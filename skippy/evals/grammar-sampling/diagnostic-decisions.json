@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "phase": "revision-5 residual control",
+  "source_commit": "983f2aad129270dea4d172bff9441d2195a86d9a",
+  "registration": "Supplemental decision map recorded before inspecting revision-5 observations; it does not change that job's measurements or any qualification gate.",
+  "reference": "Frozen baseline B remains primary. R is diagnostic only. Never divide away an R/B offset, substitute C/R for a failed C/B result, or reuse historical timing to qualify a new source.",
+  "offset_measure": "Per-case R/B sampler-latency paired geometric ratio and one-sided 95% block-bootstrap bounds, computed by the preregistered diagnostic verifier.",
+  "material_offset": "At least one case has an R/B point estimate outside [0.995, 1.005], with its confidence interval excluding 1.0.",
+  "clear_parity": "All five R/B confidence intervals are contained in [0.995, 1.005]. This supports using the existing process protocol for a fresh literal-candidate screen; it does not qualify the candidate.",
+  "uncertain": "Neither material_offset nor clear_parity holds, or a per-case C/B bound fails while the same-case C/R bound passes. Retain the observations and run a bounded independent-process control before selecting qualification process policy.",
+  "branches": [
+    {
+      "when": "clear_parity",
+      "next": "Build and verify the literal-trigger candidate, then run a fresh five-block A/B/C screen with frozen B and unchanged gates. Only a verified passing screen permits 30 fresh qualification blocks."
+    },
+    {
+      "when": "material_offset or uncertain",
+      "next": "Preregister and run one independent-process control using the unchanged revision-5 binaries. Use 24 fresh worker pairs: the full factorial of two startup orders, A-workload preconditioning present/absent, and six B/R/C measurement orders, shuffled with fixed seed 7301. All five cases, fixed warmup, and model loading outside timing. Preserve every measured pair; the process pair is the statistical unit."
+    },
+    {
+      "when": "independent control supports an A-history effect or process-instance/startup sensitivity",
+      "next": "Freeze a new protocol with separate A/B lifetimes or fresh matched workers per block, as supported by that control. Retain frozen B as primary; prescribe startup order and warmup before new measurements. Repeat the complete correctness, screen and 30-block qualification ladder."
+    },
+    {
+      "when": "offset persists across independent process instances and both A-history/startup conditions",
+      "next": "Investigate build/layout or another source-level cause. Do not promote R, normalize the offset, shop among measured builds, or advance a failing candidate. Any build-level repair needs its own frozen matched controls and fresh full ladder."
+    }
+  ],
+  "interpretation": "One resident process pair cannot distinguish persistent process state from static binary layout. Repetitions within that pair do not create independent process instances. Stable or growing block offsets are diagnostic observations, not causal proof.",
+  "unchanged_qualification": "All five cases; original model/settings; upper one-sided 95% C/B sampler ratio <= 1.01 per case and aggregate; lower decode-throughput ratio >= 0.99; improvement over A; correctness and identity/co-tenancy audits; 30 fresh paired blocks; shared MLflow readback; no PR before every gate passes."
+}

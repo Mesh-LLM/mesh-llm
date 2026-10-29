@@ -47,4 +47,5 @@ windows-sys = { version = "0.61", features = [
 
 [dev-dependencies]
 serial_test = "4"
+skippy-runtime = { path = "../../../skippy/crates/skippy-runtime", version = "0.78.0", features = ["test-support"] }
 tempfile = "3"

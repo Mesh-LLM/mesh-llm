@@ -124,6 +124,38 @@ skippy-native-tests backend="cpu":
     scripts/prepare-llama.sh pinned
     LLAMA_STAGE_BACKEND="{{ backend }}" LLAMA_STAGE_LINK_MODE=static LLAMA_STAGE_BUILD_TESTS=ON scripts/build-llama.sh
 
+# Build the grammar experiment against immutable baseline and candidate queues.
+[unix]
+grammar-sampling-build baseline:
+    scripts/prepare-llama.sh pinned
+    LLAMA_WORKDIR="$PWD/.deps/grammar-baseline-source" LLAMA_UPSTREAM_URL="$PWD/.deps/llama.cpp" "{{ baseline }}/scripts/prepare-llama.sh" pinned
+    cmake -S skippy/evals/grammar-sampling -B .deps/grammar-A -G Ninja -DLLAMA_ROOT="$PWD/.deps/grammar-baseline-source"
+    cmake --build .deps/grammar-A --parallel 8 --target grammar-sampling
+    just grammar-sampling-candidate-build
+
+# Reuse the frozen reference worker; rebuild only the new ABI candidate.
+[unix]
+grammar-sampling-candidate-build:
+    scripts/prepare-llama.sh pinned
+    cmake -S skippy/evals/grammar-sampling -B .deps/grammar-C -G Ninja -DLLAMA_ROOT="$PWD/.deps/llama.cpp" -DSKIPPY_EVAL_COMMON_SAMPLER=ON
+    cmake --build .deps/grammar-C --parallel 8 --target grammar-sampling grammar-controller grammar-fresh-controller grammar-audit grammar-verification skippy-sampling-history skippy-runtime-events-test skippy-model-fixture-generator test-skippy-verify-checkpoint-retirement test-skippy-sampling-suppress test-grammar-trigger-patterns test-grammar-parser test-grammar-integration
+
+[unix]
+grammar-sampling-tests:
+    ctest --test-dir .deps/grammar-C/native --output-on-failure --timeout 900 -R '^(skippy_sampling_history_|skippy_runtime_event_native_model_load_production|test-skippy-verify-checkpoint-retirement|test-skippy-sampling-suppress|test-grammar-trigger-patterns|test-grammar-parser|test-grammar-integration)'
+
+# Prove the runtime has no upward dependency on llama-common.
+[unix]
+grammar-sampling-shared-build:
+    cmake -S .deps/llama.cpp -B .deps/grammar-shared -G Ninja -DBUILD_SHARED_LIBS=ON -DLLAMA_BUILD_COMMON=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_STAGE_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=OFF -DLLAMA_BUILD_APP=OFF -DGGML_METAL=OFF -DGGML_ACCELERATE=ON
+    cmake --build .deps/grammar-shared --parallel 8 --target llama
+
+# Build only the diagnostic controller; its worker binaries remain frozen.
+[unix]
+grammar-process-control-build vendor:
+    mkdir -p .deps/grammar-process-control
+    c++ -std=c++17 -O3 -Wall -Wextra -Werror -I "{{ vendor }}" skippy/evals/grammar-sampling/process_control.cpp -o .deps/grammar-process-control/controller
+
 # Build the opt-in native MTP developer probes against the local runtime.
 [unix]
 skippy-native-mtp-probes-build:
