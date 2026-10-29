@@ -1591,10 +1591,23 @@ The following are intentionally left open for implementation design:
 
 Hosts advertising `operation_bindings.v1` accept RPC method
 `plugin/bound_operation`. The authenticated connection supplies caller identity;
-RPC input cannot name another caller or choose an arbitrary provider. Install
-and manifest inspection grant no authority. An explicit
-`[[plugin.operation_bindings]]` under the caller selects `name`, `provider`,
-`profile`, `setup_operation`, `setup_input_json`, and `operations`.
+RPC input cannot name another caller or choose an arbitrary provider. Manifest
+inspection grants no authority. Authority comes from one of two grants:
+
+- **Installed package.** `mesh-llm plugins install` grants a package the
+  bindings its manifest declares (`operation_bindings`, naming a capability
+  such as `wallet.v1` rather than a provider) and the OpenAI-exchange hook it
+  declares, after showing them in the install text. A capability binding
+  resolves, on first use, to the single running plugin serving that
+  capability; two candidates are refused until the operator names one. The
+  resolved provider is pinned for the registry's lifetime and may be owned by
+  only one binding (named or resolved). These package grants stand across
+  owner config applies until a `[[plugin]]` entry for the caller names its
+  own bindings or exchange grant (replacing them) or disables the plugin.
+- **Owner config.** An explicit `[[plugin.operation_bindings]]` under the
+  caller selects `name`, `provider`, `profile`, `setup_operation`,
+  `setup_input_json`, and `operations`; `[plugin.openai_exchange]` grants the
+  hook. Config-sourced grants are revoked when their entry is removed.
 
 A request contains `binding`, optional `handle`, `operation`, and `input_json`.
 Without a handle, operation and input must be empty: only the operator-fixed
@@ -1616,5 +1629,6 @@ An absent provider does not prevent startup. Explicit provider disable revokes
 the binding; removing a provider entry takes effect on restart. Revocation and
 enqueue are synchronized: revocation before enqueue is `not_dispatched`;
 revocation after enqueue may be `uncertain`. Changed owner grants revoke old handles;
-new grants require a process restart. This draft is not yet the installed
-Lightning composition or a production-readiness claim.
+new grants require a process restart. Installed `pay-lightning` + a `wallet.v1`
+plugin (e.g. `lexe-wallet`) is the composition this describes; it is not a
+production-readiness claim.
