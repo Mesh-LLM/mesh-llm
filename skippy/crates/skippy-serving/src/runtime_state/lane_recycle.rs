@@ -201,11 +201,12 @@ impl RuntimeState {
     }
 
     /// Oldest idle lane whose checkpoints the recorder accepted. Refused
-    /// lanes keep their cells and return to the pool; the caller then falls
-    /// back to a fresh lane or to back-pressure.
+    /// lanes normally stay parked. If they occupy every remaining native
+    /// lane, discard one lane's unrecorded checkpoints under an explicit
+    /// admission policy so a ready request does not fail with lanes busy.
     pub(super) fn recycle_idle_session(&mut self) -> Result<Option<RuntimeLaneSession>> {
         let mut retained = Vec::new();
-        let recycled = loop {
+        let mut recycled = loop {
             let Some(lane) = self.take_idle_session() else {
                 break None;
             };
@@ -225,6 +226,22 @@ impl RuntimeState {
                 }
             }
         };
+        if recycled.is_none()
+            && !retained.is_empty()
+            && self.free_lane_indices.is_empty()
+            && self.next_lane_index >= self.lane_count as usize
+        {
+            let victim = retained
+                .iter()
+                .position(|lane| !lane.leases.in_flight())
+                .unwrap_or(0);
+            let lane = retained.remove(victim);
+            emit_exact_state_diagnostic(
+                "lane_recycle_admission_pressure",
+                &[("lane_index", lane.index as u64)],
+            );
+            recycled = Some(lane.into_discarded(CheckpointDiscard::AdmissionPressure));
+        }
         self.idle_sessions.extend(retained);
         recycled.map(|lane| self.reset_recycled(lane)).transpose()
     }

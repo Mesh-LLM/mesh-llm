@@ -93,6 +93,9 @@ pub(super) enum CheckpointDiscard {
     IdlePoolFull,
     /// Explicit eviction under memory pressure.
     MemoryPressure,
+    /// Every native lane is occupied and the recorder cannot accept this
+    /// lane's remaining checkpoints. Serving takes precedence over caching.
+    AdmissionPressure,
     /// The recorder worker has stopped. Nothing can be recorded on this stage
     /// again, so retaining would only turn every lane into "lanes busy".
     RecorderStopped,
@@ -109,6 +112,7 @@ impl CheckpointDiscard {
             Self::Cleanup => "resident_discarded_cleanup",
             Self::IdlePoolFull => "resident_discarded_idle_pool_full",
             Self::MemoryPressure => "resident_discarded_memory_pressure",
+            Self::AdmissionPressure => "resident_discarded_admission_pressure",
             Self::RecorderStopped => "resident_discarded_recorder_stopped",
             Self::RetentionExpired => "resident_discarded_retention_expired",
         }

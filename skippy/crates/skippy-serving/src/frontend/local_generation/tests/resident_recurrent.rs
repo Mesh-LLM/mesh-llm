@@ -35,8 +35,10 @@ fn resident_hybrid_records_full_prompt_after_deferred_prefill() -> Result<()> {
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn resident_hybrid_prefill_spans_native_microbatches() -> Result<()> {
-    let (wide, _) = recurrent_test_backend("wide", "wide", 256, (128, 32), 8, 256)?;
-    let (narrow, _) = recurrent_test_backend("narrow", "narrow", 256, (32, 32), 8, 256)?;
+    // The extended prompt reaches 150 tokens. Leave the 128-token decode
+    // headroom requirement outside this microbatch-shape comparison.
+    let (wide, _) = recurrent_test_backend("wide", "wide", 512, (128, 32), 8, 256)?;
+    let (narrow, _) = recurrent_test_backend("narrow", "narrow", 512, (32, 32), 8, 256)?;
     let prompt = (1..=128).collect::<Vec<_>>();
     let (expected, _) = generate(&narrow, &prompt, 8)?;
     let (actual, _) = generate(&wide, &prompt, 8)?;
@@ -136,6 +138,25 @@ fn drain(backend: &StageOpenAiBackend) -> Result<()> {
         .map_err(anyhow::Error::msg)
 }
 
+fn drain_after_cleanup(backend: &StageOpenAiBackend) -> Result<()> {
+    let kv = backend.kv.as_ref().unwrap();
+    kv.wait_for_exact_state_captures_idle(Duration::from_secs(30))
+        .map_err(anyhow::Error::msg)?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while kv.exact_state_records_pending.load(Ordering::Acquire) != 0 {
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "recorder did not drain after cancellation"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    anyhow::ensure!(
+        kv.exact_state_record_worker_panics.load(Ordering::Acquire) == 0,
+        "recorder panicked during cancellation cleanup"
+    );
+    Ok(())
+}
+
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn resident_hybrid_cancellation_and_error_release_the_lane() -> Result<()> {
@@ -143,7 +164,7 @@ fn resident_hybrid_cancellation_and_error_release_the_lane() -> Result<()> {
     let prompt = (1..=64).collect::<Vec<_>>();
     for cancel in [true, false] {
         generate(&backend, &prompt, 8)?;
-        drain(&backend)?;
+        drain_after_cleanup(&backend)?;
         let cancellation = skippy_inference_api::CancellationToken::new();
         let ids = InferenceGenerationIds::new_with_trust(
             InferenceCacheHints::default(),
@@ -179,7 +200,7 @@ fn resident_hybrid_cancellation_and_error_release_the_lane() -> Result<()> {
         if !cancel {
             assert!(result.is_err());
         }
-        drain(&backend)?;
+        drain_after_cleanup(&backend)?;
         let stats = backend.runtime.lock().unwrap().session_stats();
         assert_eq!(stats.active_sessions, 0);
         assert_eq!(stats.idle_resident_prefixes, 0);
@@ -252,18 +273,38 @@ fn resident_hybrid_reopens_evicted_prefix_from_lane_recorded_fallback() -> Resul
     assert!(kv.records_lane_owned_recurrent());
 
     let unrelated = (100..164).collect::<Vec<_>>();
-    recurrent_early_stop::generate_after_first_token(
-        &backend,
-        &unrelated,
-        8,
-        "eviction-control",
-        || {
-            let mut runtime = backend.runtime.lock().unwrap();
-            let evicted = kv
-                .evict_resident_prefix_for_tokens(&mut runtime, "eviction-control", u64::MAX)
-                .map_err(crate::frontend::util::openai_backend_error)?;
-            assert!(evicted.evicted_entries > 0);
-            Ok(())
+    let eviction_ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
+        Some("eviction-control"),
+        true,
+        None,
+    );
+    let runtime_session_id = eviction_ids.session_label.clone();
+    let mut output_tokens = 0usize;
+    backend.generate_local_tokens(
+        LocalGeneration {
+            prompt_token_ids: &unrelated,
+            recurrent_cache_prefix_token_ids: None,
+            max_tokens: 8,
+            sampling: &SamplingConfig::default(),
+            chat_sampling_metadata: None,
+            speculative: &SpeculativeDecodeConfig::default(),
+            native_mtp_enabled: false,
+            hook_request: None,
+            hook_runtime: None,
+            cancellation: None,
+            ids: &eviction_ids,
+        },
+        |_| {
+            if output_tokens == 0 {
+                let mut runtime = backend.runtime.lock().unwrap();
+                let evicted = kv
+                    .evict_resident_prefix_for_tokens(&mut runtime, &runtime_session_id, u64::MAX)
+                    .map_err(crate::frontend::util::openai_backend_error)?;
+                assert!(evicted.evicted_entries > 0);
+            }
+            output_tokens += 1;
+            Ok(TokenControl::Continue)
         },
     )?;
     drain(&backend)?;
