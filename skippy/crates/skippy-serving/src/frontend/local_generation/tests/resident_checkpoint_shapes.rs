@@ -6,6 +6,104 @@ use skippy_runtime::IterationBatchPhase;
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn resident_126_token_restore_matches_cold_after_decode() -> Result<()> {
+    let (warm, _) = recurrent_test_backend(
+        "restore-126-warm",
+        "restore-126-warm",
+        512,
+        (128, 32),
+        8,
+        256,
+    )?;
+    let (cold, _) = recurrent_test_backend(
+        "restore-126-cold",
+        "restore-126-cold",
+        512,
+        (128, 32),
+        8,
+        256,
+    )?;
+    let session = "restore-126";
+    let prompt = (1..=128).collect::<Vec<_>>();
+    let mut warm_runtime = warm.runtime.lock().unwrap();
+    let mut cold_runtime = cold.runtime.lock().unwrap();
+    for chunk in prompt[..126].chunks(16) {
+        iterate(
+            &mut warm_runtime,
+            &[session],
+            &[chunk],
+            IterationBatchPhase::Prefill,
+        )?;
+        iterate(
+            &mut cold_runtime,
+            &[session],
+            &[chunk],
+            IterationBatchPhase::Prefill,
+        )?;
+    }
+    let kv = warm.kv.as_ref().unwrap();
+    anyhow::ensure!(
+        kv.resident_recurrent_snapshots,
+        "test requires hybrid resident KV"
+    );
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
+        Some(session),
+        true,
+        None,
+    );
+    let base = warm.local_kv_message_base(session, &ids);
+    let identity = kv.prefill_identity(&warm.config, &base, 0, &prompt[..126]);
+    assert!(
+        kv.record_resident_prefix(&mut warm_runtime, session, &identity, &prompt)?
+            .is_some()
+    );
+    let mut next = iterate(
+        &mut warm_runtime,
+        &[session],
+        &[&prompt[126..]],
+        IterationBatchPhase::Prefill,
+    )?[0];
+    for _ in 0..8 {
+        next = iterate(
+            &mut warm_runtime,
+            &[session],
+            &[&[next]],
+            IterationBatchPhase::Decode,
+        )?[0];
+    }
+    warm_runtime.drop_session_timed(session)?;
+    let lookup = kv.prefill_identity(&warm.config, &base, 0, &prompt);
+    let restored = kv
+        .restore_resident_prefix(&mut warm_runtime, session, &[lookup], &prompt)?
+        .expect("126-token resident checkpoint must restore");
+    assert_eq!(restored.token_count, 126);
+    assert!(
+        warm_runtime.export_recurrent_cache_state(session)?
+            == cold_runtime.export_recurrent_cache_state(session)?,
+        "restored recurrent state differs at the 126-token boundary"
+    );
+    let warm_output = iterate(
+        &mut warm_runtime,
+        &[session],
+        &[&prompt[126..]],
+        IterationBatchPhase::Prefill,
+    )?;
+    let cold_output = iterate(
+        &mut cold_runtime,
+        &[session],
+        &[&prompt[126..]],
+        IterationBatchPhase::Prefill,
+    )?;
+    assert_eq!(
+        warm_output, cold_output,
+        "resident attention restore changed the next token"
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn resident_shortened_tail_matches_cold_at_fixed_batch_shapes() -> Result<()> {
     for lanes in [2, 4] {
         compare_resident_restore(lanes)?;
