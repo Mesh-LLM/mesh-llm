@@ -1398,6 +1398,8 @@ async fn start_local_package_v2_model(
         fallback_projector_path,
         compact_meta,
     )?;
+    // Package loads are staged and never attach the default DFlash draft.
+    resolved.speculative.drop_default_dflash();
     crate::inference::skippy::materialize_projector_url(&mut resolved).await?;
     tracing::info!(
         model = model_name,
