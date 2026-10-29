@@ -32,3 +32,28 @@ owner identity is required. The old in-memory keypair hex constructor and
 Streaming is available through `node.inference.stream_chat_completions(...)`
 and `stream_responses(...)`; each event carries the original SSE data and raw
 frame. See [native runtime guidance](../SDK.md#native-runtime-artifacts).
+
+## Thinking effort levels
+
+`list_models()` reports the reasoning effort levels each advertised model
+accepts, so an application can select a supported level before requesting
+inference:
+
+```python
+models = await node.inference.list_models()
+model = next(
+    model for model in models
+    if model.thinking_efforts and "high" in model.thinking_efforts
+)
+response = await node.inference.chat_completions({
+    "model": model.id,
+    "messages": [{"role": "user", "content": "Explain lock ordering."}],
+    "reasoning_effort": "high",
+})
+```
+
+`thinking_efforts` is `None` when the provider advertises no effort metadata —
+an older provider or a model the host has not probed — and an empty tuple when
+the provider reports that the model's template exposes no effort levels. The
+list comes from the node's `/v1/models` view, which merges the mesh providers
+serving that ID.
