@@ -248,6 +248,7 @@ impl PluginCapabilityProvider {
 pub struct InferenceEndpointRoute {
     pub plugin_name: String,
     pub endpoint_id: String,
+    pub protocol: Option<String>,
     pub address: String,
     pub models: Vec<String>,
 }

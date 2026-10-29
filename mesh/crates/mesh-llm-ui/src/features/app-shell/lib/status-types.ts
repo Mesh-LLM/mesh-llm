@@ -202,6 +202,17 @@ export type RuntimeInfo = {
 export type PluginWebUiState = PluginWebUiStateRaw
 export type PluginSummary = PluginSummaryRaw
 
+/** A plugin's snapshot in `GET /api/status`, under `plugins.<name>`. The host
+ * owns everything but `data`, which is the plugin's own, in version
+ * `schema_version` of its schema. */
+export type PluginStatusContribution = {
+  schema_version: number
+  state: 'ready' | 'stale' | 'unavailable'
+  received_at_unix_ms: number
+  fresh_until_unix_ms: number
+  data: Record<string, unknown>
+}
+
 export type MeshRequirementsSummary = {
   policy_hash: string
   requirements: {
@@ -257,7 +268,7 @@ export type StatusPayload = {
   first_joined_mesh_ts?: number
   mesh_requirements?: MeshRequirementsSummary
   recent_mesh_rejections?: MeshRequirementRejection[]
-  plugins?: PluginSummary[]
+  plugins?: Record<string, PluginStatusContribution>
 }
 
 export type ModelServingStat = {

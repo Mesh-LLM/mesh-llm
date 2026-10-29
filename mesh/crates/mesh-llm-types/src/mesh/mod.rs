@@ -82,6 +82,8 @@ pub enum ModelWorkloadClass {
     /// Speech-to-text (`/v1/audio/transcriptions` and `/translations`) with no
     /// chat generation, such as a Whisper model.
     SpeechRecognition,
+    /// Document OCR with page text, layout, and reading order.
+    DocumentOcr,
     /// Explicit metadata from a newer peer that this node cannot interpret.
     /// Unlike absent legacy metadata, this never authorizes inference.
     #[serde(other)]

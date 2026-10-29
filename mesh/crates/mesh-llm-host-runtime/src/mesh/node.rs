@@ -1483,7 +1483,7 @@ impl Node {
     }
 
     pub async fn all_served_model_descriptors(&self) -> Vec<ServedModelDescriptor> {
-        let mut descriptors = self.served_model_descriptors.lock().await.clone();
+        let mut descriptors = self.local_descriptors_with_plugins().await;
         let peer_descriptors = {
             let state = self.state.lock().await;
             state
