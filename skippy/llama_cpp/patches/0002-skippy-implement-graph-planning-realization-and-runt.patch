@@ -17,8 +17,10 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  common/sampling.cpp                     |  254 +----
  common/sampling.h                       |   50 +-
  common/tokenization.cpp                 |   58 ++
+ src/llama-memory-hybrid-idx.cpp         |   10 +
+ src/llama-memory-hybrid-idx.h           |    4 +
  src/skippy/abi.cpp                      |   59 ++
- src/skippy/activation.cpp               | 1015 +++++++++++++++++++
+ src/skippy/activation.cpp               | 1021 +++++++++++++++++++
  src/skippy/activation_internal.h        |   88 ++
  src/skippy/activation_layout.cpp        |  156 +++
  src/skippy/block_boundaries.cpp         |   64 ++
@@ -77,7 +79,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  256 +++++
  src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 73 files changed, 16247 insertions(+), 395 deletions(-)
+ 75 files changed, 16267 insertions(+), 395 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -1423,6 +1425,42 @@ index 000000000..7f5064cb5
 +    return piece;
 +}
 +
+diff --git a/src/llama-memory-hybrid-idx.cpp b/src/llama-memory-hybrid-idx.cpp
+index 2c5a57680..2bf506b0e 100644
+--- a/src/llama-memory-hybrid-idx.cpp
++++ b/src/llama-memory-hybrid-idx.cpp
+@@ -197,6 +197,16 @@ bool llama_memory_hybrid_idx::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_po
+     return get_mem_attn()->seq_rm(seq_id, p0, p1);
+ }
+ 
++bool llama_memory_hybrid_idx::seq_rm_kv(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
++    if (mem_idx) {
++        const llama_pos stale = mem_idx_stale_pos(seq_id, p0);
++        mem_idx->seq_rm(seq_id, p0, p1);
++        mem_idx_stale_set(seq_id, stale);
++    }
++
++    return get_mem_attn()->seq_rm(seq_id, p0, p1);
++}
++
+ void llama_memory_hybrid_idx::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
+     // only whole sequences are copied: the recurrent state ignores the range, and a shared cell holds a single pool grouping
+     GGML_ASSERT(p0 <= 0 && p1 < 0 && "partial seq_cp is not supported");
+diff --git a/src/llama-memory-hybrid-idx.h b/src/llama-memory-hybrid-idx.h
+index 0ac4265df..e601ebc48 100644
+--- a/src/llama-memory-hybrid-idx.h
++++ b/src/llama-memory-hybrid-idx.h
+@@ -65,6 +65,10 @@ public:
+     void seq_add (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, llama_pos shift) override;
+     void seq_div (llama_seq_id seq_id,                              llama_pos p0, llama_pos p1, int d) override;
+ 
++    // Drops [p0, p1) from the attention and indexer caches only, for a caller that restored the
++    // recurrent state from a snapshot of its own. The pool layout regroups from p0.
++    bool seq_rm_kv(llama_seq_id seq_id, llama_pos p0, llama_pos p1);
++
+     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const override;
+ 
+     // state write/load
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
 new file mode 100644
 index 000000000..ceed6e5d3
@@ -1490,10 +1528,10 @@ index 000000000..ceed6e5d3
 +}
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
 new file mode 100644
-index 000000000..e2ce28d12
+index 000000000..71323d934
 --- /dev/null
 +++ b/src/skippy/activation.cpp
-@@ -0,0 +1,1015 @@
+@@ -0,0 +1,1021 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/graph_build_inputs.h"
@@ -1513,6 +1551,7 @@ index 000000000..e2ce28d12
 +#include "llama-kv-cache-iswa.h"
 +#include "llama-kv-cache-dsa.h"
 +#include "llama-memory-hybrid.h"
++#include "llama-memory-hybrid-idx.h"
 +#include "llama-memory-hybrid-iswa.h"
 +#include "llama-memory-recurrent.h"
 +#include "llama-model.h"
@@ -2389,6 +2428,11 @@ index 000000000..e2ce28d12
 +        llama_pos token_start) {
 +    if (auto * iswa = dynamic_cast<llama_kv_cache_iswa *>(memory)) {
 +        return iswa->seq_rm(seq_id, token_start, -1);
++    }
++    // The indexer cache keys the same positions as attention; leaving its rejected rows
++    // makes the next window's cells disagree with the pool layout.
++    if (auto * hybrid_idx = dynamic_cast<llama_memory_hybrid_idx *>(memory)) {
++        return hybrid_idx->seq_rm_kv(seq_id, token_start, -1);
 +    }
 +    if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
 +        return hybrid->get_mem_attn()->seq_rm(seq_id, token_start, -1);
@@ -12716,7 +12760,7 @@ index 000000000..d8276944d
 +        skippy_error ** out_error);
 diff --git a/src/skippy/stage_execution_contract.cpp b/src/skippy/stage_execution_contract.cpp
 new file mode 100644
-index 000000000..3f707a93f
+index 000000000..719e04462
 --- /dev/null
 +++ b/src/skippy/stage_execution_contract.cpp
 @@ -0,0 +1,78 @@
