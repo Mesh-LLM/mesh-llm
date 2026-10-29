@@ -119,6 +119,18 @@ impl DFlashFeatureRows {
         Some(&values[start * self.n_embd..(start + rows) * self.n_embd])
     }
 
+    /// Keeps only the last `rows` rows of every layer.
+    fn keep_trailing(&mut self, rows: usize) {
+        if rows >= self.rows {
+            return;
+        }
+        let drop_values = (self.rows - rows) * self.n_embd;
+        for (_, values) in &mut self.layers {
+            values.drain(..drop_values);
+        }
+        self.rows = rows;
+    }
+
     /// Appends rows decoded after these, layer by layer. Layers missing from
     /// either side are dropped, since their rows no longer line up.
     fn extend(&mut self, later: DFlashFeatureRows) {
@@ -304,6 +316,15 @@ impl DFlashSplitSession {
         }
     }
 
+    /// A session holding `rows` captured but not yet forwarded.
+    #[cfg(test)]
+    pub(crate) fn with_captured(rows: DFlashFeatureRows) -> Self {
+        Self {
+            captured: Some(rows),
+            ..Self::default()
+        }
+    }
+
     /// Records this session's rows of the last target decode.
     pub(crate) fn after_decode(&mut self, first_row: usize, rows: usize) {
         let Some(capture) = self.capture.as_ref().and_then(Weak::upgrade) else {
@@ -339,9 +360,20 @@ impl StageSession {
         }
     }
 
-    /// Feature rows this stage captured since the last call.
-    pub fn dflash_take_captured_features(&mut self) -> Option<DFlashFeatureRows> {
-        self.dflash_split.as_mut()?.captured.take()
+    /// Appends the feature rows this stage captured for the decode that
+    /// produced `frame` to it, for the final stage's draft. Rows captured by
+    /// an earlier decode whose frame left without them are dropped: the frame
+    /// carries the rows of its own tokens, which are the last ones captured.
+    pub fn dflash_forward_captured(&mut self, frame: &mut ActivationFrame) -> Result<()> {
+        let Some(mut rows) = self
+            .dflash_split
+            .as_mut()
+            .and_then(|split| split.captured.take())
+        else {
+            return Ok(());
+        };
+        rows.keep_trailing(usize::try_from(frame.desc.token_count).context("frame tokens")?);
+        rows.append_to_frame(frame)
     }
 
     /// Whether this session feeds a split DFlash pipeline, as a draft or as a
@@ -516,6 +548,38 @@ mod tests {
         assert_eq!(decoded[2], -3.140625);
         assert!((decoded[3] - 65504.0).abs() / 65504.0 < 0.01);
         assert!((decoded[4] - 1.0e30).abs() / 1.0e30 < 0.01);
+    }
+
+    fn session_with_captured(rows: DFlashFeatureRows) -> StageSession {
+        StageSession {
+            raw: std::ptr::null_mut(),
+            token_count: 0,
+            terminal_stage: false,
+            batched_activation_exports: true,
+            dflash: None,
+            dflash_split: Some(Box::new(DFlashSplitSession::with_captured(rows))),
+        }
+    }
+
+    #[test]
+    fn a_frame_carries_the_rows_of_its_own_tokens() {
+        // A one-token decode whose frame left without its row, then a
+        // three-token verify window: the window's frame must carry the last
+        // three rows, not fail on four.
+        let mut rows = DFlashFeatureRows::new(1, 4);
+        rows.insert(2, vec![9.0, 1.0, 2.0, 3.0]).unwrap();
+        let mut session = session_with_captured(rows);
+        let mut window = frame(3);
+
+        session.dflash_forward_captured(&mut window).unwrap();
+
+        let forwarded = DFlashFeatureRows::from_frame(&window).unwrap().unwrap();
+        assert_eq!(forwarded.rows(), 3);
+        assert_eq!(forwarded.rows_of(2, 0, 3), Some(&[1.0, 2.0, 3.0][..]));
+        // The rows were handed off; the next frame starts empty.
+        let mut next = frame(1);
+        session.dflash_forward_captured(&mut next).unwrap();
+        assert_eq!(DFlashFeatureRows::from_frame(&next).unwrap(), None);
     }
 
     #[test]

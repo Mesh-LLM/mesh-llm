@@ -256,3 +256,42 @@ fn partial_batch_execution_reports_the_requests_that_already_ran() {
     assert_eq!(partial.error().to_string(), "native failed");
     assert!(partial.to_string().contains("executed 2 request(s)"));
 }
+
+/// A decode run through the scheduler forwards the DFlash target-layer rows a
+/// split stage captured, as a stage message does; a frame without them makes
+/// the final stage's draft drop its context.
+#[test]
+fn iteration_frames_carry_captured_dflash_rows() {
+    let mut rows = crate::DFlashFeatureRows::new(1, 1);
+    rows.insert(6, vec![0.5]).unwrap();
+    let mut capturing = batch_session(false, true);
+    capturing.dflash_split = Some(Box::new(crate::dflash::DFlashSplitSession::with_captured(
+        rows.clone(),
+    )));
+    let mut plain = batch_session(false, true);
+    let mut requests = vec![
+        decode_request(&mut capturing, None),
+        decode_request(&mut plain, None),
+    ];
+    let mut frames = vec![
+        ActivationFrame {
+            desc: activation_desc(4),
+            payload: vec![0; 4],
+        },
+        ActivationFrame {
+            desc: activation_desc(4),
+            payload: vec![0; 4],
+        },
+    ];
+
+    forward_dflash_features(&mut requests, &mut frames);
+
+    assert_eq!(
+        crate::DFlashFeatureRows::from_frame(&frames[0]).unwrap(),
+        Some(rows)
+    );
+    assert_eq!(
+        crate::DFlashFeatureRows::from_frame(&frames[1]).unwrap(),
+        None
+    );
+}
