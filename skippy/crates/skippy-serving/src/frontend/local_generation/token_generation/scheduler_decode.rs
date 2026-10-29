@@ -21,10 +21,15 @@ impl StageOpenAiBackend {
             .kv
             .as_ref()
             .is_some_and(|kv| kv.records_lane_owned_recurrent());
-        let recurrent_state_cache = self
-            .kv
-            .as_ref()
-            .is_some_and(|kv| kv.records_lane_owned_recurrent() || kv.resident_recurrent_snapshots);
+        // Device-only KV can decline resident snapshots even when the model
+        // still has recurrent state. Route by the loaded graph, not by the
+        // representation admitted to the cache.
+        let recurrent_model = matches!(
+            crate::runtime_state::loaded_model_state_kind(Some(&self.runtime)),
+            Some(
+                skippy_runtime::ModelStateKind::Recurrent | skippy_runtime::ModelStateKind::Hybrid
+            )
+        );
         // The direct iteration channel still batches decode across lanes.
         // Handing a recurrent-state continuation to the planned scheduler
         // changes c=4 output after the first token on CUDA.
@@ -32,7 +37,7 @@ impl StageOpenAiBackend {
             && self.draft.is_none()
             && !request.native_mtp_enabled
             && !state.generation_hooks_active
-            && !recurrent_state_cache;
+            && !recurrent_model;
         if scheduler_resume_ready(
             resume_scheduler_decode,
             !recurrent_checkpoint_required,
