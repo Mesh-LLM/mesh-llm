@@ -101,7 +101,10 @@ pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
     },
     // Qwen3.8-27B has Qwen3.6-27B's shape (its NextN block is not executed), so
     // only the name tells them apart. A DFlash2 draft reading target layers
-    // 6..=62 at width 5120. Not benchmarked yet.
+    // 6..=62 at width 5120. It replaces the default native MTP: greedy chat
+    // decodes 44.0 tok/s on a DGX Spark (20.4 MTP, 12.7 off) and 77.0 on an
+    // M3 Ultra (39.0 MTP, 31.2 off); agentic coding on the Spark 28.7 (16.5
+    // MTP). Sampled at T=0.7, MTP is slower than plain decoding on both.
     DFlashPairing {
         target: DFlashTarget {
             architecture: "qwen35",

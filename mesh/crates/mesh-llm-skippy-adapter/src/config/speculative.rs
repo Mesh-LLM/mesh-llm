@@ -30,6 +30,37 @@ pub(super) fn resolve_speculative_config(
     package_generation: Option<&PackageGenerationInfo>,
     target_meta: Option<&GgufCompactMeta>,
 ) -> Result<ResolvedSpeculativeConfig> {
+    let resolve = |dflash_over_auto_mtp| {
+        resolve_speculative(
+            model_config,
+            global_config,
+            model_path,
+            package_generation,
+            target_meta,
+            dflash_over_auto_mtp,
+        )
+    };
+    let mut resolved = resolve(true)?;
+    if resolved.default_dflash.is_some() {
+        // The plan this default replaced, if it replaced automatic native MTP.
+        let without = resolve(false)?;
+        if without.default_dflash.is_none() {
+            resolved.native_mtp_fallback = Some(Box::new(without));
+        }
+    }
+    Ok(resolved)
+}
+
+/// `dflash_over_auto_mtp` lets a known DFlash pairing replace native MTP that
+/// is on only by default.
+fn resolve_speculative(
+    model_config: Option<&SpeculativeConfig>,
+    global_config: Option<&SpeculativeConfig>,
+    model_path: &Path,
+    package_generation: Option<&PackageGenerationInfo>,
+    target_meta: Option<&GgufCompactMeta>,
+    dflash_over_auto_mtp: bool,
+) -> Result<ResolvedSpeculativeConfig> {
     let spec_default = pick_owned(
         model_config.and_then(|config| config.spec_default.as_ref()),
         global_config.and_then(|config| config.spec_default.as_ref()),
@@ -75,6 +106,7 @@ pub(super) fn resolve_speculative_config(
         package_generation,
         model_path,
     )?;
+    let mtp_yields = mtp_yields(dflash_over_auto_mtp, &strategy, model_config, global_config);
     let mode = pick_string_owned(
         model_config.and_then(|config| config.mode.as_deref()),
         global_config.and_then(|config| config.mode.as_deref()),
@@ -123,7 +155,7 @@ pub(super) fn resolve_speculative_config(
         },
         &DFlashDefaultSelection {
             auto_defaults_enabled,
-            native_mtp_enabled,
+            native_mtp_decides: native_mtp_enabled && !mtp_yields,
             has_ngram_settings: ngram_min > 0 || ngram_max > 0,
             package_declares_speculation: package_generation
                 .is_some_and(|generation| generation.speculative_decoding.is_some()),
@@ -157,6 +189,7 @@ pub(super) fn resolve_speculative_config(
             draft_n_gpu_layers,
             decode,
             default_dflash,
+            native_mtp_fallback: None,
         });
     }
     let explicit = mode != "auto"
@@ -229,7 +262,29 @@ pub(super) fn resolve_speculative_config(
         draft_n_gpu_layers,
         decode,
         default_dflash: None,
+        native_mtp_fallback: None,
     })
+}
+
+/// Whether native MTP may yield to a known DFlash pairing. Under `auto` it is
+/// on because the model carries NextN layers, not because anyone asked for
+/// it, unless either layer tunes native MTP.
+fn mtp_yields(
+    dflash_over_auto_mtp: bool,
+    strategy: &str,
+    model_config: Option<&SpeculativeConfig>,
+    global_config: Option<&SpeculativeConfig>,
+) -> bool {
+    dflash_over_auto_mtp
+        && strategy == "auto"
+        && ![model_config, global_config]
+            .into_iter()
+            .flatten()
+            .any(|config| {
+                config.native_mtp_reject_cooldown_tokens.is_some()
+                    || config.native_mtp_suppress_cooldown_drafts.is_some()
+                    || config.native_mtp_suppress_cooldown_draft_limit.is_some()
+            })
 }
 
 fn configured_draft_source(config: &SpeculativeConfig) -> Option<String> {

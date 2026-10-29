@@ -1272,3 +1272,93 @@ fn a_default_dflash_draft_is_served_only_once_fetched() {
     assert!(dropped.speculative.dflash.is_none());
     assert_eq!(dropped.speculative.effective_strategy, "disabled");
 }
+
+/// A target carrying a NextN layer, alone in its directory so no sibling
+/// draft is found; native MTP is on for it by default.
+fn native_mtp_target() -> (tempfile::TempDir, std::path::PathBuf) {
+    let directory = tempfile::tempdir().expect("target directory");
+    let path = directory.path().join("Qwen3.8-27B-UD-Q4_K_M.gguf");
+    let source = temp_model_file_with_architecture_and_tensor_names(
+        "qwen35",
+        &["blk.64.nextn.eh_proj.weight"],
+        None,
+    );
+    std::fs::copy(source.path(), &path).expect("copy target");
+    (directory, path)
+}
+
+fn qwen38_27b_meta() -> skippy_model_artifact::gguf::GgufCompactMeta {
+    named(target_meta("qwen35", 64, 5120, 0), "Qwen3.8")
+}
+
+#[test]
+fn a_known_pairing_replaces_automatic_native_mtp() {
+    let (_directory, model_path) = native_mtp_target();
+    let mut resolved = resolve_default_dflash("", &model_path, &qwen38_27b_meta());
+    let speculative = &resolved.speculative;
+    let pairing = speculative.default_dflash.expect("default pairing");
+    let dflash = speculative.decode.dflash.as_ref().expect("DFlash plan");
+
+    assert_eq!(pairing.draft.repo, "z-lab/Qwen3.8-27B-DFlash2-GGUF");
+    assert!(!speculative.native_mtp_enabled);
+    assert!(!speculative.decode.native_mtp.enabled);
+    assert_eq!(speculative.decode.effective_strategy, "dflash");
+    // The pairing's block caps the backend default, and rollback follows it.
+    let cap = if cfg!(target_os = "macos") { 6 } else { 7 };
+    assert_eq!(dflash.max_draft_tokens, Some(cap));
+    assert_eq!(dflash.recurrent_rollback_tokens(), cap as u32 + 1);
+    let draft = temp_model_file_with_architecture("dflash");
+    resolved.speculative.set_default_dflash_draft(draft.path());
+    let args = resolved.to_embedded_openai_args(0, false).unwrap();
+    assert!(!args.native_mtp_enabled);
+    assert!(args.speculative.dflash.is_some());
+
+    // Without the draft (not fetched, no room, or a split target), the load
+    // keeps the native MTP it would have served.
+    resolved.speculative.drop_default_dflash();
+    let speculative = &resolved.speculative;
+    assert!(speculative.default_dflash.is_none());
+    assert!(speculative.decode.dflash.is_none());
+    assert!(speculative.native_mtp_enabled);
+    assert_eq!(speculative.decode.effective_strategy, "native-mtp");
+    let staged = resolved.to_embedded_openai_args(4096, true).unwrap();
+    assert!(staged.native_mtp_enabled);
+}
+
+#[test]
+fn native_mtp_targets_without_a_pairing_keep_native_mtp() {
+    let (_directory, model_path) = native_mtp_target();
+    let resolved = resolve_default_dflash("", &model_path, &target_meta("qwen35", 48, 5120, 0));
+
+    assert!(resolved.speculative.default_dflash.is_none());
+    assert!(resolved.speculative.native_mtp_fallback.is_none());
+    assert!(resolved.speculative.native_mtp_enabled);
+    assert_eq!(resolved.speculative.decode.effective_strategy, "native-mtp");
+}
+
+#[test]
+fn configured_speculation_keeps_its_plan_on_a_native_mtp_target_with_a_pairing() {
+    let unpaired = target_meta("qwen35", 48, 5120, 0);
+    for config in [
+        "[defaults.speculative]\nstrategy = \"mtp\"",
+        "[defaults.speculative]\nnative_mtp_reject_cooldown_tokens = 4",
+        "[defaults.speculative]\nstrategy = \"disabled\"",
+        "[defaults.speculative]\nmode = \"disabled\"",
+        "[defaults.speculative]\nspec_default = false",
+        "[defaults.speculative]\nngram_min = 2\nngram_max = 4",
+        "[defaults.speculative]\nstrategy = \"ngram-cache\"\nngram_min = 2\nngram_max = 4",
+    ] {
+        let (_directory, model_path) = native_mtp_target();
+        let paired = resolve_default_dflash(config, &model_path, &qwen38_27b_meta());
+        let without_pairing = resolve_default_dflash(config, &model_path, &unpaired);
+        assert!(paired.speculative.default_dflash.is_none(), "{config}");
+        assert_eq!(paired.speculative, without_pairing.speculative, "{config}");
+    }
+    let (_directory, model_path) = native_mtp_target();
+    let explicit_mtp = resolve_default_dflash(
+        "[defaults.speculative]\nstrategy = \"mtp\"",
+        &model_path,
+        &qwen38_27b_meta(),
+    );
+    assert!(explicit_mtp.speculative.native_mtp_enabled);
+}
