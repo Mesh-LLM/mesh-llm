@@ -30,6 +30,12 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
                 meta.parameter_size =
                     read_gguf_value_as_string_opt(&mut reader, value_type).ok()?;
             }
+            "general.basename" => {
+                meta.basename = read_gguf_value_as_string_opt(&mut reader, value_type).ok()?;
+            }
+            "general.name" => {
+                meta.name = read_gguf_value_as_string_opt(&mut reader, value_type).ok()?;
+            }
             "tokenizer.ggml.model" => {
                 meta.tokenizer_model_name =
                     read_gguf_value_as_string_opt(&mut reader, value_type).ok()??;
