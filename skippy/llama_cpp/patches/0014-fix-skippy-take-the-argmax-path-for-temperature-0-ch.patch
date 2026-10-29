@@ -1,0 +1,336 @@
+From 752aa334e952d2126ef863699a05a2645370a4fd Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Thu, 29 Oct 2026 15:33:02 -0400
+Subject: [PATCH] fix(skippy): take the argmax path for temperature-0 chains
+ that can only pick the top logit
+
+Co-authored-by: sisyphus-dev-ai <sisyphus-dev-ai@users.noreply.github.com>
+---
+ src/CMakeLists.txt                    |   1 +
+ src/skippy/chat_sampling.cpp          |  43 +++++++++
+ src/skippy/runtime_types.h            |   2 +
+ src/skippy/sampling.cpp               |   2 +
+ src/skippy/sampling_argmax.cpp        | 129 ++++++++++++++++++++++++++
+ src/skippy/sampling_argmax.h          |  41 ++++++++
+ src/skippy/tests/sampling_history.cpp |   1 +
+ 7 files changed, 219 insertions(+)
+ create mode 100644 src/skippy/sampling_argmax.cpp
+ create mode 100644 src/skippy/sampling_argmax.h
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index ca5bf6937..4770024e3 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -50,6 +50,7 @@ add_library(llama
+             ${LLAMA_CORE_SOURCES}
+             skippy/activation.cpp
+             skippy/activation_layout.cpp
++            skippy/sampling_argmax.cpp
+             skippy/execution-batch.cpp
+             skippy/execution-single.cpp
+             skippy/model_load_config.cpp
+diff --git a/src/skippy/chat_sampling.cpp b/src/skippy/chat_sampling.cpp
+index 3c9fc758b..2d266fbb7 100644
+--- a/src/skippy/chat_sampling.cpp
++++ b/src/skippy/chat_sampling.cpp
+@@ -5,6 +5,7 @@
+ #include "skippy/errors.h"
+ #include "../../common/sampling.h"
+ 
++#include <algorithm>
+ #include <cmath>
+ #include <stdexcept>
+ 
+@@ -40,6 +41,35 @@ void skippy_chat_accept_history(skippy_session * session) {
+     }
+ }
+ 
++static const skippy_argmax_plan & skippy_session_argmax_plan(skippy_session * session) {
++    auto & plan = session->sampling_argmax_plan;
++    if (!plan.valid) {
++        plan.valid = true;
++        const auto & config = session->sampling_config;
++        plan.eligible = session->sampling_config_valid && config.version != 0 &&
++                (config.flags & SKIPPY_SAMPLING_FLAG_ENABLED) && skippy_sampling_selects_argmax(&config);
++        if (plan.eligible) {
++            const auto * vocab = llama_model_get_vocab(session->stage_model->model);
++            std::vector<llama_logit_bias> biases(config.logit_bias,
++                    config.logit_bias + std::min<uint32_t>(config.logit_bias_count, SKIPPY_MAX_LOGIT_BIAS));
++            int32_t count = 0;
++            const auto * suppressed = llama_vocab_get_suppress_tokens(vocab, &count);
++            const bool ignore_eos = config.ignore_eos != 0 || (config.flags & SKIPPY_SAMPLING_FLAG_IGNORE_EOS);
++            for (llama_token token = 0; token < llama_vocab_n_tokens(vocab); ++token) {
++                const bool model_suppressed = suppressed != nullptr && count > 0 &&
++                        std::find(suppressed, suppressed + count, token) != suppressed + count;
++                if (model_suppressed || (ignore_eos && llama_vocab_is_eog(vocab, token))) {
++                    biases.erase(std::remove_if(biases.begin(), biases.end(),
++                            [token](const llama_logit_bias & bias) { return bias.token == token; }), biases.end());
++                    biases.push_back({token, -INFINITY});
++                }
++            }
++            skippy_prepare_argmax_plan(&plan, std::move(biases), llama_vocab_n_tokens(vocab));
++        }
++    }
++    return plan;
++}
++
+ llama_token skippy_chat_sample_token(skippy_session * session, int32_t logits_index) {
+     const auto backend_token = llama_get_sampled_token_ith(session->ctx, logits_index);
+     const auto * backend_probs = llama_get_sampled_probs_ith(session->ctx, logits_index);
+@@ -64,6 +94,19 @@ llama_token skippy_chat_sample_token(skippy_session * session, int32_t logits_in
+         return LLAMA_TOKEN_NULL;
+     }
+     skippy_chat_accept_history(session);
++    if (!session->sampling_has_reasoning_budget && !session->sampling_has_grammar) {
++        const auto & plan = skippy_session_argmax_plan(session);
++        if (plan.eligible) {
++            const auto * logits = llama_get_logits_ith(session->ctx, logits_index);
++            const auto * vocab = llama_model_get_vocab(session->stage_model->model);
++            const auto token = skippy_select_unique_argmax(logits, llama_vocab_n_tokens(vocab), plan);
++            if (token != LLAMA_TOKEN_NULL) {
++                ++session->sampling_argmax_count;
++                skippy_mark_context_synchronized(session->stage_model);
++                return token;
++            }
++        }
++    }
+     const auto token = common_sampler_sample(session->sampler, session->ctx, logits_index);
+     skippy_mark_context_synchronized(session->stage_model);
+     const auto * candidates = common_sampler_get_candidates(session->sampler, false);
+diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
+index 6aaa22cd7..4721ded6d 100644
+--- a/src/skippy/runtime_types.h
++++ b/src/skippy/runtime_types.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include "skippy.h"
++#include "skippy/sampling_argmax.h"
+ 
+ #include "../llama-context.h"
+ #include "../llama-model.h"
+@@ -169,6 +170,7 @@ struct skippy_session {
+     uint64_t sampling_rebuild_count = 0;
+     // Rows the argmax path selected without running the sampler chain.
+     uint64_t sampling_argmax_count = 0;
++    skippy_argmax_plan sampling_argmax_plan;
+     skippy_sampling_config sampling_config = {};
+     bool sampling_config_valid = false;
+     std::string chat_sampling_metadata;
+diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
+index 22aaa6a30..8a724d797 100644
+--- a/src/skippy/sampling.cpp
++++ b/src/skippy/sampling.cpp
+@@ -331,6 +331,7 @@ void skippy_clear_chat_sampling(skippy_session * session) {
+     session->chat_sampling_metadata.clear();
+     session->grammar_generated_start = 0;
+     session->sampling_accepted_token_count = 0;
++    session->sampling_argmax_plan = {};
+ }
+ 
+ static bool skippy_sampling_enabled(const skippy_sampling_config * sampling) {
+@@ -457,6 +458,7 @@ static void skippy_store_sampling_config(
+     session->sampling_config = sampling != nullptr ?
+             *sampling : skippy_sampling_config{};
+     session->sampling_config_valid = true;
++    session->sampling_argmax_plan = {};
+ }
+ 
+ static void skippy_log_sampling_cache_metrics(
+diff --git a/src/skippy/sampling_argmax.cpp b/src/skippy/sampling_argmax.cpp
+new file mode 100644
+index 000000000..33061da59
+--- /dev/null
++++ b/src/skippy/sampling_argmax.cpp
+@@ -0,0 +1,129 @@
++#include "skippy/sampling_argmax.h"
++
++#include <algorithm>
++#include <cmath>
++#include <iterator>
++#include <limits>
++#include <utility>
++
++static bool skippy_sampler_preserves_argmax(
++        uint32_t sampler_type,
++        const skippy_sampling_config * sampling,
++        bool default_order) {
++    switch (sampler_type) {
++        case SKIPPY_SAMPLER_PENALTIES:
++        {
++            // The chain maps a zero window to -1, which llama_sampler_init_penalties disables.
++            const float repeat_penalty = sampling->repeat_penalty == 0.0f ? 1.0f : sampling->repeat_penalty;
++            return sampling->penalty_last_n <= 0 ||
++                   (repeat_penalty == 1.0f &&
++                    sampling->frequency_penalty == 0.0f &&
++                    sampling->presence_penalty == 0.0f);
++        }
++        case SKIPPY_SAMPLER_DRY:
++            return sampling->dry_multiplier == 0.0f ||
++                   sampling->dry_base < 1.0f ||
++                   sampling->dry_penalty_last_n <= 0;
++        case SKIPPY_SAMPLER_TYPICAL_P:
++            // Typical sampling can drop the top token; the default order skips it outside (0, 1).
++            return sampling->typical_p >= 1.0f || (default_order && !(sampling->typical_p > 0.0f));
++        case SKIPPY_SAMPLER_XTC:
++            // XTC removes top tokens unless llama_sample_xtc_apply returns early.
++            return sampling->xtc_probability <= 0.0f || sampling->xtc_threshold > 0.5f;
++        case SKIPPY_SAMPLER_TOP_N_SIGMA:
++        case SKIPPY_SAMPLER_TOP_K:
++        case SKIPPY_SAMPLER_TOP_P:
++        case SKIPPY_SAMPLER_MIN_P:
++        case SKIPPY_SAMPLER_TEMPERATURE:
++            return true;
++        default:
++            return false;
++    }
++}
++
++bool skippy_sampling_selects_argmax(const skippy_sampling_config * sampling) {
++    if (sampling == nullptr ||
++            !(sampling->temperature <= 0.0f) ||
++            sampling->dynatemp_range > 0.0f ||
++            sampling->mirostat_mode == 1 ||
++            sampling->mirostat_mode == 2) {
++        return false;
++    }
++    const uint32_t configured_count = std::min<uint32_t>(sampling->sampler_count, SKIPPY_MAX_SAMPLERS);
++    const bool default_order = configured_count == 0;
++    const uint32_t * order = default_order ? skippy_default_sampler_order : sampling->samplers;
++    const uint32_t count = default_order ?
++            static_cast<uint32_t>(std::size(skippy_default_sampler_order)) : configured_count;
++    bool has_temperature = false;
++    for (uint32_t i = 0; i < count; ++i) {
++        if (!skippy_sampler_preserves_argmax(order[i], sampling, default_order)) {
++            return false;
++        }
++        has_temperature = has_temperature || order[i] == SKIPPY_SAMPLER_TEMPERATURE;
++    }
++    // Without the temperature sampler, dist draws from the whole distribution.
++    return has_temperature;
++}
++
++void skippy_prepare_argmax_plan(
++        skippy_argmax_plan * plan,
++        std::vector<llama_logit_bias> biases,
++        int32_t n_vocab) {
++    plan->biases = std::move(biases);
++    plan->biased.clear();
++    plan->biased_tokens.clear();
++    if (plan->biases.empty() || n_vocab <= 0) {
++        return;
++    }
++    plan->biased.assign(static_cast<size_t>(n_vocab), 0);
++    for (const llama_logit_bias & bias : plan->biases) {
++        if (bias.token < 0 || bias.token >= n_vocab || plan->biased[static_cast<size_t>(bias.token)] != 0) {
++            continue;
++        }
++        plan->biased[static_cast<size_t>(bias.token)] = 1;
++        plan->biased_tokens.push_back(bias.token);
++    }
++}
++
++llama_token skippy_select_unique_argmax(
++        const float * logits,
++        int32_t n_vocab,
++        const skippy_argmax_plan & plan) {
++    if (logits == nullptr || n_vocab <= 0) {
++        return LLAMA_TOKEN_NULL;
++    }
++    llama_token best_token = LLAMA_TOKEN_NULL;
++    float best = -std::numeric_limits<float>::infinity();
++    bool tied = false;
++    bool has_nan = false;
++    auto consider = [&](llama_token token, float value) {
++        if (std::isnan(value)) {
++            has_nan = true;
++        } else if (best_token == LLAMA_TOKEN_NULL || value > best) {
++            best = value;
++            best_token = token;
++            tied = false;
++        } else if (value == best) {
++            tied = true;
++        }
++    };
++    const uint8_t * biased = plan.biased.empty() ? nullptr : plan.biased.data();
++    for (llama_token token = 0; token < n_vocab; ++token) {
++        if (biased == nullptr || biased[token] == 0) {
++            consider(token, logits[token]);
++        }
++    }
++    for (const llama_token token : plan.biased_tokens) {
++        float value = logits[token];
++        for (const llama_logit_bias & bias : plan.biases) {
++            if (bias.token == token) {
++                value += bias.bias;
++            }
++        }
++        consider(token, value);
++    }
++    if (has_nan || tied || best_token == LLAMA_TOKEN_NULL || !std::isfinite(best)) {
++        return LLAMA_TOKEN_NULL;
++    }
++    return best_token;
++}
+diff --git a/src/skippy/sampling_argmax.h b/src/skippy/sampling_argmax.h
+new file mode 100644
+index 000000000..119511079
+--- /dev/null
++++ b/src/skippy/sampling_argmax.h
+@@ -0,0 +1,41 @@
++#pragma once
++
++#include "skippy/sampling.h"
++
++#include "llama.h"
++
++#include <cstdint>
++#include <vector>
++
++inline constexpr uint32_t skippy_default_sampler_order[] = {
++    SKIPPY_SAMPLER_PENALTIES,
++    SKIPPY_SAMPLER_DRY,
++    SKIPPY_SAMPLER_TOP_N_SIGMA,
++    SKIPPY_SAMPLER_TOP_K,
++    SKIPPY_SAMPLER_TYPICAL_P,
++    SKIPPY_SAMPLER_TOP_P,
++    SKIPPY_SAMPLER_MIN_P,
++    SKIPPY_SAMPLER_XTC,
++    SKIPPY_SAMPLER_TEMPERATURE,
++};
++
++struct skippy_argmax_plan {
++    bool valid = false;
++    bool eligible = false;
++    std::vector<llama_logit_bias> biases;
++    std::vector<uint8_t> biased;
++    std::vector<llama_token> biased_tokens;
++};
++
++bool skippy_sampling_selects_argmax(const skippy_sampling_config * sampling);
++
++void skippy_prepare_argmax_plan(
++        skippy_argmax_plan * plan,
++        std::vector<llama_logit_bias> biases,
++        int32_t n_vocab);
++
++// LLAMA_TOKEN_NULL when the biased maximum is tied, NaN, or not finite.
++llama_token skippy_select_unique_argmax(
++        const float * logits,
++        int32_t n_vocab,
++        const skippy_argmax_plan & plan);
+diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
+index b699103c1..e172491f6 100644
+--- a/src/skippy/tests/sampling_history.cpp
++++ b/src/skippy/tests/sampling_history.cpp
+@@ -482,6 +482,7 @@ void adapter_contracts(skippy_model * model) {
+     error = nullptr;
+ 
+     config = sampling_config();
++    config.temperature = 0.8f;
+     config.ignore_eos = 1;
+     config.logit_bias_count = 3;
+     const auto * vocab = llama_model_get_vocab(model->model);
+-- 
+2.54.0 (Apple Git-157)
+
