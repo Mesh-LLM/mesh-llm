@@ -112,6 +112,8 @@ pub(super) struct SplitGenerationLoadSettings<'a> {
     pub(super) startup_timeout: Duration,
     /// What `live_request_defaults::track_model` returned for this load.
     pub(super) live_defaults_generation: u64,
+    /// The split DFlash plan, with the draft the final stage loads.
+    pub(super) split_dflash: Option<skippy_serving::split_dflash::SplitDFlashStage>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -821,6 +823,15 @@ pub(super) fn split_runtime_stage_load_request(
             activation_codec_policy: resolved_config.activation_codec_policy,
         },
         native_mtp_enabled: resolved_config.native_mtp_enabled,
+        // Every stage captures the draft's target layers it owns; only the
+        // final stage loads the draft.
+        dflash: settings.split_dflash.as_ref().map(|plan| {
+            let mut plan = plan.clone();
+            if downstream.is_some() {
+                plan.draft_model_path = None;
+            }
+            plan
+        }),
         shutdown_generation: spec.generation.generation,
         coordinator_term: spec.generation.coordinator_term,
         coordinator_id: Some(spec.node.id()),
@@ -875,6 +886,7 @@ pub(super) async fn split_generation_load_settings<'a>(
     // without the default draft, falling back to native MTP when it has it.
     resolved.speculative.drop_default_dflash();
     crate::inference::skippy::materialize_projector_url(&mut resolved).await?;
+    let default_dflash = materialize_split_default_dflash(&mut resolved).await;
     resolved.model_fit.ctx_size = spec.ctx_size;
     resolved.throughput.parallel = spec.slots;
     if let Some(cache_type_k) = spec.cache_type_k_override {
@@ -911,12 +923,21 @@ pub(super) async fn split_generation_load_settings<'a>(
         spec.config_model_id,
         spec.package.generation.as_ref(),
     );
+    let split_dflash = split_dflash_plan(
+        &mut embedded_openai,
+        resolved.speculative.draft_n_gpu_layers,
+        default_dflash,
+    );
     let lifecycle = configured_stage_lifecycle_intervals(spec.mesh_config, spec.config_model_id);
-    let runtime_options = resolved.to_embedded_runtime_options(
+    let mut runtime_options = resolved.to_embedded_runtime_options(
         &spec.skippy_telemetry,
         Some(spec.package.clone()),
         load_mode.clone(),
     )?;
+    runtime_options.recurrent_rollback_tokens = split_dflash.as_ref().map_or(
+        0,
+        skippy_serving::split_dflash::SplitDFlashStage::recurrent_rollback_tokens,
+    );
     tracing::info!(
         model = spec.model_ref,
         "KV cache: {} K + {} V",
@@ -932,7 +953,70 @@ pub(super) async fn split_generation_load_settings<'a>(
         load_mode,
         startup_timeout: lifecycle.startup_timeout,
         live_defaults_generation,
+        split_dflash,
     })
+}
+
+/// Draft tokens per block for a default DFlash draft on a split. Every
+/// drafted token costs a verify row on every stage, and a block that misses
+/// early wastes the rest of it, so a split drafts short blocks unless the
+/// configuration asks for more.
+const SPLIT_DEFAULT_DFLASH_MAX_DRAFT_TOKENS: usize = 4;
+
+/// A default DFlash draft serves a split once it is cached, as it does on one
+/// node; until then it downloads in the background. Returns whether the
+/// split's DFlash plan is that default.
+async fn materialize_split_default_dflash(resolved: &mut skippy::ResolvedSkippyConfig) -> bool {
+    let Some(pairing) = resolved.speculative.default_dflash else {
+        return false;
+    };
+    if crate::inference::skippy::default_dflash_draft_cached(pairing) {
+        crate::inference::skippy::materialize_default_dflash_draft(resolved).await;
+    } else {
+        resolved.speculative.drop_default_dflash();
+    }
+    resolved.speculative.default_dflash.is_some()
+}
+
+/// The split DFlash plan for stage 0's DFlash decode plan, or `None` when it
+/// has none. A default draft drafts short blocks. A draft whose target layers
+/// cannot be read leaves the split serving without speculation.
+fn split_dflash_plan(
+    embedded_openai: &mut skippy::ResolvedEmbeddedOpenAiArgs,
+    draft_n_gpu_layers: Option<i32>,
+    default_dflash: bool,
+) -> Option<skippy_serving::split_dflash::SplitDFlashStage> {
+    let dflash = embedded_openai.speculative.dflash.as_mut()?;
+    if default_dflash {
+        let cap = dflash
+            .max_draft_tokens
+            .map_or(SPLIT_DEFAULT_DFLASH_MAX_DRAFT_TOKENS, |cap| {
+                cap.min(SPLIT_DEFAULT_DFLASH_MAX_DRAFT_TOKENS)
+            });
+        dflash.max_draft_tokens = Some(cap);
+    }
+    let dflash = &*dflash;
+    match skippy_serving::split_dflash::SplitDFlashStage::from_draft(
+        dflash,
+        true,
+        draft_n_gpu_layers,
+    ) {
+        Ok(plan) => {
+            tracing::info!(
+                draft = ?plan.draft_model_path,
+                target_layers = ?plan.target_layers,
+                max_draft_tokens = ?plan.max_draft_tokens,
+                "split DFlash: the final stage drafts, stages forward target-layer inputs"
+            );
+            Some(plan)
+        }
+        Err(error) => {
+            tracing::warn!("split DFlash unavailable, serving without speculation: {error:#}");
+            embedded_openai.speculative.dflash = None;
+            embedded_openai.speculative.effective_strategy = "disabled".to_string();
+            None
+        }
+    }
 }
 
 pub(super) fn split_allocatable_memory_bytes(spec: &SplitGenerationLoadSpec<'_>) -> Option<u64> {

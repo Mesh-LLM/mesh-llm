@@ -360,3 +360,27 @@ fn control_frame_roundtrip() {
     assert_eq!(decoded.peers[0].endpoint_id, vec![0u8; 32]);
     assert_eq!(decoded.peers[0].role, NodeRole::Worker as i32);
 }
+
+#[test]
+fn stage_load_proto_carries_a_split_dflash_plan() {
+    let mut load = stage_load_request();
+    let plan = skippy_serving::split_dflash::SplitDFlashStage {
+        target_layers: vec![6, 15, 25, 34, 43],
+        draft_model_path: Some("/models/draft-dflash.gguf".into()),
+        max_draft_tokens: Some(7),
+        draft_n_gpu_layers: Some(-1),
+    };
+    load.dflash = Some(plan.clone());
+
+    let decoded = stage_load_from_proto(stage_load_to_proto(load)).unwrap();
+
+    assert_eq!(decoded.dflash, Some(plan));
+}
+
+#[test]
+fn a_stage_load_from_a_peer_without_split_dflash_has_no_plan() {
+    let mut proto = stage_load_to_proto(stage_load_request());
+    proto.dflash = None;
+    let decoded = stage_load_from_proto(proto).unwrap();
+    assert_eq!(decoded.dflash, None);
+}

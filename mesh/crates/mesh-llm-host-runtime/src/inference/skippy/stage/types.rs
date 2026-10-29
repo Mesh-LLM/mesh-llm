@@ -105,6 +105,8 @@ pub(crate) struct StageLoadRequest {
     pub(crate) flash_attn_type: FlashAttentionType,
     pub(crate) runtime_settings: StageLoadRuntimeSettings,
     pub(crate) native_mtp_enabled: bool,
+    /// This stage's part in a split DFlash plan.
+    pub(crate) dflash: Option<skippy_serving::split_dflash::SplitDFlashStage>,
     pub(crate) shutdown_generation: u64,
     pub(crate) coordinator_term: u64,
     pub(crate) coordinator_id: Option<iroh::EndpointId>,
