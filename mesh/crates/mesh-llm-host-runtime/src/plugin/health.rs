@@ -161,6 +161,7 @@ impl PluginManager {
             endpoints.push(InferenceEndpointRoute {
                 plugin_name: endpoint.plugin_name,
                 endpoint_id: endpoint.endpoint_id,
+                protocol: endpoint.protocol,
                 address,
                 models: endpoint.models,
             });
@@ -325,7 +326,9 @@ async fn probe_endpoint(endpoint: &proto::EndpointManifest) -> Option<EndpointHe
     ) {
         (proto::EndpointKind::Inference, proto::EndpointTransportKind::EndpointTransportHttp) => {
             let protocol = endpoint.protocol.as_deref().unwrap_or_default();
-            if protocol.eq_ignore_ascii_case("openai_compatible") {
+            if protocol.eq_ignore_ascii_case("openai_compatible")
+                || protocol.eq_ignore_ascii_case("document_ocr_v1")
+            {
                 return Some(
                     probe_openai_compatible_http_endpoint(endpoint.address.as_deref()?).await,
                 );
@@ -625,6 +628,25 @@ mod tests {
         );
         assert_eq!(requests.load(Ordering::SeqCst), 1);
 
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn document_ocr_endpoint_probe_discovers_ready_models() {
+        let (address, handle, _) =
+            spawn_fake_models_server(vec![("200 OK", r#"{"data":[{"id":"datalab/indra-ocr"}]}"#)])
+                .await;
+        let endpoint = proto::EndpointManifest {
+            endpoint_id: "indra".into(),
+            kind: proto::EndpointKind::Inference as i32,
+            transport_kind: proto::EndpointTransportKind::EndpointTransportHttp as i32,
+            protocol: Some("document_ocr_v1".into()),
+            address: Some(address),
+            ..Default::default()
+        };
+        let health = probe_endpoint(&endpoint).await.expect("OCR probe");
+        assert!(health.available);
+        assert_eq!(health.models, ["datalab/indra-ocr"]);
         handle.await.unwrap();
     }
 

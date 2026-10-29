@@ -190,15 +190,21 @@ job, as used by the llama canary, remains a follow-up for this older repair path
 
 **Llama Upgrade** (`llama-upstream-canary.yml`) runs daily or on trusted-main dispatch. It freezes
 one main source SHA and the upstream target before any hardware work. The
-default target is GitHub's latest published stable llama.cpp release, resolved
+default target is the newest published llama.cpp release or prerelease, resolved
 by the Rust `repository llama-upstream-release` command. The hosted resolver
-rejects drafts, prereleases and non-version tags, peels the release tag to an
-exact commit, and records both tag and SHA in the summary. API errors, missing
-releases and moving tags fail before hardware work; there is no `master`
-fallback. Public API reads use the workflow's read-only token only in that
-selection step, with a 120-second total lookup budget. An explicit full
-`upstream_sha` remains a deliberate override; empty or `latest` means the latest
-stable release. `mesh_ref` bypasses this lookup and certifies its existing pin.
+compares publication times across the paginated metadata feed, excluding drafts.
+It reads every page of the feed before selecting and records the selected
+release's kind, publication time, tag and SHA in the summary, because the feed
+is ordered by creation time and a draft created long ago but published recently
+sits on a late page. It peels the selected tag to an exact commit. API errors,
+missing releases and moving tags fail before hardware work;
+there is no `master` fallback. Public API reads use the workflow's read-only
+token only in that selection step. Fixed read-only GraphQL queries fetch metadata
+without assets; REST resolves the tag. A 180-second total budget, 1 MiB response
+cap and 1000-page ceiling bound the lookup; incomplete pagination fails without
+choosing a partial result. An explicit full `upstream_sha` remains a deliberate override;
+empty or `latest` means the newest release or prerelease. `mesh_ref` bypasses
+this lookup and certifies its existing pin.
 Release selection does not waive our candidate or independent verification.
 Unchanged
 scheduled/forced runs build once and certify the complete roster. Every
@@ -1220,7 +1226,10 @@ After successful runtime package verification, Windows release CPU/GPU jobs
 publish and verify an exact-key ABI cache miss under the current ref. These
 two jobs grant only `actions: read` for the publication probe; cache writes use
 the scoped runtime cache token. Failed/cancelled packaging never saves a
-partial ABI build. Hosted placement, architecture matrices, and PR cache policy
+partial ABI build. Publication verification is idempotent: an exact key/ref,
+non-empty entry counts even when a concurrent writer (the main cache warmer)
+published the immutable key first, and the lookup-only restore still fails
+closed unless the current cache version resolves. A lookup-only version probe before the retry prevents an API-visible older version from suppressing the single recovery save. Hosted placement, architecture matrices, and PR cache policy
 are unchanged. Windows release jobs enable GitHub-backed compiler caching during
 native runtime preparation. Hosted CUDA 13 evidence and exact ABI-cache reuse
 are recorded in PR #2662; cache compatibility remains tied to the runner image.
@@ -1408,6 +1417,14 @@ The implemented policy uses that isolation selectively:
 | Website npm store | None -- the `mesh/website` job runs in the prebuilt `public web` image (baked npm/node) with no bare-metal row, so its `setup-node` cache was deleted outright rather than kept | Every run does a fresh `npm ci`; no cache to invalidate or race |
 | SDK Rust Cargo registry/target | `Swatinem/rust-cache` restores the exact `mesh-llm-sdk-rust-cargo-v1` identity (OS/arch, target, pinned image and toolchain epochs, debug/LLD recipe, Cargo/manifest/script inputs, and cache-version) and only saves on `main` | PRs restore the trusted main seed without publishing; a miss still rebuilds the SDK test graph |
 | GitHub artifacts | Never used as cross-run caches | Immutable producers/consumers remain correct within one run; reruns recreate run-scoped artifacts |
+
+On a restore-key (partial) hit, `Swatinem/rust-cache` cleans the restored
+target profile and deletes top-level binaries such as `target/debug/xtask`.
+A job that combines `prepare-automation` with rust-cache must therefore run
+every rust-cache restore before every automation preparation; the
+`artifact_automation_is_prepared_after_rust_cache_restore` contract enforces
+this for all occurrences (release run 40804094970 lost
+`MESH_LLM_AUTOMATION_BIN` in `Swift target` through the reverse order).
 
 Outside the bounded exception, a Depot-selected run emits
 `allow_native_github_cache=false` and `allow_depot_remote_cache=false`. Every

@@ -767,6 +767,29 @@ fn audio_upload_limits_are_path_scoped() {
 }
 
 #[tokio::test]
+async fn document_ocr_upload_extracts_model_from_multipart() {
+    let body = b"--ocr\r\nContent-Disposition: form-data; name=\"file\"; filename=\"page.png\"\r\n\r\nimage\r\n--ocr\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ndatalab/indra-ocr\r\n--ocr--\r\n";
+    let headers = format!(
+        "POST /v1/documents/ocr HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=ocr\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    let request = read_request_from_parts(vec![headers, body.to_vec()]).await;
+    assert_eq!(request.model_name.as_deref(), Some("datalab/indra-ocr"));
+    assert_eq!(request.body_len_bytes, body.len());
+}
+
+#[test]
+fn document_ocr_upload_limits_are_path_scoped() {
+    let limits = body_limits_for_path("/v1/documents/ocr?trace=1", HTTP_READ_LIMITS);
+    assert_eq!(limits.max_body_bytes, MAX_DOCUMENT_UPLOAD_BODY_BYTES);
+    assert_eq!(
+        limits.max_chunked_wire_bytes,
+        MAX_DOCUMENT_UPLOAD_CHUNKED_WIRE_BYTES
+    );
+}
+
+#[tokio::test]
 async fn test_read_http_request_expect_100_continue() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

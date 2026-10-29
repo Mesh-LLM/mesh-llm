@@ -260,8 +260,8 @@ where
                 Err(_) => break "idle",
                 Ok(Ok(0)) | Ok(Err(_)) => break "client closed",
                 Ok(Ok(n)) => {
-                    if host_write.write_all(&from_client[..n]).await.is_err() {
-                        let _ = client_write.write_all(&CLOSE_INTERNAL_ERROR).await;
+                    if !matches!(tokio::time::timeout(idle, host_write.write_all(&from_client[..n])).await, Ok(Ok(()))) {
+                        let _ = tokio::time::timeout(idle, client_write.write_all(&CLOSE_INTERNAL_ERROR)).await;
                         break "host write failed";
                     }
                     to_host += n as u64;
@@ -271,11 +271,11 @@ where
                 Err(_) => break "idle",
                 Ok(Ok(0)) => break "host closed",
                 Ok(Err(_)) => {
-                    let _ = client_write.write_all(&CLOSE_INTERNAL_ERROR).await;
+                    let _ = tokio::time::timeout(idle, client_write.write_all(&CLOSE_INTERNAL_ERROR)).await;
                     break "host read failed";
                 }
                 Ok(Ok(n)) => {
-                    if client_write.write_all(&from_host[..n]).await.is_err() {
+                    if !matches!(tokio::time::timeout(idle, client_write.write_all(&from_host[..n])).await, Ok(Ok(()))) {
                         break "client write failed";
                     }
                     to_client += n as u64;
@@ -283,8 +283,8 @@ where
             },
         }
     };
-    let _ = client_write.flush().await;
-    let _ = host_write.shutdown().await;
+    let _ = tokio::time::timeout(idle, client_write.flush()).await;
+    let _ = tokio::time::timeout(idle, host_write.shutdown()).await;
     Ok(SessionEnd {
         to_host,
         to_client,
@@ -529,6 +529,41 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(ended.reason, "idle");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_host_write_ends_the_session() {
+        let (mut client, mut client_side) = tokio::io::duplex(16);
+        let (host_side, _host) = tokio::io::duplex(1);
+        client.write_all(b"hello").await.unwrap();
+        let ended = tokio::time::timeout(
+            Duration::from_secs(5),
+            relay_bytes(&mut client_side, host_side, Duration::from_secs(1)),
+        )
+        .await
+        .expect("the stalled write must time out")
+        .unwrap();
+        assert_eq!(ended.reason, "host write failed");
+        assert_eq!(ended.to_host, 0);
+        let mut frame = [0; 4];
+        client.read_exact(&mut frame).await.unwrap();
+        assert_eq!(frame, CLOSE_INTERNAL_ERROR);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_stalled_client_write_ends_the_session() {
+        let (_client, mut client_side) = tokio::io::duplex(1);
+        let (host_side, mut host) = tokio::io::duplex(16);
+        host.write_all(b"hello").await.unwrap();
+        let ended = tokio::time::timeout(
+            Duration::from_secs(5),
+            relay_bytes(&mut client_side, host_side, Duration::from_secs(1)),
+        )
+        .await
+        .expect("the stalled write must time out")
+        .unwrap();
+        assert_eq!(ended.reason, "client write failed");
+        assert_eq!(ended.to_client, 0);
     }
 
     /// A host stream whose reads fail, as a dropped QUIC tunnel does.
