@@ -48,7 +48,10 @@ pub use decision::{
     DecisionRequest, DecisionValue,
 };
 pub use devices::{BackendDevice, BackendDeviceType, backend_devices};
-pub use dflash::{DFlashDraftInfo, DFlashDraftOptions, DFlashProposal, DFlashVariant};
+pub use dflash::{
+    DFlashDraftInfo, DFlashDraftOptions, DFlashFeatureRows, DFlashProposal, DFlashVariant,
+    dflash_feature_identity, dflash_feature_layer, frame_has_dflash_features,
+};
 pub(crate) use error::ensure_ok;
 pub use gguf_writer::{
     ModelInfo, write_gguf_from_parts, write_gguf_from_parts_consuming,
