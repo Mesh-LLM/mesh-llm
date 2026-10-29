@@ -27,6 +27,8 @@ fn installed_capsules(store_root: &Path, enabled: bool) -> InstalledPluginMetada
             openai_exchange_hook: None,
             config_schema: None,
             web_ui: None,
+            operation_bindings: Vec::new(),
+            peer_blocks: false,
         }),
         last_protocol_version: Some(1),
         last_status: Some("installed".to_string()),

@@ -209,6 +209,8 @@ fn install_blackboard_schema(plugin_dir: &std::path::Path) {
                 openai_exchange_hook: None,
                 config_schema: Some(blackboard_schema()),
                 web_ui: None,
+                operation_bindings: Vec::new(),
+                peer_blocks: false,
             }),
             last_protocol_version: Some(1),
             last_status: Some("installed".to_string()),

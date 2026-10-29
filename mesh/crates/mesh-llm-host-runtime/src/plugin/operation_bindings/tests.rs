@@ -56,6 +56,8 @@ async fn non_wallet_provider_uses_fixed_setup_allowlist_generation_and_revocatio
     provider.call_tool("probe", "{}").await.unwrap();
     let generation = caller.bound_generation().await.unwrap();
     let grant = PluginOperationBinding {
+        capability: None,
+        setup_directory: false,
         name: "state".into(),
         provider: "state-store".into(),
         profile: "one".into(),

@@ -1069,6 +1069,8 @@ pub(crate) mod tests {
                         reason: Some("bundle failed validation".into()),
                     },
                 }),
+                operation_bindings: Vec::new(),
+                peer_blocks: false,
             }),
             last_protocol_version: Some(1),
             last_status: Some("running".into()),

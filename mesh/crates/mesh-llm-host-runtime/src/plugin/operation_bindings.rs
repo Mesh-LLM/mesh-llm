@@ -25,12 +25,14 @@ impl BindingRegistry {
         for spec in specs {
             for grant in &spec.operation_bindings {
                 grant.validate(&spec.name).map_err(anyhow::Error::msg)?;
-                anyhow::ensure!(
-                    providers.insert(grant.provider.clone()),
-                    "provider requires one exclusive binding"
-                );
-                if !specs.iter().any(|provider| provider.name == grant.provider) {
-                    tracing::warn!(provider = %grant.provider, "bound provider unavailable at startup");
+                if grant.capability.is_none() {
+                    anyhow::ensure!(
+                        providers.insert(grant.provider.clone()),
+                        "provider requires one exclusive binding"
+                    );
+                    if !specs.iter().any(|provider| provider.name == grant.provider) {
+                        tracing::warn!(provider = %grant.provider, "bound provider unavailable at startup");
+                    }
                 }
                 anyhow::ensure!(
                     bindings
@@ -101,7 +103,11 @@ impl PluginManager {
         if caller_plugin.bound_generation().await != Some(caller_generation) {
             return denied("caller generation unavailable");
         }
-        let Some(provider) = self.inner.plugins.get(&binding.grant.provider) else {
+        let provider_name = match self.resolve_binding_provider(&key, &binding).await {
+            Ok(name) => name,
+            Err(response) => return response,
+        };
+        let Some(provider) = self.inner.plugins.get(&provider_name) else {
             return denied("provider unavailable");
         };
         let Some(generation) = provider.bound_generation().await else {
@@ -112,10 +118,15 @@ impl PluginManager {
             if !request.operation.is_empty() || !request.input_json.is_empty() {
                 return denied("setup accepts no caller payload");
             }
-            (
-                &binding.grant.setup_operation,
-                &binding.grant.setup_input_json,
-            )
+            let input = if binding.grant.setup_directory {
+                match setup_directory_payload(caller, &request.binding, &provider_name) {
+                    Ok(payload) => payload,
+                    Err(error) => return denied(&format!("setup directory unavailable: {error}")),
+                }
+            } else {
+                binding.grant.setup_input_json.clone()
+            };
+            (binding.grant.setup_operation.clone(), input)
         } else {
             if !binding.grant.operations.contains(&request.operation) {
                 return denied("operation not allowed");
@@ -131,14 +142,14 @@ impl PluginManager {
             {
                 return denied("handle requires setup and identity revalidation");
             }
-            (&request.operation, &request.input_json)
+            (request.operation.clone(), request.input_json.clone())
         };
         if input.len() > 65_536 {
             return denied("operation input exceeds bound");
         }
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
         let admission = match provider
-            .admit_bound_operation(generation, operation, input, deadline)
+            .admit_bound_operation(generation, &operation, &input, deadline)
             .await
         {
             Ok(admission) => admission,
@@ -181,6 +192,81 @@ impl PluginManager {
         }
         response
     }
+}
+
+impl PluginManager {
+    /// The provider a binding reaches. Named bindings are fixed by the
+    /// operator. A capability binding (from an installed package) resolves to
+    /// the single running plugin serving that capability; the choice is kept
+    /// for the registry's lifetime so a later restart cannot hand the binding
+    /// to another provider. Two candidates are refused: the operator names one.
+    async fn resolve_binding_provider(
+        &self,
+        key: &(String, String),
+        binding: &Binding,
+    ) -> Result<String, Response> {
+        if !binding.grant.provider.is_empty() {
+            return Ok(binding.grant.provider.clone());
+        }
+        let Some(capability) = binding.grant.capability.as_deref() else {
+            return Err(denied("binding names no provider"));
+        };
+        let mut candidates: Vec<String> = self
+            .capability_providers()
+            .await
+            .map_err(|error| denied(&format!("capability lookup failed: {error}")))?
+            .into_iter()
+            .filter(|provider| provider.capability == capability && provider.available)
+            .map(|provider| provider.plugin_name)
+            .filter(|name| name != &key.0)
+            .collect();
+        candidates.sort();
+        candidates.dedup();
+        match candidates.as_slice() {
+            [only] => {
+                let mut registry = self.inner.operation_bindings.0.lock().unwrap();
+                if let Some(current) = registry
+                    .get_mut(key)
+                    .filter(|current| Arc::ptr_eq(&current.capacity, &binding.capacity))
+                {
+                    current.grant.provider = only.clone();
+                }
+                tracing::info!(caller = %key.0, binding = %key.1, provider = %only, capability, "Capability binding resolved");
+                Ok(only.clone())
+            }
+            [] => Err(denied(&format!("no running plugin serves {capability}"))),
+            several => Err(denied(&format!(
+                "several plugins serve {capability} ({}); name one with [[plugin.operation_bindings]]",
+                several.join(", ")
+            ))),
+        }
+    }
+}
+
+/// Host-owned state directory for one caller/binding/provider, created
+/// owner-only: `~/.mesh-llm/plugin-state/<caller>/<binding>/<provider>`.
+fn setup_directory_payload(caller: &str, binding: &str, provider: &str) -> anyhow::Result<String> {
+    for segment in [caller, binding, provider] {
+        anyhow::ensure!(
+            !segment.is_empty()
+                && segment
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+                && segment != "."
+                && segment != "..",
+            "'{segment}' cannot be used as a directory name"
+        );
+    }
+    let home = dirs::home_dir().ok_or_else(|| anyhow::anyhow!("no home directory"))?;
+    let directory = home
+        .join(".mesh-llm")
+        .join("plugin-state")
+        .join(caller)
+        .join(binding)
+        .join(provider);
+    std::fs::create_dir_all(&directory)?;
+    mesh_llm_config::restrict_private_directory(&directory)?;
+    Ok(serde_json::json!({ "directory": directory.display().to_string() }).to_string())
 }
 
 fn denied(reason: &str) -> Response {

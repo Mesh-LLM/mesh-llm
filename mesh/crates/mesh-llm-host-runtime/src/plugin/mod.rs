@@ -16,6 +16,15 @@ pub(crate) mod identity_services;
 mod in_process;
 pub(crate) mod inference_observation;
 mod installed;
+
+/// Whether the installed package named `plugin_id` asked for peer-block
+/// permission (granted at install; a config entry's `allow_peer_blocks` wins).
+pub(crate) fn installed_plugin_peer_blocks(plugin_id: &str) -> bool {
+    installed::installed_plugin_metadata_for_name(plugin_id)
+        .ok()
+        .flatten()
+        .is_some_and(|metadata| installed::installed_peer_blocks(&metadata))
+}
 pub(crate) mod mcp;
 pub mod openai_exchange;
 mod operation_bindings;

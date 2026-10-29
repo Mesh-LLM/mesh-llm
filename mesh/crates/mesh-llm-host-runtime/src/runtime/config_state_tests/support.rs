@@ -125,6 +125,8 @@ pub(super) fn installed_plugin_metadata(
             openai_exchange_hook: None,
             config_schema: schema,
             web_ui: None,
+            operation_bindings: Vec::new(),
+            peer_blocks: false,
         }),
         last_protocol_version: Some(1),
         last_status: Some("installed".to_string()),

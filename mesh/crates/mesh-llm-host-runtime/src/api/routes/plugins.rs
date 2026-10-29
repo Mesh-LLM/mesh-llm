@@ -955,6 +955,8 @@ mod tests {
                         reason: Some("bundle failed validation".to_string()),
                     },
                 }),
+                operation_bindings: Vec::new(),
+                peer_blocks: false,
             }),
             last_protocol_version: Some(1),
             last_status: Some("running".to_string()),

@@ -116,9 +116,22 @@ pub(crate) fn configured_external_plugin_spec(
         },
     };
 
+    let operation_bindings = if entry.operation_bindings.is_empty() {
+        installed_metadata
+            .as_ref()
+            .map(installed_operation_bindings)
+            .unwrap_or_default()
+    } else {
+        entry.operation_bindings.clone()
+    };
+    let openai_exchange_grant = entry.openai_exchange_grant.clone().or_else(|| {
+        installed_metadata
+            .as_ref()
+            .and_then(installed_exchange_grant)
+    });
     Ok(ConfiguredExternalPlugin::Active(ExternalPluginSpec {
-        operation_bindings: entry.operation_bindings.clone(),
-        openai_exchange_grant: entry.openai_exchange_grant.clone().map(Box::new),
+        operation_bindings,
+        openai_exchange_grant: openai_exchange_grant.map(Box::new),
         name: entry.name.clone(),
         command,
         args: entry.args.clone(),
@@ -196,15 +209,75 @@ fn installed_plugin_command_for_name(name: &str) -> Result<String> {
     Ok(command.display().to_string())
 }
 
-fn installed_plugin_metadata_for_name(name: &str) -> Result<Option<InstalledPluginMetadata>> {
+pub(super) fn installed_plugin_metadata_for_name(
+    name: &str,
+) -> Result<Option<InstalledPluginMetadata>> {
     let root = default_store_root().context("Cannot determine plugin install root")?;
     PluginStore::new(root).load_optional(name)
 }
 
+/// Grants an installed package carries. `plugins install` printed what the
+/// package asks for and the operator accepted it by installing; a `[[plugin]]`
+/// entry that sets the same field replaces (or removes) the grant.
+pub(crate) fn installed_exchange_grant(
+    metadata: &InstalledPluginMetadata,
+) -> Option<mesh_llm_config::OpenAiExchangeGrant> {
+    let hook = metadata.manifest.as_ref()?.openai_exchange_hook.as_ref()?;
+    Some(mesh_llm_config::OpenAiExchangeGrant {
+        endpoints: hook.endpoints.clone(),
+        phases: hook.phases.clone(),
+        request_body: hook.request_body,
+        effective_request_body: hook.effective_request_body,
+        response_body: hook.response_body,
+        headers: hook.headers.clone(),
+        admission: hook.admission,
+        metadata: hook.metadata,
+        read_identity_bundle: hook.read_identity_bundle,
+        delegate_signing_key: hook.delegate_signing_key,
+        signing_scopes: hook.signing_scopes.clone(),
+        ..mesh_llm_config::OpenAiExchangeGrant::default()
+    })
+}
+
+/// Capability bindings an installed package asks for, as grants the binding
+/// registry resolves to the single running provider of each capability.
+pub(crate) fn installed_operation_bindings(
+    metadata: &InstalledPluginMetadata,
+) -> Vec<mesh_llm_config::PluginOperationBinding> {
+    metadata
+        .manifest
+        .as_ref()
+        .map(|manifest| {
+            manifest
+                .operation_bindings
+                .iter()
+                .map(|request| mesh_llm_config::PluginOperationBinding {
+                    name: request.name.clone(),
+                    provider: String::new(),
+                    capability: Some(request.capability.clone()),
+                    setup_directory: request.setup_directory,
+                    profile: "default".into(),
+                    setup_operation: request.setup_operation.clone(),
+                    setup_input_json: "{}".into(),
+                    operations: request.operations.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether the installed package asks for peer-block permission.
+pub(crate) fn installed_peer_blocks(metadata: &InstalledPluginMetadata) -> bool {
+    metadata
+        .manifest
+        .as_ref()
+        .is_some_and(|manifest| manifest.peer_blocks)
+}
+
 fn installed_plugin_spec(metadata: &InstalledPluginMetadata) -> ExternalPluginSpec {
     ExternalPluginSpec {
-        operation_bindings: Vec::new(),
-        openai_exchange_grant: None,
+        operation_bindings: installed_operation_bindings(metadata),
+        openai_exchange_grant: installed_exchange_grant(metadata).map(Box::new),
         name: metadata.name.clone(),
         command: installed_plugin_command(metadata).display().to_string(),
         args: Vec::new(),

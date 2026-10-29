@@ -70,8 +70,9 @@ pub use manifest::{
     mcp_tcp_endpoint, mcp_unix_socket_endpoint, mesh_channel, mesh_event_local_accepting,
     mesh_event_local_standby, mesh_event_mesh_id_updated, mesh_event_peer_down, mesh_event_peer_up,
     mesh_event_peer_updated, mesh_event_subscription, openai_http_inference_endpoint, operation,
-    package_manifest_json, plugin_manifest, prompt_service, resource, resource_template_service,
-    virtual_model, web_ui, web_ui_bundle, web_ui_config_section, web_ui_contribution, web_ui_page,
+    operation_binding, package_manifest_json, plugin_manifest, prompt_service, resource,
+    resource_template_service, virtual_model, web_ui, web_ui_bundle, web_ui_config_section,
+    web_ui_contribution, web_ui_page,
 };
 pub use virtual_model::{
     HostInferenceRequest, HostInferenceResponse, VirtualModelCandidate, VirtualModelInvocation,

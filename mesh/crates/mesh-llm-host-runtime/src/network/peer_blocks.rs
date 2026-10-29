@@ -535,10 +535,17 @@ pub(crate) async fn apply_plugin_request(
 /// Whether the operator lets `plugin_id` request peer blocks. Read from the
 /// live config on every request, so turning it off takes effect at once.
 fn plugin_may_request(config: &crate::plugin::MeshConfig, plugin_id: &str) -> bool {
-    config
+    if let Some(entry) = config
         .plugins
         .iter()
-        .any(|plugin| plugin.name == plugin_id && plugin.peer_blocks_allowed())
+        .find(|plugin| plugin.name == plugin_id)
+        && entry.allow_peer_blocks.is_some()
+    {
+        return entry.peer_blocks_allowed();
+    }
+    // No operator decision: an installed package that asked for it was
+    // granted at install (see `plugin::installed::installed_peer_blocks`).
+    crate::plugin::installed_plugin_peer_blocks(plugin_id)
 }
 
 fn plugin_request_choice(

@@ -1,0 +1,28 @@
+    Checking skippy-cache v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/skippy/crates/skippy-cache)
+    Checking secp256k1 v0.29.1
+   Compiling skippy-api v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/skippy/crates/skippy-api)
+    Checking nostr v0.45.5
+    Checking mesh-llm-log-store v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/mesh/crates/mesh-llm-log-store)
+    Checking skippy-runtime v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/skippy/crates/skippy-runtime)
+    Checking skippy-scheduler v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/skippy/crates/skippy-scheduler)
+    Checking mesh-llm-system v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/mesh/crates/mesh-llm-system)
+    Checking bitcoin v0.32.102
+    Checking skippy-serving v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/skippy/crates/skippy-serving)
+    Checking nostr-gossip v0.45.1
+    Checking nostr-database v0.45.2
+    Checking nostr-sdk v0.45.3
+    Checking lightning-types v0.4.0-rc1
+    Checking lightning-invoice v0.35.0-rc1
+    Checking mesh-native-serving-plugin-host v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/mesh/crates/mesh-native-serving-plugin-host)
+    Checking mesh-llm-wallet v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/mesh/crates/mesh-llm-wallet)
+    Checking mesh-llm-payments-types v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/mesh/crates/mesh-llm-payments-types)
+    Checking mesh-llm-client v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/mesh/crates/mesh-client)
+    Checking mesh-llm-payments v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/mesh/crates/mesh-llm-payments)
+    Checking skippy-commands v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/skippy/crates/skippy-commands)
+    Checking mesh-llm-skippy-adapter v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/mesh/crates/mesh-llm-skippy-adapter)
+    Checking mesh-llm-pay-lightning v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/mesh/crates/mesh-llm-pay-lightning)
+    Checking mesh-llm-cli v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/mesh/crates/mesh-llm-cli)
+    Checking mesh-llm-host-runtime v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/mesh/crates/mesh-llm-host-runtime)
+    Checking mesh-llm-commands v0.78.0 (/Users/michaelneale/.buzz/.scratch/jimmy-lightning-blocking/mesh/crates/mesh-llm-commands)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 23.19s
+exit=0

@@ -5,7 +5,18 @@ use serde::{Deserialize, Serialize};
 #[serde(deny_unknown_fields)]
 pub struct PluginOperationBinding {
     pub name: String,
+    /// Provider plugin name. Empty when `capability` names it instead: the
+    /// host then resolves the single running plugin serving that capability.
+    #[serde(default)]
     pub provider: String,
+    /// Capability the provider must serve (for example `wallet.v1`), used
+    /// when `provider` is empty. Comes from an installed package's manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capability: Option<String>,
+    /// The host supplies `{"directory": <host-owned per caller/binding/provider>}`
+    /// as the setup payload instead of `setup_input_json`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub setup_directory: bool,
     /// Opaque profile identifier. One provider process owns one profile.
     pub profile: String,
     pub setup_operation: String,
@@ -16,15 +27,25 @@ pub struct PluginOperationBinding {
 
 impl PluginOperationBinding {
     pub fn validate(&self, caller: &str) -> Result<(), String> {
-        for value in [
-            &self.name,
-            &self.provider,
-            &self.profile,
-            &self.setup_operation,
-        ] {
+        match &self.capability {
+            Some(capability) if capability.trim().is_empty() || capability.len() > 256 => {
+                return Err("binding capability must contain 1–256 bytes".into());
+            }
+            Some(_) if !self.provider.is_empty() => {
+                return Err("a binding names either a provider or a capability, not both".into());
+            }
+            None if self.provider.trim().is_empty() => {
+                return Err("binding identifiers must contain 1–256 bytes".into());
+            }
+            _ => {}
+        }
+        for value in [&self.name, &self.profile, &self.setup_operation] {
             if value.trim().is_empty() || value.len() > 256 {
                 return Err("binding identifiers must contain 1–256 bytes".into());
             }
+        }
+        if self.provider.len() > 256 {
+            return Err("binding identifiers must contain 1–256 bytes".into());
         }
         if self.provider == caller {
             return Err("self bindings are not permitted".into());
@@ -56,6 +77,8 @@ mod tests {
     use super::*;
     fn grant() -> PluginOperationBinding {
         PluginOperationBinding {
+            capability: None,
+            setup_directory: false,
             name: "state".into(),
             provider: "store".into(),
             profile: "one".into(),
