@@ -535,6 +535,58 @@ impl RuntimeState {
             .dflash_propose(anchor, max_tokens)
     }
 
+    /// Whether this stage drafts DFlash blocks for a split target.
+    pub(crate) fn dflash_drafts(&self) -> bool {
+        self.model.dflash_info().is_some()
+    }
+
+    /// Hands a split final stage's draft the feature rows that earlier stages
+    /// sent with `input`. A no-op on stages without a draft.
+    pub(crate) fn dflash_split_input(&mut self, session_id: &str, input: Option<&ActivationFrame>) {
+        if !self.dflash_drafts() {
+            return;
+        }
+        let rows = match input.map(skippy_runtime::DFlashFeatureRows::from_frame) {
+            Some(Ok(rows)) => rows,
+            Some(Err(error)) => {
+                tracing::debug!("ignoring malformed DFlash feature parts: {error:#}");
+                None
+            }
+            None => None,
+        };
+        if let Some(lane) = self.sessions.get_mut(session_id) {
+            lane.session.dflash_set_remote_features(rows);
+        }
+    }
+
+    /// Appends the DFlash feature rows this stage captured for the message
+    /// that produced `output`, for the final stage's draft.
+    pub(crate) fn dflash_split_output(&mut self, session_id: &str, output: &mut ActivationFrame) {
+        let Some(rows) = self
+            .sessions
+            .get_mut(session_id)
+            .and_then(|lane| lane.session.dflash_take_captured_features())
+        else {
+            return;
+        };
+        if let Err(error) = rows.append_to_frame(output) {
+            tracing::debug!("not forwarding DFlash feature rows: {error:#}");
+        }
+    }
+
+    /// Drafts a DFlash block after `anchor` at `anchor_position` on a split
+    /// final stage. `None` when the model has no DFlash draft attached.
+    pub(crate) fn dflash_propose_at(
+        &mut self,
+        session_id: &str,
+        anchor: i32,
+        anchor_position: u64,
+        max_tokens: usize,
+    ) -> Result<Option<skippy_runtime::DFlashProposal>> {
+        self.active_session(session_id)?
+            .dflash_propose_at(anchor, anchor_position, max_tokens)
+    }
+
     /// Verifies a speculative span in one batched forward, returning the target
     /// predictions plus the MTP draft for the branch that was verified.
     pub(crate) fn verify_tokens_sampled_mtp(
