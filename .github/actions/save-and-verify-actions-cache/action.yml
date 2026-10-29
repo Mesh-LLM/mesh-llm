@@ -99,8 +99,16 @@ runs:
             `The initial ${label} cache save was not published; retrying once.`,
           );
           return 'missing';
+    - name: Probe current cache version before retry
+      id: current-version
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: ${{ inputs.path }}
+        key: ${{ inputs.cache-key }}
+        lookup-only: true
+        fail-on-cache-miss: false
     - name: Retry exact cache after cache-service cooldown
-      if: steps.initial-publication.outputs.result != 'published'
+      if: steps.initial-publication.outputs.result != 'published' || steps.current-version.outputs.cache-hit != 'true'
       uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:
         path: ${{ inputs.path }}

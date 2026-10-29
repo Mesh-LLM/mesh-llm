@@ -1223,7 +1223,7 @@ the scoped runtime cache token. Failed/cancelled packaging never saves a
 partial ABI build. Publication verification is idempotent: an exact key/ref,
 non-empty entry counts even when a concurrent writer (the main cache warmer)
 published the immutable key first, and the lookup-only restore still fails
-closed unless the current cache version resolves. Hosted placement, architecture matrices, and PR cache policy
+closed unless the current cache version resolves. A lookup-only version probe before the retry prevents an API-visible older version from suppressing the single recovery save. Hosted placement, architecture matrices, and PR cache policy
 are unchanged. Windows release jobs enable GitHub-backed compiler caching during
 native runtime preparation. Hosted CUDA 13 evidence and exact ABI-cache reuse
 are recorded in PR #2662; cache compatibility remains tied to the runner image.
