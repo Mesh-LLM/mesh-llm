@@ -33,7 +33,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PluginProgressEvent {
     ResolvingCatalog {
         name: String,
@@ -76,6 +76,12 @@ pub enum PluginProgressEvent {
     InstallingRequirement {
         plugin: String,
         required: String,
+    },
+    /// A requirement of `plugin` was installed; its granted access is
+    /// reported like a plugin the operator named.
+    RequirementInstalled {
+        plugin: String,
+        installed: Box<InstalledPluginMetadata>,
     },
 }
 
@@ -124,44 +130,57 @@ pub async fn install_plugin(
 }
 
 /// Install, from the catalog, every plugin `plugin` requires that is not
-/// installed, and theirs in turn. A requirement that is already installed is
-/// left as it is, enabled or not, so this terminates on a cycle. The first
-/// failure stops the chain; `plugin` itself stays installed, and a node
-/// start reports what is still missing.
+/// installed, and theirs in turn (`requirements::install_missing`). Each
+/// dependency's install is reported as it lands, so what it was granted is
+/// disclosed even when a later requirement fails.
 async fn install_requirements(
     plugin: &InstalledPluginMetadata,
     options: &PluginInstallOptions,
     progress: &mut impl PluginProgressReporter,
 ) -> Result<()> {
     let store = PluginStore::new(&options.store_root);
-    let mut pending: Vec<(String, String)> =
-        crate::requirements::uninstalled_requirements(&store, plugin)?
-            .into_iter()
-            .map(|required| (plugin.name.clone(), required))
-            .collect();
-    while let Some((dependent, required)) = pending.pop() {
-        if store.load_optional(&required)?.is_some() {
-            continue;
-        }
-        progress.report(PluginProgressEvent::InstallingRequirement {
-            plugin: dependent.clone(),
-            required: required.clone(),
-        });
+    let mut installer = CatalogRequirementInstaller { options, progress };
+    crate::requirements::install_missing(&store, plugin, &mut installer).await
+}
+
+/// Installs a missing requirement from the catalog, reporting the install and
+/// the access it was granted as it lands.
+struct CatalogRequirementInstaller<'a, P: PluginProgressReporter> {
+    options: &'a PluginInstallOptions,
+    progress: &'a mut P,
+}
+
+impl<P: PluginProgressReporter> crate::requirements::RequirementInstaller
+    for CatalogRequirementInstaller<'_, P>
+{
+    async fn install(
+        &mut self,
+        dependent: String,
+        required: String,
+    ) -> Result<InstalledPluginMetadata> {
+        self.progress
+            .report(PluginProgressEvent::InstallingRequirement {
+                plugin: dependent.clone(),
+                required: required.clone(),
+            });
         let parsed = PluginInstallRef::Catalog {
             name: required.clone(),
             version: None,
         };
-        let resolved = resolve_install_source(parsed, options, progress)
+        let context = || format!("install {required}, required by {dependent}");
+        let resolved = resolve_install_source(parsed, self.options, self.progress)
             .await
-            .with_context(|| format!("install {required}, required by {dependent}"))?;
-        let installed = install_resolved_plugin(resolved, options, progress, None)
+            .with_context(context)?;
+        let installed = install_resolved_plugin(resolved, self.options, self.progress, None)
             .await
-            .with_context(|| format!("install {required}, required by {dependent}"))?;
-        for next in crate::requirements::uninstalled_requirements(&store, &installed.metadata)? {
-            pending.push((installed.metadata.name.clone(), next));
-        }
+            .with_context(context)?;
+        self.progress
+            .report(PluginProgressEvent::RequirementInstalled {
+                plugin: dependent,
+                installed: Box::new(installed.metadata.clone()),
+            });
+        Ok(installed.metadata)
     }
-    Ok(())
 }
 
 /// Install, from the catalog, the requirements of an already installed

@@ -588,6 +588,16 @@ impl PluginProgressReporter for CliPluginProgress {
                 let mut err = mesh_llm_events::console_err();
                 let _ = writeln!(err, "🔗 {plugin} requires {required}; installing it");
             }
+            PluginProgressEvent::RequirementInstalled { plugin, installed } => {
+                self.finish();
+                let _ = report_exchange_access(&installed);
+                let mut err = mesh_llm_events::console_err();
+                let _ = writeln!(
+                    err,
+                    "✅ Installed {} {} (required by {plugin})",
+                    installed.name, installed.installed_version
+                );
+            }
         }
     }
 }

@@ -6,7 +6,7 @@
 //! missing or disabled. The host never starts, orders or links plugins for
 //! each other: how two plugins talk stays an operator-authorized binding.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, bail};
 
@@ -87,6 +87,89 @@ pub fn ensure_not_required(store: &PluginStore, name: &str, action: &str) -> Res
     )
 }
 
+/// Installs one missing requirement: `required`, needed by `dependent`.
+/// Returns the metadata the install recorded.
+pub trait RequirementInstaller {
+    fn install(
+        &mut self,
+        dependent: String,
+        required: String,
+    ) -> impl std::future::Future<Output = Result<InstalledPluginMetadata>>;
+}
+
+/// Walk `root`'s requirement graph and install every plugin that is not
+/// installed, via `install(dependent, required)`. Installed plugins are walked
+/// through, never reinstalled or re-enabled, so a retry after a transitive
+/// failure (A→B installed, B→C failed) reaches C. A requirement that closes a
+/// cycle back to an ancestor is refused: the plugin that declared the closing
+/// edge is removed again if this walk installed it, so no cycle is persisted.
+/// The first failure stops the walk; everything installed before it stays.
+pub async fn install_missing(
+    store: &PluginStore,
+    root: &InstalledPluginMetadata,
+    installer: &mut impl RequirementInstaller,
+) -> Result<()> {
+    let mut parent: BTreeMap<String, String> = BTreeMap::new();
+    let mut visited: BTreeSet<String> = BTreeSet::from([root.name.clone()]);
+    let mut pending: Vec<(String, String)> = root
+        .requires
+        .iter()
+        .rev()
+        .map(|required| (root.name.clone(), required.clone()))
+        .collect();
+    while let Some((dependent, required)) = pending.pop() {
+        if is_ancestor(&parent, &dependent, &required) {
+            bail!(
+                "plugin requirements form a cycle: {dependent} requires {required}, which requires {dependent} in turn"
+            );
+        }
+        if !visited.insert(required.clone()) {
+            continue;
+        }
+        parent.insert(required.clone(), dependent.clone());
+        let (metadata, fresh) = match store.load_optional(&required)? {
+            Some(existing) => (existing, false),
+            None => (
+                installer
+                    .install(dependent.clone(), required.clone())
+                    .await?,
+                true,
+            ),
+        };
+        if let Some(back) = metadata
+            .requires
+            .iter()
+            .find(|next| is_ancestor(&parent, &metadata.name, next))
+        {
+            if fresh {
+                store.delete(&metadata.name)?;
+            }
+            bail!(
+                "plugin requirements form a cycle: {} requires {back}, which requires {} in turn{}",
+                metadata.name,
+                metadata.name,
+                if fresh { "; it was not installed" } else { "" }
+            );
+        }
+        for next in metadata.requires.iter().rev() {
+            pending.push((metadata.name.clone(), next.clone()));
+        }
+    }
+    Ok(())
+}
+
+/// Whether `candidate` is `name` itself or one of its ancestors in `parent`.
+fn is_ancestor(parent: &BTreeMap<String, String>, name: &str, candidate: &str) -> bool {
+    let mut current = Some(name);
+    while let Some(node) = current {
+        if node == candidate {
+            return true;
+        }
+        current = parent.get(node).map(String::as_str);
+    }
+    false
+}
+
 /// The requirements declared by `plugin` that no installed plugin provides,
 /// each listed once, in declaration order. Install resolves these from the
 /// catalog; a requirement that is installed but disabled is left alone (the
@@ -131,6 +214,112 @@ mod tests {
             last_status: None,
             last_error: None,
         }
+    }
+
+    fn store_with(dir: &std::path::Path, plugins: &[InstalledPluginMetadata]) -> PluginStore {
+        let store = PluginStore::new(dir);
+        for plugin in plugins {
+            store.save(plugin).unwrap();
+        }
+        store
+    }
+
+    /// Test installer: records each request, saves `plugin(required, requires_for(required))`
+    /// into the store, or fails for names in `fail`.
+    struct FakeInstaller {
+        root: PathBuf,
+        requires_for: fn(&str) -> Vec<&'static str>,
+        fail: &'static [&'static str],
+        installed: Vec<String>,
+    }
+
+    impl RequirementInstaller for FakeInstaller {
+        async fn install(
+            &mut self,
+            dependent: String,
+            required: String,
+        ) -> Result<InstalledPluginMetadata> {
+            self.installed.push(format!("{dependent}->{required}"));
+            if self.fail.contains(&required.as_str()) {
+                bail!("{required} is not in the catalog");
+            }
+            let metadata = plugin(&required, true, &(self.requires_for)(&required));
+            PluginStore::new(&self.root).save(&metadata)?;
+            Ok(metadata)
+        }
+    }
+
+    fn fake(
+        root: &std::path::Path,
+        requires_for: fn(&str) -> Vec<&'static str>,
+        fail: &'static [&'static str],
+    ) -> FakeInstaller {
+        FakeInstaller {
+            root: root.to_path_buf(),
+            requires_for,
+            fail,
+            installed: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn retry_walks_through_an_installed_requirement_to_the_one_still_missing() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store_with(
+            temp.path(),
+            &[plugin("a", true, &["b"]), plugin("b", true, &["c"])],
+        );
+        let mut installer = fake(temp.path(), |_| vec![], &[]);
+        install_missing(&store, &plugin("a", true, &["b"]), &mut installer)
+            .await
+            .unwrap();
+        assert_eq!(installer.installed, vec!["b->c"]);
+        assert!(store.load_optional("c").unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_failure_stops_the_walk_and_keeps_what_was_installed() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store_with(temp.path(), &[plugin("a", true, &["b"])]);
+        let mut installer = fake(
+            temp.path(),
+            |name| if name == "b" { vec!["c"] } else { vec![] },
+            &["c"],
+        );
+        let error = install_missing(&store, &plugin("a", true, &["b"]), &mut installer)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("not in the catalog"), "{error}");
+        assert!(store.load_optional("b").unwrap().is_some());
+        assert!(store.load_optional("c").unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_cycle_is_refused_and_the_closing_plugin_is_not_kept() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store_with(temp.path(), &[plugin("a", true, &["b"])]);
+        let mut installer = fake(temp.path(), |_| vec!["a"], &[]);
+        let error = install_missing(&store, &plugin("a", true, &["b"]), &mut installer)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("cycle"), "{error}");
+        assert!(store.load_optional("b").unwrap().is_none());
+        assert!(ensure_not_required(&store, "a", "delete").is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_shared_requirement_is_installed_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = store_with(temp.path(), &[plugin("a", true, &["b", "c"])]);
+        let mut installer = fake(
+            temp.path(),
+            |name| if name == "b" { vec!["c"] } else { vec![] },
+            &[],
+        );
+        install_missing(&store, &plugin("a", true, &["b", "c"]), &mut installer)
+            .await
+            .unwrap();
+        assert_eq!(installer.installed, vec!["a->b", "b->c"]);
     }
 
     #[test]
