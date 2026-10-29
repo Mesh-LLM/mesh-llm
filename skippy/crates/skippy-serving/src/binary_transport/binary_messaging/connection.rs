@@ -512,6 +512,9 @@ fn handle_binary_connection_messages(
         let mut decode_batch_wait_ms = 0.0;
         let input_activation_bytes = message.activation.len();
         let mut proactive_eviction = None;
+        // A split DFlash final stage that answered a verify window early and
+        // still owes stage 0 the next block's draft.
+        let mut dflash_draft_follows = false;
         let (predicted_token, mut predicted_tokens, mut output, native_mtp_draft, compute_ms) =
             if restored_prefill {
                 let now = now_unix_nanos() as u64;
@@ -694,6 +697,8 @@ fn handle_binary_connection_messages(
                                 &scheduler_session_key,
                                 scheduler_message.state,
                             );
+                            let draft_follows =
+                                runtime.dflash_draft_deferred(&scheduler_session_key);
                             let sessions_after =
                                 collect_session_stats.then(|| runtime.session_stats());
                             Ok((
@@ -702,7 +707,7 @@ fn handle_binary_connection_messages(
                                 sessions_before,
                                 sessions_after,
                                 eviction,
-                                (result, dflash_stats),
+                                (result, dflash_stats, draft_follows),
                             ))
                         })
                         .map_err(|error| anyhow::anyhow!(format!("{error:#}")))
@@ -716,9 +721,10 @@ fn handle_binary_connection_messages(
                         sessions_before,
                         sessions_after,
                         eviction,
-                        (result, dflash_stats),
+                        (result, dflash_stats, draft_follows),
                     ) = outcome.value;
                     message_reply_stats.merge(dflash_stats);
+                    dflash_draft_follows = draft_follows;
                     message = returned_message;
                     if align_in_compute {
                         session_auto_align_count = auto_align.count;
@@ -1131,7 +1137,8 @@ fn handle_binary_connection_messages(
             let reply_start_unix_nanos = now_unix_nanos() as u64;
             upstream_reply_start_unix_nanos.get_or_insert(reply_start_unix_nanos);
             let reply_started = Instant::now();
-            let reply_window = reply_window_for_message(&message);
+            let mut reply_window = reply_window_for_message(&message);
+            reply_window.draft_follows = dflash_draft_follows;
             let reply = StageReply {
                 kind: reply_kind,
                 predicted: predicted_token,
@@ -1149,6 +1156,25 @@ fn handle_binary_connection_messages(
             } else {
                 send_stage_reply(&mut *upstream, reply)
                     .context("send fallback upstream predicted reply")?;
+            }
+            if dflash_draft_follows {
+                // Stage 0 commits the verdict while this stage drafts.
+                let draft_reply = deferred_dflash_draft_reply(
+                    iteration_scheduler,
+                    &session_key,
+                    &message,
+                    predicted_token,
+                    reply_window,
+                );
+                if let Some(return_stream) =
+                    prediction_return_streams.get_mut(&(message.request_id, message.session_id))
+                {
+                    direct_return::send_direct_prediction_return(return_stream, draft_reply)
+                        .context("send direct DFlash draft reply")?;
+                } else {
+                    send_stage_reply(&mut *upstream, draft_reply)
+                        .context("send fallback upstream DFlash draft reply")?;
+                }
             }
             upstream_reply_end_unix_nanos = Some(now_unix_nanos() as u64);
             let reply_write_ms = elapsed_ms(reply_started);
@@ -1301,5 +1327,57 @@ fn handle_binary_connection_messages(
                 deferred_prefill_replies_drained,
             },
         );
+    }
+}
+
+/// The second reply to a verify window answered with an early verdict: the
+/// next block's DFlash draft, and the draft-time counters that include it.
+/// A failed draft still replies, without a draft, since stage 0 waits for it.
+fn deferred_dflash_draft_reply(
+    iteration_scheduler: &IterationScheduler,
+    session_key: &str,
+    message: &StageWireMessage,
+    predicted: i32,
+    window: skippy_protocol::binary::StageReplyWindow,
+) -> StageReply {
+    let draft_key = session_key.to_string();
+    let state = message.state;
+    let drafted = iteration_scheduler.execute_runtime("dflash-deferred-draft", move |runtime| {
+        let draft = crate::binary_transport::stage_execution::run_deferred_dflash_draft(
+            runtime, &draft_key,
+        );
+        let stats = runtime.dflash_reply_stats(&draft_key, state);
+        Ok((draft, stats))
+    });
+    let (draft, stats) = match drafted {
+        Ok((Ok(draft), stats)) => (draft, stats),
+        Ok((Err(error), stats)) => {
+            tracing::warn!(
+                session_key,
+                error = format!("{error:#}"),
+                "split DFlash draft after an early verdict failed; replying without one"
+            );
+            (None, stats)
+        }
+        Err(error) => {
+            tracing::warn!(
+                session_key,
+                error = format!("{error:#}"),
+                "split DFlash draft after an early verdict did not run; replying without one"
+            );
+            (None, StageReplyStats::default())
+        }
+    };
+    StageReply {
+        kind: WireReplyKind::PredictedTokens,
+        predicted,
+        predicted_tokens: Vec::new(),
+        native_mtp_draft: draft,
+        log_probabilities: Vec::new(),
+        window: skippy_protocol::binary::StageReplyWindow {
+            window_id: window.window_id,
+            draft_follows: false,
+        },
+        stats,
     }
 }

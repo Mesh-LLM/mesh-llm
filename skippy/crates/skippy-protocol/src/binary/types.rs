@@ -204,6 +204,11 @@ pub mod state_flags {
     /// its DFlash draft-context counters in the reply stats. Without it those
     /// counters stay zero.
     pub const SPLIT_DFLASH: i32 = 1 << 14;
+    /// On a verify message to a split DFlash final stage: reply with the
+    /// verdict as soon as the window is verified, then draft the next block
+    /// and send it in a second reply. The verdict reply says whether a draft
+    /// reply follows (reply marker bit `REPLY_DRAFT_FOLLOWS`).
+    pub const SPLIT_DFLASH_EARLY_VERDICT: i32 = 1 << 15;
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -431,6 +436,18 @@ impl StageStateHeader {
             self.flags |= state_flags::SPLIT_DFLASH;
         } else {
             self.flags &= !state_flags::SPLIT_DFLASH;
+        }
+    }
+
+    pub fn split_dflash_early_verdict(self) -> bool {
+        self.flags & state_flags::SPLIT_DFLASH_EARLY_VERDICT != 0
+    }
+
+    pub fn set_split_dflash_early_verdict(&mut self, early: bool) {
+        if early {
+            self.flags |= state_flags::SPLIT_DFLASH_EARLY_VERDICT;
+        } else {
+            self.flags &= !state_flags::SPLIT_DFLASH_EARLY_VERDICT;
         }
     }
 
@@ -705,6 +722,10 @@ pub struct StageNativeMtpDraft {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StageReplyWindow {
     pub window_id: i32,
+    /// A verdict reply whose next-block draft follows in a second reply to
+    /// the same window. Only sent to a sender that set
+    /// `state_flags::SPLIT_DFLASH_EARLY_VERDICT`.
+    pub draft_follows: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -748,6 +769,13 @@ pub struct StageReplyStats {
     /// keeps the largest stage's count. Filled with the DFlash counters.
     pub verify_rollbacks_in_place: i64,
     pub verify_rollbacks_checkpointed: i64,
+    /// The final stage's DFlash draft time for this session: block drafts,
+    /// how many, and the part spent injecting decode-sized feature rows.
+    /// Cumulative, so merging keeps the larger value. On the wire with the
+    /// DFlash counters.
+    pub dflash_draft_us: i64,
+    pub dflash_drafts: i64,
+    pub dflash_ingest_us: i64,
 }
 
 impl StageReplyStats {
@@ -758,6 +786,9 @@ impl StageReplyStats {
             || self.dflash_draft_context_resets != 0
             || self.verify_rollbacks_in_place != 0
             || self.verify_rollbacks_checkpointed != 0
+            || self.dflash_draft_us != 0
+            || self.dflash_drafts != 0
+            || self.dflash_ingest_us != 0
     }
 
     pub fn merge(&mut self, other: Self) {
@@ -816,6 +847,9 @@ impl StageReplyStats {
         self.verify_rollbacks_checkpointed = self
             .verify_rollbacks_checkpointed
             .max(other.verify_rollbacks_checkpointed);
+        self.dflash_draft_us = self.dflash_draft_us.max(other.dflash_draft_us);
+        self.dflash_drafts = self.dflash_drafts.max(other.dflash_drafts);
+        self.dflash_ingest_us = self.dflash_ingest_us.max(other.dflash_ingest_us);
     }
 
     pub fn observe_prefill_edge_transport(
