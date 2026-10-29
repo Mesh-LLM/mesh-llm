@@ -803,4 +803,4 @@ never a parallel packaging implementation. Preview versions must contain
 frozen source SHA. Publish verified assets as a draft before exposing the
 complete prerelease, without marking it latest or invoking stable registries.
 Keep immutable preview tags and previous downloads; no automated deletion is
-part of the initial rollout. The schedule is Tuesday/Friday 03:23 UTC.
+part of the initial rollout. The Tuesday/Friday 03:23 UTC schedule is commented out; dispatch manually.
