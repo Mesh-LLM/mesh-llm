@@ -1,4 +1,4 @@
-use super::recurrent_early_stop::generate;
+use super::recurrent_early_stop::{generate, generate_after_first_token};
 use super::*;
 use std::sync::atomic::Ordering;
 
@@ -96,6 +96,50 @@ fn resident_hybrid_first_turn_without_exact_recorder() -> Result<()> {
         "resident first turn differs without exact recording"
     );
     Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn resident_hybrid_first_token_signal_across_batch_shapes() -> Result<()> {
+    let (wide, _) = recurrent_test_backend("wide-signal", "wide-signal", 512, (128, 32), 8, 256)?;
+    let (narrow, _) =
+        recurrent_test_backend("narrow-signal", "narrow-signal", 512, (32, 32), 8, 256)?;
+    let prompt = (1..=128).collect::<Vec<_>>();
+    let expected = resident_first_token_with_signal(&narrow, &prompt)?;
+    let actual = resident_first_token_with_signal(&wide, &prompt)?;
+    assert_eq!(
+        actual.0, expected.0,
+        "first-token logits: wide={actual:?}, narrow={expected:?}"
+    );
+    Ok(())
+}
+
+fn resident_first_token_with_signal(
+    backend: &StageOpenAiBackend,
+    prompt: &[i32],
+) -> Result<(i32, skippy_runtime::TokenSignal)> {
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
+        Some("recurrent-resume"),
+        true,
+        None,
+    );
+    let mut first_signal = None;
+    let (tokens, _) = generate_after_first_token(backend, prompt, 1, "recurrent-resume", || {
+        first_signal = Some(
+            backend
+                .runtime
+                .lock()
+                .unwrap()
+                .last_token_signal(&ids.session_label)
+                .map_err(crate::frontend::util::openai_backend_error)?,
+        );
+        Ok(())
+    })?;
+    Ok((
+        tokens[0],
+        first_signal.ok_or_else(|| anyhow::anyhow!("first-token signal was not recorded"))?,
+    ))
 }
 
 #[test]
