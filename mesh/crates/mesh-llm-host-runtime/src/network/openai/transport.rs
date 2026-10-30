@@ -1269,7 +1269,7 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
     request.ensure_body_json();
     if request.body_json.is_none()
         && !workload_routing::is_audio_upload_path(&request.client_path)
-        && !workload_routing::is_document_ocr_path(&request.client_path)
+        && !workload_routing::is_binary_task_path(&request.client_path)
     {
         return AutoModelResolution::Model(None);
     }

@@ -294,7 +294,7 @@ function sectionSubtitle(category: ConfigurationDefaultsCategory) {
   if (category.id === 'logging') return 'Event history, retention, and redaction settings'
   if (category.id === 'runtime-policy') return 'Runtime reconciliation behavior'
   if (category.id === 'network') return 'Owner-control listener settings'
-  if (category.id === 'attestation') return 'Certified-build admission requirements'
+  if (category.id === 'attestation') return 'Peer admission and signed-gossip requirements'
   if (category.id === 'memory') return 'VRAM accounting and KV cache precision'
   if (category.id === 'speculative-decoding') return 'Speculative draft policy defaults'
   if (category.id === 'request-defaults') return 'Request-time sampling and reasoning defaults'

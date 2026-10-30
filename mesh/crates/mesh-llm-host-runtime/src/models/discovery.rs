@@ -415,6 +415,8 @@ fn operations(class: Option<ModelWorkloadClass>) -> Vec<String> {
         Some(ModelWorkloadClass::SpeechSynthesis) => &["speech"],
         Some(ModelWorkloadClass::SpeechRecognition) => &["live_transcription"],
         Some(ModelWorkloadClass::DocumentOcr) => &["document_ocr"],
+        Some(ModelWorkloadClass::ImageTextSimilarity) => &["image_text_similarity"],
+        Some(ModelWorkloadClass::DepthEstimation) => &["depth_estimation"],
         Some(ModelWorkloadClass::Decision) => &[],
         Some(ModelWorkloadClass::EncoderDecoder | ModelWorkloadClass::Unknown) | None => &[],
     };

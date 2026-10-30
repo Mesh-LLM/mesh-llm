@@ -23,6 +23,9 @@ use mesh_llm_membership::peer_health::{
 };
 use prost::Message;
 
+mod gossip_health;
+pub(crate) use gossip_health::GossipHealth;
+
 const DIRECT_RESCUE_CONNECT_TIMEOUT_SECS: u64 = 10;
 
 pub(crate) fn selected_connection_is_direct(conn: &Connection) -> bool {
@@ -496,8 +499,8 @@ impl Node {
         // Renewed before gossiping, so this cycle already carries it.
         self.renew_owner_attestation_on_heartbeat().await;
         for (peer_id, conn) in self.selected_heartbeat_peers().await {
-            let alive = self.probe_heartbeat_peer(peer_id, conn).await;
-            self.record_heartbeat_result(peer_id, alive, fail_counts)
+            let outcome = self.probe_heartbeat_peer(peer_id, conn).await;
+            self.record_heartbeat_result(peer_id, outcome, fail_counts)
                 .await;
         }
 
@@ -601,7 +604,7 @@ impl Node {
         &self,
         peer_id: EndpointId,
         conn: Option<Connection>,
-    ) -> bool {
+    ) -> GossipHealth {
         if let Some(conn) = conn {
             self.gossip_existing_heartbeat_connection(peer_id, conn)
                 .await
@@ -614,31 +617,31 @@ impl Node {
         &self,
         peer_id: EndpointId,
         conn: Connection,
-    ) -> bool {
+    ) -> GossipHealth {
         let hb_start = std::time::Instant::now();
         let protocol = connection_protocol(&conn);
-        let gossip_ok = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            self.initiate_gossip_inner(conn, peer_id, false),
-        )
-        .await
-        .map(|result| result.is_ok())
-        .unwrap_or(false);
+        let outcome = GossipHealth::from_exchange(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                self.initiate_gossip_inner(conn, peer_id, false),
+            )
+            .await,
+        );
         tracing::debug!(
             "Heartbeat gossip {} = {} ({}ms)",
             peer_id.fmt_short(),
-            if gossip_ok { "ok" } else { "fail" },
+            format_args!("{outcome:?}"),
             hb_start.elapsed().as_millis()
         );
-        if gossip_ok {
+        if outcome == GossipHealth::Alive {
             self.capture_direct_proof_of_life(peer_id, protocol, 0, false, "heartbeat");
         }
-        gossip_ok
+        outcome
     }
 
-    pub(crate) async fn reconnect_heartbeat_peer(&self, peer_id: EndpointId) -> bool {
+    pub(crate) async fn reconnect_heartbeat_peer(&self, peer_id: EndpointId) -> GossipHealth {
         let Some(addr) = self.heartbeat_peer_addr(peer_id).await else {
-            return false;
+            return GossipHealth::Failed;
         };
 
         match tokio::time::timeout(
@@ -650,7 +653,7 @@ impl Node {
             Ok(Ok(new_conn)) => self.install_heartbeat_reconnect(peer_id, new_conn).await,
             _ => {
                 self.capture_heartbeat_reconnect_failure(peer_id, None, "heartbeat_reconnect");
-                false
+                GossipHealth::Failed
             }
         }
     }
@@ -664,7 +667,7 @@ impl Node {
         &self,
         peer_id: EndpointId,
         new_conn: Connection,
-    ) -> bool {
+    ) -> GossipHealth {
         super::emit_mesh_info(format!(
             "💚 Heartbeat: reconnected to {}",
             peer_id.fmt_short()
@@ -695,25 +698,25 @@ impl Node {
         &self,
         peer_id: EndpointId,
         new_conn: Connection,
-    ) -> bool {
+    ) -> GossipHealth {
         let protocol = connection_protocol(&new_conn);
-        let gossip_ok = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            self.initiate_gossip_inner(new_conn, peer_id, false),
-        )
-        .await
-        .map(|result| result.is_ok())
-        .unwrap_or(false);
-        if gossip_ok {
+        let outcome = GossipHealth::from_exchange(
+            tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                self.initiate_gossip_inner(new_conn, peer_id, false),
+            )
+            .await,
+        );
+        if outcome == GossipHealth::Alive {
             self.capture_direct_proof_of_life(peer_id, protocol, 0, false, "heartbeat_reconnect");
-        } else {
+        } else if outcome == GossipHealth::Failed {
             self.capture_heartbeat_reconnect_failure(
                 peer_id,
                 Some(protocol),
                 "heartbeat_reconnect_gossip",
             );
         }
-        gossip_ok
+        outcome
     }
 
     pub(crate) fn capture_heartbeat_reconnect_opened(
@@ -760,13 +763,13 @@ impl Node {
     pub(crate) async fn record_heartbeat_result(
         &self,
         peer_id: EndpointId,
-        alive: bool,
+        outcome: GossipHealth,
         fail_counts: &mut std::collections::HashMap<EndpointId, u32>,
     ) {
-        if alive {
-            self.recover_heartbeat_peer(peer_id, fail_counts).await;
-        } else {
-            self.record_heartbeat_failure(peer_id, fail_counts).await;
+        match outcome {
+            GossipHealth::Alive => self.recover_heartbeat_peer(peer_id, fail_counts).await,
+            GossipHealth::Failed => self.record_heartbeat_failure(peer_id, fail_counts).await,
+            GossipHealth::Deferred => {}
         }
     }
 

@@ -42,6 +42,8 @@ pub(super) fn is_inference_passthrough(path: &str) -> bool {
         || path.starts_with("/models/")
         || path.starts_with("/mesh/v1/models")
         || path == "/mesh/v1/documents/ocr"
+        || path == "/mesh/v1/images/similarity"
+        || path == "/mesh/v1/images/depth"
 }
 
 pub(super) async fn handle(

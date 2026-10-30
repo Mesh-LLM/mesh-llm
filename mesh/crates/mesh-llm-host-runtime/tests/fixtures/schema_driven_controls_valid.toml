@@ -9,6 +9,7 @@ bind = "127.0.0.1:7447"
 advertise_addr = "203.0.113.10:7447"
 
 [mesh_requirements]
+require_signed_gossip = true
 require_release_attestation = true
 release_signer_keys = [
   "ed25519:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",

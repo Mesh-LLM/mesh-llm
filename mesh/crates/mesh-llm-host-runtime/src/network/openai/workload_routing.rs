@@ -47,6 +47,8 @@ pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
         "/v1/audio/speech" => Some(ModelWorkloadClass::SpeechSynthesis),
         "/v1/realtime" => Some(ModelWorkloadClass::SpeechRecognition),
         "/mesh/v1/documents/ocr" => Some(ModelWorkloadClass::DocumentOcr),
+        "/mesh/v1/images/similarity" => Some(ModelWorkloadClass::ImageTextSimilarity),
+        "/mesh/v1/images/depth" => Some(ModelWorkloadClass::DepthEstimation),
         _ => None,
     }
 }
@@ -244,7 +246,7 @@ pub(super) fn request_media(
             needs_audio: true,
             needs_vision: false,
         }
-    } else if is_document_ocr_path(path) {
+    } else if is_binary_task_path(path) {
         crate::network::router::MediaRequirements {
             has_media: true,
             needs_audio: false,
@@ -253,6 +255,14 @@ pub(super) fn request_media(
     } else {
         body.map_or_else(Default::default, crate::network::router::media_requirements)
     }
+}
+
+/// Multipart tasks can select an automatic model without a JSON request body.
+pub(super) fn is_binary_task_path(path: &str) -> bool {
+    matches!(
+        path.split('?').next(),
+        Some("/mesh/v1/documents/ocr" | "/mesh/v1/images/similarity" | "/mesh/v1/images/depth")
+    )
 }
 
 /// Pick metadata from a descriptor that supports this request, not whichever

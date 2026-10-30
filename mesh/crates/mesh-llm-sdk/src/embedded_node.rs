@@ -345,6 +345,12 @@ impl MeshNodeBuilder {
         self
     }
 
+    /// Require origin signatures for relayed records in a newly created mesh.
+    pub fn require_signed_gossip(mut self, required: bool) -> Self {
+        self.inner = self.inner.require_signed_gossip(required);
+        self
+    }
+
     pub fn release_signer_key(mut self, key: impl Into<String>) -> Self {
         self.inner = self.inner.release_signer_key(key);
         self

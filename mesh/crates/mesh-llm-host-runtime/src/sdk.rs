@@ -276,6 +276,7 @@ fn embedded_runtime_options(
         trust_policy: config.admission.trust_policy.map(Into::into),
         trust_owner: config.admission.trusted_owners.clone(),
         mesh_requirements: crate::plugin::MeshRequirementsConfig {
+            require_signed_gossip: config.admission.mesh_requirements.require_signed_gossip,
             min_node_version: config.admission.mesh_requirements.min_node_version.clone(),
             max_node_version: config.admission.mesh_requirements.max_node_version.clone(),
             min_protocol_version: config.admission.mesh_requirements.min_protocol_version,
@@ -831,6 +832,7 @@ mod tests {
             .trust_owner("owner-a")
             .trust_owner("owner-b")
             .min_node_version("0.65.0")
+            .require_signed_gossip(true)
             .signed_join_tokens(true)
             .build();
         let options = embedded_runtime_options(&config, None);
@@ -876,6 +878,7 @@ mod tests {
         );
         assert_eq!(options.mesh_requirements.min_protocol_version, Some(1));
         assert!(!options.mesh_requirements.require_release_attestation);
+        assert!(options.mesh_requirements.require_signed_gossip);
     }
 
     #[test]

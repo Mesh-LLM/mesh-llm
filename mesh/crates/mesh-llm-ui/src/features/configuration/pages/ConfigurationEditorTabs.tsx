@@ -366,11 +366,12 @@ export function ConfigurationEditorTabs({
                 screenLabel="Configuration · signing"
                 summaryDescription={
                   <>
-                    Attestation settings define certified-build admission requirements for meshes. They are written to{' '}
+                    These settings define peer admission and signed-gossip requirements for newly created meshes. They
+                    are written to{' '}
                     <span className="rounded border border-border-soft bg-surface px-1 font-mono text-foreground">
                       [mesh_requirements]
                     </span>{' '}
-                    and enforced from the loaded config.
+                    and become part of the mesh's signed policy. Existing meshes keep their original policy.
                   </>
                 }
                 summaryStatus={attestationDirty ? 'modified' : 'ready'}
@@ -378,8 +379,8 @@ export function ConfigurationEditorTabs({
                 summaryTitleId="attestation-summary-heading"
                 previewTip={
                   <>
-                    These controls describe required build provenance. They do not claim remote hardware or native
-                    runtime integrity beyond the attestation data the node can verify.
+                    Build attestations establish release provenance; gossip signatures establish the origin of peer
+                    records. Neither proves the integrity of a peer's running hardware or native runtime.
                   </>
                 }
               />

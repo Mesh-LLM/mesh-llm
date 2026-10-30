@@ -146,6 +146,7 @@ impl Default for EmbeddedMeshNetworkConfig {
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EmbeddedMeshRequirementsConfig {
+    pub require_signed_gossip: bool,
     pub min_node_version: Option<String>,
     pub max_node_version: Option<String>,
     pub min_protocol_version: Option<u32>,
@@ -468,6 +469,15 @@ impl EmbeddedMeshNodeBuilder {
             .admission
             .mesh_requirements
             .require_release_attestation = required;
+        self
+    }
+
+    /// Require origin signatures for relayed records in a newly created mesh.
+    pub fn require_signed_gossip(mut self, required: bool) -> Self {
+        self.config
+            .admission
+            .mesh_requirements
+            .require_signed_gossip = required;
         self
     }
 
