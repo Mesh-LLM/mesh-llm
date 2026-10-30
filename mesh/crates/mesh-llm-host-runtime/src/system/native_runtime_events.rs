@@ -1095,10 +1095,21 @@ mod native_runtime_events_tests {
 
     #[test]
     fn native_correlation_fields_land_on_typed_scope_and_metadata() {
-        let fact = native_family_fact(&event(RuntimeEventKind::DeviceReady, 42))
+        // Terminal tests release the shared fixture's model id 7 from the
+        // process-global identity registry; use ids no other test touches so
+        // that release cannot land between the two facts below.
+        const MODEL: u64 = 0x7a11_0000_0000_0007;
+        const SESSION: u64 = 0x7a11_0000_0000_0003;
+        let isolated = |kind, sequence| {
+            let mut native_event = event(kind, sequence);
+            native_event.model_id = MODEL;
+            native_event.session_id = SESSION;
+            native_event
+        };
+        let fact = native_family_fact(&isolated(RuntimeEventKind::DeviceReady, 42))
             .expect("device_ready maps");
-        let second =
-            native_family_fact(&event(RuntimeEventKind::DeviceLost, 43)).expect("device_lost maps");
+        let second = native_family_fact(&isolated(RuntimeEventKind::DeviceLost, 43))
+            .expect("device_lost maps");
         let model_id = fact.data().scope.model_id.as_ref().expect("model id");
         let session_id = fact.data().scope.session_id.as_ref().expect("session id");
         assert_eq!(
@@ -1114,8 +1125,8 @@ mod native_runtime_events_tests {
                 .as_ref()
                 .map(|id| id.as_str())
         );
-        assert!(!model_id.as_str().contains("0000000000000007"));
-        assert!(!session_id.as_str().contains("0000000000000003"));
+        assert!(!model_id.as_str().contains(&format!("{MODEL:016x}")));
+        assert!(!session_id.as_str().contains(&format!("{SESSION:016x}")));
         assert!(fact.data().scope.stage.is_none());
         let metadata = fact.metadata().expect("native metadata");
         assert_eq!(
@@ -1124,8 +1135,8 @@ mod native_runtime_events_tests {
         );
         let source = metadata.native_source.as_ref().expect("native envelope");
         assert_eq!(source.sequence, 42);
-        assert_eq!(source.model_id, 7);
-        assert_eq!(source.session_id, 3);
+        assert_eq!(source.model_id, MODEL);
+        assert_eq!(source.session_id, SESSION);
         let observation = metadata.native_sequence.expect("sequence observation");
         assert_eq!(observation.domain, NativeSequenceDomain::Process);
         assert_eq!(
