@@ -1616,9 +1616,13 @@ inspection grants no authority. Authority comes from one of two grants:
   hook. Config-sourced grants are revoked when their entry is removed.
 
 A request contains `binding`, optional `handle`, `operation`, and `input_json`.
-Without a handle, operation and input must be empty: only the operator-fixed
-setup call executes. Successful setup returns an opaque handle tied to both
-runtime generations. Ordinary calls must use that handle and an allowlisted
+Without a handle, operation and input must be empty: only the setup call
+executes, with the operator-fixed `setup_payload`. A binding declared with
+`setup_directory` is the exception: there the caller supplies an absolute base
+directory, the host scopes it to `<base>/<provider>` and creates that directory
+owner-only, so the caller chooses where the provider keeps its state while the
+provider's identity stays hidden from it. Successful setup returns an opaque
+handle tied to both runtime generations. Ordinary calls must use that handle and an allowlisted
 operation; setup is excluded from the allowlist. Provider unavailability never
 selects another process or starts/retries a provider. One configured binding
 exclusively owns a provider process/profile. The consumer interprets the opaque

@@ -33,11 +33,9 @@ grant itself access; access comes from one of two operator decisions:
   (endpoints, phases, prompt/content access, identity bundle, signing
   delegation) before and as the package lands, and installing it grants exactly
   that request. The accepted request is recorded with the installed version in
-  the plugin store. The same disclosure is printed for every package an install
-  pulls in through `requires`. An update is accepted by running it, so an
-  update, or an updated dependency, that asks for more than the version it
-  replaces is called out line by line at landing instead of being widened
-  quietly.
+  the plugin store. An update is accepted by running it, so an update that
+  asks for more than the version it replaces is called out line by line at
+  landing instead of being widened quietly.
 - **Configuration grant.** A `[plugin.openai_exchange_grant]` table on the
   plugin's `[[plugin]]` entry replaces the installed request: it can narrow
   it, widen it, or (an empty grant) remove it. Only this entry can grant access
