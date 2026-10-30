@@ -23,6 +23,7 @@ mod frame_operations;
 mod idle_retention;
 mod iteration_execution;
 mod lane_lifecycle;
+mod lane_recycle;
 pub mod lifecycle;
 pub mod panic_recovery;
 mod recurrent_checkpoints;
@@ -88,6 +89,20 @@ struct RuntimeLaneSession {
     session: StageSession,
     resident_prefix: Option<ResidentLanePrefix>,
     recurrent_prefixes: recurrent_checkpoints::RecurrentCheckpoints,
+    /// In-place recorder readers of this lane's cells. Every path that
+    /// releases or shrinks the cells waits on it; see `lane_recycle`.
+    leases: crate::kv_integration::LeaseLedger,
+    /// When the recorder first refused to drain this parked lane. Bounds
+    /// how long a refusal may hold the lane; see `lane_recycle`.
+    refused_since: Option<Instant>,
+}
+
+impl Drop for RuntimeLaneSession {
+    /// `StageSession::drop` frees the native cells. A recorder reader still
+    /// copying them must finish first, whichever path dropped the lane.
+    fn drop(&mut self) {
+        self.leases.wait_idle();
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -323,6 +338,17 @@ pub fn loaded_model_state_kind(
             .capability()
             .map(|capability| capability.state_kind)
     })
+}
+
+impl RuntimeState {
+    /// Where the loaded memory keeps attention cells, straight from the
+    /// buffers. Decides whether a parked lane records in place.
+    pub(crate) fn kv_cell_access(&self) -> skippy_runtime::KvCellAccess {
+        self.model
+            .capability()
+            .map(|capability| capability.cache_capabilities.kv_cell_access)
+            .unwrap_or_default()
+    }
 }
 
 /// Complete cache representations admitted by the loaded graph and native memory.

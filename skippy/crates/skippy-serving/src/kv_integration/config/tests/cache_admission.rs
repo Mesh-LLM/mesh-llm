@@ -37,6 +37,8 @@ fn loaded_capabilities_select_complete_state_without_configuration_labels() {
                 resident,
                 kv_recurrent,
                 full_state: true,
+                resident_kv_recurrent: false,
+                kv_cell_access: Default::default(),
             }),
             None,
         )

@@ -22,6 +22,14 @@ pub const EXACT_STATE_ADMISSION_TOTAL: usize = 5;
 /// boundary always finds a slot unless the whole budget is exhausted.
 pub const EXACT_STATE_ADMISSION_RESERVED: usize = 4;
 
+// Every in-flight payload holds a credit, so the recorder channel can only
+// fill if more credits exist than channel slots. Keep that impossible: a
+// post-export `DroppedFull` is a lost continuation checkpoint.
+const _: () = assert!(
+    EXACT_STATE_ADMISSION_TOTAL <= crate::kv_integration::EXACT_STATE_RECORD_CAPACITY,
+    "exact-state credits must not exceed the recorder channel capacity"
+);
+
 /// Move-only credit for one in-flight exact-state payload. Construction
 /// reserves a slot atomically (CAS, so competing producers cannot
 /// oversubscribe the budget); Drop releases it exactly once on every terminal

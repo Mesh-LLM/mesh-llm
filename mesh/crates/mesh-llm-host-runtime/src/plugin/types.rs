@@ -57,6 +57,12 @@ pub enum PluginMeshEvent {
     /// the plugin restarts): what it published to `/api/status` is shown as
     /// unavailable until a later connection publishes.
     PluginDisconnected { plugin_id: String, generation: u64 },
+    /// Whether the operator lets `plugin_id` observe local inference
+    /// (`allow_inference_observation`), read from the live config.
+    InferenceObservationGrant {
+        plugin_id: String,
+        response_tx: oneshot::Sender<bool>,
+    },
     /// The plugin stopped for good (disabled, or shut down): the host
     /// withdraws what it announced for it. Not sent when the plugin restarts
     /// after a failure, so its key stays announced across a restart.

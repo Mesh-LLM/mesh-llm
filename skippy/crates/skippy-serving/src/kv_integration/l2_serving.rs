@@ -336,7 +336,7 @@ impl KvStageIntegration {
                         write_through_l3: false,
                         l2_promotion_digest: None,
                         l3_cost: None,
-                        admission_credit,
+                        admission: super::RecordAdmission::Credit(admission_credit),
                     }),
                     ExactStateRecordAdmission::Queued
                 )

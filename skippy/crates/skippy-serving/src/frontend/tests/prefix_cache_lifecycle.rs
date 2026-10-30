@@ -118,6 +118,8 @@ fn real_initialization_notifies_started_then_completed() {
             resident: true,
             kv_recurrent: true,
             full_state: true,
+            resident_kv_recurrent: false,
+            kv_cell_access: Default::default(),
         }),
         Some(observer.clone()),
     )
@@ -154,6 +156,8 @@ fn disabled_kv_config_never_notifies_init_at_all() {
             resident: true,
             kv_recurrent: true,
             full_state: true,
+            resident_kv_recurrent: false,
+            kv_cell_access: Default::default(),
         }),
         Some(observer.clone()),
     )

@@ -87,30 +87,45 @@ impl RuntimeState {
             Some(index) => self.idle_sessions.swap_remove(index),
             None => self.create_lane_session()?,
         };
-        let result = lane
-            .session
-            .decode_step(token_id)
-            .and_then(|_| lane.session.reset());
-        self.finish_generation_warmup(lane, result, idle_index.is_some())?;
+        let index = lane.index;
+        let decoded = lane.session.decode_step(token_id);
+        let warmed = decoded.and_then(|_| {
+            // Selected above as checkpoint-free, so no recorder is involved.
+            let lane = match lane.into_recyclable_if_empty() {
+                super::lane_recycle::EmptyRecycle::Ready(lane) => lane,
+                // Selection filtered on empty lanes; a checkpoint here is a
+                // bug, and the error path below releases the lane.
+                super::lane_recycle::EmptyRecycle::Occupied(lane) => {
+                    bail!("warmup lane {} unexpectedly holds checkpoints", lane.index)
+                }
+            };
+            lane.reset().map_err(|failed| failed.error)
+        });
+        self.finish_generation_warmup(warmed, index, idle_index.is_some())?;
         Ok(true)
     }
 
     fn finish_generation_warmup(
         &mut self,
-        lane: RuntimeLaneSession,
-        result: Result<()>,
+        warmed: Result<RuntimeLaneSession>,
+        index: usize,
         return_to_pool: bool,
     ) -> Result<()> {
-        if result.is_ok() && return_to_pool {
-            self.idle_sessions.push(lane);
-        } else {
-            // A failed decode/reset must not leave a dirty session reusable.
-            // Temporary warmup sessions also release their native lane here.
-            let index = lane.index;
-            drop(lane);
-            self.free_lane_indices.push(index);
+        match warmed {
+            Ok(lane) if return_to_pool => self.idle_sessions.push(lane),
+            // A failed decode/reset must not leave a dirty session reusable;
+            // the lane is already gone. Temporary warmup sessions also release
+            // their native lane here.
+            Ok(lane) => {
+                drop(lane);
+                self.free_lane_indices.push(index);
+            }
+            Err(error) => {
+                self.free_lane_indices.push(index);
+                return Err(error);
+            }
         }
-        result
+        Ok(())
     }
 
     /// Release the session slot identified by `session_id`.
@@ -148,7 +163,7 @@ impl RuntimeState {
         let mut lane_discarded = false;
         let mut lane_discard_reason: Option<String> = None;
 
-        if let Some(mut lane_session) = self.sessions.remove(session_id) {
+        if let Some(lane_session) = self.sessions.remove(session_id) {
             let lane_index = lane_session.index;
             // Always release the lane's native KV cells back to the
             // unified pool. The trim+preserve path kept the lane's cells
@@ -171,8 +186,14 @@ impl RuntimeState {
             let idle_pool_full = self
                 .max_idle_sessions
                 .is_some_and(|max| self.idle_sessions.len() >= max);
-            match lane_session.session.reset() {
-                Ok(()) if idle_pool_full => {
+            // Successful generation already parked or demoted its
+            // checkpoints; anything still here belongs to a request that did
+            // not finish, and is discarded under that policy.
+            match lane_session
+                .into_discarded(super::lane_recycle::CheckpointDiscard::Cleanup)
+                .reset()
+            {
+                Ok(lane_session) if idle_pool_full => {
                     // The idle pool is already at model_fit.cache_idle_slots
                     // capacity: drop this lane (releasing its native KV
                     // cells via StageSession::drop) instead of growing the
@@ -180,12 +201,13 @@ impl RuntimeState {
                     drop(lane_session);
                     self.free_lane_indices.push(lane_index);
                 }
-                Ok(()) => {
+                Ok(mut lane_session) => {
                     lane_session.resident_prefix = None;
-                    lane_session.recurrent_prefixes.clear();
                     self.idle_sessions.push(lane_session);
                 }
-                Err(reset_err) => {
+                Err(super::lane_recycle::LaneResetFailed {
+                    error: reset_err, ..
+                }) => {
                     lane_discarded = true;
                     let reason = format!("reset() failed ({reset_err:#})");
                     let _ = skippy_events::diagnostics::emit(
@@ -198,7 +220,7 @@ impl RuntimeState {
                         },
                     );
                     lane_discard_reason = Some(reason);
-                    drop(lane_session);
+                    // The failed reset already dropped the lane and its cells.
                     self.free_lane_indices.push(lane_index);
                 }
             }
@@ -489,6 +511,8 @@ impl RuntimeState {
             session,
             resident_prefix: None,
             recurrent_prefixes: Default::default(),
+            leases: Default::default(),
+            refused_since: None,
         };
         self.sessions.insert(session_id.to_string(), lane_session);
         self.session_token_counts
@@ -559,6 +583,8 @@ impl RuntimeState {
             session,
             resident_prefix: None,
             recurrent_prefixes: Default::default(),
+            leases: Default::default(),
+            refused_since: None,
         })
     }
 }

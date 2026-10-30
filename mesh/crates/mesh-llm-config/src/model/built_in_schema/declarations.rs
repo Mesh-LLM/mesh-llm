@@ -324,6 +324,12 @@ fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
             setting.restart_scope = ConfigRestartScope::None;
             setting
         },
+        // Read when the plugin subscribes, so turning it off ends a running
+        // subscription only when the plugin restarts.
+        plugin_setting(
+            &format!("{plugin_prefix}.allow_inference_observation"),
+            ConfigValueSchema::Boolean,
+        ),
         plugin_setting(
             &format!("{plugin_prefix}.command"),
             ConfigValueSchema::String,

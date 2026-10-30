@@ -1,0 +1,647 @@
+From 478742efb938942ab367e1783bf39ad56b4edcec Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Wed, 28 Oct 2026 12:26:46 +1100
+Subject: [PATCH] feat(skippy): describe host-visible KV pages in place
+
+Add skippy_export_kv_page_spans, which describes a sequence's KV page as
+spans into the live cells instead of copying it out, and the
+SKIPPY_MEMORY_CACHE_HOST_VISIBLE_KV capability bit that gates it.
+
+The bit is a placement fact, not a backend name: the loaded memory sets it
+when every K/V/k_idx stream tensor lives in a buffer that reports
+ggml_backend_buffer_is_host. Unified-memory backends qualify today; a
+discrete backend qualifies the day it allocates the cache in mapped or
+managed memory, with no change on the Skippy side. Graph admission still
+decides which representations may be cached; the bit is re-applied from
+the buffers once anything is admitted.
+
+The copying export and the span export share one walk
+(stage_kv_page_walk), so the span order is by construction the payload
+byte order skippy_export_kv_page writes. Spans alias the cells and stay
+valid until the session decodes, trims below the page, resets, imports
+state, or is freed; the caller owns that window.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWeZ2oS1Nk7FaPpri4e
+---
+ include/skippy/state.h      |  33 ++++++
+ src/llama-kv-cache.cpp      | 222 ++++++++++++++++++++++++++----------
+ src/llama-kv-cache.h        |  38 ++++++
+ src/skippy/state.cpp        | 112 ++++++++++++++++++
+ src/skippy/state_memory.cpp |  31 ++++-
+ src/skippy/state_memory.h   |   1 +
+ 6 files changed, 372 insertions(+), 65 deletions(-)
+
+diff --git a/include/skippy/state.h b/include/skippy/state.h
+index dcdd70b10..6edcb4089 100644
+--- a/include/skippy/state.h
++++ b/include/skippy/state.h
+@@ -17,6 +17,12 @@ enum skippy_memory_cache_capability {
+     SKIPPY_MEMORY_CACHE_RESIDENT = 1 << 0,
+     SKIPPY_MEMORY_CACHE_KV_RECURRENT = 1 << 1,
+     SKIPPY_MEMORY_CACHE_FULL_STATE = 1 << 2,
++    /** Every attention cell of the loaded memory lives in a host-addressable
++     *  backend buffer, so skippy_export_kv_page_spans can describe a page in
++     *  place. A backend earns this bit by where it allocates the cache, not by
++     *  its name: unified memory sets it today; a discrete backend sets it the
++     *  day it places cells in mapped or managed memory. */
++    SKIPPY_MEMORY_CACHE_HOST_VISIBLE_KV = 1 << 3,
+ };
+ 
+ /** @brief Returns complete cache representations admitted by the built graph and loaded memory.
+@@ -218,6 +224,33 @@ LLAMA_API enum skippy_status skippy_export_kv_page(
+         size_t * out_bytes,
+         struct skippy_error ** out_error);
+ 
++/** @brief One host-addressable slice of a KV page, in payload order. */
++struct skippy_kv_page_span {
++    const void * data;
++    size_t bytes;
++};
++
++/** @brief Describes a KV page as spans into the live cells instead of copying it.
++ *
++ *  Requires SKIPPY_MEMORY_CACHE_HOST_VISIBLE_KV. Concatenating the spans in
++ *  order yields exactly the bytes skippy_export_kv_page writes for the same
++ *  arguments, with the same descriptor. The spans alias the session's cells:
++ *  they stay valid until the session decodes, trims below token_start +
++ *  token_count, resets, imports state, or is freed. Pass spans = NULL to size.
++ *  Returns SKIPPY_STATUS_UNSUPPORTED when the loaded memory is not host
++ *  visible, so callers fall back to the copying export. */
++LLAMA_API enum skippy_status skippy_export_kv_page_spans(
++        struct skippy_session * session,
++        int32_t layer_start,
++        int32_t layer_end,
++        uint64_t token_start,
++        uint64_t token_count,
++        struct skippy_kv_page_desc * out_desc,
++        struct skippy_kv_page_span * spans,
++        size_t span_capacity,
++        size_t * out_span_count,
++        struct skippy_error ** out_error);
++
+ /** @brief Imports a described KV page. Composite pages require a fresh session and are cleared on failure. */
+ LLAMA_API enum skippy_status skippy_import_kv_page(
+         struct skippy_session * session,
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 741d0ef30..9982ad978 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -10,6 +10,7 @@
+ #include <cassert>
+ #include <cmath>
+ #include <cstring>
++#include <functional>
+ #include <limits>
+ #include <map>
+ #include <stdexcept>
+@@ -1595,21 +1596,26 @@ static std::vector<llama_kv_cache_cell_run> llama_kv_cache_cell_runs(const std::
+     return runs;
+ }
+ 
+-bool llama_kv_cache::stage_export_kv_page(
++// Layout of one sequence's KV page in payload order: the descriptor the
++// payload is described by, the cell runs every tensor is read along, and the
++// selected layers. Both the copying export and the in-place span export walk
++// this; the walk is the single definition of the payload byte order.
++struct llama_kv_page_layout {
++    skippy_kv_page_desc desc = {};
++    std::vector<llama_kv_cache_cell_run> cell_runs;
++    std::vector<const llama_kv_cache::kv_layer *> selected;
++    uint32_t strm = 0;
++    size_t cells_size = 0;
++};
++
++bool llama_kv_cache::stage_kv_page_layout(
+         llama_seq_id seq_id,
+         int32_t layer_start,
+         int32_t layer_end,
+         uint64_t token_start,
+         uint64_t token_count,
+-        skippy_kv_page_desc * out_desc,
+-        void * output,
+-        size_t output_capacity,
+-        size_t * out_bytes,
++        llama_kv_page_layout & out,
+         std::string & error) const {
+-    if (out_desc == nullptr || out_bytes == nullptr) {
+-        error = "out_desc and out_bytes are required";
+-        return false;
+-    }
+     if (layer_start < 0 || layer_end <= layer_start) {
+         error = "invalid layer range";
+         return false;
+@@ -1757,87 +1763,185 @@ bool llama_kv_cache::stage_export_kv_page(
+         return false;
+     }
+ 
+-    out_desc->version = 1;
+-    out_desc->layer_start = layer_start;
+-    out_desc->layer_end = layer_end;
+-    out_desc->token_start = token_start;
+-    out_desc->token_count = token_count;
+-    out_desc->layer_count = static_cast<uint32_t>(selected.size());
+-    out_desc->k_type = k_type;
+-    out_desc->v_type = v_type;
+-    out_desc->k_row_bytes = k_row_bytes;
+-    out_desc->v_row_bytes = v_row_bytes;
+-    out_desc->v_element_bytes = v_element_bytes;
+-    out_desc->k_idx_row_bytes = k_idx_row_bytes;
+-    out_desc->payload_bytes = payload_bytes;
+-    out_desc->flags = v_trans ? SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED : 0;
++    out.desc = {};
++    out.desc.version = 1;
++    out.desc.layer_start = layer_start;
++    out.desc.layer_end = layer_end;
++    out.desc.token_start = token_start;
++    out.desc.token_count = token_count;
++    out.desc.layer_count = static_cast<uint32_t>(selected.size());
++    out.desc.k_type = k_type;
++    out.desc.v_type = v_type;
++    out.desc.k_row_bytes = k_row_bytes;
++    out.desc.v_row_bytes = v_row_bytes;
++    out.desc.v_element_bytes = v_element_bytes;
++    out.desc.k_idx_row_bytes = k_idx_row_bytes;
++    out.desc.payload_bytes = payload_bytes;
++    out.desc.flags = v_trans ? SKIPPY_KV_PAGE_FLAG_V_TRANSPOSED : 0;
+     if (k_idx_row_bytes > 0) {
+-        out_desc->flags |= SKIPPY_KV_PAGE_FLAG_HAS_K_IDX;
+-    }
+-    *out_bytes = static_cast<size_t>(payload_bytes);
+-
+-    if (output == nullptr) {
+-        return true;
+-    }
+-    if (output_capacity < static_cast<size_t>(payload_bytes)) {
+-        error = "output buffer is too small";
+-        return false;
++        out.desc.flags |= SKIPPY_KV_PAGE_FLAG_HAS_K_IDX;
+     }
++    out.cell_runs = llama_kv_cache_cell_runs(cell_idxs);
++    out.selected = std::move(selected);
++    out.strm = strm;
++    out.cells_size = cells.size();
++    return true;
++}
+ 
+-    const auto cell_runs = llama_kv_cache_cell_runs(cell_idxs);
+-    char * dst = static_cast<char *>(output);
+-    for (const auto * layer : selected) {
++void llama_kv_cache::stage_kv_page_walk(
++        const llama_kv_page_layout & layout,
++        const std::function<void(ggml_tensor *, size_t, size_t)> & visit) const {
++    const auto & desc = layout.desc;
++    const uint32_t strm = layout.strm;
++    for (const auto * layer : layout.selected) {
+         auto * k = layer->k_stream[strm];
+-        for (const auto & run : cell_runs) {
+-            const size_t run_bytes = static_cast<size_t>(run.count) * k_row_bytes;
+-            ggml_backend_tensor_get(k, dst, static_cast<size_t>(run.first) * k_row_bytes, run_bytes);
+-            dst += run_bytes;
++        for (const auto & run : layout.cell_runs) {
++            visit(k, static_cast<size_t>(run.first) * desc.k_row_bytes, static_cast<size_t>(run.count) * desc.k_row_bytes);
+         }
+     }
+ 
+     if (!v_trans) {
+-        for (const auto * layer : selected) {
+-            if (v_row_bytes == 0) {
++        for (const auto * layer : layout.selected) {
++            if (desc.v_row_bytes == 0) {
+                 continue;
+             }
+             auto * v = layer->v_stream[strm];
+-            for (const auto & run : cell_runs) {
+-                const size_t run_bytes = static_cast<size_t>(run.count) * v_row_bytes;
+-                ggml_backend_tensor_get(v, dst, static_cast<size_t>(run.first) * v_row_bytes, run_bytes);
+-                dst += run_bytes;
++            for (const auto & run : layout.cell_runs) {
++                visit(v, static_cast<size_t>(run.first) * desc.v_row_bytes, static_cast<size_t>(run.count) * desc.v_row_bytes);
+             }
+         }
+     } else {
+-        for (const auto * layer : selected) {
+-            if (v_element_bytes == 0) {
++        for (const auto * layer : layout.selected) {
++            if (desc.v_element_bytes == 0) {
+                 continue;
+             }
+             auto * v = layer->v_stream[strm];
+             const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer->il);
+             for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
+-                for (const auto & run : cell_runs) {
+-                    const size_t run_bytes = static_cast<size_t>(run.count) * v_element_bytes;
+-                    const size_t src_offset = (static_cast<size_t>(run.first) + static_cast<size_t>(j) * cells.size()) * v_element_bytes;
+-                    ggml_backend_tensor_get(v, dst, src_offset, run_bytes);
+-                    dst += run_bytes;
++                for (const auto & run : layout.cell_runs) {
++                    const size_t src_offset = (static_cast<size_t>(run.first) + static_cast<size_t>(j) * layout.cells_size) * desc.v_element_bytes;
++                    visit(v, src_offset, static_cast<size_t>(run.count) * desc.v_element_bytes);
+                 }
+             }
+         }
+     }
+ 
+     // MSA/DSA indexer keys ride after the V payload, one F32 row per token per layer
+-    for (const auto * layer : selected) {
+-        if (k_idx_row_bytes == 0) {
++    for (const auto * layer : layout.selected) {
++        if (desc.k_idx_row_bytes == 0) {
+             break;
+         }
+         auto * k_idx = layer->k_idx_stream[strm];
+-        for (const auto & run : cell_runs) {
+-            const size_t run_bytes = static_cast<size_t>(run.count) * k_idx_row_bytes;
+-            ggml_backend_tensor_get(k_idx, dst, static_cast<size_t>(run.first) * k_idx_row_bytes, run_bytes);
+-            dst += run_bytes;
++        for (const auto & run : layout.cell_runs) {
++            visit(k_idx, static_cast<size_t>(run.first) * desc.k_idx_row_bytes, static_cast<size_t>(run.count) * desc.k_idx_row_bytes);
+         }
+     }
++}
+ 
++bool llama_kv_cache::stage_export_kv_page(
++        llama_seq_id seq_id,
++        int32_t layer_start,
++        int32_t layer_end,
++        uint64_t token_start,
++        uint64_t token_count,
++        skippy_kv_page_desc * out_desc,
++        void * output,
++        size_t output_capacity,
++        size_t * out_bytes,
++        std::string & error) const {
++    if (out_desc == nullptr || out_bytes == nullptr) {
++        error = "out_desc and out_bytes are required";
++        return false;
++    }
++    llama_kv_page_layout layout;
++    if (!stage_kv_page_layout(seq_id, layer_start, layer_end, token_start, token_count, layout, error)) {
++        return false;
++    }
++    *out_desc = layout.desc;
++    *out_bytes = static_cast<size_t>(layout.desc.payload_bytes);
++
++    if (output == nullptr) {
++        return true;
++    }
++    if (output_capacity < static_cast<size_t>(layout.desc.payload_bytes)) {
++        error = "output buffer is too small";
++        return false;
++    }
++
++    char * dst = static_cast<char *>(output);
++    stage_kv_page_walk(layout, [&dst](ggml_tensor * tensor, size_t offset, size_t bytes) {
++        ggml_backend_tensor_get(tensor, dst, offset, bytes);
++        dst += bytes;
++    });
++    return true;
++}
++
++static bool llama_kv_cache_tensor_host_visible(const ggml_tensor * tensor) {
++    return tensor == nullptr || (tensor->buffer != nullptr && tensor->data != nullptr && ggml_backend_buffer_is_host(tensor->buffer));
++}
++
++bool llama_kv_cache::stage_kv_page_host_visible() const {
++    for (const auto & layer : layers) {
++        for (const auto * k : layer.k_stream) {
++            if (!llama_kv_cache_tensor_host_visible(k)) {
++                return false;
++            }
++        }
++        for (const auto * v : layer.v_stream) {
++            if (!llama_kv_cache_tensor_host_visible(v)) {
++                return false;
++            }
++        }
++        for (const auto * k_idx : layer.k_idx_stream) {
++            if (!llama_kv_cache_tensor_host_visible(k_idx)) {
++                return false;
++            }
++        }
++    }
++    return !layers.empty();
++}
++
++bool llama_kv_cache::stage_export_kv_page_spans(
++        llama_seq_id seq_id,
++        int32_t layer_start,
++        int32_t layer_end,
++        uint64_t token_start,
++        uint64_t token_count,
++        skippy_kv_page_desc * out_desc,
++        skippy_kv_page_span * spans,
++        size_t span_capacity,
++        size_t * out_span_count,
++        std::string & error) const {
++    if (out_desc == nullptr || out_span_count == nullptr) {
++        error = "out_desc and out_span_count are required";
++        return false;
++    }
++    if (!stage_kv_page_host_visible()) {
++        error = "KV cells are not host visible";
++        return false;
++    }
++    llama_kv_page_layout layout;
++    if (!stage_kv_page_layout(seq_id, layer_start, layer_end, token_start, token_count, layout, error)) {
++        return false;
++    }
++    *out_desc = layout.desc;
++
++    size_t count = 0;
++    stage_kv_page_walk(layout, [&](ggml_tensor * tensor, size_t offset, size_t bytes) {
++        if (spans != nullptr && count < span_capacity) {
++            spans[count].data = static_cast<const char *>(tensor->data) + offset;
++            spans[count].bytes = bytes;
++        }
++        ++count;
++    });
++    *out_span_count = count;
++    if (spans == nullptr) {
++        return true;
++    }
++    if (span_capacity < count) {
++        error = "span buffer is too small";
++        return false;
++    }
+     return true;
+ }
+ 
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index 611c1379d..915ff6dc4 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -5,6 +5,7 @@
+ #include "llama-kv-cells.h"
+ #include "llama-memory.h"
+ 
++#include <functional>
+ #include <unordered_map>
+ #include <string>
+ #include <vector>
+@@ -14,6 +15,8 @@ struct llama_hparams;
+ struct llama_model;
+ struct llama_context;
+ struct skippy_kv_page_desc;
++struct skippy_kv_page_span;
++struct llama_kv_page_layout;
+ struct skippy_cachegen_record_v1;
+ 
+ //
+@@ -213,6 +216,23 @@ public:
+             size_t * out_bytes,
+             std::string & error) const;
+ 
++    // Describe the same page as spans into the live cells, in payload order.
++    // Only when every cell tensor is host visible; see stage_kv_page_host_visible.
++    bool stage_export_kv_page_spans(
++            llama_seq_id seq_id,
++            int32_t layer_start,
++            int32_t layer_end,
++            uint64_t token_start,
++            uint64_t token_count,
++            skippy_kv_page_desc * out_desc,
++            skippy_kv_page_span * spans,
++            size_t span_capacity,
++            size_t * out_span_count,
++            std::string & error) const;
++
++    // Every K/V/k_idx stream tensor lives in a host-addressable backend buffer.
++    bool stage_kv_page_host_visible() const;
++
+     bool stage_import_kv_page(
+             llama_seq_id seq_id,
+             const skippy_kv_page_desc & desc,
+@@ -307,6 +327,8 @@ public:
+     void get_prev_tokens(const llama_ubatch & ubatch, uint32_t n, std::vector<llama_token> & res) const;
+ 
+ private:
++    friend struct llama_kv_page_layout;
++
+     bool supports_active_extent(const llama_ubatch & ubatch) const;
+     const llama_model & model;
+     const llama_hparams & hparams;
+@@ -383,6 +405,22 @@ private:
+ 
+     std::vector<kv_layer> layers;
+ 
++    // Resolve one sequence's page: descriptor, cell runs and selected layers.
++    bool stage_kv_page_layout(
++            llama_seq_id seq_id,
++            int32_t layer_start,
++            int32_t layer_end,
++            uint64_t token_start,
++            uint64_t token_count,
++            llama_kv_page_layout & out,
++            std::string & error) const;
++
++    // Visit every (tensor, byte offset, byte count) slice of a page in payload
++    // order. This is the only definition of the payload byte order.
++    void stage_kv_page_walk(
++            const llama_kv_page_layout & layout,
++            const std::function<void(ggml_tensor *, size_t, size_t)> & visit) const;
++
+     // model layer id -> KV cache layer id
+     std::unordered_map<int32_t, int32_t> map_layer_ids;
+ 
+diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
+index 688554c03..af7af0670 100644
+--- a/src/skippy/state.cpp
++++ b/src/skippy/state.cpp
+@@ -418,6 +418,118 @@ static bool skippy_export_iswa_kv_page(
+            iswa->get_swa()->stage_export_kv_page(session->seq_id, layer_start, layer_end, swa_start, swa_count, &swa, bytes + base_bytes, swa_bytes, &swa_bytes, error);
+ }
+ 
++// Composite pages place the base spans before the SWA spans, matching the
++// byte order skippy_export_iswa_kv_page writes.
++static bool skippy_export_iswa_kv_page_spans(
++        skippy_session * session,
++        llama_kv_cache_iswa * iswa,
++        int32_t layer_start,
++        int32_t layer_end,
++        uint64_t token_start,
++        uint64_t token_count,
++        skippy_kv_page_desc * out_desc,
++        skippy_kv_page_span * spans,
++        size_t span_capacity,
++        size_t * out_span_count,
++        std::string & error) {
++    if (out_desc == nullptr || out_span_count == nullptr) {
++        error = "out_desc and out_span_count are required";
++        return false;
++    }
++    if (token_start + token_count < token_start) {
++        error = "token range is too large";
++        return false;
++    }
++    const uint64_t n_swa = iswa->get_swa()->get_n_swa();
++    const uint64_t token_end = token_start + token_count;
++    const uint64_t swa_start = n_swa == 0 || token_count <= n_swa ? token_start : token_end - n_swa;
++    const uint64_t swa_count = token_end - swa_start;
++
++    skippy_kv_page_desc base = {};
++    skippy_kv_page_desc swa = {};
++    size_t base_spans = 0;
++    size_t swa_spans = 0;
++    if (!iswa->get_base()->stage_export_kv_page_spans(session->seq_id, layer_start, layer_end, token_start, token_count, &base, nullptr, 0, &base_spans, error) ||
++            !iswa->get_swa()->stage_export_kv_page_spans(session->seq_id, layer_start, layer_end, swa_start, swa_count, &swa, nullptr, 0, &swa_spans, error)) {
++        return false;
++    }
++    if (base.payload_bytes > std::numeric_limits<size_t>::max() - swa.payload_bytes ||
++            base_spans > std::numeric_limits<size_t>::max() - swa_spans) {
++        error = "composite KV page payload is too large";
++        return false;
++    }
++    *out_desc = {};
++    out_desc->version = 2;
++    out_desc->layer_start = layer_start;
++    out_desc->layer_end = layer_end;
++    out_desc->token_start = token_start;
++    out_desc->token_count = token_count;
++    out_desc->payload_bytes = base.payload_bytes + swa.payload_bytes;
++    out_desc->codec = SKIPPY_KV_PAGE_CODEC_ISWA_COMPOSITE_V1;
++    out_desc->component_count = 2;
++    out_desc->components[0] = skippy_component_from_page(base, SKIPPY_KV_PAGE_COMPONENT_BASE, 0);
++    out_desc->components[1] = skippy_component_from_page(swa, SKIPPY_KV_PAGE_COMPONENT_SWA, base.payload_bytes);
++    *out_span_count = base_spans + swa_spans;
++    if (spans == nullptr) {
++        return true;
++    }
++    if (span_capacity < base_spans + swa_spans) {
++        error = "span buffer is too small";
++        return false;
++    }
++    return iswa->get_base()->stage_export_kv_page_spans(session->seq_id, layer_start, layer_end, token_start, token_count, &base, spans, base_spans, &base_spans, error) &&
++           iswa->get_swa()->stage_export_kv_page_spans(session->seq_id, layer_start, layer_end, swa_start, swa_count, &swa, spans + base_spans, swa_spans, &swa_spans, error);
++}
++
++enum skippy_status skippy_export_kv_page_spans(
++        struct skippy_session * session,
++        int32_t layer_start,
++        int32_t layer_end,
++        uint64_t token_start,
++        uint64_t token_count,
++        struct skippy_kv_page_desc * out_desc,
++        struct skippy_kv_page_span * spans,
++        size_t span_capacity,
++        size_t * out_span_count,
++        struct skippy_error ** out_error) {
++    if (session == nullptr || session->ctx == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (!session->stage_model ||
++            !(skippy_model_memory_cache_capabilities(session->stage_model) & SKIPPY_MEMORY_CACHE_HOST_VISIBLE_KV)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "loaded KV cells are not host visible");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++    // Pending graph work may still be writing these cells; the spans must
++    // describe settled bytes.
++    session->ctx->synchronize();
++    std::string error;
++    bool ok = false;
++    if (auto * iswa = skippy_get_iswa_cache(session)) {
++        ok = skippy_export_iswa_kv_page_spans(session, iswa, layer_start, layer_end, token_start, token_count, out_desc, spans, span_capacity, out_span_count, error);
++    } else if (auto * kv = skippy_get_kv_cache(session, out_error)) {
++        ok = kv->stage_export_kv_page_spans(session->seq_id, layer_start, layer_end, token_start, token_count, out_desc, spans, span_capacity, out_span_count, error);
++        if (ok && out_desc != nullptr) {
++            out_desc->codec = SKIPPY_KV_PAGE_CODEC_SINGLE_V1;
++        }
++    } else {
++        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime memory type is not supported for native KV pages");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++    if (!ok) {
++        const bool too_small = out_span_count != nullptr && *out_span_count > span_capacity;
++        const enum skippy_status status = too_small ? SKIPPY_STATUS_BUFFER_TOO_SMALL : SKIPPY_STATUS_RUNTIME_ERROR;
++        skippy_set_error(out_error, status, error.c_str());
++        return status;
++    }
++    if (spans == nullptr || (out_span_count != nullptr && *out_span_count > span_capacity)) {
++        skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "native KV page span buffer is too small");
++        return SKIPPY_STATUS_BUFFER_TOO_SMALL;
++    }
++    return skippy_success(out_error);
++}
++
+ enum skippy_status skippy_export_kv_page(
+         struct skippy_session * session,
+         int32_t layer_start,
+diff --git a/src/skippy/state_memory.cpp b/src/skippy/state_memory.cpp
+index 0dee78d02..de5bae9ed 100644
+--- a/src/skippy/state_memory.cpp
++++ b/src/skippy/state_memory.cpp
+@@ -71,6 +71,19 @@ llama_memory_recurrent * skippy_memory_recurrent_adapter(llama_memory_t memory)
+     return nullptr;
+ }
+ 
++// Host visibility is a property of where the backend placed the cells, read
++// from the buffers themselves. Both halves of an interleaved cache must agree.
++uint32_t skippy_memory_host_visible_kv(llama_memory_t memory) {
++    if (auto * iswa = skippy_memory_iswa_adapter(memory)) {
++        return iswa->get_base()->stage_kv_page_host_visible() && iswa->get_swa()->stage_kv_page_host_visible()
++                ? SKIPPY_MEMORY_CACHE_HOST_VISIBLE_KV : 0;
++    }
++    if (auto * kv = skippy_memory_kv_adapter(memory)) {
++        return kv->stage_kv_page_host_visible() ? SKIPPY_MEMORY_CACHE_HOST_VISIBLE_KV : 0;
++    }
++    return 0;
++}
++
+ uint32_t skippy_memory_cache_capabilities(llama_memory_t memory) {
+     if (!memory) {
+         return 0;
+@@ -80,7 +93,8 @@ uint32_t skippy_memory_cache_capabilities(llama_memory_t memory) {
+     // coverage merely from a successful dynamic_cast or a nonempty export.
+     const auto & type = typeid(*memory);
+     if (type == typeid(llama_kv_cache) || type == typeid(llama_kv_cache_iswa)) {
+-        return SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE;
++        return SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE |
++                skippy_memory_host_visible_kv(memory);
+     }
+     if (type == typeid(llama_memory_recurrent)) {
+         return skippy_memory_recurrent_adapter(memory)
+@@ -89,7 +103,8 @@ uint32_t skippy_memory_cache_capabilities(llama_memory_t memory) {
+     if (type == typeid(llama_memory_hybrid) || type == typeid(llama_memory_hybrid_iswa)) {
+         return skippy_memory_recurrent_adapter(memory) &&
+                 (skippy_memory_kv_adapter(memory) || skippy_memory_iswa_adapter(memory))
+-                ? SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE : SKIPPY_MEMORY_CACHE_FULL_STATE;
++                ? SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE | skippy_memory_host_visible_kv(memory)
++                : SKIPPY_MEMORY_CACHE_FULL_STATE;
+     }
+     // DSA/MSA memories include an indexer tier. Until a real-model resident
+     // save/restore proves that tier survives, use complete state snapshots.
+@@ -133,10 +148,14 @@ uint32_t skippy_graph_cache_capabilities(const llm_graph_result & result) {
+ }
+ 
+ extern "C" uint32_t skippy_model_memory_cache_capabilities(const skippy_model * model) {
+-    return model && model->ctx
+-            ? model->ctx->admit_skippy_cache_capabilities(
+-                skippy_memory_cache_capabilities(model->ctx->get_memory()))
+-            : 0;
++    if (!model || !model->ctx) {
++        return 0;
++    }
++    const uint32_t memory_capabilities = skippy_memory_cache_capabilities(model->ctx->get_memory());
++    const uint32_t admitted = model->ctx->admit_skippy_cache_capabilities(memory_capabilities);
++    // Placement is not a representation. The graph decides what may be
++    // cached; the buffers alone say whether those cells are host visible.
++    return admitted == 0 ? 0 : admitted | (memory_capabilities & SKIPPY_MEMORY_CACHE_HOST_VISIBLE_KV);
+ }
+ 
+ llama_memory_recurrent * skippy_recurrent_memory_checked(
+diff --git a/src/skippy/state_memory.h b/src/skippy/state_memory.h
+index 67ad1ea99..4696a894a 100644
+--- a/src/skippy/state_memory.h
++++ b/src/skippy/state_memory.h
+@@ -13,6 +13,7 @@ llama_kv_cache * skippy_memory_kv_adapter(llama_memory_t memory);
+ llama_kv_cache_iswa * skippy_memory_iswa_adapter(llama_memory_t memory);
+ llama_memory_recurrent * skippy_memory_recurrent_adapter(llama_memory_t memory);
+ uint32_t skippy_memory_cache_capabilities(llama_memory_t memory);
++uint32_t skippy_memory_host_visible_kv(llama_memory_t memory);
+ uint32_t skippy_graph_cache_capabilities(const llm_graph_result & result);
+ 
+ struct skippy_session;
+-- 
+2.43.0
+

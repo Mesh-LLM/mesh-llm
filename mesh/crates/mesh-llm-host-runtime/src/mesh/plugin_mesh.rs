@@ -272,6 +272,23 @@ impl Node {
                     .mark_plugin_status_unavailable(&plugin_id, generation);
                 Ok(())
             }
+            crate::plugin::PluginMeshEvent::InferenceObservationGrant {
+                plugin_id,
+                response_tx,
+            } => {
+                let granted =
+                    self.config_state
+                        .lock()
+                        .await
+                        .config()
+                        .plugins
+                        .iter()
+                        .any(|plugin| {
+                            plugin.name == plugin_id && plugin.inference_observation_allowed()
+                        });
+                let _ = response_tx.send(granted);
+                Ok(())
+            }
             crate::plugin::PluginMeshEvent::PluginStopped { plugin_id } => {
                 // A disabled or removed plugin no longer runs here, so this
                 // node stops vouching for its key and showing its status.

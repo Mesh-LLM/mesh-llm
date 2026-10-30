@@ -25,6 +25,7 @@ async fn running_observer() -> (Arc<ExternalPlugin>, mpsc::Receiver<super::proto
             mesh_llm_plugin::openai_exchange::openai_exchange_hook("observe"),
         )),
         status_declaration: Default::default(),
+        declares_inference_observation: false,
         _child: None,
         connection_task: tokio::spawn(std::future::pending()),
         outbound_tx,

@@ -262,6 +262,8 @@ mod tests {
                 resident: true,
                 kv_recurrent: true,
                 full_state: true,
+                resident_kv_recurrent: false,
+                kv_cell_access: Default::default(),
             }),
             Some(manager),
             None,

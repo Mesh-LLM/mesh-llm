@@ -24,6 +24,176 @@ pub(super) fn prefill_without_intermediate_sampling(
     Ok(output.samples.first().map(|sample| sample.predicted_token))
 }
 
+fn prefill_without_sampling_config(
+    runtime: &mut RuntimeState,
+    session: &str,
+    tokens: &[i32],
+) -> Result<Option<i32>> {
+    let output = runtime.iteration_batch_sampled(&[RuntimeIterationBatchRequest {
+        session_id: session,
+        token_ids: tokens,
+        positions: &[],
+        sampling: None,
+        input: None,
+        sample_last: true,
+        phase: IterationBatchPhase::Prefill,
+    }])?;
+    Ok(output.samples.first().map(|sample| sample.predicted_token))
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn native_hybrid_iteration_batch_shape_parity() -> Result<()> {
+    let (wide, _) =
+        recurrent_test_backend("iteration-wide", "iteration-wide", 512, (128, 32), 8, 256)?;
+    let (narrow, _) = recurrent_test_backend(
+        "iteration-narrow",
+        "iteration-narrow",
+        512,
+        (32, 32),
+        8,
+        256,
+    )?;
+    let prompt = (1..=128).collect::<Vec<_>>();
+    let mut wide_runtime = wide.runtime.lock().unwrap();
+    let mut narrow_runtime = narrow.runtime.lock().unwrap();
+    let mut wide_token = None;
+    let mut narrow_token = None;
+    for (index, chunk) in prompt.chunks(32).enumerate() {
+        let sample_last = index == 3;
+        wide_token = prefill_without_intermediate_sampling(
+            &mut wide_runtime,
+            "native-parity",
+            chunk,
+            sample_last,
+        )?;
+        narrow_token = prefill_without_intermediate_sampling(
+            &mut narrow_runtime,
+            "native-parity",
+            chunk,
+            sample_last,
+        )?;
+    }
+    let mut wide_token = wide_token.context("wide prefill produced no sample")?;
+    let mut narrow_token = narrow_token.context("narrow prefill produced no sample")?;
+    assert_eq!(
+        wide_token, narrow_token,
+        "native prefill sample differs across batch sizes"
+    );
+    for index in 1..8 {
+        wide_token = iterate(
+            &mut wide_runtime,
+            &["native-parity"],
+            &[&[wide_token]],
+            IterationBatchPhase::Decode,
+        )?[0];
+        narrow_token = iterate(
+            &mut narrow_runtime,
+            &["native-parity"],
+            &[&[narrow_token]],
+            IterationBatchPhase::Decode,
+        )?[0];
+        assert_eq!(
+            wide_token, narrow_token,
+            "native decode token {index} differs across batch sizes"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn native_hybrid_resident_checkpoint_null_sampling_parity() -> Result<()> {
+    native_hybrid_checkpoint_shape_parity(false)
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn native_hybrid_exact_capture_shape_parity() -> Result<()> {
+    native_hybrid_checkpoint_shape_parity(true)
+}
+
+fn native_hybrid_checkpoint_shape_parity(record_exact: bool) -> Result<()> {
+    let (wide, _) =
+        recurrent_test_backend("checkpoint-wide", "checkpoint-wide", 512, (128, 32), 8, 256)?;
+    let (narrow, _) = recurrent_test_backend(
+        "checkpoint-narrow",
+        "checkpoint-narrow",
+        512,
+        (32, 32),
+        8,
+        256,
+    )?;
+    let mut wide_runtime = wide.runtime.lock().unwrap();
+    let mut narrow_runtime = narrow.runtime.lock().unwrap();
+    let session = "checkpoint-parity";
+    wide_runtime.enable_resident_recurrent_request(session);
+    narrow_runtime.enable_resident_recurrent_request(session);
+    for chunk in (1..=126).collect::<Vec<_>>().chunks(32) {
+        prefill_without_intermediate_sampling(&mut wide_runtime, session, chunk, false)?;
+        prefill_without_intermediate_sampling(&mut narrow_runtime, session, chunk, false)?;
+    }
+    let wide_recurrent = wide_runtime.export_recurrent_cache_state(session)?;
+    let narrow_recurrent = narrow_runtime.export_recurrent_cache_state(session)?;
+    assert!(!wide_recurrent.is_empty() && !narrow_recurrent.is_empty());
+    wide_runtime.save_resident_prefix(session, 2, 126)?;
+    narrow_runtime.save_resident_prefix(session, 2, 126)?;
+    if record_exact {
+        for (backend, runtime) in [(&wide, &mut *wide_runtime), (&narrow, &mut *narrow_runtime)] {
+            let kv = backend.kv.as_ref().unwrap();
+            let ids = InferenceGenerationIds::new_with_trust(
+                InferenceCacheHints::default(),
+                Some(session),
+                true,
+                None,
+            );
+            let base = backend.local_kv_message_base(session, &ids);
+            let identity =
+                kv.prefill_identity(&backend.config, &base, 0, &(1..=126).collect::<Vec<_>>());
+            anyhow::ensure!(
+                kv.record_exact_state_with_cost_and_durability(
+                    runtime,
+                    session,
+                    &identity,
+                    crate::kv_integration::CaptureAdmission::BestEffort,
+                    None,
+                    false,
+                )?
+                .is_some(),
+                "lane-owned exact checkpoint was not captured"
+            );
+        }
+    }
+    let mut wide_token = prefill_without_sampling_config(&mut wide_runtime, session, &[127, 128])?
+        .context("wide checkpoint continuation produced no sample")?;
+    let mut narrow_token =
+        prefill_without_sampling_config(&mut narrow_runtime, session, &[127, 128])?
+            .context("narrow checkpoint continuation produced no sample")?;
+    assert_eq!(
+        wide_token, narrow_token,
+        "native checkpoint continuation differs across batch sizes"
+    );
+    for index in 1..8 {
+        wide_token = iterate(
+            &mut wide_runtime,
+            &[session],
+            &[&[wide_token]],
+            IterationBatchPhase::Decode,
+        )?[0];
+        narrow_token = iterate(
+            &mut narrow_runtime,
+            &[session],
+            &[&[narrow_token]],
+            IterationBatchPhase::Decode,
+        )?[0];
+        assert_eq!(
+            wide_token, narrow_token,
+            "native checkpoint decode token {index} differs across batch sizes"
+        );
+    }
+    Ok(())
+}
+
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL, _LAYERS and optional _GPU_LAYERS"]
 fn native_interleaved_prefills_preserve_concurrent_decode() -> Result<()> {

@@ -108,11 +108,11 @@ pub use types::{
     ACTIVATION_BOUNDARY_DESC_VERSION, ActivationBoundaryDesc, ActivationDesc, ActivationFrame,
     ActivationPartDesc, ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateJsonResult,
     ChatTemplateMessage, ChatTemplateOptions, DEFAULT_PENALTY_LAST_N, DecodeFrameBatchOutput,
-    DrySamplingConfig, GenerationSignalWindow, IterationBatchOutput, IterationSample,
-    LoadedModelCapability, LogitBias, MAX_LOGIT_BIAS, MediaInput, MediaPrefill,
-    MediaPrefillChunkFrame, MediaPrefillFrame, MemoryCacheCapabilities, ModelStateKind,
-    ReasoningBudget, RuntimeKvPage, RuntimeKvPageDesc, SamplingConfig, TensorInfo, TokenLogprobs,
-    TokenSignal, XtcSamplingConfig, penalty_window,
+    DrySamplingConfig, GenerationSignalWindow, IterationBatchOutput, IterationSample, KvCellAccess,
+    KvPageSpan, KvPageSpanError, KvPageSpans, LoadedModelCapability, LogitBias, MAX_LOGIT_BIAS,
+    MediaInput, MediaPrefill, MediaPrefillChunkFrame, MediaPrefillFrame, MemoryCacheCapabilities,
+    ModelStateKind, ReasoningBudget, RuntimeKvPage, RuntimeKvPageDesc, SamplingConfig, TensorInfo,
+    TokenLogprobs, TokenSignal, XtcSamplingConfig, penalty_window,
 };
 
 #[cfg(feature = "dynamic-native-runtime")]

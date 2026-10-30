@@ -3,7 +3,7 @@ use std::ffi::{c_char, c_int, c_void};
 use crate::{
     ActivationBoundaryDesc, ActivationDesc, AsrAbortCallback, AsrInfoV1, AsrModel, AsrResult,
     AsrSegmentV1, AsrTranscribeParamsV1, BackendDevice, Error, GenerationSignalWindow,
-    IterationRequest, KvPageDesc, LayaInfoV1, LayaMemoryV1, LayaModel, LayaSequence,
+    IterationRequest, KvPageDesc, KvPageSpan, LayaInfoV1, LayaMemoryV1, LayaModel, LayaSequence,
     LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextData, Model, ModelInfo,
     ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
     MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
@@ -666,6 +666,19 @@ unsafe extern "C" {
         output: *mut c_void,
         output_capacity: usize,
         out_bytes: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_export_kv_page_spans(
+        session: *mut Session,
+        layer_start: i32,
+        layer_end: i32,
+        token_start: u64,
+        token_count: u64,
+        out_desc: *mut KvPageDesc,
+        spans: *mut KvPageSpan,
+        span_capacity: usize,
+        out_span_count: *mut usize,
         out_error: *mut *mut Error,
     ) -> Status;
 

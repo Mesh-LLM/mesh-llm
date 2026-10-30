@@ -24,15 +24,22 @@ fn recurrent_concurrent_stop_preserves_both_prompt_checkpoints() -> Result<()> {
         .map_err(anyhow::Error::msg)?;
     kv.wait_for_exact_state_recording(Duration::from_secs(30))
         .map_err(anyhow::Error::msg)?;
-    assert_eq!(
-        backend
-            .runtime
-            .lock()
-            .unwrap()
-            .session_stats()
-            .idle_resident_prefixes,
-        2
-    );
+    if kv.resident_recurrent_snapshots {
+        assert!(
+            kv.radix.lock().unwrap().stats().resident_entries >= 2,
+            "both prompts must retain resident attention and recurrent snapshots"
+        );
+    } else {
+        assert_eq!(
+            backend
+                .runtime
+                .lock()
+                .unwrap()
+                .session_stats()
+                .idle_resident_prefixes,
+            2
+        );
+    }
     for (index, prompt) in prompts.iter().enumerate() {
         let session = format!("concurrent-{index}");
         let (repeated, cached) =

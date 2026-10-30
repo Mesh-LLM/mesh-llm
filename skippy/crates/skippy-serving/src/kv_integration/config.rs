@@ -19,7 +19,9 @@ use super::{
     output_tokens::OutputTokenCache,
 };
 
-use super::cache_payload::{durable_cache_payload, effective_cache_payload};
+use super::cache_payload::{
+    durable_cache_payload, effective_cache_payload, resident_entries_carry_recurrent,
+};
 
 mod durable_spill;
 mod exact_state_limits;
@@ -136,6 +138,7 @@ impl KvStageIntegration {
         };
         let payload_selection_reason = "loaded_graph_and_memory";
         let dense_without_recurrent = admitted.resident;
+        let resident_recurrent_snapshots = resident_entries_carry_recurrent(admitted);
         let l3_manager = manager()?;
         if cache_config.l2_max_bytes > 0 && l3_manager.is_none() {
             let _ = skippy_events::diagnostics::emit(
@@ -148,17 +151,25 @@ impl KvStageIntegration {
                 },
             );
         }
-        let durable_payload = l3_manager
-            .as_ref()
-            .and_then(|_| durable_cache_payload(admitted));
+        // A resident hybrid also needs an L1 exact-state fallback when its
+        // attention cells are reclaimed. The lane recorder supplies that
+        // representation even when disk caching is disabled.
+        let serialized_payload = resident_recurrent_snapshots
+            .then(|| durable_cache_payload(admitted))
+            .flatten()
+            .or_else(|| {
+                l3_manager
+                    .as_ref()
+                    .and_then(|_| durable_cache_payload(admitted))
+            });
         let l3 = l3_manager
-            .zip(durable_payload)
+            .zip(serialized_payload)
             .map(|(manager, payload)| l3_tier_for_manager(config, payload, manager))
             .transpose()?;
         let l2 = l3
             .as_ref()
             .filter(|_| cache_config.l2_max_bytes > 0)
-            .and(durable_payload)
+            .and(serialized_payload)
             .map(|payload| {
                 super::l2_serving::StageL2::new(
                     cache_config.l2_max_bytes,
@@ -194,8 +205,13 @@ impl KvStageIntegration {
             cache_config.exact_max_bytes,
             std::env::var(EXACT_STATE_MAX_BYTES_ENV).ok().as_deref(),
         );
+        let recorder_payload = if resident_recurrent_snapshots {
+            serialized_payload.unwrap_or(payload)
+        } else {
+            payload
+        };
         let exact_state_record_queue_limit =
-            exact_state_record_queue_limit(exact_byte_limits.soft_bytes, payload);
+            exact_state_record_queue_limit(exact_byte_limits.soft_bytes, recorder_payload);
         let radix = Arc::new(Mutex::new(UnifiedRadixCache::new()));
         let exact_blobs = Arc::new(Mutex::new(CacheBlobStore::default()));
         let (exact_state_record_tx, exact_state_record_rx) =
@@ -340,7 +356,7 @@ impl KvStageIntegration {
             payload_selection_reason,
             loaded_state_kind: model_state_kind,
             loaded_memory_cache: memory_cache,
-            durable_payload,
+            serialized_payload,
             correctness_mode: false,
             trust_local_writes: true,
             checkpoint_policy,
@@ -385,6 +401,7 @@ impl KvStageIntegration {
             cachegen_serving_enabled: worker_cachegen,
             inflight_fills,
             dense_without_recurrent,
+            resident_recurrent_snapshots,
         }))
     }
 
@@ -400,6 +417,8 @@ impl KvStageIntegration {
                 resident: model_state_kind == ModelStateKind::Dense,
                 kv_recurrent: true,
                 full_state: true,
+                resident_kv_recurrent: false,
+                kv_cell_access: Default::default(),
             }),
             None,
         )
@@ -702,8 +721,14 @@ fn store_exact_radix_record_with_codec(
         write_through_l3,
         l2_promotion_digest,
         l3_cost,
-        admission_credit: _admission_credit,
+        admission,
     } = pending;
+    // The worker materialises leases before storing; a lease here is a
+    // caller that skipped `materialise_leased_kv`.
+    anyhow::ensure!(
+        !matches!(admission, super::RecordAdmission::Leased(..)),
+        "exact-state record reached storage with its KV page still leased"
+    );
     let logical_bytes = payload.byte_len();
     let (payload, _) = payload.dedupe_into(
         &mut blobs
@@ -1012,7 +1037,7 @@ mod tests {
             write_through_l3: true,
             l2_promotion_digest: None,
             l3_cost: None,
-            admission_credit: budget.credit(),
+            admission: super::super::RecordAdmission::Credit(budget.credit()),
         }
     }
 
@@ -1064,7 +1089,7 @@ mod tests {
             write_through_l3: true,
             l2_promotion_digest: None,
             l3_cost: None,
-            admission_credit: budget.credit(),
+            admission: super::super::RecordAdmission::Credit(budget.credit()),
         }
     }
 
@@ -1608,6 +1633,8 @@ mod tests {
                 resident: true,
                 kv_recurrent: true,
                 full_state: true,
+                resident_kv_recurrent: false,
+                kv_cell_access: Default::default(),
             }),
             Some(manager.clone()),
             None,
@@ -1621,6 +1648,8 @@ mod tests {
                 resident: true,
                 kv_recurrent: true,
                 full_state: true,
+                resident_kv_recurrent: false,
+                kv_cell_access: Default::default(),
             }),
             Some(manager),
             None,
@@ -1664,6 +1693,8 @@ mod tests {
                 resident: true,
                 kv_recurrent: true,
                 full_state: true,
+                resident_kv_recurrent: false,
+                kv_cell_access: Default::default(),
             }),
             Some(manager),
             None,
@@ -1673,7 +1704,7 @@ mod tests {
 
         assert_eq!(kv.payload, StagePrefixCachePayload::ResidentKv);
         assert_eq!(
-            kv.durable_payload,
+            kv.serialized_payload,
             Some(StagePrefixCachePayload::KvRecurrent)
         );
         assert_eq!(
@@ -1684,8 +1715,38 @@ mod tests {
 
         let mut invalid = kv;
         invalid.payload = StagePrefixCachePayload::Disabled;
-        invalid.durable_payload = Some(StagePrefixCachePayload::ResidentKv);
+        invalid.serialized_payload = Some(StagePrefixCachePayload::ResidentKv);
         assert_eq!(invalid.exact_state_payload(), None);
+    }
+
+    #[test]
+    fn resident_hybrid_keeps_lane_recorded_exact_fallback_without_disk() {
+        let mut config = enabled_auto_config("future/hybrid");
+        config.kv_cache.as_mut().unwrap().max_bytes = 8 * 1024 * 1024 * 1024;
+        let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
+            &config,
+            Some(ModelStateKind::Hybrid),
+            Some(skippy_runtime::MemoryCacheCapabilities {
+                resident: false,
+                kv_recurrent: true,
+                full_state: true,
+                resident_kv_recurrent: true,
+                kv_cell_access: Default::default(),
+            }),
+            None,
+            None,
+        )
+        .unwrap()
+        .expect("resident hybrid cache should remain enabled");
+
+        assert_eq!(kv.payload, StagePrefixCachePayload::ResidentKv);
+        assert_eq!(
+            kv.exact_state_payload(),
+            Some(StagePrefixCachePayload::KvRecurrent)
+        );
+        assert!(kv.records_lane_owned_recurrent());
+        assert!(kv.l3.is_none());
+        assert_eq!(kv.exact_state_record_queue_limit, 8 * 1024 * 1024 * 1024);
     }
 
     #[test]
@@ -1706,6 +1767,8 @@ mod tests {
                 resident: true,
                 kv_recurrent: true,
                 full_state: true,
+                resident_kv_recurrent: false,
+                kv_cell_access: Default::default(),
             }),
             Some(manager),
             None,
@@ -1739,6 +1802,8 @@ mod tests {
                 resident: true,
                 kv_recurrent: true,
                 full_state: true,
+                resident_kv_recurrent: false,
+                kv_cell_access: Default::default(),
             }),
             None,
             None,

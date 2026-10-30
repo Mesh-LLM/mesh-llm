@@ -844,7 +844,12 @@ impl StageOpenAiBackend {
         let scheduler_ids = request.ids.clone();
         let scheduler_lookup_identities = Arc::clone(&lookup_identities);
         let scheduler_prefill_tokens = Arc::clone(&prefill_tokens);
-        let record_prefill_tokens = Arc::clone(&prefill_tokens);
+        // Deferred prefill evaluates the final prompt token before recording.
+        // Hybrid resident KV can only pair its attention cells with recurrent
+        // state at the native session's current position, so the final record
+        // must name that full prompt rather than the lookup's one-token-short
+        // prefix.
+        let record_prefill_tokens = Arc::<[i32]>::from(request.prompt_token_ids);
         let mut scheduler_cache_stats = std::mem::take(cache_stats);
         let cache_operation_deadline = cache_operation_deadline(
             self.generation_admission_timeout,
@@ -908,7 +913,7 @@ impl StageOpenAiBackend {
                 .kv
                 .as_ref()
                 .is_some_and(|kv| kv.payload_is_exact_state());
-            let checkpoints = self.deferred_exact_checkpoint_boundaries(
+            let checkpoints = self.deferred_checkpoint_boundaries(
                 request,
                 &prefill_tokens,
                 restored_prefill_tokens,
@@ -939,13 +944,35 @@ impl StageOpenAiBackend {
                 runtime_lock_acquires =
                     runtime_lock_acquires.saturating_add(checkpoint_prefill.chunk_count);
 
-                if self.enqueue_exact_state_record_at_tokens(
-                    session_id,
-                    request.ids,
-                    request.prompt_token_ids[..boundary].to_vec(),
-                    "shared_prefill_checkpoint",
-                    true,
-                ) {
+                if self
+                    .kv
+                    .as_ref()
+                    .is_some_and(|kv| kv.resident_recurrent_snapshots)
+                {
+                    let resident = self.record_resident_prefill_checkpoint(
+                        session_id,
+                        request.ids,
+                        &request.prompt_token_ids[..boundary],
+                        cache_operation_deadline,
+                        request.cancellation,
+                    )?;
+                    runtime_lock_wait_ms += resident.runtime_lock_wait_ms;
+                    runtime_lock_hold_ms += resident.runtime_lock_hold_ms;
+                    runtime_lock_acquires = runtime_lock_acquires.saturating_add(1);
+                    if resident.value {
+                        record.resident_recorded_pages =
+                            record.resident_recorded_pages.saturating_add(1);
+                    }
+                }
+                if exact_state
+                    && self.enqueue_exact_state_record_at_tokens(
+                        session_id,
+                        request.ids,
+                        request.prompt_token_ids[..boundary].to_vec(),
+                        "shared_prefill_checkpoint",
+                        true,
+                    )
+                {
                     record.resident_enqueued_checkpoints =
                         record.resident_enqueued_checkpoints.saturating_add(1);
                 }
@@ -980,7 +1007,12 @@ impl StageOpenAiBackend {
             runtime_lock_acquires =
                 runtime_lock_acquires.saturating_add(suffix_outcome.chunk_count);
 
-            if exact_state {
+            if exact_state
+                && !self
+                    .kv
+                    .as_ref()
+                    .is_some_and(|kv| kv.resident_recurrent_snapshots)
+            {
                 // The final chunk samples the prompt's next token but leaves
                 // the native session at the full-prompt boundary. Exporting
                 // that state is useful for growing prompts, but is strictly
@@ -1000,6 +1032,8 @@ impl StageOpenAiBackend {
                         record.resident_enqueued_checkpoints.saturating_add(1);
                 }
             } else {
+                // Resident hybrids need the full-prompt native prefix and
+                // decode headroom alongside the lane-owned exact fallback.
                 let scheduler_backend = self.clone();
                 let scheduler_session_id = session_id.to_string();
                 let scheduler_ids = request.ids.clone();

@@ -9,6 +9,7 @@ fn runtime_with(generation: u64, declaration: StatusDeclaration) -> PluginRuntim
         authenticated_peer: false,
         initialized_lifecycle: None,
         status_declaration: declaration,
+        declares_inference_observation: false,
         _child: None,
         connection_task: tokio::spawn(std::future::pending()),
         outbound_tx,
