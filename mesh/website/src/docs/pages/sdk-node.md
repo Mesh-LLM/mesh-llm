@@ -16,6 +16,9 @@ const node = Node.create({ mode: 'client', autoJoin: true })
 await node.start()
 try {
   const llms = await node.inference.listModels()
+  if (llms.length === 0) {
+    throw new Error('No LLM is currently available')
+  }
   const response = await node.inference.chatCompletions({
     model: llms[0].id,
     messages: [{ role: 'user', content: 'Hello from Node.js.' }]

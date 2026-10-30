@@ -22,8 +22,9 @@ val node = Node(mode = NodeMode.CLIENT, autoJoin = true)
 node.start()
 try {
     val llms = node.inference.listModels()
+    val model = llms.firstOrNull() ?: error("No LLM is currently available")
     val body = Json.parseToJsonElement(
-        """{"model":"${llms.first().id}","messages":[{"role":"user","content":"Hello from Kotlin."}]}"""
+        """{"model":"${model.id}","messages":[{"role":"user","content":"Hello from Kotlin."}]}"""
     ).jsonObject
     println(node.inference.chatCompletions(body).json())
 } finally {

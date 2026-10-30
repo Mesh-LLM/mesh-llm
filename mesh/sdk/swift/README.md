@@ -21,8 +21,9 @@ if let cursor = page.nextCursor {
 ```
 
 Results are typed `MeshModelPage`, `MeshModel`, and `MeshModelProvider` values.
-Retain the same filters when continuing a page. Workload and kind strings
-preserve future advertisements; optional metadata remains absent when unknown.
+Retain the same filters when continuing a page. Unrecognized peer workloads
+become `unknown`; the original peer string is not preserved. Kinds are
+string-valued; optional metadata remains absent when unknown.
 Open-ended capability, thinking, payment and plugin data uses `ModelJSONValue`.
 Provider runtime observations apply to that provider. `inference.listModels()`
 continues to expose only compatible LLMs. Discovery calls the embedded node
