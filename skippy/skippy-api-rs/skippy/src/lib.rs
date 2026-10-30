@@ -458,6 +458,25 @@ fn plan_or_oom(plans: Vec<StagePlan>) -> Result<Vec<StagePlan>, StagePlanError> 
 
 impl std::error::Error for StagePlanError {}
 
+/// Why the model's declared suppression policy could not be read.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SuppressTokensError {
+    #[error("suppress tokens rejected: {0}")]
+    Rejected(String),
+    #[error("suppress tokens out of memory")]
+    OutOfMemory,
+}
+
+fn suppression_result(result: sys::SuppressTokensResult) -> Result<Vec<Token>, SuppressTokensError> {
+    if result.ok {
+        Ok(tokens_from_native(result.tokens))
+    } else if result.error.is_empty() {
+        Err(SuppressTokensError::OutOfMemory)
+    } else {
+        Err(SuppressTokensError::Rejected(result.error))
+    }
+}
+
 pub struct Model<'rt> {
     runtime: &'rt Runtime,
     handle: UniquePtr<sys::Model>,
@@ -466,11 +485,14 @@ pub struct Model<'rt> {
 impl Model<'_> {
     /// The vocab's declared suppress tokens (`tokenizer.ggml.suppress_tokens`),
     /// gathered once at load. The library never links a sampler: a caller
-    /// holding logits applies this set before selecting a token. Empty when
-    /// the GGUF declares none (patch 0012).
-    #[must_use]
-    pub fn suppress_tokens(&self) -> Vec<Token> {
-        tokens_from_native(self.runtime.lock().suppress_tokens(&self.handle))
+    /// holding logits applies this set before selecting a token. Returns an
+    /// empty successful set when the GGUF declares none (patch 0012).
+    ///
+    /// # Errors
+    /// Returns a typed error if the native model cannot be read or if copying
+    /// the declared token set runs out of memory.
+    pub fn suppress_tokens(&self) -> Result<Vec<Token>, SuppressTokensError> {
+        suppression_result(self.runtime.lock().suppress_tokens(&self.handle))
     }
 
     pub fn create_session(&self, config: SessionConfig) -> Result<Session<'_>, RuntimeError> {
@@ -764,5 +786,32 @@ mod tests {
     #[test]
     fn empty_plans_are_out_of_memory() {
         assert_eq!(plan_or_oom(Vec::new()), Err(StagePlanError::OutOfMemory));
+    }
+
+    #[test]
+    fn suppression_allocation_failure_is_not_an_empty_success() {
+        let failed = sys::SuppressTokensResult { ok: false, error: String::new(), tokens: Vec::new() };
+        assert_eq!(suppression_result(failed), Err(SuppressTokensError::OutOfMemory));
+        let empty = sys::SuppressTokensResult { ok: true, error: String::new(), tokens: Vec::new() };
+        assert_eq!(suppression_result(empty), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn suppression_failure_preserves_the_native_message() {
+        let failed = sys::SuppressTokensResult {
+            ok: false,
+            error: "suppress_tokens: invalid model".to_owned(),
+            tokens: Vec::new(),
+        };
+        assert_eq!(
+            suppression_result(failed),
+            Err(SuppressTokensError::Rejected("suppress_tokens: invalid model".to_owned()))
+        );
+    }
+
+    #[test]
+    fn suppression_success_preserves_declared_token_order() {
+        let declared = sys::SuppressTokensResult { ok: true, error: String::new(), tokens: vec![9, 2, 9] };
+        assert_eq!(suppression_result(declared), Ok(vec![Token(9), Token(2), Token(9)]));
     }
 }

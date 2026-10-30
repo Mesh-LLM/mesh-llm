@@ -497,24 +497,27 @@ ModelResult Bridge::load_model(rust::Str path) noexcept {
     });
 }
 
-rust::Vec<std::int32_t> Bridge::suppress_tokens(const Model& model) const noexcept {
-    // The visitor must copy out of the span it is handed: with_model returns
-    // whatever the visitor returns, and the span itself only lives as long as
-    // the model borrow inside the call.
-    const auto suppressed = impl_->runtime.with_model(model, [](const llama::LlamaModel& native) {
-        std::vector<std::int32_t> ids;
-        const auto declared = native.suppress_tokens();
-        ids.reserve(declared.size());
-        std::ranges::for_each(declared,
-                              [&](Token token) { ids.push_back(std::to_underlying(token)); });
-        return ids;
+SuppressTokensResult Bridge::suppress_tokens(const Model& model) const noexcept {
+    return guarded_message<SuppressTokensResult>("suppress_tokens", [&]() -> SuppressTokensResult {
+        // Copy while the model is borrowed. Allocation, including the result
+        // vector's reserve, stays inside the same exception barrier.
+        auto suppressed = impl_->runtime.with_model(model, [](const llama::LlamaModel& native) {
+            SuppressTokensResult result{};
+            const auto declared = native.suppress_tokens();
+            if (reserve_suppress_tokens(result.tokens, declared.size()) !=
+                TokenCapacityStatus::Ready) {
+                return in_band_oom<SuppressTokensResult>();
+            }
+            std::ranges::for_each(
+                declared, [&](Token token) { result.tokens.push_back(std::to_underlying(token)); });
+            result.ok = true;
+            return result;
+        });
+        if (!suppressed) {
+            return in_band_failed<SuppressTokensResult>("suppress_tokens", "invalid model");
+        }
+        return std::move(*suppressed);
     });
-    rust::Vec<std::int32_t> tokens;
-    if (!suppressed) return tokens;
-    tokens.reserve(suppressed->size());
-    for (const std::int32_t id : *suppressed)
-        tokens.push_back(id);
-    return tokens;
 }
 
 RuntimeStatus Bridge::unload_model(Model& model) noexcept {

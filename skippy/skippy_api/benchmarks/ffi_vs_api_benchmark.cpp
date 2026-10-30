@@ -673,7 +673,7 @@ template <bool UseFfi> void Normalize(benchmark::State& state) {
 // Sampling suppression (patch 0012): a vocab's declared suppress tokens
 // override caller logit biases, and greedy selection skips them. No model is
 // needed — the suppress set is synthetic, sized like a real one.
-//   FFI: the loops a native caller writes by hand (find per candidate).
+//   FFI: the native patch's merge and bitmap-based greedy scan, with ignore_eog=false.
 //   API: the facade's policy helpers (bitmap, then one scan).
 // ---------------------------------------------------------------------------
 
@@ -688,6 +688,7 @@ suppress_merge_legacy(std::vector<llama_logit_bias> biases, const llama_token* s
                                            suppress_end;
                                 }),
                  biases.end());
+    biases.reserve(biases.size() + static_cast<std::size_t>(count));
     for (const llama_token* token = suppress; token != suppress_end; ++token) {
         biases.push_back({*token, -INFINITY});
     }
@@ -697,11 +698,23 @@ suppress_merge_legacy(std::vector<llama_logit_bias> biases, const llama_token* s
 SKIPPY_NOINLINE llama_token suppress_greedy_legacy(const float* logits, std::int32_t n_vocab,
                                                    const llama_token* suppress,
                                                    std::int32_t count) {
+    if (logits == nullptr || n_vocab <= 0) return LLAMA_TOKEN_NULL;
+    std::vector<std::uint8_t> suppressed;
+    if (suppress != nullptr && count > 0) {
+        // n_vocab is positive above; native skippy_greedy_sample_allowed_logits
+        // uses the same per-call bitmap allocation and rejects invalid ids.
+        suppressed.resize(static_cast<std::size_t>(n_vocab), 0);
+        for (std::int32_t index = 0; index < count; ++index) {
+            const llama_token token = suppress[index];
+            if (token >= 0 && token < n_vocab) {
+                suppressed[static_cast<std::size_t>(token)] = 1;
+            }
+        }
+    }
     llama_token best = LLAMA_TOKEN_NULL;
     float best_logit = -std::numeric_limits<float>::infinity();
     for (llama_token token = 0; token < n_vocab; ++token) {
-        if (suppress != nullptr && count > 0 &&
-            std::find(suppress, suppress + count, token) != suppress + count) {
+        if (!suppressed.empty() && suppressed[static_cast<std::size_t>(token)] != 0) {
             continue;
         }
         if (best == LLAMA_TOKEN_NULL || logits[token] > best_logit) {

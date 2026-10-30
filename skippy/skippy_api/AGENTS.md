@@ -376,6 +376,18 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
   recursively, including its prepared pin/patch stamps and explicit source
   overrides; prove a native-input change reruns the build and an unchanged build
   stays fresh. Clearing Cargo's cache does not repair this missing dependency.
+- **A copied token set can fail even when the model accessor cannot.** The
+  suppress-token bridge returned a vector directly from a `noexcept` body;
+  growing the result could terminate its Rust caller. Return a fallible envelope
+  through `guarded_message`, keeping empty success distinct from allocation
+  failure. cxx's infallible Rust reserve cannot be caught by the C++ barrier;
+  admit the capacity with Rust `try_reserve` first. The capacity-failure and
+  suppression-envelope tests pin both boundaries.
+- **An asymptotically slower reference invents a facade speedup.** The
+  suppression reference searched every suppress id for every candidate, while
+  native greedy sampling builds one bitmap. Mirror the native algorithm and
+  allocation shape before timing. The earlier speedup is withdrawn; the
+  corrected class-A measurement applies only to its recorded synthetic fixture.
 - **A successful result must pass the benchmark gate.** Stage validation changed
   to `expected<void, E>`, but the benchmark still rejected its engaged success
   as though it were an optional error. Admit both successful validators before
