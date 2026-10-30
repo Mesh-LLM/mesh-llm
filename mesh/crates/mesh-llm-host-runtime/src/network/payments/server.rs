@@ -332,7 +332,7 @@ async fn dispatch(
     // The buyer is always a mesh peer, so it gets what this node says it ran,
     // as on the free path (`response/served_model_headers.rs`).
     let head = ServedModelHeadRewrite::new(
-        ServedModelHeaders::for_served_model(node, &session.request.model).await,
+        ServedModelHeaders::for_served_model(node, session.request.backend_model()).await,
     );
     let usage = match session
         .backend
