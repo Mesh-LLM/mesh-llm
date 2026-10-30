@@ -386,7 +386,7 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
             ATTESTATION_CATEGORY,
             20,
         )
-        .placeholder("0.78.0")
+        .placeholder("0.78.0-preview.40959817943.1")
         .hint("text")),
         "mesh_requirements.min_protocol_version" => Some(sp(
             "Minimum protocol generation",

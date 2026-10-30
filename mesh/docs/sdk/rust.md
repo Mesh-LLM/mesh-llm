@@ -10,7 +10,7 @@
 
 ```toml
 [dependencies]
-mesh-llm-sdk = { version = "0.78.0" }
+mesh-llm-sdk = { version = "0.78.0-preview.40959817943.1" }
 ```
 
 ```rust

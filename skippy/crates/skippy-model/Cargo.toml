@@ -15,7 +15,7 @@ memmap2 = "0.9.11"
 safetensors = "0.8.0"
 serde.workspace = true
 serde_json.workspace = true
-skippy-package-format = { path = "../skippy-package-format", version = "0.78.0" }
+skippy-package-format = { path = "../skippy-package-format", version = "0.78.0-preview.40959817943.1" }
 
 sha2.workspace = true
 libc = "0.2"

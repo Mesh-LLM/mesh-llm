@@ -16,7 +16,7 @@ default = ["embedded-runtime"]
 embedded-runtime = []
 
 [dependencies]
-mesh-llm-sdk = { path = "../mesh-llm-sdk", version = "0.78.0", default-features = false, features = ["serving"] }
+mesh-llm-sdk = { path = "../mesh-llm-sdk", version = "0.78.0-preview.40959817943.1", default-features = false, features = ["serving"] }
 napi = { version = "3.12.2", features = ["napi4", "tokio_rt"] }
 napi-derive = "3.6.3"
 reqwest = "0.13"

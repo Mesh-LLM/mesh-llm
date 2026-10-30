@@ -14,8 +14,8 @@ base64 = "0.22"
 futures-core = "0.3"
 futures-util = { version = "0.3", features = ["sink"] }
 http-body = "1"
-skippy-guardrails = { path = "../skippy-guardrails", version = "0.78.0"  }
-skippy-events = { path = "../skippy-events", version = "0.78.0" }
+skippy-guardrails = { path = "../skippy-guardrails", version = "0.78.0-preview.40959817943.1"  }
+skippy-events = { path = "../skippy-events", version = "0.78.0-preview.40959817943.1" }
 serde.workspace = true
 serde_json.workspace = true
 sha2 = "0.10"

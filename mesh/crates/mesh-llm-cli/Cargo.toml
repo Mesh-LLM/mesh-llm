@@ -14,10 +14,10 @@ categories = ["command-line-interface"]
 workspace = true
 
 [dependencies]
-skippy-commands = { path = "../../../skippy/crates/skippy-commands", version = "0.78.0" }
+skippy-commands = { path = "../../../skippy/crates/skippy-commands", version = "0.78.0-preview.40959817943.1" }
 anyhow.workspace = true
 clap.workspace = true
 mesh-llm-build-info.workspace = true
-mesh-llm-events = { path = "../mesh-llm-events", version = "0.78.0" }
+mesh-llm-events = { path = "../mesh-llm-events", version = "0.78.0-preview.40959817943.1" }
 serde.workspace = true
 serde_json.workspace = true
