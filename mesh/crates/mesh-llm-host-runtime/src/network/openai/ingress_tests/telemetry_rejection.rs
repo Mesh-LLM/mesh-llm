@@ -108,24 +108,56 @@ async fn a_model_rejected_before_routing_is_counted_in_request_telemetry() {
         "an unknown model must be rejected with 404 before routing, got {outcome:?}"
     );
 
-    let requests = sink.requests.lock().unwrap();
-    assert_eq!(
-        requests.len(),
-        1,
-        "a request rejected before routing must be counted in \
+    {
+        let requests = sink.requests.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            1,
+            "a request rejected before routing must be counted in \
          mesh_llm_model_request_total"
-    );
-    let (recorded_model, _attempts, recorded_outcome) = &requests[0];
-    assert!(
-        recorded_model.is_some(),
-        "the rejection must carry the bounded model ref"
-    );
-    assert!(
-        matches!(
-            recorded_outcome,
-            crate::network::metrics::RequestOutcome::Rejected(_)
-                | crate::network::metrics::RequestOutcome::Unavailable
-        ),
-        "a pre-routing rejection must carry a bounded outcome, got {recorded_outcome:?}"
-    );
+        );
+        let (recorded_model, _attempts, recorded_outcome) = &requests[0];
+        assert!(
+            recorded_model.is_none(),
+            "unknown model names must not create per-model telemetry"
+        );
+        assert!(
+            matches!(
+                recorded_outcome,
+                crate::network::metrics::RequestOutcome::Rejected(_)
+                    | crate::network::metrics::RequestOutcome::Unavailable
+            ),
+            "a pre-routing rejection must carry a bounded outcome, got {recorded_outcome:?}"
+        );
+    }
+
+    let mut known_targets = election::ModelTargets::default();
+    known_targets.targets.insert(model.to_owned(), Vec::new());
+    let known_ctx = IngressRouteContext {
+        targets: &known_targets,
+        ..ctx
+    };
+    record_pre_routing_rejection(&known_ctx, Some(model), 409).await;
+    assert_eq!(sink.requests.lock().unwrap()[1].0.as_deref(), Some(model));
+
+    let client_connect = tokio::net::TcpStream::connect(addr);
+    let server_accept = async { listener.accept().await.map(|(s, _)| s) };
+    let (_client, server) = tokio::join!(client_connect, server_accept);
+    let outcome = execution::local_model_unavailable(
+        server.unwrap().into(),
+        &request,
+        &known_ctx,
+        model,
+        lifecycle.route_observer(),
+    )
+    .await;
+    assert!(matches!(
+        outcome,
+        proxy::RouteDispatchOutcome::Responded(503)
+    ));
+    let requests = sink.requests.lock().unwrap();
+    assert!(matches!(
+        requests[2].2,
+        crate::network::metrics::RequestOutcome::Unavailable
+    ));
 }

@@ -702,7 +702,9 @@ impl GlobalMetrics {
                 self.record_service_request(service);
             }
             RequestOutcome::Rejected(service) => {
-                self.record_service_request(service);
+                if attempts > 0 {
+                    self.record_service_request(service);
+                }
             }
             RequestOutcome::Unavailable => {}
         }
@@ -1451,6 +1453,15 @@ mod tests {
         assert_eq!(model.attempt_timeout_count, 1);
         assert_eq!(model.targets.len(), 2);
         assert!(model.avg_tokens_per_second.is_some());
+    }
+
+    #[test]
+    fn zero_attempt_rejection_does_not_count_as_local_service() {
+        let metrics = RoutingMetrics::new();
+        metrics.record_request(None, 0, RequestOutcome::Rejected(RequestService::Local));
+        let status = metrics.status_snapshot(0);
+        assert_eq!(status.request_count, 1);
+        assert_eq!(status.pressure.locally_served_request_count, 0);
     }
 
     #[test]
