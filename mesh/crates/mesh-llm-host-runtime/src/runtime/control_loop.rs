@@ -260,7 +260,8 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
     }
     // The startup models are assigned by now, or none will be: a name that
     // is still unknown gets its 404 again.
-    node.set_startup_models_resolving(false).await;
+    node.set_startup_resolution(crate::mesh::StartupResolution::Done)
+        .await;
 
     if !shutdown_requested {
         run_auto_runtime_event_loop(&mut loop_ctx, control_rx, runtime_event_rx, model_intent_rx)

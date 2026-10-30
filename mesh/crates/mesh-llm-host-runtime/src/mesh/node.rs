@@ -17,11 +17,11 @@ pub(crate) use membership::{
 pub use startup::detect_local_fit_bytes;
 #[cfg(test)]
 pub(crate) use startup::hardware_snapshot_for_start;
+pub(crate) use startup::{StartupResolution, stamp_plugin_event_source, startup_transport_config};
 use startup::{
     advertised_hardware_for_start, bind_mesh_endpoint, init_owner_runtime,
     saved_owner_attestation_path, startup_secret_key, wait_for_endpoint_online,
 };
-pub(crate) use startup::{stamp_plugin_event_source, startup_transport_config};
 
 /// Upper bound on how long shutdown waits for one iroh endpoint to close.
 ///
@@ -103,8 +103,8 @@ pub struct Node {
     pub(crate) llama_ready: Arc<Mutex<bool>>,
     pub(crate) available_models: Arc<Mutex<Vec<String>>>,
     pub(crate) requested_models: Arc<Mutex<Vec<String>>>,
-    /// See `Node::startup_models_resolving`.
-    pub(crate) startup_models_resolving: Arc<Mutex<bool>>,
+    /// See `Node::startup_model_may_be`.
+    pub(crate) startup_models_resolving: Arc<Mutex<StartupResolution>>,
     pub(crate) explicit_model_interests: Arc<Mutex<Vec<String>>>,
     /// Mesh-wide demand map — merged from gossip + local API requests.
     /// This is the single source of truth for "what does the mesh want?"
@@ -859,7 +859,7 @@ impl Node {
             llama_ready: Arc::new(Mutex::new(false)),
             available_models: Arc::new(Mutex::new(Vec::new())),
             requested_models: Arc::new(Mutex::new(Vec::new())),
-            startup_models_resolving: Arc::new(Mutex::new(false)),
+            startup_models_resolving: Arc::default(),
             explicit_model_interests: Arc::new(Mutex::new(Vec::new())),
             model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
             requirement_mesh_state: Arc::new(Mutex::new(None)),
@@ -1053,7 +1053,7 @@ impl Node {
             llama_ready: Arc::new(Mutex::new(false)),
             available_models: Arc::new(Mutex::new(Vec::new())),
             requested_models: Arc::new(Mutex::new(Vec::new())),
-            startup_models_resolving: Arc::new(Mutex::new(false)),
+            startup_models_resolving: Arc::default(),
             explicit_model_interests: Arc::new(Mutex::new(Vec::new())),
             model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
             requirement_mesh_state: Arc::new(Mutex::new(None)),

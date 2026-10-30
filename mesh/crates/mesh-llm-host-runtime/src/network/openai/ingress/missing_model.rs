@@ -404,10 +404,10 @@ async fn assigned_here(ctx: &IngressRouteContext<'_>, model_name: &str) -> bool 
 }
 
 /// Whether this node may still be loading `model_name`: the startup models
-/// are still resolving, so their names are not known yet, or its serving
+/// are still resolving and the name may be one of them, or its serving
 /// assignment names it.
 async fn may_be_loading_here(ctx: &IngressRouteContext<'_>, model_name: &str) -> bool {
-    ctx.node.startup_models_resolving().await || assigned_here(ctx, model_name).await
+    ctx.node.startup_model_may_be(model_name).await || assigned_here(ctx, model_name).await
 }
 
 /// Whether a plugin inference endpoint claims `model_name`; a lookup error
