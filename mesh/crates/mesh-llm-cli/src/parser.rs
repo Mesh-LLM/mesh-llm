@@ -3,6 +3,7 @@ mod logging_help;
 mod normalization;
 mod runtime_surface_help;
 mod suggestion_redaction;
+mod top_level_options;
 mod validation;
 
 pub use commands::{
@@ -16,6 +17,10 @@ pub use normalization::{
     normalize_runtime_surface_args, raw_args_invoke_analytics, value_taking_option_names,
 };
 pub use runtime_surface_help::runtime_surface_help;
+pub use top_level_options::{
+    JoiningOptions, KvCacheOptions, LoggingOptions, MeshPolicyOptions, NetworkOptions,
+    NodeModeOptions, OwnerOptions, PlacementOptions, ServingOptions, SpeculativeOptions,
+};
 pub use validation::validate_discovery_mode_args;
 
 #[cfg(test)]
@@ -48,8 +53,11 @@ pub fn assert_mesh_requirements_docs_examples_parse() {
         normalize_runtime_surface_args(["mesh-llm", "serve", "--model", "Qwen3-8B-Q4_K_M"]);
     let unrestricted = Cli::parse_from(unrestricted_args.normalized.clone());
     assert!(unrestricted.command.is_none());
-    assert_eq!(unrestricted.model, vec![PathBuf::from("Qwen3-8B-Q4_K_M")]);
-    assert!(!unrestricted.publish);
+    assert_eq!(
+        unrestricted.serving.model,
+        vec![PathBuf::from("Qwen3-8B-Q4_K_M")]
+    );
+    assert!(!unrestricted.mesh_policy.publish);
 
     let signed_public_args = normalize_runtime_surface_args([
         "mesh-llm",
@@ -70,29 +78,35 @@ pub fn assert_mesh_requirements_docs_examples_parse() {
     ]);
     let signed_public = Cli::parse_from(signed_public_args.normalized.clone());
     assert!(signed_public.command.is_none());
-    assert_eq!(signed_public.model, vec![PathBuf::from("Qwen3-8B-Q4_K_M")]);
-    assert!(signed_public.publish);
-    assert!(signed_public.require_release_attestation);
     assert_eq!(
-        signed_public.release_signer_key,
+        signed_public.serving.model,
+        vec![PathBuf::from("Qwen3-8B-Q4_K_M")]
+    );
+    assert!(signed_public.mesh_policy.publish);
+    assert!(signed_public.mesh_policy.require_release_attestation);
+    assert_eq!(
+        signed_public.mesh_policy.release_signer_key,
         vec![
             "ed25519:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string()
         ]
     );
     assert_eq!(
-        signed_public.owner_key,
+        signed_public.owner.owner_key,
         Some(PathBuf::from("~/.mesh-llm/owner-keystore.json"))
     );
-    assert!(signed_public.owner_required);
-    assert_eq!(signed_public.trust_policy, Some(TrustPolicy::RequireOwned));
-    assert_eq!(signed_public.node_label, Some("lab-a".to_string()));
+    assert!(signed_public.owner.owner_required);
+    assert_eq!(
+        signed_public.owner.trust_policy,
+        Some(TrustPolicy::RequireOwned)
+    );
+    assert_eq!(signed_public.owner.node_label, Some("lab-a".to_string()));
 
     let signed_bootstrap_args =
         normalize_runtime_surface_args(["mesh-llm", "serve", "--join", "signed-bootstrap-token"]);
     let signed_bootstrap = Cli::parse_from(signed_bootstrap_args.normalized.clone());
     assert!(signed_bootstrap.command.is_none());
     assert_eq!(
-        signed_bootstrap.join,
+        signed_bootstrap.joining.join,
         vec!["signed-bootstrap-token".to_string()]
     );
 
@@ -104,7 +118,7 @@ pub fn assert_mesh_requirements_docs_examples_parse() {
     ]);
     let join_file = Cli::parse_from(join_file_args.normalized.clone());
     assert_eq!(
-        join_file.join_file,
+        join_file.joining.join_file,
         vec![std::path::PathBuf::from(
             "/home/example/.mesh-llm/invite.token"
         )]
@@ -180,9 +194,9 @@ mod tests {
         ])
         .expect("locked split CLI should parse");
 
-        assert!(cli.split);
+        assert!(cli.placement.split);
         assert_eq!(
-            cli.split_topology_lock,
+            cli.placement.split_topology_lock,
             Some(std::path::PathBuf::from("topology.json"))
         );
     }
@@ -207,12 +221,12 @@ mod tests {
         let cli = Cli::try_parse_from(normalized.normalized)
             .expect("disk cache runtime flags should parse");
 
-        assert_eq!(cli.kv_cache_disk.as_deref(), Some("32GiB"));
+        assert_eq!(cli.kv_cache.kv_cache_disk.as_deref(), Some("32GiB"));
         assert_eq!(
-            cli.kv_cache_disk_dir,
+            cli.kv_cache.kv_cache_disk_dir,
             Some(std::path::PathBuf::from("/fast/mesh-kv"))
         );
-        assert_eq!(cli.kv_cache_min_free.as_deref(), Some("16GiB"));
+        assert_eq!(cli.kv_cache.kv_cache_min_free.as_deref(), Some("16GiB"));
     }
 
     #[test]
@@ -226,7 +240,7 @@ mod tests {
             );
             let cli = Cli::try_parse_from(normalized.normalized)
                 .unwrap_or_else(|error| panic!("{surface} --no-default-plugins: {error}"));
-            assert!(cli.headless);
+            assert!(cli.node.headless);
             assert!(cli.no_default_plugins, "{surface}");
         }
         let help = <Cli as clap::CommandFactory>::command()
@@ -299,8 +313,8 @@ mod tests {
         ])
         .expect("explicit uncertified split CLI should parse");
 
-        assert!(cli.split);
-        assert!(cli.allow_uncertified_split);
+        assert!(cli.placement.split);
+        assert!(cli.placement.allow_uncertified_split);
     }
 
     #[test]

@@ -396,6 +396,7 @@ impl Node {
             llama_ready: self.llama_ready.clone(),
             vram_bytes: self.vram_bytes,
             local_runtime_capacity_bytes: self.local_runtime_capacity_bytes,
+            host_ram_capacity_bytes: self.host_ram_capacity_bytes,
             host_ram_offload_gain_bytes: self.host_ram_offload_gain_bytes,
             inflight_requests: self.inflight_requests.clone(),
             inflight_change_tx: self.inflight_change_tx.clone(),

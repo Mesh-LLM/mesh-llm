@@ -105,7 +105,7 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
     // Command lifecycle events are terminal noise for one-shot commands unless
     // the user asked for verbose output with --debug. The durable audit bridge
     // installed below is unaffected by this toggle.
-    mesh_llm_events::set_cli_command_event_verbose(cli.debug);
+    mesh_llm_events::set_cli_command_event_verbose(cli.logging.debug);
 
     if cli.command.as_ref().is_some_and(|c| {
         !matches!(
@@ -461,89 +461,89 @@ fn runtime_help_text() -> Option<String> {
 fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::RuntimeOptions {
     let speculative_overrides = speculative_overrides_from_cli(&cli);
     mesh_llm_host_runtime::RuntimeOptions {
-        log_format: cli.log_format,
-        debug: cli.debug,
-        skippy_metrics_otlp_grpc: cli.skippy_metrics_otlp_grpc,
+        log_format: cli.logging.log_format,
+        debug: cli.logging.debug,
+        skippy_metrics_otlp_grpc: cli.logging.skippy_metrics_otlp_grpc,
         mesh_guardrails: map_mesh_guardrail_mode(cli.mesh_guardrails),
         help_text: runtime_help_text(),
-        join: cli.join,
-        join_files: cli.join_file,
-        discover: cli.discover,
-        auto: cli.auto,
-        mesh_discovery_mode: map_mesh_discovery_mode(cli.mesh_discovery_mode),
-        model: cli.model,
-        gguf: cli.gguf,
-        mmproj: cli.mmproj,
-        checkpoint_quantization: cli.checkpoint_quantization,
-        checkpoint_imatrix: cli.checkpoint_imatrix,
-        port: cli.port,
-        local_model_only: cli.local_model_only,
-        native_serving_plugin: cli.native_serving_plugin,
-        native_serving_plugin_config: cli.native_serving_plugin_config,
-        native_serving_plugin_state: cli.native_serving_plugin_state,
-        native_serving_plugin_deadline_ms: cli.native_serving_plugin_deadline_ms,
-        client: cli.client,
-        console: cli.console,
-        headless: cli.headless,
-        swarm_capture: cli.swarm_capture,
-        publish: cli.publish,
-        mesh_name: cli.mesh_name,
-        region: cli.region,
-        min_node_version: cli.min_node_version,
-        max_node_version: cli.max_node_version,
-        min_protocol_version: cli.min_protocol_version,
-        max_protocol_version: cli.max_protocol_version,
-        require_release_attestation: cli.require_release_attestation,
-        require_signed_gossip: cli.require_signed_gossip,
-        release_signer_key: cli.release_signer_key,
+        join: cli.joining.join,
+        join_files: cli.joining.join_file,
+        discover: cli.joining.discover,
+        auto: cli.joining.auto,
+        mesh_discovery_mode: map_mesh_discovery_mode(cli.joining.mesh_discovery_mode),
+        model: cli.serving.model,
+        gguf: cli.serving.gguf,
+        mmproj: cli.serving.mmproj,
+        checkpoint_quantization: cli.serving.checkpoint_quantization,
+        checkpoint_imatrix: cli.serving.checkpoint_imatrix,
+        port: cli.serving.port,
+        local_model_only: cli.serving.local_model_only,
+        native_serving_plugin: cli.serving.native_serving_plugin,
+        native_serving_plugin_config: cli.serving.native_serving_plugin_config,
+        native_serving_plugin_state: cli.serving.native_serving_plugin_state,
+        native_serving_plugin_deadline_ms: cli.serving.native_serving_plugin_deadline_ms,
+        client: cli.node.client,
+        console: cli.node.console,
+        headless: cli.node.headless,
+        swarm_capture: cli.node.swarm_capture,
+        publish: cli.mesh_policy.publish,
+        mesh_name: cli.mesh_policy.mesh_name,
+        region: cli.mesh_policy.region,
+        min_node_version: cli.mesh_policy.min_node_version,
+        max_node_version: cli.mesh_policy.max_node_version,
+        min_protocol_version: cli.mesh_policy.min_protocol_version,
+        max_protocol_version: cli.mesh_policy.max_protocol_version,
+        require_release_attestation: cli.mesh_policy.require_release_attestation,
+        require_signed_gossip: cli.mesh_policy.require_signed_gossip,
+        release_signer_key: cli.mesh_policy.release_signer_key,
         name: cli.name,
         plugin: cli.plugin,
         plugin_args: cli.plugin_args,
         auto_update: cli.auto_update,
         command_is_update: matches!(cli.command, Some(mesh_llm_cli::Command::Update { .. })),
         command_uses_machine_output: command_uses_machine_output(cli.command.as_ref()),
-        draft: cli.draft,
-        draft_max: cli.draft_max,
-        no_draft: cli.no_draft,
+        draft: cli.speculative.draft,
+        draft_max: cli.speculative.draft_max,
+        no_draft: cli.speculative.no_draft,
         speculative_overrides,
-        strategy: cli.strategy.map(map_serving_strategy),
-        split: cli.split,
-        allow_uncertified_split: cli.allow_uncertified_split,
-        split_topology_lock: cli.split_topology_lock,
-        auto_balance: cli.auto_balance,
-        ctx_size: cli.ctx_size,
-        parallel: cli.parallel.map(std::num::NonZeroUsize::get),
-        max_vram: cli.max_vram,
-        no_enumerate_host: cli.no_enumerate_host,
-        bin_dir: cli.bin_dir,
-        llama_flavor: cli.llama_flavor.map(map_binary_flavor),
-        device: cli.device,
-        tensor_split: cli.tensor_split,
-        relay: cli.relay,
-        relay_auth: cli.relay_auth,
-        disable_iroh_relays: cli.disable_iroh_relays,
-        bind_port: cli.bind_port,
-        bind_ip: cli.bind_ip,
-        listen_all: cli.listen_all,
-        max_clients: cli.max_clients,
-        nostr_relay: cli.nostr_relay,
-        no_console: cli.no_console,
+        strategy: cli.placement.strategy.map(map_serving_strategy),
+        split: cli.placement.split,
+        allow_uncertified_split: cli.placement.allow_uncertified_split,
+        split_topology_lock: cli.placement.split_topology_lock,
+        auto_balance: cli.placement.auto_balance,
+        ctx_size: cli.placement.ctx_size,
+        parallel: cli.placement.parallel.map(std::num::NonZeroUsize::get),
+        max_vram: cli.placement.max_vram,
+        no_enumerate_host: cli.placement.no_enumerate_host,
+        bin_dir: cli.placement.bin_dir,
+        llama_flavor: cli.placement.llama_flavor.map(map_binary_flavor),
+        device: cli.placement.device,
+        tensor_split: cli.placement.tensor_split,
+        relay: cli.network.relay,
+        relay_auth: cli.network.relay_auth,
+        disable_iroh_relays: cli.network.disable_iroh_relays,
+        bind_port: cli.network.bind_port,
+        bind_ip: cli.network.bind_ip,
+        listen_all: cli.network.listen_all,
+        max_clients: cli.network.max_clients,
+        nostr_relay: cli.network.nostr_relay,
+        no_console: cli.network.no_console,
         config: cli.config,
-        kv_cache_disk: cli.kv_cache_disk,
-        kv_cache_disk_dir: cli.kv_cache_disk_dir,
-        kv_cache_min_free: cli.kv_cache_min_free,
-        owner_key: cli.owner_key,
-        control_bind: cli.control_bind,
-        control_advertise_addr: cli.control_advertise_addr,
-        owner_required: cli.owner_required,
-        node_label: cli.node_label,
-        trust_policy: cli.trust_policy.map(map_trust_policy),
-        trust_owner: cli.trust_owner,
+        kv_cache_disk: cli.kv_cache.kv_cache_disk,
+        kv_cache_disk_dir: cli.kv_cache.kv_cache_disk_dir,
+        kv_cache_min_free: cli.kv_cache.kv_cache_min_free,
+        owner_key: cli.owner.owner_key,
+        control_bind: cli.owner.control_bind,
+        control_advertise_addr: cli.owner.control_advertise_addr,
+        owner_required: cli.owner.owner_required,
+        node_label: cli.owner.node_label,
+        trust_policy: cli.owner.trust_policy.map(map_trust_policy),
+        trust_owner: cli.owner.trust_owner,
         nostr_discovery: cli.nostr_discovery,
         no_default_plugins: cli.no_default_plugins,
-        audit_log_path: cli.audit_log_path,
-        audit_log_format: cli.audit_log_format,
-        audit_log_level: cli.audit_log_level,
+        audit_log_path: cli.logging.audit_log_path,
+        audit_log_format: cli.logging.audit_log_format,
+        audit_log_level: cli.logging.audit_log_level,
         audit_max_file_size: 100 * 1024 * 1024,
         audit_max_files: 10,
     }
@@ -552,37 +552,46 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
 fn speculative_overrides_from_cli(
     cli: &mesh_llm_cli::Cli,
 ) -> Option<mesh_llm_host_runtime::plugin::SpeculativeConfig> {
-    let suppress_cooldown_drafts = if cli.speculative_native_mtp_allow_cooldown_drafts {
+    let suppress_cooldown_drafts = if cli.speculative.speculative_native_mtp_allow_cooldown_drafts {
         Some(false)
     } else {
-        cli.speculative_native_mtp_suppress_cooldown_drafts
+        cli.speculative
+            .speculative_native_mtp_suppress_cooldown_drafts
             .then_some(true)
     };
     let mut overrides = mesh_llm_host_runtime::plugin::SpeculativeConfig::default();
-    overrides.strategy = cli.speculative_strategy.clone();
-    overrides.ngram_min = cli.speculative_ngram_min;
-    overrides.ngram_max = cli.speculative_ngram_max;
-    overrides.ngram_max_proposal_tokens = cli.speculative_ngram_max_proposal_tokens;
+    overrides.strategy = cli.speculative.speculative_strategy.clone();
+    overrides.ngram_min = cli.speculative.speculative_ngram_min;
+    overrides.ngram_max = cli.speculative.speculative_ngram_max;
+    overrides.ngram_max_proposal_tokens = cli.speculative.speculative_ngram_max_proposal_tokens;
     overrides.ngram_proposer = cli
+        .speculative
         .speculative_ngram_proposer
         .map(|proposer| proposer.as_str().to_string());
-    overrides.extension_max_tokens = cli.speculative_extension_max_tokens;
-    overrides.native_mtp_reject_cooldown_tokens = cli.speculative_native_mtp_reject_cooldown_tokens;
+    overrides.extension_max_tokens = cli.speculative.speculative_extension_max_tokens;
+    overrides.native_mtp_reject_cooldown_tokens = cli
+        .speculative
+        .speculative_native_mtp_reject_cooldown_tokens;
     overrides.native_mtp_suppress_cooldown_drafts = suppress_cooldown_drafts;
-    overrides.native_mtp_suppress_cooldown_draft_limit =
-        cli.speculative_native_mtp_suppress_cooldown_draft_limit;
-    overrides.verify_window_min_tokens = cli.speculative_verify_window_min_tokens;
-    overrides.verify_window_max_tokens = cli.speculative_verify_window_max_tokens;
-    overrides.verify_window_pipeline_depth = cli.speculative_verify_window_pipeline_depth;
+    overrides.native_mtp_suppress_cooldown_draft_limit = cli
+        .speculative
+        .speculative_native_mtp_suppress_cooldown_draft_limit;
+    overrides.verify_window_min_tokens = cli.speculative.speculative_verify_window_min_tokens;
+    overrides.verify_window_max_tokens = cli.speculative.speculative_verify_window_max_tokens;
+    overrides.verify_window_pipeline_depth =
+        cli.speculative.speculative_verify_window_pipeline_depth;
     // The flag stays a number. It is a mechanism override — "use exactly this
     // budget" — and the whole point of an override is to assert a value. `auto`
     // is the absence of an assertion, so it is reachable through the config file
     // and through `--strategy interactive`, which is what composes it.
-    overrides.verify_window_runahead_tokens =
-        cli.speculative_verify_window_runahead_tokens.map(|tokens| {
+    overrides.verify_window_runahead_tokens = cli
+        .speculative
+        .speculative_verify_window_runahead_tokens
+        .map(|tokens| {
             mesh_llm_host_runtime::sdk::config::IntegerOrString::Integer(i64::from(tokens))
         });
     overrides.ngram_fallback = cli
+        .speculative
         .speculative_ngram_fallback
         .map(|fallback| fallback.as_str().to_string());
     (overrides != Default::default()).then_some(overrides)

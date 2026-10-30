@@ -124,6 +124,9 @@ pub struct Node {
     pub(crate) vram_bytes: u64,
     /// Local fit budget, which may additionally include CPU offload memory.
     pub(crate) local_runtime_capacity_bytes: u64,
+    /// Independent safe system-RAM budget for CPU-default models when global
+    /// host-RAM offload is disabled.
+    pub(crate) host_ram_capacity_bytes: u64,
     /// What `gpu.host_ram_offload = true` would add to the local fit budget.
     pub(crate) host_ram_offload_gain_bytes: u64,
     pub(crate) peer_change_tx: watch::Sender<usize>,
@@ -873,6 +876,7 @@ impl Node {
             )),
             vram_bytes: hardware.vram_bytes,
             local_runtime_capacity_bytes: hardware.local_runtime_capacity_bytes,
+            host_ram_capacity_bytes: hardware.host_ram_capacity_bytes,
             host_ram_offload_gain_bytes: hardware.host_ram_offload_gain_bytes,
             peer_change_tx,
             peer_change_rx,
@@ -1064,6 +1068,7 @@ impl Node {
             )),
             vram_bytes: 0,
             local_runtime_capacity_bytes: 0,
+            host_ram_capacity_bytes: 0,
             host_ram_offload_gain_bytes: 0,
             advertised_memory: AdvertisedMemory::default(),
             peer_change_tx,

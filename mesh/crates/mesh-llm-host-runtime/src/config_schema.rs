@@ -1018,6 +1018,7 @@ mod tests {
                 last_protocol_version: None,
                 last_status: None,
                 last_error: None,
+                verified_sha256: None,
             }],
         )
         .expect("schema aggregation should succeed")
@@ -1300,6 +1301,7 @@ mod tests {
                 last_protocol_version: None,
                 last_status: None,
                 last_error: None,
+                verified_sha256: None,
             }],
         )
         .expect("schema aggregation should succeed");
@@ -1354,6 +1356,7 @@ mod tests {
             last_protocol_version: None,
             last_status: None,
             last_error: None,
+            verified_sha256: None,
         }
     }
 }

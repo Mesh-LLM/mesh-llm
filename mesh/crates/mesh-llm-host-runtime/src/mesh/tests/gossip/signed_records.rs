@@ -385,6 +385,72 @@ async fn signed_cache_affinity_replaces_the_unsigned_copy_and_is_forwarded() {
     );
 }
 
+/// Rejected relayed versions preserve a live direct peer and its signed records.
+#[tokio::test]
+async fn rejected_transitive_version_preserves_fresh_direct_peer_and_signed_records() {
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let peer_seed = 0x67;
+    let peer_id = test_endpoint_id(peer_seed);
+    let addr = test_addr(peer_seed);
+    let bridge_seed = 0x68;
+    let mut direct = unsigned_worker(peer_seed, "direct-model").1;
+
+    receive_frame(
+        &node,
+        bridge_seed,
+        InboundGossip {
+            announcements: vec![(addr.clone(), direct.clone())],
+            signed_records: vec![signed_worker_record(peer_seed, 1, "direct-model")],
+            signed_cache_affinity: vec![signed_cache_affinity(peer_seed, 1, "direct-model", 7)],
+        },
+    )
+    .await;
+    node.add_peer(peer_id, addr.clone(), &direct, None).await;
+
+    let (direct_seen, admitted_count) = {
+        let state = node.state.lock().await;
+        let peer = state.peers.get(&peer_id).expect("direct peer");
+        assert!(peer.is_admitted());
+        assert!(state.node_records.contains(&peer_id));
+        assert!(state.cache_affinity_records.contains(&peer_id));
+        (peer.last_seen, state.admitted_peer_count())
+    };
+
+    direct.version = Some("0.57.0".to_string());
+    node.update_transitive_peer(peer_id, &addr, &direct, test_endpoint_id(bridge_seed))
+        .await;
+
+    let state = node.state.lock().await;
+    let peer = state
+        .peers
+        .get(&peer_id)
+        .expect("unsupported relayed version must not remove a fresh direct peer");
+    assert!(peer.is_admitted());
+    assert_eq!(peer.last_seen, direct_seen);
+    assert_eq!(peer.serving_models, vec!["direct-model".to_string()]);
+    assert_eq!(state.admitted_peer_count(), admitted_count);
+    assert!(state.node_records.contains(&peer_id));
+    assert!(state.cache_affinity_records.contains(&peer_id));
+    drop(state);
+
+    {
+        let mut state = node.state.lock().await;
+        state
+            .peers
+            .get_mut(&peer_id)
+            .expect("direct peer")
+            .last_seen = std::time::Instant::now()
+            - std::time::Duration::from_secs(mesh_llm_membership::peer_state::PEER_STALE_SECS + 1);
+    }
+    node.update_transitive_peer(peer_id, &addr, &direct, test_endpoint_id(bridge_seed))
+        .await;
+
+    let state = node.state.lock().await;
+    assert!(!state.peers.contains_key(&peer_id));
+    assert!(!state.node_records.contains(&peer_id));
+    assert!(!state.cache_affinity_records.contains(&peer_id));
+}
+
 #[tokio::test]
 async fn signed_cache_affinity_applies_to_peers_known_only_by_unsigned_entries() {
     let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
