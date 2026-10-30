@@ -23,8 +23,11 @@ test('discovery preserves OCR providers and translates filters without invoking 
   assert.deepEqual(query, { workload_class: 'document_ocr', available: false, limit: 3, cursor: 'opaque-input' })
 })
 
-test('default query includes all workloads and preserves future metadata', async () => {
-  const page = { data: [{ id: 'future', workload_class: 'future_workload', providers: [], extra: true }], next_cursor: null }
+test('default query includes all workloads and passes through native-normalized fields', async () => {
+  // Native deserialization maps unrecognized peer workloads and kinds to
+  // "unknown" before this surface sees them, so a realistic page carries the
+  // normalized values; unknown extra fields still pass through untouched.
+  const page = { data: [{ id: 'future', kind: 'unknown', workload_class: 'unknown', providers: [], extra: true }], next_cursor: null }
   const models = new Models({ async meshModelsJson(source) {
     assert.deepEqual(JSON.parse(source), {})
     return JSON.stringify(page)

@@ -199,6 +199,14 @@ shipped APIs. An implementation change is not complete with source code alone;
 update and validate the corresponding examples under `mesh/website/src/docs/`
 and the owning SDK guides in the same change or coordinated companion PR.
 
+The invariant has a completion condition: a public SDK API change is complete
+only when every language surface's own checks and maintained examples pass
+against the same native API revision — Rust, Node.js, Swift, and Kotlin inside
+this repository, and Python through a companion PR in
+`Mesh-LLM/mesh-llm-python-sdk` that has merged with its admitted immutable
+native checkpoint pinning that same revision. Until that condition holds, the
+change is in progress, not shippable, regardless of which surfaces have landed.
+
 The Python SDK is maintained in `Mesh-LLM/mesh-llm-python-sdk`; changes that cross
 that boundary require a coordinated companion PR and matching generated native
 bindings. Generate bindings from the exact native library metadata with the

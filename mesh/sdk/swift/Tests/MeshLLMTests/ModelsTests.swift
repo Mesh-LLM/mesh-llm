@@ -18,14 +18,17 @@ final class ModelsTests: XCTestCase {
         XCTAssertEqual(page.data.first?.providers.first?.metadata, .object(["architecture": .string("future")]))
     }
 
-    func testExactLookupPreservesFutureWorkloadsAndMissingMetadata() async throws {
+    func testExactLookupSurfacesNativeUnknownWorkloadsAndMissingMetadata() async throws {
         let models = Models(listJSON: { _ in XCTFail("lookup must not invoke list"); return "{}" }, modelJSON: { id in
             XCTAssertEqual(id, "org/model@revision#profile")
-            return #"{"id":"org/model@revision#profile","display_name":"Future","kind":"future_kind","workload_class":"future_workload","availability":"unknown","operations":[],"providers":[]}"#
+            // Native deserialization normalizes unrecognized peer workloads and
+            // kinds to "unknown" before this surface sees them, so realistic
+            // input carries the normalized values.
+            return #"{"id":"org/model@revision#profile","display_name":"Future","kind":"unknown","workload_class":"unknown","availability":"unknown","operations":[],"providers":[]}"#
         })
         let model = try await models.get("org/model@revision#profile")
-        XCTAssertEqual(model.workloadClass, "future_workload")
-        XCTAssertEqual(model.kind, "future_kind")
+        XCTAssertEqual(model.workloadClass, "unknown")
+        XCTAssertEqual(model.kind, "unknown")
         XCTAssertNil(model.metadata)
     }
 

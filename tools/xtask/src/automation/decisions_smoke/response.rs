@@ -13,7 +13,12 @@ pub(super) fn select_model(models: &Value, requested: Option<&str>) -> DynResult
                 && !matches!(id, "mesh" | "auto")
                 && row["providers"].as_array().is_some_and(|items| {
                     items.iter().any(|item| {
-                        item["workload_class"] == "decision" && item["available"] == true
+                        // `/v1/decisions` admission follows the system_one
+                        // operation of an available provider, not a class.
+                        item["available"] == true
+                            && item["operations"].as_array().is_some_and(|operations| {
+                                operations.iter().any(|operation| operation == "system_one")
+                            })
                     })
                 }))
             .then_some(id)

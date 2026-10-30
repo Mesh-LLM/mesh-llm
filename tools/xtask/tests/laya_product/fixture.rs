@@ -93,21 +93,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             stream.write_all(body)?;
             continue;
         }
-        let response =
-            if bytes.starts_with(b"GET /mesh/v1/models?workload_class=decision&available=true ") {
-                serde_json::json!({"data":[{"id":"laya-fixture"}]})
-            } else {
-                let request: serde_json::Value = serde_json::from_slice(&bytes[header_end..])?;
-                let fixture = fixtures
-                    .iter()
-                    .flatten()
-                    .find(|fixture| {
-                        fixture["state"] == request["state"]
-                            && fixture["questions"] == request["questions"]
-                    })
-                    .ok_or("unknown fixture request")?;
-                serde_json::json!({"answers":fixture["answers"]})
-            };
+        let response = if bytes.starts_with(b"GET /v1/models ") {
+            serde_json::json!({"data":[{"id":"laya-fixture"}]})
+        } else if bytes.starts_with(b"GET /mesh/v1/models?available=true&cursor=p2 ") {
+            // System One admission is capability-based: page two carries the
+            // model whose available provider advertises the system_one
+            // operation, regardless of workload class.
+            serde_json::json!({"data":[{"id":"laya-fixture","providers":[
+                    {"available":true,"operations":["system_one"]}]}]})
+        } else if bytes.starts_with(b"GET /mesh/v1/models?available=true ") {
+            // Page one holds only an incapable model, so the worker must
+            // follow the cursor to find the eligible entry on page two.
+            serde_json::json!({"data":[{"id":"laya-decoy","providers":[
+                    {"available":true,"operations":["chat"]}]}],"next_cursor":"p2"})
+        } else {
+            let request: serde_json::Value = serde_json::from_slice(&bytes[header_end..])?;
+            let fixture = fixtures
+                .iter()
+                .flatten()
+                .find(|fixture| {
+                    fixture["state"] == request["state"]
+                        && fixture["questions"] == request["questions"]
+                })
+                .ok_or("unknown fixture request")?;
+            serde_json::json!({"answers":fixture["answers"]})
+        };
         let body = serde_json::to_vec(&response)?;
         write!(
             stream,

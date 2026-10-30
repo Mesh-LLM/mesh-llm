@@ -40,4 +40,33 @@ final class LiveTranscriptionTests: XCTestCase {
         do { try await live.sendAudio([]); XCTFail("expected native failure") }
         catch Failure.closed {}
     }
+
+    func testEventsEndInOverflowErrorWhenConsumerFallsBehind() async throws {
+        actor Tally { var count = 0; func next() -> Int { count += 1; return count } }
+        let tally = Tally()
+        let live = LiveTranscription(
+            audio: { _ in }, floatAudio: { _ in }, commit: {},
+            // An endless native event source: the producer only stops once the
+            // bounded buffer overflows.
+            eventJSON: { _ = await tally.next(); return #"{"type":"delta","item_id":"turn","text":"x"}"# },
+            stopJSON: { "[]" },
+            close: {}
+        )
+        let stream = live.events()
+        // Stay parked until the producer has pushed past the buffer capacity,
+        // so iteration starts strictly after the overflow.
+        while await tally.count < 257 {
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        var received = 0
+        do {
+            for try await _ in stream { received += 1 }
+            XCTFail("expected the slow consumer to end in an overflow error")
+        } catch let error as LiveTranscriptionBufferOverflowError {
+            XCTAssertEqual(error.capacity, 256)
+            XCTAssertLessThanOrEqual(received, 256)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
 }

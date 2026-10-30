@@ -65,14 +65,31 @@ fn request(socket: &mut TcpStream) -> Option<(String, Value)> {
     };
     Some((path, body))
 }
-fn models() -> Value {
+/// Discovery walks pages without a workload class filter: `/v1/decisions`
+/// admits on the system_one capability of an available provider, so page one
+/// only carries models that must not be selected — aliases, a generation
+/// model without the capability, and an offline provider.
+fn page_one() -> Value {
+    let provider = |class: &str, available: bool, operations: &[&str]| {
+        json!({"workload_class": class, "available": available,
+            "operations": operations})
+    };
     json!({"data":[
-        {"id":"mesh","providers":[{"workload_class":"decision","available":true}]},
-        {"id":"auto","providers":[{"workload_class":"decision","available":true}]},
-        {"id":"ordinary","providers":[{"workload_class":"causal_generation","available":true}]},
-        {"id":"offline","providers":[{"workload_class":"decision","available":false}]},
-        {"id":"actual","providers":[{"workload_class":"decision","available":true}]},
-        {"id":"second","providers":[{"workload_class":"decision","available":true}]}]})
+        {"id":"mesh","providers":[provider("decision", true, &["system_one"])]},
+        {"id":"auto","providers":[provider("decision", true, &["system_one"])]},
+        {"id":"ordinary","providers":[provider("causal_generation", true, &["chat"])]},
+        {"id":"offline","providers":[provider("decision", false, &["system_one"])]}],
+        "next_cursor":"p2"})
+}
+/// The eligible System One models sit on page two, so the client must follow
+/// the cursor to find them; `actual` is a generation model that advertises
+/// the capability, mirroring server admission.
+fn page_two() -> Value {
+    json!({"data":[
+        {"id":"actual","providers":[{"workload_class":"causal_generation","available":true,
+            "operations":["chat","system_one"]}]},
+        {"id":"second","providers":[{"workload_class":"decision","available":true,
+            "operations":["system_one"]}]}]})
 }
 fn answers(model: &str) -> Value {
     json!({"model":model,"answers":[
@@ -154,8 +171,10 @@ fn reply(mode: &str, path: &str, input: &Value) -> (u16, Vec<u8>) {
     if mode == "oversize" {
         return (200, vec![b' '; 1024 * 1024 + 1]);
     }
-    let mut body = if path == "/mesh/v1/models?workload_class=decision&available=true" {
-        models()
+    let mut body = if path == "/mesh/v1/models?available=true" {
+        page_one()
+    } else if path == "/mesh/v1/models?available=true&cursor=p2" {
+        page_two()
     } else if input["input"].is_array() {
         boolean_choice()
     } else {
@@ -227,23 +246,29 @@ fn decisions_cli_discovers_real_capability_and_sends_all_three_questions() {
             String::from_utf8_lossy(&output.stderr)
         );
         let calls = peer.calls.lock().unwrap();
-        assert_eq!(calls.len(), 3);
-        assert_eq!(calls[2].1["questions"][0]["choices"][0]["value"], true);
+        assert_eq!(calls.len(), 4);
+        assert_eq!(calls[3].1["questions"][0]["choices"][0]["value"], true);
         assert_eq!(
             calls[0],
+            ("/mesh/v1/models?available=true".into(), Value::Null)
+        );
+        // The eligible models sit on page two, so discovery must follow the
+        // cursor before posting either question set.
+        assert_eq!(
+            calls[1],
             (
-                "/mesh/v1/models?workload_class=decision&available=true".into(),
+                "/mesh/v1/models?available=true&cursor=p2".into(),
                 Value::Null
             )
         );
-        assert_eq!(calls[1].0, "/v1/decisions");
+        assert_eq!(calls[2].0, "/v1/decisions");
         let selected = if extra.is_empty() { "actual" } else { "second" };
-        assert_eq!(calls[1].1["model"], selected);
+        assert_eq!(calls[2].1["model"], selected);
         assert_eq!(
-            calls[1].1["input"],
+            calls[2].1["input"],
             "I was charged twice. Please refund me today."
         );
-        let questions = calls[1].1["questions"].as_array().unwrap();
+        let questions = calls[2].1["questions"].as_array().unwrap();
         assert_eq!(questions.len(), 3);
         assert_eq!(questions[0]["type"], "predicate");
         assert_eq!(questions[1]["choices"][1]["value"], "support");
@@ -255,16 +280,18 @@ fn decisions_cli_discovers_real_capability_and_sends_all_three_questions() {
 }
 #[test]
 fn decisions_cli_refuses_unadvertised_model_before_post() {
-    for (mode, extra) in [
-        ("no-model", vec![]),
-        ("valid", vec!["--model", "ordinary"]),
-        ("valid", vec!["--model", "mesh"]),
+    for (mode, extra, expected_calls) in [
+        ("no-model", vec![], 1),
+        ("valid", vec!["--model", "ordinary"], 2),
+        ("valid", vec!["--model", "mesh"], 2),
     ] {
         let peer = Peer::start(mode);
         let output = run(&peer, &extra);
         assert!(!output.status.success());
         assert!(output.stdout.is_empty());
-        assert_eq!(peer.calls.lock().unwrap().len(), 1);
+        // Discovery walks both pages before the CLI refuses; `no-model`
+        // answers with a single empty page.
+        assert_eq!(peer.calls.lock().unwrap().len(), expected_calls);
     }
 }
 #[test]
@@ -300,12 +327,12 @@ fn decisions_cli_global_deadline_refuses_stalled_peer() {
     assert!(started.elapsed() < Duration::from_secs(4));
 }
 #[test]
-fn decisions_cli_deadline_is_shared_across_discovery_and_post() {
+fn decisions_cli_deadline_is_shared_across_discovery_pages() {
     let peer = Peer::start("cumulative");
     let output = run(&peer, &[]);
     assert!(
         !output.status.success(),
-        "per-request deadlines incorrectly admitted a 1.4s exchange"
+        "per-request deadlines incorrectly admitted a 1.4s two-page walk"
     );
     assert!(output.stdout.is_empty());
     assert_eq!(peer.calls.lock().unwrap().len(), 2);

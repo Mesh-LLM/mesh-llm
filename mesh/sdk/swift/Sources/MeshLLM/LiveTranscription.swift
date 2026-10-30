@@ -79,10 +79,17 @@ public final class LiveTranscription: @unchecked Sendable {
     }
     public func close() async { await closeNative() }
     public func events() -> AsyncThrowingStream<LiveTranscriptionEvent, Error> {
-        AsyncThrowingStream { continuation in
+        // Mirror the native session's bounded event queue: a slow consumer
+        // gets an explicit overflow error instead of unbounded buffering.
+        AsyncThrowingStream(bufferingPolicy: .bufferingNewest(Self.eventBufferCapacity)) { continuation in
             let task = Task {
                 do {
-                    while let event = try await nextEvent() { continuation.yield(event) }
+                    while let event = try await nextEvent() {
+                        if case .dropped = continuation.yield(event) {
+                            continuation.finish(throwing: LiveTranscriptionBufferOverflowError(capacity: Self.eventBufferCapacity))
+                            return
+                        }
+                    }
                     continuation.finish()
                 } catch { continuation.finish(throwing: error) }
             }
@@ -92,8 +99,20 @@ public final class LiveTranscription: @unchecked Sendable {
             }
         }
     }
+    /// Matches the native live-transcription session's bounded event channel.
+    private static let eventBufferCapacity = 256
     private static func decode<T: Decodable>(_ type: T.Type, _ json: String) throws -> T {
         let decoder = JSONDecoder(); decoder.keyDecodingStrategy = .convertFromSnakeCase
         return try decoder.decode(type, from: Data(json.utf8))
+    }
+}
+
+/// The consumer fell behind the native event queue and the bounded stream
+/// dropped events instead of growing without limit.
+public struct LiveTranscriptionBufferOverflowError: Error, Sendable, CustomStringConvertible {
+    public let capacity: Int
+    public init(capacity: Int) { self.capacity = capacity }
+    public var description: String {
+        "live transcription consumer fell behind; events dropped at buffer capacity \(capacity)"
     }
 }

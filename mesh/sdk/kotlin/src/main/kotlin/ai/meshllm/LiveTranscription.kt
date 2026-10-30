@@ -1,5 +1,6 @@
 package ai.meshllm
 
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -92,6 +93,15 @@ class LiveTranscription internal constructor(
                 channel.close()
             } catch (error: Throwable) { channel.close(error) }
         }
-        awaitClose { closeNative(); reader.cancel() }
+        awaitClose {
+            // closeNative() blocks until the native session pump drains — the
+            // same wait close() performs on Dispatchers.IO — and unblocks a
+            // reader parked in a pending read. Run it on IO so cancellation
+            // never blocks the collector's dispatcher.
+            CoroutineScope(Dispatchers.IO).launch {
+                closeNative()
+                reader.cancel()
+            }
+        }
     }
 }

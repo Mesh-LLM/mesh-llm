@@ -31,13 +31,19 @@ val generateKotlinBindings by tasks.registering(Exec::class) {
 
     workingDir = repoRoot
     commandLine("bash", "mesh/sdk/kotlin/scripts/generate-kotlin-bindings.sh")
-    // Treat blank environment values as unset, matching generate-kotlin-bindings.sh.
-    inputs.file(providers.environmentVariable("MESH_LLM_FFI_LIBRARY")
-        .map { it.takeIf(String::isNotBlank) }
-        .orElse(providers.environmentVariable("CARGO_TARGET_DIR")
-            .map { it.takeIf(String::isNotBlank) }
-            .map { File(it).resolve("release/libmeshllm_ffi.a").absolutePath })
-        .orElse(repoRoot.resolve("target/release/libmeshllm_ffi.a").absolutePath))
+    // Mirror generate-kotlin-bindings.sh: a blank MESH_LLM_FFI_LIBRARY or
+    // CARGO_TARGET_DIR behaves as unset, and the default target directory is
+    // <repo>/target. Resolved without nullable provider mappings so the
+    // configuration never emits DSL warnings.
+    inputs.file(
+        providers.environmentVariable("MESH_LLM_FFI_LIBRARY").orElse("").zip(
+            providers.environmentVariable("CARGO_TARGET_DIR").orElse("")
+        ) { ffiLibrary, cargoTarget ->
+            ffiLibrary.takeIf(String::isNotBlank)
+                ?: File(cargoTarget.takeIf(String::isNotBlank) ?: repoRoot.resolve("target").absolutePath)
+                    .resolve("release/libmeshllm_ffi.a").absolutePath
+        }
+    )
     outputs.file(projectDir.resolve("src/main/kotlin/uniffi/mesh_ffi/mesh_ffi.kt"))
     outputs.file(repoRoot.resolve("mesh/sdk/kotlin/src/main/kotlin/uniffi/mesh_ffi/mesh_ffi.kt"))
 }

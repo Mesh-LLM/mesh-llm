@@ -67,6 +67,15 @@ Keep filters unchanged when passing `next_cursor`; a changed matching snapshot
 expires the cursor and requires restarting the list. A final page has
 `next_cursor: null`. SDKs expose the same bounded page and continuation token.
 
+`available` filters the providers that match the rest of the query, not the
+aggregate entry: `available=false` asks for entries where **no** provider
+matching the other filters is currently serving. It does not mean the entry
+merely has an unavailable replica. A mixed model — an OCR provider and an LLM
+provider sharing an ID — can therefore match `workload_class=document_ocr&available=false`
+while its model-level `availability` field still reads `available`, because the
+LLM provider is up. The aggregate and the filter answer different questions;
+neither contradicts the other.
+
 ## Metadata and provider observations
 
 Model entries include `id`, `display_name`, `kind`, `availability`, `operations`
@@ -116,6 +125,16 @@ Mesh-specific `metadata`, capability arrays/status fields, `thinking`,
 them through this catalog. `display_name` is standard for Anthropic but is not
 part of the OpenAI projection. Internal plugin provider `/v1/models` probes
 retain their existing provider contract.
+
+Compatibility listing requires positive causal-generation evidence: a model
+appears in `/v1/models` only when a provider carries the `causal_generation`
+workload class. Chat routing is deliberately wider — `class_is_compatible`
+accepts class-less models so requests keep reaching peers that predate
+workload-class advertisement. The two surfaces therefore disagree by design for
+those models: an upgraded node stops listing such peer models in `/v1/models`
+(and OpenAI-compatible clients cannot select them by name), while mesh routing
+still reaches them. `/mesh/v1/models` remains the complete catalog and lists
+them with `workload_class: "unknown"` at the provider.
 
 ## Native SDK catalog
 

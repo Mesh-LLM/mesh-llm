@@ -27,14 +27,17 @@ class ModelsTest {
     }
 
     @Test
-    fun lookupPreservesExactIdsAndFutureClasses() = runTest {
+    fun lookupPreservesExactIdsAndNormalizedUnknownClasses() = runTest {
         val models = Models(listJson = { error("lookup must not invoke list") }, modelJson = { id ->
             assertEquals("org/model@revision#profile", id)
-            """{"id":"org/model@revision#profile","display_name":"Future","kind":"future_kind","workload_class":"future_workload","availability":"unknown","operations":[],"providers":[]}"""
+            // Native deserialization normalizes unrecognized peer workloads and
+            // kinds to "unknown" before this surface sees them, so realistic
+            // input carries the normalized values.
+            """{"id":"org/model@revision#profile","display_name":"Future","kind":"unknown","workload_class":"unknown","availability":"unknown","operations":[],"providers":[]}"""
         })
         val model = models.get("org/model@revision#profile")
-        assertEquals("future_workload", model.workloadClass)
-        assertEquals("future_kind", model.kind)
+        assertEquals("unknown", model.workloadClass)
+        assertEquals("unknown", model.kind)
         assertNull(model.metadata)
     }
 
