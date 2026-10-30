@@ -1,34 +1,15 @@
-use clap::Parser;
-use mesh_llm_cli::Cli;
+use super::runtime::{LoadSizing, send_load_request};
 use serde_json::json;
-use std::future::Future;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-fn run_on_application_stack<F, Fut>(test: F)
-where
-    F: FnOnce() -> Fut + Send + 'static,
-    Fut: Future<Output = ()>,
-{
-    std::thread::Builder::new()
-        .stack_size(crate::DEFAULT_THREAD_STACK_SIZE)
-        .spawn(move || {
-            let mut builder = tokio::runtime::Builder::new_current_thread();
-            builder.enable_all();
-            builder.build().expect("test runtime").block_on(test())
-        })
-        .expect("spawn application-stack test thread")
-        .join()
-        .expect("application-stack test should not panic");
-}
+const TEST_TOKEN: &str = "load-test-secret";
+const TEST_TIMEOUT: Duration = Duration::from_secs(30);
 
-fn parse_cli(args: &[&str]) -> Cli {
-    let normalized = mesh_llm_cli::normalize_runtime_surface_args(args.iter().copied());
-    Cli::try_parse_from(normalized.normalized).expect("load arguments should parse")
-}
-
-async fn read_request_body(stream: &mut TcpStream) -> Vec<u8> {
+/// Returns the request head (lowercased) and body.
+async fn read_request(stream: &mut TcpStream) -> (String, Vec<u8>) {
     let mut request = Vec::new();
     let mut chunk = [0u8; 1024];
     let header_end = loop {
@@ -50,32 +31,22 @@ async fn read_request_body(stream: &mut TcpStream) -> Vec<u8> {
         assert!(read > 0, "client closed mid-body");
         request.extend_from_slice(&chunk[..read]);
     }
-    request[header_end..header_end + content_length].to_vec()
-}
-
-/// Answers the owner-control credential fetch that `load` makes before it
-/// posts, so the following load request reaches the node under test.
-async fn serve_owner_control_token(listener: &TcpListener) {
-    let (mut stream, _) = listener.accept().await.expect("accept token request");
-    let _ = read_request_body(&mut stream).await;
-    let reply = r#"{"token":"load-test-secret"}"#;
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{reply}",
-        reply.len()
-    );
-    stream
-        .write_all(response.as_bytes())
-        .await
-        .expect("write token response");
+    (
+        head,
+        request[header_end..header_end + content_length].to_vec(),
+    )
 }
 
 async fn spawn_loading_node() -> (u16, tokio::task::JoinHandle<serde_json::Value>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let port = listener.local_addr().expect("local addr").port();
     let server = tokio::spawn(async move {
-        serve_owner_control_token(&listener).await;
         let (mut stream, _) = listener.accept().await.expect("accept");
-        let body = read_request_body(&mut stream).await;
+        let (head, body) = read_request(&mut stream).await;
+        assert!(
+            head.contains(&format!("authorization: bearer {TEST_TOKEN}")),
+            "load must present the owner-control credential: {head}"
+        );
         let reply = r#"{"loaded":"org/model","instance_id":"runtime-1"}"#;
         let response = format!(
             "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{reply}",
@@ -90,46 +61,39 @@ async fn spawn_loading_node() -> (u16, tokio::task::JoinHandle<serde_json::Value
     (port, server)
 }
 
-#[test]
-fn load_sends_requested_context_size_and_lanes() {
-    run_on_application_stack(|| async {
-        let (port, server) = spawn_loading_node().await;
-        let port_arg = port.to_string();
-        let cli = parse_cli(&[
-            "mesh-llm",
-            "load",
-            "org/model",
-            "--port",
-            &port_arg,
-            "--ctx-size",
-            "8192",
-            "--parallel",
-            "1",
-        ]);
+#[tokio::test]
+async fn load_sends_requested_context_size_and_lanes() {
+    let (port, server) = spawn_loading_node().await;
+    let sizing = LoadSizing::from_flags(NonZeroU32::new(8192), NonZeroUsize::new(1));
 
-        super::dispatch(&cli).await.expect("load should succeed");
+    send_load_request("org/model", port, sizing, TEST_TOKEN, TEST_TIMEOUT)
+        .await
+        .expect("load should succeed");
 
-        assert_eq!(
-            server.await.expect("node task"),
-            json!({"model": "org/model", "ctx_size": 8192, "parallel": 1})
-        );
-    });
+    assert_eq!(
+        server.await.expect("node task"),
+        json!({"model": "org/model", "ctx_size": 8192, "parallel": 1})
+    );
 }
 
-#[test]
-fn load_without_sizing_flags_sends_only_the_model() {
-    run_on_application_stack(|| async {
-        let (port, server) = spawn_loading_node().await;
-        let port_arg = port.to_string();
-        let cli = parse_cli(&["mesh-llm", "load", "org/model", "--port", &port_arg]);
+#[tokio::test]
+async fn load_without_sizing_flags_sends_only_the_model() {
+    let (port, server) = spawn_loading_node().await;
 
-        super::dispatch(&cli).await.expect("load should succeed");
+    send_load_request(
+        "org/model",
+        port,
+        LoadSizing::default(),
+        TEST_TOKEN,
+        TEST_TIMEOUT,
+    )
+    .await
+    .expect("load should succeed");
 
-        assert_eq!(
-            server.await.expect("node task"),
-            json!({"model": "org/model"})
-        );
-    });
+    assert_eq!(
+        server.await.expect("node task"),
+        json!({"model": "org/model"})
+    );
 }
 
 #[tokio::test]
@@ -137,17 +101,17 @@ async fn load_that_outlasts_the_client_timeout_reports_uncertain_status() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let port = listener.local_addr().expect("local addr").port();
     let node = tokio::spawn(async move {
-        serve_owner_control_token(&listener).await;
         let (_stream, _) = listener.accept().await.expect("accept");
         std::future::pending::<()>().await;
     });
 
     let error = tokio::time::timeout(
         Duration::from_secs(10),
-        super::runtime::run_load_with_timeout(
+        send_load_request(
             "org/model",
             port,
-            super::runtime::LoadSizing::default(),
+            LoadSizing::default(),
+            TEST_TOKEN,
             Duration::from_millis(200),
         ),
     )
@@ -166,22 +130,21 @@ async fn load_that_outlasts_the_client_timeout_reports_uncertain_status() {
     assert!(!text.contains("Can't connect"), "{text}");
 }
 
-#[test]
-fn load_against_a_closed_port_reports_cannot_connect() {
-    run_on_application_stack(|| async {
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let port_arg = listener
-            .local_addr()
-            .expect("local addr")
-            .port()
-            .to_string();
-        drop(listener);
-        let cli = parse_cli(&["mesh-llm", "load", "org/model", "--port", &port_arg]);
+#[tokio::test]
+async fn load_against_a_closed_port_reports_cannot_connect() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+    let port = listener.local_addr().expect("local addr").port();
+    drop(listener);
 
-        let error = super::dispatch(&cli)
-            .await
-            .expect_err("a closed port should fail the client");
-        let text = format!("{error:#}");
-        assert!(text.contains("Can't connect"), "{text}");
-    });
+    let error = send_load_request(
+        "org/model",
+        port,
+        LoadSizing::default(),
+        TEST_TOKEN,
+        TEST_TIMEOUT,
+    )
+    .await
+    .expect_err("a closed port should fail the client");
+    let text = format!("{error:#}");
+    assert!(text.contains("Can't connect"), "{text}");
 }
