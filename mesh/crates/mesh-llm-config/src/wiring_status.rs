@@ -148,6 +148,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
+        path: "mesh_requirements.require_signed_gossip",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
         path: "mesh_requirements.release_signer_keys",
         status: WiringStatus::Wired,
         owner: "n/a",

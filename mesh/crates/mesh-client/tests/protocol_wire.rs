@@ -147,6 +147,7 @@ fn mesh_requirements_signed_policy_proto() -> SignedMeshGenesisPolicy {
             origin_owner_id: "owner-123".into(),
             created_at_unix_ms: 1_717_171_717_000,
             requirements: Some(MeshRequirements {
+                require_signed_gossip: false,
                 node_version: Some(NodeVersionBounds {
                     min: Some("0.65.0".into()),
                     max: Some("0.65.2".into()),

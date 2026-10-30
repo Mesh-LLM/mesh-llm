@@ -228,6 +228,7 @@ pub(super) fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) ->
         min_protocol_version: embedded.mesh_requirements.min_protocol_version,
         max_protocol_version: embedded.mesh_requirements.max_protocol_version,
         require_release_attestation: embedded.mesh_requirements.require_release_attestation,
+        require_signed_gossip: embedded.mesh_requirements.require_signed_gossip,
         release_signer_key: embedded.mesh_requirements.release_signer_keys,
         config: embedded.config_path,
         ..RuntimeOptions::default()

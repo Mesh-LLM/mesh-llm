@@ -302,6 +302,9 @@ impl NativeRuntimeConfig {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct MeshRequirementsConfig {
+    /// Require origin-signed relayed peer records in newly created meshes.
+    #[serde(default)]
+    pub require_signed_gossip: bool,
     #[serde(default)]
     pub min_node_version: Option<String>,
     #[serde(default)]

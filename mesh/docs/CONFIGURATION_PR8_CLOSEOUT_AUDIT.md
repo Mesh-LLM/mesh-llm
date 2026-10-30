@@ -32,6 +32,7 @@ schema row or stale manifest row from passing review:
 `mesh_requirements.min_node_version`, `mesh_requirements.max_node_version`,
 `mesh_requirements.min_protocol_version`, `mesh_requirements.max_protocol_version`,
 `mesh_requirements.require_release_attestation`, `mesh_requirements.release_signer_keys`,
+`mesh_requirements.require_signed_gossip`,
 `owner_control.bind`, `owner_control.advertise_addr`, `payments.wallet`,
 `telemetry.enabled`,
 `telemetry.service_name`, `telemetry.endpoint`, `telemetry.headers`,

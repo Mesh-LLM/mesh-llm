@@ -325,6 +325,8 @@ impl Node {
             is_membership: true,
             // This membership's mesh: peers, demand, and mesh identity.
             state: Arc::new(Mutex::new(MembershipState::default())),
+            gossip_verification: Arc::default(),
+            gossip_encoder: Arc::default(),
             plugin_message_history: Default::default(),
             direct_rescue_endpoints: super::super::direct_rescue::DirectRescueEndpoints::default(),
             host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),

@@ -202,6 +202,10 @@ pub struct MeshPolicyOptions {
     #[arg(long)]
     pub require_release_attestation: bool,
 
+    /// Require origin-signed relayed gossip in a new mesh (upgraded peers only).
+    #[arg(long)]
+    pub require_signed_gossip: bool,
+
     /// Allowed release signer key for mesh creation-time attestation policy (repeatable).
     #[arg(long = "release-signer-key")]
     pub release_signer_key: Vec<String>,

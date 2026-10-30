@@ -494,6 +494,7 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         min_protocol_version: cli.mesh_policy.min_protocol_version,
         max_protocol_version: cli.mesh_policy.max_protocol_version,
         require_release_attestation: cli.mesh_policy.require_release_attestation,
+        require_signed_gossip: cli.mesh_policy.require_signed_gossip,
         release_signer_key: cli.mesh_policy.release_signer_key,
         name: cli.name,
         plugin: cli.plugin,
