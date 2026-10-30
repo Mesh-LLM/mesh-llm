@@ -124,6 +124,13 @@ workflows are independent of required PR readiness.
 `nightly-stability-run.yml`; the reusable run executes both the general
 stability harness and the existing KV tool-loop/prefix-reuse harness, preserves
 both evidence sets, and fails after both have had a chance to run.
+`public-mesh-probe.yml` is a 15-minute GitHub-hosted schedule that runs
+`scripts/public-mesh-probe.sh` against the public console and requires a real
+`model=auto` completion, not just `/health`; after three consecutive failing
+scheduled runs it opens or reuses one `public-mesh-down` issue assigned to the
+configured on-call list and closes it on the first green probe. It uses the
+default token (`issues: write`, `actions: read`), optional Buzz webhook
+secrets, no runner image and no model artifacts.
 `nightly-kv-coverage.yml` is a separate trusted-`main` GitHub-hosted schedule
 for a much larger deterministic radix/blob ownership corpus. It uses the
 pinned `public cpu` image, has no secrets, records exact seed/step budgets and
