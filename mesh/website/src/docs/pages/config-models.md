@@ -43,7 +43,42 @@ model_runtime = "cuda"
 gpu_layers = "auto"
 ```
 
+## Managed inference providers
+
+A model entry can select an installed inference plugin. Provider models use
+provider-owned option and request schemas and do not inherit built-in LLM
+hardware, sampling or context defaults.
+
+```toml
+[[plugin]]
+name = "onnx"
+
+[[models]]
+model = "datalab-to/indra-ocr@v1.1.0"
+provider = "onnx"
+variant = "fp32"
+
+[models.options]
+threads = 4
+
+[models.request_defaults]
+dpi = 200
+
+[models.lifecycle]
+load = "on_demand"
+idle_timeout_secs = 300
+prefetch = true
+```
+
+The host passes only this provider's selected models to its process. It prepares
+explicit asset plans through the shared Hugging Face cache; credentials stay in
+Mesh. The plugin validates options and creates inference sessions on demand.
+Idle eviction releases sessions without deleting cached assets. Set prefetch to
+false to defer downloading too. A local source directory bypasses downloading;
+relative directories resolve against the configuration file's directory.
+
 ## Plugins
+
 
 The `[[plugin]]` array configures local plugin processes, which can attach to external services.
 
@@ -144,7 +179,7 @@ Idle unloading uses the normal non-forced drain path and respects maintained
 owner intents. Capacity admission includes the existing runtime memory budget;
 a failed cold load returns HTTP 503 and can be retried.
 
-This initial policy applies to uniquely configured model identifiers and
+This initial policy applies to uniquely configured native model identifiers and
 instances loaded on demand. Configured aliases and cached public IDs resolve to the same residency.
 On-demand configuration rejects `--split` and `--split-topology-lock`; use
 `load = "startup"` for split serving. Explicit CLI model selections retain their

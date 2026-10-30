@@ -211,6 +211,8 @@ pub(super) fn resolve_startup_mesh_creation_state(
     config: &plugin::MeshConfig,
 ) -> Result<StartupMeshCreationState> {
     let merged = plugin::MeshRequirementsConfig {
+        require_signed_gossip: options.require_signed_gossip
+            || config.mesh_requirements.require_signed_gossip,
         min_node_version: options
             .min_node_version
             .clone()
@@ -304,6 +306,7 @@ pub(crate) fn assert_mesh_requirements_cli_overrides_config_per_field_before_gen
     let config = plugin::MeshConfig {
         mesh_requirements: plugin::MeshRequirementsConfig {
             min_node_version: Some("0.65.0".into()),
+            require_signed_gossip: true,
             max_node_version: Some("0.65.9".into()),
             min_protocol_version: Some(1),
             max_protocol_version: Some(2),
@@ -335,6 +338,7 @@ pub(crate) fn assert_mesh_requirements_cli_overrides_config_per_field_before_gen
     assert_eq!(startup_state.requirements.protocol_generation.min, Some(1));
     assert_eq!(startup_state.requirements.protocol_generation.max, Some(5));
     assert!(startup_state.requirements.release_attestation.required);
+    assert!(startup_state.requirements.require_signed_gossip);
     assert_eq!(
         startup_state
             .requirements
@@ -521,6 +525,7 @@ pub(super) fn runtime_options_for_test(args: &[&str]) -> RuntimeOptions {
             "--discover" => options.discover = Some(String::new()),
             "--split" => options.split = true,
             "--require-release-attestation" => options.require_release_attestation = true,
+            "--require-signed-gossip" => options.require_signed_gossip = true,
             "--join" => options.join.push(next_test_arg(&mut iter, arg).to_string()),
             "--model" => options.model.push(next_test_arg(&mut iter, arg).into()),
             "--gguf" => options.gguf.push(next_test_arg(&mut iter, arg).into()),
@@ -759,6 +764,7 @@ fn matching_config_model<'a>(
     let mut matches = config
         .models
         .iter()
+        .filter(|model| model.provider.is_none())
         .filter(|model| model.model == model_ref);
     let Some(first) = matches.next() else {
         return Ok(None);
@@ -798,6 +804,14 @@ pub(super) fn skippy_local_source_required(
         .and_then(|skippy| skippy.source_policy.as_deref())
         .or_else(|| default_skippy.and_then(|skippy| skippy.source_policy.as_deref()))
         == Some("local-required")
+}
+
+fn native_model_count(config: &plugin::MeshConfig) -> usize {
+    config
+        .models
+        .iter()
+        .filter(|model| model.provider.is_none())
+        .count()
 }
 
 pub(super) fn build_startup_model_specs(
@@ -936,16 +950,16 @@ pub(super) fn build_startup_model_specs(
         .as_ref()
         .and_then(|defaults| defaults.hardware.as_ref())
         .and_then(|hardware| hardware.model_path.as_ref());
-    if config.models.len() > 1 && default_model_path.is_some() {
+    if native_model_count(config) > 1 && default_model_path.is_some() {
         anyhow::bail!(
             "defaults.hardware.model_path cannot be used when multiple logical models are configured; set hardware.model_path on each model"
         );
     }
 
-    for model in &config.models {
-        if super::native_model_lifecycle::is_on_demand_managed(config, model) {
-            continue;
-        }
+    for model in config.models.iter().filter(|model| {
+        model.provider.is_none()
+            && !super::native_model_lifecycle::is_on_demand_managed(config, model)
+    }) {
         let effective =
             effective_startup_model_config(&model.model, Some(model), config.defaults.as_ref());
         let local_source_required =

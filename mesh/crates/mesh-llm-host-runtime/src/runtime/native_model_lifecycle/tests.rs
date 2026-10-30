@@ -459,3 +459,37 @@ load = "on_demand"
         assert_ne!(specs[0].profile, specs[1].profile);
     }
 }
+
+#[test]
+fn provider_models_never_enter_native_residency_or_ambiguate_native_names() {
+    let mut config: crate::plugin::MeshConfig = toml::from_str(
+        r#"
+[[plugin]]
+name = "onnx"
+command = "/opt/mesh-onnx"
+[[models]]
+model = "same-name"
+[models.lifecycle]
+load = "on_demand"
+prefetch = false
+[[models]]
+model = "same-name"
+provider = "onnx"
+[models.lifecycle]
+load = "on_demand"
+prefetch = false
+"#,
+    )
+    .unwrap();
+    assert!(is_on_demand_managed(&config, &config.models[0]));
+    assert!(!is_on_demand_managed(&config, &config.models[1]));
+    // Programmatic configurations can bypass operator duplicate-name validation.
+    config.models[0].lifecycle.prefetch = true;
+    let managed = configured_residencies(&config);
+    assert_eq!(managed.len(), 1);
+    config.models.retain(|model| model.provider.is_some());
+    assert!(configured_residencies(&config).is_empty());
+    assert!(sources::validate_managed_sources(&config).is_ok());
+    // A provider sharing a name must not inherit the native prefetch plan.
+    assert!(sources::spawn_prefetch(&config, &managed).is_ok());
+}

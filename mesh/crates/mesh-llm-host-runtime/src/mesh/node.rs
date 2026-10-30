@@ -84,6 +84,8 @@ pub struct Node {
     pub(crate) owner_keypair: Option<crate::crypto::OwnerKeypair>,
     pub(crate) local_mesh_requirements: crate::MeshRequirements,
     pub(crate) state: Arc<Mutex<MembershipState>>,
+    pub(crate) gossip_verification: Arc<super::signed_records::VerificationGate>,
+    pub(crate) gossip_encoder: Arc<crate::protocol::GossipFrameEncoder>,
     pub(crate) plugin_message_history: Arc<Mutex<super::plugin_mesh::PluginMessageHistory>>,
     /// Relay-disabled same-identity endpoints that own recovered direct connections.
     /// See [`super::direct_rescue`] for the ownership and shutdown rules.
@@ -786,11 +788,7 @@ impl Node {
         let (tunnel_http_tx, tunnel_http_rx) = tokio::sync::mpsc::channel(256);
         let (stage_transport_tx, stage_transport_rx) = tokio::sync::mpsc::channel(256);
 
-        let config_state_init = {
-            let path = crate::plugin::config_path(config_path)
-                .unwrap_or_else(|_| std::path::PathBuf::from("config.toml"));
-            crate::runtime::config_state::ConfigState::load(&path)?
-        };
+        let config_state_init = startup::load_config_state(config_path)?;
         let hardware =
             advertised_hardware_for_start(config_state_init.config(), &role, max_vram_gb);
         let owner_runtime = init_owner_runtime(
@@ -866,6 +864,8 @@ impl Node {
             mesh_id: Arc::new(Mutex::new(None)),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
+            gossip_verification: Arc::default(),
+            gossip_encoder: Arc::default(),
             bootstrap_token: Arc::new(Mutex::new(None)),
             join_targets: Arc::new(Mutex::new(Vec::new())),
             first_joined_mesh_ts: Arc::new(Mutex::new(None)),
@@ -1057,6 +1057,8 @@ impl Node {
             mesh_id: Arc::new(Mutex::new(None)),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
+            gossip_verification: Arc::default(),
+            gossip_encoder: Arc::default(),
             bootstrap_token: Arc::new(Mutex::new(None)),
             join_targets: Arc::new(Mutex::new(Vec::new())),
             first_joined_mesh_ts: Arc::new(Mutex::new(None)),

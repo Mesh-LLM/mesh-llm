@@ -394,6 +394,8 @@ fn local_workload_class_to_proto(workload: crate::mesh::ModelWorkloadClass) -> i
         Local::Decision => Proto::Decision as i32,
         Local::SpeechRecognition => Proto::SpeechRecognition as i32,
         Local::DocumentOcr => Proto::DocumentOcr as i32,
+        Local::ImageTextSimilarity => Proto::ImageTextSimilarity as i32,
+        Local::DepthEstimation => Proto::DepthEstimation as i32,
         // Preserve explicit denial when relaying metadata. Zero is the legacy
         // unspecified value and must not erase an unknown workload.
         Local::Unknown => -1,
@@ -414,6 +416,8 @@ fn proto_workload_class_to_local(value: i32) -> Option<crate::mesh::ModelWorkloa
         Ok(Proto::Decision) => Some(Local::Decision),
         Ok(Proto::SpeechRecognition) => Some(Local::SpeechRecognition),
         Ok(Proto::DocumentOcr) => Some(Local::DocumentOcr),
+        Ok(Proto::ImageTextSimilarity) => Some(Local::ImageTextSimilarity),
+        Ok(Proto::DepthEstimation) => Some(Local::DepthEstimation),
         Ok(Proto::Unspecified) => None,
         Err(_) => Some(Local::Unknown),
     }
@@ -1434,6 +1438,7 @@ fn legacy_proto_config_to_mesh(
         .map(|requirements| crate::plugin::mesh_requirements_config_from_runtime(&requirements))
         .unwrap_or_default();
     let mut config = MeshConfig {
+        source_directory: None,
         version: Some(snapshot.version),
         gpu: GpuConfig {
             host_ram_offload: None,

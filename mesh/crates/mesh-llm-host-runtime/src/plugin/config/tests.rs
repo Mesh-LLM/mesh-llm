@@ -10,7 +10,7 @@ use mesh_llm_plugin_manager::{
     InstalledPluginSettingSchema, InstalledPluginValueKind, InstalledPluginValueSchema,
     InstalledPluginVisibility, PluginStore,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use tempfile::TempDir;
 
 const FULL_SURFACE_VALID_FIXTURE: &str =
@@ -308,7 +308,12 @@ fn documented_matrix_key_paths() -> BTreeSet<String> {
 fn test_model(name: &str) -> ModelConfigEntry {
     ModelConfigEntry {
         model: name.into(),
+        provider: None,
+        variant: None,
+        options: BTreeMap::new(),
+        provider_request_defaults: BTreeMap::new(),
         lifecycle: Default::default(),
+        source: Default::default(),
         mmproj: None,
         ctx_size: None,
         gpu_id: None,

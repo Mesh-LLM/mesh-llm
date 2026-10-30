@@ -400,11 +400,12 @@ pub(super) fn is_on_demand_managed(
     config: &crate::plugin::MeshConfig,
     model: &crate::plugin::ModelConfigEntry,
 ) -> bool {
-    model.lifecycle.load == ModelLoadPolicy::OnDemand
+    model.provider.is_none()
+        && model.lifecycle.load == ModelLoadPolicy::OnDemand
         && config
             .models
             .iter()
-            .filter(|entry| entry.model == model.model)
+            .filter(|entry| entry.provider.is_none() && entry.model == model.model)
             .count()
             == 1
 }

@@ -1,6 +1,7 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page, type TestInfo } from '../fixtures/base'
 import { DATA_MODE_STORAGE_KEY } from '@e2e/support/data-mode'
+import { BACKEND_SCHEMA_REFERENCE } from '@/features/configuration/api/config-adapter-test-support'
 
 const FEATURE_FLAGS_STORAGE_KEY = 'mesh-llm-ui-preview:feature-flags:v1'
 
@@ -58,6 +59,9 @@ const schemaPayload = {
     }
   ],
   settings: [
+    ...BACKEND_SCHEMA_REFERENCE.settings.filter(
+      (entry) => entry.canonical_path === 'mesh_requirements.require_signed_gossip'
+    ),
     setting('runtime.native_backend', {
       label: 'Native backend',
       help: 'Runtime backend selected from local availability.',
@@ -328,7 +332,7 @@ async function installConfigurationBackend(page: Page, configOverride: JsonRecor
         featureFlagsKey,
         JSON.stringify({
           global: { newConfigurationPage: true },
-          configuration: { integrations: true, logsSettings: true }
+          configuration: { integrations: true, logsSettings: true, signingAttestation: true }
         })
       )
 
@@ -480,6 +484,50 @@ async function expectNoHorizontalOverflow(page: Page) {
 test.describe('schema-driven configuration controls', () => {
   test.beforeEach(async ({ page }) => {
     await installConfigurationBackend(page)
+  })
+
+  test('saves signed gossip as a creation-time mesh policy', async ({ page }, testInfo) => {
+    await page.goto(appUrl('/configuration/signing', testInfo))
+    const policy = page.getByRole('radiogroup', { name: 'Require signed peer gossip' })
+    await expect(policy.getByRole('radio', { name: 'off', exact: true })).toBeChecked()
+    await expect(page.getByText(/Existing meshes keep their original policy\./)).toBeVisible()
+    await expect(page.getByText(/older versions cannot join/)).toBeVisible()
+    await policy.getByRole('radio', { name: 'on', exact: true }).click()
+    await expect(policy.getByRole('radio', { name: 'on', exact: true })).toBeChecked()
+    await expectNoHorizontalOverflow(page)
+    await testInfo.attach('signed-gossip-policy-desktop', {
+      body: await page.screenshot({
+        path: testInfo.outputPath('signed-gossip-policy-desktop.png'),
+        fullPage: true,
+        animations: 'disabled'
+      }),
+      contentType: 'image/png'
+    })
+    await page.setViewportSize({ width: 390, height: 720 })
+    await policy.getByRole('radio', { name: 'off', exact: true }).click()
+    await expect(policy.getByRole('radio', { name: 'off', exact: true })).toBeChecked()
+    await policy.getByRole('radio', { name: 'on', exact: true }).click()
+    await expect(policy.getByRole('radio', { name: 'on', exact: true })).toBeChecked()
+    await policy.scrollIntoViewIfNeeded()
+    await expectNoHorizontalOverflow(page)
+    await testInfo.attach('signed-gossip-policy-mobile', {
+      body: await page.screenshot({
+        path: testInfo.outputPath('signed-gossip-policy-mobile.png'),
+        fullPage: true,
+        animations: 'disabled'
+      }),
+      contentType: 'image/png'
+    })
+    await page.getByRole('tab', { name: 'TOML Output' }).click()
+    await expect(page.getByRole('textbox', { name: 'Configuration TOML source' })).toHaveValue(
+      /require_signed_gossip = true/
+    )
+    await page.getByRole('button', { name: 'Save config' }).click()
+    await expect.poll(async () => (await readConfigState(page)).applyRequests.length).toBe(1)
+    const state = await readConfigState(page)
+    expect(state.applyRequests[0]).toMatchObject({
+      config: { mesh_requirements: { require_signed_gossip: true } }
+    })
   })
 
   test('renders schema-selected controls with bounds, runtime options, disabled reasons, and accessible layout', async ({

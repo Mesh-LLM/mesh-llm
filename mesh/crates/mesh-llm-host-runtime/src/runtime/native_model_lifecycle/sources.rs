@@ -108,7 +108,7 @@ pub(super) fn spawn_prefetch(
     for model in config
         .models
         .iter()
-        .filter(|model| residencies.contains_key(&model.model))
+        .filter(|model| model.provider.is_none() && residencies.contains_key(&model.model))
     {
         let residency = &residencies[&model.model];
         let strict_local = startup_models::skippy_local_source_required(

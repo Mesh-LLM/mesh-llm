@@ -25,6 +25,10 @@ fn build_built_in_config_schema() -> ConfigSchema {
             ConfigValueSchema::Boolean,
         ),
         top_level_setting(
+            "mesh_requirements.require_signed_gossip",
+            ConfigValueSchema::Boolean,
+        ),
+        top_level_setting(
             "mesh_requirements.release_signer_keys",
             ConfigValueSchema::Array {
                 items: Box::new(ConfigValueSchema::String),
@@ -211,18 +215,14 @@ fn model_entry_settings() -> Vec<ConfigSettingSchema> {
         ConfigValueSchema::String,
     )];
     settings.extend([
-        top_level_setting(
-            &format!("{model_prefix}.lifecycle.load"),
-            string_enum(["startup", "on_demand"]),
-        ),
-        top_level_setting(
-            &format!("{model_prefix}.lifecycle.idle_timeout_secs"),
-            ConfigValueSchema::Integer,
-        ),
-        top_level_setting(
-            &format!("{model_prefix}.lifecycle.prefetch"),
-            ConfigValueSchema::Boolean,
-        ),
+        basic_setting(&format!("{model_prefix}.provider"), ConfigValueSchema::String),
+        basic_setting(&format!("{model_prefix}.variant"), ConfigValueSchema::String),
+        basic_setting(&format!("{model_prefix}.options"), ConfigValueSchema::object()),
+        basic_setting(&format!("{model_prefix}.request_defaults"), ConfigValueSchema::object()),
+        top_level_setting(&format!("{model_prefix}.lifecycle.load"), string_enum(["startup", "on_demand"])),
+        top_level_setting(&format!("{model_prefix}.lifecycle.idle_timeout_secs"), ConfigValueSchema::Integer),
+        top_level_setting(&format!("{model_prefix}.lifecycle.prefetch"), ConfigValueSchema::Boolean),
+        basic_setting(&format!("{model_prefix}.source"), ConfigValueSchema::object()),
     ]);
     settings.extend(model_fit_settings(
         &format!("{model_prefix}.model_fit"),

@@ -5,7 +5,7 @@ use super::*;
 /// serves without model execution. The coverage test below requires every
 /// entry to be workload-classified, System One, or explicitly exempt — a new
 /// route fails CI until it is classified.
-const ROUTER_INFERENCES_PATHS: [&str; 17] = [
+const ROUTER_INFERENCES_PATHS: [&str; 19] = [
     "/v1/chat/completions",
     "/v1/completions",
     "/v1/responses",
@@ -23,6 +23,8 @@ const ROUTER_INFERENCES_PATHS: [&str; 17] = [
     "/systemone",
     "/v1/decisions",
     "/mesh/v1/documents/ocr",
+    "/mesh/v1/images/similarity",
+    "/mesh/v1/images/depth",
 ];
 
 #[test]

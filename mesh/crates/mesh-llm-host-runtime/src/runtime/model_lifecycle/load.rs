@@ -80,7 +80,7 @@ fn resolve_runtime_model_config<'a>(
     let matching = config
         .models
         .iter()
-        .filter(|model| model.model == selector)
+        .filter(|model| model.provider.is_none() && model.model == selector)
         .collect::<Vec<_>>();
     if matching.is_empty() {
         anyhow::ensure!(
@@ -848,6 +848,22 @@ mod tests {
         .expect_err("a stale config selector must not enter unconfigured resolution");
 
         assert!(error.to_string().contains("is no longer present"));
+    }
+
+    #[test]
+    fn provider_entry_does_not_ambiguate_a_native_runtime_profile() {
+        let native = strict_model("org/model");
+        let profile = native.derived_profile();
+        let provider = ModelConfigEntry {
+            model: "org/model".into(),
+            provider: Some("onnx".into()),
+            ..Default::default()
+        };
+        let config = config_with(vec![provider, native]);
+        let (model, actual) =
+            resolve_runtime_model_config(&config, Some("org/model"), "org/model", "").unwrap();
+        assert!(model.unwrap().provider.is_none());
+        assert_eq!(actual, profile);
     }
 
     #[test]

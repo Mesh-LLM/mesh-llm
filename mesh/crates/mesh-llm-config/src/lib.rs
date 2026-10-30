@@ -1149,6 +1149,7 @@ gpu_id = "pci:0000:65:00.0"
             "extra",
             "gpu_id_from_legacy_shim",
             "lifecycle_log_parser_source",
+            "source_directory", // runtime origin, skipped by config serialization
             "lifecycle_log_parser_override",
             "download_override",
             "models",

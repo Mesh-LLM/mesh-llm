@@ -1,4 +1,4 @@
-//! Native request-driven model residency consumers.
+//! Shared native and provider model residency controls.
 use super::{WiringBehavior, WiringEntry, WiringStatus};
 
 pub(super) const LOAD: WiringEntry = entry("lifecycle.load");
@@ -9,8 +9,8 @@ const fn entry(path: &'static str) -> WiringEntry {
     WiringEntry {
         path,
         status: WiringStatus::Wired,
-        owner: "native residency",
-        reason: "runtime/native_model_lifecycle.rs owns on-demand native loading, disk prefetch and idle instance eviction",
+        owner: "native/provider residency",
+        reason: "Native model lifecycle and plugin model selection consume loading, disk prefetch and idle residency policies",
         behavior: WiringBehavior::None,
     }
 }
