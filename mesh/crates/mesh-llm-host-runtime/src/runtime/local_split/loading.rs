@@ -105,8 +105,13 @@ pub(super) struct SplitGenerationLoadSettings<'a> {
     /// Planned final-stage decode batching. A stage policy rather than a
     /// frontend one, so it rides here instead of on the OpenAI args.
     pub(super) last_stage_decode_batch: Option<bool>,
+    /// Operator policy for host-resident routed experts, applied to every
+    /// stage.
+    pub(super) host_experts: skippy_protocol::HostExpertPolicy,
     pub(super) load_mode: LoadMode,
     pub(super) startup_timeout: Duration,
+    /// What `live_request_defaults::track_model` returned for this load.
+    pub(super) live_defaults_generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -251,6 +256,18 @@ pub(super) async fn load_split_runtime_generation_inner(
             .await?
     };
     let first_downstream_stage_id = downstream.stage_id.clone();
+    // Downstream loads take minutes on a large model, long enough for a peer
+    // that joined meanwhile to win the election and place one of its stages
+    // here. Loading stage 0 on top of that stage would hold both topologies'
+    // weights on this node; stand down instead and free the stages we placed.
+    if let Some(reason) =
+        split_coordinator_superseded(spec.node, spec.model_ref, spec.package, spec.generation).await
+    {
+        anyhow::bail!(
+            "split coordinator lease was superseded before stage 0 of {} loaded: {reason}",
+            spec.model_ref
+        );
+    }
     let stage0_status_load = split_runtime_stage_load_request(
         spec,
         &settings,
@@ -277,6 +294,7 @@ pub(super) async fn load_split_runtime_generation_inner(
     .await;
     let node_for_hook = spec.node.clone();
     let model_ref = spec.model_ref.to_string();
+    let live_defaults_generation = settings.live_defaults_generation;
     let reporter_model_ref = model_ref.clone();
     let skippy_telemetry = spec.skippy_telemetry.clone();
     let guardrail_telemetry = spec.survey_telemetry.clone();
@@ -306,6 +324,11 @@ pub(super) async fn load_split_runtime_generation_inner(
     })
     .await
     .context("join load skippy stage0 config task")??;
+    spec.node.live_request_defaults.sync_after_load(
+        &model_ref,
+        live_defaults_generation,
+        &spec.node.live_request_defaults.serving_backends(),
+    );
     let stage0_output = handle
         .output_activation_boundary()
         .context("stage 0 graph did not expose its output activation boundary")?;
@@ -506,6 +529,10 @@ pub(super) async fn stage0_runtime_options(
     runtime_options.config.bind_addr = stage0_return_endpoint.to_string();
     runtime_options.config.upstream = None;
     runtime_options.config.downstream = Some(PeerConfig {
+        persistent_lane_marker: spec
+            .node
+            .stage_peer_supports_persistent_lane_marker(downstream.node_id)
+            .await,
         stage_id: downstream.stage_id.clone(),
         stage_index: downstream.stage_index,
         endpoint: downstream_endpoint.to_string(),
@@ -629,6 +656,7 @@ pub(super) async fn load_downstream_split_runtime_stages(
             )?;
         }
         *downstream = Some(skippy::StagePeerDescriptor {
+            persistent_lane_marker: false,
             stage_id: stage.stage_id.clone(),
             stage_index: stage.stage_index,
             endpoint: ready.status.bind_addr.clone(),
@@ -789,6 +817,7 @@ pub(super) fn split_runtime_stage_load_request(
             kv_unified: resolved_config.kv_unified,
             swa_full: resolved_config.swa_full,
             cache_idle_slots: resolved_config.cache_idle_slots,
+            host_experts: settings.host_experts,
             activation_codec_policy: resolved_config.activation_codec_policy,
         },
         native_mtp_enabled: resolved_config.native_mtp_enabled,
@@ -808,6 +837,7 @@ pub(super) fn split_runtime_stage_upstream(
 ) -> Option<skippy::StagePeerDescriptor> {
     let stage0 = spec.generation.stages.first()?;
     Some(skippy::StagePeerDescriptor {
+        persistent_lane_marker: false,
         stage_id: stage0.stage_id.clone(),
         stage_index: stage0.stage_index,
         endpoint: stage0_return_endpoint.to_string(),
@@ -870,7 +900,14 @@ pub(super) async fn split_generation_load_settings<'a>(
     }
     // Stage zero replaces this placeholder with its graph-observed output
     // boundary after the native runtime has been constructed.
-    let embedded_openai = resolved.to_embedded_openai_args(0, true)?;
+    let mut embedded_openai = resolved.to_embedded_openai_args(0, true)?;
+    let live_request_defaults = spec.node.live_request_defaults.clone();
+    embedded_openai.live_defaults_scope = live_request_defaults.scope();
+    let live_defaults_generation = live_request_defaults.track_model(
+        &resolved.model_id,
+        spec.config_model_id,
+        spec.package.generation.as_ref(),
+    );
     let lifecycle = configured_stage_lifecycle_intervals(spec.mesh_config, spec.config_model_id);
     let runtime_options = resolved.to_embedded_runtime_options(
         &spec.skippy_telemetry,
@@ -888,8 +925,10 @@ pub(super) async fn split_generation_load_settings<'a>(
         runtime_options,
         embedded_openai,
         last_stage_decode_batch: resolved.throughput.last_stage_decode_batch,
+        host_experts: resolved.hardware.host_experts,
         load_mode,
         startup_timeout: lifecycle.startup_timeout,
+        live_defaults_generation,
     })
 }
 
@@ -970,6 +1009,75 @@ pub(super) async fn claim_split_coordinator_lease(
         "split topology coordinator lease quorum reached"
     );
     Ok(())
+}
+
+/// Why this node no longer holds the coordinator lease for `generation`, or
+/// `None` while it still does.
+///
+/// The canonical coordinator is the smallest eligible node, so a peer that
+/// joins after a split was planned can elect itself and claim the same model.
+/// Every stage it plans accepts the newer term, this node's stage control
+/// included, but that only fences stages stage control runs: this node's own
+/// stage 0 runs in the host runtime, so its generation carries on and the node
+/// ends up holding a stage of each topology. Re-sending our own claim to the
+/// local stage control asks the fence directly — the same claim is accepted
+/// again unchanged, and a newer term rejects it as stale.
+///
+/// Only a rejection by another coordinator's claim counts: a transient
+/// stage-control failure must not tear down a healthy split.
+pub(super) async fn split_coordinator_superseded(
+    node: &mesh::Node,
+    model_ref: &str,
+    package: &skippy::SkippyPackageIdentity,
+    generation: &SplitTopologyGeneration,
+) -> Option<String> {
+    let claim = renewed_claim(split_coordinator_claim(
+        node.id(),
+        model_ref,
+        package,
+        generation,
+    ));
+    let response = node
+        .send_local_stage_control(skippy::StageControlRequest::Claim(claim))
+        .await;
+    match response {
+        Ok(skippy::StageControlResponse::ClaimAccepted(ack)) => {
+            superseded_claim_reason(&node.id().to_string(), &ack)
+        }
+        Ok(_) | Err(_) => None,
+    }
+}
+
+/// `claim` with its lease extended from now. The generation keeps the lease it
+/// was planned with, and the fence rejects an expired claim before it looks up
+/// the holder, so a generation serving past its lease could no longer see a
+/// takeover. The lease is not part of a claim's epoch, so the fence accepts a
+/// renewal of the claim it holds.
+pub(super) fn renewed_claim(
+    mut claim: skippy::StageCoordinatorClaim,
+) -> skippy::StageCoordinatorClaim {
+    claim.lease_until_unix_ms = claim
+        .lease_until_unix_ms
+        .max(super::split_coordinator_lease_until_unix_ms());
+    claim
+}
+
+/// The rejection of our re-sent claim, when the claim that holds the model
+/// belongs to another coordinator. A newer generation of our own — a cutover
+/// that claimed the stages and then failed to load — is not a takeover.
+pub(super) fn superseded_claim_reason(
+    local_coordinator_id: &str,
+    ack: &skippy::StageCoordinatorClaimAck,
+) -> Option<String> {
+    if ack.accepted || ack.claim.coordinator_id == local_coordinator_id {
+        return None;
+    }
+    Some(format!(
+        "coordinator {} holds term {}: {}",
+        ack.claim.coordinator_id,
+        ack.claim.coordinator_term,
+        ack.error.as_deref().unwrap_or("claim rejected")
+    ))
 }
 
 pub(super) enum SplitCoordinatorClaimResult {

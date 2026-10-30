@@ -81,11 +81,15 @@ fn spawn_stage_control_loop_with_state(mut state: StageControlState) -> StageCon
                 command = rx.recv() => {
                     let Some(command) = command else { break };
                     match command {
-                        StageControlCommand::Execute { request, resp } => {
+                        StageControlCommand::Execute {
+                            request,
+                            requester,
+                            resp,
+                        } => {
                             tokio::select! {
                                 biased;
                                 _ = &mut shutdown_rx => break,
-                                result = state.handle(request) => {
+                                result = state.handle(request, requester) => {
                                     let _ = resp.send(result);
                                 }
                             }
@@ -125,22 +129,30 @@ impl StageControlState {
         Ok(())
     }
 
-    async fn handle(&mut self, request: StageControlRequest) -> Result<StageControlResponse> {
+    async fn handle(
+        &mut self,
+        request: StageControlRequest,
+        requester: iroh::EndpointId,
+    ) -> Result<StageControlResponse> {
         match request {
             StageControlRequest::Claim(claim) => self
-                .claim(claim)
+                .claim(claim, requester)
                 .await
                 .map(StageControlResponse::ClaimAccepted),
-            StageControlRequest::Load(load) => {
-                self.load(load).await.map(StageControlResponse::Ready)
-            }
+            StageControlRequest::Load(load) => self
+                .load(load, requester)
+                .await
+                .map(StageControlResponse::Ready),
             StageControlRequest::LoadLocal(mut load) => {
                 load.local_source_required = true;
-                self.load(load).await.map(StageControlResponse::Ready)
+                self.load(load, requester)
+                    .await
+                    .map(StageControlResponse::Ready)
             }
-            StageControlRequest::Stop(stop) => {
-                self.stop(stop).await.map(StageControlResponse::Ready)
-            }
+            StageControlRequest::Stop(stop) => self
+                .stop(stop, requester)
+                .await
+                .map(StageControlResponse::Ready),
             StageControlRequest::Status(filter) => {
                 Ok(StageControlResponse::Status(self.statuses(&filter)))
             }
@@ -150,8 +162,27 @@ impl StageControlState {
         }
     }
 
-    async fn claim(&mut self, claim: StageCoordinatorClaim) -> Result<StageCoordinatorClaimAck> {
+    async fn claim(
+        &mut self,
+        claim: StageCoordinatorClaim,
+        requester: iroh::EndpointId,
+    ) -> Result<StageCoordinatorClaimAck> {
         let attempted_claim = claim.clone();
+        // A claim binds its term to the identity that issues it. The wire
+        // conversion rejects a mismatched identity for remote commands; the
+        // in-process control channel carries the local endpoint as requester.
+        // Rejecting here keeps the fence from accepting a claim the requester
+        // cannot own (#2217).
+        if claim.coordinator_id.parse::<iroh::EndpointId>().ok() != Some(requester) {
+            return Ok(StageCoordinatorClaimAck {
+                accepted: false,
+                claim: attempted_claim,
+                error: Some(
+                    "stage claim coordinator identity does not match the authenticated requester"
+                        .to_string(),
+                ),
+            });
+        }
         match self
             .coordinator_claims
             .accept_claim(claim, current_time_unix_ms())
@@ -172,9 +203,12 @@ impl StageControlState {
                 claim,
                 error: None,
             }),
-            ClaimDecision::Rejected { reason, .. } => Ok(StageCoordinatorClaimAck {
+            // A rejection carries the claim that holds the model here, so the
+            // claimant can tell its own newer generation from another
+            // coordinator's.
+            ClaimDecision::Rejected { current, reason } => Ok(StageCoordinatorClaimAck {
                 accepted: false,
-                claim: attempted_claim,
+                claim: current.unwrap_or(attempted_claim),
                 error: Some(reason.to_string()),
             }),
         }
@@ -267,13 +301,49 @@ impl StageControlState {
         }
     }
 
-    async fn load(&mut self, mut load: StageLoadRequest) -> Result<StageReadyResponse> {
+    async fn load(
+        &mut self,
+        mut load: StageLoadRequest,
+        requester: iroh::EndpointId,
+    ) -> Result<StageReadyResponse> {
+        let key = stage_key(&load.topology_id, &load.run_id, &load.stage_id);
+        if let Some(existing) = self.stages.get(&key) {
+            // An unbound load (no coordinator identity) never takes over a
+            // generation a coordinator has bound: it carries no term or
+            // identity to fence with (#2217).
+            if load.coordinator_id.is_none() && existing.load.coordinator_id.is_some() {
+                let error = "an unbound stage load cannot replace a coordinator-bound stage";
+                return Ok(StageReadyResponse {
+                    accepted: false,
+                    removed_running_stage: false,
+                    status: failed_status_from_load(&load, error.to_string()),
+                    error: Some(error.to_string()),
+                });
+            }
+        }
+        if let Some(coordinator_id) = load.coordinator_id {
+            // A claimed load must be issued by the coordinator it names. The
+            // wire conversion rejects a mismatched identity for remote
+            // commands; this keeps the execution boundary authoritative for
+            // the in-process control channel (#2217).
+            if coordinator_id != requester {
+                let error =
+                    "stage load coordinator identity does not match the authenticated requester";
+                return Ok(StageReadyResponse {
+                    accepted: false,
+                    removed_running_stage: false,
+                    status: failed_status_from_load(&load, error.to_string()),
+                    error: Some(error.to_string()),
+                });
+            }
+        }
         if let Err(error) =
             crate::system::native_runtime_requirement::ensure_native_runtime_available()
         {
             let error = error.to_string();
             return Ok(StageReadyResponse {
                 accepted: false,
+                removed_running_stage: false,
                 status: failed_status_from_load(&load, error.clone()),
                 error: Some(error),
             });
@@ -286,6 +356,7 @@ impl StageControlState {
         if let Some(error) = self.validate_load_claim(&load) {
             return Ok(StageReadyResponse {
                 accepted: false,
+                removed_running_stage: false,
                 status: failed_status_from_load(&load, error.clone()),
                 error: Some(error),
             });
@@ -393,27 +464,49 @@ impl StageControlState {
         stage_op.ready(effective_load.lane_count);
         Ok(StageReadyResponse {
             accepted: true,
+            removed_running_stage: false,
             status,
             error: None,
         })
     }
 
-    async fn stop(&mut self, stop: StageStopRequest) -> Result<StageReadyResponse> {
+    async fn stop(
+        &mut self,
+        stop: StageStopRequest,
+        requester: iroh::EndpointId,
+    ) -> Result<StageReadyResponse> {
         let key = stage_key(&stop.topology_id, &stop.run_id, &stop.stage_id);
         let Some(existing) = self.stages.remove(&key) else {
             let status = stopped_status(&stop);
             return Ok(StageReadyResponse {
                 accepted: true,
+                removed_running_stage: false,
                 status,
                 error: None,
             });
         };
+        // Shutdown binds to the coordinator identity the running stage was
+        // loaded under. A stop from any other requester must not take the
+        // stage down, whatever term it claims (#2217).
+        if let Some(coordinator_id) = existing.load.coordinator_id
+            && coordinator_id != requester
+        {
+            let status = status_from_running(&existing);
+            self.stages.insert(key, existing);
+            return Ok(StageReadyResponse {
+                accepted: false,
+                removed_running_stage: false,
+                status,
+                error: Some("stage stop requester is not the stage coordinator".to_string()),
+            });
+        }
         if stop.coordinator_term < existing.load.coordinator_term {
             let current_term = existing.load.coordinator_term;
             let status = status_from_running(&existing);
             self.stages.insert(key, existing);
             return Ok(StageReadyResponse {
                 accepted: false,
+                removed_running_stage: false,
                 status,
                 error: Some(format!(
                     "stale coordinator term {} < {}",
@@ -426,6 +519,7 @@ impl StageControlState {
             self.stages.insert(key, existing);
             return Ok(StageReadyResponse {
                 accepted: false,
+                removed_running_stage: false,
                 status,
                 error: Some("stale shutdown generation".to_string()),
             });
@@ -439,6 +533,7 @@ impl StageControlState {
         stage_op.stopped();
         Ok(StageReadyResponse {
             accepted: true,
+            removed_running_stage: true,
             status,
             error: None,
         })
@@ -670,6 +765,7 @@ pub(crate) fn admitted_resident_tensor_names(
 
 fn peer_config(peer: &StagePeerDescriptor) -> PeerConfig {
     PeerConfig {
+        persistent_lane_marker: peer.persistent_lane_marker,
         stage_id: peer.stage_id.clone(),
         stage_index: peer.stage_index,
         endpoint: peer.endpoint.clone(),

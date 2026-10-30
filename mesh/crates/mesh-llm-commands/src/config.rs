@@ -68,6 +68,15 @@ fn validate_config_file(override_path: Option<&Path>) -> Result<ConfigFileValida
         validate_config_diagnostics_with_plugin_schemas(&config, Some(&raw), plugin_schema);
     // `serve` reads these paths on this host before it starts; check them here too.
     diagnostics.extend(local_model_path_diagnostics(&config));
+    diagnostics.extend(mesh_llm_config::managed_models::provider_diagnostics(
+        &config,
+        |name| {
+            default_store_root()
+                .ok()
+                .and_then(|root| PluginStore::new(root).load_optional(name).ok().flatten())
+                .is_some_and(|metadata| metadata.enabled && metadata.executable_path().exists())
+        },
+    ));
     Ok(ConfigFileValidation { path, diagnostics })
 }
 
@@ -670,6 +679,36 @@ mod tests {
 
         assert!(validation.diagnostics.is_empty());
         assert_eq!(validation.path, path);
+    }
+
+    #[test]
+    fn config_validate_checks_provider_availability_without_starting_plugins() {
+        for (plugin, provider, valid) in [
+            ("", "blobstore", false),
+            ("", "payments", false),
+            ("", "not-installed-provider-2710", false),
+            (
+                "[[plugin]]\nname='onnx'\ncommand='/opt/onnx'\n",
+                "onnx",
+                true,
+            ),
+            (
+                "[[plugin]]\nname='onnx'\ncommand='/opt/onnx'\nenabled=false\n",
+                "onnx",
+                false,
+            ),
+        ] {
+            let raw = format!("{plugin}[[models]]\nmodel='owner/model@pin'\nprovider='{provider}'");
+            let (_dir, path) = write_fixture_file(&raw);
+            let result = validate_config_file(Some(&path)).unwrap();
+            assert_eq!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains("unavailable provider")),
+                !valid
+            );
+        }
     }
 
     #[test]

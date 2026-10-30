@@ -1,8 +1,6 @@
 //! Actual frontend/reader process contract, selected after automation bootstrap.
 mod parquet_fixture;
-#[path = "../../xtask/src/process/mod.rs"]
-#[allow(dead_code)]
-pub mod process;
+pub use process_supervision as process;
 
 use process::{Cancellation, Completion, Limits, OutputFiles, ProcessSpec, Readiness, Value};
 use std::{
@@ -30,7 +28,9 @@ fn generate(directory: &Path, families: usize) -> process::ProcessReport {
     )]
     .into_iter()
     .collect();
-    for name in ["SYSTEMROOT", "WINDIR"] {
+    // Without TEMP and TMP, Windows resolves the frontend's temporary
+    // directory to the Windows directory, which a user cannot write.
+    for name in ["SYSTEMROOT", "WINDIR", "TEMP", "TMP"] {
         if let Some(value) = std::env::var_os(name) {
             environment.insert(name.into(), Value::Public(value));
         }
@@ -139,9 +139,10 @@ fn native_prompt_command_preserves_trajectory_data_larger_than_log_capture_limit
     let result = generate(&directory, 1);
     assert!(result.success(), "{result:?}");
     assert!(result.cleanup.complete, "{result:?}");
-    let manifest: serde_json::Value =
-        serde_json::from_reader(std::fs::File::open(directory.join("manifest.json")).unwrap())
-            .unwrap();
+    let manifest: serde_json::Value = serde_json::from_reader(std::io::BufReader::new(
+        std::fs::File::open(directory.join("manifest.json")).unwrap(),
+    ))
+    .unwrap();
     let prompt = manifest["prompts"][0]["prompt"].as_str().unwrap();
     assert!(prompt.contains(&content));
     assert!(

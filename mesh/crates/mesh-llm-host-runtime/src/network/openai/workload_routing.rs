@@ -20,6 +20,11 @@ pub(super) fn is_audio_upload_path(path: &str) -> bool {
     )
 }
 
+/// Recognize document OCR uploads independently of query parameters.
+pub(super) fn is_document_ocr_path(path: &str) -> bool {
+    path.split('?').next().unwrap_or(path) == "/mesh/v1/documents/ocr"
+}
+
 /// Recognize the typed System One endpoint independently of query parameters.
 pub(super) fn is_system_one_path(path: &str) -> bool {
     matches!(
@@ -34,12 +39,16 @@ pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
         "/v1/chat/completions"
         | "/v1/completions"
         | "/v1/responses"
+        | "/v1/messages"
         | "/v1/audio/transcriptions"
         | "/v1/audio/translations" => Some(ModelWorkloadClass::CausalGeneration),
         "/v1/embeddings" => Some(ModelWorkloadClass::Embedding),
         "/v1/rerank" => Some(ModelWorkloadClass::Rerank),
         "/v1/audio/speech" => Some(ModelWorkloadClass::SpeechSynthesis),
         "/v1/realtime" => Some(ModelWorkloadClass::SpeechRecognition),
+        "/mesh/v1/documents/ocr" => Some(ModelWorkloadClass::DocumentOcr),
+        "/mesh/v1/images/similarity" => Some(ModelWorkloadClass::ImageTextSimilarity),
+        "/mesh/v1/images/depth" => Some(ModelWorkloadClass::DepthEstimation),
         _ => None,
     }
 }
@@ -149,7 +158,7 @@ pub(super) fn model_satisfies_workload_class(
 /// Require verified audio and a known audio-to-text class on the same
 /// descriptor: a generation model with an audio encoder, or a dedicated
 /// speech-recognition model.
-fn descriptor_supports_audio_upload(descriptor: &ServedModelDescriptor) -> bool {
+pub(crate) fn descriptor_supports_audio_upload(descriptor: &ServedModelDescriptor) -> bool {
     descriptor.capabilities_known
         && descriptor.capabilities.supports_audio_runtime()
         && matches!(
@@ -167,7 +176,7 @@ fn descriptor_supports_audio_upload(descriptor: &ServedModelDescriptor) -> bool 
 
 /// System One is a runtime-verified endpoint capability, independent of the
 /// model's primary workload class.
-fn descriptor_supports_system_one(descriptor: &ServedModelDescriptor) -> bool {
+pub(crate) fn descriptor_supports_system_one(descriptor: &ServedModelDescriptor) -> bool {
     descriptor.capabilities_known && descriptor.capabilities.supports_system_one_runtime()
 }
 
@@ -226,6 +235,39 @@ pub(super) fn descriptor_for_request<'a>(
     })
 }
 
+/// The one descriptor that serves `model` for the endpoint at `path`, or
+/// `None` when none does or more than one could have: a node can advertise a
+/// native embedding model and a chat plugin under one name, and a fact read
+/// from the wrong one would be attributed to a model that never ran. Exact
+/// `model_name` matches win over public-ID aliases, as in routing.
+pub(super) fn unambiguous_descriptor_for_request<'a>(
+    model: &str,
+    path: &str,
+    descriptors: &'a [ServedModelDescriptor],
+) -> Option<&'a ServedModelDescriptor> {
+    let serves = |descriptor: &&ServedModelDescriptor| {
+        model_satisfies_request(model, path, std::slice::from_ref(*descriptor))
+    };
+    let exact = descriptors
+        .iter()
+        .filter(|descriptor| descriptor.identity.model_name == model)
+        .filter(serves)
+        .collect::<Vec<_>>();
+    let candidates = if exact.is_empty() {
+        descriptors
+            .iter()
+            .filter(|descriptor| descriptor_matches_routable_name(descriptor, model))
+            .filter(serves)
+            .collect()
+    } else {
+        exact
+    };
+    match candidates.as_slice() {
+        [only] => Some(*only),
+        _ => None,
+    }
+}
+
 /// Infer binary upload requirements without interpreting file bytes as JSON.
 pub(super) fn request_media(
     path: &str,
@@ -237,9 +279,23 @@ pub(super) fn request_media(
             needs_audio: true,
             needs_vision: false,
         }
+    } else if is_binary_task_path(path) {
+        crate::network::router::MediaRequirements {
+            has_media: true,
+            needs_audio: false,
+            needs_vision: false,
+        }
     } else {
         body.map_or_else(Default::default, crate::network::router::media_requirements)
     }
+}
+
+/// Multipart tasks can select an automatic model without a JSON request body.
+pub(super) fn is_binary_task_path(path: &str) -> bool {
+    matches!(
+        path.split('?').next(),
+        Some("/mesh/v1/documents/ocr" | "/mesh/v1/images/similarity" | "/mesh/v1/images/depth")
+    )
 }
 
 /// Pick metadata from a descriptor that supports this request, not whichever
@@ -287,6 +343,8 @@ pub(super) async fn eligible_targets(
     if request_workload_class(path).is_none() && !is_system_one_path(path) {
         return candidates.to_vec();
     }
+    // Local inference targets are native serving ports. Plugin descriptors are
+    // advertised separately for peer discovery and dispatched by the plugin path.
     let local = node.served_model_descriptors().await;
     let state = node.state.lock().await;
     candidates

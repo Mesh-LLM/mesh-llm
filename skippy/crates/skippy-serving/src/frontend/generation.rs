@@ -3,6 +3,7 @@ mod concurrency;
 mod draft_runner;
 mod execution;
 mod incremental_text;
+mod live_request_defaults;
 mod parsing;
 mod persistent_lanes;
 mod queue;
@@ -16,6 +17,13 @@ mod types;
 mod workload;
 
 pub use cache_hints::{CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS};
+pub(in crate::frontend) use live_request_defaults::LiveRequestDefaults;
+pub use live_request_defaults::{
+    PreviousRequestDefaults, capture_live_request_defaults, replace_live_request_defaults,
+    restore_live_request_defaults,
+};
+#[cfg(feature = "test-support")]
+pub use live_request_defaults::{RegisteredRequestDefaultsProbe, register_request_defaults_probe};
 pub use request_defaults::{
     EmbeddedOpenAiRequestDefaults, EmbeddedReasoningBudget, EmbeddedReasoningEnabled,
     EmbeddedReasoningFormat,

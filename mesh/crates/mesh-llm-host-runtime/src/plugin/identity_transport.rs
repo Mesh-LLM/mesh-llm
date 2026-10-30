@@ -73,6 +73,7 @@ mod identity_transport_tests {
         let payload = forward_identity_service(
             "authenticated-observer",
             super::super::proto::RpcRequest {
+                invocation_id: None,
                 method: "ReadIdentityBundle".into(),
                 params_json: "{}".into(),
             },

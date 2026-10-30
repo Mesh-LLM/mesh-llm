@@ -57,9 +57,9 @@ Use `mesh-llm client --auto` for an API-only node.
 
 Mesh requirements are fixed when the mesh is created. For requirement-aware
 meshes, changing mesh requirements creates a new mesh: changing the required
-node version, protocol generation, or release-attestation policy derives a new
-mesh id from the new policy hash. Trust policy is a local owner-trust setting,
-not part of the immutable mesh requirements hash.
+node version, protocol generation, release-attestation policy, or signed-gossip
+requirement derives a new mesh id from the new policy hash. Trust policy is a
+local owner-trust setting, not part of the immutable mesh requirements hash.
 
 The release-attestation side of mesh requirements is build provenance only:
 certified-build admission is not remote runtime attestation. A signed release
@@ -122,10 +122,46 @@ and evidence are underscored: `certified_binary_required`,
 When migrating from an unrestricted mesh to a requirement-aware mesh,
 recreate the mesh, republish it, and issue new signed bootstrap tokens.
 
-For an API-only node that does not serve models:
+### Require origin-signed relayed gossip
+
+To prevent a relay from replacing another node's advertised models, payment
+offers, or cache-affinity evidence with unsigned claims, create a mesh with:
+
+```toml
+[mesh_requirements]
+require_signed_gossip = true
+```
+
+Put this in the creation node's config, or use `--require-signed-gossip`, and
+start it with your owner key:
 
 ```bash
-mesh-llm client --auto
+mesh-llm serve --model Qwen3-8B-Q4_K_M --require-signed-gossip \
+  --owner-key ~/.mesh-llm/owner-keystore.json
+```
+
+Share the new signed bootstrap token with upgraded participants. Joiners inherit
+the policy; they do not need to repeat the creation setting. The default remains
+`false` for existing meshes and rolling upgrades. Old binaries that do not know
+this requirement cannot validate a strict mesh's policy and must be upgraded
+before joining. Switching either way requires a new mesh and invitations.
+
+If the node already has a saved genesis policy, use a fresh node identity
+namespace for the new mesh, for example a new `MESH_LLM_NODE_KEY_PATH`. Keep
+the original identity and policy intact. Restarting a strict identity with
+signed gossip disabled is rejected; it does not rewrite that mesh's policy or
+migrate its peers.
+
+Strict gossip authenticates who published a record. It does not prove that a
+node is honest, certify its binary, or sign relay-measured latency and merged
+model demand. Release certification remains a separate requirement. In paid
+meshes this prevents unsigned offer substitution in routing; payment terms are
+still independently checked by the payer before payment.
+
+For an API-only participant in this strict mesh, use the same signed token:
+
+```bash
+mesh-llm client --join <signed-bootstrap-token>
 ```
 
 <a id="start-a-private-mesh"></a>
@@ -384,6 +420,11 @@ memberships, and refuses peers that announce a different mesh, so its peers do
 not see the serving node's own mesh or its other memberships. Requests from them
 run on the local model only. Memberships do not carry split-stage transport,
 plugins or owner control.
+
+SDK memberships currently use unsigned invitations and do not support mesh
+requirements. Enabling `require_signed_gossip` for the primary node protects
+that node's mesh; it does not enable the policy for its additional memberships.
+Their verification work budgets and peer records remain independent.
 
 ## Networking notes
 

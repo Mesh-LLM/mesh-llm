@@ -15,7 +15,8 @@ impl From<crate::runtime::IntentSource> for IntentSourceLabel {
             | crate::runtime::IntentSource::OwnerUnload
             | crate::runtime::IntentSource::OwnerEnsure
             | crate::runtime::IntentSource::OwnerDrain => IntentSourceLabel::OwnerLifecycle,
-            crate::runtime::IntentSource::MeshDemand => IntentSourceLabel::MeshDemand,
+            crate::runtime::IntentSource::NativeLifecycle
+            | crate::runtime::IntentSource::MeshDemand => IntentSourceLabel::MeshDemand,
         }
     }
 }

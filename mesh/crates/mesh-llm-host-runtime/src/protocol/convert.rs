@@ -17,6 +17,7 @@ fn skippy_stage_subprotocols(
     stage_protocol_generation_supported: bool,
     status_list_supported: bool,
     local_gguf_content_id_supported: bool,
+    persistent_lane_marker_supported: bool,
 ) -> Vec<crate::proto::node::MeshSubprotocol> {
     let mut features = vec![
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string(),
@@ -27,6 +28,10 @@ fn skippy_stage_subprotocols(
     if local_gguf_content_id_supported {
         features
             .push(skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1.to_string());
+    }
+    if persistent_lane_marker_supported {
+        features
+            .push(skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_PERSISTENT_LANE_MARKER.to_string());
     }
     if stage_protocol_generation_supported {
         features.push(
@@ -302,10 +307,10 @@ fn descriptor_identity_to_proto(
         // `weights_digest` deliberately does NOT cross the gossip wire: it is
         // a hash of file bytes only THIS node can read, so a peer receiving
         // it over gossip could never verify it against anything -- it would
-        // be a claim, not a locally-checkable fact. A future exchange-event
-        // consumer could carry it to whoever actually served the exchange
-        // instead, but no such consumer exists in this crate today -- see
-        // `runtime/local.rs::set_local_model_weights_digest`'s doc comment.
+        // be a claim, not a locally-checkable fact. The serving node instead
+        // returns it per response to the peer that asked it to serve
+        // (`x-mesh-weights-digest`), which records it as that node's
+        // statement -- see `runtime/local.rs::set_local_model_weights_digest`.
     }
 }
 
@@ -388,6 +393,9 @@ fn local_workload_class_to_proto(workload: crate::mesh::ModelWorkloadClass) -> i
         Local::SpeechSynthesis => Proto::SpeechSynthesis as i32,
         Local::Decision => Proto::Decision as i32,
         Local::SpeechRecognition => Proto::SpeechRecognition as i32,
+        Local::DocumentOcr => Proto::DocumentOcr as i32,
+        Local::ImageTextSimilarity => Proto::ImageTextSimilarity as i32,
+        Local::DepthEstimation => Proto::DepthEstimation as i32,
         // Preserve explicit denial when relaying metadata. Zero is the legacy
         // unspecified value and must not erase an unknown workload.
         Local::Unknown => -1,
@@ -407,6 +415,9 @@ fn proto_workload_class_to_local(value: i32) -> Option<crate::mesh::ModelWorkloa
         Ok(Proto::SpeechSynthesis) => Some(Local::SpeechSynthesis),
         Ok(Proto::Decision) => Some(Local::Decision),
         Ok(Proto::SpeechRecognition) => Some(Local::SpeechRecognition),
+        Ok(Proto::DocumentOcr) => Some(Local::DocumentOcr),
+        Ok(Proto::ImageTextSimilarity) => Some(Local::ImageTextSimilarity),
+        Ok(Proto::DepthEstimation) => Some(Local::DepthEstimation),
         Ok(Proto::Unspecified) => None,
         Err(_) => Some(Local::Unknown),
     }
@@ -922,12 +933,23 @@ pub(crate) fn local_ann_to_proto_ann(
             .iter()
             .map(local_throughput_hint_to_proto)
             .collect(),
-        subprotocols: skippy_stage_subprotocols(
-            ann.artifact_transfer_supported,
-            ann.stage_protocol_generation_supported,
-            ann.stage_status_list_supported,
-            ann.local_gguf_content_id_supported,
-        ),
+        subprotocols: {
+            let mut subprotocols = skippy_stage_subprotocols(
+                ann.artifact_transfer_supported,
+                ann.stage_protocol_generation_supported,
+                ann.stage_status_list_supported,
+                ann.local_gguf_content_id_supported,
+                ann.persistent_lane_marker_supported,
+            );
+            if ann.plugin_origin_signature_supported {
+                subprotocols.push(crate::proto::node::MeshSubprotocol {
+                    name: mesh_llm_protocol::PLUGIN_MESH_SUBPROTOCOL.into(),
+                    major: 1,
+                    features: vec![mesh_llm_protocol::PLUGIN_ORIGIN_SIGNATURE_FEATURE.into()],
+                });
+            }
+            subprotocols
+        },
         inference_admission_state: ann.inference_admission_state.map(|state| state as i32),
         lightning_offers: {
             #[cfg(feature = "payments")]
@@ -1195,6 +1217,18 @@ pub(crate) fn proto_ann_to_local(
         stage_status_list_supported: supports_skippy_status_list(&pa.subprotocols),
         local_gguf_content_id_supported: supports_local_gguf_content_id(&pa.subprotocols),
         decode_batch_policy_supported: supports_decode_batch_policy(&pa.subprotocols),
+        plugin_origin_signature_supported: pa.subprotocols.iter().any(|subprotocol| {
+            subprotocol.name == mesh_llm_protocol::PLUGIN_MESH_SUBPROTOCOL
+                && subprotocol.major == 1
+                && subprotocol
+                    .features
+                    .iter()
+                    .any(|feature| feature == mesh_llm_protocol::PLUGIN_ORIGIN_SIGNATURE_FEATURE)
+        }),
+        persistent_lane_marker_supported: supports_skippy_stage_feature(
+            &pa.subprotocols,
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_PERSISTENT_LANE_MARKER,
+        ),
         advertised_model_throughput: pa
             .advertised_model_throughput
             .iter()
@@ -1404,6 +1438,7 @@ fn legacy_proto_config_to_mesh(
         .map(|requirements| crate::plugin::mesh_requirements_config_from_runtime(&requirements))
         .unwrap_or_default();
     let mut config = MeshConfig {
+        source_directory: None,
         version: Some(snapshot.version),
         gpu: GpuConfig {
             host_ram_offload: None,
@@ -1481,6 +1516,7 @@ mod tests {
             crate::mesh::ModelWorkloadClass::SpeechSynthesis,
             crate::mesh::ModelWorkloadClass::Decision,
             crate::mesh::ModelWorkloadClass::SpeechRecognition,
+            crate::mesh::ModelWorkloadClass::DocumentOcr,
             crate::mesh::ModelWorkloadClass::Unknown,
         ] {
             let local = crate::mesh::ServedModelMetadata {

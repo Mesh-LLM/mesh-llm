@@ -95,6 +95,8 @@
         "package-lock.json",
         "recipes/**",
         "schemas/**",
+        "skippy/skippy_api/**",
+        "skippy/skippy-api-rs/**",
         "scripts/**",
         "tools/**"
       ]

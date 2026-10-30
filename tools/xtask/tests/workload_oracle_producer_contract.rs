@@ -2,9 +2,8 @@
 #![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 
-#[allow(dead_code, unused_imports)]
-#[path = "../src/process/mod.rs"]
-mod process;
+#[allow(unused_imports)]
+use process_supervision as process;
 
 use serde_json::Value;
 use std::{

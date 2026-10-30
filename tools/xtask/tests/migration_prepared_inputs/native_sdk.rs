@@ -297,3 +297,44 @@ fn migration_prepared_inputs_sdk_library_dir_prefers_uniffi_library() -> TestRes
     }
     Ok(())
 }
+
+#[test]
+fn migration_prepared_inputs_sdk_uniffi_library_reports_the_artifact_relative_file() -> TestResult {
+    let scratch = Scratch::new("sdk-uniffi-library")?;
+    for (uniffi, library, expected) in [
+        (
+            json!("jna/libuniffi.so"),
+            "lib/libmesh.so",
+            "jna/libuniffi.so\n",
+        ),
+        (json!(""), "lib/deep/libmesh.so", "lib/deep/libmesh.so\n"),
+        (Value::Null, "libmesh.so", "libmesh.so\n"),
+    ] {
+        let path = scratch.write(
+            "manifest.json",
+            &serde_json::to_vec(&json!({"uniffi_library": uniffi, "library": library}))?,
+        )?;
+        let case = Case::same(
+            &["native-sdk-uniffi-library"],
+            &[path.to_str().ok_or("path")?],
+            KOTLIN,
+        );
+        assert_output(&case.run(scratch.path())?, 0, expected, "");
+    }
+    let missing = scratch.write(
+        "empty.json",
+        &serde_json::to_vec(&json!({"uniffi_library": null, "library": null}))?,
+    )?;
+    let case = Case::same(
+        &["native-sdk-uniffi-library"],
+        &[missing.to_str().ok_or("path")?],
+        KOTLIN,
+    );
+    assert_output(
+        &case.run(scratch.path())?,
+        1,
+        "",
+        "native SDK manifest is missing library\n",
+    );
+    Ok(())
+}

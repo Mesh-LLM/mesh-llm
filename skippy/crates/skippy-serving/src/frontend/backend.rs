@@ -934,7 +934,7 @@ impl InferenceBackend for StageOpenAiBackend {
             move |mut request, admission| async move {
                 self.ensure_model(&request.model)?;
                 let (request_defaults, defaults_diagnostics) =
-                    resolve_chat_request_defaults(&request, &self.request_defaults)?;
+                    resolve_chat_request_defaults(&request, &self.request_defaults.snapshot())?;
                 apply_chat_request_defaults(&mut request, &request_defaults)?;
                 ensure_chat_runtime_features_supported(&request)?;
                 let sampling = chat_sampling_config(&request, &request_defaults)?
@@ -1088,7 +1088,7 @@ impl InferenceBackend for StageOpenAiBackend {
             move |mut request, admission| async move {
                 self.ensure_model(&request.model)?;
                 let (request_defaults, defaults_diagnostics) =
-                    resolve_chat_request_defaults(&request, &self.request_defaults)?;
+                    resolve_chat_request_defaults(&request, &self.request_defaults.snapshot())?;
                 apply_chat_request_defaults(&mut request, &request_defaults)?;
                 ensure_chat_runtime_features_supported(&request)?;
                 let sampling = chat_sampling_config(&request, &request_defaults)?
@@ -1186,7 +1186,7 @@ impl InferenceBackend for StageOpenAiBackend {
         let request_timer = PhaseTimer::start();
         self.ensure_model(&request.model)?;
         let (request_defaults, defaults_diagnostics) =
-            resolve_completion_request_defaults(&request, &self.request_defaults);
+            resolve_completion_request_defaults(&request, &self.request_defaults.snapshot());
         apply_completion_request_defaults(&mut request, &request_defaults);
         ensure_completion_runtime_features_supported(&request)?;
         let sampling =
@@ -1287,7 +1287,7 @@ impl InferenceBackend for StageOpenAiBackend {
         );
         self.ensure_model(&request.model)?;
         let (request_defaults, defaults_diagnostics) =
-            resolve_completion_request_defaults(&request, &self.request_defaults);
+            resolve_completion_request_defaults(&request, &self.request_defaults.snapshot());
         apply_completion_request_defaults(&mut request, &request_defaults);
         ensure_completion_runtime_features_supported(&request)?;
         let sampling =

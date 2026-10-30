@@ -11,7 +11,7 @@ fn hf_projector_actual_tls_pins_host_certificate_and_streams_valid_gguf_without_
         vec![Reply::bytes(200, b"GGUFownedfixture".to_vec())],
         "huggingface.co",
     );
-    let curl = process::curl_https::Curl::fixture(&server.ca);
+    let curl = crate::curl_https::Curl::fixture(&server.ca);
     let url = url::Url::parse(&format!("{}/mmproj?signature=fixture", server.base)).unwrap();
     let pin = format!("huggingface.co:{}:127.0.0.1", url.port().unwrap());
     let directory = tempfile::tempdir().unwrap();
@@ -50,7 +50,7 @@ fn hf_projector_actual_tls_unknown_length_body_limit_and_incomplete_eof_refuse()
         Reply::incomplete(),
     ] {
         let server = Server::with_host(vec![reply], "hf.co");
-        let curl = process::curl_https::Curl::fixture(&server.ca);
+        let curl = crate::curl_https::Curl::fixture(&server.ca);
         let url = url::Url::parse(&server.base).unwrap();
         let pin = format!("hf.co:{}:127.0.0.1", url.port().unwrap());
         let directory = tempfile::tempdir().unwrap();
@@ -99,7 +99,7 @@ fn hf_projector_actual_tls_redirect_requires_new_policy_admission_and_never_auto
         "https://example.com/secret",
     ] {
         let server = Server::with_host(vec![Reply::redirect(destination)], "hf.co");
-        let curl = process::curl_https::Curl::fixture(&server.ca);
+        let curl = crate::curl_https::Curl::fixture(&server.ca);
         let url = url::Url::parse(&server.base).unwrap();
         let pin = format!("hf.co:{}:127.0.0.1", url.port().unwrap());
         let directory = tempfile::tempdir().unwrap();

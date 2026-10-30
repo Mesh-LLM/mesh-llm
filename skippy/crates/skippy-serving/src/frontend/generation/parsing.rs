@@ -406,6 +406,43 @@ pub(in crate::frontend) fn tool_choice_function_name(value: &Value) -> Option<St
         .map(ToString::to_string)
 }
 
+/// The tool list to hand to the chat template and generation grammar. When
+/// `tool_choice` names one specific function, only that tool is passed so the
+/// constrained output can only be that call (a named choice is otherwise
+/// flattened to "required" over every offered tool, and the post-parse filter
+/// would drop a call to any other tool as an empty stop reply). Unnamed
+/// choices (`auto`/`required`/`none`/`any`) and a named tool that is not among
+/// the offered tools keep the original list.
+pub(in crate::frontend) fn effective_tools_for_choice(
+    tools: Option<&Value>,
+    tool_choice: Option<&Value>,
+) -> Option<Value> {
+    let tools = tools?;
+    let Some(choice) = tool_choice.and_then(tool_choice_function_name) else {
+        return Some(tools.clone());
+    };
+    let Some(entries) = tools.as_array() else {
+        return Some(tools.clone());
+    };
+    let filtered: Vec<Value> = entries
+        .iter()
+        .filter(|entry| {
+            entry
+                .get("function")
+                .and_then(|function| function.get("name"))
+                .or_else(|| entry.get("name"))
+                .and_then(Value::as_str)
+                .is_some_and(|name| name == choice)
+        })
+        .cloned()
+        .collect();
+    if filtered.is_empty() {
+        Some(tools.clone())
+    } else {
+        Some(Value::Array(filtered))
+    }
+}
+
 pub(in crate::frontend) fn request_tool_names(request: &ChatCompletionRequest) -> Vec<String> {
     request
         .tools

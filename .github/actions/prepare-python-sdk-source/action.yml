@@ -7,7 +7,7 @@ runs:
       uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       with:
         repository: Mesh-LLM/mesh-llm-python-sdk
-        ref: d2a881612186b0626a153ee237dfa3df00ab6087
+        ref: 85226c50a68a13b48f40fe25e70eb85814e67457
         path: .sdk-source/python
         persist-credentials: false
     - name: Admit external Python SDK source

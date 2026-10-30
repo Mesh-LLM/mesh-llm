@@ -17,6 +17,8 @@
 //! validate` agrees with real runtime support instead of drifting from it.
 
 mod checkpoint;
+mod lifecycle;
+mod managed_models;
 mod runtime;
 mod topology;
 
@@ -142,6 +144,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
     },
     WiringEntry {
         path: "mesh_requirements.require_release_attestation",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
+        path: "mesh_requirements.require_signed_gossip",
         status: WiringStatus::Wired,
         owner: "n/a",
         reason: "",
@@ -579,6 +588,11 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         reason: "",
         behavior: WiringBehavior::None,
     },
+    managed_models::PROVIDER,
+    managed_models::VARIANT,
+    managed_models::OPTIONS,
+    managed_models::REQUEST_DEFAULTS,
+    managed_models::SOURCE,
     WiringEntry {
         path: "hardware.model_path",
         status: WiringStatus::Wired,
@@ -833,17 +847,17 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
     },
     WiringEntry {
         path: "hardware.cpu_moe",
-        status: WiringStatus::Unwired,
-        owner: "PR3",
-        reason: "Passes static validation, then fails at model load",
-        behavior: WiringBehavior::BailsDownstream,
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
     },
     WiringEntry {
         path: "hardware.n_cpu_moe",
-        status: WiringStatus::Unwired,
-        owner: "PR3",
-        reason: "Passes static validation, then fails at model load",
-        behavior: WiringBehavior::BailsDownstream,
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
     },
     WiringEntry {
         path: "hardware.fit_target_mib",
@@ -1036,6 +1050,9 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         reason: "",
         behavior: WiringBehavior::None,
     },
+    lifecycle::LOAD,
+    lifecycle::IDLE,
+    lifecycle::PREFETCH,
     topology::MODE,
     topology::MANIFEST_SHA256,
     topology::STAGES,

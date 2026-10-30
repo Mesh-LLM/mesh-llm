@@ -53,6 +53,7 @@ mod cache_publication;
 mod causal_decisions;
 mod chat_stream_deltas;
 mod draft_runtime;
+pub(in crate::frontend) mod enc_dec_lane_admission;
 mod generation;
 mod guardrails;
 mod multimodal;

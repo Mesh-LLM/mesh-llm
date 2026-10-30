@@ -126,7 +126,7 @@ pub(in crate::binary_transport) fn take_ready_downstream(
                     last_error = Some(anyhow!("downstream ready deadline expired after connect"));
                     continue;
                 }
-                match complete_downstream_ready(&mut stream, deadline, shutdown) {
+                match complete_downstream_ready(&mut stream, deadline, shutdown, config) {
                     Ok(()) => return Ok(Some(stream)),
                     Err(error) => last_error = Some(error),
                 }
@@ -161,6 +161,7 @@ fn complete_downstream_ready(
     stream: &mut TcpStream,
     deadline: Instant,
     shutdown: &AtomicBool,
+    config: &StageConfig,
 ) -> Result<()> {
     ensure_downstream_acquisition_active(shutdown)?;
     let timeout = deadline
@@ -217,7 +218,16 @@ fn complete_downstream_ready(
     stream
         .set_read_timeout(None)
         .context("clear downstream ready timeout")?;
-    result
+    result?;
+    if config
+        .downstream
+        .as_ref()
+        .is_some_and(|peer| peer.persistent_lane_marker)
+    {
+        super::connection_mode::mark_persistent_lane(stream)
+            .context("mark preconnected downstream lane")?;
+    }
+    Ok(())
 }
 
 pub(in crate::binary_transport) fn warm_downstream_is_healthy(stream: &TcpStream) -> Result<bool> {
@@ -763,17 +773,48 @@ pub(in crate::binary_transport) fn input_activation_frame(
         .take_activation_frame()
         .context("decode wire activation frame")?
         .context("activation payload did not contain a frame")?;
-    let expected_range = upstream_layer_range(config, topology, message);
-    if (frame.desc.layer_start, frame.desc.layer_end) != expected_range {
+    check_upstream_layer_range(
+        config,
+        topology,
+        message,
+        (frame.desc.layer_start, frame.desc.layer_end),
+    )?;
+    runtime_activation_frame(frame).map(Some)
+}
+
+/// Checks that an activation frame covers the layers of the stage that sent
+/// it. A frame describes only its producer's layers, so with a topology the
+/// range must be exactly that stage's. Without one this stage knows only
+/// where its own layers start: the frame must end there. Assuming the
+/// producer started at layer 0 held only for the second stage of a split and
+/// rejected every frame reaching a third.
+fn check_upstream_layer_range(
+    config: &StageConfig,
+    topology: Option<&StageTopology>,
+    message: &StageWireMessage,
+    (layer_start, layer_end): (i32, i32),
+) -> Result<()> {
+    let expected = upstream_layer_range(topology, message);
+    if topology.is_some() && expected.is_none() {
         bail!(
-            "activation frame layer range {}..{} does not match upstream stage {}..{}",
-            frame.desc.layer_start,
-            frame.desc.layer_end,
-            expected_range.0,
-            expected_range.1,
+            "activation frame came from stage {}, which the stage topology does not list",
+            message.state.source_stage_index
         );
     }
-    runtime_activation_frame(frame).map(Some)
+    let matches = match expected {
+        Some(expected) => (layer_start, layer_end) == expected,
+        None => layer_end == config.layer_start as i32 && (0..layer_end).contains(&layer_start),
+    };
+    if !matches {
+        let expected = expected.map_or_else(
+            || format!("..{}", config.layer_start),
+            |(start, end)| format!("{start}..{end}"),
+        );
+        bail!(
+            "activation frame layer range {layer_start}..{layer_end} does not match upstream stage {expected}"
+        );
+    }
+    Ok(())
 }
 
 pub(in crate::binary_transport) fn empty_activation_frame(
@@ -797,20 +838,16 @@ pub(in crate::binary_transport) fn empty_activation_frame(
     }
 }
 
+/// The layers of the stage that sent `message`, when a topology names it.
 fn upstream_layer_range(
-    config: &StageConfig,
     topology: Option<&StageTopology>,
     message: &StageWireMessage,
-) -> (i32, i32) {
-    if let Some(topology) = topology
-        && let Some(stage) = topology
-            .stages
-            .iter()
-            .find(|stage| stage.stage_index as i32 == message.state.source_stage_index)
-    {
-        return (stage.layer_start as i32, stage.layer_end as i32);
-    }
-    (0, config.layer_start as i32)
+) -> Option<(i32, i32)> {
+    topology?
+        .stages
+        .iter()
+        .find(|stage| stage.stage_index as i32 == message.state.source_stage_index)
+        .map(|stage| (stage.layer_start as i32, stage.layer_end as i32))
 }
 
 pub(in crate::binary_transport) fn token_sideband_or_fill(
@@ -911,6 +948,7 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
         direct_io: false,
         main_gpu: None,
         split_mode: skippy_protocol::SplitMode::Auto,
+        host_expert_layers: None,
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: Default::default(),
@@ -936,6 +974,7 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
         downstream: Some(PeerConfig {
+            persistent_lane_marker: false,
             stage_id: "stage-1".to_string(),
             stage_index: 1,
             endpoint: "127.0.0.1:0".to_string(),
@@ -1159,6 +1198,48 @@ mod tests {
 
         assert!(error.to_string().contains("cancelled during shutdown"));
         task.join().unwrap();
+    }
+
+    /// A frame carries only its producer's layers. On the third stage of a
+    /// split without a topology, as mesh loads stages, the frame from the
+    /// second stage starts after layer 0 and must still be accepted.
+    #[test]
+    fn a_third_stage_accepts_the_frame_of_the_stage_before_it() {
+        use super::check_upstream_layer_range;
+        use skippy_protocol::{LoadMode, StageTopology, StageTopologyEntry};
+
+        let mut config = prefix_cache_test_config();
+        config.stage_index = 2;
+        config.layer_start = 23;
+        config.layer_end = 35;
+        let mut message = first_decode_message_with_full_prompt_sideband();
+        message.state.source_stage_index = 1;
+
+        check_upstream_layer_range(&config, None, &message, (11, 23)).unwrap();
+        check_upstream_layer_range(&config, None, &message, (0, 23)).unwrap();
+        for wrong in [(11, 22), (23, 35), (-1, 23), (23, 23)] {
+            assert!(check_upstream_layer_range(&config, None, &message, wrong).is_err());
+        }
+
+        let entry = |stage_index, layer_start, layer_end| StageTopologyEntry {
+            stage_id: format!("stage-{stage_index}"),
+            stage_index,
+            host: None,
+            endpoint: String::new(),
+            layer_start,
+            layer_end,
+            load_mode: LoadMode::RuntimeSlice,
+        };
+        let topology = StageTopology {
+            topology_id: "topology".to_string(),
+            model_id: "model".to_string(),
+            stages: vec![entry(0, 0, 11), entry(1, 11, 23), entry(2, 23, 35)],
+        };
+        check_upstream_layer_range(&config, Some(&topology), &message, (11, 23)).unwrap();
+        assert!(check_upstream_layer_range(&config, Some(&topology), &message, (0, 23)).is_err());
+        // A topology that does not list the sender rejects the frame.
+        message.state.source_stage_index = 99;
+        assert!(check_upstream_layer_range(&config, Some(&topology), &message, (11, 23)).is_err());
     }
 
     #[test]

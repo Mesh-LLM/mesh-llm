@@ -22,6 +22,23 @@ const PORT_BIND_ERROR_HINTS: [&str; 6] = [
     "could not bind",
 ];
 
+/// Model ref the benchmark tune trial request sends to the trial child.
+///
+/// The trial child serves exactly one model, registered under
+/// [`crate::gpus::tune_apply::appended_model_ref`]. The request must name that
+/// concrete model rather than the `model:auto` directive: the mesh host's
+/// auto-routing path force-injects `mesh_hooks: true` for auto-routed chat
+/// requests (`build_mesh_request_plan`: `if is_auto_request {
+/// inject_skippy_hooks_flag(raw, true) }`), and that hook injection enables
+/// generation hooks, which stand down the batched native-MTP verify path
+/// (skippy-serving admits the batched MTP span only while
+/// `!generation_hooks_active`). Naming the concrete model keeps the request
+/// off that path so an MTP sweep measures the intended MTP implementation
+/// instead of the serial fallback (issue #2192).
+pub(crate) fn trial_chat_request_model(prepared: &PreparedTunePlan) -> String {
+    crate::gpus::tune_apply::appended_model_ref(&prepared.target)
+}
+
 pub(crate) fn run_trial(
     request: &TuneBenchmarkRunRequest<'_>,
     prepared: &PreparedTunePlan,
@@ -112,11 +129,13 @@ pub(crate) fn run_trial_inner(
             ));
         }
 
+        let request_model = trial_chat_request_model(prepared);
         let started = std::time::Instant::now();
         let response_result = send_chat_request_with_watchdog(
             &client,
             &mut child,
             port,
+            &request_model,
             request.prompt,
             request.max_tokens,
             request_timeout,
@@ -366,6 +385,7 @@ pub(crate) fn wait_for_trial_ready(wait: TrialReadinessWait<'_>) -> anyhow::Resu
             wait.client,
             wait.child,
             wait.port,
+            "auto",
             wait.prompt,
             1,
             attempt_timeout,
@@ -405,16 +425,18 @@ pub(crate) fn send_chat_request_with_watchdog(
     client: &reqwest::blocking::Client,
     child: &mut TrialChild,
     port: u16,
+    model: &str,
     prompt: &str,
     max_tokens: u32,
     timeout: std::time::Duration,
 ) -> anyhow::Result<streaming::TrialChatOutcome> {
     let client = client.clone();
     let prompt = prompt.to_string();
+    let model = model.to_string();
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let _ = sender.send(streaming::send_chat_request(
-            &client, port, &prompt, max_tokens,
+            &client, port, &model, &prompt, max_tokens,
         ));
     });
 

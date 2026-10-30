@@ -42,7 +42,19 @@ impl Serialize for PublicationState {
     }
 }
 
+/// Per-load sizing requested by the caller; `None` keeps the configured or
+/// planned value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RuntimeLoadSizing {
+    pub ctx_size: Option<u32>,
+    pub parallel: Option<usize>,
+}
+
 pub enum RuntimeControlRequest {
+    DiscoverModels {
+        resp:
+            tokio::sync::oneshot::Sender<anyhow::Result<Vec<crate::models::discovery::MeshModel>>>,
+    },
     Join {
         invite_token: String,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
@@ -51,6 +63,7 @@ pub enum RuntimeControlRequest {
         spec: String,
         config_model_id: Option<String>,
         profile: String,
+        sizing: RuntimeLoadSizing,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<RuntimeLoadResponse>>,
     },
     Unload {
@@ -210,6 +223,7 @@ pub(super) struct ApiInner {
     pub(super) runtime_control: Option<tokio::sync::mpsc::UnboundedSender<RuntimeControlRequest>>,
     pub(super) control_bootstrap: ControlBootstrapPayload,
     pub(super) owner_key_path: Option<PathBuf>,
+    pub(super) owner_control_token: Option<zeroize::Zeroizing<String>>,
     pub(super) local_processes: Vec<RuntimeProcessPayload>,
     pub(super) sse_clients: Vec<tokio::sync::mpsc::UnboundedSender<String>>,
     pub(super) model_interests: HashMap<String, LocalModelInterest>,

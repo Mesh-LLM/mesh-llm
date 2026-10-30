@@ -9,6 +9,7 @@ pub const KV_ALPN_V1: &[u8] = b"skippy-kv/1";
 pub const STAGE_SUBPROTOCOL_NAME: &str = "skippy-stage";
 pub const STAGE_SUBPROTOCOL_MAJOR: u32 = 2;
 pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL: &str = "stage-control";
+pub const STAGE_SUBPROTOCOL_FEATURE_PERSISTENT_LANE_MARKER: &str = "persistent-lane-marker";
 pub const STAGE_PROTOCOL_GENERATION: u32 = 12;
 /// Generation-scoped stage capability. A peer can advertise `stage-control`
 /// while still rejecting current-generation frames, so split planning gates on

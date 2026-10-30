@@ -170,6 +170,7 @@ fn resolve_installed_cli_plugin(command: &str) -> Result<Option<plugin::External
         args: Vec::new(),
         url: None,
         env: Default::default(),
+        settings: Default::default(),
         startup: Default::default(),
         web_ui_enabled: None,
         web_ui_primary_tab: None,
@@ -179,7 +180,7 @@ fn resolve_installed_cli_plugin(command: &str) -> Result<Option<plugin::External
 
 fn plugin_host_mode(cli: &Cli) -> plugin::PluginHostMode {
     plugin::PluginHostMode {
-        mesh_visibility: if cli.publish || cli.nostr_discovery {
+        mesh_visibility: if cli.mesh_policy.publish || cli.nostr_discovery {
             mesh_llm_plugin::MeshVisibility::Public
         } else {
             mesh_llm_plugin::MeshVisibility::Private
@@ -190,7 +191,7 @@ fn plugin_host_mode(cli: &Cli) -> plugin::PluginHostMode {
 fn plugin_runtime_options_from_cli(cli: &Cli) -> mesh_llm_host_runtime::RuntimeOptions {
     mesh_llm_host_runtime::RuntimeOptions {
         config: cli.config.clone(),
-        publish: cli.publish,
+        publish: cli.mesh_policy.publish,
         nostr_discovery: cli.nostr_discovery,
         ..mesh_llm_host_runtime::RuntimeOptions::default()
     }
@@ -261,16 +262,27 @@ mod tests {
 
     use super::*;
 
+    fn run_on_application_stack(test: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(crate::DEFAULT_THREAD_STACK_SIZE)
+            .spawn(test)
+            .expect("spawn application-stack test thread")
+            .join()
+            .expect("application-stack test should not panic");
+    }
+
     #[test]
     fn missing_external_command_is_classified_as_unknown() {
-        let cli = Cli::parse_from(["mesh-llm", "gpus"]);
-        let family = external_cli_command_family(
-            &cli,
-            &[OsString::from(
-                "definitely-not-an-installed-mesh-plugin-9f4a",
-            )],
-        );
-        assert_eq!(family, CliCommandFamily::Unknown);
+        run_on_application_stack(|| {
+            let cli = Cli::parse_from(["mesh-llm", "gpus"]);
+            let family = external_cli_command_family(
+                &cli,
+                &[OsString::from(
+                    "definitely-not-an-installed-mesh-plugin-9f4a",
+                )],
+            );
+            assert_eq!(family, CliCommandFamily::Unknown);
+        });
     }
 
     struct EnvGuard {
@@ -317,44 +329,49 @@ mod tests {
             last_protocol_version: None,
             last_status: None,
             last_error: None,
+            verified_sha256: None,
         }
     }
 
     #[test]
     #[serial]
     fn resolves_installed_cli_plugin_when_not_configured() {
-        let temp = TempDir::new().unwrap();
-        let _plugin_dir = EnvGuard::set("MESH_LLM_PLUGIN_DIR", temp.path());
-        let install_path = temp.path().join("installed").join("demo");
-        std::fs::create_dir_all(&install_path).unwrap();
-        let executable = install_path.join(format!("demo{}", std::env::consts::EXE_SUFFIX));
-        std::fs::write(&executable, "").unwrap();
-        PluginStore::new(temp.path())
-            .save(&installed_metadata("demo", install_path))
-            .unwrap();
+        run_on_application_stack(|| {
+            let temp = TempDir::new().unwrap();
+            let _plugin_dir = EnvGuard::set("MESH_LLM_PLUGIN_DIR", temp.path());
+            let install_path = temp.path().join("installed").join("demo");
+            std::fs::create_dir_all(&install_path).unwrap();
+            let executable = install_path.join(format!("demo{}", std::env::consts::EXE_SUFFIX));
+            std::fs::write(&executable, "").unwrap();
+            PluginStore::new(temp.path())
+                .save(&installed_metadata("demo", install_path))
+                .unwrap();
 
-        let spec = resolve_required_cli_plugin(&cli_with_missing_config(&temp), "demo")
-            .expect("installed plugin should resolve");
+            let spec = resolve_required_cli_plugin(&cli_with_missing_config(&temp), "demo")
+                .expect("installed plugin should resolve");
 
-        assert_eq!(spec.name, "demo");
-        assert_eq!(spec.command, executable.display().to_string());
-        assert!(spec.args.is_empty());
+            assert_eq!(spec.name, "demo");
+            assert_eq!(spec.command, executable.display().to_string());
+            assert!(spec.args.is_empty());
+        });
     }
 
     #[test]
     #[serial]
     fn installed_cli_plugin_missing_executable_is_reported() {
-        let temp = TempDir::new().unwrap();
-        let _plugin_dir = EnvGuard::set("MESH_LLM_PLUGIN_DIR", temp.path());
-        let install_path = temp.path().join("installed").join("demo");
-        std::fs::create_dir_all(&install_path).unwrap();
-        PluginStore::new(temp.path())
-            .save(&installed_metadata("demo", install_path))
-            .unwrap();
+        run_on_application_stack(|| {
+            let temp = TempDir::new().unwrap();
+            let _plugin_dir = EnvGuard::set("MESH_LLM_PLUGIN_DIR", temp.path());
+            let install_path = temp.path().join("installed").join("demo");
+            std::fs::create_dir_all(&install_path).unwrap();
+            PluginStore::new(temp.path())
+                .save(&installed_metadata("demo", install_path))
+                .unwrap();
 
-        let err = resolve_required_cli_plugin(&cli_with_missing_config(&temp), "demo")
-            .expect_err("missing executable should be reported");
+            let err = resolve_required_cli_plugin(&cli_with_missing_config(&temp), "demo")
+                .expect_err("missing executable should be reported");
 
-        assert!(err.to_string().contains("installed but not runnable"));
+            assert!(err.to_string().contains("installed but not runnable"));
+        });
     }
 }

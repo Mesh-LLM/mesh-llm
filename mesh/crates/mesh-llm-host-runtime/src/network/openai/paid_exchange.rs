@@ -9,7 +9,7 @@ use crate::mesh;
 use crate::network::openai::ingress::{RawProxyTerminalFacts, publish_raw_proxy_terminal};
 use crate::network::openai::transport as proxy;
 use crate::plugin::openai_exchange::{
-    OpenAiExchangeChannel, OpenAiExchangeDispatchPath, OpenAiExchangeEnvelope,
+    ClientNonceSource, OpenAiExchangeChannel, OpenAiExchangeDispatchPath, OpenAiExchangeEnvelope,
 };
 
 /// The paid serving path's exchange events, the same ones the free
@@ -68,6 +68,7 @@ impl PaidServedExchange {
         outcome: &proxy::RouteDispatchOutcome,
         request_digest: Option<&str>,
         payer: iroh::EndpointId,
+        client_nonce: Option<&str>,
     ) {
         let requested_by_node_id = hex::encode(payer.as_bytes());
         // Served here, on this node's own weights.
@@ -81,9 +82,9 @@ impl PaidServedExchange {
                 served_locally: true,
                 request_digest,
                 requested_by_node_id: Some(&requested_by_node_id),
-                // `PaidRequest` keeps no request headers, so there is no
-                // client nonce to report.
-                client_nonce: None,
+                // The payer forwards its nonce; as on the free path's
+                // tunnelled hop, the serving side reports it `ClientSupplied`.
+                client_nonce: client_nonce.map(|nonce| (nonce, ClientNonceSource::ClientSupplied)),
             },
         )
         .await;

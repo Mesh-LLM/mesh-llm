@@ -37,11 +37,13 @@ pub(super) fn partition(config: &StageConfig) -> Result<[StageConfig; 2]> {
         // Preserve the caller's chunk shape across both stage partitions.
     }
     stages[0].downstream = Some(PeerConfig {
+        persistent_lane_marker: false,
         stage_id: stages[1].stage_id.clone(),
         stage_index: 1,
         endpoint: stages[1].bind_addr.clone(),
     });
     stages[1].upstream = Some(PeerConfig {
+        persistent_lane_marker: false,
         stage_id: stages[0].stage_id.clone(),
         stage_index: 0,
         endpoint: stages[0].bind_addr.clone(),

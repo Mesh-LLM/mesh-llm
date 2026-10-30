@@ -4,8 +4,10 @@ use super::common::{
 };
 use super::dispatch::{RelayAttemptContext, relay_attempted_response};
 use super::probe::probe_http_response;
+use super::served_model_headers::set_served_model_headers;
 use crate::logging::OpenAiRouteObserver;
 use crate::network::openai::client_stream::ClientStream;
+use crate::network::openai::forwarded_request::is_ingress_credential_header;
 use crate::network::openai::request_normalize::ResponseAdapter;
 use anyhow::{Context, Result};
 use mesh_llm_events::logging::identifiers::RequestId;
@@ -113,7 +115,11 @@ async fn route_http_endpoint_attempt_after_forward(
     route_observer: OpenAiRouteObserver<'_>,
 ) -> RouteAttemptResult {
     match probe_http_response(upstream).await {
-        Ok(probe) => {
+        Ok(mut probe) => {
+            // A plugin backend is not this node's native runtime, so any
+            // served-model headers it sent are its own claims: strip them
+            // before a mesh peer reads this response as the node's.
+            set_served_model_headers(&mut probe, None);
             let result = relay_attempted_response(
                 tcp_stream,
                 upstream,
@@ -283,12 +289,19 @@ fn rewrite_http_request_target(
     let mut rebuilt = format!("{method} {new_path} {version}\r\n");
     let mut saw_host = false;
     for line in lines {
-        if let Some((name, _value)) = line.split_once(':')
-            && name.eq_ignore_ascii_case("host")
-        {
-            rebuilt.push_str(&format!("Host: {host}:{port}\r\n"));
-            saw_host = true;
-            continue;
+        if let Some((name, _value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("host") {
+                rebuilt.push_str(&format!("Host: {host}:{port}\r\n"));
+                saw_host = true;
+                continue;
+            }
+            // The external endpoint is a nonlocal hop, so it gets the same
+            // credential policy as a peer forward: the caller authenticated to
+            // this node, not to the operator's upstream server, and this hop is
+            // plaintext HTTP (#2210).
+            if is_ingress_credential_header(name) {
+                continue;
+            }
         }
         rebuilt.push_str(line);
         rebuilt.push_str("\r\n");
@@ -306,6 +319,62 @@ fn rewrite_http_request_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    /// Serve `response` from a plugin backend to a mesh client and return the
+    /// bytes the client received.
+    async fn relay_plugin_response(response: &str) -> String {
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream_listener.local_addr().unwrap();
+        let client_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client_address = client_listener.local_addr().unwrap();
+        let response = response.to_owned();
+        tokio::spawn(async move {
+            let (mut backend, _) = upstream_listener.accept().await.unwrap();
+            backend.write_all(response.as_bytes()).await.unwrap();
+        });
+        let relay = tokio::spawn(async move {
+            let (client, _) = client_listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
+            let mut upstream: ClientStream =
+                TcpStream::connect(upstream_address).await.unwrap().into();
+            route_http_endpoint_attempt_after_forward(
+                &mut client,
+                &mut upstream,
+                "http://plugin.test",
+                RequestId::new(),
+                ResponseRetryPolicy::next_target_available(false),
+                ResponseAdapter::None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+        });
+        let mut socket = TcpStream::connect(client_address).await.unwrap();
+        let mut relayed = Vec::new();
+        socket.read_to_end(&mut relayed).await.unwrap();
+        relay.await.unwrap();
+        String::from_utf8(relayed).unwrap()
+    }
+
+    /// A plugin backend's served-model headers are its own claims, not this
+    /// node's: they never reach a mesh peer that reads the response as ours.
+    #[tokio::test]
+    async fn a_plugin_backends_served_model_headers_are_stripped() {
+        let body = r#"{"id":"c","object":"chat.completion","choices":[]}"#;
+        let relayed = relay_plugin_response(&format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+             x-mesh-weights-digest: forged\r\nx-mesh-model-canonical-ref: forged/ref\r\n\r\n{body}",
+            body.len()
+        ))
+        .await;
+        assert!(relayed.starts_with("HTTP/1.1 200 OK"), "{relayed}");
+        assert!(
+            !relayed.to_ascii_lowercase().contains("x-mesh-"),
+            "{relayed}"
+        );
+        assert!(relayed.ends_with(body));
+    }
 
     #[test]
     fn external_endpoint_target_only_accepts_openai_inference_routes() {
@@ -375,5 +444,133 @@ mod tests {
         assert!(rewritten.contains("\r\nHost: localhost:8000\r\n"));
         assert!(rewritten.contains("\r\nx-request-id: 4c3ca94d-bc1f-4759-912d-f4f6d77d5515\r\n"));
         assert!(rewritten.ends_with("\r\n\r\n{}"));
+    }
+
+    /// Capture the exact bytes one forwarded request writes to the upstream
+    /// socket, then answer with a minimal JSON completion so the relay runs to
+    /// completion.
+    fn strip_trailing_cr(line: &[u8]) -> &[u8] {
+        let mut end = line.len();
+        while end > 0 && line[end - 1] == b'\r' {
+            end -= 1;
+        }
+        &line[..end]
+    }
+
+    async fn capture_one_forwarded_request(sink: &tokio::net::TcpListener) -> (Vec<u8>, Vec<u8>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut upstream, _) = sink.accept().await.unwrap();
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            if upstream.read(&mut byte).await.unwrap() == 0 {
+                break;
+            }
+            head.push(byte[0]);
+        }
+        let declared = head
+            .split(|b| *b == b'\n')
+            .find_map(|line| {
+                let line = strip_trailing_cr(line);
+                line.get(..15)
+                    .filter(|prefix| prefix.eq_ignore_ascii_case(b"content-length:"))
+                    .and_then(|_| std::str::from_utf8(&line[15..]).ok())
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+            })
+            .unwrap_or(0);
+        let mut body = vec![0u8; declared];
+        upstream.read_exact(&mut body).await.unwrap();
+        let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+        let _ = upstream.write_all(response).await;
+        let _ = upstream.shutdown().await;
+        (head, body)
+    }
+
+    /// Regression (#2210): the external endpoint is a nonlocal hop. A caller's
+    /// ingress credential must never be rewritten onto the plaintext upstream
+    /// connection in any header casing, while the rewritten request line, the
+    /// rewritten `Host`, every unrelated header, and the body stay intact.
+    #[tokio::test]
+    async fn external_endpoint_forward_strips_caller_credentials() {
+        let sink = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = sink.local_addr().unwrap().port();
+        let body = br#"{"model":"sink-model","input":"Authorization: Bearer inside-the-body"}"#;
+        let mut prefetched = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: caller-facing:9337\r\naUtHoRiZaTiOn: Bearer caller-secret\r\nPROXY-AUTHORIZATION: Basic proxy-secret\r\nX-API-Key: anthropic-secret\r\napi-key: azure-secret\r\nX-Trace-Id: trace-123\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        prefetched.extend_from_slice(body);
+
+        let base_url = format!("http://127.0.0.1:{port}/");
+        let mut downstream = ClientStream::Null;
+        let (captured, attempt) = tokio::join!(
+            capture_one_forwarded_request(&sink),
+            route_http_endpoint_attempt(
+                &mut downstream,
+                &base_url,
+                &prefetched,
+                "/v1/chat/completions",
+                RouteAttemptLoggingContext {
+                    exchange_id: None,
+                    request_id: RequestId::new(),
+                    retry_policy: ResponseRetryPolicy::next_target_available(false),
+                    response_adapter: ResponseAdapter::OpenAiChatCompletionsJson,
+                    route_observer: OpenAiRouteObserver::default(),
+                    served_by: None,
+                    peer_capsule_id: None,
+                },
+            )
+        );
+        assert!(
+            matches!(
+                attempt,
+                RouteAttemptResult::Delivered {
+                    status_code: 200,
+                    ..
+                }
+            ),
+            "{attempt:?}"
+        );
+
+        let (head, forwarded_body) = captured;
+        let head = String::from_utf8(head).unwrap();
+        let lowered = head.to_ascii_lowercase();
+        for secret in [
+            "caller-secret",
+            "proxy-secret",
+            "anthropic-secret",
+            "azure-secret",
+        ] {
+            assert!(
+                !head.contains(secret),
+                "credential {secret} reached the external endpoint:\n{head}"
+            );
+        }
+        for name in [
+            "authorization",
+            "proxy-authorization",
+            "x-api-key",
+            "api-key",
+        ] {
+            assert!(
+                !lowered.contains(&format!("{name}:")),
+                "{name} reached the external endpoint:\n{head}"
+            );
+        }
+        assert!(
+            head.starts_with("POST /v1/chat/completions HTTP/1.1\r\n"),
+            "{head}"
+        );
+        assert!(
+            head.contains(&format!("\r\nHost: 127.0.0.1:{port}\r\n")),
+            "{head}"
+        );
+        assert!(head.contains("\r\nX-Trace-Id: trace-123\r\n"), "{head}");
+        assert!(
+            head.contains("\r\nContent-Type: application/json\r\n"),
+            "{head}"
+        );
+        assert_eq!(forwarded_body, body);
     }
 }

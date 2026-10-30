@@ -23,6 +23,7 @@ async fn stage_control_shutdown_closes_and_joins_the_control_loop() {
                     run_id: None,
                     stage_id: None,
                 }),
+                requester: coordinator_id(),
                 resp,
             })
             .is_err(),
@@ -111,6 +112,7 @@ fn load_request() -> StageLoadRequest {
             direct_io: true,
             main_gpu: Some(2),
             split_mode: skippy_protocol::SplitMode::Row,
+            host_experts: skippy_protocol::HostExpertPolicy::default(),
             kv_offload: Some(false),
             kv_unified: Some(true),
             swa_full: Some(false),
@@ -125,6 +127,7 @@ fn load_request() -> StageLoadRequest {
         load_mode: LoadMode::RuntimeSlice,
         upstream: None,
         downstream: Some(StagePeerDescriptor {
+            persistent_lane_marker: false,
             stage_id: "stage-1".to_string(),
             stage_index: 1,
             endpoint: "127.0.0.1:9001".to_string(),
@@ -135,6 +138,20 @@ fn load_request() -> StageLoadRequest {
 
 fn coordinator_id() -> iroh::EndpointId {
     iroh::EndpointId::from(iroh::SecretKey::from_bytes(&[0x5a; 32]).public())
+}
+
+#[test]
+fn peer_config_preserves_only_the_resolved_marker_capability() {
+    for supported in [false, true] {
+        let peer = StagePeerDescriptor {
+            persistent_lane_marker: supported,
+            stage_id: "stage-1".into(),
+            stage_index: 1,
+            endpoint: "127.0.0.1:9001".into(),
+            node_id: None,
+        };
+        assert_eq!(peer_config(&peer).persistent_lane_marker, supported);
+    }
 }
 
 fn coordinator_claim_from_load(
@@ -216,7 +233,7 @@ async fn accepted_coordinator_claim_allows_fenced_load() {
     let claim = coordinator_claim_from_load(&load, coordinator_id);
     let mut state = StageControlState::default();
 
-    let ack = state.claim(claim).await.unwrap();
+    let ack = state.claim(claim, coordinator_id).await.unwrap();
     assert!(ack.accepted);
 
     assert_eq!(state.validate_load_claim(&load), None);
@@ -399,14 +416,21 @@ fn stage_load_failure_context_identifies_split_stage_shape() {
 
 #[tokio::test]
 async fn stage_control_shutdown_cancels_and_joins_an_active_readiness_probe() {
+    // How long a busy machine may take to start the probe and connect.
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+    // Generous for a busy machine, and far below the probe's 900 s deadline:
+    // a shutdown that waited for it still fails.
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let bind_addr = listener.local_addr().unwrap();
     let (accepted_tx, accepted_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
+    // The silent stage keeps the connection open until the test lets it go,
+    // so only the cancel can end the probe before its deadline.
     let server = std::thread::spawn(move || {
         let (_stream, _) = listener.accept().unwrap();
         accepted_tx.send(()).unwrap();
-        let _ = release_rx.recv_timeout(Duration::from_secs(5));
+        let _ = release_rx.recv();
     });
 
     let state = StageControlState {
@@ -418,10 +442,10 @@ async fn stage_control_shutdown_cancels_and_joins_an_active_readiness_probe() {
     };
     let handle = spawn_stage_control_loop_with_state(state);
     accepted_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(CONNECT_TIMEOUT)
         .expect("readiness probe connected to silent stage");
 
-    tokio::time::timeout(Duration::from_secs(3), handle.shutdown())
+    tokio::time::timeout(SHUTDOWN_TIMEOUT, handle.shutdown())
         .await
         .expect("shutdown must not wait for the readiness deadline")
         .expect("stage control shutdown should succeed");
@@ -617,7 +641,7 @@ async fn unavailable_native_runtime_rejects_remote_and_local_stage_loads() {
         StageControlRequest::Load(load_request()),
         StageControlRequest::LoadLocal(load_request()),
     ] {
-        let response = state.handle(request).await.unwrap();
+        let response = state.handle(request, coordinator_id()).await.unwrap();
         let StageControlResponse::Ready(response) = response else {
             panic!("load must return a readiness response");
         };

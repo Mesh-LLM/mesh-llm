@@ -271,6 +271,7 @@ async fn build_inference_endpoint_plugin_manager(models: &[&str]) -> plugin::Plu
         .set_test_inference_endpoints(vec![plugin::InferenceEndpointRoute {
             plugin_name: "endpoint-plugin".into(),
             endpoint_id: "endpoint-plugin".into(),
+            protocol: None,
             address: "http://127.0.0.1:8000/v1".into(),
             models: models.iter().map(|model| (*model).to_string()).collect(),
         }])
@@ -286,7 +287,7 @@ struct OwnerControlTestServer {
 async fn spawn_owner_control_test_server() -> OwnerControlTestServer {
     let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(iroh::SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .unwrap()
@@ -378,7 +379,7 @@ async fn spawn_owner_control_apply_test_server(
 ) -> OwnerControlApplyTestServer {
     let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(iroh::SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .unwrap()
@@ -469,6 +470,25 @@ fn management_post_request(path: &str, body: &str) -> String {
     )
 }
 
+/// The owner-control bearer credential seeded into test console state.
+pub(super) const TEST_OWNER_CONTROL_TOKEN: &str = "test-owner-control-token-0123456789";
+
+async fn seed_owner_control_token(state: &MeshApi) {
+    state
+        .set_owner_control_token(Some(zeroize::Zeroizing::new(
+            TEST_OWNER_CONTROL_TOKEN.to_string(),
+        )))
+        .await;
+}
+
+fn management_post_request_with_owner_control(path: &str, body: &str) -> String {
+    format!(
+        "POST {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TEST_OWNER_CONTROL_TOKEN}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    )
+}
+
 fn full_mesh_config_fixture() -> crate::plugin::MeshConfig {
     serde_json::from_value(json!({
         "version": 1,
@@ -530,7 +550,7 @@ fn merge_json_object(target: &mut serde_json::Value, source: serde_json::Value) 
 async fn unreachable_owner_control_endpoint_token() -> String {
     let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(iroh::SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .unwrap()
@@ -652,6 +672,8 @@ fn make_test_peer(
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
+        plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         owner_summary: crate::crypto::OwnershipSummary::default(),
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]

@@ -131,8 +131,9 @@ impl StageOpenAiBackend {
             temperature: request.temperature,
             ..Default::default()
         };
-        apply_chat_request_defaults(&mut chat_request, &self.request_defaults)?;
-        let template_options = chat_template_options(&chat_request, &self.request_defaults)?;
+        let request_defaults = self.request_defaults.snapshot();
+        apply_chat_request_defaults(&mut chat_request, &request_defaults)?;
+        let template_options = chat_template_options(&chat_request, &request_defaults)?;
         let mut prompt = self
             .prepare_chat_prompt_offloaded(&chat_request, template_options, context.clone())
             .await?;

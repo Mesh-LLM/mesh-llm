@@ -30,7 +30,7 @@ mod runtime_events_gate;
 #[path = "migration_lifecycle/just_automation_argv.rs"]
 mod just_automation_argv;
 
-#[path = "../src/automation/command_interrupt/mod.rs"]
+#[path = "../src/command_interrupt.rs"]
 pub(crate) mod command_interrupt;
 
 #[path = "../src/automation"]
@@ -59,8 +59,7 @@ mod daemon_header_bound;
 mod interruption;
 #[path = "migration_lifecycle/observation.rs"]
 mod observation;
-#[path = "../src/process/mod.rs"]
-pub mod process;
+pub use process_supervision as process;
 #[path = "migration_lifecycle/protocol.rs"]
 mod protocol;
 #[path = "migration_lifecycle/pty.rs"]
@@ -153,8 +152,7 @@ mod local_repair_inspection;
 #[path = "migration_lifecycle/package_input_admission.rs"]
 mod package_input_admission;
 
-#[path = "../src/ci_validation/lane_results/workflow_yaml.rs"]
-mod workflow_yaml;
+use ci_controller::lane_results::workflow_yaml;
 
 #[path = "migration_lifecycle/verification_source_cli.rs"]
 mod verification_source_cli;

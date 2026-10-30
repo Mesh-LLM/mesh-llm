@@ -15,6 +15,10 @@ use crate::plugin::{
 };
 use crate::protocol::convert::{canonical_config_hash, mesh_config_to_proto};
 
+use super::live_request_defaults::{
+    self, AppliedRequestDefaults, LiveRequestDefaults, RequestDefaultsBackends,
+    ScopedServingBackends,
+};
 use super::operational_logging::{
     ConfigDiagnosticsOutcome, ConfigOperationalEvent, record_config_operational_event,
 };
@@ -87,6 +91,19 @@ pub(crate) struct PendingConfigApply {
     old_logging: LoggingConfig,
     kv_disk_requires_restart: bool,
     dynamic_kv_disk_changed: bool,
+    /// This apply changes request defaults, so models are swapped (or at least
+    /// tried) and a failed persist has to put them back.
+    request_defaults_changed: bool,
+    /// Something outside the settings this apply can take live changed, so the
+    /// saved config stays staged even when every live part took effect.
+    changes_staged_settings: bool,
+    live_request_defaults: std::sync::Arc<LiveRequestDefaults>,
+    /// What the live request-defaults swap replaced, for a failed persist.
+    request_defaults_undo: std::sync::Mutex<
+        Option<
+            AppliedRequestDefaults<<ScopedServingBackends as RequestDefaultsBackends>::Previous>,
+        >,
+    >,
 }
 
 impl PendingConfigApply {
@@ -135,6 +152,61 @@ impl PendingConfigApply {
         }
     }
 
+    /// Whether this apply changes request defaults, so models were swapped (or
+    /// at least tried) and a failed persist has to put them back.
+    fn changes_request_defaults(&self) -> bool {
+        self.request_defaults_changed
+    }
+
+    pub(crate) fn apply_live_request_defaults(&self) -> bool {
+        if !self.changes_request_defaults() {
+            return false;
+        }
+        let backends = self.live_request_defaults.serving_backends();
+        let applied = self.live_request_defaults.apply(&self.config, &backends);
+        let all_applied = applied.all_applied;
+        *self
+            .request_defaults_undo
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(applied);
+        if !all_applied {
+            tracing::warn!(
+                "request defaults could not be applied to every loaded model; retaining them as staged configuration"
+            );
+        }
+        all_applied
+    }
+
+    pub(crate) fn restore_live_request_defaults(&self) {
+        let undo = self
+            .request_defaults_undo
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(applied) = undo {
+            self.live_request_defaults
+                .undo(applied, &self.live_request_defaults.serving_backends());
+        }
+    }
+
+    /// Whether every setting this apply changes took effect live: each live
+    /// part that was attempted succeeded and nothing else changed.
+    fn fully_live(
+        &self,
+        logging_applied: bool,
+        kv_disk_applied: bool,
+        defaults_applied: bool,
+    ) -> bool {
+        let attempted = self.dynamic_logging_only
+            || self.dynamic_kv_disk_changed
+            || self.request_defaults_changed;
+        attempted
+            && (!self.dynamic_logging_only || logging_applied)
+            && (!self.dynamic_kv_disk_changed || kv_disk_applied)
+            && (!self.request_defaults_changed || defaults_applied)
+            && !self.changes_staged_settings
+    }
+
     fn applied_result(&self, apply_mode: ConfigApplyMode) -> ApplyResult {
         if self.logging_requires_restart || self.kv_disk_requires_restart {
             ApplyResult::AppliedWithRestartRequired {
@@ -160,6 +232,8 @@ pub(crate) struct ConfigState {
     config_path: PathBuf,
     last_write_config_hash: [u8; 32],
     apply_serialization_lock: std::sync::Arc<std::sync::Mutex<()>>,
+    /// The request-defaults tracker of the node this state belongs to.
+    live_request_defaults: std::sync::Arc<LiveRequestDefaults>,
 }
 
 fn revision_sidecar_path(config_path: &Path) -> PathBuf {
@@ -324,6 +398,92 @@ fn logging_dynamic_limits_changed(old: &LoggingConfig, new: &LoggingConfig) -> b
     old.retention_ttl_secs != new.retention_ttl_secs || old.replay_capacity != new.replay_capacity
 }
 
+/// Whether the two configs differ in anything beyond the settings an apply can
+/// take live (`attempted_*`): those compare equal here because their outcome is
+/// judged separately, so what is left over takes effect only after a restart or
+/// reload and keeps the apply staged.
+fn changes_outside_live_settings(
+    old: &MeshConfig,
+    new: &MeshConfig,
+    logging_limits: bool,
+    kv_disk_limits: bool,
+    request_defaults: bool,
+) -> bool {
+    let without_live_settings = |config: &MeshConfig| {
+        let mut value = serde_json::to_value(config).unwrap_or_default();
+        if request_defaults {
+            if let Some(defaults) = value.get_mut("defaults").and_then(|v| v.as_object_mut()) {
+                defaults.remove("request_defaults");
+            }
+            for model in value
+                .get_mut("models")
+                .and_then(|v| v.as_array_mut())
+                .into_iter()
+                .flatten()
+            {
+                if let Some(model) = model.as_object_mut() {
+                    model.remove("request_defaults");
+                }
+            }
+        }
+        if logging_limits {
+            remove_keys(
+                &mut value,
+                &["logging"],
+                &["retention_ttl_secs", "replay_capacity"],
+            );
+        }
+        if kv_disk_limits {
+            remove_keys(
+                &mut value,
+                &["runtime", "kv_cache", "disk"],
+                &["budget_mib", "minimum_free_mib"],
+            );
+        }
+        // A section that only holds unset values is the same as an absent one,
+        // and the file-format `version` marker configures nothing at runtime.
+        if let Some(root) = value.as_object_mut() {
+            root.remove("version");
+        }
+        prune_unset(&mut value);
+        value
+    };
+    without_live_settings(old) != without_live_settings(new)
+}
+
+/// Drop `null` values and the objects left empty without them, so a section
+/// that sets nothing compares equal to a missing one.
+fn prune_unset(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.values_mut().for_each(prune_unset);
+            map.retain(|_, child| match child {
+                serde_json::Value::Null => false,
+                serde_json::Value::Object(inner) => !inner.is_empty(),
+                _ => true,
+            });
+        }
+        serde_json::Value::Array(items) => items.iter_mut().for_each(prune_unset),
+        _ => {}
+    }
+}
+
+/// Remove `keys` from the object at `path` in a JSON value, if it is there.
+fn remove_keys(value: &mut serde_json::Value, path: &[&str], keys: &[&str]) {
+    let mut current = value;
+    for segment in path {
+        let Some(next) = current.get_mut(*segment) else {
+            return;
+        };
+        current = next;
+    }
+    if let Some(object) = current.as_object_mut() {
+        for key in keys {
+            object.remove(*key);
+        }
+    }
+}
+
 fn kv_disk_changes_require_restart(old: &KvDiskTierConfig, new: &KvDiskTierConfig) -> bool {
     old.mode != new.mode || old.directory != new.directory || old.codec != new.codec
 }
@@ -344,6 +504,7 @@ impl Default for ConfigState {
             config_path: std::path::PathBuf::from("config.toml"),
             last_write_config_hash: [0xFF; 32],
             apply_serialization_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
+            live_request_defaults: std::sync::Arc::new(LiveRequestDefaults::new()),
         }
     }
 }
@@ -366,6 +527,7 @@ impl ConfigState {
             config_path: path.to_path_buf(),
             last_write_config_hash,
             apply_serialization_lock: std::sync::Arc::new(std::sync::Mutex::new(())),
+            live_request_defaults: std::sync::Arc::new(LiveRequestDefaults::new()),
         })
     }
 
@@ -389,6 +551,10 @@ impl ConfigState {
         &self.config
     }
 
+    pub(crate) fn live_request_defaults(&self) -> std::sync::Arc<LiveRequestDefaults> {
+        std::sync::Arc::clone(&self.live_request_defaults)
+    }
+
     pub(crate) fn apply_serialization_lock(&self) -> std::sync::Arc<std::sync::Mutex<()>> {
         std::sync::Arc::clone(&self.apply_serialization_lock)
     }
@@ -405,10 +571,15 @@ impl ConfigState {
 
     pub(crate) fn prepare_apply(
         &self,
-        new_config: MeshConfig,
+        mut new_config: MeshConfig,
         expected_revision: u64,
     ) -> ConfigApplyPreparation {
         record_config_operational_event(ConfigOperationalEvent::ApplyStarted);
+        new_config.source_directory = self.config.source_directory.clone().or_else(|| {
+            std::path::absolute(&self.config_path)
+                .ok()
+                .and_then(|path| path.parent().map(Path::to_path_buf))
+        });
         let raw_toml = config_to_toml(&new_config).ok();
         let diagnostics = validate_config_diagnostics_with_installed_plugin_schemas(
             &new_config,
@@ -460,6 +631,16 @@ impl ConfigState {
         let kv_disk_requires_restart = kv_disk_changes_require_restart(old_kv_disk, new_kv_disk);
         let dynamic_kv_disk_changed = kv_disk_dynamic_limits_changed(old_kv_disk, new_kv_disk);
 
+        let request_defaults_changed =
+            live_request_defaults::request_defaults_changed(&self.config, &new_config);
+        let changes_staged_settings = changes_outside_live_settings(
+            &self.config,
+            &new_config,
+            dynamic_logging_only,
+            dynamic_kv_disk_changed,
+            request_defaults_changed,
+        );
+
         ConfigApplyPreparation::Pending(Box::new(PendingConfigApply {
             config: new_config,
             config_path: self.config_path.clone(),
@@ -472,6 +653,10 @@ impl ConfigState {
             old_logging,
             kv_disk_requires_restart,
             dynamic_kv_disk_changed,
+            request_defaults_changed,
+            changes_staged_settings,
+            live_request_defaults: std::sync::Arc::clone(&self.live_request_defaults),
+            request_defaults_undo: std::sync::Mutex::new(None),
         }))
     }
 
@@ -554,6 +739,8 @@ where
     let live_logging_applied = pending.apply_live_logging();
     let live_kv_disk_rollback = pending.apply_live_kv_disk();
     let live_kv_disk_applied = live_kv_disk_rollback.is_some();
+    let request_defaults_attempted = pending.changes_request_defaults();
+    let live_request_defaults_applied = pending.apply_live_request_defaults();
     let persistence = persist(&pending);
     if live_logging_applied && matches!(&persistence, ConfigPersistence::PersistError(_)) {
         // A persistence failure after a live apply is rare, but restore the
@@ -566,6 +753,14 @@ where
     {
         super::kv_disk_config::restore_live_kv_disk_limits(rollback);
     }
+    if request_defaults_attempted && matches!(&persistence, ConfigPersistence::PersistError(_)) {
+        pending.restore_live_request_defaults();
+    }
+    let fully_live = pending.fully_live(
+        live_logging_applied,
+        live_kv_disk_applied,
+        live_request_defaults_applied,
+    );
     let result = finish(pending, persistence);
 
     match result {
@@ -574,7 +769,7 @@ where
             hash,
             diagnostics,
             ..
-        } if live_logging_applied || live_kv_disk_applied => ApplyResult::Applied {
+        } if fully_live => ApplyResult::Applied {
             revision,
             hash,
             apply_mode: ConfigApplyMode::Live,

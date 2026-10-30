@@ -118,6 +118,7 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
             direct_io: true,
             main_gpu: Some(2),
             split_mode: skippy_protocol::SplitMode::Row,
+            host_experts: skippy_protocol::HostExpertPolicy::default(),
             kv_offload: Some(false),
             kv_unified: Some(true),
             swa_full: Some(false),
@@ -132,12 +133,32 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         load_mode: skippy_protocol::LoadMode::RuntimeSlice,
         upstream: None,
         downstream: Some(crate::inference::skippy::StagePeerDescriptor {
+            persistent_lane_marker: false,
             stage_id: "stage-2".to_string(),
             stage_index: 2,
             endpoint: "127.0.0.1:9002".to_string(),
             node_id: Some(make_test_endpoint_id(0x80)),
         }),
     }
+}
+
+#[tokio::test]
+async fn persistent_lane_marker_requires_known_capable_peer() -> Result<()> {
+    let node = Node::new_for_tests(crate::mesh::NodeRole::Worker).await?;
+    let peer_id = make_test_endpoint_id(0xD3);
+    assert!(!node.stage_peer_supports_persistent_lane_marker(None).await);
+    assert!(!node.stage_peer_supports_persistent_lane_marker(Some(peer_id)).await);
+    let mut peer = make_test_peer(peer_id, Some(10), 8);
+    peer.persistent_lane_marker_supported = false;
+    node.state.lock().await.peers.insert(peer_id, peer.clone());
+    assert!(!node.stage_peer_supports_persistent_lane_marker(Some(peer_id)).await);
+
+    peer.persistent_lane_marker_supported = true;
+    node.state.lock().await.peers.insert(peer_id, peer);
+
+    assert!(node.stage_peer_supports_persistent_lane_marker(Some(peer_id)).await);
+    assert!(node.stage_peer_supports_persistent_lane_marker(Some(node.id())).await);
+    Ok(())
 }
 
 #[tokio::test]
@@ -264,6 +285,8 @@ fn strict_local_load_uses_distinct_fail_closed_proto_command() {
     let requester = make_test_endpoint_id(0x85);
     let digest = "a".repeat(64);
     let mut load = test_stage_load_request();
+    // The load must be issued by the coordinator identity it names (#2217).
+    load.coordinator_id = Some(requester);
     load.package_ref = format!("local-gguf://sha256/{digest}");
     load.source_model_sha256 = Some(digest);
     load.local_source_required = true;
@@ -297,6 +320,8 @@ fn local_load_command_strengthens_a_stale_fallback_domain_flag() {
     let requester = make_test_endpoint_id(0x8c);
     let digest = "f".repeat(64);
     let mut load = test_stage_load_request();
+    // The load must be issued by the coordinator identity it names (#2217).
+    load.coordinator_id = Some(requester);
     load.package_ref = format!("local-gguf://sha256/{digest}");
     load.source_model_sha256 = Some(digest);
     load.local_source_required = false;

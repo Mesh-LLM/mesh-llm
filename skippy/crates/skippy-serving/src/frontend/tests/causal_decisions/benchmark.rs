@@ -138,11 +138,12 @@ async fn measure(
     } else {
         (Arc::new(backend_with_config(config)?), None)
     };
-    let defaults = &mut Arc::get_mut(&mut backend)
-        .context("exclusive baseline backend")?
-        .request_defaults;
+    let mut defaults = backend.request_defaults.snapshot().as_ref().clone();
     defaults.chat_template = Some(BASELINE_TEMPLATE.into());
     defaults.skip_chat_parsing = Some(true);
+    Arc::get_mut(&mut backend)
+        .context("exclusive baseline backend")?
+        .request_defaults = defaults.into();
     let body = questions(count);
     let requests = generation_requests(&backend, &body)?;
     let mut samples = Vec::new();

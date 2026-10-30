@@ -7,6 +7,7 @@ use crate::mesh::NodeRole;
 use crate::mesh::PeerAnnouncement;
 
 pub(crate) mod config_diagnostic;
+pub(crate) mod config_redaction;
 pub(crate) mod convert;
 pub(crate) mod node_record;
 use anyhow::Result;
@@ -18,7 +19,7 @@ use prost::Message;
 
 #[cfg(test)]
 mod config_tests;
-pub const ALPN_CONTROL_V1: &[u8] = b"mesh-llm-control/1";
+pub use mesh_llm_protocol::ALPN_CONTROL_V2;
 pub const ALPN_V1: &[u8] = b"mesh-llm/1";
 #[cfg(test)]
 pub const ALPN: &[u8] = ALPN_V1;
@@ -37,7 +38,7 @@ pub(crate) const STREAM_PLUGIN_BULK_TRANSFER: u8 = 0x09;
 pub(crate) const STREAM_PLUGIN_MESH_STREAM: u8 = 0x0a;
 // Stream IDs 0x0b and 0x0c remain reserved for the retired mesh-plane config
 // subscription and push operations. Config and inventory control now live
-// exclusively on `mesh-llm-control/1`.
+// exclusively on `mesh-llm-control/2`.
 #[cfg(test)]
 pub(crate) const STREAM_CONFIG_SUBSCRIBE: u8 = 0x0b;
 #[cfg(test)]
@@ -120,6 +121,9 @@ pub(crate) struct OutboundGossip {
     pub(crate) signed_cache_affinity: Vec<crate::proto::node::SignedCacheAffinity>,
 }
 
+mod gossip_budget;
+pub(crate) use gossip_budget::{GossipFrameBudgetExceeded, GossipFrameEncoder, MAX_GOSSIP_RECORDS};
+
 /// A decoded gossip frame before signed records are checked against the
 /// peer table.
 pub(crate) struct InboundGossip {
@@ -134,13 +138,15 @@ pub(crate) async fn write_gossip_payload(
     outbound: &OutboundGossip,
     sender_id: EndpointId,
     own_plugin_keys: &[crate::proto::node::PluginKey],
+    encoder: &GossipFrameEncoder,
+    remote: EndpointId,
 ) -> Result<()> {
     let _ = protocol;
     let mut frame = build_gossip_frame(&outbound.announcements, sender_id);
     attach_own_plugin_keys(&mut frame, own_plugin_keys);
     frame.signed_records = outbound.signed_records.clone();
     frame.signed_cache_affinity = outbound.signed_cache_affinity.clone();
-    write_len_prefixed(send, &frame.encode_to_vec()).await?;
+    write_len_prefixed(send, &encoder.encode(frame, remote)?).await?;
     Ok(())
 }
 

@@ -15,17 +15,6 @@ mod stream_adapters;
 #[cfg(test)]
 mod workload_admission_tests;
 
-pub(crate) fn advertisable_routes(
-    routes: Vec<crate::plugin::VirtualModelRoute>,
-    concrete_models: &[String],
-) -> Vec<crate::plugin::VirtualModelRoute> {
-    let has_candidates = !concrete_models.is_empty();
-    routes
-        .into_iter()
-        .filter(|route| !route.requires_candidates || has_candidates)
-        .collect()
-}
-
 #[derive(Clone)]
 pub(crate) struct InferenceRpcBridge {
     api_port: u16,
@@ -563,6 +552,10 @@ async fn virtual_model_candidates(
     model_ids.sort();
     model_ids.dedup();
 
+    // Plugin-served models are advertised by name and dispatched by endpoint
+    // protocol, so they are the only local evidence for an id `hosted_models`
+    // does not list.
+    let plugin_descriptors = node.plugin_inference_descriptors().await;
     let mut candidates = Vec::new();
     for model_id in model_ids {
         if !super::workload_routing::model_satisfies_request(&model_id, CHAT_PATH, &descriptors) {
@@ -644,14 +637,34 @@ async fn virtual_model_candidates(
             }
         }
 
-        // Plugin-backed inference models have no mesh endpoint. Keep one
-        // untargeted candidate when discovery found no host instance at all —
-        // never when instances exist but every one was filtered out, or the
-        // plugin's nested call would re-enter the ingress filter that just
-        // excluded them. A local model still loading is not plugin-backed:
-        // its nested call would get 404 until the load finishes.
+        // Plugin-backed inference models have no mesh endpoint, and
+        // `hosted_models` lists native instances only, so a plugin-served id
+        // never has a local instance to match. Keep one untargeted candidate
+        // when discovery found no host at all -- never when instances exist but
+        // every one was filtered out, or the plugin's nested call would
+        // re-enter the ingress filter that just excluded them.
+        //
+        // The exception is a host filtered out on *workload class*: it cannot
+        // serve this request at all, so it must not hide the local plugin that
+        // serves the requested class (ndizazzo [P2], PR #2560). Requiring a
+        // matching plugin descriptor -- rather than model-level admission,
+        // which treats an absent descriptor as a legacy name-only chat
+        // advertisement -- keeps a name no plugin serves, such as a paid-only
+        // replica, out of the committee entirely.
+        //
+        // A model still loading locally is not plugin-backed either: its
+        // nested call would get 404 until the load finishes (#2674).
+        let plugin_serves_model = super::workload_routing::descriptor_for_request(
+            &model_id,
+            CHAT_PATH,
+            &plugin_descriptors,
+        )
+        .is_some();
         let loading_locally = local_assignments.iter().any(|local| local == &model_id);
-        if !has_local_instance && !has_discovered_remote_host && !loading_locally {
+        if !has_local_instance
+            && !loading_locally
+            && (!has_discovered_remote_host || plugin_serves_model)
+        {
             candidates.push(candidate_from(None, None));
         }
     }
@@ -725,34 +738,6 @@ fn translated_json_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn route(model_id: &str, requires_candidates: bool) -> crate::plugin::VirtualModelRoute {
-        crate::plugin::VirtualModelRoute {
-            plugin_name: "test-plugin".into(),
-            model_id: model_id.into(),
-            handler: "handle".into(),
-            input_modalities: vec!["text".into()],
-            output_modalities: vec!["text".into()],
-            supports_tools: false,
-            supports_streaming: false,
-            requires_candidates,
-            progress_lines: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn candidate_dependent_routes_are_advertised_only_when_candidates_exist() {
-        let routes = vec![route("standalone", false), route("dependent", true)];
-
-        assert_eq!(
-            advertisable_routes(routes.clone(), &[]),
-            vec![route("standalone", false)]
-        );
-        assert_eq!(
-            advertisable_routes(routes.clone(), &["concrete".into()]),
-            routes
-        );
-    }
 
     #[test]
     fn virtual_response_headers_cannot_override_http_framing() {

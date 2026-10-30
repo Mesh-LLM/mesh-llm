@@ -101,6 +101,145 @@ fn words_are_confirmed_once_two_passes_agree() {
 }
 
 #[test]
+fn tentative_text_shows_what_a_pass_heard_before_it_is_confirmed() {
+    let mut script = Script::new(vec![
+        vec![(900, " Hello")],
+        vec![(1_900, " Hello world")],
+        vec![(2_900, " Hello world")],
+        vec![(3_000, " Hello world again.")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig {
+        tentative: true,
+        ..manual()
+    });
+    let tentative = |events: Vec<SpeechStreamEvent>| {
+        events
+            .into_iter()
+            .filter_map(|event| match event {
+                SpeechStreamEvent::Tentative { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        tentative(stream.push(&loud(1_000), &mut transcribe).unwrap()),
+        ["Hello"]
+    );
+    // It reads on from the confirmed text, as a delta does.
+    assert_eq!(
+        tentative(stream.push(&loud(1_000), &mut transcribe).unwrap()),
+        [" world"]
+    );
+    // All of it is confirmed: an empty one clears what was shown.
+    assert_eq!(
+        tentative(stream.push(&loud(1_000), &mut transcribe).unwrap()),
+        [""]
+    );
+    assert!(tentative(stream.commit(&mut transcribe).unwrap()).is_empty());
+}
+
+#[test]
+fn fast_passes_confirm_nothing_until_a_turn_has_two_seconds_of_audio() {
+    // Passes this short can agree on a misheard first word; it must not stick.
+    let mut script = Script::new(vec![
+        vec![(400, " pull")],
+        vec![(800, " pull")],
+        vec![(1_200, " What pull requests")],
+        vec![(1_600, " What pull requests do")],
+        vec![(2_000, " What pull requests do I")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig {
+        step_ms: 400,
+        ..manual()
+    });
+    let mut confirmed = Vec::new();
+    for _ in 0..4 {
+        confirmed.extend(deltas(&stream.push(&loud(400), &mut transcribe).unwrap()));
+    }
+    assert!(confirmed.is_empty(), "{confirmed:?}");
+    confirmed.extend(deltas(&stream.push(&loud(400), &mut transcribe).unwrap()));
+    assert_eq!(confirmed, ["What pull requests do"]);
+}
+
+#[test]
+fn tentative_text_is_off_by_default() {
+    let mut script = Script::new(vec![vec![(900, " Hello")]]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(manual());
+    let events = stream.push(&loud(1_000), &mut transcribe).unwrap();
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, SpeechStreamEvent::Tentative { .. }))
+    );
+}
+
+#[test]
+fn clear_replaces_reported_tentative_text_with_an_empty_event() {
+    let mut script = Script::new(vec![vec![(900, " Dropped words")], vec![(900, " Later")]]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig {
+        tentative: true,
+        ..manual()
+    });
+    stream.push(&loud(1_000), &mut transcribe).unwrap();
+    assert!(matches!(
+        stream.clear().as_slice(),
+        [SpeechStreamEvent::Tentative { turn: 0, text }] if text.is_empty()
+    ));
+    // Without reported text, clearing reports nothing.
+    assert!(stream.clear().is_empty());
+    // With tentative off, discarded words report nothing either.
+    let mut silent = SpeechStream::new(manual());
+    silent.push(&loud(1_000), &mut transcribe).unwrap();
+    assert!(silent.clear().is_empty());
+}
+
+#[test]
+fn switching_tentative_back_on_reports_the_last_text_again() {
+    let mut script = Script::new(vec![
+        vec![(900, " Hello")],
+        vec![(900, " Hello")],
+        vec![(900, " Hello")],
+        vec![(900, " Hello")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let tentative_cfg = |on: bool| SpeechStreamConfig {
+        tentative: on,
+        step_ms: 300,
+        ..manual()
+    };
+    let mut stream = SpeechStream::new(tentative_cfg(true));
+    let text = |events: Vec<SpeechStreamEvent>| {
+        events
+            .into_iter()
+            .filter_map(|event| match event {
+                SpeechStreamEvent::Tentative { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        text(stream.push(&loud(300), &mut transcribe).unwrap()),
+        ["Hello"]
+    );
+    // Unchanged text does not repeat.
+    assert!(text(stream.push(&loud(300), &mut transcribe).unwrap()).is_empty());
+    stream.set_config(tentative_cfg(false));
+    assert!(text(stream.push(&loud(300), &mut transcribe).unwrap()).is_empty());
+    // A consumer that stopped asking may have cleared its display, so the
+    // same text reports again once it is back on.
+    stream.set_config(tentative_cfg(true));
+    assert_eq!(
+        text(stream.push(&loud(300), &mut transcribe).unwrap()),
+        ["Hello"]
+    );
+}
+
+#[test]
 fn passes_wait_for_a_step_of_new_audio() {
     let mut script = Script::new(vec![vec![(500, " Hi")]]);
     let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
@@ -247,6 +386,33 @@ fn a_pass_hearing_fewer_words_than_confirmed_realigns_instead_of_stalling() {
 }
 
 #[test]
+fn a_shortened_hypothesis_keeps_the_last_confirmed_word_out_of_the_tail() {
+    let mut script = Script::new(vec![
+        vec![(900, " A B C D")],
+        vec![(1_900, " A B C D E")],
+        // The beginning was revised away, but D is still the confirmed boundary.
+        vec![(2_900, " C d, E")],
+        vec![(3_900, " C D E F")],
+        vec![(4_900, " C D E F G")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(manual());
+    for expected in [vec![], vec!["A B C D"], vec![], vec![" E"], vec![" F"]] {
+        let events = stream.push(&loud(1_000), &mut transcribe).unwrap();
+        assert_eq!(deltas(&events), expected);
+    }
+    let done = stream.commit(&mut transcribe).unwrap();
+    assert_eq!(deltas(&done), [" G"]);
+    assert_eq!(
+        done.last(),
+        Some(&SpeechStreamEvent::Completed {
+            turn: 0,
+            transcript: "A B C D E F G".into(),
+        })
+    );
+}
+
+#[test]
 fn silence_without_turn_detection_is_bounded_and_never_transcribed() {
     let config = SpeechStreamConfig {
         max_buffer_ms: 2_000,
@@ -298,6 +464,7 @@ fn two_turns_inside_one_push_are_reported_in_order() {
             SpeechStreamEvent::SpeechStopped { turn, .. } => format!("stop{turn}"),
             SpeechStreamEvent::Delta { turn, .. } => format!("delta{turn}"),
             SpeechStreamEvent::Completed { turn, transcript } => format!("done{turn}:{transcript}"),
+            SpeechStreamEvent::Tentative { turn, .. } => format!("tentative{turn}"),
         })
         .collect::<Vec<_>>();
     assert_eq!(
@@ -430,4 +597,121 @@ fn streams_a_real_clip() {
     assert!(words(&completed).contains("ask not what your country can do for you"));
     // Deltas carry exactly the completed words, turn by turn.
     assert_eq!(words(&deltas(&events).join(" ")), words(&completed));
+}
+
+#[test]
+fn turning_tentative_off_replaces_reported_text_with_an_empty_event() {
+    let mut script = Script::new(vec![
+        vec![(300, " Hello")],
+        vec![(600, " Hello")],
+        vec![(900, " Hello")],
+        vec![(1_200, " Hello")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let tentative_cfg = |on: bool| SpeechStreamConfig {
+        tentative: on,
+        step_ms: 300,
+        ..manual()
+    };
+    let mut stream = SpeechStream::new(tentative_cfg(true));
+    let text = |events: Vec<SpeechStreamEvent>| {
+        events
+            .into_iter()
+            .filter_map(|event| match event {
+                SpeechStreamEvent::Tentative { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        text(stream.push(&loud(300), &mut transcribe).unwrap()),
+        ["Hello"]
+    );
+    // Switching tentative off reports the empty replacement itself, so a
+    // consumer stops showing the words immediately.
+    assert_eq!(text(stream.set_config(tentative_cfg(false))), [""]);
+    assert!(text(stream.push(&loud(300), &mut transcribe).unwrap()).is_empty());
+    // Re-enabling still frees the next pass to repeat the text.
+    stream.set_config(tentative_cfg(true));
+    assert_eq!(
+        text(stream.push(&loud(300), &mut transcribe).unwrap()),
+        ["Hello"]
+    );
+}
+
+#[test]
+fn leading_silence_does_not_count_toward_the_confirmation_delay() {
+    // With turn detection off a turn opens on silence; two agreeing passes
+    // after only 800 ms of speech must not confirm a misheard first word.
+    let mut script = Script::new(vec![
+        vec![(2_800, " Yes")],
+        vec![(3_200, " Yes")],
+        vec![(3_600, " Yes")],
+        vec![(4_400, " Yes")],
+        vec![(4_800, " Yes")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig {
+        step_ms: 400,
+        ..manual()
+    });
+    stream.push(&quiet(2_500), &mut transcribe).unwrap();
+    let mut confirmed = Vec::new();
+    for _ in 0..2 {
+        confirmed.extend(deltas(&stream.push(&loud(400), &mut transcribe).unwrap()));
+    }
+    assert!(confirmed.is_empty(), "{confirmed:?}");
+    // Two seconds of heard speech confirm the agreed word.
+    for _ in 0..3 {
+        confirmed.extend(deltas(&stream.push(&loud(400), &mut transcribe).unwrap()));
+    }
+    assert_eq!(confirmed, ["Yes"]);
+}
+
+#[test]
+fn a_final_pass_that_hears_nothing_keeps_the_words_already_heard() {
+    // Whisper can drop the audio of a short turn's final pass; the words
+    // earlier passes heard must still reach the transcript.
+    let mut script = Script::new(vec![vec![(400, " Yes")], vec![(800, " Yes")], vec![]]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig {
+        step_ms: 400,
+        ..manual()
+    });
+    stream.push(&loud(400), &mut transcribe).unwrap();
+    stream.push(&loud(400), &mut transcribe).unwrap();
+    let done = stream.commit(&mut transcribe).unwrap();
+    assert_eq!(deltas(&done), ["Yes"]);
+    let transcript = done
+        .iter()
+        .find_map(|event| match event {
+            SpeechStreamEvent::Completed { transcript, .. } => Some(transcript.clone()),
+            _ => None,
+        })
+        .expect("completed event");
+    assert_eq!(transcript, "Yes");
+}
+
+#[test]
+fn a_final_pass_that_hears_nothing_confirms_only_words_the_passes_agreed_on() {
+    // Passes that disagree leave no stable candidate; the empty-final
+    // fallback must not confirm the latest hypothesis it heard once.
+    let mut script = Script::new(vec![vec![(400, " No")], vec![(800, " Yes")], vec![]]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig {
+        step_ms: 400,
+        ..manual()
+    });
+    stream.push(&loud(400), &mut transcribe).unwrap();
+    stream.push(&loud(400), &mut transcribe).unwrap();
+    let done = stream.commit(&mut transcribe).unwrap();
+    assert!(deltas(&done).is_empty());
+    let transcript = done
+        .iter()
+        .find_map(|event| match event {
+            SpeechStreamEvent::Completed { transcript, .. } => Some(transcript.clone()),
+            _ => None,
+        })
+        .expect("completed event");
+    assert_eq!(transcript, "");
 }

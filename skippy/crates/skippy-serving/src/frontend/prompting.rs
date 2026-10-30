@@ -2,6 +2,7 @@ use crate::frontend::generation::ParsedChatMessage;
 use crate::frontend::generation::PreparedGenerationPrompt;
 use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::chat_message_generation_value;
+use crate::frontend::generation::effective_tools_for_choice;
 use crate::frontend::generation::hook_injected_text;
 use crate::frontend::generation::mid_generation_window_should_fire;
 use crate::frontend::generation::parsed_chat_message_from_json;
@@ -156,10 +157,8 @@ impl StageOpenAiBackend {
             InferenceError::invalid_request(format!("serialize messages: {error}"))
         })?;
         let tools_json = if include_tools {
-            request
-                .tools
-                .as_ref()
-                .map(serde_json::to_string)
+            effective_tools_for_choice(request.tools.as_ref(), request.tool_choice.as_ref())
+                .map(|value| serde_json::to_string(&value))
                 .transpose()
                 .map_err(|error| {
                     InferenceError::invalid_request(format!("serialize tools: {error}"))

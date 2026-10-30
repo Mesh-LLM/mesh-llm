@@ -246,6 +246,43 @@ async fn test_api_proxy_lists_registered_inference_models() {
 }
 
 #[tokio::test]
+async fn test_api_proxy_chat_model_list_excludes_ocr_providers() {
+    let manager = plugin::PluginManager::for_test_summaries(Vec::new());
+    manager
+        .set_test_inference_endpoints(vec![
+            plugin::InferenceEndpointRoute {
+                plugin_name: "chat".into(),
+                endpoint_id: "chat".into(),
+                protocol: Some("openai_compatible".into()),
+                address: "http://127.0.0.1:1".into(),
+                models: vec!["chat-model".into()],
+            },
+            plugin::InferenceEndpointRoute {
+                plugin_name: "ocr".into(),
+                endpoint_id: "ocr".into(),
+                protocol: Some("document_ocr_v1".into()),
+                address: "http://127.0.0.1:2".into(),
+                models: vec!["ocr-model".into()],
+            },
+        ])
+        .await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness_with_plugin_manager(local_targets(&[]), manager).await;
+    let response = send_request_and_read_response(
+        proxy_addr,
+        vec![b"GET /v1/models HTTP/1.1\r\nHost: localhost\r\n\r\n".to_vec()],
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    let body = response.split("\r\n\r\n").nth(1).unwrap();
+    let json: serde_json::Value = serde_json::from_str(body).unwrap();
+    let models = json["data"].as_array().unwrap();
+    assert!(models.iter().any(|model| model["id"] == "chat-model"));
+    assert!(models.iter().all(|model| model["id"] != "ocr-model"));
+    proxy_handle.abort();
+}
+
+#[tokio::test]
 async fn test_builtin_moa_all_small_pool_routes_direct_through_plugin_api() {
     let worker_response = json!({
         "id": "chatcmpl-worker",
@@ -286,9 +323,17 @@ async fn test_builtin_moa_all_small_pool_routes_direct_through_plugin_api() {
         .as_array()
         .and_then(|models| models.iter().find(|model| model["id"] == "mesh"))
         .unwrap_or_else(|| panic!("virtual model missing from /v1/models: {models_response}"));
-    assert_eq!(mesh_model["owned_by"], "plugin:mesh-moa");
-    assert_eq!(mesh_model["virtual_model"]["supports_tools"], true);
-    assert_eq!(mesh_model["virtual_model"]["supports_streaming"], true);
+    assert_eq!(mesh_model["owned_by"], "mesh-llm");
+    assert!(mesh_model.get("virtual_model").is_none());
+    let catalog_response = send_request_and_read_response(
+        proxy_addr,
+        vec![b"GET /mesh/v1/models/lookup?id=mesh HTTP/1.1\r\nHost: localhost\r\n\r\n".to_vec()],
+    )
+    .await;
+    let (_, catalog_body) = catalog_response.split_once("\r\n\r\n").unwrap();
+    let catalog_model: serde_json::Value = serde_json::from_str(catalog_body).unwrap();
+    assert_eq!(catalog_model["virtual_model"]["supports_tools"], true);
+    assert_eq!(catalog_model["virtual_model"]["supports_streaming"], true);
 
     let body = json!({
         "model": "mesh",
@@ -353,26 +398,34 @@ async fn test_builtin_moa_all_small_falls_back_through_host_inference() {
             let (proxy_addr, proxy_handle) = spawn_api_proxy_test_harness_with_plugin_manager(
                 local_targets(&[("worker-a", failed_port), ("worker-b", healthy_port)]),
                 plugin_manager.clone(),
-            ).await;
+            )
+            .await;
             crate::network::openai::virtual_model::install_inference_bridge(
                 &plugin_manager,
                 proxy_addr.port(),
-            ).await;
+            )
+            .await;
             let body = json!({
                 "model": model,
                 "messages": [{"role": "user", "content": "answer briefly"}],
                 "stream": false,
-            }).to_string();
+            })
+            .to_string();
             let request = format!(
                 "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-                body.len(), body
+                body.len(),
+                body
             );
-            let response = send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
+            let response =
+                send_request_and_read_response(proxy_addr, vec![request.into_bytes()]).await;
             assert!(
                 response.starts_with("HTTP/1.1 200 OK") && response.contains("healthy fallback"),
                 "{model} disappeared={disappeared}: {response}"
             );
-            assert_eq!(healthy_requests.load(std::sync::atomic::Ordering::Relaxed), 1);
+            assert_eq!(
+                healthy_requests.load(std::sync::atomic::Ordering::Relaxed),
+                1
+            );
             if let Some((_, failed_requests, failed_handle)) = failed_upstream {
                 assert!(
                     tokio::time::timeout(Duration::from_secs(5), failed_requests)
@@ -748,6 +801,7 @@ async fn test_builtin_moa_uses_plugin_inference_model_as_its_only_candidate() {
         .set_test_inference_endpoints(vec![plugin::InferenceEndpointRoute {
             plugin_name: "endpoint-plugin".into(),
             endpoint_id: "endpoint-plugin".into(),
+            protocol: None,
             address: format!("http://127.0.0.1:{worker_port}/api/v1"),
             models: vec!["plugin-worker".into()],
         }])

@@ -6,10 +6,15 @@ use iroh::endpoint::{ConnectOptions, Connection};
 use iroh::{Endpoint, EndpointAddr};
 use prost::Message;
 pub use v0::*;
+/// Legacy owner-control ALPN, retained for recognizing incompatible peers.
 pub const ALPN_CONTROL_V1: &[u8] = b"mesh-llm-control/1";
+/// Owner-control ALPN requiring explicit plugin argument approval.
+pub const ALPN_CONTROL_V2: &[u8] = b"mesh-llm-control/2";
 pub const ALPN_V1: &[u8] = b"mesh-llm/1";
 pub const NODE_PROTOCOL_GENERATION: u32 = 1;
 pub const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024;
+pub const PLUGIN_MESH_SUBPROTOCOL: &str = "plugin-mesh";
+pub const PLUGIN_ORIGIN_SIGNATURE_FEATURE: &str = "plugin-origin-signature";
 
 pub const STREAM_GOSSIP: u8 = 0x01;
 pub const STREAM_TUNNEL: u8 = 0x02;
@@ -22,12 +27,12 @@ pub const STREAM_PLUGIN_CHANNEL: u8 = 0x08;
 pub const STREAM_PLUGIN_BULK_TRANSFER: u8 = 0x09;
 /// Reserved legacy mesh-plane config subscription stream ID.
 ///
-/// Config and inventory control now live exclusively on `mesh-llm-control/1`;
+/// Config and inventory control now live exclusively on `mesh-llm-control/2`;
 /// keep 0x0b reserved so old wire values are not accidentally reused.
 pub const STREAM_CONFIG_SUBSCRIBE: u8 = 0x0b;
 /// Reserved legacy mesh-plane config push stream ID.
 ///
-/// Config and inventory control now live exclusively on `mesh-llm-control/1`;
+/// Config and inventory control now live exclusively on `mesh-llm-control/2`;
 /// keep 0x0c reserved so old wire values are not accidentally reused.
 pub const STREAM_CONFIG_PUSH: u8 = 0x0c;
 pub const STREAM_SUBPROTOCOL: u8 = 0x0d;
@@ -1052,7 +1057,7 @@ mod tests {
 
     #[test]
     fn control_plane_messages_constants_are_stable() {
-        assert_eq!(ALPN_CONTROL_V1, b"mesh-llm-control/1");
+        assert_eq!(ALPN_CONTROL_V2, b"mesh-llm-control/2");
         assert_eq!(ALPN_V1, b"mesh-llm/1");
         assert_eq!(ALPN_V0, b"mesh-llm/0");
         assert_eq!(STREAM_CONFIG_SUBSCRIBE, 0x0b);
@@ -1132,6 +1137,7 @@ mod tests {
                     target_node_id: vec![0x40; 32],
                     expected_revision: 7,
                     config: Some(control_plane_test_config()),
+                    plugin_command_approvals: vec![],
                 }),
                 refresh_inventory: None,
                 load_model: None,

@@ -13,9 +13,10 @@ impl StageOpenAiBackend {
         mut request: ChatCompletionRequest,
     ) -> InferenceResult<u32> {
         self.ensure_model(&request.model)?;
-        apply_chat_request_defaults(&mut request, &self.request_defaults)?;
+        let request_defaults = self.request_defaults.snapshot();
+        apply_chat_request_defaults(&mut request, &request_defaults)?;
         ensure_chat_runtime_features_supported(&request)?;
-        let options = chat_template_options(&request, &self.request_defaults)?;
+        let options = chat_template_options(&request, &request_defaults)?;
         let prompt = self
             .prepare_chat_prompt_offloaded(&request, options, Default::default())
             .await?;

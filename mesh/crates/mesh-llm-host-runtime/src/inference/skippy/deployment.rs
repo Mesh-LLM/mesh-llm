@@ -157,6 +157,11 @@ pub(crate) fn stage0_config(
         direct_io: context.runtime_settings.direct_io,
         main_gpu: context.runtime_settings.main_gpu,
         split_mode: context.runtime_settings.split_mode,
+        host_expert_layers: skippy_protocol::HostExpertLayers::for_stage(
+            stage0.layer_start,
+            stage0.layer_end,
+            context.runtime_settings.host_experts,
+        ),
         cache_type_k: context.kv_cache.cache_type_k().to_string(),
         cache_type_v: context.kv_cache.cache_type_v().to_string(),
         flash_attn_type: context.flash_attn_type,
@@ -180,6 +185,7 @@ pub(crate) fn stage0_config(
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
         downstream: Some(PeerConfig {
+            persistent_lane_marker: false,
             stage_id: downstream_stage.stage_id.clone(),
             stage_index: downstream_stage.stage_index,
             endpoint: downstream_endpoint,
@@ -263,6 +269,7 @@ mod tests {
                 direct_io: true,
                 main_gpu: Some(2),
                 split_mode: skippy_protocol::SplitMode::Row,
+                host_experts: skippy_protocol::HostExpertPolicy::default(),
                 kv_offload: Some(false),
                 kv_unified: Some(true),
                 swa_full: Some(false),

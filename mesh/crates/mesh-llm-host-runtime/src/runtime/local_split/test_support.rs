@@ -181,6 +181,8 @@ pub(super) fn split_test_peer(
         stage_status_list_supported: false,
         local_gguf_content_id_supported: stage_protocol_generation_supported,
         decode_batch_policy_supported: stage_protocol_generation_supported,
+        plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -724,6 +726,9 @@ max_tokens = 222
     .expect("test mesh config should parse");
     let model_bytes = fs::metadata(&model_path).unwrap().len();
     let spec = LocalOpenAiModelStartSpec {
+        live_request_defaults: std::sync::Arc::new(
+            crate::runtime::live_request_defaults::LiveRequestDefaults::new(),
+        ),
         mesh_config: &mesh_config,
         config_model_id: Some("configured/model-ref"),
         model_path: &model_path,
@@ -774,6 +779,9 @@ max_tokens = 222
     write_fake_gguf_model(&cli_model_path);
     let cli_model_bytes = fs::metadata(&cli_model_path).unwrap().len();
     let cli_spec = LocalOpenAiModelStartSpec {
+        live_request_defaults: std::sync::Arc::new(
+            crate::runtime::live_request_defaults::LiveRequestDefaults::new(),
+        ),
         mesh_config: &mesh_config,
         config_model_id: None,
         model_path: &cli_model_path,

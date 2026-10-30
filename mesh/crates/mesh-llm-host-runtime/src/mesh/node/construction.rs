@@ -82,16 +82,13 @@ impl Node {
         let (tunnel_http_tx, tunnel_http_rx) = tokio::sync::mpsc::channel(256);
         let (stage_transport_tx, stage_transport_rx) = tokio::sync::mpsc::channel(256);
 
-        let config_state_init = {
-            let path = crate::plugin::config_path(config_path)
-                .unwrap_or_else(|_| std::path::PathBuf::from("config.toml"));
-            crate::runtime::config_state::ConfigState::load(&path)?
-        };
+        let config_state_init = super::startup::load_config_state(config_path)?;
         let mut hardware =
             advertised_hardware_for_start(config_state_init.config(), &role, max_vram_gb);
         if identity.is_some() {
             hardware.vram_bytes = 0;
             hardware.local_runtime_capacity_bytes = 0;
+            hardware.host_ram_capacity_bytes = 0;
             hardware.host_ram_offload_gain_bytes = 0;
         }
         let owner_runtime = init_owner_runtime(
@@ -110,6 +107,7 @@ impl Node {
             current_time_unix_ms(),
         );
         let config_revision_init = config_state_init.revision();
+        let live_request_defaults = config_state_init.live_request_defaults();
         let runtime_data_collector = crate::runtime_data::RuntimeDataCollector::new();
         let runtime_data_producer =
             runtime_data_collector.producer(crate::runtime_data::RuntimeDataSource {
@@ -141,11 +139,13 @@ impl Node {
             serving_models: Arc::new(Mutex::new(Vec::new())),
             served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
             served_model_generations: Arc::new(Mutex::new(HashMap::new())),
+            served_model_weights_ports: Arc::new(Mutex::new(HashMap::new())),
             model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
             available_models: Arc::new(Mutex::new(Vec::new())),
             requested_models: Arc::new(Mutex::new(Vec::new())),
+            startup_models_resolving: Arc::default(),
             explicit_model_interests: Arc::new(Mutex::new(Vec::new())),
             model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
             requirement_mesh_state: Arc::new(Mutex::new(None)),
@@ -157,6 +157,8 @@ impl Node {
             mesh_id: Arc::new(Mutex::new(None)),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
+            gossip_verification: Arc::default(),
+            gossip_encoder: Arc::default(),
             bootstrap_token: Arc::new(Mutex::new(None)),
             join_targets: Arc::new(Mutex::new(Vec::new())),
             first_joined_mesh_ts: Arc::new(Mutex::new(None)),
@@ -166,6 +168,7 @@ impl Node {
             )),
             vram_bytes: hardware.vram_bytes,
             local_runtime_capacity_bytes: hardware.local_runtime_capacity_bytes,
+            host_ram_capacity_bytes: hardware.host_ram_capacity_bytes,
             host_ram_offload_gain_bytes: hardware.host_ram_offload_gain_bytes,
             peer_change_tx,
             peer_change_rx,
@@ -211,6 +214,7 @@ impl Node {
             gpu_compute_tflops_fp32: Arc::new(tokio::sync::Mutex::new(None)),
             gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
             config_state: Arc::new(tokio::sync::Mutex::new(config_state_init)),
+            live_request_defaults,
             peer_blocks: identity.as_ref().map_or_else(
                 crate::network::peer_blocks::PeerBlocks::for_this_node,
                 |identity| crate::network::peer_blocks::PeerBlocks::load(&identity.state_dir),
@@ -230,6 +234,7 @@ impl Node {
             runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
             runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+            native_model_lifecycle: Arc::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             memberships: MeshMemberships::default(),
             owner_attestation_path: saved_owner_attestation_path(

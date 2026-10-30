@@ -373,7 +373,11 @@ async fn make_test_node_with_requirements(
         },
     );
 
+    let config_state = crate::runtime::config_state::ConfigState::default();
+    let live_request_defaults = config_state.live_request_defaults();
     let node = Node {
+        gossip_verification: Arc::default(),
+        gossip_encoder: Arc::default(),
         adopted_membership_file: None,
         identity_state_dir: None,
         full_model_only: false,
@@ -394,11 +398,13 @@ async fn make_test_node_with_requirements(
         serving_models: Arc::new(Mutex::new(Vec::new())),
         served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
         served_model_generations: Arc::new(Mutex::new(HashMap::new())),
+        served_model_weights_ports: Arc::new(Mutex::new(HashMap::new())),
         model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
         hosted_models: Arc::new(Mutex::new(Vec::new())),
         llama_ready: Arc::new(Mutex::new(false)),
         available_models: Arc::new(Mutex::new(Vec::new())),
         requested_models: Arc::new(Mutex::new(Vec::new())),
+        startup_models_resolving: Arc::default(),
         explicit_model_interests: Arc::new(Mutex::new(Vec::new())),
         model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
         requirement_mesh_state: Arc::new(Mutex::new(None)),
@@ -414,6 +420,7 @@ async fn make_test_node_with_requirements(
         )),
         vram_bytes: 64 * 1024 * 1024 * 1024,
         local_runtime_capacity_bytes: 64 * 1024 * 1024 * 1024,
+        host_ram_capacity_bytes: 0,
         host_ram_offload_gain_bytes: 0,
         peer_change_tx,
         peer_change_rx,
@@ -457,9 +464,8 @@ async fn make_test_node_with_requirements(
         gpu_mem_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
         gpu_compute_tflops_fp32: Arc::new(tokio::sync::Mutex::new(None)),
         gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
-        config_state: Arc::new(tokio::sync::Mutex::new(
-            crate::runtime::config_state::ConfigState::default(),
-        )),
+        config_state: Arc::new(tokio::sync::Mutex::new(config_state)),
+        live_request_defaults,
         peer_blocks: crate::network::peer_blocks::PeerBlocks::in_memory(),
         plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
         config_revision_tx: {
@@ -479,6 +485,7 @@ async fn make_test_node_with_requirements(
         runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
         runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
         owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+        native_model_lifecycle: Arc::default(),
         model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
         memberships: super::node::MeshMemberships::default(),
         owner_attestation_path: None,
@@ -714,6 +721,7 @@ impl crate::network::metrics::RoutingTelemetrySink for TestRoutingTelemetrySink 
         model: Option<&str>,
         target: &crate::network::metrics::AttemptTarget,
         outcome: crate::network::metrics::AttemptOutcome,
+        _attempt_ms: f64,
     ) {
         let target_kind = match target {
             crate::network::metrics::AttemptTarget::Local(_) => "local",

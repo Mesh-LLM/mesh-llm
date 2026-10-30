@@ -85,7 +85,7 @@ mod connectivity;
 mod direct_path;
 mod direct_rescue;
 mod gossip;
-mod heartbeat;
+pub(crate) mod heartbeat;
 mod host_role_claims;
 pub(crate) mod model_identity;
 mod node;
@@ -171,8 +171,8 @@ pub use node::{
     LocalRequestMetricsSnapshot, Node, RouteEntry, RoutingTable, detect_local_fit_bytes,
 };
 pub(crate) use node::{
-    MembershipEntry, MembershipNodeConfig, PeerDownReport, membership_token_endpoint,
-    peer_down_endpoint_id,
+    MembershipEntry, MembershipNodeConfig, PeerDownReport, StartupResolution,
+    membership_token_endpoint, peer_down_endpoint_id,
 };
 pub(crate) use node::{NodeStartupSpec, ScopedNodeIdentity};
 pub(crate) use peer_state::{

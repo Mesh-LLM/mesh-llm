@@ -19,9 +19,12 @@ fn serve_parses_runahead_and_ngram_fallback() {
     ]);
     let cli = Cli::try_parse_from(normalized.normalized).expect("clap parse");
 
-    assert_eq!(cli.speculative_verify_window_runahead_tokens, Some(96));
     assert_eq!(
-        cli.speculative_ngram_fallback,
+        cli.speculative.speculative_verify_window_runahead_tokens,
+        Some(96)
+    );
+    assert_eq!(
+        cli.speculative.speculative_ngram_fallback,
         Some(SpeculativeNgramFallbackCli::Draft)
     );
 }
@@ -38,11 +41,13 @@ fn ngram_fallback_accepts_none_and_rejects_unknown_values() {
         "x.gguf",
     ]);
     assert_eq!(
-        cli.speculative_ngram_fallback,
+        cli.speculative.speculative_ngram_fallback,
         Some(SpeculativeNgramFallbackCli::Off)
     );
     assert_eq!(
-        cli.speculative_ngram_fallback.map(|value| value.as_str()),
+        cli.speculative
+            .speculative_ngram_fallback
+            .map(|value| value.as_str()),
         Some("none")
     );
 

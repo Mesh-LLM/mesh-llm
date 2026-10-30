@@ -883,7 +883,7 @@ The control plane uses QUIC ALPN `mesh-llm/1` with the `meshllm.node.v1` protobu
 | 0x0c | CONFIG_PUSH | reserved legacy mesh-plane config stream ID; do not reuse |
 | 0x0d | STREAM_SUBPROTOCOL | protobuf `MeshSubprotocolOpen`, then subprotocol-owned bytes |
 
-Config and inventory mutation must use `mesh-llm-control/1`; `mesh-llm/1` no longer dispatches request/response handlers for the reserved 0x0b/0x0c config stream IDs. Raw TCP relay streams (0x02 RPC, 0x04 HTTP) are unchanged.
+Config and inventory mutation must use `mesh-llm-control/2`; `mesh-llm/1` no longer dispatches request/response handlers for the reserved 0x0b/0x0c config stream IDs. Raw TCP relay streams (0x02 RPC, 0x04 HTTP) are unchanged.
 
 
 ### Verifying protobuf gossip in logs
@@ -930,7 +930,7 @@ cached and a worker does not:
 Owner-control QA needs to prove three things at the same time:
 
 1. Public-mesh join and routed inference still work across released/current binaries.
-2. Explicit endpoint bootstrap and `mesh-llm-control/1` work for current nodes while released peers continue to coexist on the public mesh plane for join, gossip, routing, and inference. Config and inventory mutation stay on owner-control only.
+2. Explicit endpoint bootstrap and `mesh-llm-control/2` work for current nodes while released peers continue to coexist on the public mesh plane for join, gossip, routing, and inference. Config and inventory mutation stay on owner-control only.
 3. A current same-owner requester can run the public `runtime scan-refresh`
    command against exactly one current remote target and receive the sorted,
    metadata-bearing result. Released targets are not expected to return the new
@@ -974,7 +974,7 @@ Expected checks:
 
 - Public mode: both binaries must bring up `/api/status`, list at least one model from `/v1/models`, and complete a routed chat request against the public mesh.
 - Loopback mode: the harness runs both mixed-version directions (`current -> released` and `released -> current`) on a private local mesh, waits for peers to appear on both nodes, then runs `mesh-llm runtime bootstrap --json` plus `mesh-llm runtime get-config --json` against the current-version node's explicit endpoint. When two current same-owner nodes are available, it also records `runtime scan-refresh --json` against the explicitly bootstrapped remote target.
-- Config-only mode: the harness skips public probes, runs the same loopback coexistence checks, then executes the compatibility tests that prove new clients require explicit endpoints, use `mesh-llm-control/1`, reject legacy frames on the owner-control ALPN, and accept a legacy snapshot-only refresh response without claiming rich inventory support.
+- Config-only mode: the harness skips public probes, runs the same loopback coexistence checks, then executes the compatibility tests that prove new clients require explicit endpoints, use `mesh-llm-control/2`, reject legacy frames on the owner-control ALPN, and accept a legacy snapshot-only refresh response without claiming rich inventory support.
 - The current-version bootstrap payload must keep `requires_explicit_remote_endpoint=true` and expose an endpoint token when owner-control is enabled.
 - If the bootstrap payload reports `enabled=false`, the harness records a `PREREQ` result showing that a signed same-owner keystore is required before runtime owner-control requests can be proven on that machine.
 
@@ -1030,7 +1030,7 @@ remain open rather than inherit a unary timeout.
 Failure interpretation:
 
 - `control_endpoint_required`: you did not use the explicit bootstrap endpoint.
-- `control_unsupported`: the target does not negotiate `mesh-llm-control/1`; this should not silently downgrade.
+- `control_unsupported`: the target does not negotiate `mesh-llm-control/2`; this should not silently downgrade.
 - `control_unavailable`: listener, token, network path, or local owner-key loading failed.
 - `unauthorized`: same-owner authentication failed.
 - `revision_conflict`: the apply CAS revision is stale; re-read before retrying.
@@ -1039,7 +1039,7 @@ Failure interpretation:
 Config-only result interpretation:
 
 - `config-missing-endpoint-required`: executable proof that config bootstrap without an explicit owner-control endpoint is rejected when cargo-backed protocol tests run.
-- `config-new-client-owner-control`: executable proof that new clients prefer `mesh-llm-control/1` when cargo-backed protocol tests run.
+- `config-new-client-owner-control`: executable proof that new clients prefer `mesh-llm-control/2` when cargo-backed protocol tests run.
 - `config-control-rejects-legacy-frames`: executable proof that owner-control does not silently accept legacy frames on the wrong ALPN when cargo-backed protocol tests run.
 - `config-current-scan-refresh`: a same-owner current requester used an
   explicit current target endpoint and received a sorted private inventory
@@ -1386,6 +1386,50 @@ Run the command-surface smoke on every product platform without device
 passthrough. Separately qualify backend loading and a minimal operation on
 suitable CUDA, ROCm, Vulkan, or Metal hardware. Preserve unique temp paths and
 ports and verify process/listener cleanup.
+
+## Native model hot loading
+
+The opt-in [live hot-loading test](../../crates/mesh-llm/tests/native_hot_load_live.rs)
+starts the shipped Mesh binary with isolated user/runtime directories and temporary
+loopback ports. It requires a real local causal GGUF and a compatible packaged
+native runtime; it does not mock model loading or use an external model server.
+It reuses `smollm2-q8-inference` from the shared
+[product smoke manifest](../../../ci/model-artifacts/manifests/product-smoke.json),
+also used by product, scripted-binary and SDK smoke tests: SmolLM2-135M-Instruct
+Q8_0 (about 138 MiB). The registry owns the pinned revision, filename and digest.
+
+Build the local runtime with `just skippy` (or select a backend, such as
+`just skippy metal` on macOS), then run from the repository root:
+
+Restore that shared fixture into the usual `$HOME/.models` cache and verify it
+against the manifest before execution:
+
+```bash
+cargo xtool models resolve ci/model-artifacts/manifests/product-smoke.json \
+  --cadence pull-request --artifact-id smollm2-q8-inference \
+  --require-single-file --verify-root "$HOME/.models"
+
+MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/target/debug/native-runtimes" \
+cargo test -p mesh-llm --test native_hot_load_live -- --ignored --nocapture
+```
+
+The test defaults to the manifest's filename under `$HOME/.models`. Set
+`MESH_LLM_HOT_LOAD_TEST_GGUF` to an absolute path if the same restored fixture
+lives elsewhere; the test rejects a file whose size differs from the shared
+fixture and checks its GGUF header. The restore/verification step owns digest
+validation. The test selects
+CPU execution, disables relays, and uses strict local model resolution with
+prefetch disabled. It verifies an initially empty runtime, token generation on
+the first HTTP request, idle removal of the native instance, closure of its
+backend port, preservation of the disk weights, and generation through a new
+instance on the second request while the original Mesh process remains alive.
+
+Ordinary package tests compile this test but leave it ignored because runtime
+and weight assets are external prerequisites. Explicit execution fails if the
+GGUF, runtime, generation or lifecycle checks are unavailable or incorrect;
+missing prerequisites never count as a live pass. Startup/state waits and
+inference requests have deadlines, and the child process is reaped on success
+or failure. Child logs are included in startup, state and generation failures.
 
 ## Deploy to remote node
 

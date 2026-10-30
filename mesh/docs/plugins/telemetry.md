@@ -65,6 +65,15 @@ Request and route metrics are emitted per fronting node. A collector or
 dashboard can aggregate `mesh_llm_requests_inflight` across nodes for a
 mesh-wide in-flight request view.
 
+Every exported stream carries a random `service.instance.id` (a fresh UUID
+per process start) alongside `service.name` and `service.version`, so two
+nodes that share a `service_name` stay separable in one collector. The id
+identifies the process, not the machine or the node identity.
+
+Failed exports are logged at warn, rate-limited to the first failure and then
+at most one line per five minutes, with a one-time recovery line when the
+endpoint comes back; the failed interval's metrics are dropped.
+
 Counters:
 
 - `mesh_llm_model_launch_total`
@@ -100,6 +109,7 @@ Histograms:
 
 - `mesh_llm_model_launch_duration_ms`
 - `mesh_llm_model_uptime_s`
+- `mesh_llm_model_request_duration_ms`
 - `mesh_llm_prompt_tokens` (only when `telemetry.prompt_shape_metrics = true`)
 - `mesh_llm_completion_tokens` (only when `telemetry.prompt_shape_metrics = true`)
 

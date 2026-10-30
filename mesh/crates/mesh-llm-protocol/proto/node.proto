@@ -8,11 +8,12 @@ message GossipFrame {
   bytes sender_id = 3;          // must be exactly 32 bytes; must match QUIC peer identity
   // Node records signed by the node they describe and relayed byte-for-byte.
   // Additive: older nodes ignore this field and keep reading `peers`, which
-  // newer nodes still populate for them.
+  // newer nodes still populate in compatibility meshes. Strict meshes retain
+  // only the authenticated sender's unsigned entry for hop-local metadata.
   repeated SignedNodeRecord signed_records = 4;
   // Cache-affinity evidence signed by the node it describes, relayed
   // byte-for-byte alongside its node record. Additive: older nodes keep
-  // reading PeerAnnouncement.cache_affinity, which newer nodes still send.
+  // reading PeerAnnouncement.cache_affinity in compatibility meshes.
   repeated SignedCacheAffinity signed_cache_affinity = 5;
 }
 
@@ -294,6 +295,7 @@ message MeshRequirements {
   NodeVersionBounds node_version = 1;
   ProtocolGenerationBounds protocol_generation = 2;
   ReleaseAttestationRequirement release_attestation = 3;
+  bool require_signed_gossip = 4; // Opt-in strict relay authentication; bound into the policy hash.
 }
 
 message NodeVersionBounds {
@@ -470,6 +472,9 @@ enum ModelWorkloadClass {
   MODEL_WORKLOAD_CLASS_SPEECH_SYNTHESIS = 5;
   MODEL_WORKLOAD_CLASS_DECISION = 6;
   MODEL_WORKLOAD_CLASS_SPEECH_RECOGNITION = 7;
+  MODEL_WORKLOAD_CLASS_DOCUMENT_OCR = 8;
+  MODEL_WORKLOAD_CLASS_IMAGE_TEXT_SIMILARITY = 9;
+  MODEL_WORKLOAD_CLASS_DEPTH_ESTIMATION = 10;
 }
 
 message ServedModelIdentity {
@@ -819,6 +824,18 @@ message OwnerControlApplyConfigRequest {
   bytes target_node_id = 2;               // exactly 32 bytes
   uint64 expected_revision = 3;
   NodeConfigSnapshot config = 4;
+  // separate approval for each plugin whose command executable changes
+  repeated OwnerControlPluginCommandApproval plugin_command_approvals = 5;
+}
+
+message OwnerControlPluginCommandApproval {
+  string plugin = 1;
+  string command = 2;                     // exact new command executable
+  optional OwnerControlPluginArguments invocation = 3; // exact approved arguments; required for changes
+}
+
+message OwnerControlPluginArguments {
+  repeated string args = 1;
 }
 
 message OwnerControlApplyConfigResponse {

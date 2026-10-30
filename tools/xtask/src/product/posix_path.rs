@@ -84,6 +84,10 @@ pub(super) fn realpath(path: &str, strict: bool) -> Result<String, String> {
 mod tests {
     use super::{dirname, join, normpath};
 
+    // These helpers follow the host's path rules: their callers hand the
+    // result to the filesystem. On Windows `//a/.` is a UNC share and the
+    // separator is `\`, so each platform checks its own rules.
+    #[cfg(not(windows))]
     #[test]
     fn lexical_paths_preserve_ancestry_without_interpreter_root_rules() {
         assert_eq!(normpath("//a/./b/../c/"), "/a/c");
@@ -93,5 +97,20 @@ mod tests {
         assert_eq!(join("", "archive-0"), "archive-0");
         assert_eq!(dirname("/a/b"), "/a");
         assert_eq!(dirname("/b"), "/");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_paths_keep_drive_and_share_roots() {
+        assert_eq!(normpath(r"C:\a\.\b\..\c\"), r"C:\a\c");
+        assert_eq!(normpath(r"C:\..\x"), r"C:\x");
+        assert_eq!(normpath(r"\..\x"), r"\x");
+        assert_eq!(normpath(r"a\..\..\b"), r"..\b");
+        assert_eq!(normpath(r"\\server\share\.\a\..\b"), r"\\server\share\b");
+        assert_eq!(normpath(""), ".");
+        assert_eq!(join("", "archive-0"), "archive-0");
+        assert_eq!(dirname(r"C:\a\b"), r"C:\a");
+        assert_eq!(dirname(r"C:\b"), r"C:\");
+        assert_eq!(dirname(r"\\server\share\a"), r"\\server\share\");
     }
 }

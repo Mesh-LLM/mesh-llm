@@ -164,6 +164,7 @@ fn request_shape_is_rejected_before_artifact_work() {
     ] {
         assert!(
             validate_identity_input(&super::super::proto::RpcRequest {
+                invocation_id: None,
                 method: "DelegatePluginSigningKey".into(),
                 params_json: params.to_string()
             })
@@ -188,6 +189,7 @@ fn early_signing_key_gate_matches_canonical_ed25519_validation() {
         (valid[..62].to_owned(), false),
     ] {
         let request = super::super::proto::RpcRequest {
+            invocation_id: None,
             method: "DelegatePluginSigningKey".into(),
             params_json: serde_json::json!({"lifetime_ms":1000,"signing_public_key":key,"scope":"mesh.openai.exchange.evidence.sign.v1"}).to_string(),
         };
@@ -214,6 +216,7 @@ async fn callback_renewal_gate_is_per_authenticated_plugin_and_precedes_artifact
     .unwrap();
     node.set_plugin_manager(manager.clone()).await;
     let delegate=super::super::proto::RpcRequest {
+        invocation_id: None,
         method:"DelegatePluginSigningKey".into(),
         params_json:serde_json::json!({"lifetime_ms":60_000,"signing_public_key":hex::encode(OwnerKeypair::generate().verifying_key().as_bytes()),"scope":"mesh.openai.exchange.evidence.sign.v1"}).to_string(),
     };
@@ -235,6 +238,7 @@ async fn callback_renewal_gate_is_per_authenticated_plugin_and_precedes_artifact
         &node,
         "active-observer",
         super::super::proto::RpcRequest {
+            invocation_id: None,
             method: "ReadIdentityBundle".into(),
             params_json: "{}".into(),
         },

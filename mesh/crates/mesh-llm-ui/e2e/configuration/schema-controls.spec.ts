@@ -1,6 +1,7 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page, type TestInfo } from '../fixtures/base'
 import { DATA_MODE_STORAGE_KEY } from '@e2e/support/data-mode'
+import { BACKEND_SCHEMA_REFERENCE } from '@/features/configuration/api/config-adapter-test-support'
 
 const FEATURE_FLAGS_STORAGE_KEY = 'mesh-llm-ui-preview:feature-flags:v1'
 
@@ -58,6 +59,9 @@ const schemaPayload = {
     }
   ],
   settings: [
+    ...BACKEND_SCHEMA_REFERENCE.settings.filter(
+      (entry) => entry.canonical_path === 'mesh_requirements.require_signed_gossip'
+    ),
     setting('runtime.native_backend', {
       label: 'Native backend',
       help: 'Runtime backend selected from local availability.',
@@ -328,7 +332,7 @@ async function installConfigurationBackend(page: Page, configOverride: JsonRecor
         featureFlagsKey,
         JSON.stringify({
           global: { newConfigurationPage: true },
-          configuration: { integrations: true, logsSettings: true }
+          configuration: { integrations: true, logsSettings: true, signingAttestation: true }
         })
       )
 
@@ -458,6 +462,13 @@ async function readConfigState(page: Page) {
   })
 }
 
+async function unlockOwnerControls(page: Page, screenshotPath?: string) {
+  const dialog = page.getByRole('dialog', { name: 'Unlock owner controls' })
+  if (screenshotPath) await dialog.screenshot({ path: screenshotPath })
+  await dialog.getByLabel('Owner-control token').fill('config-e2e-owner-token')
+  await dialog.getByRole('button', { name: 'Unlock' }).click()
+}
+
 async function expectNoHorizontalOverflow(page: Page) {
   await expect
     .poll(async () =>
@@ -482,10 +493,56 @@ test.describe('schema-driven configuration controls', () => {
     await installConfigurationBackend(page)
   })
 
+  test('saves signed gossip as a creation-time mesh policy', async ({ page }, testInfo) => {
+    await page.goto(appUrl('/configuration/signing', testInfo))
+    await unlockOwnerControls(page)
+    const policy = page.getByRole('radiogroup', { name: 'Require signed peer gossip' })
+    await expect(policy.getByRole('radio', { name: 'off', exact: true })).toBeChecked()
+    await expect(page.getByText(/Existing meshes keep their original policy\./)).toBeVisible()
+    await expect(page.getByText(/older versions cannot join/)).toBeVisible()
+    await policy.getByRole('radio', { name: 'on', exact: true }).click()
+    await expect(policy.getByRole('radio', { name: 'on', exact: true })).toBeChecked()
+    await expectNoHorizontalOverflow(page)
+    await testInfo.attach('signed-gossip-policy-desktop', {
+      body: await page.screenshot({
+        path: testInfo.outputPath('signed-gossip-policy-desktop.png'),
+        fullPage: true,
+        animations: 'disabled'
+      }),
+      contentType: 'image/png'
+    })
+    await page.setViewportSize({ width: 390, height: 720 })
+    await policy.getByRole('radio', { name: 'off', exact: true }).click()
+    await expect(policy.getByRole('radio', { name: 'off', exact: true })).toBeChecked()
+    await policy.getByRole('radio', { name: 'on', exact: true }).click()
+    await expect(policy.getByRole('radio', { name: 'on', exact: true })).toBeChecked()
+    await policy.scrollIntoViewIfNeeded()
+    await expectNoHorizontalOverflow(page)
+    await testInfo.attach('signed-gossip-policy-mobile', {
+      body: await page.screenshot({
+        path: testInfo.outputPath('signed-gossip-policy-mobile.png'),
+        fullPage: true,
+        animations: 'disabled'
+      }),
+      contentType: 'image/png'
+    })
+    await page.getByRole('tab', { name: 'TOML Output' }).click()
+    await expect(page.getByRole('textbox', { name: 'Configuration TOML source' })).toHaveValue(
+      /require_signed_gossip = true/
+    )
+    await page.getByRole('button', { name: 'Save config' }).click()
+    await expect.poll(async () => (await readConfigState(page)).applyRequests.length).toBe(1)
+    const state = await readConfigState(page)
+    expect(state.applyRequests[0]).toMatchObject({
+      config: { mesh_requirements: { require_signed_gossip: true } }
+    })
+  })
+
   test('renders schema-selected controls with bounds, runtime options, disabled reasons, and accessible layout', async ({
     page
   }, testInfo) => {
     await page.goto(appUrl('/configuration/models', testInfo))
+    await unlockOwnerControls(page, testInfo.outputPath('owner-control-credential.png'))
 
     await expect(page.getByRole('heading', { name: 'Configuration' })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Model settings' })).toBeVisible()
@@ -530,6 +587,7 @@ test.describe('schema-driven configuration controls', () => {
 
   test('renders audit settings in the dedicated Logs tab', async ({ page }, testInfo) => {
     await page.goto(appUrl('/configuration/audit', testInfo))
+    await unlockOwnerControls(page)
 
     await expect(page.getByRole('heading', { name: 'Configuration' })).toBeVisible()
     await expect(page.getByRole('tab', { name: 'Logs' })).toBeVisible()
@@ -566,6 +624,7 @@ test.describe('schema-driven configuration controls', () => {
 
   test('writes edited settings to TOML preview and applies the same config payload', async ({ page }, testInfo) => {
     await page.goto(appUrl('/configuration/models', testInfo))
+    await unlockOwnerControls(page)
     await expect(page.getByRole('heading', { name: 'Model settings' })).toBeVisible()
 
     const contextSize = page.getByRole('slider', { name: 'Context size' })
@@ -613,6 +672,7 @@ test.describe('schema-driven configuration controls', () => {
   test('keeps the configuration surface usable on mobile without clipped controls', async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 390, height: 720 })
     await page.goto(appUrl('/configuration/models', testInfo))
+    await unlockOwnerControls(page)
 
     await expect(page.getByRole('heading', { name: 'Configuration' })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Model settings' })).toBeVisible()
@@ -640,6 +700,7 @@ test.describe('native runtime backend pin', () => {
   test('preserves an unmatched runtime backend pin through an unrelated edit and save', async ({ page }, testInfo) => {
     await installConfigurationBackend(page, pinnedRuntimeConfig)
     await page.goto(appUrl('/configuration/models', testInfo))
+    await unlockOwnerControls(page)
     await expect(page.getByRole('heading', { name: 'Model settings' })).toBeVisible()
 
     await page.getByRole('tab', { name: 'Runtime' }).click()

@@ -454,6 +454,7 @@ mod tests {
 
     fn forward_error_peer() -> PeerConfig {
         PeerConfig {
+            persistent_lane_marker: false,
             stage_id: "stage-1".to_string(),
             stage_index: 1,
             endpoint: "10.0.0.2:50051".to_string(),
