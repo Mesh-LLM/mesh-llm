@@ -437,6 +437,7 @@ pub(super) async fn prepare_runtime_startup(
     effective_mode: mesh_llm_config::RuntimeMode,
 ) -> Result<Option<PreparedRuntimeStartup>> {
     validate_runtime_cli_model_options(options)?;
+    super::native_model_lifecycle::sources::validate_split(config, options)?;
     let startup_specs = if effective_mode == mesh_llm_config::RuntimeMode::OnDemand
         && !cli_has_explicit_models(options)
     {
@@ -701,7 +702,7 @@ fn effective_startup_model_config(
     }
 }
 
-fn configured_server_alias(
+pub(super) fn configured_server_alias(
     model: &plugin::ModelConfigEntry,
     defaults: Option<&plugin::ModelConfigDefaults>,
 ) -> Option<String> {
@@ -805,6 +806,7 @@ pub(super) fn build_startup_model_specs(
     if options.client {
         return Ok(Vec::new());
     }
+    super::native_model_lifecycle::sources::validate_split(config, options)?;
 
     let mut specs = Vec::new();
     let default_skippy = config

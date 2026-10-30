@@ -187,6 +187,7 @@ struct ResolvedRuntimeModelSource {
 
 /// State owned by the post-launch registration phase.
 struct RuntimeModelLaunchSuccess {
+    native_residency: bool,
     requested_model: String,
     config_model_id: Option<String>,
     profile: String,
@@ -303,6 +304,7 @@ async fn finish_runtime_model_load(
     success: RuntimeModelLaunchSuccess,
 ) -> api::RuntimeLoadResponse {
     let RuntimeModelLaunchSuccess {
+        native_residency,
         requested_model,
         config_model_id,
         profile,
@@ -338,7 +340,6 @@ async fn finish_runtime_model_load(
     });
     ctx.survey_telemetry
         .record_launch_success(&survey_loaded_model, launch_started.elapsed());
-    add_runtime_local_target(ctx.target_tx, &loaded_name, handle.port);
     // Publish Skippy's render-only reasoning-control observations for this model,
     // so `/v1/models` can attach them to the entry this node serves.
     skippy::register_local_thinking(&loaded_name, handle.thinking.as_ref());
@@ -403,6 +404,7 @@ async fn finish_runtime_model_load(
     );
     ctx.runtime_survey_models
         .insert(instance_id.clone(), survey_loaded_model);
+    let loaded_port = handle.port;
     let loaded_backend = handle.backend.clone();
     let loaded_context_length = handle.context_length;
     let lifecycle = std::sync::Arc::new(tokio::sync::Mutex::new(InstanceLifecycleRecord::new(
@@ -421,6 +423,15 @@ async fn finish_runtime_model_load(
             lifecycle,
         },
     );
+    if native_residency && let Some(service) = ctx.node.native_model_lifecycle.get() {
+        service.record_loaded(
+            config_model_id.as_deref().unwrap_or(&requested_model),
+            &instance_id,
+            &loaded_name,
+            loaded_port,
+        );
+    }
+    add_runtime_local_target(ctx.target_tx, &loaded_name, loaded_port);
     record_runtime_model_load_terminal(
         RuntimeOperationalEvent::ModelReady,
         &loaded_name,
@@ -445,6 +456,7 @@ pub(crate) async fn run_auto_load_runtime_model(
     spec: String,
     config_model_id: Option<String>,
     profile: String,
+    native_residency: bool,
 ) -> Result<api::RuntimeLoadResponse> {
     crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let (spec, profile) = normalize_runtime_model_request_for_config(
@@ -468,25 +480,58 @@ pub(crate) async fn run_auto_load_runtime_model(
         runtime_model_audit_context(None, &instance_id),
         load_started,
     )?;
+    let prepared = match model_overrides.filter(|model| {
+        config_model_id.is_some()
+            && model.lifecycle.load == mesh_llm_config::managed_models::ModelLoadPolicy::OnDemand
+    }) {
+        Some(model) => Some(super::configured_load::prepare(ctx, model).await?),
+        None => None,
+    };
+    let resolved = match prepared.as_ref() {
+        Some(prepared) => ResolvedRuntimeModelSource {
+            model_path: prepared.plan.resolved_path.clone(),
+            runtime_model_name: prepared.plan.declared_ref.clone(),
+            local_source_required: prepared.plan.local_source_required,
+        },
+        None => {
+            resolve_runtime_model_source(
+                ctx,
+                &spec,
+                config_model_id.as_deref(),
+                &profile,
+                model_overrides,
+                &instance_id,
+                load_started,
+            )
+            .await?
+        }
+    };
     let ResolvedRuntimeModelSource {
         model_path,
         runtime_model_name,
         local_source_required,
-    } = resolve_runtime_model_source(
-        ctx,
-        &spec,
-        config_model_id.as_deref(),
-        &profile,
-        model_overrides,
-        &instance_id,
-        load_started,
-    )
-    .await?;
+    } = resolved;
+    skippy::register_local_source_policy(&runtime_model_name, &profile, local_source_required);
+    let pinned_gpu = prepared
+        .as_ref()
+        .and_then(|prepared| prepared.plan.pinned_gpu.as_ref());
+    let mmproj_path = prepared
+        .as_ref()
+        .and_then(|prepared| prepared.plan.mmproj_path.as_deref());
+    let device_override = prepared.as_ref().and_then(|prepared| {
+        super::super::startup_models::startup_device_override(prepared.plan.gpu_id.as_deref())
+    });
+    let capacity_bytes = prepared
+        .as_ref()
+        .map(|prepared| prepared.capacity_bytes)
+        .unwrap_or_else(|| ctx.node.local_runtime_capacity_bytes());
     // §8.2 "model resolution completed": the model's source is now known
     // (local path or remote catalog ref), before any native load work.
     load_op.resolution_completed(&runtime_model_name);
     let requested_model = spec.clone();
     let model_bytes = plan_runtime_model_bytes(&model_path, &requested_model).await;
+    let admission_bytes =
+        super::configured_load::model_and_projector_bytes(model_bytes, mmproj_path)?;
     let ctx_size_override = runtime_model_ctx_size_override(ctx.options, model_overrides);
     let parallel_override = crate::runtime::startup_models::resolve_model_parallel_override(
         model_overrides.and_then(|m| m.parallel),
@@ -497,9 +542,9 @@ pub(crate) async fn run_auto_load_runtime_model(
             ctx.runtime_capacity_ledger,
             &instance_id,
             &runtime_model_name,
-            None,
-            ctx.node.local_runtime_capacity_bytes(),
-            model_bytes,
+            pinned_gpu,
+            capacity_bytes,
+            admission_bytes,
         ),
         runtime_model_audit_context(Some(&runtime_model_name), &instance_id),
         load_started,
@@ -531,12 +576,14 @@ pub(crate) async fn run_auto_load_runtime_model(
                 .or_else(|| model_overrides.map(|model| model.model.as_str())),
             runtime_profile: &profile,
             model_path: &model_path,
-            preindexed_split_package: None,
+            preindexed_split_package: prepared
+                .as_ref()
+                .and_then(|prepared| prepared.plan.preindexed_split_package.as_ref()),
             model_bytes,
-            mmproj_override: None,
+            mmproj_override: mmproj_path,
             ctx_size_override,
-            pinned_gpu: None,
-            device_override: None,
+            pinned_gpu,
+            device_override,
             capacity_budget_bytes: Some(capacity_budget_bytes),
             cache_type_k_override: model_overrides.and_then(|m| m.cache_type_k.as_deref()),
             cache_type_v_override: model_overrides.and_then(|m| m.cache_type_v.as_deref()),
@@ -601,6 +648,7 @@ pub(crate) async fn run_auto_load_runtime_model(
     Ok(finish_runtime_model_load(
         ctx,
         RuntimeModelLaunchSuccess {
+            native_residency,
             requested_model,
             config_model_id,
             profile,

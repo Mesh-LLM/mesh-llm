@@ -145,7 +145,10 @@ owner intents. Capacity admission includes the existing runtime memory budget;
 a failed cold load returns HTTP 503 and can be retried.
 
 This initial policy applies to uniquely configured model identifiers and
-instances loaded on demand. Startup models, split controllers, and manually
+instances loaded on demand. Configured aliases and cached public IDs resolve to the same residency.
+On-demand configuration rejects `--split` and `--split-topology-lock`; use
+`load = "startup"` for split serving. Explicit CLI model selections retain their
+eager startup behavior. Startup models, split controllers, and manually
 loaded instances retain their existing residency behavior. Automatic model
 selection chooses ready models; explicitly name a cold configured model to
 load it. Direct standalone Skippy serving retains its existing lifecycle.

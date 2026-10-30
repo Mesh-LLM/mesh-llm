@@ -1602,15 +1602,20 @@ impl Node {
         let Some(lifecycle) = lifecycle else {
             return Ok(None);
         };
+        let residency = match self.native_model_lifecycle.get() {
+            Some(service) => service.lease_port(port).await,
+            None => None,
+        };
         let record = lifecycle.lock().await;
         if !record.is_accepting_work() {
             return Err(crate::runtime::InstanceAdmissionError::NotAccepting {
                 state: record.state(),
             });
         }
-        Ok(Some(crate::runtime::InstanceRequestGuard::new(
-            record.in_flight_tracker(),
-        )))
+        Ok(Some(
+            crate::runtime::InstanceRequestGuard::new(record.in_flight_tracker())
+                .with_residency(residency),
+        ))
     }
 
     pub(crate) async fn refresh_served_model_descriptors(&self) {

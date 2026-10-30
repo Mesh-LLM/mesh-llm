@@ -574,9 +574,14 @@ pub(super) async fn run_auto_handle_model_intent(
                     .stack_load_completion(&spec, &profile, tx);
             }
 
-            let result =
-                run_auto_load_runtime_model(ctx, spec.clone(), config_model_id, profile.clone())
-                    .await;
+            let result = run_auto_load_runtime_model(
+                ctx,
+                spec.clone(),
+                config_model_id,
+                profile.clone(),
+                source == IntentSource::NativeLifecycle,
+            )
+            .await;
             match &result {
                 Ok(response) => {
                     ctx.model_target_reconciliation_state

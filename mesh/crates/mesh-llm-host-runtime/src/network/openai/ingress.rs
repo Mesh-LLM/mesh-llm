@@ -351,7 +351,7 @@ async fn resolve_auto_routed_model(
     if let Some(model) = request.model_name.as_deref()
         && !automatic::is_directive(model)
     {
-        return explicit_model_route(request, model, descriptors);
+        return native_residency::named_model_route(node, request, model, descriptors);
     }
 
     request.ensure_body_json();
