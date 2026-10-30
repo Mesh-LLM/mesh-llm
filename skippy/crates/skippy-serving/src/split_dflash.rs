@@ -269,6 +269,7 @@ mod tests {
                 stage_id: "stage-2".to_string(),
                 stage_index: 2,
                 endpoint: "tcp://127.0.0.1:1".to_string(),
+                persistent_lane_marker: false,
             }),
             ..StageConfig::default()
         }
