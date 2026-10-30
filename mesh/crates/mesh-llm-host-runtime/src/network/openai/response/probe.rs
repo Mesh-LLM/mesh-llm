@@ -20,6 +20,9 @@ pub(in crate::network::openai::response) struct ParsedResponseHeaders {
     /// rebuild fresh HTTP responses instead of forwarding upstream headers.
     pub(in crate::network::openai::response) client_nonce: Option<String>,
     pub(in crate::network::openai::response) nonce_origin: Option<String>,
+    /// The serving node's [`SERVED_WEIGHTS_DIGEST_HEADER`], kept for the same
+    /// reason: a rebuilt response must still carry it back to the routing node.
+    pub(in crate::network::openai::response) served_weights_digest: Option<String>,
 }
 
 /// Append the capsule client nonce and origin-marker headers (when present)
@@ -58,6 +61,49 @@ pub(in crate::network::openai::response) fn append_mesh_served_by_header(
 ) {
     if let Some(served_by) = served_by {
         header.push_str(&format!("{MESH_SERVED_BY_HEADER}: {served_by}\r\n"));
+    }
+}
+
+/// The header a serving node adds to a 2xx response it served from its own
+/// weights for a mesh peer: the SHA-256 of the GGUF it loaded for the model
+/// (`ServedModelIdentity::weights_digest`). Gossip never carries this digest
+/// (see `protocol/convert.rs`), so this per-response header is how the routing
+/// node learns what the peer says it ran. The routing node records it as the
+/// peer's own, unverified statement; see `PeerCapsuleIdSink`.
+pub(in crate::network::openai) const SERVED_WEIGHTS_DIGEST_HEADER: &str = "x-mesh-weights-digest";
+
+/// Splice [`SERVED_WEIGHTS_DIGEST_HEADER`] into a probed 2xx response this
+/// node served, before any relay path reads the probe. Raw relays forward it
+/// as is; response adapters that rebuild the head echo it from
+/// [`ParsedResponseHeaders::served_weights_digest`]. A no-op without a digest
+/// or on a non-2xx response, which served nothing.
+pub(in crate::network::openai::response) fn add_served_weights_digest_header(
+    probe: &mut ResponseProbe,
+    weights_digest: Option<&str>,
+) {
+    let Some(digest) = weights_digest else {
+        return;
+    };
+    if !(200..300).contains(&probe.status_code) {
+        return;
+    }
+    let delta = insert_header_before_body(
+        &mut probe.buffered,
+        probe.header_end,
+        SERVED_WEIGHTS_DIGEST_HEADER,
+        digest,
+    );
+    probe.header_end = probe.header_end.saturating_add_signed(delta);
+}
+
+/// Append [`SERVED_WEIGHTS_DIGEST_HEADER`] (when present) to a hand-built
+/// response header string. Sibling of `append_mesh_served_by_header`.
+pub(in crate::network::openai::response) fn append_served_weights_digest_header(
+    header: &mut String,
+    weights_digest: Option<&str>,
+) {
+    if let Some(digest) = weights_digest {
+        header.push_str(&format!("{SERVED_WEIGHTS_DIGEST_HEADER}: {digest}\r\n"));
     }
 }
 
@@ -234,6 +280,7 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
             let mut chunked = false;
             let mut client_nonce = None;
             let mut nonce_origin = None;
+            let mut served_weights_digest = None;
             let nonce_header = skippy_inference_api::lifecycle::CLIENT_NONCE_HEADER.as_str();
             let nonce_origin_header =
                 skippy_inference_api::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str();
@@ -264,6 +311,13 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
                     nonce_origin = std::str::from_utf8(header.value)
                         .ok()
                         .map(|value| value.trim().to_string());
+                } else if header
+                    .name
+                    .eq_ignore_ascii_case(SERVED_WEIGHTS_DIGEST_HEADER)
+                {
+                    served_weights_digest = std::str::from_utf8(header.value)
+                        .ok()
+                        .map(|value| value.trim().to_string());
                 }
             }
             Ok(Some(ParsedResponseHeaders {
@@ -274,6 +328,7 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
                 chunked,
                 client_nonce,
                 nonce_origin,
+                served_weights_digest,
             }))
         }
         Ok(httparse::Status::Partial) => Ok(None),

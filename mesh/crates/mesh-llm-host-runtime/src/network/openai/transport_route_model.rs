@@ -183,7 +183,7 @@ async fn execution_candidates(
 
 fn clear_peer_capsule(sink: Option<&PeerCapsuleIdSink>) {
     if let Some(sink) = sink {
-        sink.take();
+        sink.clear();
     }
 }
 
@@ -350,9 +350,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
             request,
             Some(model),
             "mesh",
-            super::super::exchange_admission::SelectedRouteTarget::MeshLabel(&format!(
-                "{target:?}"
-            )),
+            super::super::exchange_admission::SelectedRouteTarget::Mesh(&target),
             state.attempts,
         )
         .await
@@ -1196,7 +1194,7 @@ mod tests {
                 let response = if connect_order.fetch_add(1, Ordering::SeqCst) == 0 {
                     let body = r#"{"error":"prompt exceeds the context window limit"}"#;
                     format!(
-                        "HTTP/1.1 400 Bad Request\r\nX-Capsule-Id: cap-from-the-first-peer\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        "HTTP/1.1 400 Bad Request\r\nX-Capsule-Id: cap-from-the-first-peer\r\nx-mesh-weights-digest: digest-from-the-first-peer\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
                         body.len(),
                         body
                     )
@@ -1307,6 +1305,7 @@ mod tests {
             "the sink must not carry the FIRST (retried-away-from) peer's \
              capsule_id onto a later attempt that never asserted one itself"
         );
+        assert_eq!(sink.take_weights_digest(), None, "nor its weights digest");
         assert_eq!(
             served_by.take(),
             None,

@@ -889,6 +889,7 @@ async fn route_missing_local_model(
                         peer_capsule_id: peer_capsule_id_sink.take(),
                         target,
                         observed_served_by_hex: served_by_node_id_sink.take(),
+                        peer_weights_digest: peer_capsule_id_sink.take_weights_digest(),
                         request_digest,
                         twin_bracket_id: twin_bracket,
                     },
@@ -1552,6 +1553,7 @@ async fn route_request(
                     model_name,
                     peer_hex,
                     peer_capsule_id_sink.take(),
+                    peer_capsule_id_sink.take_weights_digest(),
                     request_digest.clone(),
                 )
             });
@@ -1585,7 +1587,7 @@ async fn route_request(
             request,
             None,
             "mesh",
-            super::exchange_admission::SelectedRouteTarget::MeshLabel(&format!("{target:?}")),
+            super::exchange_admission::SelectedRouteTarget::Mesh(&target),
             1,
         )
         .await

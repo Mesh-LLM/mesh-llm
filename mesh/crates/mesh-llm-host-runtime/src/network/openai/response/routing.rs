@@ -5,7 +5,8 @@ use super::common::{
 };
 use super::dispatch::{RelayAttemptContext, relay_attempted_response};
 use super::probe::{
-    PEER_CAPSULE_ID_HEADER, ResponseProbe, peer_response_header_value, probe_http_response,
+    PEER_CAPSULE_ID_HEADER, ResponseProbe, SERVED_WEIGHTS_DIGEST_HEADER,
+    add_served_weights_digest_header, peer_response_header_value, probe_http_response,
     probe_http_response_local,
 };
 use crate::logging::OpenAiRouteObserver;
@@ -37,11 +38,6 @@ pub(in crate::network::openai) async fn route_local_attempt(
         served_by,
         peer_capsule_id,
     } = logging;
-    // The decoded model identity is only consulted by seller payment
-    // admission. Keep the parameter deliberate when that feature is compiled
-    // out so the denied-warnings build does not flag it as unused.
-    #[cfg(not(feature = "payments"))]
-    let _ = model;
     #[cfg(feature = "payments")]
     {
         if !super::paid::is_local_origin(tcp_stream) {
@@ -66,6 +62,7 @@ pub(in crate::network::openai) async fn route_local_attempt(
             }
         }
     }
+    let served_weights_digest = served_weights_digest_for_mesh_peer(node, tcp_stream, model).await;
     let Ok((_instance_request, mut upstream)) = acquire_local_attempt_upstream(node, port).await
     else {
         return RouteAttemptResult::RetryableUnavailable;
@@ -86,10 +83,33 @@ pub(in crate::network::openai) async fn route_local_attempt(
         retry_policy,
         response_adapter,
         served_by,
+        served_weights_digest.as_deref(),
         peer_capsule_id,
         route_observer,
     )
     .await
+}
+
+/// This node's load-time weights digest for `model`, to return to a mesh peer
+/// that asked this node to serve it (see `SERVED_WEIGHTS_DIGEST_HEADER`).
+/// `None` for a local client, which reads this node's own exchange events,
+/// and when this node has no digest for the model. Matches the descriptor on
+/// `model_name`, as this node's own terminal provenance does, so both report
+/// the same digest.
+async fn served_weights_digest_for_mesh_peer(
+    node: &mesh::Node,
+    tcp_stream: &ClientStream,
+    model: Option<&str>,
+) -> Option<String> {
+    let model = model?;
+    if !tcp_stream.is_mesh_peer() {
+        return None;
+    }
+    node.served_model_descriptors()
+        .await
+        .into_iter()
+        .find(|descriptor| descriptor.identity.model_name == model)
+        .and_then(|descriptor| descriptor.identity.weights_digest)
 }
 
 async fn acquire_local_attempt_upstream(
@@ -119,6 +139,7 @@ pub(super) async fn route_local_attempt_after_forward<U: AsyncRead + Unpin + Can
     retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
     served_by: Option<&str>,
+    served_weights_digest: Option<&str>,
     peer_capsule_id: Option<&PeerCapsuleIdSink>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> RouteAttemptResult {
@@ -127,8 +148,11 @@ pub(super) async fn route_local_attempt_after_forward<U: AsyncRead + Unpin + Can
             cancel_upstream_if_client_disconnected(RouteAttemptResult::ClientDisconnected, upstream)
                 .await
         }
-        ProbeOutcome::Response(Ok(probe)) => {
-            record_peer_capsule_id(peer_capsule_id, &probe);
+        ProbeOutcome::Response(Ok(mut probe)) => {
+            record_peer_response_markers(peer_capsule_id, &probe);
+            // Recorded before the splice below, so this node never records its
+            // own digest as a peer's.
+            add_served_weights_digest_header(&mut probe, served_weights_digest);
             let result = relay_attempted_response(
                 tcp_stream,
                 upstream,
@@ -199,7 +223,7 @@ async fn route_remote_attempt_after_forward<R: AsyncRead + Unpin + CancelUpstrea
             .await
         }
         ProbeOutcome::Response(Ok(probe)) => {
-            record_peer_capsule_id(peer_capsule_id, &probe);
+            record_peer_response_markers(peer_capsule_id, &probe);
             let result = relay_attempted_response(
                 tcp_stream,
                 quic_recv,
@@ -334,18 +358,20 @@ async fn forward_buffered_request<W: AsyncWrite + Unpin>(
 }
 
 /// Peek the just-probed, untouched response headers for a peer's
-/// `X-Capsule-Id` and stash it in `sink`, before any relay/adapter rewrite
-/// runs. A no-op when `sink` is `None` (every attempt except the
-/// `RemoteMesh` dispatch path) or the header is absent — never invents a
-/// value.
-fn record_peer_capsule_id(sink: Option<&PeerCapsuleIdSink>, probe: &ResponseProbe) {
+/// `X-Capsule-Id` and `x-mesh-weights-digest` and stash them in `sink`, before
+/// any relay/adapter rewrite runs. A no-op when `sink` is `None` (every attempt
+/// except the `RemoteMesh` dispatch path) or a header is absent — never
+/// invents a value.
+fn record_peer_response_markers(sink: Option<&PeerCapsuleIdSink>, probe: &ResponseProbe) {
     let Some(sink) = sink else {
         return;
     };
-    if let Some(capsule_id) =
-        peer_response_header_value(&probe.buffered, probe.header_end, PEER_CAPSULE_ID_HEADER)
-    {
+    let header = |name| peer_response_header_value(&probe.buffered, probe.header_end, name);
+    if let Some(capsule_id) = header(PEER_CAPSULE_ID_HEADER) {
         sink.set(capsule_id);
+    }
+    if let Some(weights_digest) = header(SERVED_WEIGHTS_DIGEST_HEADER) {
+        sink.set_weights_digest(weights_digest);
     }
 }
 
@@ -454,6 +480,7 @@ mod tests {
                 RequestId::new(),
                 ResponseRetryPolicy::next_target_available(false),
                 ResponseAdapter::None,
+                None,
                 None,
                 None,
                 OpenAiRouteObserver::default(),
@@ -664,7 +691,7 @@ mod tests {
     async fn a_remote_attempt_records_the_peers_capsule_id_into_the_sink() {
         let body = "x".repeat(8);
         let header = format!(
-            "HTTP/1.1 200 OK\r\nX-Capsule-Id: cap-peer-1\r\nContent-Length: {}\r\n\r\n{body}",
+            "HTTP/1.1 200 OK\r\nX-Capsule-Id: cap-peer-1\r\nx-mesh-weights-digest: 74a4da8c\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
         );
         let mut upstream = ScriptedUpstream::new(vec![Ok(header.into_bytes())]);
@@ -696,6 +723,7 @@ mod tests {
 
         let sink = task.await.unwrap();
         assert_eq!(sink.take(), Some("cap-peer-1".to_string()));
+        assert_eq!(sink.take_weights_digest(), Some("74a4da8c".to_string()));
     }
 
     /// Mutant: no `X-Capsule-Id` on the peer's response — the sink stays
@@ -736,6 +764,177 @@ mod tests {
 
         let sink = task.await.unwrap();
         assert_eq!(sink.take(), None);
+        assert_eq!(sink.take_weights_digest(), None);
+    }
+
+    /// Serve `upstream_response` from this node with `weights_digest` set and
+    /// return the bytes the client received.
+    async fn relay_local_with_weights_digest(
+        upstream_response: String,
+        response_adapter: ResponseAdapter,
+        weights_digest: Option<&'static str>,
+    ) -> String {
+        let mut upstream = ScriptedUpstream::new(vec![Ok(upstream_response.into_bytes())]);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
+            route_local_attempt_after_forward(
+                &mut client,
+                &mut upstream,
+                0,
+                RequestId::new(),
+                ResponseRetryPolicy::next_target_available(false),
+                response_adapter,
+                None,
+                weights_digest,
+                None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+        });
+        let mut socket = TcpStream::connect(address).await.unwrap();
+        let mut relayed = Vec::new();
+        socket.read_to_end(&mut relayed).await.unwrap();
+        task.await.unwrap();
+        String::from_utf8(relayed).unwrap()
+    }
+
+    /// A node serving a mesh peer returns its weights digest on the response,
+    /// both when it relays the backend's head as is and when a response
+    /// adapter rebuilds it.
+    #[tokio::test]
+    async fn a_local_attempt_returns_the_served_weights_digest() {
+        let body = r#"{"id":"c","object":"chat.completion","choices":[]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        for adapter in [
+            ResponseAdapter::None,
+            ResponseAdapter::OpenAiChatCompletionsJson,
+        ] {
+            let relayed =
+                relay_local_with_weights_digest(response.clone(), adapter, Some("74a4da8c")).await;
+            assert!(
+                relayed.contains("x-mesh-weights-digest: 74a4da8c\r\n"),
+                "{adapter:?}: {relayed}"
+            );
+        }
+        let relayed = relay_local_with_weights_digest(response, ResponseAdapter::None, None).await;
+        assert!(!relayed.contains("x-mesh-weights-digest"), "{relayed}");
+
+        // A streamed chat completion rebuilds its head too.
+        let sse = "data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[]}\n\ndata: [DONE]\n\n";
+        let streamed = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{sse}",
+            sse.len()
+        );
+        let relayed = relay_local_with_weights_digest(
+            streamed,
+            ResponseAdapter::OpenAiChatCompletionsStream,
+            Some("74a4da8c"),
+        )
+        .await;
+        assert!(
+            relayed.contains("x-mesh-weights-digest: 74a4da8c\r\n"),
+            "{relayed}"
+        );
+    }
+
+    /// Only a mesh peer that reached this node over its QUIC tunnel is given
+    /// this node's weights digest; a local TCP client is not, and a model this
+    /// node does not describe yields none.
+    #[tokio::test]
+    async fn only_a_mesh_peer_is_given_this_nodes_weights_digest() {
+        const TEST_ALPN: &[u8] = b"mesh-llm/weights-digest-peer-test/1";
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        *node.served_model_descriptors.lock().await = vec![mesh::ServedModelDescriptor {
+            identity: mesh::ServedModelIdentity {
+                model_name: "served".to_owned(),
+                weights_digest: Some("74a4da8c".to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }];
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let _tcp_client = TcpStream::connect(address).await.unwrap();
+        let (tcp, _) = listener.accept().await.unwrap();
+        let tcp = ClientStream::from(tcp).with_response_metadata(Vec::new());
+        assert!(!tcp.is_mesh_peer());
+        assert_eq!(
+            served_weights_digest_for_mesh_peer(&node, &tcp, Some("served")).await,
+            None
+        );
+        assert!(!ClientStream::null().is_mesh_peer());
+
+        let server = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .secret_key(iroh::SecretKey::generate())
+            .alpns(vec![TEST_ALPN.to_vec()])
+            .relay_mode(iroh::endpoint::RelayMode::Disabled)
+            .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+            .unwrap()
+            .bind()
+            .await
+            .unwrap();
+        let server_endpoint = server.clone();
+        let accepting = tokio::spawn(async move {
+            let incoming = server_endpoint.accept().await.expect("connection arrives");
+            let connection = incoming.await.expect("connection negotiates");
+            let (send, recv) = connection.accept_bi().await.expect("stream arrives");
+            (connection, send, recv)
+        });
+        let client = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .secret_key(iroh::SecretKey::generate())
+            .relay_mode(iroh::endpoint::RelayMode::Disabled)
+            .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+            .unwrap()
+            .bind()
+            .await
+            .unwrap();
+        let connection = client.connect(server.addr(), TEST_ALPN).await.unwrap();
+        let (mut request_send, _response_recv) = connection.open_bi().await.unwrap();
+        request_send.write_all(b"x").await.unwrap();
+        let (_accepted, send, recv) = accepting.await.unwrap();
+        let quic = ClientStream::from_quic_with_prefix(recv, send, Vec::new())
+            .with_response_metadata(Vec::new());
+        assert!(quic.is_mesh_peer());
+        assert_eq!(
+            served_weights_digest_for_mesh_peer(&node, &quic, Some("served")).await,
+            Some("74a4da8c".to_owned())
+        );
+        assert_eq!(
+            served_weights_digest_for_mesh_peer(&node, &quic, Some("other")).await,
+            None
+        );
+        assert_eq!(
+            served_weights_digest_for_mesh_peer(&node, &quic, None).await,
+            None
+        );
+
+        client.close().await;
+        server.close().await;
+        node.endpoint.close().await;
+    }
+
+    /// A non-2xx response served nothing, so it carries no digest.
+    #[tokio::test]
+    async fn a_failed_local_attempt_returns_no_weights_digest() {
+        let body = r#"{"error":{"message":"busy"}}"#;
+        let response = format!(
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let relayed =
+            relay_local_with_weights_digest(response, ResponseAdapter::None, Some("74a4da8c"))
+                .await;
+        assert!(relayed.starts_with("HTTP/1.1 503"), "{relayed}");
+        assert!(!relayed.contains("x-mesh-weights-digest"), "{relayed}");
     }
 
     #[tokio::test]
