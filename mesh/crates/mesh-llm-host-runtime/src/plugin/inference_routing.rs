@@ -68,7 +68,7 @@ impl PluginManager {
         model: &str,
         path: &str,
     ) -> Result<Option<InferenceEndpointRoute>> {
-        let is_document_ocr = path.split('?').next() == Some("/v1/documents/ocr");
+        let is_document_ocr = path.split('?').next() == Some("/mesh/v1/documents/ocr");
         let mut endpoints = self.inference_endpoints().await?;
         sort_endpoints(&mut endpoints);
         Ok(endpoints.into_iter().find(|endpoint| {
@@ -142,7 +142,7 @@ mod tests {
             ])
             .await;
         let ocr = manager
-            .inference_endpoint_for_request("same-model", "/v1/documents/ocr")
+            .inference_endpoint_for_request("same-model", "/mesh/v1/documents/ocr")
             .await
             .expect("lookup")
             .expect("OCR endpoint");

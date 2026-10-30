@@ -50,24 +50,23 @@ fn spawn_runtime_model_exit_watcher(
     });
 }
 
-async fn plan_runtime_model_bytes(model_path: &Path, requested_model: &str) -> u64 {
+async fn plan_runtime_model_sizing(model_path: &Path, requested_model: &str) -> RuntimeModelSizing {
     let planning_path = model_path.to_path_buf();
-    tokio::task::spawn_blocking(move || runtime_model_planning_bytes(&planning_path))
+    tokio::task::spawn_blocking(move || runtime_model_sizing(&planning_path))
         .await
-        .unwrap_or_else(|err| {
-            Err(anyhow::anyhow!(
-                "join runtime model byte planning task: {err}"
-            ))
-        })
+        .unwrap_or_else(|err| Err(anyhow::anyhow!("join runtime model sizing task: {err}")))
         .unwrap_or_else(|err| {
             let fallback = election::total_model_bytes(model_path);
             tracing::warn!(
                 model = %requested_model,
                 error = %err,
                 fallback_bytes = fallback,
-                "failed to resolve runtime model planning bytes; using filesystem size fallback"
+                "failed to resolve runtime model sizing; using filesystem size fallback"
             );
-            fallback
+            RuntimeModelSizing {
+                model_bytes: fallback,
+                compact_meta: None,
+            }
         })
 }
 
@@ -450,6 +449,60 @@ async fn finish_runtime_model_load(
     }
 }
 
+/// Audit configured preflight before any native source policy is published.
+async fn prepare_configured_runtime_load(
+    ctx: &RunAutoRuntimeLoopContext<'_>,
+    model_overrides: Option<&plugin::ModelConfigEntry>,
+    config_model_id: Option<&str>,
+    instance_id: &str,
+    load_started: Instant,
+) -> Result<Option<super::configured_load::ConfiguredLoadPlan>> {
+    match model_overrides.filter(|model| {
+        config_model_id.is_some()
+            && model.lifecycle.load == mesh_llm_config::managed_models::ModelLoadPolicy::OnDemand
+    }) {
+        Some(model) => Ok(Some(audit_runtime_model_load_result(
+            super::configured_load::prepare(ctx, model).await,
+            runtime_model_audit_context(None, instance_id),
+            load_started,
+        )?)),
+        None => Ok(None),
+    }
+}
+
+/// Pair capacity admission failure auditing with source-policy rollback.
+fn reserve_audited_runtime_capacity(
+    ctx: &mut RunAutoRuntimeLoopContext<'_>,
+    instance_id: &str,
+    runtime_model_name: &str,
+    profile: &str,
+    target: RuntimeCapacityTarget<'_>,
+    model_bytes: u64,
+    load_started: Instant,
+) -> Result<RuntimeCapacityReservation> {
+    match audit_runtime_model_load_result(
+        reserve_runtime_capacity_for_model(
+            ctx.runtime_capacity_ledger,
+            instance_id,
+            runtime_model_name,
+            target,
+            model_bytes,
+        ),
+        runtime_model_audit_context(Some(runtime_model_name), instance_id),
+        load_started,
+    ) {
+        Ok(reservation) => Ok(reservation),
+        Err(error) => {
+            super::unload::unregister_local_source_policy_if_unused(
+                ctx,
+                runtime_model_name,
+                profile,
+            );
+            Err(error)
+        }
+    }
+}
+
 /// Run auto-load for a runtime model.
 pub(crate) async fn run_auto_load_runtime_model(
     ctx: &mut RunAutoRuntimeLoopContext<'_>,
@@ -480,14 +533,19 @@ pub(crate) async fn run_auto_load_runtime_model(
         runtime_model_audit_context(None, &instance_id),
         load_started,
     )?;
-    let prepared = match model_overrides.filter(|model| {
-        config_model_id.is_some()
-            && model.lifecycle.load == mesh_llm_config::managed_models::ModelLoadPolicy::OnDemand
-    }) {
-        Some(model) => Some(super::configured_load::prepare(ctx, model).await?),
-        None => None,
-    };
-    let resolved = match prepared.as_ref() {
+    let prepared = prepare_configured_runtime_load(
+        ctx,
+        model_overrides,
+        config_model_id.as_deref(),
+        &instance_id,
+        load_started,
+    )
+    .await?;
+    let ResolvedRuntimeModelSource {
+        model_path,
+        runtime_model_name,
+        local_source_required,
+    } = match prepared.as_ref() {
         Some(prepared) => ResolvedRuntimeModelSource {
             model_path: prepared.plan.resolved_path.clone(),
             runtime_model_name: prepared.plan.declared_ref.clone(),
@@ -506,12 +564,6 @@ pub(crate) async fn run_auto_load_runtime_model(
             .await?
         }
     };
-    let ResolvedRuntimeModelSource {
-        model_path,
-        runtime_model_name,
-        local_source_required,
-    } = resolved;
-    skippy::register_local_source_policy(&runtime_model_name, &profile, local_source_required);
     let pinned_gpu = prepared
         .as_ref()
         .and_then(|prepared| prepared.plan.pinned_gpu.as_ref());
@@ -529,41 +581,45 @@ pub(crate) async fn run_auto_load_runtime_model(
     // (local path or remote catalog ref), before any native load work.
     load_op.resolution_completed(&runtime_model_name);
     let requested_model = spec.clone();
-    let model_bytes = plan_runtime_model_bytes(&model_path, &requested_model).await;
-    let admission_bytes =
-        super::configured_load::model_and_projector_bytes(model_bytes, mmproj_path)?;
+    let sizing = plan_runtime_model_sizing(&model_path, &requested_model).await;
+    let model_bytes = sizing.model_bytes;
+    let admission_bytes = audit_runtime_model_load_result(
+        super::configured_load::model_and_projector_bytes(model_bytes, mmproj_path),
+        runtime_model_audit_context(Some(&runtime_model_name), &instance_id),
+        load_started,
+    )?;
+    // Configured preflight must succeed before publishing its source policy.
+    skippy::register_local_source_policy(&runtime_model_name, &profile, local_source_required);
+    let device_override = if super::super::local_laya::is_laya(sizing.compact_meta.as_ref()) {
+        super::super::local_laya::resolve_laya_device(
+            device_override.as_deref(),
+            pinned_gpu.map(|gpu| gpu.backend_device.as_str()),
+        )
+    } else {
+        device_override
+    };
+    let capacity_target = RuntimeCapacityTarget {
+        compact_meta: sizing.compact_meta.as_ref(),
+        pinned_gpu,
+        device_override: device_override.as_deref(),
+        node_capacity_bytes: capacity_bytes,
+        host_ram_capacity_bytes: ctx.node.host_ram_capacity_bytes,
+    };
     let ctx_size_override = runtime_model_ctx_size_override(ctx.options, model_overrides);
     let parallel_override = crate::runtime::startup_models::resolve_model_parallel_override(
         model_overrides.and_then(|m| m.parallel),
         &ctx.config.gpu,
     );
-    let capacity_reservation = match audit_runtime_model_load_result(
-        reserve_runtime_capacity_for_model(
-            ctx.runtime_capacity_ledger,
-            &instance_id,
-            &runtime_model_name,
-            pinned_gpu,
-            capacity_bytes,
-            admission_bytes,
-        ),
-        runtime_model_audit_context(Some(&runtime_model_name), &instance_id),
+    let capacity_reservation = reserve_audited_runtime_capacity(
+        ctx,
+        &instance_id,
+        &runtime_model_name,
+        &profile,
+        capacity_target,
+        admission_bytes,
         load_started,
-    ) {
-        Ok(reservation) => {
-            // §8.4 "model capacity changed": local capacity is now
-            // reserved for this load.
-            load_op.capacity_changed(&runtime_model_name);
-            reservation
-        }
-        Err(error) => {
-            super::unload::unregister_local_source_policy_if_unused(
-                ctx,
-                &runtime_model_name,
-                &profile,
-            );
-            return Err(error);
-        }
-    };
+    )?;
+    load_op.capacity_changed(&runtime_model_name);
     add_serving_assignment(ctx.node, ctx.primary_model_name, &runtime_model_name).await;
     let launch_started = Instant::now();
     let capacity_budget_bytes = capacity_reservation.capacity_budget_bytes();
@@ -583,7 +639,7 @@ pub(crate) async fn run_auto_load_runtime_model(
             mmproj_override: mmproj_path,
             ctx_size_override,
             pinned_gpu,
-            device_override,
+            device_override: device_override.clone(),
             capacity_budget_bytes: Some(capacity_budget_bytes),
             cache_type_k_override: model_overrides.and_then(|m| m.cache_type_k.as_deref()),
             cache_type_v_override: model_overrides.and_then(|m| m.cache_type_v.as_deref()),

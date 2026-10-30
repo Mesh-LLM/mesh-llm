@@ -75,6 +75,8 @@ export type ModelSummary = {
   size: string
   context: string
   status: 'ready' | 'warming' | 'offline' | 'warm'
+  /** See `MeshModelRaw['workload_class']`. Undefined means unadvertised, not unclassified. */
+  workloadClass?: string
   tags: string[]
   nodeCount?: number
   fullId?: string

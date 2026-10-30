@@ -509,25 +509,66 @@ impl Node {
         self.connect_to_peer(addr).await
     }
 
-    /// A join token that names our own endpoint id means a second node
-    /// process on this machine is loading the same node key (#1699). iroh
-    /// refuses self-connections, so both meshes silently collapse to one node
-    /// — fail loudly instead, naming the two escape hatches.
+    /// A join token that names our own endpoint id means either a second
+    /// node process on this machine is loading the same node key (#1699), or
+    /// the token is simply this node's own invite token — e.g. one join file
+    /// pushed to every node in the mesh. iroh refuses self-connections, so
+    /// both cases must fail loudly; the messages differ because only the
+    /// first is a real error (issue #2352, papercut 2): with no other local
+    /// instance running, the token is this node's own and nothing is wrong,
+    /// so report it at info level.
     async fn reject_join_to_own_identity(&self, addr: &EndpointAddr) -> Result<()> {
         if addr.id != self.endpoint.id() {
             return Ok(());
         }
+        let short_id = self.endpoint.id().fmt_short();
+        let root = crate::runtime::instance::runtime_root()?;
+        let other_local_instance =
+            crate::runtime::instance::scan_local_instances(&root, std::process::id())
+                .await?
+                .iter()
+                .any(|snapshot| !snapshot.is_self);
+        if other_local_instance {
+            let message = format!(
+                "join rejected: the invite token names this node's own id ({short_id}) — \
+                 another process on this machine is almost certainly serving with \
+                 the same node key. Give this node its own key with \
+                 MESH_LLM_NODE_KEY_PATH, or set MESH_LLM_EPHEMERAL_KEY for a \
+                 throwaway identity"
+            );
+            tracing::error!("{message}");
+            emit_mesh_info(format!("⛔ {message}"));
+            anyhow::bail!("{message}");
+        }
         let message = format!(
-            "join rejected: the invite token names this node's own id ({}) — \
-             another process on this machine is almost certainly serving with \
-             the same node key. Give this node its own key with \
-             MESH_LLM_NODE_KEY_PATH, or set MESH_LLM_EPHEMERAL_KEY for a \
-             throwaway identity",
-            self.endpoint.id().fmt_short()
+            "join skipped: the invite token names this node's own id ({short_id}) — \
+             this is this node's own invite token; a node cannot join itself. \
+             Remove or replace the join token if this node should join another mesh"
         );
-        tracing::error!("{message}");
-        emit_mesh_info(format!("⛔ {message}"));
+        tracing::info!("{message}");
+        emit_mesh_info(format!("ℹ️ {message}"));
         anyhow::bail!("{message}")
+    }
+
+    /// Whether an invite token names this node's own identity.
+    ///
+    /// The 60 s rejoin pass uses this to stop retrying a join file that
+    /// holds this node's own token instead of joining it and erroring
+    /// forever (issue #2352, papercut 2). Unparseable or unverifiable
+    /// tokens are not classified as own: they stay on the normal join path,
+    /// where their real error is reported.
+    pub(crate) fn invite_token_names_own_identity(&self, invite_token: &str) -> bool {
+        let Ok(material) = parse_invite_token(invite_token) else {
+            return false;
+        };
+        match material {
+            InviteTokenMaterial::Legacy(addr) => addr.id == self.endpoint.id(),
+            InviteTokenMaterial::Signed(token) => {
+                token.verify().is_ok()
+                    && decode_signed_bootstrap_addrs(&token)
+                        .is_ok_and(|addrs| addrs.iter().any(|addr| addr.id == self.endpoint.id()))
+            }
+        }
     }
 
     /// Record a join target address so the LAN beacon can unicast a dial-back

@@ -699,6 +699,7 @@ url = "unix:///run/remote.sock"
                 last_protocol_version: None,
                 last_status: None,
                 last_error: None,
+                verified_sha256: None,
             })
             .unwrap();
     }

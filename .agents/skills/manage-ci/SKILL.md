@@ -636,9 +636,14 @@ require successful source resolution and final selection, and require
 pass; their skipped status must not suppress publication through GitHub's
 implicit `success()` condition.
 
-Default upstream selection uses GitHub's latest published stable release of
-`ggml-org/llama.cpp`, never an unqualified `master` tip or a `b*` prerelease.
-The hosted resolver validates the release and peels its tag to an exact commit
+Default upstream selection uses the most recently published release of
+`ggml-org/llama.cpp`, including prereleases and excluding drafts. Compare
+publication times across the paginated metadata feed; neither the pinned stable
+release nor feed position determines the target. The scan reads every page
+before selecting, because the feed is ordered by creation time and a draft
+created long ago but published recently sits on a late page; the 180-second
+lookup budget and the 1000-page ceiling bound a feed that only grows. The hosted
+resolver validates the release and peels its tag to an exact commit
 before any hardware work. Missing releases, malformed metadata, moved tags or
 API failures stop resolution without a fallback. Record the release tag and
 commit in the run summary. An explicit full `upstream_sha` remains an operator

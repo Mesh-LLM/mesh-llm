@@ -3,7 +3,7 @@ mod request;
 
 use super::config::{ExternalPluginSpec, PluginHostMode};
 use super::plugin_manifest_overview;
-use super::support::{plugin_error, serialize_params, summarize_capabilities};
+use super::support::{PluginTimeout, plugin_error, serialize_params, summarize_capabilities};
 use super::transport::{
     LocalListener, LocalStream, bind_local_listener, connection_loop, reject_remote_control,
 };
@@ -28,10 +28,14 @@ use tokio::sync::{Mutex, mpsc, oneshot};
 mod exchange_request;
 #[cfg(test)]
 mod exchange_request_tests;
+#[cfg(test)]
+mod exit_tests;
 mod identity_artifact;
 mod lifecycle_readiness;
 #[cfg(test)]
 mod restart_tests;
+#[cfg(test)]
+mod settings_tests;
 mod shutdown;
 mod socket_auth;
 pub(crate) mod status_publication;
@@ -344,6 +348,7 @@ impl ExternalPlugin {
         pending: PendingResponses,
     ) -> Result<proto::InitializeResponse> {
         let host_info_json = serde_json::to_string(&InitializeRequestParams::default())?;
+        let settings_json = serde_json::to_string(&self.spec.settings)?;
         let response = self
             .request_once(
                 generation,
@@ -354,7 +359,9 @@ impl ExternalPlugin {
                     host_version: crate::VERSION.to_string(),
                     host_info_json,
                     mesh_visibility: proto_mesh_visibility(self.host_mode.mesh_visibility),
+                    settings_json,
                     host_capabilities: vec![
+                        mesh_llm_plugin::host_capabilities::INVOCATION_CALLBACKS.to_string(),
                         mesh_llm_plugin::host_capabilities::PEER_BLOCKS.to_string(),
                         mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.to_string(),
                         mesh_llm_plugin::host_capabilities::PLUGIN_KEYS.to_string(),
@@ -663,6 +670,24 @@ impl ExternalPlugin {
         self.manifest.lock().await.clone()
     }
 
+    /// How long one operation may take before the host gives up on it: the
+    /// deadline the plugin declares for it, `None` when the operation declares
+    /// it may run as long as the caller does, or the host default.
+    pub(crate) async fn operation_timeout(&self, operation: &str) -> Option<std::time::Duration> {
+        let declared = self.manifest_snapshot().await.and_then(|manifest| {
+            manifest
+                .operations
+                .into_iter()
+                .find(|declared| declared.name == operation)
+                .and_then(|declared| declared.timeout_secs)
+        });
+        match declared {
+            Some(0) => None,
+            Some(secs) => Some(std::time::Duration::from_secs(u64::from(secs))),
+            None => Some(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS)),
+        }
+    }
+
     pub(crate) async fn list_tools(&self) -> Result<Vec<ToolSummary>> {
         Ok(self
             .manifest
@@ -678,12 +703,16 @@ impl ExternalPlugin {
         tool_name: &str,
         arguments_json: &str,
     ) -> Result<ToolCallResult> {
+        // The deadline an operation declares lives in its manifest, so the
+        // plugin has to be running before the call can be given one.
+        self.ensure_running().await?;
+        let timeout = self.operation_timeout(tool_name).await;
         let response = self
             .invoke_service(
                 proto::ServiceKind::Operation,
                 tool_name,
                 arguments_json,
-                Some(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS)),
+                timeout,
             )
             .await?;
         Ok(ToolCallResult {
@@ -700,6 +729,7 @@ impl ExternalPlugin {
         let params_json = serialize_params(params)?;
         let response = self
             .request(proto::envelope::Payload::RpcRequest(proto::RpcRequest {
+                invocation_id: super::mcp::invocation::forwarded_id(),
                 method: method.to_string(),
                 params_json,
             }))
@@ -730,6 +760,7 @@ impl ExternalPlugin {
     {
         self.send_unsolicited(
             proto::envelope::Payload::RpcNotification(proto::RpcNotification {
+                invocation_id: None,
                 method: method.to_string(),
                 params_json: serialize_params(params)?,
             }),
@@ -884,7 +915,9 @@ impl ExternalPlugin {
                         format!("Plugin '{}' timed out", self.spec.name),
                     )
                     .await;
-                    bail!("Plugin '{}' timed out", self.spec.name);
+                    return Err(anyhow::Error::new(PluginTimeout {
+                        plugin_name: self.spec.name.clone(),
+                    }));
                 }
             },
             None => rx.await,
@@ -1127,6 +1160,7 @@ pub(crate) mod tests {
             last_protocol_version: Some(1),
             last_status: Some("running".into()),
             last_error: None,
+            verified_sha256: None,
         }
     }
 
@@ -1143,6 +1177,7 @@ pub(crate) mod tests {
             args: Vec::new(),
             url: None,
             env: BTreeMap::new(),
+            settings: Default::default(),
             startup: Default::default(),
             web_ui_enabled,
             web_ui_primary_tab: None,
@@ -1205,6 +1240,7 @@ pub(crate) mod tests {
             args: Vec::new(),
             url: None,
             env: BTreeMap::new(),
+            settings: Default::default(),
             startup: Default::default(),
             web_ui_enabled: None,
             web_ui_primary_tab: None,
@@ -1343,6 +1379,7 @@ pub(crate) mod tests {
                 input_schema_json: r#"{"type":"object"}"#.into(),
                 output_schema_json: None,
                 title: None,
+                timeout_secs: None,
             }],
             ..proto::PluginManifest::default()
         }
@@ -1509,6 +1546,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn configured_plugin_url_is_normalized_before_child_env_export() {
         let config = MeshConfig {
             plugins: vec![PluginConfigEntry {

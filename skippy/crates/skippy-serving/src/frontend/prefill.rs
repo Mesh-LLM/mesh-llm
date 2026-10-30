@@ -11,6 +11,9 @@ use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
 use std::net::TcpStream;
 
+mod frame_budget;
+pub(super) use frame_budget::bounded_chunk_size;
+
 pub(super) fn prefill_chunk_end(
     pos_start: usize,
     chunk_size: usize,

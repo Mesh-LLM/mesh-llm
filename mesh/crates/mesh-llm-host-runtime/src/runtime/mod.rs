@@ -76,7 +76,8 @@ pub(crate) mod wakeable;
 
 pub(crate) use self::capacity::runtime_model_required_bytes;
 use self::capacity::{
-    RuntimeCapacityLedger, RuntimeCapacityReservation, model_fits_runtime_capacity,
+    RuntimeCapacityLedger, RuntimeCapacityPool, RuntimeCapacityReservation,
+    model_fits_runtime_capacity,
 };
 use self::context_planning::RuntimeResourcePlanningProfile;
 pub(crate) use self::dashboard::runtime_status_from_process_status;
@@ -88,14 +89,15 @@ pub(crate) use self::instance_lifecycle::{
 use self::interactive::InitialPromptMode;
 use self::local::{
     LocalOpenAiModelStartSpec, LocalRuntimeModelHandle, LocalRuntimeModelStartSpec,
-    ManagedModelController, OpenAiGuardrailPolicyHandle, RuntimeEvent, SplitCoordinatorAck,
-    SplitCoordinatorEvent, SplitRuntimeReason, SplitRuntimeStart, StartupRuntimePlan,
-    add_runtime_local_target, add_serving_assignment, advertise_model_ready, local_process_payload,
-    openai_guardrail_policy_handle, remove_runtime_local_target, remove_serving_assignment,
-    resolved_model_name, runtime_model_planning_bytes, set_advertised_model_context,
-    set_openai_guardrail_policy_mode, set_runtime_verified_served_model_capabilities,
-    start_local_openai_model, start_runtime_local_model, start_runtime_split_model,
-    startup_runtime_plan, stop_split_generation_cleanup, withdraw_advertised_model,
+    ManagedModelController, OpenAiGuardrailPolicyHandle, RuntimeEvent, RuntimeModelSizing,
+    SplitCoordinatorAck, SplitCoordinatorEvent, SplitRuntimeReason, SplitRuntimeStart,
+    StartupRuntimePlan, add_runtime_local_target, add_serving_assignment, advertise_model_ready,
+    local_process_payload, openai_guardrail_policy_handle, remove_runtime_local_target,
+    remove_serving_assignment, resolved_model_name, runtime_model_sizing,
+    set_advertised_model_context, set_openai_guardrail_policy_mode,
+    set_runtime_verified_served_model_capabilities, start_local_openai_model,
+    start_runtime_local_model, start_runtime_split_model, startup_runtime_plan,
+    stop_split_generation_cleanup, withdraw_advertised_model,
 };
 use self::local_model_only::*;
 pub use self::memberships::{MeshMembershipConfig, MeshMembershipStatus};

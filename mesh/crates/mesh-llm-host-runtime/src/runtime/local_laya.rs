@@ -31,6 +31,7 @@ pub(super) const LAYA_ARCHITECTURE: &str = "laya";
 const LAYA_ACCELERATOR_ENV: &str = "MESH_LLM_LAYA_ACCELERATOR";
 /// Native device name for "the first GPU, CPU when there is none".
 const FIRST_ACCELERATOR: &str = "auto";
+const CPU_DEVICE: &str = "CPU";
 
 /// Default `laya.max_len` when a GGUF omits it, matching the native runtime.
 const DEFAULT_MAX_LEN: u64 = 1024;
@@ -88,6 +89,25 @@ fn laya_device(
         .or(pinned_device)
         .map(str::to_string)
         .or_else(|| accelerator_requested(accelerator_env).then(|| FIRST_ACCELERATOR.to_string()))
+}
+
+pub(super) fn resolve_laya_device(
+    device_override: Option<&str>,
+    pinned_device: Option<&str>,
+) -> Option<String> {
+    resolve_laya_device_with_env(
+        device_override,
+        pinned_device,
+        std::env::var(LAYA_ACCELERATOR_ENV).ok().as_deref(),
+    )
+}
+
+fn resolve_laya_device_with_env(
+    device_override: Option<&str>,
+    pinned_device: Option<&str>,
+    accelerator_env: Option<&str>,
+) -> Option<String> {
+    laya_device(device_override, pinned_device, accelerator_env).or(Some(CPU_DEVICE.to_string()))
 }
 
 /// Checks a loaded model's measured peak against what the capacity ledger
@@ -177,10 +197,9 @@ pub(super) async fn start_local_laya_model(
         MemoryPlanStartPath::Direct,
     );
 
-    let device = laya_device(
+    let device = resolve_laya_device(
         spec.device_override.as_deref(),
         spec.pinned_gpu.map(|gpu| gpu.backend_device.as_str()),
-        std::env::var(LAYA_ACCELERATOR_ENV).ok().as_deref(),
     );
     let _ = emit_event(OutputEvent::ModelLoading {
         model: model_name.clone(),
@@ -250,6 +269,31 @@ mod tests {
             head_count: heads,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn accelerator_opt_in_resolves_before_capacity_pool_selection() {
+        let device = resolve_laya_device_with_env(None, None, Some("true"));
+        let metadata = meta(1024, 768, 12);
+
+        assert_eq!(device.as_deref(), Some("auto"));
+        assert_eq!(
+            super::super::runtime_registry::runtime_capacity_pool_for_model(
+                Some(&metadata),
+                None,
+                device.as_deref(),
+                2_000,
+            ),
+            crate::runtime::RuntimeCapacityPool::Node
+        );
+    }
+
+    #[test]
+    fn default_cpu_target_is_explicit_after_resolution() {
+        assert_eq!(
+            resolve_laya_device_with_env(None, None, None).as_deref(),
+            Some(CPU_DEVICE)
+        );
     }
 
     #[test]

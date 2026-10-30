@@ -11,6 +11,7 @@ mod plugin_validation;
 mod private_file;
 mod size;
 mod store;
+mod unknown_fields;
 mod validate;
 mod validation_support;
 #[cfg(test)]

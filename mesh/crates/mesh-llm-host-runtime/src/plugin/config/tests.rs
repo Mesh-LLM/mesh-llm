@@ -352,6 +352,7 @@ fn installed_plugin_metadata(
         last_protocol_version: Some(1),
         last_status: Some("installed".to_string()),
         last_error: None,
+        verified_sha256: None,
     }
 }
 

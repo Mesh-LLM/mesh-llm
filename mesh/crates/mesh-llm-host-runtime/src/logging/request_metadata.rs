@@ -117,6 +117,9 @@ impl RequestSummaryMetadata {
             "/v1/messages/count_tokens" => Some("messages_count_tokens"),
             "/systemone" => Some("system_one"),
             "/v1/decisions" => Some("decisions"),
+            // Mesh task contracts use their own namespace but still need
+            // route labels in inference request summaries.
+            "/mesh/v1/documents/ocr" => Some("document_ocr"),
             _ => None,
         };
         Self::from_parts(route, None, None, None)
@@ -322,6 +325,19 @@ mod tests {
                 assert!(metadata.model().is_none());
             }
         }
+    }
+
+    /// Only the current OCR path receives the document task label.
+    #[test]
+    fn mesh_task_routes_are_labelled_beyond_the_openai_surface() {
+        for suffix in ["", "?trace=1"] {
+            let metadata = RequestSummaryMetadata::from_openai_ingress_path(&format!(
+                "/mesh/v1/documents/ocr{suffix}"
+            ));
+            assert_eq!(metadata.route(), Some("document_ocr"));
+            assert!(metadata.model().is_none());
+        }
+        assert!(RequestSummaryMetadata::from_openai_ingress_path("/v1/documents/ocr").is_empty());
     }
 
     #[test]

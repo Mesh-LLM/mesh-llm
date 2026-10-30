@@ -1277,7 +1277,7 @@ struct RawModelConfigDefaults {
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
-struct RawModelConfigEntry {
+pub(crate) struct RawModelConfigEntry {
     model: String,
     #[serde(default)]
     lifecycle: crate::managed_models::ModelLifecycle,
@@ -1317,6 +1317,11 @@ struct RawModelConfigEntry {
     multimodal: Option<MultimodalConfig>,
     #[serde(default)]
     advanced: Option<AdvancedConfig>,
+    /// Keys a `[[models]]` row sets that the row struct does not know. Kept
+    /// out of `ModelConfigEntry` on purpose; validation warns about them
+    /// (see `unknown_fields::unknown_model_row_field_diagnostics`).
+    #[serde(flatten, default)]
+    pub(crate) extra: BTreeMap<String, toml::Value>,
 }
 
 impl<'de> Deserialize<'de> for MeshConfig {
