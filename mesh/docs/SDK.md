@@ -14,9 +14,9 @@ Combined mode does both.
 | Kotlin | [Kotlin](sdk/kotlin.md) |
 | Node.js | [Node.js](sdk/node.md) |
 
-The legacy thin `Client`, its in-memory keypair hex constructor, and the Rust
-facade's `client`/`node` feature split have been removed. Platform constructors
-accept an optional Mesh LLM owner keystore path. These constructor changes are
+**SDK breaking change:** the legacy thin `Client`, its in-memory keypair hex
+constructor, and the Rust facade's `client`/`node` feature split have been removed.
+Platform constructors accept an optional Mesh LLM owner keystore path. These constructor changes are
 separate from the model-discovery API split below; mesh advertisement remains
 compatible.
 

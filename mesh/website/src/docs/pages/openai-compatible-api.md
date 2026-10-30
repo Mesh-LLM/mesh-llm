@@ -30,6 +30,10 @@ embedding, reranking, decision, and OCR models appear through
 [Mesh model discovery](/docs/pages/model-discovery/) instead. Missing or unknown
 legacy workload metadata is visible in that catalog but excluded here.
 
+The OpenAI list currently returns the full eligible LLM list and rejects query
+parameters with `400`; `limit`, `order` and `after` pagination are not supported.
+Clients must omit those parameters. Anthropic pagination is described below.
+
 The OpenAI response contains standard model fields:
 
 ```json
