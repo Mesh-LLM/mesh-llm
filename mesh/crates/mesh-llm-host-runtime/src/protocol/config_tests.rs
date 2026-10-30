@@ -50,6 +50,7 @@ fn config_sync_full_config_roundtrip() {
             command: Some("mesh-llm".to_string()),
             args: vec!["--plugin".to_string()],
             url: None,
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],

@@ -933,6 +933,16 @@ fn model_and_plugin_presentation(rendered: &str) -> Option<SettingPresentation> 
             .placeholder("http://localhost:8000/v1")
             .hint("text"),
         ),
+        "plugin.<plugin-name>.models" => Some(
+            sp(
+                "Shared endpoint models",
+                "Model IDs the plugin's inference endpoints may share. Other listed models are not advertised or routed. Unset shares every listed model.",
+                PLUGIN_HOST_CATEGORY,
+                25,
+            )
+            .placeholder("one model ID per line; [] alone shares none")
+            .hint("text"),
+        ),
         "plugin.<plugin-name>.command" => Some(
             sp(
                 "Plugin command",

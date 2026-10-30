@@ -131,6 +131,7 @@ For Flash-MoE, see the [Flash-MoE repository](https://github.com/Mesh-LLM/flash-
 | `command` | Explicit executable path or command. Useful for locally built plugins. |
 | `args` | Arguments passed to the plugin process. |
 | `url` | Optional endpoint passed to the plugin as `MESH_LLM_PLUGIN_URL`. |
+| `models` | Model IDs this plugin's inference endpoints may share. Mesh does not advertise or route the other models the endpoint lists. Omit it to share every listed model. |
 | `settings` | Plugin-specific settings declared by the installed plugin. Use `[plugin.settings]` in TOML. |
 | `[plugin.startup]` | Startup and failure behavior. |
 

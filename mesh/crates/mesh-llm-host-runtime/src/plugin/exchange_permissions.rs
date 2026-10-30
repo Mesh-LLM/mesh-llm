@@ -171,6 +171,7 @@ mod tests {
             },
             web_ui_enabled: None,
             web_ui_primary_tab: None,
+            endpoint_models: None,
             installed_metadata: None,
             openai_exchange_grant: Some(Box::new(grant)),
         };

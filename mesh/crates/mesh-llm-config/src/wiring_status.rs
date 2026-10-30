@@ -1747,6 +1747,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
+        path: "plugin.<name>.models",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
         path: "plugin.<name>.startup.connect_timeout_secs",
         status: WiringStatus::Wired,
         owner: "n/a",

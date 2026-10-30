@@ -106,6 +106,12 @@ impl ExternalPlugin {
         self.spec.openai_exchange_grant.as_deref()
     }
 
+    /// The models the operator allows this plugin's inference endpoints to
+    /// expose, or `None` to expose every model they list.
+    pub(crate) fn endpoint_models(&self) -> Option<&[String]> {
+        self.spec.endpoint_models.as_deref()
+    }
+
     pub(crate) fn installed_metadata(
         &self,
     ) -> Option<&mesh_llm_plugin_manager::InstalledPluginMetadata> {
@@ -1181,6 +1187,7 @@ pub(crate) mod tests {
             startup: Default::default(),
             web_ui_enabled,
             web_ui_primary_tab: None,
+            endpoint_models: None,
             installed_metadata: Some(installed_metadata_with_web_ui(
                 temp_dir.path().to_path_buf(),
                 validation_status,
@@ -1244,6 +1251,7 @@ pub(crate) mod tests {
             startup: Default::default(),
             web_ui_enabled: None,
             web_ui_primary_tab: None,
+            endpoint_models: None,
             installed_metadata: None,
         });
         plugin.in_process = Some(runner);
@@ -1560,6 +1568,7 @@ pub(crate) mod tests {
                 command: Some("mesh-llm-plugin-demo".into()),
                 args: Vec::new(),
                 url: Some("\u{2003}https://plugin.example.test/v1\u{2003}".into()),
+                models: None,
                 settings: BTreeMap::new(),
                 startup: Default::default(),
             }],

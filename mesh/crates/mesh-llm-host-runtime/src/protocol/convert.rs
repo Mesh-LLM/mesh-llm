@@ -1423,6 +1423,7 @@ fn legacy_proto_config_to_mesh(
             command: p.command.clone(),
             args: p.args.clone(),
             url: None,
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         })

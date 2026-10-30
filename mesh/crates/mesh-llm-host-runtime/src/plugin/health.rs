@@ -66,6 +66,11 @@ impl PluginManager {
             })
             .collect::<BTreeMap<_, _>>();
         let plugin_default = endpoint_record_from_plugin_status(&summary);
+        let allowed_models = self
+            .inner
+            .plugins
+            .get(plugin_name)
+            .and_then(|plugin| plugin.endpoint_models());
         let mut providers = manifest
             .capabilities
             .iter()
@@ -82,8 +87,14 @@ impl PluginManager {
         let mut endpoint_summaries = Vec::new();
         for endpoint in &manifest.endpoints {
             let key = endpoint.endpoint_id.clone();
-            let health =
-                endpoint_health_for_summary(&summary, endpoint, previous.get(&key), now).await;
+            let health = endpoint_health_for_summary(
+                &summary,
+                endpoint,
+                allowed_models,
+                previous.get(&key),
+                now,
+            )
+            .await;
             for capability in endpoint_declared_capabilities(endpoint) {
                 providers.push(PluginCapabilityProvider {
                     capability,
@@ -243,6 +254,7 @@ pub(super) fn endpoint_declared_capabilities(endpoint: &proto::EndpointManifest)
 async fn endpoint_health_for_summary(
     summary: &PluginSummary,
     endpoint: &proto::EndpointManifest,
+    allowed_models: Option<&[String]>,
     previous: Option<&EndpointHealthState>,
     now: Instant,
 ) -> EndpointHealthState {
@@ -258,7 +270,25 @@ async fn endpoint_health_for_summary(
             detail: None,
             models: Vec::new(),
         });
-    apply_endpoint_probe(previous, probe, now)
+    apply_endpoint_probe(
+        previous,
+        restrict_endpoint_models(probe, allowed_models),
+        now,
+    )
+}
+
+/// Drops the models the operator has not allowed this endpoint to expose, so
+/// they are neither advertised nor routed to it.
+fn restrict_endpoint_models(
+    mut probe: EndpointHealthRecord,
+    allowed_models: Option<&[String]>,
+) -> EndpointHealthRecord {
+    if let Some(allowed_models) = allowed_models {
+        probe
+            .models
+            .retain(|model| allowed_models.iter().any(|allowed| allowed == model));
+    }
+    probe
 }
 
 fn apply_endpoint_probe(
@@ -715,13 +745,14 @@ mod tests {
         };
         let summary = running_summary();
         let now = Instant::now();
-        let healthy = endpoint_health_for_summary(&summary, &endpoint, None, now).await;
+        let healthy = endpoint_health_for_summary(&summary, &endpoint, None, None, now).await;
         assert!(healthy.record.available);
         assert_eq!(healthy.record.models, ["ollama-model"]);
 
         let degraded = endpoint_health_for_summary(
             &summary,
             &endpoint,
+            None,
             Some(&healthy),
             now + Duration::from_secs(15),
         )
@@ -734,6 +765,7 @@ mod tests {
         let withdrawn = endpoint_health_for_summary(
             &summary,
             &endpoint,
+            None,
             Some(&degraded),
             now + Duration::from_secs(30),
         )
@@ -744,6 +776,7 @@ mod tests {
         let recovered = endpoint_health_for_summary(
             &summary,
             &endpoint,
+            None,
             Some(&withdrawn),
             now + Duration::from_secs(45),
         )
@@ -752,6 +785,62 @@ mod tests {
         assert_eq!(recovered.record.models, ["replacement-model"]);
         assert_eq!(recovered.consecutive_failures, 0);
         assert_eq!(requests.load(Ordering::SeqCst), 4);
+        handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn plugin_endpoint_exposes_only_allowed_models() {
+        let (address, handle, _requests) = spawn_fake_models_server(vec![
+            (
+                "200 OK",
+                r#"{"data":[{"id":"sold"},{"id":"unpriced"},{"id":"also-unpriced"}]}"#,
+            ),
+            ("503 Service Unavailable", r#"{"error":"temporary"}"#),
+            ("200 OK", r#"{"data":[{"id":"sold"}]}"#),
+        ])
+        .await;
+        let endpoint = proto::EndpointManifest {
+            endpoint_id: "gateway".into(),
+            kind: proto::EndpointKind::Inference as i32,
+            transport_kind: proto::EndpointTransportKind::EndpointTransportHttp as i32,
+            protocol: Some("openai_compatible".into()),
+            address: Some(address),
+            args: Vec::new(),
+            namespace: None,
+            supports_streaming: true,
+            managed_by_plugin: false,
+        };
+        let summary = running_summary();
+        // An allowed model the upstream does not list is not invented.
+        let allowed = ["sold".to_string(), "not-listed".to_string()];
+        let now = Instant::now();
+
+        let healthy =
+            endpoint_health_for_summary(&summary, &endpoint, Some(&allowed), None, now).await;
+        assert!(healthy.record.available);
+        assert_eq!(healthy.record.models, ["sold"]);
+
+        let degraded = endpoint_health_for_summary(
+            &summary,
+            &endpoint,
+            Some(&allowed),
+            Some(&healthy),
+            now + Duration::from_secs(15),
+        )
+        .await;
+        assert_eq!(degraded.record.state, "degraded");
+        assert_eq!(degraded.record.models, ["sold"]);
+
+        let nothing_allowed = endpoint_health_for_summary(
+            &summary,
+            &endpoint,
+            Some(&[]),
+            Some(&degraded),
+            now + Duration::from_secs(30),
+        )
+        .await;
+        assert!(nothing_allowed.record.available);
+        assert!(nothing_allowed.record.models.is_empty());
         handle.await.unwrap();
     }
 

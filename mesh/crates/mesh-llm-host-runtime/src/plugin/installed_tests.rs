@@ -56,6 +56,7 @@ fn capsules_entry(command: Option<&str>) -> PluginConfigEntry {
         command: command.map(str::to_string),
         args: Vec::new(),
         url: None,
+        models: None,
         settings: Default::default(),
         startup: Default::default(),
     }

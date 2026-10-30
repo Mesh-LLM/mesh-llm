@@ -289,6 +289,9 @@ pub struct ExternalPluginSpec {
     pub startup: PluginStartupOptions,
     pub web_ui_enabled: Option<bool>,
     pub web_ui_primary_tab: Option<bool>,
+    /// Inference endpoint models the operator allows this plugin to expose;
+    /// `None` exposes every model the endpoint lists.
+    pub endpoint_models: Option<Vec<String>>,
     pub installed_metadata: Option<mesh_llm_plugin_manager::InstalledPluginMetadata>,
 }
 
@@ -369,6 +372,7 @@ fn ensure_builtin_entry_only_toggles_enabled(entry: &PluginConfigEntry) -> Resul
     if entry.command.is_some()
         || !entry.args.is_empty()
         || entry.url.is_some()
+        || entry.models.is_some()
         || !entry.startup.is_default()
     {
         bail!(
@@ -415,6 +419,7 @@ pub fn in_process_builtin_spec(name: &str) -> ExternalPluginSpec {
         },
         web_ui_enabled: None,
         web_ui_primary_tab: None,
+        endpoint_models: None,
         installed_metadata: None,
     }
 }
@@ -450,6 +455,7 @@ pub fn builtin_plugin_spec(name: &str, plugin_args: &[String]) -> Result<Externa
         },
         web_ui_enabled: None,
         web_ui_primary_tab: None,
+        endpoint_models: None,
         installed_metadata: None,
     })
 }
