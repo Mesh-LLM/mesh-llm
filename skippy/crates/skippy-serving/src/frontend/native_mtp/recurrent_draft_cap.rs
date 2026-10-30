@@ -32,14 +32,16 @@ pub(in crate::frontend) fn apply_native_mtp_draft_cap(
     speculative.native_mtp.max_draft_tokens = capped;
     speculative.native_mtp.min_draft_tokens = speculative.native_mtp.min_draft_tokens.min(capped);
     if speculative.native_mtp.enabled {
-        tracing::warn!(
-            requested_draft_tokens = requested,
-            capped_draft_tokens = capped,
-            model_state_kind = ?state_kind,
-            "native MTP draft tokens capped from {requested} to {capped}: this model has \
-             recurrent state, and more than one draft token is about 7x slower on hybrid \
-             and recurrent models until the rollback depth is sized from the speculative \
-             window (#2318)"
+        let _ = skippy_events::diagnostics::emit(
+            skippy_events::diagnostics::ServingDiagnostic::Warning {
+                message: format!(
+                    "native MTP draft tokens capped from {requested} to {capped}: this model has \
+                     recurrent state, and more than one draft token is about 7x slower on hybrid \
+                     and recurrent models until the rollback depth is sized from the speculative \
+                     window (#2318)"
+                ),
+                context: Some(format!("model_state_kind={state_kind:?}")),
+            },
         );
     }
 }
