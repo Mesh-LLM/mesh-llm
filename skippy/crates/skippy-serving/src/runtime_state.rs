@@ -764,6 +764,7 @@ mod tests {
 
     #[test]
     fn split_dflash_counters_go_only_to_senders_that_read_them() {
+        skippy_runtime::test_support::require_native_runtime();
         let mut runtime = split_dflash_final_stage();
         runtime.dflash_split_input("s", None);
         runtime
