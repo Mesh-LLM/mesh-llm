@@ -49,6 +49,13 @@ Release setup and 15 interleaved 0.05-second repetitions, FFI/API minima were
 reject an exhausted vocabulary. This synthetic observation does not establish
 a production sampling speedup.
 
+`SamplingStore` is also class A: both arms reserve and store a 64-token batch,
+with a setup gate requiring identical successful output and atomic rejection.
+The same local Release settings (15 interleaved 0.05-second repetitions) gave
+FFI/API minima of 44.8/39.1 ns and medians of 45.2/39.6 ns. This replaces the
+earlier conflicting timing/run-count statements; it describes one local
+synthetic run rather than general runtime behavior.
+
 ## Build
 
 ```bash
