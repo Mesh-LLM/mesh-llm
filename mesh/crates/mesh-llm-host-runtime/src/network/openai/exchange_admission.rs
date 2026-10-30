@@ -2,6 +2,7 @@
 use super::{client_stream::ClientStream, transport};
 use crate::inference::election::InferenceTarget;
 use crate::mesh;
+use crate::mesh::model_identity::routable_descriptor_for_name;
 use serde_json::json;
 use tokio::io::AsyncWriteExt;
 
@@ -52,7 +53,8 @@ pub(super) async fn admit_selected_route(
 /// own descriptor for a local target, the peer's gossiped descriptor for a
 /// remote one. A peer descriptor never carries `weights_digest` (gossip strips
 /// it; see `protocol/convert.rs`), so a remote target yields at most its
-/// canonical ref here. Matches on `model_name`, as serving provenance does.
+/// canonical ref here. Matches `model` under every name routing accepts for
+/// it: the descriptor's `model_name`, then its public model ID.
 pub(super) async fn selected_model_identity(
     node: &mesh::Node,
     target: &InferenceTarget,
@@ -69,10 +71,7 @@ pub(super) async fn selected_model_identity(
         }
         InferenceTarget::None => return None,
     };
-    descriptors
-        .into_iter()
-        .find(|descriptor| descriptor.identity.model_name == model)
-        .map(|descriptor| descriptor.identity)
+    routable_descriptor_for_name(&descriptors, model).map(|descriptor| descriptor.identity.clone())
 }
 
 async fn apply_selected_route_policy(

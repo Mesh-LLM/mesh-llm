@@ -11,6 +11,7 @@ use super::probe::{
     ResponseProbe, insert_header_before_body, peer_response_header_value, remove_existing_header,
 };
 use crate::mesh;
+use crate::mesh::model_identity::routable_descriptor_for_name;
 #[cfg(feature = "payments")]
 use crate::network::openai::request_parse::MAX_HEADER_BYTES;
 
@@ -33,17 +34,14 @@ pub(crate) struct ServedModelHeaders {
 }
 
 impl ServedModelHeaders {
-    /// This node's facts for `model`, the name its backend serves the model
-    /// under, matched on the served descriptor's `model_name` as this node's
-    /// own host-served terminal provenance does. `None` when this node has
-    /// neither fact.
+    /// This node's facts for `model`, matched under every name routing
+    /// accepts for it: the served descriptor's `model_name`, then its public
+    /// model ID. `None` when this node has neither fact.
     pub(crate) async fn for_served_model(node: &mesh::Node, model: &str) -> Option<Self> {
-        let identity = node
-            .served_model_descriptors()
-            .await
-            .into_iter()
-            .find(|descriptor| descriptor.identity.model_name == model)?
-            .identity;
+        let descriptors = node.served_model_descriptors().await;
+        let identity = routable_descriptor_for_name(&descriptors, model)?
+            .identity
+            .clone();
         let headers = Self {
             weights_digest: identity.weights_digest.filter(|v| is_header_value(v)),
             canonical_ref: identity.canonical_ref.filter(|v| is_header_value(v)),
