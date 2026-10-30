@@ -71,5 +71,6 @@ mesh/sdk/swift/Generated/MeshLLMFFI.xcframework/
 /crates/mesh-llm-ui/node_modules/
 
 # C++ tooling scratch; skippy/skippy_api/.clang-tidy is checked in.
+/.lsmcp/
 compile_commands.json
 skippy/skippy_api/.cache/
