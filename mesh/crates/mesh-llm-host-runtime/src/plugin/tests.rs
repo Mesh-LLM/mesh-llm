@@ -597,3 +597,65 @@ fn windows_pipe_name_is_namespaced_by_instance_id() {
         r"\\.\pipe\mesh-llm-p1234-deadbeef-Pipes"
     );
 }
+
+/// A built-in plugin is listed among the resolved externals whenever it is
+/// enabled, but this host serves it itself and neither built-in exposes
+/// inference. Naming one as a model's provider must fail loudly instead of
+/// resolving and then serving nothing: native startup skips provider models.
+#[test]
+#[serial_test::serial]
+fn built_in_plugin_is_not_a_model_provider() {
+    let config: MeshConfig = toml::from_str(
+        r#"
+[[models]]
+model = "mystery"
+provider = "blobstore"
+"#,
+    )
+    .expect("config should parse");
+
+    let error = resolve_plugins(&config, private_host_mode())
+        .expect_err("a built-in plugin must not resolve as a model provider");
+    assert!(
+        error
+            .to_string()
+            .contains("selects unavailable provider 'blobstore'"),
+        "got: {error}"
+    );
+}
+
+/// The provider check must stay a check on *inference-capable* externals: a
+/// configured plugin command still resolves and still receives the model
+/// selection it serves.
+#[test]
+#[serial_test::serial]
+fn external_plugin_still_resolves_as_a_model_provider() {
+    let config: MeshConfig = toml::from_str(
+        r#"
+[[plugin]]
+name = "endpoint-plugin"
+command = "/opt/plugins/endpoint-plugin"
+
+[[models]]
+model = "mystery"
+provider = "endpoint-plugin"
+"#,
+    )
+    .expect("config should parse");
+
+    let resolved = resolve_plugins(&config, private_host_mode())
+        .expect("an external plugin command is a model provider");
+    let plugin = resolved
+        .externals
+        .iter()
+        .find(|spec| spec.name == "endpoint-plugin")
+        .expect("the configured plugin must resolve");
+    let models = plugin
+        .env
+        .get(mesh_llm_plugin::models::CONFIG_ENV)
+        .expect("the plugin must receive its model selection");
+    assert!(
+        models.contains("\"provider\":\"endpoint-plugin\""),
+        "got: {models}"
+    );
+}

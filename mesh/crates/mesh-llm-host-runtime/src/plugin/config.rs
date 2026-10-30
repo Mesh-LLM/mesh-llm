@@ -398,9 +398,13 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
         .iter()
         .filter(|model| model.provider.is_some())
     {
+        // Built-ins are appended to `externals` whenever they are enabled, but
+        // this host runs both itself and neither exposes inference. Matching
+        // one by name alone would resolve the model and then serve nothing:
+        // native startup skips every model that names a provider.
         if !externals
             .iter()
-            .any(|spec| Some(&spec.name) == model.provider.as_ref())
+            .any(|spec| Some(&spec.name) == model.provider.as_ref() && spec.serves_models_itself())
         {
             bail!(
                 "model '{}' selects unavailable provider '{}'",
