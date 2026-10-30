@@ -1194,7 +1194,7 @@ mod tests {
                 let response = if connect_order.fetch_add(1, Ordering::SeqCst) == 0 {
                     let body = r#"{"error":"prompt exceeds the context window limit"}"#;
                     format!(
-                        "HTTP/1.1 400 Bad Request\r\nX-Capsule-Id: cap-from-the-first-peer\r\nx-mesh-weights-digest: digest-from-the-first-peer\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                        "HTTP/1.1 400 Bad Request\r\nX-Capsule-Id: cap-from-the-first-peer\r\nx-mesh-weights-digest: digest-from-the-first-peer\r\nx-mesh-model-canonical-ref: ref-from-the-first-peer\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
                         body.len(),
                         body
                     )
@@ -1305,7 +1305,7 @@ mod tests {
             "the sink must not carry the FIRST (retried-away-from) peer's \
              capsule_id onto a later attempt that never asserted one itself"
         );
-        assert_eq!(sink.take_weights_digest(), None, "nor its weights digest");
+        assert!(sink.take_served_model().is_empty(), "nor its served model");
         assert_eq!(
             served_by.take(),
             None,

@@ -56,17 +56,17 @@ pub(crate) struct RouteAttemptLoggingContext<'a> {
 /// must stay `Send`, which `RefCell` is not. The lock is never held across
 /// an `.await`.
 ///
-/// It also keeps the peer's `x-mesh-weights-digest` response header
-/// (`probe::SERVED_WEIGHTS_DIGEST_HEADER`), read at the same point and cleared
-/// with it before each attempt, so a retry never inherits the previous
-/// peer's digest. Both values are the peer's own unverified statements.
+/// It also keeps the peer's served-model response headers
+/// (`served_model_headers`), read at the same point and cleared with it
+/// before each attempt, so a retry never inherits the previous peer's model.
+/// All of these are the peer's own unverified statements.
 #[derive(Default)]
 pub(crate) struct PeerCapsuleIdSink(std::sync::Mutex<PeerResponseMarkers>);
 
 #[derive(Default)]
 struct PeerResponseMarkers {
     capsule_id: Option<String>,
-    weights_digest: Option<String>,
+    served_model: super::ServedModelHeaders,
 }
 
 impl PeerCapsuleIdSink {
@@ -82,15 +82,15 @@ impl PeerCapsuleIdSink {
         self.0.lock().unwrap().capsule_id.take()
     }
 
-    pub(in crate::network::openai) fn set_weights_digest(&self, value: String) {
-        self.0.lock().unwrap().weights_digest = Some(value);
+    pub(in crate::network::openai) fn set_served_model(&self, value: super::ServedModelHeaders) {
+        self.0.lock().unwrap().served_model = value;
     }
 
-    pub(crate) fn take_weights_digest(&self) -> Option<String> {
-        self.0.lock().unwrap().weights_digest.take()
+    pub(crate) fn take_served_model(&self) -> super::ServedModelHeaders {
+        std::mem::take(&mut self.0.lock().unwrap().served_model)
     }
 
-    /// Drop both values, before a new attempt records its own.
+    /// Drop every value, before a new attempt records its own.
     pub(in crate::network::openai) fn clear(&self) {
         *self.0.lock().unwrap() = PeerResponseMarkers::default();
     }

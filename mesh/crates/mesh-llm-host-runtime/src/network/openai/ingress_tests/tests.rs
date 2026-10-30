@@ -4,6 +4,7 @@ use crate::logging::{
     LoggingService, OpenAiLifecycleAttachment, RawMeshLifecycleOwners, RawMeshRequestLifecycle,
     TerminalOutcome,
 };
+use crate::network::openai::ServedModelHeaders;
 use crate::plugin::openai_exchange::{OpenAiExchangeChannel, OpenAiExchangeEnvelope};
 use async_trait::async_trait;
 use mesh_llm_events::logging::{events::LifecycleEvent, identifiers::RequestId};
@@ -2432,7 +2433,7 @@ fn serving_provenance_for_remote_mesh_names_the_pinned_peer_on_a_served_outcome(
     let provenance = serving_provenance_for_remote_mesh(
         Some(peer),
         None,
-        None,
+        ServedModelHeaders::default(),
         &proxy::RouteDispatchOutcome::Responded(200),
     )
     .expect("a pinned target on a served outcome must yield provenance");
@@ -2461,7 +2462,7 @@ fn serving_provenance_for_remote_mesh_is_absent_without_a_known_peer() {
         serving_provenance_for_remote_mesh(
             None,
             None,
-            None,
+            ServedModelHeaders::default(),
             &proxy::RouteDispatchOutcome::Responded(200)
         )
         .is_none()
@@ -2475,7 +2476,7 @@ fn serving_provenance_for_remote_mesh_names_the_routing_observed_peer() {
     let provenance = serving_provenance_for_remote_mesh(
         None,
         Some(observed.clone()),
-        None,
+        ServedModelHeaders::default(),
         &proxy::RouteDispatchOutcome::Responded(200),
     )
     .expect("an observed peer on a served outcome must yield provenance");
@@ -2490,7 +2491,7 @@ fn serving_provenance_for_remote_mesh_prefers_the_observed_peer() {
     let provenance = serving_provenance_for_remote_mesh(
         Some(pinned),
         Some(observed.clone()),
-        None,
+        ServedModelHeaders::default(),
         &proxy::RouteDispatchOutcome::Responded(200),
     )
     .expect("served outcome must yield provenance");
@@ -2505,7 +2506,10 @@ fn serving_provenance_for_remote_mesh_is_absent_on_an_unserved_outcome() {
         serving_provenance_for_remote_mesh(
             Some(peer),
             None,
-            Some("e".repeat(64)),
+            ServedModelHeaders {
+                weights_digest: Some("e".repeat(64)),
+                ..Default::default()
+            },
             &proxy::RouteDispatchOutcome::FailedWithStatus {
                 status_code: 503,
                 reason: "no_target",
@@ -2517,7 +2521,7 @@ fn serving_provenance_for_remote_mesh_is_absent_on_an_unserved_outcome() {
         serving_provenance_for_remote_mesh(
             Some(peer),
             None,
-            None,
+            ServedModelHeaders::default(),
             &proxy::RouteDispatchOutcome::Dropped("x")
         )
         .is_none()
@@ -2547,7 +2551,10 @@ fn remote_delivered_terminal_carries_the_relayed_response_digests() {
             peer_capsule_id: None,
             target: None,
             observed_served_by_hex: Some(peer_hex.clone()),
-            peer_weights_digest: Some("e".repeat(64)),
+            peer_served_model: ServedModelHeaders {
+                weights_digest: Some("e".repeat(64)),
+                canonical_ref: Some("acme/remote-model@main:Q4_K_M".to_string()),
+            },
             request_digest: Some("d".repeat(64)),
             twin_bracket_id: None,
         },
@@ -2582,6 +2589,14 @@ fn remote_delivered_terminal_carries_the_relayed_response_digests() {
         Some("e".repeat(64).as_str()),
         "the RemoteMesh terminal must carry the digest the peer reported"
     );
+    assert_eq!(
+        terminal
+            .serving_provenance
+            .as_ref()
+            .and_then(|provenance| provenance.model_canonical_ref.as_deref()),
+        Some("acme/remote-model@main:Q4_K_M"),
+        "and the canonical ref the peer reported"
+    );
 }
 
 /// Election on the local-candidates route can pick a peer that also serves
@@ -2614,7 +2629,7 @@ async fn local_route_terminal_names_the_peer_that_delivered() {
             peer_capsule_id: None,
             target: None,
             observed_served_by_hex: Some(peer_hex.clone()),
-            peer_weights_digest: None,
+            peer_served_model: ServedModelHeaders::default(),
             request_digest: Some(digest.clone()),
             twin_bracket_id: None,
         }),
@@ -2691,7 +2706,10 @@ async fn local_route_terminal_from_a_peer_keeps_the_twin_bracket_id() {
             "acme/shared-model",
             peer_hex.clone(),
             Some("cap-local-pair".to_string()),
-            Some("e".repeat(64)),
+            ServedModelHeaders {
+                weights_digest: Some("e".repeat(64)),
+                ..Default::default()
+            },
             None,
         )),
         RawProxyTerminalFacts {

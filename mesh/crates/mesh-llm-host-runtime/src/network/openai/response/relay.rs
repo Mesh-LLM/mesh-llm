@@ -6,8 +6,7 @@ use super::common::{
 use super::probe::MESH_SERVED_BY_HEADER;
 use super::probe::{
     ParsedResponseHeaders, REQUEST_ID_HEADER, ResponseProbe, append_capsule_nonce_headers,
-    append_served_weights_digest_header, insert_header_before_body, read_response_chunk,
-    try_parse_response_headers,
+    insert_header_before_body, read_response_chunk, try_parse_response_headers,
 };
 use crate::logging::{ArtifactUnavailableReason, OpenAiRouteObserver};
 use crate::network::openai::client_stream::ClientStream;
@@ -72,7 +71,7 @@ pub(in crate::network::openai::response) fn remap_error_http_response(
             parsed.client_nonce.as_deref(),
             parsed.nonce_origin.as_deref(),
         );
-        append_served_weights_digest_header(&mut header, parsed.served_weights_digest.as_deref());
+        parsed.served_model.append_to(&mut header);
     }
     header.push_str("\r\n");
     let mut response = header.into_bytes();
@@ -491,7 +490,7 @@ mod tests {
                     content_type: Some("application/json".to_owned()),
                     client_nonce: None,
                     nonce_origin: None,
-                    served_weights_digest: None,
+                    served_model: Default::default(),
                 },
                 ResponseRetryPolicy::next_target_available(false),
                 None,
@@ -531,7 +530,7 @@ mod tests {
             chunked: false,
             client_nonce: None,
             nonce_origin: None,
-            served_weights_digest: None,
+            served_model: Default::default(),
         };
         let probe_for = |header: &str| ResponseProbe {
             buffered: header.as_bytes().to_vec(),
@@ -553,7 +552,7 @@ mod tests {
             chunked: parsed.chunked,
             client_nonce: None,
             nonce_origin: None,
-            served_weights_digest: None,
+            served_model: Default::default(),
         };
         let task = tokio::spawn(async move {
             let (client, _) = listener.accept().await.unwrap();
@@ -843,7 +842,7 @@ mod tests {
                     content_type: Some("application/json; charset=utf-8".to_owned()),
                     client_nonce: None,
                     nonce_origin: None,
-                    served_weights_digest: None,
+                    served_model: Default::default(),
                 },
                 ResponseRetryPolicy::next_target_available(false),
                 None,
@@ -943,7 +942,7 @@ mod tests {
             chunked: false,
             client_nonce: None,
             nonce_origin: None,
-            served_weights_digest: None,
+            served_model: Default::default(),
         };
         let probe = ResponseProbe {
             buffered: header.as_bytes().to_vec(),

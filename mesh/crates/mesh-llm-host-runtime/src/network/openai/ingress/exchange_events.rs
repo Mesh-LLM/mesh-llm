@@ -2,6 +2,7 @@
 //! effective and terminal envelopes, the serving provenance, token usage,
 //! digests and client nonce they carry, and the channel a route publishes to.
 use crate::mesh;
+use crate::network::openai::ServedModelHeaders;
 use crate::network::openai::transport as proxy;
 use crate::plugin::openai_exchange::{
     ClientNonceSource, ExchangeUsage, OpenAiExchangeChannel, OpenAiExchangeDispatchPath,
@@ -148,14 +149,14 @@ fn outcome_was_served(outcome: &proxy::RouteDispatchOutcome) -> bool {
 /// hardware and model field stays absent, since this node never touched that
 /// hardware.
 ///
-/// `peer_weights_digest` is the peer's `x-mesh-weights-digest` response
-/// header: what the peer says it ran, the same value its own host-served
-/// terminal reports. This node cannot check it against the bytes, as with the
+/// `peer_served_model` holds the peer's served-model response headers
+/// (`x-mesh-weights-digest`, `x-mesh-model-canonical-ref`): what the peer
+/// says it ran, the same values its own host-served terminal reports. This node cannot check it against the bytes, as with the
 /// peer's `X-Capsule-Id`; it is recorded as the peer's statement.
 pub(super) fn serving_provenance_for_remote_mesh(
     target: Option<iroh::EndpointId>,
     observed_served_by_hex: Option<String>,
-    peer_weights_digest: Option<String>,
+    peer_served_model: ServedModelHeaders,
     outcome: &proxy::RouteDispatchOutcome,
 ) -> Option<ServingProvenance> {
     if !outcome_was_served(outcome) {
@@ -172,9 +173,9 @@ pub(super) fn serving_provenance_for_remote_mesh(
         parameter_size: None,
         layer_count: None,
         model_identity_hash: None,
-        model_canonical_ref: None,
+        model_canonical_ref: peer_served_model.canonical_ref,
         model_revision: None,
-        weights_digest: peer_weights_digest,
+        weights_digest: peer_served_model.weights_digest,
         gpu: None,
         vram_bytes: None,
         is_soc: None,
@@ -378,8 +379,8 @@ pub(super) struct RemoteDeliveredFacts<'a> {
     pub(super) target: Option<iroh::EndpointId>,
     /// The peer `route_model_request` saw deliver the attempt.
     pub(super) observed_served_by_hex: Option<String>,
-    /// The `x-mesh-weights-digest` that peer returned with its response.
-    pub(super) peer_weights_digest: Option<String>,
+    /// The served-model headers that peer returned with its response.
+    pub(super) peer_served_model: ServedModelHeaders,
     pub(super) request_digest: Option<String>,
     /// The client's `x-mesh-twin-bracket` value, copied unread.
     pub(super) twin_bracket_id: Option<String>,
@@ -407,7 +408,7 @@ pub(super) fn remote_delivered_terminal(
     if let Some(provenance) = serving_provenance_for_remote_mesh(
         facts.target,
         facts.observed_served_by_hex,
-        facts.peer_weights_digest,
+        facts.peer_served_model,
         outcome,
     ) {
         terminal = terminal.with_serving_provenance(provenance);
@@ -434,7 +435,7 @@ pub(super) fn local_route_delivered_by_peer<'a>(
     model_name: &'a str,
     peer_hex: String,
     peer_capsule_id: Option<String>,
-    peer_weights_digest: Option<String>,
+    peer_served_model: ServedModelHeaders,
     request_digest: Option<String>,
 ) -> RemoteDeliveredFacts<'a> {
     let (nonce, nonce_origin) = request.capsule_nonce_headers();
@@ -447,7 +448,7 @@ pub(super) fn local_route_delivered_by_peer<'a>(
         peer_capsule_id,
         target: None,
         observed_served_by_hex: Some(peer_hex),
-        peer_weights_digest,
+        peer_served_model,
         request_digest,
         // Validated in `route_request`; copied unread.
         twin_bracket_id: twin_bracket_id(request).ok().flatten(),

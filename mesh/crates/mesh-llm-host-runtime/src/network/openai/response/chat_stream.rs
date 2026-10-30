@@ -5,8 +5,7 @@ use super::common::{
 };
 use super::probe::{
     ResponseProbe, append_capsule_nonce_headers, append_mesh_request_id_header,
-    append_mesh_served_by_header, append_served_weights_digest_header, response_is_event_stream,
-    try_parse_response_headers,
+    append_mesh_served_by_header, response_is_event_stream, try_parse_response_headers,
 };
 use super::relay::{relay_error_response, relay_success_response};
 use super::stream_translation::write_captured_sse_event;
@@ -232,7 +231,7 @@ pub(in crate::network::openai::response) async fn relay_chat_protocol_stream<
         parsed.client_nonce.as_deref(),
         parsed.nonce_origin.as_deref(),
     );
-    append_served_weights_digest_header(&mut header, parsed.served_weights_digest.as_deref());
+    parsed.served_model.append_to(&mut header);
     append_mesh_served_by_header(&mut header, served_by);
     append_mesh_request_id_header(&mut header, request_id);
     header.push_str("Connection: close\r\n\r\n");

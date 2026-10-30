@@ -19,6 +19,7 @@ use mesh_llm_payments_types::response_usage::{ResponseEvidence, ResponseUsage};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
 use super::{backend::Backend, client::Payments, request::PaidRequest};
+use crate::network::openai::{ServedModelHeadRewrite, ServedModelHeaders};
 use crate::{inference::election::ModelTargets, mesh::Node};
 use exchange_events::DeliveredCapture;
 
@@ -328,12 +329,17 @@ async fn dispatch(
     )
     .await;
     let mut delivered = exchange.as_ref().map(|_| DeliveredCapture::default());
+    // The buyer is always a mesh peer, so it gets what this node says it ran,
+    // as on the free path (`response/served_model_headers.rs`).
+    let head = ServedModelHeadRewrite::new(
+        ServedModelHeaders::for_served_model(node, &session.request.model).await,
+    );
     let usage = match session
         .backend
         .connect(&session.request, &session.terms.id)
         .await
     {
-        Ok(backend) => forward_backend(backend, reader, writer, delivered.as_mut()).await,
+        Ok(backend) => forward_backend(backend, reader, writer, delivered.as_mut(), head).await,
         Err(_) => None,
     };
     drop(instance);
@@ -353,12 +359,15 @@ async fn dispatch(
 /// Forward the backend's response to the buyer, observing usage on the way.
 /// The backend is observed independently of buyer transport completion: a
 /// buyer that goes away mid-response still owes nothing (abandoned), and a
-/// complete response is billed even when the last frame did not land.
+/// complete response is billed even when the last frame did not land. Usage
+/// and the delivered capture see the backend's own bytes; only the head the
+/// buyer receives carries the served-model headers `head` sets.
 async fn forward_backend(
     mut backend: impl AsyncRead + Unpin,
     reader: &mut (impl AsyncRead + Unpin),
     writer: &mut (impl AsyncWrite + Unpin),
     mut delivered: Option<&mut DeliveredCapture>,
+    mut head: ServedModelHeadRewrite,
 ) -> Option<MeteredUsage> {
     let mut usage = ResponseUsage::default();
     let mut buffer = [0_u8; 16 * 1024];
@@ -370,7 +379,13 @@ async fn forward_backend(
             _ = &mut cancelled => return reported(usage.interrupted_evidence()),
         };
         let count = match read {
-            Ok(Ok(0)) => break,
+            Ok(Ok(0)) => {
+                let held = head.finish();
+                if !held.is_empty() && write_output(writer, held).await.is_err() {
+                    return reported(usage.interrupted_evidence());
+                }
+                break;
+            }
             Ok(Ok(count)) => count,
             _ => return reported(usage.interrupted_evidence()),
         };
@@ -378,15 +393,17 @@ async fn forward_backend(
         if let Some(capture) = delivered.as_deref_mut() {
             capture.push(&buffer[..count]);
         }
-        let frame = Frame::Output {
-            bytes: buffer[..count].to_vec(),
-        };
-        if wire::write(writer, &frame).await.is_err() {
+        let bytes = head.push(&buffer[..count]);
+        if !bytes.is_empty() && write_output(writer, bytes).await.is_err() {
             return reported(usage.interrupted_evidence());
         }
     }
     usage.finish();
     reported(usage.evidence())
+}
+
+async fn write_output(writer: &mut (impl AsyncWrite + Unpin), bytes: Vec<u8>) -> Result<()> {
+    wire::write(writer, &Frame::Output { bytes }).await
 }
 
 fn reported(evidence: ResponseEvidence) -> Option<MeteredUsage> {
@@ -573,7 +590,14 @@ mod tests {
         let (mut buyer_send, mut buyer_recv) = tokio::io::duplex(1 << 16);
         buyer_send.shutdown().await.unwrap();
         let mut sink = Vec::new();
-        let usage = forward_backend(&response[..], &mut buyer_recv, &mut sink, None).await;
+        let usage = forward_backend(
+            &response[..],
+            &mut buyer_recv,
+            &mut sink,
+            None,
+            ServedModelHeadRewrite::new(None),
+        )
+        .await;
         assert_eq!(
             usage,
             Some(MeteredUsage {
@@ -584,13 +608,57 @@ mod tests {
         );
     }
 
+    /// The buyer is told which model the seller says it ran, as a free
+    /// exchange's routing node is, while usage is still read from the
+    /// backend's own bytes.
+    #[tokio::test]
+    async fn a_paid_buyer_receives_the_sellers_served_model_headers() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 44\r\n\r\n{\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}";
+        let (_buyer_send, mut buyer_recv) = tokio::io::duplex(16);
+        let mut sink = Vec::new();
+        let served = ServedModelHeaders {
+            weights_digest: Some("74a4da8c".into()),
+            canonical_ref: Some("org/repo@main:Q4_K_M".into()),
+        };
+        // A one-byte backend reader splits the head across many reads.
+        let backend = tokio::io::BufReader::with_capacity(1, &response[..]);
+        let usage = forward_backend(
+            backend,
+            &mut buyer_recv,
+            &mut sink,
+            None,
+            ServedModelHeadRewrite::new(Some(served)),
+        )
+        .await;
+        assert!(usage.is_some());
+        let mut frames = &sink[..];
+        let mut delivered = Vec::new();
+        while !frames.is_empty() {
+            match wire::read(&mut frames).await.unwrap() {
+                Frame::Output { bytes } => delivered.extend(bytes),
+                other => panic!("unexpected frame {other:?}"),
+            }
+        }
+        let delivered = String::from_utf8(delivered).unwrap();
+        assert!(delivered.contains("x-mesh-weights-digest: 74a4da8c\r\n"));
+        assert!(delivered.contains("x-mesh-model-canonical-ref: org/repo@main:Q4_K_M\r\n"));
+        assert!(delivered.ends_with("\"completion_tokens\":2}}"));
+    }
+
     #[tokio::test]
     async fn a_backend_that_reports_no_usage_abandons() {
         let response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}";
         let (_buyer_send, mut buyer_recv) = tokio::io::duplex(16);
         let mut sink = Vec::new();
         assert_eq!(
-            forward_backend(&response[..], &mut buyer_recv, &mut sink, None).await,
+            forward_backend(
+                &response[..],
+                &mut buyer_recv,
+                &mut sink,
+                None,
+                ServedModelHeadRewrite::new(None)
+            )
+            .await,
             None
         );
     }
@@ -604,7 +672,14 @@ mod tests {
             .unwrap();
         let mut sink = Vec::new();
         assert_eq!(
-            forward_backend(backend_recv, &mut buyer_recv, &mut sink, None).await,
+            forward_backend(
+                backend_recv,
+                &mut buyer_recv,
+                &mut sink,
+                None,
+                ServedModelHeadRewrite::new(None)
+            )
+            .await,
             None
         );
     }
