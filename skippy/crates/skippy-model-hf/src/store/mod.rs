@@ -16,8 +16,8 @@ pub use local::{
     huggingface_hub_cache_dir, huggingface_identity_for_path, huggingface_repo_folder_name,
     huggingface_snapshot_path, layered_package_layer_count_for_path,
     layered_package_total_bytes_for_path, model_metadata_cache_dir, model_metadata_cache_dir_in,
-    model_ref_for_path, scan_hf_cache_fast, scan_hf_cache_info, scan_installed_models,
-    scan_installed_models_in, scan_local_models,
+    model_ref_for_path, remember_model_ref_path, replace_model_ref_path, scan_hf_cache_fast,
+    scan_hf_cache_info, scan_installed_models, scan_installed_models_in, scan_local_models,
 };
 pub use usage::{
     ModelCleanupPlan, ModelCleanupResult, ModelUsageRecord, execute_model_cleanup,

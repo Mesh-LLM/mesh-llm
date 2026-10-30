@@ -1051,6 +1051,7 @@ pub(super) async fn resolve_local_model_only_startup_models(
             .declared_ref
             .clone()
             .unwrap_or_else(|| models::model_ref_for_path(&resolved_path));
+        remember_served_gguf_path(&declared_ref, &resolved_path);
         plans.push(StartupModelPlan {
             model_source: crate::runtime::model_presentation::launch_source(&spec.model_ref),
             declared_ref,
@@ -1113,6 +1114,7 @@ async fn resolve_startup_models_with_package_discovery(
             if spec.config_model_id.is_none() && spec.declared_ref.is_none() {
                 plan.declared_ref = direct_gguf_model_id(&identity);
             }
+            remember_served_gguf_path(&plan.declared_ref, &plan.resolved_path);
             plan.preindexed_split_package = Some(identity);
             plans.push(plan);
             continue;
@@ -1203,6 +1205,7 @@ async fn resolve_startup_models_with_package_discovery(
                     }
                 })
         };
+        remember_served_gguf_path(&declared_ref, &resolved_path);
         plans.push(StartupModelPlan {
             model_source: crate::runtime::model_presentation::launch_source(&spec.model_ref),
             declared_ref,
@@ -1256,6 +1259,29 @@ fn is_gguf_file(path: &Path) -> Result<bool> {
 
 fn direct_gguf_model_id(identity: &skippy::SkippyPackageIdentity) -> String {
     format!("local-gguf/sha256-{}", identity.source_model_sha256)
+}
+
+/// Teach `find_model_path` which file a served GGUF ref was loaded from.
+///
+/// The served ref is often not recoverable from the HF cache: the
+/// content-addressed `local-gguf/sha256-…` id above is derived from the weights
+/// digest, and a `--model` alias is an arbitrary label. Without this
+/// registration every later by-name lookup — `served_model_metadata_for_model`
+/// in particular — fell through to a non-existent path, so the node advertised
+/// its GGUF with no architecture, quant, or `parameter_count_b`, leaving
+/// size-based routing and the MoA small/big split blind to every such host.
+///
+/// The registration also marks the ref as served, so `/v1/models` keeps
+/// listing it verbatim instead of re-deriving a path-hash id from the file it
+/// now resolves to.
+///
+/// HF-cache files resolve to extensionless `blobs/<sha>` paths, so this keys
+/// on "is a file", not on a `.gguf` suffix; layer-package directories are
+/// skipped because the GGUF scanner needs a single file.
+fn remember_served_gguf_path(model_ref: &str, resolved_path: &Path) {
+    if resolved_path.is_file() {
+        models::remember_served_model_ref(model_ref, resolved_path);
+    }
 }
 
 /// Read the `model_id` field from a layer package's `model-package.json`.

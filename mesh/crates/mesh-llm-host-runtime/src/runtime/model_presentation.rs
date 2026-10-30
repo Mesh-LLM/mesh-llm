@@ -41,6 +41,15 @@ pub(super) async fn advertise_startup_sources(node: &mesh::Node, models: &[Start
         );
         for mut descriptor in descriptors {
             descriptor.identity.is_primary = index == 0;
+            // The upsert replaces the whole descriptor, so a `None` here used
+            // to wipe the GGUF-derived metadata (size, arch, quant) and leave
+            // the node advertising only the runtime's workload class.
+            if descriptor.metadata.is_none() {
+                descriptor.metadata = crate::models::served_model_metadata_for_path(
+                    &descriptor.identity.model_name,
+                    &model.resolved_path,
+                );
+            }
             node.upsert_served_model_descriptor(descriptor).await;
         }
     }
