@@ -29,6 +29,10 @@ const UNVERIFIED: &[&str] = &[
     "xtask",
     // Extracted native reader has Unix regular-file admission branches; Windows runtime proof is pending.
     "trajectory-reader",
+    // Retired to Mesh-LLM/ln-payments-plugin by #2654, which removes these
+    // entries together with the crates.
+    "mesh-llm-payments",
+    "mesh-llm-wallet",
 ];
 
 fn predicate(tokens: TokenStream) -> bool {
@@ -744,11 +748,11 @@ fn every_current_windows_catalog_unit_owner_selects_the_native_planner_row() {
     }
 }
 #[test]
-fn wallet_dependency_closure_preserves_direct_domain_pr_routing_and_full_cadence() {
-    let plan = plan_for_workflow_owner("mesh-llm-wallet", "pr-ready");
+fn plugin_dependency_closure_preserves_direct_domain_pr_routing_and_full_cadence() {
+    let plan = plan_for_workflow_owner("mesh-llm-plugin", "pr-ready");
     assert_eq!(
         plan["direct_crates"],
-        serde_json::json!(["mesh-llm-wallet"])
+        serde_json::json!(["mesh-llm-plugin"])
     );
     assert!(
         plan["affected_crates"]
@@ -777,12 +781,12 @@ fn wallet_dependency_closure_preserves_direct_domain_pr_routing_and_full_cadence
             .unwrap()
             .iter()
             .flat_map(|row| row["crates"].as_array().unwrap())
-            .any(|name| name == "mesh-llm-wallet")
+            .any(|name| name == "mesh-llm-plugin")
     );
-    assert!(unit_owners("windows").contains("mesh-llm-wallet"));
+    assert!(unit_owners("windows").contains("mesh-llm-plugin"));
     for profile in ["main", "manual-full"] {
         assert!(
-            plan_for_workflow_owner("mesh-llm-wallet", profile)["matrices"]["platform_checks"]
+            plan_for_workflow_owner("mesh-llm-plugin", profile)["matrices"]["platform_checks"]
                 .as_array()
                 .unwrap()
                 .iter()
