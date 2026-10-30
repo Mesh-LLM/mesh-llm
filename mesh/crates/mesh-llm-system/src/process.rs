@@ -814,12 +814,26 @@ mod pid_identity_tests {
         let dir = tempfile::tempdir().expect("temporary directory");
         let executable = dir.path().join("mesh-sleeper");
         std::fs::copy(std::env::current_exe().unwrap(), &executable).expect("copy the test binary");
-        let mut child = std::process::Command::new(&executable)
+        let mut command = std::process::Command::new(&executable);
+        command
             .args(["--exact", "pid_identity_tests::sleeper", "--nocapture"])
             .env(SLEEPER_ENV, "1")
-            .stdout(std::process::Stdio::null())
-            .spawn()
-            .expect("start the copy");
+            .stdout(std::process::Stdio::null());
+        // A process another test forks while the copy is being written holds
+        // its write descriptor until that process execs, and starting the
+        // copy fails with "Text file busy" until then.
+        let mut attempts = 0;
+        let mut child = loop {
+            match command.spawn() {
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ExecutableFileBusy && attempts < 100 =>
+                {
+                    attempts += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
+                started => break started.expect("start the copy"),
+            }
+        };
         let pid = child.id();
         let started = process_started_at_unix(pid)
             .expect("read the start time")
