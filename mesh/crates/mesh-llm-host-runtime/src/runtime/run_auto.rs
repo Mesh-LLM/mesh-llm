@@ -176,6 +176,13 @@ pub(crate) async fn run_cli(
     legacy_warning: Option<String>,
 ) -> Result<()> {
     initialize_runtime_entrypoint()?;
+    if options.memberships_config.is_some() {
+        anyhow::ensure!(
+            explicit_surface == Some(RuntimeSurface::Serve),
+            "configured memberships require serve"
+        );
+        return super::shared_serving::configured::run(&options).await;
+    }
     run_runtime_cli(options, explicit_surface, legacy_warning, None).await
 }
 
@@ -658,62 +665,6 @@ pub(super) async fn store_benchmark_metrics(
     *fp16_arc.lock().await = result.and_then(|r| r.compute_tflops_fp16.clone());
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "release attestation loading logs missing, valid, and invalid embedded states before advertising the result"
-)]
-pub(super) async fn attach_local_release_attestation(node: &mesh::Node) -> Result<()> {
-    let loaded = match release_attestation::load_for_current_binary() {
-        Ok(loaded) => loaded,
-        Err(error) => {
-            tracing::warn!(
-                error = %error,
-                "failed to load local embedded release attestation; continuing without advertising one"
-            );
-            return Ok(());
-        }
-    };
-    node.set_release_attestation_report(loaded.summary.clone(), loaded.attestation.clone())
-        .await;
-    match loaded.summary.status {
-        crate::ReleaseAttestationStatus::Missing => {
-            tracing::info!(
-                path = %loaded.binary_path.display(),
-                "no embedded release attestation found for local binary"
-            );
-            return Ok(());
-        }
-        crate::ReleaseAttestationStatus::Valid => {}
-        crate::ReleaseAttestationStatus::Invalid => {
-            tracing::warn!(
-                path = %loaded.binary_path.display(),
-                error = %loaded.summary.error.as_deref().unwrap_or("unknown release attestation error"),
-                "local binary has an invalid embedded release attestation; continuing without advertising one"
-            );
-            return Ok(());
-        }
-    }
-    let Some(attestation) = loaded.attestation else {
-        tracing::warn!(
-            path = %loaded.binary_path.display(),
-            "embedded release attestation verified but no release attestation payload was produced"
-        );
-        return Ok(());
-    };
-    let attestation_hash = attestation.canonical_hash_hex().ok();
-    if loaded.summary.verified {
-        tracing::info!(
-            path = %loaded.binary_path.display(),
-            signer_key_id = %attestation.signer_key_id,
-            attestation_hash = attestation_hash.as_deref().unwrap_or("unknown"),
-            "loaded local embedded release attestation"
-        );
-    }
-    node.set_release_attestation_report(loaded.summary, Some(attestation))
-        .await;
-    Ok(())
-}
-
 /// Install the model-intent channel on `node` and return the receiver the
 /// runtime control loop drains.
 async fn install_run_auto_model_intent_channel(
@@ -885,6 +836,8 @@ pub(super) fn spawn_node_benchmark_task(node: &mesh::Node, bin_dir: &Path) {
     });
 }
 
+/// Start the ordinary node, attach its binary proof before accepting peers,
+/// and install its stage-control and plugin services with startup failure cleanup.
 pub(super) async fn start_run_auto_node_and_plugins(
     options: &RuntimeOptions,
     config: &plugin::MeshConfig,
@@ -928,7 +881,8 @@ pub(super) async fn start_run_auto_node_and_plugins(
     )
     .await?;
     node.set_swarm_capture_recorder(swarm_capture);
-    attach_local_release_attestation(&node).await?;
+    release_attestation::attach_to_node(&node, release_attestation::load_for_current_binary())
+        .await;
     node.set_stage_control_handle(skippy::spawn_stage_control_loop(skippy_telemetry_options(
         options,
     )))

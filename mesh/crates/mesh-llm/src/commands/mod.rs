@@ -78,6 +78,7 @@ fn apply_config_host_ram_offload(config_path: Option<&std::path::Path>) -> Resul
     Ok(())
 }
 
+/// Dispatch general CLI commands and propagate the selected command's result.
 async fn dispatch_general_command(cli: &Cli, cmd: &Command) -> Result<()> {
     match cmd {
         Command::Serve | Command::Client => Ok(()),

@@ -3,6 +3,7 @@
 pub mod agent_config;
 pub mod benchmark;
 pub mod inventory;
+pub mod memberships;
 pub mod models;
 pub mod pager;
 pub mod parser;

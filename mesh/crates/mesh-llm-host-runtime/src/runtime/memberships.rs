@@ -347,11 +347,7 @@ fn validate(options: &RuntimeOptions, config: &MeshMembershipConfig) -> Result<(
 /// Lowercase only, so two names never share a key file on a case-insensitive
 /// filesystem.
 fn valid_name(name: &str) -> bool {
-    (1..=64).contains(&name.len())
-        && !name.starts_with('.')
-        && name.bytes().all(|b| {
-            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')
-        })
+    mesh_llm_config::memberships::valid_membership_name(name)
 }
 
 /// The membership's node key, made on first use. One key per membership keeps
@@ -570,6 +566,32 @@ mod tests {
             .is_ok()
     }
 
+    async fn assert_current_invite(
+        ctx: &MembershipContext,
+        config: &MeshMembershipConfig,
+        status: &MeshMembershipStatus,
+    ) -> Result<std::net::SocketAddr> {
+        let bound = ctx
+            .node
+            .memberships
+            .with_each(|_, entry| (entry.node.id(), entry.node.endpoint.bound_sockets()))
+            .await;
+        assert_eq!(bound.len(), 1);
+        let (id, sockets) = &bound[0];
+        assert_eq!(sockets.len(), 1, "the test binds only IPv4 loopback");
+        let addr = sockets[0];
+        let invite = mesh::Node::decode_invite_token(&status.invite_token)?;
+        assert_eq!(invite.id, *id);
+        assert_eq!(status.endpoint_id, id.to_string());
+        assert_eq!(invite.addrs.len(), 1);
+        assert!(invite.addrs.contains(&iroh::TransportAddr::Ip(addr)));
+        assert_eq!(
+            read_quic_port(config.node_key_path.as_ref().expect("test key path")),
+            Some(addr.port())
+        );
+        Ok(addr)
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_membership_is_replaced_on_its_own_port_and_removed() -> Result<()> {
         let (ctx, _targets) = membership_context(election::ModelTargets::default(), true).await?;
@@ -578,8 +600,10 @@ mod tests {
         let config = team_config(keys.path().join("team.key"), port);
 
         let first = add_membership(&ctx, config.clone()).await?;
-        // The replacement takes the same port the first one held, and keeps
-        // its key and UDP port, so its token; its own token is skipped.
+        let first_addr = assert_current_invite(&ctx, &config, &first).await?;
+        // The replacement keeps its key and API port; its own token is
+        // skipped. UDP reuse is best-effort: iroh retains a closed socket
+        // until the last endpoint clone is dropped, including serving tasks.
         let replaced = add_membership(
             &ctx,
             MeshMembershipConfig {
@@ -589,7 +613,10 @@ mod tests {
         )
         .await?;
         assert_eq!(replaced.endpoint_id, first.endpoint_id);
-        assert_eq!(replaced.invite_token, first.invite_token);
+        let replaced_addr = assert_current_invite(&ctx, &config, &replaced).await?;
+        if replaced_addr == first_addr {
+            assert_eq!(replaced.invite_token, first.invite_token);
+        }
         assert_eq!(membership_statuses(&ctx.node).await, vec![replaced]);
         assert!(answers(port).await);
 
@@ -597,6 +624,45 @@ mod tests {
         assert!(!remove_membership(&ctx.node, "team").await);
         assert!(membership_statuses(&ctx.node).await.is_empty());
         assert!(!answers(port).await);
+        ctx.node.close_endpoint().await;
+        Ok(())
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_replacement_reports_and_persists_its_fallback_udp_port() -> Result<()> {
+        let (ctx, _targets) = membership_context(election::ModelTargets::default(), true).await?;
+        let keys = tempfile::tempdir()?;
+        let port = port_of(&held_port());
+        let config = team_config(keys.path().join("team.key"), port);
+        let first = add_membership(&ctx, config.clone()).await?;
+        let first_addr = assert_current_invite(&ctx, &config, &first).await?;
+        // Keep the old UDP socket alive even after close, deterministically
+        // exercising the documented fallback instead of relying on timing.
+        let held_endpoint = ctx
+            .node
+            .memberships
+            .with_each(|_, entry| entry.node.endpoint.clone())
+            .await
+            .pop()
+            .expect("running membership");
+        let replaced = add_membership(
+            &ctx,
+            MeshMembershipConfig {
+                join_tokens: vec![first.invite_token.clone()],
+                ..config.clone()
+            },
+        )
+        .await?;
+        assert!(held_endpoint.is_closed());
+        assert_eq!(replaced.endpoint_id, first.endpoint_id);
+        assert_ne!(
+            assert_current_invite(&ctx, &config, &replaced).await?,
+            first_addr
+        );
+        assert_ne!(replaced.invite_token, first.invite_token);
+        assert!(answers(port).await);
+        assert!(remove_membership(&ctx.node, "team").await);
+        drop(held_endpoint);
         ctx.node.close_endpoint().await;
         Ok(())
     }

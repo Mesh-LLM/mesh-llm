@@ -1,5 +1,5 @@
 use super::*;
-use crate::frontend::backend::run_blocking_generation_worker;
+use crate::frontend::generation::run_blocking_generation_worker;
 use std::sync::atomic::AtomicBool;
 
 fn assert_generation_rate_limit(error: InferenceError, message_fragment: &str) {

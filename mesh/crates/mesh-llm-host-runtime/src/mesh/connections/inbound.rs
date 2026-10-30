@@ -1,6 +1,7 @@
 use super::*;
 use crate::logging::OperationalAuditContext;
 
+mod control;
 mod stage;
 
 impl Node {
@@ -120,63 +121,7 @@ impl Node {
             mesh_peer_operational_context(remote, selected_path_observation(&conn))
                 .numeric_summary("protocol_gen", u64::from(NODE_PROTOCOL_GENERATION)),
         );
-        let permits = control_stream_semaphore();
-        loop {
-            let permit_started = std::time::Instant::now();
-            let permit = match permits.clone().acquire_owned().await {
-                Ok(permit) => permit,
-                Err(_) => {
-                    record_mesh_operational_event_with_context(
-                        MeshOperationalEvent::ControlHandlerFailed(
-                            MeshHandlerFailureBoundary::CapacityPermit.failure_class(),
-                        ),
-                        mesh_peer_operational_context(remote, selected_path_observation(&conn))
-                            .duration_ms(elapsed_ms_u64(permit_started.elapsed())),
-                    );
-                    break;
-                }
-            };
-            let stream_accept_started = std::time::Instant::now();
-            let (mut send, mut recv) = match conn.accept_bi().await {
-                Ok(streams) => streams,
-                Err(error) => {
-                    record_mesh_operational_event_with_context(
-                        MeshOperationalEvent::ControlHandlerFailed(
-                            MeshHandlerFailureBoundary::StreamAccept.failure_class(),
-                        ),
-                        mesh_peer_operational_context(remote, selected_path_observation(&conn))
-                            .duration_ms(elapsed_ms_u64(stream_accept_started.elapsed())),
-                    );
-                    tracing::debug!(
-                        "Control-plane connection from {} closed: {error}",
-                        remote.fmt_short()
-                    );
-                    break;
-                }
-            };
-            let node = self.clone();
-            let peer_context =
-                mesh_peer_operational_context(remote, selected_path_observation(&conn));
-            tokio::spawn(Box::pin(async move {
-                let _permit = permit;
-                let dispatch_started = std::time::Instant::now();
-                if let Err(error) = node
-                    .handle_control_stream(remote, &mut send, &mut recv)
-                    .await
-                {
-                    record_mesh_operational_event_with_context(
-                        MeshOperationalEvent::ControlHandlerFailed(
-                            MeshHandlerFailureBoundary::ControlDispatch.failure_class(),
-                        ),
-                        peer_context.duration_ms(elapsed_ms_u64(dispatch_started.elapsed())),
-                    );
-                    tracing::debug!(
-                        "Control-plane stream from {} failed: {error}",
-                        remote.fmt_short()
-                    );
-                }
-            }));
-        }
+        self.dispatch_control_streams(conn, remote).await;
         Ok(())
     }
 
@@ -220,16 +165,27 @@ impl Node {
         })
     }
 
+    /// Enforce stream permissions and peer admission before dispatching mesh traffic.
+    /// Full-model attachments admit only gossip before membership verification
+    /// and never accept model-control or plugin streams.
     pub(crate) async fn admitted_mesh_stream(
         &self,
         remote: EndpointId,
         protocol: ControlProtocol,
         stream_type: u8,
-        send: iroh::endpoint::SendStream,
-        recv: iroh::endpoint::RecvStream,
+        mut send: iroh::endpoint::SendStream,
+        mut recv: iroh::endpoint::RecvStream,
     ) -> Option<MeshBiStream> {
         let capture_streams = self.swarm_capture_enabled();
-        if stream_allowed_before_admission(stream_type, self.trust_policy) {
+        if self.full_model_only && !super::full_model_attachment_stream(stream_type) {
+            self.capture_stream_rejected(remote, stream_type, protocol, "full_model_only");
+            let _ = recv.stop(0u32.into());
+            let _ = send.reset(0u32.into());
+            return None;
+        }
+        if stream_allowed_before_admission(stream_type, self.trust_policy)
+            && (!self.full_model_only || stream_type == STREAM_GOSSIP)
+        {
             if capture_streams {
                 self.capture_stream_observation(remote, stream_type, protocol, true);
             }
@@ -251,6 +207,10 @@ impl Node {
                 stream_type,
                 remote.fmt_short()
             );
+            if self.full_model_only {
+                let _ = recv.stop(0u32.into());
+                let _ = send.reset(0u32.into());
+            }
             drop((send, recv));
             None
         }

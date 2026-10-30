@@ -134,7 +134,7 @@ impl StageOpenAiBackend {
         apply_chat_request_defaults(&mut chat_request, &self.request_defaults)?;
         let template_options = chat_template_options(&chat_request, &self.request_defaults)?;
         let mut prompt = self
-            .prepare_chat_prompt_offloaded(&chat_request, template_options)
+            .prepare_chat_prompt_offloaded(&chat_request, template_options, context.clone())
             .await?;
         prompt.media = vec![MediaInput {
             bytes: request.file,

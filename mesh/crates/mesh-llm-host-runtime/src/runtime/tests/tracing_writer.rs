@@ -1,6 +1,17 @@
 use super::*;
 
 #[test]
+fn ownership_renewal_warnings_are_enabled_by_the_runtime_subscriber() {
+    let subscriber = runtime_tracing_subscriber().expect("runtime tracing subscriber");
+    tracing::subscriber::with_default(subscriber, || {
+        assert!(tracing::enabled!(
+            target: "mesh_llm_host_runtime::mesh::node::ownership",
+            tracing::Level::WARN
+        ));
+    });
+}
+
+#[test]
 fn noq_proto_tracing_messages_use_transport_context() {
     let message = "2026-06-11T03:49:18.033043Z  WARN noq_proto::connection: err=LastOpenPath failed closing path";
 
