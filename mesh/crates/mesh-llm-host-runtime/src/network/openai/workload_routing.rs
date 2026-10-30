@@ -22,7 +22,7 @@ pub(super) fn is_audio_upload_path(path: &str) -> bool {
 
 /// Recognize document OCR uploads independently of query parameters.
 pub(super) fn is_document_ocr_path(path: &str) -> bool {
-    path.split('?').next().unwrap_or(path) == "/v1/documents/ocr"
+    path.split('?').next().unwrap_or(path) == "/mesh/v1/documents/ocr"
 }
 
 /// Recognize the typed System One endpoint independently of query parameters.
@@ -46,7 +46,7 @@ pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
         "/v1/rerank" => Some(ModelWorkloadClass::Rerank),
         "/v1/audio/speech" => Some(ModelWorkloadClass::SpeechSynthesis),
         "/v1/realtime" => Some(ModelWorkloadClass::SpeechRecognition),
-        "/v1/documents/ocr" => Some(ModelWorkloadClass::DocumentOcr),
+        "/mesh/v1/documents/ocr" => Some(ModelWorkloadClass::DocumentOcr),
         _ => None,
     }
 }

@@ -770,7 +770,7 @@ fn audio_upload_limits_are_path_scoped() {
 async fn document_ocr_upload_extracts_model_from_multipart() {
     let body = b"--ocr\r\nContent-Disposition: form-data; name=\"file\"; filename=\"page.png\"\r\n\r\nimage\r\n--ocr\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ndatalab/indra-ocr\r\n--ocr--\r\n";
     let headers = format!(
-        "POST /v1/documents/ocr HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=ocr\r\nContent-Length: {}\r\n\r\n",
+        "POST /mesh/v1/documents/ocr HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=ocr\r\nContent-Length: {}\r\n\r\n",
         body.len()
     )
     .into_bytes();
@@ -781,7 +781,7 @@ async fn document_ocr_upload_extracts_model_from_multipart() {
 
 #[test]
 fn document_ocr_upload_limits_are_path_scoped() {
-    let limits = body_limits_for_path("/v1/documents/ocr?trace=1", HTTP_READ_LIMITS);
+    let limits = body_limits_for_path("/mesh/v1/documents/ocr?trace=1", HTTP_READ_LIMITS);
     assert_eq!(limits.max_body_bytes, MAX_DOCUMENT_UPLOAD_BODY_BYTES);
     assert_eq!(
         limits.max_chunked_wire_bytes,

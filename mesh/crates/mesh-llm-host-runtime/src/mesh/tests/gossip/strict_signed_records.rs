@@ -260,13 +260,28 @@ async fn expired_relay_is_rejected_but_authenticated_restart_can_reset_sequence(
             .iter()
             .any(|r| r.signed == restarted.signed_bytes())
     );
-    receive(
-        &node,
-        0x62,
-        Vec::new(),
-        vec![signed_worker_record(0x61, 2, "restarted")],
-    )
-    .await;
+    let fresh = signed_worker_record(0x61, 2, "restarted");
+    receive(&node, 0x62, Vec::new(), vec![fresh.clone()]).await;
+    // The signed record advances, but fresh direct routing state remains
+    // authoritative even when another node relays a valid origin signature.
+    assert_eq!(
+        serving_models(&node, 0x61).await,
+        Some(vec!["relay-model".into()])
+    );
+    {
+        let mut state = node.state.lock().await;
+        let peer_id = test_endpoint_id(0x61);
+        let held = state.node_records.get(&peer_id).unwrap();
+        assert_eq!(held.header().seq, 2);
+        assert_eq!(held.signed_bytes(), fresh.signed);
+        state.peers.get_mut(&peer_id).unwrap().last_seen = std::time::Instant::now()
+            - std::time::Duration::from_secs(
+                mesh_llm_membership::peer_state::PEER_STALE_SECS + 1,
+            );
+    }
+    // Once direct proof-of-life expires, the same accepted record restores
+    // the current models without sleeping or depending on test-runner speed.
+    receive(&node, 0x62, Vec::new(), vec![fresh]).await;
     assert_eq!(
         serving_models(&node, 0x61).await,
         Some(vec!["restarted".into()])
