@@ -1,8 +1,9 @@
 /** Per-model payment summary from the `/mesh/v1/models` discovery listing (per-provider `payment`). Descriptive only. */
 export type ModelPayment = { freeAvailable: boolean; paidAvailable: boolean; outputMsatPerMillion?: number }
 
+/** A provider entry from `/mesh/v1/models`; discovery keeps offline providers listed with `available: false`. */
 type RawPayment = { paid?: unknown; pricing?: { output_msat_per_million?: unknown } | null }
-type RawProvider = { local?: unknown; payment?: RawPayment | null }
+type RawProvider = { local?: unknown; available?: unknown; payment?: RawPayment | null }
 type RawModel = { id?: unknown; providers?: unknown }
 
 export function parseModelPayments(body: unknown): Map<string, ModelPayment> {
@@ -11,7 +12,12 @@ export function parseModelPayments(body: unknown): Map<string, ModelPayment> {
   if (!Array.isArray(data)) return result
   for (const item of data as RawModel[]) {
     if (typeof item?.id !== 'string') continue
-    const providers = Array.isArray(item.providers) ? (item.providers as RawProvider[]) : []
+    // Availability gates every derived field: an offline free or local provider
+    // must not make the model free-available, and offline paid rates must not
+    // set the shown minimum.
+    const providers = (Array.isArray(item.providers) ? (item.providers as RawProvider[]) : []).filter(
+      (provider) => provider?.available !== false
+    )
     if (!providers.some((provider) => provider?.payment != null)) continue
     const rates = providers
       .map((provider) => provider.payment)

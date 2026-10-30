@@ -50,7 +50,10 @@ class LiveTranscriptionTest {
     fun cancellingEventsDuringPendingReadClosesOnIoWithoutBlockingCollection() = runTest {
         val readPending = CompletableDeferred<Unit>()
         val closeStarted = CompletableDeferred<Unit>()
-        val release = CompletableDeferred<Unit>()
+        // closeNative is a plain () -> Unit, so the park must be a blocking
+        // wait rather than a suspending await; the reader callback stays
+        // suspending either way.
+        val release = java.util.concurrent.CountDownLatch(1)
         val live = LiveTranscription(
             audio = {}, floatAudio = {}, commitNative = {},
             // The reader parks in a pending native read until close releases it.
@@ -66,7 +69,7 @@ class LiveTranscriptionTest {
             // the collector's dispatcher never runs the blocking cleanup.
             collection.cancelAndJoin()
         }
-        release.complete(Unit)
+        release.countDown()
         withTimeout(5_000) { closeStarted.await() }
     }
 }
