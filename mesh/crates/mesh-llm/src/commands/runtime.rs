@@ -414,20 +414,21 @@ fn build_load_request(model_name: &str, sizing: LoadSizing) -> serde_json::Value
 const LOAD_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 pub(crate) async fn run_load(model_name: &str, port: u16, sizing: LoadSizing) -> Result<()> {
-    run_load_with_timeout(model_name, port, sizing, LOAD_REQUEST_TIMEOUT).await
+    let token = mesh_llm_commands::owner_control::owner_control_token(port).await?;
+    send_load_request(model_name, port, sizing, &token, LOAD_REQUEST_TIMEOUT).await
 }
 
-pub(crate) async fn run_load_with_timeout(
+pub(crate) async fn send_load_request(
     model_name: &str,
     port: u16,
     sizing: LoadSizing,
+    token: &str,
     timeout: std::time::Duration,
 ) -> Result<()> {
     let client = reqwest::Client::builder()
         .connect_timeout(timeout.min(std::time::Duration::from_secs(5)))
         .timeout(timeout)
         .build()?;
-    let token = load_owner_control_token(port).await?;
     let url = format!("http://127.0.0.1:{port}/api/runtime/models");
     let resp = client
         .post(&url)
@@ -437,27 +438,6 @@ pub(crate) async fn run_load_with_timeout(
         .await
         .map_err(|error| load_send_error(error, model_name, port))?;
     display_runtime_result(resp, model_name, "Loaded").await
-}
-
-/// The credential fetch is the first request `load` sends, so a node that is
-/// not running fails here. Report that the same way as a refused load request.
-async fn load_owner_control_token(port: u16) -> Result<String> {
-    mesh_llm_commands::owner_control::owner_control_token(port)
-        .await
-        .map_err(|error| {
-            let refused = error.chain().any(|cause| {
-                cause
-                    .downcast_ref::<reqwest::Error>()
-                    .is_some_and(reqwest::Error::is_connect)
-            });
-            if refused {
-                error.context(format!(
-                    "Can't connect to mesh-llm on port {port}. Is it running?"
-                ))
-            } else {
-                error
-            }
-        })
 }
 
 /// A timeout does not establish whether the node accepted the load request.
