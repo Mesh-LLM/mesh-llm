@@ -33,6 +33,7 @@ use skippy_runtime::SamplingConfig;
 
 mod active_kv_window;
 mod native_cache_concurrency;
+mod native_decode_order;
 mod native_decode_shapes;
 mod native_execution_accounting;
 mod recurrent_concurrency;
