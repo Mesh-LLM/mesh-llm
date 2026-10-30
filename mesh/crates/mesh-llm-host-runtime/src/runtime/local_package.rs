@@ -318,6 +318,9 @@ pub(super) struct SplitParticipant {
     /// nothing but lower throughput, so placement warns rather than leaving it
     /// to be inferred.
     pub(super) decode_batch_policy_supported: bool,
+    /// Whether this peer decodes the FP8 activation codecs. A peer without
+    /// them rejects a stage load naming one, so the coordinator falls back.
+    pub(super) activation_codec_fp8_supported: bool,
     availability_score: u32,
     /// Weight bytes per second this node streams during decode, from its GPU
     /// memory-bandwidth benchmark. Used by `--auto-balance` placement.
@@ -339,6 +342,7 @@ impl SplitParticipant {
             rtt_ms: None,
             artifact_transfer_supported: false,
             decode_batch_policy_supported: false,
+            activation_codec_fp8_supported: false,
             availability_score: 0,
             decode_bytes_per_second: None,
         }
@@ -360,6 +364,7 @@ impl SplitParticipant {
         participant.artifact_transfer_supported = true;
         // Ourselves: this build honours the field by construction.
         participant.decode_batch_policy_supported = true;
+        participant.activation_codec_fp8_supported = true;
         participant.availability_score = package.layer_count;
         participant
     }
@@ -383,6 +388,11 @@ impl SplitParticipant {
     /// to say about this capability. Mirrors `with_decode_speed`.
     pub(super) fn with_decode_batch_policy(mut self, supported: bool) -> Self {
         self.decode_batch_policy_supported = supported;
+        self
+    }
+
+    pub(super) fn with_activation_codec_fp8(mut self, supported: bool) -> Self {
+        self.activation_codec_fp8_supported = supported;
         self
     }
 
@@ -666,6 +676,7 @@ pub(super) async fn collect_split_participants(
                             artifact_transfer_allowed,
                         )
                         .with_decode_batch_policy(peer.decode_batch_policy_supported)
+                        .with_activation_codec_fp8(peer.activation_codec_fp8_supported)
                         .with_decode_speed(decode_bytes_per_second_from_gossip(
                             peer.gpu_mem_bandwidth_gbps.as_deref(),
                         )),

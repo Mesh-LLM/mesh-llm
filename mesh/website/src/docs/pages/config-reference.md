@@ -296,7 +296,7 @@ per-tensor device overrides. None of these has a schema key yet.
 | `skippy.prefill_chunking` | enum | `auto` (normalizes to `fixed`), `fixed`, `schedule`, `adaptive-ramp` | both | model reload | wired (staged mode only) | none |
 | `skippy.prefill_chunk_size` | integer | runtime default | both | model reload | wired (staged mode only) | none |
 | `skippy.prefill_chunk_schedule` | string | unset | both | model reload | wired (staged mode only; monotonic comma-separated positive integers) | none |
-| `skippy.activation_codec` | enum | `lossless` (default), `f16`, `bf16`, `s8-row`, `f32` | both | model reload | wired (split serving only; the split's coordinator chooses and every stage follows its stage load; `lossless` sends exact values, `f16`/`bf16` halve activation bytes, `s8-row` quarters them with measurable drift) | none |
+| `skippy.activation_codec` | enum | `lossless` (default), `f16`, `bf16`, `s8-row`, `fp8-e4m3-row`, `fp8-e4m3-block32`, `fp8-e5m2-row`, `f32` | both | model reload | wired (split serving only; the split's coordinator chooses and every stage follows its stage load; `lossless` sends exact values, `f16`/`bf16` halve activation bytes, `s8-row` and the `fp8-*` codecs quarter them with measurable drift; an `fp8-*` codec falls back to `f16` when a stage does not advertise FP8 support) | none |
 
 Staged-only controls stay staged-only: lifecycle intervals, prefill controls,
 and manual stage layer ranges only take effect

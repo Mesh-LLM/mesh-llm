@@ -27,6 +27,10 @@ pub const STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1: &str = "local-gguf
 /// coordinator needs to tell "declined" from "not understood" to warn instead
 /// of silently under-delivering the planned policy.
 pub const STAGE_SUBPROTOCOL_FEATURE_DECODE_BATCH_POLICY_V1: &str = "decode-batch-policy-v1";
+/// Stage decodes the FP8 activation codecs (`StageActivationCodec` wire ids
+/// 5-7). A peer without it rejects a `StageLoad` naming one, so the split
+/// coordinator only plans an FP8 codec when every stage advertises this.
+pub const STAGE_SUBPROTOCOL_FEATURE_ACTIVATION_CODEC_FP8_V1: &str = "activation-codec-fp8-v1";
 pub const STAGE_STREAM_CONTROL: u8 = 0x01;
 pub const STAGE_STREAM_TRANSPORT: u8 = 0x02;
 pub const STAGE_STREAM_ARTIFACT_TRANSFER: u8 = 0x03;
@@ -388,7 +392,10 @@ fn validate_activation_codec(value: i32) -> Result<(), StageFrameError> {
         Ok(proto::stage::StageActivationCodec::RawF32V1)
         | Ok(proto::stage::StageActivationCodec::F16RneV1)
         | Ok(proto::stage::StageActivationCodec::Bf16RneV1)
-        | Ok(proto::stage::StageActivationCodec::S8RowF32RneV1) => Ok(()),
+        | Ok(proto::stage::StageActivationCodec::S8RowF32RneV1)
+        | Ok(proto::stage::StageActivationCodec::Fp8E4m3RowF32RneV1)
+        | Ok(proto::stage::StageActivationCodec::Fp8E4m3Block32E8m0RneV1)
+        | Ok(proto::stage::StageActivationCodec::Fp8E5m2RowF32RneV1) => Ok(()),
         _ => Err(StageFrameError::InvalidActivationCodec { got: value }),
     }
 }

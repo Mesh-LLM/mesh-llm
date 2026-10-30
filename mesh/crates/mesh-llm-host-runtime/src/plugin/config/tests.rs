@@ -1553,7 +1553,7 @@ activation_codec = "int4"
     let err = validate_config(&config).unwrap_err();
     assert_eq!(
         err.to_string(),
-        "defaults.skippy.activation_codec must be one of: lossless, f16, bf16, s8-row, f32"
+        "defaults.skippy.activation_codec must be one of: lossless, f16, bf16, s8-row, fp8-e4m3-row, fp8-e4m3-block32, fp8-e5m2-row, f32"
     );
 }
 

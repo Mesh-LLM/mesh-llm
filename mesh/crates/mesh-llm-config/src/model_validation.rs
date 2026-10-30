@@ -484,7 +484,16 @@ fn validate_skippy(config: &SkippyConfig, base_path: &str) -> DiagnosticResult {
     )?;
     validate_optional_enum(
         config.activation_codec.as_deref(),
-        &["lossless", "f16", "bf16", "s8-row", "f32"],
+        &[
+            "lossless",
+            "f16",
+            "bf16",
+            "s8-row",
+            "fp8-e4m3-row",
+            "fp8-e4m3-block32",
+            "fp8-e5m2-row",
+            "f32",
+        ],
         &format!("{base_path}.activation_codec"),
     )?;
     if let Some(schedule) = &config.prefill_chunk_schedule {
