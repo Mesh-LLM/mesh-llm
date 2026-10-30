@@ -460,14 +460,14 @@ async fn load_owner_control_token(port: u16) -> Result<String> {
         })
 }
 
-/// The route answers only when the load ends, so a timeout after the node
-/// accepted the request means the load is still running there.
+/// A timeout does not establish whether the node accepted the load request.
 fn load_send_error(error: reqwest::Error, model_name: &str, port: u16) -> anyhow::Error {
     let message = if error.is_connect() {
         format!("Can't connect to mesh-llm on port {port}. Is it running?")
     } else if error.is_timeout() {
         format!(
-            "mesh-llm on port {port} is still loading {model_name}; the load continues on the node. \
+            "Load request to mesh-llm on port {port} timed out while loading {model_name}; \
+             it may have been accepted and may still be running. \
              Run `mesh-llm status --port {port}` to see when it is ready."
         )
     } else {
