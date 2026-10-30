@@ -8,6 +8,7 @@ mod daemon_startup;
 mod dashboard;
 mod default_plugins;
 mod discovery;
+mod embedded_readiness;
 mod failed_node_start;
 pub mod instance;
 mod instance_lifecycle;
@@ -120,6 +121,7 @@ use self::auto_join::*;
 use self::control_loop::*;
 use self::dashboard::*;
 pub use self::discovery::nostr_relays;
+pub(crate) use self::embedded_readiness::EmbeddedRuntimeReadiness;
 use self::model_lifecycle::*;
 pub(crate) use self::operational_logging::{
     NativeSkippyOperationalEvent, RuntimeOperationalEvent, record_native_skippy_operational_event,
@@ -129,8 +131,8 @@ use self::publication::*;
 pub use self::run_auto::load_resolved_plugins;
 use self::run_auto::*;
 pub(crate) use self::run_auto::{
-    EmbeddedRuntimeDiscoveryMode, EmbeddedRuntimeMode, EmbeddedRuntimeOptions,
-    EmbeddedRuntimeReadiness, run, run_cli, run_embedded_runtime,
+    EmbeddedRuntimeDiscoveryMode, EmbeddedRuntimeMode, EmbeddedRuntimeOptions, run, run_cli,
+    run_embedded_runtime,
 };
 use self::runtime_registry::*;
 use self::serving_surface::*;
