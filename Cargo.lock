@@ -5076,6 +5076,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "mesh-llm-payments"
+version = "0.78.0"
+
+[[package]]
 name = "mesh-llm-plugin"
 version = "0.78.0"
 dependencies = [
@@ -5302,6 +5306,10 @@ version = "0.78.0"
 dependencies = [
  "include_dir",
 ]
+
+[[package]]
+name = "mesh-llm-wallet"
+version = "0.78.0"
 
 [[package]]
 name = "mesh-mixture-of-agents"

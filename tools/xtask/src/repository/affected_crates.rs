@@ -31,6 +31,8 @@ const WORKSPACE_MEMBERS: &[&str] = &[
     "mesh-llm-identity",
     "mesh-llm-log-store",
     "skippy-native-runtime",
+    "mesh-llm-payments",
+    "mesh-llm-wallet",
     "mesh-llm-protocol",
     "mesh-llm-transport",
     "mesh-llm-membership",

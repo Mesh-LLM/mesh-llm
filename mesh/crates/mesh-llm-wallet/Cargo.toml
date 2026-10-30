@@ -1,0 +1,10 @@
+[package]
+name = "mesh-llm-wallet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Retired placeholder; payments live in Mesh-LLM/ln-payments-plugin."
+
+[lib]
+path = "src/lib.rs"
