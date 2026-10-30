@@ -353,6 +353,10 @@ skippy-api-verify embed_model="" reranker_model="" causal_model="" *ARGS="":
     if [[ $# -gt 0 ]]; then shift; fi
     printf '%s\n' '== clang-format' >&2
     just skippy-llama-api-format-check
+    # cxx generates the bridge header while building the Rust bindings. Prepare
+    # it before clang-tidy reads bridge.cpp, including from a clean checkout.
+    printf '%s\n' '== Rust fmt + clippy and bridge generation' >&2
+    just skippy-api-rs-lint
     printf '%s\n' '== clang-tidy' >&2
     just skippy-tidy-plugin-build
     just skippy-llama-api-tidy '*'
@@ -360,8 +364,6 @@ skippy-api-verify embed_model="" reranker_model="" causal_model="" *ARGS="":
     just skippy-api-all-targets-build
     printf '%s\n' '== C++ tests' >&2
     just skippy-llama-api-test
-    printf '%s\n' '== Rust fmt + clippy' >&2
-    just skippy-api-rs-lint
     printf '%s\n' '== Rust tests' >&2
     just skippy-api-rs-e2e "$embed" "$reranker" "$causal"
     printf '%s\n' '== downstream static link closure' >&2
