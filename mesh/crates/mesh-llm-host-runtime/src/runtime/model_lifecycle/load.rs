@@ -50,24 +50,23 @@ fn spawn_runtime_model_exit_watcher(
     });
 }
 
-async fn plan_runtime_model_bytes(model_path: &Path, requested_model: &str) -> u64 {
+async fn plan_runtime_model_sizing(model_path: &Path, requested_model: &str) -> RuntimeModelSizing {
     let planning_path = model_path.to_path_buf();
-    tokio::task::spawn_blocking(move || runtime_model_planning_bytes(&planning_path))
+    tokio::task::spawn_blocking(move || runtime_model_sizing(&planning_path))
         .await
-        .unwrap_or_else(|err| {
-            Err(anyhow::anyhow!(
-                "join runtime model byte planning task: {err}"
-            ))
-        })
+        .unwrap_or_else(|err| Err(anyhow::anyhow!("join runtime model sizing task: {err}")))
         .unwrap_or_else(|err| {
             let fallback = election::total_model_bytes(model_path);
             tracing::warn!(
                 model = %requested_model,
                 error = %err,
                 fallback_bytes = fallback,
-                "failed to resolve runtime model planning bytes; using filesystem size fallback"
+                "failed to resolve runtime model sizing; using filesystem size fallback"
             );
-            fallback
+            RuntimeModelSizing {
+                model_bytes: fallback,
+                compact_meta: None,
+            }
         })
 }
 
@@ -486,7 +485,20 @@ pub(crate) async fn run_auto_load_runtime_model(
     // (local path or remote catalog ref), before any native load work.
     load_op.resolution_completed(&runtime_model_name);
     let requested_model = spec.clone();
-    let model_bytes = plan_runtime_model_bytes(&model_path, &requested_model).await;
+    let sizing = plan_runtime_model_sizing(&model_path, &requested_model).await;
+    let model_bytes = sizing.model_bytes;
+    let device_override = if super::super::local_laya::is_laya(sizing.compact_meta.as_ref()) {
+        super::super::local_laya::resolve_laya_device(None, None)
+    } else {
+        None
+    };
+    let capacity_target = RuntimeCapacityTarget {
+        compact_meta: sizing.compact_meta.as_ref(),
+        pinned_gpu: None,
+        device_override: device_override.as_deref(),
+        node_capacity_bytes: ctx.node.local_runtime_capacity_bytes(),
+        host_ram_capacity_bytes: ctx.node.host_ram_capacity_bytes,
+    };
     let ctx_size_override = runtime_model_ctx_size_override(ctx.options, model_overrides);
     let parallel_override = crate::runtime::startup_models::resolve_model_parallel_override(
         model_overrides.and_then(|m| m.parallel),
@@ -497,8 +509,7 @@ pub(crate) async fn run_auto_load_runtime_model(
             ctx.runtime_capacity_ledger,
             &instance_id,
             &runtime_model_name,
-            None,
-            ctx.node.local_runtime_capacity_bytes(),
+            capacity_target,
             model_bytes,
         ),
         runtime_model_audit_context(Some(&runtime_model_name), &instance_id),
@@ -536,7 +547,7 @@ pub(crate) async fn run_auto_load_runtime_model(
             mmproj_override: None,
             ctx_size_override,
             pinned_gpu: None,
-            device_override: None,
+            device_override: device_override.clone(),
             capacity_budget_bytes: Some(capacity_budget_bytes),
             cache_type_k_override: model_overrides.and_then(|m| m.cache_type_k.as_deref()),
             cache_type_v_override: model_overrides.and_then(|m| m.cache_type_v.as_deref()),

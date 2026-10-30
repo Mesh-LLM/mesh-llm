@@ -123,19 +123,19 @@ impl ServeSession {
 /// Shape of a runtime surface invocation, from flags only.
 fn serve_properties(cli: &Cli) -> Properties {
     Properties::new()
-        .with("surface", if cli.client { "client" } else { "serve" })
-        .with("auto", cli.auto)
+        .with("surface", if cli.node.client { "client" } else { "serve" })
+        .with("auto", cli.joining.auto)
         // Whether peers were named, never which peers.
-        .with("joined_explicitly", !cli.join.is_empty())
+        .with("joined_explicitly", !cli.joining.join.is_empty())
         // Whether discovery was requested, never the mesh name given to it.
-        .with("discover", cli.discover.is_some())
-        .with("publish", cli.publish)
-        .with("headless", cli.headless)
+        .with("discover", cli.joining.discover.is_some())
+        .with("publish", cli.mesh_policy.publish)
+        .with("headless", cli.node.headless)
         // Whether a model was requested, never which one: both `--model` and
         // `--gguf` take filesystem paths.
         .with(
             "model_requested",
-            !cli.model.is_empty() || !cli.gguf.is_empty(),
+            !cli.serving.model.is_empty() || !cli.serving.gguf.is_empty(),
         )
         // Whether this node manages its own upgrades. Without it an
         // auto-updating fleet and a hand-run node are indistinguishable.

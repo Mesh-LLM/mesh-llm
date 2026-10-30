@@ -192,8 +192,8 @@ Files modified (all additive to upstream):
 
 ### Port layout
 
-- **9337** (`cli.port`): Proxy — inference requests from users
-- **3131** (`cli.console`): Management API — hook callbacks from llama-server, `/api/status`, console
+- **9337** (`cli.serving.port`): Proxy — inference requests from users
+- **3131** (`cli.node.console`): Management API — hook callbacks from llama-server, `/api/status`, console
 - **random**: Internal llama-server port
 
 Hooks: llama-server → localhost:3131 → Rust handler → QUIC → peer.

@@ -162,6 +162,37 @@ pub(super) fn finalize_forwarded_request(
     Ok(forwarded)
 }
 
+/// The caller's ingress credentials, in the canonical lowercase form every
+/// comparison in this module uses.
+///
+/// This is the single credential-stripping policy for nonlocal hops: a
+/// credential the caller presented to *this* node authenticates the caller to
+/// the mesh, not to the next peer or to an operator-configured external
+/// endpoint. Forwarding it hands a third party a token it was never issued,
+/// and on a plaintext `http://` endpoint hop it does so on the wire.
+///
+/// Endpoint-side credentials are a separate concern and are never sourced from
+/// a caller header: the external-endpoint adapter is configured with a URL
+/// only, so there is nothing to inject here. See the upstream API-key FAQ in
+/// `mesh/website/src/docs/pages/external-model-endpoints.md`.
+pub(super) const INGRESS_CREDENTIAL_HEADERS: &[&str] = &[
+    "authorization",
+    "proxy-authorization",
+    "x-api-key",
+    "api-key",
+];
+
+/// Case-insensitive membership in [`INGRESS_CREDENTIAL_HEADERS`].
+///
+/// Header names are matched without allocation so a rewrite that walks raw
+/// header lines can apply the same policy as [`finalize_forwarded_request`]'s
+/// omitted-header list.
+pub(super) fn is_ingress_credential_header(name: &str) -> bool {
+    INGRESS_CREDENTIAL_HEADERS
+        .iter()
+        .any(|credential| name.eq_ignore_ascii_case(credential))
+}
+
 /// Rebuild a request for a remote peer without forwarding ingress credentials
 /// or the routing headers the ROUTING node already consumed.
 ///
@@ -174,17 +205,17 @@ pub(super) fn finalize_forwarded_request(
 /// bound (CodeRabbit / erlich, PR #1671 round 2).
 pub(super) fn prepare_peer_forwarded_request(raw: &[u8]) -> Result<Vec<u8>> {
     const OMITTED_ON_PEER_FORWARD: &[&str] = &[
-        "authorization",
-        "proxy-authorization",
-        "x-api-key",
-        "api-key",
         super::request_parse::MESH_TARGET_HEADER,
         super::request_parse::MESH_EXCLUDE_HEADER,
         // The pairing is the client's and the routing node's business: a peer
         // never learns that its answer is one half of a comparison.
         super::request_parse::MESH_TWIN_BRACKET_HEADER,
     ];
-    finalize_forwarded_request(raw, false, None, None, OMITTED_ON_PEER_FORWARD)
+    let omitted = INGRESS_CREDENTIAL_HEADERS
+        .iter()
+        .copied()
+        .chain(OMITTED_ON_PEER_FORWARD.iter().copied());
+    finalize_forwarded_request(raw, false, None, None, &omitted.collect::<Vec<_>>())
 }
 
 #[cfg(test)]

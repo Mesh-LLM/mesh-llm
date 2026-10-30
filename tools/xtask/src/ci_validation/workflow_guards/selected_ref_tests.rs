@@ -47,6 +47,22 @@ fn actual_protected_controller_bootstrap_and_selected_output_order_are_admitted(
     check(&actual()).unwrap();
 }
 #[test]
+fn selection_step_timeout_is_pinned_to_one_bounded_value() {
+    for minutes in ["3", "30", "${{ inputs.timeout_minutes }}"] {
+        let mut workflows = actual();
+        let upstream = steps(&mut workflows)
+            .iter_mut()
+            .find(|step| field(step, "id") == Some("upstream"))
+            .unwrap();
+        *field_mut(upstream, "timeout-minutes") = Node::Scalar(minutes.into());
+        assert!(
+            check(&workflows).is_err(),
+            "admitted timeout-minutes {minutes}"
+        );
+    }
+}
+
+#[test]
 fn upstream_release_selection_cannot_be_bypassed_or_run_for_selected_mesh_source() {
     let mut workflows = actual();
     let upstream = steps(&mut workflows)

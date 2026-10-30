@@ -1,5 +1,64 @@
 use super::*;
 
+/// The inference surface the OpenAI frontend router recognizes: every route
+/// the router can dispatch to a model target, plus the metadata routes it
+/// serves without model execution. The coverage test below requires every
+/// entry to be workload-classified, System One, or explicitly exempt — a new
+/// route fails CI until it is classified.
+const ROUTER_INFERENCES_PATHS: [&str; 19] = [
+    "/v1/chat/completions",
+    "/v1/completions",
+    "/v1/responses",
+    "/v1/messages",
+    "/v1/embeddings",
+    "/v1/rerank",
+    "/v1/audio/speech",
+    "/v1/audio/transcriptions",
+    "/v1/audio/translations",
+    "/v1/realtime",
+    "/v1/models",
+    "/models",
+    "/v1/tokenize",
+    "/v1/messages/count_tokens",
+    "/systemone",
+    "/v1/decisions",
+    "/mesh/v1/documents/ocr",
+    "/mesh/v1/images/similarity",
+    "/mesh/v1/images/depth",
+];
+
+#[test]
+fn document_ocr_uses_only_the_mesh_namespace() {
+    for path in ["/mesh/v1/documents/ocr", "/mesh/v1/documents/ocr?trace=1"] {
+        assert!(is_document_ocr_path(path));
+        assert_eq!(
+            request_workload_class(path),
+            Some(ModelWorkloadClass::DocumentOcr)
+        );
+    }
+    assert!(!is_document_ocr_path("/v1/documents/ocr"));
+    assert_eq!(request_workload_class("/v1/documents/ocr"), None);
+}
+
+#[test]
+/// Every inference path the frontend router recognizes must carry a workload
+/// class (or be System One). An unclassified route gets no workload admission
+/// at all (fail-open), so a new route fails this gate until it is classified.
+fn router_inference_paths_are_all_classified() {
+    for path in ROUTER_INFERENCES_PATHS {
+        // Metadata routes are served without model execution: no workload class by design.
+        let exempt = matches!(
+            path,
+            "/v1/models" | "/models" | "/v1/tokenize" | "/v1/messages/count_tokens"
+        );
+        let classified = request_workload_class(path).is_some() || is_system_one_path(path);
+        assert!(
+            classified || exempt,
+            "inference path {path} is unclassified and unexempt: it would be admitted without workload filtering"
+        );
+    }
+}
+
 #[test]
 /// Distinguish unrecognized explicit metadata from the old absent-field contract.
 fn unknown_workloads_never_inherit_legacy_admission() {
@@ -295,4 +354,28 @@ fn unknown_class_peers_never_receive_audio() {
             "{path}"
         );
     }
+}
+
+#[test]
+/// `/v1/models` is the chat-compatible listing, so a name the mesh only serves
+/// for document OCR stays off it -- including when a peer is what advertises it.
+fn document_ocr_only_names_are_excluded_from_the_chat_listing() {
+    let descriptors = [
+        descriptor_with_workload("ocr-only", mesh::ModelWorkloadClass::DocumentOcr),
+        descriptor_with_workload("shared", mesh::ModelWorkloadClass::DocumentOcr),
+        descriptor_with_workload("shared", mesh::ModelWorkloadClass::CausalGeneration),
+        descriptor_with_workload("chat", mesh::ModelWorkloadClass::CausalGeneration),
+        local_gguf_descriptor("unnamed-legacy"),
+    ];
+    assert!(serves_only_document_ocr("ocr-only", &descriptors));
+    assert!(!serves_only_document_ocr("shared", &descriptors));
+    assert!(!serves_only_document_ocr("chat", &descriptors));
+    assert!(
+        !serves_only_document_ocr("unnamed-legacy", &descriptors),
+        "name-only advertisement is admitted for chat, so it stays listed"
+    );
+    assert!(
+        !serves_only_document_ocr("peer-only", &descriptors),
+        "a model no descriptor claims is not an OCR model"
+    );
 }

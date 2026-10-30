@@ -373,6 +373,8 @@ async fn make_test_node_with_requirements(
     );
 
     let node = Node {
+        gossip_verification: Arc::default(),
+        gossip_encoder: Arc::default(),
         adopted_membership_file: None,
         endpoint,
         endpoint_secret_key,
@@ -411,6 +413,7 @@ async fn make_test_node_with_requirements(
         )),
         vram_bytes: 64 * 1024 * 1024 * 1024,
         local_runtime_capacity_bytes: 64 * 1024 * 1024 * 1024,
+        host_ram_capacity_bytes: 0,
         host_ram_offload_gain_bytes: 0,
         peer_change_tx,
         peer_change_rx,

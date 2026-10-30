@@ -232,7 +232,7 @@ pub(super) async fn bind_runtime_tcp_listener(
     label: &str,
 ) -> Result<tokio::net::TcpListener> {
     let addr = if listen_all { "0.0.0.0" } else { "127.0.0.1" };
-    tokio::net::TcpListener::bind(format!("{addr}:{port}"))
+    crate::network::exclusive_listener::bind_exclusive_tcp_listener(&format!("{addr}:{port}"))
         .await
         .with_context(|| format!("Failed to bind {label} to port {port}"))
 }

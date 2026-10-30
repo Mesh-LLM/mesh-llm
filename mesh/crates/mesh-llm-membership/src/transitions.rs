@@ -29,12 +29,35 @@ pub enum TransitivePeerUpdate {
     },
 }
 
+/// Whether a bridge may rewrite what this node already learned directly.
+///
+/// A bridge speaks for itself; it does not speak for a peer that has already
+/// spoken for itself. `insert_new_direct_peer` and `update_existing_direct_peer`
+/// mark an endpoint admitted, and while that direct proof-of-life is still
+/// fresh the peer's own announcements are the only authority for its routing
+/// state. Relaying a different description under a live admission lets any
+/// admitted gossip peer republish someone else's models, role, capacity,
+/// policy and payment offers, and routing then consumes them under the
+/// victim's still-live admission (issue #2213). Once direct proof-of-life
+/// goes stale the bridge is the only remaining source, so it regains
+/// authority and a peer that really did move keeps converging.
+fn bridge_may_rewrite_peer_record(peer: &PeerInfo) -> bool {
+    !peer.is_admitted() || peer.last_seen.elapsed() >= Duration::from_secs(PEER_STALE_SECS)
+}
+
 impl MembershipState {
     pub fn admitted_peer_count(&self) -> usize {
         self.peers
             .values()
             .filter(|peer| peer.is_admitted())
             .count()
+    }
+
+    /// Whether `id` still has fresh proof of direct admission.
+    pub fn has_fresh_direct_admission(&self, id: &EndpointId) -> bool {
+        self.peers
+            .get(id)
+            .is_some_and(|peer| !bridge_may_rewrite_peer_record(peer))
     }
 
     /// Stop holding (and so relaying) any signed record for `id`.
@@ -85,7 +108,8 @@ impl MembershipState {
     }
 
     /// Apply a transitive announcement after version, demand and ownership checks.
-    /// A bridge refreshes mention age, never direct proof-of-life or admission.
+    /// A bridge refreshes mention age, never direct proof-of-life or admission,
+    /// and never rewrites a record that fresh direct proof-of-life still backs.
     pub fn apply_accepted_transitive_peer(
         &mut self,
         local_id: EndpointId,
@@ -109,8 +133,14 @@ impl MembershipState {
         }
         if let Some(existing) = self.peers.get_mut(&id) {
             let old_peer = existing.clone();
-            let serving_changed = apply_transitive_ann(existing, addr, ann, bridge_id);
-            existing.owner_summary = owner_summary;
+            let serving_changed = if bridge_may_rewrite_peer_record(existing) {
+                existing.owner_summary = owner_summary;
+                apply_transitive_ann(existing, addr, ann, bridge_id)
+            } else {
+                // Direct state wins. A relay of a live direct peer buys only
+                // the mention-age refresh below.
+                false
+            };
             existing.last_mentioned = Instant::now();
             let peer = existing.clone();
             let changed = peer_meaningfully_changed(&old_peer, &peer);
@@ -124,6 +154,8 @@ impl MembershipState {
             // Capability provenance must be direct: a bridge cannot grant eligibility.
             peer.local_gguf_content_id_supported = false;
             peer.decode_batch_policy_supported = false;
+            peer.plugin_origin_signature_supported = false;
+            peer.persistent_lane_marker_supported = false;
             peer.stage_protocol_generation_supported = false;
             peer.admitted = false;
             peer.last_seen = Instant::now() - Duration::from_secs(PEER_STALE_SECS * 2);

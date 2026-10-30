@@ -130,7 +130,7 @@ const DEFAULTS_CATEGORY_FALLBACKS: Record<string, ConfigurationDefaultsCategory>
   attestation: {
     id: 'attestation',
     label: 'Attestation',
-    summary: 'Certified-build admission requirements',
+    summary: 'Peer admission and signed-gossip requirements',
     help: 'Creation-time mesh requirement settings',
     tomlSection: 'mesh_requirements',
     order: 10

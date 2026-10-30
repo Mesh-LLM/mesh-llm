@@ -9,6 +9,22 @@ use crate::{
 };
 
 #[test]
+fn signed_gossip_is_a_typed_opt_in_creation_requirement() {
+    let legacy: crate::MeshConfig = toml::from_str("").unwrap();
+    assert!(!legacy.mesh_requirements.require_signed_gossip);
+    let raw = "[mesh_requirements]\nrequire_signed_gossip = true\n";
+    let strict: crate::MeshConfig = toml::from_str(raw).unwrap();
+    assert!(strict.mesh_requirements.require_signed_gossip);
+    assert!(diagnostics_from_toml(raw).is_empty());
+    let malformed = "[mesh_requirements]\nrequire_signed_gossip = \"true\"\n";
+    // Type errors are rejected during deserialization, before semantic validation.
+    assert!(toml::from_str::<crate::MeshConfig>(malformed).is_err());
+    let setting = schema_setting("mesh_requirements.require_signed_gossip");
+    assert_eq!(setting.value_schema, ConfigValueSchema::Boolean);
+    assert!(setting.control_behavior.is_some());
+}
+
+#[test]
 fn validate_schema_contract_covers_owner_control_attestation_and_plugin_timeouts() {
     let advertise = schema_setting("owner_control.advertise_addr");
     assert_socket_addr_schema(&advertise);

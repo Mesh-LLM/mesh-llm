@@ -1,12 +1,14 @@
 use super::super::{
     MeshApi,
     http::{
-        MAX_FORWARDED_RESPONSE_HEADER_BYTES, respond_bytes, respond_error, respond_json,
-        take_bounded_response_head, write_managed_response_head,
+        MAX_FORWARDED_RESPONSE_HEADER_BYTES, respond_bytes, respond_error, respond_error_detail,
+        respond_json, take_bounded_response_head, write_managed_response_head,
     },
 };
+use crate::plugin::PluginRpcFailure;
 use crate::plugin::stapler;
-use serde_json::{Map, Value};
+use serde_json::Value;
+use serde_json::value::RawValue;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use url::form_urlencoded;
@@ -370,10 +372,10 @@ async fn handle_call(
                 .await?;
             }
             Ok(result) => {
-                respond_error(stream, 502, &result.content_json).await?;
+                respond_error_detail(stream, 502, &result.content_json).await?;
             }
             Err(e) => {
-                respond_error(stream, 502, &e.to_string()).await?;
+                respond_error(stream, plugin_failure_status(&e), &e.to_string()).await?;
             }
         }
     } else {
@@ -448,17 +450,22 @@ async fn handle_stapled_http(
     };
 
     match plugin_manager
-        .invoke_operation(
-            plugin_name,
-            operation_name,
-            &Value::Object(args).to_string(),
-        )
+        .invoke_operation(plugin_name, operation_name, &args)
         .await
     {
-        Ok(result) if !result.is_error => match serde_json::from_str::<Value>(&result.content_json)
-        {
-            Ok(value) => respond_json(stream, 200, &value).await?,
-            Err(_) => {
+        // The plugin's own JSON goes back as it arrived: parsing it into a
+        // `Value` here would sort its keys on the way out.
+        Ok(result) if !result.is_error => {
+            if serde_json::from_str::<Value>(&result.content_json).is_ok() {
+                respond_bytes(
+                    stream,
+                    200,
+                    "OK",
+                    "application/json",
+                    result.content_json.as_bytes(),
+                )
+                .await?;
+            } else {
                 respond_error(
                     stream,
                     502,
@@ -466,16 +473,32 @@ async fn handle_stapled_http(
                 )
                 .await?;
             }
-        },
+        }
         Ok(result) => {
-            respond_error(stream, 502, &result.content_json).await?;
+            respond_error_detail(stream, 502, &result.content_json).await?;
         }
         Err(err) => {
-            respond_error(stream, 502, &err.to_string()).await?;
+            respond_error(stream, plugin_failure_status(&err), &err.to_string()).await?;
         }
     }
 
     Ok(())
+}
+
+/// The HTTP status a plugin's JSON-RPC error code deserves. A caller that sent
+/// the plugin bad arguments is not a gateway failure, and a client must be
+/// able to branch on that without reading the message text.
+fn plugin_failure_status(err: &anyhow::Error) -> u16 {
+    use rmcp::model::ErrorCode;
+
+    match err
+        .downcast_ref::<PluginRpcFailure>()
+        .map(|failure| failure.code)
+    {
+        Some(code) if code == ErrorCode::INVALID_PARAMS.0 => 400,
+        Some(code) if code == ErrorCode::METHOD_NOT_FOUND.0 => 404,
+        _ => 502,
+    }
 }
 
 async fn handle_streamed_http_binding(
@@ -548,19 +571,20 @@ fn parse_stapled_http_path(path_only: &str) -> Option<(&str, &str)> {
     ))
 }
 
-fn build_http_arguments(path: &str, body: &str) -> Result<Map<String, Value>, String> {
+fn build_http_arguments(path: &str, body: &str) -> Result<String, String> {
     let mut args = query_arguments(path);
     let trimmed = body.trim();
-    if trimmed.is_empty() {
-        return Ok(args);
+    if !trimmed.is_empty() {
+        let body_value: OrderedArgs = serde_json::from_str(trimmed).map_err(|err| {
+            if serde_json::from_str::<Value>(trimmed).is_ok() {
+                "Buffered plugin HTTP bindings currently require a JSON object body".to_string()
+            } else {
+                format!("Invalid JSON body: {err}")
+            }
+        })?;
+        args.merge(body_value);
     }
-    let body_value: Value =
-        serde_json::from_str(trimmed).map_err(|err| format!("Invalid JSON body: {err}"))?;
-    let Value::Object(body_map) = body_value else {
-        return Err("Buffered plugin HTTP bindings currently require a JSON object body".into());
-    };
-    args.extend(body_map);
-    Ok(args)
+    serde_json::to_string(&args).map_err(|err| format!("Invalid JSON body: {err}"))
 }
 
 fn rewrite_http_request_path(raw_request: &[u8], path: &str) -> anyhow::Result<Vec<u8>> {
@@ -640,8 +664,8 @@ fn binding_transfer_mode(
     }
 }
 
-fn query_arguments(path: &str) -> Map<String, Value> {
-    let mut args = Map::new();
+fn query_arguments(path: &str) -> OrderedArgs {
+    let mut args = OrderedArgs::default();
     let Some((_, query)) = path.split_once('?') else {
         return args;
     };
@@ -661,9 +685,83 @@ fn query_arguments(path: &str) -> Map<String, Value> {
         } else {
             Value::String(value.into_owned())
         };
-        args.insert(key.into_owned(), json_value);
+        let raw = serde_json::to_string(&json_value).unwrap_or_else(|_| r#""""#.to_string());
+        args.set(
+            key.into_owned(),
+            RawValue::from_string(raw).unwrap_or_else(|_| {
+                RawValue::from_string("null".to_string()).expect("null is valid JSON")
+            }),
+        );
     }
     args
+}
+
+/// The arguments of one buffered plugin HTTP binding, with its keys in the
+/// order the caller sent them. `serde_json::Value` sorts object keys, so the
+/// values stay as the raw JSON text the caller wrote.
+#[derive(Default)]
+struct OrderedArgs(Vec<(String, Box<RawValue>)>);
+
+impl OrderedArgs {
+    fn set(&mut self, key: String, value: Box<RawValue>) {
+        match self.0.iter_mut().find(|(name, _)| *name == key) {
+            Some(entry) => entry.1 = value,
+            None => self.0.push((key, value)),
+        }
+    }
+
+    /// A body argument wins over a query argument of the same name.
+    fn merge(&mut self, other: Self) {
+        for (key, value) in other.0 {
+            self.set(key, value);
+        }
+    }
+
+    #[cfg(test)]
+    fn get(&self, key: &str) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| value.get())
+    }
+}
+
+impl serde::Serialize for OrderedArgs {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap as _;
+        let mut map = serializer.serialize_map(Some(self.0.len()))?;
+        for (key, value) in &self.0 {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for OrderedArgs {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct OrderedArgsVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for OrderedArgsVisitor {
+            type Value = OrderedArgs;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a JSON object")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut args = OrderedArgs::default();
+                while let Some((key, value)) = map.next_entry::<String, Box<RawValue>>()? {
+                    args.set(key, value);
+                }
+                Ok(args)
+            }
+        }
+
+        deserializer.deserialize_map(OrderedArgsVisitor)
+    }
 }
 
 #[cfg(test)]
@@ -749,8 +847,8 @@ mod tests {
     #[test]
     fn query_arguments_decode_values() {
         let args = query_arguments("/api/plugins/demo/http/feed?name=hello%20world&limit=10");
-        assert_eq!(args.get("name"), Some(&Value::String("hello world".into())));
-        assert_eq!(args.get("limit"), Some(&Value::Number(10.into())));
+        assert_eq!(args.get("name"), Some(r#""hello world""#));
+        assert_eq!(args.get("limit"), Some("10"));
     }
 
     #[test]
@@ -760,8 +858,33 @@ mod tests {
             r#"{"limit":10,"from":"bob"}"#,
         )
         .unwrap();
-        assert_eq!(args.get("limit"), Some(&Value::Number(10.into())));
-        assert_eq!(args.get("from"), Some(&Value::String("bob".into())));
+        assert_eq!(args, r#"{"from":"bob","limit":10}"#);
+    }
+
+    /// The body is the part a caller controls the order of, and the plugin is
+    /// meant to see it the way it was written.
+    #[test]
+    fn build_http_arguments_keeps_the_body_key_order() {
+        let args = build_http_arguments(
+            "/api/plugins/demo/http/feed",
+            r#"{"zeta":1,"alpha":{"b":1,"a":2}}"#,
+        )
+        .unwrap();
+        assert_eq!(args, r#"{"zeta":1,"alpha":{"b":1,"a":2}}"#);
+    }
+
+    #[test]
+    fn build_http_arguments_rejects_a_non_object_body() {
+        let err = build_http_arguments("/api/plugins/demo/http/feed", r#"[1,2]"#)
+            .expect_err("an array is not an argument object");
+        assert!(err.contains("JSON object body"), "error: {err}");
+    }
+
+    #[test]
+    fn build_http_arguments_reports_malformed_json() {
+        let err = build_http_arguments("/api/plugins/demo/http/feed", "{oops")
+            .expect_err("malformed JSON must be reported");
+        assert!(err.contains("Invalid JSON body"), "error: {err}");
     }
 
     #[test]
@@ -959,6 +1082,7 @@ mod tests {
             last_protocol_version: Some(1),
             last_status: Some("running".to_string()),
             last_error: None,
+            verified_sha256: None,
         }
     }
 
