@@ -10,7 +10,7 @@ use mesh_client::proto::node::{
     OwnerControlError, OwnerControlErrorCode, OwnerControlGetConfigResponse, OwnerControlResponse,
 };
 use mesh_llm_plugin::MeshVisibility;
-use mesh_llm_protocol::{ALPN_CONTROL_V1, decode_owner_control_envelope, write_len_prefixed};
+use mesh_llm_protocol::{ALPN_CONTROL_V2, decode_owner_control_envelope, write_len_prefixed};
 use prost::Message;
 use rmcp::model::ErrorCode;
 use serde_json::json;

@@ -386,9 +386,6 @@ async function installConfigurationBackend(page: Page, configOverride: JsonRecor
         if (url.pathname === '/api/status') return jsonResponse(status)
         if (url.pathname === '/api/models') return jsonResponse(models)
         if (url.pathname === '/api/runtime/control-bootstrap') return jsonResponse(bootstrap)
-        if (url.pathname === '/api/runtime/control/owner-control-token') {
-          return jsonResponse({ token: 'config-e2e-owner-token' })
-        }
         if (url.pathname === '/api/runtime/config-schema') return jsonResponse(schema)
         if (url.pathname === '/api/runtime/config-control-state') return jsonResponse(controlState)
 
@@ -465,6 +462,13 @@ async function readConfigState(page: Page) {
   })
 }
 
+async function unlockOwnerControls(page: Page, screenshotPath?: string) {
+  const dialog = page.getByRole('dialog', { name: 'Unlock owner controls' })
+  if (screenshotPath) await dialog.screenshot({ path: screenshotPath })
+  await dialog.getByLabel('Owner-control token').fill('config-e2e-owner-token')
+  await dialog.getByRole('button', { name: 'Unlock' }).click()
+}
+
 async function expectNoHorizontalOverflow(page: Page) {
   await expect
     .poll(async () =>
@@ -537,6 +541,7 @@ test.describe('schema-driven configuration controls', () => {
     page
   }, testInfo) => {
     await page.goto(appUrl('/configuration/models', testInfo))
+    await unlockOwnerControls(page, testInfo.outputPath('owner-control-credential.png'))
 
     await expect(page.getByRole('heading', { name: 'Configuration' })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Model settings' })).toBeVisible()
@@ -581,6 +586,7 @@ test.describe('schema-driven configuration controls', () => {
 
   test('renders audit settings in the dedicated Logs tab', async ({ page }, testInfo) => {
     await page.goto(appUrl('/configuration/audit', testInfo))
+    await unlockOwnerControls(page)
 
     await expect(page.getByRole('heading', { name: 'Configuration' })).toBeVisible()
     await expect(page.getByRole('tab', { name: 'Logs' })).toBeVisible()
@@ -617,6 +623,7 @@ test.describe('schema-driven configuration controls', () => {
 
   test('writes edited settings to TOML preview and applies the same config payload', async ({ page }, testInfo) => {
     await page.goto(appUrl('/configuration/models', testInfo))
+    await unlockOwnerControls(page)
     await expect(page.getByRole('heading', { name: 'Model settings' })).toBeVisible()
 
     const contextSize = page.getByRole('slider', { name: 'Context size' })
@@ -664,6 +671,7 @@ test.describe('schema-driven configuration controls', () => {
   test('keeps the configuration surface usable on mobile without clipped controls', async ({ page }, testInfo) => {
     await page.setViewportSize({ width: 390, height: 720 })
     await page.goto(appUrl('/configuration/models', testInfo))
+    await unlockOwnerControls(page)
 
     await expect(page.getByRole('heading', { name: 'Configuration' })).toBeVisible()
     await expect(page.getByRole('heading', { name: 'Model settings' })).toBeVisible()
@@ -691,6 +699,7 @@ test.describe('native runtime backend pin', () => {
   test('preserves an unmatched runtime backend pin through an unrelated edit and save', async ({ page }, testInfo) => {
     await installConfigurationBackend(page, pinnedRuntimeConfig)
     await page.goto(appUrl('/configuration/models', testInfo))
+    await unlockOwnerControls(page)
     await expect(page.getByRole('heading', { name: 'Model settings' })).toBeVisible()
 
     await page.getByRole('tab', { name: 'Runtime' }).click()

@@ -37,12 +37,10 @@ use std::os::fd::AsRawFd;
 
 /// Whether the connected peer process runs as the current OS user.
 ///
-/// `Some(true)`/`Some(false)` where the platform exposes peer credentials for
-/// this socket kind (Unix-domain sockets on macOS); `Some(false)` also covers
-/// extraction failures there, so the host fails closed. `None` where the
-/// platform does not expose peer credentials for this socket kind (all
-/// supported platforms over loopback TCP); callers keep the bearer-credential
-/// requirement as the owner-control gate.
+/// Returns `Some(true)` or `Some(false)` when peer credentials can be read.
+/// Returns `None` when extraction fails or credentials are unavailable, as
+/// with loopback TCP on supported platforms. Callers permit `None`; protected
+/// owner-control requests separately require a bearer credential.
 #[cfg(target_os = "macos")]
 pub(crate) fn peer_runs_as_current_user(stream: &tokio::net::TcpStream) -> Option<bool> {
     peer_uid(stream).map(|uid| uid == unsafe { libc::getuid() })

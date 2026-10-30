@@ -712,7 +712,7 @@ All four owner lifecycle commands share these properties:
 - **Session-only**: intents disappear when the target node restarts. They never
   mutate durable config or TOML. Use `runtime apply-config` for persistent
   configuration changes.
-- **Private**: commands travel the `mesh-llm-control/1` ALPN, not the public
+- **Private**: commands travel the `mesh-llm-control/2` ALPN, not the public
   mesh plane. They require an explicit endpoint token and same-owner
   authentication.
 - **Legacy peers**: a current client talking to a released host that does not

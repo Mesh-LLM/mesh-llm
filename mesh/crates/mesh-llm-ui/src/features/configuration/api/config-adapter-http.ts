@@ -11,6 +11,7 @@ import type {
   RuntimeControlConfigSnapshot
 } from './config-adapter-types'
 import { mergeConfigurationIntoMeshConfig } from './config-adapter-merge'
+import { getOwnerControlCredential, setOwnerControlCredential } from './owner-control-credential'
 
 type RuntimeControlConfigResponse = {
   snapshot: RuntimeControlConfigSnapshot
@@ -23,16 +24,6 @@ async function expectJson<T>(response: Response): Promise<T> {
   }
 
   return response.json() as Promise<T>
-}
-
-let ownerControlToken: string | null = null
-
-async function getOwnerControlToken(): Promise<string> {
-  if (ownerControlToken) return ownerControlToken
-  const response = await fetch(`${env.managementApiUrl}/api/runtime/control/owner-control-token`)
-  const payload = await expectJson<{ token: string }>(response)
-  ownerControlToken = payload.token
-  return payload.token
 }
 
 export async function fetchRuntimeControlBootstrap(): Promise<RuntimeControlBootstrapPayload> {
@@ -57,12 +48,13 @@ export async function fetchRuntimeConfigControlState(): Promise<RuntimeConfigCon
 }
 
 export async function fetchRuntimeControlConfigSnapshot(endpoint: string): Promise<RuntimeControlConfigSnapshot> {
-  const token = await getOwnerControlToken()
+  const token = await getOwnerControlCredential()
   const response = await fetch(`${env.managementApiUrl}/api/runtime/control/get-config`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     body: JSON.stringify({ endpoint })
   })
+  if (response.status === 401) setOwnerControlCredential(null)
   const payload = await expectJson<RuntimeControlConfigResponse>(response)
   return payload.snapshot
 }
@@ -83,30 +75,56 @@ export async function fetchRuntimeControlConfig(): Promise<RuntimeControlConfigR
 
 type PluginCommandSource =
   | {
-      plugin?: ReadonlyArray<{ name?: string; command?: string }>
+      plugin?: ReadonlyArray<{ name?: string; command?: string; args?: unknown[] }>
     }
   | null
   | undefined
+
+export type PluginCommandApproval = { plugin: string; command: string; invocation: { args: string[] } }
 
 // Plugins whose command executable this apply adds or changes; the host
 // rejects an apply whose declared approvals do not cover this diff.
 export function changedPluginCommandApprovals(
   previous: PluginCommandSource,
   next: PluginCommandSource
-): Array<{ plugin: string; command: string }> {
-  const previousCommands = new Map<string, string | null>()
+): PluginCommandApproval[] {
+  const previousCommands = new Map<string, { command?: string; args?: unknown[] }>()
   for (const plugin of previous?.plugin ?? []) {
-    if (plugin.name) previousCommands.set(plugin.name, plugin.command ?? null)
+    if (plugin.name) previousCommands.set(plugin.name, plugin)
   }
-  const approvals: Array<{ plugin: string; command: string }> = []
+  const approvals: PluginCommandApproval[] = []
   for (const plugin of next?.plugin ?? []) {
     const command = plugin.command ?? null
     if (!plugin.name || !command) continue
-    if (previousCommands.get(plugin.name) !== command) {
-      approvals.push({ plugin: plugin.name, command })
+    const previousPlugin = previousCommands.get(plugin.name)
+    if (
+      previousPlugin?.command !== command ||
+      JSON.stringify(previousPlugin.args ?? []) !== JSON.stringify(plugin.args ?? [])
+    ) {
+      const args = plugin.args ?? []
+      if (!args.every((arg): arg is string => typeof arg === 'string')) {
+        throw new Error(`Plugin ${plugin.name} has invalid command arguments.`)
+      }
+      approvals.push({ plugin: plugin.name, command, invocation: { args } })
     }
   }
   return approvals
+}
+
+export function describePluginCommandApprovals(
+  config: PluginCommandSource,
+  approvals: PluginCommandApproval[]
+): string[] {
+  return (config?.plugin ?? [])
+    .filter((entry) =>
+      approvals.some(
+        (approval) =>
+          approval.plugin === entry.name &&
+          approval.command === entry.command &&
+          JSON.stringify(approval.invocation.args) === JSON.stringify(entry.args ?? [])
+      )
+    )
+    .map((entry) => `${entry.name}: ${entry.command} ${JSON.stringify(entry.args ?? [])}`)
 }
 
 export async function applyRuntimeControlConfig(
@@ -114,14 +132,14 @@ export async function applyRuntimeControlConfig(
   snapshot: RuntimeControlConfigSnapshot,
   input: RuntimeControlApplyInput,
   schema?: RuntimeConfigSchemaReference,
-  controlState?: RuntimeConfigControlStatePayload
+  controlState?: RuntimeConfigControlStatePayload,
+  confirmedApprovals: PluginCommandApproval[] = []
 ): Promise<{ response: RuntimeControlApplyResponse; snapshot: RuntimeControlConfigSnapshot }> {
   const config = mergeConfigurationIntoMeshConfig(snapshot.config, input, schema, {
     includeModelAssignments: true,
     controlState
   })
-  const token = await getOwnerControlToken()
-  const approvals = changedPluginCommandApprovals(snapshot.config, config)
+  const token = await getOwnerControlCredential()
   const response = await fetch(`${env.managementApiUrl}/api/runtime/control/apply-config`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -129,9 +147,10 @@ export async function applyRuntimeControlConfig(
       endpoint,
       expected_revision: snapshot.revision,
       config,
-      ...(approvals.length > 0 ? { plugin_command_approvals: approvals } : {})
+      ...(confirmedApprovals.length > 0 ? { plugin_command_approvals: confirmedApprovals } : {})
     })
   })
+  if (response.status === 401) setOwnerControlCredential(null)
   const payload = await expectJson<RuntimeControlApplyResponse>(response)
 
   return {

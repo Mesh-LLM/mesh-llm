@@ -14,6 +14,22 @@
 
 use super::*;
 
+#[tokio::test]
+async fn loopback_token_endpoint_does_not_disclose_the_credential() {
+    let state = build_test_mesh_api().await;
+    seed_owner_control_token(&state).await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+    let response = send_management_request(
+        addr,
+        "GET /api/runtime/control/owner-control-token HTTP/1.1\r\nHost: localhost\r\n\r\n"
+            .to_owned(),
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 403"), "response: {response}");
+    assert!(!response.contains(TEST_OWNER_CONTROL_TOKEN));
+    handle.abort();
+}
+
 struct OwnerControlSnapshotTestServer {
     endpoint_token: String,
     task: tokio::task::JoinHandle<()>,
@@ -26,7 +42,7 @@ async fn spawn_owner_control_snapshot_test_server(
 ) -> OwnerControlSnapshotTestServer {
     let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(iroh::SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .unwrap()

@@ -4682,6 +4682,7 @@ dependencies = [
  "mesh-llm-cli",
  "mesh-llm-client",
  "mesh-llm-commands",
+ "mesh-llm-config",
  "mesh-llm-events",
  "mesh-llm-host-runtime",
  "mesh-llm-payments",
@@ -4836,6 +4837,7 @@ version = "0.78.0"
 dependencies = [
  "anyhow",
  "dirs",
+ "libc",
  "mesh-llm-types",
  "semver",
  "serde",

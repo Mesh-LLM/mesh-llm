@@ -1,47 +1,37 @@
 //! CLI-side owner-control credential acquisition.
 //!
 //! Owner-control management routes require the host's owner-control
-//! credential as a `Bearer` token. The host publishes that credential on the
-//! loopback-only `GET /api/runtime/control/owner-control-token` endpoint, so
-//! a CLI running on the host fetches it once and presents it on the
-//! owner-control requests it makes.
+//! credential as a `Bearer` token. The CLI reads it from the owner-only local
+//! token file instead of exposing the credential over loopback TCP.
 
 use anyhow::{Context, Result, bail};
-use serde_json::Value;
-
-const OWNER_CONTROL_TOKEN_PATH: &str = "/api/runtime/control/owner-control-token";
-const OWNER_CONTROL_TOKEN_TIMEOUT_SECS: u64 = 10;
-
-/// Fetches the owner-control credential the host published for loopback
-/// callers, ready to present as `Authorization: Bearer <token>`.
-pub async fn owner_control_token(port: u16) -> Result<String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(
-            OWNER_CONTROL_TOKEN_TIMEOUT_SECS,
-        ))
-        .build()?;
-    let url = format!("http://127.0.0.1:{port}{OWNER_CONTROL_TOKEN_PATH}");
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .with_context(|| {
-            format!("can't reach the mesh-llm console on port {port} to fetch the owner-control credential; is it running?")
-        })?;
-    let status = response.status();
-    let body: Value = response.json().await.unwrap_or(Value::Null);
-    if !status.is_success() {
-        bail!(
-            "owner-control credential request failed ({status}): {}",
-            body.get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown error")
-        );
+/// Read the local credential. Set `MESH_LLM_OWNER_CONTROL_TOKEN_FILE` when the
+/// host uses a custom owner keystore path.
+pub async fn owner_control_token(_port: u16) -> Result<String> {
+    #[cfg(test)]
+    if let Ok(token) = tests::TEST_TOKEN.try_with(Clone::clone) {
+        return Ok(token);
     }
-    body.get("token")
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .with_context(|| "owner-control credential response has no token")
+    let path = match std::env::var_os("MESH_LLM_OWNER_CONTROL_TOKEN_FILE") {
+        Some(path) => std::path::PathBuf::from(path),
+        None => {
+            mesh_llm_identity::default_keystore_path()?.with_file_name("owner-control-token-v2")
+        }
+    };
+    read_token(&path)
+}
+
+fn read_token(path: &std::path::Path) -> Result<String> {
+    let contents = mesh_llm_config::read_private_file(path)
+        .with_context(|| format!("reading owner-control credential from {}", path.display()))?;
+    let contents = zeroize::Zeroizing::new(contents);
+    let token = std::str::from_utf8(&contents)
+        .context("owner-control credential is not UTF-8")?
+        .trim();
+    if token.is_empty() {
+        bail!("owner-control credential is empty");
+    }
+    Ok(token.to_owned())
 }
 
 #[cfg(test)]
@@ -50,6 +40,10 @@ pub(crate) mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
+
+    tokio::task_local! {
+        pub(crate) static TEST_TOKEN: String;
+    }
 
     /// A loopback stub that serves `replies` in order and records every
     /// header line of each request.
@@ -106,35 +100,17 @@ pub(crate) mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn owner_control_token_reads_published_credential() {
-        let stub = serve_in_order(vec![(200, r#"{"token":"loopback-secret"}"#.to_string())]);
-        let token = owner_control_token(stub.port)
-            .await
-            .expect("loopback token fetch");
-        assert_eq!(token, "loopback-secret");
-        let heads = stub.request_heads();
-        assert!(
-            heads.first().and_then(|head| head.first()).is_some_and(
-                |line| line.starts_with("GET /api/runtime/control/owner-control-token")
-            ),
-            "token endpoint must be fetched over loopback: {heads:?}"
-        );
+    #[test]
+    fn reads_owner_only_credential_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("owner-control-token-v2");
+        mesh_llm_config::create_private_file_if_absent(&path, b"test-token\n").unwrap();
+        assert_eq!(read_token(&path).unwrap(), "test-token");
     }
 
-    #[tokio::test]
-    async fn owner_control_token_surfaces_host_error() {
-        let stub = serve_in_order(vec![(
-            503,
-            r#"{"error":"owner control credential is not configured"}"#.to_string(),
-        )]);
-        let err = owner_control_token(stub.port)
-            .await
-            .expect_err("unconfigured host must fail");
-        assert!(
-            err.to_string()
-                .contains("owner control credential is not configured"),
-            "host error must surface verbatim: {err}"
-        );
+    #[test]
+    fn missing_credential_fails_without_network_fallback() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(read_token(&directory.path().join("missing")).is_err());
     }
 }
