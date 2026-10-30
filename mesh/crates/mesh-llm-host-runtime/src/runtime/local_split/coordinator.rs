@@ -1,3 +1,4 @@
+use super::activation_codec::SplitActivationCodec;
 use super::loading::{configured_split_activation_codec, stage_health_ticks};
 use super::recovery::{
     SplitLossRecoveryDecision, SplitWithdrawGraceAction,
@@ -34,43 +35,6 @@ use std::time::Instant;
 /// full teardown. Holding the topology through transient peer loss avoids
 /// forcing a manual restart while still withdrawing a genuinely dead split.
 const SPLIT_STAGE_LOSS_WITHDRAW_GRACE: Duration = Duration::from_secs(75);
-
-/// The operator's `skippy.activation_codec` choice for split activations.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct SplitActivationCodec {
-    pub(super) codec: skippy_protocol::StageActivationCodec,
-    pub(super) policy: skippy_protocol::StageActivationCodecPolicy,
-}
-
-impl SplitActivationCodec {
-    /// The default. Frames carry exact values: RawF32, compacted to BF16 or
-    /// F16 only when the whole frame (sidebands included) round-trips
-    /// bit-for-bit, which real activations rarely do.
-    pub(super) const LOSSLESS: Self = Self {
-        codec: skippy_protocol::StageActivationCodec::RawF32V1,
-        policy: skippy_protocol::StageActivationCodecPolicy::AutoLosslessV1,
-    };
-
-    /// Parse a `skippy.activation_codec` value. Every value but `lossless`
-    /// fixes one codec for every frame.
-    pub(super) fn from_setting(value: &str) -> Option<Self> {
-        use skippy_protocol::StageActivationCodec as Codec;
-        let fixed = |codec| {
-            Some(Self {
-                codec,
-                policy: skippy_protocol::StageActivationCodecPolicy::Fixed,
-            })
-        };
-        match value {
-            "lossless" => Some(Self::LOSSLESS),
-            "f32" => fixed(Codec::RawF32V1),
-            "f16" => fixed(Codec::F16RneV1),
-            "bf16" => fixed(Codec::Bf16RneV1),
-            "s8-row" => fixed(Codec::S8RowF32RneV1),
-            _ => None,
-        }
-    }
-}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct SplitTopologyGeneration {
@@ -110,8 +74,11 @@ impl SplitTopologyGeneration {
 
     /// Run this generation with `choice` on every hop. The codec rides each
     /// stage's load request and the topology hash, so all stages of one
-    /// generation use the coordinator's choice.
+    /// generation use the coordinator's choice. A codec some stage cannot
+    /// decode is swapped for one every stage can (see
+    /// [`SplitActivationCodec::supported_by`]).
     pub(super) fn with_activation_codec(mut self, choice: SplitActivationCodec) -> Self {
+        let choice = choice.supported_by(&self.stages, &self.participants);
         self.activation_codec = choice.codec;
         self.activation_codec_policy = choice.policy;
         self

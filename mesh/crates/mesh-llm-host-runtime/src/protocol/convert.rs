@@ -24,6 +24,7 @@ fn skippy_stage_subprotocols(
         // No build-time variability to gate on, unlike artifact transfer: any
         // node running this code honours `StageLoad.last_stage_decode_batch`.
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_DECODE_BATCH_POLICY_V1.to_string(),
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_ACTIVATION_CODEC_FP8_V1.to_string(),
     ];
     if local_gguf_content_id_supported {
         features
@@ -83,6 +84,15 @@ fn supports_decode_batch_policy(subprotocols: &[crate::proto::node::MeshSubproto
     supports_skippy_stage_feature(
         subprotocols,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_DECODE_BATCH_POLICY_V1,
+    )
+}
+
+/// Whether a peer's stages decode the FP8 activation codecs. Without it a
+/// stage load naming one fails, so the coordinator plans F16 instead.
+fn supports_activation_codec_fp8(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
+    supports_skippy_stage_feature(
+        subprotocols,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_ACTIVATION_CODEC_FP8_V1,
     )
 }
 
@@ -1229,6 +1239,7 @@ pub(crate) fn proto_ann_to_local(
             &pa.subprotocols,
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_PERSISTENT_LANE_MARKER,
         ),
+        activation_codec_fp8_supported: supports_activation_codec_fp8(&pa.subprotocols),
         advertised_model_throughput: pa
             .advertised_model_throughput
             .iter()

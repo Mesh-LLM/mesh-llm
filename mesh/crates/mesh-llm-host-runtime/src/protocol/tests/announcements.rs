@@ -62,6 +62,7 @@ fn owner_fields_roundtrip_through_proto_announcement() {
         decode_batch_policy_supported: true,
         plugin_origin_signature_supported: true,
         persistent_lane_marker_supported: true,
+        activation_codec_fp8_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -140,6 +141,16 @@ fn owner_fields_roundtrip_through_proto_announcement() {
             .1
             .persistent_lane_marker_supported
     );
+    assert!(roundtripped.activation_codec_fp8_supported);
+    let mut without_fp8 = proto_pa.clone();
+    for subprotocol in &mut without_fp8.subprotocols {
+        subprotocol.features.retain(|feature| {
+            feature != skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_ACTIVATION_CODEC_FP8_V1
+        });
+    }
+    let (_, older_peer) = proto_ann_to_local(&without_fp8).expect("older peer announcement");
+    assert!(!older_peer.activation_codec_fp8_supported);
+    assert!(older_peer.stage_protocol_generation_supported);
     let roundtripped = roundtripped
         .owner_attestation
         .expect("owner attestation must round-trip");
@@ -232,6 +243,7 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
+        activation_codec_fp8_supported: false,
         advertised_model_throughput: vec![
             expected_hints[0].clone(),
             crate::network::metrics::ModelThroughputHint {
@@ -449,6 +461,7 @@ fn inference_admission_state_roundtrips_through_proto_announcement() {
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
+        activation_codec_fp8_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -714,6 +727,7 @@ fn test_proto_round_trip_with_bandwidth_and_tflops() {
         decode_batch_policy_supported: true,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
+        activation_codec_fp8_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -1125,6 +1139,7 @@ fn claimed_log_head_test_announcement(
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
+        activation_codec_fp8_supported: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
@@ -1242,6 +1257,7 @@ fn proto_announcement_without_claimed_log_head_decodes_as_absent() {
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
+        activation_codec_fp8_supported: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,

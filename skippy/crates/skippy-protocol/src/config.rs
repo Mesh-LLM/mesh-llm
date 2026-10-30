@@ -178,15 +178,50 @@ pub enum StageActivationCodec {
     /// Per-logical-row symmetric signed int8 with an inline finite F32 scale.
     #[serde(rename = "s8-row-f32-rne-v1")]
     S8RowF32RneV1,
+    /// Per-logical-row OCP FP8 E4M3 (±448, no infinities) with an inline
+    /// finite F32 scale; round-to-nearest-even, saturating.
+    #[serde(rename = "fp8-e4m3-row-f32-rne-v1")]
+    Fp8E4m3RowF32RneV1,
+    /// OCP FP8 E4M3 with one E8M0 power-of-two scale per 32 values of each
+    /// logical row (the OCP MX layout); round-to-nearest-even, saturating.
+    #[serde(rename = "fp8-e4m3-block32-e8m0-rne-v1")]
+    Fp8E4m3Block32E8m0RneV1,
+    /// Per-logical-row OCP FP8 E5M2 (±57344) with an inline finite F32
+    /// scale; round-to-nearest-even, saturating.
+    #[serde(rename = "fp8-e5m2-row-f32-rne-v1")]
+    Fp8E5m2RowF32RneV1,
 }
 
 impl StageActivationCodec {
+    /// Every codec, in wire-id order.
+    pub const ALL: [Self; 7] = [
+        Self::RawF32V1,
+        Self::F16RneV1,
+        Self::Bf16RneV1,
+        Self::S8RowF32RneV1,
+        Self::Fp8E4m3RowF32RneV1,
+        Self::Fp8E4m3Block32E8m0RneV1,
+        Self::Fp8E5m2RowF32RneV1,
+    ];
+
+    /// FP8 codecs postdate the split stage protocol: a stage decodes them only
+    /// if it advertises `STAGE_SUBPROTOCOL_FEATURE_ACTIVATION_CODEC_FP8_V1`.
+    pub const fn is_fp8(self) -> bool {
+        matches!(
+            self,
+            Self::Fp8E4m3RowF32RneV1 | Self::Fp8E4m3Block32E8m0RneV1 | Self::Fp8E5m2RowF32RneV1
+        )
+    }
+
     pub const fn identity(self) -> &'static str {
         match self {
             Self::RawF32V1 => "raw-f32-v1",
             Self::F16RneV1 => "f16-rne-v1",
             Self::Bf16RneV1 => "bf16-rne-v1",
             Self::S8RowF32RneV1 => "s8-row-f32-rne-v1",
+            Self::Fp8E4m3RowF32RneV1 => "fp8-e4m3-row-f32-rne-v1",
+            Self::Fp8E4m3Block32E8m0RneV1 => "fp8-e4m3-block32-e8m0-rne-v1",
+            Self::Fp8E5m2RowF32RneV1 => "fp8-e5m2-row-f32-rne-v1",
         }
     }
 
@@ -196,6 +231,9 @@ impl StageActivationCodec {
             Self::F16RneV1 => 2,
             Self::Bf16RneV1 => 3,
             Self::S8RowF32RneV1 => 4,
+            Self::Fp8E4m3RowF32RneV1 => 5,
+            Self::Fp8E4m3Block32E8m0RneV1 => 6,
+            Self::Fp8E5m2RowF32RneV1 => 7,
         }
     }
 
@@ -205,6 +243,9 @@ impl StageActivationCodec {
             2 => Some(Self::F16RneV1),
             3 => Some(Self::Bf16RneV1),
             4 => Some(Self::S8RowF32RneV1),
+            5 => Some(Self::Fp8E4m3RowF32RneV1),
+            6 => Some(Self::Fp8E4m3Block32E8m0RneV1),
+            7 => Some(Self::Fp8E5m2RowF32RneV1),
             _ => None,
         }
     }

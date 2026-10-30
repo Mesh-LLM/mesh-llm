@@ -123,6 +123,8 @@ pub struct PeerAnnouncement {
     pub decode_batch_policy_supported: bool,
     pub plugin_origin_signature_supported: bool,
     pub persistent_lane_marker_supported: bool,
+    /// Stage decodes the FP8 activation codecs (`activation-codec-fp8-v1`).
+    pub activation_codec_fp8_supported: bool,
     pub advertised_model_throughput: Vec<ModelThroughputHint>,
     #[cfg(feature = "payments")]
     pub lightning_offers: mesh_llm_payments_types::offers::LightningOffers,
@@ -378,6 +380,8 @@ pub struct PeerInfo {
     pub decode_batch_policy_supported: bool,
     pub plugin_origin_signature_supported: bool,
     pub persistent_lane_marker_supported: bool,
+    /// Stage decodes the FP8 activation codecs (`activation-codec-fp8-v1`).
+    pub activation_codec_fp8_supported: bool,
     pub advertised_model_throughput: Vec<ModelThroughputHint>,
     #[cfg(feature = "payments")]
     pub lightning_offers: mesh_llm_payments_types::offers::LightningOffers,
@@ -447,6 +451,7 @@ impl PeerInfo {
             decode_batch_policy_supported: ann.decode_batch_policy_supported,
             plugin_origin_signature_supported: ann.plugin_origin_signature_supported,
             persistent_lane_marker_supported: ann.persistent_lane_marker_supported,
+            activation_codec_fp8_supported: ann.activation_codec_fp8_supported,
             advertised_model_throughput: ann.advertised_model_throughput.clone(),
             #[cfg(feature = "payments")]
             lightning_offers: ann.lightning_offers.clone(),
