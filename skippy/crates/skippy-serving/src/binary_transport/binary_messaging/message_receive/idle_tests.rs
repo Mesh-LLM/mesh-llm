@@ -9,7 +9,22 @@ fn connected_pair() -> (TcpStream, TcpStream) {
     let peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
     let (upstream, _) = listener.accept().unwrap();
     peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    // Stage connections disable Nagle in production. Without it, Windows can hold
+    // a frame's tail behind a delayed ACK past the 50 ms decode deadline.
+    peer.set_nodelay(true).unwrap();
+    upstream.set_nodelay(true).unwrap();
     (peer, upstream)
+}
+
+// One write per message, so only the tests that split a frame on purpose do so.
+fn encoded_stop(request_id: u64) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    write_stage_message(
+        &mut bytes,
+        &StageWireMessage::stop_with_identity(request_id, 11),
+    )
+    .unwrap();
+    bytes
 }
 
 fn control() -> Arc<ConnectionWorkerControl> {
@@ -41,7 +56,7 @@ fn ordinary_idle_after_first_message_closes_cleanly() {
     let (mut peer, upstream) = connected_pair();
     let control = control();
     let reader = reader(&upstream, control.clone());
-    write_stage_message(&mut peer, &StageWireMessage::stop_with_identity(7, 11)).unwrap();
+    peer.write_all(&encoded_stop(7)).unwrap();
     assert_eq!(reader.next(None, 0, 0).unwrap().unwrap().request_id, 7);
     let (done, finished) = mpsc::sync_channel(1);
     let worker = thread::spawn(move || {
@@ -71,7 +86,7 @@ fn marked_lane_outlives_ordinary_idle_then_closes() {
     let (mut peer, mut upstream) = connected_pair();
     let control = control();
     crate::binary_transport::connection_mode::mark_persistent_lane(&mut peer).unwrap();
-    write_stage_message(&mut peer, &StageWireMessage::stop_with_identity(7, 11)).unwrap();
+    peer.write_all(&encoded_stop(7)).unwrap();
     super::super::first_message::read_first_message(
         &control,
         &mut upstream,
@@ -141,7 +156,7 @@ fn active_peer_resets_idle_deadline_between_messages() {
     let started = std::time::Instant::now();
     let mut count = 0;
     while started.elapsed() < Duration::from_millis(600) {
-        write_stage_message(&mut peer, &StageWireMessage::stop_with_identity(count, 11)).unwrap();
+        peer.write_all(&encoded_stop(count)).unwrap();
         assert_eq!(reader.next(None, 0, 1).unwrap().unwrap().request_id, count);
         count += 1;
     }
@@ -186,12 +201,12 @@ fn request_processing_longer_than_idle_deadline_keeps_the_connection() {
     let (mut peer, upstream) = connected_pair();
     let control = control();
     let reader = reader(&upstream, control);
-    write_stage_message(&mut peer, &StageWireMessage::stop_with_identity(7, 11)).unwrap();
+    peer.write_all(&encoded_stop(7)).unwrap();
     assert_eq!(reader.next(None, 0, 0).unwrap().unwrap().request_id, 7);
     // The executor holds request 7 well past the 30 ms ordinary idle deadline;
     // time spent processing is the behavior under test.
     thread::sleep(Duration::from_millis(200));
-    write_stage_message(&mut peer, &StageWireMessage::stop_with_identity(8, 11)).unwrap();
+    peer.write_all(&encoded_stop(8)).unwrap();
     assert_eq!(
         reader
             .next(None, 0, 1)
@@ -200,16 +215,6 @@ fn request_processing_longer_than_idle_deadline_keeps_the_connection() {
             .request_id,
         8
     );
-}
-
-fn encoded_stop(request_id: u64) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    write_stage_message(
-        &mut bytes,
-        &StageWireMessage::stop_with_identity(request_id, 11),
-    )
-    .unwrap();
-    bytes
 }
 
 #[test]
@@ -224,7 +229,7 @@ fn stalled_later_frame_is_dropped_at_the_decode_deadline() {
         ..ConnectionWorkerControl::default()
     });
     let reader = reader(&upstream, control.clone());
-    write_stage_message(&mut peer, &StageWireMessage::stop_with_identity(7, 11)).unwrap();
+    peer.write_all(&encoded_stop(7)).unwrap();
     assert_eq!(reader.next(None, 0, 0).unwrap().unwrap().request_id, 7);
     let frame = encoded_stop(8);
     peer.write_all(&frame[..frame.len() / 2]).unwrap();
@@ -268,7 +273,7 @@ fn slow_but_progressing_later_frame_is_not_cut_off() {
         ..ConnectionWorkerControl::default()
     });
     let reader = reader(&upstream, control);
-    write_stage_message(&mut peer, &StageWireMessage::stop_with_identity(7, 11)).unwrap();
+    peer.write_all(&encoded_stop(7)).unwrap();
     assert_eq!(reader.next(None, 0, 0).unwrap().unwrap().request_id, 7);
     let frame = encoded_stop(8);
     let (head, tail) = frame.split_at(frame.len() / 2);
