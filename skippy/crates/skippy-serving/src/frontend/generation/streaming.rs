@@ -526,6 +526,7 @@ where
             predicted_ms: cache_stats.predicted_ms,
             queue_wait_ms: cache_stats.queue_wait_ms,
             restore_ms: cache_stats.restore_ms,
+            split_prefix_cache: cache_stats.split_prefix_cache,
             text: self.text,
             finish_reason: self.finish_reason,
             detokenize_ms: self.metrics.detokenize_ms,
