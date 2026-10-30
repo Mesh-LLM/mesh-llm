@@ -5,8 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
-# The links key publishes cargo:root from build.rs as DEP_SKIPPY_API_ROOT,
-# so dependents can add the shared-library rpath themselves.
+# Cargo admits one owner of this native static link closure in a dependency graph.
 links = "skippy_api"
 build = "build.rs"
 

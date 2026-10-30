@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <deque>
+#include <limits>
 #include <ranges>
 #include <unordered_map>
 #include <utility>
@@ -497,6 +498,10 @@ std::string cache_key(const std::string& path, std::span<const LayerRange> range
 
 std::expected<std::vector<StageLoadConfig>, PlanFailure>
 configs_from(const std::vector<std::shared_ptr<const StagePlan>>& plans) {
+    if (plans.size() > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
+        return std::unexpected(
+            PlanFailure{.code = PlanError::Rejected, .message = "too many stages"});
+    }
     std::vector<StageLoadConfig> configs;
     configs.reserve(plans.size());
     for (const auto& plan : plans) {
@@ -504,6 +509,8 @@ configs_from(const std::vector<std::shared_ptr<const StagePlan>>& plans) {
         if (!config.has_value()) {
             return std::unexpected(PlanFailure{.code = config.error(), .message = {}});
         }
+        // Bounded by the stage-count check above; this is the native ABI width.
+        config->stage_index = static_cast<std::int32_t>(configs.size());
         configs.push_back(std::move(*config));
     }
     return configs;

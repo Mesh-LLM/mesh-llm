@@ -22,8 +22,8 @@ Both sides link the *same* patched llama.cpp build, load the same GGUF, and run
 with the same geometry (`n_ctx = n_batch = n_ubatch = 512`, one sequence, all
 layers offloaded, flash-attention AUTO). The harness embeds one 64-token input
 through both paths before timing and refuses to run if the vectors disagree by
-more than 1e-4, so a configuration drift shows up as a skip instead of a wrong
-number.
+more than 1e-4. A configuration drift produces an error in the raw report and
+fails the comparison instead of producing a timing verdict.
 
 ## Build
 
@@ -45,7 +45,9 @@ because the old side calls `skippy_session_embed` out of `libllama.a`. The
 One command, prints the old-vs-new table:
 
 ```bash
-just skippy-llama-api-ffi-bench-compare ~/models/all-MiniLM-L6-v2.Q4_K_M.gguf
+just skippy-llama-api-ffi-bench-compare ~/models/all-MiniLM-L6-v2.Q4_K_M.gguf \
+  --benchmark_filter='^Embed/'
+just skippy-llama-api-ffi-bench-compare '' --benchmark_filter='BatchBuild|Normalize'
 ```
 
 Raw google-benchmark rows, with any extra benchmark flags passed through:
@@ -68,12 +70,15 @@ SKIPPY_BENCH_MODEL=~/models/all-MiniLM-L6-v2.Q4_K_M.gguf \
   --benchmark_min_time=0.5s --benchmark_repetitions=9 \
   --benchmark_enable_random_interleaving=true \
   --benchmark_format=json --benchmark_out=out.json
-python3 skippy/skippy_api/benchmarks/compare_benchmarks.py out.json
+just automation-run automation skippy-benchmark-compare out.json
 ```
 
 `BatchBuild` and `Normalize` are llama-free, so they run without a model; the
-rest skip with a message. A reranker GGUF as `SKIPPY_BENCH_MODEL` adds the
-`Rerank` pair; `Embed` then skips on both sides.
+rest report missing-model errors. Select a filter matching the supplied model:
+for example, a reranker GGUF as `SKIPPY_BENCH_MODEL` supports the `Rerank` pair.
+The comparison rejects any error row, incomplete pair, or report without paired
+samples, even when the benchmark process itself exits successfully. Both sides
+rejecting a correctness gate therefore fails the selected case.
 
 The facade's own behaviour is covered by the Rust integration tests, which
 need the same two files:
@@ -110,7 +115,7 @@ median of 9 interleaved repetitions, `--benchmark_min_time=0.2s`:
 | `SessionCreate` | 3.3 µs | 2.4 µs | 1.4x |
 | `SessionCreateCold` | 3.4 µs | 1.65 ms | old wins ~485x |
 | `ModelLoad` | 18.4 ms | 18.7 ms | tie |
-| `stage_materialize/6` | 2.04 µs | 1.70 µs | 1.2x |
+| `stage_materialize/6` | — | — | pending: equivalent-field gate corrected; prior timing withdrawn |
 
 With `bge-reranker-v2-m3-Q4_K_M` (438 MB):
 
@@ -140,8 +145,10 @@ With `bge-reranker-v2-m3-Q4_K_M` (438 MB):
   scratch instead of reallocating, which does not show up at these sizes.
 
 `--benchmark_repetitions` matters: single runs of `Embed/128` move by a few
-percent between invocations. `compare_benchmarks.py` reports the median of the
-repetitions.
+percent between invocations. `automation skippy-benchmark-compare` reports the
+median of the repetitions after converting the samples to nanoseconds.
+Google Benchmark's `_min` aggregates remain separate labeled comparison rows;
+other aggregate statistics do not enter the repetition median.
 
 ## Where the facade is slower
 
@@ -207,8 +214,8 @@ Result, in an isolated process (median of 20):
 
 The cold row is the honest remainder: a geometry the pool has not seen yet
 still costs a full `llama_init_from_model`. One context is pre-built at load
-and up to two are retained, so a process pays the build at most once per
-geometry it actually uses.
+and up to two are retained. A geometry reuses its context while that context
+remains cached; eviction can require another build.
 
 `skippy-api-rs/skippy/tests/integration.rs::released_sessions_do_not_leak_previous_state`
 covers the reuse path: eight create/embed/release cycles must reproduce the

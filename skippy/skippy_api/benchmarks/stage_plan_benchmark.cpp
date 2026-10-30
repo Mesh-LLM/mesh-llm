@@ -15,9 +15,12 @@
 
 #include <benchmark/benchmark.h>
 
+#include <algorithm>
 #include <array>
+#include <numeric>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace {
@@ -30,6 +33,67 @@ using skippy::llama::StagePlanner;
 std::string model_path() {
     const char* value = std::getenv("SKIPPY_BENCH_MODEL");
     return value == nullptr ? std::string{} : std::string{value};
+}
+
+struct MaterializedReference {
+    std::vector<std::string> strings;
+    std::size_t state_effects = 0;
+
+    [[nodiscard]] std::size_t observed() const {
+        return std::accumulate(
+            strings.begin(), strings.end(), state_effects,
+            [](std::size_t total, const std::string& value) { return total + value.size(); });
+    }
+};
+
+std::vector<std::string_view> materialized_strings(const skippy::StagePlan& plan) {
+    std::vector<std::string_view> strings{plan.package.value, plan.id.value,
+                                          plan.execution_contract};
+    for (const auto& resident : plan.resident_identities) {
+        strings.push_back(plan.view(resident.slice));
+    }
+    for (const auto& profile : plan.profiles) {
+        for (const std::string_view value :
+             {profile.id.view(), profile.graph_identity.view(), profile.profile_identity.view(),
+              profile.slice_identity.view(), profile.source_snapshot.view(),
+              profile.graph_configuration.view(), profile.backend.view()}) {
+            strings.push_back(value);
+        }
+        for (const auto values :
+             {plan.activation_imports_of(profile), plan.activation_exports_of(profile),
+              plan.request_inputs_of(profile)}) {
+            for (const auto& value : values) {
+                strings.push_back(plan.view(value.identity.slice));
+                strings.push_back(plan.view(value.binding.slice));
+            }
+        }
+    }
+    return strings;
+}
+
+std::size_t materialized_observed(const skippy::StagePlan& plan) {
+    // Consume the same fields as the native getter loop without allocating a
+    // second representation in the facade's timed arm.
+    std::size_t observed = plan.package.value.size() + plan.id.value.size() +
+                           plan.execution_contract.size() + plan.state_effects.size();
+    for (const auto& resident : plan.resident_identities) {
+        observed += plan.view(resident.slice).size();
+    }
+    for (const auto& profile : plan.profiles) {
+        observed += profile.id.value.size() + profile.graph_identity.value.size() +
+                    profile.profile_identity.value.size() + profile.slice_identity.value.size() +
+                    profile.source_snapshot.value.size() +
+                    profile.graph_configuration.value.size() + profile.backend.value.size();
+        for (const auto values :
+             {plan.activation_imports_of(profile), plan.activation_exports_of(profile),
+              plan.request_inputs_of(profile)}) {
+            for (const auto& value : values) {
+                observed +=
+                    plan.view(value.identity.slice).size() + plan.view(value.binding.slice).size();
+            }
+        }
+    }
+    return observed;
 }
 
 /// Owns one planner per side and the string storage both configs borrow.
@@ -183,18 +247,23 @@ public:
             if (!cached_api_.has_value()) return 0;
             auto materialized = cached_api_->materialize();
             if (!materialized) return 0;
-            std::size_t total = materialized->execution_contract.size();
-            for (const auto& profile : materialized->profiles) {
-                total += materialized->activation_imports_of(profile).size() +
-                         materialized->activation_exports_of(profile).size() +
-                         materialized->state_effects_of(profile).size();
-            }
-            return total + materialized->resident_identities.size();
+            return materialized_observed(*materialized);
         }
-        return materialize_native_plan(cached_native_);
+        auto materialized = materialize_native_plan(cached_native_);
+        return materialized ? materialized->observed() : 0;
     }
 
-    std::size_t materialize_native_plan(skippy_stage_plan* plan) const;
+    std::optional<MaterializedReference> materialize_native_plan(skippy_stage_plan* plan) const;
+    [[nodiscard]] bool materialization_agrees() const {
+        if (!cached_api_.has_value()) return false;
+        auto api = cached_api_->materialize();
+        if (!api) return false;
+        auto native = materialize_native_plan(cached_native_);
+        if (!native || native->strings.empty()) return false;
+        const auto api_strings = materialized_strings(*api);
+        return std::ranges::equal(native->strings, api_strings) &&
+               native->state_effects == api->state_effects.size();
+    }
     [[nodiscard]] skippy_stage_plan* cached_native() const noexcept { return cached_native_; }
     [[nodiscard]] const std::optional<StagePlanHandle>& cached_api() const noexcept {
         return cached_api_;
@@ -208,30 +277,32 @@ public:
     bool ready_ = false;
 };
 
-std::size_t StageHarness::materialize_native_plan(skippy_stage_plan* plan) const {
-    if (plan == nullptr) return 0;
+std::optional<MaterializedReference>
+StageHarness::materialize_native_plan(skippy_stage_plan* plan) const {
+    if (plan == nullptr) return std::nullopt;
     skippy_error* error = nullptr;
     skippy_stage_plan_desc_v1 desc{};
     desc.abi_version = SKIPPY_STAGE_PLAN_DESC_V1_ABI_VERSION;
     desc.struct_size = sizeof(desc);
     if (skippy_stage_plan_describe_v1(plan, &desc, &error) != SKIPPY_STATUS_OK) {
         if (error != nullptr) skippy_error_free(error);
-        return 0;
+        return std::nullopt;
     }
     // Retain what is read: the facade builds owned values, so a getter loop
     // that throws its strings away would compare unlike work.
-    std::size_t total = 0;
-    std::vector<std::string> retained;
+    MaterializedReference materialized;
+    bool complete = true;
     const auto read = [&](skippy_stage_plan_string_ref_v1 reference) {
         const char* data = nullptr;
         std::size_t length = 0;
         if (skippy_stage_plan_string_v1(plan, reference, &data, &length, &error) !=
             SKIPPY_STATUS_OK) {
             skippy_error_free(error);
+            error = nullptr;
+            complete = false;
             return;
         }
-        retained.emplace_back(data, length);
-        total += length;
+        materialized.strings.emplace_back(data, length);
     };
     read(desc.package_id);
     read(desc.plan_id);
@@ -243,7 +314,7 @@ std::size_t StageHarness::materialize_native_plan(skippy_stage_plan* plan) const
         if (skippy_stage_plan_resident_tensor_at_v1(plan, resident, &value, &error) !=
             SKIPPY_STATUS_OK) {
             skippy_error_free(error);
-            return total;
+            return std::nullopt;
         }
         read(value.identity);
     }
@@ -253,7 +324,7 @@ std::size_t StageHarness::materialize_native_plan(skippy_stage_plan* plan) const
         profile.struct_size = sizeof(profile);
         if (skippy_stage_plan_profile_at_v1(plan, index, &profile, &error) != SKIPPY_STATUS_OK) {
             skippy_error_free(error);
-            return total;
+            return std::nullopt;
         }
         // The facade materialises the profile's own identities too.
         // All seven: the facade reads the same identity set per profile, so a
@@ -277,6 +348,10 @@ std::size_t StageHarness::materialize_native_plan(skippy_stage_plan* plan) const
                     read(value.binding);
                 } else if (error != nullptr) {
                     skippy_error_free(error);
+                    error = nullptr;
+                    complete = false;
+                } else {
+                    complete = false;
                 }
             }
         };
@@ -291,13 +366,18 @@ std::size_t StageHarness::materialize_native_plan(skippy_stage_plan* plan) const
             state.struct_size = sizeof(state);
             if (skippy_stage_plan_state_at_v1(plan, index, effect, &state, &error) ==
                 SKIPPY_STATUS_OK) {
+                ++materialized.state_effects;
             } else if (error != nullptr) {
                 skippy_error_free(error);
+                error = nullptr;
+                complete = false;
+            } else {
+                complete = false;
             }
         }
     }
-    benchmark::DoNotOptimize(retained);
-    return total;
+    if (!complete) return std::nullopt;
+    return materialized;
 }
 
 std::size_t StageHarness::materialize_native() const {
@@ -454,7 +534,12 @@ void materialize(benchmark::State& state, bool use_api) {
         state.SkipWithError("planner setup failed");
         return;
     }
-    harness.cache_plan(use_api);
+    harness.cache_plan(false);
+    harness.cache_plan(true);
+    if (!harness.materialization_agrees()) {
+        state.SkipWithError("materialized identities or state effects disagree");
+        return;
+    }
     for (auto _ : state) {
         std::size_t produced = harness.materialize_cached(use_api);
         benchmark::DoNotOptimize(&produced);
@@ -505,14 +590,13 @@ void validate(benchmark::State& state, bool use_api) {
             plans.push_back(std::move(*plan));
         }
         // Time only successful validation: a failing loop would measure the
-        // error path, not the check. validate_chain returns the failure as
-        // an engaged optional, so success is the empty one.
-        if (skippy::validate_chain(plans).has_value()) {
+        // error path, not the check. expected<void, E> is engaged on success.
+        if (!skippy::validate_chain(plans).has_value()) {
             state.SkipWithError("chain validation failed");
             return;
         }
         for (auto _ : state) {
-            validated = skippy::validate_chain(plans).has_value() ? 0 : 1;
+            validated = skippy::validate_chain(plans).has_value() ? 1 : 0;
             benchmark::DoNotOptimize(&validated);
         }
         return;

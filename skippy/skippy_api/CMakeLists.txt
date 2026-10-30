@@ -187,6 +187,7 @@ if(SKIPPY_API_BUILD_TESTS)
       tests/inventory_parser_test.cpp
       tests/type_contracts_test.cpp
       tests/toolchain_test.cpp
+      tests/probe_arguments_test.cpp
       tests/properties_test.cpp
       tests/native_message_test.cpp
       tests/rules_consistency_test.cpp
@@ -316,6 +317,7 @@ if(PROJECT_IS_TOP_LEVEL AND SKIPPY_CLANG_FORMAT_EXE)
     "${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/*.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/tools/*.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/tools/*.h"
     # The plugin sources had the same gap tools/ did: unformatted until
     # someone noticed. Fixtures under tidy/test are FileCheck-pinned test
     # data: their CONFIG/CHECK lines anchor columns, so reformatting them

@@ -141,8 +141,9 @@ have your context, and this file is the only thing that survives it.
 
 ### Performance
 
-- **Wins where we can, parity everywhere else.** Every row in
-  `benchmarks/cases.txt` must read `win` or `parity`. A row that loses is a bug
+- **Wins where we can, parity everywhere else.** Every completed runnable row in
+  `benchmarks/cases.txt` must read `win` or `parity`; unmeasured and upstream-blocked
+  rows retain their documented `pending` or `blocked-upstream` state. A row that loses is a bug
   to fix or a design cost to justify in writing.
 - **Never claim a win the measurement does not support.** If the gate cannot
   prove both sides did the same work, the row does not count.
@@ -153,6 +154,8 @@ have your context, and this file is the only thing that survives it.
   `stage_materialize` sat at `parity` with AGENTS.md quoting 0.80x for two
   commits after the stored-positions and shared-mapping work had already
   flipped it to a ~1.2x win — nobody re-measured, so the record lied.
+  Those timings were later withdrawn when the equivalence gate was corrected;
+  historical timing claims are not current performance evidence.
 - **Remove work, do not micro-optimise.** The façade owns tokenisation, batch
   fill, pooling and normalisation; everything else is llama. A change that
   shaves nanoseconds off our layer while the decode dominates is not a result.
@@ -230,6 +233,10 @@ have your context, and this file is the only thing that survives it.
   anything `&mut` "just to be safe".
 - Errors are typed (`WorkloadError`, `StageError`, `PlanError`) and carry the
   backend's message; do not flatten to strings at the boundary.
+- Rust consumers link one static facade/llama/ggml closure. Build-script rpaths
+  do not propagate to external executables; keep static linkage and its system
+  dependencies complete. Never co-link this closure with the production dynamic
+  llama runtime before a separately reviewed cutover.
 
 ## Never modify llama.cpp from here
 
@@ -347,10 +354,10 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
   rule (what it should reject, and an example of code it should flag); a rule
   that is not written down is a rule that will be broken again.
 - **Fix the class, not the instance.** When the same defect appears twice, the
-  second occurrence is evidence that a guard is missing."
+  second occurrence is evidence that a guard is missing.
 
-- **Do not write new Python tooling.** `benchmarks/compare_benchmarks.py` is
-  transitional. New automation belongs in a `just` recipe or a typed `tools/`
+- **Do not write new Python tooling.** Benchmark report admission and comparison
+  belong to `cargo xtool automation skippy-benchmark-compare`. New automation belongs in a `just` recipe or a typed `tools/`
   helper; the repository rule is in the root `AGENTS.md`.
 - **Commit through the recipe**, never a bare `git commit` on this tree:
   `just skippy-api-checkpoint "<type(scope): subject>" [embed.gguf] [reranker.gguf]`.
@@ -362,6 +369,17 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
 
 ## Traps that have already bitten us
 
+- **A successful result must pass the benchmark gate.** Stage validation changed
+  to `expected<void, E>`, but the benchmark still rejected its engaged success
+  as though it were an optional error. Admit both successful validators before
+  timing, and compare materialization's exact identities and state-effect
+  counts on both sides. Timing claims for corrected gates require remeasurement.
+- **Every metadata reader validates its header.** The architecture shortcut
+  skipped the GGUF magic and version checks used by the full inventory reader.
+  `ArchitectureRejectsWrongMagicBeforeMetadata` and
+  `ArchitectureRejectsUnsupportedVersionsBeforeMetadata` pin the shared
+  boundary. Probe integers likewise use bounded complete-string parsing before
+  geometry or allocation; malformed CLI input must not escape as an exception.
 - **A `std::move` argument poisons every other argument in the same call.**
   Parameter construction order is unspecified, so
   `recycle(std::move(context), llama_n_ctx(context.get()))` moves the pointer

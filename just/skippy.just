@@ -321,7 +321,7 @@ skippy-llama-api-ffi-bench-compare model="" *ARGS="":
       --benchmark_format=json \
       --benchmark_out="$report" \
       "$@" >/dev/null
-    python3 skippy/skippy_api/benchmarks/compare_benchmarks.py "$report"
+    just automation-run automation skippy-benchmark-compare "$report"
 
 # Stage planner probe: proves a GGUF is a valid single-shard package and prints
 # what planning costs. Optional layer count and [start, end) stage range.
@@ -364,6 +364,8 @@ skippy-api-verify embed_model="" reranker_model="" causal_model="" *ARGS="":
     just skippy-api-rs-lint
     printf '%s\n' '== Rust tests' >&2
     just skippy-api-rs-e2e "$embed" "$reranker" "$causal"
+    printf '%s\n' '== downstream static link closure' >&2
+    just skippy-api-downstream-smoke
     printf '%s\n' 'ok: skippy_api is ready to commit' >&2
 
 # Format and lint the Rust facade with the gates CI applies elsewhere.
@@ -372,8 +374,8 @@ skippy-api-rs-lint:
     #!/usr/bin/env bash
     set -euo pipefail
     cd skippy/skippy-api-rs
-    RUSTC_WRAPPER= cargo fmt --all --check
-    RUSTC_WRAPPER= cargo clippy --workspace --all-targets -- -D warnings
+    cargo fmt --all --check
+    cargo clippy --workspace --all-targets -- -D warnings
 
 # Verify, stage the API sources, and commit. Message must be a Conventional Commit.
 [unix]
@@ -392,6 +394,12 @@ skippy-api-checkpoint message="" embed_model="" reranker_model="" causal_model="
     reranker="${1:-}"
     if [[ $# -gt 0 ]]; then shift; fi
     causal="${1:-}"
+    if ! git diff --cached --quiet -- . \
+        ':(exclude)skippy/skippy_api/**' ':(exclude)skippy/skippy-api-rs/**' \
+        ':(exclude)just/skippy.just' ':(exclude).gitignore'; then
+      printf '%s\n' 'checkpoint refuses staged files outside the API; commit or unstage those files first' >&2
+      exit 1
+    fi
     just skippy-api-verify "$embed" "$reranker" "$causal"
     git add skippy/skippy_api skippy/skippy-api-rs just/skippy.just .gitignore
     if git diff --cached --quiet; then
@@ -427,12 +435,10 @@ skippy-api-rs-e2e embed_model="" reranker_model="" causal_model="" *ARGS="":
     if [[ -n "$embed" && -n "$reranker" && -n "$causal" ]]; then
       require=1
     fi
-    # The workspace config points rustc at sccache; these tests link the native
-    # library through the crate's own build script, so run rustc directly.
+    # Preserve the repository compiler wrapper for the nested workspace too.
     # All four variables are assigned identically and unconditionally: env is
     # not an input to this recipe, positionals are, and the Rust side reads
     # set-but-empty as absent.
-    RUSTC_WRAPPER= \
     SKIPPY_TEST_MODEL="$embed" \
     SKIPPY_TEST_RERANKER="$reranker" \
     SKIPPY_TEST_CAUSAL="$causal" \
@@ -446,6 +452,15 @@ skippy-api-rs-e2e embed_model="" reranker_model="" causal_model="" *ARGS="":
 # the default compiler (llama's own sources do not build under Homebrew
 # clang's libc++), and the fuzzers build under the clang prefix the fuzz
 # recipes use, llama off.
+[unix]
+skippy-api-downstream-smoke:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo build --locked --manifest-path skippy/skippy-api-rs/tests/downstream/Cargo.toml \
+        --target-dir target/skippy-api-downstream
+    env -u LD_LIBRARY_PATH -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH \
+        target/skippy-api-downstream/debug/skippy-api-downstream-smoke
+
 [unix]
 skippy-api-all-targets-build:
     #!/usr/bin/env bash
@@ -499,28 +514,33 @@ skippy-ab case="" model="":
         echo "  work belongs in skippy/llama_cpp/patches, not in skippy_api (see AGENTS.md)"
         exit 0
     fi
-    if [ -z "${2-}" ]; then
+    case "$1" in
+        batch_build_*|normalize_*|sampling_*) model_required=false ;;
+        *) model_required=true ;;
+    esac
+    if [ "$model_required" = true ] && [ -z "${2-}" ]; then
         echo "{{ case }} needs a model: just skippy-ab {{ case }} <model.gguf>" >&2
         exit 1
     fi
     out=$(mktemp "${TMPDIR:-/tmp}/skippy-ab.XXXXXX")
     log="${out}.log"
-    trap 'rm -f "$out" "$log"' EXIT
+    trap 'rm -f "$out"' EXIT
     # The recipe builds what it runs: a benchmark binary nobody else builds is
     # how the stage_plan typo hid for a week (TYPE-RULES §6).
-    cmake -S skippy/skippy_api -B target/skippy-api-all -G Ninja \
-        -DCMAKE_BUILD_TYPE=Debug -DSKIPPY_BUILD_LLAMA=ON \
+    build_dir="${SKIPPY_LLAMA_API_FFI_BENCH_BUILD_DIR:-target/skippy-llama-api-ffi-bench}"
+    cmake -S skippy/skippy_api -B "$build_dir" -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release -DSKIPPY_BUILD_LLAMA=ON \
         -DSKIPPY_LLAMA_SOURCE_DIR="{{absolute_path(llama_dir)}}" \
         -DSKIPPY_API_BUILD_BENCHMARKS=ON -DSKIPPY_API_BUILD_FFI_BENCHMARKS=ON \
         -DBENCHMARK_ENABLE_WERROR=OFF -DBENCHMARK_ENABLE_TESTING=OFF >/dev/null
-    cmake --build target/skippy-api-all --target skippy_api_ffi_benchmarks --parallel
+    cmake --build "$build_dir" --target skippy_api_ffi_benchmarks --parallel
     if ! SKIPPY_BENCH_MODEL="${2-}" \
-        ./target/skippy-llama-api-ffi-bench/skippy_api_ffi_benchmarks \
+        "$build_dir/skippy_api_ffi_benchmarks" \
         --benchmark_filter="$filter" \
-        --benchmark_min_time=0.3s --benchmark_repetitions=5 \
+        --benchmark_min_time=0.3s --benchmark_repetitions=15 \
         --benchmark_enable_random_interleaving=true \
         --benchmark_format=json --benchmark_out="$out" >"$log" 2>&1; then
-        echo "{{ case }}: benchmark exited non-zero; last output:" >&2
+        echo "{{ case }}: benchmark exited non-zero (log: $log); last output:" >&2
         tail -20 "$log" >&2
         exit 1
     fi
@@ -533,7 +553,7 @@ skippy-ab case="" model="":
         echo "  manifest filters must prefix-match, never \$-anchor" >&2
         exit 1
     fi
-    python3 skippy/skippy_api/benchmarks/compare_benchmarks.py "$out" | sed "s/^/  /"
+    just automation-run automation skippy-benchmark-compare "$out" | sed "s/^/  /"
     echo "{{ case }}: acceptance=$expected (benchmark output: $log)"
 
 # Run the old C ABI against the skippy_api facade on one model (model=<gguf>).
@@ -687,7 +707,7 @@ skippy-llama-api-tidy *CHECKS="":
     cd "$repo_root"
     # The bridge has no compile database (cxx_build compiles it); the flags
     # below mirror build.rs. Generated headers stay outside the filter.
-    cxx_include="$(find "$HOME/.cargo/registry/src" -maxdepth 4 -path '*/cxx-*/include' -type d | sort | tail -1)"
+    cxx_include="$(find "${CARGO_HOME:-$HOME/.cargo}/registry/src" -maxdepth 4 -path '*/cxx-*/include' -type d | sort | tail -1)"
     "$tidy" ${wae_args[@]+"${wae_args[@]}"} \
       "${load_args[@]+"${load_args[@]}"}" \
       skippy/skippy-api-rs/skippy-sys/cpp/bridge.cpp -- \

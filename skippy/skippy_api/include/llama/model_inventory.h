@@ -604,7 +604,11 @@ inline std::expected<std::string, std::string> model_architecture(const std::str
     [[maybe_unused]] std::uint64_t tensor_count = 0;
     std::uint64_t metadata_count = 0;
     if (auto ok = reader.read(magic); !ok) return std::unexpected(ok.error());
+    if (magic != kGgufMagic) return std::unexpected("not a GGUF file");
     if (auto ok = reader.read(version); !ok) return std::unexpected(ok.error());
+    if (version < kMinGgufVersion || version > kMaxGgufVersion) {
+        return std::unexpected("unsupported GGUF version");
+    }
     if (auto ok = reader.read(tensor_count); !ok) return std::unexpected(ok.error());
     if (auto ok = reader.read(metadata_count); !ok) return std::unexpected(ok.error());
     if (metadata_count > kMaxInventoryEntries) {

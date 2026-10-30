@@ -176,6 +176,14 @@ fn stages_partition_the_model_and_share_one_boundary() {
     for plan in &plans {
         assert!(!plan.resident_identities.is_empty(), "a stage keeps tensors resident");
         assert!(!plan.execution_contract_hex.is_empty(), "a stage carries its contract");
+        assert!(!plan.request_inputs.is_empty(), "BERT plans carry request inputs through the Rust bridge");
+        for input in &plan.request_inputs {
+            assert!(!input.identity.is_empty(), "a request input preserves its identity");
+            assert!(
+                input.binding.len().is_multiple_of(2),
+                "request bindings remain hex-encoded, including empty bindings"
+            );
+        }
     }
 
     assert!(!plans[0].exports.is_empty(), "a split stage exports a frontier");
@@ -192,6 +200,20 @@ fn stages_partition_the_model_and_share_one_boundary() {
     let exported: Vec<&String> = plans[0].exports.iter().map(|value| &value.identity).collect();
     let imported: Vec<&String> = plans[1].imports.iter().map(|value| &value.identity).collect();
     assert_eq!(exported, imported, "what stage 0 exports is what stage 1 imports, in order");
+}
+
+#[test]
+fn planned_stage_indices_preserve_chain_order() {
+    let Some(path) = model_path("SKIPPY_TEST_CAUSAL") else {
+        return;
+    };
+    let bridge = skippy_sys::new_bridge();
+    assert!(!bridge.is_null(), "runtime allocation");
+    let plans = bridge.plan_stages(&path, 2);
+    assert!(plans.ok, "planning failed: {}", plans.error);
+    assert_eq!(plans.stages.len(), 2);
+    let indices: Vec<i32> = plans.stages.iter().map(|plan| plan.stage_index).collect();
+    assert_eq!(indices, [0, 1], "producer indices follow the chain rather than defaulting to zero");
 }
 
 /// A stage is a model of its own: it opens, it owns resources, and its

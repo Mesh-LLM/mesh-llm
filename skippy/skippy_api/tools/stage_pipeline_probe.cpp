@@ -5,10 +5,10 @@
  * Usage: skippy_api_stage_pipeline_probe <model.gguf> <stages> [layers]
  *
  * Each stage is planned, configured and opened from its own plan, then fed the
- * previous stage's activation payload. The last stage's payload is compared
- * with the payload of a single stage covering the whole model: if the chain
- * composes, the bytes agree, which is the correctness question a split model
- * actually has.
+ * previous stage's activation payload. Every nonterminal boundary must carry
+ * a nonempty payload equal to a separately opened monolithic prefix ending at
+ * the same layer. The terminal payload is also checked against a single stage
+ * covering the whole model; a full-model terminal may export no activations.
  *
  * The payload check is extended by a K-step greedy continuation: both the
  * chain and an unstaged reference keep decoding their own predictions, and the
@@ -18,6 +18,7 @@
 
 #include "llama/model_inventory.h"
 #include "llama/stage_planner.h"
+#include "probe_arguments.h"
 #include "stage_load.h"
 
 #include "skippy.h"
@@ -86,7 +87,7 @@ std::string message_of(enum skippy_status status, skippy_error* error) {
 
 /// Opens one stage: planner -> plan -> loader config -> model -> session.
 bool open_stage(skippy::llama::StagePlanner& planner, const std::string& path,
-                skippy::LayerRange range, Stage& stage) {
+                skippy::LayerRange range, std::int32_t stage_index, Stage& stage) {
     stage.range = range;
     auto plan = planner.realize(range);
     if (!plan) {
@@ -129,7 +130,7 @@ bool open_stage(skippy::llama::StagePlanner& planner, const std::string& path,
     export_bindings.seal();
 
     auto config = skippy_runtime_config_default();
-    config.stage_index = 0;
+    config.stage_index = stage_index;
     config.layer_start = range.start;
     config.layer_end = range.end;
     config.ctx_size = 512;
@@ -223,6 +224,34 @@ std::string compare(const std::vector<std::uint8_t>& left, const std::vector<std
     }
     return "max abs difference " + std::to_string(worst) + " over " + std::to_string(count) +
            " floats";
+}
+
+/// An independent prefix realizes the same outgoing frontier without consuming
+/// any chain activation, so agreement witnesses the complete prefix execution.
+std::expected<void, std::string> verify_boundary(skippy::llama::StagePlanner& planner,
+                                                 const std::string& path, const Stage& actual,
+                                                 const std::vector<llama_token>& context) {
+    if (actual.output.empty()) {
+        return std::unexpected("nonterminal chain boundary emitted no payload");
+    }
+    Stage reference;
+    if (!open_stage(planner, path, skippy::LayerRange{.start = 0, .end = actual.range.end}, 0,
+                    reference)) {
+        return std::unexpected("could not open the independent boundary prefix");
+    }
+    if (!run_stage(reference, context, nullptr, nullptr)) {
+        return std::unexpected("could not prefill the independent boundary prefix");
+    }
+    if (reference.output.empty()) {
+        return std::unexpected("independent boundary prefix emitted no payload");
+    }
+    if (actual.output != reference.output) {
+        return std::unexpected("chain boundary differs from independent prefix: " +
+                               compare(actual.output, reference.output));
+    }
+    std::cout << "verified boundary at layer " << actual.range.end << ": " << actual.output.size()
+              << " nonempty bytes match independent prefix\n";
+    return {};
 }
 
 } // namespace
@@ -331,19 +360,38 @@ int main(
         return 2;
     }
     const std::string path = argv[1];
-    const int stage_count = std::stoi(argv[2]);
-    if (stage_count < 1) {
-        std::cerr << "need at least one stage\n";
+    const auto parsed_stages = skippy::probe::parse_probe_integer(argv[2], "stages", 1);
+    if (!parsed_stages) {
+        std::cerr << parsed_stages.error() << "\n";
         return 2;
     }
+    const int stage_count = *parsed_stages;
+    const auto parsed_steps = argc > 5 ? skippy::probe::parse_probe_integer(argv[5], "steps", 1)
+                                       : std::expected<std::int32_t, std::string>{16};
+    if (!parsed_steps) {
+        std::cerr << parsed_steps.error() << "\n";
+        return 2;
+    }
+    const int steps = *parsed_steps;
 
     auto inventory = skippy::probe::read_inventory(path);
     if (!inventory) {
         std::cerr << "gguf: " << inventory.error() << "\n";
         return 2;
     }
-    const std::int32_t layers =
-        argc > 3 ? std::stoi(argv[3]) : skippy::probe::layer_count_from(*inventory);
+    const auto parsed_layers =
+        argc > 3
+            ? skippy::probe::parse_probe_integer(argv[3], "layers", 1)
+            : std::expected<std::int32_t, std::string>{skippy::probe::layer_count_from(*inventory)};
+    if (!parsed_layers) {
+        std::cerr << parsed_layers.error() << "\n";
+        return 2;
+    }
+    const std::int32_t layers = *parsed_layers;
+    if (layers < stage_count) {
+        std::cerr << "layers must be at least the stage count\n";
+        return 2;
+    }
     const std::string text = argc > 4 ? argv[4] : "the quick brown fox jumps over the lazy dog";
 
     std::vector<skippy::PackageTensor> tensors;
@@ -386,7 +434,7 @@ int main(
     const std::vector<skippy::LayerRange> ranges = partition(layers, stage_count);
     std::vector<Stage> stages(static_cast<std::size_t>(stage_count));
     for (int index = 0; index < stage_count; ++index) {
-        if (!open_stage(*planner, path, ranges[static_cast<std::size_t>(index)],
+        if (!open_stage(*planner, path, ranges[static_cast<std::size_t>(index)], index,
                         stages[static_cast<std::size_t>(index)])) {
             return 1;
         }
@@ -419,6 +467,12 @@ int main(
         if (!run_stage(stage, context, input_desc, input)) return 1;
         std::cout << "stage " << index << " [" << stage.range.start << ", " << stage.range.end
                   << "): " << payload_size(stage) << " bytes in " << millis(start) << " ms\n";
+        if (index + 1 < stage_count) {
+            if (auto witness = verify_boundary(*planner, path, stage, context); !witness) {
+                std::cerr << "stage " << index << " boundary: " << witness.error() << "\n";
+                return 1;
+            }
+        }
         carried = stage.output;
         input_desc = &stage.output_desc;
         input = carried.data();
@@ -429,21 +483,19 @@ int main(
     // Composition check: one stage holding every layer must emit the same
     // terminal payload as the chain.
     Stage monolithic;
-    if (!open_stage(*planner, path, skippy::LayerRange{.start = 0, .end = layers}, monolithic))
+    if (!open_stage(*planner, path, skippy::LayerRange{.start = 0, .end = layers}, 0, monolithic))
         return 1;
     if (!run_stage(monolithic, context, nullptr, nullptr)) return 1;
     std::cout << "single stage: " << payload_size(monolithic) << " bytes\n";
     std::cout << "chain vs single: " << compare(stages.back().output, monolithic.output) << "\n";
+    if (stages.back().output != monolithic.output) {
+        std::cerr << "chain vs single: payload mismatch\n";
+        return 1;
+    }
     // K-step greedy continuation: both paths prefilled `context` above, so
     // step 0 decodes the text's final token on both. Every later step feeds
     // each path its own prediction back, so the paths stay comparable exactly
     // as long as they keep agreeing; the run fails at the first divergence.
-    const int steps = argc > 5 ? std::stoi(argv[5]) : 16;
-    if (steps < 1) {
-        std::cerr << "need at least one continuation step\n";
-        return 2;
-    }
-
     Stage full;
     auto full_config = skippy_runtime_config_default();
     full_config.ctx_size = 512;
@@ -492,6 +544,10 @@ int main(
         }
         std::cout << "step " << step << ": token " << *chain_token << ", terminal frame "
                   << compare(chain_frame, full_frame) << "\n";
+        if (chain_frame != full_frame) {
+            std::cerr << "step " << step << ": terminal payload mismatch\n";
+            return 1;
+        }
         chain_feed = *chain_token;
         full_feed = *full_token;
     }

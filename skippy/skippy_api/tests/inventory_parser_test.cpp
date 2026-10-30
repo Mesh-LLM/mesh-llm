@@ -80,6 +80,44 @@ TEST(InventoryParser, AcceptsAnEmptyButWellFormedHeader) {
     EXPECT_TRUE(inventory->empty());
 }
 
+TEST(InventoryParser, ArchitectureRejectsWrongMagicBeforeMetadata) {
+    auto bytes = empty_header();
+    bytes[0] = 'X';
+    const auto path = write_temp(bytes, "architecture-wrong-magic");
+    const auto architecture = skippy::probe::model_architecture(path);
+    std::remove(path.c_str());
+    ASSERT_FALSE(architecture.has_value());
+    EXPECT_EQ(architecture.error(), "not a GGUF file");
+}
+
+TEST(InventoryParser, ArchitectureRejectsUnsupportedVersionsBeforeMetadata) {
+    for (const std::uint32_t version : {0U, 1U, 4U, std::numeric_limits<std::uint32_t>::max()}) {
+        std::vector<std::uint8_t> bytes{'G', 'G', 'U', 'F'};
+        put32(bytes, version);
+        put64(bytes, 0);
+        put64(bytes, 0);
+        const auto path = write_temp(bytes, "architecture-version-" + std::to_string(version));
+        const auto architecture = skippy::probe::model_architecture(path);
+        std::remove(path.c_str());
+        ASSERT_FALSE(architecture.has_value()) << version;
+        EXPECT_EQ(architecture.error(), "unsupported GGUF version");
+    }
+}
+
+TEST(InventoryParser, ArchitectureAcceptsSupportedVersionsWithoutMetadata) {
+    for (const std::uint32_t version : {2U, 3U}) {
+        std::vector<std::uint8_t> bytes{'G', 'G', 'U', 'F'};
+        put32(bytes, version);
+        put64(bytes, 0);
+        put64(bytes, 0);
+        const auto path = write_temp(bytes, "architecture-version-" + std::to_string(version));
+        const auto architecture = skippy::probe::model_architecture(path);
+        std::remove(path.c_str());
+        ASSERT_TRUE(architecture.has_value()) << version;
+        EXPECT_TRUE(architecture->empty());
+    }
+}
+
 TEST(InventoryParser, RejectsEveryTruncationOfAValidFile) {
     const std::vector<std::uint8_t> bytes = empty_header();
     for (std::size_t cut = 0; cut < bytes.size(); ++cut) {

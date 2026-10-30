@@ -312,6 +312,7 @@ PlanStagesResult Bridge::plan_stages(rust::Str path, std::uint32_t stage_count) 
 
         for (const skippy::StageLoadConfig& config : lease->configs) {
             StagePlanInfo info{};
+            info.stage_index = config.stage_index;
             info.profile_id_hex = hex_of(config.profile_id);
             info.graph_identity_hex = hex_of(config.graph_identity);
             info.profile_identity_hex = hex_of(config.profile_identity);
@@ -343,6 +344,14 @@ PlanStagesResult Bridge::plan_stages(rust::Str path, std::uint32_t stage_count) 
             }
             for (const std::string_view value : config.activation_export_bindings) {
                 info.export_binding_hex.push_back(hex_of(value));
+            }
+            info.request_identity_hex.reserve(config.request_input_identities.size());
+            for (const std::string_view value : config.request_input_identities) {
+                info.request_identity_hex.push_back(hex_of(value));
+            }
+            info.request_binding_hex.reserve(config.request_input_bindings.size());
+            for (const std::string_view value : config.request_input_bindings) {
+                info.request_binding_hex.push_back(hex_of(value));
             }
             result.stages.push_back(std::move(info));
         }

@@ -14,12 +14,14 @@ compiles the facade with the generated cxx glue. Inputs, all optional:
 
 ```
 SKIPPY_API_DIR            default ../../skippy_api (relative to skippy-sys)
-SKIPPY_LLAMA_SOURCE_DIR   default <skippy_api>/.deps/llama.cpp
+SKIPPY_LLAMA_SOURCE_DIR   nearest ancestor .deps/llama.cpp above skippy-sys
 SKIPPY_CMAKE_PROFILE      default Release
 ```
 
-llama and ggml are built as shared libraries inside Cargo's `OUT_DIR`; test
-binaries find them by rpath. `skippy_core` and `skippy_llama` link statically.
+The facade, llama and ggml link statically from Cargo's `OUT_DIR`, including
+their system-library dependencies. Consumers need no llama loader paths or
+consumer build script. Keep this isolated from the production dynamic runtime:
+linking both closures into one executable would introduce two llama copies.
 
 ## Testing
 

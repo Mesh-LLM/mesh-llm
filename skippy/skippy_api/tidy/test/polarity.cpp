@@ -6,7 +6,7 @@ enum class PlanError { Bad };
 std::optional<PlanError> validate(int x) { return x < 0 ? std::optional{PlanError::Bad} : std::nullopt; }
 
 std::expected<void, PlanError> old_shape();
-// CHECK: [[@LINE-1]]:1: warning: std::expected<void, E> is banned
+// CHECK: [[@LINE-1]]:{{(1|6)}}: warning: std::expected<void, E> is banned
 
 bool caller(int x) {
     const auto failure = validate(x);

@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "llama/model_inventory.h"
+#include "probe_arguments.h"
 
 namespace {
 
@@ -67,8 +68,28 @@ int main(
         std::cerr << "gguf: " << inventory.error() << "\n";
         return 2;
     }
-    const std::int32_t layers =
-        argc > 2 ? static_cast<std::int32_t>(std::stoll(argv[2])) : layer_count_from(*inventory);
+    const auto parsed_layers =
+        argc > 2 ? parse_probe_integer(argv[2], "layer_count", 1)
+                 : std::expected<std::int32_t, std::string>{layer_count_from(*inventory)};
+    if (!parsed_layers || *parsed_layers < 1) {
+        std::cerr << (parsed_layers ? "the model has no layers" : parsed_layers.error()) << "\n";
+        return 2;
+    }
+    const std::int32_t layers = *parsed_layers;
+    const auto parsed_start = argc > 3 ? parse_probe_integer(argv[3], "layer_start", 0)
+                                       : std::expected<std::int32_t, std::string>{0};
+    const auto parsed_end = argc > 4 ? parse_probe_integer(argv[4], "layer_end", 1)
+                                     : std::expected<std::int32_t, std::string>{layers};
+    if (!parsed_start || !parsed_end) {
+        std::cerr << (!parsed_start ? parsed_start.error() : parsed_end.error()) << "\n";
+        return 2;
+    }
+    const auto start = *parsed_start;
+    const auto end = *parsed_end;
+    if (start >= end || end > layers) {
+        std::cerr << "stage range must satisfy 0 <= start < end <= layer_count\n";
+        return 2;
+    }
     std::cout << "gguf: " << inventory->size() << " tensors, " << layers << " layers\n";
 
     std::vector<skippy::PackageTensor> tensors;
@@ -128,11 +149,8 @@ int main(
 
     double realize_ms = 0.0;
     auto plan = std::expected<skippy::llama::StagePlanHandle, skippy::PlanFailure>{};
-    realize_ms = milliseconds([&] {
-        const auto start = argc > 3 ? std::stoi(argv[3]) : 0;
-        const auto end = argc > 4 ? std::stoi(argv[4]) : static_cast<std::int32_t>(layers);
-        plan = planner.realize(skippy::LayerRange{.start = start, .end = end});
-    });
+    realize_ms = milliseconds(
+        [&] { plan = planner.realize(skippy::LayerRange{.start = start, .end = end}); });
     if (!plan) {
         std::cerr << "realize rejected: " << plan.error().message << "\n";
         std::cerr << "realize: " << realize_ms << " ms (failed)\n";

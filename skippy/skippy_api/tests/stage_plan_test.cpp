@@ -196,7 +196,7 @@ TEST(StagePlanChain, AcceptsAThreeStageChain) {
     StagePlan last = plan({8, 12}, 12, {profile({8, 12}, {ValueIdentity{"h.7"}}, {})});
     const std::array<StagePlan, 3> chain{std::move(first), std::move(middle), std::move(last)};
     EXPECT_TRUE(skippy::validate_chain(chain).has_value());
-    EXPECT_TRUE(last.terminal());
+    EXPECT_TRUE(chain.back().terminal());
 }
 
 namespace {

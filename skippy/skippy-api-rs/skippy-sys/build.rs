@@ -46,6 +46,10 @@ fn main() {
         .define("SKIPPY_API_BUILD_TESTS", "OFF")
         .define("SKIPPY_API_BUILD_BENCHMARKS", "OFF")
         .define("CMAKE_POSITION_INDEPENDENT_CODE", "ON")
+        // Native dependencies travel inside the rlib. Link arguments and rpaths
+        // from this build script do not propagate to a downstream executable.
+        .define("BUILD_SHARED_LIBS", "OFF")
+        .define("GGML_BACKEND_DL", "OFF")
         .define("LLAMA_BUILD_COMMON", "OFF")
         .define("LLAMA_BUILD_TOOLS", "OFF")
         .define("LLAMA_CURL", "OFF")
@@ -54,24 +58,11 @@ fn main() {
         .join("build");
 
     let libraries = find_libraries(&build_root);
-    link(&libraries, "skippy_llama", Kind::Static);
-    link(&libraries, "skippy_core", Kind::Static);
-    link(&libraries, "llama", Kind::Discovered);
-    libraries.keys().filter(|name| name.starts_with("ggml")).for_each(|name| link(&libraries, name, Kind::Discovered));
-
-    // Dependent packages cannot inherit cargo:rustc-link-arg; publish the build
-    // root through the links-key metadata (Cargo.toml `links = "skippy_api"`),
-    // so a dependent's build.rs can read DEP_SKIPPY_API_ROOT and emit its own
-    // -Wl,-rpath for the shared llama/ggml libraries (i386 review).
-    println!("cargo:root={}", build_root.display());
-    // Shared llama/ggml libraries stay in the build tree; binaries find them by rpath.
-    let mut rpaths: Vec<&Path> =
-        libraries.values().filter(|library| library.shared).map(|library| library.dir.as_path()).collect();
-    rpaths.sort();
-    rpaths.dedup();
-    for dir in rpaths {
-        println!("cargo:rustc-link-arg=-Wl,-rpath,{}", dir.display());
-    }
+    link(&libraries, "skippy_llama");
+    link(&libraries, "skippy_core");
+    link(&libraries, "llama");
+    libraries.keys().filter(|name| name.starts_with("ggml")).for_each(|name| link(&libraries, name));
+    link_system_dependencies(&build_root, &libraries);
 
     cxx_build::bridge("src/lib.rs")
         .file("cpp/bridge.cpp")
@@ -91,19 +82,44 @@ fn dir_from_env(name: &str, default: impl FnOnce() -> PathBuf) -> PathBuf {
         .unwrap_or_else(|error| panic!("{name}: {} is not a readable directory: {error}", path.display()))
 }
 
+fn link_system_dependencies(build_root: &Path, libraries: &BTreeMap<String, Library>) {
+    let target = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS");
+    if target == "macos" {
+        if libraries.contains_key("ggml-metal") {
+            for framework in ["Foundation", "Metal", "MetalKit"] {
+                println!("cargo:rustc-link-lib=framework={framework}");
+            }
+        }
+        let cache = fs::read_to_string(build_root.join("CMakeCache.txt")).expect("CMake cache");
+        if cache.lines().any(|line| line == "GGML_ACCELERATE:BOOL=ON") || libraries.contains_key("ggml-blas") {
+            println!("cargo:rustc-link-lib=framework=Accelerate");
+        }
+    }
+    // CMake discovers the host OpenMP runtime; retain that exact link closure
+    // instead of assuming libgomp on every platform/compiler.
+    let cache = fs::read_to_string(build_root.join("CMakeCache.txt")).expect("CMake cache");
+    if let Some(names) = cache
+        .lines()
+        .find_map(|line| line.strip_prefix("OpenMP_CXX_LIB_NAMES:STRING="))
+        .filter(|names| !names.ends_with("NOTFOUND"))
+    {
+        for name in names.split(';').filter(|name| !name.is_empty()) {
+            let prefix = format!("OpenMP_{name}_LIBRARY:FILEPATH=");
+            if let Some(path) = cache.lines().find_map(|line| line.strip_prefix(&prefix)) {
+                let dir = Path::new(path).parent().expect("OpenMP library directory");
+                println!("cargo:rustc-link-search=native={}", dir.display());
+            }
+            println!("cargo:rustc-link-lib={name}");
+        }
+    }
+}
+
 struct Library {
     dir: PathBuf,
-    shared: bool,
 }
 
-#[derive(Clone, Copy)]
-enum Kind {
-    Static,
-    Discovered,
-}
-
-/// Every lib<name>.{a,so,dylib} under `root`, by name. A shared build wins
-/// over a static one of the same name.
+/// Static archives under `root`. Ignore stale shared outputs from a previous
+/// configuration: discovering those would silently restore the loader defect.
 fn find_libraries(root: &Path) -> BTreeMap<String, Library> {
     let mut found = BTreeMap::new();
     collect_libraries(root, &mut found);
@@ -123,25 +139,22 @@ fn collect_libraries(dir: &Path, found: &mut BTreeMap<String, Library>) {
             collect_libraries(&path, found);
             continue;
         }
-        let Some((name, shared)) = library_name(&path) else { continue };
-        if found.get(&name).is_none_or(|existing| shared && !existing.shared) {
-            found.insert(name, Library { dir: dir.to_path_buf(), shared });
-        }
+        let Some(name) = library_name(&path) else { continue };
+        found.insert(name, Library { dir: dir.to_path_buf() });
     }
 }
 
-fn library_name(path: &Path) -> Option<(String, bool)> {
+fn library_name(path: &Path) -> Option<String> {
     let file = path.file_name()?.to_str()?;
     let stem = file.strip_prefix("lib")?;
     if let Some(name) = stem.strip_suffix(".a") {
-        return Some((name.to_owned(), false));
+        return Some(name.to_owned());
     }
-    [".so", ".dylib"].iter().find_map(|suffix| stem.strip_suffix(suffix)).map(|name| (name.to_owned(), true))
+    None
 }
 
-fn link(libraries: &BTreeMap<String, Library>, name: &str, kind: Kind) {
+fn link(libraries: &BTreeMap<String, Library>, name: &str) {
     let library = libraries.get(name).unwrap_or_else(|| panic!("library {name} not produced by the CMake build"));
     println!("cargo:rustc-link-search=native={}", library.dir.display());
-    let modifier = if matches!(kind, Kind::Discovered) && library.shared { "dylib" } else { "static" };
-    println!("cargo:rustc-link-lib={modifier}={name}");
+    println!("cargo:rustc-link-lib=static={name}");
 }

@@ -91,12 +91,14 @@ Manifest: row `0003 B stage_open_encoder blocked-upstream`.
 
 ### Native validate_chain re-derives guarded plans per call
 
-Measured: native ~10.9 ms per validation vs ~0.18 µs for our cached plan
-validation (~60,000x) — the native path rebuilds guarded plans on every call
-where our `PlanStore` RCU cache serves an immutable snapshot. The cache shape
-(copy-on-write index, atomic snapshot publish) is the upstream-worthy idea.
+The native path rebuilds guarded plans on every call where our `PlanStore`
+RCU cache serves an immutable snapshot. The cache shape (copy-on-write index,
+atomic snapshot publish) is the upstream-worthy idea. The earlier timing claim
+is withdrawn: the facade benchmark still used the old optional-error polarity
+after validation changed to `expected<void, E>`. Measure the successful paths
+again before attaching a speedup to this opportunity.
 
-Manifest: class C ceiling row `stage_validate`.
+Manifest: class A row `stage_validate`, pending remeasurement.
 
 ### Per-decode fixed cost in the Metal path
 

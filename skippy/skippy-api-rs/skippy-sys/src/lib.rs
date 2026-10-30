@@ -134,6 +134,8 @@ pub mod ffi {
     /// One stage of a split model.
     #[derive(Debug)]
     struct StagePlanInfo {
+        /// Position in the native chain, also used for producer provenance.
+        stage_index: i32,
         layer_start: i32,
         layer_end: i32,
         /// Hex-encoded: the contract is opaque bytes, not text.
