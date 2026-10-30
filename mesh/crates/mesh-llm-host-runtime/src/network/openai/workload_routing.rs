@@ -246,12 +246,7 @@ pub(super) fn request_media(
             needs_audio: true,
             needs_vision: false,
         }
-    } else if is_document_ocr_path(path)
-        || matches!(
-            path.split('?').next(),
-            Some("/mesh/v1/images/similarity" | "/mesh/v1/images/depth")
-        )
-    {
+    } else if is_binary_task_path(path) {
         crate::network::router::MediaRequirements {
             has_media: true,
             needs_audio: false,
@@ -260,6 +255,14 @@ pub(super) fn request_media(
     } else {
         body.map_or_else(Default::default, crate::network::router::media_requirements)
     }
+}
+
+/// Multipart tasks can select an automatic model without a JSON request body.
+pub(super) fn is_binary_task_path(path: &str) -> bool {
+    matches!(
+        path.split('?').next(),
+        Some("/mesh/v1/documents/ocr" | "/mesh/v1/images/similarity" | "/mesh/v1/images/depth")
+    )
 }
 
 /// Whether every advertisement of this model name serves document OCR.

@@ -30,6 +30,9 @@ use crate::ConfigValueSource;
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct MeshConfig {
+    /// Runtime origin used to resolve paths without rewriting persisted values.
+    #[serde(skip)]
+    pub source_directory: Option<std::path::PathBuf>,
     #[serde(default)]
     pub version: Option<u32>,
     #[serde(default)]
@@ -1351,6 +1354,7 @@ impl<'de> Deserialize<'de> for MeshConfig {
         let raw = RawMeshConfig::deserialize(deserializer)?;
         Ok(Self {
             version: raw.version,
+            source_directory: None,
             gpu: raw.gpu,
             mesh_requirements: raw.mesh_requirements,
             owner_control: raw.owner_control,

@@ -1438,6 +1438,7 @@ fn legacy_proto_config_to_mesh(
         .map(|requirements| crate::plugin::mesh_requirements_config_from_runtime(&requirements))
         .unwrap_or_default();
     let mut config = MeshConfig {
+        source_directory: None,
         version: Some(snapshot.version),
         gpu: GpuConfig {
             host_ram_offload: None,

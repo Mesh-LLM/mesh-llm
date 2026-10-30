@@ -10,6 +10,15 @@ use tokio::sync::{Mutex, mpsc};
 
 use super::{PROTOCOL_VERSION, proto, runtime::PluginRuntime};
 
+pub(super) fn managed_models_from_env(
+    env: &BTreeMap<String, String>,
+) -> Result<Vec<ManagedModelConfig>> {
+    env.get(mesh_llm_plugin::models::CONFIG_ENV)
+        .map(|json| serde_json::from_str(json).context("invalid managed model configuration"))
+        .transpose()
+        .map(Option::unwrap_or_default)
+}
+
 /// Keep downloading and disk IO off the connection's control loop.
 pub(super) fn prepare_for_connection(
     request_id: u64,
@@ -191,6 +200,22 @@ fn bundle_root(path: &Path, relative: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn managed_configuration_rejects_malformed_data_instead_of_empty_inventory() {
+        assert!(
+            managed_models_from_env(&BTreeMap::new())
+                .unwrap()
+                .is_empty()
+        );
+        let env = BTreeMap::from([(mesh_llm_plugin::models::CONFIG_ENV.into(), "{broken".into())]);
+        assert!(
+            managed_models_from_env(&env)
+                .unwrap_err()
+                .to_string()
+                .contains("invalid managed model configuration")
+        );
+    }
 
     fn plan() -> AssetPlan {
         AssetPlan {

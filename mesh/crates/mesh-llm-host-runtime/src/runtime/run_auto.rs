@@ -363,7 +363,7 @@ pub(super) async fn run_runtime_cli(
 
     let startup_mesh_creation_state = resolve_startup_mesh_creation_state(&options, &config)?;
     let cli_has_explicit_models = cli_has_explicit_models(&options);
-    let has_config_models = !config.models.is_empty();
+    let has_config_models = config.models.iter().any(|model| model.provider.is_none());
     let has_startup_models = cli_has_explicit_models || has_config_models;
 
     // Acquire the per-instance runtime directory and flock. Plain --client still

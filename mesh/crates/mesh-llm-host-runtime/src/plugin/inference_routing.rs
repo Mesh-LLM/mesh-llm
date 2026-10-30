@@ -16,7 +16,10 @@ pub(crate) fn endpoint_workload_class(protocol: Option<&str>) -> ModelWorkloadCl
         Some("transcription_v1") => ModelWorkloadClass::SpeechRecognition,
         Some("image_text_similarity_v1") => ModelWorkloadClass::ImageTextSimilarity,
         Some("depth_estimation_v1") => ModelWorkloadClass::DepthEstimation,
-        Some("openai_compatible") | None => ModelWorkloadClass::CausalGeneration,
+        None => ModelWorkloadClass::CausalGeneration,
+        Some(protocol) if protocol.eq_ignore_ascii_case("openai_compatible") => {
+            ModelWorkloadClass::CausalGeneration
+        }
         _ => ModelWorkloadClass::Unknown,
     }
 }
@@ -174,6 +177,14 @@ mod tests {
     /// endpoint for.
     #[test]
     fn endpoint_workload_class_matches_dispatch_protocols() {
+        assert_eq!(
+            endpoint_workload_class(Some("OPENAI_COMPATIBLE")),
+            ModelWorkloadClass::CausalGeneration
+        );
+        assert!(protocol_serves_path(
+            Some("OpenAI_Compatible"),
+            "/v1/chat/completions"
+        ));
         assert_eq!(
             endpoint_workload_class(Some("document_ocr_v1")),
             ModelWorkloadClass::DocumentOcr

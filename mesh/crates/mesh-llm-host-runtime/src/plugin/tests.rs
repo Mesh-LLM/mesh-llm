@@ -659,3 +659,65 @@ provider = "endpoint-plugin"
         "got: {models}"
     );
 }
+
+#[test]
+fn managed_sources_preserve_relative_config_and_resolve_runtime_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[[plugin]]
+name = "onnx"
+command = "/opt/onnx"
+[[models]]
+model = "owner/model@pin"
+provider = "onnx"
+[models.source]
+local_dir = "weights"
+"#,
+    )
+    .unwrap();
+    let config = load_config(Some(&path)).unwrap();
+    assert_eq!(
+        config.models[0].source.local_dir.as_deref(),
+        Some(std::path::Path::new("weights"))
+    );
+    assert!(
+        config_to_toml(&config)
+            .unwrap()
+            .contains("local_dir = \"weights\"")
+    );
+    let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
+    let spec = resolved
+        .externals
+        .iter()
+        .find(|spec| spec.name == "onnx")
+        .unwrap();
+    let models: Vec<mesh_llm_plugin::models::ManagedModelConfig> =
+        serde_json::from_str(&spec.env[mesh_llm_plugin::models::CONFIG_ENV]).unwrap();
+    assert_eq!(models[0].source.local_dir, Some(dir.path().join("weights")));
+}
+
+#[test]
+fn unavailable_providers_fail_file_validation_and_snapshot_parsing() {
+    for provider in ["blobstore", "payments", "missing-provider"] {
+        let raw = format!("[[models]]\nmodel = 'owner/model@pin'\nprovider = '{provider}'\n");
+        assert!(
+            parse_config_toml(&raw)
+                .unwrap_err()
+                .to_string()
+                .contains("unavailable provider")
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, &raw).unwrap();
+        assert!(
+            validate_config_file(Some(&path))
+                .unwrap()
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("unavailable provider"))
+        );
+    }
+}

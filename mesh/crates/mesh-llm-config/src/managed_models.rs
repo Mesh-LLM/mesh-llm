@@ -64,6 +64,39 @@ pub fn default_variant() -> String {
     "fp32".into()
 }
 
+/// Validate provider references using the caller's local installed inventory.
+pub fn provider_diagnostics(
+    config: &crate::MeshConfig,
+    mut installed: impl FnMut(&str) -> bool,
+) -> Vec<crate::ConfigDiagnostic> {
+    config
+        .models
+        .iter()
+        .filter_map(|model| {
+            let provider = model.provider.as_deref()?;
+            let entry = config.plugins.iter().find(|entry| entry.name == provider);
+            let available = !matches!(provider, "blobstore" | "payments" | "wallet-lexe")
+                && entry.is_none_or(|entry| entry.enabled != Some(false))
+                && (entry.is_some_and(|entry| {
+                    entry
+                        .command
+                        .as_deref()
+                        .is_some_and(|command| !command.trim().is_empty())
+                }) || installed(provider));
+            (!available).then(|| {
+                crate::ConfigDiagnostic::error(
+                    crate::ConfigDiagnosticCode::InvalidValue,
+                    crate::ConfigDiagnosticSource::Validation,
+                    format!(
+                        "model '{}' selects unavailable provider '{}'",
+                        model.model, provider
+                    ),
+                )
+            })
+        })
+        .collect()
+}
+
 impl crate::ModelConfigEntry {
     /// Return this entry's plugin selection, without inheriting LLM defaults.
     pub fn managed_model_config(&self) -> Option<ManagedModelConfig> {
@@ -136,5 +169,45 @@ local_dir = "models/local"
             crate::parse_config_toml(&CONFIG.replace("idle_timeout_secs", "idle_timout_secs"))
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod provider_validation_tests {
+    use super::*;
+
+    #[test]
+    fn provider_inventory_respects_commands_disabled_entries_and_builtins() {
+        for (name, command, enabled, installed, valid) in [
+            ("onnx", Some("/opt/onnx"), true, false, true),
+            ("onnx", None, true, true, true),
+            ("onnx", None, true, false, false),
+            ("onnx", Some("/opt/onnx"), false, true, false),
+            ("blobstore", None, true, true, false),
+            ("payments", None, true, true, false),
+        ] {
+            let config = crate::MeshConfig {
+                models: vec![crate::ModelConfigEntry {
+                    model: "owner/model@pin".into(),
+                    provider: Some(name.into()),
+                    ..Default::default()
+                }],
+                plugins: vec![
+                    toml::from_str(&format!(
+                        "name = '{name}'\nenabled = {enabled}\n{}",
+                        command
+                            .map(|command| format!("command = '{command}'"))
+                            .unwrap_or_default()
+                    ))
+                    .unwrap(),
+                ],
+                ..Default::default()
+            };
+            assert_eq!(
+                provider_diagnostics(&config, |_| installed).is_empty(),
+                valid,
+                "{name} {command:?} {enabled}"
+            );
+        }
     }
 }
