@@ -4,7 +4,7 @@
  *        does it accept a plain GGUF as a single-shard package, and what does
  *        planning cost?
  *
- * Usage: skippy_api_planner_probe <model.gguf> [layer_count]
+ * Usage: skippy_api_planner_probe <model.gguf> [layer_count] [start] [end]
  *
  * The tensor inventory is read straight from the GGUF header; nothing here
  * uses llama to parse it, so a shape bug shows up as a planner rejection
@@ -58,7 +58,7 @@ int main(
     char**
         argv) { // NOLINT(readability-function-cognitive-complexity,bugprone-exception-escape): a probe main reads as a script; an unexpected throw terminating with the message is the diagnostic
     if (argc < 2) {
-        std::cerr << "usage: skippy_api_planner_probe <model.gguf> [layer_count]\n";
+        std::cerr << "usage: skippy_api_planner_probe <model.gguf> [layer_count] [start] [end]\n";
         return 2;
     }
     const std::string path = argv[1];

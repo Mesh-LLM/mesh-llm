@@ -553,6 +553,8 @@ skippy-ab case="" model="":
         echo "{{ case }}: filter '$filter' matched no benchmark; report is empty" >&2
         echo "  registered names ending in /real_time come from ->UseRealTime();" >&2
         echo "  manifest filters must prefix-match, never \$-anchor" >&2
+        echo "  benchmark log: $log; last output:" >&2
+        tail -20 "$log" >&2
         exit 1
     fi
     just automation-run automation skippy-benchmark-compare "$out" | sed "s/^/  /"
