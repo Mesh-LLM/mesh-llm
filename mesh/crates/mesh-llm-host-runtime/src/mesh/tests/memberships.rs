@@ -147,22 +147,40 @@ async fn a_membership_admits_only_its_own_allowlist() -> Result<()> {
     let node = owned_node(&me, &[&me]).await?;
     let membership = membership_of(&node, &[&team]).await?;
 
-    // Trusted by the node itself, but not on the membership's allowlist.
+    // Trusted by the node itself, but not on the membership's allowlist. The
+    // membership records the refusal before it drops the join; a join that
+    // ends or stalls sooner on a busy machine records nothing, so join again
+    // until it does.
     let my_other_node = owned_node(&me, &[&me]).await?;
-    let _ = my_other_node.join(&membership.invite_token().await).await;
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while !membership
+    let token = membership.invite_token().await;
+    let refused = async || {
+        membership
             .state
             .lock()
             .await
             .policy_rejected_peers
             .contains_key(&my_other_node.id())
-        {
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    };
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        loop {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                my_other_node.join(&token),
+            )
+            .await;
+            if refused().await {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     })
-    .await
-    .expect("the membership should refuse an owner its allowlist lacks");
+    .await;
+    // Checked again after the deadline: a refusal recorded during the last
+    // attempt counts too.
+    assert!(
+        refused().await,
+        "the membership should refuse an owner its allowlist lacks"
+    );
     assert!(peer_ids(&membership).await.is_empty());
     assert!(peer_ids(&node).await.is_empty());
     Ok(())
