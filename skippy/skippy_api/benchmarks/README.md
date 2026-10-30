@@ -16,6 +16,7 @@ google-benchmark report.
 | `Rerank` | `skippy_session_rerank` | `skippy::rerank` |
 | `BatchEmbed` | B separate `skippy_session_embed` calls | `embed_batch` — B sequences, one decode |
 | `RerankBatch` | B separate `skippy_session_rerank` calls | `rerank_batch` — one query, B documents, one decode |
+| `SamplingSuppress/N` | native-equivalent merge and per-call bitmap greedy scan | `apply_vocab_suppress` and `greedy_among_allowed` |
 | `stage_chain` | *row pending: the gate compares identical inputs; must compare the C-ABI chain's terminal frame against `StageChain::prefill`'s before timing* | `StageChain` prefill |
 
 Both sides link the *same* patched llama.cpp build, load the same GGUF, and run
@@ -24,6 +25,20 @@ layers offloaded, flash-attention AUTO). The harness embeds one 64-token input
 through both paths before timing and refuses to run if the vectors disagree by
 more than 1e-4. A configuration drift produces an error in the raw report and
 fails the comparison instead of producing a timing verdict.
+
+`SamplingSuppress` needs no model. The reference mirrors the native patch's
+merge and bitmap scan with `ignore_eog=false`. The previous find-per-candidate
+reference measured a different algorithm; its timing claim is withdrawn.
+
+Corrected local measurement on 2026-10-31 (arm64, Release, 32,000 logits,
+128 suppressed IDs, 32 caller biases, 15 randomly interleaved repetitions,
+0.05-second minimum per repetition): FFI/API minima were 94.17/14.71 us and
+medians 114.43/18.23 us. This supports the class-A `win` for that synthetic
+fixture. The wall-time variation was high (17%/30%); these numbers do not
+establish a production speedup. Both sides use the bitmap algorithm and admit
+identical outputs; the API is inlined while the native-equivalent reference
+crosses a function boundary, matching the native implementation's separate
+translation unit.
 
 ## Build
 

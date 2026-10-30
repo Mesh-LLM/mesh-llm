@@ -362,7 +362,7 @@ fn a_model_without_declared_suppress_tokens_reports_an_empty_set() {
         return;
     };
     let model = runtime.load_model(&path).expect("load embedder");
-    let suppressed: Vec<Token> = model.suppress_tokens();
+    let suppressed: Vec<Token> = model.suppress_tokens().expect("read declared suppress tokens");
     assert!(suppressed.is_empty(), "MiniLM declares no suppress tokens: {suppressed:?}");
 }
 

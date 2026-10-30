@@ -108,6 +108,26 @@ pub mod ffi {
         session: UniquePtr<Session>,
     }
 
+    /// An empty token set is successful; a failed allocation is not.
+    #[derive(Debug)]
+    struct SuppressTokensResult {
+        ok: bool,
+        error: String,
+        tokens: Vec<i32>,
+    }
+
+    #[repr(u8)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum TokenCapacityStatus {
+        Ready,
+        AllocationFailed,
+    }
+
+    extern "Rust" {
+        /// Unlike rust::Vec::reserve, this returns allocation failure in-band.
+        fn reserve_suppress_tokens(tokens: &mut Vec<i32>, capacity: usize) -> TokenCapacityStatus;
+    }
+
     #[derive(Debug, Clone, Copy)]
     struct WorkloadResult {
         status: RuntimeStatus,
@@ -271,7 +291,7 @@ pub mod ffi {
 
         /// The model's declared vocab suppress tokens (patch 0012); empty when
         /// the GGUF declares none.
-        fn suppress_tokens(self: &Bridge, model: &Model) -> Vec<i32>;
+        fn suppress_tokens(self: &Bridge, model: &Model) -> SuppressTokensResult;
 
         /// Replaces the contents of `tokens`.
         fn tokenize(self: Pin<&mut Bridge>, session: &Session, text: &str, tokens: &mut Vec<i32>) -> WorkloadStatus;
@@ -346,5 +366,34 @@ unsafe impl Send for ffi::Session {}
 
 pub use ffi::*;
 
+fn reserve_suppress_tokens(tokens: &mut Vec<i32>, capacity: usize) -> TokenCapacityStatus {
+    match tokens.try_reserve(capacity.saturating_sub(tokens.len())) {
+        Ok(()) => TokenCapacityStatus::Ready,
+        Err(_) => TokenCapacityStatus::AllocationFailed,
+    }
+}
+
 /// The cxx version these bindings were generated with; `UniquePtr` lives here.
 pub use cxx;
+
+#[cfg(test)]
+mod tests {
+    use super::{TokenCapacityStatus, reserve_suppress_tokens};
+
+    #[test]
+    fn suppress_capacity_failure_returns_without_aborting_or_losing_tokens() {
+        let mut tokens = vec![5, 2];
+        assert_eq!(reserve_suppress_tokens(&mut tokens, usize::MAX), TokenCapacityStatus::AllocationFailed);
+        assert_eq!(tokens, [5, 2]);
+    }
+
+    #[test]
+    fn suppress_capacity_admission_preserves_contents_and_allows_the_copy() {
+        let mut tokens = vec![5, 2];
+        assert_eq!(reserve_suppress_tokens(&mut tokens, 8), TokenCapacityStatus::Ready);
+        assert!(tokens.capacity() >= 8);
+        assert_eq!(tokens, [5, 2]);
+        tokens.extend_from_slice(&[9, 1, 8, 3, 4, 7]);
+        assert_eq!(tokens, [5, 2, 9, 1, 8, 3, 4, 7]);
+    }
+}
