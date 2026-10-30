@@ -1,5 +1,51 @@
 # MeshLLM CI topology
 
+## Standalone C++ API qualification
+
+The protected catalog admits `skippy/skippy_api/**` and
+`skippy/skippy-api-rs/**` as tooling owned by Quality. This admission must land
+as a catalog-only prerequisite, then dependent PRs must adopt the current
+protected catalogs; the byte-for-byte catalog comparison remains mandatory.
+
+The `skippy_cpp_api` job in the shared Quality slice validates the standalone
+C++ facade and its separate Rust workspace on the existing centrally selected
+Linux runner and pinned CPU image. Both PR and main invoke this same job. A
+dependency on the completed Quality contracts job preserves the existing peak
+worker count; native API validation starts after those contracts pass. A
+revision without either source tree records an explicit not-applicable result;
+partial trees, missing crate manifests and symlinked source roots fail admission.
+While the API is under review, the job runs for every selected Quality slice
+containing those sources, rather than relying on the root Cargo workspace to
+discover the nested workspace.
+
+The job compiles every optional API target, runs the full C++ suite and
+ASan/UBSan corpus replay, checks Rust formatting and warning-denying Clippy,
+and runs the full Rust test suite with mandatory embedding, rerank and causal
+models. The `skippy-cpp-api` model manifest pins MiniLM Q8, BGE reranker Q4_K_M
+and SmolLM2 Q8; shared model restoration verifies immutable revision, size and
+SHA-256 before use. The existing protected automation producer supplies model
+resolution; this job does not compile another xtask executable or publish a
+model cache. The all-targets build also supplies a real three-stage pipeline
+probe, which uses the pinned 30-layer SmolLM2 model and requires both boundary
+payloads and all 16 sampled tokens to match unsplit execution. A separate
+external-consumer smoke executes the built binary
+directly without Cargo's injected loader search paths.
+After Rust generates its bridge headers, the job builds and exercises the
+matching LLVM clang-tidy plugin and runs every configured C++/bridge lint;
+missing plugin tooling fails rather than silently reducing coverage.
+
+This adds no production dependency or ABI cutover. Candidate workflow syntax
+and finite source-admission contracts do not qualify the pinned Linux image's
+C++23/clang toolchain or model behavior. Activate the executor on protected
+main, update the four feature branches with the admitted catalogs and owning
+recipes, then retain successful PR-associated execution at their final heads.
+The current CPU image's reviewed build profile at runner-images
+`6c220ce1ed39d57c3fd67d60ee9554f83f0cf2e2` does not declare clang, clang-tidy,
+clang-format, FileCheck or Clang development packages. A qualified image
+containing these prerequisites must be built, admitted and pinned for this
+consumer before its first source-present run can establish coverage; the
+workflow must not install them ad hoc or skip their checks.
+
 The L2 planner action and all five lane summaries now invoke Rust `ci plan`
 and `ci validate-lane` through the narrow `ci-controller` executable that
 `prepare-ci-controller` builds. Other automation uses `prepare-automation`'s

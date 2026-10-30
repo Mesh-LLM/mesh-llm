@@ -1,5 +1,29 @@
 # MeshLLM CI inventory
 
+The standalone C++ facade paths `skippy/skippy_api/**` and
+`skippy/skippy-api-rs/**` have additive tooling ownership. Their catalog-only
+admission is a protected-main prerequisite before dependent branches adopt the
+updated catalog; no protected comparison is relaxed.
+
+`ci-quality-slice.yml` adds `skippy_cpp_api`, an ordinary centrally selected
+Linux CPU-image job shared by PR and main. It explicitly skips revisions with
+neither standalone source tree and rejects incomplete or symlinked sources.
+For admitted sources it builds every C++ target, runs complete CTest and
+ASan/UBSan/corpus checks, runs the nested Rust workspace's formatting, Clippy
+and full tests with all three pinned `skippy-cpp-api` fixtures. A real three-stage
+SmolLM2 probe checks both activation boundaries and 16 tokens against unsplit
+execution. The job also executes an external downstream binary without Cargo
+loader variables. It restores the
+existing protected Linux automation artifact for model resolution and publishes
+only one-day CTest diagnostics. No new producer, remote model-cache publisher,
+runner authority, required entrypoint or production ABI dependency is added.
+The CPU image binding is recorded as consumer role `skippy-cpp-api`.
+Hosted C++23/compiler and real-model qualification remains pending execution.
+The matching clang-tidy plugin build/fixtures and configured C++/bridge lints
+are required after Rust header generation; missing lint tools fail preflight.
+The new job raises the retained pre-checkout audit caller census from 27 to 28,
+using the same published audit pin and central runner/cache projection.
+
 L2 post-checkout planning, the five lane summaries, and Quality commit
 convention use the narrow `ci-controller` executable through
 `prepare-ci-controller`. Only GitHub-hosted Linux may run it; locked release
@@ -1262,8 +1286,8 @@ GitHub provenance again. See `ci/ci.md` for the explicit trust boundary and CLI.
 Current image references and historical null evidence remain unchanged.
 
 The `product-smoke` catalog role covers `smoke.yml`; accelerator and macOS paths
-retain their existing container opt-outs. The inventory has 9 images, 36 roles
-and 36 literal workflow image bindings.
+retain their existing container opt-outs. The inventory has 9 images, 37 roles
+and 37 literal workflow image bindings.
 
 ### Qualified lean UI consumers
 

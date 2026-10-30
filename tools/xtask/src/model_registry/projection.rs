@@ -138,7 +138,18 @@ pub(super) fn outputs(registry: &Entries, registry_sha256: &str) -> ModelResult<
         path: FAMILY_MANIFEST.to_owned(),
         text: render(registry, &rows)?,
     }];
-    for suite in SUITES {
+    // Historical registries used by retained contract fixtures predate the
+    // standalone facade. A registry admitting this suite must populate it;
+    // older registries retain exactly their established output set.
+    let cpp_api_suite = get(registry, "suites")
+        .and_then(Json::as_array)
+        .is_some_and(|suites| {
+            suites
+                .iter()
+                .any(|suite| suite.as_str() == Some("skippy-cpp-api"))
+        })
+        .then_some("skippy-cpp-api");
+    for suite in SUITES.into_iter().chain(cpp_api_suite) {
         let members = rows
             .iter()
             .filter(|row| in_suite(row, suite))
