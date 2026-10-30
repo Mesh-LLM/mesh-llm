@@ -45,30 +45,37 @@ completion_ms=""
 completion_attempts=0
 reply_chars=0
 
-now_ms() {
-  local t
-  t="$(date +%s%N)"
-  if [[ "$t" == *N* ]]; then
-    # macOS date has no %N; fall back to python.
-    python3 -c 'import time; print(int(time.time() * 1000))'
-  else
-    echo $((t / 1000000))
-  fi
+# seconds_to_ms "1.234567" -> 1234. curl reports %{time_total} in seconds;
+# this avoids float arithmetic and any interpreter dependency.
+seconds_to_ms() {
+  local t="${1/,/.}" whole frac
+  whole="${t%%.*}"
+  frac="${t#"$whole"}"
+  frac="${frac#.}000"
+  [[ "$whole" =~ ^[0-9]+$ ]] || whole=0
+  [[ "$frac" =~ ^[0-9]+$ ]] || frac=000
+  echo $((10#$whole * 1000 + 10#${frac:0:3}))
 }
 
 # http GET|POST path [body] -> prints HTTP code ("000" on transport failure),
-# response body saved to $workdir/body, curl stderr to $workdir/curl.err
+# response body saved to $workdir/body, curl stderr to $workdir/curl.err,
+# request wall time in milliseconds (curl's time_total) in $workdir/ms.
 http() {
-  local method="$1" path="$2" body="${3:-}" code
-  local -a args=(-sS -m "$timeout_secs" -o "$workdir/body" -w '%{http_code}' -X "$method" "$base_url$path")
+  local method="$1" path="$2" body="${3:-}" out code secs rc=0
+  local -a args=(-sS -m "$timeout_secs" -o "$workdir/body" -w '%{http_code} %{time_total}' -X "$method" "$base_url$path")
   if [[ -n "$body" ]]; then
     args+=(-H 'content-type: application/json' --data "$body")
   fi
   : >"$workdir/body"
-  if ! code="$(curl "${args[@]}" 2>"$workdir/curl.err")"; then
+  out="$(curl "${args[@]}" 2>"$workdir/curl.err")" || rc=$?
+  code="${out%% *}"
+  secs="${out#* }"
+  [[ "$secs" == "$out" ]] && secs=0
+  seconds_to_ms "$secs" >"$workdir/ms"
+  if [[ $rc -ne 0 || -z "$code" ]]; then
     code="000"
   fi
-  echo "${code:-000}"
+  echo "$code"
 }
 
 fail() {
@@ -106,10 +113,8 @@ if [[ "$state" == "ok" ]]; then
   }')"
   for ((i = 1; i <= attempts; i++)); do
     completion_attempts=$i
-    start_ms="$(now_ms)"
     completion_code="$(http POST /v1/chat/completions "$request")"
-    end_ms="$(now_ms)"
-    completion_ms=$((end_ms - start_ms))
+    completion_ms="$(cat "$workdir/ms")"
     if [[ "$completion_code" == "200" ]]; then
       # Accept content or reasoning_content: thinking models can spend the
       # whole budget reasoning. Either proves tokens came back from a worker.
