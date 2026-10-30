@@ -816,7 +816,11 @@ mod pid_identity_tests {
         std::fs::copy(std::env::current_exe().unwrap(), &executable).expect("copy the test binary");
         let mut command = std::process::Command::new(&executable);
         command
-            .args(["--exact", "pid_identity_tests::sleeper", "--nocapture"])
+            .args([
+                "--exact",
+                "process::pid_identity_tests::sleeper",
+                "--nocapture",
+            ])
             .env(SLEEPER_ENV, "1")
             .stdout(std::process::Stdio::null());
         // A process another test forks while the copy is being written holds
