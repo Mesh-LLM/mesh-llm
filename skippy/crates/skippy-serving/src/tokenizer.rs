@@ -567,18 +567,20 @@ mod tests {
 
         async fn chat_completion(
             &self,
-            _request: skippy_inference_api::ChatCompletionRequest,
-        ) -> skippy_inference_api::InferenceResult<skippy_inference_api::ChatCompletionResponse>
-        {
+            _request: skippy_inference_api::generation::GenerationRequest,
+        ) -> skippy_inference_api::InferenceResult<
+            skippy_inference_api::generation::GenerationResponse,
+        > {
             unreachable!("tokenizer requests must not enter the generic OpenAI backend")
         }
 
         async fn chat_completion_stream(
             &self,
-            _request: skippy_inference_api::ChatCompletionRequest,
+            _request: skippy_inference_api::generation::GenerationRequest,
             _context: skippy_inference_api::InferenceRequestContext,
-        ) -> skippy_inference_api::InferenceResult<skippy_inference_api::ChatCompletionStream>
-        {
+        ) -> skippy_inference_api::InferenceResult<
+            skippy_inference_api::generation::GenerationEventStream,
+        > {
             unreachable!("tokenizer requests must not enter the generic OpenAI backend")
         }
     }

@@ -1,3 +1,4 @@
+use skippy_inference_api::generation::{GenerationEventStream, GenerationResponse};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -10,11 +11,11 @@ use futures_util::stream;
 use http_body_util::BodyExt;
 use serde_json::json;
 use skippy_inference_api::{
-    CancellationToken, ChatCompletionResponse, ChatCompletionStream, CompletionResponse,
-    CompletionStream, InferenceBackend, InferenceBackendOperation, InferenceFailure,
-    InferenceFrontendConfig, InferenceFrontendRoute, InferenceLifecycleEvent,
-    InferenceLifecycleObserver, InferenceRejection, InferenceRequestContext, InferenceResult,
-    InferenceTerminalResult, InferenceUsage, ModelObject, Usage, router_for_with_config,
+    CancellationToken, CompletionResponse, CompletionStream, InferenceBackend,
+    InferenceBackendOperation, InferenceFailure, InferenceFrontendConfig, InferenceFrontendRoute,
+    InferenceLifecycleEvent, InferenceLifecycleObserver, InferenceRejection,
+    InferenceRequestContext, InferenceResult, InferenceTerminalResult, InferenceUsage, ModelObject,
+    Usage, router_for_with_config,
 };
 use tower::ServiceExt;
 
@@ -72,14 +73,14 @@ impl InferenceBackend for TestBackend {
 
     async fn chat_completion(
         &self,
-        request: skippy_inference_api::ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: skippy_inference_api::generation::GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         if request.model == "backend-error" {
             return Err(skippy_inference_api::InferenceError::backend(
                 "backend failed",
             ));
         }
-        Ok(ChatCompletionResponse::new(
+        Ok(GenerationResponse::new(
             request.model,
             "ok",
             Usage::new(2, 1).with_cached_tokens(1),
@@ -88,9 +89,9 @@ impl InferenceBackend for TestBackend {
 
     async fn chat_completion_stream(
         &self,
-        request: skippy_inference_api::ChatCompletionRequest,
+        request: skippy_inference_api::generation::GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         self.stream_request_ids
             .lock()
             .expect("test request-id lock poisoned")
@@ -122,11 +123,11 @@ impl InferenceBackend for TestBackend {
         }
 
         Ok(Box::pin(stream::iter(vec![
-            Ok(skippy_inference_api::ChatCompletionChunk::usage(
+            Ok(skippy_inference_api::generation::GenerationEvent::usage(
                 request.model.clone(),
                 Usage::new(8, 2).with_cached_tokens(5),
             )),
-            Ok(skippy_inference_api::ChatCompletionChunk::done(
+            Ok(skippy_inference_api::generation::GenerationEvent::done(
                 request.model,
             )),
         ])))

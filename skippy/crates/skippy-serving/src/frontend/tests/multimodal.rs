@@ -1,4 +1,5 @@
 use super::*;
+use skippy_inference_api::chat::ChatCompletionRequest;
 
 const MM_MODEL_ENV: &str = "SKIPPY_MM_MODEL";
 const MM_PROJECTOR_ENV: &str = "SKIPPY_MM_PROJECTOR";
@@ -236,14 +237,14 @@ fn multimodal_stage_config(
     config
 }
 
-fn multimodal_chat_request(fixture: &MultimodalSmokeFixture) -> Result<ChatCompletionRequest> {
+fn multimodal_chat_request(fixture: &MultimodalSmokeFixture) -> Result<GenerationRequest> {
     multimodal_chat_request_with_max_tokens(fixture, fixture.max_tokens)
 }
 
 fn multimodal_chat_request_with_max_tokens(
     fixture: &MultimodalSmokeFixture,
     max_tokens: u32,
-) -> Result<ChatCompletionRequest> {
+) -> Result<GenerationRequest> {
     let image = fs::read(&fixture.image_path)
         .with_context(|| format!("read smoke image {}", fixture.image_path.display()))?;
     let mime_type = match fixture
@@ -259,7 +260,7 @@ fn multimodal_chat_request_with_max_tokens(
         _ => "image/png",
     };
     let encoded = base64::engine::general_purpose::STANDARD.encode(image);
-    serde_json::from_value(json!({
+    serde_json::from_value::<ChatCompletionRequest>(json!({
             "model": "mm-smoke",
             "messages": [{
                 "role": "user",
@@ -274,11 +275,12 @@ fn multimodal_chat_request_with_max_tokens(
             "reasoning_format": "auto",
             "chat_template_kwargs": {"reasoning_strength": "none"}
         }))
+        .map(Into::into)
         .context("build multimodal smoke request")
 }
 
-fn malformed_multimodal_chat_request() -> ChatCompletionRequest {
-    serde_json::from_value(json!({
+fn malformed_multimodal_chat_request() -> GenerationRequest {
+    serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "mm-smoke",
         "messages": [{
             "role": "user",
@@ -293,9 +295,10 @@ fn malformed_multimodal_chat_request() -> ChatCompletionRequest {
         "temperature": 0.0
     }))
     .expect("malformed multimodal request should deserialize")
+    .into()
 }
 
-fn validate_image_response(response: &ChatCompletionResponse) -> Result<()> {
+fn validate_image_response(response: &GenerationResponse) -> Result<()> {
     let choice = response
         .choices
         .first()
@@ -353,7 +356,7 @@ fn image_response_validation_distinguishes_truncation_from_completion() {
         (Some("A red square"), None, "tool_calls", 16, false),
     ] {
         let finish_reason = serde_json::from_value(json!(finish)).expect("finish reason");
-        let mut response = ChatCompletionResponse::new_with_reason(
+        let mut response = GenerationResponse::new_with_reason(
             "fixture",
             "",
             Usage::new(10, tokens),
@@ -762,7 +765,7 @@ fn message_content_to_generation_text_rejects_remote_media_urls() {
 
 #[test]
 fn rescued_audio_media_becomes_text_only_before_prompt_media_extraction() {
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "auto",
         "messages": [{
             "role": "user",
@@ -776,7 +779,8 @@ fn rescued_audio_media_becomes_text_only_before_prompt_media_extraction() {
         }],
         "mesh_hooks": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let media = skippy_inference_api::first_chat_media(&request.messages).expect("media");
 
     apply_chat_hook_outcome(
@@ -797,7 +801,7 @@ fn rescued_audio_media_becomes_text_only_before_prompt_media_extraction() {
 
 #[test]
 fn rescued_media_leaves_unhandled_second_media_in_prompt_media() {
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "auto",
         "messages": [{
             "role": "user",
@@ -814,7 +818,8 @@ fn rescued_media_leaves_unhandled_second_media_in_prompt_media() {
         }],
         "mesh_hooks": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let media = skippy_inference_api::first_chat_media(&request.messages).expect("media");
 
     apply_chat_hook_outcome(

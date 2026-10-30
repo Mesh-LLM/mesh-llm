@@ -27,10 +27,10 @@ use crate::telemetry::Telemetry;
 use crate::telemetry::now_unix_nanos;
 use serde_json::Value;
 use serde_json::json;
-use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::FinishReason;
 use skippy_inference_api::InferenceHookPolicy;
 use skippy_inference_api::Usage;
+use skippy_inference_api::generation::GenerationRequest;
 use skippy_protocol::StageConfig;
 use skippy_protocol::binary::StageReply;
 use skippy_protocol::binary::StageReplyStats;
@@ -161,7 +161,7 @@ pub(in crate::frontend) struct LocalGeneration<'a> {
     pub(in crate::frontend) chat_sampling_metadata: Option<&'a str>,
     pub(in crate::frontend) speculative: &'a SpeculativeDecodeConfig,
     pub(in crate::frontend) native_mtp_enabled: bool,
-    pub(in crate::frontend) hook_request: Option<ChatCompletionRequest>,
+    pub(in crate::frontend) hook_request: Option<GenerationRequest>,
     pub(in crate::frontend) hook_runtime: Option<tokio::runtime::Handle>,
     pub(in crate::frontend) cancellation: Option<&'a skippy_inference_api::CancellationToken>,
     pub(in crate::frontend) ids: &'a InferenceGenerationIds,
@@ -186,7 +186,7 @@ pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
     pub(in crate::frontend) max_tokens: u32,
     pub(in crate::frontend) sampling: &'a SamplingConfig,
     pub(in crate::frontend) chat_sampling_metadata: Option<&'a str>,
-    pub(in crate::frontend) hook_request: Option<ChatCompletionRequest>,
+    pub(in crate::frontend) hook_request: Option<GenerationRequest>,
     pub(in crate::frontend) hook_runtime: Option<tokio::runtime::Handle>,
     pub(in crate::frontend) cancellation: Option<&'a skippy_inference_api::CancellationToken>,
     pub(in crate::frontend) ids: &'a InferenceGenerationIds,

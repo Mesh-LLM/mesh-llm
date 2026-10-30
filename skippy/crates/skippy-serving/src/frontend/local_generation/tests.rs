@@ -25,7 +25,7 @@ use crate::kv_integration::KvStageIntegration;
 use crate::runtime_state::{RuntimeState, load_runtime};
 use crate::telemetry::{Telemetry, TelemetryLevel};
 use anyhow::{Result, bail};
-use skippy_inference_api::{ChatCompletionRequest, InferenceBackend};
+use skippy_inference_api::{InferenceBackend, generation::GenerationRequest};
 use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode};
 use skippy_runtime::SamplingConfig;
 
@@ -506,7 +506,9 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
         .enable_all()
         .build()?;
     runtime.block_on(async {
-        let first_request: ChatCompletionRequest = serde_json::from_value(serde_json::json!({
+        let first_request: GenerationRequest = serde_json::from_value::<
+            skippy_inference_api::chat::ChatCompletionRequest,
+        >(serde_json::json!({
             "model": "recurrent-chat-cache-test",
             "messages": [
                 {"role": "system", "content": "You are a deterministic cache test."},
@@ -516,7 +518,8 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
             "temperature": 0,
             "reasoning_effort": "none",
             "prompt_cache_key": "recurrent-chat-cache"
-        }))?;
+        }))?
+        .into();
         let first_prompt = backend.prepare_chat_prompt(
             &first_request,
             crate::frontend::request::chat_template_options(
@@ -628,14 +631,17 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
             {"role": "assistant", "content": first_content},
             {"role": "user", "content": "Now reply with a short plain answer: CACHE_TAIL"}
         ]);
-        let cached_request: ChatCompletionRequest = serde_json::from_value(serde_json::json!({
+        let cached_request: GenerationRequest = serde_json::from_value::<
+            skippy_inference_api::chat::ChatCompletionRequest,
+        >(serde_json::json!({
             "model": "recurrent-chat-cache-test",
             "messages": second_messages.clone(),
             "max_tokens": 4,
             "temperature": 0,
             "reasoning_effort": "none",
             "prompt_cache_key": "recurrent-chat-cache"
-        }))?;
+        }))?
+        .into();
         let second_prompt = backend.prepare_chat_prompt(
             &cached_request,
             crate::frontend::request::chat_template_options(
@@ -683,14 +689,17 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
         let lookup_candidates = capture_trace::drain_lookup_candidates();
         let divergence = first_identity_divergence(&stored_identities, &lookup_candidates);
 
-        let uncached_request: ChatCompletionRequest = serde_json::from_value(serde_json::json!({
+        let uncached_request: GenerationRequest = serde_json::from_value::<
+            skippy_inference_api::chat::ChatCompletionRequest,
+        >(serde_json::json!({
             "model": "recurrent-chat-cache-test",
             "messages": second_messages,
             "max_tokens": 4,
             "temperature": 0,
             "reasoning_effort": "none",
             "prompt_cache_key": "recurrent-chat-cache-control"
-        }))?;
+        }))?
+        .into();
         let uncached_response = backend.chat_completion(uncached_request).await?;
         let uncached_content = uncached_response
             .choices

@@ -5,12 +5,12 @@ impl StageOpenAiBackend {
     #[cfg(test)]
     pub(super) async fn chat_completion_with_hooks<F, Fut>(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         dispatch: F,
-    ) -> InferenceResult<ChatCompletionResponse>
+    ) -> InferenceResult<GenerationResponse>
     where
-        F: FnOnce(ChatCompletionRequest) -> Fut,
-        Fut: std::future::Future<Output = InferenceResult<ChatCompletionResponse>>,
+        F: FnOnce(GenerationRequest) -> Fut,
+        Fut: std::future::Future<Output = InferenceResult<GenerationResponse>>,
     {
         self.chat_completion_with_prepared_hooks_for_exchange(
             request,
@@ -25,13 +25,13 @@ impl StageOpenAiBackend {
 
     pub(super) async fn chat_completion_with_prepared_hooks_for_exchange<F, Fut>(
         &self,
-        mut request: ChatCompletionRequest,
+        mut request: GenerationRequest,
         observation_id: Option<String>,
         dispatch: F,
-    ) -> InferenceResult<ChatCompletionResponse>
+    ) -> InferenceResult<GenerationResponse>
     where
-        F: FnOnce(ChatCompletionRequest, PreparedExchangeAdmission) -> Fut,
-        Fut: std::future::Future<Output = InferenceResult<ChatCompletionResponse>>,
+        F: FnOnce(GenerationRequest, PreparedExchangeAdmission) -> Fut,
+        Fut: std::future::Future<Output = InferenceResult<GenerationResponse>>,
     {
         let hooks = self.hook_policy.clone().filter(|hooks| {
             chat_skippy_hooks_enabled(&request) || hooks.requires_exchange_lifecycle()
@@ -65,7 +65,7 @@ impl StageOpenAiBackend {
             let effective = if hooks.observes_dispatched_request() {
                 request.clone()
             } else {
-                ChatCompletionRequest::default()
+                GenerationRequest::default()
             };
             if let Some(guard) = guard.as_mut() {
                 guard.set_request(effective.clone());
@@ -134,13 +134,13 @@ impl StageOpenAiBackend {
     #[cfg(test)]
     pub(super) async fn chat_completion_stream_with_hooks<F, Fut>(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         context: &InferenceRequestContext,
         dispatch: F,
-    ) -> InferenceResult<ChatCompletionStream>
+    ) -> InferenceResult<GenerationEventStream>
     where
-        F: FnOnce(ChatCompletionRequest) -> Fut,
-        Fut: std::future::Future<Output = InferenceResult<ChatCompletionStream>>,
+        F: FnOnce(GenerationRequest) -> Fut,
+        Fut: std::future::Future<Output = InferenceResult<GenerationEventStream>>,
     {
         self.chat_completion_stream_with_prepared_hooks(
             request,
@@ -155,13 +155,13 @@ impl StageOpenAiBackend {
 
     pub(super) async fn chat_completion_stream_with_prepared_hooks<F, Fut>(
         &self,
-        mut request: ChatCompletionRequest,
+        mut request: GenerationRequest,
         context: &InferenceRequestContext,
         dispatch: F,
-    ) -> InferenceResult<ChatCompletionStream>
+    ) -> InferenceResult<GenerationEventStream>
     where
-        F: FnOnce(ChatCompletionRequest, PreparedExchangeAdmission) -> Fut,
-        Fut: std::future::Future<Output = InferenceResult<ChatCompletionStream>>,
+        F: FnOnce(GenerationRequest, PreparedExchangeAdmission) -> Fut,
+        Fut: std::future::Future<Output = InferenceResult<GenerationEventStream>>,
     {
         let hooks = self.hook_policy.clone().filter(|hooks| {
             chat_skippy_hooks_enabled(&request) || hooks.requires_exchange_lifecycle()

@@ -1,8 +1,8 @@
 use crate::frontend::NativeMtpStats;
 use crate::frontend::util::now_unix_millis;
 use crate::frontend::util::stable_wire_id;
-use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::CompletionRequest;
+use skippy_inference_api::generation::GenerationRequest;
 use skippy_protocol::binary::StageReplyStats;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
@@ -199,7 +199,7 @@ pub(in crate::frontend) struct InferenceCacheHints {
 }
 
 impl InferenceCacheHints {
-    pub(in crate::frontend) fn from_chat_request(request: &ChatCompletionRequest) -> Self {
+    pub(in crate::frontend) fn from_chat_request(request: &GenerationRequest) -> Self {
         Self {
             prompt_cache_key: request
                 .prompt_cache_key

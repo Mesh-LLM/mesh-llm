@@ -13,13 +13,13 @@ use crate::frontend::util::openai_backend_error;
 use crate::kv_integration::StagePrefixCachePayload;
 use crate::runtime_state::panic_recovery::lock_runtime;
 use serde_json::Value;
-use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::GenerationHookSignals;
 use skippy_inference_api::InferenceError;
 use skippy_inference_api::InferenceResult;
 use skippy_inference_api::PrefillHookSignals;
 use skippy_inference_api::apply_chat_hook_outcome;
 use skippy_inference_api::chat_skippy_hooks_enabled;
+use skippy_inference_api::generation::GenerationRequest;
 use skippy_runtime::ChatTemplateJsonOptions;
 use skippy_runtime::ChatTemplateOptions;
 use skippy_runtime::GenerationSignalWindow;
@@ -47,7 +47,7 @@ impl StageOpenAiBackend {
     /// mirrors the `spawn_blocking` already used for prompt tokenization.
     pub(super) async fn prepare_chat_prompt_offloaded(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         options: ChatTemplateOptions,
     ) -> InferenceResult<PreparedGenerationPrompt> {
         let backend = self.clone();
@@ -61,7 +61,7 @@ impl StageOpenAiBackend {
 
     pub(super) fn prepare_chat_prompt(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         options: ChatTemplateOptions,
     ) -> InferenceResult<PreparedGenerationPrompt> {
         let marker = {
@@ -137,10 +137,10 @@ impl StageOpenAiBackend {
     /// false, `tools`/`tool_choice` are omitted (used by the emulation path).
     fn render_chat_prompt(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         options: &ChatTemplateOptions,
         marker: &str,
-        messages: Option<&[skippy_inference_api::ChatMessage]>,
+        messages: Option<&[skippy_inference_api::generation::GenerationMessage]>,
         include_tools: bool,
     ) -> InferenceResult<RenderedChatPrompt> {
         let source_messages = messages.unwrap_or(&request.messages);
@@ -209,7 +209,7 @@ impl StageOpenAiBackend {
     pub(super) fn parse_chat_output(
         &self,
         text: &str,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         metadata: Option<&str>,
         is_partial: bool,
     ) -> InferenceResult<Option<ParsedChatMessage>> {
@@ -236,7 +236,7 @@ impl StageOpenAiBackend {
         &self,
         model: &skippy_runtime::StageModelReader,
         text: &str,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         metadata: &str,
         is_partial: bool,
     ) -> InferenceResult<Option<ParsedChatMessage>> {
@@ -300,7 +300,7 @@ impl StageOpenAiBackend {
     pub(super) fn maybe_run_generation_hooks(
         &self,
         session_id: &str,
-        hook_request: &mut Option<ChatCompletionRequest>,
+        hook_request: &mut Option<GenerationRequest>,
         hook_runtime: Option<&tokio::runtime::Handle>,
         decoded_tokens: usize,
         post_prefill_hook_checked: &mut bool,
@@ -365,7 +365,7 @@ impl StageOpenAiBackend {
 
     pub(super) fn generation_hooks_active(
         &self,
-        hook_request: &Option<ChatCompletionRequest>,
+        hook_request: &Option<GenerationRequest>,
         hook_runtime: Option<&tokio::runtime::Handle>,
     ) -> bool {
         self.hook_policy.is_some()
@@ -387,7 +387,7 @@ impl StageOpenAiBackend {
 /// streaming it needs a partial-JSON scanner, not a change to this gate.
 pub(super) fn parse_emulated_chat_output(
     text: &str,
-    request: &ChatCompletionRequest,
+    request: &GenerationRequest,
     is_partial: bool,
 ) -> Option<ParsedChatMessage> {
     let allowed = request_allowed_tool_names(request);

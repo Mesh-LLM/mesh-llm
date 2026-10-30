@@ -1,10 +1,13 @@
+use skippy_inference_api::chat::ChatCompletionRequest;
+use skippy_inference_api::generation::{
+    GenerationEventStream, GenerationRequest, GenerationResponse,
+};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use futures_util::stream;
 use serde_json::json;
 use skippy_inference_api::{
-    ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream,
     CompactingInferenceBackend, CompactionConfig, GuardedInferenceBackend, GuardrailPolicy,
     HookedInferenceBackend, InferenceBackend, InferenceHookPolicy, InferenceRequestContext,
     InferenceResult, ModelObject, Usage, parse_request_id,
@@ -23,9 +26,9 @@ impl InferenceBackend for ContextCaptureBackend {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
-        Ok(ChatCompletionResponse::new(
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
+        Ok(GenerationResponse::new(
             request.model,
             "ok",
             Usage::new(1, 1),
@@ -34,18 +37,18 @@ impl InferenceBackend for ContextCaptureBackend {
 
     async fn chat_completion_with_context(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionResponse> {
+    ) -> InferenceResult<GenerationResponse> {
         self.contexts.lock().expect("context lock").push(context);
         self.chat_completion(request).await
     }
 
     async fn chat_completion_stream(
         &self,
-        _request: ChatCompletionRequest,
+        _request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         self.contexts.lock().expect("context lock").push(context);
         Ok(Box::pin(stream::empty()))
     }
@@ -68,11 +71,12 @@ async fn backend_wrapper_stack_preserves_authoritative_request_context() {
         GuardrailPolicy::default(),
     ));
     let hooked = HookedInferenceBackend::new(guarded, Arc::new(NoopHook));
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "context-model",
         "messages": [{"role": "user", "content": "private prompt"}]
     }))
-    .expect("request fixture");
+    .expect("request fixture")
+    .into();
     let unary_id = parse_request_id("cc752a7e-40ce-4708-be8c-ad2ca885d28a").expect("request ID");
     let stream_id = parse_request_id("f876529e-9800-445e-8f67-46326af341e6").expect("request ID");
 

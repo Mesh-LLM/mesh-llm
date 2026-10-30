@@ -1,3 +1,4 @@
+use crate::chat::ChatCompletionRequest;
 use std::sync::{Arc, Mutex};
 
 use futures_util::StreamExt;
@@ -7,7 +8,7 @@ use super::*;
 use crate::Usage;
 
 struct RecordingBackend {
-    seen: Mutex<Option<ChatCompletionRequest>>,
+    seen: Mutex<Option<GenerationRequest>>,
 }
 
 #[async_trait]
@@ -18,10 +19,10 @@ impl InferenceBackend for RecordingBackend {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         *self.seen.lock().unwrap() = Some(request.clone());
-        Ok(ChatCompletionResponse::new(
+        Ok(GenerationResponse::new(
             request.model,
             "ok",
             Usage::new(0, 0),
@@ -30,9 +31,9 @@ impl InferenceBackend for RecordingBackend {
 
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         *self.seen.lock().unwrap() = Some(request);
         Ok(Box::pin(futures_util::stream::empty()))
     }
@@ -44,7 +45,7 @@ struct InjectingHook;
 impl InferenceHookPolicy for InjectingHook {
     async fn before_chat_completion(
         &self,
-        _request: &mut ChatCompletionRequest,
+        _request: &mut GenerationRequest,
     ) -> InferenceResult<ChatHookOutcome> {
         Ok(ChatHookOutcome::injected("[hint]\n"))
     }
@@ -60,16 +61,16 @@ impl InferenceBackend for FailingBackend {
 
     async fn chat_completion(
         &self,
-        _request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        _request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         Err(crate::errors::InferenceError::backend("upstream exploded"))
     }
 
     async fn chat_completion_stream(
         &self,
-        _request: ChatCompletionRequest,
+        _request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         Err(crate::errors::InferenceError::backend("upstream exploded"))
     }
 }
@@ -86,7 +87,7 @@ enum TerminalRecord {
 #[derive(Default)]
 struct RecordingPolicy {
     deny: bool,
-    effective: Mutex<Vec<(ChatCompletionRequest, ChatExchangeRoute)>>,
+    effective: Mutex<Vec<(GenerationRequest, ChatExchangeRoute)>>,
     terminals: Mutex<Vec<TerminalRecord>>,
 }
 
@@ -94,7 +95,7 @@ struct RecordingPolicy {
 impl InferenceHookPolicy for RecordingPolicy {
     async fn before_chat_completion(
         &self,
-        _request: &mut ChatCompletionRequest,
+        _request: &mut GenerationRequest,
     ) -> InferenceResult<ChatHookOutcome> {
         if self.deny {
             return Err(crate::errors::InferenceError::invalid_request(
@@ -106,7 +107,7 @@ impl InferenceHookPolicy for RecordingPolicy {
 
     async fn on_effective_chat_completion(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         route: &ChatExchangeRoute,
     ) {
         self.effective
@@ -117,7 +118,7 @@ impl InferenceHookPolicy for RecordingPolicy {
 
     async fn on_chat_completion_terminal(
         &self,
-        _request: &ChatCompletionRequest,
+        _request: &GenerationRequest,
         _exchange_id: &str,
         outcome: &ChatCompletionOutcome<'_>,
     ) {
@@ -146,7 +147,7 @@ struct MediaRescueHook;
 impl InferenceHookPolicy for MediaRescueHook {
     async fn before_chat_completion(
         &self,
-        request: &mut ChatCompletionRequest,
+        request: &mut GenerationRequest,
     ) -> InferenceResult<ChatHookOutcome> {
         let media = first_chat_media(&request.messages).expect("media");
         Ok(ChatHookOutcome::injected_with_consumed_media(
@@ -158,12 +159,13 @@ impl InferenceHookPolicy for MediaRescueHook {
 
 #[test]
 fn chat_skippy_hooks_enabled_reads_canonical_and_legacy_flags() {
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "auto",
         "messages": [{"role": "user", "content": "hello"}],
         "mesh_hooks": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     assert!(chat_skippy_hooks_enabled(&request));
 
@@ -186,7 +188,7 @@ fn chat_skippy_hooks_enabled_reads_canonical_and_legacy_flags() {
 
 #[test]
 fn first_chat_media_extracts_image_url_and_user_text() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "auto",
         "messages": [{
             "role": "user",
@@ -196,7 +198,8 @@ fn first_chat_media_extracts_image_url_and_user_text() {
             ]
         }]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let media = first_chat_media(&request.messages).expect("media");
 
@@ -209,7 +212,7 @@ fn first_chat_media_extracts_image_url_and_user_text() {
 
 #[test]
 fn first_chat_media_extracts_audio_url_and_user_text() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "auto",
         "messages": [{
             "role": "user",
@@ -219,7 +222,8 @@ fn first_chat_media_extracts_audio_url_and_user_text() {
             ]
         }]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let media = first_chat_media(&request.messages).expect("media");
 
@@ -232,7 +236,7 @@ fn first_chat_media_extracts_audio_url_and_user_text() {
 
 #[test]
 fn first_chat_media_extracts_inline_input_audio_data() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "auto",
         "messages": [{
             "role": "user",
@@ -245,7 +249,8 @@ fn first_chat_media_extracts_inline_input_audio_data() {
             ]
         }]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let media = first_chat_media(&request.messages).expect("media");
 
@@ -258,7 +263,7 @@ fn first_chat_media_extracts_inline_input_audio_data() {
 
 #[test]
 fn image_only_message_with_mesh_hooks_is_valid_before_hook_injection() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "auto",
         "messages": [{
             "role": "user",
@@ -268,14 +273,15 @@ fn image_only_message_with_mesh_hooks_is_valid_before_hook_injection() {
         }],
         "mesh_hooks": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     request.validate().unwrap();
 }
 
 #[test]
 fn image_only_message_without_mesh_hooks_is_valid_for_native_multimodal_backend() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "auto",
         "messages": [{
             "role": "user",
@@ -284,18 +290,20 @@ fn image_only_message_without_mesh_hooks_is_valid_for_native_multimodal_backend(
             ]
         }]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     request.validate().unwrap();
 }
 
 #[test]
 fn inject_text_into_chat_messages_prepends_last_user_text() {
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "auto",
         "messages": [{"role": "user", "content": "original"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     inject_text_into_chat_messages(&mut request.messages, "[hint]\n");
 
@@ -311,12 +319,13 @@ async fn hooked_backend_applies_injection_once_before_forwarding() {
         seen: Mutex::new(None),
     });
     let hooked = HookedInferenceBackend::new(backend.clone(), Arc::new(InjectingHook));
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "auto",
         "messages": [{"role": "user", "content": "original"}],
         "mesh_hooks": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     hooked.chat_completion(request).await.unwrap();
 
@@ -333,7 +342,7 @@ async fn hooked_backend_consumes_rescued_audio_media_before_forwarding() {
         seen: Mutex::new(None),
     });
     let hooked = HookedInferenceBackend::new(backend.clone(), Arc::new(MediaRescueHook));
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "auto",
         "messages": [{
             "role": "user",
@@ -347,7 +356,8 @@ async fn hooked_backend_consumes_rescued_audio_media_before_forwarding() {
         }],
         "mesh_hooks": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     hooked.chat_completion(request).await.unwrap();
 
@@ -372,7 +382,7 @@ async fn hooked_backend_consumes_rescued_audio_media_before_forwarding() {
 
 #[test]
 fn consumed_media_action_removes_only_matching_media_part() {
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "auto",
         "messages": [{
             "role": "user",
@@ -384,7 +394,8 @@ fn consumed_media_action_removes_only_matching_media_part() {
         }],
         "mesh_hooks": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let media = ChatMediaRef {
         kind: ChatMediaKind::Audio,
         url: "data:audio/wav;base64,def".to_string(),
@@ -417,12 +428,13 @@ fn consumed_media_action_removes_only_matching_media_part() {
     );
 }
 
-fn request_for(model: &str) -> ChatCompletionRequest {
-    serde_json::from_value(json!({
+fn request_for(model: &str) -> GenerationRequest {
+    serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": model,
         "messages": [{"role": "user", "content": "original"}]
     }))
     .unwrap()
+    .into()
 }
 
 #[tokio::test]
@@ -497,17 +509,17 @@ impl InferenceBackend for HangingBackend {
 
     async fn chat_completion(
         &self,
-        _request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        _request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         std::future::pending::<()>().await;
         unreachable!("this backend never returns")
     }
 
     async fn chat_completion_stream(
         &self,
-        _request: ChatCompletionRequest,
+        _request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         Ok(Box::pin(futures_util::stream::empty()))
     }
 }
@@ -566,7 +578,7 @@ struct HangOnTerminalPolicy {
 impl InferenceHookPolicy for HangOnTerminalPolicy {
     async fn on_chat_completion_terminal(
         &self,
-        _request: &ChatCompletionRequest,
+        _request: &GenerationRequest,
         _exchange_id: &str,
         outcome: &ChatCompletionOutcome<'_>,
     ) {
@@ -648,7 +660,7 @@ struct HangOnEffectivePolicy {
 impl InferenceHookPolicy for HangOnEffectivePolicy {
     async fn on_effective_chat_completion(
         &self,
-        _request: &ChatCompletionRequest,
+        _request: &GenerationRequest,
         _route: &ChatExchangeRoute,
     ) {
         self.started.notify_one();
@@ -657,7 +669,7 @@ impl InferenceHookPolicy for HangOnEffectivePolicy {
 
     async fn on_chat_completion_terminal(
         &self,
-        _request: &ChatCompletionRequest,
+        _request: &GenerationRequest,
         _exchange_id: &str,
         outcome: &ChatCompletionOutcome<'_>,
     ) {
@@ -728,7 +740,7 @@ struct DenyingHangOnTerminalPolicy {
 impl InferenceHookPolicy for DenyingHangOnTerminalPolicy {
     async fn before_chat_completion(
         &self,
-        _request: &mut ChatCompletionRequest,
+        _request: &mut GenerationRequest,
     ) -> InferenceResult<ChatHookOutcome> {
         Err(crate::errors::InferenceError::invalid_request(
             "denied by policy",
@@ -737,7 +749,7 @@ impl InferenceHookPolicy for DenyingHangOnTerminalPolicy {
 
     async fn on_chat_completion_terminal(
         &self,
-        _request: &ChatCompletionRequest,
+        _request: &GenerationRequest,
         _exchange_id: &str,
         outcome: &ChatCompletionOutcome<'_>,
     ) {
@@ -807,8 +819,8 @@ struct CapsuleMintingPolicy;
 impl InferenceHookPolicy for CapsuleMintingPolicy {
     async fn capsule_marker_for_response(
         &self,
-        _request: &ChatCompletionRequest,
-        response: &ChatCompletionResponse,
+        _request: &GenerationRequest,
+        response: &GenerationResponse,
     ) -> Option<CapsuleMarker> {
         Some(CapsuleMarker {
             capsule_id: format!("capsule-{}", response.id),
@@ -845,8 +857,8 @@ struct TerminalSnapshotPolicy {
 impl InferenceHookPolicy for TerminalSnapshotPolicy {
     async fn capsule_marker_for_response(
         &self,
-        _request: &ChatCompletionRequest,
-        _response: &ChatCompletionResponse,
+        _request: &GenerationRequest,
+        _response: &GenerationResponse,
     ) -> Option<CapsuleMarker> {
         Some(CapsuleMarker {
             capsule_id: "capsule-fixed".to_string(),
@@ -856,7 +868,7 @@ impl InferenceHookPolicy for TerminalSnapshotPolicy {
 
     async fn on_chat_completion_terminal(
         &self,
-        _request: &ChatCompletionRequest,
+        _request: &GenerationRequest,
         _exchange_id: &str,
         outcome: &ChatCompletionOutcome<'_>,
     ) {
@@ -901,7 +913,7 @@ struct RequestSnapshotPolicy {
 impl InferenceHookPolicy for RequestSnapshotPolicy {
     async fn on_chat_completion_terminal(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         _exchange_id: &str,
         _outcome: &ChatCompletionOutcome<'_>,
     ) {
@@ -1010,11 +1022,11 @@ async fn denial_by_before_hook_skips_dispatch_and_effective_request_but_reports_
 }
 
 struct StreamingBackend {
-    chunks: Mutex<Option<Vec<InferenceResult<ChatCompletionChunk>>>>,
+    chunks: Mutex<Option<Vec<InferenceResult<GenerationEvent>>>>,
 }
 
 impl StreamingBackend {
-    fn new(chunks: Vec<InferenceResult<ChatCompletionChunk>>) -> Self {
+    fn new(chunks: Vec<InferenceResult<GenerationEvent>>) -> Self {
         Self {
             chunks: Mutex::new(Some(chunks)),
         }
@@ -1029,16 +1041,16 @@ impl InferenceBackend for StreamingBackend {
 
     async fn chat_completion(
         &self,
-        _request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        _request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         unreachable!("streaming tests only call chat_completion_stream")
     }
 
     async fn chat_completion_stream(
         &self,
-        _request: ChatCompletionRequest,
+        _request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         let chunks = self.chunks.lock().unwrap().take().expect("chunks");
         Ok(Box::pin(futures_util::stream::iter(chunks)))
     }
@@ -1058,17 +1070,17 @@ impl InferenceBackend for HangingStreamBackend {
 
     async fn chat_completion(
         &self,
-        _request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        _request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         unreachable!("streaming tests only call chat_completion_stream")
     }
 
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
-        let first = ChatCompletionChunk::delta(request.model, "partial");
+    ) -> InferenceResult<GenerationEventStream> {
+        let first = GenerationEvent::delta(request.model, "partial");
         Ok(Box::pin(
             futures_util::stream::once(async move { Ok(first) })
                 .chain(futures_util::stream::pending()),
@@ -1099,8 +1111,8 @@ async fn wait_for_terminal(policy: &RecordingPolicy) {
 #[tokio::test]
 async fn streaming_exchange_that_ends_normally_fires_stream_completed_terminal_exactly_once() {
     let backend = Arc::new(StreamingBackend::new(vec![
-        Ok(ChatCompletionChunk::delta("gpt-mesh", "hi")),
-        Ok(ChatCompletionChunk::done("gpt-mesh")),
+        Ok(GenerationEvent::delta("gpt-mesh", "hi")),
+        Ok(GenerationEvent::done("gpt-mesh")),
     ]));
     let policy = Arc::new(RecordingPolicy::default());
     let hooked = HookedInferenceBackend::new(backend, policy.clone());
@@ -1125,7 +1137,7 @@ async fn streaming_exchange_that_ends_normally_fires_stream_completed_terminal_e
 #[tokio::test]
 async fn streaming_exchange_with_an_error_chunk_fires_error_terminal_exactly_once() {
     let backend = Arc::new(StreamingBackend::new(vec![
-        Ok(ChatCompletionChunk::delta("gpt-mesh", "hi")),
+        Ok(GenerationEvent::delta("gpt-mesh", "hi")),
         Err(crate::errors::InferenceError::backend("upstream exploded")),
     ]));
     let policy = Arc::new(RecordingPolicy::default());

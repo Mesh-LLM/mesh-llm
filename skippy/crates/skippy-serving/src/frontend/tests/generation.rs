@@ -1,5 +1,6 @@
 use super::*;
 use crate::frontend::backend::run_blocking_generation_worker;
+use skippy_inference_api::chat::ChatCompletionRequest;
 use std::sync::atomic::AtomicBool;
 
 fn assert_generation_rate_limit(error: InferenceError, message_fragment: &str) {
@@ -451,11 +452,12 @@ fn omitted_max_tokens_with_embedded_default_is_bounded() {
 
 #[test]
 fn qwen35_incident_path_gets_bounded_output_and_native_reasoning_budget() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "unsloth/Qwen3.5-9B-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let output_limit = GenerationTokenLimit::from_request(None, DEFAULT_EMBEDDED_MAX_TOKENS)
         .resolve(128, 32_000)
         .unwrap();

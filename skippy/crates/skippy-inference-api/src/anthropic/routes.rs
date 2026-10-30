@@ -17,8 +17,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::anthropic::protocol::{AnthropicError, AnthropicMessagesStreamEvent};
 use crate::anthropic::translate::{
-    MessagesStreamAssembler, message_start_event, messages_request_to_chat_request,
-    messages_response_from_chat_response, translate_stream_error_body,
+    MessagesStreamAssembler, message_start_event, messages_request_to_generation,
+    messages_response_from_generation, translate_stream_error_body,
 };
 use crate::backend_lifecycle::call_backend_with_context;
 use crate::errors::InferenceError;
@@ -64,21 +64,21 @@ pub(crate) async fn messages(
     let Json(request) = json_payload(payload)?;
     let header_session = agent_session_from_header(&state.config, &headers)?;
     let trusted_agent_session = header_session.is_some();
-    let mut chat_request = messages_request_to_chat_request(request)?;
-    chat_request.set_agent_session(header_session);
-    chat_request.validate()?;
+    let mut generation_request = messages_request_to_generation(request)?;
+    generation_request.set_agent_session(header_session);
+    generation_request.validate()?;
 
-    if chat_request.stream {
-        streaming_messages(&state, context, chat_request, trusted_agent_session).await
+    if generation_request.stream {
+        streaming_messages(&state, context, generation_request, trusted_agent_session).await
     } else {
-        non_streaming_messages(&state, context, chat_request, trusted_agent_session).await
+        non_streaming_messages(&state, context, generation_request, trusted_agent_session).await
     }
 }
 
 async fn non_streaming_messages(
     state: &FrontendState,
     context: InferenceLifecycleContext,
-    request: crate::chat::ChatCompletionRequest,
+    request: crate::generation::GenerationRequest,
     trusted_agent_session: bool,
 ) -> Result<Response, AnthropicRejection> {
     let backend_context = request_context(context.request_id, trusted_agent_session, false);
@@ -99,7 +99,7 @@ async fn non_streaming_messages(
         InferenceBackendOperation::Messages,
         &response.usage,
     );
-    let translated = messages_response_from_chat_response(&response)?;
+    let translated = messages_response_from_generation(&response)?;
     let mut http_response = crate::router::json_response_with_usage(translated, &response.usage);
     if let Some(marker) = response.capsule_marker {
         http_response
@@ -112,7 +112,7 @@ async fn non_streaming_messages(
 async fn streaming_messages(
     state: &FrontendState,
     context: InferenceLifecycleContext,
-    request: crate::chat::ChatCompletionRequest,
+    request: crate::generation::GenerationRequest,
     trusted_agent_session: bool,
 ) -> Result<Response, AnthropicRejection> {
     let model = request.model.clone();
@@ -253,7 +253,7 @@ pub(crate) async fn messages_count_tokens(
     let Json(request) = json_payload(payload)?;
     let session = agent_session_from_header(&state.config, &headers)?;
     let backend_context = request_context(context.request_id, session.is_some(), false);
-    let mut chat = messages_request_to_chat_request(request.into_messages())?;
+    let mut chat = messages_request_to_generation(request.into_messages())?;
     chat.set_agent_session(session);
     chat.validate()?;
     let count = call_backend_with_context(

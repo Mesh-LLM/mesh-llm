@@ -1,3 +1,4 @@
+use crate::generation::GenerationEventStream;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -6,13 +7,10 @@ use crate::{
     audio::{
         AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
     },
-    backend::{
-        ChatCompletionStream, CompletionStream, InferenceBackend, InferenceRequestContext,
-        InferenceResult,
-    },
-    chat::{ChatCompletionRequest, ChatCompletionResponse},
+    backend::{CompletionStream, InferenceBackend, InferenceRequestContext, InferenceResult},
     completions::{CompletionRequest, CompletionResponse},
     embeddings::{EmbeddingResponse, EmbeddingsRequest},
+    generation::{GenerationRequest, GenerationResponse},
     models::ModelObject,
     rerank::{RerankRequest, RerankResponse},
     system_one::{SystemOneRequest, SystemOneResponse},
@@ -81,9 +79,9 @@ impl GuardedInferenceBackend {
 
     async fn guarded_chat_completion(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionResponse> {
+    ) -> InferenceResult<GenerationResponse> {
         let _guardrail_error_catalog = guardrail_error_catalog();
         let policy = self.policy.snapshot();
         let engine = GuardrailEngine::new(policy.clone());
@@ -172,11 +170,11 @@ impl GuardedInferenceBackend {
 
     async fn metrics_only_chat_completion(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         engine: &GuardrailEngine,
         prepared: &state::PreparedGuardrailRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionResponse> {
+    ) -> InferenceResult<GenerationResponse> {
         let response = self
             .backend
             .chat_completion_with_context(request, context)
@@ -312,7 +310,7 @@ impl InferenceBackend for GuardedInferenceBackend {
     fn http_exchange_policy(&self) -> Option<Arc<dyn crate::http_exchange::HttpExchangePolicy>> {
         self.backend.http_exchange_policy()
     }
-    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> InferenceResult<u32> {
+    async fn count_chat_tokens(&self, request: GenerationRequest) -> InferenceResult<u32> {
         self.backend.count_chat_tokens(request).await
     }
 
@@ -326,25 +324,25 @@ impl InferenceBackend for GuardedInferenceBackend {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         self.guarded_chat_completion(request, InferenceRequestContext::new())
             .await
     }
 
     async fn chat_completion_with_context(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionResponse> {
+    ) -> InferenceResult<GenerationResponse> {
         self.guarded_chat_completion(request, context).await
     }
 
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         self.backend.chat_completion_stream(request, context).await
     }
 

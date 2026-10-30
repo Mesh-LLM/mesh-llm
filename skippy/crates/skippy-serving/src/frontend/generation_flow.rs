@@ -34,9 +34,9 @@ use crate::kv_integration::proactive_eviction_attrs;
 use crate::runtime_state::panic_recovery::lock_runtime;
 use anyhow::anyhow;
 use serde_json::json;
-use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::InferenceError;
 use skippy_inference_api::InferenceResult;
+use skippy_inference_api::generation::GenerationRequest;
 use skippy_protocol::binary::StageWireMessage;
 use skippy_protocol::binary::WireReplyKind;
 use skippy_protocol::binary::recv_reply;
@@ -189,7 +189,7 @@ impl StageOpenAiBackend {
         max_tokens: GenerationTokenLimit,
         stop: Option<&skippy_inference_api::StopSequence>,
         mut sampling: SamplingConfig,
-        hook_request: Option<ChatCompletionRequest>,
+        hook_request: Option<GenerationRequest>,
         hook_runtime: Option<tokio::runtime::Handle>,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
         ids: InferenceGenerationIds,

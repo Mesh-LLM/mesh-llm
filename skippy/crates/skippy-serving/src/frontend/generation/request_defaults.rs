@@ -86,8 +86,10 @@ pub enum EmbeddedReasoningBudget {
 impl EmbeddedOpenAiRequestDefaults {
     /// Validate operator defaults through the same parsers used for API requests.
     pub fn validate(&self) -> anyhow::Result<()> {
-        let mut request: skippy_inference_api::ChatCompletionRequest =
-            serde_json::from_value(serde_json::json!({"model": "validation", "messages": []}))?;
+        let mut request = skippy_inference_api::generation::GenerationRequest {
+            model: "validation".into(),
+            ..Default::default()
+        };
         crate::frontend::request::apply_chat_request_defaults(&mut request, self)
             .map_err(|error| anyhow::anyhow!("invalid request defaults: {error:?}"))?;
         crate::frontend::request::chat_sampling_config(&request, self)
