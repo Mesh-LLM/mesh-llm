@@ -6,8 +6,8 @@ use super::common::{
 use super::dispatch::{RelayAttemptContext, relay_attempted_response};
 use super::probe::{
     PEER_CAPSULE_ID_HEADER, ResponseProbe, SERVED_WEIGHTS_DIGEST_HEADER,
-    add_served_weights_digest_header, peer_response_header_value, probe_http_response,
-    probe_http_response_local,
+    peer_response_header_value, probe_http_response, probe_http_response_local,
+    set_served_weights_digest_header,
 };
 use crate::logging::OpenAiRouteObserver;
 use crate::mesh;
@@ -150,9 +150,10 @@ pub(super) async fn route_local_attempt_after_forward<U: AsyncRead + Unpin + Can
         }
         ProbeOutcome::Response(Ok(mut probe)) => {
             record_peer_response_markers(peer_capsule_id, &probe);
-            // Recorded before the splice below, so this node never records its
-            // own digest as a peer's.
-            add_served_weights_digest_header(&mut probe, served_weights_digest);
+            // Recorded before the header is set below, so this node never
+            // records its own digest as a peer's, and a paid seller's digest
+            // read here never reaches this node's client.
+            set_served_weights_digest_header(&mut probe, served_weights_digest);
             let result = relay_attempted_response(
                 tcp_stream,
                 upstream,
@@ -222,8 +223,11 @@ async fn route_remote_attempt_after_forward<R: AsyncRead + Unpin + CancelUpstrea
             )
             .await
         }
-        ProbeOutcome::Response(Ok(probe)) => {
+        ProbeOutcome::Response(Ok(mut probe)) => {
             record_peer_response_markers(peer_capsule_id, &probe);
+            // The peer's digest is for this node's own exchange events; it is
+            // never relayed on to this node's client.
+            set_served_weights_digest_header(&mut probe, None);
             let result = relay_attempted_response(
                 tcp_stream,
                 quic_recv,
@@ -724,6 +728,66 @@ mod tests {
         let sink = task.await.unwrap();
         assert_eq!(sink.take(), Some("cap-peer-1".to_string()));
         assert_eq!(sink.take_weights_digest(), Some("74a4da8c".to_string()));
+    }
+
+    /// The peer's digest is recorded for this node's own events but never
+    /// relayed on to this node's client, whether the head is relayed as is or
+    /// rebuilt by a response adapter.
+    #[tokio::test]
+    async fn a_remote_attempt_never_relays_the_peers_weights_digest() {
+        let body = r#"{"id":"c","object":"chat.completion","choices":[]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nx-mesh-weights-digest: 74a4da8c\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        for adapter in [
+            ResponseAdapter::None,
+            ResponseAdapter::OpenAiChatCompletionsJson,
+        ] {
+            let mut upstream = ScriptedUpstream::new(vec![Ok(response.clone().into_bytes())]);
+            let host_id = iroh::SecretKey::generate().public();
+            let sink = PeerCapsuleIdSink::new();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let task = tokio::spawn(async move {
+                let (client, _) = listener.accept().await.unwrap();
+                let mut client: ClientStream = client.into();
+                route_remote_attempt_after_forward(
+                    &mut client,
+                    &mut upstream,
+                    host_id,
+                    RequestId::new(),
+                    ResponseRetryPolicy::next_target_available(false),
+                    adapter,
+                    None,
+                    Some(&sink),
+                    OpenAiRouteObserver::default(),
+                )
+                .await;
+                sink
+            });
+            let mut socket = TcpStream::connect(address).await.unwrap();
+            let mut relayed = Vec::new();
+            socket.read_to_end(&mut relayed).await.unwrap();
+            let relayed = String::from_utf8(relayed).unwrap();
+
+            let sink = task.await.unwrap();
+            assert_eq!(sink.take_weights_digest(), Some("74a4da8c".to_string()));
+            assert!(
+                relayed.starts_with("HTTP/1.1 200"),
+                "{adapter:?}: {relayed}"
+            );
+            assert!(
+                !relayed
+                    .to_ascii_lowercase()
+                    .contains("x-mesh-weights-digest"),
+                "{adapter:?}: {relayed}"
+            );
+            assert!(
+                relayed.contains("\"chat.completion\""),
+                "{adapter:?}: {relayed}"
+            );
+        }
     }
 
     /// Mutant: no `X-Capsule-Id` on the peer's response — the sink stays

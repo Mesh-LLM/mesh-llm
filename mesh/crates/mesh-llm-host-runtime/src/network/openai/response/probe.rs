@@ -72,15 +72,23 @@ pub(in crate::network::openai::response) fn append_mesh_served_by_header(
 /// peer's own, unverified statement; see `PeerCapsuleIdSink`.
 pub(in crate::network::openai) const SERVED_WEIGHTS_DIGEST_HEADER: &str = "x-mesh-weights-digest";
 
-/// Splice [`SERVED_WEIGHTS_DIGEST_HEADER`] into a probed 2xx response this
-/// node served, before any relay path reads the probe. Raw relays forward it
-/// as is; response adapters that rebuild the head echo it from
-/// [`ParsedResponseHeaders::served_weights_digest`]. A no-op without a digest
-/// or on a non-2xx response, which served nothing.
-pub(in crate::network::openai::response) fn add_served_weights_digest_header(
+/// Set [`SERVED_WEIGHTS_DIGEST_HEADER`] on a probed response before any relay
+/// path reads the probe: drop whatever value the upstream sent, then splice in
+/// `weights_digest` on a 2xx response this node served for a mesh peer. Raw
+/// relays forward the head as is; response adapters that rebuild it echo the
+/// header from [`ParsedResponseHeaders::served_weights_digest`]. With `None`,
+/// or on a non-2xx response, which served nothing, the header is only removed,
+/// so a peer's digest is never relayed on to this node's own client.
+pub(in crate::network::openai::response) fn set_served_weights_digest_header(
     probe: &mut ResponseProbe,
     weights_digest: Option<&str>,
 ) {
+    let removed = remove_existing_header(
+        &mut probe.buffered,
+        probe.header_end,
+        SERVED_WEIGHTS_DIGEST_HEADER,
+    );
+    probe.header_end -= removed;
     let Some(digest) = weights_digest else {
         return;
     };
