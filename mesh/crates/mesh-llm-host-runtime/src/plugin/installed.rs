@@ -2,9 +2,7 @@ use super::config::{ExternalPluginSpec, PluginConfigEntry};
 use super::startup::PluginStartupOptions;
 use super::{PluginSummary, PluginWebUiState, derive_plugin_web_ui_state};
 use anyhow::{Context, Result, bail};
-use mesh_llm_plugin_manager::{
-    InstalledPluginMetadata, PluginStore, default_store_root, missing_requirements,
-};
+use mesh_llm_plugin_manager::{InstalledPluginMetadata, PluginStore, default_store_root};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -191,8 +189,6 @@ pub(crate) fn append_installed_plugins(
             return;
         }
     };
-    warn_once_about_missing_requirements(&installed);
-
     for metadata in installed {
         if names.contains_key(&metadata.name) {
             continue;
@@ -209,28 +205,6 @@ pub(crate) fn append_installed_plugins(
         }
         externals.push(installed_plugin_spec(&metadata));
     }
-}
-
-/// A plugin whose `plugin.toml` requirement is not installed, or is disabled,
-/// still starts: how it reaches the other plugin is an operator-authorized
-/// binding, not something the host wires. Say so at start rather than
-/// leaving it to be discovered at the first call. An output event, not
-/// `tracing::warn!`: the runtime's default log filter drops host-runtime
-/// warnings. Plugins are resolved more than once at startup; warn once.
-fn warn_once_about_missing_requirements(installed: &[InstalledPluginMetadata]) {
-    static WARNED: std::sync::Once = std::sync::Once::new();
-    let missing = missing_requirements(installed);
-    if missing.is_empty() {
-        return;
-    }
-    WARNED.call_once(|| {
-        for requirement in missing {
-            let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Warning {
-                message: format!("Plugin {}", requirement.describe()),
-                context: None,
-            });
-        }
-    });
 }
 
 fn installed_plugin_command_for_name(name: &str) -> Result<String> {

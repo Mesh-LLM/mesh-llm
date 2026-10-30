@@ -302,7 +302,6 @@ mod tests {
             install_path: "/tmp/notes".into(),
             enabled,
             default_managed: managed,
-            requires: Vec::new(),
             manifest: None,
             last_protocol_version: None,
             last_status: None,

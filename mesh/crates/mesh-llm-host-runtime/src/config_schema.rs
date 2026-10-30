@@ -1009,7 +1009,6 @@ mod tests {
                 install_path: PathBuf::from("/tmp/blackboard"),
                 enabled: true,
                 default_managed: false,
-                requires: Vec::new(),
                 manifest: Some(InstalledPluginManifestMetadata {
                     openai_exchange_hook: None,
                     config_schema: None,
@@ -1269,7 +1268,6 @@ mod tests {
                 install_path: PathBuf::from("/tmp/blackboard"),
                 enabled: true,
                 default_managed: false,
-                requires: Vec::new(),
                 manifest: Some(InstalledPluginManifestMetadata {
                     openai_exchange_hook: None,
                     config_schema: Some(InstalledPluginConfigSchema {
@@ -1348,7 +1346,6 @@ mod tests {
             install_path: PathBuf::from(format!("/tmp/{plugin_name}")),
             enabled: true,
             default_managed: false,
-            requires: Vec::new(),
             manifest: Some(InstalledPluginManifestMetadata {
                 openai_exchange_hook: None,
                 config_schema: Some(InstalledPluginConfigSchema {

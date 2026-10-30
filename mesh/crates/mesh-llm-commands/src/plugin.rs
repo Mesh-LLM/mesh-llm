@@ -7,8 +7,7 @@ use mesh_llm_plugin_manager::defaults::{
     DEFAULT_PLUGINS, DefaultPluginOutcome, NO_DEFAULT_PLUGINS_ENV, default_plugin,
     default_plugins_opted_out, provision_bundled_defaults, turn_off_defaults,
 };
-use mesh_llm_plugin_manager::install::{install_plugin_archive, install_plugin_requirements};
-use mesh_llm_plugin_manager::requirements::{ensure_not_required, missing_requirements};
+use mesh_llm_plugin_manager::install::install_plugin_archive;
 use mesh_llm_plugin_manager::{
     PluginCatalog, PluginInstallOptions, PluginProgressEvent, PluginProgressReporter, PluginStore,
     PluginTarget, default_store_root, install_plugin, update_plugin,
@@ -308,14 +307,12 @@ async fn install(
     let outcome = match (reference, archive, name) {
         (Some(reference), None, None) => install_plugin(reference, &options, &mut progress).await?,
         (None, Some(archive), Some(name)) => {
-            let outcome = install_plugin_archive(name, version, archive, &options, &mut progress)?;
-            install_plugin_requirements(&outcome.metadata, &options, &mut progress).await?;
-            outcome
+            install_plugin_archive(name, version, archive, &options, &mut progress)?
         }
         _ => bail!("provide either a plugin reference or --archive with --name"),
     };
-    // Each package's granted access was disclosed as it landed
-    // (`CliPluginProgress`), before its requirements were attempted.
+    // The package's granted access was disclosed as it landed
+    // (`CliPluginProgress`).
     progress.finish();
     if outcome.changed {
         let mut err = mesh_llm_events::console_err();
@@ -492,8 +489,7 @@ fn access_increase_lines(
 
 /// What is said when a package lands (`PluginProgressEvent::Installed` /
 /// `Updated`): the landing line, then the disclosure of what it was granted.
-/// Printed as each package lands, so a plugin that stays installed when a
-/// later requirement fails has still had its access disclosed.
+/// Printed as the package lands, before anything else is attempted.
 fn landed_lines(
     landing: String,
     metadata: &mesh_llm_plugin_manager::InstalledPluginMetadata,
@@ -509,7 +505,6 @@ fn delete(name: &str) -> Result<()> {
 }
 
 fn delete_in(store: &PluginStore, name: &str, err: &mut impl Write) -> Result<()> {
-    ensure_not_required(store, name, "delete")?;
     store.delete(name)?;
     writeln!(err, "🗑️  Deleted {name}")?;
     // A deleted default stays removed: delete leaves the record that `plugins
@@ -651,21 +646,13 @@ fn list(runtime_rows: &PluginListRows) -> Result<()> {
         } else {
             "disabled"
         };
-        let requires = if metadata.requires.is_empty() {
-            String::new()
-        } else {
-            format!("\trequires={}", metadata.requires.join(","))
-        };
         writeln!(
             out,
-            "{}\tversion={}\tstate={}\tsource={}{requires}",
+            "{}\tversion={}\tstate={}\tsource={}",
             metadata.name, metadata.installed_version, state, metadata.source_repository
         )?;
     }
     let mut err = mesh_llm_events::console_err();
-    for missing in missing_requirements(&installed) {
-        writeln!(err, "⚠️  {}", missing.describe())?;
-    }
     for warning in unresolvable_capability_grants(&installed, runtime_rows.providers.as_deref()) {
         writeln!(err, "⚠️  {warning}")?;
     }
@@ -823,11 +810,6 @@ impl PluginProgressReporter for CliPluginProgress {
                 let mut err = mesh_llm_events::console_err();
                 let _ = writeln!(err, "✅ {name} is up to date ({version})");
             }
-            PluginProgressEvent::InstallingRequirement { plugin, required } => {
-                self.finish();
-                let mut err = mesh_llm_events::console_err();
-                let _ = writeln!(err, "🔗 {plugin} requires {required}; installing it");
-            }
         }
     }
 }
@@ -954,7 +936,6 @@ url = "unix:///run/remote.sock"
                 install_path: store.root().join("installed").join("capsules"),
                 enabled,
                 default_managed: false,
-                requires: Vec::new(),
                 manifest: None,
                 last_protocol_version: None,
                 last_status: None,
@@ -1084,7 +1065,6 @@ url = "unix:///run/remote.sock"
     fn installed_plugin(
         store: &PluginStore,
         name: &str,
-        requires: &[&str],
     ) -> mesh_llm_plugin_manager::InstalledPluginMetadata {
         let metadata = mesh_llm_plugin_manager::InstalledPluginMetadata {
             name: name.into(),
@@ -1096,7 +1076,6 @@ url = "unix:///run/remote.sock"
             enabled: true,
             default_managed: false,
             verified_sha256: None,
-            requires: requires.iter().map(|value| value.to_string()).collect(),
             manifest: None,
             last_protocol_version: None,
             last_status: None,
@@ -1109,12 +1088,11 @@ url = "unix:///run/remote.sock"
     #[test]
     fn a_landing_discloses_what_the_package_was_granted() {
         // The lines printed on `Installed`/`Updated`, i.e. when a package
-        // lands and before its requirements are attempted, carry the access
-        // disclosure, so a root kept after a failed requirement has had its
-        // grants disclosed.
+        // lands and before anything else is attempted, carry the access
+        // disclosure.
         let temp = tempfile::tempdir().unwrap();
         let store = PluginStore::new(temp.path());
-        let mut root = installed_plugin(&store, "root", &["needed"]);
+        let mut root = installed_plugin(&store, "root");
         root.manifest = Some(mesh_llm_plugin_manager::InstalledPluginManifestMetadata {
             openai_exchange_hook: Some(
                 mesh_llm_plugin_manager::store::InstalledOpenAiExchangeAccess {
@@ -1139,33 +1117,11 @@ url = "unix:///run/remote.sock"
         assert!(lines[1].contains("Installing grants these requests"));
 
         // A package requesting nothing gets the landing line only.
-        let plain = installed_plugin(&store, "needed", &[]);
+        let plain = installed_plugin(&store, "needed");
         assert_eq!(
             landed_lines("📦 Installed needed v0.1.0".to_string(), &plain),
             vec!["📦 Installed needed v0.1.0".to_string()]
         );
-    }
-
-    #[test]
-    fn deleting_a_plugin_another_one_requires_is_refused_and_keeps_it_installed() {
-        let temp = tempfile::tempdir().unwrap();
-        let store = PluginStore::new(temp.path());
-        installed_plugin(&store, "demo-app", &["toolkit"]);
-        installed_plugin(&store, "toolkit", &[]);
-        let mut err = Vec::new();
-
-        let error = delete_in(&store, "toolkit", &mut err).unwrap_err();
-
-        assert_eq!(
-            error.to_string(),
-            "cannot delete toolkit: required by demo-app; delete it first"
-        );
-        assert!(store.load_optional("toolkit").unwrap().is_some());
-        assert!(err.is_empty());
-
-        delete_in(&store, "demo-app", &mut err).unwrap();
-        delete_in(&store, "toolkit", &mut err).unwrap();
-        assert!(store.list().unwrap().is_empty());
     }
 
     #[test]

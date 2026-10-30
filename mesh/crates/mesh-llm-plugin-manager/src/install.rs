@@ -59,11 +59,9 @@ pub enum PluginProgressEvent {
     Extracting {
         asset: String,
     },
-    /// A package landed: it is in place and recorded. Emitted for the plugin
-    /// the operator named and for each requirement installed for it, before
-    /// anything else is attempted, so what `installed` was granted (its
-    /// manifest's access requests) can be disclosed even when a later step
-    /// fails.
+    /// A package landed: it is in place and recorded. Emitted before anything
+    /// else is attempted, so what `installed` was granted (its manifest's
+    /// access requests) can be disclosed even when a later step fails.
     Installed {
         installed: Box<InstalledPluginMetadata>,
     },
@@ -78,12 +76,6 @@ pub enum PluginProgressEvent {
     AlreadyCurrent {
         name: String,
         version: String,
-    },
-    /// `plugin` requires `required`, which is not installed; it is installed
-    /// next from the catalog.
-    InstallingRequirement {
-        plugin: String,
-        required: String,
     },
 }
 
@@ -126,68 +118,7 @@ pub async fn install_plugin(
 ) -> Result<InstallOutcome> {
     let parsed = parse_install_ref(reference)?;
     let resolved = resolve_install_source(parsed, options, progress).await?;
-    let outcome = install_resolved_plugin(resolved, options, progress, None).await?;
-    install_requirements(&outcome.metadata, options, progress).await?;
-    Ok(outcome)
-}
-
-/// Install, from the catalog, every plugin `plugin` requires that is not
-/// installed, and theirs in turn (`requirements::install_missing`). Each
-/// dependency's install is reported as it lands, so what it was granted is
-/// disclosed even when a later requirement fails.
-async fn install_requirements(
-    plugin: &InstalledPluginMetadata,
-    options: &PluginInstallOptions,
-    progress: &mut impl PluginProgressReporter,
-) -> Result<()> {
-    let store = PluginStore::new(&options.store_root);
-    let mut installer = CatalogRequirementInstaller { options, progress };
-    crate::requirements::install_missing(&store, plugin, &mut installer).await
-}
-
-/// Installs a missing requirement from the catalog; `install_resolved_plugin`
-/// reports it `Installed` as it lands, like the plugin the operator named.
-struct CatalogRequirementInstaller<'a, P: PluginProgressReporter> {
-    options: &'a PluginInstallOptions,
-    progress: &'a mut P,
-}
-
-impl<P: PluginProgressReporter> crate::requirements::RequirementInstaller
-    for CatalogRequirementInstaller<'_, P>
-{
-    async fn install(
-        &mut self,
-        dependent: String,
-        required: String,
-    ) -> Result<InstalledPluginMetadata> {
-        self.progress
-            .report(PluginProgressEvent::InstallingRequirement {
-                plugin: dependent.clone(),
-                required: required.clone(),
-            });
-        let parsed = PluginInstallRef::Catalog {
-            name: required.clone(),
-            version: None,
-        };
-        let context = || format!("install {required}, required by {dependent}");
-        let resolved = resolve_install_source(parsed, self.options, self.progress)
-            .await
-            .with_context(context)?;
-        let installed = install_resolved_plugin(resolved, self.options, self.progress, None)
-            .await
-            .with_context(context)?;
-        Ok(installed.metadata)
-    }
-}
-
-/// Install, from the catalog, the requirements of an already installed
-/// plugin (for example one installed from a local archive).
-pub async fn install_plugin_requirements(
-    plugin: &InstalledPluginMetadata,
-    options: &PluginInstallOptions,
-    progress: &mut impl PluginProgressReporter,
-) -> Result<()> {
-    install_requirements(plugin, options, progress).await
+    install_resolved_plugin(resolved, options, progress, None).await
 }
 
 pub fn install_plugin_archive(
@@ -230,7 +161,6 @@ pub fn install_plugin_archive(
         install_path: extracted.install_path,
         enabled: current.as_ref().map(|item| item.enabled).unwrap_or(true),
         default_managed: false,
-        requires: extracted.requires,
         manifest: extracted.manifest,
         last_protocol_version: current.as_ref().and_then(|item| item.last_protocol_version),
         last_status: current.as_ref().and_then(|item| item.last_status.clone()),
@@ -249,9 +179,7 @@ pub fn install_plugin_archive(
 
 /// Every install path extracts through here, so the executable it checks is
 /// named for `options.target`, as `InstalledPluginMetadata::executable_path`
-/// names the one the host launches, and so a package whose `requires` would
-/// close a cycle through the installed plugins is refused while still staged:
-/// neither the installed package nor its metadata changes.
+/// names the one the host launches.
 pub(crate) fn extract_for_install(
     archive_path: &std::path::Path,
     archive_ext: ArchiveExt,
@@ -264,11 +192,6 @@ pub(crate) fn extract_for_install(
         options.target.executable_suffix(),
         name,
         &options.install_root,
-    )?;
-    crate::requirements::ensure_no_cycle_through_installed(
-        &PluginStore::new(&options.store_root),
-        name,
-        &staged.requires,
     )?;
     staged.commit()
 }
@@ -324,9 +247,7 @@ pub async fn update_plugin(
         version: None,
         pin: None,
     };
-    let outcome = install_resolved_plugin(resolved, options, progress, Some(current)).await?;
-    install_requirements(&outcome.metadata, options, progress).await?;
-    Ok(outcome)
+    install_resolved_plugin(resolved, options, progress, Some(current)).await
 }
 
 struct ResolvedInstallSource {
@@ -486,7 +407,6 @@ fn build_installed_metadata(
         install_path: extracted.install_path,
         enabled: current.map(|metadata| metadata.enabled).unwrap_or(true),
         default_managed: current.is_some_and(|metadata| metadata.default_managed),
-        requires: extracted.requires,
         manifest: extracted.manifest,
         last_protocol_version: current.and_then(|metadata| metadata.last_protocol_version),
         last_status: current.and_then(|metadata| metadata.last_status.clone()),
@@ -593,7 +513,7 @@ fn verify_asset_sha256(asset_name: &str, expected: &str, hasher: sha2::Sha256) -
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, path::Path};
+    use std::path::Path;
 
     use flate2::{Compression, write::GzEncoder};
     use tempfile::TempDir;
@@ -1086,242 +1006,6 @@ mod tests {
             );
             assert!(outcome.metadata.executable_path().is_file(), "{os}/{arch}");
         }
-    }
-
-    #[test]
-    fn a_local_archive_records_what_its_plugin_toml_requires() {
-        let temp = tempfile::tempdir().unwrap();
-        let options = options_for(temp.path(), "linux", "x86_64");
-        let archive_path = temp
-            .path()
-            .join("demo-app-0.1.0-x86_64-unknown-linux-gnu.tar.gz");
-        write_tar_gz(
-            &archive_path,
-            "demo-app",
-            &[
-                (
-                    "plugin.toml",
-                    b"name = \"demo-app\"\nversion = \"0.1.0\"\nrequires = [\"toolkit\"]\n",
-                ),
-                ("demo-app", b""),
-            ],
-        )
-        .unwrap();
-
-        let outcome = install_plugin_archive(
-            "demo-app",
-            "0.1.0",
-            &archive_path,
-            &options,
-            &mut |_event: PluginProgressEvent| {},
-        )
-        .unwrap();
-        assert_eq!(outcome.metadata.requires, vec!["toolkit".to_string()]);
-
-        let store = PluginStore::new(&options.store_root);
-        let reloaded = store.load("demo-app").unwrap();
-        assert_eq!(reloaded.requires, vec!["toolkit".to_string()]);
-        assert_eq!(
-            crate::requirements::uninstalled_requirements(&store, &reloaded).unwrap(),
-            vec!["toolkit".to_string()]
-        );
-        assert_eq!(
-            crate::requirements::missing_requirements(std::slice::from_ref(&reloaded))
-                .into_iter()
-                .map(|missing| missing.required)
-                .collect::<Vec<_>>(),
-            vec!["toolkit".to_string()]
-        );
-    }
-
-    /// A linux/x86_64 archive for `name` whose `plugin.toml` requires
-    /// `requires`, with `executable_body` as its executable.
-    fn write_requiring_archive(
-        archive_path: &Path,
-        name: &str,
-        requires: &[&str],
-        executable_body: &[u8],
-    ) {
-        let requires = requires
-            .iter()
-            .map(|required| format!("\"{required}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let plugin_toml = format!("name = \"{name}\"\nrequires = [{requires}]\n");
-        write_tar_gz(
-            archive_path,
-            name,
-            &[
-                ("plugin.toml", plugin_toml.as_bytes()),
-                (name, executable_body),
-            ],
-        )
-        .unwrap();
-    }
-
-    /// Everything on disk under `install_path`, by relative path, with
-    /// contents; what a refused install must leave untouched.
-    fn package_contents(install_path: &Path) -> BTreeMap<String, Vec<u8>> {
-        let mut contents = BTreeMap::new();
-        for entry in fs::read_dir(install_path).unwrap() {
-            let entry = entry.unwrap();
-            let name = entry.file_name().to_string_lossy().into_owned();
-            contents.insert(name, fs::read(entry.path()).unwrap());
-        }
-        contents
-    }
-
-    #[test]
-    fn installing_a_root_that_closes_a_cycle_through_an_installed_plugin_is_refused() {
-        // b is installed and requires a (a retained partial state: a never
-        // landed). Installing a with requires = [b] would close b→a→b.
-        let temp = tempfile::tempdir().unwrap();
-        let options = options_for(temp.path(), "linux", "x86_64");
-        let b_archive = temp.path().join("b.tar.gz");
-        write_requiring_archive(&b_archive, "b", &["a"], b"b-binary");
-        let b = install_plugin_archive("b", "0.1.0", &b_archive, &options, &mut |_| {})
-            .unwrap()
-            .metadata;
-        let b_contents = package_contents(&b.install_path);
-
-        let a_archive = temp.path().join("a.tar.gz");
-        write_requiring_archive(&a_archive, "a", &["b"], b"a-binary");
-        let error =
-            install_plugin_archive("a", "0.1.0", &a_archive, &options, &mut |_| {}).unwrap_err();
-        assert!(
-            format!("{error:#}").contains("cycle: a requires b requires a; a was not installed"),
-            "{error:#}"
-        );
-
-        let store = PluginStore::new(&options.store_root);
-        assert!(store.load_optional("a").unwrap().is_none());
-        assert!(!options.install_root.join("a").exists());
-        assert_eq!(store.load("b").unwrap(), b);
-        assert_eq!(package_contents(&b.install_path), b_contents);
-        // Nothing holds b: it can still be deleted.
-        assert!(crate::requirements::ensure_not_required(&store, "b", "delete").is_ok());
-    }
-
-    #[test]
-    fn updating_a_root_so_that_it_closes_a_cycle_keeps_the_installed_package_and_metadata() {
-        // a 0.1.0 requires nothing; b requires a. An a 0.2.0 that requires b
-        // would close a→b→a, so the update is refused and a 0.1.0 stays:
-        // same executable bytes, same metadata.
-        let temp = tempfile::tempdir().unwrap();
-        let options = options_for(temp.path(), "linux", "x86_64");
-        let a_archive = temp.path().join("a-0.1.0.tar.gz");
-        write_requiring_archive(&a_archive, "a", &[], b"a-0.1.0");
-        let a = install_plugin_archive("a", "0.1.0", &a_archive, &options, &mut |_| {})
-            .unwrap()
-            .metadata;
-        let b_archive = temp.path().join("b.tar.gz");
-        write_requiring_archive(&b_archive, "b", &["a"], b"b-binary");
-        install_plugin_archive("b", "0.1.0", &b_archive, &options, &mut |_| {}).unwrap();
-        let a_contents = package_contents(&a.install_path);
-        assert_eq!(
-            a_contents.get("a").map(Vec::as_slice),
-            Some(&b"a-0.1.0"[..])
-        );
-
-        let a_update = temp.path().join("a-0.2.0.tar.gz");
-        write_requiring_archive(&a_update, "a", &["b"], b"a-0.2.0");
-        let mut events = Vec::new();
-        let error = install_plugin_archive("a", "0.2.0", &a_update, &options, &mut |event| {
-            events.push(event)
-        })
-        .unwrap_err();
-        assert!(format!("{error:#}").contains("cycle"), "{error:#}");
-        assert!(
-            !events
-                .iter()
-                .any(|event| matches!(event, PluginProgressEvent::Installed { .. })),
-            "{events:?}"
-        );
-
-        let store = PluginStore::new(&options.store_root);
-        assert_eq!(store.load("a").unwrap(), a);
-        assert_eq!(package_contents(&a.install_path), a_contents);
-        assert!(crate::requirements::ensure_not_required(&store, "b", "delete").is_ok());
-    }
-
-    /// A manifest requesting prompt access: what installing the package
-    /// grants, and what the installer must disclose.
-    fn manifest_requesting_prompts() -> Vec<u8> {
-        serde_json::to_vec(&serde_json::json!({
-            "openai_exchange_hook": {
-                "contract_version": 1,
-                "request_body": true,
-                "response_body": false,
-                "admission": false
-            }
-        }))
-        .unwrap()
-    }
-
-    #[tokio::test]
-    async fn the_root_is_reported_landed_with_its_grants_before_a_requirement_fails() {
-        // The root requests prompt access and requires a plugin the catalog
-        // cannot be fetched for (nothing listens on the catalog port). The
-        // root stays installed, so its `Installed` event, carrying the
-        // metadata the disclosure is made from, must precede the failure.
-        let temp = tempfile::tempdir().unwrap();
-        let mut options = options_for(temp.path(), "linux", "x86_64");
-        options.catalog_url = "http://127.0.0.1:1/plugins.jsonl".to_string();
-        let archive_path = temp.path().join("root.tar.gz");
-        let manifest = manifest_requesting_prompts();
-        write_tar_gz(
-            &archive_path,
-            "root",
-            &[
-                ("plugin.toml", b"name = \"root\"\nrequires = [\"needed\"]\n"),
-                ("root", b""),
-                ("plugin-manifest.json", manifest.as_slice()),
-            ],
-        )
-        .unwrap();
-
-        let mut events = Vec::new();
-        let outcome =
-            install_plugin_archive("root", "0.1.0", &archive_path, &options, &mut |event| {
-                events.push(event)
-            })
-            .unwrap();
-        let error = install_plugin_requirements(&outcome.metadata, &options, &mut |event| {
-            events.push(event)
-        })
-        .await
-        .unwrap_err();
-        assert!(
-            format!("{error:#}").contains("install needed, required by root"),
-            "{error:#}"
-        );
-
-        let landed = events
-            .iter()
-            .position(|event| matches!(event, PluginProgressEvent::Installed { .. }))
-            .expect("the root's landing is reported");
-        let requirement = events
-            .iter()
-            .position(|event| matches!(event, PluginProgressEvent::InstallingRequirement { .. }))
-            .expect("the requirement install is reported");
-        assert!(landed < requirement, "{events:?}");
-        let PluginProgressEvent::Installed { installed } = &events[landed] else {
-            unreachable!()
-        };
-        let access = installed
-            .manifest
-            .as_ref()
-            .and_then(|manifest| manifest.openai_exchange_hook.as_ref())
-            .expect("the landed metadata carries the access requests to disclose");
-        assert!(access.request_body);
-        assert!(access.access_summary().contains("original prompts"));
-        // Retained, as the operator must be told.
-        assert!(
-            PluginStore::new(&options.store_root)
-                .load_optional("root")
-                .unwrap()
-                .is_some()
-        );
     }
 
     #[test]

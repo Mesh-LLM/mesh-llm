@@ -1023,7 +1023,6 @@ mod tests {
             install_path,
             enabled: true,
             default_managed: false,
-            requires: Vec::new(),
             manifest: Some(InstalledPluginManifestMetadata {
                 openai_exchange_hook: None,
                 config_schema: Some(InstalledPluginConfigSchema {

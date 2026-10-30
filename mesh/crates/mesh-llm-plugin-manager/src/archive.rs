@@ -24,8 +24,6 @@ const WEB_UI_CONTRIBUTION_SLOTS: [&str; 2] = ["chat_message", "logs_request"];
 pub struct ExtractedPluginArchive {
     pub install_path: PathBuf,
     pub manifest: Option<InstalledPluginManifestMetadata>,
-    /// Installed plugins this one requires, from its `plugin.toml`.
-    pub requires: Vec<String>,
 }
 
 /// A plugin archive extracted and validated in a staging directory, not yet
@@ -38,8 +36,6 @@ pub struct StagedPluginArchive {
     install_dir: PathBuf,
     plugin_name: String,
     pub manifest: Option<InstalledPluginManifestMetadata>,
-    /// Installed plugins this one requires, from its `plugin.toml`.
-    pub requires: Vec<String>,
 }
 
 impl StagedPluginArchive {
@@ -53,7 +49,6 @@ impl StagedPluginArchive {
         Ok(ExtractedPluginArchive {
             install_path: final_dir,
             manifest: self.manifest,
-            requires: self.requires,
         })
     }
 }
@@ -80,14 +75,13 @@ pub fn stage_plugin_archive(
     let extracted_root = find_plugin_root(staging.path(), plugin_name)?;
     validate_plugin_root(&extracted_root, plugin_name, executable_suffix)?;
     let manifest = load_packaged_manifest(&extracted_root, plugin_name)?;
-    let requires = read_plugin_toml(&extracted_root, plugin_name)?.requires;
+    read_plugin_toml(&extracted_root, plugin_name)?;
     Ok(StagedPluginArchive {
         staging,
         extracted_root,
         install_dir: install_dir.to_path_buf(),
         plugin_name: plugin_name.to_string(),
         manifest,
-        requires,
     })
 }
 

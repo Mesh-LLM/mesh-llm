@@ -23,7 +23,6 @@ fn installed_capsules(store_root: &Path, enabled: bool) -> InstalledPluginMetada
         install_path: store_root.join("installs").join("capsules"),
         enabled,
         default_managed: true,
-        requires: Vec::new(),
         manifest: Some(InstalledPluginManifestMetadata {
             openai_exchange_hook: None,
             config_schema: None,

@@ -126,7 +126,6 @@ mod tests {
             install_path,
             enabled: true,
             default_managed: false,
-            requires: Vec::new(),
             manifest: None,
 
             last_protocol_version: None,
