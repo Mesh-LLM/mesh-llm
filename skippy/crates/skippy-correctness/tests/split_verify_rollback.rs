@@ -1,7 +1,9 @@
 //! Parity for speculative verify-window rollback on a split target.
 //!
-//! A two-stage split runs greedy speculative windows with forced rejections
-//! and must commit exactly the tokens a full model decodes one at a time. The
+//! Two- and three-stage splits run greedy speculative windows with forced
+//! rejections and must commit exactly the tokens a full model decodes one at
+//! a time. A three-stage split has a middle stage that both receives and
+//! sends activations, which a two-stage split never exercises. Each
 //! split runs once with recurrent rollback snapshots deep enough for every
 //! window to roll back in place, once with snapshots too shallow so every
 //! window takes a host checkpoint, and once with pipelined windows, where a
@@ -97,17 +99,29 @@ fn open(
 
 /// A target that verifies windows and rolls them back.
 enum Target {
-    Single(StageSession),
-    Split(StageSession, StageSession),
+    Single(Box<StageSession>),
+    /// One session per stage, in stage order; each stage's output frame is
+    /// the next stage's input.
+    Split(Vec<StageSession>),
 }
 
 impl Target {
+    fn split(models: &[StageModel]) -> Result<Self> {
+        models
+            .iter()
+            .map(StageModel::create_session)
+            .collect::<Result<_>>()
+            .map(Self::Split)
+    }
+
     fn prefill(&mut self, tokens: &[i32]) -> Result<()> {
         match self {
             Self::Single(session) => session.prefill_chunked(tokens),
-            Self::Split(first, last) => {
-                let frame = first.prefill_chunk_frame(tokens, None, 0)?;
-                last.prefill_chunk_frame(tokens, Some(&frame), 0)?;
+            Self::Split(stages) => {
+                let mut frame = None;
+                for stage in stages {
+                    frame = Some(stage.prefill_chunk_frame(tokens, frame.as_ref(), 0)?);
+                }
                 Ok(())
             }
         }
@@ -116,10 +130,15 @@ impl Target {
     fn verify(&mut self, window: &[i32]) -> Result<Vec<i32>> {
         match self {
             Self::Single(session) => session.verify_tokens(window),
-            Self::Split(first, last) => {
-                let (_, _, frame): (_, _, ActivationFrame) =
-                    first.verify_tokens_frame(window, None, 0)?;
-                let (predicted, _, _) = last.verify_tokens_frame(window, Some(&frame), 0)?;
+            Self::Split(stages) => {
+                let mut frame: Option<ActivationFrame> = None;
+                let mut predicted = Vec::new();
+                for stage in stages {
+                    let (stage_predicted, _, output) =
+                        stage.verify_tokens_frame(window, frame.as_ref(), 0)?;
+                    predicted = stage_predicted;
+                    frame = Some(output);
+                }
                 Ok(predicted)
             }
         }
@@ -127,8 +146,8 @@ impl Target {
 
     fn sessions(&mut self) -> Vec<&mut StageSession> {
         match self {
-            Self::Single(session) => vec![session],
-            Self::Split(first, last) => vec![first, last],
+            Self::Single(session) => vec![&mut **session],
+            Self::Split(stages) => stages.iter_mut().collect(),
         }
     }
 
@@ -168,11 +187,16 @@ impl Target {
                     let (predicted, frame) = session.decode_step_frame(token, None, 0)?;
                     Ok((predicted, vec![frame]))
                 }
-                Self::Split(first, last) => {
-                    let (_, first_frame) = first.decode_step_frame(token, None, 0)?;
-                    let (predicted, last_frame) =
-                        last.decode_step_frame(token, Some(&first_frame), 0)?;
-                    Ok((predicted, vec![first_frame, last_frame]))
+                Self::Split(stages) => {
+                    let mut frames: Vec<ActivationFrame> = Vec::with_capacity(stages.len());
+                    let mut predicted = 0;
+                    for stage in stages.iter_mut() {
+                        let (stage_predicted, frame) =
+                            stage.decode_step_frame(token, frames.last(), 0)?;
+                        predicted = stage_predicted;
+                        frames.push(frame);
+                    }
+                    Ok((predicted, frames))
                 }
             })
             .collect()
@@ -459,85 +483,67 @@ fn relative_difference(lhs: &ActivationFrame, rhs: &ActivationFrame) -> Result<f
     })
 }
 
-#[test]
-fn split_verify_rollback_matches_full_model_and_checkpoint_path() -> Result<()> {
-    let Some(path) = correctness_model() else {
-        eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
-        return Ok(());
-    };
-    let layers = layer_count(&path)?;
-    let split = layers / 2;
-    let full = open(&path, 0, (0, layers), None, DEEP_ROLLBACK)?;
-    let plans = plan_gguf_stage_runtime_plans(&path, &[(0, split), (split, layers)], CTX_SIZE, 1)?;
-    let prompt = full.tokenize(PROMPT, true)?;
-    ensure!(prompt.len() > 2, "prompt is too short");
-    let reference = reference_tokens(&full, &prompt)?;
+/// Layer ranges of a split into `stages` nearly equal stages.
+fn stage_ranges(layers: u32, stages: u32) -> Vec<(u32, u32)> {
+    (0..stages)
+        .map(|stage| (layers * stage / stages, layers * (stage + 1) / stages))
+        .collect()
+}
 
-    let split_target = |rollback| -> Result<(StageModel, StageModel)> {
-        Ok((
-            open(&path, 0, (0, split), Some(&plans[0]), rollback)?,
-            open(&path, 1, (split, layers), Some(&plans[1]), rollback)?,
-        ))
+/// Runs every split scenario over `ranges` and checks it against the full
+/// model's greedy decode.
+fn check_split(
+    path: &PathBuf,
+    ranges: &[(u32, u32)],
+    prompt: &[i32],
+    reference: &[i32],
+    single: &Run,
+) -> Result<()> {
+    let stages = ranges.len();
+    let plans = plan_gguf_stage_runtime_plans(path, ranges, CTX_SIZE, 1)?;
+    let split_target = |rollback| -> Result<Vec<StageModel>> {
+        ranges
+            .iter()
+            .zip(&plans)
+            .enumerate()
+            .map(|(index, (&range, plan))| open(path, index as u32, range, Some(plan), rollback))
+            .collect()
     };
-    let (deep_first, deep_last) = split_target(DEEP_ROLLBACK)?;
-    let (shallow_first, shallow_last) = split_target(SHALLOW_ROLLBACK)?;
+    let deep = split_target(DEEP_ROLLBACK)?;
+    let shallow = split_target(SHALLOW_ROLLBACK)?;
 
-    let single = run_serial(
-        Target::Single(full.create_session()?),
-        &prompt,
-        &reference,
-        "single node",
-    )?;
     let in_place = run_serial(
-        Target::Split(deep_first.create_session()?, deep_last.create_session()?),
-        &prompt,
-        &reference,
-        "split in place",
+        Target::split(&deep)?,
+        prompt,
+        reference,
+        &format!("{stages}-stage split in place"),
     )?;
     let checkpointed = run_serial(
-        Target::Split(
-            shallow_first.create_session()?,
-            shallow_last.create_session()?,
-        ),
-        &prompt,
-        &reference,
-        "split checkpoint",
+        Target::split(&shallow)?,
+        prompt,
+        reference,
+        &format!("{stages}-stage split checkpoint"),
     )?;
     let pipelined = run_pipelined(
-        Target::Split(deep_first.create_session()?, deep_last.create_session()?),
-        &prompt,
-        &reference,
-        "split pipelined",
+        Target::split(&deep)?,
+        prompt,
+        reference,
+        &format!("{stages}-stage split pipelined"),
     )?;
-    let single_pipelined = run_pipelined(
-        Target::Single(full.create_session()?),
-        &prompt,
-        &reference,
-        "single node pipelined",
-    )?;
-
     // Every width change re-realizes each stage's slice of a freshly built
     // graph; the split must still commit what the full model decodes.
-    let changing = run_changing_widths(
-        Target::Split(deep_first.create_session()?, deep_last.create_session()?),
-        &prompt,
-        &reference,
-        "split changing widths",
-    )?;
+    let label = format!("{stages}-stage split changing widths");
+    let changing = run_changing_widths(Target::split(&deep)?, prompt, reference, &label)?;
 
-    let expected = &reference[..single.committed.len()];
-    assert_eq!(single.committed, expected);
     assert_eq!(
         changing.committed,
         &reference[..changing.committed.len()],
-        "split changing widths"
+        "{label}"
     );
     assert_eq!(in_place.committed, checkpointed.committed);
     assert_eq!(in_place.committed, single.committed);
-    for run in [&pipelined, &single_pipelined] {
-        let common = run.committed.len().min(single.committed.len());
-        assert_eq!(run.committed[..common], single.committed[..common]);
-    }
+    let common = pipelined.committed.len().min(single.committed.len());
+    assert_eq!(pipelined.committed[..common], single.committed[..common]);
 
     // Both runs committed the same windows; only how each stage rolled back
     // differs. A rejected window's accepted rows replay in a smaller batch on
@@ -550,19 +556,63 @@ fn split_verify_rollback_matches_full_model_and_checkpoint_path() -> Result<()> 
     for (step, ((_, in_place_frames), (_, checkpoint_frames))) in
         in_place.probe.iter().zip(&checkpointed.probe).enumerate()
     {
+        ensure!(in_place_frames.len() == stages && checkpoint_frames.len() == stages);
         for (stage, (lhs, rhs)) in in_place_frames.iter().zip(checkpoint_frames).enumerate() {
             if lhs.payload.is_empty() && rhs.payload.is_empty() {
                 continue;
             }
             let difference = relative_difference(lhs, rhs)?;
             eprintln!(
-                "probe step {step} stage {stage}: relative |in place - checkpoint| = {difference:e}"
+                "{stages} stages, probe step {step} stage {stage}: relative |in place - checkpoint| = {difference:e}"
             );
             ensure!(
                 difference <= tolerance,
-                "probe step {step}: stage {stage} activations differ from the checkpoint path by {difference}"
+                "{stages} stages, probe step {step}: stage {stage} activations differ from the checkpoint path by {difference}"
             );
         }
+    }
+    Ok(())
+}
+
+#[test]
+fn split_verify_rollback_matches_full_model_and_checkpoint_path() -> Result<()> {
+    let Some(path) = correctness_model() else {
+        eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
+        return Ok(());
+    };
+    let layers = layer_count(&path)?;
+    let full = open(&path, 0, (0, layers), None, DEEP_ROLLBACK)?;
+    let prompt = full.tokenize(PROMPT, true)?;
+    ensure!(prompt.len() > 2, "prompt is too short");
+    let reference = reference_tokens(&full, &prompt)?;
+
+    let single = run_serial(
+        Target::Single(Box::new(full.create_session()?)),
+        &prompt,
+        &reference,
+        "single node",
+    )?;
+    let single_pipelined = run_pipelined(
+        Target::Single(Box::new(full.create_session()?)),
+        &prompt,
+        &reference,
+        "single node pipelined",
+    )?;
+    assert_eq!(single.committed, &reference[..single.committed.len()]);
+    let common = single_pipelined.committed.len().min(single.committed.len());
+    assert_eq!(
+        single_pipelined.committed[..common],
+        single.committed[..common]
+    );
+
+    for stages in [2, 3] {
+        check_split(
+            &path,
+            &stage_ranges(layers, stages),
+            &prompt,
+            &reference,
+            &single,
+        )?;
     }
     Ok(())
 }
