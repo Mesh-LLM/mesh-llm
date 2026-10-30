@@ -27,4 +27,4 @@
 11	C	workload_classify	^ModelLoad/.*	parity	load-time derivation only; the ModelLoad row covers it (same native open), decisions tested in workload_profile_test
 12	A	sampling_suppress	^SamplingSuppress/	win	native-equivalent merge and bitmap scan; 32k vocab/128 suppressed/32 biases; arm64 local 15 interleaved reps: 94.17 us FFI / 14.71 us API minima; scoped synthetic result
 13	A	sampling_eligible	^SamplingEligible/	win	full bitmap selection plus boundary check; arm64 local 15 interleaved reps: 82.57 us FFI / 10.71 us API minima; scoped synthetic result
-14	C	sampling_store	^SamplingStore/	win	store-boundary row: identical work both sides (reserve + 64 stores + reject branch); 1.10x on a ~50ns fixed-cost row, reproduced across two 15-rep interleaved runs
+14	A	sampling_store	^SamplingStore/	win	full all-or-nothing 64-token store comparison; local arm64 15 interleaved reps: 44.8 ns FFI / 39.1 ns API minima; scoped synthetic result
