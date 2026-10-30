@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **20 headers** and **124 exported functions**.
+Current generated surface: **21 headers** and **130 exported functions**.
 
 ## Quick navigation
 
@@ -40,6 +40,17 @@ Current generated surface: **20 headers** and **124 exported functions**.
         <a href="#skippy-fn-skippy-asr-result-language"><code>skippy_asr_result_language</code></a>
         <a href="#skippy-fn-skippy-asr-result-duration-seconds"><code>skippy_asr_result_duration_seconds</code></a>
         <a href="#skippy-fn-skippy-asr-result-free"><code>skippy_asr_result_free</code></a>
+      </div>
+    </section>
+    <section class="skippy-api-index__group">
+      <a class="skippy-api-index__group-title" href="#skippy-header-clef-h"><code>clef.h</code><span>6 functions</span></a>
+      <div class="skippy-api-index__functions">
+        <a href="#skippy-fn-skippy-clef-model-open"><code>skippy_clef_model_open</code></a>
+        <a href="#skippy-fn-skippy-clef-model-free"><code>skippy_clef_model_free</code></a>
+        <a href="#skippy-fn-skippy-clef-model-info-v1"><code>skippy_clef_model_info_v1</code></a>
+        <a href="#skippy-fn-skippy-clef-model-decision-metadata"><code>skippy_clef_model_decision_metadata</code></a>
+        <a href="#skippy-fn-skippy-clef-plan"><code>skippy_clef_plan</code></a>
+        <a href="#skippy-fn-skippy-clef-read"><code>skippy_clef_read</code></a>
       </div>
     </section>
     <section class="skippy-api-index__group">
@@ -254,6 +265,7 @@ Capability consumers can include a narrower header:
 | `include/skippy.h` | Umbrella include for the capability-oriented Skippy C API. Include a narrower header when a consumer only needs one capability. This file exists for consumers that want the complete staged-runtime surface. |
 | `include/skippy/activation.h` | Describes activation-frame payloads exchanged between stages. The descriptor carries a typed directory for every tensor crossing a stage frontier. Parts are matched by planner identity rather than model family. |
 | `include/skippy/asr.h` | Full-model speech recognition (Whisper) over uploaded audio. An ASR model does not load through `skippy_model_open`; it owns its whisper.cpp model file and runs on the runtime's ggml backends. Callers decode an upload to 16 kHz mono PCM with `skippy_asr_decode_audio`, then transcribe or translate it with `skippy_asr_transcribe`. Each transcription holds its own decoder state, so calls on one model may run concurrently. Runtimes built without whisper.cpp still export every symbol; they leave SKIPPY_FEATURE_SPEECH_RECOGNITION clear and fail calls with SKIPPY_STATUS_UNSUPPORTED. |
+| `include/skippy/clef.h` | Joint Clef decision reads (prompt rendering, decision order, one-pass scoring). Clef is a decision model whose head scores every option of every question of a request in one non-causal forward pass. It does not load through `skippy_model_open`; it owns its GGUF, tokenizer, `systemone` chat template, and an embeddings-mode execution context. The caller supplies the request as JSON in prompt order; the runtime renders the template, splits the prompt on the Clef separator, tokenizes each piece, marks the decision order of every token, decodes the whole prompt in one micro-batch, and returns one raw score per option. Temperature and softmax stay on the caller side (see `skippy_clef_model_decision_metadata`). |
 | `include/skippy/common.h` | ABI versioning, feature discovery, status codes, and errors. Every other public Skippy header depends on this capability boundary. The ABI is intentionally C-compatible so Rust and other native callers do not depend on private llama.cpp C++ layouts. |
 | `include/skippy/devices.h` | Enumerates backend devices available to the staged runtime. |
 | `include/skippy/events.h` | Versioned callbacks for model-open and runtime lifecycle progress. Event reporters are optional and operation-scoped. A reporter must remain valid until the corresponding model-open call returns. |
@@ -414,6 +426,97 @@ Releases a result returned by `skippy_asr_transcribe`.
 ```cpp
 LLAMA_API void skippy_asr_result_free(
         struct skippy_asr_result * result);
+```
+
+<a class="skippy-api-backlink" href="#skippy-function-index">↩ Back to function index</a>
+
+<a id="skippy-header-clef-h"></a>
+### `clef.h`
+
+<a id="skippy-fn-skippy-clef-model-open"></a>
+#### `skippy_clef_model_open`
+
+Opens a Clef GGUF with an embeddings-mode context; not a `skippy_model`. `n_ctx` bounds the tokens of one request and sizes the single micro-batch that reads it. `n_gpu_layers` follows llama.cpp (negative offloads all layers). Fails with SKIPPY_STATUS_MODEL_ERROR when the GGUF is not a Clef decision model or has no `systemone` chat template.
+
+```cpp
+LLAMA_API enum skippy_status skippy_clef_model_open(
+         const char * model_path,
+        int32_t n_ctx,
+        int32_t n_threads,
+        int32_t n_gpu_layers,
+        struct skippy_clef_model ** out_model,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-clef-model-free"></a>
+#### `skippy_clef_model_free`
+
+Releases a model returned by `skippy_clef_model_open`.
+
+```cpp
+LLAMA_API void skippy_clef_model_free(
+        struct skippy_clef_model * model);
+```
+
+<a id="skippy-fn-skippy-clef-model-info-v1"></a>
+#### `skippy_clef_model_info_v1`
+
+Reports the model's sizes, decision type, and metadata count. `out_info` must be initialized with its `struct_size` and `abi_version`.
+
+```cpp
+LLAMA_API enum skippy_status skippy_clef_model_info_v1(
+         const struct skippy_clef_model * model,
+        struct skippy_clef_info_v1 * out_info,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-clef-model-decision-metadata"></a>
+#### `skippy_clef_model_decision_metadata`
+
+Reads one `<arch>.decision.*` GGUF metadata entry by index. `out_key` receives the key suffix after `<arch>.decision.` (for example `temperature.choice.3_5` or `score_bias.5.2`) and `out_value` its string value; both are NUL-terminated and truncated to their capacities. Indices run over `decision_metadata_count` of `skippy_clef_info_v1`.
+
+```cpp
+LLAMA_API enum skippy_status skippy_clef_model_decision_metadata(
+         const struct skippy_clef_model * model,
+        uint32_t index,
+        char * out_key,
+        size_t key_capacity,
+        char * out_value,
+        size_t value_capacity,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-clef-plan"></a>
+#### `skippy_clef_plan`
+
+Plans the prompt of a request: token ids with their decision order. `request_json` is `{"state": ..., "questions": [{"id", "type", "instructions", "options": [{"key", "description"}]}]}` with the questions and options in the order the caller wants the scores back. The runtime sorts object keys, escapes the Clef marker in the input, renders the `systemone` template, splits on the separator, and tokenizes each piece on its own without special tokens. Returns SKIPPY_STATUS_BUFFER_TOO_SMALL with `out_token_count` set to the required length when `capacity` is short.
+
+```cpp
+LLAMA_API enum skippy_status skippy_clef_plan(
+         const struct skippy_clef_model * model,
+        const char * request_json,
+        size_t request_len,
+        int32_t * out_tokens,
+        int32_t * out_orders,
+        size_t capacity,
+        size_t * out_token_count,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-clef-read"></a>
+#### `skippy_clef_read`
+
+Scores every option of every question of a request in one pass. Plans the prompt like `skippy_clef_plan`, decodes it in one micro-batch, and writes one raw score per option in prompt order to `out_scores`. The head reports an unusable decision order as NaN, which fails the read with SKIPPY_STATUS_RUNTIME_ERROR. Calls are serialized per model. Returns SKIPPY_STATUS_BUFFER_TOO_SMALL with `out_score_count` set when `capacity` is short, and SKIPPY_STATUS_INVALID_ARGUMENT when the prompt exceeds `n_ctx`.
+
+```cpp
+LLAMA_API enum skippy_status skippy_clef_read(
+         struct skippy_clef_model * model,
+        const char * request_json,
+        size_t request_len,
+        float * out_scores,
+        size_t capacity,
+        size_t * out_score_count,
+        struct skippy_error ** out_error);
 ```
 
 <a class="skippy-api-backlink" href="#skippy-function-index">↩ Back to function index</a>
@@ -2080,7 +2183,8 @@ The headers also define the following enums, structs, opaque handles, and ABI co
 
 - `activation.h`: `skippy_activation_part_desc`, `skippy_activation_boundary_desc`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_FRAME_VERSION = 2`, `SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION = 2`, `SKIPPY_ACTIVATION_IDENTITY_BYTES = 32`, `SKIPPY_ACTIVATION_MAX_DIMS = 4`, `SKIPPY_ACTIVATION_MAX_PARTS = 16`, `SKIPPY_ACTIVATION_PART_OPTIONAL = (UINT32_C(1) << 0)`
 - `asr.h`: `skippy_asr_model`, `skippy_asr_result`, `skippy_asr_info_v1`, `skippy_asr_transcribe_params_v1`, `skippy_asr_segment_v1`, `SKIPPY_ASR_INFO_V1_ABI_VERSION = 1`, `SKIPPY_ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION = 1`, `SKIPPY_ASR_SEGMENT_V1_ABI_VERSION = 1`, `SKIPPY_ASR_SAMPLE_RATE = 16000`, `SKIPPY_ASR_MAX_SAMPLES = (SKIPPY_ASR_SAMPLE_RATE * 60 * 30)`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 74`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`, `SKIPPY_FEATURE_NON_CHAT_WORKLOADS = ((uint64_t)1 << 37)`, `SKIPPY_FEATURE_SYSTEM_ONE = ((uint64_t)1 << 38)`, `SKIPPY_FEATURE_CACHEGEN_KV_PAGE = (UINT64_C(1) << 39)`, `SKIPPY_FEATURE_LAYA_DECISIONS = (UINT64_C(1) << 40)`, `SKIPPY_FEATURE_SPEECH_RECOGNITION = (UINT64_C(1) << 41)`
+- `clef.h`: `skippy_clef_model`, `skippy_clef_order`, `skippy_clef_info_v1`, `SKIPPY_CLEF_INFO_V1_ABI_VERSION = 1`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 75`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`, `SKIPPY_FEATURE_NON_CHAT_WORKLOADS = ((uint64_t)1 << 37)`, `SKIPPY_FEATURE_SYSTEM_ONE = ((uint64_t)1 << 38)`, `SKIPPY_FEATURE_CACHEGEN_KV_PAGE = (UINT64_C(1) << 39)`, `SKIPPY_FEATURE_LAYA_DECISIONS = (UINT64_C(1) << 40)`, `SKIPPY_FEATURE_SPEECH_RECOGNITION = (UINT64_C(1) << 41)`, `SKIPPY_FEATURE_CLEF_DECISIONS = (UINT64_C(1) << 42)`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `execution.h`: `skippy_token_score_request`, `skippy_iteration_request`

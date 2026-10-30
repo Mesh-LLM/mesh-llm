@@ -7,9 +7,9 @@ use std::{
 use crate::{
     ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
     ActivationDesc, AsrAbortCallback, AsrInfoV1, AsrModel, AsrResult, AsrSegmentV1,
-    AsrTranscribeParamsV1, BackendDevice, CacheGenRecordV1, Error, GenerationSignalWindow,
-    IterationRequest, KvPageDesc, LayaInfoV1, LayaMemoryV1, LayaModel, LayaSequence,
-    LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextFn, Model, ModelInfo,
+    AsrTranscribeParamsV1, BackendDevice, CacheGenRecordV1, ClefInfoV1, ClefModel, Error,
+    GenerationSignalWindow, IterationRequest, KvPageDesc, LayaInfoV1, LayaMemoryV1, LayaModel,
+    LayaSequence, LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextFn, Model, ModelInfo,
     ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
     MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
     MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
@@ -197,6 +197,12 @@ dynamic_symbols! {
     skippy_model_supports_causal_readout(model: *const Model) -> bool;
     skippy_laya_model_open(model_path: *const c_char, n_threads: i32, device: *const c_char, out_model: *mut *mut LayaModel, out_error: *mut *mut Error) -> Status;
     skippy_laya_model_free(model: *mut LayaModel);
+    skippy_clef_model_open(model_path: *const c_char, n_ctx: i32, n_threads: i32, n_gpu_layers: i32, out_model: *mut *mut ClefModel, out_error: *mut *mut Error) -> Status;
+    skippy_clef_model_free(model: *mut ClefModel);
+    skippy_clef_model_info_v1(model: *const ClefModel, out_info: *mut ClefInfoV1, out_error: *mut *mut Error) -> Status;
+    skippy_clef_model_decision_metadata(model: *const ClefModel, index: u32, out_key: *mut c_char, key_capacity: usize, out_value: *mut c_char, value_capacity: usize, out_error: *mut *mut Error) -> Status;
+    skippy_clef_plan(model: *const ClefModel, request_json: *const c_char, request_len: usize, out_tokens: *mut i32, out_orders: *mut i32, capacity: usize, out_token_count: *mut usize, out_error: *mut *mut Error) -> Status;
+    skippy_clef_read(model: *mut ClefModel, request_json: *const c_char, request_len: usize, out_scores: *mut f32, capacity: usize, out_score_count: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_laya_model_memory_v1(model: *mut LayaModel, out_info: *mut LayaMemoryV1, out_error: *mut *mut Error) -> Status;
     skippy_laya_model_info_v1(model: *const LayaModel, out_info: *mut LayaInfoV1, out_error: *mut *mut Error) -> Status;
     skippy_laya_tokenize(model: *const LayaModel, text: *const c_char, text_len: usize, out_tokens: *mut i32, capacity: usize, out_token_count: *mut usize, out_error: *mut *mut Error) -> Status;

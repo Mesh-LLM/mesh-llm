@@ -2,10 +2,10 @@ use std::ffi::{c_char, c_int, c_void};
 
 use crate::{
     ActivationBoundaryDesc, ActivationDesc, AsrAbortCallback, AsrInfoV1, AsrModel, AsrResult,
-    AsrSegmentV1, AsrTranscribeParamsV1, BackendDevice, Error, GenerationSignalWindow,
-    IterationRequest, KvPageDesc, LayaInfoV1, LayaMemoryV1, LayaModel, LayaSequence,
-    LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextData, Model, ModelInfo,
-    ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
+    AsrSegmentV1, AsrTranscribeParamsV1, BackendDevice, ClefInfoV1, ClefModel, Error,
+    GenerationSignalWindow, IterationRequest, KvPageDesc, LayaInfoV1, LayaMemoryV1, LayaModel,
+    LayaSequence, LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextData, Model,
+    ModelInfo, ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
     MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
     MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
     NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, StagePlan,
@@ -182,6 +182,48 @@ unsafe extern "C" {
     ) -> Status;
 
     pub fn skippy_laya_model_free(model: *mut LayaModel);
+    pub fn skippy_clef_model_open(
+        model_path: *const c_char,
+        n_ctx: i32,
+        n_threads: i32,
+        n_gpu_layers: i32,
+        out_model: *mut *mut ClefModel,
+        out_error: *mut *mut Error,
+    ) -> Status;
+    pub fn skippy_clef_model_free(model: *mut ClefModel);
+    pub fn skippy_clef_model_info_v1(
+        model: *const ClefModel,
+        out_info: *mut ClefInfoV1,
+        out_error: *mut *mut Error,
+    ) -> Status;
+    pub fn skippy_clef_model_decision_metadata(
+        model: *const ClefModel,
+        index: u32,
+        out_key: *mut c_char,
+        key_capacity: usize,
+        out_value: *mut c_char,
+        value_capacity: usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+    pub fn skippy_clef_plan(
+        model: *const ClefModel,
+        request_json: *const c_char,
+        request_len: usize,
+        out_tokens: *mut i32,
+        out_orders: *mut i32,
+        capacity: usize,
+        out_token_count: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+    pub fn skippy_clef_read(
+        model: *mut ClefModel,
+        request_json: *const c_char,
+        request_len: usize,
+        out_scores: *mut f32,
+        capacity: usize,
+        out_score_count: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
 
     pub fn skippy_laya_model_memory_v1(
         model: *mut LayaModel,

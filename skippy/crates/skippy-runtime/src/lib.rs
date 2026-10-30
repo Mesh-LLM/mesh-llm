@@ -5,6 +5,7 @@ pub(crate) use skippy_ffi::TensorRole;
 mod activation;
 mod capability_probe;
 mod checkpoint;
+pub mod clef;
 mod config;
 pub mod decision;
 mod devices;
@@ -36,6 +37,7 @@ pub use activation::{
 };
 pub use capability_probe::{CapabilityReport, probe_capabilities};
 pub use checkpoint::{CheckpointQuantization, is_safetensors_checkpoint};
+pub use clef::{ClefModel, ClefModelInfo};
 pub use config::{
     FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_I32, GGML_TYPE_Q4_0,
     GGML_TYPE_Q8_0, GlmDsaPolicy, LLAMA_SERVER_DEFAULT_N_BATCH, LLAMA_SERVER_DEFAULT_N_UBATCH,
