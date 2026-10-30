@@ -2,7 +2,7 @@
 //! the GPU state lives in host RAM, so exporting a snapshot that does not fit
 //! the remaining headroom kills the process instead of degrading the cache.
 
-use std::sync::atomic::Ordering;
+use std::sync::{Mutex, atomic::Ordering};
 
 use crate::runtime_state::RuntimeState;
 
@@ -18,6 +18,46 @@ pub(crate) const SNAPSHOT_TRANSIENT_COPIES: u64 = 2;
 /// 64 GiB host) for decode growth and the allocations the export itself does
 /// not account for.
 pub(crate) const HOST_RESERVE_DIVISOR: u64 = 16;
+
+static RESERVED_BYTES: Mutex<u64> = Mutex::new(0);
+
+#[derive(Debug)]
+pub(super) struct SnapshotReservation {
+    bytes: u64,
+    counter: &'static Mutex<u64>,
+}
+
+impl Drop for SnapshotReservation {
+    fn drop(&mut self) {
+        let mut reserved = self
+            .counter
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *reserved = reserved.saturating_sub(self.bytes);
+    }
+}
+
+fn reserve_snapshot(
+    counter: &'static Mutex<u64>,
+    snapshot_bytes: u64,
+    host: impl FnOnce() -> Option<HostMemory>,
+) -> Result<SnapshotReservation, SnapshotAdmission> {
+    let mut reserved = counter
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let host = host().map(|mut host| {
+        host.available_bytes = host.available_bytes.saturating_sub(*reserved);
+        host
+    });
+    match admit_snapshot(snapshot_bytes, host) {
+        SnapshotAdmission::Admit => {
+            let bytes = snapshot_bytes.saturating_mul(SNAPSHOT_TRANSIENT_COPIES);
+            *reserved = reserved.saturating_add(bytes);
+            Ok(SnapshotReservation { bytes, counter })
+        }
+        skip => Err(skip),
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct HostMemory {
@@ -80,13 +120,13 @@ impl KvStageIntegration {
     /// against host memory read now, before any state is copied. A size probe
     /// that fails admits the record (the export reports its own error), and
     /// says so once per stage so a host without admission is noticeable.
-    pub(super) fn snapshot_fits_host_memory(
+    pub(super) fn reserve_snapshot_host_memory(
         &self,
         runtime: &mut RuntimeState,
         session_id: &str,
         payload: StagePrefixCachePayload,
         token_count: u64,
-    ) -> bool {
+    ) -> Option<Option<SnapshotReservation>> {
         let snapshot_bytes = match self.snapshot_size(runtime, session_id, payload, token_count) {
             Ok(snapshot_bytes) => snapshot_bytes,
             Err(_) => {
@@ -102,16 +142,18 @@ impl KvStageIntegration {
                         ),
                     );
                 }
-                return true;
+                return Some(None);
             }
         };
-        let SnapshotAdmission::Skip {
-            required_bytes,
-            available_bytes,
-        } = admit_snapshot(snapshot_bytes, current_host_memory())
-        else {
-            return true;
-        };
+        let (required_bytes, available_bytes) =
+            match reserve_snapshot(&RESERVED_BYTES, snapshot_bytes, current_host_memory) {
+                Ok(reservation) => return Some(Some(reservation)),
+                Err(SnapshotAdmission::Skip {
+                    required_bytes,
+                    available_bytes,
+                }) => (required_bytes, available_bytes),
+                Err(SnapshotAdmission::Admit) => unreachable!(),
+            };
         self.exact_state_records_dropped
             .fetch_add(1, Ordering::Relaxed);
         self.notify_kv_lifecycle(KvLifecycleEvent::ExactStateRecordFailed);
@@ -126,7 +168,7 @@ impl KvStageIntegration {
                 ),
             );
         }
-        false
+        None
     }
 
     /// Mirrors the export: a missing native KV page or a dense model's absent
@@ -184,6 +226,15 @@ mod tests {
     fn headroom_reserves_two_snapshot_copies_and_a_sixteenth_of_host_ram() {
         assert_eq!(required_headroom_bytes(10 * GIB, 64 * GIB), 24 * GIB);
         assert_eq!(required_headroom_bytes(0, 64 * GIB), 4 * GIB);
+    }
+
+    #[test]
+    fn active_reservation_blocks_another_export_until_dropped() {
+        static COUNTER: Mutex<u64> = Mutex::new(0);
+        let first = reserve_snapshot(&COUNTER, 10 * GIB, || host(64, 24)).unwrap();
+        assert!(reserve_snapshot(&COUNTER, 10 * GIB, || host(64, 24)).is_err());
+        drop(first);
+        assert!(reserve_snapshot(&COUNTER, 10 * GIB, || host(64, 24)).is_ok());
     }
 
     #[test]

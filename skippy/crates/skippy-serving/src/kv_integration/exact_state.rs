@@ -82,6 +82,7 @@ pub struct ExactStateAdmissionCredit {
     class: CaptureAdmission,
     total: Arc<std::sync::atomic::AtomicUsize>,
     best_effort: Arc<std::sync::atomic::AtomicUsize>,
+    snapshot_reservation: Option<snapshot_headroom::SnapshotReservation>,
 }
 
 impl ExactStateAdmissionCredit {
@@ -104,6 +105,7 @@ impl ExactStateAdmissionCredit {
                                 class,
                                 total: Arc::clone(total),
                                 best_effort: Arc::clone(best_effort),
+                                snapshot_reservation: None,
                             });
                         }
                         Err(actual) => observed = actual,
@@ -146,6 +148,7 @@ impl ExactStateAdmissionCredit {
                                 class,
                                 total: Arc::clone(total),
                                 best_effort: Arc::clone(best_effort),
+                                snapshot_reservation: None,
                             });
                         }
                         Err(actual) => observed_total = actual,
@@ -559,7 +562,7 @@ impl KvStageIntegration {
         // enqueued record and the worker releases it on every completion
         // path. Acquisition is a CAS reservation, so competing producers
         // cannot oversubscribe the budget.
-        let Some(admission_credit) = ExactStateAdmissionCredit::acquire(
+        let Some(mut admission_credit) = ExactStateAdmissionCredit::acquire(
             &self.admission_outstanding,
             &self.admission_best_effort_outstanding,
             admission,
@@ -609,10 +612,16 @@ impl KvStageIntegration {
             self.finish_record(&identity.page_id);
             return Ok(None);
         }
-        if !self.snapshot_fits_host_memory(runtime, session_id, exact_state_payload, token_count) {
+        let Some(reservation) = self.reserve_snapshot_host_memory(
+            runtime,
+            session_id,
+            exact_state_payload,
+            token_count,
+        ) else {
             self.finish_record(&identity.page_id);
             return Ok(None);
-        }
+        };
+        admission_credit.snapshot_reservation = reservation;
         let exported = match exact_state_payload {
             StagePrefixCachePayload::FullState => {
                 runtime.export_full_state(session_id).map(|state| {
