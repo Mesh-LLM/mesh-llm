@@ -18,14 +18,19 @@ mode. `.serve` is serve-only.
 ## Join and infer
 
 ```swift
+import Foundation
 import MeshLLM
 
 let node = try Node(mode: .client, autoJoin: true)
 try await node.start()
 do {
     let llms = try await node.inference.listModels()
+    guard let model = llms.first else {
+        throw NSError(domain: "MeshLLM", code: 1,
+                      userInfo: [NSLocalizedDescriptionKey: "No LLM is advertised yet."])
+    }
     let response = try await node.inference.chatCompletions([
-        "model": llms[0].id,
+        "model": model.id,
         "messages": [["role": "user", "content": "Hello from Swift."]],
     ])
     print(try response.jsonObject())
@@ -61,7 +66,8 @@ if let cursor = ocr.nextCursor {
 
 The result types are `MeshModelPage`, `MeshModel`, `MeshModelProvider` and
 `MeshModelRuntime`. Optional facts remain absent when unknown; string-valued
-workloads and kinds preserve future peer values. Open-ended metadata uses
+workloads normalize unrecognized peer values to `unknown`; the original workload
+string is not preserved. Kinds are string-valued. Open-ended metadata uses
 `ModelJSONValue`. Filters combine with AND; preserve them when continuing a page.
 
 Runtime limits, capability evidence, thinking controls and payment offers apply
@@ -136,6 +142,32 @@ A membership has an independent node identity, owner allowlist and peer set.
 An empty owner allowlist admits nobody. Adding the same name replaces its
 membership under the Rust core's validation/recovery rules. The native model
 catalog queries the primary mesh and does not merge separate memberships.
+
+## Live transcription
+
+Supply signed 16-bit mono PCM samples recorded at 16 kHz. With turn detection
+disabled, call `commit()` to end the turn explicitly:
+
+```swift
+let session = try await node.startLiveTranscription(LiveTranscriptionOptions(
+    model: "speech-model", sampleRate: 16000, turnDetection: nil))
+do {
+    try await session.sendAudio(pcm16Samples)
+    try await session.commit()
+    if let event = try await session.nextEvent() {
+        print(event)
+    }
+    let remainingEvents = try await session.stop()
+    print(remainingEvents)
+} catch {
+    await session.close()
+    throw error
+}
+```
+
+`sendAudioF32` accepts floating point samples. Defaults use 16 kHz and server-side
+turn detection. `stop()` returns remaining final events; `close()` abandons the
+session. Stop the node when the application exits.
 
 ## Full embedded-node configuration
 

@@ -14,6 +14,34 @@ mod query;
 pub(crate) use query::{http_response, parse_params as parse_query_parameters};
 pub use query::{lookup, query_models};
 
+/// Snapshot locks must not block the runtime's command and shutdown polling.
+pub(crate) fn respond(
+    node: mesh::Node,
+    mut resp: tokio::sync::oneshot::Sender<Result<Vec<MeshModel>>>,
+) -> tokio::task::JoinHandle<()> {
+    let shutdown = crate::sdk::embedded_shutdown::SHUTDOWN
+        .try_with(Clone::clone)
+        .ok();
+    tokio::spawn(async move {
+        let discover = async move {
+            tokio::select! {
+                biased;
+                _ = crate::sdk::embedded_shutdown::cancelled() => {}
+                _ = resp.closed() => {}
+                result = collect(&node) => { let _ = resp.send(result); }
+            }
+        };
+        // Spawned tasks do not inherit the runtime's task-local scope.
+        if let Some(shutdown) = shutdown {
+            crate::sdk::embedded_shutdown::SHUTDOWN
+                .scope(shutdown, discover)
+                .await;
+        } else {
+            discover.await;
+        }
+    })
+}
+
 /// Collect only this node's mesh advertisements. Downloads and other memberships
 /// are deliberately not queried. Provider facts remain together throughout.
 pub(crate) async fn collect(node: &mesh::Node) -> Result<Vec<MeshModel>> {

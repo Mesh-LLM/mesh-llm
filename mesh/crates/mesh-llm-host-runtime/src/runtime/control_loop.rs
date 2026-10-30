@@ -421,7 +421,7 @@ pub(super) async fn run_auto_handle_control_request(
 
     match cmd {
         api::RuntimeControlRequest::DiscoverModels { resp } => {
-            let _ = resp.send(crate::models::discovery::collect(ctx.node).await);
+            crate::models::discovery::respond(ctx.node.clone(), resp);
             false
         }
         api::RuntimeControlRequest::Join { invite_token, resp } => {

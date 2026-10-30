@@ -122,3 +122,28 @@ Always call `stop`/`shutdown` as the application exits. `status`,
 `api_base_url`, `console_url` and `invite_token` expose node lifecycle details.
 Native catalog queries avoid HTTP; this does not mean the whole SDK lifecycle
 or inference transport is HTTP-free.
+
+Supply signed 16-bit mono PCM recorded at 16 kHz. Disable turn detection for
+explicit turn commits:
+
+```rust,no_run
+use mesh_llm_sdk::live_transcription::LiveTranscriptionOptions;
+
+let mut session = node.start_live_transcription(LiveTranscriptionOptions {
+    model: Some("speech-model".into()),
+    sample_rate: 16_000,
+    turn_detection: None,
+    ..Default::default()
+}).await?;
+session.send_audio(&pcm16_samples).await?;
+session.commit().await?;
+if let Some(event) = session.next_event().await {
+    println!("{event:?}");
+}
+let remaining_events = session.stop().await?;
+println!("{remaining_events:?}");
+```
+
+`send_audio_f32` accepts floating point samples. `stop()` consumes the session
+and returns remaining final events. Dropping the session on error closes its
+transport. Stop the node when the application exits.

@@ -55,7 +55,8 @@ ocr.nextCursor?.let { cursor ->
 
 Results use `MeshModelPage`, `MeshModel`, `MeshModelProvider` and
 `MeshModelRuntime`. Filters combine with AND; keep them when continuing a page.
-String-valued workloads and kinds preserve future peer values. Unknown optional
+Unrecognized workloads become `unknown`; the original peer string is not
+preserved. Kinds are string-valued. Unknown optional
 facts remain null; open-ended metadata uses `JsonElement`.
 
 A model's operations mean at least one provider advertises each operation.
@@ -135,6 +136,29 @@ Memberships have independent identities, owner allowlists and peers. An empty
 allowlist admits nobody. Adding an existing name replaces the membership under
 the Rust core's validation/recovery rules. The native model catalog queries the
 primary mesh; it never combines independent memberships implicitly.
+
+## Live transcription
+
+Use signed 16-bit mono PCM recorded at 16 kHz. Disable turn detection to commit
+turns explicitly:
+
+```kotlin
+val session = node.startLiveTranscription(LiveTranscriptionOptions(
+    model = "speech-model", sampleRate = 16000u, turnDetection = null))
+try {
+    session.sendAudio(pcm16Samples)
+    session.commit()
+    println(session.nextEvent())
+    val remainingEvents = session.stop()
+    println(remainingEvents)
+} finally {
+    session.close()
+}
+```
+
+`sendAudioF32` accepts floating point samples. Defaults use 16 kHz and server-side
+turn detection. `stop()` returns remaining final events; `close()` abandons the
+session. Stop the node when the application exits.
 
 ## Full embedded-node configuration
 

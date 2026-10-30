@@ -49,8 +49,9 @@ if page.next_cursor is not None:
 
 Results are `MeshModelPage`, `MeshModel`, and `MeshModelProvider` dataclasses.
 Filters combine with AND. Keep filters unchanged when continuing a page, and
-restart if its snapshot expires. Missing metadata is unknown; workload strings
-preserve future values. Each provider retains its runtime limits, capabilities
+restart if its snapshot expires. Missing metadata is unknown. Unrecognized
+workloads become `unknown`; the original peer string is not preserved.
+Each provider retains its runtime limits, capabilities
 and optional thinking/payment observations. See
 [Mesh model discovery](../MODEL_DISCOVERY.md) for complete HTTP and SDK shapes.
 

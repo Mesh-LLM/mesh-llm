@@ -146,6 +146,29 @@ allowlist admits nobody. Adding an existing name replaces its membership under
 the same Rust validation/recovery rules. Model discovery queries the node's
 primary mesh; it does not combine these independent meshes.
 
+## Live transcription
+
+Use signed 16-bit mono PCM recorded at 16 kHz. Disable turn detection to commit
+turns explicitly:
+
+```js
+const session = await node.startLiveTranscription({
+  model: 'speech-model', sampleRate: 16000, turnDetection: null
+})
+try {
+  await session.sendAudio(pcm16Samples)
+  await session.commit()
+  console.log(await session.nextEvent())
+  console.log(await session.stop())
+} finally {
+  await session.close()
+}
+```
+
+`sendAudioF32` accepts floating point samples. Defaults use 16 kHz and server-side
+turn detection. `stop()` returns remaining final events; `close()` abandons the
+session. Stop the node when the application exits.
+
 ## Full embedded-node configuration
 
 `Node.fromConfig(config)` accepts the complete Rust `EmbeddedMeshNodeConfig`

@@ -59,7 +59,8 @@ ocr.nextCursor?.let { cursor ->
 
 Results use `MeshModelPage`, `MeshModel`, `MeshModelProvider` and
 `MeshModelRuntime`. Filters combine with AND; keep them when continuing a page.
-String-valued workloads and kinds preserve future peer values. Unknown optional
+Unrecognized workloads become `unknown`; the original peer string is not
+preserved. Kinds are string-valued. Unknown optional
 facts remain null; open-ended metadata uses `JsonElement`.
 
 A model's operations mean at least one provider advertises each operation.

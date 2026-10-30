@@ -59,7 +59,8 @@ Inference requests and OCR calls check HTTP success by default across all five
 SDKs. Use Rust's `request_raw`, `stream_raw` or `document_ocr_raw` for deliberate
 provider-status handling. Other SDKs offer `raiseForStatus: false` or Python's
 `raise_for_status=False` on raw request methods. Raw responses retain status,
-content type and body and expose a status-check helper. Rust/Swift/Kotlin generic
+content type and body. Node.js raw responses expose `statusCode`, `contentType`,
+`body` and `json()`; check `statusCode` explicitly in raw mode. Rust/Swift/Kotlin generic
 requests previously returned non-success responses by default; those callers
 must now select raw mode explicitly.
 

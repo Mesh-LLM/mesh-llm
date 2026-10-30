@@ -59,7 +59,8 @@ if page.next_cursor is not None:
 
 Results are `MeshModelPage`, `MeshModel`, and `MeshModelProvider` dataclasses.
 Filters combine with AND. Preserve filters while continuing a cursor; restart
-the list when the snapshot expires. Workload strings preserve future values.
+the list when the snapshot expires. Unrecognized workloads become `unknown`;
+the original peer string is not preserved.
 Provider runtime limits, capabilities and optional thinking/payment observations
 remain separate; absent facts are unknown. See
 [Mesh model discovery](/docs/pages/model-discovery/) for HTTP shapes and migration.

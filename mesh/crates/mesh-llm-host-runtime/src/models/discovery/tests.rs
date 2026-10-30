@@ -1,5 +1,44 @@
 use super::*;
 
+#[tokio::test]
+async fn snapshot_lock_wait_does_not_block_dispatch_and_caller_drop_cancels_it() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .unwrap();
+    let lock = node.model_runtime_descriptors.lock().await;
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let task = respond(node.clone(), sender);
+    tokio::task::yield_now().await;
+    assert!(!task.is_finished());
+    drop(receiver);
+    tokio::time::timeout(std::time::Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap();
+    drop(lock);
+    node.close_endpoint().await;
+}
+
+#[tokio::test]
+async fn snapshot_lock_wait_inherits_embedded_shutdown_scope() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .unwrap();
+    let lock = node.model_runtime_descriptors.lock().await;
+    let (shutdown, receiver) = tokio::sync::watch::channel(false);
+    let (sender, response) = tokio::sync::oneshot::channel();
+    let task = crate::sdk::embedded_shutdown::SHUTDOWN
+        .sync_scope(receiver, || respond(node.clone(), sender));
+    shutdown.send(true).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(response.await.is_err());
+    drop(lock);
+    node.close_endpoint().await;
+}
+
 #[test]
 fn advertised_operations_use_the_same_runtime_evidence_as_endpoint_admission() {
     use crate::models::CapabilityLevel;

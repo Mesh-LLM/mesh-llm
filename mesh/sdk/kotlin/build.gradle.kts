@@ -37,6 +37,8 @@ val generateKotlinBindings by tasks.registering(Exec::class) {
     workingDir = repoRoot
     commandLine("bash", "mesh/sdk/kotlin/scripts/generate-kotlin-bindings.sh")
     inputs.file(providers.environmentVariable("MESH_LLM_FFI_LIBRARY")
+        .orElse(providers.environmentVariable("CARGO_TARGET_DIR")
+            .map { File(it).resolve("release/libmeshllm_ffi.a").absolutePath })
         .orElse(repoRoot.resolve("target/release/libmeshllm_ffi.a").absolutePath))
     outputs.file(projectDir.resolve("src/main/kotlin/uniffi/mesh_ffi/mesh_ffi.kt"))
     outputs.file(projectDir.resolve("example/example-jvm/src/main/kotlin/uniffi/mesh_ffi/mesh_ffi.kt"))

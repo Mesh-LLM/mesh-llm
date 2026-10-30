@@ -60,7 +60,8 @@ if let cursor = ocr.nextCursor {
 
 The result types are `MeshModelPage`, `MeshModel`, `MeshModelProvider` and
 `MeshModelRuntime`. Optional facts remain absent when unknown; string-valued
-workloads and kinds preserve future peer values. Open-ended metadata uses
+workloads normalize unrecognized peer values to `unknown`; the original workload
+string is not preserved. Kinds are string-valued. Open-ended metadata uses
 `ModelJSONValue`. Filters combine with AND; preserve them when continuing a page.
 
 Runtime limits, capability evidence, thinking controls and payment offers apply
