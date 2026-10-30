@@ -559,6 +559,7 @@ pub(super) async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, nod
         // private-mesh service retried a dead credential for days with nothing
         // an operator would see.
         let mut last_failure: Option<String> = None;
+        let mut own_token_noticed = false;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             // Re-resolve file-backed tokens on every tick so a rotated invite
@@ -567,6 +568,25 @@ pub(super) async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, nod
                 resolve_rejoin_tokens(&rejoin_tokens, &rejoin_join_files, rejoin_config.as_deref());
             let mut join_failure: Option<String> = None;
             for t in &tokens {
+                // A token that names this node's own identity can never join
+                // (a node cannot join itself) — e.g. one join file pushed to
+                // every node in the mesh. Skip it, with one notice, instead
+                // of retrying it forever at error level (issue #2352).
+                if rejoin_node.invite_token_names_own_identity(t) {
+                    if !own_token_noticed {
+                        let message = "invite token names this node's own identity — \
+                            rejoin will not join it (it is this node's own invite token; a \
+                            node cannot join itself)"
+                            .to_string();
+                        tracing::info!("{message}");
+                        let _ = emit_event(OutputEvent::Warning {
+                            message,
+                            context: None,
+                        });
+                        own_token_noticed = true;
+                    }
+                    continue;
+                }
                 if let Err(e) = rejoin_node.join(t).await {
                     join_failure = Some(format!("Rejoin failed: {e}"));
                 }

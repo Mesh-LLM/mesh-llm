@@ -180,6 +180,7 @@ pub(crate) fn stage0_config(
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
         downstream: Some(PeerConfig {
+            persistent_lane_marker: false,
             stage_id: downstream_stage.stage_id.clone(),
             stage_index: downstream_stage.stage_index,
             endpoint: downstream_endpoint,

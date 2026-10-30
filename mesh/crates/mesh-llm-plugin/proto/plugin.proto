@@ -55,6 +55,10 @@ message InitializeRequest {
   string host_version = 2;
   string host_info_json = 3;
   MeshVisibility mesh_visibility = 4;
+  // JSON object of the operator's `[plugin.settings]` for this plugin,
+  // validated against its `config_schema`. Empty from a host older than this
+  // field, and for a plugin the operator gave no settings to.
+  string settings_json = 6;
   // Optional host features this host implements (see
   // `mesh_llm_plugin::host_capabilities`). A plugin checks one before using
   // the feature it names, so it fails clearly against an older host, which
@@ -128,6 +132,8 @@ message MeshEvent {
 message RpcRequest {
   string method = 1;
   string params_json = 2;
+  // Host-assigned parent call identity, echoed by invocation_callbacks.v1 plugins.
+  optional uint64 invocation_id = 3;
 }
 
 message RpcResponse {
@@ -137,6 +143,7 @@ message RpcResponse {
 message RpcNotification {
   string method = 1;
   string params_json = 2;
+  optional uint64 invocation_id = 3;
 }
 
 message ChannelMessage {
@@ -154,6 +161,13 @@ message MeshChannelFrame {
   string plugin_id = 1;
   string message_id = 2;
   ChannelMessage message = 3;
+  // Signed with the source endpoint key; the signature covers this expiry and
+  // every other frame field except `origin_signature`.
+  uint64 expires_at_unix_ms = 4;
+  // Covers a prost re-encoding of the decoded frame with this field cleared.
+  // Relayed only through peers advertising plugin-origin-signature; legacy
+  // relays are skipped because they discard these fields. Destinations verify it.
+  bytes origin_signature = 5;
 }
 
 message BulkTransferMessage {
@@ -186,6 +200,13 @@ message MeshBulkFrame {
   string plugin_id = 1;
   string message_id = 2;
   BulkTransferMessage message = 3;
+  // Signed with the source endpoint key; the signature covers this expiry and
+  // every other frame field except `origin_signature`.
+  uint64 expires_at_unix_ms = 4;
+  // Covers a prost re-encoding of the decoded frame with this field cleared.
+  // Relayed only through peers advertising plugin-origin-signature; legacy
+  // relays are skipped because they discard these fields. Destinations verify it.
+  bytes origin_signature = 5;
 }
 
 message PluginManifest {
@@ -544,6 +565,7 @@ message InvokeServiceRequest {
   ServiceKind kind = 1;
   string service_name = 2;
   string input_json = 3;
+  optional uint64 invocation_id = 4;
 }
 
 message InvokeServiceResponse {
@@ -557,6 +579,10 @@ message OperationManifest {
   string input_schema_json = 3;
   optional string output_schema_json = 4;
   optional string title = 5;
+  // Wall-clock seconds this operation may take before the host gives up on
+  // it. Unset means the host's default request deadline; 0 means the host
+  // waits for this operation for as long as the caller does.
+  optional uint32 timeout_secs = 6;
 }
 
 message ResourceManifest {

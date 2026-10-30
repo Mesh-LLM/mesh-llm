@@ -287,6 +287,7 @@ fn failed_plugin_summary_redacts_urls_before_serialization() {
         args: Vec::new(),
         url: Some("https://plugin.example.test/v1".into()),
         env: BTreeMap::new(),
+        settings: Default::default(),
         startup: PluginStartupOptions {
             optional: true,
             ..PluginStartupOptions::default()
@@ -532,6 +533,7 @@ async fn plugin_load_failure_keeps_declared_web_ui_metadata() {
             args: Vec::new(),
             url: None,
             env: BTreeMap::new(),
+            settings: Default::default(),
             startup: PluginStartupOptions {
                 optional: true,
                 ..PluginStartupOptions::default()

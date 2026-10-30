@@ -182,6 +182,7 @@ mod tests {
             load_mode: LoadMode::RuntimeSlice,
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: Some(PeerConfig {
+                persistent_lane_marker: false,
                 stage_id: "stage-0".to_string(),
                 stage_index: 0,
                 endpoint: "tcp://127.0.0.1:19000".to_string(),

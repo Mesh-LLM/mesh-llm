@@ -958,6 +958,7 @@ fn proxy_result_metadata(result: &RouteAttemptResult) -> (Option<u16>, Option<&'
         ),
         RouteAttemptResult::RetryableTimeout => (None, Some("timeout")),
         RouteAttemptResult::RetryableUnavailable => (None, Some("unavailable")),
+        RouteAttemptResult::RetryablePaymentRequired => (None, Some("payment_required")),
         RouteAttemptResult::RetryableContextOverflow
         | RouteAttemptResult::RetryableResponseQuality(_) => (None, Some("rejected")),
         RouteAttemptResult::CommittedStreamFailure { status_code } => {
@@ -1034,6 +1035,7 @@ fn handle_mesh_attempt_result(
         }
         RouteAttemptResult::RetryableTimeout => handle_retryable_mesh_timeout(context),
         RouteAttemptResult::RetryableUnavailable => handle_retryable_mesh_unavailable(context),
+        RouteAttemptResult::RetryablePaymentRequired => handle_retryable_mesh_unavailable(context),
         RouteAttemptResult::CommittedStreamFailure { .. } => {
             MeshAttemptDisposition::Return(attempt_result)
         }
@@ -1100,6 +1102,7 @@ fn terminal_outcome_for_mesh_route_result(
             crate::logging::TerminalOutcome::Cancelled(Some("client_disconnected".into()))
         }
         RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryablePaymentRequired
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableTimeout
         | RouteAttemptResult::RetryableUnavailable => {
@@ -1589,15 +1592,17 @@ fn should_retry_uncommitted_remote_attempt(result: RouteAttemptResult) -> bool {
     )
 }
 
-/// Route a request to a known inference target (local OpenAI surface or remote host).
-///
-/// Used by the API proxy after election has determined the target.
+/// Context passed when routing a request to one elected inference target.
 pub(crate) struct RouteTargetContext<'a> {
     pub(crate) request_id: RequestId,
     pub(crate) response_adapter: ResponseAdapter,
     pub(crate) route_observer: OpenAiRouteObserver<'a>,
 }
 
+/// Routes a request to its elected local or remote inference target.
+///
+/// A target timeout is reported as HTTP 504 so OpenAI clients can distinguish
+/// it from context overflow and other unavailable-target responses (HTTP 503).
 pub async fn route_to_target(
     node: mesh::Node,
     tcp_stream: ClientStream,
@@ -1668,7 +1673,26 @@ pub async fn route_to_target(
             node.record_routed_request(model, 1, outcome);
             delivered_outcome(status_code, usage, output_digests)
         }
-        RouteAttemptResult::RetryableTimeout
+        // A single target that ran out its deadline is a gateway timeout, not
+        // generic unavailability: 504 is the status the OpenAI error contract
+        // labels `timeout`, and it is the one an operator can act on by
+        // raising the budget (#2195).
+        RouteAttemptResult::RetryableTimeout => {
+            node.record_routed_request(
+                model,
+                1,
+                crate::network::metrics::RequestOutcome::Unavailable,
+            );
+            let result = send_error_observed(
+                tcp_stream,
+                504,
+                &format!("single target {target:?} timed out (route_to_target)"),
+                route_observer,
+            )
+            .await;
+            response_outcome(504, result)
+        }
+        RouteAttemptResult::RetryablePaymentRequired
         | RouteAttemptResult::RetryableContextOverflow
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableUnavailable => {
@@ -1787,6 +1811,7 @@ pub async fn route_http_endpoint_request(
             delivered_outcome(status_code, usage, output_digests)
         }
         RouteAttemptResult::RetryableTimeout
+        | RouteAttemptResult::RetryablePaymentRequired
         | RouteAttemptResult::RetryableContextOverflow
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableUnavailable => {

@@ -17,7 +17,7 @@ confirmed LLM offerings and eligible virtual LLM routes. Multimodal LLMs remain
 included. Models with missing or unknown workload metadata remain visible in
 Mesh discovery but are excluded from compatibility model lists. Older peers
 need to advertise a known LLM workload to appear in those lists. Existing
-non-LLM inference routes, including `/v1/documents/ocr`, are preserved.
+non-LLM inference routes, including `/mesh/v1/documents/ocr`, are preserved.
 
 ## HTTP catalog
 

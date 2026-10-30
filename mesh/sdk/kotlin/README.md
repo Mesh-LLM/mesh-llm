@@ -39,7 +39,7 @@ val response = node.inference.documentOcr(pdfBytes,
 val pages = response.json()
 ```
 
-OCR uploads the original binary bytes to `/v1/documents/ocr`; an empty document
+OCR uploads the original binary bytes to `/mesh/v1/documents/ocr`; an empty document
 is rejected. Provider status, content type and body are preserved. OCR raises
 `OpenAIRequestException` for non-2xx by default; `raiseForStatus = false`
 returns the raw response. Generic `inference.request`/`requestJson` also check status by default,

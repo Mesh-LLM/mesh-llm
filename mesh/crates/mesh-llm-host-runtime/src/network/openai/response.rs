@@ -7,6 +7,8 @@ mod dispatch;
 mod external_endpoint;
 mod json_adaptation;
 mod models;
+#[cfg(feature = "payments")]
+mod payment_admission;
 mod pipeline;
 mod pipeline_adapter;
 pub(crate) mod prepared_dispatch;

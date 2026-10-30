@@ -66,6 +66,7 @@ impl Drop for HomeEnvGuard {
 
 mod apply_config_diagnostics;
 mod apply_config_validation_authority;
+mod kv_cache_csrf;
 mod logs_api_routes;
 mod management_request_id;
 mod network_diagnostics;
@@ -88,6 +89,7 @@ include!("model_targets.rs");
 include!("wakeable_inventory.rs");
 include!("status_metrics.rs");
 include!("openai_smoke.rs");
+include!("plugin_call_transport.rs");
 include!("ui_routes.rs");
 include!("runtime_events_v1.rs");
 include!("runtime_capabilities_parity.rs");

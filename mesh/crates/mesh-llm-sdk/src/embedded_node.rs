@@ -501,7 +501,10 @@ impl OpenAiClient {
         form: reqwest::multipart::Form,
     ) -> reqwest::RequestBuilder {
         self.http
-            .post(self.url("documents/ocr"))
+            .post(format!(
+                "{}/mesh/v1/documents/ocr",
+                self.base_url.trim_end_matches('/').trim_end_matches("/v1")
+            ))
             .bearer_auth(&self.api_key)
             .multipart(form)
     }

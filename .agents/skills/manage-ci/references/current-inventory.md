@@ -130,15 +130,21 @@ pinned `public cpu` image, has no secrets, records exact seed/step budgets and
 source SHA, and uploads the reproducible failure log.
 **Llama Upgrade** (`llama-upstream-canary.yml`) runs daily or on trusted-main dispatch. It freezes
 one main source SHA and the upstream target before any hardware work. Default
-selection uses `repository llama-upstream-release` to resolve GitHub's latest
-published stable `ggml-org/llama.cpp` release, validate its `vMAJOR.MINOR.PATCH`
-tag, and peel annotated tags to an exact commit. It records the release and
-commit in the Actions summary and rejects lookup failures or tag movement
+selection uses `repository llama-upstream-release` to compare publication times
+across pages of `ggml-org/llama.cpp` release metadata, including prereleases and
+excluding drafts, then peel the selected tag to an exact commit. Every page is
+read before selecting: the feed is ordered by creation time, so a draft created
+long ago but published recently is on a late page, and the 180-second budget and
+1000-page ceiling bound the walk. It records the release kind, publication time,
+tag and commit in the Actions summary and rejects lookup failures or tag movement
 without falling back to `master`. The hosted selection step alone receives
-the workflow's read-only GitHub token; the lookup has a 120-second total budget.
+the workflow's read-only GitHub token; fixed read-only GraphQL queries fetch
+metadata without release assets, and REST resolves the selected tag. The lookup
+has a 180-second total budget, 1 MiB per response and a 1000-page ceiling;
+incomplete pagination fails instead of selecting from a partial feed.
 An explicit full `upstream_sha` bypasses release lookup; empty or `latest` selects
-the stable release. `mesh_ref` skips upstream selection entirely and retains
-its existing-pin contract; publication requires explicit `mesh_action=certify-and-publish`. This selection policy does not replace our full
+the newest published release or prerelease. `mesh_ref` skips upstream selection
+entirely and retains its existing-pin contract; publication requires explicit `mesh_action=certify-and-publish`. This selection policy does not replace our full
 upgrade certification or independent verification. All
 candidate builds compile native tests with `--build-only`, then the generated
 patch checker owns one full native CTest pass after patch equality and
@@ -522,10 +528,10 @@ runner-contract update is active.
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer; release UI builds upload a raw artifact, then a separate Rust-capable `ui_stamp` job binds source/version and complete file checksums without rebuilding the console |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
 | `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that prepare the patched llama checkout before verifying the producer-owned static ABI revision and toolchain epoch, plus a pinned, digest-verified Skippy correctness fixture; related PR changes (including `mesh-llm-skippy-adapter`) additionally compile the asserted `mesh-llm-skippy-adapter` library test `config::hardware_translation_tests::safetensors_checkpoint_reaches_mesh_host_runtime` and smoke an immutable SmolLM2 SafeTensors checkpoint through the Mesh config/adapter/Skippy serving/native path to sampled prefill and decode with every supported load-time quantization |
-| `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; no empty cross-platform jobs |
-| `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers. The Linux CPU row also runs the native runtime-event gate against its verified built-or-restored runtime and uploads its evidence. |
+| `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; the macOS host compile has a 60-minute job timeout; no empty cross-platform jobs |
+| `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers. The `native-abi` domain selects `linux-cpu`, `windows-cpu`, and `windows-vulkan`; Windows Vulkan feeds the Windows product/smoke consumers, and Windows CPU also selects the Skippy probe check below. The Linux CPU row also runs the native runtime-event gate against its verified built-or-restored runtime and uploads its evidence. |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
-| `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable/unit, Windows log-store privacy ACL checks, and the Windows CPU native Skippy probes (`windows-skippy-probes`: selected by `native-abi` changes and on every main run; builds the static CPU ABI with tests, logs memory headroom, then runs every `^skippy_` test serially with the 64-bit ctest, each bounded at 15 minutes, within the row's 150-minute timeout, followed by the `skippy-runtime` and `skippy-serving` lib tests linked against that static ABI) |
+| `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable/unit, Windows log-store privacy ACL checks, and the Windows CPU native Skippy probes (`windows-skippy-probes`: selected by the `native-abi` platform domain and on every main run; the `native-abi` domain also selects `linux-cpu`, `windows-cpu`, and `windows-vulkan` in `domain_rows`; builds the static CPU ABI with tests, logs memory headroom, then runs every `^skippy_` test serially with the 64-bit ctest, each bounded at 15 minutes, within the row's 150-minute timeout, followed by the `skippy-runtime` and `skippy-serving` lib tests linked against that static ABI) |
 | `ci-{linux,macos,windows}-product-smoke-slice.yml` | Platform-local core, scripted, model-download, and Laya smokes. The pinned Laya Multilingual F16 GGUF runs startup plus the complete upstream golden `/systemone` battery on Linux CPU/CUDA, conditional `gpu-nvidia` Vulkan and `gpu-amd` ROCm, macOS Metal, and Windows CPU; each row selects the exact native device name, so an unavailable backend fails at model load. Core CPU/CUDA/Metal restores the registry-pinned SmolLM2 Q8 and IBM Granite 4.0 H Q4 pair once and runs both through standalone inference, OpenAI client compatibility, and constrained-Tokio restart. The CPU two-node split row uses the same pair for dense KV and strict recurrent `KvRecurrent` validation, persists strict-whitelist seed/worker identity and stage/model snapshots, reconciles two-observer topology and exact two-stage contiguous-cut agreement, then compares each loaded stage's Auto payload, reason, fallback, loaded state, and native capability against model-manifest-pinned expectations. A wrong second stage fails even when the first is correct. The row uploads evidence on every outcome. The Linux CPU row additionally preserves node cache roots across restart and requires an observable durable-L3 fill before status and clear verification. Product restore verifies the manifest backend and forces discovery through the bundled runtime. CUDA verifies the packaged dependency closure with `LD_LIBRARY_PATH` unset, runs inherited and strict device probes, installs no cudart or cuBLAS packages, and leaves the NVIDIA driver host-owned. Windows accelerator product targets remain build-only because CI has no Windows accelerator runners. There is no separate product-integration or Qwen migration lane. |
 | `.github/actions/run-laya-product-smoke` | Shared product restore plus Laya startup/read harness. Inputs are bounded to the supported backend/device/cadence combinations, and the fixture is resolved through `product-smoke.json`. The explicit Vulkan row enables the Vulkan profile for runners without `vulkaninfo`; model startup and reads still verify the device. Windows product restore emits LF-delimited manifest fields for Git Bash. |
 | `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls and each smoke receives the lane-local immutable UI artifact |
@@ -537,6 +543,12 @@ runner-contract update is active.
 | `scripted-binary-smoke.yml` | Artifact-based scripted product smoke with optional typed model context-size and recurrent-model inputs; recurrent models restore and save through a dedicated trust-scoped cache before the smoke runs. It passes `source_sha` to the split smoke; `xtask split-payloads` certifies each stage and writes revision-bound JSON evidence. |
 | `sdk-smoke.yml` | Artifact-based SDK consumers; all SDK rows consume the lane's immutable console UI artifact, while Rust smoke restores the main-seeded, target/profile/image/toolchain/recipe-bound Cargo/target cache through `Swatinem/rust-cache` |
 | `hf-download-smoke.yml` | Hugging Face download smoke |
+
+The `native-abi` domain selects `static-abi`, `runtime-product`,
+`product-smoke`, `rust-tests`, and `platform-checks`. In `ci/slices.yml`, its
+`domain_rows` are `linux-cpu`, `windows-cpu`, and `windows-vulkan`;
+`smoke_domain_rows` selects `core`; and `platform_domain_rows` selects
+`windows-skippy-probes`.
 
 Native Quality contracts use a 60-minute job with a 40-minute full-contract
 step and restore the pinned external SDK and research sources before the
@@ -1818,7 +1830,7 @@ applies to a PR until it is merged. No hosted execution is recorded here.
 ## External Python SDK source preparation
 
 The checkout action, admission descriptor and Python-tooling policy use SDK
-commit `8a20791c8501bc45e0e699c888165fc3abc2085a`; update all three together.
+commit `85226c50a68a13b48f40fe25e70eb85814e67457`; update all three together.
 Laya product readiness and Decisions smoke discovery query
 `/mesh/v1/models?workload_class=decision&available=true`, since compatibility
 model lists contain only LLMs. The golden and response checks remain required.

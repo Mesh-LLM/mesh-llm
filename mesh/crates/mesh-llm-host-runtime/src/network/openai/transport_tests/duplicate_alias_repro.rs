@@ -69,6 +69,8 @@ pub(super) fn duplicate_peer(peer_id: iroh::EndpointId, model: &str) -> mesh::Pe
         owner_summary: crate::crypto::OwnershipSummary::default(),
         inference_admission_state: None,
         decode_batch_policy_supported: false,
+        plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
     }
 }
 
@@ -357,7 +359,7 @@ async fn peer_ingress_forwards_document_upload_to_ocr_plugin() {
         .expect("connect");
     let body = b"--ocr\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ndatalab/indra-ocr\r\n--ocr\r\nContent-Disposition: form-data; name=\"file\"; filename=\"page.pdf\"\r\n\r\n%PDF-test\r\n--ocr--\r\n";
     let header = format!(
-        "POST /v1/documents/ocr HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=ocr\r\nContent-Length: {}\r\n\r\n",
+        "POST /mesh/v1/documents/ocr HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=ocr\r\nContent-Length: {}\r\n\r\n",
         body.len()
     );
     let (mut send, _recv) = caller
@@ -376,7 +378,7 @@ async fn peer_ingress_forwards_document_upload_to_ocr_plugin() {
     caller.close_endpoint().await;
     host.close_endpoint().await;
     task.abort();
-    assert!(String::from_utf8_lossy(&captured).contains("POST /v1/documents/ocr"));
+    assert!(String::from_utf8_lossy(&captured).contains("POST /mesh/v1/documents/ocr"));
     assert!(String::from_utf8_lossy(&captured).contains("datalab/indra-ocr"));
 }
 

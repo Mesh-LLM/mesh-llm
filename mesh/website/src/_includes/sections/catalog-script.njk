@@ -68,6 +68,12 @@
 
     if (totalPages <= 1) {
       pgEl.style.display = 'none';
+      // The count still has to move: a filter that matches a single page is the
+      // common case once the buckets actually select rows.
+      var singleLiveEl = catalogCard.querySelector('.catalog-foot .live');
+      if (singleLiveEl) {
+        singleLiveEl.innerHTML = total ? 'Showing 1–' + total + ' of ' + total : '0 entries found';
+      }
       return;
     }
     pgEl.style.display = '';

@@ -706,7 +706,7 @@ fn is_audio_upload_path(path: &str) -> bool {
 }
 
 fn is_document_ocr_path(path: &str) -> bool {
-    path.split('?').next().unwrap_or(path) == "/v1/documents/ocr"
+    path.split('?').next().unwrap_or(path) == "/mesh/v1/documents/ocr"
 }
 
 fn finalize_forwarded_request(

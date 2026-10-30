@@ -123,7 +123,7 @@ const result = await node.inference.documentOcr(await readFile('scan.pdf'), {
 console.log(result.json())
 ```
 
-OCR uses binary multipart upload to `/v1/documents/ocr`, including when the
+OCR uses binary multipart upload to `/mesh/v1/documents/ocr`, including when the
 provider is remote. It does not send the document through chat completion.
 The response preserves provider status, content type and body. OCR raises
 `OpenAIRequestError` for non-2xx by default; pass a third argument

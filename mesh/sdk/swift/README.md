@@ -42,7 +42,7 @@ if let model = page.data.first {
 }
 ```
 
-OCR uploads PDF/image bytes to `/v1/documents/ocr` and preserves the provider's
+OCR uploads PDF/image bytes to `/mesh/v1/documents/ocr` and preserves the provider's
 status, content type and body. It raises `OpenAIRequestFailure` for non-2xx by
 default; `raiseForStatus: false` returns the raw response. Generic
 `inference.request` also checks status by default, matching the other SDKs.

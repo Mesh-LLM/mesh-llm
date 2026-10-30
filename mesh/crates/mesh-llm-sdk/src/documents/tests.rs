@@ -10,7 +10,7 @@ async fn multipart_upload_preserves_binary_and_provider_error_response() {
     let server = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.unwrap();
         let (headers, body) = read_upload(&mut stream).await;
-        assert!(headers.starts_with("POST /v1/documents/ocr HTTP/1.1\r\n"));
+        assert!(headers.starts_with("POST /mesh/v1/documents/ocr HTTP/1.1\r\n"));
         assert!(
             headers
                 .to_ascii_lowercase()
