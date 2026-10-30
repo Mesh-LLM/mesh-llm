@@ -19,6 +19,7 @@ Plugin-specific documentation:
 - [Flash-MoE](flash-moe.md) - external OpenAI-compatible backend adapter for single-node SSD expert streaming
 - [Telemetry](telemetry.md) - OTLP metrics-only runtime telemetry and external metrics plugin notes
 - [Virtual models](virtual-models.md) - request-orchestrating models backed by a plugin and host-routed inference
+- [Document OCR](document-ocr.md) - provider contract and mesh routing for `/v1/documents/ocr`
 - [Web UI exemplar](exemplars/web-ui/README.md) - source-owned maintainer sample for v1 plugin web UI projection, read directly by tests to catch drift
 
 The main goals are:
@@ -639,11 +640,12 @@ Required fields:
 | `author_email` | Plugin author or maintainer email.                                                            |
 | `author_name`  | Plugin author or maintainer display name.                                                     |
 
-Optional pin fields:
+Pin fields, required to install an entry by name. An entry without them stays
+searchable, but `mesh-llm plugins install <name>` refuses it:
 
 | Field     | Meaning                                                                                                   |
 | --------- | --------------------------------------------------------------------------------------------------------- |
-| `version` | The exact release tag the entry pins, such as `v0.1.0`.                                                   |
+| `version` | The exact release tag the entry pins, such as `v0.1.0`. Every install resolves this tag.                  |
 | `sha256`  | The SHA-256 of that release's archive, as lowercase hex, keyed by target triple. Requires `version`.      |
 
 ```json
@@ -662,12 +664,18 @@ Optional pin fields:
 }
 ```
 
-An ordinary `mesh-llm plugins install` ignores the pin fields. A default plugin
-(see [Default Plugins](#default-plugins)) is pinned in the default list itself;
-if its catalog entry also pins this platform, the two pins must agree, and the
-downloaded archive must match the pin as well as GitHub's reported digest
-before it is extracted. A disagreement or a mismatch is an error and nothing is
-installed, so a release asset replaced after it was pinned is refused.
+Installing an entry by name installs exactly what that entry pins. The resolver
+asks GitHub for the pinned `version` tag rather than the repository's latest,
+refuses a returned release whose tag is not the pinned one, and verifies the
+downloaded archive against the entry's `sha256` for the target before anything
+is extracted. GitHub's reported digest is a cross-check, not the authority:
+whoever controls a repository can replace a release, its assets, and the digests
+it reports, so a rewritten release is refused instead of launched. An entry that
+pins no version, or no digest for your platform, installs nothing.
+
+A default plugin (see [Default Plugins](#default-plugins)) is pinned in the
+default list itself; if its catalog entry also pins this platform, the two pins
+must agree, and the bundled archive must match them both.
 
 Catalog rules:
 

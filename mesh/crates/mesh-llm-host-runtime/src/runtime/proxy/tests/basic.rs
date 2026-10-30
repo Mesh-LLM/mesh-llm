@@ -246,6 +246,43 @@ async fn test_api_proxy_lists_registered_inference_models() {
 }
 
 #[tokio::test]
+async fn test_api_proxy_chat_model_list_excludes_ocr_providers() {
+    let manager = plugin::PluginManager::for_test_summaries(Vec::new());
+    manager
+        .set_test_inference_endpoints(vec![
+            plugin::InferenceEndpointRoute {
+                plugin_name: "chat".into(),
+                endpoint_id: "chat".into(),
+                protocol: Some("openai_compatible".into()),
+                address: "http://127.0.0.1:1".into(),
+                models: vec!["chat-model".into()],
+            },
+            plugin::InferenceEndpointRoute {
+                plugin_name: "ocr".into(),
+                endpoint_id: "ocr".into(),
+                protocol: Some("document_ocr_v1".into()),
+                address: "http://127.0.0.1:2".into(),
+                models: vec!["ocr-model".into()],
+            },
+        ])
+        .await;
+    let (proxy_addr, proxy_handle) =
+        spawn_api_proxy_test_harness_with_plugin_manager(local_targets(&[]), manager).await;
+    let response = send_request_and_read_response(
+        proxy_addr,
+        vec![b"GET /v1/models HTTP/1.1\r\nHost: localhost\r\n\r\n".to_vec()],
+    )
+    .await;
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    let body = response.split("\r\n\r\n").nth(1).unwrap();
+    let json: serde_json::Value = serde_json::from_str(body).unwrap();
+    let models = json["data"].as_array().unwrap();
+    assert!(models.iter().any(|model| model["id"] == "chat-model"));
+    assert!(models.iter().all(|model| model["id"] != "ocr-model"));
+    proxy_handle.abort();
+}
+
+#[tokio::test]
 async fn test_builtin_moa_all_small_pool_routes_direct_through_plugin_api() {
     let worker_response = json!({
         "id": "chatcmpl-worker",
@@ -748,6 +785,7 @@ async fn test_builtin_moa_uses_plugin_inference_model_as_its_only_candidate() {
         .set_test_inference_endpoints(vec![plugin::InferenceEndpointRoute {
             plugin_name: "endpoint-plugin".into(),
             endpoint_id: "endpoint-plugin".into(),
+            protocol: None,
             address: format!("http://127.0.0.1:{worker_port}/api/v1"),
             models: vec!["plugin-worker".into()],
         }])

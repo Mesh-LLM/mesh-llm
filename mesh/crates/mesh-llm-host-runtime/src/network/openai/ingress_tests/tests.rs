@@ -1180,6 +1180,8 @@ pub(super) fn test_remote_peer(seed: u32, model: &str) -> mesh::PeerInfo {
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
+        plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -1962,6 +1964,15 @@ fn plugin_only_request(model: &str) -> proxy::BufferedHttpRequest {
     }
 }
 
+/// The same request on another endpoint path. Admission reads `client_path`, so
+/// this changes the endpoint under test without rebuilding the fixture.
+fn plugin_only_request_for(model: &str, path: &str) -> proxy::BufferedHttpRequest {
+    let mut request = plugin_only_request(model);
+    request.path = path.to_owned();
+    request.client_path = path.to_owned();
+    request
+}
+
 fn empty_test_plugin_manager() -> crate::plugin::PluginManager {
     crate::plugin::PluginManager::for_test_summaries(Vec::new())
 }
@@ -1999,6 +2010,7 @@ async fn route_self_targeted_model_attempts_a_registered_plugin_instead_of_faili
         .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
             plugin_name: "acme".to_string(),
             endpoint_id: "ep1".to_string(),
+            protocol: None,
             address: format!("http://{refusing_addr}"),
             models: vec![model.to_string()],
         }])
@@ -2080,6 +2092,7 @@ async fn route_missing_local_model_excluding_self_blocks_local_plugin_fallback()
             plugin_name: "acme".to_string(),
             endpoint_id: "ep1".to_string(),
             // Never dialed if the exclude check runs first, as it must.
+            protocol: None,
             address: "http://127.0.0.1:1".to_string(),
             models: vec![model.to_string()],
         }])
@@ -2731,5 +2744,700 @@ async fn local_route_terminal_stays_host_served_when_this_node_served() {
             .as_ref()
             .map(|provenance| provenance.served_by_node_id.clone()),
         Some(node.id().to_string())
+    );
+}
+
+/// A plugin advertises its models by name and selects a serving endpoint by
+/// request protocol, so one model id may be served by a chat endpoint and an
+/// OCR endpoint at once. Admission is descriptor-based while dispatch selects
+/// on protocol, so the advertisement has to carry the chat class for the shared
+/// name; otherwise chat is rejected as an unsupported workload before
+/// `try_route_plugin_model`, which does select on protocol, is ever reached.
+/// This assertion runs against the same descriptor set a peer receives in
+/// gossip, so it covers remote ingress as well as this node.
+#[tokio::test]
+async fn shared_plugin_model_name_stays_admitted_for_chat_and_ocr() {
+    let model = "acme/shared-model";
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node should start");
+    let targets = election::ModelTargets::default();
+    let affinity = affinity::AffinityRouter::new();
+
+    let plugin_manager = empty_test_plugin_manager();
+    plugin_manager
+        .set_test_inference_endpoints(vec![
+            crate::plugin::InferenceEndpointRoute {
+                plugin_name: "chat-plugin".to_string(),
+                endpoint_id: "chat".to_string(),
+                protocol: Some("openai_compatible".to_string()),
+                address: "http://127.0.0.1:1".to_string(),
+                models: vec![model.to_string()],
+            },
+            crate::plugin::InferenceEndpointRoute {
+                plugin_name: "ocr-plugin".to_string(),
+                endpoint_id: "ocr".to_string(),
+                protocol: Some("document_ocr_v1".to_string()),
+                address: "http://127.0.0.1:2".to_string(),
+                models: vec![model.to_string()],
+            },
+        ])
+        .await;
+    node.set_plugin_manager(plugin_manager.clone()).await;
+
+    let descriptors = node.all_served_model_descriptors().await;
+    for path in ["/v1/chat/completions", "/v1/documents/ocr"] {
+        assert!(
+            workload_routing::model_satisfies_request(model, path, &descriptors),
+            "{model} must be advertised as servable for {path}"
+        );
+    }
+
+    let ctx = IngressRouteContext {
+        node: &node,
+        targets: &targets,
+        affinity: &affinity,
+        plugin_manager: Some(&plugin_manager),
+        requested_by_node_id: None,
+        #[cfg(test)]
+        exchange_channel: None,
+    };
+
+    let mut chat = plugin_only_request(model);
+    let decision = prepare_auto_route_decision(&mut chat, &ctx, &descriptors)
+        .await
+        .expect("a chat endpoint serving the shared name must keep it admitted for chat");
+    assert_eq!(decision.effective_model.as_deref(), Some(model));
+
+    let mut ocr = plugin_only_request_for(model, "/v1/documents/ocr");
+    match prepare_auto_route_decision(&mut ocr, &ctx, &descriptors).await {
+        Ok(decision) => assert_eq!(decision.effective_model.as_deref(), Some(model)),
+        Err(other) => {
+            panic!("the OCR endpoint serves this name, so OCR must be admitted: {other:?}")
+        }
+    }
+}
+
+/// Widening the advertisement must not widen admission for a name only an OCR
+/// endpoint serves: chat for an OCR-only model stays rejected.
+#[tokio::test]
+async fn chat_still_rejected_for_model_served_only_by_an_ocr_endpoint() {
+    let model = "acme/ocr-only-model";
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node should start");
+    let targets = election::ModelTargets::default();
+    let affinity = affinity::AffinityRouter::new();
+
+    let plugin_manager = empty_test_plugin_manager();
+    plugin_manager
+        .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
+            plugin_name: "ocr-plugin".to_string(),
+            endpoint_id: "ocr".to_string(),
+            protocol: Some("document_ocr_v1".to_string()),
+            address: "http://127.0.0.1:2".to_string(),
+            models: vec![model.to_string()],
+        }])
+        .await;
+    node.set_plugin_manager(plugin_manager.clone()).await;
+
+    let descriptors = node.all_served_model_descriptors().await;
+    assert!(
+        !workload_routing::model_satisfies_request(model, "/v1/chat/completions", &descriptors),
+        "an OCR-only endpoint must not advertise the chat class"
+    );
+
+    let ctx = IngressRouteContext {
+        node: &node,
+        targets: &targets,
+        affinity: &affinity,
+        plugin_manager: Some(&plugin_manager),
+        requested_by_node_id: None,
+        #[cfg(test)]
+        exchange_channel: None,
+    };
+
+    let mut request = plugin_only_request(model);
+    match prepare_auto_route_decision(&mut request, &ctx, &descriptors).await {
+        Err(AutoRouteRejection::WorkloadUnsupported(
+            mesh::ModelWorkloadClass::CausalGeneration,
+        )) => {}
+        Err(other) => panic!("expected a causal-generation workload rejection, got {other:?}"),
+        Ok(_) => panic!("an OCR-only model must not be admitted for chat"),
+    }
+}
+
+/// A loopback backend that answers one chat completion identifying which route
+/// served it, so a test can tell the plugin path from the mesh path.
+async fn spawn_answering_chat_backend(answer: &'static str) -> u16 {
+    use tokio::io::AsyncWriteExt;
+
+    let backend = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind backend");
+    let port = backend.local_addr().expect("backend addr").port();
+    tokio::spawn(async move {
+        let (mut stream, _) = backend.accept().await.expect("accept backend");
+        proxy::read_http_request(&mut stream)
+            .await
+            .expect("backend request");
+        let body = format!(
+            r#"{{"id":"c1","object":"chat.completion","model":"acme/shared-model","choices":[{{"index":0,"message":{{"role":"assistant","content":"{answer}"}},"finish_reason":"stop"}}],"usage":{{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}}}"#
+        );
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("backend response");
+    });
+    port
+}
+
+/// Parse a chat request as this node's ingress receives it.
+async fn ingress_chat_request(model: &str) -> proxy::BufferedHttpRequest {
+    use tokio::io::AsyncWriteExt;
+
+    let body = format!(r#"{{"model":"{model}","messages":[{{"role":"user","content":"hi"}}]}}"#);
+    let raw = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: t\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .into_bytes();
+    let (mut writer, mut reader) = tokio::io::duplex(64 * 1024);
+    writer.write_all(&raw).await.expect("write request");
+    proxy::read_http_request(&mut reader)
+        .await
+        .expect("parse request")
+}
+
+/// A connected loopback pair: the router writes into the first, the second
+/// stands in for the client.
+async fn ingress_client_socket_pair() -> (tokio::net::TcpStream, tokio::net::TcpStream) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback listener");
+    let addr = listener.local_addr().expect("local addr");
+    let (client, accepted) = tokio::join!(tokio::net::TcpStream::connect(addr), listener.accept());
+    (
+        accepted.expect("accept server side").0,
+        client.expect("connect client side"),
+    )
+}
+
+fn descriptor_with_workload_class(
+    model: &str,
+    workload_class: mesh::ModelWorkloadClass,
+) -> mesh::ServedModelDescriptor {
+    mesh::ServedModelDescriptor {
+        identity: mesh::ServedModelIdentity {
+            model_name: model.to_string(),
+            ..Default::default()
+        },
+        metadata: Some(mesh::ServedModelMetadata {
+            workload_class: Some(workload_class),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// A model id shared across workload classes must not be claimed by a target
+/// that cannot serve the request. `execution_candidates` filters every target
+/// whose advertisement does not admit the request's class, so mesh routing
+/// would answer "no eligible target" while a local plugin endpoint serves this
+/// request perfectly well.
+#[tokio::test]
+async fn local_plugin_serves_a_shared_model_name_no_mesh_candidate_admits() {
+    use tokio::io::AsyncReadExt;
+
+    let model = "acme/shared-model";
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node should start");
+    // This node's own target serves the id for a different workload class.
+    node.set_served_model_descriptors(vec![descriptor_with_workload_class(
+        model,
+        mesh::ModelWorkloadClass::Embedding,
+    )])
+    .await;
+    let reserved = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind reserved port");
+    let reserved_port = reserved.local_addr().expect("addr").port();
+    drop(reserved);
+    let mut targets = election::ModelTargets::default();
+    targets.targets.insert(
+        model.to_string(),
+        vec![election::InferenceTarget::Local(reserved_port)],
+    );
+
+    let plugin_port = spawn_answering_chat_backend("from-plugin").await;
+    let plugin_manager = empty_test_plugin_manager();
+    plugin_manager
+        .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
+            plugin_name: "chat-plugin".to_string(),
+            endpoint_id: "chat".to_string(),
+            protocol: Some("openai_compatible".to_string()),
+            address: format!("http://127.0.0.1:{plugin_port}"),
+            models: vec![model.to_string()],
+        }])
+        .await;
+
+    let affinity = affinity::AffinityRouter::new();
+    let ctx = IngressRouteContext {
+        node: &node,
+        targets: &targets,
+        affinity: &affinity,
+        plugin_manager: Some(&plugin_manager),
+        requested_by_node_id: None,
+        #[cfg(test)]
+        exchange_channel: None,
+    };
+    let mut request = ingress_chat_request(model).await;
+    let (server_side, mut client_side) = ingress_client_socket_pair().await;
+    let outcome = route_request(
+        false,
+        server_side.into(),
+        &mut request,
+        &ctx,
+        Some(model),
+        None,
+        OpenAiRouteObserver::default(),
+    )
+    .await;
+    let mut response = String::new();
+    client_side
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "a plugin endpoint that matches the request protocol must serve a name no \
+         mesh candidate admits: {outcome:?}: {response}"
+    );
+    assert!(
+        response.contains("from-plugin"),
+        "expected the plugin backend's answer, got: {response}"
+    );
+}
+
+/// The plugin is a fallback, not a preference: when a mesh candidate admits the
+/// request, the existing route keeps it, so this branch cannot re-order traffic.
+#[tokio::test]
+async fn mesh_candidate_that_admits_the_request_still_wins_over_the_plugin() {
+    use tokio::io::AsyncReadExt;
+
+    let model = "acme/shared-model";
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node should start");
+    let local_port = spawn_answering_chat_backend("from-local").await;
+    node.set_served_model_descriptors(vec![descriptor_with_workload_class(
+        model,
+        mesh::ModelWorkloadClass::CausalGeneration,
+    )])
+    .await;
+    let mut targets = election::ModelTargets::default();
+    targets.targets.insert(
+        model.to_string(),
+        vec![election::InferenceTarget::Local(local_port)],
+    );
+
+    let plugin_port = spawn_answering_chat_backend("from-plugin").await;
+    let plugin_manager = empty_test_plugin_manager();
+    plugin_manager
+        .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
+            plugin_name: "chat-plugin".to_string(),
+            endpoint_id: "chat".to_string(),
+            protocol: Some("openai_compatible".to_string()),
+            address: format!("http://127.0.0.1:{plugin_port}"),
+            models: vec![model.to_string()],
+        }])
+        .await;
+
+    let affinity = affinity::AffinityRouter::new();
+    let ctx = IngressRouteContext {
+        node: &node,
+        targets: &targets,
+        affinity: &affinity,
+        plugin_manager: Some(&plugin_manager),
+        requested_by_node_id: None,
+        #[cfg(test)]
+        exchange_channel: None,
+    };
+    let mut request = ingress_chat_request(model).await;
+    let (server_side, mut client_side) = ingress_client_socket_pair().await;
+    let outcome = route_request(
+        false,
+        server_side.into(),
+        &mut request,
+        &ctx,
+        Some(model),
+        None,
+        OpenAiRouteObserver::default(),
+    )
+    .await;
+    let mut response = String::new();
+    client_side
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "{outcome:?}: {response}"
+    );
+    assert!(
+        response.contains("from-local"),
+        "an eligible mesh candidate must keep the request; got: {response}"
+    );
+}
+
+/// The shape a live two-node mesh produced: this node serves `model` from a
+/// chat plugin, a peer advertises the same id as `DocumentOcr` only, and the
+/// election snapshot carries no candidate for the name at all. The remote half
+/// of `route_missing_local_model` finds that peer, filters it out on workload
+/// class, and answered `503 no context-compatible target` even though the local
+/// plugin endpoint serves this exact request.
+#[tokio::test]
+async fn local_plugin_serves_a_name_whose_only_peer_candidate_is_ocr_only() {
+    use tokio::io::AsyncReadExt;
+
+    let model = "acme/shared-model";
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node should start");
+    let mut peer = test_remote_peer(9, model);
+    peer.served_model_descriptors = vec![descriptor_with_workload_class(
+        model,
+        mesh::ModelWorkloadClass::DocumentOcr,
+    )];
+    node.insert_test_peer(peer).await;
+    assert!(
+        !node.hosts_for_model(model).await.is_empty(),
+        "the peer must be discoverable by name so routing reaches the remote half"
+    );
+
+    // No elected candidate for the name: the peer advertises it, the local
+    // plugin serves it, and the mesh snapshot lists nothing.
+    let targets = election::ModelTargets::default();
+
+    let plugin_port = spawn_answering_chat_backend("from-plugin").await;
+    let plugin_manager = empty_test_plugin_manager();
+    plugin_manager
+        .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
+            plugin_name: "chat-plugin".to_string(),
+            endpoint_id: "chat".to_string(),
+            protocol: Some("openai_compatible".to_string()),
+            address: format!("http://127.0.0.1:{plugin_port}"),
+            models: vec![model.to_string()],
+        }])
+        .await;
+
+    let affinity = affinity::AffinityRouter::new();
+    let ctx = IngressRouteContext {
+        node: &node,
+        targets: &targets,
+        affinity: &affinity,
+        plugin_manager: Some(&plugin_manager),
+        requested_by_node_id: None,
+        #[cfg(test)]
+        exchange_channel: None,
+    };
+    let mut request = ingress_chat_request(model).await;
+    let (server_side, mut client_side) = ingress_client_socket_pair().await;
+    let outcome = route_request(
+        false,
+        server_side.into(),
+        &mut request,
+        &ctx,
+        Some(model),
+        None,
+        OpenAiRouteObserver::default(),
+    )
+    .await;
+    let mut response = String::new();
+    client_side
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "an OCR-only peer must not shadow the local plugin that serves this \
+         request: {outcome:?}: {response}"
+    );
+    assert!(
+        response.contains("from-plugin"),
+        "expected the local plugin's answer, got: {response}"
+    );
+}
+
+/// A chat request carrying an `x-mesh-exclude` header.
+async fn ingress_chat_request_excluding(model: &str, exclude: &str) -> proxy::BufferedHttpRequest {
+    use tokio::io::AsyncWriteExt;
+
+    let body = format!(r#"{{"model":"{model}","messages":[{{"role":"user","content":"hi"}}]}}"#);
+    let raw = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: t\r\nx-mesh-exclude: {exclude}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    )
+    .into_bytes();
+    let (mut writer, mut reader) = tokio::io::duplex(64 * 1024);
+    writer.write_all(&raw).await.expect("write request");
+    proxy::read_http_request(&mut reader)
+        .await
+        .expect("parse request")
+}
+
+/// Peer inference executes on this node, so a remote advertisement it cannot
+/// forward is not a route for the request and must not suppress the local
+/// plugin that does serve it. ndizazzo [P2], PR #2560: the workload-eligible
+/// check fell back to `hosts_for_model`, which bypasses the remote-stripped
+/// `ctx.targets` peer ingress routes with.
+#[tokio::test]
+async fn peer_ingress_ignores_a_remote_candidate_it_cannot_forward() {
+    use tokio::io::AsyncReadExt;
+
+    let model = "acme/shared-model";
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node should start");
+    // A candidate for the name exists, but this node serves it for a different
+    // class, so nothing local admits a chat request.
+    node.set_served_model_descriptors(vec![descriptor_with_workload_class(
+        model,
+        mesh::ModelWorkloadClass::Embedding,
+    )])
+    .await;
+    // A peer serves the class this request wants, but peer ingress cannot
+    // forward to it.
+    let mut peer = test_remote_peer(9, model);
+    peer.served_model_descriptors = vec![descriptor_with_workload_class(
+        model,
+        mesh::ModelWorkloadClass::CausalGeneration,
+    )];
+    node.insert_test_peer(peer).await;
+
+    let reserved = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind reserved port");
+    let reserved_port = reserved.local_addr().expect("addr").port();
+    drop(reserved);
+    let mut targets = election::ModelTargets::default();
+    targets.targets.insert(
+        model.to_string(),
+        vec![election::InferenceTarget::Local(reserved_port)],
+    );
+
+    let plugin_port = spawn_answering_chat_backend("from-plugin").await;
+    let plugin_manager = empty_test_plugin_manager();
+    plugin_manager
+        .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
+            plugin_name: "chat-plugin".to_string(),
+            endpoint_id: "chat".to_string(),
+            protocol: Some("openai_compatible".to_string()),
+            address: format!("http://127.0.0.1:{plugin_port}"),
+            models: vec![model.to_string()],
+        }])
+        .await;
+
+    let affinity = affinity::AffinityRouter::new();
+    let ctx = IngressRouteContext {
+        node: &node,
+        targets: &targets,
+        affinity: &affinity,
+        plugin_manager: Some(&plugin_manager),
+        requested_by_node_id: None,
+        #[cfg(test)]
+        exchange_channel: None,
+    };
+    let mut request = ingress_chat_request(model).await;
+    let (server_side, mut client_side) = ingress_client_socket_pair().await;
+    let outcome = route_request(
+        true,
+        server_side.into(),
+        &mut request,
+        &ctx,
+        Some(model),
+        None,
+        OpenAiRouteObserver::default(),
+    )
+    .await;
+    let mut response = String::new();
+    client_side
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "peer ingress must execute on the local plugin, not count a peer it \
+         cannot forward: {outcome:?}: {response}"
+    );
+    assert!(
+        response.contains("from-plugin"),
+        "expected the local plugin's answer, got: {response}"
+    );
+}
+
+/// An `x-mesh-exclude`d peer cannot serve the request, so it must not suppress
+/// the local plugin that can. ndizazzo [P2], PR #2560: only a self-exclusion
+/// forces this branch away, so an excluded *remote* peer reached it and won the
+/// suppression check without ever being routable.
+#[tokio::test]
+async fn excluded_peer_does_not_suppress_the_local_plugin() {
+    use tokio::io::AsyncReadExt;
+
+    let model = "acme/shared-model";
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node should start");
+    node.set_served_model_descriptors(vec![descriptor_with_workload_class(
+        model,
+        mesh::ModelWorkloadClass::Embedding,
+    )])
+    .await;
+    let mut peer = test_remote_peer(9, model);
+    peer.served_model_descriptors = vec![descriptor_with_workload_class(
+        model,
+        mesh::ModelWorkloadClass::CausalGeneration,
+    )];
+    let excluded_hex = hex::encode(peer.id.as_bytes());
+    node.insert_test_peer(peer).await;
+
+    let reserved = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind reserved port");
+    let reserved_port = reserved.local_addr().expect("addr").port();
+    drop(reserved);
+    let mut targets = election::ModelTargets::default();
+    targets.targets.insert(
+        model.to_string(),
+        vec![election::InferenceTarget::Local(reserved_port)],
+    );
+
+    let plugin_port = spawn_answering_chat_backend("from-plugin").await;
+    let plugin_manager = empty_test_plugin_manager();
+    plugin_manager
+        .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
+            plugin_name: "chat-plugin".to_string(),
+            endpoint_id: "chat".to_string(),
+            protocol: Some("openai_compatible".to_string()),
+            address: format!("http://127.0.0.1:{plugin_port}"),
+            models: vec![model.to_string()],
+        }])
+        .await;
+
+    let affinity = affinity::AffinityRouter::new();
+    let ctx = IngressRouteContext {
+        node: &node,
+        targets: &targets,
+        affinity: &affinity,
+        plugin_manager: Some(&plugin_manager),
+        requested_by_node_id: None,
+        #[cfg(test)]
+        exchange_channel: None,
+    };
+    let mut request = ingress_chat_request_excluding(model, &excluded_hex).await;
+    let (server_side, mut client_side) = ingress_client_socket_pair().await;
+    let outcome = route_request(
+        false,
+        server_side.into(),
+        &mut request,
+        &ctx,
+        Some(model),
+        None,
+        OpenAiRouteObserver::default(),
+    )
+    .await;
+    let mut response = String::new();
+    client_side
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "an excluded peer must not shadow the local plugin that serves this \
+         request: {outcome:?}: {response}"
+    );
+    assert!(
+        response.contains("from-plugin"),
+        "expected the local plugin's answer, got: {response}"
+    );
+}
+
+/// A native target still loading for the same id must not 503 a peer request a
+/// local plugin can serve. ndizazzo [P2], PR #2560: the plugin lookup was gated
+/// on "no candidate at all", so all-`None` (loading/draining) candidates
+/// skipped it entirely.
+#[tokio::test]
+async fn peer_ingress_dispatches_to_the_plugin_while_a_native_target_loads() {
+    use tokio::io::AsyncReadExt;
+
+    let model = "acme/shared-model";
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .expect("test node should start");
+    // The id is known locally but nothing is serving yet: every candidate is
+    // `None`, the loading/draining shape.
+    let mut targets = election::ModelTargets::default();
+    targets
+        .targets
+        .insert(model.to_string(), vec![election::InferenceTarget::None]);
+
+    let plugin_port = spawn_answering_chat_backend("from-plugin").await;
+    let plugin_manager = empty_test_plugin_manager();
+    plugin_manager
+        .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
+            plugin_name: "chat-plugin".to_string(),
+            endpoint_id: "chat".to_string(),
+            protocol: Some("openai_compatible".to_string()),
+            address: format!("http://127.0.0.1:{plugin_port}"),
+            models: vec![model.to_string()],
+        }])
+        .await;
+
+    let affinity = affinity::AffinityRouter::new();
+    let ctx = IngressRouteContext {
+        node: &node,
+        targets: &targets,
+        affinity: &affinity,
+        plugin_manager: Some(&plugin_manager),
+        requested_by_node_id: None,
+        #[cfg(test)]
+        exchange_channel: None,
+    };
+    let mut request = ingress_chat_request(model).await;
+    let (server_side, mut client_side) = ingress_client_socket_pair().await;
+    let outcome = route_request(
+        true,
+        server_side.into(),
+        &mut request,
+        &ctx,
+        Some(model),
+        None,
+        OpenAiRouteObserver::default(),
+    )
+    .await;
+    let mut response = String::new();
+    client_side
+        .read_to_string(&mut response)
+        .await
+        .expect("read response");
+
+    assert!(
+        response.starts_with("HTTP/1.1 200"),
+        "a plugin endpoint serving this request must answer while the native \
+         target for the same id loads: {outcome:?}: {response}"
+    );
+    assert!(
+        response.contains("from-plugin"),
+        "expected the local plugin's answer, got: {response}"
     );
 }

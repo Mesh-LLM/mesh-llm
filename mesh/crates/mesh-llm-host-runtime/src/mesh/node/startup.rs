@@ -142,6 +142,14 @@ pub(crate) fn hardware_snapshot_for_start(
 ) -> NodeHardwareSnapshot {
     let local_runtime_capacity_bytes =
         super::super::capacity::local_fit_capacity_bytes(&hw, max_vram_gb, host_ram_offload);
+    let host_ram_capacity_bytes = if !host_ram_offload
+        && !hw.is_soc
+        && super::super::capacity::mesh_capacity_bytes(&hw) > 0
+    {
+        hw.ram_offload_bytes
+    } else {
+        0
+    };
     let host_ram_offload_gain_bytes =
         super::super::capacity::host_ram_offload_gain_bytes(&hw, max_vram_gb, host_ram_offload);
     let mut vram_bytes = super::super::capacity::advertised_capacity_bytes(&hw, max_vram_gb);
@@ -182,6 +190,7 @@ pub(crate) fn hardware_snapshot_for_start(
     NodeHardwareSnapshot {
         vram_bytes,
         local_runtime_capacity_bytes,
+        host_ram_capacity_bytes,
         host_ram_offload_gain_bytes,
         gpu_name,
         hostname,

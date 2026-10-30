@@ -69,6 +69,8 @@ pub(super) fn duplicate_peer(peer_id: iroh::EndpointId, model: &str) -> mesh::Pe
         owner_summary: crate::crypto::OwnershipSummary::default(),
         inference_admission_state: None,
         decode_batch_policy_supported: false,
+        plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
     }
 }
 
@@ -291,6 +293,7 @@ async fn peer_ingress_executes_registered_plugin_without_mesh_forwarding() {
         .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
             plugin_name: "test-provider".into(),
             endpoint_id: "execution".into(),
+            protocol: None,
             address: format!("http://127.0.0.1:{port}"),
             models: vec![PUBLIC.into()],
         }])
@@ -326,6 +329,57 @@ async fn peer_ingress_executes_registered_plugin_without_mesh_forwarding() {
     task.abort();
     let captured = captured.expect("plugin execution timed out").unwrap();
     assert!(String::from_utf8_lossy(&captured).contains(PUBLIC));
+}
+
+#[tokio::test]
+async fn peer_ingress_forwards_document_upload_to_ocr_plugin() {
+    let (caller, _channels, _dir) = start_http_tunnel_test_node().await;
+    let (host, channels, _host_dir) = start_http_tunnel_test_node().await;
+    let (port, backend, task) = spawn_tunnel_capture().await;
+    let manager = crate::plugin::PluginManager::for_test_summaries(Vec::new());
+    manager
+        .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
+            plugin_name: "onnx-ocr".into(),
+            endpoint_id: "indra".into(),
+            protocol: Some("document_ocr_v1".into()),
+            address: format!("http://127.0.0.1:{port}"),
+            models: vec!["datalab/indra-ocr".into()],
+        }])
+        .await;
+    host.set_plugin_manager(manager).await;
+    let (_tx, rx) = watch::channel(election::ModelTargets::default());
+    let tunnel = TunnelManager::start(host.clone(), channels.rpc, channels.http, channels.stage)
+        .await
+        .expect("tunnel");
+    tunnel.set_http_ingress(rx, AffinityRouter::new());
+    host.start_accepting();
+    caller
+        .connect_to_peer(host.endpoint_addr_for_advertisement())
+        .await
+        .expect("connect");
+    let body = b"--ocr\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ndatalab/indra-ocr\r\n--ocr\r\nContent-Disposition: form-data; name=\"file\"; filename=\"page.pdf\"\r\n\r\n%PDF-test\r\n--ocr--\r\n";
+    let header = format!(
+        "POST /v1/documents/ocr HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=ocr\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    );
+    let (mut send, _recv) = caller
+        .open_http_tunnel(host.id())
+        .await
+        .expect("open tunnel");
+    send.write_all(header.as_bytes())
+        .await
+        .expect("send headers");
+    send.write_all(body).await.expect("send document");
+    send.finish().expect("finish tunnel");
+    let captured = tokio::time::timeout(Duration::from_secs(3), backend)
+        .await
+        .expect("OCR plugin execution timed out")
+        .expect("backend capture");
+    caller.close_endpoint().await;
+    host.close_endpoint().await;
+    task.abort();
+    assert!(String::from_utf8_lossy(&captured).contains("POST /v1/documents/ocr"));
+    assert!(String::from_utf8_lossy(&captured).contains("datalab/indra-ocr"));
 }
 
 #[tokio::test]

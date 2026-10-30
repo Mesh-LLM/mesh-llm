@@ -50,6 +50,7 @@ mod tests {
             last_protocol_version: None,
             last_status: None,
             last_error: None,
+            verified_sha256: None,
         };
         ExternalPluginSpec {
             name: metadata.name.clone(),
@@ -57,6 +58,7 @@ mod tests {
             args: vec!["--identity".into()],
             url: None,
             env: BTreeMap::new(),
+            settings: Default::default(),
             startup: Default::default(),
             web_ui_enabled: None,
             web_ui_primary_tab: None,

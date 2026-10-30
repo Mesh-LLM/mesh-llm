@@ -210,13 +210,15 @@ async fn relayed_record_is_applied_and_forwarded_byte_for_byte() {
 async fn record_replaces_its_unsigned_twin_but_keeps_its_cache_affinity() {
     let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
     let mut twin = unsigned_worker(0x61, "relay-view-model");
-    twin.1.cache_affinity = Some(mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement {
-        salt: [3; mesh_llm_routing::cache_inventory::CACHE_AFFINITY_SALT_BYTES],
-        epoch: 7,
-        generated_at_unix_ms: current_time_unix_ms(),
-        ttl_ms: 120_000,
-        entries: Vec::new(),
-    });
+    twin.1.cache_affinity = Some(
+        mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement {
+            salt: [3; mesh_llm_routing::cache_inventory::CACHE_AFFINITY_SALT_BYTES],
+            epoch: 7,
+            generated_at_unix_ms: current_time_unix_ms(),
+            ttl_ms: 120_000,
+            entries: Vec::new(),
+        },
+    );
 
     receive(
         &node,
@@ -227,10 +229,15 @@ async fn record_replaces_its_unsigned_twin_but_keeps_its_cache_affinity() {
     .await;
 
     let state = node.state.lock().await;
-    let peer = state.peers.get(&test_endpoint_id(0x61)).expect("peer added");
+    let peer = state
+        .peers
+        .get(&test_endpoint_id(0x61))
+        .expect("peer added");
     assert_eq!(peer.serving_models, vec!["signed-model".to_string()]);
     assert_eq!(
-        peer.cache_affinity.as_ref().map(|advertisement| advertisement.epoch),
+        peer.cache_affinity
+            .as_ref()
+            .map(|advertisement| advertisement.epoch),
         Some(7)
     );
 }
@@ -247,7 +254,13 @@ async fn unsigned_announcements_from_older_relays_still_apply() {
     .await;
 
     // A relay that predates signed records only sends unsigned entries.
-    let resolved = receive(&node, 0x63, vec![unsigned_worker(0x61, "unsigned-model")], Vec::new()).await;
+    let resolved = receive(
+        &node,
+        0x63,
+        vec![unsigned_worker(0x61, "unsigned-model")],
+        Vec::new(),
+    )
+    .await;
 
     assert!(ids(&resolved).contains(&test_endpoint_id(0x61)));
     assert_eq!(
@@ -315,7 +328,13 @@ async fn forged_record_is_dropped_and_its_unsigned_twin_applies() {
 async fn unsigned_announcements_still_work_for_nodes_without_records() {
     let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
 
-    let resolved = receive(&node, 0x62, vec![unsigned_worker(0x64, "legacy-model")], Vec::new()).await;
+    let resolved = receive(
+        &node,
+        0x62,
+        vec![unsigned_worker(0x64, "legacy-model")],
+        Vec::new(),
+    )
+    .await;
 
     assert!(ids(&resolved).contains(&test_endpoint_id(0x64)));
     assert_eq!(
@@ -351,6 +370,72 @@ async fn signed_cache_affinity_replaces_the_unsigned_copy_and_is_forwarded() {
             .any(|wire| wire.signed == signed.signed && wire.signature == signed.signature),
         "cache affinity is forwarded with its original bytes"
     );
+}
+
+/// Rejected relayed versions preserve a live direct peer and its signed records.
+#[tokio::test]
+async fn rejected_transitive_version_preserves_fresh_direct_peer_and_signed_records() {
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let peer_seed = 0x67;
+    let peer_id = test_endpoint_id(peer_seed);
+    let addr = test_addr(peer_seed);
+    let bridge_seed = 0x68;
+    let mut direct = unsigned_worker(peer_seed, "direct-model").1;
+
+    receive_frame(
+        &node,
+        bridge_seed,
+        InboundGossip {
+            announcements: vec![(addr.clone(), direct.clone())],
+            signed_records: vec![signed_worker_record(peer_seed, 1, "direct-model")],
+            signed_cache_affinity: vec![signed_cache_affinity(peer_seed, 1, "direct-model", 7)],
+        },
+    )
+    .await;
+    node.add_peer(peer_id, addr.clone(), &direct, None).await;
+
+    let (direct_seen, admitted_count) = {
+        let state = node.state.lock().await;
+        let peer = state.peers.get(&peer_id).expect("direct peer");
+        assert!(peer.is_admitted());
+        assert!(state.node_records.contains(&peer_id));
+        assert!(state.cache_affinity_records.contains(&peer_id));
+        (peer.last_seen, state.admitted_peer_count())
+    };
+
+    direct.version = Some("0.57.0".to_string());
+    node.update_transitive_peer(peer_id, &addr, &direct, test_endpoint_id(bridge_seed))
+        .await;
+
+    let state = node.state.lock().await;
+    let peer = state
+        .peers
+        .get(&peer_id)
+        .expect("unsupported relayed version must not remove a fresh direct peer");
+    assert!(peer.is_admitted());
+    assert_eq!(peer.last_seen, direct_seen);
+    assert_eq!(peer.serving_models, vec!["direct-model".to_string()]);
+    assert_eq!(state.admitted_peer_count(), admitted_count);
+    assert!(state.node_records.contains(&peer_id));
+    assert!(state.cache_affinity_records.contains(&peer_id));
+    drop(state);
+
+    {
+        let mut state = node.state.lock().await;
+        state
+            .peers
+            .get_mut(&peer_id)
+            .expect("direct peer")
+            .last_seen = std::time::Instant::now()
+            - std::time::Duration::from_secs(mesh_llm_membership::peer_state::PEER_STALE_SECS + 1);
+    }
+    node.update_transitive_peer(peer_id, &addr, &direct, test_endpoint_id(bridge_seed))
+        .await;
+
+    let state = node.state.lock().await;
+    assert!(!state.peers.contains_key(&peer_id));
+    assert!(!state.node_records.contains(&peer_id));
+    assert!(!state.cache_affinity_records.contains(&peer_id));
 }
 
 #[tokio::test]

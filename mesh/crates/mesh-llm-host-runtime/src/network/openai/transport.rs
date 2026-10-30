@@ -257,6 +257,7 @@ pub(crate) fn request_context_budget(request: &BufferedHttpRequest) -> Option<u3
     if request.is_tokenize_request()
         || request.is_anthropic_count_tokens_request()
         || request.is_audio_upload_request()
+        || request.is_document_ocr_request()
         || request.is_system_one_request()
     {
         None
@@ -363,21 +364,25 @@ async fn handle_mesh_control_request(
     }
 
     if is_models_list_request(&request.method, &request.path) {
+        let descriptors = node.all_served_model_descriptors().await;
         let mut served = node.models_being_served().await;
         let virtual_models = match node.plugin_manager().await {
             Some(manager) => {
-                if let Ok(mut inference_models) = manager.inference_models().await {
+                if let Ok(mut inference_models) = manager.chat_inference_models().await {
                     served.append(&mut inference_models);
                 }
                 manager.virtual_models().await.unwrap_or_default()
             }
             None => Vec::new(),
         };
+        // Keep the chat-compatible listing free of models only document OCR serves.
+        served.retain(|model| {
+            !super::workload_routing::serves_only_document_ocr(model, &descriptors)
+        });
         let virtual_models = super::virtual_model::advertisable_routes(virtual_models, &served);
         served.extend(virtual_models.iter().map(|route| route.model_id.clone()));
         served.sort();
         served.dedup();
-        let descriptors = node.all_served_model_descriptors().await;
         let runtimes = node.all_model_runtime_descriptors().await;
         let outcome = response_outcome(
             200,
@@ -982,6 +987,7 @@ fn proxy_result_metadata(result: &RouteAttemptResult) -> (Option<u16>, Option<&'
         ),
         RouteAttemptResult::RetryableTimeout => (None, Some("timeout")),
         RouteAttemptResult::RetryableUnavailable => (None, Some("unavailable")),
+        RouteAttemptResult::RetryablePaymentRequired => (None, Some("payment_required")),
         RouteAttemptResult::RetryableContextOverflow
         | RouteAttemptResult::RetryableResponseQuality(_) => (None, Some("rejected")),
         RouteAttemptResult::CommittedStreamFailure { status_code } => {
@@ -1058,6 +1064,7 @@ fn handle_mesh_attempt_result(
         }
         RouteAttemptResult::RetryableTimeout => handle_retryable_mesh_timeout(context),
         RouteAttemptResult::RetryableUnavailable => handle_retryable_mesh_unavailable(context),
+        RouteAttemptResult::RetryablePaymentRequired => handle_retryable_mesh_unavailable(context),
         RouteAttemptResult::CommittedStreamFailure { .. } => {
             MeshAttemptDisposition::Return(attempt_result)
         }
@@ -1124,6 +1131,7 @@ fn terminal_outcome_for_mesh_route_result(
             crate::logging::TerminalOutcome::Cancelled(Some("client_disconnected".into()))
         }
         RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryablePaymentRequired
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableTimeout
         | RouteAttemptResult::RetryableUnavailable => {
@@ -1288,7 +1296,9 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
         return AutoModelResolution::Model(None);
     }
     request.ensure_body_json();
-    if request.body_json.is_none() && !workload_routing::is_audio_upload_path(&request.client_path)
+    if request.body_json.is_none()
+        && !workload_routing::is_audio_upload_path(&request.client_path)
+        && !workload_routing::is_document_ocr_path(&request.client_path)
     {
         return AutoModelResolution::Model(None);
     }
@@ -1611,15 +1621,17 @@ fn should_retry_uncommitted_remote_attempt(result: RouteAttemptResult) -> bool {
     )
 }
 
-/// Route a request to a known inference target (local OpenAI surface or remote host).
-///
-/// Used by the API proxy after election has determined the target.
+/// Context passed when routing a request to one elected inference target.
 pub(crate) struct RouteTargetContext<'a> {
     pub(crate) request_id: RequestId,
     pub(crate) response_adapter: ResponseAdapter,
     pub(crate) route_observer: OpenAiRouteObserver<'a>,
 }
 
+/// Routes a request to its elected local or remote inference target.
+///
+/// A target timeout is reported as HTTP 504 so OpenAI clients can distinguish
+/// it from context overflow and other unavailable-target responses (HTTP 503).
 pub async fn route_to_target(
     node: mesh::Node,
     tcp_stream: ClientStream,
@@ -1690,7 +1702,26 @@ pub async fn route_to_target(
             node.record_routed_request(model, 1, outcome);
             delivered_outcome(status_code, usage, output_digests)
         }
-        RouteAttemptResult::RetryableTimeout
+        // A single target that ran out its deadline is a gateway timeout, not
+        // generic unavailability: 504 is the status the OpenAI error contract
+        // labels `timeout`, and it is the one an operator can act on by
+        // raising the budget (#2195).
+        RouteAttemptResult::RetryableTimeout => {
+            node.record_routed_request(
+                model,
+                1,
+                crate::network::metrics::RequestOutcome::Unavailable,
+            );
+            let result = send_error_observed(
+                tcp_stream,
+                504,
+                &format!("single target {target:?} timed out (route_to_target)"),
+                route_observer,
+            )
+            .await;
+            response_outcome(504, result)
+        }
+        RouteAttemptResult::RetryablePaymentRequired
         | RouteAttemptResult::RetryableContextOverflow
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableUnavailable => {
@@ -1809,6 +1840,7 @@ pub async fn route_http_endpoint_request(
             delivered_outcome(status_code, usage, output_digests)
         }
         RouteAttemptResult::RetryableTimeout
+        | RouteAttemptResult::RetryablePaymentRequired
         | RouteAttemptResult::RetryableContextOverflow
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableUnavailable => {
