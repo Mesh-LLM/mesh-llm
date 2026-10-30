@@ -45,7 +45,7 @@ pub(super) async fn handle(
     state: &MeshApi,
     method: &str,
     path_only: &str,
-    req: &str,
+    req: &[u8],
     caller: CallerTrust,
 ) -> anyhow::Result<()> {
     let is_passthrough = is_inference_passthrough(path_only);
@@ -93,13 +93,17 @@ pub(super) async fn handle(
                 ),
             };
             let rewritten = if is_passthrough {
-                req.to_string()
+                req.to_vec()
             } else if path_only.starts_with("/api/chat") {
-                req.replacen("/api/chat", upstream_path, 1)
+                String::from_utf8_lossy(req)
+                    .replacen("/api/chat", upstream_path, 1)
+                    .into_bytes()
             } else {
-                req.replacen("/api/responses", upstream_path, 1)
+                String::from_utf8_lossy(req)
+                    .replacen("/api/responses", upstream_path, 1)
+                    .into_bytes()
             };
-            upstream.write_all(rewritten.as_bytes()).await?;
+            upstream.write_all(&rewritten).await?;
             relay_upstream_response(stream, &mut upstream).await?;
         }
         _ => {

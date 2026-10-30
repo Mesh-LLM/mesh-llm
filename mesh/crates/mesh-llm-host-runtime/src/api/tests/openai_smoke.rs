@@ -25,6 +25,36 @@ async fn document_ocr_passthrough_preserves_multipart_and_query() {
 }
 
 #[tokio::test]
+async fn console_task_uploads_preserve_binary_bytes() {
+    for path in ["/mesh/v1/documents/ocr", "/v1/audio/transcriptions"] {
+        let (upstream_port, upstream_rx, upstream_handle) =
+            spawn_capturing_upstream(r#"{"ok":true}"#).await;
+        let state = build_test_mesh_api_with_api_port(upstream_port).await;
+        let (addr, handle) = spawn_management_test_server(state).await;
+        let body = b"--upload\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nmodel\r\n--upload\r\nContent-Disposition: form-data; name=\"file\"; filename=\"input.bin\"\r\n\r\n\x00\xff\x80\r\n--upload--\r\n";
+        let header = format!(
+            "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=upload\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let mut stream = TcpStream::connect(addr).await.unwrap();
+        stream.write_all(header.as_bytes()).await.unwrap();
+        stream.write_all(body).await.unwrap();
+        stream.shutdown().await.unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).await.unwrap();
+        assert!(response.starts_with(b"HTTP/1.1 200"), "{path}");
+        let raw = tokio::time::timeout(Duration::from_secs(5), upstream_rx)
+            .await
+            .expect("task upload must reach inference")
+            .unwrap();
+        let body_start = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+        assert_eq!(&raw[body_start..], body, "{path}");
+        handle.await.unwrap().unwrap();
+        upstream_handle.await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn document_ocr_console_preflight_and_methods() {
     let state = build_test_mesh_api_with_api_port(0).await;
     for (method, status) in [("OPTIONS", "204"), ("GET", "405")] {
