@@ -52,6 +52,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY mesh/crates/ mesh/crates/
 COPY skippy/crates/ skippy/crates/
 COPY tools/xtask/ tools/xtask/
+COPY tools/trajectory-reader/ tools/trajectory-reader/
 COPY scripts/ scripts/
 COPY skippy/scripts/ skippy/scripts/
 COPY mesh/scripts/ mesh/scripts/
