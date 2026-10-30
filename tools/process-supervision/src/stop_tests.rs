@@ -1,5 +1,5 @@
 use super::*;
-use crate::process::{
+use crate::{
     Cancellation, Completion, Outcome, ProcessReport, Readiness, ReadinessStop, Stream,
     StreamReport,
     observed::{self, Admission, Decision, Lines},

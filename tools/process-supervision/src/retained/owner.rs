@@ -1,6 +1,6 @@
 use super::observation::observe;
 use super::{Action, Context, Coordinator, Report, member::Member, shutdown};
-use crate::process::{Cancellation, Completion, Failure, Limits, Outcome, Readiness, control};
+use crate::{Cancellation, Completion, Failure, Limits, Outcome, Readiness, control};
 use std::time::Instant;
 pub fn run<Observer: Coordinator>(
     observer: &mut Observer,

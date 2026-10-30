@@ -1,5 +1,5 @@
 use super::*;
-use crate::process::{Completion, Outcome, ProcessReport, Readiness, StreamReport};
+use crate::{Completion, Outcome, ProcessReport, Readiness, StreamReport};
 
 struct StuckTree {
     force_error: bool,
