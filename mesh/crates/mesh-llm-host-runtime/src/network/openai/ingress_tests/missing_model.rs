@@ -1,6 +1,6 @@
 //! Status lines for a request naming a model this node does not serve yet:
 //! retryable 503 while it loads, the exclusion 409, the plugin route.
-use super::tests::{empty_test_plugin_manager, plugin_only_request};
+use super::tests::{empty_test_plugin_manager, plugin_only_request, spawn_answering_chat_backend};
 use super::*;
 use mesh_llm_events::logging::identifiers::RequestId;
 
@@ -109,16 +109,6 @@ async fn route_missing_local_model_prefers_a_plugin_serving_a_loading_name() {
     let targets = election::ModelTargets::default();
     let affinity = affinity::AffinityRouter::new();
     let plugin_manager = empty_test_plugin_manager();
-    plugin_manager
-        .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
-            plugin_name: "acme".to_string(),
-            endpoint_id: "ep1".to_string(),
-            protocol: None,
-            // Unreachable: only which branch answers matters here.
-            address: "http://127.0.0.1:1".to_string(),
-            models: vec![model.to_string()],
-        }])
-        .await;
     let ctx = IngressRouteContext {
         node: &node,
         targets: &targets,
@@ -127,8 +117,19 @@ async fn route_missing_local_model_prefers_a_plugin_serving_a_loading_name() {
         requested_by_node_id: None,
         exchange_channel: None,
     };
-    // Untargeted, and with `x-mesh-target` naming this node.
+    // Untargeted, and with `x-mesh-target` naming this node. The backend
+    // answers one request, so each case gets its own.
     for target in [None, Some(node.id())] {
+        let plugin_port = spawn_answering_chat_backend("from-plugin").await;
+        plugin_manager
+            .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
+                plugin_name: "acme".to_string(),
+                endpoint_id: "ep1".to_string(),
+                protocol: Some("openai_compatible".to_string()),
+                address: format!("http://127.0.0.1:{plugin_port}"),
+                models: vec![model.to_string()],
+            }])
+            .await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind");
@@ -158,7 +159,7 @@ async fn route_missing_local_model_prefers_a_plugin_serving_a_loading_name() {
             .expect("read response");
         let response_text = String::from_utf8_lossy(&response);
         assert!(
-            !response_text.contains("loading or draining"),
+            response_text.contains("from-plugin"),
             "a plugin-served name must take the plugin route (target {target:?}), got: {response_text}"
         );
     }

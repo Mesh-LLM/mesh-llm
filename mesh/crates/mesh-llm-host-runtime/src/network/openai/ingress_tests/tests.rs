@@ -2869,7 +2869,7 @@ async fn chat_still_rejected_for_model_served_only_by_an_ocr_endpoint() {
 
 /// A loopback backend that answers one chat completion identifying which route
 /// served it, so a test can tell the plugin path from the mesh path.
-async fn spawn_answering_chat_backend(answer: &'static str) -> u16 {
+pub(super) async fn spawn_answering_chat_backend(answer: &'static str) -> u16 {
     use tokio::io::AsyncWriteExt;
 
     let backend = tokio::net::TcpListener::bind("127.0.0.1:0")
