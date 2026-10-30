@@ -395,6 +395,7 @@ pub(in crate::frontend) struct GeneratedText {
     pub(in crate::frontend) predicted_ms: f64,
     pub(in crate::frontend) queue_wait_ms: f64,
     pub(in crate::frontend) restore_ms: f64,
+    pub(in crate::frontend) split_prefix_cache: Option<SplitPrefixCacheStats>,
     pub(in crate::frontend) text: String,
     pub(in crate::frontend) finish_reason: FinishReason,
     pub(in crate::frontend) detokenize_ms: f64,
@@ -477,6 +478,70 @@ impl ActivationWireStats {
                 json!(per_token(features.decode_bytes, completion_tokens)),
             );
         }
+    }
+}
+
+/// A split's prompt prefix cache for one response, as stage 0 saw it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(in crate::frontend) struct SplitPrefixCacheStats {
+    /// Prompt tokens every stage restored instead of prefilling.
+    pub(in crate::frontend) hit_tokens: usize,
+    /// Stages that confirmed the restore, stage 0 included.
+    pub(in crate::frontend) hit_stages: u32,
+    /// Activation bytes stage 0 wrote to the next stage while prefilling the
+    /// rest of the prompt: the first hop, payload only.
+    pub(in crate::frontend) prefill_bytes_sent: usize,
+    /// Activation bytes the restore kept off the wire, over every hop between
+    /// the stages that restored.
+    pub(in crate::frontend) bytes_saved: usize,
+}
+
+impl SplitPrefixCacheStats {
+    /// Stats for a prefill that restored `hit_tokens` on `hit_stages` stages
+    /// and then sent `prefill_bytes_sent` for `prefilled_tokens` more. Saved
+    /// bytes are priced at this request's measured rate per prefilled token,
+    /// which includes any split DFlash feature rows, or at an f32 activation
+    /// row when nothing was prefilled.
+    pub(in crate::frontend) fn new(
+        hit_tokens: usize,
+        hit_stages: u32,
+        prefill_bytes_sent: usize,
+        prefilled_tokens: usize,
+        activation_width: i32,
+    ) -> Self {
+        let bytes_per_token = prefill_bytes_sent
+            .checked_div(prefilled_tokens)
+            .unwrap_or_else(|| {
+                usize::try_from(activation_width).unwrap_or(0) * std::mem::size_of::<f32>()
+            });
+        let hops = usize::try_from(hit_stages.saturating_sub(1)).unwrap_or(0);
+        Self {
+            hit_tokens,
+            hit_stages,
+            prefill_bytes_sent,
+            bytes_saved: hit_tokens
+                .saturating_mul(bytes_per_token)
+                .saturating_mul(hops),
+        }
+    }
+
+    fn insert_response_timings(&self, timings: &mut BTreeMap<String, Value>) {
+        timings.insert(
+            "prefix_cache_hit_tokens".to_string(),
+            json!(self.hit_tokens),
+        );
+        timings.insert(
+            "prefix_cache_hit_stages".to_string(),
+            json!(self.hit_stages),
+        );
+        timings.insert(
+            "prefix_cache_prefill_bytes_sent".to_string(),
+            json!(self.prefill_bytes_sent),
+        );
+        timings.insert(
+            "prefix_cache_bytes_saved".to_string(),
+            json!(self.bytes_saved),
+        );
     }
 }
 
@@ -573,6 +638,9 @@ impl GeneratedText {
                 self.prompt_tokens.saturating_sub(1)
             };
             wire.insert_response_timings(&mut timings, prefill_tokens, self.completion_tokens);
+        }
+        if let Some(stats) = self.split_prefix_cache.as_ref() {
+            stats.insert_response_timings(&mut timings);
         }
         Some(timings)
     }
