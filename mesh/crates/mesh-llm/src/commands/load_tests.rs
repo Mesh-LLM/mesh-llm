@@ -133,7 +133,7 @@ fn load_without_sizing_flags_sends_only_the_model() {
 }
 
 #[tokio::test]
-async fn load_that_outlasts_the_client_timeout_reports_still_loading() {
+async fn load_that_outlasts_the_client_timeout_reports_uncertain_status() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let port = listener.local_addr().expect("local addr").port();
     let node = tokio::spawn(async move {
@@ -157,7 +157,12 @@ async fn load_that_outlasts_the_client_timeout_reports_still_loading() {
     node.abort();
 
     let text = format!("{error:#}");
-    assert!(text.contains("still loading"), "{text}");
+    assert!(text.contains("may have been accepted"), "{text}");
+    assert!(text.contains("may still be running"), "{text}");
+    assert!(
+        text.contains(&format!("mesh-llm status --port {port}")),
+        "{text}"
+    );
     assert!(!text.contains("Can't connect"), "{text}");
 }
 
