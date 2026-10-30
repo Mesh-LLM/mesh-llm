@@ -222,6 +222,47 @@ pub(crate) fn validate_model_entry(
     gpu_assignment: GpuAssignment,
     defaults_hardware: Option<&HardwareConfig>,
 ) -> DiagnosticResult {
+    if let Some(provider) = &model.provider {
+        validate_non_empty(provider, &format!("{base_path}.provider"))?;
+        if let Some(variant) = &model.variant {
+            validate_non_empty(variant, &format!("{base_path}.variant"))?;
+        }
+        if model.source.local_dir.is_some()
+            && (model.source.repo.is_some() || model.source.revision.is_some())
+        {
+            return Err(validation_diagnostic(
+                base_path,
+                "local_dir cannot be combined with remote source overrides",
+            ));
+        }
+        if model.model_fit.is_some()
+            || model.hardware.is_some()
+            || model.throughput.is_some()
+            || model.skippy.is_some()
+            || model.speculative.is_some()
+            || model.topology.is_some()
+            || model.multimodal.is_some()
+            || model.advanced.is_some()
+            || model.request_defaults.is_some()
+        {
+            return Err(validation_diagnostic(
+                base_path,
+                "provider models use their own options and request_defaults, not built-in runtime controls",
+            ));
+        }
+        return Ok(());
+    }
+    if model.variant.is_some()
+        || !model.options.is_empty()
+        || !model.provider_request_defaults.is_empty()
+        || model.lifecycle != Default::default()
+        || model.source != Default::default()
+    {
+        return Err(validation_diagnostic(
+            base_path,
+            "provider model options require provider",
+        ));
+    }
     let model_fit = merge_model_fit(
         model.model_fit.clone(),
         model.ctx_size,

@@ -47,6 +47,8 @@ pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
         "/v1/audio/speech" => Some(ModelWorkloadClass::SpeechSynthesis),
         "/v1/realtime" => Some(ModelWorkloadClass::SpeechRecognition),
         "/mesh/v1/documents/ocr" => Some(ModelWorkloadClass::DocumentOcr),
+        "/mesh/v1/images/similarity" => Some(ModelWorkloadClass::ImageTextSimilarity),
+        "/mesh/v1/images/depth" => Some(ModelWorkloadClass::DepthEstimation),
         _ => None,
     }
 }
@@ -244,7 +246,12 @@ pub(super) fn request_media(
             needs_audio: true,
             needs_vision: false,
         }
-    } else if is_document_ocr_path(path) {
+    } else if is_document_ocr_path(path)
+        || matches!(
+            path.split('?').next(),
+            Some("/mesh/v1/images/similarity" | "/mesh/v1/images/depth")
+        )
+    {
         crate::network::router::MediaRequirements {
             has_media: true,
             needs_audio: false,
@@ -274,7 +281,15 @@ pub(crate) fn serves_only_document_ocr(model: &str, descriptors: &[ServedModelDe
                 .metadata
                 .as_ref()
                 .and_then(|metadata| metadata.workload_class)
-                == Some(ModelWorkloadClass::DocumentOcr)
+                .is_some_and(|class| {
+                    matches!(
+                        class,
+                        ModelWorkloadClass::DocumentOcr
+                            | ModelWorkloadClass::SpeechRecognition
+                            | ModelWorkloadClass::ImageTextSimilarity
+                            | ModelWorkloadClass::DepthEstimation
+                    )
+                })
         })
 }
 

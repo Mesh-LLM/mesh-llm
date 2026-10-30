@@ -940,7 +940,11 @@ pub(super) fn build_startup_model_specs(
         );
     }
 
-    for model in &config.models {
+    for model in config
+        .models
+        .iter()
+        .filter(|model| model.provider.is_none())
+    {
         let effective =
             effective_startup_model_config(&model.model, Some(model), config.defaults.as_ref());
         let local_source_required =

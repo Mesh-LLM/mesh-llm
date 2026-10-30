@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
 
+mod model_assets;
+
 use crate::{
     PROTOCOL_VERSION,
     helpers::{channel_message, json_channel_message},

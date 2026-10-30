@@ -1461,6 +1461,8 @@ pub enum ModelWorkloadClass {
     Decision = 6,
     SpeechRecognition = 7,
     DocumentOcr = 8,
+    ImageTextSimilarity = 9,
+    DepthEstimation = 10,
 }
 impl ModelWorkloadClass {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1478,6 +1480,8 @@ impl ModelWorkloadClass {
             Self::Decision => "MODEL_WORKLOAD_CLASS_DECISION",
             Self::SpeechRecognition => "MODEL_WORKLOAD_CLASS_SPEECH_RECOGNITION",
             Self::DocumentOcr => "MODEL_WORKLOAD_CLASS_DOCUMENT_OCR",
+            Self::ImageTextSimilarity => "MODEL_WORKLOAD_CLASS_IMAGE_TEXT_SIMILARITY",
+            Self::DepthEstimation => "MODEL_WORKLOAD_CLASS_DEPTH_ESTIMATION",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1492,6 +1496,8 @@ impl ModelWorkloadClass {
             "MODEL_WORKLOAD_CLASS_DECISION" => Some(Self::Decision),
             "MODEL_WORKLOAD_CLASS_SPEECH_RECOGNITION" => Some(Self::SpeechRecognition),
             "MODEL_WORKLOAD_CLASS_DOCUMENT_OCR" => Some(Self::DocumentOcr),
+            "MODEL_WORKLOAD_CLASS_IMAGE_TEXT_SIMILARITY" => Some(Self::ImageTextSimilarity),
+            "MODEL_WORKLOAD_CLASS_DEPTH_ESTIMATION" => Some(Self::DepthEstimation),
             _ => None,
         }
     }

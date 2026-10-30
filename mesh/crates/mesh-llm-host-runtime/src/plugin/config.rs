@@ -46,6 +46,17 @@ pub fn load_config(override_path: Option<&Path>) -> Result<MeshConfig> {
         MeshConfig::default()
     };
     apply_env_overrides(&mut config)?;
+    for model in &mut config.models {
+        if let Some(directory) = &mut model.source.local_dir
+            && directory.is_relative()
+        {
+            *directory = path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join(&*directory);
+        }
+    }
+
     Ok(config)
 }
 
@@ -292,6 +303,19 @@ pub struct ExternalPluginSpec {
     pub installed_metadata: Option<mesh_llm_plugin_manager::InstalledPluginMetadata>,
 }
 
+impl ExternalPluginSpec {
+    /// Whether this entry launches a plugin process this host did not build in.
+    ///
+    /// `blobstore` and `payments` are appended to the resolved list whenever they
+    /// are enabled, and this executable runs both itself. Neither can serve
+    /// models in place of the native runtime, so the startup fallback must not
+    /// mistake them for an external provider.
+    pub fn serves_models_itself(&self) -> bool {
+        !matches!(self.name.as_str(), BLOBSTORE_PLUGIN_ID | PAYMENTS_PLUGIN_ID)
+            && !self.command.trim().is_empty()
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct PluginHostMode {
     pub mesh_visibility: MeshVisibility,
@@ -357,6 +381,34 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
         externals.push(in_process_builtin_spec(PAYMENTS_PLUGIN_ID));
     }
 
+    for spec in &mut externals {
+        let models = config
+            .models
+            .iter()
+            .filter_map(|entry| entry.managed_model_config())
+            .filter(|entry| entry.provider == spec.name)
+            .collect::<Vec<_>>();
+        spec.env.insert(
+            mesh_llm_plugin::models::CONFIG_ENV.into(),
+            serde_json::to_string(&models)?,
+        );
+    }
+    for model in config
+        .models
+        .iter()
+        .filter(|model| model.provider.is_some())
+    {
+        if !externals
+            .iter()
+            .any(|spec| Some(&spec.name) == model.provider.as_ref())
+        {
+            bail!(
+                "model '{}' selects unavailable provider '{}'",
+                model.model,
+                model.provider.as_deref().unwrap_or_default()
+            );
+        }
+    }
     Ok(ResolvedPlugins {
         externals,
         inactive,

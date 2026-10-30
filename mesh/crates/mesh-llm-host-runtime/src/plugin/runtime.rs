@@ -70,6 +70,7 @@ pub(crate) struct ExternalPlugin {
 }
 
 pub(crate) struct PluginRuntime {
+    pub(crate) managed_models: Vec<mesh_llm_plugin::models::ManagedModelConfig>,
     pub(crate) generation: u64,
     pub(crate) authenticated_peer: bool,
     pub(crate) initialized_lifecycle: Option<Box<proto::OpenAiExchangeHookManifest>>,
@@ -328,6 +329,12 @@ impl ExternalPlugin {
             self.authenticated_peer.clone(),
         ));
         *self.runtime.lock().await = Some(PluginRuntime {
+            managed_models: self
+                .spec
+                .env
+                .get(mesh_llm_plugin::models::CONFIG_ENV)
+                .and_then(|json| serde_json::from_str(json).ok())
+                .unwrap_or_default(),
             generation,
             authenticated_peer,
             initialized_lifecycle: None,
@@ -362,6 +369,7 @@ impl ExternalPlugin {
                     settings_json,
                     host_capabilities: vec![
                         mesh_llm_plugin::host_capabilities::INVOCATION_CALLBACKS.to_string(),
+                        mesh_llm_plugin::models::ASSET_CAPABILITY.to_string(),
                         mesh_llm_plugin::host_capabilities::PEER_BLOCKS.to_string(),
                         mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.to_string(),
                         mesh_llm_plugin::host_capabilities::PLUGIN_KEYS.to_string(),
@@ -1352,6 +1360,7 @@ pub(crate) mod tests {
         let pid = child.id();
         let (outbound_tx, _outbound_rx) = mpsc::channel(1);
         *plugin.runtime.lock().await = Some(PluginRuntime {
+            managed_models: Vec::new(),
             generation,
             authenticated_peer: true,
             initialized_lifecycle: None,
@@ -1925,6 +1934,7 @@ pub(crate) mod tests {
             .expect("sleep process should start for outbound-queue test");
         let (outbound_tx, outbound_rx) = mpsc::channel(1);
         *plugin.runtime.lock().await = Some(PluginRuntime {
+            managed_models: Vec::new(),
             generation: 1,
             authenticated_peer: true,
             initialized_lifecycle: None,

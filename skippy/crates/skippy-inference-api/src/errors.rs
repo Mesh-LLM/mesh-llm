@@ -202,6 +202,15 @@ fn map_upstream_kind(status_code: u16, upstream_type: &str) -> InferenceErrorKin
         (502, _) => InferenceErrorKind::ServiceUnavailable,
         (503, _) => InferenceErrorKind::ServiceUnavailable,
         (504, _) => InferenceErrorKind::Timeout,
+        (413, _) => InferenceErrorKind::PayloadTooLarge,
+        // Any other client error stays a client error. The status code is
+        // preserved either way, but the body's `type` decides whether a
+        // caller retries: reporting a `406 Not Acceptable` or a `422` from an
+        // upstream as `server_error` tells it to wait out a failure it could
+        // have fixed by changing the request. Task endpoints such as
+        // `document_ocr` reach this path with negotiated response types, so
+        // this is an ordinary outcome, not a defect in the upstream.
+        (400..=499, _) => InferenceErrorKind::InvalidRequest,
         _ => InferenceErrorKind::Internal,
     }
 }

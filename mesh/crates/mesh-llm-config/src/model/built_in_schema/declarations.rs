@@ -210,6 +210,14 @@ fn model_entry_settings() -> Vec<ConfigSettingSchema> {
         &format!("{model_prefix}.model"),
         ConfigValueSchema::String,
     )];
+    settings.extend([
+        basic_setting(&format!("{model_prefix}.provider"), ConfigValueSchema::String),
+        basic_setting(&format!("{model_prefix}.variant"), ConfigValueSchema::String),
+        basic_setting(&format!("{model_prefix}.options"), ConfigValueSchema::object()),
+        basic_setting(&format!("{model_prefix}.request_defaults"), ConfigValueSchema::object()),
+        basic_setting(&format!("{model_prefix}.lifecycle"), ConfigValueSchema::object()),
+        basic_setting(&format!("{model_prefix}.source"), ConfigValueSchema::object()),
+    ]);
     settings.extend(model_fit_settings(
         &format!("{model_prefix}.model_fit"),
         &[

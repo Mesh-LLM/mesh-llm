@@ -37,7 +37,14 @@ const RELAY_SECURITY_HEADERS: &str =
     "X-Content-Type-Options: nosniff\r\nContent-Security-Policy: sandbox\r\n";
 
 pub(super) fn is_inference_passthrough(path: &str) -> bool {
-    path.starts_with("/v1/") || path == "/models" || path == "/mesh/v1/documents/ocr"
+    path.starts_with("/v1/")
+        || matches!(
+            path,
+            "/models"
+                | "/mesh/v1/documents/ocr"
+                | "/mesh/v1/images/similarity"
+                | "/mesh/v1/images/depth"
+        )
 }
 
 pub(super) async fn handle(

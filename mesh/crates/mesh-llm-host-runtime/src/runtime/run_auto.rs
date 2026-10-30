@@ -541,7 +541,11 @@ pub(in crate::runtime) fn apply_runtime_cli_speculative_overrides(
         .defaults
         .get_or_insert_with(plugin::ModelConfigDefaults::default)
         .speculative = Some(resolved_defaults);
-    for model in &mut config.models {
+    for model in config
+        .models
+        .iter_mut()
+        .filter(|model| model.provider.is_none())
+    {
         model.speculative = Some(plugin::SpeculativeConfig::with_precedence(
             Some(overrides),
             model.speculative.as_ref(),
@@ -601,7 +605,11 @@ pub(in crate::runtime) fn apply_runtime_cli_checkpoint_overrides(
     // Runtime CLI flags are process-wide serving overrides. Apply them to
     // config-declared models as well as defaults so model-local config cannot
     // unexpectedly take precedence over the explicit command line.
-    for model in &mut config.models {
+    for model in config
+        .models
+        .iter_mut()
+        .filter(|model| model.provider.is_none())
+    {
         let hardware = model
             .hardware
             .get_or_insert_with(plugin::HardwareConfig::default);
@@ -1003,7 +1011,11 @@ pub(super) fn register_pre_accept_local_source_policies(
         .as_ref()
         .and_then(|defaults| defaults.hardware.as_ref())
         .and_then(|hardware| hardware.model_path.as_deref());
-    for model in &config.models {
+    for model in config
+        .models
+        .iter()
+        .filter(|model| model.provider.is_none())
+    {
         let mut model_ids = BTreeSet::from([model.model.clone()]);
         let configured_path = model
             .hardware

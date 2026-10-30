@@ -26,7 +26,12 @@ async fn document_ocr_passthrough_preserves_multipart_and_query() {
 
 #[tokio::test]
 async fn console_task_uploads_preserve_binary_bytes() {
-    for path in ["/mesh/v1/documents/ocr", "/v1/audio/transcriptions"] {
+    for path in [
+        "/mesh/v1/documents/ocr",
+        "/mesh/v1/images/similarity",
+        "/mesh/v1/images/depth",
+        "/v1/audio/transcriptions",
+    ] {
         let (upstream_port, upstream_rx, upstream_handle) =
             spawn_capturing_upstream(r#"{"ok":true}"#).await;
         let state = build_test_mesh_api_with_api_port(upstream_port).await;
