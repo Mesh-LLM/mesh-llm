@@ -4835,7 +4835,6 @@ dependencies = [
 name = "mesh-llm-embedded-runtime"
 version = "0.78.0"
 dependencies = [
- "anyhow",
  "mesh-llm-host-runtime",
 ]
 
