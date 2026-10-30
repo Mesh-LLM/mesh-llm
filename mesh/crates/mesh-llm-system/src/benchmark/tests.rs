@@ -565,8 +565,10 @@ fn test_run_and_save_backend_not_compiled_fails_cleanly() {
     };
 
     let err = with_benchmark_child_override(&child, || {
-        run_and_save_to_path(&hw, &bin_dir, Duration::from_secs(1), &path)
-            .expect_err("uncompiled benchmark backend should fail")
+        crate::text_file_busy::retry(|| {
+            run_and_save_to_path(&hw, &bin_dir, Duration::from_secs(1), &path)
+        })
+        .expect_err("uncompiled benchmark backend should fail")
     });
     let _ = std::fs::remove_dir_all(&root);
 
@@ -589,7 +591,7 @@ fn test_run_and_save_empty_stderr_child_failure_fails_cleanly() {
     #[cfg(windows)]
     let child = write_test_child(&root, "mesh-llm-child.cmd", "exit /b 1");
     let err = with_benchmark_child_override(&child, || {
-        run_benchmark_subprocess(&child, Duration::from_secs(5))
+        crate::text_file_busy::retry(|| run_benchmark_subprocess(&child, Duration::from_secs(5)))
             .expect_err("empty-stderr benchmark child failure should fail")
     });
     let _ = std::fs::remove_dir_all(&root);
