@@ -107,6 +107,53 @@ async fn model_target_reconciliation_replacement_unloads_before_loading() {
 }
 
 #[test]
+fn pending_load_rejects_explicit_sizing_and_stacks_default_sizing() {
+    let mut state = ModelTargetReconciliationState::default();
+    let model_ref = "org/model@main:model.gguf";
+    let profile = "low-ctx";
+    state.mark_load_started(model_ref, profile);
+    for sizing in [
+        api::RuntimeLoadSizing {
+            ctx_size: Some(8192),
+            parallel: None,
+        },
+        api::RuntimeLoadSizing {
+            ctx_size: None,
+            parallel: Some(2),
+        },
+    ] {
+        let (rejected_tx, rejected_rx) = tokio::sync::oneshot::channel();
+        state.stack_pending_load_completion(model_ref, profile, sizing, rejected_tx);
+        let error = rejected_rx.blocking_recv().unwrap().unwrap_err();
+        assert!(error.to_string().contains("cannot be applied"));
+    }
+
+    let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+    state.stack_pending_load_completion(
+        model_ref,
+        profile,
+        api::RuntimeLoadSizing::default(),
+        accepted_tx,
+    );
+    state.notify_load_success(
+        model_ref,
+        profile,
+        api::RuntimeLoadResponse {
+            model_ref: model_ref.to_string(),
+            model: "Model".to_string(),
+            instance_id: "runtime-1".to_string(),
+            profile: profile.to_string(),
+            backend: Some("skippy".to_string()),
+            context_length: Some(4096),
+        },
+    );
+    assert_eq!(
+        accepted_rx.blocking_recv().unwrap().unwrap().instance_id,
+        "runtime-1"
+    );
+}
+
+#[test]
 fn startup_load_finished_notifies_stacked_load_callers() {
     // Given: two same-key callers are stacked behind a startup load already in flight.
     let mut state = ModelTargetReconciliationState::default();

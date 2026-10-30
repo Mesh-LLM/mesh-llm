@@ -433,6 +433,22 @@ impl ModelTargetReconciliationState {
             .push_back(tx);
     }
 
+    pub(crate) fn stack_pending_load_completion(
+        &mut self,
+        model_ref: &str,
+        profile: &str,
+        sizing: api::RuntimeLoadSizing,
+        tx: LoadCompletionTx,
+    ) {
+        if sizing != api::RuntimeLoadSizing::default() {
+            let _ = tx.send(Err(anyhow::anyhow!(
+                "a load of this model is already in progress; requested ctx_size/parallel cannot be applied"
+            )));
+        } else {
+            self.stack_load_completion(model_ref, profile, tx);
+        }
+    }
+
     pub(crate) fn stack_unload_completion(&mut self, unload_key: &str, tx: UnloadCompletionTx) {
         self.pending_unload_completions
             .entry(unload_key.to_string())
