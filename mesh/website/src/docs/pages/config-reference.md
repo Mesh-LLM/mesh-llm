@@ -185,6 +185,12 @@ normal warnings in every mode.
 | Key path | Type | Allowed values / default (`auto`) | `[defaults]` / `[[models]]` | Restart | Status | CLI equivalent |
 |---|---|---|---|---|---|---|
 | `model` | string | required; catalog id, Hugging Face reference, URL, or local path | `[[models]]` only | model reload | wired | positional `--model` / `--gguf` on the ad-hoc single-model path |
+| `provider` | string | unset for built-in models; installed plugin name for provider models | `[[models]]` only | model reload | wired | none |
+| `variant` | string | provider-defined; defaults to fp32 | `[[models]]` only | model reload | wired | none |
+| `options` | object | empty; typed and validated by the selected provider | `[[models]]` only | model reload | wired | none |
+| `request_defaults` | object | empty provider-specific request defaults | `[[models]]` only | model reload | wired | none |
+| `lifecycle` | object | startup loading, idle eviction disabled, prefetch enabled | `[[models]]` only | model reload | wired | none |
+| `source` | object | model reference; optional local_dir or repo/revision override | `[[models]]` only | model reload | wired | none |
 | `hardware.model_path` | path | unset | both | model reload | wired | `--gguf` sets it for the ad-hoc single-model path |
 | `hardware.hf_repo`<br>`hardware.hf_file` | string | unset | both | model reload | wired | none |
 | `model_fit.ctx_size` | integer | `0` = auto | both | model reload | wired | `--ctx-size` on the ad-hoc single-model path |

@@ -6,6 +6,9 @@ use super::super::{
 impl ModelConfigEntry {
     /// Merge profile-shaping defaults beneath this model entry.
     pub fn with_profile_defaults(&self, defaults: Option<&ModelConfigDefaults>) -> Self {
+        if self.provider.is_some() {
+            return self.clone();
+        }
         let Some(defaults) = defaults else {
             return self.clone();
         };

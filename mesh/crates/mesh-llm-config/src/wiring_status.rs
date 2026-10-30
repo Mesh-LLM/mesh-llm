@@ -17,6 +17,7 @@
 //! validate` agrees with real runtime support instead of drifting from it.
 
 mod checkpoint;
+mod managed_models;
 mod runtime;
 mod topology;
 
@@ -586,6 +587,12 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         reason: "",
         behavior: WiringBehavior::None,
     },
+    managed_models::PROVIDER,
+    managed_models::VARIANT,
+    managed_models::OPTIONS,
+    managed_models::REQUEST_DEFAULTS,
+    managed_models::LIFECYCLE,
+    managed_models::SOURCE,
     WiringEntry {
         path: "hardware.model_path",
         status: WiringStatus::Wired,

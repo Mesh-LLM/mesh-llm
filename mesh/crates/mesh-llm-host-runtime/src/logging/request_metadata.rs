@@ -117,9 +117,14 @@ impl RequestSummaryMetadata {
             "/v1/messages/count_tokens" => Some("messages_count_tokens"),
             "/systemone" => Some("system_one"),
             "/v1/decisions" => Some("decisions"),
-            // Mesh task contracts use their own namespace but still need
-            // route labels in inference request summaries.
+            // Mesh task contracts live outside `/v1/`, which is reserved for
+            // OpenAI-shaped endpoints. An admitted task request that reaches no
+            // arm here records no route at all, so it reads in the logs as an
+            // unknown path — exactly what an operator cannot afford when the
+            // task itself is the thing they are trying to trace.
             "/mesh/v1/documents/ocr" => Some("document_ocr"),
+            "/mesh/v1/images/similarity" => Some("image_text_similarity"),
+            "/mesh/v1/images/depth" => Some("depth_estimation"),
             _ => None,
         };
         Self::from_parts(route, None, None, None)
@@ -327,17 +332,88 @@ mod tests {
         }
     }
 
-    /// Only the current OCR path receives the document task label.
+    /// Mesh task routes are labelled even though they sit outside `/v1/`.
+    ///
+    /// The retired `/v1/` task paths are asserted as unlabelled on purpose:
+    /// Mesh matches the request path to a workload class and then forwards that
+    /// same path to the plugin, so a rename that lands on one side only must be
+    /// visible here rather than presenting as a silent `404` in production.
     #[test]
     fn mesh_task_routes_are_labelled_beyond_the_openai_surface() {
-        for suffix in ["", "?trace=1"] {
-            let metadata = RequestSummaryMetadata::from_openai_ingress_path(&format!(
-                "/mesh/v1/documents/ocr{suffix}"
-            ));
-            assert_eq!(metadata.route(), Some("document_ocr"));
-            assert!(metadata.model().is_none());
+        for (path, route) in [
+            ("/mesh/v1/documents/ocr", "document_ocr"),
+            ("/mesh/v1/images/similarity", "image_text_similarity"),
+            ("/mesh/v1/images/depth", "depth_estimation"),
+        ] {
+            for suffix in ["", "?trace=1"] {
+                let metadata =
+                    RequestSummaryMetadata::from_openai_ingress_path(&format!("{path}{suffix}"));
+                assert_eq!(metadata.route(), Some(route));
+                assert!(metadata.model().is_none());
+            }
         }
-        assert!(RequestSummaryMetadata::from_openai_ingress_path("/v1/documents/ocr").is_empty());
+        for retired in [
+            "/v1/documents/ocr",
+            "/v1/images/similarity",
+            "/v1/images/depth",
+        ] {
+            assert!(RequestSummaryMetadata::from_openai_ingress_path(retired).is_empty());
+        }
+    }
+
+    /// Every label this layer can produce must survive the presentation
+    /// envelope's own closed vocabulary.
+    ///
+    /// The two vocabularies are separate lists, so a route added here without a
+    /// matching arm there is silently dropped and the request presents as an
+    /// unknown path — the exact failure the task labels exist to prevent.
+    #[test]
+    fn every_ingress_label_survives_the_presentation_vocabulary() {
+        for path in [
+            "/health",
+            "/healthz",
+            "/readyz",
+            "/v1/models",
+            "/v1/embeddings",
+            "/v1/rerank",
+            "/v1/audio/speech",
+            "/v1/audio/transcriptions",
+            "/v1/audio/translations",
+            "/v1/chat/completions",
+            "/v1/completions",
+            "/v1/responses",
+            "/v1/messages",
+            "/v1/messages/count_tokens",
+            "/systemone",
+            "/v1/decisions",
+            "/mesh/v1/documents/ocr",
+            "/mesh/v1/images/similarity",
+            "/mesh/v1/images/depth",
+        ] {
+            let label = RequestSummaryMetadata::from_openai_ingress_path(path)
+                .route()
+                .unwrap_or_else(|| panic!("{path} has no label"))
+                .to_owned();
+            let presented =
+                mesh_llm_events::logging::envelope::CanonicalPresentationContext::from_parts(
+                    Some(&label),
+                    Some("direct_http"),
+                    None,
+                    None,
+                    None,
+                    None,
+                );
+            assert_eq!(
+                presented.route(),
+                Some(label.as_str()),
+                "{path} is labelled '{label}' but the presentation vocabulary drops it"
+            );
+            assert_ne!(
+                presented.request_kind(),
+                "unknown",
+                "{path} is labelled '{label}' but no request kind claims it"
+            );
+        }
     }
 
     #[test]

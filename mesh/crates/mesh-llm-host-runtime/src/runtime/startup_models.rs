@@ -763,6 +763,7 @@ fn matching_config_model<'a>(
     let mut matches = config
         .models
         .iter()
+        .filter(|model| model.provider.is_none())
         .filter(|model| model.model == model_ref);
     let Some(first) = matches.next() else {
         return Ok(None);
@@ -802,6 +803,14 @@ pub(super) fn skippy_local_source_required(
         .and_then(|skippy| skippy.source_policy.as_deref())
         .or_else(|| default_skippy.and_then(|skippy| skippy.source_policy.as_deref()))
         == Some("local-required")
+}
+
+fn native_model_count(config: &plugin::MeshConfig) -> usize {
+    config
+        .models
+        .iter()
+        .filter(|model| model.provider.is_none())
+        .count()
 }
 
 pub(super) fn build_startup_model_specs(
@@ -939,13 +948,17 @@ pub(super) fn build_startup_model_specs(
         .as_ref()
         .and_then(|defaults| defaults.hardware.as_ref())
         .and_then(|hardware| hardware.model_path.as_ref());
-    if config.models.len() > 1 && default_model_path.is_some() {
+    if native_model_count(config) > 1 && default_model_path.is_some() {
         anyhow::bail!(
             "defaults.hardware.model_path cannot be used when multiple logical models are configured; set hardware.model_path on each model"
         );
     }
 
-    for model in &config.models {
+    for model in config
+        .models
+        .iter()
+        .filter(|model| model.provider.is_none())
+    {
         let effective =
             effective_startup_model_config(&model.model, Some(model), config.defaults.as_ref());
         let local_source_required =
