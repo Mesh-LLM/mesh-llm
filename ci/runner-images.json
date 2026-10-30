@@ -273,6 +273,19 @@
     }
   },
   "consumer_roles": {
+    "skippy-cpp-api": {
+      "image_id": "public-cpu",
+      "scope": "ordinary",
+      "bindings": [
+        {
+          "workflow": "ci-quality-slice.yml",
+          "job": "skippy_cpp_api",
+          "matrix_selector": null,
+          "image_expression": "{image}",
+          "epoch_field": null
+        }
+      ]
+    },
     "rust-clippy": {
       "image_id": "public-cpu",
       "scope": "ordinary",
