@@ -267,6 +267,7 @@ impl StageOpenAiBackend {
         )
         .map_err(openai_backend_error)?;
         let forward_activation_bytes = forwarded.message.activation.len();
+        request.record_forwarded_features(false, forwarded.dflash_feature_bytes);
         let write_timer = PhaseTimer::start();
         let forward_receipt = if let Some(forwarder) = async_forwarder {
             Some(

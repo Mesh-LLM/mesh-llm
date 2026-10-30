@@ -461,6 +461,9 @@ impl StageOpenAiBackend {
         cache_stats.predicted_ms = decode_timer.elapsed_ms();
         if let Some(wire) = cache_stats.activation_wire.as_mut() {
             wire.decode_bytes = summary.forward_activation_bytes;
+            wire.dflash_features = request
+                .split_dflash()
+                .then(|| request.split_dflash_health.feature_bytes());
         }
         self.emit_openai_summary("stage.openai_decode", decode_timer, attrs);
     }
