@@ -83,7 +83,12 @@ describe('payment query refresh', () => {
           {
             id: 'other',
             providers: [
-              { provider_id: 'peer-c', local: false, available: true, payment: { binding_quote: false, paid: false, pricing: null, rate_unit: 'msat_per_million_tokens' } }
+              {
+                provider_id: 'peer-c',
+                local: false,
+                available: true,
+                payment: { binding_quote: false, paid: false, pricing: null, rate_unit: 'msat_per_million_tokens' }
+              }
             ]
           }
         ]
