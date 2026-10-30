@@ -329,10 +329,8 @@ async fn dispatch(
     )
     .await;
     let mut delivered = exchange.as_ref().map(|_| DeliveredCapture::default());
-    // The buyer is always a mesh peer, so it gets what this node says it ran,
-    // as on the free path (`response/served_model_headers.rs`).
     let head = ServedModelHeadRewrite::new(
-        ServedModelHeaders::for_served_model(node, session.request.backend_model()).await,
+        served_model_headers(node, &session.backend, &session.request).await,
     );
     let usage = match session
         .backend
@@ -354,6 +352,19 @@ async fn dispatch(
     )
     .await;
     usage
+}
+
+/// What this node says it ran, for the buyer, who is always a mesh peer
+/// (`response/served_model_headers.rs`). Only a local backend runs this
+/// node's own weights; a plugin backend may answer for a model whose local
+/// descriptor is still listed, so it reports none.
+async fn served_model_headers(
+    node: &Node,
+    backend: &Backend,
+    request: &PaidRequest,
+) -> Option<ServedModelHeaders> {
+    backend.local_port()?;
+    ServedModelHeaders::for_served_model(node, request.backend_model()).await
 }
 
 /// Forward the backend's response to the buyer, observing usage on the way.
@@ -643,6 +654,47 @@ mod tests {
         assert!(delivered.contains("x-mesh-weights-digest: 74a4da8c\r\n"));
         assert!(delivered.contains("x-mesh-model-canonical-ref: org/repo@main:Q4_K_M\r\n"));
         assert!(delivered.ends_with("\"completion_tokens\":2}}"));
+    }
+
+    /// Only this node's own weights are reported: a plugin backend answering
+    /// while the model's local descriptor is still listed reports none.
+    #[tokio::test]
+    async fn only_a_local_backend_reports_this_nodes_served_model() {
+        let node = Node::new_for_tests(crate::mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        *node.served_model_descriptors.lock().await = vec![crate::mesh::ServedModelDescriptor {
+            identity: crate::mesh::ServedModelIdentity {
+                model_name: "local-gguf/sha256-abc".to_owned(),
+                weights_digest: Some("74a4da8c".to_owned()),
+                canonical_ref: Some("org/repo@main:Q4_K_M".to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }];
+        let mut request = PaidRequest::parse(
+            b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"model\":\"org/repo:Q4_K_M\"}",
+        )
+        .unwrap();
+        request.use_backend_model("local-gguf/sha256-abc");
+
+        let local = served_model_headers(&node, &Backend::Local(1), &request).await;
+        assert_eq!(
+            local,
+            Some(ServedModelHeaders {
+                weights_digest: Some("74a4da8c".to_owned()),
+                canonical_ref: Some("org/repo@main:Q4_K_M".to_owned()),
+            }),
+            "looked up by the backend name, not the buyer's public ID"
+        );
+        let plugin = served_model_headers(
+            &node,
+            &Backend::Plugin("http://127.0.0.1:1".into()),
+            &request,
+        )
+        .await;
+        assert_eq!(plugin, None);
+        node.endpoint.close().await;
     }
 
     #[tokio::test]

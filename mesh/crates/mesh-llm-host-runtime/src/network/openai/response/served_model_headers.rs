@@ -33,9 +33,10 @@ pub(crate) struct ServedModelHeaders {
 }
 
 impl ServedModelHeaders {
-    /// This node's facts for `model`, matched on the served descriptor's
-    /// `model_name` as this node's own terminal provenance does, so both
-    /// report the same values. `None` when this node has neither fact.
+    /// This node's facts for `model`, the name its backend serves the model
+    /// under, matched on the served descriptor's `model_name` as this node's
+    /// own host-served terminal provenance does. `None` when this node has
+    /// neither fact.
     pub(crate) async fn for_served_model(node: &mesh::Node, model: &str) -> Option<Self> {
         let identity = node
             .served_model_descriptors()

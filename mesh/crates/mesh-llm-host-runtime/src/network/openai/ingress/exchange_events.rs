@@ -151,8 +151,12 @@ fn outcome_was_served(outcome: &proxy::RouteDispatchOutcome) -> bool {
 ///
 /// `peer_served_model` holds the peer's served-model response headers
 /// (`x-mesh-weights-digest`, `x-mesh-model-canonical-ref`): what the peer
-/// says it ran, the same values its own host-served terminal reports. This node cannot check it against the bytes, as with the
-/// peer's `X-Capsule-Id`; it is recorded as the peer's statement.
+/// says it ran, taken from the descriptor its backend served. On a free
+/// exchange that is the descriptor its own host-served terminal reports. A
+/// paid seller's own terminal looks the model up by the buyer's public ID,
+/// so it can lack what these headers carry. This node cannot check them
+/// against the bytes, as with the peer's `X-Capsule-Id`; they are recorded
+/// as the peer's statement.
 pub(super) fn serving_provenance_for_remote_mesh(
     target: Option<iroh::EndpointId>,
     observed_served_by_hex: Option<String>,
