@@ -115,10 +115,12 @@ impl DecodeTiming {
             return Self::default();
         }
         let elapsed_us = last.saturating_sub(first);
+        if elapsed_us == 0 {
+            return Self::default();
+        }
         Self {
             elapsed_us: Some(elapsed_us),
-            tokens_per_second_milli: (elapsed_us > 0)
-                .then(|| intervals.saturating_mul(1_000_000_000) / elapsed_us),
+            tokens_per_second_milli: Some(intervals.saturating_mul(1_000_000_000) / elapsed_us),
         }
     }
 }
@@ -309,4 +311,16 @@ pub(super) fn session_active_fact() -> RuntimeFact {
 
 pub(super) fn session_idle_fact() -> RuntimeFact {
     session_fact(SessionEventKind::SessionIdle, empty_data())
+}
+
+#[cfg(test)]
+mod decode_timing_tests {
+    use super::DecodeTiming;
+
+    #[test]
+    fn zero_span_omits_decode_timing() {
+        let timing = DecodeTiming::from_token_span(Some(100), Some(100), 2);
+        assert_eq!(timing.elapsed_us, None);
+        assert_eq!(timing.tokens_per_second_milli, None);
+    }
 }
