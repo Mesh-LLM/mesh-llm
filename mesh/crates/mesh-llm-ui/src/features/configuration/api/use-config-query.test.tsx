@@ -2,10 +2,11 @@
 
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
 
 import { useConfigQuery } from '@/features/configuration/api/use-config-query'
+import { setOwnerControlCredential } from '@/features/configuration/api/owner-control-credential'
 import type {
   RuntimeConfigControlStatePayload,
   RuntimeConfigSchemaEntry,
@@ -72,7 +73,10 @@ const CONFIG_SCHEMA_REFERENCE: RuntimeConfigSchemaReference = {
   ]
 }
 
+beforeEach(() => setOwnerControlCredential('unit-owner-token'))
+
 afterEach(() => {
+  setOwnerControlCredential(null)
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })

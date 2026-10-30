@@ -1174,6 +1174,14 @@ pub struct OwnerControlPluginCommandApproval {
     /// exact new command executable
     #[prost(string, tag = "2")]
     pub command: ::prost::alloc::string::String,
+    /// exact approved arguments; required for changes
+    #[prost(message, optional, tag = "3")]
+    pub invocation: ::core::option::Option<OwnerControlPluginArguments>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlPluginArguments {
+    #[prost(string, repeated, tag = "1")]
+    pub args: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnerControlApplyConfigResponse {

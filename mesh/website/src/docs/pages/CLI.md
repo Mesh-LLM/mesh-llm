@@ -615,7 +615,7 @@ keeps the cause chain in every case.
 #### `runtime scan-refresh`
 
 Use this to ask exactly one remote, owner-attested node to rescan its managed
-model inventory. It uses the private `mesh-llm-control/1` lane; it does not
+model inventory. It uses the private `mesh-llm-control/2` lane; it does not
 change public mesh join, gossip, routing, or inference behavior.
 
 The target node must expose owner-control and the requester must use an owner

@@ -5,7 +5,7 @@
 //! All assertions run against the public API of `mesh-client::protocol`.
 
 use mesh_client::protocol::{
-    ALPN_CONTROL_V1, ALPN_V0, ALPN_V1, ControlProtocol, STREAM_CONFIG_PUSH,
+    ALPN_CONTROL_V1, ALPN_CONTROL_V2, ALPN_V0, ALPN_V1, ControlProtocol, STREAM_CONFIG_PUSH,
     STREAM_CONFIG_SUBSCRIBE, protocol_from_alpn,
 };
 use mesh_client::{
@@ -28,6 +28,8 @@ fn alpn_v1_byte_sequence_is_stable() {
 #[test]
 fn control_alpn_byte_sequence_is_stable() {
     assert_eq!(ALPN_CONTROL_V1, b"mesh-llm-control/1");
+    assert_eq!(ALPN_CONTROL_V2, b"mesh-llm-control/2");
+    assert_ne!(ALPN_CONTROL_V1, ALPN_CONTROL_V2);
 }
 
 #[test]

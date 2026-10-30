@@ -10,7 +10,6 @@
 //! (0600 on Unix) so restarts keep accepting already-configured callers, and
 //! it is held in memory behind [`Zeroizing`].
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
@@ -20,7 +19,7 @@ use zeroize::Zeroizing;
 use crate::crypto::default_keystore_path;
 
 /// File name of the persisted token, stored beside the owner keystore.
-pub(crate) const OWNER_CONTROL_TOKEN_FILE: &str = "owner-control-token";
+pub(crate) const OWNER_CONTROL_TOKEN_FILE: &str = "owner-control-token-v2";
 
 const OWNER_CONTROL_TOKEN_BYTES: usize = 32;
 
@@ -93,9 +92,12 @@ pub(crate) fn owner_control_tokens_match(expected: &str, presented: &str) -> boo
 }
 
 fn read_owner_control_token(path: &Path) -> Result<Option<Zeroizing<String>>> {
-    match std::fs::read_to_string(path) {
+    match mesh_llm_config::read_private_file(path) {
         Ok(raw) => {
-            let token = raw.trim();
+            let raw = Zeroizing::new(raw);
+            let token = std::str::from_utf8(&raw)
+                .context("owner-control token is not UTF-8")?
+                .trim();
             anyhow::ensure!(
                 !token.is_empty(),
                 "owner-control token file {} is empty",
@@ -110,26 +112,34 @@ fn read_owner_control_token(path: &Path) -> Result<Option<Zeroizing<String>>> {
 }
 
 fn write_owner_control_token_new(path: &Path, token: &[u8]) -> std::io::Result<()> {
-    let mut options = std::fs::OpenOptions::new();
-    options.create_new(true).write(true);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-
-        options.mode(0o600);
-    }
-
-    let mut file = options.open(path)?;
-    file.write_all(token)?;
-    file.write_all(b"\n")?;
-    file.flush()?;
-    file.sync_all()
+    let mut contents = Zeroizing::new(Vec::with_capacity(token.len() + 1));
+    contents.extend_from_slice(token);
+    contents.push(b'\n');
+    mesh_llm_config::create_private_file_if_absent(path, &contents)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn publication_preserves_existing_token_and_removes_temporary_file() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let path = dir.path().join("token");
+        write_owner_control_token_new(&path, b"first").expect("publish token");
+        let error = write_owner_control_token_new(&path, b"second").expect_err("existing token");
+        assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read token"),
+            "first\n"
+        );
+        assert_eq!(
+            std::fs::read_dir(dir.path())
+                .expect("read directory")
+                .count(),
+            1
+        );
+    }
 
     #[test]
     fn generated_tokens_are_64_hex_characters() {
