@@ -376,6 +376,11 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
   recursively, including its prepared pin/patch stamps and explicit source
   overrides; prove a native-input change reruns the build and an unchanged build
   stays fresh. Clearing Cargo's cache does not repair this missing dependency.
+- **A selected sentinel is not an eligible token.** Empty, fully suppressed,
+  or entirely non-finite logits have no selectable token. Preserve that failure
+  through the selection boundary instead of accepting a negative token or
+  allowing an infinity/NaN to stand in for a valid score. The exhaustion tests
+  and the benchmark's exhausted-vocabulary gate cover the rejection path.
 - **A copied token set can fail even when the model accessor cannot.** The
   suppress-token bridge returned a vector directly from a `noexcept` body;
   growing the result could terminate its Rust caller. Return a fallible envelope

@@ -17,10 +17,9 @@ google-benchmark report.
 | `BatchEmbed` | B separate `skippy_session_embed` calls | `embed_batch` — B sequences, one decode |
 | `RerankBatch` | B separate `skippy_session_rerank` calls | `rerank_batch` — one query, B documents, one decode |
 | `SamplingSuppress/N` | native-equivalent merge and per-call bitmap greedy scan | `apply_vocab_suppress` and `greedy_among_allowed` |
+| `SamplingEligible` | native-equivalent bitmap selection and call-site `LLAMA_TOKEN_NULL` check | `greedy_among_allowed` through `eligible_token` |
 | `stage_chain` | *row pending: the gate compares identical inputs; must compare the C-ABI chain's terminal frame against `StageChain::prefill`'s before timing* | `StageChain` prefill |
 
-| `SamplingSuppress` | hand-written find-per-candidate merge + greedy (pre-0012 spelling) | `apply_vocab_suppress` + `greedy_among_allowed` (bitmap) |
-| `SamplingEligible` | the post-0012 native sampler entry plus the call-site `LLAMA_TOKEN_NULL` check | `greedy_among_allowed` through `eligible_token` |
 Both sides link the *same* patched llama.cpp build, load the same GGUF, and run
 with the same geometry (`n_ctx = n_batch = n_ubatch = 512`, one sequence, all
 layers offloaded, flash-attention AUTO). The harness embeds one 64-token input
@@ -41,6 +40,13 @@ establish a production speedup. Both sides use the bitmap algorithm and admit
 identical outputs; the API is inlined while the native-equivalent reference
 crosses a function boundary, matching the native implementation's separate
 translation unit.
+
+`SamplingEligible` times full bitmap selection and the eligibility boundary;
+it is a class-A comparison, not a metadata ceiling. With the same local arm64
+Release setup and 15 interleaved 0.05-second repetitions, FFI/API minima were
+82.57/10.71 us and medians 84.94/11.18 us. Its gate also requires both arms to
+reject an exhausted vocabulary. This synthetic observation does not establish
+a production sampling speedup.
 
 ## Build
 

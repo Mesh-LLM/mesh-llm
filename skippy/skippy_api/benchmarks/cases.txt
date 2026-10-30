@@ -26,4 +26,4 @@
 3	B	stage_open_encoder	^stage_open	blocked-upstream	BERT stage fails at identity match since c66eafa1e (v0.7.0 export-contract rework); underlying gap unchanged: attention.mask.0 has no owned request recipe (native)
 11	C	workload_classify	^ModelLoad/.*	parity	load-time derivation only; the ModelLoad row covers it (same native open), decisions tested in workload_profile_test
 12	A	sampling_suppress	^SamplingSuppress/	win	native-equivalent merge and bitmap scan; 32k vocab/128 suppressed/32 biases; arm64 local 15 interleaved reps: 94.17 us FFI / 14.71 us API minima; scoped synthetic result
-13	C	sampling_eligible	^SamplingEligible/	win	boundary-rule row: both sides run the same bitmap selection and gate outputs; the facade's spelling also measures 8x faster than the native transcription
+13	A	sampling_eligible	^SamplingEligible/	win	full bitmap selection plus boundary check; arm64 local 15 interleaved reps: 82.57 us FFI / 10.71 us API minima; scoped synthetic result
