@@ -212,7 +212,7 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 }
                 (m, p)
                     if matches!(m, "GET" | "POST" | "OPTIONS")
-                        && (p.starts_with("/v1/") || p == "/models") =>
+                        && chat::is_inference_passthrough(p) =>
                 {
                     chat::handle(stream, state, method, path_only, req, caller).await?;
                     Ok(true)

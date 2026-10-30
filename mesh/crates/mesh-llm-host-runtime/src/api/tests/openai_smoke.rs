@@ -1,4 +1,45 @@
 #[tokio::test]
+async fn document_ocr_passthrough_preserves_multipart_and_query() {
+    let (upstream_port, upstream_rx, upstream_handle) =
+        spawn_capturing_upstream(r#"{"pages":[]}"#).await;
+    let state = build_test_mesh_api_with_api_port(upstream_port).await;
+    let (addr, handle) = spawn_management_test_server(state).await;
+    let body = "--ocr\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\nindra\r\n--ocr\r\nContent-Disposition: form-data; name=\"file\"; filename=\"page.pdf\"\r\n\r\n%PDF-test\r\n--ocr--\r\n";
+    let request = format!(
+        "POST /mesh/v1/documents/ocr?trace=1 HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=ocr\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    let response = send_management_request(addr, request).await;
+    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+    let raw = tokio::time::timeout(Duration::from_secs(5), upstream_rx)
+        .await
+        .expect("console must forward OCR to inference")
+        .unwrap();
+    let raw = String::from_utf8(raw).unwrap();
+    assert!(raw.starts_with("POST /mesh/v1/documents/ocr?trace=1 HTTP/1.1\r\n"));
+    assert!(raw.contains("Content-Type: multipart/form-data; boundary=ocr\r\n"));
+    assert_eq!(http_body_text(raw.as_bytes()), body);
+    assert!(response.contains("Content-Security-Policy: sandbox\r\n"));
+    handle.await.unwrap().unwrap();
+    upstream_handle.await.unwrap();
+}
+
+#[tokio::test]
+async fn document_ocr_console_preflight_and_methods() {
+    let state = build_test_mesh_api_with_api_port(0).await;
+    for (method, status) in [("OPTIONS", "204"), ("GET", "405")] {
+        let (addr, handle) = spawn_management_test_server(state.clone()).await;
+        let response = send_management_request(
+            addr,
+            format!("{method} /mesh/v1/documents/ocr HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+        )
+        .await;
+        assert!(response.starts_with(&format!("HTTP/1.1 {status}")), "{response}");
+        handle.await.unwrap().unwrap();
+    }
+}
+
+#[tokio::test]
 async fn test_api_objects_routes_through_object_store_capability() {
     let (plugin_manager, blobstore_root) = build_blobstore_api_plugin_manager().await;
     let state = build_test_mesh_api_with_plugin_manager(3131, plugin_manager).await;

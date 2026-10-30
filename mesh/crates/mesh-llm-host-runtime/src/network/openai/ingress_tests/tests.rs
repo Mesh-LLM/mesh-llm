@@ -2786,7 +2786,7 @@ async fn shared_plugin_model_name_stays_admitted_for_chat_and_ocr() {
     node.set_plugin_manager(plugin_manager.clone()).await;
 
     let descriptors = node.all_served_model_descriptors().await;
-    for path in ["/v1/chat/completions", "/v1/documents/ocr"] {
+    for path in ["/v1/chat/completions", "/mesh/v1/documents/ocr"] {
         assert!(
             workload_routing::model_satisfies_request(model, path, &descriptors),
             "{model} must be advertised as servable for {path}"
@@ -2809,7 +2809,7 @@ async fn shared_plugin_model_name_stays_admitted_for_chat_and_ocr() {
         .expect("a chat endpoint serving the shared name must keep it admitted for chat");
     assert_eq!(decision.effective_model.as_deref(), Some(model));
 
-    let mut ocr = plugin_only_request_for(model, "/v1/documents/ocr");
+    let mut ocr = plugin_only_request_for(model, "/mesh/v1/documents/ocr");
     match prepare_auto_route_decision(&mut ocr, &ctx, &descriptors).await {
         Ok(decision) => assert_eq!(decision.effective_model.as_deref(), Some(model)),
         Err(other) => {

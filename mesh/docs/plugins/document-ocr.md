@@ -1,10 +1,12 @@
 # Document OCR plugin contract
 
-An OCR provider registers an inference endpoint with protocol `document_ocr_v1` and serves `GET /v1/models` plus `POST /v1/documents/ocr` on its local HTTP address. The host probes `/v1/models` to discover ready model IDs, advertises them as `DocumentOcr` workloads, and routes OCR requests only to endpoints carrying this protocol. A provider can be written in any language; the [ONNX plugin](https://github.com/Mesh-LLM/onnx) is the first implementation, using Indra in Rust with `ort`.
+An OCR provider registers an inference endpoint with protocol `document_ocr_v1` and serves `GET /v1/models` plus `POST /mesh/v1/documents/ocr` on its local HTTP address. The host probes `/v1/models` to discover ready model IDs, advertises them as `DocumentOcr` workloads, and routes OCR requests only to endpoints carrying this protocol. A provider can be written in any language; the [ONNX plugin](https://github.com/Mesh-LLM/onnx) is the first implementation, using Indra in Rust with `ort`.
+
+The task lives under `/mesh/v1/` because `/v1/` is reserved for OpenAI-shaped endpoints: an OpenAI client or SDK pointed at Mesh finds the paths it expects, and a Mesh task can never collide with a route OpenAI adds later. The path is a **two-sided contract** — the host admits the request by matching this path to a workload class, then forwards that same path to the provider — so host and provider must agree on the literal string. Changing it on one side is a runtime `404`, not a compile error.
 
 ## Request and response
 
-`POST /v1/documents/ocr` accepts `multipart/form-data` with a required `file` field and a `model` field selecting an advertised ID. Providers may accept `response_format` (`json`, `text`, or `markdown`) and `max_pages`. The mesh reads `model` from the multipart body to choose a host, then forwards the original request body to the selected provider. The current host limit is 64 MiB for the file plus multipart overhead. The provider owns document decoding and processing errors.
+`POST /mesh/v1/documents/ocr` accepts `multipart/form-data` with a required `file` field and a `model` field selecting an advertised ID. Providers may accept `response_format` (`json`, `text`, or `markdown`) and `max_pages`. The mesh reads `model` from the multipart body to choose a host, then forwards the original request body to the selected provider. The current host limit is 64 MiB for the file plus multipart overhead. The provider owns document decoding and processing errors.
 
 The JSON response has a `model` ID and a `pages` array. Each page has `page_index`, extracted `text`, `markdown`, `lines` with text and boxes, and ordered layout `blocks`. The provider may add fields such as page rotation. Plain text and Markdown formats return joined page content. Errors use an `error.message` object.
 
