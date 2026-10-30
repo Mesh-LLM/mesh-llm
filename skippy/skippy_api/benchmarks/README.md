@@ -115,7 +115,18 @@ median of 9 interleaved repetitions, `--benchmark_min_time=0.2s`:
 | `SessionCreate` | 3.3 µs | 2.4 µs | 1.4x |
 | `SessionCreateCold` | 3.4 µs | 1.65 ms | old wins ~485x |
 | `ModelLoad` | 18.4 ms | 18.7 ms | tie |
-| `stage_materialize/6` | — | — | pending: equivalent-field gate corrected; prior timing withdrawn |
+| `stage_materialize/6` | 1.864 us | 1.826 us | local parity after correcting the equivalent-field gate |
+
+The corrected materialization measurement is a separate arm64 Release run on
+2026-10-31 with MiniLM, 15 interleaved 0.05-second repetitions. FFI/API minima
+were 1.633/1.485 us. Its setup gate compares exact strings and state-effect
+counts; the timed arms consume the same fields.
+
+`stage_validate` has no timing verdict: the facade checks previously materialized
+metadata while native validation additionally checks live graph pointers,
+tensor metadata and semantic hashes. Both accepting a valid fixture does not
+establish equivalent validation obligations. The pending row must align those
+obligations before comparison.
 
 With `bge-reranker-v2-m3-Q4_K_M` (438 MB):
 

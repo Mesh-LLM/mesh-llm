@@ -89,16 +89,18 @@ Manifest: row `0003 B stage_open_encoder blocked-upstream`.
 
 ## Performance worth asking llama for
 
-### Native validate_chain re-derives guarded plans per call
+### Chain-validation scope must match before timing
 
-The native path rebuilds guarded plans on every call where our `PlanStore`
-RCU cache serves an immutable snapshot. The cache shape (copy-on-write index,
-atomic snapshot publish) is the upstream-worthy idea. The earlier timing claim
-is withdrawn: the facade benchmark still used the old optional-error polarity
-after validation changed to `expected<void, E>`. Measure the successful paths
-again before attaching a speedup to this opportunity.
+The facade benchmark validates a local vector of materialized plans; it does
+not exercise `PlanStore`. Native validation additionally re-derives guarded
+profile identity and checks semantic snapshots, live graph/tensor pointers and
+state effects. The facade's metadata check has fewer obligations, so their
+timings do not establish an optimization or a cache benefit. The success-polarity
+fix makes both valid-fixture setup calls succeed, but cannot establish equivalent
+rejection semantics. Align the obligations or prove an immutable validated-token
+contract before attaching a timing verdict.
 
-Manifest: class A row `stage_validate`, pending remeasurement.
+Manifest: class A row `stage_validate`, pending equivalent validation scope.
 
 ### Per-decode fixed cost in the Metal path
 
