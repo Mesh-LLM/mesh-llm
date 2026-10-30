@@ -57,6 +57,7 @@ COPY skippy/scripts/ skippy/scripts/
 COPY mesh/scripts/ mesh/scripts/
 COPY scripts/lib/ scripts/lib/
 COPY skippy/llama_cpp/upstream.txt skippy/llama_cpp/upstream.txt
+COPY skippy/llama_cpp/whisper-upstream.txt skippy/llama_cpp/whisper-upstream.txt
 COPY skippy/llama_cpp/patches/ skippy/llama_cpp/patches/
 RUN --mount=type=cache,id=mesh-llm-sccache-debian-bookworm-gcc12-cpu-${TARGETARCH},target=/root/.cache/sccache,sharing=locked \
     scripts/prepare-llama.sh pinned && \
