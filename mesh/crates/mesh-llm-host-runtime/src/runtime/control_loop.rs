@@ -555,7 +555,7 @@ pub(super) async fn run_auto_handle_model_intent(
             {
                 if let Some(tx) = completion {
                     ctx.model_target_reconciliation_state
-                        .stack_load_completion(&spec, &profile, tx);
+                        .stack_pending_load_completion(&spec, &profile, sizing, tx);
                 }
                 return;
             }
