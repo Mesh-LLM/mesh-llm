@@ -4,6 +4,9 @@ use mesh_llm_events::logging::identifiers::RequestId;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
+use super::served_model_headers::{
+    SERVED_MODEL_CANONICAL_REF_HEADER, SERVED_WEIGHTS_DIGEST_HEADER, ServedModelHeaders,
+};
 use crate::network::openai::request_parse::{MAX_HEADER_BYTES, MAX_HEADERS};
 
 const MAX_RESPONSE_BODY_PREVIEW_BYTES: usize = 4 * 1024;
@@ -20,6 +23,9 @@ pub(in crate::network::openai::response) struct ParsedResponseHeaders {
     /// rebuild fresh HTTP responses instead of forwarding upstream headers.
     pub(in crate::network::openai::response) client_nonce: Option<String>,
     pub(in crate::network::openai::response) nonce_origin: Option<String>,
+    /// The serving node's served-model headers, kept for the same reason: a
+    /// rebuilt response must still carry them back to the routing node.
+    pub(in crate::network::openai::response) served_model: ServedModelHeaders,
 }
 
 /// Append the capsule client nonce and origin-marker headers (when present)
@@ -86,7 +92,7 @@ pub(in crate::network::openai::response) fn append_mesh_request_id_header(
 /// already meant to be single-valued (e.g. `x-mesh-served-by`) must never
 /// appear twice just because some upstream response already carried one —
 /// canonicalize to one value instead of appending a second.
-fn remove_existing_header(buf: &mut Vec<u8>, header_end: usize, name: &str) -> usize {
+pub(super) fn remove_existing_header(buf: &mut Vec<u8>, header_end: usize, name: &str) -> usize {
     let mut offset = 0usize;
     let mut total_removed = 0usize;
     while offset < header_end.saturating_sub(total_removed) {
@@ -234,6 +240,7 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
             let mut chunked = false;
             let mut client_nonce = None;
             let mut nonce_origin = None;
+            let mut served_model = ServedModelHeaders::default();
             let nonce_header = skippy_inference_api::lifecycle::CLIENT_NONCE_HEADER.as_str();
             let nonce_origin_header =
                 skippy_inference_api::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str();
@@ -264,6 +271,20 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
                     nonce_origin = std::str::from_utf8(header.value)
                         .ok()
                         .map(|value| value.trim().to_string());
+                } else if header
+                    .name
+                    .eq_ignore_ascii_case(SERVED_WEIGHTS_DIGEST_HEADER)
+                {
+                    served_model.weights_digest = std::str::from_utf8(header.value)
+                        .ok()
+                        .map(|value| value.trim().to_string());
+                } else if header
+                    .name
+                    .eq_ignore_ascii_case(SERVED_MODEL_CANONICAL_REF_HEADER)
+                {
+                    served_model.canonical_ref = std::str::from_utf8(header.value)
+                        .ok()
+                        .map(|value| value.trim().to_string());
                 }
             }
             Ok(Some(ParsedResponseHeaders {
@@ -274,6 +295,7 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
                 chunked,
                 client_nonce,
                 nonce_origin,
+                served_model,
             }))
         }
         Ok(httparse::Status::Partial) => Ok(None),

@@ -20,6 +20,7 @@ mod relay;
 mod replay;
 mod routing;
 mod send;
+mod served_model_headers;
 mod stream_translation;
 
 pub(super) use cache_cost::CacheCostObservation;
@@ -42,6 +43,9 @@ pub(crate) use send::{
     append_safe_header, is_valid_header_name, send_400, send_400_observed, send_409_observed,
     send_503, send_503_observed, send_error_observed, send_json_with_status_and_headers_observed,
 };
+#[cfg(feature = "payments")]
+pub(crate) use served_model_headers::ServedModelHeadRewrite;
+pub(crate) use served_model_headers::ServedModelHeaders;
 
 #[cfg(feature = "payments")]
 pub(crate) mod paid;

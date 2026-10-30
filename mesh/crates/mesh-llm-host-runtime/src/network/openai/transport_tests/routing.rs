@@ -849,3 +849,131 @@ async fn multipart_image_auto_request_reaches_workload_selection() -> Result<()>
     }
     Ok(())
 }
+
+/// `backend_selected` reads the model identity from the target that routing
+/// actually selected: this node's own descriptor for a local target, and the
+/// named peer's gossiped descriptor for a remote one, never another node's
+/// same-named model.
+#[tokio::test]
+async fn backend_selected_identity_comes_from_the_selected_target() -> Result<()> {
+    use crate::network::openai::exchange_admission::selected_model_identity;
+
+    let model = "shared-model";
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker).await?;
+    *node.served_model_descriptors.lock().await = vec![mesh::ServedModelDescriptor {
+        identity: mesh::ServedModelIdentity {
+            model_name: model.to_owned(),
+            canonical_ref: Some("local-ref".to_owned()),
+            weights_digest: Some("local-digest".to_owned()),
+            ..Default::default()
+        },
+        ..Default::default()
+    }];
+    let peer_a = iroh::SecretKey::generate().public();
+    let peer_b = iroh::SecretKey::generate().public();
+    for (peer_id, canonical_ref) in [(peer_a, "peer-a-ref"), (peer_b, "peer-b-ref")] {
+        let mut peer = test_peer_serving_model(peer_id, model);
+        peer.served_model_descriptors[0].identity.canonical_ref = Some(canonical_ref.to_owned());
+        node.insert_test_peer(peer).await;
+    }
+
+    let local = selected_model_identity(&node, &election::InferenceTarget::Local(1), model)
+        .await
+        .expect("local descriptor");
+    assert_eq!(local.canonical_ref.as_deref(), Some("local-ref"));
+    assert_eq!(local.weights_digest.as_deref(), Some("local-digest"));
+
+    let remote = selected_model_identity(&node, &election::InferenceTarget::Remote(peer_b), model)
+        .await
+        .expect("peer B descriptor");
+    assert_eq!(remote.canonical_ref.as_deref(), Some("peer-b-ref"));
+    assert_eq!(remote.weights_digest, None, "gossip never carries a digest");
+
+    let unknown_peer = iroh::SecretKey::generate().public();
+    assert!(
+        selected_model_identity(
+            &node,
+            &election::InferenceTarget::Remote(unknown_peer),
+            model
+        )
+        .await
+        .is_none()
+    );
+    assert!(
+        selected_model_identity(
+            &node,
+            &election::InferenceTarget::Remote(peer_a),
+            "other-model"
+        )
+        .await
+        .is_none()
+    );
+    assert!(
+        selected_model_identity(&node, &election::InferenceTarget::None, model)
+            .await
+            .is_none()
+    );
+    node.endpoint.close().await;
+    Ok(())
+}
+
+/// A request may name a model by its public ID, which routing accepts as
+/// well as the runtime `model_name`. `backend_selected` and the served-model
+/// headers resolve that alias to the same descriptor routing selected.
+#[tokio::test]
+async fn backend_selected_identity_resolves_the_public_model_id() -> Result<()> {
+    use crate::network::openai::ServedModelHeaders;
+    use crate::network::openai::exchange_admission::selected_model_identity;
+
+    let runtime_name = "Qwen3-8B-Q4_K_M";
+    let public_id = "Qwen/Qwen3-8B-GGUF@revabc:Q4_K_M";
+    let identity = |canonical_ref: &str, weights_digest: Option<&str>| mesh::ServedModelIdentity {
+        model_name: runtime_name.to_owned(),
+        source_kind: mesh::ModelSourceKind::HuggingFace,
+        repository: Some("Qwen/Qwen3-8B-GGUF".to_owned()),
+        revision: Some("revabc".to_owned()),
+        artifact: Some("Qwen3-8B-Q4_K_M.gguf".to_owned()),
+        canonical_ref: Some(canonical_ref.to_owned()),
+        weights_digest: weights_digest.map(str::to_owned),
+        ..Default::default()
+    };
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker).await?;
+    *node.served_model_descriptors.lock().await = vec![mesh::ServedModelDescriptor {
+        identity: identity("local-ref", Some("local-digest")),
+        ..Default::default()
+    }];
+    let peer_id = iroh::SecretKey::generate().public();
+    let mut peer = test_peer_serving_model(peer_id, runtime_name);
+    peer.served_model_descriptors[0].identity = identity("peer-ref", None);
+    assert!(
+        crate::mesh::routes_model(&peer, public_id),
+        "routing accepts the public ID"
+    );
+    node.insert_test_peer(peer).await;
+
+    let local = selected_model_identity(&node, &election::InferenceTarget::Local(1), public_id)
+        .await
+        .expect("local descriptor by public ID");
+    assert_eq!(local.canonical_ref.as_deref(), Some("local-ref"));
+    assert_eq!(local.weights_digest.as_deref(), Some("local-digest"));
+
+    let remote = selected_model_identity(
+        &node,
+        &election::InferenceTarget::Remote(peer_id),
+        public_id,
+    )
+    .await
+    .expect("peer descriptor by public ID");
+    assert_eq!(remote.canonical_ref.as_deref(), Some("peer-ref"));
+    assert_eq!(remote.weights_digest, None, "gossip never carries a digest");
+
+    assert_eq!(
+        ServedModelHeaders::for_served_model(&node, public_id).await,
+        Some(ServedModelHeaders {
+            weights_digest: Some("local-digest".to_owned()),
+            canonical_ref: Some("local-ref".to_owned()),
+        })
+    );
+    node.endpoint.close().await;
+    Ok(())
+}

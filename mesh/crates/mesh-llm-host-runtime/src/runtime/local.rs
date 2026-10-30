@@ -608,19 +608,15 @@ pub(super) async fn set_advertised_model_context(
 /// reference-string hash) -- the two are different facts and neither
 /// replaces the other.
 ///
-/// Nothing in this crate's `openai.exchange.v1` terminal event
-/// (`OpenAiExchangeEnvelope`, `plugin/openai_exchange.rs`) reads this field
-/// yet -- it carries only `exchange_id`/`model`/`status`/capsule-marker
-/// fields today, not a served-model identity block. A `ServingProvenance`
-/// terminal-event block that does thread a served digest through exists, but
-/// only on fork-only demo/ledger-UI lineage (`feat/serving-provenance` and
-/// descendants), never merged to `origin/main` and absent from this branch.
-/// It also deliberately never crosses the mesh gossip wire (see
+/// This node's host-served `openai.exchange.v1` terminal reports it as
+/// `serving_provenance.weights_digest`, and its `backend_selected` event names
+/// it for a local target. A mesh peer that asked this node to serve the model
+/// gets it per response in `x-mesh-weights-digest`
+/// (`network/openai/response/probe.rs`) and records it on its own `RemoteMesh`
+/// terminal. It deliberately never crosses the mesh gossip wire (see
 /// `protocol/convert.rs`'s `descriptor_identity_to_proto`, which drops it on
 /// purpose: a peer could never verify a hash of bytes only this node can
-/// read). So today this is Record-only: the digest lands on this node's own
-/// served-model descriptor and nothing else -- neither an exchange a peer or
-/// plugin observes, nor a peer's gossip view -- reads it.
+/// read), so no peer's gossip view carries it.
 pub(super) async fn set_local_model_weights_digest(
     node: &mesh::Node,
     model_name: &str,
