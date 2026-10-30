@@ -415,3 +415,31 @@ async fn serve_hub_request(
             .unwrap();
     }
 }
+
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial]
+async fn embedded_listen_all_rejects_foreign_loopback_console() {
+    let foreign = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind foreign console");
+    let console_port = foreign.local_addr().expect("foreign address").port();
+    let api = TcpListener::bind("127.0.0.1:0").expect("reserve API port");
+    let api_port = api.local_addr().expect("API address").port();
+    drop(api);
+
+    let result = start_embedded_serve(EmbeddedServeConfig {
+        mode: EmbeddedMeshNodeMode::Client,
+        api_port,
+        console_port,
+        listen_all: true,
+        startup_timeout: Duration::from_secs(30),
+        ..EmbeddedServeConfig::default()
+    })
+    .await;
+
+    if let Ok(handle) = result {
+        let _ = handle.stop().await;
+        panic!("embedded startup must reject a foreign loopback console");
+    }
+}

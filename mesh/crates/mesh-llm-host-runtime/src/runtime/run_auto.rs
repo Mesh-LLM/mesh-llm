@@ -1,4 +1,5 @@
 use super::daemon_startup::{check_mode_conflicts, resolve_effective_mode};
+use super::embedded_readiness::EmbeddedReadinessTx;
 use super::failed_node_start::cleanup_failed_node_start;
 use super::join_sources;
 use super::plugin_host_role;
@@ -81,18 +82,6 @@ pub(crate) enum EmbeddedRuntimeDiscoveryMode {
     Nostr,
     Mdns,
 }
-
-/// In-process evidence that the embedded runtime worker itself bound its
-/// required listeners, emitted by the worker after a successful bind so
-/// startup readiness cannot be spoofed by an unaffiliated HTTP service that
-/// already answers `/api/status` on the console port (#2147).
-#[derive(Debug)]
-pub(crate) struct EmbeddedRuntimeReadiness {
-    pub(crate) invite_token: Option<String>,
-}
-
-pub(crate) type EmbeddedReadinessTx =
-    std::sync::mpsc::Sender<Result<EmbeddedRuntimeReadiness, String>>;
 
 pub(crate) struct EmbeddedRuntimeOptions {
     pub(crate) mode: EmbeddedRuntimeMode,
