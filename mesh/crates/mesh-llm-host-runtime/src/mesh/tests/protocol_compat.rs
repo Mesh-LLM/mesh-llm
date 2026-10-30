@@ -437,6 +437,9 @@ fn stage_load_proto_roundtrip_preserves_every_split_activation_codec() {
         (Codec::F16RneV1, Policy::Fixed),
         (Codec::Bf16RneV1, Policy::Fixed),
         (Codec::S8RowF32RneV1, Policy::Fixed),
+        (Codec::Fp8E4m3RowF32RneV1, Policy::Fixed),
+        (Codec::Fp8E4m3Block32E8m0RneV1, Policy::Fixed),
+        (Codec::Fp8E5m2RowF32RneV1, Policy::Fixed),
     ] {
         let mut load = stage_load_request();
         load.activation_codec = codec;

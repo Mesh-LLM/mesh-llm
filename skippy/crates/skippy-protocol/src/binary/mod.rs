@@ -523,12 +523,7 @@ mod tests {
         let frame = multipart_activation_frame(2);
         let i32_part = frame.desc.parts[1];
         let i32_start = usize::try_from(i32_part.payload_offset).unwrap();
-        for codec in [
-            crate::StageActivationCodec::RawF32V1,
-            crate::StageActivationCodec::F16RneV1,
-            crate::StageActivationCodec::Bf16RneV1,
-            crate::StageActivationCodec::S8RowF32RneV1,
-        ] {
+        for codec in crate::StageActivationCodec::ALL {
             let message = activation_message(&frame, codec);
             assert_eq!(
                 message.activation.len(),

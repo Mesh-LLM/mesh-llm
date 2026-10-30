@@ -707,8 +707,10 @@ pub struct SkippyConfig {
     #[serde(default)]
     pub prefill_chunk_schedule: Option<String>,
     /// Wire codec for activations between split stages: `lossless` (the
-    /// default), `f16`, `bf16`, `s8-row`, or `f32`. The split's coordinator
-    /// decides; every stage receives its choice in the stage load.
+    /// default), `f16`, `bf16`, `s8-row`, `fp8-e4m3-row`, `fp8-e4m3-block32`,
+    /// `fp8-e5m2-row`, or `f32`. The split's coordinator decides; every stage
+    /// receives its choice in the stage load. An FP8 codec falls back to
+    /// `f16` when a stage does not advertise FP8 support.
     #[serde(default)]
     pub activation_codec: Option<String>,
 }

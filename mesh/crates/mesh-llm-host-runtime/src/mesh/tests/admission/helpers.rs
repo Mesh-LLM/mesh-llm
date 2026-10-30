@@ -47,6 +47,7 @@ pub(super) fn make_test_peer(id: EndpointId, rtt_ms: Option<u32>, vram_gb: u64) 
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
+        activation_codec_fp8_supported: false,
         owner_summary: OwnershipSummary::default(),
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
@@ -434,6 +435,7 @@ pub(super) fn requirement_peer_announcement(
         decode_batch_policy_supported: true,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
+        activation_codec_fp8_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),

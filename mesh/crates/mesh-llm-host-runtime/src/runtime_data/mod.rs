@@ -561,6 +561,7 @@ pub(crate) mod tests {
             decode_batch_policy_supported: false,
             plugin_origin_signature_supported: false,
             persistent_lane_marker_supported: false,
+            activation_codec_fp8_supported: false,
             advertised_model_throughput: vec![],
             #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
@@ -704,6 +705,7 @@ pub(crate) mod tests {
             decode_batch_policy_supported: false,
             plugin_origin_signature_supported: false,
             persistent_lane_marker_supported: false,
+            activation_codec_fp8_supported: false,
             advertised_model_throughput: vec![],
             #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
@@ -851,6 +853,7 @@ pub(crate) mod tests {
             decode_batch_policy_supported: false,
             plugin_origin_signature_supported: false,
             persistent_lane_marker_supported: false,
+            activation_codec_fp8_supported: false,
             advertised_model_throughput: vec![crate::network::metrics::ModelThroughputHint {
                 model_name: "Qwen/Qwen3-Coder".into(),
                 avg_tokens_per_second_milli: 13_400,
