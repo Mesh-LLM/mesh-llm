@@ -767,6 +767,7 @@ fn timings_report_activation_wire_bytes_per_token() {
         codec: "s8-row-f32-rne-v1",
         prefill_bytes: 99 * 2564,
         decode_bytes: 4 * 2564,
+        dflash_features: None,
     });
     let timings = output.timings().expect("timings");
     assert_eq!(timings["activation_codec"], json!("s8-row-f32-rne-v1"));
@@ -779,6 +780,27 @@ fn timings_report_activation_wire_bytes_per_token() {
     output.suffix_prefill_tokens = 33;
     let timings = output.timings().expect("timings");
     assert_eq!(timings["activation_prefill_bytes_per_token"], json!(7692.0));
+    assert!(!timings.contains_key("dflash_feature_decode_bytes"));
+
+    // A split DFlash target also reports the draft's feature-row share.
+    output.suffix_prefill_tokens = 0;
+    if let Some(wire) = output.activation_wire.as_mut() {
+        wire.dflash_features = Some(SplitDFlashFeatureBytes {
+            prefill_bytes: 99 * 1360,
+            decode_bytes: 4 * 2720,
+        });
+    }
+    let timings = output.timings().expect("timings");
+    assert_eq!(timings["dflash_feature_prefill_bytes"], json!(134_640));
+    assert_eq!(
+        timings["dflash_feature_prefill_bytes_per_token"],
+        json!(1360.0)
+    );
+    assert_eq!(timings["dflash_feature_decode_bytes"], json!(10_880));
+    assert_eq!(
+        timings["dflash_feature_decode_bytes_per_token"],
+        json!(2720.0)
+    );
 }
 
 #[test]

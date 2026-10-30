@@ -364,6 +364,10 @@ impl StageOpenAiBackend {
                         prefill_output_activation_bytes.saturating_add(output.payload.len());
                     prefill_forward_activation_bytes =
                         prefill_forward_activation_bytes.saturating_add(forwarded.activation.len());
+                    request.record_forwarded_features(
+                        true,
+                        skippy_runtime::dflash_feature_payload_bytes(&output),
+                    );
                     let write_timer = PhaseTimer::start();
                     crate::frontend::backend::write_downstream_or_emit_forward_error(
                         &self.telemetry,
@@ -697,6 +701,7 @@ impl StageOpenAiBackend {
                     .identity(request.config.activation_codec),
                 prefill_bytes: prefill_forward_activation_bytes,
                 decode_bytes: 0,
+                dflash_features: None,
             });
             self.emit_openai_phase("stage.openai_prefill", prefill_timer, prefill_attrs);
 
@@ -2027,6 +2032,7 @@ impl StageOpenAiBackend {
                     decode_output_activation_bytes.saturating_add(output.payload.len());
                 decode_forward_activation_bytes = decode_forward_activation_bytes
                     .saturating_add(forwarded.message.activation.len());
+                request.record_forwarded_features(false, forwarded.dflash_feature_bytes);
                 let write_timer = PhaseTimer::start();
                 crate::frontend::backend::write_downstream_or_emit_forward_error(
                     &self.telemetry,
