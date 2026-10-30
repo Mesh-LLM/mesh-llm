@@ -15,6 +15,7 @@
 
 mod context;
 mod draft_batch;
+mod feature_wire;
 mod readout;
 mod split;
 
@@ -39,9 +40,8 @@ use draft_batch::{DraftBatch, target_feature_row};
 use readout::{argmax_token, block_draft_capacity, walk_dflash2_lattice};
 
 pub use context::DFlashHealth;
-pub use split::{
-    DFlashFeatureRows, dflash_feature_identity, dflash_feature_layer, frame_has_dflash_features,
-};
+pub use feature_wire::{DFlashFeatureEncoding, dflash_feature_identity, dflash_feature_layer};
+pub use split::{DFlashFeatureRows, dflash_feature_payload_bytes, frame_has_dflash_features};
 pub(crate) use split::{DFlashSplitSession, SharedDFlashCapture};
 
 const DFLASH_ARCHITECTURE: &str = "dflash";
@@ -146,6 +146,9 @@ pub(crate) struct DFlashDraft {
     /// Per target layer: captured on this stage, or sent by an earlier stage
     /// of a split target.
     local_layers: Vec<bool>,
+    /// The target layer whose input is the activation this final stage
+    /// receives, when the draft reads it: its rows come from that activation.
+    input_layer: Option<u32>,
     lanes: i32,
     n_embd_target: usize,
     n_embd_draft: usize,
@@ -205,6 +208,7 @@ impl DFlashDraft {
                 selector_top_k: 0,
             },
             local_layers: Vec::new(),
+            input_layer: None,
             lanes,
             n_embd_target: 0,
             n_embd_draft: 0,
@@ -242,7 +246,8 @@ impl DFlashDraft {
         self.info.target_layer_ids = target_layer_ids(api, self.model, target_layers)?;
         // A final stage of a split target captures only the layers whose
         // input its graph produces; earlier stages send the rest with their
-        // activations, including the input of this stage's first layer.
+        // activations. The input of this stage's first layer is the
+        // activation it receives.
         let complete = config.resident_tensor_names.is_empty() && config.layer_start == 0;
         let local_end = if complete || config.layer_end == 0 {
             u32::MAX
@@ -255,6 +260,11 @@ impl DFlashDraft {
             .iter()
             .map(|&lid| split::stage_captures_layer_input(lid, config.layer_start, local_end))
             .collect();
+        self.input_layer = if complete {
+            None
+        } else {
+            split::stage_receives_layer_input(&self.info.target_layer_ids, config.layer_start)
+        };
         self.n_embd_target =
             positive_usize(unsafe { (api.model_n_embd)(target_model) }, "target n_embd")?;
         self.n_embd_draft =
@@ -322,12 +332,13 @@ impl DFlashDraft {
             }
         }
         write_native_log_note(format!(
-            "dflash draft attached variant={} block_size={} max_draft_tokens={} target_layers={:?} local_layers={:?} mask_token={} causal={causal} mrope={}",
+            "dflash draft attached variant={} block_size={} max_draft_tokens={} target_layers={:?} local_layers={:?} input_layer={:?} mask_token={} causal={causal} mrope={}",
             self.info.variant.as_str(),
             self.info.block_size,
             self.info.max_draft_tokens,
             self.info.target_layer_ids,
             self.local_layers,
+            self.input_layer,
             self.mask_token,
             self.mrope,
         ));
@@ -764,6 +775,9 @@ fn positive_usize(value: i32, label: &str) -> Result<usize> {
 pub(crate) struct DFlashSessionLink {
     draft: Weak<Mutex<DFlashDraft>>,
     seq_id: i32,
+    /// The draft's layer read from this stage's input activation, and the
+    /// target width.
+    pub(crate) input_layer: Option<(u32, usize)>,
     /// The target positions this lane's draft holds.
     context: DraftContext,
     stats: DFlashDraftStats,
@@ -774,10 +788,17 @@ pub(crate) struct DFlashSessionLink {
 
 impl DFlashSessionLink {
     pub(crate) fn new(draft: &Arc<Mutex<DFlashDraft>>, seq_id: i32) -> Option<Self> {
-        let owns_lane = lock_draft(draft).owns_lane(seq_id);
+        let (owns_lane, input_layer) = {
+            let draft = lock_draft(draft);
+            (
+                draft.owns_lane(seq_id),
+                draft.input_layer.map(|layer| (layer, draft.n_embd_target)),
+            )
+        };
         owns_lane.then(|| Self {
             draft: Arc::downgrade(draft),
             seq_id,
+            input_layer,
             context: DraftContext::empty(),
             stats: DFlashDraftStats::default(),
             defer_next_ingest: false,
@@ -791,6 +812,7 @@ impl DFlashSessionLink {
         Self {
             draft: Weak::new(),
             seq_id,
+            input_layer: None,
             context: DraftContext::empty(),
             stats: DFlashDraftStats::default(),
             defer_next_ingest: false,

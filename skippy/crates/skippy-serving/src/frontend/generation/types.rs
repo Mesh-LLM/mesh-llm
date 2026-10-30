@@ -199,7 +199,8 @@ pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
 }
 
 /// The largest split DFlash draft-context counters a final stage reported
-/// for this generation's session. Its replies carry running totals.
+/// for this generation's session, whose replies carry running totals, and
+/// the feature-row bytes stage 0 sent it.
 #[derive(Debug, Default)]
 pub(in crate::frontend) struct SplitDFlashHealth {
     feature_rows_missing: std::sync::atomic::AtomicI64,
@@ -209,6 +210,8 @@ pub(in crate::frontend) struct SplitDFlashHealth {
     draft_us: std::sync::atomic::AtomicI64,
     drafts: std::sync::atomic::AtomicI64,
     ingest_us: std::sync::atomic::AtomicI64,
+    prefill_feature_bytes: std::sync::atomic::AtomicUsize,
+    decode_feature_bytes: std::sync::atomic::AtomicUsize,
 }
 
 /// Split DFlash counters for a generation's response timings.
@@ -250,6 +253,26 @@ impl SplitDFlashHealth {
             .fetch_max(stats.dflash_ingest_us, Ordering::Relaxed);
     }
 
+    /// Counts the DFlash feature-row bytes of a frame stage 0 forwarded, in
+    /// prefill or in decode (verify windows and fused restores included).
+    pub(in crate::frontend) fn record_feature_bytes(&self, prefill: bool, bytes: usize) {
+        use std::sync::atomic::Ordering;
+        let counter = if prefill {
+            &self.prefill_feature_bytes
+        } else {
+            &self.decode_feature_bytes
+        };
+        counter.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    pub(in crate::frontend) fn feature_bytes(&self) -> SplitDFlashFeatureBytes {
+        use std::sync::atomic::Ordering;
+        SplitDFlashFeatureBytes {
+            prefill_bytes: self.prefill_feature_bytes.load(Ordering::Relaxed),
+            decode_bytes: self.decode_feature_bytes.load(Ordering::Relaxed),
+        }
+    }
+
     pub(in crate::frontend) fn counts(
         &self,
         stage0_rollbacks: Option<skippy_runtime::VerifyRollbackCounts>,
@@ -275,6 +298,15 @@ impl EmbeddedStageZeroGeneration<'_> {
     /// decode and verify messages say so.
     pub(in crate::frontend) fn split_dflash(&self) -> bool {
         self.split_dflash_draft.is_some()
+    }
+
+    /// Records the DFlash feature-row bytes of a frame this generation
+    /// forwarded from stage 0.
+    pub(in crate::frontend) fn record_forwarded_features(&self, prefill: bool, bytes: usize) {
+        if self.split_dflash() {
+            self.split_dflash_health
+                .record_feature_bytes(prefill, bytes);
+        }
     }
 
     /// Records the draft-context counters a downstream reply carries.
@@ -384,6 +416,16 @@ pub(in crate::frontend) struct ActivationWireStats {
     pub(in crate::frontend) codec: &'static str,
     pub(in crate::frontend) prefill_bytes: usize,
     pub(in crate::frontend) decode_bytes: usize,
+    /// On a split DFlash target, the share of those bytes that were the
+    /// draft's feature rows.
+    pub(in crate::frontend) dflash_features: Option<SplitDFlashFeatureBytes>,
+}
+
+/// DFlash feature-row payload bytes stage 0 sent to the next stage, by phase.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(in crate::frontend) struct SplitDFlashFeatureBytes {
+    pub(in crate::frontend) prefill_bytes: usize,
+    pub(in crate::frontend) decode_bytes: usize,
 }
 
 impl ActivationWireStats {
@@ -417,6 +459,24 @@ impl ActivationWireStats {
             "activation_decode_bytes_per_token".to_string(),
             json!(per_token(self.decode_bytes, completion_tokens)),
         );
+        if let Some(features) = self.dflash_features {
+            timings.insert(
+                "dflash_feature_prefill_bytes".to_string(),
+                json!(features.prefill_bytes),
+            );
+            timings.insert(
+                "dflash_feature_prefill_bytes_per_token".to_string(),
+                json!(per_token(features.prefill_bytes, prefill_tokens)),
+            );
+            timings.insert(
+                "dflash_feature_decode_bytes".to_string(),
+                json!(features.decode_bytes),
+            );
+            timings.insert(
+                "dflash_feature_decode_bytes_per_token".to_string(),
+                json!(per_token(features.decode_bytes, completion_tokens)),
+            );
+        }
     }
 }
 

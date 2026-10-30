@@ -765,7 +765,8 @@ mod tests {
             },
             payload: vec![0; 4],
         };
-        rows.append_to_frame(&mut frame).unwrap();
+        rows.append_to_frame_as(&mut frame, skippy_runtime::DFlashFeatureEncoding::Bf16)
+            .unwrap();
         frame
     }
 
