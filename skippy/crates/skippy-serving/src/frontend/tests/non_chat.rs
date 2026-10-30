@@ -490,6 +490,7 @@ fn assert_unsupported_staging(
     config.resident_tensor_names = vec!["block.0".to_string()];
     config.layer_end = (fixture.layer_end / 2).max(1);
     config.downstream = Some(PeerConfig {
+        persistent_lane_marker: false,
         stage_id: "stage-1".to_string(),
         stage_index: 1,
         endpoint: "127.0.0.1:1".to_string(),

@@ -34,6 +34,7 @@ fn installed_capsules(store_root: &Path, enabled: bool) -> InstalledPluginMetada
         last_protocol_version: Some(1),
         last_status: Some("installed".to_string()),
         last_error: None,
+        verified_sha256: None,
     };
     std::fs::create_dir_all(&metadata.install_path).expect("install dir");
     std::fs::write(metadata.executable_path(), b"").expect("plugin executable");
@@ -261,35 +262,29 @@ fn explicit_installed_command_still_runs_when_the_store_copy_is_disabled() {
     assert_eq!(spec.installed_metadata, Some(metadata));
 }
 
+/// `[plugin.settings]` are validated and shown in the console; the launch spec
+/// is what carries them to the process.
 #[test]
 #[serial_test::serial]
-fn configured_settings_are_delivered_only_to_their_plugin_launch() {
-    let store = tempfile::tempdir().unwrap();
-    with_plugin_dir(store.path(), || {
-        let mut entry = capsules_entry(Some("unused-fixture"));
-        entry
-            .settings
-            .insert("profile".into(), toml::Value::String("fixture".into()));
-        entry
-            .settings
-            .insert("enabled".into(), toml::Value::Boolean(false));
-        let ConfiguredExternalPlugin::Active(spec) =
-            configured_external_plugin_spec(&entry).unwrap()
-        else {
-            panic!("explicit command must resolve");
-        };
-        let settings: serde_json::Value =
-            serde_json::from_str(&spec.env["MESH_LLM_PLUGIN_SETTINGS_JSON"]).unwrap();
-        assert_eq!(
-            settings,
-            serde_json::json!({"profile": "fixture", "enabled": false})
-        );
-        entry.settings.clear();
-        let ConfiguredExternalPlugin::Active(empty) =
-            configured_external_plugin_spec(&entry).unwrap()
-        else {
-            panic!("explicit command must resolve");
-        };
-        assert_eq!(empty.env["MESH_LLM_PLUGIN_SETTINGS_JSON"], "{}");
-    });
+fn configured_plugin_settings_reach_the_launch_spec() {
+    let store = tempfile::TempDir::new().expect("plugin store");
+    let mut entry = capsules_entry(Some("/opt/capsules/bin"));
+    entry.settings = [(
+        "greeting".to_string(),
+        toml::Value::String("marker-7f3a".to_string()),
+    )]
+    .into_iter()
+    .collect();
+
+    let resolved = with_plugin_dir(store.path(), || configured_external_plugin_spec(&entry))
+        .expect("entry resolves");
+
+    let ConfiguredExternalPlugin::Active(spec) = resolved else {
+        panic!("an enabled entry with a command is active");
+    };
+    assert_eq!(
+        spec.settings.get("greeting"),
+        Some(&serde_json::json!("marker-7f3a")),
+        "[plugin.settings] were dropped from the spec the plugin is started from"
+    );
 }

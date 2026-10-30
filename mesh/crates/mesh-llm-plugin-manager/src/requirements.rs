@@ -261,6 +261,7 @@ mod tests {
             install_path: PathBuf::from(format!("/plugins/installed/{name}")),
             enabled,
             default_managed: false,
+            verified_sha256: None,
             requires: requires.iter().map(|value| value.to_string()).collect(),
             manifest: None,
             last_protocol_version: None,

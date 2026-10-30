@@ -107,6 +107,7 @@ mod tests {
             ],
             url: None,
             env: [("PLUGIN_PEER_AUTH_TEST_HOLD".into(), "1".into())].into(),
+            settings: Default::default(),
             startup: Default::default(),
             web_ui_enabled: None,
             web_ui_primary_tab: None,

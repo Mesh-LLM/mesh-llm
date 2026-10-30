@@ -1,6 +1,7 @@
 //! Queue admission and cancellation-safe correlation for control requests.
 use super::{ExternalPlugin, PROTOCOL_VERSION, PendingResponses, proto};
-use anyhow::{Context, Result, bail};
+use crate::plugin::support::PluginTimeout;
+use anyhow::{Context, Result};
 use std::sync::atomic::Ordering;
 use tokio::sync::{mpsc, oneshot};
 
@@ -64,7 +65,9 @@ impl ExternalPlugin {
                         format!("Plugin '{}' timed out", self.spec.name),
                     )
                     .await;
-                    bail!("Plugin '{}' timed out", self.spec.name);
+                    return Err(anyhow::Error::new(PluginTimeout {
+                        plugin_name: self.spec.name.clone(),
+                    }));
                 }
             },
             None => call.await,

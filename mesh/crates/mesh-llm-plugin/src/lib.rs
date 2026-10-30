@@ -104,6 +104,8 @@ pub const PROTOCOL_VERSION: u32 = 3;
 /// Additive protobuf messages alone do not tell a plugin whether its host
 /// handles them; these do.
 pub mod host_capabilities {
+    /// Invocation-scoped RPC callbacks carry the host-assigned parent call ID.
+    pub const INVOCATION_CALLBACKS: &str = "invocation_callbacks.v1";
     /// The host accepts model channel requirements.
     pub const MODEL_REQUIREMENTS: &str = "model_requirements.v1";
     /// The host supports permissioned OpenAI exchange lifecycle services.

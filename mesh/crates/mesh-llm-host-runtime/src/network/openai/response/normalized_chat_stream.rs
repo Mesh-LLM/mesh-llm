@@ -80,6 +80,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     retry_policy: ResponseRetryPolicy,
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
+    request_id: RequestId,
 ) -> Result<RouteAttemptResult> {
     if let Some(result) =
         crate::network::openai::response::common::retry_before_relay(&probe, retry_policy)
@@ -89,7 +90,15 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
 
     if !(200..300).contains(&probe.status_code) {
         route_observer.stream_error("upstream_status");
-        return relay_error_response(tcp_stream, reader, probe, served_by, route_observer).await;
+        return relay_error_response(
+            tcp_stream,
+            reader,
+            probe,
+            served_by,
+            route_observer,
+            request_id,
+        )
+        .await;
     }
 
     let parsed = try_parse_response_headers(&probe.buffered)?
@@ -103,6 +112,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
             retry_policy,
             served_by,
             route_observer,
+            request_id,
         )
         .await;
     }
@@ -122,6 +132,7 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
         parsed.nonce_origin.as_deref(),
     );
     append_mesh_served_by_header(&mut header, served_by);
+    append_mesh_request_id_header(&mut header, request_id);
     header.push_str("Connection: close\r\n\r\n");
     tcp_stream.write_all(header.as_bytes()).await?;
     let mut response_capture = route_observer.begin_stream_response_capture();
@@ -224,7 +235,7 @@ mod tests {
             + "data: [DONE]\n\n"
     }
 
-    async fn relay(body: String) -> (String, Result<RouteAttemptResult>) {
+    async fn relay(body: String, request_id: RequestId) -> (String, Result<RouteAttemptResult>) {
         let header =
             b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n";
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -245,6 +256,7 @@ mod tests {
                 ResponseRetryPolicy::next_target_available(false),
                 None,
                 OpenAiRouteObserver::default(),
+                request_id,
             )
             .await
         });
@@ -256,8 +268,11 @@ mod tests {
 
     #[tokio::test]
     async fn billing_watermarks_do_not_interrupt_tool_arguments() {
-        let (paid, paid_result) = relay(frames(true)).await;
-        let (free, free_result) = relay(frames(false)).await;
+        // One request id for both runs: the wire comparison below is
+        // byte-for-byte, and every response head echoes the canonical id.
+        let request_id = RequestId::new();
+        let (paid, paid_result) = relay(frames(true), request_id).await;
+        let (free, free_result) = relay(frames(false), request_id).await;
         assert_eq!(paid, free);
         assert_eq!(paid.matches("\"usage\"").count(), 1);
         let RouteAttemptResult::Delivered {
@@ -290,9 +305,10 @@ mod tests {
     async fn usage_precedes_upstream_error_without_hiding_error() {
         let usage = json!({"choices":[],"usage":{"completion_tokens":2}});
         let error = json!({"error":{"message":"generation failed","type":"backend_error"}});
-        let (wire, _) = relay(format!(
-            "data: {usage}\n\ndata: {error}\n\ndata: [DONE]\n\n"
-        ))
+        let (wire, _) = relay(
+            format!("data: {usage}\n\ndata: {error}\n\ndata: [DONE]\n\n"),
+            RequestId::new(),
+        )
         .await;
         assert!(
             wire.find("\"completion_tokens\":2").unwrap() < wire.find("generation failed").unwrap()
@@ -302,7 +318,7 @@ mod tests {
     #[tokio::test]
     async fn eof_flushes_usage_but_remains_truncated() {
         let body = frames(true).replace("data: [DONE]\n\n", "");
-        let (wire, result) = relay(body).await;
+        let (wire, result) = relay(body, RequestId::new()).await;
         assert!(result.is_err());
         assert_eq!(wire.matches("\"usage\"").count(), 1);
         assert!(!wire.contains("[DONE]"));
@@ -311,7 +327,7 @@ mod tests {
     #[tokio::test]
     async fn totals_before_finish_are_preserved_after_finish() {
         let body = "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":12,\"completion_tokens\":4,\"total_tokens\":16}}\n\ndata: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n";
-        let (wire, result) = relay(body.to_string()).await;
+        let (wire, result) = relay(body.to_string(), RequestId::new()).await;
         assert!(result.is_ok());
         assert_eq!(wire.matches("\"usage\"").count(), 1);
         assert!(wire.find("tool_calls").unwrap() < wire.find("\"usage\"").unwrap());
@@ -321,7 +337,7 @@ mod tests {
     async fn empty_data_frames_preserve_trailing_usage() {
         let body =
             frames(false).replace("data: [DONE]\n\n", "data:\n\ndata:   \n\ndata: [DONE]\n\n");
-        let (wire, result) = relay(body).await;
+        let (wire, result) = relay(body, RequestId::new()).await;
         assert!(matches!(
             result.unwrap(),
             RouteAttemptResult::Delivered { .. }

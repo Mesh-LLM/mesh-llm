@@ -77,7 +77,7 @@ tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["raw_value"] }
 socket2 = { version = "0.6", features = ["all"] }
 anyhow = "1"
 async-trait = "0.1"

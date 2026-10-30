@@ -281,6 +281,9 @@ pub struct ExternalPluginSpec {
     pub url: Option<String>,
     /// Extra environment passed only to the plugin process.
     pub env: BTreeMap<String, String>,
+    /// The operator's `[plugin.settings]` for this plugin, validated against
+    /// the plugin's `config_schema` at startup.
+    pub settings: BTreeMap<String, serde_json::Value>,
     pub startup: PluginStartupOptions,
     pub web_ui_enabled: Option<bool>,
     pub web_ui_primary_tab: Option<bool>,
@@ -358,6 +361,7 @@ pub fn in_process_builtin_spec(name: &str) -> ExternalPluginSpec {
         args: Vec::new(),
         url: None,
         env: BTreeMap::new(),
+        settings: Default::default(),
         startup: PluginStartupOptions {
             optional: true,
             ..PluginStartupOptions::default()
@@ -393,6 +397,7 @@ pub fn builtin_plugin_spec(name: &str, plugin_args: &[String]) -> Result<Externa
         args,
         url: None,
         env: BTreeMap::new(),
+        settings: Default::default(),
         startup: PluginStartupOptions {
             optional: true,
             ..PluginStartupOptions::default()

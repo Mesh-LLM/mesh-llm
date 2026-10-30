@@ -64,6 +64,7 @@ impl ExternalPlugin {
                     kind: proto::ServiceKind::Operation as i32,
                     service_name: operation.into(),
                     input_json: input_json.into(),
+                    invocation_id: None,
                 },
             )),
         };

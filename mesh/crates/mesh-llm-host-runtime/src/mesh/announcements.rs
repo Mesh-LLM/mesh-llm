@@ -281,6 +281,8 @@ impl Node {
             // Advertised unconditionally: there is no build-time variability
             // behind it, unlike artifact transfer.
             decode_batch_policy_supported: true,
+            plugin_origin_signature_supported: true,
+            persistent_lane_marker_supported: true,
             advertised_model_throughput: data.advertised_model_throughput,
             cache_affinity: data.cache_affinity,
             latency_ms: None,

@@ -19,6 +19,7 @@ use std::future::Future;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+/// Check remote seller pricing before forwarding a request to local inference.
 pub(in crate::network::openai) async fn route_local_attempt(
     node: &mesh::Node,
     tcp_stream: &mut ClientStream,

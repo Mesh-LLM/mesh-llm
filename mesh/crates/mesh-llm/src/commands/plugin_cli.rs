@@ -171,6 +171,7 @@ fn resolve_installed_cli_plugin(command: &str) -> Result<Option<plugin::External
         args: Vec::new(),
         url: None,
         env: Default::default(),
+        settings: Default::default(),
         startup: Default::default(),
         web_ui_enabled: None,
         web_ui_primary_tab: None,
@@ -319,6 +320,7 @@ mod tests {
             last_protocol_version: None,
             last_status: None,
             last_error: None,
+            verified_sha256: None,
         }
     }
 

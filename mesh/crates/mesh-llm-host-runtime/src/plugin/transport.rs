@@ -719,11 +719,7 @@ fn forward_plugin_request(
         let bridge = rpc_bridge.lock().await.clone();
         let payload = match bridge {
             Some(bridge) => match bridge
-                .handle_request(
-                    plugin_name.clone(),
-                    request.method.clone(),
-                    request.params_json.clone(),
-                )
+                .handle_invocation_request(plugin_name.clone(), request)
                 .await
             {
                 Ok(result) => {
@@ -905,7 +901,7 @@ fn forward_plugin_notification(
     tokio::spawn(async move {
         if let Some(bridge) = rpc_bridge.lock().await.clone() {
             bridge
-                .handle_notification(plugin_name, notification.method, notification.params_json)
+                .handle_invocation_notification(plugin_name, notification)
                 .await;
         }
     });

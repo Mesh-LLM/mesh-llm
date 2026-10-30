@@ -1180,6 +1180,8 @@ pub(super) fn test_remote_peer(seed: u32, model: &str) -> mesh::PeerInfo {
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
+        plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
         cache_affinity: None,
         display_rtt: None,

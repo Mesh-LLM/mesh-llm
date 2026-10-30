@@ -56,6 +56,7 @@ zeroize = { version = "1", features = ["derive"] }
 libc = "0.2"
 
 [dev-dependencies]
+skippy-coordinator = { path = "../../../skippy/crates/skippy-coordinator", version = "0.78.0" }
 clap.workspace = true
 rand = "0.10"
 serial_test = "4"

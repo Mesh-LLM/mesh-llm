@@ -28,4 +28,4 @@ toml = "1.1"
 zip = { version = "9", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "time", "net"] }

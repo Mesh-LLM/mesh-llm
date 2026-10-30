@@ -6,6 +6,7 @@ use super::dispatch::{RelayAttemptContext, relay_attempted_response};
 use super::probe::probe_http_response;
 use crate::logging::OpenAiRouteObserver;
 use crate::network::openai::client_stream::ClientStream;
+use crate::network::openai::forwarded_request::is_ingress_credential_header;
 use crate::network::openai::request_normalize::ResponseAdapter;
 use anyhow::{Context, Result};
 use mesh_llm_events::logging::identifiers::RequestId;
@@ -282,12 +283,19 @@ fn rewrite_http_request_target(
     let mut rebuilt = format!("{method} {new_path} {version}\r\n");
     let mut saw_host = false;
     for line in lines {
-        if let Some((name, _value)) = line.split_once(':')
-            && name.eq_ignore_ascii_case("host")
-        {
-            rebuilt.push_str(&format!("Host: {host}:{port}\r\n"));
-            saw_host = true;
-            continue;
+        if let Some((name, _value)) = line.split_once(':') {
+            if name.eq_ignore_ascii_case("host") {
+                rebuilt.push_str(&format!("Host: {host}:{port}\r\n"));
+                saw_host = true;
+                continue;
+            }
+            // The external endpoint is a nonlocal hop, so it gets the same
+            // credential policy as a peer forward: the caller authenticated to
+            // this node, not to the operator's upstream server, and this hop is
+            // plaintext HTTP (#2210).
+            if is_ingress_credential_header(name) {
+                continue;
+            }
         }
         rebuilt.push_str(line);
         rebuilt.push_str("\r\n");
@@ -374,5 +382,132 @@ mod tests {
         assert!(rewritten.contains("\r\nHost: localhost:8000\r\n"));
         assert!(rewritten.contains("\r\nx-request-id: 4c3ca94d-bc1f-4759-912d-f4f6d77d5515\r\n"));
         assert!(rewritten.ends_with("\r\n\r\n{}"));
+    }
+
+    /// Capture the exact bytes one forwarded request writes to the upstream
+    /// socket, then answer with a minimal JSON completion so the relay runs to
+    /// completion.
+    fn strip_trailing_cr(line: &[u8]) -> &[u8] {
+        let mut end = line.len();
+        while end > 0 && line[end - 1] == b'\r' {
+            end -= 1;
+        }
+        &line[..end]
+    }
+
+    async fn capture_one_forwarded_request(sink: &tokio::net::TcpListener) -> (Vec<u8>, Vec<u8>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (mut upstream, _) = sink.accept().await.unwrap();
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") {
+            if upstream.read(&mut byte).await.unwrap() == 0 {
+                break;
+            }
+            head.push(byte[0]);
+        }
+        let declared = head
+            .split(|b| *b == b'\n')
+            .find_map(|line| {
+                let line = strip_trailing_cr(line);
+                line.get(..15)
+                    .filter(|prefix| prefix.eq_ignore_ascii_case(b"content-length:"))
+                    .and_then(|_| std::str::from_utf8(&line[15..]).ok())
+                    .and_then(|value| value.trim().parse::<usize>().ok())
+            })
+            .unwrap_or(0);
+        let mut body = vec![0u8; declared];
+        upstream.read_exact(&mut body).await.unwrap();
+        let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+        let _ = upstream.write_all(response).await;
+        let _ = upstream.shutdown().await;
+        (head, body)
+    }
+
+    /// Regression (#2210): the external endpoint is a nonlocal hop. A caller's
+    /// ingress credential must never be rewritten onto the plaintext upstream
+    /// connection in any header casing, while the rewritten request line, the
+    /// rewritten `Host`, every unrelated header, and the body stay intact.
+    #[tokio::test]
+    async fn external_endpoint_forward_strips_caller_credentials() {
+        let sink = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = sink.local_addr().unwrap().port();
+        let body = br#"{"model":"sink-model","input":"Authorization: Bearer inside-the-body"}"#;
+        let mut prefetched = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: caller-facing:9337\r\naUtHoRiZaTiOn: Bearer caller-secret\r\nPROXY-AUTHORIZATION: Basic proxy-secret\r\nX-API-Key: anthropic-secret\r\napi-key: azure-secret\r\nX-Trace-Id: trace-123\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        prefetched.extend_from_slice(body);
+
+        let base_url = format!("http://127.0.0.1:{port}/");
+        let mut downstream = ClientStream::Null;
+        let (captured, attempt) = tokio::join!(
+            capture_one_forwarded_request(&sink),
+            route_http_endpoint_attempt(
+                &mut downstream,
+                &base_url,
+                &prefetched,
+                "/v1/chat/completions",
+                RouteAttemptLoggingContext {
+                    request_id: RequestId::new(),
+                    retry_policy: ResponseRetryPolicy::next_target_available(false),
+                    response_adapter: ResponseAdapter::OpenAiChatCompletionsJson,
+                    route_observer: OpenAiRouteObserver::default(),
+                    served_by: None,
+                    peer_capsule_id: None,
+                },
+            )
+        );
+        assert!(
+            matches!(
+                attempt,
+                RouteAttemptResult::Delivered {
+                    status_code: 200,
+                    ..
+                }
+            ),
+            "{attempt:?}"
+        );
+
+        let (head, forwarded_body) = captured;
+        let head = String::from_utf8(head).unwrap();
+        let lowered = head.to_ascii_lowercase();
+        for secret in [
+            "caller-secret",
+            "proxy-secret",
+            "anthropic-secret",
+            "azure-secret",
+        ] {
+            assert!(
+                !head.contains(secret),
+                "credential {secret} reached the external endpoint:\n{head}"
+            );
+        }
+        for name in [
+            "authorization",
+            "proxy-authorization",
+            "x-api-key",
+            "api-key",
+        ] {
+            assert!(
+                !lowered.contains(&format!("{name}:")),
+                "{name} reached the external endpoint:\n{head}"
+            );
+        }
+        assert!(
+            head.starts_with("POST /v1/chat/completions HTTP/1.1\r\n"),
+            "{head}"
+        );
+        assert!(
+            head.contains(&format!("\r\nHost: 127.0.0.1:{port}\r\n")),
+            "{head}"
+        );
+        assert!(head.contains("\r\nX-Trace-Id: trace-123\r\n"), "{head}");
+        assert!(
+            head.contains("\r\nContent-Type: application/json\r\n"),
+            "{head}"
+        );
+        assert_eq!(forwarded_body, body);
     }
 }

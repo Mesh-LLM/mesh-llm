@@ -145,6 +145,8 @@ pub fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
         || old.stage_status_list_supported != new.stage_status_list_supported
         || old.local_gguf_content_id_supported != new.local_gguf_content_id_supported
         || old.decode_batch_policy_supported != new.decode_batch_policy_supported
+        || old.plugin_origin_signature_supported != new.plugin_origin_signature_supported
+        || old.persistent_lane_marker_supported != new.persistent_lane_marker_supported
         || crate::advertised_state_changed(&old.cache_affinity, &new.cache_affinity)
         || old.version != new.version
         || old.owner_summary != new.owner_summary
@@ -320,6 +322,8 @@ pub fn announcement_from_peer(peer: &PeerInfo) -> PeerAnnouncement {
         stage_status_list_supported: peer.stage_status_list_supported,
         local_gguf_content_id_supported: peer.local_gguf_content_id_supported,
         decode_batch_policy_supported: peer.decode_batch_policy_supported,
+        plugin_origin_signature_supported: peer.plugin_origin_signature_supported,
+        persistent_lane_marker_supported: peer.persistent_lane_marker_supported,
         advertised_model_throughput: peer.advertised_model_throughput.clone(),
         cache_affinity: peer.cache_affinity.clone(),
         latency_ms: latency.latency_ms,
@@ -404,6 +408,8 @@ pub fn update_existing_direct_peer(
     existing.stage_status_list_supported = ann.stage_status_list_supported;
     existing.local_gguf_content_id_supported = ann.local_gguf_content_id_supported;
     existing.decode_batch_policy_supported = ann.decode_batch_policy_supported;
+    existing.plugin_origin_signature_supported = ann.plugin_origin_signature_supported;
+    existing.persistent_lane_marker_supported = ann.persistent_lane_marker_supported;
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
     crate::merge_advertisement(
         &mut existing.cache_affinity,

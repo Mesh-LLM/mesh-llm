@@ -216,6 +216,7 @@ fn install_blackboard_schema(plugin_dir: &std::path::Path) {
             last_protocol_version: Some(1),
             last_status: Some("installed".to_string()),
             last_error: None,
+            verified_sha256: None,
         })
         .expect("save plugin metadata");
 }

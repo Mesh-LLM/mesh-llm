@@ -959,6 +959,7 @@ url = "unix:///run/remote.sock"
                 last_protocol_version: None,
                 last_status: None,
                 last_error: None,
+                verified_sha256: None,
             })
             .unwrap();
     }
@@ -1094,6 +1095,7 @@ url = "unix:///run/remote.sock"
             install_path: store.root().join("installed").join(name),
             enabled: true,
             default_managed: false,
+            verified_sha256: None,
             requires: requires.iter().map(|value| value.to_string()).collect(),
             manifest: None,
             last_protocol_version: None,

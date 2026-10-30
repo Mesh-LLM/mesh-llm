@@ -65,16 +65,35 @@ pub(super) fn group_active(group: libc::pid_t) -> Result<bool, Failure> {
         if read != size {
             return Err(Failure::EnumerationLimit);
         }
-        if info.pbsi_pgid == group && info.pbsi_status != libc::SZOMB {
+        if info.pbsi_pgid == group && member_is_live(info.pbsi_status, info.pbsi_flags) {
             return Ok(true);
         }
     }
     Ok(false)
 }
 
+/// PROC_FLAG_INEXIT from <sys/proc_info.h>: the process is working its way
+/// through exit(). libc does not export it.
+const PROC_FLAG_INEXIT: u32 = 0x4;
+
+/// A member still needs to be stopped only while it is neither a zombie nor
+/// already exiting. An exiting member can still report `SRUN` before it turns
+/// into a zombie, but it is no longer a signal target (`kill` on the group
+/// returns `EPERM`), and it finishes exiting without our help.
+fn member_is_live(status: u32, flags: u32) -> bool {
+    status != libc::SZOMB && flags & PROC_FLAG_INEXIT == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exiting_or_zombie_members_are_not_live() {
+        assert!(member_is_live(2, 0x10));
+        assert!(!member_is_live(libc::SZOMB, 0x10));
+        assert!(!member_is_live(2, 0x0140_0094));
+    }
     use std::os::unix::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};

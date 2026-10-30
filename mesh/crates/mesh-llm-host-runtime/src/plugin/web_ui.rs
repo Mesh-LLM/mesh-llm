@@ -520,6 +520,7 @@ pub(super) fn installed_metadata_with_web_ui(
         last_protocol_version: Some(1),
         last_status: Some("running".into()),
         last_error: None,
+        verified_sha256: None,
     }
 }
 

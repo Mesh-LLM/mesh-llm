@@ -30,7 +30,7 @@ async fn start_http_tunnel_test_node() -> (mesh::Node, mesh::TunnelChannels, tem
     )
     .await
     .expect("start HTTP tunnel test node");
-    // These are free-routing fixtures, not the operator's configured wallet.
+    // Isolated fixtures: never the operator's own config state.
     // Keep the directory alive for every clone used by tunnel tasks.
     let directory = tempfile::tempdir().expect("isolated config");
     *node.config_state.lock().await =

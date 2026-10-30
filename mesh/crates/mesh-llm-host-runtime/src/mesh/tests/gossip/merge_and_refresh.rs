@@ -198,6 +198,98 @@ pub(crate) async fn test_direct_merge_accepts_only_newer_cache_advertisements() 
     assert_eq!((updated.generated_at_unix_ms, updated.epoch), (now + 1, 8));
 }
 
+/// Issue #2213: routing state learned directly from a peer must not be
+/// replaced by what some other node says about it. Direct admission is the
+/// only provenance that authorizes models, role, capacity, and policy; a
+/// bridge may refresh mention age, never the record.
+#[tokio::test]
+pub(crate) async fn transitive_announcement_cannot_replace_direct_routing_metadata() {
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let peer_id = test_endpoint_id(0x4c);
+    let direct_addr = test_addr(0x4c);
+    let bridge_id = test_endpoint_id(0xed);
+    let model = "direct/Qwen3-8B-Q4_K_M";
+
+    let mut direct = test_announcement(Some(100));
+    direct.addr = direct_addr.clone();
+    direct.role = NodeRole::Host { http_port: 9337 };
+    direct.version = Some("0.78.1".into());
+    direct.models = vec![model.into()];
+    direct.serving_models = vec![model.into()];
+    direct.hosted_models = Some(vec![model.into()]);
+    direct.vram_bytes = 16 * 1024 * 1024 * 1024;
+    direct.mesh_id = Some("direct-mesh".into());
+    direct.mesh_policy_hash = Some("direct-policy".into());
+    node.add_peer(peer_id, direct_addr.clone(), &direct, None)
+        .await;
+
+    let direct_owner = mesh_llm_identity::OwnershipSummary {
+        owner_id: Some("direct-owner".into()),
+        verified: true,
+        ..Default::default()
+    };
+    let direct_seen = {
+        let mut state = node.state.lock().await;
+        let peer = state
+            .peers
+            .get_mut(&peer_id)
+            .expect("direct admission must be tracked");
+        peer.owner_summary = direct_owner.clone();
+        assert!(peer.is_admitted(), "direct gossip admits the peer");
+        peer.last_seen
+    };
+
+    // The bridge relays a different description of the same endpoint id.
+    let mut relayed = direct.clone();
+    relayed.role = NodeRole::Worker;
+    relayed.models = vec!["relayed-model".into()];
+    relayed.serving_models = vec!["relayed-model".into()];
+    relayed.hosted_models = Some(vec!["relayed-model".into()]);
+    relayed.vram_bytes = 2 * 1024 * 1024 * 1024;
+    relayed.mesh_id = Some("relayed-mesh".into());
+    relayed.mesh_policy_hash = Some("relayed-policy".into());
+    node.update_transitive_peer(peer_id, &direct_addr, &relayed, bridge_id)
+        .await;
+
+    let state = node.state.lock().await;
+    let peer = state
+        .peers
+        .get(&peer_id)
+        .expect("direct peer remains tracked");
+    assert!(
+        peer.is_admitted(),
+        "transitive gossip must not revoke a direct admission"
+    );
+    assert_eq!(
+        peer.last_seen, direct_seen,
+        "a bridge must not touch direct proof-of-life"
+    );
+    assert_eq!(peer.role, direct.role, "relay must not replace role");
+    assert_eq!(peer.owner_summary, direct_owner, "relay must not replace owner");
+    assert_eq!(peer.models, direct.models, "relay must not replace models");
+    assert_eq!(
+        peer.serving_models, direct.serving_models,
+        "relay must not replace served models"
+    );
+    assert_eq!(
+        peer.hosted_models,
+        direct.hosted_models.unwrap_or_default(),
+        "relay must not replace hosted models"
+    );
+    assert_eq!(
+        peer.vram_bytes, direct.vram_bytes,
+        "relay must not replace capacity"
+    );
+    assert_eq!(
+        peer.mesh_id, direct.mesh_id,
+        "relay must not replace mesh identity"
+    );
+    assert_eq!(
+        peer.mesh_policy_hash, direct.mesh_policy_hash,
+        "relay must not replace policy"
+    );
+}
+
 #[test]
 pub(crate) fn test_apply_transitive_ann_refreshes_explicit_model_interests() {
     let mut existing = test_peer(Some(100));
@@ -519,4 +611,53 @@ fn cache_advertisement(
         ttl_ms: 120_000,
         entries: Vec::new(),
     }
+}
+
+/// The other half of the #2213 gate: once direct proof-of-life goes stale the
+/// bridge is the only remaining source, so it must regain full authority.
+/// Without this, protecting a live direct record would freeze a peer that
+/// really did move onto different models.
+#[tokio::test]
+pub(crate) async fn transitive_announcement_updates_a_direct_record_once_proof_of_life_is_stale() {
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let peer_id = test_endpoint_id(0x4d);
+    let direct_addr = test_addr(0x4d);
+    let bridge_id = test_endpoint_id(0xee);
+
+    let mut direct = test_announcement(Some(100));
+    direct.addr = direct_addr.clone();
+    direct.models = vec!["direct-model".into()];
+    direct.serving_models = vec!["direct-model".into()];
+    direct.hosted_models = Some(vec!["direct-model".into()]);
+    node.add_peer(peer_id, direct_addr.clone(), &direct, None)
+        .await;
+
+    // The direct session goes quiet for longer than the stale window.
+    {
+        let mut state = node.state.lock().await;
+        let peer = state.peers.get_mut(&peer_id).expect("direct peer");
+        peer.last_seen = std::time::Instant::now()
+            - std::time::Duration::from_secs(
+                mesh_llm_membership::peer_state::PEER_STALE_SECS + 1,
+            );
+    }
+
+    let mut relayed = direct.clone();
+    relayed.models = vec!["relayed-model".into()];
+    relayed.serving_models = vec!["relayed-model".into()];
+    relayed.hosted_models = Some(vec!["relayed-model".into()]);
+    node.update_transitive_peer(peer_id, &direct_addr, &relayed, bridge_id)
+        .await;
+
+    let state = node.state.lock().await;
+    let peer = state
+        .peers
+        .get(&peer_id)
+        .expect("peer remains tracked once stale");
+    assert_eq!(
+        peer.models, relayed.models,
+        "a bridge must be able to refresh a peer whose direct proof-of-life went stale"
+    );
+    assert_eq!(peer.serving_models, relayed.serving_models);
+    assert_eq!(peer.hosted_models, vec!["relayed-model".to_string()]);
 }

@@ -1,4 +1,6 @@
 mod message_history;
+#[cfg(test)]
+mod relay_tests;
 pub(super) use message_history::PluginMessageHistory;
 
 use super::*;
@@ -9,6 +11,200 @@ const PLUGIN_FRAME_PREFIX_READ_TIMEOUT: std::time::Duration = std::time::Duratio
 const PLUGIN_FRAME_BODY_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const PLUGIN_CHANNEL_FRAME_MAX_BYTES: usize = 10_000_000;
 const PLUGIN_BULK_FRAME_MAX_BYTES: usize = 64_000_000;
+const PLUGIN_FRAME_SIGNATURE_TTL_MS: u64 = 120_000;
+/// The accepted remaining lifetime includes 30 seconds of clock skew. The
+/// time-based deduplication window matches this bound; signature expiry still
+/// rejects an old frame if its ID is evicted earlier by the history cap.
+const PLUGIN_FRAME_MAX_REMAINING_TTL_MS: u64 = 150_000;
+const PLUGIN_MESSAGE_DEDUP_TTL: std::time::Duration =
+    std::time::Duration::from_millis(PLUGIN_FRAME_MAX_REMAINING_TTL_MS);
+
+fn plugin_frame_recipient(
+    peer_id: EndpointId,
+    skip_peer: Option<EndpointId>,
+    target: &str,
+    signed: bool,
+    relay_supported: bool,
+) -> bool {
+    Some(peer_id) != skip_peer
+        && (!signed
+            || (skip_peer.is_none() && target.is_empty())
+            || relay_supported
+            || target == endpoint_id_hex(peer_id))
+}
+
+trait OriginSignedPluginFrame: prost::Message + Clone {
+    const SIGNATURE_DOMAIN: &'static [u8];
+
+    fn source_peer_id(&self) -> Option<&str>;
+    fn expires_at_unix_ms(&self) -> u64;
+    fn set_expires_at_unix_ms(&mut self, value: u64);
+    fn origin_signature(&self) -> &[u8];
+    fn set_origin_signature(&mut self, value: Vec<u8>);
+}
+
+impl OriginSignedPluginFrame for crate::plugin::proto::MeshChannelFrame {
+    const SIGNATURE_DOMAIN: &'static [u8] = b"mesh-llm/plugin-channel-frame/v1\0";
+
+    fn source_peer_id(&self) -> Option<&str> {
+        self.message
+            .as_ref()
+            .map(|message| message.source_peer_id.as_str())
+    }
+
+    fn expires_at_unix_ms(&self) -> u64 {
+        self.expires_at_unix_ms
+    }
+
+    fn set_expires_at_unix_ms(&mut self, value: u64) {
+        self.expires_at_unix_ms = value;
+    }
+
+    fn origin_signature(&self) -> &[u8] {
+        &self.origin_signature
+    }
+
+    fn set_origin_signature(&mut self, value: Vec<u8>) {
+        self.origin_signature = value;
+    }
+}
+
+impl OriginSignedPluginFrame for crate::plugin::proto::MeshBulkFrame {
+    const SIGNATURE_DOMAIN: &'static [u8] = b"mesh-llm/plugin-bulk-frame/v1\0";
+
+    fn source_peer_id(&self) -> Option<&str> {
+        self.message
+            .as_ref()
+            .map(|message| message.source_peer_id.as_str())
+    }
+
+    fn expires_at_unix_ms(&self) -> u64 {
+        self.expires_at_unix_ms
+    }
+
+    fn set_expires_at_unix_ms(&mut self, value: u64) {
+        self.expires_at_unix_ms = value;
+    }
+
+    fn origin_signature(&self) -> &[u8] {
+        &self.origin_signature
+    }
+
+    fn set_origin_signature(&mut self, value: Vec<u8>) {
+        self.origin_signature = value;
+    }
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum PluginFrameAuthentication {
+    ImmediatePeer,
+    OriginSignature,
+}
+
+/// Signs a prost re-encoding of the decoded frame, with its signature cleared.
+/// Signed frames use only feature-advertising relays. Legacy relays are skipped
+/// because their decode/re-encode cycle would discard the signature fields.
+fn plugin_frame_signing_bytes<F: OriginSignedPluginFrame>(frame: &F) -> Vec<u8> {
+    let mut unsigned = frame.clone();
+    unsigned.set_origin_signature(Vec::new());
+    let encoded = unsigned.encode_to_vec();
+    let mut bytes = Vec::with_capacity(F::SIGNATURE_DOMAIN.len() + encoded.len());
+    bytes.extend_from_slice(F::SIGNATURE_DOMAIN);
+    bytes.extend_from_slice(&encoded);
+    bytes
+}
+
+fn sign_origin_frame_with_expiry<F: OriginSignedPluginFrame>(
+    secret: &SecretKey,
+    frame: &mut F,
+    expires_at_unix_ms: u64,
+) {
+    frame.set_expires_at_unix_ms(expires_at_unix_ms);
+    frame.set_origin_signature(Vec::new());
+    let signature = secret
+        .sign(&plugin_frame_signing_bytes(frame))
+        .to_bytes()
+        .to_vec();
+    frame.set_origin_signature(signature);
+}
+
+fn sign_origin_frame<F: OriginSignedPluginFrame>(secret: &SecretKey, frame: &mut F) {
+    let expires_at_unix_ms =
+        crate::mesh::current_time_unix_ms().saturating_add(PLUGIN_FRAME_SIGNATURE_TTL_MS);
+    sign_origin_frame_with_expiry(secret, frame, expires_at_unix_ms);
+}
+
+#[cfg(test)]
+pub(super) fn sign_channel_frame_with_expiry(
+    secret: &SecretKey,
+    frame: &mut crate::plugin::proto::MeshChannelFrame,
+    expires_at_unix_ms: u64,
+) {
+    sign_origin_frame_with_expiry(secret, frame, expires_at_unix_ms);
+}
+
+fn sign_channel_frame(secret: &SecretKey, frame: &mut crate::plugin::proto::MeshChannelFrame) {
+    sign_origin_frame(secret, frame);
+}
+
+#[cfg(test)]
+pub(super) fn sign_bulk_frame_with_expiry(
+    secret: &SecretKey,
+    frame: &mut crate::plugin::proto::MeshBulkFrame,
+    expires_at_unix_ms: u64,
+) {
+    sign_origin_frame_with_expiry(secret, frame, expires_at_unix_ms);
+}
+
+fn sign_bulk_frame(secret: &SecretKey, frame: &mut crate::plugin::proto::MeshBulkFrame) {
+    sign_origin_frame(secret, frame);
+}
+
+fn verify_origin_signature<F: OriginSignedPluginFrame>(frame: &F, now_unix_ms: u64) -> bool {
+    let Some(source_peer_id) = frame.source_peer_id() else {
+        return false;
+    };
+    if source_peer_id.is_empty()
+        || frame.expires_at_unix_ms() <= now_unix_ms
+        || frame.expires_at_unix_ms()
+            > now_unix_ms.saturating_add(PLUGIN_FRAME_MAX_REMAINING_TTL_MS)
+    {
+        return false;
+    }
+    let Ok(source_bytes) = hex::decode(source_peer_id) else {
+        return false;
+    };
+    let Ok(source_bytes) = <[u8; 32]>::try_from(source_bytes.as_slice()) else {
+        return false;
+    };
+    let Ok(verifying_key) = ed25519_dalek::VerifyingKey::from_bytes(&source_bytes) else {
+        return false;
+    };
+    let Ok(signature_bytes) = <[u8; 64]>::try_from(frame.origin_signature()) else {
+        return false;
+    };
+    verifying_key
+        .verify_strict(
+            &plugin_frame_signing_bytes(frame),
+            &ed25519_dalek::Signature::from_bytes(&signature_bytes),
+        )
+        .is_ok()
+}
+
+fn authenticate_plugin_frame<F: OriginSignedPluginFrame>(
+    frame: &F,
+    remote: EndpointId,
+) -> Option<PluginFrameAuthentication> {
+    let source_peer_id = frame.source_peer_id()?;
+    let has_signature_fields =
+        !frame.origin_signature().is_empty() || frame.expires_at_unix_ms() != 0;
+    if !has_signature_fields {
+        return (source_peer_id.is_empty() || source_peer_id == endpoint_id_hex(remote))
+            .then_some(PluginFrameAuthentication::ImmediatePeer);
+    }
+    verify_origin_signature(frame, crate::mesh::current_time_unix_ms())
+        .then_some(PluginFrameAuthentication::OriginSignature)
+}
 
 /// Shortest interval between plugin-frame warnings for one sending peer.
 ///
@@ -51,16 +247,17 @@ pub(crate) struct PluginFrameWarnState {
 /// atomic read for the status path.
 #[derive(Default)]
 pub(crate) struct PluginFrameTelemetry {
-    /// Received plugin-mesh frames whose non-empty `source_peer_id` was not the
-    /// sending peer. Advanced before throttling, so it is the true volume even
-    /// while a peer's warning is folded.
+    /// Rejected plugin-mesh frames with an unauthenticated non-empty source
+    /// claim different from the sending peer. Advanced before throttling, so it
+    /// records the true volume even while a peer's warning is folded.
     source_mismatch_total: AtomicU64,
     /// Per-peer warning throttle; deliberately its own mutex, not `MeshState`.
     warn: std::sync::Mutex<HashMap<EndpointId, PluginFrameWarnState>>,
 }
 
 impl PluginFrameTelemetry {
-    /// Record one received frame whose claimed source is not the sending peer.
+    /// Record one rejected frame whose claimed source is unauthenticated and
+    /// differs from the sending peer.
     ///
     /// The counter advances on every call; `now` decides the warning for
     /// `remote`: `Some` with the number of warnings folded in when the caller
@@ -201,11 +398,13 @@ impl Node {
                     return Ok(());
                 }
                 stamp_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
-                let frame = crate::plugin::proto::MeshChannelFrame {
+                let mut frame = crate::plugin::proto::MeshChannelFrame {
                     plugin_id,
                     message_id: new_plugin_message_id(&message.source_peer_id),
                     message: Some(message),
+                    ..Default::default()
                 };
+                sign_channel_frame(&self.endpoint_secret_key, &mut frame);
                 if !self.remember_plugin_message(frame.message_id.clone()).await {
                     return Ok(());
                 }
@@ -222,11 +421,13 @@ impl Node {
                     return Ok(());
                 }
                 stamp_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
-                let frame = crate::plugin::proto::MeshBulkFrame {
+                let mut frame = crate::plugin::proto::MeshBulkFrame {
                     plugin_id,
                     message_id: new_plugin_message_id(&message.source_peer_id),
                     message: Some(message),
+                    ..Default::default()
                 };
+                sign_bulk_frame(&self.endpoint_secret_key, &mut frame);
                 if !self.remember_plugin_message(frame.message_id.clone()).await {
                     return Ok(());
                 }
@@ -398,7 +599,7 @@ impl Node {
     /// Record a plugin-frame source mismatch from `remote` and decide the warning.
     ///
     /// Both plugin-frame receive paths record the same class of event — a frame
-    /// whose claimed `source_peer_id` is not the peer that sent it — and neither
+    /// whose source mismatch lacks a valid origin signature — and neither
     /// may warn per frame: a remote can open a stream per frame, and the runtime
     /// writes every warning to stderr and flushes it synchronously. Every call
     /// advances the local mismatch counter; the warning itself is throttled to at
@@ -417,10 +618,19 @@ impl Node {
     /// Total plugin-frame source mismatches this node has observed.
     ///
     /// The per-peer warning is throttled, so this counter — not the log line —
-    /// is the record of how often a peer claims a source that is not itself.
+    /// is the record of how often a peer makes a rejected source claim.
     /// Surfaced on the local status payload.
     pub(crate) fn plugin_frame_source_mismatch_total(&self) -> u64 {
         self.plugin_frame_telemetry.source_mismatch_total()
+    }
+
+    /// Whether this node already accepted `message_id` for plugin delivery.
+    #[cfg(test)]
+    pub(crate) async fn has_plugin_message(&self, message_id: &str) -> bool {
+        self.plugin_message_history
+            .lock()
+            .await
+            .contains(message_id)
     }
 
     pub(crate) async fn remember_plugin_message(&self, message_id: String) -> bool {
@@ -437,15 +647,16 @@ impl Node {
         skip_peer: Option<EndpointId>,
     ) -> Result<()> {
         let data = frame.encode_to_vec();
-        let conns: Vec<(EndpointId, Connection)> = {
-            let state = self.state.lock().await;
-            state
-                .connections
-                .iter()
-                .filter(|(peer_id, _)| Some(**peer_id) != skip_peer)
-                .map(|(peer_id, conn)| (*peer_id, conn.clone()))
-                .collect()
-        };
+        let conns = self
+            .plugin_frame_connections(
+                frame
+                    .message
+                    .as_ref()
+                    .map_or("", |message| message.target_peer_id.as_str()),
+                !frame.origin_signature.is_empty(),
+                skip_peer,
+            )
+            .await;
         for (peer_id, conn) in conns {
             let bytes = data.clone();
             tokio::spawn(async move {
@@ -469,21 +680,50 @@ impl Node {
         Ok(())
     }
 
+    async fn plugin_frame_connections(
+        &self,
+        target: &str,
+        signed: bool,
+        skip_peer: Option<EndpointId>,
+    ) -> Vec<(EndpointId, Connection)> {
+        {
+            let state = self.state.lock().await;
+            state
+                .connections
+                .iter()
+                .filter(|(peer_id, _)| {
+                    plugin_frame_recipient(
+                        **peer_id,
+                        skip_peer,
+                        target,
+                        signed,
+                        state
+                            .peers
+                            .get(*peer_id)
+                            .is_some_and(|peer| peer.plugin_origin_signature_supported),
+                    )
+                })
+                .map(|(peer_id, conn)| (*peer_id, conn.clone()))
+                .collect()
+        }
+    }
+
     pub(crate) async fn broadcast_plugin_bulk_frame(
         &self,
         frame: &crate::plugin::proto::MeshBulkFrame,
         skip_peer: Option<EndpointId>,
     ) -> Result<()> {
         let data = frame.encode_to_vec();
-        let conns: Vec<(EndpointId, Connection)> = {
-            let state = self.state.lock().await;
-            state
-                .connections
-                .iter()
-                .filter(|(peer_id, _)| Some(**peer_id) != skip_peer)
-                .map(|(peer_id, conn)| (*peer_id, conn.clone()))
-                .collect()
-        };
+        let conns = self
+            .plugin_frame_connections(
+                frame
+                    .message
+                    .as_ref()
+                    .map_or("", |message| message.target_peer_id.as_str()),
+                !frame.origin_signature.is_empty(),
+                skip_peer,
+            )
+            .await;
         for (peer_id, conn) in conns {
             let bytes = data.clone();
             tokio::spawn(async move {
@@ -537,11 +777,9 @@ impl Node {
 
     /// Handle an inbound plugin-mesh frame carrying channel frames.
     ///
-    /// `remote` is the peer the frame arrived from, which is not necessarily its
-    /// origin: a relayed frame is re-encoded by each hop. The claimed
-    /// `source_peer_id` is unauthenticated until plugin frame origin signing
-    /// lands, so a mismatch with `remote` is recorded (throttled per peer) and
-    /// the frame keeps its current handling.
+    /// Unsigned legacy frames are bound to `remote` and accepted only when they
+    /// claim that peer (or omit a source). Relayed claims require an end-to-end
+    /// origin signature over the frame and its expiry.
     pub(crate) async fn handle_plugin_channel_stream(
         &self,
         remote: EndpointId,
@@ -555,30 +793,32 @@ impl Node {
         if frame.plugin_id.is_empty() || frame.message_id.is_empty() {
             return Ok(());
         }
-        if !self.remember_plugin_message(frame.message_id.clone()).await {
-            return Ok(());
-        }
-
-        let Some(message) = frame.message.clone() else {
+        let Some(mut message) = frame.message.clone() else {
             return Ok(());
         };
-        // `source_peer_id` arrives from the wire and no frame carries an origin
-        // signature yet, so a value that is not the sending peer is an
-        // unauthenticated claim. Record it; enforcement lands with plugin frame
-        // origin signing. Warning is throttled per peer and reports how many
-        // claims it folded in, so this cannot be turned into unbounded log I/O.
-        if !message.source_peer_id.is_empty()
-            && message.source_peer_id != endpoint_id_hex(remote)
-            && let Some(suppressed) = self.plugin_frame_source_mismatch(remote)
-        {
-            tracing::warn!(
-                claimed_source = %message.source_peer_id,
-                sending_peer = %remote.fmt_short(),
-                channel = %message.channel,
-                frame_kind = %PLUGIN_FRAME_KIND_CHANNEL,
-                suppressed,
-                "Plugin frame claims a source_peer_id that is not the sending peer"
-            );
+        let source_peer_id_was_empty = message.source_peer_id.is_empty();
+        let Some(authentication) = authenticate_plugin_frame(&frame, remote) else {
+            if message.source_peer_id != endpoint_id_hex(remote)
+                && let Some(suppressed) = self.plugin_frame_source_mismatch(remote)
+            {
+                tracing::warn!(
+                    claimed_source = %message.source_peer_id,
+                    sending_peer = %remote.fmt_short(),
+                    channel = %message.channel,
+                    frame_kind = %PLUGIN_FRAME_KIND_CHANNEL,
+                    suppressed,
+                    "Rejecting plugin frame with an unauthenticated source_peer_id"
+                );
+            }
+            return Ok(());
+        };
+        if message.source_peer_id.is_empty() {
+            message.source_peer_id = endpoint_id_hex(remote);
+        }
+        // A rejected frame never enters deduplication, so a relay cannot spend
+        // the origin's message ID with an unauthenticated claim.
+        if !self.remember_plugin_message(frame.message_id.clone()).await {
+            return Ok(());
         }
         let local_peer_id = endpoint_id_hex(self.endpoint.id());
         let deliver_local =
@@ -596,12 +836,14 @@ impl Node {
             }
         }
 
-        // Targeted messages: forward only toward the specific target peer.
-        // Do NOT flood-broadcast targeted messages to all connections — that
-        // causes O(N²) amplification across the mesh.
-        // Untargeted broadcasts: deliver locally only.  The originator already
-        // sent to all their direct connections.
-        if !message.target_peer_id.is_empty() && message.target_peer_id != local_peer_id {
+        // A signed origin may be forwarded unchanged. Legacy empty-source frames
+        // may also continue: each hop binds the empty claim to its authenticated
+        // immediate peer. Non-empty unsigned claims never cross another hop.
+        if (authentication == PluginFrameAuthentication::OriginSignature
+            || source_peer_id_was_empty)
+            && !message.target_peer_id.is_empty()
+            && message.target_peer_id != local_peer_id
+        {
             self.forward_targeted_plugin_frame(
                 &message.target_peer_id,
                 STREAM_PLUGIN_CHANNEL,
@@ -615,11 +857,8 @@ impl Node {
 
     /// Handle an inbound plugin-mesh frame carrying bulk-transfer frames.
     ///
-    /// `remote` is the peer the frame arrived from, which is not necessarily its
-    /// origin: a relayed frame is re-encoded by each hop. The claimed
-    /// `source_peer_id` is unauthenticated until plugin frame origin signing
-    /// lands, so a mismatch with `remote` is recorded (throttled per peer) and
-    /// the frame keeps its current handling.
+    /// Unsigned legacy frames are bound to the authenticated immediate peer;
+    /// relayed claims require a valid origin signature and expiry.
     pub(crate) async fn handle_plugin_bulk_stream(
         &self,
         remote: EndpointId,
@@ -633,30 +872,30 @@ impl Node {
         if frame.plugin_id.is_empty() || frame.message_id.is_empty() {
             return Ok(());
         }
-        if !self.remember_plugin_message(frame.message_id.clone()).await {
-            return Ok(());
-        }
-
-        let Some(message) = frame.message.clone() else {
+        let Some(mut message) = frame.message.clone() else {
             return Ok(());
         };
-        // `source_peer_id` arrives from the wire and no frame carries an origin
-        // signature yet, so a value that is not the sending peer is an
-        // unauthenticated claim. Record it; enforcement lands with plugin frame
-        // origin signing. Warning is throttled per peer and reports how many
-        // claims it folded in, so this cannot be turned into unbounded log I/O.
-        if !message.source_peer_id.is_empty()
-            && message.source_peer_id != endpoint_id_hex(remote)
-            && let Some(suppressed) = self.plugin_frame_source_mismatch(remote)
-        {
-            tracing::warn!(
-                claimed_source = %message.source_peer_id,
-                sending_peer = %remote.fmt_short(),
-                channel = %message.channel,
-                frame_kind = %PLUGIN_FRAME_KIND_BULK,
-                suppressed,
-                "Plugin frame claims a source_peer_id that is not the sending peer"
-            );
+        let source_peer_id_was_empty = message.source_peer_id.is_empty();
+        let Some(authentication) = authenticate_plugin_frame(&frame, remote) else {
+            if message.source_peer_id != endpoint_id_hex(remote)
+                && let Some(suppressed) = self.plugin_frame_source_mismatch(remote)
+            {
+                tracing::warn!(
+                    claimed_source = %message.source_peer_id,
+                    sending_peer = %remote.fmt_short(),
+                    channel = %message.channel,
+                    frame_kind = %PLUGIN_FRAME_KIND_BULK,
+                    suppressed,
+                    "Rejecting plugin bulk frame with an unauthenticated source_peer_id"
+                );
+            }
+            return Ok(());
+        };
+        if message.source_peer_id.is_empty() {
+            message.source_peer_id = endpoint_id_hex(remote);
+        }
+        if !self.remember_plugin_message(frame.message_id.clone()).await {
+            return Ok(());
         }
         let local_peer_id = endpoint_id_hex(self.endpoint.id());
         let deliver_local =
@@ -674,10 +913,11 @@ impl Node {
             }
         }
 
-        // Same policy as channel frames: targeted -> forward to target only,
-        // broadcast → deliver locally only (originator already sent to their
-        // direct connections).
-        if !message.target_peer_id.is_empty() && message.target_peer_id != local_peer_id {
+        if (authentication == PluginFrameAuthentication::OriginSignature
+            || source_peer_id_was_empty)
+            && !message.target_peer_id.is_empty()
+            && message.target_peer_id != local_peer_id
+        {
             self.forward_targeted_plugin_frame(
                 &message.target_peer_id,
                 STREAM_PLUGIN_BULK_TRANSFER,
@@ -705,6 +945,53 @@ mod tests {
         let mut bytes = [0u8; 32];
         bytes[..4].copy_from_slice(&seed.to_be_bytes());
         EndpointId::from(SecretKey::from_bytes(&bytes).public())
+    }
+
+    #[test]
+    fn signed_plugin_frames_skip_legacy_relays_but_keep_direct_targets() {
+        let capable = peer(1);
+        let legacy = peer(2);
+        assert!(plugin_frame_recipient(capable, None, "", true, true));
+        assert!(plugin_frame_recipient(legacy, None, "", true, false));
+        let target = endpoint_id_hex(peer(3));
+        assert!(!plugin_frame_recipient(legacy, None, &target, true, false));
+        assert!(plugin_frame_recipient(capable, None, &target, true, true));
+        assert!(plugin_frame_recipient(
+            legacy,
+            None,
+            &endpoint_id_hex(legacy),
+            true,
+            false
+        ));
+        assert!(!plugin_frame_recipient(
+            legacy,
+            Some(capable),
+            "",
+            true,
+            false
+        ));
+        assert!(!plugin_frame_recipient(
+            legacy,
+            Some(capable),
+            &endpoint_id_hex(peer(3)),
+            true,
+            false
+        ));
+        assert!(plugin_frame_recipient(
+            legacy,
+            Some(capable),
+            &endpoint_id_hex(legacy),
+            true,
+            false
+        ));
+        assert!(!plugin_frame_recipient(
+            capable,
+            Some(capable),
+            "",
+            true,
+            true
+        ));
+        assert!(plugin_frame_recipient(legacy, None, "", false, false));
     }
 
     #[test]

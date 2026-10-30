@@ -357,7 +357,7 @@ pub(super) fn submit_capability_probe_warnings(messages: &[String]) {
 
 /// FNV-1a over the message bytes: deterministic across processes, unlike
 /// `DefaultHasher`, so the same disabled family always maps to one warning.
-fn stable_message_id(message: &str) -> u64 {
+pub(crate) fn stable_message_id(message: &str) -> u64 {
     message.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
         (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3)
     })

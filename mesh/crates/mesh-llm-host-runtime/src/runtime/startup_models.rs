@@ -19,6 +19,7 @@ use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
+mod layer_diagnostics;
 mod local_required;
 
 use local_required::resolve_local_required_startup_model;
@@ -1272,15 +1273,26 @@ pub(super) fn resolve_split_layer_package(model_query: &str, model_path: &Path) 
 
     // Try remote catalog first for curated source-model metadata, then probe
     // Hugging Face directly for uncataloged package repos.
-    match models::remote_catalog::ensure_catalog() {
+    let catalog_reason = match models::remote_catalog::ensure_catalog() {
         Ok(()) => {
             if let Some(package_ref) = models::remote_catalog::find_layer_package(model_query) {
                 return Some(package_ref);
             }
+            "the model catalog lists no layer package for it".to_string()
         }
-        Err(err) => tracing::debug!("remote catalog unavailable: {err:#}"),
+        Err(err) => format!("the model catalog was unavailable: {err:#}"),
+    };
+    let package_ref = models::remote_catalog::find_huggingface_layer_package(model_query);
+    if package_ref.is_none() {
+        layer_diagnostics::report_unresolved_layer_package(
+            model_query,
+            &format!(
+                "{catalog_reason} and its Hugging Face repo exposes no readable \
+                 model-package.json"
+            ),
+        );
     }
-    models::remote_catalog::find_huggingface_layer_package(model_query)
+    package_ref
 }
 
 pub(super) fn preflight_pinned_startup_models(
