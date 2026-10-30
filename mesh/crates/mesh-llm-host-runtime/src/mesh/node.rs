@@ -1175,7 +1175,7 @@ impl Node {
         // endpoints share one id.
         let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
             .secret_key(secret_key)
-            .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+            .alpns(vec![ALPN_CONTROL_V2.to_vec()])
             .clear_ip_transports()
             .bind_addr(bind_addr.unwrap_or_else(default_control_bind_addr))?
             .relay_mode(iroh::endpoint::RelayMode::Disabled)

@@ -17,18 +17,17 @@ use crate::proto::node::OwnerControlPluginCommandApproval;
 pub(crate) fn changed_plugin_commands(
     current: &[PluginConfigEntry],
     incoming: &MeshConfig,
-) -> Vec<(String, String)> {
+) -> Vec<(String, String, Vec<String>)> {
     let mut changed = Vec::new();
     for plugin in &incoming.plugins {
         let Some(command) = plugin.command.as_deref() else {
             continue;
         };
-        let previous = current
-            .iter()
-            .find(|entry| entry.name == plugin.name)
-            .and_then(|entry| entry.command.as_deref());
-        if previous != Some(command) {
-            changed.push((plugin.name.clone(), command.to_owned()));
+        let previous = current.iter().find(|entry| entry.name == plugin.name);
+        if previous.is_none_or(|entry| {
+            entry.command.as_deref() != Some(command) || entry.args != plugin.args
+        }) {
+            changed.push((plugin.name.clone(), command.to_owned(), plugin.args.clone()));
         }
     }
     changed
@@ -37,17 +36,27 @@ pub(crate) fn changed_plugin_commands(
 /// Changed commands the request does not declare an approval for. Empty means
 /// the request is fully approved.
 pub(crate) fn missing_plugin_command_approvals(
-    changed: &[(String, String)],
+    changed: &[(String, String, Vec<String>)],
     declared: &[OwnerControlPluginCommandApproval],
 ) -> Vec<String> {
-    let declared: HashSet<(String, String)> = declared
+    let declared: HashSet<(String, String, Vec<String>)> = declared
         .iter()
-        .map(|entry| (entry.plugin.clone(), entry.command.clone()))
+        .filter_map(|entry| {
+            entry.invocation.as_ref().map(|invocation| {
+                (
+                    entry.plugin.clone(),
+                    entry.command.clone(),
+                    invocation.args.clone(),
+                )
+            })
+        })
         .collect();
     changed
         .iter()
-        .filter(|(plugin, command)| !declared.contains(&(plugin.clone(), command.clone())))
-        .map(|(plugin, _)| plugin.clone())
+        .filter(|(plugin, command, args)| {
+            !declared.contains(&(plugin.clone(), command.clone(), args.clone()))
+        })
+        .map(|(plugin, _, _)| plugin.clone())
         .collect()
 }
 
@@ -107,8 +116,8 @@ mod tests {
         assert_eq!(
             changed,
             vec![
-                ("metrics".to_string(), "new-binary".to_string()),
-                ("second".to_string(), "second-binary".to_string())
+                ("metrics".to_string(), "new-binary".to_string(), vec![]),
+                ("second".to_string(), "second-binary".to_string(), vec![])
             ]
         );
     }
@@ -122,6 +131,48 @@ mod tests {
     }
 
     #[test]
+    fn changed_arguments_require_approval() {
+        let current = vec![entry("metrics", Some("same-binary"))];
+        let mut incoming = incoming_with_command("metrics", "same-binary");
+        incoming.plugins[0].args.push("--new-argument".to_owned());
+        assert_eq!(
+            changed_plugin_commands(&current, &incoming),
+            vec![(
+                "metrics".to_owned(),
+                "same-binary".to_owned(),
+                vec!["--new-argument".to_owned()]
+            )]
+        );
+    }
+
+    #[test]
+    fn approvals_must_include_the_exact_arguments() {
+        let changed = vec![(
+            "metrics".to_owned(),
+            "binary".to_owned(),
+            vec!["--new".to_owned()],
+        )];
+        let mut approval = OwnerControlPluginCommandApproval {
+            plugin: "metrics".to_owned(),
+            command: "binary".to_owned(),
+            invocation: None,
+        };
+        assert_eq!(
+            missing_plugin_command_approvals(&changed, &[approval.clone()]),
+            vec!["metrics"]
+        );
+        approval.invocation = Some(crate::proto::node::OwnerControlPluginArguments {
+            args: vec!["--old".to_owned()],
+        });
+        assert_eq!(
+            missing_plugin_command_approvals(&changed, &[approval.clone()]),
+            vec!["metrics"]
+        );
+        approval.invocation.as_mut().unwrap().args = vec!["--new".to_owned()];
+        assert!(missing_plugin_command_approvals(&changed, &[approval]).is_empty());
+    }
+
+    #[test]
     fn removed_commands_are_not_reported() {
         let current = vec![entry("metrics", Some("old-binary"))];
         let mut incoming = MeshConfig::default();
@@ -131,10 +182,11 @@ mod tests {
 
     #[test]
     fn declared_approvals_cover_the_changed_commands() {
-        let changed = vec![("metrics".to_string(), "new-binary".to_string())];
+        let changed = vec![("metrics".to_string(), "new-binary".to_string(), vec![])];
         let declared = vec![OwnerControlPluginCommandApproval {
             plugin: "metrics".to_string(),
             command: "new-binary".to_string(),
+            invocation: Some(crate::proto::node::OwnerControlPluginArguments { args: vec![] }),
         }];
         assert!(missing_plugin_command_approvals(&changed, &declared).is_empty());
     }
@@ -142,12 +194,13 @@ mod tests {
     #[test]
     fn undeclared_changed_commands_are_listed() {
         let changed = vec![
-            ("metrics".to_string(), "new-binary".to_string()),
-            ("second".to_string(), "second-binary".to_string()),
+            ("metrics".to_string(), "new-binary".to_string(), vec![]),
+            ("second".to_string(), "second-binary".to_string(), vec![]),
         ];
         let declared = vec![OwnerControlPluginCommandApproval {
             plugin: "metrics".to_string(),
             command: "new-binary".to_string(),
+            invocation: Some(crate::proto::node::OwnerControlPluginArguments { args: vec![] }),
         }];
         assert_eq!(
             missing_plugin_command_approvals(&changed, &declared),
@@ -161,6 +214,7 @@ mod tests {
         let declared = vec![OwnerControlPluginCommandApproval {
             plugin: "metrics".to_string(),
             command: "whatever".to_string(),
+            invocation: Some(crate::proto::node::OwnerControlPluginArguments { args: vec![] }),
         }];
         assert!(missing_plugin_command_approvals(&changed, &declared).is_empty());
     }
@@ -172,6 +226,7 @@ mod tests {
         let declared = vec![OwnerControlPluginCommandApproval {
             plugin: "metrics".to_string(),
             command: "new-binary".to_string(),
+            invocation: Some(crate::proto::node::OwnerControlPluginArguments { args: vec![] }),
         }];
         assert!(plugin_command_approval_error(&current, &incoming, &declared).is_none());
     }

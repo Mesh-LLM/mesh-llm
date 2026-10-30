@@ -287,7 +287,7 @@ struct OwnerControlTestServer {
 async fn spawn_owner_control_test_server() -> OwnerControlTestServer {
     let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(iroh::SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .unwrap()
@@ -379,7 +379,7 @@ async fn spawn_owner_control_apply_test_server(
 ) -> OwnerControlApplyTestServer {
     let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(iroh::SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .unwrap()
@@ -550,7 +550,7 @@ fn merge_json_object(target: &mut serde_json::Value, source: serde_json::Value) 
 async fn unreachable_owner_control_endpoint_token() -> String {
     let endpoint = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(iroh::SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .unwrap()

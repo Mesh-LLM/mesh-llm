@@ -169,7 +169,7 @@ has finished loading, draining, or stopping. Observe `/api/runtime/intents`,
 ## Owner-control lifecycle
 
 These loopback REST facades ask the local node to contact exactly one remote,
-owner-attested target over the private `mesh-llm-control/1` ALPN:
+owner-attested target over the private `mesh-llm-control/2` ALPN:
 
 ```http
 POST /api/runtime/control/load-model

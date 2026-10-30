@@ -14,7 +14,7 @@ use crate::proto::node::{
     OwnerControlWatchConfigRequest, OwnerControlWatchConfigResponse, SignedNodeOwnership,
 };
 use crate::protocol::{
-    ALPN_CONTROL_V1, ALPN_V1, NODE_PROTOCOL_GENERATION, decode_owner_control_envelope,
+    ALPN_CONTROL_V2, ALPN_V1, NODE_PROTOCOL_GENERATION, decode_owner_control_envelope,
     write_len_prefixed,
 };
 use anyhow::Context;
@@ -51,11 +51,11 @@ fn owner_control_client_bind_addr() -> std::net::SocketAddr {
 /// Explicit owner-control bootstrap policy for new config clients.
 ///
 /// Negotiation matrix:
-/// - new client + explicit control endpoint -> use `mesh-llm-control/1`; configured control
+/// - new client + explicit control endpoint -> use `mesh-llm-control/2`; configured control
 ///   failures stay on the control lane and return structured errors.
 /// - new client + no control endpoint -> return `ControlEndpointRequired`.
 ///
-/// Config and inventory mutation is intentionally exclusive to `mesh-llm-control/1`.
+/// Config and inventory mutation is intentionally exclusive to `mesh-llm-control/2`.
 /// The legacy mesh-plane config stream IDs remain reserved, but no client bootstrap path
 /// falls back to them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -387,7 +387,7 @@ impl OwnerControlClient {
         })?;
         let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
             .secret_key(iroh::SecretKey::generate())
-            .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+            .alpns(vec![ALPN_CONTROL_V2.to_vec()])
             .bind_addr(owner_control_client_bind_addr())
             .map_err(|error| ControlPlaneClientError::Transport(error.to_string()))?;
         builder = builder.relay_mode(relay_mode_from_endpoint_addr(&control_addr));
@@ -400,7 +400,7 @@ impl OwnerControlClient {
         }
         let connection = match tokio::time::timeout(
             options.connect_timeout,
-            endpoint.connect(control_addr.clone(), ALPN_CONTROL_V1),
+            endpoint.connect(control_addr.clone(), ALPN_CONTROL_V2),
         )
         .await
         {
@@ -1112,7 +1112,7 @@ fn fallback_probe_disposition(message: &str) -> ConnectProbeDisposition {
 fn control_unsupported_message(message: &str) -> (OwnerControlErrorCode, String) {
     (
         OwnerControlErrorCode::ControlUnsupported,
-        format!("remote endpoint did not negotiate mesh-llm-control/1: {message}"),
+        format!("remote endpoint did not negotiate mesh-llm-control/2: {message}"),
     )
 }
 

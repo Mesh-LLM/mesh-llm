@@ -831,6 +831,11 @@ message OwnerControlApplyConfigRequest {
 message OwnerControlPluginCommandApproval {
   string plugin = 1;
   string command = 2;                     // exact new command executable
+  optional OwnerControlPluginArguments invocation = 3; // exact approved arguments; required for changes
+}
+
+message OwnerControlPluginArguments {
+  repeated string args = 1;
 }
 
 message OwnerControlApplyConfigResponse {

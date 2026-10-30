@@ -8,6 +8,8 @@ use super::control_apply_diagnostics::{
     local_control_apply_diagnostic_payload_from_local,
 };
 use super::runtime_control_state::collect_runtime_config_control_state_payload;
+mod owner_control_credential;
+mod plugin_approval;
 use crate::config_schema::{EngineConfigSchemaDescriptor, export_runtime_config_schema_reference};
 use crate::crypto::{
     OwnerKeychainLoadError, keystore_metadata, load_keystore, load_owner_keypair_from_keychain,
@@ -24,6 +26,7 @@ use mesh_llm_config::{
 };
 use mesh_llm_config::{ConfigDiagnosticSeverity, legacy_validation_error_text};
 use mesh_llm_node::serving::{UnloadOptions, UnloadTarget};
+use plugin_approval::RawPluginCommandApproval;
 use serde::{Deserialize, Serialize};
 use skippy_inference_api::GuardrailMode;
 use std::collections::BTreeMap;
@@ -116,7 +119,7 @@ async fn handle_get(
         "/api/runtime/kv-cache" => super::kv_cache::handle_status(stream).await,
         "/api/runtime/control-bootstrap" => handle_control_bootstrap(stream, state).await,
         "/api/runtime/control/owner-control-token" => {
-            handle_owner_control_token(stream, state).await
+            owner_control_credential::reject_token_disclosure(stream).await
         }
         "/api/runtime/intents" => handle_get_intents(stream, state).await,
         "/api/runtime/activity" => super::runtime_activity::handle_get(stream, state).await,
@@ -268,12 +271,6 @@ struct RawApplyConfigRequest {
     config: serde_json::Value,
     #[serde(default)]
     plugin_command_approvals: Vec<RawPluginCommandApproval>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawPluginCommandApproval {
-    plugin: String,
-    command: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -618,12 +615,7 @@ async fn handle_control_apply_config(
                     request
                         .plugin_command_approvals
                         .iter()
-                        .map(|approval| {
-                            mesh_client::proto::node::OwnerControlPluginCommandApproval {
-                                plugin: approval.plugin.clone(),
-                                command: approval.command.clone(),
-                            }
-                        })
+                        .map(RawPluginCommandApproval::to_proto)
                         .collect(),
                 )
                 .await;
@@ -1125,28 +1117,6 @@ async fn ensure_owner_control_local_user(stream: &mut TcpStream) -> anyhow::Resu
             Ok(false)
         }
         Some(true) | None => Ok(true),
-    }
-}
-
-async fn handle_owner_control_token(stream: &mut TcpStream, state: &MeshApi) -> anyhow::Result<()> {
-    if !ensure_loopback_control_caller(stream).await? {
-        return Ok(());
-    }
-    if !ensure_owner_control_local_user(stream).await? {
-        return Ok(());
-    }
-    match state.owner_control_token().await {
-        Some(token) => {
-            respond_json(stream, 200, &serde_json::json!({"token": token.as_str()})).await
-        }
-        None => {
-            respond_json(
-                stream,
-                503,
-                &serde_json::json!({"error": "owner control credential is not configured"}),
-            )
-            .await
-        }
     }
 }
 
