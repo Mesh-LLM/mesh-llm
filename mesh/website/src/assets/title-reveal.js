@@ -5,6 +5,8 @@
     '#topology .sec-head',
     '#catalog .sec-head',
     '#plugins .sec-head',
+    '#paid-inference .paid-inference-head > :first-child',
+    '#install .sec-head',
   ].join(',');
   var REDUCE_QUERY = '(prefers-reduced-motion: reduce)';
   var REVEAL_LINGER_MS = 800;

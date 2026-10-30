@@ -4815,6 +4815,13 @@ html:has(> body.docs-body)::-webkit-scrollbar-corner,
 }
 
 /* ─────────────────────  CTA TERMINAL  ───────────────────── */
+.install-head {
+  display: block;
+  max-width: 980px;
+  margin-inline: auto;
+  margin-bottom: 40px;
+}
+
 .cta-terminal {
   position: relative;
   overflow: hidden;
@@ -8662,6 +8669,832 @@ body.is-stage2-debug-scrubber-visible .stage2-scroll.is-stage2-scrubbable .stage
   .cli-explorer-page *,
   .cli-explorer-page *::before,
   .cli-explorer-page *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ─────────────────────  PAID INFERENCE LOOP  ───────────────────── */
+#paid-inference {
+  scroll-margin-top: clamp(2.5rem, 6svh, 4.5rem);
+}
+
+.paid-inference-head {
+  align-items: start;
+}
+
+.paid-inference-copy {
+  display: grid;
+  justify-items: start;
+  gap: 14px;
+  max-width: 56ch;
+}
+
+.paid-inference-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: var(--type-lead);
+  line-height: 1.62;
+}
+
+.paid-inference-cta {
+  margin-top: 8px;
+}
+
+.paid-inference {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-xl);
+  background: linear-gradient(180deg, rgba(15,17,22,0.98), rgba(7,8,11,0.98));
+}
+
+.paid-inference-bar,
+.paid-inference-body,
+.paid-inference-panel,
+.paid-inference-panel__lead,
+.paid-inference-steps,
+.paid-inference-map,
+.paid-inference-endpoint,
+.paid-inference-routes,
+.paid-inference-route,
+.paid-inference-route__meta,
+.paid-inference-track,
+.paid-inference-legend {
+  min-width: 0;
+}
+
+.paid-inference-bar {
+  position: relative;
+  z-index: 3;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(360px, auto);
+  gap: 20px;
+  align-items: center;
+  min-height: 76px;
+  padding: 14px 20px 14px 26px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255,255,255,0.018);
+}
+
+.paid-inference-protocol {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+}
+
+.paid-inference-protocol__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--green-2);
+  box-shadow: 0 0 8px rgba(74,222,128,0.55);
+}
+
+.paid-inference-protocol code {
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--blue-3);
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.paid-inference-tabs {
+  display: none;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding: 5px;
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  background: rgba(0,0,0,0.22);
+}
+
+.js .paid-inference-tabs {
+  display: grid;
+}
+
+.paid-inference-tab {
+  min-height: 48px;
+  padding: 7px 18px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+.paid-inference-tab span,
+.paid-inference-tab small {
+  display: block;
+}
+
+.paid-inference-tab span {
+  color: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.paid-inference-tab small {
+  margin-top: 1px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.625rem;
+}
+
+.paid-inference-tab:hover,
+.paid-inference-tab:focus-visible {
+  color: var(--fg);
+  outline: none;
+}
+
+.paid-inference-tab:focus-visible {
+  outline: 2px solid var(--blue-2);
+  outline-offset: 2px;
+}
+
+.paid-inference-tab.is-active {
+  background: var(--blue-soft);
+  color: var(--blue-3);
+}
+
+.paid-inference-body {
+  position: relative;
+  padding: 30px;
+  isolation: isolate;
+}
+
+.paid-inference-body::before {
+  content: "";
+  position: absolute;
+  inset: 16px;
+  z-index: -2;
+  border: 1px solid rgba(255,255,255,0.045);
+  border-radius: 18px;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.032) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.032) 1px, transparent 1px),
+    radial-gradient(circle at 50% 68%, rgba(59,130,246,0.12), transparent 36%);
+  background-size: 34px 34px, 34px 34px, 100% 100%;
+  opacity: 0.78;
+}
+
+.paid-inference-body::after {
+  content: "";
+  position: absolute;
+  inset: 16px;
+  z-index: -1;
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(7,8,11,0.66), rgba(7,8,11,0.16) 52%, rgba(7,8,11,0.48));
+  pointer-events: none;
+}
+
+.paid-inference-panel {
+  display: grid;
+  grid-template-columns: minmax(200px, 0.76fr) minmax(0, 1.6fr);
+  gap: 34px;
+  align-items: center;
+  margin: 0 12px 28px;
+  padding: 12px 14px 26px;
+  border-bottom: 1px solid var(--line);
+}
+
+.js .paid-inference-panel:not(.is-active),
+.paid-inference-panel[hidden],
+.paid-inference-map[hidden] {
+  display: none;
+}
+
+.paid-inference-panel__kicker {
+  margin: 0 0 8px;
+  color: var(--blue-3);
+  font-family: var(--mono);
+  font-size: 0.65625rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.paid-inference-panel h3 {
+  margin: 0;
+  max-width: 18ch;
+  color: var(--fg);
+  font-size: clamp(1.25rem, 2.4vw, 1.75rem);
+  font-weight: 600;
+  line-height: 1.08;
+  letter-spacing: -0.018em;
+}
+
+.paid-inference-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.paid-inference-steps li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  min-height: 88px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(5,5,7,0.56);
+  transition: border-color 0.2s ease, background-color 0.2s ease;
+}
+
+.paid-inference-steps li > span {
+  display: grid;
+  width: 23px;
+  height: 23px;
+  place-items: center;
+  border: 1px solid var(--line-2);
+  border-radius: 999px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+}
+
+.paid-inference-steps strong,
+.paid-inference-steps small {
+  display: block;
+}
+
+.paid-inference-steps strong {
+  color: var(--fg-2);
+  font-size: 0.78125rem;
+  font-weight: 600;
+}
+
+.paid-inference-steps small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  line-height: 1.4;
+}
+
+.paid-inference-steps li.is-active {
+  border-color: rgba(96,165,250,0.42);
+  background: rgba(59,130,246,0.08);
+}
+
+.paid-inference-steps li.is-active > span {
+  border-color: rgba(96,165,250,0.55);
+  color: var(--blue-3);
+}
+
+.paid-inference-steps li.is-complete > span {
+  border-color: rgba(74,222,128,0.38);
+  background: var(--green-soft);
+  color: var(--green-3);
+}
+
+.paid-inference-map {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.72fr) minmax(300px, 1.65fr) minmax(150px, 0.72fr);
+  gap: 24px;
+  align-items: stretch;
+  min-height: 284px;
+  padding: 8px 12px 14px;
+}
+
+.paid-inference-endpoint {
+  display: grid;
+  align-content: start;
+  min-height: 252px;
+  padding: 18px;
+  border: 1px solid var(--line-2);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(20,23,29,0.98), rgba(10,12,16,0.98));
+}
+
+.paid-inference-endpoint--local {
+  border-color: rgba(96,165,250,0.32);
+  box-shadow: inset 0 1px 0 rgba(147,197,253,0.06);
+}
+
+.paid-inference-endpoint__eyebrow {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.paid-inference-endpoint > strong {
+  margin-top: 9px;
+  color: var(--fg);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.paid-inference-endpoint > small {
+  margin-top: 4px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.65625rem;
+  line-height: 1.45;
+}
+
+.paid-inference-wallet {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  margin-top: auto;
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(5,5,7,0.72);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.65625rem;
+}
+
+.paid-inference-wallet svg {
+  width: 17px;
+  height: 17px;
+  color: var(--amber);
+}
+
+.paid-inference-wallet span,
+.paid-inference-wallet small {
+  display: block;
+}
+
+.paid-inference-wallet small {
+  margin-bottom: 1px;
+  color: var(--muted);
+  font-size: 0.5625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.paid-inference-wallet b {
+  grid-column: 1 / -1;
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  color: var(--green-3);
+  font-size: 0.5625rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.paid-inference-wallet b::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  margin-right: 6px;
+  border-radius: 999px;
+  background: var(--green-2);
+  box-shadow: 0 0 7px rgba(74,222,128,0.55);
+}
+
+.paid-inference-routes {
+  display: grid;
+  align-content: center;
+  gap: 16px;
+  padding-block: 4px;
+}
+
+.paid-inference-route {
+  display: grid;
+  gap: 6px;
+  opacity: 0.9;
+  transition: opacity 0.18s ease;
+}
+
+.paid-inference-route.is-active,
+.paid-inference-route.is-complete {
+  opacity: 1;
+}
+
+.paid-inference-route__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.paid-inference-route__meta strong {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 0.59375rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-align: right;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.paid-inference-route.is-active .paid-inference-route__meta strong {
+  color: var(--blue-3);
+}
+
+.paid-inference-route--deposit.is-active .paid-inference-route__meta strong,
+.paid-inference-route--settlement.is-active .paid-inference-route__meta strong {
+  color: var(--amber);
+}
+
+.paid-inference-route.is-complete .paid-inference-route__meta::after {
+  content: "✓";
+  color: var(--green-3);
+  font-size: 0.6875rem;
+}
+
+.paid-inference-track {
+  position: relative;
+  height: 18px;
+}
+
+.paid-inference-track::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: repeating-linear-gradient(90deg, rgba(96,165,250,0.62) 0 7px, transparent 7px 13px);
+  transform: translateY(-50%);
+}
+
+.paid-inference-route--deposit .paid-inference-track::before,
+.paid-inference-route--settlement .paid-inference-track::before {
+  background: repeating-linear-gradient(90deg, rgba(245,158,11,0.52) 0 7px, transparent 7px 13px);
+}
+
+.paid-inference-track::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-top: 1px solid rgba(147,197,253,0.78);
+  border-right: 1px solid rgba(147,197,253,0.78);
+}
+
+.paid-inference-track:has([data-payment-direction="forward"])::after {
+  right: 1px;
+  transform: translateY(-50%) rotate(45deg);
+}
+
+.paid-inference-track:has([data-payment-direction="reverse"])::after {
+  left: 1px;
+  transform: translateY(-50%) rotate(-135deg);
+}
+
+.paid-inference-route--deposit .paid-inference-track::after,
+.paid-inference-route--settlement .paid-inference-track::after {
+  border-color: rgba(245,158,11,0.74);
+}
+
+.paid-inference-packet {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 1px solid rgba(96,165,250,0.72);
+  border-radius: 999px;
+  background: #0b1422;
+  color: var(--blue-3);
+  box-shadow: 0 0 12px rgba(59,130,246,0.28);
+  font-style: normal;
+  opacity: 0;
+  will-change: transform, opacity;
+}
+
+.paid-inference-packet::before {
+  font-family: var(--mono);
+  font-size: 0.625rem;
+  line-height: 1;
+}
+
+.paid-inference-packet[data-payment-direction="forward"]::before {
+  content: "→";
+}
+
+.paid-inference-packet[data-payment-direction="reverse"]::before {
+  content: "←";
+}
+
+.paid-inference-packet--payment {
+  border-color: rgba(245,158,11,0.72);
+  background: #1d1608;
+  color: var(--amber);
+  box-shadow: 0 0 12px rgba(245,158,11,0.24);
+}
+
+.paid-inference-packet--settlement {
+  border-color: rgba(74,222,128,0.7);
+  background: #08190f;
+  color: var(--green-3);
+  box-shadow: 0 0 12px rgba(34,197,94,0.25);
+}
+
+.paid-inference-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px 26px;
+  align-items: center;
+  min-height: 51px;
+  padding: 12px 26px;
+  border-top: 1px solid var(--line);
+  background: rgba(255,255,255,0.012);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 0.625rem;
+}
+
+.paid-inference-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.paid-inference-legend i {
+  width: 18px;
+  height: 1px;
+}
+
+.paid-inference-legend__mesh {
+  background: var(--blue-2);
+}
+
+.paid-inference-legend__lightning {
+  background: var(--amber);
+}
+
+.paid-inference-legend .paid-inference-legend__status {
+  margin-left: auto;
+  color: var(--green-3);
+  letter-spacing: 0.03em;
+}
+
+.paid-inference-motion-control {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 10px;
+  border: 1px solid var(--line-3);
+  border-radius: 7px;
+  background: rgba(255,255,255,0.025);
+  color: var(--fg-2);
+  font: inherit;
+  cursor: pointer;
+}
+
+.paid-inference-motion-control[hidden] {
+  display: none;
+}
+
+.paid-inference-motion-control:hover {
+  border-color: var(--blue-2);
+  color: var(--fg);
+}
+
+.paid-inference-motion-control:focus-visible {
+  outline: 2px solid var(--blue-2);
+  outline-offset: 2px;
+}
+
+@media (max-width: 900px) {
+  .paid-inference-bar {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .paid-inference-tabs {
+    width: 100%;
+  }
+
+  .paid-inference-panel {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+
+  .paid-inference-map {
+    grid-template-columns: minmax(130px, 0.62fr) minmax(250px, 1.4fr) minmax(130px, 0.62fr);
+    gap: 16px;
+  }
+
+  .paid-inference-endpoint {
+    padding: 14px;
+  }
+}
+
+@media (max-width: 720px) {
+  .paid-inference-copy {
+    gap: 12px;
+  }
+
+  .paid-inference-cta {
+    width: 100%;
+    margin-top: 6px;
+    white-space: normal;
+    text-align: center;
+  }
+
+  .paid-inference-bar {
+    padding: 15px;
+  }
+
+  .paid-inference-protocol code {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  .paid-inference-tab {
+    min-height: 52px;
+    padding-inline: 12px;
+  }
+
+  .paid-inference-body {
+    padding: 20px 14px;
+  }
+
+  .paid-inference-body::before,
+  .paid-inference-body::after {
+    inset: 8px;
+  }
+
+  .paid-inference-panel {
+    margin: 0 2px 22px;
+    padding: 8px 6px 22px;
+  }
+
+  .paid-inference-panel h3 {
+    max-width: 24ch;
+  }
+
+  .paid-inference-panel__lead {
+    min-height: 68px;
+  }
+
+  .paid-inference-steps {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .paid-inference-steps li {
+    min-height: 88px;
+  }
+
+  .paid-inference-map {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+    min-height: 0;
+    padding: 4px 4px 8px;
+  }
+
+  .paid-inference-endpoint {
+    min-height: 142px;
+    padding: 15px;
+  }
+
+  .paid-inference-wallet {
+    margin-top: 18px;
+  }
+
+  .paid-inference-routes {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+    min-height: 178px;
+    padding: 2px 0;
+  }
+
+  .paid-inference-route {
+    grid-template-rows: minmax(50px, auto) 118px;
+    justify-items: center;
+    gap: 8px;
+  }
+
+  .paid-inference-route__meta {
+    display: grid;
+    align-content: start;
+    justify-items: center;
+    gap: 2px;
+    text-align: center;
+  }
+
+  .paid-inference-route__meta strong {
+    overflow: visible;
+    max-width: 11ch;
+    font-size: 0.5625rem;
+    line-height: 1.25;
+    text-align: center;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .paid-inference-route.is-complete .paid-inference-route__meta::after {
+    position: absolute;
+    margin-top: 34px;
+  }
+
+  .paid-inference-track {
+    width: 18px;
+    height: 118px;
+  }
+
+  .paid-inference-track::before {
+    top: 0;
+    bottom: 0;
+    left: 50%;
+    width: 1px;
+    height: auto;
+    background: repeating-linear-gradient(180deg, rgba(96,165,250,0.62) 0 7px, transparent 7px 13px);
+    transform: translateX(-50%);
+  }
+
+  .paid-inference-route--deposit .paid-inference-track::before,
+  .paid-inference-route--settlement .paid-inference-track::before {
+    background: repeating-linear-gradient(180deg, rgba(245,158,11,0.52) 0 7px, transparent 7px 13px);
+  }
+
+  .paid-inference-track:has([data-payment-direction="forward"])::after {
+    right: auto;
+    bottom: 1px;
+    left: 50%;
+    top: auto;
+    transform: translateX(-50%) rotate(135deg);
+  }
+
+  .paid-inference-track:has([data-payment-direction="reverse"])::after {
+    top: 1px;
+    left: 50%;
+    transform: translateX(-50%) rotate(-45deg);
+  }
+
+  .paid-inference-packet[data-payment-direction="forward"]::before {
+    content: "↓";
+  }
+
+  .paid-inference-packet[data-payment-direction="reverse"]::before {
+    content: "↑";
+  }
+
+  .paid-inference-legend {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 9px;
+    padding: 14px 18px;
+  }
+
+  .paid-inference-legend .paid-inference-legend__status {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 420px) {
+  .paid-inference-protocol {
+    font-size: 0.625rem;
+  }
+
+  .paid-inference-tab small {
+    font-size: 0.5625rem;
+  }
+
+  .paid-inference-routes {
+    gap: 4px;
+  }
+
+  .paid-inference-route__meta {
+    font-size: 0.5rem;
+  }
+
+  .paid-inference-route__meta strong {
+    font-size: 0.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .paid-inference *,
+  .paid-inference *::before,
+  .paid-inference *::after {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
   }
