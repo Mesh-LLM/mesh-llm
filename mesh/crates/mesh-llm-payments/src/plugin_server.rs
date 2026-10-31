@@ -12,7 +12,6 @@ use mesh_llm_payments_types::contract::{
     AcceptAdmissionRequest, AdvertisedPricing, ArrivalResponse, CancelRequest, Empty,
     FinishRequest, InvoiceRequest, OpError, PayDepositRequest, RequestIdRequest,
     RoutingBudgetRequest, ServeAdmitRequest, ServeSettleRequest, SettleFinalRequest,
-    SettledReceived,
 };
 use mesh_llm_payments_types::engine::AdvertisedPrices;
 use mesh_llm_plugin::{
@@ -314,12 +313,7 @@ fn add_serving_ops(router: &mut OperationRouter, source: &ServiceSource) {
                     .await
             })
             .await??;
-            // A wallet that reports no amount reports 0; never claim a 0 credit.
-            Ok(SettledReceived {
-                credited_msat: (payment.amount_msat > 0).then_some(payment.amount_msat),
-                fee_msat: Some(payment.fee_msat),
-                preimage: payment.preimage.clone(),
-            })
+            Ok(crate::serving::settled(&payment))
         },
     );
 }

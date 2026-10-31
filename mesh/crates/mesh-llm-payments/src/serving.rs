@@ -345,7 +345,7 @@ impl PaymentService {
     }
 }
 
-fn settled(payment: &Transaction) -> SettledReceived {
+pub(crate) fn settled(payment: &Transaction) -> SettledReceived {
     // A wallet that reports no amount reports 0; never claim a 0 credit.
     SettledReceived {
         credited_msat: (payment.amount_msat > 0).then_some(payment.amount_msat),
