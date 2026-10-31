@@ -10,10 +10,16 @@ import {
   applyRuntimeControlConfig,
   createConfigurationDefaultsValuesFromMeshConfig,
   fetchRuntimeControlConfig,
+  mergeConfigurationIntoMeshConfig,
   type RuntimeControlApplyInput,
   type RuntimeControlApplyResponse,
   type RuntimeControlConfigResult
 } from '@/features/configuration/api/config-adapter'
+import {
+  changedPluginCommandApprovals,
+  describePluginCommandApprovals
+} from '@/features/configuration/api/config-adapter-http'
+import { confirmPluginCommands } from '@/features/configuration/api/plugin-command-confirmation'
 
 const CONFIG_CONTROL_QUERY_KEY = ['configuration', 'runtime-control'] as const
 
@@ -72,12 +78,25 @@ export function useConfigQuery(options?: { enabled?: boolean }): ConfigQueryResu
 
       if (!endpoint || !snapshot) return null
 
+      const config = mergeConfigurationIntoMeshConfig(snapshot.config, input, controlConfigQuery.data?.schema, {
+        includeModelAssignments: true,
+        controlState: controlConfigQuery.data?.controlState
+      })
+      const approvals = changedPluginCommandApprovals(snapshot.config, config)
+      if (approvals.length > 0) {
+        const commands = describePluginCommandApprovals(config, approvals)
+        if (!(await confirmPluginCommands(commands))) {
+          throw new Error('Plugin command approval was cancelled.')
+        }
+      }
+
       const applied = await applyRuntimeControlConfig(
         endpoint,
         snapshot,
         input,
         controlConfigQuery.data?.schema,
-        controlConfigQuery.data?.controlState
+        controlConfigQuery.data?.controlState,
+        approvals
       )
       if (applied.response.success) {
         queryClient.setQueryData<RuntimeControlConfigResult>(CONFIG_CONTROL_QUERY_KEY, (current) => {
