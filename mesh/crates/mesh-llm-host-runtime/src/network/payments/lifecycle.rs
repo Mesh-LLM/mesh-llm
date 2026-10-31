@@ -420,9 +420,15 @@ mod tests {
         assert_eq!(first.role, Role::Payer);
         let json = serde_json::to_string(&first).unwrap();
         assert!(json.contains(r#""role":"payer""#));
-        // A settled payment's preimage is the one secret an event may carry
-        // (see `a_settlement_carries_only_a_preimage_that_proves_its_payment`).
-        for secret in ["private-recovery", "private-peer", "bolt11", "prompt"] {
+        // Only a settlement event may carry a preimage (see
+        // `a_settlement_carries_only_a_preimage_that_proves_its_payment`).
+        for secret in [
+            "private-recovery",
+            "private-peer",
+            "preimage",
+            "bolt11",
+            "prompt",
+        ] {
             assert!(!json.contains(secret));
         }
         for _ in 0..20 {
