@@ -32,6 +32,11 @@ fn main() {
         manifest.join("cpp/bridge.h"),
         manifest.join("cpp/bridge.cpp"),
         manifest.join("src/lib.rs"),
+        // The selected native checkout is part of this static link closure.
+        // Track it recursively, including prepared pin/patch stamps and
+        // caller-provided source overrides, so a new queue cannot reuse an
+        // archive compiled against the previous native inputs.
+        llama.clone(),
         skippy_api.join("CMakeLists.txt"),
         skippy_api.join("include"),
         skippy_api.join("src"),

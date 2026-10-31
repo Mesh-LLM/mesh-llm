@@ -369,6 +369,13 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
 
 ## Traps that have already bitten us
 
+- **Cargo must track the selected native checkout.** At `aa627bb692`, adding an
+  untracked native header after a fresh build still reported `Fresh skippy-sys`:
+  only facade inputs had `rerun-if-changed` directives, so preparing a new native
+  queue could reuse the old static closure. Watch the resolved native directory
+  recursively, including its prepared pin/patch stamps and explicit source
+  overrides; prove a native-input change reruns the build and an unchanged build
+  stays fresh. Clearing Cargo's cache does not repair this missing dependency.
 - **A successful result must pass the benchmark gate.** Stage validation changed
   to `expected<void, E>`, but the benchmark still rejected its engaged success
   as though it were an optional error. Admit both successful validators before
