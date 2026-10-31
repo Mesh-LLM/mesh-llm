@@ -52,7 +52,9 @@ describe('SchemaSetValueArrayControl', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Set' }))
     expect(screen.getByTestId('value')).toHaveTextContent('[{"endpoint":"https://witness.example.org"}]')
     expect(screen.getByLabelText('Witnesses 1')).toHaveAttribute('data-set', 'true')
-    expect(screen.getByText('Saved. Takes effect when mesh-llm restarts.')).toBeInTheDocument()
+    expect(
+      screen.getByText('Set. Click Save config to keep it; takes effect when mesh-llm restarts.')
+    ).toBeInTheDocument()
     expect(screen.queryByText(/Not set/)).not.toBeInTheDocument()
   })
 
@@ -146,5 +148,59 @@ describe('SchemaSetValueArrayControl', () => {
     )
     expect(screen.queryByRole('button', { name: 'Set' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: /Add witness/ })).toBeInTheDocument()
+  })
+
+  it("with two rows holding the same value, clearing the first keeps the second row's own draft", async () => {
+    render(<Harness initial='[{"endpoint":"https://a.example"},{"endpoint":"https://a.example"}]' />)
+    fireEvent.change(screen.getByLabelText('Witnesses 2'), { target: { value: 'https://second.example' } })
+    await userEvent.click(screen.getAllByRole('button', { name: 'Clear' })[0]!)
+    expect(screen.getByLabelText('Witnesses 1')).toHaveValue('https://second.example')
+  })
+
+  it('does not overwrite an invalid stored value with a new item', () => {
+    render(<Harness initial="not json" />)
+    expect(screen.getByRole('alert')).toHaveTextContent('Witnesses must be a valid JSON array of objects.')
+    expect(screen.queryByRole('button', { name: 'Set' })).not.toBeInTheDocument()
+  })
+
+  it('a pending row can be cancelled, which brings the greyed suggestion back', async () => {
+    render(<Harness />)
+    await userEvent.click(screen.getByRole('button', { name: /Add your own/ }))
+    expect(screen.queryByLabelText('Witnesses (not set)')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Clear' }))
+    expect(screen.getByLabelText('Witnesses (not set)')).toBeInTheDocument()
+  })
+
+  it('forwards the description id and invalid state to the value input', () => {
+    render(<SchemaArrayControl ariaDescribedBy="w-help" invalid onChange={() => {}} setting={setting} value="" />)
+    const input = screen.getByLabelText('Witnesses (not set)')
+    expect(input).toHaveAttribute('aria-describedby', 'w-help')
+    expect(input).toHaveAttribute('aria-invalid', 'true')
+  })
+
+  it("a new item carries the other required properties' defaults", async () => {
+    const two: ConfigurationSettingObjectSchema = {
+      kind: 'object',
+      properties: [
+        { label: 'Endpoint', name: 'endpoint', required: true, value_schema: { kind: 'url' } },
+        { label: 'Weight', name: 'weight', required: true, value_schema: { kind: 'integer' } }
+      ]
+    }
+    function TwoHarness() {
+      const [value, setValue] = useState('')
+      return (
+        <>
+          <SchemaArrayControl
+            onChange={setValue}
+            setting={{ ...setting, valueSchema: { kind: 'array', items: two } }}
+            value={value}
+          />
+          <output data-testid="value">{value}</output>
+        </>
+      )
+    }
+    render(<TwoHarness />)
+    await userEvent.click(screen.getByRole('button', { name: 'Set' }))
+    expect(screen.getByTestId('value')).toHaveTextContent('[{"endpoint":"https://witness.example.org","weight":0}]')
   })
 })

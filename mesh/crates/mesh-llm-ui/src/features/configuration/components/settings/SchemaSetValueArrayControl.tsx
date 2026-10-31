@@ -8,6 +8,7 @@ import {
   type SchemaSettingControlProps
 } from '@/features/configuration/components/settings/schema-control-utils'
 import {
+  createSchemaObjectDefault,
   parseSchemaObjectArrayValue,
   schemaValueFromInput,
   setValuePrimaryProperty,
@@ -23,12 +24,14 @@ type SchemaSetValueArrayControlProps = SchemaSettingControlProps & {
 }
 
 type SetRowProps = {
+  readonly ariaDescribedBy?: string
   readonly ariaLabel: string
   readonly committed: string | undefined
   readonly confirmed: boolean
   readonly confirmedText: string
   readonly disabled: boolean
   readonly ghost?: boolean
+  readonly invalid: boolean
   readonly onRemove?: () => void
   readonly onSet: (value: string) => void
   readonly placeholder: string | undefined
@@ -36,12 +39,14 @@ type SetRowProps = {
 
 // A value row: greyed until Set, black once Set, a brief checkmark after each Set.
 function SetRow({
+  ariaDescribedBy,
   ariaLabel,
   committed,
   confirmed,
   confirmedText,
   disabled,
   ghost = false,
+  invalid,
   onRemove,
   onSet,
   placeholder
@@ -50,15 +55,13 @@ function SetRow({
 
   const shown = ghost ? (placeholder ?? '') : draft
   const unset = ghost || committed === undefined
-  const canSet = !disabled && shown.trim().length > 0 && (ghost || shown !== committed)
-
-  const set = () => {
-    onSet(shown.trim())
-  }
+  const canSet = !disabled && shown.trim().length > 0 && (ghost || shown.trim() !== committed)
 
   return (
     <div className="flex min-w-0 items-center gap-2">
       <input
+        aria-describedby={ariaDescribedBy}
+        aria-invalid={invalid ? 'true' : undefined}
         aria-label={ariaLabel}
         autoCapitalize="off"
         autoCorrect="off"
@@ -66,7 +69,8 @@ function SetRow({
           TEXT_FIELD_BASE_CLASS,
           'w-full min-w-[200px]',
           ghost ? 'text-fg-dim' : 'text-foreground',
-          disabled && 'cursor-not-allowed opacity-60'
+          disabled && 'cursor-not-allowed opacity-60',
+          invalid && 'border-bad shadow-[var(--shadow-surface-error-inset)]'
         )}
         data-set={unset ? 'false' : 'true'}
         disabled={disabled}
@@ -74,9 +78,9 @@ function SetRow({
         placeholder={placeholder}
         readOnly={ghost}
         spellCheck={false}
-        value={ghost ? shown : draft}
+        value={shown}
       />
-      <Button disabled={!canSet} onClick={set} size="sm" type="button" variant="outline">
+      <Button disabled={!canSet} onClick={() => onSet(shown.trim())} size="sm" type="button" variant="outline">
         Set
       </Button>
       <span aria-live="polite" className="inline-flex min-w-4 shrink-0 items-center gap-1 text-good type-caption">
@@ -99,6 +103,7 @@ function SetRow({
 // Generic renderer for an array of objects whose main field is set explicitly. With nothing
 // set, the setting's `placeholder` shows greyed; the value only exists once the user clicks Set.
 export function SchemaSetValueArrayControl({
+  ariaDescribedBy,
   disabled = false,
   invalid = false,
   itemSchema,
@@ -107,9 +112,14 @@ export function SchemaSetValueArrayControl({
   value
 }: SchemaSetValueArrayControlProps) {
   const primary = setValuePrimaryProperty(itemSchema)
-  const items = parseSchemaObjectArrayValue(value) ?? []
+  const parsed = parseSchemaObjectArrayValue(value)
+  const items = parsed ?? []
+  // Committed rows carry an id that survives removals, so a row never inherits another row's draft.
+  // If the list changes length from outside, the rows past what we track get positional ids.
+  const nextId = useRef(items.length)
+  const [trackedIds, setTrackedIds] = useState<readonly number[]>(() => items.map((_, index) => index))
+  const rowIds = items.map((_, index) => trackedIds[index] ?? -(index + 1))
   const [pending, setPending] = useState<readonly number[]>([])
-  const nextPendingId = useRef(0)
   const [confirmedRow, setConfirmedRow] = useState<number | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(timer.current), [])
@@ -120,11 +130,21 @@ export function SchemaSetValueArrayControl({
   }
   const placeholder = 'placeholder' in setting.control ? setting.control.placeholder : undefined
   if (!primary) return null
+  if (!parsed) {
+    return (
+      <p className="type-caption text-bad" role="alert">
+        {setting.label} must be a valid JSON array of objects.
+      </p>
+    )
+  }
   const restartRequired =
     setting.restartScope === 'process_restart' ||
     setting.restartScope === 'mesh_restart' ||
     setting.mutability === 'restart-required'
-  const savedText = restartRequired ? 'Saved. Takes effect when mesh-llm restarts.' : 'Saved.'
+  // Set only edits the page's draft; the console writes it when the user clicks Save config.
+  const savedText = restartRequired
+    ? 'Set. Click Save config to keep it; takes effect when mesh-llm restarts.'
+    : 'Set. Click Save config to keep it.'
   const itemName = singularItemLabel(setting.label).toLowerCase()
 
   const emit = (next: readonly Record<string, unknown>[]) => onChange(JSON.stringify(next))
@@ -136,29 +156,23 @@ export function SchemaSetValueArrayControl({
     const raw = item[primary.name]
     return typeof raw === 'string' ? raw : ''
   }
-
-  // Keyed by value (and repeat count), so removing an earlier row never hands its draft to a later one.
-  const seen = new Map<string, number>()
-  const rowKeys = items.map((item) => {
-    const text = stringOf(item)
-    const count = seen.get(text) ?? 0
-    seen.set(text, count + 1)
-    return `row-${count}-${text}`
-  })
+  const removePending = (id: number) => setPending((ids) => ids.filter((pendingId) => pendingId !== id))
 
   return (
-    <div className="grid w-full min-w-0 gap-2.5" data-invalid={invalid ? 'true' : undefined}>
+    <div className="grid w-full min-w-0 gap-2.5">
       {items.length === 0 && pending.length === 0 && placeholder ? (
         <div className="grid gap-1">
           <SetRow
+            ariaDescribedBy={ariaDescribedBy}
             ariaLabel={`${setting.label} (not set)`}
             committed={undefined}
             confirmed={confirmedRow === 0}
             confirmedText={savedText}
             disabled={disabled}
             ghost
+            invalid={invalid}
             onSet={(next) => {
-              emit([{ [primary.name]: next }])
+              emit([{ ...createSchemaObjectDefault(itemSchema), [primary.name]: next }])
               flash(0)
             }}
             placeholder={placeholder}
@@ -167,14 +181,20 @@ export function SchemaSetValueArrayControl({
         </div>
       ) : null}
       {items.map((item, index) => (
-        <div className="grid min-w-0 gap-2" key={rowKeys[index]}>
+        <div className="grid min-w-0 gap-2" key={`row-${rowIds[index]}`}>
           <SetRow
+            ariaDescribedBy={ariaDescribedBy}
             ariaLabel={`${setting.label} ${index + 1}`}
             committed={stringOf(item)}
             confirmed={confirmedRow === index}
             confirmedText={savedText}
             disabled={disabled}
-            onRemove={() => emit(items.filter((_, itemIndex) => itemIndex !== index))}
+            invalid={invalid}
+            onRemove={() => {
+              setTrackedIds(rowIds.filter((_, rowIndex) => rowIndex !== index))
+              setConfirmedRow(null)
+              emit(items.filter((_, itemIndex) => itemIndex !== index))
+            }}
             onSet={(next) => {
               emit(
                 items.map((existing, itemIndex) =>
@@ -187,6 +207,7 @@ export function SchemaSetValueArrayControl({
           />
           {rest.properties && rest.properties.length > 0 ? (
             <SchemaObjectFields
+              ariaDescribedBy={ariaDescribedBy}
               ariaPrefix={`${setting.label} ${index + 1}`}
               disabled={disabled}
               invalid={invalid}
@@ -213,15 +234,19 @@ export function SchemaSetValueArrayControl({
       ))}
       {pending.map((id, index) => (
         <SetRow
+          ariaDescribedBy={ariaDescribedBy}
           ariaLabel={`${setting.label} ${items.length + index + 1}`}
           committed={undefined}
           confirmed={false}
           confirmedText={savedText}
           disabled={disabled}
+          invalid={invalid}
           key={`pending-${id}`}
+          onRemove={() => removePending(id)}
           onSet={(next) => {
-            emit([...items, { [primary.name]: next }])
-            setPending((ids) => ids.filter((pendingId) => pendingId !== id))
+            setTrackedIds([...rowIds, id])
+            emit([...items, { ...createSchemaObjectDefault(itemSchema), [primary.name]: next }])
+            removePending(id)
             flash(items.length)
           }}
           placeholder={undefined}
@@ -230,7 +255,7 @@ export function SchemaSetValueArrayControl({
       <Button
         className="justify-self-start"
         disabled={disabled}
-        onClick={() => setPending((ids) => [...ids, nextPendingId.current++])}
+        onClick={() => setPending((ids) => [...ids, nextId.current++])}
         size="sm"
         type="button"
         variant="ghost"
