@@ -578,12 +578,7 @@ impl GenerationAdmissionController {
                 self.generation_service_estimator
                     .set_concurrency(self.generation_limit.current_limit());
                 let predicted_wait_ms = self.generation_service_estimator.predicted_wait_ms();
-                let queued_work = self
-                    .generation_service_estimator
-                    .reserve_queued(work, admission_timeout)
-                    .map_err(|predicted_wait_ms| {
-                        generation_predicted_wait_error(predicted_wait_ms, admission_timeout)
-                    })?;
+                let queued_work = self.generation_service_estimator.reserve_queued(work);
                 let resources = lease
                     .acquire(
                         self.generation_limit.semaphore(),
