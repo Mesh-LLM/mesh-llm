@@ -278,9 +278,11 @@ pub(crate) fn mesh_requirements_survive_owner_control_config_round_trip() {
     // proto_config_to_mesh round-trip end-to-end.
     use crate::plugin::{MeshRequirementsConfig, OwnerControlConfig};
     let original = crate::plugin::MeshConfig {
+        source_directory: None,
         version: Some(1),
         gpu: Default::default(),
         mesh_requirements: MeshRequirementsConfig {
+            require_signed_gossip: true,
             min_node_version: Some("0.65.0".to_string()),
             max_node_version: Some("0.66.0".to_string()),
             min_protocol_version: Some(1),
@@ -345,6 +347,7 @@ fn config_sync_config_toml_roundtrips_additive_defaults_sections() {
         ModelConfigDefaults, ModelFitConfig, RequestDefaultsConfig, ThroughputConfig,
     };
     let config = crate::plugin::MeshConfig {
+        source_directory: None,
         version: Some(1),
         defaults: Some(ModelConfigDefaults {
             throughput: Some(ThroughputConfig {
@@ -414,6 +417,7 @@ fn config_sync_config_toml_roundtrips_additive_defaults_sections() {
 fn config_sync_config_hash_determinism() {
     use crate::plugin::{GpuAssignment, GpuConfig, ModelConfigEntry};
     let config = crate::plugin::MeshConfig {
+        source_directory: None,
         version: Some(1),
         gpu: GpuConfig {
             host_ram_offload: None,
@@ -451,6 +455,7 @@ fn config_sync_config_hash_determinism() {
     assert_eq!(h1, h2, "same config must produce same hash");
 
     let config2 = crate::plugin::MeshConfig {
+        source_directory: None,
         version: Some(1),
         gpu: GpuConfig {
             host_ram_offload: None,
@@ -522,6 +527,7 @@ fn pinned_gpu_proto_roundtrip() {
     use crate::plugin::{GpuAssignment, GpuConfig, ModelConfigEntry};
 
     let config = crate::plugin::MeshConfig {
+        source_directory: None,
         version: Some(1),
         gpu: GpuConfig {
             host_ram_offload: None,

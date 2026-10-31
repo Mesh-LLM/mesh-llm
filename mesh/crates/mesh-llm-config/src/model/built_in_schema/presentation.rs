@@ -35,7 +35,7 @@ const NETWORK_CATEGORY: CategoryPresentation = CategoryPresentation {
 const ATTESTATION_CATEGORY: CategoryPresentation = CategoryPresentation {
     id: "attestation",
     label: "Attestation",
-    summary: "Creation-time certified-build admission requirements",
+    summary: "Creation-time peer admission and signed-gossip requirements",
     order: 30,
 };
 const TELEMETRY_CATEGORY: CategoryPresentation = CategoryPresentation {
@@ -400,6 +400,13 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
             "Require peers to advertise a trusted release-build attestation at admission time. This is build provenance, not remote runtime integrity proof.",
             ATTESTATION_CATEGORY,
             50,
+        )
+        .hint("toggle")),
+        "mesh_requirements.require_signed_gossip" => Some(sp(
+            "Require signed peer gossip",
+            "Require origin-signed records for relayed peers in a newly created mesh. Joining peers inherit the signed genesis policy; older versions cannot join a strict mesh.",
+            ATTESTATION_CATEGORY,
+            55,
         )
         .hint("toggle")),
         "mesh_requirements.release_signer_keys" => Some(sp(

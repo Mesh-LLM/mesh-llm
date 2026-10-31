@@ -213,7 +213,7 @@ impl BufferedHttpRequest {
         self.method == "POST" && is_audio_upload_path(&self.client_path)
     }
 
-    /// Document bytes are media, not prompt text or model context.
+    /// Document and typed image uploads are media, not model context.
     pub fn is_document_ocr_request(&self) -> bool {
         self.method == "POST" && is_document_ocr_path(&self.client_path)
     }
@@ -706,7 +706,10 @@ fn is_audio_upload_path(path: &str) -> bool {
 }
 
 fn is_document_ocr_path(path: &str) -> bool {
-    path.split('?').next().unwrap_or(path) == "/v1/documents/ocr"
+    matches!(
+        path.split('?').next().unwrap_or(path),
+        "/mesh/v1/documents/ocr" | "/mesh/v1/images/similarity" | "/mesh/v1/images/depth"
+    )
 }
 
 fn finalize_forwarded_request(

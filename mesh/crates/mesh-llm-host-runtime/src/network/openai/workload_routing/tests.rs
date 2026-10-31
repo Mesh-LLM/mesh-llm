@@ -5,7 +5,7 @@ use super::*;
 /// serves without model execution. The coverage test below requires every
 /// entry to be workload-classified, System One, or explicitly exempt — a new
 /// route fails CI until it is classified.
-const ROUTER_INFERENCES_PATHS: [&str; 16] = [
+const ROUTER_INFERENCES_PATHS: [&str; 19] = [
     "/v1/chat/completions",
     "/v1/completions",
     "/v1/responses",
@@ -22,7 +22,23 @@ const ROUTER_INFERENCES_PATHS: [&str; 16] = [
     "/v1/messages/count_tokens",
     "/systemone",
     "/v1/decisions",
+    "/mesh/v1/documents/ocr",
+    "/mesh/v1/images/similarity",
+    "/mesh/v1/images/depth",
 ];
+
+#[test]
+fn document_ocr_uses_only_the_mesh_namespace() {
+    for path in ["/mesh/v1/documents/ocr", "/mesh/v1/documents/ocr?trace=1"] {
+        assert!(is_document_ocr_path(path));
+        assert_eq!(
+            request_workload_class(path),
+            Some(ModelWorkloadClass::DocumentOcr)
+        );
+    }
+    assert!(!is_document_ocr_path("/v1/documents/ocr"));
+    assert_eq!(request_workload_class("/v1/documents/ocr"), None);
+}
 
 #[test]
 /// Every inference path the frontend router recognizes must carry a workload

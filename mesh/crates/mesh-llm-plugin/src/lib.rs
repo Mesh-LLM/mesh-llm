@@ -11,6 +11,7 @@ pub mod inference_observation;
 mod internal_rpc;
 mod io;
 mod manifest;
+pub mod models;
 pub mod openai_exchange;
 pub mod operation_binding;
 pub mod plugin_status;

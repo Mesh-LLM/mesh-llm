@@ -876,8 +876,9 @@ impl Node {
     }
 
     /// One gossip exchange: the remote's announcements and verified plugin
-    /// keys, and the round-trip time. Stores nothing: the caller stores the
-    /// keys once the remote is admitted (`store_plugin_keys_if_admitted`).
+    /// keys, and the round-trip time. Validates the direct sender before
+    /// retaining signed records; the caller stores plugin keys only once
+    /// the remote is admitted (`store_plugin_keys_if_admitted`).
     pub(crate) async fn gossip_round_trip(
         &self,
         conn: &Connection,
@@ -895,6 +896,8 @@ impl Node {
             &outbound,
             self.endpoint.id(),
             &crate::mesh::plugin_keys::to_proto(&self.plugin_keys.own()),
+            &self.gossip_encoder,
+            remote,
         )
         .await?;
         send.finish()?;
@@ -903,6 +906,11 @@ impl Node {
         let rtt_ms = t0.elapsed().as_millis() as u32;
         let (inbound, their_plugin_keys) =
             decode_gossip_frame_and_plugin_keys(protocol, remote, &buf)?;
+        self.validate_direct_announcement_before_payload_apply(
+            &inbound.announcements,
+            AnnouncedPeerContext::direct(remote, Some(NODE_PROTOCOL_GENERATION)),
+        )
+        .await?;
         let their_announcements = self.resolve_inbound_gossip(remote, inbound).await;
 
         let _ = recv.read_to_end(0).await;
@@ -950,6 +958,11 @@ impl Node {
         let buf = super::pre_admission::read_pre_admission_frame(&mut recv).await?;
         let (inbound, their_plugin_keys) =
             decode_gossip_frame_and_plugin_keys(protocol, remote, &buf)?;
+        self.validate_direct_announcement_before_payload_apply(
+            &inbound.announcements,
+            AnnouncedPeerContext::direct(remote, Some(NODE_PROTOCOL_GENERATION)),
+        )
+        .await?;
         let their_announcements = self.resolve_inbound_gossip(remote, inbound).await;
         let negotiated_protocol_generation = match protocol {
             ControlProtocol::ProtoV1 => Some(NODE_PROTOCOL_GENERATION),
@@ -965,6 +978,8 @@ impl Node {
             &outbound,
             self.endpoint.id(),
             &crate::mesh::plugin_keys::to_proto(&self.plugin_keys.own()),
+            &self.gossip_encoder,
+            remote,
         )
         .await?;
         send.finish()?;

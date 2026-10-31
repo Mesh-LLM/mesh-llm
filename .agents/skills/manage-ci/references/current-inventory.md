@@ -1,9 +1,43 @@
 # MeshLLM CI inventory
 
-L2 post-checkout planning and the five lane summaries use Rust through the
-closed `prepare-automation` hosted-bare profile. Only GitHub-hosted Linux may
-select it; locked release Cargo bypasses compiler wrappers and Just and reuses
-an exact-key cached release executable when present, while
+The standalone C++ facade paths `skippy/skippy_api/**` and
+`skippy/skippy-api-rs/**` have additive tooling ownership. Their catalog-only
+admission is a protected-main prerequisite before dependent branches adopt the
+updated catalog; no protected comparison is relaxed.
+
+`ci-quality-slice.yml` adds `skippy_cpp_api`, an ordinary centrally selected
+Linux CPU-image job shared by PR and main. It explicitly skips revisions with
+neither standalone source tree and rejects incomplete or symlinked sources.
+For admitted sources it builds every C++ target, runs complete CTest and
+ASan/UBSan/corpus checks, runs the nested Rust workspace's formatting, Clippy
+and full tests with all three pinned `skippy-cpp-api` fixtures. A real three-stage
+SmolLM2 probe checks both activation boundaries and 16 tokens against unsplit
+execution. The job also executes an external downstream binary without Cargo
+loader variables. It restores the
+existing protected Linux automation artifact for model resolution and publishes
+only one-day CTest diagnostics. No new producer, remote model-cache publisher,
+runner authority, required entrypoint or production ABI dependency is added.
+The CPU image binding is recorded as consumer role `skippy-cpp-api`, using only
+the dedicated `public-cpp-api` image ID. Its new immutable CPU index
+`sha256:656e4874af027e0b437427f4415fdaab51ff8b1cda444dcdd4bc331794f703c5`
+was staged and verified on AMD64/ARM64 in runner-images main run `41127631709`,
+attempt 1, producer `2ca51592535c29ddbed768b75481451d3fa5a49e`. Trusted producer
+admission and native binding retain the complete cohort as evidence hash
+`189f0408681bf999868a5a01cae3e5260c63d5aca0bbe613714cbb97b78ed2e8`.
+Existing CPU consumer, runtime and compiler-seed identities are unchanged.
+The producer's CPU C++23/sanitizer/tooling probes passed; source-present API
+and real-model CI qualification remains pending protected-main execution.
+The matching clang-tidy plugin build/fixtures and configured C++/bridge lints
+are required after Rust header generation; missing lint tools fail preflight.
+The new job raises the retained pre-checkout audit caller census from 27 to 28,
+using the same published audit pin and central runner/cache projection.
+
+L2 post-checkout planning, the five lane summaries, and Quality commit
+convention use the narrow `ci-controller` executable through
+`prepare-ci-controller`. Only GitHub-hosted Linux may run it; locked release
+Cargo bypasses compiler wrappers and Just and reuses an exact-key cached
+release executable when present. Other automation keeps the closed
+`prepare-automation` hosted-bare profile under the same rules, while
 image callers retain verification and sccache unchanged. Quality convention
 and environment ownership checks, runner-contract cleanup, registry summary,
 and runtime-seed lifecycle have Rust callers. Runtime-seed preparation uses
@@ -477,8 +511,10 @@ What enforces the convention instead:
 - The `commit_convention` job in `ci-quality-slice.yml`, which validates the
   pull request title against Conventional Commits and scans every branch
   commit message plus the pull request body for denied attribution trailers.
-  It declares no `needs`, so it fails within a minute rather than after a lane
-  has compiled anything, and runs only for `pull_request` events.
+  It runs `repository conventional-commits` through the `ci-controller`
+  executable from `prepare-ci-controller`. It declares no `needs`, so it fails
+  within a minute rather than after a lane has compiled anything, and runs
+  only for `pull_request` events.
   Pull-request-authored text reaches the script through environment variables
   and is never interpolated into the shell.
 - Merge-message composition. `squash_merge_commit_title=PR_TITLE` and
@@ -860,8 +896,9 @@ source commit.
 
 ## Planner contract
 
-- `tools/xtask/src/ci_plan` owns routing; the legacy Python planner and its
-  identity/test import closure are deleted.
+- `tools/ci-controller/src/plan` owns routing, and xtask delegates `ci plan` to
+  it; the legacy Python planner and its identity/test import closure are
+  deleted.
 - `ci/ownership.yml` maps paths and direct crates to semantic domains; unknown
   paths fail closed.
 - `ci/slices.yml` defines profiles, slice dependencies, rows, runner roles,
@@ -1245,20 +1282,21 @@ gh api orgs/Mesh-LLM/actions/runner-groups
 Organization runner-group responses of `403` are unverified administrative
 state, not proof that a restriction is absent.
 
-### Proposed retained-cohort identity evidence
+### Retained-cohort identity evidence
 
-Runner-images PR #23 is pending; its retained exact-attempt admission flow is
-not yet the producer's merged-main behavior. After that producer flow lands,
-`cargo xtool ci-ops runner-identity bind` can prepare offline catalog proposals
-from maintainer-reviewed admission anchors. The exact cohort bytes are retained
+The merged producer's retained exact-attempt admission flow validates a
+successful main staging attempt before `cargo xtool ci-ops runner-identity bind`
+prepares an offline catalog proposal from the reviewed admission anchor.
+The exact cohort bytes are retained
 under `ci/runner-image-evidence/<sha256>.json`; ordinary commands validate hashes
 and consumer relationships without executing producer code or authenticating
 GitHub provenance again. See `ci/ci.md` for the explicit trust boundary and CLI.
-Current image references and historical null evidence remain unchanged.
+The standalone API adds only its dedicated CPU identity; existing image
+references and evidence bindings remain unchanged.
 
 The `product-smoke` catalog role covers `smoke.yml`; accelerator and macOS paths
-retain their existing container opt-outs. The inventory has 9 images, 36 roles
-and 36 literal workflow image bindings.
+retain their existing container opt-outs. The inventory has 10 images, 37 roles
+and 37 literal workflow image bindings.
 
 ### Qualified lean UI consumers
 
@@ -1810,17 +1848,36 @@ keep `cargo xtool`. The lane planner (`ci validate-lane`) lists the producers as
 required exactly when a restoring job is planned, so a selected consumer cannot
 run without its producer and an unplanned producer must be skipped.
 
-Jobs that must not wait on a producer keep `prepare-automation`: the planner and
-lane summaries, Quality commit convention, the release UI stamp and the
+The twelve entry planner jobs (`plan` in the five `pr_*` and five `main_*`
+workflows, `ci-control`, and `ci-pr-canary-lane`), the five lane `summary` jobs,
+and Quality `commit_convention` do not wait on a producer and use
+`prepare-ci-controller` instead. It builds only the `ci-controller` executable
+on GitHub-hosted Linux, runs `ci-controller automation bootstrap`, and exports
+`MESH_CI_CONTROLLER_BIN`. `compute-changes` calls `repository affected-crates
+--stdin` and `plan-ci` calls `ci plan` through that variable, and each prepares
+the controller only when it is unset, so a planner job builds it once. Lane
+summaries run `ci validate-lane`; the Quality summary also runs `repository
+llama-upstream-pin` on PRs. Its exact-key cache entry
+(`ci-controller-hosted-<os>-<arch>-<toolchain>-<hash>` over `Cargo.lock`,
+`Cargo.toml`, `.cargo/config.toml`, the action file,
+`.github/cache-version.txt`, `tools/ci-controller/**`, and the Linux linker
+drivers) is separate from the xtask entry. A miss runs `cargo build --locked
+--release -p ci-controller --bin ci-controller` without Just or sccache and
+saves the result.
+
+Other jobs that must not wait on a producer keep `prepare-automation`: the
+release UI stamp and the
 Windows unit platform-check jobs, Linux SDK and product smoke consumers (they restore through
 `restore-smoke-inputs`, which already prefers an exported
 `MESH_LLM_AUTOMATION_BIN`), release, canary, nightly, Docker and warm-cache
 workflows. The `hosted-bare` profile now restores a release executable from an
 exact-key `actions/cache` entry (`xtask-hosted-bare-<os>-<arch>-<hash>` over
 `Cargo.lock`, `Cargo.toml`, `.cargo/config.toml`, the action file,
-`.github/cache-version.txt`, `tools/xtask/**`, `tools/trajectory-reader/**`,
+`.github/cache-version.txt`, `tools/xtask/**`, `tools/ci-controller/**`,
+`tools/trajectory-reader/**`,
 `mesh/crates/mesh-llm-release-footer/**`, the compiled-in JSON/script inputs and
-the Linux linker drivers), compiles only on a miss and saves on a miss. The image
+the Linux linker drivers), compiles only on a miss and saves on a miss. It hashes
+`tools/ci-controller/**` because xtask compiles the controller library. The image
 profile never restores or saves an executable. The protected authority producers
 pass `reuse-hosted-binary: false`, so their bytes are always compiled in the
 run from the frozen protected source. A first run after any hashed input changes

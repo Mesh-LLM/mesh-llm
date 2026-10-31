@@ -74,9 +74,12 @@ impl CommandDispatchBoundary {
         let mut summary = command_summary(command).map(|value| value.as_str().to_owned());
         if let Some(summary_value) = summary.as_mut() {
             for (present, marker) in [
-                (!cli.join.is_empty(), " --join [REDACTED]"),
-                (!cli.relay.is_empty(), " --root-relay [REDACTED]"),
-                (!cli.relay_auth.is_empty(), " --relay-auth [REDACTED]"),
+                (!cli.joining.join.is_empty(), " --join [REDACTED]"),
+                (!cli.network.relay.is_empty(), " --root-relay [REDACTED]"),
+                (
+                    !cli.network.relay_auth.is_empty(),
+                    " --relay-auth [REDACTED]",
+                ),
             ] {
                 if present && !summary_value.contains(marker) {
                     summary_value.push_str(marker);

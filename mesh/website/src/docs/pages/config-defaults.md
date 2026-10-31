@@ -132,6 +132,6 @@ alias = ""                               # Optional model alias
 | `throughput` | Concurrency — parallel sequences, threading, flash attention |
 | `skippy` | Stage-split serving — stage packages, activation dtypes |
 | `speculative` | Speculative decoding — draft source, verification policy, and runtime controls |
-| `request_defaults` | Sampling — temperature, tokens, penalties, stop sequences |
+| Request defaults | Sampling — temperature, tokens, penalties, stop sequences |
 | `multimodal` | Vision — CLIP model, projection, GPU assignment |
 | `advanced` | Low-level — slot count, hierarchical slots |

@@ -47,6 +47,7 @@ impl crate::network::metrics::RoutingTelemetrySink for PromptShapeSink {
         _model: Option<&str>,
         _target: &crate::network::metrics::AttemptTarget,
         _outcome: crate::network::metrics::AttemptOutcome,
+        _attempt_ms: f64,
     ) {
     }
 
@@ -781,5 +782,35 @@ async fn system_one_read_is_not_sized_by_its_body() -> Result<()> {
         .await,
         vec![peer_id]
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn multipart_image_auto_request_reaches_workload_selection() -> Result<()> {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client).await?;
+    let affinity = AffinityRouter::new();
+    for path in ["/mesh/v1/images/similarity", "/mesh/v1/images/depth"] {
+        let mut request = text_auto_request();
+        request.client_path = path.into();
+        request.path = path.into();
+        request.body_json = None;
+        request.body_bytes = Some(b"--multipart\r\n\xff\r\n".to_vec());
+        request.body_json_attempted = true;
+        let result = resolve_auto_model_request(AutoModelRequestArgs {
+            node: &node,
+            request: &mut request,
+            served: &[],
+            descriptors: &[],
+            is_auto_request: true,
+            auto_session_key: None,
+            required_tokens: None,
+            affinity: &affinity,
+        })
+        .await;
+        assert!(
+            matches!(result, AutoModelResolution::UnsupportedWorkload),
+            "multipart auto must attempt workload selection"
+        );
+    }
     Ok(())
 }

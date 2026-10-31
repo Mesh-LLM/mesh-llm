@@ -85,7 +85,7 @@ mod connectivity;
 mod direct_path;
 mod direct_rescue;
 mod gossip;
-mod heartbeat;
+pub(crate) mod heartbeat;
 mod host_role_claims;
 pub(crate) mod model_identity;
 mod model_requirements;

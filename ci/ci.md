@@ -1,11 +1,69 @@
 # MeshLLM CI topology
 
+## Standalone C++ API qualification
+
+The protected catalog admits `skippy/skippy_api/**` and
+`skippy/skippy-api-rs/**` as tooling owned by Quality. This admission must land
+as a catalog-only prerequisite, then dependent PRs must adopt the current
+protected catalogs; the byte-for-byte catalog comparison remains mandatory.
+
+The `skippy_cpp_api` job in the shared Quality slice validates the standalone
+C++ facade and its separate Rust workspace on the existing centrally selected
+Linux runner and pinned CPU image. Both PR and main invoke this same job. A
+dependency on the completed Quality contracts job preserves the existing peak
+worker count; native API validation starts after those contracts pass. A
+revision without either source tree records an explicit not-applicable result;
+partial trees, missing crate manifests and symlinked source roots fail admission.
+While the API is under review, the job runs for every selected Quality slice
+containing those sources, rather than relying on the root Cargo workspace to
+discover the nested workspace.
+
+The job compiles every optional API target, runs the full C++ suite and
+ASan/UBSan corpus replay, checks Rust formatting and warning-denying Clippy,
+and runs the full Rust test suite with mandatory embedding, rerank and causal
+models. The `skippy-cpp-api` model manifest pins MiniLM Q8, BGE reranker Q4_K_M
+and SmolLM2 Q8; shared model restoration verifies immutable revision, size and
+SHA-256 before use. The existing protected automation producer supplies model
+resolution; this job does not compile another xtask executable or publish a
+model cache. The all-targets build also supplies a real three-stage pipeline
+probe, which uses the pinned 30-layer SmolLM2 model and requires both boundary
+payloads and all 16 sampled tokens to match unsplit execution. A separate
+external-consumer smoke executes the built binary
+directly without Cargo's injected loader search paths.
+After Rust generates its bridge headers, the job builds and exercises the
+matching LLVM clang-tidy plugin and runs every configured C++/bridge lint;
+missing plugin tooling fails rather than silently reducing coverage.
+
+This adds no production dependency or ABI cutover. Candidate workflow syntax
+and finite source-admission contracts do not qualify the pinned Linux image's
+C++23/clang toolchain or model behavior. Activate the executor on protected
+main, update the four feature branches with the admitted catalogs and owning
+recipes, then retain successful PR-associated execution at their final heads.
+The dedicated `public-cpp-api` image entry binds only the `skippy-cpp-api`
+consumer role. Its immutable multi-architecture CPU index is
+`sha256:656e4874af027e0b437427f4415fdaab51ff8b1cda444dcdd4bc331794f703c5`;
+the existing `public-cpu` image, consumers, runtime rows and compiler seed keep
+their previous identities. Runner-images main run `41127631709`, attempt 1,
+successfully staged and verified AMD64/ARM64 CPU candidates at producer
+`2ca51592535c29ddbed768b75481451d3fa5a49e` and Mesh source
+`5e2fdddf6a6ea10d16e3689741483574f1274103`. The exact producer's
+`runner-cohort.py fetch` admitted the retained complete 16-index/23-platform
+cohort against current tool, cache and OCI-binding policy. Native
+`runner-identity bind` retained cohort bytes under
+`ci/runner-image-evidence/189f0408681bf999868a5a01cae3e5260c63d5aca0bbe613714cbb97b78ed2e8.json`.
+That producer's mandatory CPU verification checks LLVM 19 and plugin development
+inputs and executes sanitized C++23 and libFuzzer probes. The run staged exact
+digests without moving production aliases; consumer binding does not require
+promotion. This admission does not establish source-present API coverage,
+which still requires the protected-main executor rollout and real PR runs.
+
 The L2 planner action and all five lane summaries now invoke Rust `ci plan`
-and `ci validate-lane` using `prepare-automation`'s explicit `hosted-bare`
-profile. That profile is restricted to GitHub-hosted Linux, uses the existing
-stable Rust selection and locked release Cargo without compiler wrappers or
-Just, restores an exact-key cached release executable before compiling, and
-preserves the default image profile's verification and cache setup.
+and `ci validate-lane` through the narrow `ci-controller` executable that
+`prepare-ci-controller` builds. Other automation uses `prepare-automation`'s
+explicit `hosted-bare` profile. Both are restricted to GitHub-hosted Linux, use
+the existing stable Rust selection and locked release Cargo without compiler
+wrappers or Just, and restore an exact-key cached release executable before
+compiling. The default image profile keeps its verification and cache setup.
 Metadata-only Cargo discovery remains permitted. Composition-only release
 jobs still consume immutable automation and never compile.
 
@@ -773,7 +831,7 @@ native inputs. No workflow YAML is generated and no lane allocates a planner.
 The local `scripts/hooks/commit-msg` hook now invokes the Rust
 `repository conventional-commits` command through the repository Cargo alias.
 The workflow commit check, planner and five lane summaries use Rust owners
-through hosted-bare automation preparation. The local package resolver requires
+through `prepare-ci-controller`. The local package resolver requires
 prepared or restored automation and invokes metadata-only discovery. Protected
 callers still pin the old resolver and retain its Python implementation until
 rollout. Pre-checkout audit and no-checkout sentinel jobs must not build
@@ -798,7 +856,7 @@ they do not establish a published protected caller cutover. The separate 27
 pre-checkout audit callers retain the same rollout boundary. Native source fixtures do not
 qualify their environments, datasets, or live model behavior.
 
-`tools/xtask/src/ci_plan` is the production source of slice eligibility. It reads the
+`tools/ci-controller/src/plan` is the production source of slice eligibility. It reads the
 JSON-compatible YAML manifests `ci/ownership.yml` and `ci/slices.yml`, validates
 their schema and dependency graph, and emits `ci/ci-plan.schema.json` output.
 Its optional manifest root changes only those two reads. All workspace and
@@ -812,7 +870,9 @@ closed.
 
 The Rust CI planner is the sole production Clippy and Rust-test batch allocator;
 `ci-crate-lists` validates that the main `matrices.rust_tests` covers every
-workspace crate exactly once.
+workspace crate exactly once, except the `CONTRACT_TESTED_CRATES`
+(`ci-controller` and `xtask`). `just ci-automation-contracts` runs their tests
+in the Quality slice, so each runs exactly once.
 
 Control-plane changes fail open through the selected profile. When they
 require the `web` slice, both console and website rows execute even without a
@@ -1573,7 +1633,9 @@ The consumer's `ci-ops runner-identity bind` accepts a separate reviewed anchor
 and emits a fresh proposal directory containing `ci/runner-images.json` plus
 content-addressed `ci/runner-image-evidence/<sha256>.json` files. It does not
 modify the input catalog, workflows, image pins, compiler seed or cache policy.
-Qualified public UI and browser entries retain reviewed admission evidence; historical full-web and native entries remain null.
+The dedicated standalone API CPU entry and previously qualified image entries
+retain reviewed admission evidence. Each image keeps its own exact source and
+cohort binding; adding one consumer does not roll out other image pins.
 
 ```sh
 cargo xtool ci-ops runner-identity --root /trusted/mesh-llm bind \
@@ -2089,17 +2151,36 @@ keep `cargo xtool`. The lane planner (`ci validate-lane`) lists the producers as
 required exactly when a restoring job is planned, so a selected consumer cannot
 run without its producer and an unplanned producer must be skipped.
 
-Jobs that must not wait on a producer keep `prepare-automation`: the planner and
-lane summaries, Quality commit convention, the release UI stamp and the
+The twelve entry planner jobs (`plan` in the five `pr_*` and five `main_*`
+workflows, `ci-control`, and `ci-pr-canary-lane`), the five lane `summary` jobs,
+and Quality `commit_convention` do not wait on a producer and use
+`prepare-ci-controller` instead. It builds only the `ci-controller` executable
+on GitHub-hosted Linux, runs `ci-controller automation bootstrap`, and exports
+`MESH_CI_CONTROLLER_BIN`. `compute-changes` calls `repository affected-crates
+--stdin` and `plan-ci` calls `ci plan` through that variable, and each prepares
+the controller only when it is unset, so a planner job builds it once. Lane
+summaries run `ci validate-lane`; the Quality summary also runs `repository
+llama-upstream-pin` on PRs. Its exact-key cache entry
+(`ci-controller-hosted-<os>-<arch>-<toolchain>-<hash>` over `Cargo.lock`,
+`Cargo.toml`, `.cargo/config.toml`, the action file,
+`.github/cache-version.txt`, `tools/ci-controller/**`, and the Linux linker
+drivers) is separate from the xtask entry. A miss runs `cargo build --locked
+--release -p ci-controller --bin ci-controller` without Just or sccache and
+saves the result.
+
+Other jobs that must not wait on a producer keep `prepare-automation`: the
+release UI stamp and the
 Windows unit platform-check jobs, Linux SDK and product smoke consumers (they restore through
 `restore-smoke-inputs`, which already prefers an exported
 `MESH_LLM_AUTOMATION_BIN`), release, canary, nightly, Docker and warm-cache
 workflows. The `hosted-bare` profile now restores a release executable from an
 exact-key `actions/cache` entry (`xtask-hosted-bare-<os>-<arch>-<hash>` over
 `Cargo.lock`, `Cargo.toml`, `.cargo/config.toml`, the action file,
-`.github/cache-version.txt`, `tools/xtask/**`, `tools/trajectory-reader/**`,
+`.github/cache-version.txt`, `tools/xtask/**`, `tools/ci-controller/**`,
+`tools/trajectory-reader/**`,
 `mesh/crates/mesh-llm-release-footer/**`, the compiled-in JSON/script inputs and
-the Linux linker drivers), compiles only on a miss and saves on a miss. The image
+the Linux linker drivers), compiles only on a miss and saves on a miss. It hashes
+`tools/ci-controller/**` because xtask compiles the controller library. The image
 profile never restores or saves an executable. The protected authority producers
 pass `reuse-hosted-binary: false`, so their bytes are always compiled in the
 run from the frozen protected source. A first run after any hashed input changes

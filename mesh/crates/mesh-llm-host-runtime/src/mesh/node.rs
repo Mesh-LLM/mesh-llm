@@ -84,6 +84,8 @@ pub struct Node {
     pub(crate) owner_keypair: Option<crate::crypto::OwnerKeypair>,
     pub(crate) local_mesh_requirements: crate::MeshRequirements,
     pub(crate) state: Arc<Mutex<MembershipState>>,
+    pub(crate) gossip_verification: Arc<super::signed_records::VerificationGate>,
+    pub(crate) gossip_encoder: Arc<crate::protocol::GossipFrameEncoder>,
     pub(crate) plugin_message_history: Arc<Mutex<super::plugin_mesh::PluginMessageHistory>>,
     /// Relay-disabled same-identity endpoints that own recovered direct connections.
     /// See [`super::direct_rescue`] for the ownership and shutdown rules.
@@ -864,6 +866,8 @@ impl Node {
             mesh_id: Arc::new(Mutex::new(None)),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
+            gossip_verification: Arc::default(),
+            gossip_encoder: Arc::default(),
             bootstrap_token: Arc::new(Mutex::new(None)),
             join_targets: Arc::new(Mutex::new(Vec::new())),
             first_joined_mesh_ts: Arc::new(Mutex::new(None)),
@@ -1053,6 +1057,8 @@ impl Node {
             mesh_id: Arc::new(Mutex::new(None)),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
+            gossip_verification: Arc::default(),
+            gossip_encoder: Arc::default(),
             bootstrap_token: Arc::new(Mutex::new(None)),
             join_targets: Arc::new(Mutex::new(Vec::new())),
             first_joined_mesh_ts: Arc::new(Mutex::new(None)),

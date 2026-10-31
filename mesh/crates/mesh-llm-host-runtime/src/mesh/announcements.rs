@@ -206,6 +206,17 @@ impl Node {
                             model_name,
                             ..Default::default()
                         },
+                        capabilities_known: true,
+                        capabilities: crate::models::ModelCapabilities {
+                            audio: if workload_class
+                                == crate::mesh::ModelWorkloadClass::SpeechRecognition
+                            {
+                                crate::models::CapabilityLevel::Supported
+                            } else {
+                                crate::models::CapabilityLevel::None
+                            },
+                            ..Default::default()
+                        },
                         metadata: Some(ServedModelMetadata {
                             workload_class: Some(workload_class),
                             ..Default::default()

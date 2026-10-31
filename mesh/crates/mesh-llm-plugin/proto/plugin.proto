@@ -39,8 +39,10 @@ message Envelope {
     SubscribeInferenceObservationRequest subscribe_inference_observation_request = 38;
     SubscribeInferenceObservationResponse subscribe_inference_observation_response = 39;
     InferenceObservationBatch inference_observation_batch = 40;
-    ModelRequirementRequest model_requirement_request = 41;
-    ModelRequirementResponse model_requirement_response = 42;
+    PrepareModelAssetsRequest prepare_model_assets_request = 41;
+    PrepareModelAssetsResponse prepare_model_assets_response = 42;
+    ModelRequirementRequest model_requirement_request = 43;
+    ModelRequirementResponse model_requirement_response = 44;
   }
 }
 
@@ -1018,3 +1020,7 @@ message InferenceObservationLoss {
   uint64 first_lost_sequence = 1;
   uint64 lost_events = 2;
 }
+
+// Provider plans are authorized against host-selected model configuration.
+message PrepareModelAssetsRequest { string plan_json = 1; }
+message PrepareModelAssetsResponse { string assets_json = 1; }

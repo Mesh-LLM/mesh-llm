@@ -88,6 +88,7 @@ pub(super) fn test_dir() -> PathBuf {
 
 pub(super) fn minimal_valid_config() -> MeshConfig {
     MeshConfig {
+        source_directory: None,
         version: Some(1),
         gpu: GpuConfig {
             host_ram_offload: None,

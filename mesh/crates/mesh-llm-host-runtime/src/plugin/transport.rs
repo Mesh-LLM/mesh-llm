@@ -148,7 +148,14 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                         outbound_tx.clone(),
                                     );
                                 }
+                                Some(super::proto::envelope::Payload::PrepareModelAssetsRequest(request)) => {
+                                    super::model_assets::prepare_for_connection(
+                                        request_id, request, plugin_name.clone(), generation,
+                                        runtime.clone(), outbound_tx.clone(),
+                                    );
+                                }
                                 Some(super::proto::envelope::Payload::PeerBlockRequest(request)) => {
+
                                     // The requester is the connection's own name,
                                     // so one plugin cannot act as another.
                                     forward_plugin_peer_block_request(

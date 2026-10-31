@@ -84,6 +84,7 @@ produces a clear startup error rather than a partial start.
 | `mesh_requirements.min_node_version`<br>`mesh_requirements.max_node_version` | string (semver) | optional peer version bounds; unset means no bound | node-level | process restart | wired | none |
 | `mesh_requirements.min_protocol_version`<br>`mesh_requirements.max_protocol_version` | integer | `0` means no bound | node-level | process restart | wired | none |
 | `mesh_requirements.require_release_attestation` | boolean | `false` | node-level | process restart | wired | none |
+| `mesh_requirements.require_signed_gossip` | boolean | `false`; require origin signatures for relayed node/cache records; changing this creates a new mesh and requires upgraded participants | node-level | process restart | wired | `--require-signed-gossip` |
 | `mesh_requirements.release_signer_keys` | array of string | `[]`; when non-empty, only those signer keys admit peers | node-level | process restart | wired | none |
 | `owner_control.bind` | socket address | unset (auto); e.g. `[::]:7447` | node-level | process restart | wired | none |
 | `owner_control.advertise_addr` | socket address | unset (auto-detected) | node-level | process restart | wired | none |
@@ -183,6 +184,12 @@ normal warnings in every mode.
 | Key path | Type | Allowed values / default (`auto`) | `[defaults]` / `[[models]]` | Restart | Status | CLI equivalent |
 |---|---|---|---|---|---|---|
 | `model` | string | required; catalog id, Hugging Face reference, URL, or local path | `[[models]]` only | model reload | wired | positional `--model` / `--gguf` on the ad-hoc single-model path |
+| `provider` | string | unset for built-in models; installed plugin name for provider models | `[[models]]` only | model reload | wired | none |
+| `variant` | string | provider-defined; defaults to fp32 | `[[models]]` only | model reload | wired | none |
+| `options` | object | empty; typed and validated by the selected provider | `[[models]]` only | model reload | wired | none |
+| `request_defaults` | object | empty provider-specific request defaults | `[[models]]` only | model reload | wired | none |
+| `lifecycle` | object | startup loading, idle eviction disabled, prefetch enabled | `[[models]]` only | model reload | wired | none |
+| `source` | object | model reference; optional local_dir or repo/revision override | `[[models]]` only | model reload | wired | none |
 | `hardware.model_path` | path | unset | both | model reload | wired | `--gguf` sets it for the ad-hoc single-model path |
 | `hardware.hf_repo`<br>`hardware.hf_file` | string | unset | both | model reload | wired | none |
 | `model_fit.ctx_size` | integer | `0` = auto | both | model reload | wired | `--ctx-size` on the ad-hoc single-model path |

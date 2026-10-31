@@ -36,16 +36,27 @@ const MAX_UPSTREAM_HEAD_BYTES: usize = 64 * 1024;
 const RELAY_SECURITY_HEADERS: &str =
     "X-Content-Type-Options: nosniff\r\nContent-Security-Policy: sandbox\r\n";
 
+pub(super) fn is_inference_passthrough(path: &str) -> bool {
+    path.starts_with("/v1/")
+        || matches!(
+            path,
+            "/models"
+                | "/mesh/v1/documents/ocr"
+                | "/mesh/v1/images/similarity"
+                | "/mesh/v1/images/depth"
+        )
+}
+
 pub(super) async fn handle(
     stream: &mut TcpStream,
     state: &MeshApi,
     method: &str,
     path_only: &str,
-    req: &str,
+    req: &[u8],
     caller: CallerTrust,
 ) -> anyhow::Result<()> {
-    let is_openai_passthrough = path_only.starts_with("/v1/") || path_only == "/models";
-    if method == "OPTIONS" && is_openai_passthrough {
+    let is_passthrough = is_inference_passthrough(path_only);
+    if method == "OPTIONS" && is_passthrough {
         stream
             .write_all(
                 b"HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Headers: content-type, authorization\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nContent-Length: 0\r\n\r\n",
@@ -63,7 +74,7 @@ pub(super) async fn handle(
         return respond_error(stream, 405, "Method Not Allowed").await;
     }
 
-    let upstream_path = if is_openai_passthrough {
+    let upstream_path = if is_passthrough {
         path_only
     } else if path_only.starts_with("/api/chat") {
         "/v1/chat/completions"
@@ -88,14 +99,18 @@ pub(super) async fn handle(
                     )?,
                 ),
             };
-            let rewritten = if is_openai_passthrough {
-                req.to_string()
+            let rewritten = if is_passthrough {
+                req.to_vec()
             } else if path_only.starts_with("/api/chat") {
-                req.replacen("/api/chat", upstream_path, 1)
+                String::from_utf8_lossy(req)
+                    .replacen("/api/chat", upstream_path, 1)
+                    .into_bytes()
             } else {
-                req.replacen("/api/responses", upstream_path, 1)
+                String::from_utf8_lossy(req)
+                    .replacen("/api/responses", upstream_path, 1)
+                    .into_bytes()
             };
-            upstream.write_all(rewritten.as_bytes()).await?;
+            upstream.write_all(&rewritten).await?;
             relay_upstream_response(stream, &mut upstream).await?;
         }
         _ => {

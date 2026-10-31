@@ -5,6 +5,7 @@ use mesh_llm_types::mesh::{DEMAND_TTL_SECS, merge_demand};
 
 mod control_listener;
 mod memberships;
+mod signed_gossip;
 
 include!("connections.rs");
 include!("own_invite_token.rs");

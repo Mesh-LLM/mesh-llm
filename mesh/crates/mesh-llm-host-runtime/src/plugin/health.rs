@@ -327,10 +327,20 @@ async fn probe_endpoint(endpoint: &proto::EndpointManifest) -> Option<EndpointHe
         (proto::EndpointKind::Inference, proto::EndpointTransportKind::EndpointTransportHttp) => {
             let protocol = endpoint.protocol.as_deref().unwrap_or_default();
             if protocol.eq_ignore_ascii_case("openai_compatible")
-                || protocol.eq_ignore_ascii_case("document_ocr_v1")
+                || matches!(
+                    protocol,
+                    "document_ocr_v1"
+                        | "transcription_v1"
+                        | "image_text_similarity_v1"
+                        | "depth_estimation_v1"
+                )
             {
                 return Some(
-                    probe_openai_compatible_http_endpoint(endpoint.address.as_deref()?).await,
+                    probe_openai_compatible_http_endpoint_for_protocol(
+                        endpoint.address.as_deref()?,
+                        Some(protocol),
+                    )
+                    .await,
                 );
             }
             None
@@ -339,7 +349,15 @@ async fn probe_endpoint(endpoint: &proto::EndpointManifest) -> Option<EndpointHe
     }
 }
 
+#[cfg(test)]
 async fn probe_openai_compatible_http_endpoint(address: &str) -> EndpointHealthRecord {
+    probe_openai_compatible_http_endpoint_for_protocol(address, None).await
+}
+
+async fn probe_openai_compatible_http_endpoint_for_protocol(
+    address: &str,
+    protocol: Option<&str>,
+) -> EndpointHealthRecord {
     let models_url = match endpoint_models_url(address) {
         Some(url) => url,
         None => {
@@ -372,7 +390,9 @@ async fn probe_openai_compatible_http_endpoint(address: &str) -> EndpointHealthR
             state: "healthy".into(),
             available: true,
             detail: Some(format!("GET {} -> {}", models_url, response.status())),
-            models: parse_models_response(response).await.unwrap_or_default(),
+            models: parse_models_response(response, protocol)
+                .await
+                .unwrap_or_default(),
         },
         Ok(response) => EndpointHealthRecord {
             state: "unhealthy".into(),
@@ -389,17 +409,51 @@ async fn probe_openai_compatible_http_endpoint(address: &str) -> EndpointHealthR
     }
 }
 
-async fn parse_models_response(response: reqwest::Response) -> Result<Vec<String>> {
+async fn parse_models_response(
+    response: reqwest::Response,
+    protocol: Option<&str>,
+) -> Result<Vec<String>> {
     let body = response.json::<Value>().await?;
     let models = body
         .get("data")
         .and_then(|value| value.as_array())
         .into_iter()
         .flatten()
+        .filter(|entry| model_matches_protocol(entry, protocol))
         .filter_map(|entry| entry.get("id").and_then(|id| id.as_str()))
         .map(|id| id.to_string())
         .collect::<Vec<_>>();
     Ok(models)
+}
+
+fn model_matches_protocol(entry: &Value, protocol: Option<&str>) -> bool {
+    if entry
+        .get("availability")
+        .and_then(Value::as_str)
+        .is_some_and(|state| !matches!(state, "ready" | "loadable" | "busy"))
+    {
+        return false;
+    }
+    let expected = match protocol {
+        Some("document_ocr_v1") => "document_ocr",
+        Some("transcription_v1") => "speech_recognition",
+        Some("image_text_similarity_v1") => "image_text_similarity",
+        Some("depth_estimation_v1") => "depth_estimation",
+        _ => {
+            return entry
+                .get("workload_class")
+                .and_then(Value::as_str)
+                .is_none_or(|class| class == "causal_generation" || class == "encoder_decoder");
+        }
+    };
+    // Single-task legacy OCR endpoints omit class; modern multi-task providers
+    // declare every entry, so none can leak onto another endpoint.
+    entry
+        .get("workload_class")
+        .and_then(Value::as_str)
+        .map_or(protocol == Some("document_ocr_v1"), |class| {
+            class == expected
+        })
 }
 
 fn endpoint_models_url(address: &str) -> Option<Url> {
@@ -775,5 +829,24 @@ mod tests {
                 "endpoint:inference/openai_compatible".to_string()
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod managed_task_tests {
+    use super::model_matches_protocol;
+    use serde_json::json;
+
+    #[test]
+    fn multi_task_inventory_is_partitioned_before_model_advertisement() {
+        let speech = json!({"id":"whisper", "workload_class":"speech_recognition", "availability":"loadable"});
+        let depth =
+            json!({"id":"depth", "workload_class":"depth_estimation", "availability":"ready"});
+        assert!(model_matches_protocol(&speech, Some("transcription_v1")));
+        assert!(!model_matches_protocol(&speech, Some("document_ocr_v1")));
+        assert!(!model_matches_protocol(&speech, Some("openai_compatible")));
+        assert!(model_matches_protocol(&depth, Some("depth_estimation_v1")));
+        assert!(!model_matches_protocol(&depth, Some("transcription_v1")));
+        assert!(!model_matches_protocol(&depth, Some("openai_compatible")));
     }
 }

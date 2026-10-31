@@ -11,12 +11,13 @@ pub struct GossipFrame {
     pub sender_id: ::prost::alloc::vec::Vec<u8>,
     /// Node records signed by the node they describe and relayed byte-for-byte.
     /// Additive: older nodes ignore this field and keep reading `peers`, which
-    /// newer nodes still populate for them.
+    /// newer nodes still populate in compatibility meshes. Strict meshes retain
+    /// only the authenticated sender's unsigned entry for hop-local metadata.
     #[prost(message, repeated, tag = "4")]
     pub signed_records: ::prost::alloc::vec::Vec<SignedNodeRecord>,
     /// Cache-affinity evidence signed by the node it describes, relayed
     /// byte-for-byte alongside its node record. Additive: older nodes keep
-    /// reading PeerAnnouncement.cache_affinity, which newer nodes still send.
+    /// reading PeerAnnouncement.cache_affinity in compatibility meshes.
     #[prost(message, repeated, tag = "5")]
     pub signed_cache_affinity: ::prost::alloc::vec::Vec<SignedCacheAffinity>,
 }
@@ -412,6 +413,9 @@ pub struct MeshRequirements {
     pub protocol_generation: ::core::option::Option<ProtocolGenerationBounds>,
     #[prost(message, optional, tag = "3")]
     pub release_attestation: ::core::option::Option<ReleaseAttestationRequirement>,
+    /// Opt-in strict relay authentication; bound into the policy hash.
+    #[prost(bool, tag = "4")]
+    pub require_signed_gossip: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NodeVersionBounds {
@@ -1447,6 +1451,8 @@ pub enum ModelWorkloadClass {
     Decision = 6,
     SpeechRecognition = 7,
     DocumentOcr = 8,
+    ImageTextSimilarity = 9,
+    DepthEstimation = 10,
 }
 impl ModelWorkloadClass {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1464,6 +1470,8 @@ impl ModelWorkloadClass {
             Self::Decision => "MODEL_WORKLOAD_CLASS_DECISION",
             Self::SpeechRecognition => "MODEL_WORKLOAD_CLASS_SPEECH_RECOGNITION",
             Self::DocumentOcr => "MODEL_WORKLOAD_CLASS_DOCUMENT_OCR",
+            Self::ImageTextSimilarity => "MODEL_WORKLOAD_CLASS_IMAGE_TEXT_SIMILARITY",
+            Self::DepthEstimation => "MODEL_WORKLOAD_CLASS_DEPTH_ESTIMATION",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1478,6 +1486,8 @@ impl ModelWorkloadClass {
             "MODEL_WORKLOAD_CLASS_DECISION" => Some(Self::Decision),
             "MODEL_WORKLOAD_CLASS_SPEECH_RECOGNITION" => Some(Self::SpeechRecognition),
             "MODEL_WORKLOAD_CLASS_DOCUMENT_OCR" => Some(Self::DocumentOcr),
+            "MODEL_WORKLOAD_CLASS_IMAGE_TEXT_SIMILARITY" => Some(Self::ImageTextSimilarity),
+            "MODEL_WORKLOAD_CLASS_DEPTH_ESTIMATION" => Some(Self::DepthEstimation),
             _ => None,
         }
     }

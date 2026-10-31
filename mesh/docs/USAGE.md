@@ -452,7 +452,7 @@ advertise_addr = "203.0.113.10:7447"     # address announced to peers (same port
 
 [telemetry]
 enabled  = true
-endpoint = "http://localhost:4317"       # OTLP collector
+endpoint = "http://localhost:4318"       # OTLP/HTTP collector (metrics endpoint)
 
 # ---------------------------------------------------------------------------
 # Global defaults — applied to every model that does not override the field

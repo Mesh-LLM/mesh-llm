@@ -373,6 +373,8 @@ async fn make_test_node_with_requirements(
     );
 
     let node = Node {
+        gossip_verification: Arc::default(),
+        gossip_encoder: Arc::default(),
         adopted_membership_file: None,
         endpoint,
         endpoint_secret_key,
@@ -712,6 +714,7 @@ impl crate::network::metrics::RoutingTelemetrySink for TestRoutingTelemetrySink 
         model: Option<&str>,
         target: &crate::network::metrics::AttemptTarget,
         outcome: crate::network::metrics::AttemptOutcome,
+        _attempt_ms: f64,
     ) {
         let target_kind = match target {
             crate::network::metrics::AttemptTarget::Local(_) => "local",
