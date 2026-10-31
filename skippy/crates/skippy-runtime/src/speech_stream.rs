@@ -195,6 +195,11 @@ impl SpeechStream {
     /// `turn_detection`, `step_ms`, or buffer bound governs the very next
     /// frame and pass. Language and prompt reach the next pass.
     pub fn set_config(&mut self, config: SpeechStreamConfig) {
+        if config.tentative != self.config.tentative {
+            // A consumer that stopped asking may have cleared its display;
+            // the next pass must be free to repeat the last text it saw.
+            self.reported_tentative.clear();
+        }
         self.config = config;
     }
 
@@ -250,11 +255,20 @@ impl SpeechStream {
     }
 
     /// Drops the current turn's audio and unconfirmed words without a
-    /// transcript.
-    pub fn clear(&mut self) {
+    /// transcript. Tentative text already reported for that turn is replaced
+    /// by an empty event, so a consumer stops showing the discarded words.
+    pub fn clear(&mut self) -> Vec<SpeechStreamEvent> {
+        let mut events = Vec::new();
+        if self.config.tentative && !self.reported_tentative.is_empty() {
+            events.push(SpeechStreamEvent::Tentative {
+                turn: self.turn,
+                text: String::new(),
+            });
+        }
         self.reset_turn();
         self.preroll.clear();
         self.partial_frame.clear();
+        events
     }
 
     fn push_frame(

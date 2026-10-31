@@ -178,6 +178,68 @@ fn tentative_text_is_off_by_default() {
 }
 
 #[test]
+fn clear_replaces_reported_tentative_text_with_an_empty_event() {
+    let mut script = Script::new(vec![vec![(900, " Dropped words")], vec![(900, " Later")]]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig {
+        tentative: true,
+        ..manual()
+    });
+    stream.push(&loud(1_000), &mut transcribe).unwrap();
+    assert!(matches!(
+        stream.clear().as_slice(),
+        [SpeechStreamEvent::Tentative { turn: 0, text }] if text.is_empty()
+    ));
+    // Without reported text, clearing reports nothing.
+    assert!(stream.clear().is_empty());
+    // With tentative off, discarded words report nothing either.
+    let mut silent = SpeechStream::new(manual());
+    silent.push(&loud(1_000), &mut transcribe).unwrap();
+    assert!(silent.clear().is_empty());
+}
+
+#[test]
+fn switching_tentative_back_on_reports_the_last_text_again() {
+    let mut script = Script::new(vec![
+        vec![(900, " Hello")],
+        vec![(900, " Hello")],
+        vec![(900, " Hello")],
+        vec![(900, " Hello")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let tentative_cfg = |on: bool| SpeechStreamConfig {
+        tentative: on,
+        step_ms: 300,
+        ..manual()
+    };
+    let mut stream = SpeechStream::new(tentative_cfg(true));
+    let text = |events: Vec<SpeechStreamEvent>| {
+        events
+            .into_iter()
+            .filter_map(|event| match event {
+                SpeechStreamEvent::Tentative { text, .. } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        text(stream.push(&loud(300), &mut transcribe).unwrap()),
+        ["Hello"]
+    );
+    // Unchanged text does not repeat.
+    assert!(text(stream.push(&loud(300), &mut transcribe).unwrap()).is_empty());
+    stream.set_config(tentative_cfg(false));
+    assert!(text(stream.push(&loud(300), &mut transcribe).unwrap()).is_empty());
+    // A consumer that stopped asking may have cleared its display, so the
+    // same text reports again once it is back on.
+    stream.set_config(tentative_cfg(true));
+    assert_eq!(
+        text(stream.push(&loud(300), &mut transcribe).unwrap()),
+        ["Hello"]
+    );
+}
+
+#[test]
 fn passes_wait_for_a_step_of_new_audio() {
     let mut script = Script::new(vec![vec![(500, " Hi")]]);
     let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);

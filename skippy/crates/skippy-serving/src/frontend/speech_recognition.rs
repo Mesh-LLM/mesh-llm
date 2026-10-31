@@ -301,10 +301,7 @@ impl LiveSession {
                     });
                     stream.commit(&mut |samples, options| self.transcribe(samples, options))
                 }
-                RealtimeInput::Clear => {
-                    stream.clear();
-                    Ok(Vec::new())
-                }
+                RealtimeInput::Clear => Ok(stream.clear()),
                 RealtimeInput::Configure(config) => {
                     stream.set_config(stream_config(&config));
                     if resampler.input_rate() != config.input_sample_rate {
