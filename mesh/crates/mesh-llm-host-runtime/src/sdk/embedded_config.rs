@@ -675,6 +675,7 @@ mod tests {
             serde_json::to_value(&defaults).unwrap()
         );
         assert_eq!(decoded.admission, defaults.admission);
+        assert!(!decoded.admission.mesh_requirements.require_signed_gossip);
         assert_eq!(decoded.mode, EmbeddedMeshNodeMode::Serve);
         assert_eq!(
             decoded.network.enumerate_host,
@@ -698,7 +699,8 @@ mod tests {
                 "nostr_relays":["wss://relay.example"],"bind_ip":"127.0.0.1","bind_port":12222,"listen_all":true,"enumerate_host":false},
             "admission":{"owner_key":"owner.key","owner_required":true,"node_label":"node-label","trust_policy":"allowlist",
                 "trusted_owners":["owner-a"],"mesh_requirements":{"min_node_version":"0.78.0","max_node_version":"0.79.0",
-                "min_protocol_version":1,"max_protocol_version":2,"require_release_attestation":true,"release_signer_keys":["signer-a"]}},
+                "min_protocol_version":1,"max_protocol_version":2,"require_signed_gossip":true,
+                "require_release_attestation":true,"release_signer_keys":["signer-a"]}},
             "storage":{"config_path":"settings.toml","isolated_config":false},
             "log_format":"pretty","startup_timeout":{"secs":12,"nanos":345}
         });
