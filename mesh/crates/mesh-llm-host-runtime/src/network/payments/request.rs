@@ -252,6 +252,15 @@ mod tests {
         let seller = PaidRequest::parse(&forwarded).unwrap();
         assert_eq!(seller.client_nonce.as_deref(), Some(nonce));
 
+        // A nonce the payer's frontend minted (origin marker present) is kept
+        // too, and the marker is not forwarded.
+        let minted = parse(&format!(
+            "X-Capsule-Client-Nonce: {nonce}\r\nX-Capsule-Nonce-Origin: frontend\r\n"
+        ));
+        assert_eq!(minted.client_nonce.as_deref(), Some(nonce));
+        let forwarded = String::from_utf8(minted.backend_http("id").unwrap()).unwrap();
+        assert!(!forwarded.to_ascii_lowercase().contains("origin"));
+
         // Absent, duplicated or malformed nonces are neither kept nor forwarded.
         for headers in [
             String::new(),
