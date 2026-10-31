@@ -936,8 +936,11 @@ correlation, disconnects, queue drops, process exits and restart recovery can
 leave incomplete evidence; there is no replay or complete audit-log guarantee.
 No raw invoice, wallet transaction ID, prompt or response text is
 published. A settled payment's preimage is published to these trusted local
-subscribers on both payer and provider settlements. It can't spend or claim
-anything, and only the payer's copy proves the invoice was paid. The wallet's local control API
+subscribers on both payer and provider settlements, and only the payer's copy
+proves the invoice was paid. It can't move funds, but it is bearer evidence: it
+doesn't identify the payer, so anything that accepts a preimage alone as proof
+of purchase accepts it from whoever holds it. A subscriber should not disclose
+it beyond the exchange's counterparty, which already has it. The wallet's local control API
 (`mesh-llm wallet transactions`) also shows it to the operator. Payment hashes
 are linkable metadata, and fee amounts can hint at which wallet a node uses.
 
