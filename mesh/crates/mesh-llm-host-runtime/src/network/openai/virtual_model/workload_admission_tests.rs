@@ -151,3 +151,77 @@ async fn chat_candidates_check_each_replica_without_untargeted_fallback() {
     remote.endpoint.close().await;
     node.endpoint.close().await;
 }
+
+/// A peer that advertises a shared id for another workload class must not
+/// suppress the untargeted local plugin candidate that serves chat. ndizazzo
+/// [P2], PR #2560: the plugin candidate was suppressed on any *discovered*
+/// remote host, even after `eligible_remote_hosts` filtered that host out on
+/// workload class, leaving the committee with no candidate for a model the
+/// local plugin serves.
+#[tokio::test]
+async fn chat_candidates_keep_a_local_plugin_when_an_ocr_peer_shares_the_id() {
+    let model = "acme/shared-model";
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .unwrap();
+    let remote = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+        .await
+        .unwrap();
+
+    // The local plugin serves the id for chat.
+    let plugin_manager = crate::plugin::PluginManager::for_test_summaries(Vec::new());
+    plugin_manager
+        .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
+            plugin_name: "chat-plugin".into(),
+            endpoint_id: "chat".into(),
+            protocol: Some("openai_compatible".into()),
+            address: "http://127.0.0.1:1".into(),
+            models: vec![model.into()],
+        }])
+        .await;
+    node.set_plugin_manager(plugin_manager).await;
+
+    // A peer advertises the same id as document OCR only, so nothing it serves
+    // admits a chat request.
+    remote
+        .set_served_model_descriptors(vec![workload_descriptor(
+            model,
+            mesh::ModelWorkloadClass::DocumentOcr,
+        )])
+        .await;
+    let mut announcement =
+        remote.build_local_announcement(remote.snapshot_local_announcement_data().await);
+    announcement.role = mesh::NodeRole::Host { http_port: 9337 };
+    announcement.serving_models = vec![model.into()];
+    announcement.hosted_models = Some(vec![model.into()]);
+    announcement.served_model_descriptors = vec![workload_descriptor(
+        model,
+        mesh::ModelWorkloadClass::DocumentOcr,
+    )];
+    let mut peer = mesh::PeerInfo::from_announcement(
+        remote.id(),
+        remote.endpoint.addr(),
+        &announcement,
+        crate::crypto::OwnershipSummary::default(),
+    );
+    peer.admitted = true;
+    node.insert_test_peer(peer).await;
+    assert!(
+        !node.hosts_for_model(model).await.is_empty(),
+        "the OCR peer must be discovered by name for this to be the reported shape"
+    );
+
+    let candidates =
+        virtual_model_candidates(&node, vec![model.into()], &Default::default(), None).await;
+    assert_eq!(
+        candidates.len(),
+        1,
+        "the local chat plugin must stay a candidate: {candidates:?}"
+    );
+    assert_eq!(
+        candidates[0].target_node_id, None,
+        "the plugin candidate is untargeted"
+    );
+    node.endpoint.close().await;
+    remote.endpoint.close().await;
+}

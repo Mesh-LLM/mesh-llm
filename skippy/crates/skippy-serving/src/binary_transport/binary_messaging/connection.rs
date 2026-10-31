@@ -208,7 +208,7 @@ fn handle_binary_connection_messages(
         let message_started = Instant::now();
         let session_id = binary_message_session_id(connection_session_id, &message);
         let session_key = session_id.to_string();
-        session_tracker.touch(&session_key);
+        session_tracker.touch(&session_key)?;
         emit_binary_message_received(
             telemetry,
             config,

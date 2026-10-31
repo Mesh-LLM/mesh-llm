@@ -10,6 +10,8 @@ pub const ALPN_CONTROL_V1: &[u8] = b"mesh-llm-control/1";
 pub const ALPN_V1: &[u8] = b"mesh-llm/1";
 pub const NODE_PROTOCOL_GENERATION: u32 = 1;
 pub const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024;
+pub const PLUGIN_MESH_SUBPROTOCOL: &str = "plugin-mesh";
+pub const PLUGIN_ORIGIN_SIGNATURE_FEATURE: &str = "plugin-origin-signature";
 
 pub const STREAM_GOSSIP: u8 = 0x01;
 pub const STREAM_TUNNEL: u8 = 0x02;

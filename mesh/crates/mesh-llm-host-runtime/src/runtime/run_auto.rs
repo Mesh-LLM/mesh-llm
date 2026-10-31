@@ -228,6 +228,7 @@ pub(super) fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) ->
         min_protocol_version: embedded.mesh_requirements.min_protocol_version,
         max_protocol_version: embedded.mesh_requirements.max_protocol_version,
         require_release_attestation: embedded.mesh_requirements.require_release_attestation,
+        require_signed_gossip: embedded.mesh_requirements.require_signed_gossip,
         release_signer_key: embedded.mesh_requirements.release_signer_keys,
         config: embedded.config_path,
         ..RuntimeOptions::default()
@@ -363,7 +364,7 @@ pub(super) async fn run_runtime_cli(
 
     let startup_mesh_creation_state = resolve_startup_mesh_creation_state(&options, &config)?;
     let cli_has_explicit_models = cli_has_explicit_models(&options);
-    let has_config_models = !config.models.is_empty();
+    let has_config_models = config.models.iter().any(|model| model.provider.is_none());
     let has_startup_models = cli_has_explicit_models || has_config_models;
 
     // Acquire the per-instance runtime directory and flock. Plain --client still
@@ -541,7 +542,11 @@ pub(in crate::runtime) fn apply_runtime_cli_speculative_overrides(
         .defaults
         .get_or_insert_with(plugin::ModelConfigDefaults::default)
         .speculative = Some(resolved_defaults);
-    for model in &mut config.models {
+    for model in config
+        .models
+        .iter_mut()
+        .filter(|model| model.provider.is_none())
+    {
         model.speculative = Some(plugin::SpeculativeConfig::with_precedence(
             Some(overrides),
             model.speculative.as_ref(),
@@ -601,7 +606,11 @@ pub(in crate::runtime) fn apply_runtime_cli_checkpoint_overrides(
     // Runtime CLI flags are process-wide serving overrides. Apply them to
     // config-declared models as well as defaults so model-local config cannot
     // unexpectedly take precedence over the explicit command line.
-    for model in &mut config.models {
+    for model in config
+        .models
+        .iter_mut()
+        .filter(|model| model.provider.is_none())
+    {
         let hardware = model
             .hardware
             .get_or_insert_with(plugin::HardwareConfig::default);
@@ -901,6 +910,7 @@ pub(super) async fn start_run_auto_node_and_plugins(
     if !options.headless && owner_config.keypair.is_none() {
         emit_configuration_ui_read_only_hint();
     }
+    crate::system::native_runtime_requirement::emit_unused_gpu_warnings();
     let max_vram = if options.client || !skippy_runtime::native_runtime_loaded() {
         Some(0.0)
     } else {
@@ -1002,7 +1012,11 @@ pub(super) fn register_pre_accept_local_source_policies(
         .as_ref()
         .and_then(|defaults| defaults.hardware.as_ref())
         .and_then(|hardware| hardware.model_path.as_deref());
-    for model in &config.models {
+    for model in config
+        .models
+        .iter()
+        .filter(|model| model.provider.is_none())
+    {
         let mut model_ids = BTreeSet::from([model.model.clone()]);
         let configured_path = model
             .hardware
@@ -1841,6 +1855,9 @@ async fn run_auto_inner(
 
     // Model intent channel: owner-control commands send intents here, control loop polls.
     let mut model_intent_rx = install_run_auto_model_intent_channel(node.clone()).await;
+    if !is_client && !super::startup_models::cli_has_explicit_models(&options) {
+        super::native_model_lifecycle::install(&node, &config, target_tx.subscribe()).await?;
+    }
 
     let model_name_for_console = String::new();
     let runtime_owner_key_path = resolve_runtime_owner_key_path(&options)?;

@@ -2,6 +2,9 @@
 mod adopted_membership;
 pub(crate) use adopted_membership::*;
 
+#[path = "requirements/persisted_policy.rs"]
+mod persisted_policy;
+
 use super::*;
 
 pub(crate) fn assert_mesh_requirements_outbound_admits_compliant_peer_after_requirements_pass() {
@@ -617,10 +620,12 @@ pub(crate) fn assert_mesh_requirements_add_peer_rejects_untrusted_release_signer
             stage_status_list_supported: true,
             local_gguf_content_id_supported: true,
             decode_batch_policy_supported: true,
+            plugin_origin_signature_supported: false,
+            persistent_lane_marker_supported: false,
             advertised_model_throughput: vec![],
             #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
-        cache_affinity: None,
+            cache_affinity: None,
             latency_ms: None,
             latency_source: None,
             latency_age_ms: None,
@@ -716,10 +721,12 @@ pub(crate) fn assert_mesh_requirements_add_peer_rejects_invalid_release_attestat
             stage_status_list_supported: true,
             local_gguf_content_id_supported: true,
             decode_batch_policy_supported: true,
+            plugin_origin_signature_supported: false,
+            persistent_lane_marker_supported: false,
             advertised_model_throughput: vec![],
             #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
-        cache_affinity: None,
+            cache_affinity: None,
             latency_ms: None,
             latency_source: None,
             latency_age_ms: None,
@@ -812,10 +819,12 @@ pub(crate) fn assert_mesh_requirements_add_peer_rejects_wrong_mesh_id() {
             stage_status_list_supported: true,
             local_gguf_content_id_supported: true,
             decode_batch_policy_supported: true,
+            plugin_origin_signature_supported: false,
+            persistent_lane_marker_supported: false,
             advertised_model_throughput: vec![],
             #[cfg(feature = "payments")]
             lightning_offers: Default::default(),
-        cache_affinity: None,
+            cache_affinity: None,
             latency_ms: None,
             latency_source: None,
             latency_age_ms: None,
@@ -1187,9 +1196,8 @@ pub(crate) fn assert_mesh_requirements_unrestricted_legacy_mesh_join_stays_compa
 }
 
 pub(crate) fn assert_named_mesh_id_uses_documented_sha256_derivation() {
-    let mesh_id =
-        mesh_llm_membership::generate_mesh_id(Some("alpha"), Some("nostr-pubkey"))
-            .expect("named mesh id should derive");
+    let mesh_id = mesh_llm_membership::generate_mesh_id(Some("alpha"), Some("nostr-pubkey"))
+        .expect("named mesh id should derive");
 
     assert_eq!(
         mesh_id,
@@ -1249,8 +1257,8 @@ pub(crate) fn assert_persisted_random_mesh_id_is_preserved() {
     std::fs::create_dir_all(&mesh_dir).expect("mesh dir");
     std::fs::write(mesh_dir.join("mesh-id"), persisted).expect("persist mesh id");
 
-    let mesh_id = mesh_llm_membership::generate_mesh_id(None, None)
-        .expect("persisted id should load");
+    let mesh_id =
+        mesh_llm_membership::generate_mesh_id(None, None).expect("persisted id should load");
 
     assert_eq!(mesh_id, persisted);
 }

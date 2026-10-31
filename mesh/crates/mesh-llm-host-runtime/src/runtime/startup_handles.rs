@@ -6,15 +6,16 @@ use super::{
     DASHBOARD_CONTEXT_USAGE_REFRESH_INTERVAL, DashboardContextUsage, InitialPromptMode,
     InstanceLifecycleRecord, InstanceLifecycleState, LocalRuntimeModelHandle,
     LocalRuntimeModelStartSpec, OpenAiGuardrailPolicyHandle, RuntimeCapacityLedger,
-    RuntimeCapacityReservation, RuntimeInstanceRegistry, RuntimeModelRegistration,
-    RuntimeOperationalEvent, RuntimeResourcePlanningProfile, SPLIT_STANDBY_RETRY_INTERVAL,
-    SplitCoordinatorAck, SplitCoordinatorEvent, SplitRuntimeReason, SplitRuntimeStart,
-    StartupPinnedGpuTarget, StartupRuntimePlan, add_runtime_local_target, local_process_payload,
+    RuntimeCapacityPool, RuntimeCapacityReservation, RuntimeCapacityTarget,
+    RuntimeInstanceRegistry, RuntimeModelRegistration, RuntimeModelSizing, RuntimeOperationalEvent,
+    RuntimeResourcePlanningProfile, SPLIT_STANDBY_RETRY_INTERVAL, SplitCoordinatorAck,
+    SplitCoordinatorEvent, SplitRuntimeReason, SplitRuntimeStart, StartupPinnedGpuTarget,
+    StartupRuntimePlan, add_runtime_local_target, local_process_payload,
     publish_runtime_llama_slots, publish_runtime_llama_unavailable,
     record_runtime_operational_event, record_runtime_operational_event_with_context,
     refresh_dashboard_context_usage, register_runtime_instance, remove_dashboard_context_usage,
     remove_dashboard_process, remove_runtime_local_target, reserve_runtime_capacity_for_model,
-    runtime_model_planning_bytes, runtime_model_required_bytes,
+    runtime_capacity_pool_for_model, runtime_model_required_bytes, runtime_model_sizing,
     runtime_process_payload_with_status, start_runtime_local_model, start_runtime_split_model,
     startup_runtime_plan, stop_split_generation_cleanup, unregister_runtime_instance,
     update_pi_models_json, upsert_dashboard_process,
@@ -143,7 +144,10 @@ where
     instance_id: &'a str,
     model_name: &'a str,
     pinned_gpu: Option<&'a StartupPinnedGpuTarget>,
+    device_override: Option<&'a str>,
+    compact_meta: Option<&'a crate::models::gguf::GgufCompactMeta>,
     local_capacity: u64,
+    host_ram_capacity_bytes: u64,
     model_bytes: u64,
     startup_load_gate: &'a Arc<tokio::sync::Mutex<()>>,
     launch_failure: StartupLaunchFailureContext<'a>,
@@ -364,7 +368,10 @@ where
         instance_id,
         model_name,
         pinned_gpu,
+        device_override,
+        compact_meta,
         local_capacity,
+        host_ram_capacity_bytes,
         model_bytes,
         startup_load_gate,
         launch_failure,
@@ -383,8 +390,13 @@ where
         runtime_capacity_ledger,
         instance_id,
         model_name,
-        pinned_gpu,
-        local_capacity,
+        RuntimeCapacityTarget {
+            compact_meta,
+            pinned_gpu,
+            device_override,
+            node_capacity_bytes: local_capacity,
+            host_ram_capacity_bytes,
+        },
         model_bytes,
     ) {
         Ok(reservation) => reservation,
@@ -670,32 +682,52 @@ pub(super) fn no_split_peer_message(
 pub(super) async fn startup_prepare_launch(
     ctx: StartupPrepareLaunchContext<'_>,
 ) -> Option<StartupPreparedLaunch> {
-    let local_capacity = startup_local_capacity_bytes(
+    let sizing = startup_planning_model_sizing(&ctx).await?;
+    let device_override = if super::local_laya::is_laya(sizing.compact_meta.as_ref()) {
+        super::local_laya::resolve_laya_device(
+            ctx.device_override,
+            ctx.pinned_gpu.map(|gpu| gpu.backend_device.as_str()),
+        )
+    } else {
+        ctx.device_override.map(str::to_owned)
+    };
+    let capacity_pool = runtime_capacity_pool_for_model(
+        sizing.compact_meta.as_ref(),
         ctx.pinned_gpu,
-        ctx.node.local_runtime_capacity_bytes(),
-        ctx.node.advertised_memory.ram_offload_bytes,
+        device_override.as_deref(),
+        ctx.node.host_ram_capacity_bytes,
     );
-    let model_bytes = startup_planning_model_bytes(&ctx).await?;
-    let runtime_plan = startup_runtime_plan(ctx.split, local_capacity, model_bytes);
+    let local_capacity = match capacity_pool {
+        RuntimeCapacityPool::HostRam => ctx.node.host_ram_capacity_bytes,
+        RuntimeCapacityPool::Node => ctx.node.local_runtime_capacity_bytes(),
+        RuntimeCapacityPool::PinnedGpu(_) => startup_local_capacity_bytes(
+            ctx.pinned_gpu,
+            ctx.node.local_runtime_capacity_bytes(),
+            ctx.node.advertised_memory.ram_offload_bytes,
+        ),
+    };
+    let runtime_plan = startup_runtime_plan(ctx.split, local_capacity, sizing.model_bytes);
     let launch_kind = startup_launch_kind(runtime_plan, ctx.survey_launch_kind);
     Some(StartupPreparedLaunch {
         local_capacity,
-        model_bytes,
+        model_bytes: sizing.model_bytes,
+        compact_meta: sizing.compact_meta,
+        device_override,
         runtime_plan,
         launch_kind,
     })
 }
 
-pub(super) async fn startup_planning_model_bytes(
+pub(super) async fn startup_planning_model_sizing(
     ctx: &StartupPrepareLaunchContext<'_>,
-) -> Option<u64> {
+) -> Option<RuntimeModelSizing> {
     let model_path_for_sizing = ctx.model_path.to_path_buf();
-    match tokio::task::spawn_blocking(move || runtime_model_planning_bytes(&model_path_for_sizing))
+    match tokio::task::spawn_blocking(move || runtime_model_sizing(&model_path_for_sizing))
         .await
         .context("join runtime model sizing task")
         .and_then(|result| result)
     {
-        Ok(model_bytes) => Some(model_bytes),
+        Ok(sizing) => Some(sizing),
         Err(err) => {
             startup_emit_model_inspection_failure(
                 ctx.target_tx,
@@ -762,6 +794,7 @@ pub(super) async fn startup_launch_runtime(
         stop_rx,
         local_capacity,
         model_bytes,
+        compact_meta,
         runtime_plan,
         launch_kind,
     } = ctx;
@@ -831,7 +864,10 @@ pub(super) async fn startup_launch_runtime(
                 instance_id,
                 model_name,
                 pinned_gpu,
+                device_override: device_override.as_deref(),
+                compact_meta,
                 local_capacity,
+                host_ram_capacity_bytes: node.host_ram_capacity_bytes,
                 model_bytes,
                 startup_load_gate,
                 launch_failure: StartupLaunchFailureContext {

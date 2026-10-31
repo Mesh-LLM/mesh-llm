@@ -4,7 +4,7 @@ import {
   LIVE_NODE_STATE_LABELS,
   type LiveNodeState,
   type Peer,
-  type PluginWebUiState,
+  type PluginStatusContribution,
   type StatusPayload,
   type WakeableNodeState
 } from '@/features/app-shell/lib/status-types'
@@ -111,25 +111,14 @@ describe('status type contracts', () => {
     expect([idle, splitServing, host, standbyWakeable]).toHaveLength(4)
   })
 
-  it('allows app shell status payloads to preserve plugin web UI state when present', () => {
-    const webUi = {
+  it('keeps plugin status contributions by plugin name when present', () => {
+    const contribution = {
+      schema_version: 1,
       state: 'ready',
-      declared: true,
-      enabled: true,
-      available: true,
-      pages: [
-        {
-          id: 'dashboard',
-          label: 'Dashboard',
-          route: 'dashboard',
-          bundle_id: 'main',
-          entry_script: 'dashboard.js'
-        }
-      ],
-      config_sections: [],
-      asset_base_url: '/api/plugins/blackboard/web-ui/assets/',
-      primary_tab_enabled: false
-    } satisfies PluginWebUiState
+      received_at_unix_ms: 1793404800000,
+      fresh_until_unix_ms: 1793404860000,
+      data: { source: 'macmon', idle_watts: 8.2 }
+    } satisfies PluginStatusContribution
     const statusPayload: StatusPayload = {
       node_id: 'node-1',
       token: 'token-1',
@@ -144,20 +133,12 @@ describe('status type contracts', () => {
       model_size_gb: 8,
       peers: [],
       inflight_requests: 0,
-      plugins: [
-        {
-          name: 'blackboard',
-          kind: 'bridge',
-          enabled: true,
-          status: 'running',
-          capabilities: [],
-          args: [],
-          tools: [],
-          web_ui: webUi
-        }
-      ]
+      plugins: { powermetrics: contribution }
     }
 
-    expect(statusPayload.plugins?.[0]?.web_ui).toEqual(webUi)
+    expect(statusPayload.plugins?.powermetrics).toEqual(contribution)
+    // @ts-expect-error a contribution's state is one of the host's three
+    const unknownState: PluginStatusContribution['state'] = 'starting'
+    expect(unknownState).toBe('starting')
   })
 })

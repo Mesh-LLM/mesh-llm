@@ -226,3 +226,105 @@ fn artifact_smoke_handoffs_require_packaged_backends_without_remote_runtime_fall
         }
     }
 }
+
+const PREPARE: &str = "./.github/actions/prepare-automation";
+const RUST_CACHE: &str = "Swatinem/rust-cache@";
+
+/// Every (prepare, rust-cache) pair where the cache restore runs after the
+/// preparation. Checks all occurrences, not only the first of each.
+fn cache_restores_after_prepare(steps: &[Node]) -> Vec<(usize, usize)> {
+    let at = |prefix: &str| -> Vec<usize> {
+        steps
+            .iter()
+            .enumerate()
+            .filter(|(_, step)| text(step, "uses").is_some_and(|u| u.starts_with(prefix)))
+            .map(|(index, _)| index)
+            .collect()
+    };
+    let caches = at(RUST_CACHE);
+    at(PREPARE)
+        .into_iter()
+        .flat_map(|prepare| {
+            caches
+                .iter()
+                .filter(move |&&cache| cache > prepare)
+                .map(move |&cache| (prepare, cache))
+        })
+        .collect()
+}
+
+fn fixture_steps(uses: &[&str]) -> Vec<Node> {
+    let yaml: String = std::iter::once("steps:\n".to_owned())
+        .chain(uses.iter().map(|u| format!("  - uses: {u}\n")))
+        .collect();
+    let Node::Seq(steps) = workflow_yaml::parse(&yaml)
+        .unwrap()
+        .get("steps")
+        .unwrap()
+        .clone()
+    else {
+        panic!("steps")
+    };
+    steps
+}
+
+#[test]
+fn artifact_automation_ordering_rejects_old_and_later_cache_restores() {
+    let cache = "Swatinem/rust-cache@abc";
+    // Release run 40804094970 shape: prepare, then rust-cache.
+    assert_eq!(
+        cache_restores_after_prepare(&fixture_steps(&[PREPARE, cache])),
+        [(0, 1)]
+    );
+    // A second restore after preparation must not escape a first-match check.
+    assert_eq!(
+        cache_restores_after_prepare(&fixture_steps(&[cache, PREPARE, cache])),
+        [(1, 2)]
+    );
+    // A later re-preparation does not excuse an earlier unsafe one.
+    assert_eq!(
+        cache_restores_after_prepare(&fixture_steps(&[PREPARE, cache, PREPARE])),
+        [(0, 1)]
+    );
+    assert!(cache_restores_after_prepare(&fixture_steps(&[cache, cache, PREPARE])).is_empty());
+}
+
+/// Swatinem/rust-cache pre-cleans the shared target directory on a restore-key
+/// (partial) hit, deleting workspace binaries such as `target/debug/xtask`.
+/// Release run 40804094970 lost MESH_LLM_AUTOMATION_BIN this way, so in any job
+/// every Rust cache restore must precede every automation preparation.
+#[test]
+fn artifact_automation_is_prepared_after_rust_cache_restore() {
+    let mut checked = 0;
+    for entry in fs::read_dir(support::root().join(".github/workflows")).unwrap() {
+        let path = entry.unwrap().path();
+        let file = path.file_name().unwrap().to_str().unwrap().to_owned();
+        if !file.ends_with(".yml") {
+            continue;
+        }
+        let workflow = document(&file);
+        let Some(jobs) = workflow.get("jobs") else {
+            continue;
+        };
+        for (name, job) in jobs.entries() {
+            let Some(Node::Seq(steps)) = job.get("steps") else {
+                continue;
+            };
+            let uses = |prefix: &str| {
+                steps
+                    .iter()
+                    .any(|step| text(step, "uses").is_some_and(|u| u.starts_with(prefix)))
+            };
+            if !(uses(PREPARE) && uses(RUST_CACHE)) {
+                continue;
+            }
+            checked += 1;
+            let violations = cache_restores_after_prepare(steps);
+            assert!(
+                violations.is_empty(),
+                "{file}/{name}: rust-cache restore after prepare-automation at step indices {violations:?}"
+            );
+        }
+    }
+    assert!(checked > 0, "no job combines automation and rust-cache");
+}

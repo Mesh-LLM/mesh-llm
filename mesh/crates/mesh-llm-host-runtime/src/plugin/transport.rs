@@ -145,7 +145,14 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                         outbound_tx.clone(),
                                     );
                                 }
+                                Some(super::proto::envelope::Payload::PrepareModelAssetsRequest(request)) => {
+                                    super::model_assets::prepare_for_connection(
+                                        request_id, request, plugin_name.clone(), generation,
+                                        runtime.clone(), outbound_tx.clone(),
+                                    );
+                                }
                                 Some(super::proto::envelope::Payload::PeerBlockRequest(request)) => {
+
                                     // The requester is the connection's own name,
                                     // so one plugin cannot act as another.
                                     forward_plugin_peer_block_request(
@@ -691,11 +698,7 @@ fn forward_plugin_request(
         let bridge = rpc_bridge.lock().await.clone();
         let payload = match bridge {
             Some(bridge) => match bridge
-                .handle_request(
-                    plugin_name.clone(),
-                    request.method.clone(),
-                    request.params_json.clone(),
-                )
+                .handle_invocation_request(plugin_name.clone(), request)
                 .await
             {
                 Ok(result) => {
@@ -877,7 +880,7 @@ fn forward_plugin_notification(
     tokio::spawn(async move {
         if let Some(bridge) = rpc_bridge.lock().await.clone() {
             bridge
-                .handle_notification(plugin_name, notification.method, notification.params_json)
+                .handle_invocation_notification(plugin_name, notification)
                 .await;
         }
     });

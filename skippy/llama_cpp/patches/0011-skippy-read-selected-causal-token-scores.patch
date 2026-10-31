@@ -1,4 +1,4 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 5fb5632cf2145daeb536a2eb7f25ab29746af66b Mon Sep 17 00:00:00 2001
 From: IvGolovach <20299097+IvGolovach@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 12:00:00 -0700
 Subject: [PATCH] feat(skippy): read selected token scores in causal batches
@@ -6,8 +6,16 @@ Subject: [PATCH] feat(skippy): read selected token scores in causal batches
 Keep full vocabulary logits on the terminal worker and read bounded
 conditional log probabilities before another iteration can replace them.
 Readouts do not invoke samplers or advance generation history.
-
 ---
+ include/skippy/execution.h           | 19 ++++++++++
+ src/CMakeLists.txt                   |  4 +++
+ src/skippy/execution-batch.cpp       | 52 +++++++++++++++++++++++++++-
+ src/skippy/selected_logits.h         | 43 +++++++++++++++++++++++
+ src/skippy/tests/selected_logits.cpp | 25 +++++++++++++
+ 5 files changed, 142 insertions(+), 1 deletion(-)
+ create mode 100644 src/skippy/selected_logits.h
+ create mode 100644 src/skippy/tests/selected_logits.cpp
+
 diff --git a/include/skippy/execution.h b/include/skippy/execution.h
 index 7098677d8..bf9fb497c 100644
 --- a/include/skippy/execution.h
@@ -46,10 +54,10 @@ index 7098677d8..bf9fb497c 100644
  
  /**
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index fe75f538d..417be82de 100644
+index 5e02baa49..48f8964a9 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -157,6 +157,10 @@ endif()
+@@ -167,6 +167,10 @@ endif()
  if (LLAMA_STAGE_BUILD_TESTS)
      target_compile_definitions(llama PRIVATE LLAMA_STAGE_BUILD_TESTS)
  
@@ -61,7 +69,7 @@ index fe75f538d..417be82de 100644
          skippy/tests/hardware_application_probe.cpp)
      target_include_directories(skippy-hardware-application-probe PRIVATE .)
 diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
-index c45f66421..7987b9310 100644
+index 901095cab..bcc996bb1 100644
 --- a/src/skippy/execution-batch.cpp
 +++ b/src/skippy/execution-batch.cpp
 @@ -5,6 +5,7 @@
@@ -112,7 +120,7 @@ index c45f66421..7987b9310 100644
          if (request.session == nullptr || request.session->ctx != first->ctx ||
                  request.session->stage_model != first->stage_model || request.token_ids == nullptr ||
                  request.token_count == 0 || !unique_sessions.insert(request.session).second) {
-@@ -319,6 +346,18 @@ enum skippy_status skippy_iteration_batch_sampled(
+@@ -309,6 +336,18 @@ enum skippy_status skippy_iteration_batch_sampled(
      }
      *out_sampled_output_count = sampled_count;
  
@@ -122,9 +130,9 @@ index c45f66421..7987b9310 100644
 +    for (size_t index = 0; index < request_count; ++index) {
 +        auto * session = requests[index].session;
 +        if (requests[index].readout != nullptr && session->sampling_backend_enabled) {
-+            llama_set_sampler(session->ctx, session->seq_id, nullptr);
-+            session->sampling_backend_enabled = false;
-+            session->sampling_backend_retired = true;
++            if (!skippy_retire_backend_sampling(session, out_error)) {
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
 +        }
 +    }
 +
@@ -141,8 +149,8 @@ index c45f66421..7987b9310 100644
              for (int32_t axis = 0; axis < n_pos_per_embd; ++axis) {
                  const size_t destination = static_cast<size_t>(axis)*total_tokens + flat;
                  if (request.positions != nullptr) {
-@@ -383,6 +423,16 @@ enum skippy_status skippy_iteration_batch_sampled(
-         }
+@@ -384,6 +424,16 @@ enum skippy_status skippy_iteration_batch_sampled(
+         request.session->sampling_backend_row_invalid = false;
          request.session->n_past += static_cast<int32_t>(request.token_count);
          skippy_record_tokens(request.session, request.token_ids, request.token_count);
 +        if (request.readout != nullptr && request_logits) {
@@ -160,6 +168,7 @@ index c45f66421..7987b9310 100644
              // sparse output-row translation internally.
 diff --git a/src/skippy/selected_logits.h b/src/skippy/selected_logits.h
 new file mode 100644
+index 000000000..0fa526e5d
 --- /dev/null
 +++ b/src/skippy/selected_logits.h
 @@ -0,0 +1,43 @@
@@ -208,6 +217,7 @@ new file mode 100644
 +#endif
 diff --git a/src/skippy/tests/selected_logits.cpp b/src/skippy/tests/selected_logits.cpp
 new file mode 100644
+index 000000000..d33237d1a
 --- /dev/null
 +++ b/src/skippy/tests/selected_logits.cpp
 @@ -0,0 +1,25 @@
@@ -236,3 +246,6 @@ new file mode 100644
 +    if (skippy_selected_log_probabilities(inf.data(), inf.size(), selected.data() + 1, 1, result.data())) return 8;
 +    return 0;
 +}
+-- 
+2.56.0
+

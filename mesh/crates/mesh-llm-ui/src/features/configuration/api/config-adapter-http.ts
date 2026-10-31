@@ -18,7 +18,7 @@ type RuntimeControlConfigResponse = {
 
 async function expectJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    const message = await parseApiErrorBody(response)
+    const { body: message } = await parseApiErrorBody(response)
     throw new ApiError(response.status, message, message)
   }
 

@@ -860,10 +860,22 @@ pub(in crate::frontend) fn ensure_generation_concurrency_fits_lanes(
     let lane_count = usize::try_from(lane_count).unwrap_or(usize::MAX);
     if generation_concurrency > lane_count {
         bail!(
-            "{flag_name} ({generation_concurrency}) cannot exceed configured lane_count ({lane_count})"
+            "{flag_name} ({generation_concurrency}) cannot exceed effective lane_count ({lane_count})"
         );
     }
     Ok(())
+}
+
+/// Lane bound OpenAI generation admission must measure against.
+///
+/// The loaded runtime's lane count is the effective bound. Native serializes
+/// encoder-decoder work onto one lane, so `RuntimeState::lane_count()` can be
+/// below `StageConfig::lane_count`; admission measured against the configured
+/// value starts a frontend that queues generations the runtime can never serve.
+pub(in crate::frontend) fn generation_admission_lane_count(
+    runtime: &Arc<Mutex<RuntimeState>>,
+) -> u32 {
+    lock_runtime(runtime).lane_count()
 }
 
 pub(in crate::frontend) fn generation_lanes_busy_error() -> InferenceError {

@@ -25,6 +25,9 @@ use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 
+#[cfg(test)]
+mod reconnect_tests;
+
 pub(in crate::frontend) struct PersistentStageLanePool {
     pub(in crate::frontend) config: StageConfig,
     pub(in crate::frontend) timeout_secs: u64,
@@ -389,6 +392,15 @@ impl PersistentStageLanePool {
         send_client_ready_hello_if_enabled(&mut stream)
             .context("send persistent downstream lane client ready hello")?;
         receive_persistent_lane_ready(&mut stream, ready_timeout)?;
+        if self
+            .config
+            .downstream
+            .as_ref()
+            .is_some_and(|peer| peer.persistent_lane_marker)
+        {
+            crate::binary_transport::connection_mode::mark_persistent_lane(&mut stream)
+                .context("mark persistent downstream lane")?;
+        }
         configure_persistent_lane_io_deadlines(&stream)?;
         tracing::debug!(
             "openai downstream lane received ready: stage_id={} lane_id={lane_id} local={local_addr:?} peer={peer_addr:?}",
@@ -446,4 +458,62 @@ pub(in crate::frontend) fn ewma(old: f64, sample: f64) -> f64 {
         1.0 - PersistentStageLanePool::PREFILL_TRANSPORT_EWMA_ALPHA,
         sample * PersistentStageLanePool::PREFILL_TRANSPORT_EWMA_ALPHA,
     )
+}
+
+#[cfg(test)]
+mod marker_tests {
+    use super::*;
+    use skippy_protocol::binary::{
+        StageWireMessage, read_stage_message, send_ready, write_stage_message,
+    };
+    use std::{io::Read, net::TcpListener};
+
+    #[test]
+    fn frontend_lane_marker_requires_downstream_opt_in() {
+        for enabled in [false, true] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let config = StageConfig {
+                bind_addr: "127.0.0.1:0".into(),
+                downstream: Some(skippy_protocol::PeerConfig {
+                    persistent_lane_marker: enabled,
+                    stage_id: "stage-1".into(),
+                    stage_index: 1,
+                    endpoint: listener.local_addr().unwrap().to_string(),
+                }),
+                ..StageConfig::default()
+            };
+            let receiver = std::thread::spawn(move || {
+                let (mut server, _) = listener.accept().unwrap();
+                server
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .unwrap();
+                send_ready(&mut server).unwrap();
+                if enabled {
+                    let mut marker = [0; 4];
+                    server.read_exact(&mut marker).unwrap();
+                    assert_eq!(&marker, b"SPLN");
+                }
+                read_stage_message(&mut server, 0)
+            });
+            let telemetry = Telemetry::new(
+                None,
+                0,
+                config.clone(),
+                crate::telemetry::TelemetryLevel::Off,
+            );
+            let pool = PersistentStageLanePool::new(&config, 0, 2, telemetry)
+                .unwrap()
+                .unwrap();
+
+            let mut stream = pool
+                .connect_lane_once(0, Duration::from_secs(2), Duration::from_secs(2))
+                .unwrap();
+            write_stage_message(&mut stream, &StageWireMessage::stop_with_identity(23, 29))
+                .unwrap();
+
+            let decoded = receiver.join().unwrap().unwrap();
+            assert_eq!(decoded.request_id, 23);
+            assert_eq!(decoded.session_id, 29);
+        }
+    }
 }

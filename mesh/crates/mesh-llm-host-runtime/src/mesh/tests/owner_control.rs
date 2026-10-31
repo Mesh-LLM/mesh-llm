@@ -50,6 +50,8 @@ fn make_test_peer_info(peer_id: EndpointId) -> PeerInfo {
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
+        plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         owner_summary: OwnershipSummary::default(),
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
@@ -237,6 +239,7 @@ async fn external_inference_endpoint_models_are_advertised_in_gossip() -> anyhow
         .set_test_inference_endpoints(vec![plugin::InferenceEndpointRoute {
             plugin_name: "endpoint-plugin".into(),
             endpoint_id: "endpoint-plugin".into(),
+            protocol: None,
             address: "http://127.0.0.1:8000/v1".into(),
             models: vec!["lemonade-small".into()],
         }])

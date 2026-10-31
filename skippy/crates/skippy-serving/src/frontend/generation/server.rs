@@ -15,6 +15,7 @@ use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::attach_native_mtp_draft_model;
 use crate::frontend::generation::ensure_generation_concurrency_fits_lanes;
+use crate::frontend::generation::generation_admission_lane_count;
 use crate::frontend::generation::open_draft_runner;
 use crate::frontend::generation::prewarm_generation_sessions;
 use crate::frontend::iteration_scheduler::IterationScheduler;
@@ -231,9 +232,13 @@ fn embedded_openai_backend_with_scheduler(
     if args.generation_concurrency == 0 {
         bail!("--generation-concurrency must be greater than zero");
     }
+    // Admission is measured against the loaded runtime, not the configured
+    // `lane_count`: an encoder-decoder model serves one lane however many the
+    // stage config asks for (#1954).
+    let admission_lane_count = generation_admission_lane_count(&args.runtime);
     ensure_generation_concurrency_fits_lanes(
         args.generation_concurrency,
-        args.config.lane_count,
+        admission_lane_count,
         "--generation-concurrency",
     )?;
     if args.draft_model_path.is_some() && args.speculative_window == 0 {
