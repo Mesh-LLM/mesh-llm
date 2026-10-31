@@ -28,6 +28,9 @@ pub const FEATURE_LAYA_DECISIONS: u64 = 1 << 40;
 /// Full-model speech recognition (`skippy/asr.h`); clear in runtimes built
 /// without whisper.cpp.
 pub const FEATURE_SPEECH_RECOGNITION: u64 = 1 << 41;
+/// Joint Clef decision reads (`skippy/clef.h`).
+pub const FEATURE_CLEF_DECISIONS: u64 = 1 << 42;
+pub const CLEF_INFO_V1_ABI_VERSION: u32 = 1;
 pub const MODEL_TENSOR_SOURCE_V1_ABI_VERSION: u32 = 1;
 pub const WORKLOAD_INFO_V1_ABI_VERSION: u32 = 1;
 pub const LAYA_INFO_V1_ABI_VERSION: u32 = 1;
@@ -644,6 +647,51 @@ pub struct Model {
 #[repr(C)]
 pub struct LayaModel {
     _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct ClefModel {
+    _private: [u8; 0],
+}
+
+/// Decision-order marks of Clef prompt tokens (`enum skippy_clef_order`).
+pub const CLEF_ORDER_NONE: i32 = 0;
+pub const CLEF_ORDER_QUESTION_NOUL: i32 = 1;
+pub const CLEF_ORDER_QUESTION_CHOICE: i32 = 2;
+pub const CLEF_ORDER_QUESTION_SCORE: i32 = 3;
+pub const CLEF_ORDER_OPTION: i32 = 4;
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ClefInfoV1 {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub n_ctx: i32,
+    pub n_embd: i32,
+    pub n_layer: i32,
+    pub n_vocab: i32,
+    pub parameter_count: i64,
+    pub model_bytes: u64,
+    pub decision_metadata_count: u32,
+    pub decision_type: [u8; 32],
+}
+
+impl Default for ClefInfoV1 {
+    /// Initialize the Clef descriptor with its ABI size and version.
+    fn default() -> Self {
+        Self {
+            struct_size: std::mem::size_of::<Self>() as u32,
+            abi_version: CLEF_INFO_V1_ABI_VERSION,
+            n_ctx: 0,
+            n_embd: 0,
+            n_layer: 0,
+            n_vocab: 0,
+            parameter_count: 0,
+            model_bytes: 0,
+            decision_metadata_count: 0,
+            decision_type: [0; 32],
+        }
+    }
 }
 
 #[repr(C)]
