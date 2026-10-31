@@ -31,6 +31,11 @@ use skippy_runtime::SamplingConfig;
 
 #[path = "tests/durable_prefix.rs"]
 mod durable_prefix;
+#[path = "tests/recurrent_fixture.rs"]
+mod recurrent_fixture;
+use recurrent_fixture::recurrent_test_backend;
+#[path = "tests/cooperative_prefill.rs"]
+mod cooperative_prefill;
 
 // The real-model tests below are deliberately ignored by default. The
 // fixture contract is explicit: run them with both model-path variables set;

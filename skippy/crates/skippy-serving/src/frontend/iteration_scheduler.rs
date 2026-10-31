@@ -1,4 +1,4 @@
-mod cache_runtime;
+pub(super) mod cache_runtime;
 mod detached_runtime;
 mod direct_batch;
 mod direct_execution;
@@ -20,7 +20,7 @@ use crate::frontend::admission::DECODE_BATCH_HEADROOM_TOKENS;
 use crate::frontend::generation::TokenControl;
 use crate::frontend::generation::generation_queue_full_error;
 use crate::frontend::util::openai_backend_error;
-use crate::kv_integration::StagePrefixCachePayload;
+use crate::kv_integration::scheduling::CacheSchedulingPolicy;
 use crate::runtime_state::panic_recovery::lock_runtime;
 use crate::runtime_state::{RuntimeIterationBatchRequest, RuntimeSessionAlignStats, RuntimeState};
 use crate::telemetry::Telemetry;
@@ -101,16 +101,6 @@ pub(crate) struct SchedulerRuntimeOutcome<T> {
 pub(crate) struct DirectIterationChannel {
     reply: std_mpsc::SyncSender<InferenceResult<SchedulerIterationOutcome>>,
     result: std_mpsc::Receiver<InferenceResult<SchedulerIterationOutcome>>,
-}
-
-pub(crate) struct CacheAwareRuntimeRequest<'a> {
-    pub(crate) operation_id: String,
-    pub(crate) deadline: Instant,
-    pub(crate) cancellation: Option<&'a skippy_inference_api::CancellationToken>,
-    pub(crate) prompt_tokens: Arc<[i32]>,
-    pub(crate) priority: u64,
-    pub(crate) payload: StagePrefixCachePayload,
-    pub(crate) refresh_affinity: CacheAffinityRefresh,
 }
 
 struct IterationSchedulerShared {
@@ -348,7 +338,7 @@ enum SchedulerCommand {
         RuntimeOperation,
         Arc<[i32]>,
         u64,
-        StagePrefixCachePayload,
+        CacheSchedulingPolicy,
         CacheAffinityRefresh,
     ),
     Cancel(String),
@@ -797,36 +787,6 @@ impl IterationScheduler {
         result.recv().map_err(|error| {
             InferenceError::backend(format!("iteration scheduler stopped: {error}"))
         })?
-    }
-
-    /// Queue cache restore/prefill work by stage-local radix affinity while
-    /// retaining aging and decode-turn fairness.
-    pub(crate) fn execute_cache_aware_runtime_timed<T>(
-        &self,
-        label: &'static str,
-        request: CacheAwareRuntimeRequest<'_>,
-        operation: impl FnOnce(&mut RuntimeState, &CacheRuntimeContext) -> InferenceResult<T>
-        + Send
-        + 'static,
-    ) -> InferenceResult<SchedulerRuntimeOutcome<T>>
-    where
-        T: Send + 'static,
-    {
-        let (runtime_operation, result, control) = cache_runtime_operation(
-            label,
-            request.operation_id,
-            request.deadline,
-            request.cancellation,
-            operation,
-        );
-        self.enqueue_command(SchedulerCommand::ExecuteCacheAwareRuntime(
-            runtime_operation,
-            request.prompt_tokens,
-            request.priority,
-            request.payload,
-            request.refresh_affinity,
-        ))?;
-        wait_for_cache_runtime(result, &control)
     }
 
     fn enqueue_command(&self, command: SchedulerCommand) -> InferenceResult<()> {
