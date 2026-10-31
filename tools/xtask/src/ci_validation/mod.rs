@@ -5,6 +5,7 @@ mod documentation;
 pub(crate) mod entrypoint_graph;
 mod entrypoints;
 pub(crate) mod lane_results;
+mod platform_member_filter;
 mod producers;
 mod python_tooling;
 mod release_compilation;
@@ -30,6 +31,7 @@ use windows_runtime::check_windows_dynamic_runtime_contract;
 
 pub(crate) fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     workflow_guards::check(repo_root)?;
+    platform_member_filter::check(repo_root)?;
     check_current_ci_invariants(repo_root)
 }
 

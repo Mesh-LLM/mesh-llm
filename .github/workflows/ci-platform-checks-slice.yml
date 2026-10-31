@@ -306,10 +306,45 @@ jobs:
           # shared owner already resolved by the step above, so it is
           # deliberately absent here rather than run twice.
           crates: '["mesh-llm-analytics","mesh-llm-config","mesh-llm-events","mesh-llm-identity","mesh-llm-payments","mesh-llm-plugin","mesh-llm-plugin-manager","mesh-llm-tui","mesh-llm-ui","mesh-llm-wallet","skippy-cache"]'
+      - name: Resolve macOS unit-test owners against the checked-out workspace
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
+        id: macos_test_packages
+        env:
+          PLANNED_BATCH_CRATES: ${{ steps.packages.outputs.crates }}
+        run: |
+          set -euo pipefail
+          # The resolver passes absent unmapped names through unchanged, so a
+          # fixed-list member removed from the workspace would reach the test
+          # loop below and abort it with "package ID specification <crate> did
+          # not match any packages". Workspace membership is decided by the tree
+          # that is actually checked out, so resolve the shared owners against
+          # it exactly once and feed the filtered list to the test command.
+          # macOS runners ship Bash 3.2, which has no mapfile, and treats an
+          # empty array expansion as unbound under set -u.
+          requested=()
+          while IFS= read -r crate; do
+            requested+=("$crate")
+          done < <(jq -r '.[]' <<<"$PLANNED_BATCH_CRATES")
+          crates=(${requested[@]+"${requested[@]}"})
+          if [[ "${#requested[@]}" -gt 0 ]] && cargo metadata --no-deps --format-version 1 > "$RUNNER_TEMP/workspace-metadata.json"; then
+            jq -r '.packages[].name' "$RUNNER_TEMP/workspace-metadata.json" > "$RUNNER_TEMP/workspace-members.txt"
+            crates=()
+            for crate in "${requested[@]}"; do
+              if grep -qxF -- "$crate" "$RUNNER_TEMP/workspace-members.txt"; then
+                crates+=("$crate")
+              else
+                echo "::warning::platform plans $crate, which is not a workspace member of the checked-out revision; skipping it"
+              fi
+            done
+          elif [[ "${#requested[@]}" -gt 0 ]]; then
+            echo "::warning::cargo metadata failed; running the planned owners unchanged"
+          fi
+          printf 'crates=%s\n' "$(jq -cn --args '$ARGS.positional' ${crates[@]+"${crates[@]}"})" >> "$GITHUB_OUTPUT"
+
       - name: Run macOS unit tests
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
         env:
-          TEST_CRATES: ${{ steps.packages.outputs.crates }}
+          TEST_CRATES: ${{ steps.macos_test_packages.outputs.crates }}
         run: |
           set -euo pipefail
           while IFS= read -r crate; do
@@ -327,13 +362,63 @@ jobs:
           # llama archives this row does not prepare, so the run step below
           # turns on `mesh-llm-system/dynamic-native-runtime` for them.
           crates: '["mesh-llm-commands","mesh-llm-system"]'
+      - name: Resolve Windows unit-test owners against the checked-out workspace
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
+        id: windows_test_packages
+        shell: bash
+        env:
+          SHARED_CRATES: ${{ steps.packages.outputs.crates }}
+          WINDOWS_CRATES: ${{ steps.windows_packages.outputs.crates }}
+          WINDOWS_DYNAMIC_CRATES: ${{ steps.windows_dynamic_packages.outputs.crates }}
+        run: |
+          set -euo pipefail
+          # The resolver passes absent unmapped names through unchanged, so a
+          # fixed-list member removed from the workspace would reach the test
+          # loop below and abort it with "package ID specification <crate> did
+          # not match any packages". Workspace membership is decided by the tree
+          # that is actually checked out, so resolve all three owner lists
+          # against it exactly once and feed the filtered lists to the test
+          # command. An empty filtered list runs no test command rather than an
+          # invalid one.
+          metadata_ok=0
+          if cargo metadata --no-deps --format-version 1 > "$RUNNER_TEMP/workspace-metadata.json"; then
+            jq -r '.packages[].name' "$RUNNER_TEMP/workspace-metadata.json" > "$RUNNER_TEMP/workspace-members.txt"
+            metadata_ok=1
+          else
+            echo "::warning::cargo metadata failed; running the planned owners unchanged"
+          fi
+          filter_list() {
+            local input="$1"
+            if [[ "$metadata_ok" -ne 1 ]]; then
+              printf '%s' "$input"
+              return
+            fi
+            local -a requested=()
+            mapfile -t requested < <(jq -r '.[]' <<<"$input")
+            local -a kept=()
+            local crate
+            for crate in "${requested[@]}"; do
+              if grep -qxF -- "$crate" "$RUNNER_TEMP/workspace-members.txt"; then
+                kept+=("$crate")
+              else
+                echo "::warning::platform plans $crate, which is not a workspace member of the checked-out revision; skipping it" >&2
+              fi
+            done
+            jq -cn --args '$ARGS.positional' ${kept[@]+"${kept[@]}"}
+          }
+          {
+            printf 'crates=%s\n' "$(filter_list "$SHARED_CRATES")"
+            printf 'windows_crates=%s\n' "$(filter_list "$WINDOWS_CRATES")"
+            printf 'windows_dynamic_crates=%s\n' "$(filter_list "$WINDOWS_DYNAMIC_CRATES")"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Run Windows unit tests
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
         shell: pwsh
         env:
-          TEST_CRATES: ${{ steps.packages.outputs.crates }}
-          WINDOWS_TEST_CRATES: ${{ steps.windows_packages.outputs.crates }}
-          WINDOWS_DYNAMIC_TEST_CRATES: ${{ steps.windows_dynamic_packages.outputs.crates }}
+          TEST_CRATES: ${{ steps.windows_test_packages.outputs.crates }}
+          WINDOWS_TEST_CRATES: ${{ steps.windows_test_packages.outputs.windows_crates }}
+          WINDOWS_DYNAMIC_TEST_CRATES: ${{ steps.windows_test_packages.outputs.windows_dynamic_crates }}
         run: |
           # The macOS unit row's shared source-owner suites, resolved through
           # the same package resolver, plus the crates the
