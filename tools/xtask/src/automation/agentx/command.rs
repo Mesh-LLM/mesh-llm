@@ -60,6 +60,39 @@ pub(super) fn limits(seconds: u64) -> process::Limits {
     }
 }
 pub(super) fn run(spec: &ProcessSpec, seconds: u64, log: &Path) -> DynResult<()> {
+    capture(spec, seconds, log, None).map(|_| ())
+}
+
+/// Parse trusted public CLI/API JSON without interpreting redacted diagnostics
+/// as machine data. Raw bytes remain bounded in memory and are never logged.
+pub(super) fn public_json(
+    spec: &ProcessSpec,
+    seconds: u64,
+    log: &Path,
+) -> DynResult<serde_json::Value> {
+    let report = capture(
+        spec,
+        seconds,
+        log,
+        std::num::NonZeroUsize::new(4 * 1024 * 1024),
+    )?;
+    let bytes = report
+        .stdout
+        .as_ref()
+        .ok_or("public JSON capture absent")?
+        .as_bytes();
+    if bytes.iter().all(u8::is_ascii_whitespace) {
+        return Ok(serde_json::Value::Null);
+    }
+    Ok(serde_json::from_slice(bytes)?)
+}
+
+fn capture(
+    spec: &ProcessSpec,
+    seconds: u64,
+    log: &Path,
+    stdout: Option<std::num::NonZeroUsize>,
+) -> DynResult<process::RawProcessReport> {
     let interrupt = crate::automation::command_interrupt::Interrupt::install()?;
     let result = process::supervise_raw_with_files(
         spec,
@@ -70,7 +103,7 @@ pub(super) fn run(spec: &ProcessSpec, seconds: u64, log: &Path) -> DynResult<()>
             stderr: Some(log.with_extension("stderr.log")),
         },
         process::RawCaptureOptions {
-            stdout: None,
+            stdout,
             stderr: None,
         },
     );
@@ -85,8 +118,34 @@ pub(super) fn run(spec: &ProcessSpec, seconds: u64, log: &Path) -> DynResult<()>
         )
         .into());
     }
-    Ok(())
+    Ok(report)
 }
 pub(super) fn strings(args: &[&str]) -> Vec<String> {
     args.iter().map(|arg| (*arg).into()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn structured_public_json_survives_redaction_without_disabling_log_redaction() {
+        let root = tempfile::tempdir().unwrap();
+        let log = root.path().join("public-json");
+        let spec = spec(
+            root.path(),
+            "sh",
+            &strings(&[
+                "-c",
+                r#"printf '%s' '{"context_tokens":8,"model_cache":"/models/tokenizer"}'"#,
+            ]),
+        )
+        .unwrap();
+        let value = public_json(&spec, 10, &log).unwrap();
+        assert_eq!(value["context_tokens"], 8);
+        assert_eq!(value["model_cache"], "/models/tokenizer");
+        let diagnostic = std::fs::read_to_string(log.with_extension("stdout.log")).unwrap();
+        assert!(diagnostic.contains("[output line suppressed]"));
+        assert!(!diagnostic.contains("/models/tokenizer"));
+    }
 }
