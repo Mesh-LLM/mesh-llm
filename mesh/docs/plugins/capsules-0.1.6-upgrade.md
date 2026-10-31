@@ -58,8 +58,9 @@ refused. So a push is refused when:
 
 - the receiver runs 0.1.5 at its default, which is `off`, so in a mixed mesh
   only pushes between 0.1.6 nodes are held;
-- the receiver's host announces no keys, as on mesh-llm 0.78.1 or older, and
-  `CAPSULES_PEER_KEYS` does not name the sender;
+- the sender's or the receiver's host announces no keys, as on mesh-llm
+  0.78.1 or older, and the receiver's `CAPSULES_PEER_KEYS` does not name the
+  sender;
 - the sender is a client-only node (`mesh-llm client`), which gets a new peer
   id at each start, and the receiver does not name its key in
   `CAPSULES_PEER_KEYS`.
