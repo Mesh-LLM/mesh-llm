@@ -655,7 +655,6 @@ fn make_test_peer(
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
-        activation_codec_fp8_supported: false,
         owner_summary: crate::crypto::OwnershipSummary::default(),
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]

@@ -94,8 +94,7 @@ impl StageActivationCodec {
         Self::Fp8E5m2RowF32RneV1,
     ];
 
-    /// FP8 codecs postdate the split stage protocol: a stage decodes them only
-    /// if it advertises `STAGE_SUBPROTOCOL_FEATURE_ACTIVATION_CODEC_FP8_V1`.
+    /// Whether this is one of the FP8 codecs.
     pub const fn is_fp8(self) -> bool {
         matches!(
             self,
