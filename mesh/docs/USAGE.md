@@ -1134,8 +1134,11 @@ quant matches, and the draft is pinned to a Hugging Face revision and SHA-256:
 | Qwen3-Coder-Next | `AtomicChat/Qwen3-Coder-Next-DFlash-GGUF` | Metal only |
 
 A load uses the draft once it is in the Hugging Face cache. A missing draft
-downloads in the background and the load serves without speculation rather
-than wait for it; the next load of the model picks it up. A cataloged draft
+downloads in the background and the load does not wait for it: it serves with
+the native MTP the draft would have replaced, or without speculation. A later
+load attaches the draft once it passes its size, digest and pairing checks and
+fits the memory plan. A cached draft that fails its size or digest check is
+removed so the next load downloads it again. A cataloged draft
 also replaces native MTP that is on only because the GGUF carries NextN layers.
 An explicit draft, strategy, N-gram setting, MTP tuning or package strategy
 keeps its own choice, and `spec_default = false` turns automatic speculation
