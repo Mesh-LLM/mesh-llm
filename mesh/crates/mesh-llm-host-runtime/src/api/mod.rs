@@ -71,8 +71,8 @@ pub(crate) use self::server::start_with_listener;
 pub(crate) use self::server::{handle_request, is_ui_only_route};
 pub use self::state::{
     ControlBootstrapPayload, LocalModelInterest, MeshApi, OpenAiGuardrailModeUpdateResponse,
-    PublicationState, RuntimeControlRequest, RuntimeLoadResponse, RuntimeModelPayload,
-    RuntimeProcessPayload, RuntimeUnloadResponse,
+    PublicationState, RuntimeControlRequest, RuntimeLoadResponse, RuntimeLoadSizing,
+    RuntimeModelPayload, RuntimeProcessPayload, RuntimeUnloadResponse,
 };
 
 use self::state::ApiInner;
@@ -1202,6 +1202,7 @@ impl ServingController for MeshApi {
                     spec: model_ref.clone(),
                     config_model_id: None,
                     profile: request.profile.clone(),
+                    sizing: RuntimeLoadSizing::default(),
                     resp: resp_tx,
                 })
                 .map_err(|_| runtime_unavailable("runtime control unavailable"))?;

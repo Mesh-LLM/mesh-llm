@@ -444,6 +444,7 @@ pub(crate) async fn run_auto_load_runtime_model(
     spec: String,
     config_model_id: Option<String>,
     profile: String,
+    requested: api::RuntimeLoadSizing,
 ) -> Result<api::RuntimeLoadResponse> {
     crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let (spec, profile) = normalize_runtime_model_request_for_config(
@@ -499,11 +500,15 @@ pub(crate) async fn run_auto_load_runtime_model(
         node_capacity_bytes: ctx.node.local_runtime_capacity_bytes(),
         host_ram_capacity_bytes: ctx.node.host_ram_capacity_bytes,
     };
-    let ctx_size_override = runtime_model_ctx_size_override(ctx.options, model_overrides);
-    let parallel_override = crate::runtime::startup_models::resolve_model_parallel_override(
-        model_overrides.and_then(|m| m.parallel),
-        &ctx.config.gpu,
-    );
+    let ctx_size_override = requested
+        .ctx_size
+        .or_else(|| runtime_model_ctx_size_override(ctx.options, model_overrides));
+    let parallel_override = requested.parallel.or_else(|| {
+        crate::runtime::startup_models::resolve_model_parallel_override(
+            model_overrides.and_then(|m| m.parallel),
+            &ctx.config.gpu,
+        )
+    });
     let capacity_reservation = match audit_runtime_model_load_result(
         reserve_runtime_capacity_for_model(
             ctx.runtime_capacity_ledger,
@@ -606,6 +611,10 @@ pub(crate) async fn run_auto_load_runtime_model(
                 load_started,
             );
             load_op.load_failed(&runtime_model_name);
+            let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Error {
+                message: format!("Failed to load model {runtime_model_name}: {err:#}"),
+                context: Some(format!("model={runtime_model_name}")),
+            });
             return Err(err);
         }
     };

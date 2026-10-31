@@ -52,6 +52,7 @@ async fn local_runtime_model_routes_remain_the_lifecycle_api() {
                 spec,
                 config_model_id,
                 profile,
+                sizing: _,
                 resp,
             }) => {
                 assert_eq!(spec, "org/model:Q4_K_M");
@@ -112,6 +113,69 @@ async fn local_runtime_model_routes_remain_the_lifecycle_api() {
     unload_task.await.unwrap();
     assert!(unloaded.starts_with("HTTP/1.1 200 OK"), "response: {unloaded}");
     assert_eq!(json_body(&unloaded)["dropped"], "org/model:Q4_K_M");
+}
+
+#[tokio::test]
+async fn runtime_load_route_rejects_unusable_context_size_and_lanes() {
+    let state = build_test_mesh_api().await;
+    for body in [
+        r#"{"model":"org/model","ctx_size":0}"#,
+        r#"{"model":"org/model","parallel":0}"#,
+        r#"{"model":"org/model","ctx_size":"large"}"#,
+        r#"{"model":"org/model","parallel":-1}"#,
+    ] {
+        let (control_tx, mut control_rx) = mpsc::unbounded_channel();
+        state.set_runtime_control(control_tx).await;
+        let response = tokio::time::timeout(
+            Duration::from_secs(5),
+            send_runtime_lifecycle_request(
+                state.clone(),
+                lifecycle_post("/api/runtime/models", body),
+            ),
+        )
+        .await
+        .unwrap_or_else(|_| {
+            panic!("{body} reached the control loop instead of being rejected")
+        });
+        assert!(
+            control_rx.try_recv().is_err(),
+            "{body} must not start a load"
+        );
+        assert!(
+            response.starts_with("HTTP/1.1 400 Bad Request"),
+            "{body} should be rejected: {response}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn runtime_load_route_returns_the_whole_failure_chain() {
+    let state = build_test_mesh_api().await;
+    let (control_tx, mut control_rx) = mpsc::unbounded_channel();
+    state.set_runtime_control(control_tx).await;
+    let load_task = tokio::spawn(async move {
+        match control_rx.recv().await {
+            Some(RuntimeControlRequest::Load { resp, .. }) => {
+                let native = anyhow::anyhow!("tensor 'output.weight' data is not within the file bounds")
+                    .context("load Skippy runtime for model org/model");
+                let _ = resp.send(Err(native));
+            }
+            _ => panic!("expected local load request"),
+        }
+    });
+
+    let failed = send_runtime_lifecycle_request(
+        state,
+        lifecycle_post("/api/runtime/models", r#"{"model":"org/model"}"#),
+    )
+    .await;
+    load_task.await.unwrap();
+    let reason = json_body(&failed)["error"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(reason.contains("load Skippy runtime"), "{failed}");
+    assert!(reason.contains("not within the file bounds"), "{failed}");
 }
 
 #[tokio::test]

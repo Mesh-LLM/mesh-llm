@@ -161,7 +161,12 @@ pub(crate) async fn dispatch_runtime_command(
             port,
             json,
         }) => run_control_apply_config(endpoint, *expected_revision, config, *port, *json).await,
-        Some(RuntimeCommand::Load { name, port }) => run_load(name, *port).await,
+        Some(RuntimeCommand::Load {
+            name,
+            port,
+            ctx_size,
+            parallel,
+        }) => run_load(name, *port, LoadSizing::from_flags(*ctx_size, *parallel)).await,
         Some(RuntimeCommand::Unload { name, port }) => run_drop(name, *port).await,
         Some(RuntimeCommand::Guardrails { mode, port, json }) => {
             run_set_mesh_guardrails(*mode, *port, *json).await
@@ -376,25 +381,79 @@ pub(crate) async fn run_drop(model_name: &str, port: u16) -> Result<()> {
     display_runtime_result(resp, model_name, "Unloaded").await
 }
 
-pub(crate) async fn run_load(model_name: &str, port: u16) -> Result<()> {
+/// Optional per-load sizing; absent fields keep the node's own plan.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct LoadSizing {
+    ctx_size: Option<u32>,
+    parallel: Option<usize>,
+}
+
+impl LoadSizing {
+    pub(crate) fn from_flags(
+        ctx_size: Option<std::num::NonZeroU32>,
+        parallel: Option<std::num::NonZeroUsize>,
+    ) -> Self {
+        Self {
+            ctx_size: ctx_size.map(std::num::NonZeroU32::get),
+            parallel: parallel.map(std::num::NonZeroUsize::get),
+        }
+    }
+}
+
+fn build_load_request(model_name: &str, sizing: LoadSizing) -> serde_json::Value {
+    let mut body = json!({ "model": model_name });
+    if let Some(ctx_size) = sizing.ctx_size {
+        body["ctx_size"] = json!(ctx_size);
+    }
+    if let Some(parallel) = sizing.parallel {
+        body["parallel"] = json!(parallel);
+    }
+    body
+}
+
+const LOAD_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+pub(crate) async fn run_load(model_name: &str, port: u16, sizing: LoadSizing) -> Result<()> {
+    let token = mesh_llm_commands::owner_control::owner_control_token(port).await?;
+    send_load_request(model_name, port, sizing, &token, LOAD_REQUEST_TIMEOUT).await
+}
+
+pub(crate) async fn send_load_request(
+    model_name: &str,
+    port: u16,
+    sizing: LoadSizing,
+    token: &str,
+    timeout: std::time::Duration,
+) -> Result<()> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(timeout.min(std::time::Duration::from_secs(5)))
+        .timeout(timeout)
         .build()?;
     let url = format!("http://127.0.0.1:{port}/api/runtime/models");
     let resp = client
         .post(&url)
-        .header(
-            reqwest::header::AUTHORIZATION,
-            format!(
-                "Bearer {}",
-                mesh_llm_commands::owner_control::owner_control_token(port).await?
-            ),
-        )
-        .json(&serde_json::json!({"model": model_name}))
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
+        .json(&build_load_request(model_name, sizing))
         .send()
         .await
-        .with_context(|| format!("Can't connect to mesh-llm on port {port}. Is it running?"))?;
+        .map_err(|error| load_send_error(error, model_name, port))?;
     display_runtime_result(resp, model_name, "Loaded").await
+}
+
+/// A timeout does not establish whether the node accepted the load request.
+fn load_send_error(error: reqwest::Error, model_name: &str, port: u16) -> anyhow::Error {
+    let message = if error.is_connect() {
+        format!("Can't connect to mesh-llm on port {port}. Is it running?")
+    } else if error.is_timeout() {
+        format!(
+            "Load request to mesh-llm on port {port} timed out while loading {model_name}; \
+             it may have been accepted and may still be running. \
+             Run `mesh-llm status --port {port}` to see when it is ready."
+        )
+    } else {
+        format!("Load request to mesh-llm on port {port} failed")
+    };
+    anyhow::Error::new(error).context(message)
 }
 
 async fn display_runtime_result(

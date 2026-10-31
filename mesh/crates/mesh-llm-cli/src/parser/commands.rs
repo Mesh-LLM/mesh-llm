@@ -691,6 +691,12 @@ pub enum Command {
         /// Console/API port of the running mesh-llm instance (default: 3131)
         #[arg(long, default_value = "3131")]
         port: u16,
+        /// Context size per lane, in tokens. Default: planned for this node.
+        #[arg(long)]
+        ctx_size: Option<std::num::NonZeroU32>,
+        /// Parallel lanes (concurrent sequences). Default: the model's config, else planned.
+        #[arg(long)]
+        parallel: Option<std::num::NonZeroUsize>,
     },
     /// Unload a local model from a running mesh-llm instance.
     #[command(alias = "drop")]

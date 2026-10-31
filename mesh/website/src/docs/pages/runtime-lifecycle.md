@@ -90,6 +90,10 @@ curl -s -X POST localhost:3131/api/runtime/models \
   -H 'Content-Type: application/json' \
   -d '{"model":"Qwen3-8B-Q4_K_M"}'
 
+curl -s -X POST localhost:3131/api/runtime/models \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"Qwen3-8B-Q4_K_M","ctx_size":8192,"parallel":1}'
+
 curl -s -X DELETE \
   localhost:3131/api/runtime/models/Qwen3-8B-Q4_K_M
 
