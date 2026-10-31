@@ -789,12 +789,15 @@ skippy-api-asan:
     cmake --build target/skippy-api-asan --target skippy_api_tests --parallel
     ctest --test-dir target/skippy-api-asan --output-on-failure
     # The fuzzers are part of the regression gate: build them and replay every
-    # corpus seed deterministically. A missing clang is a hard error, not a
-    # silent skip. The property tests run in the ctest suite above.
+    # corpus seed deterministically. Prefer the pinned LLVM prefix when it is
+    # present, else the runner's clang++ (Linux CI guarantees one on PATH).
+    # A missing clang is a hard error, not a silent skip. The property tests
+    # run in the ctest suite above.
     llvm="${SKIPPY_LLVM_PREFIX:-/opt/homebrew/opt/llvm}"
     cxx="$llvm/bin/clang++"
-    if [[ ! -x "$cxx" ]]; then
-        printf '%s\n' "skippy-api-asan: $cxx not found; cannot replay the fuzz corpus" >&2
+    [[ -x "$cxx" ]] || cxx="$(command -v clang++ || true)"
+    if [[ -z "$cxx" ]]; then
+        printf '%s\n' 'skippy-api-asan: clang++ not found under $SKIPPY_LLVM_PREFIX or on PATH; cannot replay the fuzz corpus' >&2
         exit 1
     fi
     cmake -S skippy/skippy_api -B target/skippy-api-fuzz -G Ninja \
