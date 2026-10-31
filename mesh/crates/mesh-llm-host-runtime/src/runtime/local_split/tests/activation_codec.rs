@@ -104,6 +104,15 @@ fn split_activation_codec_resolves_model_then_defaults_then_f16() {
         SplitActivationCodec::DEFAULT
     );
     assert!(SplitActivationCodec::from_setting("int4").is_none());
+    // Validation accepts any case, so parsing does too.
+    assert_eq!(
+        SplitActivationCodec::from_setting("LOSSLESS"),
+        Some(SplitActivationCodec::LOSSLESS)
+    );
+    assert_eq!(
+        SplitActivationCodec::from_setting("F16"),
+        Some(fixed(Codec::F16RneV1))
+    );
     for (setting, codec) in [
         ("fp8-e4m3-row", Codec::Fp8E4m3RowF32RneV1),
         ("fp8-e4m3-block32", Codec::Fp8E4m3Block32E8m0RneV1),
