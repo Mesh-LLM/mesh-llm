@@ -11,6 +11,10 @@ pub(crate) struct PaidRequest {
     pub path: String,
     pub body: Value,
     pub intent: Option<mesh_llm_payments_types::intent::PaymentIntent>,
+    /// The caller's single valid `x-capsule-client-nonce`, forwarded to the
+    /// seller so its terminal exchange event reports it. As on the free
+    /// path's tunnelled hop, the origin marker is not forwarded.
+    pub client_nonce: Option<String>,
 }
 
 impl PaidRequest {
@@ -25,6 +29,18 @@ impl PaidRequest {
             request.method == Some("POST"),
             "paid inference requires POST"
         );
+        let client_nonce = skippy_inference_api::parse_single_client_nonce(
+            request
+                .headers
+                .iter()
+                .filter(|header| {
+                    header.name.eq_ignore_ascii_case(
+                        skippy_inference_api::lifecycle::CLIENT_NONCE_HEADER.as_str(),
+                    )
+                })
+                .map(|header| std::str::from_utf8(header.value).ok()),
+        )
+        .and_then(|value| value.to_str().ok().map(str::to_owned));
         let path = request.path.context("missing request path")?;
         ensure!(
             matches!(path, "/v1/chat/completions" | "/v1/completions"),
@@ -98,6 +114,7 @@ impl PaidRequest {
             path: path.into(),
             body,
             intent,
+            client_nonce,
         })
     }
 
@@ -109,7 +126,12 @@ impl PaidRequest {
 
     pub fn backend_http(&self, request_id: &str) -> Result<Vec<u8>> {
         let bytes = serde_json::to_vec(&self.body)?;
-        let mut raw = format!("POST {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nAccept-Encoding: identity\r\nConnection: close\r\nx-request-id: {}\r\nContent-Length: {}\r\n\r\n", self.path, request_id, bytes.len()).into_bytes();
+        let mut raw = format!("POST {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nAccept-Encoding: identity\r\nConnection: close\r\nx-request-id: {}\r\n", self.path, request_id).into_bytes();
+        if let Some(nonce) = &self.client_nonce {
+            let name = skippy_inference_api::lifecycle::CLIENT_NONCE_HEADER.as_str();
+            raw.extend(format!("{name}: {nonce}\r\n").into_bytes());
+        }
+        raw.extend(format!("Content-Length: {}\r\n\r\n", bytes.len()).into_bytes());
         raw.extend(bytes);
         Ok(raw)
     }
@@ -210,6 +232,45 @@ mod tests {
                 )
                 .is_err()
             );
+        }
+    }
+
+    #[test]
+    fn a_single_valid_client_nonce_is_forwarded_to_the_seller() {
+        let nonce = "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f";
+        let parse = |headers: &str| {
+            PaidRequest::parse(
+                format!("POST /v1/completions HTTP/1.1\r\n{headers}\r\n{{\"model\":\"m\"}}")
+                    .as_bytes(),
+            )
+            .unwrap()
+        };
+        let payer = parse(&format!("X-Capsule-Client-Nonce: {nonce}\r\n"));
+        assert_eq!(payer.client_nonce.as_deref(), Some(nonce));
+        let forwarded = payer.backend_http("id").unwrap();
+        // The seller reads back what the payer forwarded.
+        let seller = PaidRequest::parse(&forwarded).unwrap();
+        assert_eq!(seller.client_nonce.as_deref(), Some(nonce));
+
+        // A nonce the payer's frontend minted (origin marker present) is kept
+        // too, and the marker is not forwarded.
+        let minted = parse(&format!(
+            "X-Capsule-Client-Nonce: {nonce}\r\nX-Capsule-Nonce-Origin: frontend\r\n"
+        ));
+        assert_eq!(minted.client_nonce.as_deref(), Some(nonce));
+        let forwarded = String::from_utf8(minted.backend_http("id").unwrap()).unwrap();
+        assert!(!forwarded.to_ascii_lowercase().contains("origin"));
+
+        // Absent, duplicated or malformed nonces are neither kept nor forwarded.
+        for headers in [
+            String::new(),
+            "X-Capsule-Client-Nonce: nope\r\n".into(),
+            format!("X-Capsule-Client-Nonce: {nonce}\r\nX-Capsule-Client-Nonce: {nonce}\r\n"),
+        ] {
+            let request = parse(&headers);
+            assert!(request.client_nonce.is_none());
+            let forwarded = String::from_utf8(request.backend_http("id").unwrap()).unwrap();
+            assert!(!forwarded.to_ascii_lowercase().contains("nonce"));
         }
     }
 
