@@ -1010,3 +1010,105 @@ draft_max_tokens = 4
                 .contains("mesh/test-draft:draft.gguf"))
     );
 }
+
+fn resolve_with_dflash_draft(strategy: &str, pairing_fault: &str) -> ResolvedSkippyConfig {
+    resolve_with_dflash_draft_and(strategy, pairing_fault, "")
+}
+
+fn resolve_with_dflash_draft_and(
+    strategy: &str,
+    pairing_fault: &str,
+    extra: &str,
+) -> ResolvedSkippyConfig {
+    let draft_file = temp_model_file_with_architecture("dflash");
+    let mesh_config = parse_config(&format!(
+        r#"
+[defaults.speculative]
+strategy = "{strategy}"
+draft_model_path = {}
+draft_selection_policy = "manual"
+pairing_fault = "{pairing_fault}"
+draft_max_tokens = 8
+draft_gpu_layers = 12
+{extra}
+"#,
+        toml_path(draft_file.path())
+    ));
+    let model_file = temp_model_file_with_architecture("qwen3");
+    resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "Qwen/Qwen3-4B:Q4_K_M",
+        model_path: model_file.path(),
+        model_bytes: 4 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: None,
+    })
+    .expect("a DFlash draft should resolve")
+}
+
+#[test]
+fn dflash_draft_resolves_to_a_dflash_plan_without_a_draft_runner() {
+    let resolved = resolve_with_dflash_draft("dflash", "warn_disable");
+    let decode = &resolved.speculative.decode;
+    assert_eq!(decode.effective_strategy, "dflash");
+    assert_eq!(
+        decode
+            .dflash
+            .as_ref()
+            .and_then(|dflash| dflash.max_draft_tokens),
+        Some(8)
+    );
+    assert!(!resolved.speculative.native_mtp_enabled);
+    assert_eq!(resolved.speculative.mode, "disabled");
+    assert!(resolved.speculative.draft_model_path.is_none());
+
+    let args = resolved
+        .to_embedded_openai_args(0, false)
+        .expect("single-stage translation");
+    assert!(args.draft_model_path.is_none());
+    assert!(args.speculative.dflash.is_some());
+    assert_eq!(args.draft_n_gpu_layers, Some(12));
+}
+
+#[test]
+fn dflash_plan_keeps_the_configured_gate() {
+    let resolved = resolve_with_dflash_draft_and(
+        "dflash",
+        "warn_disable",
+        "gate = false\ngate_min_requests = 3\ngate_cooldown_s = 7",
+    );
+    let decode = &resolved.speculative.decode;
+
+    assert!(decode.dflash.is_some());
+    assert!(!decode.gate.enabled);
+    assert_eq!(decode.gate.min_requests, 3);
+    assert_eq!(decode.gate.cooldown_s, 7);
+}
+
+#[test]
+fn auto_does_not_select_a_dflash_draft() {
+    let resolved = resolve_with_dflash_draft("auto", "warn_disable");
+
+    assert!(resolved.speculative.decode.dflash.is_none());
+    assert_eq!(resolved.speculative.mode, "disabled");
+    assert!(resolved.speculative.draft_model_path.is_none());
+}
+
+#[test]
+fn dflash_plan_is_dropped_for_split_targets_unless_pairing_fails_closed() {
+    let resolved = resolve_with_dflash_draft("dflash", "warn_disable");
+    let staged = resolved
+        .to_embedded_openai_args(4096, true)
+        .expect("staged translation drops DFlash");
+    assert!(staged.speculative.dflash.is_none());
+    assert_eq!(staged.speculative.effective_strategy, "disabled");
+
+    let resolved = resolve_with_dflash_draft("dflash", "fail_closed");
+    let err = resolved
+        .to_embedded_openai_args(4096, true)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("complete target model"), "{err}");
+}
