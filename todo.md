@@ -32,6 +32,13 @@ Small generated native fixtures supplement this matrix; they do not replace it.
   cache bug. Do not weaken correctness gates to accept an optimization.
 - [ ] Exercise cold, warm, shared-prefix, changed-tail, and A/B/C/revisit requests
   at c1/c2/c4. Check reuse counts, actual shared-pool capacity, and lane isolation.
+- [ ] Admit concurrent long prompts whose combined reservations exceed one
+  lane's context but fit the loaded aggregate pool. Verify actual overlap and
+  preserve each request's context limit; distinguish admission waits from
+  frontend runtime-lock waits.
+- [ ] Measure identical cold work after retaining additional prefixes. Compare
+  attention kernel time, matrix multiplication, transfers, and mask/input work
+  against standard vanilla to catch costs that grow with idle physical KV cells.
 - [ ] Test cache-off controls and c1 generated-content parity. Output-token counts
   and their hashes alone are not generated-token correctness evidence.
 - [ ] Test the default 1 GiB checkpoint budget and an explicit larger budget,
