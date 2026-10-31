@@ -38,10 +38,11 @@ impl SplitActivationCodec {
         }
     }
 
-    /// Parse a `skippy.activation_codec` value. Every value but `lossless`
-    /// fixes one codec for every frame.
+    /// Parse a `skippy.activation_codec` value, ignoring ASCII case as config
+    /// validation does. Every value but `lossless` fixes one codec for every
+    /// frame.
     pub(super) fn from_setting(value: &str) -> Option<Self> {
-        let codec = match value {
+        let codec = match value.to_ascii_lowercase().as_str() {
             "lossless" => return Some(Self::LOSSLESS),
             "f32" => Codec::RawF32V1,
             "f16" => Codec::F16RneV1,
