@@ -1141,8 +1141,10 @@ fits the memory plan. A cached draft that fails its size or digest check is
 removed so the next load downloads it again. A cataloged draft
 also replaces native MTP that is on only because the GGUF carries NextN layers.
 An explicit draft, strategy, N-gram setting, MTP tuning or package strategy
-keeps its own choice, and `spec_default = false` turns automatic speculation
-off.
+keeps its own choice. `spec_default = false` turns automatic speculation off,
+including the cataloged draft, unless a `strategy` is also set: any configured
+strategy, `"auto"` included, counts as explicit and re-enables the automatic
+defaults.
 
 To use a draft that is not in the catalog, set `strategy = "dflash"` and point
 `draft_model` at a GGUF whose architecture is `dflash`:
