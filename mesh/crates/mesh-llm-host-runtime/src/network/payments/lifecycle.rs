@@ -4,6 +4,7 @@ use mesh_llm_payments_types::contract::SettledReceived;
 use mesh_llm_payments_types::metered_wire::AdmissionTerms;
 use mesh_llm_wallet::{invoice::Invoice, provider::Transaction};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 
 use crate::{mesh::Node, plugin::PluginManager, plugin::openai_exchange::request_body_digest};
@@ -48,15 +49,32 @@ struct Event {
     credited_msat: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     fee_msat: Option<u64>,
+    /// A settled payment's preimage, only when it hashes to `payment_hash`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preimage: Option<String>,
 }
 
 /// An event's optional members: the delivered watermark, and a settlement's
-/// amounts as the wallet reported them. All absent unless the phase has them.
-#[derive(Clone, Copy, Default)]
+/// amounts and preimage as the wallet reported them. All absent unless the
+/// phase has them.
+#[derive(Clone, Default)]
 struct Optional {
     tokens: Option<u64>,
     credited_msat: Option<u64>,
     fee_msat: Option<u64>,
+    preimage: Option<String>,
+}
+
+/// The wallet's preimage for a settled payment, as lowercase hex, only when it
+/// is 32 bytes that hash to `payment_hash`. Anything else is dropped, so an
+/// event never carries a value that does not prove this payment.
+fn settled_preimage(preimage: Option<&str>, payment_hash: Option<&str>) -> Option<String> {
+    let preimage = preimage?.to_ascii_lowercase();
+    let bytes: [u8; 32] = hex::decode(&preimage).ok()?.try_into().ok()?;
+    let hash = hex::encode(Sha256::digest(bytes));
+    payment_hash?
+        .eq_ignore_ascii_case(&hash)
+        .then_some(preimage)
 }
 
 /// One bounded queue per observed paid exchange. No task or hashing without a subscriber.
@@ -155,6 +173,7 @@ impl Observations {
             transaction.amount_msat,
             None,
             Some(transaction.fee_msat),
+            transaction.preimage.as_deref(),
         );
     }
 
@@ -168,6 +187,7 @@ impl Observations {
             invoice.amount_msat.unwrap_or(0),
             settled.credited_msat,
             settled.fee_msat,
+            settled.preimage.as_deref(),
         );
     }
 
@@ -201,7 +221,9 @@ impl Observations {
         amount_msat: u64,
         credited_msat: Option<u64>,
         fee_msat: Option<u64>,
+        preimage: Option<&str>,
     ) {
+        let preimage = settled_preimage(preimage, payment_hash.as_deref());
         self.emit_with(
             if segment == 0 {
                 "input_settlement_observed"
@@ -216,6 +238,7 @@ impl Observations {
                 tokens: None,
                 credited_msat,
                 fee_msat,
+                preimage,
             },
         );
     }
@@ -268,6 +291,7 @@ impl Observations {
             tokens: optional.tokens,
             credited_msat: optional.credited_msat,
             fee_msat: optional.fee_msat,
+            preimage: optional.preimage,
         };
         let Ok(value) = serde_json::to_value(&event) else {
             return;
@@ -396,13 +420,9 @@ mod tests {
         assert_eq!(first.role, Role::Payer);
         let json = serde_json::to_string(&first).unwrap();
         assert!(json.contains(r#""role":"payer""#));
-        for secret in [
-            "private-recovery",
-            "private-peer",
-            "preimage",
-            "bolt11",
-            "prompt",
-        ] {
+        // A settled payment's preimage is the one secret an event may carry
+        // (see `a_settlement_carries_only_a_preimage_that_proves_its_payment`).
+        for secret in ["private-recovery", "private-peer", "bolt11", "prompt"] {
             assert!(!json.contains(secret));
         }
         for _ in 0..20 {
@@ -425,6 +445,7 @@ mod tests {
             status_msg: None,
             created_at_ms: 0,
             settled_at_ms: None,
+            preimage: Some(PREIMAGE.into()),
         };
         observations.settled(0, &payment);
         payment.status = mesh_llm_wallet::provider::PaymentStatus::Failed;
@@ -437,6 +458,55 @@ mod tests {
         assert_eq!(event.settlement, Some("terminal"));
         assert_eq!(event.exchange_id, "exchange-two");
         assert_eq!(event.payment_hash.as_deref(), Some("public-hash"));
+    }
+
+    /// A preimage and the payment hash it proves.
+    const PREIMAGE: &str = "0101010101010101010101010101010101010101010101010101010101010101";
+
+    fn preimage_hash() -> String {
+        hex::encode(Sha256::digest([1u8; 32]))
+    }
+
+    #[test]
+    fn a_settlement_carries_only_a_preimage_that_proves_its_payment() {
+        let (observations, mut receiver) = observing(Role::Payer, "exchange-proof");
+        let mut payment = Transaction {
+            id: "wallet-private".into(),
+            payment_hash: Some(preimage_hash()),
+            inbound: false,
+            amount_msat: 10,
+            fee_msat: 1,
+            status: mesh_llm_wallet::provider::PaymentStatus::Succeeded,
+            claiming: false,
+            status_msg: None,
+            created_at_ms: 0,
+            settled_at_ms: Some(1),
+            preimage: Some(PREIMAGE.to_ascii_uppercase()),
+        };
+        observations.settled(0, &payment);
+        let event = receiver.try_recv().unwrap();
+        assert_eq!(event.preimage.as_deref(), Some(PREIMAGE), "lowercased");
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains(&format!(r#""preimage":"{PREIMAGE}""#)));
+
+        for wrong in ["02".repeat(32), "01".repeat(31), "not hex".into()] {
+            payment.preimage = Some(wrong);
+            observations.settled(0, &payment);
+            let event = receiver.try_recv().unwrap();
+            assert_eq!(event.preimage, None);
+            assert!(!serde_json::to_string(&event).unwrap().contains("preimage"));
+        }
+
+        let (observations, mut receiver) = observing(Role::Provider, "provider-proof");
+        let mut invoice = invoice(1000);
+        invoice.payment_hash = preimage_hash();
+        let settled = SettledReceived {
+            preimage: Some(PREIMAGE.into()),
+            ..SettledReceived::default()
+        };
+        observations.received(0, &invoice, &settled);
+        let event = receiver.try_recv().unwrap();
+        assert_eq!(event.preimage.as_deref(), Some(PREIMAGE));
     }
 
     fn invoice(amount_msat: u64) -> Invoice {
@@ -463,6 +533,7 @@ mod tests {
             status_msg: None,
             created_at_ms: 0,
             settled_at_ms: Some(1),
+            preimage: None,
         };
         observations.settled(1, &payment);
         let event = receiver.try_recv().unwrap();
@@ -480,6 +551,7 @@ mod tests {
         let settled = SettledReceived {
             credited_msat: Some(995),
             fee_msat: Some(5),
+            preimage: None,
         };
         observations.received(0, &invoice(1000), &settled);
         let event = receiver.try_recv().unwrap();

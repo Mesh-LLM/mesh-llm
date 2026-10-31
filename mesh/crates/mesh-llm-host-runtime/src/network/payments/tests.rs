@@ -149,6 +149,7 @@ impl WalletProvider for TestWallet {
                     status_msg: None,
                     created_at_ms: mesh_llm_payments::now_ms(),
                     settled_at_ms: None,
+                    preimage: None,
                 },
             ),
         );

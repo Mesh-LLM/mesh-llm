@@ -64,6 +64,7 @@ fn received(wallet: &MockWallet, inv: &Invoice) {
             status_msg: None,
             created_at_ms: crate::now_ms(),
             settled_at_ms: Some(crate::now_ms()),
+            preimage: None,
         },
     );
     wallet.updates.notify_waiters();

@@ -65,6 +65,12 @@ pub struct Transaction {
     pub status_msg: Option<String>,
     pub created_at_ms: u64,
     pub settled_at_ms: Option<u64>,
+    /// The payment's preimage as 64 hex digits, for a `Succeeded` payment
+    /// whose provider reports one. A payer holds it only once the payee
+    /// released it, so it proves the payment completed. Providers leave it
+    /// `None` for pending and failed payments, and when their API has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preimage: Option<String>,
 }
 
 impl Transaction {
@@ -135,5 +141,20 @@ pub trait WalletProvider: Send + Sync {
     /// status, which is always a correct (if slower) answer.
     async fn wait_for_arrival(&self, payment_hash: &str) -> Result<Transaction> {
         self.wait_for_payment(payment_hash).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A wallet plugin built before `preimage` existed still decodes, and a
+    /// transaction without one encodes exactly as before.
+    #[test]
+    fn a_transaction_without_a_preimage_is_unchanged_on_the_wire() {
+        let json = r#"{"id":"t","payment_hash":"h","inbound":false,"amount_msat":1,"fee_msat":0,"status":"succeeded","created_at_ms":0,"settled_at_ms":1}"#;
+        let transaction: Transaction = serde_json::from_str(json).unwrap();
+        assert_eq!(transaction.preimage, None);
+        assert_eq!(serde_json::to_string(&transaction).unwrap(), json);
     }
 }

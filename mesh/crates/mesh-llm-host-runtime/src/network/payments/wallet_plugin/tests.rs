@@ -211,6 +211,7 @@ fn transaction(hash: &str, status: PaymentStatus) -> Transaction {
         status_msg: None,
         created_at_ms: 1,
         settled_at_ms: None,
+        preimage: None,
     }
 }
 
