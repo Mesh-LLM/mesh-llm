@@ -11,7 +11,8 @@ skippy_session_take_token_logprobs moves them out, oldest first; a session
 reset drops them. A logprobs request never attaches backend (in-graph)
 sampling, which skips copying the raw logits row; a token drawn while the
 lane still carried a backend sampler from an earlier request is recorded
-as unreadable instead of being read from a stale row. ABI 0.1.72 -> 0.1.73.
+as unreadable instead of being read from a stale row. As the last patch
+to touch common.h it carries the queue's ABI version, 0.1.76.
 ---
  include/skippy.h               |  1 +
  include/skippy/common.h        |  2 +-
@@ -143,7 +144,7 @@ index 1b42f32c0..c1a755c4c 100644
  
  #ifdef __cplusplus
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index e913b2bb1..7eab4b4c5 100644
+index 056f11443..52ef6ae4b 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -83,6 +83,7 @@ add_library(llama

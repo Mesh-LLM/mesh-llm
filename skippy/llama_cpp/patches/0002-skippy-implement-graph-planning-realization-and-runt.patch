@@ -68,8 +68,8 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/stage_plan.cpp               |  709 ++++++++++++++
  src/skippy/stage_realization.cpp        |  293 ++++++
  src/skippy/stage_realization.h          |   21 +
- src/skippy/stage_slice_plan.cpp         |  871 +++++++++++++++++
- src/skippy/stage_slice_plan.h           |  119 +++
+ src/skippy/stage_slice_plan.cpp         |  907 +++++++++++++++++
+ src/skippy/stage_slice_plan.h           |  136 +++
  src/skippy/state.cpp                    | 1185 ++++++++++++++++++++++
  src/skippy/state_effects.cpp            |  450 +++++++++
  src/skippy/state_effects.h              |   74 ++
@@ -79,7 +79,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  256 +++++
  src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 75 files changed, 16267 insertions(+), 395 deletions(-)
+ 75 files changed, 16320 insertions(+), 395 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -13580,7 +13580,7 @@ index 000000000..380e1eaad
 +}
 diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
 new file mode 100644
-index 000000000..32106f7f2
+index 000000000..6482cafa6
 --- /dev/null
 +++ b/src/skippy/stage_realization.cpp
 @@ -0,0 +1,293 @@
@@ -13747,7 +13747,7 @@ index 000000000..32106f7f2
 +        return;
 +    }
 +    skippy_stage_slice_selection selection;
-+    if (!skippy_select_stage_slice(
++    if (!skippy_select_live_stage_slice(
 +                result.get_gf(),
 +                result.get_block_boundaries(),
 +                result.get_state_effects(),
@@ -13906,10 +13906,10 @@ index 000000000..6ef94f46d
 +        llm_graph_result & result);
 diff --git a/src/skippy/stage_slice_plan.cpp b/src/skippy/stage_slice_plan.cpp
 new file mode 100644
-index 000000000..75a4da24c
+index 000000000..7444a760e
 --- /dev/null
 +++ b/src/skippy/stage_slice_plan.cpp
-@@ -0,0 +1,871 @@
+@@ -0,0 +1,907 @@
 +#include "stage_slice_plan.h"
 +
 +#include "ggml.h"
@@ -14506,7 +14506,8 @@ index 000000000..75a4da24c
 +
 +}
 +
-+bool skippy_select_stage_slice(
++// Encodes the graph's semantics into `semantics` when it is given.
++static bool select_stage_slice(
 +        ggml_cgraph * graph,
 +        const std::vector<skippy_block_boundary> & boundaries,
 +        const std::vector<skippy_state_effect> & state_effects,
@@ -14517,7 +14518,8 @@ index 000000000..75a4da24c
 +        int32_t layer_end,
 +        skippy_stage_slice_selection & selection,
 +        std::string & error,
-+        const ggml_tensor * explicit_output) {
++        const ggml_tensor * explicit_output,
++        skippy_graph_semantics * semantics) {
 +    selection = {};
 +    error.clear();
 +    std::vector<skippy_state_effect> effective_state_effects;
@@ -14525,9 +14527,9 @@ index 000000000..75a4da24c
 +                state_effects, graph, boundaries, effective_state_effects, error)) {
 +        return false;
 +    }
-+    skippy_graph_semantics semantics;
-+    if (!skippy_build_graph_semantics(
-+                graph, boundaries, effective_state_effects, parameters, request_inputs, semantics, error)) {
++    if (semantics != nullptr &&
++            !skippy_build_graph_semantics(
++                graph, boundaries, effective_state_effects, parameters, request_inputs, *semantics, error)) {
 +        return false;
 +    }
 +    selector state(
@@ -14546,7 +14548,41 @@ index 000000000..75a4da24c
 +    for (const auto & request : request_inputs) {
 +        state.request_names.emplace(canonical_storage(request.tensor), request.identity);
 +    }
-+    return state.select() && skippy_finalize_stage_slice_identity(semantics, selection, error);
++    return state.select();
++}
++
++bool skippy_select_stage_slice(
++        ggml_cgraph * graph,
++        const std::vector<skippy_block_boundary> & boundaries,
++        const std::vector<skippy_state_effect> & state_effects,
++        const std::vector<skippy_parameter_binding> & parameters,
++        const std::vector<skippy_request_input_binding> & request_inputs,
++        int32_t layer_count,
++        int32_t layer_start,
++        int32_t layer_end,
++        skippy_stage_slice_selection & selection,
++        std::string & error,
++        const ggml_tensor * explicit_output) {
++    skippy_graph_semantics semantics;
++    return select_stage_slice(graph, boundaries, state_effects, parameters, request_inputs, layer_count,
++            layer_start, layer_end, selection, error, explicit_output, &semantics) &&
++            skippy_finalize_stage_slice_identity(semantics, selection, error);
++}
++
++bool skippy_select_live_stage_slice(
++        ggml_cgraph * graph,
++        const std::vector<skippy_block_boundary> & boundaries,
++        const std::vector<skippy_state_effect> & state_effects,
++        const std::vector<skippy_parameter_binding> & parameters,
++        const std::vector<skippy_request_input_binding> & request_inputs,
++        int32_t layer_count,
++        int32_t layer_start,
++        int32_t layer_end,
++        skippy_stage_slice_selection & selection,
++        std::string & error,
++        const ggml_tensor * explicit_output) {
++    return select_stage_slice(graph, boundaries, state_effects, parameters, request_inputs, layer_count,
++            layer_start, layer_end, selection, error, explicit_output, nullptr);
 +}
 +
 +bool skippy_build_guarded_stage_slice_plan(
@@ -14783,10 +14819,10 @@ index 000000000..75a4da24c
 +}
 diff --git a/src/skippy/stage_slice_plan.h b/src/skippy/stage_slice_plan.h
 new file mode 100644
-index 000000000..2272a3fec
+index 000000000..1cb24c7cb
 --- /dev/null
 +++ b/src/skippy/stage_slice_plan.h
-@@ -0,0 +1,119 @@
+@@ -0,0 +1,136 @@
 +#pragma once
 +
 +#include "block_boundaries.h"
@@ -14884,6 +14920,23 @@ index 000000000..2272a3fec
 +        std::string & error);
 +
 +bool skippy_select_stage_slice(
++        ggml_cgraph * graph,
++        const std::vector<skippy_block_boundary> & boundaries,
++        const std::vector<skippy_state_effect> & state_effects,
++        const std::vector<skippy_parameter_binding> & parameters,
++        const std::vector<skippy_request_input_binding> & request_inputs,
++        int32_t layer_count,
++        int32_t layer_start,
++        int32_t layer_end,
++        skippy_stage_slice_selection & selection,
++        std::string & error,
++        const ggml_tensor * explicit_output = nullptr);
++
++// Selects the same slice as skippy_select_stage_slice without its semantic
++// identities. Those are a full-graph encoding and hash that admission and
++// planning compare; a live graph rebuilt for a new batch shape only executes
++// the selection, and encoding it there costs more than the stage's forward.
++bool skippy_select_live_stage_slice(
 +        ggml_cgraph * graph,
 +        const std::vector<skippy_block_boundary> & boundaries,
 +        const std::vector<skippy_state_effect> & state_effects,

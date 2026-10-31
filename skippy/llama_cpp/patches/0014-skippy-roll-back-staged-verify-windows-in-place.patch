@@ -27,6 +27,12 @@ fallback path no longer allocates a full sequence state per window.
 skippy_session_verify_rollback_counts reports how many of a session's
 windows were held in place and how many in a host checkpoint since it was
 reset, so a split can show which path each stage took. ABI 0.1.68.
+
+This is its own patch rather than part of 0002: 0002 rolls back a
+single-node session's window in place, while this owns the staged-session
+rollback lifecycle (verify_window.cpp: when a window may roll back in
+place, settling a window that a pipelined decode lands on into a host
+checkpoint, buffer reuse) and its rollback-count ABI.
 ---
  include/skippy/common.h                       |   2 +-
  include/skippy/state.h                        |  13 ++

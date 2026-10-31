@@ -21,7 +21,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  src/skippy/tests/sampling_history.cpp         |  459 +++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
- src/skippy/tests/stage_slice_plan.cpp         | 1151 ++++++++++++
+ src/skippy/tests/stage_slice_plan.cpp         | 1196 ++++++++++++
  tests/CMakeLists.txt                          |   29 +
  tests/test-chat-auto-parser.cpp               |   47 +
  tests/test-chat.cpp                           |  189 +-
@@ -38,7 +38,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 34 files changed, 9908 insertions(+), 32 deletions(-)
+ 34 files changed, 9953 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -5138,7 +5138,7 @@ index 000000000..31734bf56
 +}
 diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
 new file mode 100644
-index 000000000..cb420a561
+index 000000000..00a6ff0ec
 --- /dev/null
 +++ b/src/skippy/tests/runtime_events.cpp
 @@ -0,0 +1,695 @@
@@ -6339,10 +6339,10 @@ index 000000000..beb86aaae
 +}
 diff --git a/src/skippy/tests/stage_slice_plan.cpp b/src/skippy/tests/stage_slice_plan.cpp
 new file mode 100644
-index 000000000..35de1e36c
+index 000000000..b7ad7c85e
 --- /dev/null
 +++ b/src/skippy/tests/stage_slice_plan.cpp
-@@ -0,0 +1,1151 @@
+@@ -0,0 +1,1196 @@
 +#include "ggml.h"
 +#include "ggml-backend.h"
 +#include "ggml-cpu.h"
@@ -6823,6 +6823,51 @@ index 000000000..35de1e36c
 +        std::fprintf(stderr, "middle stage omitted locally resolvable state preparation\n");
 +        ggml_free(ctx);
 +        return 6;
++    }
++    {
++        // Live realization selects the same slice without encoding the
++        // graph's semantic identities.
++        skippy_stage_slice_selection live;
++        if (!skippy_select_live_stage_slice(
++                    graph,
++                    boundaries,
++                    effects,
++                    parameter_bindings,
++                    request_bindings,
++                    3,
++                    1,
++                    2,
++                    live,
++                    error) ||
++                live.source_graph != selection.source_graph ||
++                live.node_indices != selection.node_indices ||
++                live.activation_imports != selection.activation_imports ||
++                live.activation_exports != selection.activation_exports ||
++                live.request_inputs != selection.request_inputs ||
++                live.parameter_identities != selection.parameter_identities ||
++                live.state_effects.size() != selection.state_effects.size()) {
++            std::fprintf(stderr, "live stage selection differs from the planned selection: %s\n", error.c_str());
++            ggml_free(ctx);
++            return 40;
++        }
++        for (size_t index = 0; index < live.state_effects.size(); ++index) {
++            const auto & left = live.state_effects[index];
++            const auto & right = selection.state_effects[index];
++            if (left.kind != right.kind || left.access != right.access || left.layer != right.layer ||
++                    left.storage != right.storage || left.effect_node != right.effect_node ||
++                    left.write_ordinal != right.write_ordinal || left.residency != right.residency) {
++                std::fprintf(stderr, "live stage selection changed a state effect\n");
++                ggml_free(ctx);
++                return 41;
++            }
++        }
++        if (selection.graph_identity.empty() || selection.node_identities.empty() ||
++                !live.graph_identity.empty() || !live.node_identities.empty() ||
++                !live.source_value_identities.empty()) {
++            std::fprintf(stderr, "live stage selection should carry no semantic identities\n");
++            ggml_free(ctx);
++            return 42;
++        }
 +    }
 +
 +    if (!skippy_select_stage_slice(
