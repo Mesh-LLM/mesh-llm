@@ -8,8 +8,15 @@
 use super::*;
 use tokio::sync::oneshot;
 
-const LOCAL: &str = "local-coordinator";
-const NEWER: &str = "newer-coordinator";
+/// The loading coordinator's node, and the peer that joined late and won the
+/// election. A stage accepts a claim only from the coordinator it names.
+fn local() -> String {
+    make_id(0x51).to_string()
+}
+
+fn newer() -> String {
+    make_id(0x52).to_string()
+}
 
 fn claim(coordinator_id: &str, term: u64, topology: &str) -> skippy::StageCoordinatorClaim {
     skippy::StageCoordinatorClaim {
@@ -31,10 +38,15 @@ async fn send_claim(
     claim: skippy::StageCoordinatorClaim,
 ) -> skippy::StageCoordinatorClaimAck {
     let (resp, rx) = oneshot::channel();
+    let requester = claim
+        .coordinator_id
+        .parse()
+        .expect("claims name an endpoint id");
     control
         .sender()
         .send(skippy::StageControlCommand::Execute {
             request: skippy::StageControlRequest::Claim(claim),
+            requester,
             resp,
         })
         .expect("stage control accepts the claim");
@@ -51,22 +63,26 @@ async fn send_claim(
 #[tokio::test]
 async fn a_newer_coordinator_claim_supersedes_the_loading_coordinator() {
     let control = skippy::spawn_stage_control_loop(skippy::SkippyTelemetryOptions::default());
-    let ours = claim(LOCAL, 11, "a");
+    let ours = claim(&local(), 11, "a");
     assert!(send_claim(&control, ours.clone()).await.accepted);
     // Re-sending our own claim is how the coordinator checks its lease; with
     // nothing newer it is accepted unchanged.
     let ack = send_claim(&control, ours.clone()).await;
-    assert_eq!(superseded_claim_reason(LOCAL, &ack), None);
+    assert_eq!(superseded_claim_reason(&local(), &ack), None);
 
     // The peer that joined late wins the election and claims this node for a
     // stage of its own topology.
-    assert!(send_claim(&control, claim(NEWER, 12, "b")).await.accepted);
+    assert!(
+        send_claim(&control, claim(&newer(), 12, "b"))
+            .await
+            .accepted
+    );
 
     let ack = send_claim(&control, ours).await;
     assert!(!ack.accepted);
-    assert_eq!(ack.claim.coordinator_id, NEWER);
-    let reason = superseded_claim_reason(LOCAL, &ack).expect("the takeover is seen");
-    assert!(reason.contains(NEWER), "{reason}");
+    assert_eq!(ack.claim.coordinator_id, newer());
+    let reason = superseded_claim_reason(&local(), &ack).expect("the takeover is seen");
+    assert!(reason.contains(&newer()), "{reason}");
     assert!(
         reason.contains("stale coordinator term 11 < 12"),
         "{reason}"
@@ -77,15 +93,19 @@ async fn a_newer_coordinator_claim_supersedes_the_loading_coordinator() {
 #[tokio::test]
 async fn a_failed_cutover_of_our_own_is_not_a_takeover() {
     let control = skippy::spawn_stage_control_loop(skippy::SkippyTelemetryOptions::default());
-    let active = claim(LOCAL, 11, "a");
+    let active = claim(&local(), 11, "a");
     assert!(send_claim(&control, active.clone()).await.accepted);
     // An auto-balance cutover claims the stages under a newer term, then fails
     // to load and leaves the active generation serving.
-    assert!(send_claim(&control, claim(LOCAL, 12, "a2")).await.accepted);
+    assert!(
+        send_claim(&control, claim(&local(), 12, "a2"))
+            .await
+            .accepted
+    );
 
     let ack = send_claim(&control, active).await;
     assert!(!ack.accepted);
-    assert_eq!(superseded_claim_reason(LOCAL, &ack), None);
+    assert_eq!(superseded_claim_reason(&local(), &ack), None);
     control.shutdown().await.unwrap();
 }
 
@@ -95,8 +115,8 @@ fn a_claim_rejected_without_a_holder_is_not_a_takeover() {
     // model; the ack then echoes our own claim.
     let ack = skippy::StageCoordinatorClaimAck {
         accepted: false,
-        claim: claim(LOCAL, 11, "a"),
+        claim: claim(&local(), 11, "a"),
         error: Some("coordinator claim lease is expired".to_string()),
     };
-    assert_eq!(superseded_claim_reason(LOCAL, &ack), None);
+    assert_eq!(superseded_claim_reason(&local(), &ack), None);
 }
