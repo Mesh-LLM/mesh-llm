@@ -1372,6 +1372,7 @@ mod tests {
 
     #[test]
     fn an_owed_draft_is_drafted_once_and_counted() {
+        skippy_runtime::test_support::require_native_runtime();
         let mut runtime = RuntimeState::split_dflash_final_stage_for_test();
         let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
         state.set_split_dflash(true);
