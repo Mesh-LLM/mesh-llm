@@ -266,4 +266,21 @@ describe('SchemaSetValueArrayControl', () => {
     expect(screen.getByLabelText('Witnesses 1')).toHaveValue('https://a.example')
     expect(screen.getByLabelText('Witnesses 2')).toHaveValue('https://a.example')
   })
+
+  it('Enter in the field sets the value, like the Set button', async () => {
+    render(<Harness initial='[{"endpoint":"https://a.example"}]' />)
+    const input = screen.getByLabelText('Witnesses 1')
+    fireEvent.change(input, { target: { value: 'https://b.example' } })
+    await userEvent.type(input, '{Enter}')
+    expect(screen.getByTestId('value')).toHaveTextContent('[{"endpoint":"https://b.example"}]')
+  })
+
+  it('keeps keyboard focus on the Set button after Set, and the confirmation stays up', async () => {
+    render(<Harness initial='[{"endpoint":"https://a.example"}]' />)
+    fireEvent.change(screen.getByLabelText('Witnesses 1'), { target: { value: 'https://b.example' } })
+    const set = screen.getByRole('button', { name: 'Set' })
+    await userEvent.click(set)
+    expect(document.activeElement).toBe(set)
+    expect(screen.getByText(/Set\. Click Save config to keep it/)).toBeInTheDocument()
+  })
 })

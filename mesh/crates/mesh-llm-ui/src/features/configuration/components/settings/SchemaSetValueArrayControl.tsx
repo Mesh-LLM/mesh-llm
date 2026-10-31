@@ -17,7 +17,8 @@ import {
 } from '@/features/configuration/lib/schema-object-array'
 import { cn } from '@/lib/cn'
 
-const CONFIRM_MS = 2000
+// Long enough to read "Click Save config to keep it; takes effect when mesh-llm restarts."
+const CONFIRM_MS = 6000
 
 type SchemaSetValueArrayControlProps = SchemaSettingControlProps & {
   readonly itemSchema: ConfigurationSettingObjectSchema
@@ -52,6 +53,13 @@ function SetRow({
   placeholder
 }: SetRowProps) {
   const [draft, setDraft] = useState(committed ?? '')
+  // An outside change to the stored value (Undo, Redo, Revert) replaces the draft, without remounting the
+  // row: Set keeps keyboard focus and the confirmation's live region.
+  const [seen, setSeen] = useState(committed)
+  if (seen !== committed) {
+    setSeen(committed)
+    setDraft(committed ?? '')
+  }
 
   const shown = ghost ? (placeholder ?? '') : draft
   const unset = ghost || committed === undefined
@@ -75,6 +83,12 @@ function SetRow({
         data-set={unset ? 'false' : 'true'}
         disabled={disabled}
         onChange={(event) => setDraft(event.currentTarget.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' && canSet) {
+            event.preventDefault()
+            onSet(shown.trim())
+          }
+        }}
         placeholder={placeholder}
         readOnly={ghost}
         spellCheck={false}
@@ -186,7 +200,7 @@ export function SchemaSetValueArrayControl({
         </div>
       ) : null}
       {items.map((item, index) => (
-        <div className="grid min-w-0 gap-2" key={`row-${rowIds[index]}-${stringOf(item)}`}>
+        <div className="grid min-w-0 gap-2" key={`row-${rowIds[index]}`}>
           <SetRow
             ariaDescribedBy={ariaDescribedBy}
             ariaLabel={`${setting.label} ${index + 1}`}
