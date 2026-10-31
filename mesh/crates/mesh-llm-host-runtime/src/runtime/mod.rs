@@ -15,6 +15,7 @@ mod interactive;
 mod join_sources;
 pub(crate) mod kv_disk_config;
 mod local;
+mod local_dflash_plan;
 mod local_laya;
 mod local_memory_plan;
 mod local_model_only;
