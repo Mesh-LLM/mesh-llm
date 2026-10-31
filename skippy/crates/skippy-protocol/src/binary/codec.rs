@@ -112,7 +112,7 @@ pub fn send_reply_predicted_with_tokens_window_and_stats(
         predicted_tokens,
         window,
     )?;
-    write_native_mtp_draft(&mut writer, None, stats.has_dflash_health())?;
+    write_native_mtp_draft(&mut writer, None)?;
     write_reply_stats(&mut writer, stats)
 }
 
@@ -146,7 +146,7 @@ pub fn send_reply_predicted_tokens_with_window_and_stats(
         predicted_tokens,
         window,
     )?;
-    write_native_mtp_draft(&mut writer, None, stats.has_dflash_health())?;
+    write_native_mtp_draft(&mut writer, None)?;
     write_reply_stats(&mut writer, stats)
 }
 
@@ -174,11 +174,7 @@ pub fn send_reply_message(mut writer: impl Write, reply: &StageReply) -> io::Res
         &reply.predicted_tokens,
         reply.window,
     )?;
-    write_native_mtp_draft(
-        &mut writer,
-        reply.native_mtp_draft.as_ref(),
-        reply.stats.has_dflash_health(),
-    )?;
+    write_native_mtp_draft(&mut writer, reply.native_mtp_draft.as_ref())?;
     write_reply_stats(&mut writer, reply.stats)?;
     if reply.kind == WireReplyKind::TokenScores {
         super::readout::write_scores(&mut writer, &reply.log_probabilities)?;
@@ -201,11 +197,8 @@ pub fn recv_reply(mut reader: impl Read) -> io::Result<StageReply> {
         predicted_tokens.push(read_i32(&mut reader)?);
     }
     let window = read_reply_window(&mut reader)?;
-    let (native_mtp_draft, dflash_health) = read_native_mtp_draft(&mut reader)?;
-    let mut stats = read_reply_stats(&mut reader)?;
-    if dflash_health {
-        read_dflash_health(&mut reader, &mut stats)?;
-    }
+    let native_mtp_draft = read_native_mtp_draft(&mut reader)?;
+    let stats = read_reply_stats(&mut reader)?;
     let log_probabilities = if kind == WireReplyKind::TokenScores {
         if !predicted_tokens.is_empty() || native_mtp_draft.is_some() || predicted != -1 {
             return Err(invalid_data("readout reply contains generated tokens"));
@@ -245,33 +238,19 @@ fn write_reply_header(
     write_reply_window(&mut writer, window)
 }
 
-/// Reply marker bit: DFlash draft-context counters follow the reply stats.
-/// Only sent to a sender that set `state_flags::SPLIT_DFLASH`; older
-/// readers reject the marker.
-const REPLY_DFLASH_HEALTH: i32 = 1 << 8;
-
 fn write_native_mtp_draft(
     mut writer: impl Write,
     draft: Option<&StageNativeMtpDraft>,
-    dflash_health: bool,
 ) -> io::Result<()> {
-    let health_bit = if dflash_health {
-        REPLY_DFLASH_HEALTH
-    } else {
-        0
-    };
     let Some(draft) = draft else {
-        return write_i32(&mut writer, health_bit);
+        return write_i32(&mut writer, 0);
     };
     if draft.token_ids.len() > MAX_STAGE_PREDICTED_TOKENS {
         return Err(invalid_input("too many native MTP draft tokens"));
     }
     // Marker 2 is only sent to a stage 0 that set
     // NATIVE_MTP_DRAFT_AFTER_CORRECTION; older readers reject it.
-    write_i32(
-        &mut writer,
-        health_bit | if draft.follows_correction { 2 } else { 1 },
-    )?;
+    write_i32(&mut writer, if draft.follows_correction { 2 } else { 1 })?;
     write_i32(
         &mut writer,
         i32::try_from(draft.token_ids.len())
@@ -283,12 +262,10 @@ fn write_native_mtp_draft(
     write_i64(&mut writer, draft.proposal_compute_us)
 }
 
-/// Reads a reply's native MTP draft and whether DFlash draft-context
-/// counters follow its stats.
-fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<(Option<StageNativeMtpDraft>, bool)> {
+/// Reads a reply's native MTP draft.
+fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<Option<StageNativeMtpDraft>> {
     let marker = read_i32(&mut reader)?;
-    let dflash_health = marker & REPLY_DFLASH_HEALTH != 0;
-    let draft = match marker & !REPLY_DFLASH_HEALTH {
+    let draft = match marker {
         0 => None,
         marker @ (1 | 2) => {
             let token_count = checked_i32_len(
@@ -309,7 +286,7 @@ fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<(Option<StageNativ
         }
         _ => return Err(invalid_data("unknown native MTP draft reply marker")),
     };
-    Ok((draft, dflash_health))
+    Ok(draft)
 }
 
 /// Serialize a validated current-generation stage message and its sidebands.
@@ -914,7 +891,7 @@ fn read_string_list(
     Ok(values)
 }
 
-const REPLY_STATS_FIELD_COUNT: usize = 27;
+const REPLY_STATS_FIELD_COUNT: usize = 29;
 const REPLY_STATS_WIRE_BYTES: usize = REPLY_STATS_FIELD_COUNT * std::mem::size_of::<i64>();
 
 fn write_reply_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Result<()> {
@@ -929,50 +906,6 @@ fn write_reply_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Resu
         chunk.copy_from_slice(&value.to_le_bytes());
     }
     writer.write_all(&bytes)?;
-    // The reply marker announced these; see `REPLY_DFLASH_HEALTH`.
-    if stats.has_dflash_health() {
-        write_dflash_health(&mut writer, stats)?;
-    }
-    Ok(())
-}
-
-/// Most split DFlash counters a reply may carry. Bounds what a reader skips.
-const MAX_DFLASH_HEALTH_COUNTERS: usize = 64;
-
-/// The split DFlash counters, in wire order. Append new counters at the end:
-/// the block carries its own count, so a reader takes the counters it knows
-/// and skips the rest, and a writer that sends fewer leaves the rest zero.
-fn dflash_health_counters(stats: &mut StageReplyStats) -> [&mut i64; 2] {
-    [
-        &mut stats.dflash_feature_rows_missing,
-        &mut stats.dflash_draft_context_resets,
-    ]
-}
-
-fn write_dflash_health(mut writer: impl Write, mut stats: StageReplyStats) -> io::Result<()> {
-    let counters = dflash_health_counters(&mut stats);
-    write_i32(
-        &mut writer,
-        i32::try_from(counters.len()).map_err(|_| invalid_data("too many DFlash counters"))?,
-    )?;
-    for counter in counters {
-        write_i64(&mut writer, *counter)?;
-    }
-    Ok(())
-}
-
-fn read_dflash_health(mut reader: impl Read, stats: &mut StageReplyStats) -> io::Result<()> {
-    let count = usize::try_from(read_i32(&mut reader)?)
-        .ok()
-        .filter(|count| *count <= MAX_DFLASH_HEALTH_COUNTERS)
-        .ok_or_else(|| invalid_data("invalid DFlash counter count"))?;
-    let mut known = dflash_health_counters(stats).into_iter();
-    for _ in 0..count {
-        let value = read_i64(&mut reader)?;
-        if let Some(counter) = known.next() {
-            *counter = value;
-        }
-    }
     Ok(())
 }
 
@@ -1028,6 +961,8 @@ fn reply_stats_fields(stats: StageReplyStats) -> [i64; REPLY_STATS_FIELD_COUNT] 
         stats.prefill_compute_stage_index,
         stats.prefill_compute_token_count_at_slowest_rate,
         stats.prefill_compute_observation_count,
+        stats.dflash_feature_rows_missing,
+        stats.dflash_draft_context_resets,
     ]
 }
 
@@ -1060,9 +995,8 @@ fn reply_stats_from_fields(fields: [i64; REPLY_STATS_FIELD_COUNT]) -> StageReply
         prefill_compute_stage_index: fields[24],
         prefill_compute_token_count_at_slowest_rate: fields[25],
         prefill_compute_observation_count: fields[26],
-        // Read after the fixed fields when the reply marker says so.
-        dflash_feature_rows_missing: 0,
-        dflash_draft_context_resets: 0,
+        dflash_feature_rows_missing: fields[27],
+        dflash_draft_context_resets: fields[28],
     }
 }
 

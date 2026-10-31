@@ -200,9 +200,9 @@ pub mod state_flags {
     /// continues after the first rejected row's correction token (reply
     /// marker 2). Without it a final stage drops drafts from rejected windows.
     pub const NATIVE_MTP_DRAFT_AFTER_CORRECTION: i32 = 1 << 13;
-    /// The sender reads a final stage's DFlash draft-context counters, which
-    /// follow the reply stats (reply marker bit `REPLY_DFLASH_HEALTH`). Without
-    /// it a final stage never sends them.
+    /// The sender is stage 0 of a split DFlash target: a final stage reports
+    /// its DFlash draft-context counters in the reply stats. Without it those
+    /// counters stay zero.
     pub const SPLIT_DFLASH: i32 = 1 << 14;
 }
 
@@ -738,7 +738,7 @@ pub struct StageReplyStats {
     pub prefill_compute_observation_count: i64,
     /// Target rows whose DFlash features never reached the final stage's
     /// draft for this session. Cumulative per session, so merging keeps the
-    /// larger value. Only on the wire to senders that set
+    /// larger value. Filled only for senders that set
     /// `state_flags::SPLIT_DFLASH`.
     pub dflash_feature_rows_missing: i64,
     /// Times that draft's context was cleared or left with a gap.
@@ -746,7 +746,7 @@ pub struct StageReplyStats {
 }
 
 impl StageReplyStats {
-    /// Whether the DFlash draft-context counters need to go on the wire.
+    /// Whether a final stage reported any DFlash draft-context loss.
     pub fn has_dflash_health(self) -> bool {
         self.dflash_feature_rows_missing != 0 || self.dflash_draft_context_resets != 0
     }

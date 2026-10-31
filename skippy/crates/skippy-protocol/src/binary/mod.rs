@@ -268,44 +268,6 @@ mod tests {
     }
 
     #[test]
-    fn a_reply_without_dflash_losses_keeps_the_older_wire_shape() {
-        let mut with_zero = Vec::new();
-        send_reply_predicted_tokens_with_stats(&mut with_zero, &[1], StageReplyStats::default())
-            .unwrap();
-        let stats = StageReplyStats {
-            dflash_draft_context_resets: 1,
-            ..StageReplyStats::default()
-        };
-        let mut with_reset = Vec::new();
-        send_reply_predicted_tokens_with_stats(&mut with_reset, &[1], stats).unwrap();
-
-        // A count, then each counter.
-        assert_eq!(with_reset.len(), with_zero.len() + 4 + 16);
-        assert_eq!(recv_reply(Cursor::new(with_reset)).unwrap().stats, stats);
-    }
-
-    #[test]
-    fn a_reader_skips_dflash_counters_it_does_not_know() {
-        let stats = StageReplyStats {
-            dflash_feature_rows_missing: 3,
-            dflash_draft_context_resets: 1,
-            ..StageReplyStats::default()
-        };
-        let mut bytes = Vec::new();
-        send_reply_predicted_tokens_with_stats(&mut bytes, &[1], stats).unwrap();
-        // A newer writer appends two more counters and says so in the count.
-        let base = bytes.len() - 4 - 16;
-        bytes[base..base + 4].copy_from_slice(&4_i32.to_le_bytes());
-        bytes.extend_from_slice(&7_i64.to_le_bytes());
-        bytes.extend_from_slice(&9_i64.to_le_bytes());
-        bytes.extend_from_slice(&[0xAB; 4]);
-        let mut cursor = Cursor::new(bytes);
-
-        assert_eq!(recv_reply(&mut cursor).unwrap().stats, stats);
-        assert_eq!(cursor.position() as usize, cursor.get_ref().len() - 4);
-    }
-
-    #[test]
     fn dflash_counters_merge_as_cumulative_maxima() {
         let mut stats = StageReplyStats {
             dflash_feature_rows_missing: 10,
