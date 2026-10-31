@@ -38,7 +38,7 @@ impl StageOpenAiBackend {
         let Some(kv) = self.kv.as_ref() else {
             return false;
         };
-        if !kv.payload_is_exact_state() {
+        if !kv.payload_is_exact_state() && !kv.records_resident_prefixes() {
             return false;
         }
         let Some(checkpoint_tokens) =
@@ -153,7 +153,7 @@ impl StageOpenAiBackend {
         let Some(kv) = self.kv.as_ref() else {
             return false;
         };
-        if !kv.payload_is_exact_state() {
+        if !kv.payload_is_exact_state() && !kv.records_resident_prefixes() {
             return false;
         }
         let Ok(checkpoint_token_count) = u64::try_from(checkpoint_tokens.len()) else {
@@ -230,6 +230,30 @@ impl StageOpenAiBackend {
 
         let base = self.local_kv_message_base(session_id, ids);
         let identity = kv.prefill_identity(&self.config, &base, 0, checkpoint_tokens);
+        if kv.records_resident_prefixes() {
+            let recorded = kv
+                .record_resident_prefix(runtime, session_id, &identity, checkpoint_tokens)
+                .is_ok_and(|record| record.is_some());
+            #[cfg(test)]
+            {
+                if recorded && decision_prefix == "post_decode_checkpoint" {
+                    super::capture_trace::POST_DECODE_RECORDED
+                        .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                }
+                super::capture_trace::log_capture_decision(
+                    decision_prefix,
+                    if recorded {
+                        "native_prefix_recorded"
+                    } else {
+                        "native_prefix_skipped"
+                    },
+                    checkpoint_token_count,
+                    Some(runtime_token_count),
+                    Some(&identity.namespace),
+                );
+            }
+            return recorded;
+        }
         #[cfg(test)]
         let decision_namespace = identity.namespace.clone();
         let admission = if decision_prefix == "post_decode_checkpoint" {

@@ -3410,7 +3410,7 @@ index 426c48741..0a5980aaa 100644
  
  #
  # libraries
-@@ -47,6 +48,50 @@ set(LLAMA_CORE_SOURCES
+@@ -47,6 +48,51 @@ set(LLAMA_CORE_SOURCES
  add_library(llama
              ../include/llama.h
              ${LLAMA_CORE_SOURCES}
@@ -3453,6 +3453,7 @@ index 426c48741..0a5980aaa 100644
 +            skippy/stage_realization.cpp
 +            skippy/stage_execution_contract.cpp
 +            skippy/state.cpp
++            skippy/resident_prefix.cpp
 +            skippy/state_memory.cpp
 +            skippy/state_effects.cpp
 +            skippy/speculative_decoding.cpp
@@ -3771,12 +3772,14 @@ index 426c48741..0a5980aaa 100644
 +    set_tests_properties(skippy_generate_gemma_fixture PROPERTIES
 +        FIXTURES_SETUP skippy-model-loader-fixtures)
 +
-+    add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
++    add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp skippy/tests/resident_checkpoint_gpu.cpp)
 +    target_include_directories(skippy-sampling-history PRIVATE .)
 +    target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
 +    target_link_libraries(skippy-sampling-history PRIVATE llama)
++    add_test(NAME skippy_resident_checkpoint_gpu_long COMMAND skippy-sampling-history resident-gpu-long)
++    set_tests_properties(skippy_resident_checkpoint_gpu_long PROPERTIES SKIP_RETURN_CODE 77)
 +    function(add_skippy_sampling_history_tests family fixture state)
-+        foreach(mode grammar penalty)
++        foreach(mode grammar penalty resident)
 +            add_test(NAME skippy_sampling_history_${family}_${mode}
 +                COMMAND skippy-sampling-history
 +                    "${SKIPPY_MODEL_FIXTURE_DIR}/${family}-dense.gguf" ${mode} ${state})

@@ -785,8 +785,10 @@ fn execute_binary_stage_message(
             Ok((message.state.current_token, Vec::new(), output, None))
         }
         WireMessageKind::PrefillFinalEmbd if options.sample_final_prefill => {
-            let sampling =
-                runtime_sampling_config(message.sampling.as_ref(), runtime.kv_pool_tokens());
+            let sampling = runtime_sampling_config(
+                message.sampling.as_ref(),
+                runtime.context_tokens_per_lane(),
+            );
             let (predicted, output) = runtime.prefill_final_frame_sampled(
                 session_id,
                 token_ids,
@@ -814,8 +816,10 @@ fn execute_binary_stage_message(
                 .first()
                 .copied()
                 .unwrap_or(message.state.current_token);
-            let sampling =
-                runtime_sampling_config(message.sampling.as_ref(), runtime.kv_pool_tokens());
+            let sampling = runtime_sampling_config(
+                message.sampling.as_ref(),
+                runtime.context_tokens_per_lane(),
+            );
             let draft_tokens = native_mtp_draft_tokens(message, options);
             if !options.native_mtp_enabled || draft_tokens == 0 || dflash_drafts {
                 let (predicted, output) = runtime.decode_frame_sampled(

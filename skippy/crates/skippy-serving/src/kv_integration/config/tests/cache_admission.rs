@@ -34,6 +34,8 @@ fn loaded_capabilities_select_complete_state_without_configuration_labels() {
             &config,
             Some(kind),
             Some(skippy_runtime::MemoryCacheCapabilities {
+                resident_attention: resident,
+                resident_checkpoint: false,
                 resident,
                 kv_recurrent,
                 full_state: true,
