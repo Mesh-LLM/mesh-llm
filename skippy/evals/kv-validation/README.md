@@ -22,6 +22,14 @@ This foundation runs:
 * The unchanged strict chat-parity and growing-checkpoint Rust regressions for
   the catalog's two recurrent/hybrid workloads. These fixtures retain their
   recurrent message-boundary assertions; dense rows use the generic HTTP gate.
+* For those hybrid rows, cold eviction of a 64-token native checkpoint after
+  releasing its source lane, followed by model/runtime/cache reload against the
+  same L3 directory. Require an actual L3 hit, identical attention and recurrent
+  payload bytes, and four matching fixed-input continuation predictions. This
+  runs in one test process and does not qualify fresh-process server restart.
+  A second model test refuses L3 writes with a one-byte disk budget, requires
+  native attention cells to be released, and verifies exact cold-recompute
+  predictions before checking that no durable entry was published.
 
 Long c4 state comparisons, L3 restart, pressure, default-budget qualification and
 standard-vanilla performance comparisons remain separate work in

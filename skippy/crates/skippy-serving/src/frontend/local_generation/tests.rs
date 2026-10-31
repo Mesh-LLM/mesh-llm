@@ -29,6 +29,9 @@ use skippy_inference_api::{ChatCompletionRequest, InferenceBackend};
 use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode};
 use skippy_runtime::SamplingConfig;
 
+#[path = "tests/durable_prefix.rs"]
+mod durable_prefix;
+
 // The real-model tests below are deliberately ignored by default. The
 // fixture contract is explicit: run them with both model-path variables set;
 // optionally set SKIPPY_RECURRENT_CACHE_TEST_MODEL_ID to override the model id
