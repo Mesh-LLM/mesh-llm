@@ -16,26 +16,74 @@ impl PluginManager {
         body: Vec<u8>,
         correlation_id: &str,
     ) -> Result<()> {
+        self.deliver_locally(
+            None,
+            proto::ChannelMessage {
+                channel: channel.to_string(),
+                content_type: content_type.to_string(),
+                body,
+                correlation_id: correlation_id.to_string(),
+                ..Default::default()
+            },
+        )
+        .await
+    }
+
+    /// Deliver `plugin_id`'s own message on a channel its manifest declares
+    /// `local` to every other loaded plugin that declares the channel, the
+    /// same way the host delivers its own broadcasts: empty `source_peer_id`,
+    /// so a receiver tells it from a mesh peer's frame. Nothing goes to the
+    /// mesh. The sender's id rides in `metadata_json` as `source_plugin`.
+    pub async fn relay_local_channel_message(
+        &self,
+        plugin_id: &str,
+        message: proto::ChannelMessage,
+    ) -> Result<()> {
+        let metadata_json = serde_json::json!({ "source_plugin": plugin_id }).to_string();
+        self.deliver_locally(
+            Some(plugin_id),
+            proto::ChannelMessage {
+                source_peer_id: String::new(),
+                metadata_json,
+                ..message
+            },
+        )
+        .await
+    }
+
+    /// One delivery to each loaded plugin declaring `template.channel`,
+    /// skipping `except`; `target_peer_id` is set to the recipient.
+    async fn deliver_locally(
+        &self,
+        except: Option<&str>,
+        template: proto::ChannelMessage,
+    ) -> Result<()> {
         let mut results = Vec::new();
         for (plugin_id, plugin) in &self.inner.plugins {
-            if !self.plugin_declares_mesh_channel(plugin_id, channel).await {
+            if except == Some(plugin_id.as_str())
+                || !self
+                    .plugin_declares_mesh_channel(plugin_id, &template.channel)
+                    .await
+            {
                 continue;
             }
             let result = plugin
                 .try_send_channel_message(proto::ChannelMessage {
-                    channel: channel.to_string(),
-                    source_peer_id: String::new(),
                     target_peer_id: plugin_id.clone(),
-                    content_type: content_type.to_string(),
-                    body: body.clone(),
-                    message_kind: String::new(),
-                    correlation_id: correlation_id.to_string(),
-                    metadata_json: String::new(),
+                    ..template.clone()
                 })
                 .await;
             results.push((plugin_id.clone(), result));
         }
         aggregate_broadcast_results(results)
+    }
+
+    /// Whether an already-running `plugin_name` declares `channel` as one it
+    /// publishes on locally ([`proto::MeshChannelManifest::local`]).
+    pub async fn plugin_declares_local_channel(&self, plugin_name: &str, channel: &str) -> bool {
+        self.manifest_snapshot(plugin_name)
+            .await
+            .is_some_and(|manifest| manifest_declares_local_channel(&manifest, channel))
     }
 
     /// Whether an already-running `plugin_name` declares `channel` in its
@@ -93,6 +141,13 @@ fn aggregate_broadcast_results(results: Vec<(String, Result<()>)>) -> Result<()>
     }
 }
 
+fn manifest_declares_local_channel(manifest: &proto::PluginManifest, channel: &str) -> bool {
+    manifest
+        .mesh_channels
+        .iter()
+        .any(|entry| entry.name == channel && entry.local)
+}
+
 fn manifest_declares_mesh_channel(manifest: &proto::PluginManifest, channel: &str) -> bool {
     manifest
         .mesh_channels
@@ -118,6 +173,7 @@ mod tests {
         let manifest = proto::PluginManifest {
             mesh_channels: vec![proto::MeshChannelManifest {
                 name: "openai.exchange.v1".into(),
+                local: false,
             }],
             ..proto::PluginManifest::default()
         };
@@ -127,6 +183,34 @@ mod tests {
             "openai.exchange.v1"
         ));
         assert!(!manifest_declares_mesh_channel(&manifest, "other.channel"));
+    }
+
+    #[test]
+    fn a_channel_is_local_only_when_its_declaration_says_so() {
+        let manifest = proto::PluginManifest {
+            mesh_channels: vec![
+                proto::MeshChannelManifest {
+                    name: "payment.lifecycle.v1".into(),
+                    local: true,
+                },
+                proto::MeshChannelManifest {
+                    name: "pay.ln.v1".into(),
+                    local: false,
+                },
+            ],
+            ..proto::PluginManifest::default()
+        };
+        assert!(manifest_declares_local_channel(
+            &manifest,
+            "payment.lifecycle.v1"
+        ));
+        assert!(!manifest_declares_local_channel(&manifest, "pay.ln.v1"));
+        assert!(!manifest_declares_local_channel(&manifest, "other.channel"));
+        // A local declaration is still a declaration of the channel.
+        assert!(manifest_declares_mesh_channel(
+            &manifest,
+            "payment.lifecycle.v1"
+        ));
     }
 
     /// One declaring plugin failing must not stop delivery to the rest —

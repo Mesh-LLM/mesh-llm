@@ -1313,6 +1313,23 @@ These should use the generic plugin mesh transport rather than dedicated core st
 
 Core should not embed plugin-specific wire protocols in the main mesh transport when the behavior can live behind the generic plugin channel mechanism.
 
+### Local channels
+
+A plugin may publish on a channel to the other plugins on its own node only, by
+declaring it local (`mesh_llm_plugin::mesh::local_channel(name)`, which sets
+`MeshChannelManifest.local`). The host then delivers that plugin's messages on
+the channel to every other loaded plugin that declares the same channel, and
+sends none to a peer. The delivery has the shape of the host's own local
+broadcast (`PluginManager::broadcast_channel_message`): an empty
+`source_peer_id`, `target_peer_id` set to the receiving plugin, and the
+publisher's name in `metadata_json` as `source_plugin`. A receiver declares the
+channel as usual (`mesh::channel(name)`).
+
+The host advertises the `local_channels.v1` host capability. A host without it
+reads the declaration as an ordinary mesh channel and would send the messages
+to peers, so a plugin checks `context.host_supports(LOCAL_CHANNELS)` before
+publishing on a local channel.
+
 ## Plugin Keys
 
 A plugin that signs records can have its host announce the public key it signs

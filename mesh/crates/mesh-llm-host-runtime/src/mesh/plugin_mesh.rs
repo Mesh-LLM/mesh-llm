@@ -391,6 +391,18 @@ impl Node {
                 plugin_id,
                 mut message,
             } => {
+                // A channel the plugin publishes on locally never reaches the
+                // mesh: its messages go to the other plugins on this node.
+                let plugin_manager = self.plugin_manager.lock().await.clone();
+                if let Some(plugin_manager) = plugin_manager
+                    && plugin_manager
+                        .plugin_declares_local_channel(&plugin_id, &message.channel)
+                        .await
+                {
+                    return plugin_manager
+                        .relay_local_channel_message(&plugin_id, message)
+                        .await;
+                }
                 if !self
                     .plugin_event_channel_declared(&plugin_id, &message.channel, "message")
                     .await

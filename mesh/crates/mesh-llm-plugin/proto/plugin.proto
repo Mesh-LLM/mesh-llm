@@ -552,6 +552,14 @@ message PluginConfigRequiresConstraint {
 
 message MeshChannelManifest {
   string name = 1;
+  // This plugin publishes on the channel to the other plugins on its own
+  // node, never to the mesh: the host delivers its channel messages on it to
+  // every other local plugin that declares the channel, as it delivers its
+  // own local broadcasts (empty `source_peer_id`), and sends none to a peer.
+  // Handled only by a host listing the `local_channels.v1` capability; a
+  // host without it would send the messages to the mesh, so a plugin checks
+  // the capability before publishing.
+  bool local = 2;
 }
 
 message MeshEventSubscriptionManifest {

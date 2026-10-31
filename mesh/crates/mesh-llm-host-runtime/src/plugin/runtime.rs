@@ -375,6 +375,7 @@ impl ExternalPlugin {
                         mesh_llm_plugin::host_capabilities::PLUGIN_KEYS.to_string(),
                         mesh_llm_plugin::host_capabilities::PLUGIN_STATUS.to_string(),
                         mesh_llm_plugin::host_capabilities::LOCAL_INFERENCE_OBSERVATION.to_string(),
+                        mesh_llm_plugin::host_capabilities::LOCAL_CHANNELS.to_string(),
                     ],
                 }),
                 Some(self.spec.startup.init_timeout()),
