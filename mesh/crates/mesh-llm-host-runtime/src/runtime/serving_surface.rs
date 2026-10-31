@@ -1439,58 +1439,6 @@ pub(super) fn detect_bin_dir() -> Result<PathBuf> {
     Ok(dir.to_path_buf())
 }
 
-/// Update ~/.pi/agent/models.json to include a "mesh" provider.
-pub(super) fn update_pi_models_json(model_id: &str, port: u16) {
-    let Some(home) = dirs::home_dir() else { return };
-    let models_path = home.join(".pi/agent/models.json");
-
-    let mut root: serde_json::Value = if models_path.exists() {
-        match std::fs::read_to_string(&models_path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_else(|_| serde_json::json!({})),
-            Err(_) => serde_json::json!({}),
-        }
-    } else {
-        serde_json::json!({})
-    };
-
-    let providers = root.as_object_mut().and_then(|r| {
-        r.entry("providers")
-            .or_insert_with(|| serde_json::json!({}));
-        r.get_mut("providers")?.as_object_mut()
-    });
-    let Some(providers) = providers else { return };
-
-    let mesh = serde_json::json!({
-        "baseUrl": format!("http://localhost:{port}/v1"),
-        "api": "openai-completions",
-        "apiKey": "mesh",
-        "models": [{
-            "id": model_id,
-            "name": model_id,
-            "reasoning": false,
-            "input": ["text"],
-            "contextWindow": 32768,
-            "maxTokens": 8192,
-            "compat": {
-                "supportsUsageInStreaming": false,
-                "maxTokensField": "max_tokens",
-                "supportsDeveloperRole": false
-            }
-        }]
-    });
-
-    providers.insert("mesh".to_string(), mesh);
-
-    if let Some(parent) = models_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(json) = serde_json::to_string_pretty(&root)
-        && let Err(e) = std::fs::write(&models_path, json)
-    {
-        tracing::warn!("Failed to update {}: {e}", models_path.display());
-    }
-}
-
 /// Resolve Nostr relay URLs from CLI or defaults.
 /// Build the list of model refs this node is assigned to serve for gossip announcement.
 /// The primary model ref must always appear first in the result.
