@@ -84,7 +84,8 @@ function SetRow({
         disabled={disabled}
         onChange={(event) => setDraft(event.currentTarget.value)}
         onKeyDown={(event) => {
-          if (event.key === 'Enter' && canSet) {
+          // Enter that confirms an IME candidate is not a Set.
+          if (event.key === 'Enter' && !event.nativeEvent.isComposing && canSet) {
             event.preventDefault()
             onSet(shown.trim())
           }
@@ -151,6 +152,7 @@ export function SchemaSetValueArrayControl({
   const [pending, setPending] = useState<readonly number[]>([])
   const [confirmedRow, setConfirmedRow] = useState<number | null>(null)
   const [lastEmitted, setLastEmitted] = useState<string | null>(null)
+  const [sets, setSets] = useState(0)
   // A change this control did not make (Undo, Redo, Revert) ends the confirmation: it described the undone value.
   if (confirmedRow !== null && value !== lastEmitted) setConfirmedRow(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -182,6 +184,7 @@ export function SchemaSetValueArrayControl({
   const emit = (next: readonly Record<string, unknown>[]) => {
     const text = JSON.stringify(next)
     setLastEmitted(text)
+    setSets((count) => count + 1)
     onChange(text)
   }
   const rest: ConfigurationSettingObjectSchema = {
@@ -198,7 +201,7 @@ export function SchemaSetValueArrayControl({
     <div className="grid w-full min-w-0 gap-2.5">
       {/* One live region for the whole control, so the confirmation is announced even when Set replaces a row. */}
       <p aria-live="polite" className="sr-only" role="status">
-        {confirmedRow === null ? '' : savedText}
+        {confirmedRow === null ? '' : `${savedText}${sets % 2 === 0 ? '\u00a0' : ''}`}
       </p>
       {items.length === 0 && pending.length === 0 && placeholder ? (
         <div className="grid gap-1">

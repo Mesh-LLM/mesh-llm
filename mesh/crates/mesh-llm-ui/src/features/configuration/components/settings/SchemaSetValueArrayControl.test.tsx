@@ -321,4 +321,27 @@ describe('SchemaSetValueArrayControl', () => {
       vi.useRealTimers()
     }
   })
+
+  it('ignores Enter that confirms an IME candidate', () => {
+    render(<Harness initial='[{"endpoint":"https://a.example"}]' />)
+    const input = screen.getByLabelText('Witnesses 1')
+    fireEvent.change(input, { target: { value: 'https://b.example' } })
+    fireEvent.keyDown(input, { key: 'Enter', isComposing: true })
+    expect(screen.getByTestId('value')).toHaveTextContent('https://a.example')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(screen.getByTestId('value')).toHaveTextContent('https://b.example')
+  })
+
+  it('changes the live region on every Set, so a second Set within the window is announced again', () => {
+    render(<Harness initial='[{"endpoint":"https://a.example"}]' />)
+    const input = screen.getByLabelText('Witnesses 1')
+    fireEvent.change(input, { target: { value: 'https://b.example' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Set' }))
+    const first = screen.getByRole('status').textContent
+    fireEvent.change(input, { target: { value: 'https://c.example' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Set' }))
+    const second = screen.getByRole('status').textContent
+    expect(first?.trim()).toBe(second?.trim())
+    expect(second).not.toBe(first)
+  })
 })
