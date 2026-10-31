@@ -4763,6 +4763,7 @@ dependencies = [
  "hex",
  "httparse",
  "iroh",
+ "libc",
  "mesh-llm-identity",
  "mesh-llm-membership",
  "mesh-llm-protocol",
