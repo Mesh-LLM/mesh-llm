@@ -705,16 +705,12 @@ impl StageOpenAiBackend {
                 decode_bytes: 0,
                 dflash_features: None,
             });
-            cache_stats.split_prefix_cache = Some(SplitPrefixCacheStats::new(
-                usize::try_from(cache_stats.cached_prompt_tokens).unwrap_or(usize::MAX),
-                super::prefix_cache::chain_prefix_cache_savings(
-                    &prefill_chain_cache_stats,
-                    prefill_chain_restored_tokens,
-                    request.activation_width,
-                )
-                .hit_stage_count,
+            cache_stats.split_prefix_cache = Some(prefix_restore::split_prefix_cache_stats(
+                cache_stats.cached_prompt_tokens,
+                &prefill_chain_cache_stats,
+                prefill_chain_restored_tokens,
                 prefill_forward_activation_bytes,
-                prefill_token_count.saturating_sub(prefill_chain_restored_tokens),
+                prefill_token_count,
                 request.activation_width,
             ));
             self.emit_openai_phase("stage.openai_prefill", prefill_timer, prefill_attrs);

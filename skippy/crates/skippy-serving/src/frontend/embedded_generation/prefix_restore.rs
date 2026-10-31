@@ -147,6 +147,31 @@ fn restore_allowed(native_mtp_enabled: bool, split_dflash: bool) -> bool {
     !native_mtp_enabled || split_dflash
 }
 
+/// What a split's prompt-prefix restore saved stage 0, for the response
+/// timings: tokens restored on every stage, how many stages hit, and the
+/// activation bytes stage 0 still forwarded for the suffix it prefilled.
+pub(super) fn split_prefix_cache_stats(
+    cached_prompt_tokens: u32,
+    chain_stats: &StageReplyStats,
+    chain_restored_tokens: usize,
+    forwarded_bytes: usize,
+    prefill_token_count: usize,
+    activation_width: i32,
+) -> SplitPrefixCacheStats {
+    SplitPrefixCacheStats::new(
+        usize::try_from(cached_prompt_tokens).unwrap_or(usize::MAX),
+        crate::frontend::prefix_cache::chain_prefix_cache_savings(
+            chain_stats,
+            chain_restored_tokens,
+            activation_width,
+        )
+        .hit_stage_count,
+        forwarded_bytes,
+        prefill_token_count.saturating_sub(chain_restored_tokens),
+        activation_width,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::restore_allowed;
