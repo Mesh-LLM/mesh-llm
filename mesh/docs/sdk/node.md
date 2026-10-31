@@ -28,8 +28,9 @@ Stream with `node.inference.streamChatCompletions(body)` or
 
 ## Thinking effort levels
 
-`listModels()` returns the provider's `/v1/models` metadata, including the
-effort strings observed in the loaded chat template:
+`listModels()` returns model metadata in the `/v1/models` shape, including the
+effort strings observed in the loaded chat template. The native addon currently
+queries this metadata through the embedded node's HTTP client:
 
 ```js
 const models = await node.inference.listModels()

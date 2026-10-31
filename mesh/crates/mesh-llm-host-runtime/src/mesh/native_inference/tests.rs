@@ -404,6 +404,73 @@ async fn native_wire_rejects_wrong_provider_generation_and_oversize_without_exec
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn remote_native_stream_times_out_when_provider_withholds_stream_credit() {
+    let secret = SecretKey::generate();
+    let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .secret_key(secret.clone())
+        .alpns(vec![ALPN.to_vec()])
+        .relay_mode(iroh::endpoint::RelayMode::Disabled)
+        .transport_config(
+            iroh::endpoint::QuicTransportConfig::builder()
+                .max_concurrent_bidi_streams(0u32.into())
+                .build(),
+        )
+        .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+        .unwrap()
+        .bind()
+        .await
+        .unwrap();
+    let provider =
+        Node::new_test_node_from_endpoint(NodeRole::Host { http_port: 9 }, endpoint, secret);
+    let client = Node::new_for_tests(NodeRole::Client).await.unwrap();
+    let addr = provider.endpoint_addr_for_advertisement();
+    let (connection, accepted) = tokio::join!(client.endpoint.connect(addr.clone(), ALPN), async {
+        provider.endpoint.accept().await.unwrap().await
+    },);
+    let connection = connection.unwrap();
+    let _accepted = accepted.unwrap();
+    // Admit the test peer without gossip: zero stream credit intentionally
+    // prevents even a gossip exchange, while the QUIC connection stays alive.
+    let announcement = provider.collect_announcements().await.pop().unwrap();
+    let mut peer = PeerInfo::from_announcement(
+        provider.id(),
+        addr,
+        &announcement,
+        OwnershipSummary::default(),
+    );
+    peer.admitted = true;
+    {
+        let mut state = client.state.lock().await;
+        state.peers.insert(provider.id(), peer);
+        state.connections.insert(provider.id(), connection.clone());
+    }
+    assert!(
+        tokio::time::timeout(Duration::from_millis(20), connection.open_bi())
+            .await
+            .is_err(),
+        "the provider must withhold stream credit"
+    );
+    client.set_native_stream_idle(Duration::from_millis(150));
+    let mut stream = client
+        .native_chat_completion_stream(call(&provider, None))
+        .await
+        .unwrap();
+    let error = tokio::time::timeout(Duration::from_secs(5), stream.next_chunk())
+        .await
+        .expect("opening the stream must be bounded")
+        .expect("a blocked open must report an error")
+        .expect_err("opening without stream credit cannot succeed");
+    assert!(
+        error
+            .to_string()
+            .contains("timed out opening the provider stream")
+    );
+    assert!(stream.next_chunk().await.is_none());
+    client.endpoint.close().await;
+    provider.endpoint.close().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_mesh_stream_delivers_deltas_and_preserves_effort() {
     let (provider, backend, _) = serving_node(Some(vec!["high".into()])).await;
     let client = Node::new_for_tests(NodeRole::Client).await.unwrap();

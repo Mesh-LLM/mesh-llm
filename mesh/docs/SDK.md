@@ -34,14 +34,15 @@ is unknown, including older peers; render-probe observations are not guarantees
 about generated reasoning. The legacy HTTP client and management status methods
 remain available separately.
 
-Every language SDK reads the same `/v1/models` metadata, so `thinking_efforts`
-is not Rust-only: Kotlin and Swift return it from `listModels()` as
-`Model.thinkingEfforts`, and Node.js returns it as
-`model.metadata.thinking_efforts`. The Python SDK reads the same FFI record;
-its generated bindings gain the field when they are regenerated against this
-Mesh revision. The [Rust](sdk/rust.md), [Node.js](sdk/node.md),
-[Kotlin](sdk/kotlin.md), [Swift](sdk/swift.md), and [Python](sdk/python.md) guides
-each show how to select an effort.
+Thinking effort metadata is also exposed by Kotlin and Swift from
+`listModels()` as `Model.thinkingEfforts`, and by Node.js as
+`model.metadata.thinking_efforts`. These bridges currently use the embedded
+HTTP client to return metadata in the `/v1/models` shape; Rust
+`MeshNode::models()` reads native runtime state directly. The
+[Rust](sdk/rust.md), [Node.js](sdk/node.md), [Kotlin](sdk/kotlin.md), and
+[Swift](sdk/swift.md) guides show how to select an effort. Python support
+requires updated bindings and documentation in the separately versioned
+[Python SDK](sdk/python.md).
 
 Native streaming deadlines are part of the protocol contract. A unary request
 must finish within five minutes. A stream has no total-duration limit: it fails

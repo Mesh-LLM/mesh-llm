@@ -87,7 +87,9 @@ impl Node {
         tx: &ChunkSender,
         idle: Duration,
     ) -> Result<()> {
-        let (_send, mut recv) = self.open_native_chat(provider, &call).await?;
+        let (_send, mut recv) = tokio::time::timeout(idle, self.open_native_chat(provider, &call))
+            .await
+            .context("native inference timed out opening the provider stream")??;
         loop {
             let frame = tokio::select! {
                 _ = tx.closed() => return Ok(()),

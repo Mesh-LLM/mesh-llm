@@ -95,6 +95,8 @@ generation's total duration:
 
 - A unary request must complete within 300 seconds of the provider accepting
   it. It produces one response and has no progress signal of its own.
+- Opening the provider stream, including connection acquisition, QUIC stream
+  credit and the initial request write, must finish within 300 seconds.
 - A stream has no total-duration limit. Each wait for the next chunk is bounded
   by a 300-second inactivity window that restarts with every chunk, so a
   generation that keeps producing is never cut off and a generation that stops
