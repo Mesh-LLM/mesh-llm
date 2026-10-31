@@ -66,7 +66,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/stage_execution_contract.cpp |   78 ++
  src/skippy/stage_execution_contract.h   |   15 +
  src/skippy/stage_plan.cpp               |  709 ++++++++++++++
- src/skippy/stage_realization.cpp        |  293 ++++++
+ src/skippy/stage_realization.cpp        |  350 +++++++
  src/skippy/stage_realization.h          |   21 +
  src/skippy/stage_slice_plan.cpp         |  907 +++++++++++++++++
  src/skippy/stage_slice_plan.h           |  136 +++
@@ -79,7 +79,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  256 +++++
  src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 75 files changed, 16320 insertions(+), 395 deletions(-)
+ 75 files changed, 16377 insertions(+), 395 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -13580,10 +13580,10 @@ index 000000000..380e1eaad
 +}
 diff --git a/src/skippy/stage_realization.cpp b/src/skippy/stage_realization.cpp
 new file mode 100644
-index 000000000..6482cafa6
+index 000000000..1ae940166
 --- /dev/null
 +++ b/src/skippy/stage_realization.cpp
-@@ -0,0 +1,293 @@
+@@ -0,0 +1,350 @@
 +#include "stage_realization.h"
 +
 +#include "stage_slice_plan.h"
@@ -13597,6 +13597,7 @@ index 000000000..6482cafa6
 +#include <algorithm>
 +#include <cstring>
 +#include <stdexcept>
++#include <string>
 +#include <unordered_map>
 +#include <unordered_set>
 +#include <utility>
@@ -13676,6 +13677,61 @@ index 000000000..6482cafa6
 +                operand = found->second;
 +            }
 +        }
++    }
++}
++
++// Speculative drafters read the input of selected layers. A builder may
++// derive that input beside the block (a stream mean, say), so it feeds no
++// frontier and the slice walk leaves it out. Keep the requested input of each
++// layer the stage computes, provided it is built from that layer's own block.
++void add_layer_input_outputs(
++        ggml_cgraph * graph,
++        const skippy_stage_slice_selection & selection,
++        const llm_graph_result & result) {
++    std::unordered_map<const ggml_tensor *, int32_t> positions;
++    for (int32_t index = 0; index < selection.source_graph->n_nodes; ++index) {
++        positions.emplace(selection.source_graph->nodes[index], index);
++    }
++    std::unordered_set<const ggml_tensor *> in_graph;
++    for (int index = 0; index < ggml_graph_n_nodes(graph); ++index) {
++        in_graph.insert(ggml_graph_node(graph, index));
++    }
++    const auto & boundaries = result.get_block_boundaries();
++    // A stage's first layer input arrives from the previous stage.
++    const int32_t first = selection.layer_start > 0 ? selection.layer_start + 1 : 0;
++    for (int32_t layer = first; layer < selection.layer_end; ++layer) {
++        ggml_tensor * tensor = static_cast<size_t>(layer) < result.t_layer_inp.size()
++                ? result.t_layer_inp[layer] : nullptr;
++        if (tensor == nullptr || in_graph.count(tensor) != 0 ||
++                static_cast<size_t>(2 * layer + 1) >= boundaries.size()) {
++            continue;
++        }
++        const auto entry = positions.find(boundaries[2 * layer].tensor);
++        const auto exit = positions.find(boundaries[2 * layer + 1].tensor);
++        const int32_t lower = entry == positions.end() ? -1 : entry->second;
++        const int32_t upper = exit == positions.end() ? -1 : exit->second;
++        std::vector<const ggml_tensor *> pending = {tensor};
++        std::unordered_set<const ggml_tensor *> visited;
++        while (!pending.empty()) {
++            const ggml_tensor * node = pending.back();
++            pending.pop_back();
++            if (node == nullptr || in_graph.count(node) != 0 || !visited.insert(node).second) {
++                continue;
++            }
++            const auto position = positions.find(node);
++            if (position == positions.end()) {
++                continue; // a weight, constant or request leaf
++            }
++            if (position->second < lower || position->second > upper) {
++                throw std::runtime_error("layer " + std::to_string(layer) +
++                        " input depends on graph nodes outside its block");
++            }
++            pending.push_back(node->view_src);
++            for (const ggml_tensor * source : node->src) {
++                pending.push_back(source);
++            }
++        }
++        ggml_build_forward_expand(graph, tensor);
 +    }
 +}
 +
@@ -13858,6 +13914,7 @@ index 000000000..6482cafa6
 +        add_sampling_outputs(result.t_sampled_logits);
 +        add_sampling_outputs(result.t_candidates);
 +    }
++    add_layer_input_outputs(graph, selection, result);
 +
 +    std::vector<skippy_activation_port> exports;
 +    exports.reserve(selection.activation_exports.size());

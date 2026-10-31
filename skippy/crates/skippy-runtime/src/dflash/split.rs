@@ -13,7 +13,9 @@
 //! The input of a stage's first layer is the activation it receives, which
 //! its own graph never produces, so no stage captures it there. The stage that
 //! ends on that layer forwards its own output hidden states as that layer's
-//! rows instead; they are the same values.
+//! rows instead; they are the same values. For a hyper-connection target,
+//! whose boundary carries several residual streams, it forwards their mean,
+//! which is what those graphs publish as the layer input.
 //!
 //! Rows travel as BF16: hidden states keep their range, and the draft only
 //! proposes tokens the target then verifies, so feature precision can change
@@ -79,6 +81,12 @@ pub(crate) fn stage_forwards_output_as(
 
 /// The hidden-state rows of `frame`'s primary part, which are the input of
 /// the layer after the producing stage's range.
+///
+/// A plain boundary is `[n_embd, tokens]` rows. A hyper-connection boundary
+/// (glm5-next, deepseek4) is `[n_embd, streams, tokens]`, and the layer input
+/// those families publish is the mean of the streams, computed here in the
+/// order their graphs use: the streams summed in turn, then scaled by
+/// `1 / streams`.
 fn frame_hidden_rows(frame: &ActivationFrame, n_embd: usize) -> Result<Vec<f32>> {
     let part = frame
         .desc
@@ -92,24 +100,38 @@ fn frame_hidden_rows(frame: &ActivationFrame, n_embd: usize) -> Result<Vec<f32>>
         crate::GGML_TYPE_F16 | GGML_TYPE_BF16 => 2,
         other => bail!("primary activation part has ggml type {other}"),
     };
-    let contiguous = part.byte_strides[..2] == [0, 0]
-        || part.byte_strides[..2] == [element as u64, (n_embd * element) as u64];
+    let streams = match (part.rank, part.token_axis) {
+        (2, 1) => 1,
+        (3, 2) => usize::try_from(part.dimensions[1]).unwrap_or(0),
+        _ => 0,
+    };
+    let row = n_embd
+        .checked_mul(element)
+        .context("hidden-state row stride")?;
+    let token = row
+        .checked_mul(streams)
+        .context("hidden-state token stride")?;
+    let packed = [element, row, token].map(|v| v as u64);
+    let rank = usize::try_from(part.rank).unwrap_or(0).min(packed.len());
+    let contiguous = part.byte_strides[..rank].iter().all(|&stride| stride == 0)
+        || part.byte_strides[..rank] == packed[..rank];
     ensure!(
         dflash_feature_layer(&part.identity).is_none()
-            && part.rank == 2
-            && part.token_axis == 1
+            && streams > 0
             && usize::try_from(part.dimensions[0]).ok() == Some(n_embd)
             && contiguous,
         "primary activation part is not {n_embd}-wide contiguous hidden-state rows"
     );
     let start = usize::try_from(part.payload_offset).context("primary offset")?;
-    let bytes = tokens * n_embd * element;
+    let bytes = tokens
+        .checked_mul(token)
+        .context("primary activation part size")?;
     let payload = frame
         .payload
         .get(start..start.saturating_add(bytes))
         .filter(|payload| payload.len() == bytes)
         .ok_or_else(|| anyhow!("primary activation part is truncated"))?;
-    Ok(match part.ggml_type {
+    let values: Vec<f32> = match part.ggml_type {
         crate::GGML_TYPE_F32 => payload
             .as_chunks::<4>()
             .0
@@ -123,7 +145,23 @@ fn frame_hidden_rows(frame: &ActivationFrame, n_embd: usize) -> Result<Vec<f32>>
             .iter()
             .map(|pair| f16_to_f32(u16::from_le_bytes(*pair)))
             .collect(),
-    })
+    };
+    if streams == 1 {
+        return Ok(values);
+    }
+    let scale = 1.0 / streams as f32;
+    Ok(values
+        .chunks_exact(streams * n_embd)
+        .flat_map(|token| {
+            let mut sum = token[..n_embd].to_vec();
+            for stream in token.chunks_exact(n_embd).skip(1) {
+                for (acc, value) in sum.iter_mut().zip(stream) {
+                    *acc += value;
+                }
+            }
+            sum.into_iter().map(move |value| value * scale)
+        })
+        .collect())
 }
 
 fn f16_to_f32(bits: u16) -> f32 {
@@ -874,6 +912,32 @@ mod tests {
 
         let forwarded = DFlashFeatureRows::from_frame(&output).unwrap().unwrap();
         assert_eq!(forwarded.rows_of(32, 0, 2), Some(&[1.0, 2.0, 3.0, 4.0][..]));
+    }
+
+    #[test]
+    fn a_hyper_connection_boundary_forwards_the_mean_of_its_streams() {
+        // Two tokens of two 2-wide streams: [n_embd, streams, tokens].
+        let streams = [1.0_f32, 2.0, 3.0, 6.0, -1.0, 0.5, 5.0, 1.5];
+        let mut output = frame(2);
+        let part = &mut output.desc.parts[0];
+        part.rank = 3;
+        part.token_axis = 2;
+        part.dimensions = [2, 2, 2, 0];
+        part.byte_strides = [4, 8, 16, 0];
+        output.payload = streams.iter().flat_map(|v| v.to_le_bytes()).collect();
+        output.desc.parts[0].payload_bytes = output.payload.len() as u64;
+        output.desc.payload_bytes = output.payload.len() as u64;
+
+        assert_eq!(
+            frame_hidden_rows(&output, 2).unwrap(),
+            vec![2.0, 4.0, 2.0, 1.0]
+        );
+        // Strides that are not packed streams are refused.
+        output.desc.parts[0].byte_strides = [4, 16, 8, 0];
+        assert!(frame_hidden_rows(&output, 2).is_err());
+        // A stream count whose strides overflow is an error, not a panic.
+        output.desc.parts[0].dimensions[1] = i64::MAX;
+        assert!(frame_hidden_rows(&output, 2).is_err());
     }
 
     #[test]
