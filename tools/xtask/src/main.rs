@@ -51,6 +51,7 @@ fn run() -> DynResult<()> {
         .map(|path| repository::RepositoryRoot::resolve(Some(path)))
         .transpose()?;
     match parsed.command {
+        cli::CliCommand::KvValidation(rest) => automation::kv_validation::run(rest),
         cli::CliCommand::EndpointModelDiscovery(rest) => {
             automation::endpoint_model_discovery::run(rest)
         }

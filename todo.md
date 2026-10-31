@@ -1,7 +1,47 @@
 # Reusable KV validation on JY
 
-Implement this **after the current cache and performance work**. Turn the
-experiments into repeatable JY jobs that we can run whenever KV behavior changes.
+The bounded [validation foundation](skippy/evals/kv-validation/README.md) now
+provides explicit reusable commands. Complete the remaining cases below after
+the current cache and performance work.
+
+## Completed foundation
+
+- [x] Own the exact four-model manifest and reject model/hash substitutions.
+- [x] Prepare a matching-header, pinned-runtime real-model evaluator once and
+  reuse one model load across the supported K/V type pairs.
+- [x] Provide typed Rust pin/prepare/run/JY-plan commands and thin Just recipes,
+  with bounded child supervision, cancellation and failed evidence retention.
+- [x] Run a fresh c1 cold/repeat/growing/repeat generated-content check, plus the
+  unchanged strict recurrent chat/growing tests for the declared hybrid rows.
+- [x] Emit four independent Linux CPU/CUDA JY specs with excluded-host guards,
+  immutable image/model/tool identities and no worker rebuilds. Local Metal
+  uses the same native prepare/run commands; native macOS JY admission remains
+  separate work.
+
+The new command passed end to end locally on the pinned Qwen3.5-4B model with
+all eight Metal formats. This does not mark the full four-model/backend suite,
+long-prefix ownership, L3 restart or throughput comparisons complete.
+
+## Retain PR #2657's correctness requirements
+
+Cache-owned immutable checkpoints replace the old execution-lane pinning and
+leased-pointer recorder. Before closing
+[PR #2657](https://github.com/Mesh-LLM/mesh-llm/pull/2657) as fully superseded:
+
+- [ ] Port native hybrid cancellation/consumer-error, recorder saturation and
+  unload/L3-restart integration assertions to cache-owned checkpoints. Keep
+  exact consumed-token boundaries, immutable KV/recurrent state and transactional
+  restore checks; token-count hashes cannot replace them.
+- [ ] Exercise the new spill reservation under byte-budget refusal, queue-full,
+  disconnect, export failure and blocked/failed writes. Reserve both attention
+  and recurrent bytes before export; retain accounting through write completion
+  and prove all failure paths release it without wedging request admission.
+- [ ] Document and expose the current best-effort cold-eviction policy: a refused
+  or failed L3 offload can release the final cached native owner. This loses reuse
+  and causes later prefill; it does not make every retained prefix durable.
+  Existing blob-L1 refusal tests do not cover native-owner eviction. Preserve
+  explicit refusal/eviction outcomes rather than restoring the old lane-pinning
+  timeout or forced direct-decode routing.
 
 ## Four-model AgentX matrix
 

@@ -37,6 +37,7 @@ pub(crate) mod event_benchmark_runner;
 pub(crate) mod family_battery_policy;
 pub(crate) mod family_model_identity;
 pub(crate) mod guardrail_corpus;
+pub(crate) mod kv_validation;
 pub(crate) mod laya;
 pub(crate) mod local_ports;
 pub(crate) mod logging_console;

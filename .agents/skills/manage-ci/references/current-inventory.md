@@ -1,5 +1,13 @@
 # MeshLLM CI inventory
 
+Manual KV validation lives in `automation kv-validation` and the thin
+`skippy-kv-*` Just recipes. It prepares one external native test harness against
+an exact packaged runtime, then reuses producer artifacts for the four pinned
+AgentX models. Its explicit Linux JY CPU/CUDA specs use the accepted lab/custom
+schema; Metal runs natively through the same local owner. This foundation is
+not selected by ordinary CI and does not qualify deferred long-c4/L3/performance
+checks. See `skippy/evals/kv-validation/README.md`.
+
 L2 post-checkout planning, the five lane summaries, and Quality commit
 convention use the narrow `ci-controller` executable through
 `prepare-ci-controller`. Only GitHub-hosted Linux may run it; locked release

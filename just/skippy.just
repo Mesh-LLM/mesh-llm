@@ -1,3 +1,13 @@
+# Prepare the pinned evaluator once, then run or plan explicit model cells.
+skippy-kv-prepare input output:
+    @just automation-run automation kv-validation prepare --input "{{ input }}" --output "{{ output }}"
+
+skippy-kv-validate input output:
+    @just automation-run automation kv-validation run --input "{{ input }}" --output "{{ output }}"
+
+skippy-kv-jy-plan input output:
+    @just automation-run automation kv-validation jy-plan --input "{{ input }}" --output "{{ output }}"
+
 # Build the complete standalone Skippy product for local iteration.
 [unix]
 skippy backend="" cuda_arch="" rocm_arch="":
