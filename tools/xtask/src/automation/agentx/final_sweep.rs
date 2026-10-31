@@ -58,6 +58,10 @@ impl Request {
         let model = inputs::select_model(&self.workspace, &self.model_key)?;
         inputs::verify(&self.model, &model.files[0].sha256)?;
         self.tools.verify(&self.workspace)?;
+        super::agentic_config::verify_tokenizer_snapshot(
+            &self.tools.tokenizer.path,
+            &super::agentic_config::tokenizer_snapshot(&self.workspace, &model),
+        )?;
         Ok(model)
     }
 }
