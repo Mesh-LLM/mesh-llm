@@ -8,6 +8,9 @@ use mesh_llm_cli::{BinaryFlavor, MeshGuardrailCliMode};
 use mesh_llm_commands::runtime_native::NativeRuntimeConfigSelection;
 use mesh_llm_host_runtime::command_support::plugin::{MeshConfig, load_config};
 
+mod owner_control_http;
+use owner_control_http::post_runtime_payload;
+
 pub(crate) async fn dispatch_runtime_command(
     command: Option<&RuntimeCommand>,
     config_path: Option<&Path>,
@@ -360,6 +363,13 @@ pub(crate) async fn run_drop(model_name: &str, port: u16) -> Result<()> {
     let url = format!("http://127.0.0.1:{port}/api/runtime/models/{encoded}");
     let resp = client
         .delete(&url)
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!(
+                "Bearer {}",
+                mesh_llm_commands::owner_control::owner_control_token(port).await?
+            ),
+        )
         .send()
         .await
         .with_context(|| format!("Can't connect to mesh-llm on port {port}. Is it running?"))?;
@@ -373,6 +383,13 @@ pub(crate) async fn run_load(model_name: &str, port: u16) -> Result<()> {
     let url = format!("http://127.0.0.1:{port}/api/runtime/models");
     let resp = client
         .post(&url)
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!(
+                "Bearer {}",
+                mesh_llm_commands::owner_control::owner_control_token(port).await?
+            ),
+        )
         .json(&serde_json::json!({"model": model_name}))
         .send()
         .await
@@ -672,35 +689,6 @@ fn load_mesh_config_file(path: &Path) -> Result<MeshConfig> {
     load_config(Some(path))
 }
 
-async fn post_runtime_payload(
-    port: u16,
-    path: &str,
-    body: &serde_json::Value,
-) -> Result<serde_json::Value> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
-    let url = format!("http://127.0.0.1:{port}{path}");
-    let response = client.post(&url).json(body).send().await.with_context(|| {
-        format!("Can't connect to mesh-llm console on port {port}. Is it running?")
-    })?;
-    let status = response.status();
-    let body = response
-        .json::<serde_json::Value>()
-        .await
-        .unwrap_or(serde_json::Value::Null);
-    if status.is_success() {
-        Ok(body)
-    } else {
-        let reason = body
-            .get("error")
-            .and_then(|value| value.get("message").or(Some(value)))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("unknown error");
-        anyhow::bail!("{reason}");
-    }
-}
-
 fn print_control_response(title: &str, body: &serde_json::Value, json_output: bool) -> Result<()> {
     if !json_output {
         let mut out = mesh_llm_events::console_out();
@@ -776,7 +764,7 @@ mod tests {
         build_apply_config_request, build_control_endpoint_request, build_guardrail_mode_request,
         build_lifecycle_request, control_bootstrap_lines, control_scan_refresh_lines,
         display_backend_label, native_runtime_command_selection, native_runtime_config_selector,
-        runtime_success_lines, yes_no,
+        owner_control_http, runtime_success_lines, yes_no,
     };
     use mesh_llm_cli::{BinaryFlavor, MeshGuardrailCliMode};
     use mesh_llm_host_runtime::command_support::plugin::{GpuAssignment, GpuConfig, MeshConfig};
@@ -988,5 +976,46 @@ mod tests {
             build_guardrail_mode_request(MeshGuardrailCliMode::Enforce),
             json!({ "mode": "enforce" })
         );
+    }
+
+    #[tokio::test]
+    async fn control_calls_present_owner_control_credential() {
+        use axum::{Router, routing::post};
+        use std::sync::{Arc, Mutex as StdMutex};
+        use tokio::net::TcpListener as TokioTcpListener;
+
+        let seen = Arc::new(StdMutex::new(Vec::<String>::new()));
+        let seen_app = seen.clone();
+        let app = Router::new().route(
+            "/api/runtime/control/scan-refresh",
+            post(move |headers: axum::http::HeaderMap| async move {
+                seen_app.lock().expect("auth lock").push(
+                    headers
+                        .get("authorization")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_string(),
+                );
+                axum::Json(json!({ "ok": true }))
+            }),
+        );
+        let listener = TokioTcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+
+        let body = owner_control_http::post_with_token(
+            port,
+            "/api/runtime/control/scan-refresh",
+            &json!({}),
+            "ax-secret",
+        )
+        .await
+        .expect("control call with supplied credential");
+        assert_eq!(body.get("ok"), Some(&json!(true)));
+        let auth = seen.lock().expect("auth lock").clone();
+        assert_eq!(auth, vec!["Bearer ax-secret".to_string()]);
+        server.abort();
     }
 }

@@ -101,7 +101,7 @@ pub(super) async fn open_owner_control_stream(
 )> {
     let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?
         .bind()
@@ -119,7 +119,7 @@ pub(super) async fn open_owner_control_stream(
             .await
             .expect("control endpoint should be available for owner-control tests"),
     )?;
-    let conn = endpoint.connect(control_addr, ALPN_CONTROL_V1).await?;
+    let conn = endpoint.connect(control_addr, ALPN_CONTROL_V2).await?;
     let (mut send, recv) = conn.open_bi().await?;
     write_len_prefixed(
         &mut send,
