@@ -222,10 +222,16 @@ jobs, and `publish=true`, so skipped optional repair attempts do not suppress it
 The approved Rust source-plan API uses the current controller planner for every
 selected SHA; source build scripts and the battery remain selected-source code.
 Rust `gguf_metadata` yields `metadata_admitted`; other modes stay `pending`, with downgrade rejection.
-Model cache admission checks pinned revision/blob paths, sizes and GGUF metadata
-without rehashing model payloads: full-roster reads are too expensive on the NAS.
-Same-size payload corruption is outside this admission gate; plan, handoff and
-evidence digests remain verified.
+Model cache admission accepts regular snapshot files and symlinks, checking pinned
+revision, size, containment and GGUF metadata. Content-addressed blob paths retain
+their immutable-cache identity check. Other files are SHA-256 verified, with private
+Unix job-account receipts avoiding repeat reads while path, digest, device/inode,
+size, mtime and ctime match. Receipts are local account state, not portable
+attestations, and never modify the model cache. Blob-path admission still leaves
+same-size corruption to cache population/audit; plan, handoff and evidence digests
+remain verified.
+The upstream preflight job has a 180-minute ceiling for cold copied-payload
+verification; warm admissions reuse the local integrity receipts.
 The upstream preflight caller now invokes Rust canary-receipts preflight after protected-controller preparation. It admits exact cached GGUF metadata and memory placement; native tensor, runtime, disk and certification checks remain in the selected real battery. This receipt is not environment readiness. The package binds both revisions, and workers
 reject any changed source identity. This is an operator-authorized trusted-code
 path on persistent lab machines, not isolation for untrusted PRs or fork code.
