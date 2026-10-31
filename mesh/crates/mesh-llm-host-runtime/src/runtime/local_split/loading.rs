@@ -211,8 +211,9 @@ pub(super) fn configured_stage_lifecycle_intervals(
 }
 
 /// The activation codec a split generation runs with: `skippy.activation_codec`
-/// on the model, else in `[defaults.skippy]`, else lossless. Config validation
-/// rejects unknown values; one that slips through runs lossless.
+/// on the model, else in `[defaults.skippy]`, else f16
+/// ([`SplitActivationCodec::DEFAULT`]). Config validation rejects unknown
+/// values; one that slips through runs the default.
 pub(super) fn configured_split_activation_codec(
     mesh_config: &plugin::MeshConfig,
     config_model_id: Option<&str>,
@@ -226,14 +227,14 @@ pub(super) fn configured_split_activation_codec(
         .and_then(|defaults| defaults.skippy.as_ref())
         .and_then(|config| config.activation_codec.as_deref());
     let Some(value) = model.or(defaults) else {
-        return SplitActivationCodec::LOSSLESS;
+        return SplitActivationCodec::DEFAULT;
     };
     SplitActivationCodec::from_setting(value).unwrap_or_else(|| {
         tracing::warn!(
             activation_codec = value,
-            "unknown skippy.activation_codec; split activations stay lossless"
+            "unknown skippy.activation_codec; split activations use the f16 default"
         );
-        SplitActivationCodec::LOSSLESS
+        SplitActivationCodec::DEFAULT
     })
 }
 
