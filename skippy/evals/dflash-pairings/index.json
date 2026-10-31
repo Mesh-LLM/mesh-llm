@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "pairings": [
+    {
+      "target": {
+        "architecture": "qwen35",
+        "layer_count": 32,
+        "embedding_length": 4096,
+        "expert_count": 0
+      },
+      "draft": {
+        "repo": "AtomicChat/Qwen3.5-9B-DFlash-GGUF",
+        "revision": "c7c69923d77a9aa0004b410d3a7a3dbb64591d41",
+        "file": "Qwen3.5-9B-DFlash.Q8_0.gguf",
+        "sha256": "27b9d18e605aea9c50ef506e4b63921e0dc624cc91c63c60617a8295f153d436",
+        "bytes": 1383768224
+      },
+      "max_draft_tokens": 15,
+      "backends": "all"
+    },
+    {
+      "target": {
+        "architecture": "qwen35",
+        "layer_count": 64,
+        "embedding_length": 5120,
+        "expert_count": 0
+      },
+      "draft": {
+        "repo": "AtomicChat/Qwen3.6-27B-DFlash-GGUF",
+        "revision": "a3d4fb1eff6f268cbbdf808042f6902cc17f5458",
+        "file": "Qwen3.6-27B-DFlash.Q8_0.gguf",
+        "sha256": "b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1",
+        "bytes": 1849481472
+      },
+      "max_draft_tokens": 15,
+      "backends": "all"
+    },
+    {
+      "target": {
+        "architecture": "qwen35",
+        "layer_count": 64,
+        "embedding_length": 5120,
+        "expert_count": 0,
+        "family": "Qwen3.8"
+      },
+      "draft": {
+        "repo": "z-lab/Qwen3.8-27B-DFlash2-GGUF",
+        "revision": "2d9571f8ce46e151f61c6499c99dee6079e1d610",
+        "file": "Qwen3.8-27B-DFlash2-Q8_0.gguf",
+        "sha256": "c18e800daedc59ca68fd13b6a856d795746af6d399a9279ac6a277d1d422f87e",
+        "bytes": 2056414816
+      },
+      "max_draft_tokens": 7,
+      "backends": "all"
+    },
+    {
+      "target": {
+        "architecture": "qwen35moe",
+        "layer_count": 40,
+        "embedding_length": 2048,
+        "expert_count": 256
+      },
+      "draft": {
+        "repo": "aminya/Qwen3.6-35B-A3B-DFlash2-GGUF",
+        "revision": "1e26e3499d865b9d2fc55e019d65b3f0e8ab6846",
+        "file": "Qwen3.6-35B-A3B-DFlash2-Q8_0.gguf",
+        "sha256": "69bc81f5344dfeb67bcfc09277dd9617500fca1823f72e6e08d5df92e73a8b44",
+        "bytes": 570468544
+      },
+      "max_draft_tokens": 7,
+      "backends": "not-metal"
+    },
+    {
+      "target": {
+        "architecture": "qwen35moe",
+        "layer_count": 40,
+        "embedding_length": 2048,
+        "expert_count": 256
+      },
+      "draft": {
+        "repo": "Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp",
+        "revision": "2aa57b642f211d2639083954c5b66d9c1ee503fc",
+        "file": "Qwen3.6-35B-A3B-DFlash-Q8_0.gguf",
+        "sha256": "724ac8a102763e0d896cd49bf558fdf5bfdb146ec9f7097d18b035e4a95eac3f",
+        "bytes": 421060800
+      },
+      "max_draft_tokens": 15,
+      "backends": "metal"
+    },
+    {
+      "target": {
+        "architecture": "qwen3next",
+        "layer_count": 48,
+        "embedding_length": 2048,
+        "expert_count": 512
+      },
+      "draft": {
+        "repo": "AtomicChat/Qwen3-Coder-Next-DFlash-GGUF",
+        "revision": "f5b4c9d2511678f75a41b3d3de5d9e379dd88768",
+        "file": "Qwen3-Coder-Next-DFlash.Q8_0.gguf",
+        "sha256": "139081af2f9f634b3b8bce8f75a0449f92bcb75ae7a2e32abaf1bcdf6f4a7952",
+        "bytes": 509674720
+      },
+      "max_draft_tokens": 15,
+      "backends": "metal"
+    }
+  ]
+}

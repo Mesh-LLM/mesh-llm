@@ -1264,3 +1264,255 @@ fn fixture() -> PackageManifest {
     manifest.package_id = manifest.computed_package_id().unwrap();
     manifest
 }
+
+fn dflash_generation(proposer: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "speculative_decoding": {
+            "default": "dflash",
+            "proposers": { "draft": proposer },
+            "strategies": { "dflash": { "type": "dflash", "proposers": ["draft"] } }
+        }
+    })
+}
+
+fn dflash_proposer_json() -> serde_json::Value {
+    serde_json::json!({
+        "type": "dflash",
+        "draft": {
+            "repo": "z-lab/Qwen3.8-27B-DFlash2-GGUF",
+            "revision": "2d9571f8ce46e151f61c6499c99dee6079e1d610",
+            "file": "Qwen3.8-27B-DFlash2-Q8_0.gguf",
+            "sha256": DIGEST,
+            "bytes": 2_056_414_816u64
+        },
+        "target_layers": [0],
+        "block_size": 8,
+        "max_draft_tokens": 7,
+        "backends": "not-metal"
+    })
+}
+
+fn manifest_with_generation(generation: serde_json::Value) -> PackageManifest {
+    let manifest = fixture();
+    let mut encoded = serde_json::to_value(&manifest).unwrap();
+    encoded["generation"] = generation;
+    let decoded: PackageManifest = serde_json::from_value(encoded).unwrap();
+    let mut decoded = decoded.resolve_inventory(
+        manifest.model_metadata.clone(),
+        manifest.tensor_catalog.clone(),
+    );
+    decoded.package_id = decoded.computed_package_id().unwrap();
+    decoded
+}
+
+#[test]
+fn a_dflash_proposer_parses_validates_and_round_trips() {
+    let manifest = manifest_with_generation(dflash_generation(dflash_proposer_json()));
+    manifest.validate().unwrap();
+    let speculative = manifest
+        .generation
+        .as_ref()
+        .and_then(|generation| generation.speculative_decoding.as_ref())
+        .unwrap();
+    let ProposerKind::Dflash {
+        draft,
+        target_layers,
+        block_size,
+        max_draft_tokens,
+        backends,
+    } = &speculative.proposers["draft"].kind
+    else {
+        panic!("expected a dflash proposer");
+    };
+    assert_eq!(draft.repo, "z-lab/Qwen3.8-27B-DFlash2-GGUF");
+    assert_eq!(draft.bytes, 2_056_414_816);
+    assert_eq!(target_layers, &[0]);
+    assert_eq!((*block_size, *max_draft_tokens), (8, 7));
+    assert_eq!(*backends, DFlashBackends::NotMetal);
+    assert_eq!(speculative.proposers["draft"].kind.type_name(), "dflash");
+
+    let encoded = serde_json::to_string(&manifest).unwrap();
+    let decoded: PackageManifest = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(
+        serde_json::to_value(&decoded).unwrap()["generation"],
+        serde_json::to_value(&manifest).unwrap()["generation"]
+    );
+    let proposer = &serde_json::to_value(&manifest).unwrap()["generation"]["speculative_decoding"]
+        ["proposers"]["draft"];
+    assert_eq!(proposer["type"], "dflash");
+    assert_eq!(proposer["backends"], "not-metal");
+
+    // Backends default to all.
+    let mut without_backends = dflash_proposer_json();
+    without_backends.as_object_mut().unwrap().remove("backends");
+    let manifest = manifest_with_generation(dflash_generation(without_backends));
+    let speculative = manifest.generation.unwrap().speculative_decoding.unwrap();
+    assert!(matches!(
+        speculative.proposers["draft"].kind,
+        ProposerKind::Dflash {
+            backends: DFlashBackends::All,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn a_dflash_proposer_rejects_unknown_fields_and_backends() {
+    for (field, value) in [
+        ("cooldown", serde_json::json!(1)),
+        ("backends", serde_json::json!("cuda")),
+    ] {
+        let mut proposer = dflash_proposer_json();
+        proposer[field] = value;
+        let manifest = fixture();
+        let mut encoded = serde_json::to_value(manifest).unwrap();
+        encoded["generation"] = dflash_generation(proposer);
+        assert!(
+            serde_json::from_value::<PackageManifest>(encoded).is_err(),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn a_dflash_proposer_must_be_pinned_and_fit_its_block() {
+    for (field, value, path) in [
+        ("revision", serde_json::json!("main"), "draft.revision"),
+        ("sha256", serde_json::json!("00"), "draft.sha256"),
+        ("repo", serde_json::json!("no-namespace"), "draft.repo"),
+        ("file", serde_json::json!("../draft.gguf"), "draft.file"),
+        ("file", serde_json::json!("draft.bin"), "draft.file"),
+        ("bytes", serde_json::json!(0), "draft.bytes"),
+    ] {
+        let mut proposer = dflash_proposer_json();
+        proposer["draft"][field] = value;
+        let error = manifest_with_generation(dflash_generation(proposer))
+            .validate()
+            .unwrap_err();
+        assert!(
+            error.issues().iter().any(|issue| issue.path
+                == format!("generation.speculative_decoding.proposers[draft].{path}")),
+            "{path}: {error}"
+        );
+    }
+    for (field, value) in [
+        ("target_layers", serde_json::json!([])),
+        ("target_layers", serde_json::json!([0, 3])),
+        ("block_size", serde_json::json!(1)),
+        ("block_size", serde_json::json!(32)),
+        ("max_draft_tokens", serde_json::json!(8)),
+        ("max_draft_tokens", serde_json::json!(0)),
+    ] {
+        let mut proposer = dflash_proposer_json();
+        proposer[field] = value.clone();
+        let error = manifest_with_generation(dflash_generation(proposer))
+            .validate()
+            .unwrap_err();
+        assert!(
+            error.issues().iter().any(|issue| issue.path
+                == format!("generation.speculative_decoding.proposers[draft].{field}")),
+            "{field} = {value}: {error}"
+        );
+    }
+}
+
+#[test]
+fn a_dflash_strategy_names_only_dflash_proposers() {
+    let mut generation = dflash_generation(dflash_proposer_json());
+    generation["speculative_decoding"]["proposers"]["ngram"] = serde_json::json!({
+        "type": "ngram-cache",
+        "ngram_min": 2,
+        "ngram_max": 4,
+        "max_proposal_tokens": 4,
+        "history_scope": "request"
+    });
+    for proposers in [
+        serde_json::json!([]),
+        serde_json::json!(["draft", "draft"]),
+        serde_json::json!(["ngram"]),
+        serde_json::json!(["ghost"]),
+    ] {
+        let mut generation = generation.clone();
+        generation["speculative_decoding"]["strategies"]["dflash"]["proposers"] = proposers.clone();
+        let error = manifest_with_generation(generation).validate().unwrap_err();
+        assert!(
+            error.issues().iter().any(|issue| issue
+                .path
+                .starts_with("generation.speculative_decoding.strategies[dflash]")),
+            "{proposers}: {error}"
+        );
+    }
+}
+
+fn pairing_index_json() -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "pairings": [{
+            "target": {
+                "architecture": "qwen35",
+                "layer_count": 64,
+                "embedding_length": 5120,
+                "expert_count": 0,
+                "family": "Qwen3.8"
+            },
+            "draft": dflash_proposer_json()["draft"],
+            "max_draft_tokens": 7,
+            "backends": "all"
+        }]
+    })
+}
+
+#[test]
+fn a_pairing_index_parses_and_round_trips() {
+    let json = pairing_index_json().to_string();
+    let index = DFlashPairingIndex::from_json(&json).unwrap();
+    assert_eq!(index.pairings.len(), 1);
+    let pairing = &index.pairings[0];
+    assert_eq!(pairing.target.family.as_deref(), Some("Qwen3.8"));
+    assert_eq!(pairing.backends, DFlashBackends::All);
+    assert!(pairing.backends.applies_on(true) && pairing.backends.applies_on(false));
+    assert!(DFlashBackends::Metal.applies_on(true) && !DFlashBackends::Metal.applies_on(false));
+    assert!(!DFlashBackends::NotMetal.applies_on(true));
+    let reparsed = DFlashPairingIndex::from_json(&serde_json::to_string(&index).unwrap()).unwrap();
+    assert_eq!(reparsed, index);
+}
+
+#[test]
+fn a_pairing_index_rejects_unpinned_or_malformed_entries() {
+    for (pointer, value, reason) in [
+        ("/schema_version", serde_json::json!(2), "schema version"),
+        (
+            "/pairings/0/draft/sha256",
+            serde_json::json!("ABC"),
+            "sha256",
+        ),
+        (
+            "/pairings/0/draft/revision",
+            serde_json::json!("main"),
+            "revision",
+        ),
+        (
+            "/pairings/0/max_draft_tokens",
+            serde_json::json!(16),
+            "max_draft_tokens",
+        ),
+        (
+            "/pairings/0/target/layer_count",
+            serde_json::json!(0),
+            "layer_count",
+        ),
+        (
+            "/pairings/0/target/family",
+            serde_json::json!(" "),
+            "family",
+        ),
+    ] {
+        let mut json = pairing_index_json();
+        *json.pointer_mut(pointer).unwrap() = value;
+        let error = DFlashPairingIndex::from_json(&json.to_string()).unwrap_err();
+        assert!(error.contains(reason), "{pointer}: {error}");
+    }
+    let mut json = pairing_index_json();
+    json["pairings"][0]["draft"]["mirror"] = serde_json::json!("x");
+    assert!(DFlashPairingIndex::from_json(&json.to_string()).is_err());
+}

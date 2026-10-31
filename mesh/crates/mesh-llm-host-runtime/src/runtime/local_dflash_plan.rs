@@ -64,14 +64,18 @@ pub(super) fn planned_default_dflash_draft(
     .ok()?;
     let dflash = resolved.speculative.decode.dflash.as_ref()?;
     let recurrent_rollback_tokens = dflash.recurrent_rollback_tokens();
-    let (path, weight_bytes, default) = match resolved.speculative.default_dflash {
-        Some(pairing) => {
+    let (path, weight_bytes, default) = match resolved.speculative.default_dflash.as_ref() {
+        Some(chosen) => {
             // A draft that is not cached yet downloads in the background; this
             // load plans no room for it and serves without it.
-            if !skippy::default_dflash_draft_cached(pairing) {
+            if !skippy::default_dflash_draft_cached(chosen) {
                 return None;
             }
-            (pairing.draft.cache_path(), pairing.draft.bytes, true)
+            (
+                mesh_llm_skippy_adapter::config::dflash_draft_cache_path(&chosen.pairing.draft),
+                chosen.pairing.draft.bytes,
+                true,
+            )
         }
         None => {
             let path = dflash.draft_model_path.clone();

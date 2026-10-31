@@ -81,6 +81,18 @@ pub struct PackageSpeculativeProposerInfo {
     pub ngram_max: Option<u32>,
     pub max_proposal_tokens: Option<u32>,
     pub history_scope: Option<String>,
+    /// Set for a `dflash` proposer.
+    pub dflash: Option<PackageDFlashProposerInfo>,
+}
+
+/// A package-declared DFlash draft and how it is used.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PackageDFlashProposerInfo {
+    pub draft: skippy_package_format::DFlashDraft,
+    pub target_layers: Vec<u32>,
+    pub block_size: u32,
+    pub max_draft_tokens: u32,
+    pub backends: skippy_package_format::DFlashBackends,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -93,6 +105,8 @@ pub struct PackageSpeculativeStrategyInfo {
     pub primary: Option<String>,
     pub extender: Option<String>,
     pub extension_policy: Option<PackageExtensionPolicyInfo>,
+    /// A `dflash` strategy's proposers, in order of preference.
+    pub proposers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -260,6 +274,16 @@ struct PackageSpeculativeProposer {
     max_proposal_tokens: Option<u32>,
     #[serde(default)]
     history_scope: Option<String>,
+    #[serde(default)]
+    draft: Option<skippy_package_format::DFlashDraft>,
+    #[serde(default)]
+    target_layers: Vec<u32>,
+    #[serde(default)]
+    block_size: Option<u32>,
+    #[serde(default)]
+    max_draft_tokens: Option<u32>,
+    #[serde(default)]
+    backends: Option<skippy_package_format::DFlashBackends>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -280,6 +304,8 @@ struct PackageSpeculativeStrategy {
     extender: Option<String>,
     #[serde(default)]
     extension_policy: Option<PackageExtensionPolicy>,
+    #[serde(default)]
+    proposers: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -629,6 +655,22 @@ fn package_speculative_decoding_info(
 fn package_speculative_proposer_info(
     proposer: PackageSpeculativeProposer,
 ) -> PackageSpeculativeProposerInfo {
+    let dflash = match (
+        proposer.draft,
+        proposer.block_size,
+        proposer.max_draft_tokens,
+    ) {
+        (Some(draft), Some(block_size), Some(max_draft_tokens)) => {
+            Some(PackageDFlashProposerInfo {
+                draft,
+                target_layers: proposer.target_layers,
+                block_size,
+                max_draft_tokens,
+                backends: proposer.backends.unwrap_or_default(),
+            })
+        }
+        _ => None,
+    };
     PackageSpeculativeProposerInfo {
         proposer_type: proposer.proposer_type,
         prediction_depth: proposer.prediction_depth,
@@ -637,6 +679,7 @@ fn package_speculative_proposer_info(
         ngram_max: proposer.ngram_max,
         max_proposal_tokens: proposer.max_proposal_tokens,
         history_scope: proposer.history_scope,
+        dflash,
     }
 }
 
@@ -664,6 +707,7 @@ fn package_speculative_strategy_info(
             .map(|policy| PackageExtensionPolicyInfo {
                 max_tokens: policy.max_tokens,
             }),
+        proposers: strategy.proposers,
     }
 }
 

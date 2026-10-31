@@ -22,6 +22,7 @@ fn native_mtp_generation() -> PackageGenerationInfo {
             ngram_max: None,
             max_proposal_tokens: None,
             history_scope: None,
+            dflash: None,
         },
     );
     let mut strategies = BTreeMap::new();
@@ -42,6 +43,7 @@ fn native_mtp_generation() -> PackageGenerationInfo {
             primary: None,
             extender: None,
             extension_policy: None,
+            proposers: Vec::new(),
         },
     );
 
@@ -67,6 +69,7 @@ fn native_mtp_cache_generation() -> PackageGenerationInfo {
             ngram_max: None,
             max_proposal_tokens: None,
             history_scope: None,
+            dflash: None,
         },
     );
     proposers.insert(
@@ -79,6 +82,7 @@ fn native_mtp_cache_generation() -> PackageGenerationInfo {
             ngram_max: Some(4),
             max_proposal_tokens: Some(10),
             history_scope: Some("request".to_string()),
+            dflash: None,
         },
     );
     let mut strategies = BTreeMap::new();
@@ -99,6 +103,7 @@ fn native_mtp_cache_generation() -> PackageGenerationInfo {
             primary: Some("mtp".to_string()),
             extender: Some("cache".to_string()),
             extension_policy: Some(PackageExtensionPolicyInfo { max_tokens: 8 }),
+            proposers: Vec::new(),
         },
     );
     PackageGenerationInfo {
@@ -123,6 +128,7 @@ fn ngram_cache_generation() -> PackageGenerationInfo {
             ngram_max: Some(4),
             max_proposal_tokens: Some(6),
             history_scope: Some("request".to_string()),
+            dflash: None,
         },
     );
     let mut strategies = BTreeMap::new();
@@ -143,6 +149,7 @@ fn ngram_cache_generation() -> PackageGenerationInfo {
             primary: None,
             extender: None,
             extension_policy: None,
+            proposers: Vec::new(),
         },
     );
     PackageGenerationInfo {
@@ -167,6 +174,7 @@ fn ngram_suffix_generation() -> PackageGenerationInfo {
             ngram_max: Some(32),
             max_proposal_tokens: Some(48),
             history_scope: Some("request".to_string()),
+            dflash: None,
         },
     );
     let mut strategies = BTreeMap::new();
@@ -187,6 +195,7 @@ fn ngram_suffix_generation() -> PackageGenerationInfo {
             primary: None,
             extender: None,
             extension_policy: None,
+            proposers: Vec::new(),
         },
     );
     PackageGenerationInfo {

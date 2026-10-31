@@ -1,3 +1,4 @@
+use super::dflash_catalog::with_test_pairings;
 use super::test_support::*;
 use super::*;
 use crate::SkippyTelemetryOptions;
@@ -1126,6 +1127,15 @@ fn resolve_default_dflash(
     model_path: &Path,
     meta: &skippy_model_artifact::gguf::GgufCompactMeta,
 ) -> ResolvedSkippyConfig {
+    resolve_package_dflash(config, model_path, meta, None)
+}
+
+fn resolve_package_dflash(
+    config: &str,
+    model_path: &Path,
+    meta: &skippy_model_artifact::gguf::GgufCompactMeta,
+    package_generation: Option<&skippy_runtime::package::PackageGenerationInfo>,
+) -> ResolvedSkippyConfig {
     let mesh_config = parse_config(config);
     resolve_skippy_config(SkippyConfigResolveRequest {
         mesh_config: &mesh_config,
@@ -1134,7 +1144,7 @@ fn resolve_default_dflash(
         model_bytes: 5 * 1024 * 1024 * 1024,
         allocatable_memory_bytes: None,
         request_defaults: None,
-        package_generation: None,
+        package_generation,
         compact_meta: Some(meta),
     })
     .expect("a known DFlash target should resolve")
@@ -1145,11 +1155,18 @@ fn a_known_target_defaults_to_its_dflash_draft() {
     let (_directory, model_path) = default_dflash_target();
     let resolved = resolve_default_dflash("", &model_path, &target_meta("qwen35", 32, 4096, 0));
     let speculative = &resolved.speculative;
-    let pairing = speculative.default_dflash.expect("default pairing");
+    let pairing = &speculative
+        .default_dflash
+        .as_ref()
+        .expect("default pairing")
+        .pairing;
     let dflash = speculative.decode.dflash.as_ref().expect("DFlash plan");
 
     assert_eq!(pairing.draft.repo, "AtomicChat/Qwen3.5-9B-DFlash-GGUF");
-    assert_eq!(dflash.draft_model_path, pairing.draft.cache_path());
+    assert_eq!(
+        dflash.draft_model_path,
+        super::dflash_catalog::dflash_draft_cache_path(&pairing.draft)
+    );
     let cap = if cfg!(target_os = "macos") { 6 } else { 15 };
     assert_eq!(dflash.max_draft_tokens, Some(cap));
     assert_eq!(speculative.draft_max_tokens, cap as u32);
@@ -1303,7 +1320,11 @@ fn a_known_pairing_replaces_automatic_native_mtp() {
     let (_directory, model_path) = native_mtp_target();
     let mut resolved = resolve_default_dflash("", &model_path, &qwen38_27b_meta());
     let speculative = &resolved.speculative;
-    let pairing = speculative.default_dflash.expect("default pairing");
+    let pairing = &speculative
+        .default_dflash
+        .as_ref()
+        .expect("default pairing")
+        .pairing;
     let dflash = speculative.decode.dflash.as_ref().expect("DFlash plan");
 
     assert_eq!(pairing.draft.repo, "z-lab/Qwen3.8-27B-DFlash2-GGUF");
@@ -1368,4 +1389,212 @@ fn configured_speculation_keeps_its_plan_on_a_native_mtp_target_with_a_pairing()
         &qwen38_27b_meta(),
     );
     assert!(explicit_mtp.speculative.native_mtp_enabled);
+}
+
+fn index_pairing(repo: &str, backends: DFlashBackends) -> DFlashPairing {
+    DFlashPairing {
+        target: DFlashTarget {
+            architecture: "qwen35".to_string(),
+            layer_count: 64,
+            embedding_length: 5120,
+            expert_count: 0,
+            family: None,
+        },
+        draft: DFlashDraft {
+            repo: repo.to_string(),
+            revision: "0123456789abcdef0123456789abcdef01234567".to_string(),
+            file: "draft-Q8_0.gguf".to_string(),
+            sha256: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_string(),
+            bytes: 1 << 30,
+        },
+        max_draft_tokens: 7,
+        backends,
+    }
+}
+
+/// A package whose default strategy is DFlash, preferring a Metal draft and
+/// then one for every backend.
+fn package_with_dflash(
+    proposers: &[(&str, DFlashBackends)],
+) -> skippy_runtime::package::PackageGenerationInfo {
+    use skippy_runtime::package::{
+        PackageDFlashProposerInfo, PackageGenerationInfo, PackageSpeculativeDecodingInfo,
+        PackageSpeculativeProposerInfo, PackageSpeculativeStrategyInfo,
+    };
+    let proposer = |repo: &str, backends| PackageSpeculativeProposerInfo {
+        proposer_type: "dflash".to_string(),
+        prediction_depth: None,
+        layer_indices: Vec::new(),
+        ngram_min: None,
+        ngram_max: None,
+        max_proposal_tokens: None,
+        history_scope: None,
+        dflash: Some(PackageDFlashProposerInfo {
+            draft: index_pairing(repo, backends).draft,
+            target_layers: vec![2, 62],
+            block_size: 4,
+            max_draft_tokens: 3,
+            backends,
+        }),
+    };
+    PackageGenerationInfo {
+        request_defaults: None,
+        speculative_decoding: Some(PackageSpeculativeDecodingInfo {
+            default: "draft".to_string(),
+            proposers: proposers
+                .iter()
+                .map(|(repo, backends)| (repo.to_string(), proposer(repo, *backends)))
+                .collect(),
+            strategies: [(
+                "draft".to_string(),
+                PackageSpeculativeStrategyInfo {
+                    strategy_type: "dflash".to_string(),
+                    prediction_depth: None,
+                    layer_indices: Vec::new(),
+                    window_policy: None,
+                    proposer: None,
+                    primary: None,
+                    extender: None,
+                    extension_policy: None,
+                    proposers: proposers.iter().map(|(repo, _)| repo.to_string()).collect(),
+                },
+            )]
+            .into(),
+        }),
+    }
+}
+
+fn default_repo(resolved: &ResolvedSkippyConfig) -> Option<String> {
+    resolved
+        .speculative
+        .default_dflash
+        .as_ref()
+        .map(|chosen| chosen.pairing.draft.repo.clone())
+}
+
+#[test]
+fn an_index_entry_is_the_default_for_a_plain_gguf() {
+    let _index = with_test_pairings(vec![index_pairing("meshllm/indexed", DFlashBackends::All)]);
+    let (_directory, model_path) = default_dflash_target();
+    let resolved = resolve_default_dflash("", &model_path, &target_meta("qwen35", 64, 5120, 0));
+    assert_eq!(default_repo(&resolved).as_deref(), Some("meshllm/indexed"));
+    let chosen = resolved.speculative.default_dflash.as_ref().unwrap();
+    assert_eq!(chosen.source, DFlashPairingSource::Catalog);
+    assert_eq!(
+        resolved
+            .speculative
+            .decode
+            .dflash
+            .as_ref()
+            .unwrap()
+            .draft_model_path,
+        super::dflash_catalog::dflash_draft_cache_path(&chosen.pairing.draft)
+    );
+    // The index replaces the bootstrap table: Qwen3.5-9B is not in it.
+    let resolved = resolve_default_dflash("", &model_path, &target_meta("qwen35", 32, 4096, 0));
+    assert!(resolved.speculative.default_dflash.is_none());
+}
+
+#[test]
+fn a_package_declared_dflash_proposer_wins_over_the_index() {
+    let _index = with_test_pairings(vec![index_pairing("meshllm/indexed", DFlashBackends::All)]);
+    let (_directory, model_path) = default_dflash_target();
+    let package = package_with_dflash(&[
+        ("meshllm/package-metal", DFlashBackends::Metal),
+        ("meshllm/package-cuda", DFlashBackends::NotMetal),
+    ]);
+    let meta = target_meta("qwen35", 64, 5120, 0);
+    let resolved = resolve_package_dflash("", &model_path, &meta, Some(&package));
+    let expected = if cfg!(target_os = "macos") {
+        "meshllm/package-metal"
+    } else {
+        "meshllm/package-cuda"
+    };
+    assert_eq!(default_repo(&resolved).as_deref(), Some(expected));
+    let chosen = resolved.speculative.default_dflash.as_ref().unwrap();
+    assert_eq!(chosen.source, DFlashPairingSource::Package);
+    assert_eq!(chosen.target_layers.as_deref(), Some(&[2, 62][..]));
+    assert_eq!(chosen.pairing.target.embedding_length, 5120);
+    assert_eq!(chosen.pairing.target.layer_count, 64);
+    // The package's block caps the draft.
+    assert_eq!(resolved.speculative.draft_max_tokens, 3);
+    assert_eq!(resolved.speculative.decode.effective_strategy, "dflash");
+
+    // Naming the package's DFlash strategy selects it too.
+    let resolved = resolve_package_dflash(
+        "[defaults.speculative]\nstrategy = \"draft\"",
+        &model_path,
+        &meta,
+        Some(&package),
+    );
+    assert_eq!(default_repo(&resolved).as_deref(), Some(expected));
+}
+
+#[test]
+fn a_package_dflash_proposer_for_another_backend_serves_without_dflash() {
+    let _index = with_test_pairings(vec![index_pairing("meshllm/indexed", DFlashBackends::All)]);
+    let (_directory, model_path) = default_dflash_target();
+    let other_backend = if cfg!(target_os = "macos") {
+        DFlashBackends::NotMetal
+    } else {
+        DFlashBackends::Metal
+    };
+    let package = package_with_dflash(&[("meshllm/elsewhere", other_backend)]);
+    let resolved = resolve_package_dflash(
+        "",
+        &model_path,
+        &target_meta("qwen35", 64, 5120, 0),
+        Some(&package),
+    );
+    // The package decides: no draft here, and no fallback to the index.
+    assert!(resolved.speculative.default_dflash.is_none());
+    assert!(resolved.speculative.decode.dflash.is_none());
+    assert_eq!(resolved.speculative.decode.effective_strategy, "disabled");
+}
+
+#[test]
+fn explicit_configuration_wins_over_a_package_dflash_proposer() {
+    let (_directory, model_path) = default_dflash_target();
+    let package = package_with_dflash(&[("meshllm/package", DFlashBackends::All)]);
+    let meta = target_meta("qwen35", 64, 5120, 0);
+    for config in [
+        "[defaults.speculative]\nstrategy = \"disabled\"",
+        "[defaults.speculative]\nspec_default = false",
+        "[defaults.speculative]\nngram_min = 2\nngram_max = 4",
+    ] {
+        let resolved = resolve_package_dflash(config, &model_path, &meta, Some(&package));
+        assert!(resolved.speculative.default_dflash.is_none(), "{config}");
+    }
+    let draft = temp_model_file_with_architecture("dflash");
+    let config = format!(
+        "[defaults.speculative]\nstrategy = \"dflash\"\ndraft_model_path = {}",
+        toml_path(draft.path())
+    );
+    let resolved = resolve_package_dflash(&config, &model_path, &meta, Some(&package));
+    assert!(resolved.speculative.default_dflash.is_none());
+    assert_eq!(
+        resolved.speculative.decode.dflash.unwrap().draft_model_path,
+        draft.path()
+    );
+}
+
+#[test]
+fn native_mtp_is_preferred_only_when_no_pairing_exists() {
+    let (_directory, model_path) = native_mtp_target();
+    let meta = target_meta("qwen35", 64, 5120, 0);
+
+    let _index = with_test_pairings(Vec::new());
+    let resolved = resolve_default_dflash("", &model_path, &meta);
+    assert!(resolved.speculative.default_dflash.is_none());
+    assert!(resolved.speculative.native_mtp_enabled);
+    assert_eq!(resolved.speculative.decode.effective_strategy, "native-mtp");
+    drop(_index);
+
+    let _index = with_test_pairings(vec![index_pairing("meshllm/indexed", DFlashBackends::All)]);
+    let mut resolved = resolve_default_dflash("", &model_path, &meta);
+    assert_eq!(default_repo(&resolved).as_deref(), Some("meshllm/indexed"));
+    assert!(!resolved.speculative.native_mtp_enabled);
+    resolved.speculative.drop_default_dflash();
+    assert!(resolved.speculative.native_mtp_enabled);
+    assert_eq!(resolved.speculative.decode.effective_strategy, "native-mtp");
 }
