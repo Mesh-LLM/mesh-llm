@@ -587,6 +587,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             last_stage_decode_batch: None,
             continuous_batching: true,
             compute_meter: None,
+            split_dflash: None,
             openai: None,
             l3_manager: None,
         });

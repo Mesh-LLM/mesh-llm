@@ -390,6 +390,9 @@ impl StageControlState {
             effective_load.source_model_bytes = package.source_model_bytes;
             resolved_package = Some(package);
         }
+        if let Some(plan) = effective_load.dflash.as_mut() {
+            crate::inference::skippy::materialize_split_dflash_draft(plan).await;
+        }
         let config = stage_config(&effective_load, resolved_package.as_ref())?;
         let compute_meter = Arc::new(skippy_serving::compute_meter::StageComputeMeter::default());
         let server = skippy_serving::start_binary_stage(BinaryStageOptions {
@@ -411,6 +414,7 @@ impl StageControlState {
             openai: None,
             l3_manager: crate::runtime::kv_disk_config::node_kv_disk_manager(),
             compute_meter: Some(compute_meter.clone()),
+            split_dflash: effective_load.dflash.clone(),
         });
         self.stages.insert(
             key.clone(),

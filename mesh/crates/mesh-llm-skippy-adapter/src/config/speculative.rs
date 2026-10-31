@@ -107,12 +107,11 @@ fn resolve_speculative(
         model_path,
     )?;
     let mtp_yields = mtp_yields(dflash_over_auto_mtp, &strategy, model_config, global_config);
-    let mode = pick_string_owned(
+    let mut mode = pick_string_owned(
         model_config.and_then(|config| config.mode.as_deref()),
         global_config.and_then(|config| config.mode.as_deref()),
         Some("auto"),
     );
-    let mut mode = mode;
     let configured_draft_max_tokens = super::support::pick_value(
         model_config.and_then(|config| config.draft_max_tokens),
         global_config.and_then(|config| config.draft_max_tokens),
@@ -184,6 +183,7 @@ fn resolve_speculative(
             draft_model_path: None,
             pairing_fault,
             draft_max_tokens,
+            draft_max_tokens_configured: configured_draft_max_tokens > 0,
             draft_min_tokens: 0,
             explicit: default_dflash.is_none(),
             draft_n_gpu_layers,
@@ -257,6 +257,7 @@ fn resolve_speculative(
         draft_model_path,
         pairing_fault,
         draft_max_tokens: effective_draft_max_tokens,
+        draft_max_tokens_configured: configured_draft_max_tokens > 0,
         draft_min_tokens,
         explicit,
         draft_n_gpu_layers,

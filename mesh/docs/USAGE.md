@@ -1163,13 +1163,15 @@ elsewhere, held to the draft's trained block. Block length adapts to the
 measured verify cost and acceptance of each request, up to the cap;
 `SKIPPY_DFLASH_ADAPTIVE=0` is an off switch that pins blocks at the cap.
 
-DFlash needs the complete target model on one node. A model that is split
-across nodes serves without its cataloged draft, falling back to native MTP when
-the GGUF carries NextN layers. An explicit DFlash draft on a split model is
-dropped too, unless `pairing_fault = "fail_closed"`, which rejects the load.
-DFlash drafts tokens for greedy and sampled requests; requests
-that ask for logprobs decode normally. DSpark and LiliCorr drafts and Windows
-runtimes are not supported.
+A split serves DFlash too. Each stage forwards the target features the draft
+reads, the final stage holds the draft (a default draft is fetched into that
+node's own cache), and each block is verified in one pass through every
+stage. Split blocks are capped at four draft tokens unless `draft_max_tokens`
+is set, because every drafted token is a verify row on every stage.
+
+DFlash drafts tokens for greedy and sampled requests; requests that ask for
+logprobs decode normally. DSpark and LiliCorr drafts and Windows runtimes are
+not supported.
 
 ### Run-ahead admission
 

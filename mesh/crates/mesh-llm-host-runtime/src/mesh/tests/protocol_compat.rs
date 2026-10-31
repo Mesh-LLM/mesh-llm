@@ -360,3 +360,53 @@ fn control_frame_roundtrip() {
     assert_eq!(decoded.peers[0].endpoint_id, vec![0u8; 32]);
     assert_eq!(decoded.peers[0].role, NodeRole::Worker as i32);
 }
+
+#[test]
+fn stage_load_proto_carries_a_split_dflash_plan() {
+    let mut load = stage_load_request();
+    let plan = skippy_serving::split_dflash::SplitDFlashStage {
+        target_layers: vec![6, 15, 25, 34, 43],
+        draft_model_path: Some("/models/draft-dflash.gguf".into()),
+        max_draft_tokens: Some(7),
+        draft_n_gpu_layers: Some(-1),
+        draft_source: Some(skippy_serving::split_dflash::SplitDFlashDraftSource {
+            repo: "AtomicChat/Qwen3.6-27B-DFlash-GGUF".into(),
+            revision: "a3d4fb1eff6f268cbbdf808042f6902cc17f5458".into(),
+            file: "Qwen3.6-27B-DFlash.Q8_0.gguf".into(),
+            sha256: "b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1".into(),
+        }),
+    };
+    load.dflash = Some(plan.clone());
+
+    let decoded = stage_load_from_proto(stage_load_to_proto(load)).unwrap();
+
+    assert_eq!(decoded.dflash, Some(plan));
+}
+
+#[test]
+fn a_stage_load_from_a_peer_without_split_dflash_has_no_plan() {
+    let mut proto = stage_load_to_proto(stage_load_request());
+    proto.dflash = None;
+    let decoded = stage_load_from_proto(proto).unwrap();
+    assert_eq!(decoded.dflash, None);
+}
+
+#[test]
+fn a_split_dflash_plan_from_an_older_planner_keeps_its_draft_path() {
+    let mut load = stage_load_request();
+    load.dflash = Some(skippy_serving::split_dflash::SplitDFlashStage {
+        target_layers: vec![2, 62],
+        draft_model_path: Some("/models/draft-dflash.gguf".into()),
+        ..Default::default()
+    });
+    let mut proto = stage_load_to_proto(load);
+    proto.dflash.as_mut().unwrap().draft_source = None;
+
+    let plan = stage_load_from_proto(proto).unwrap().dflash.unwrap();
+
+    assert_eq!(plan.draft_source, None);
+    assert_eq!(
+        plan.draft_model_path.as_deref(),
+        Some(std::path::Path::new("/models/draft-dflash.gguf"))
+    );
+}

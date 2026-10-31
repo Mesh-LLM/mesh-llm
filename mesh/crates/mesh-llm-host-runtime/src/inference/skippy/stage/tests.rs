@@ -119,6 +119,7 @@ fn load_request() -> StageLoadRequest {
             activation_codec_policy: Default::default(),
         },
         native_mtp_enabled: true,
+        dflash: None,
         shutdown_generation: 7,
         coordinator_term: 0,
         coordinator_id: None,

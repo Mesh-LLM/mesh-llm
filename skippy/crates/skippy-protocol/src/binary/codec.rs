@@ -262,9 +262,11 @@ fn write_native_mtp_draft(
     write_i64(&mut writer, draft.proposal_compute_us)
 }
 
+/// Reads a reply's native MTP draft.
 fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<Option<StageNativeMtpDraft>> {
-    match read_i32(&mut reader)? {
-        0 => Ok(None),
+    let marker = read_i32(&mut reader)?;
+    let draft = match marker {
+        0 => None,
         marker @ (1 | 2) => {
             let token_count = checked_i32_len(
                 read_i32(&mut reader)?,
@@ -276,14 +278,15 @@ fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<Option<StageNative
             for _ in 0..token_count {
                 token_ids.push(read_i32(&mut reader)?);
             }
-            Ok(Some(StageNativeMtpDraft {
+            Some(StageNativeMtpDraft {
                 token_ids,
                 proposal_compute_us: read_i64(&mut reader)?,
                 follows_correction: marker == 2,
-            }))
+            })
         }
-        _ => Err(invalid_data("unknown native MTP draft reply marker")),
-    }
+        _ => return Err(invalid_data("unknown native MTP draft reply marker")),
+    };
+    Ok(draft)
 }
 
 /// Serialize a validated current-generation stage message and its sidebands.
@@ -888,7 +891,7 @@ fn read_string_list(
     Ok(values)
 }
 
-const REPLY_STATS_FIELD_COUNT: usize = 27;
+const REPLY_STATS_FIELD_COUNT: usize = 29;
 const REPLY_STATS_WIRE_BYTES: usize = REPLY_STATS_FIELD_COUNT * std::mem::size_of::<i64>();
 
 fn write_reply_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Result<()> {
@@ -902,7 +905,8 @@ fn write_reply_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Resu
     {
         chunk.copy_from_slice(&value.to_le_bytes());
     }
-    writer.write_all(&bytes)
+    writer.write_all(&bytes)?;
+    Ok(())
 }
 
 fn read_reply_stats(mut reader: impl Read) -> io::Result<StageReplyStats> {
@@ -957,6 +961,8 @@ fn reply_stats_fields(stats: StageReplyStats) -> [i64; REPLY_STATS_FIELD_COUNT] 
         stats.prefill_compute_stage_index,
         stats.prefill_compute_token_count_at_slowest_rate,
         stats.prefill_compute_observation_count,
+        stats.dflash_feature_rows_missing,
+        stats.dflash_draft_context_resets,
     ]
 }
 
@@ -989,6 +995,8 @@ fn reply_stats_from_fields(fields: [i64; REPLY_STATS_FIELD_COUNT]) -> StageReply
         prefill_compute_stage_index: fields[24],
         prefill_compute_token_count_at_slowest_rate: fields[25],
         prefill_compute_observation_count: fields[26],
+        dflash_feature_rows_missing: fields[27],
+        dflash_draft_context_resets: fields[28],
     }
 }
 

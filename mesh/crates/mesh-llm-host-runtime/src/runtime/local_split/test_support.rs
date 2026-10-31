@@ -89,6 +89,7 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         flash_attn_type: FlashAttentionType::Auto,
         runtime_settings: Default::default(),
         native_mtp_enabled: true,
+        dflash: None,
         shutdown_generation: 1,
         coordinator_term: 1,
         coordinator_id: None,
@@ -714,7 +715,7 @@ async fn split_load_of_a_paired_native_mtp_target_keeps_native_mtp() {
     let temp_dir = tempfile::tempdir().unwrap();
     let model_path = temp_dir.path().join("Qwen3.8-27B-UD-Q4_K_M.gguf");
     write_fake_native_mtp_gguf_model(&model_path);
-    // Qwen3.8-27B has a default DFlash pairing, which a split cannot serve.
+    // Qwen3.8-27B has a default DFlash pairing; the load sees no cached draft.
     let compact_meta = crate::models::gguf::GgufCompactMeta {
         architecture: "qwen35".to_string(),
         layer_count: 64,
@@ -764,7 +765,7 @@ async fn split_load_of_a_paired_native_mtp_target_keeps_native_mtp() {
         serving_hooks_factory: None,
         local_source_required: false,
     };
-    let settings = split_generation_load_settings(&spec)
+    let settings = split_generation_load_settings_with(&spec, SplitDefaultDraft::Uncached)
         .await
         .expect("split settings should resolve");
 
@@ -774,6 +775,113 @@ async fn split_load_of_a_paired_native_mtp_target_keeps_native_mtp() {
     assert_eq!(
         settings.embedded_openai.speculative.effective_strategy,
         "native-mtp"
+    );
+}
+
+/// A DFlash draft GGUF header naming the target layers it reads.
+fn write_fake_dflash_draft(path: &Path, target_layers: &[u32]) {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"GGUF");
+    bytes.extend_from_slice(&3u32.to_le_bytes());
+    bytes.extend_from_slice(&0i64.to_le_bytes());
+    bytes.extend_from_slice(&2i64.to_le_bytes());
+    push_string_kv(&mut bytes, "general.architecture", "dflash");
+    push_gguf_string(&mut bytes, "dflash.target_layers");
+    // An array of u32 values.
+    bytes.extend_from_slice(&9u32.to_le_bytes());
+    bytes.extend_from_slice(&4u32.to_le_bytes());
+    bytes.extend_from_slice(&(target_layers.len() as u64).to_le_bytes());
+    for layer in target_layers {
+        bytes.extend_from_slice(&layer.to_le_bytes());
+    }
+    fs::write(path, bytes).unwrap();
+}
+
+#[tokio::test]
+async fn split_load_of_a_cataloged_target_serves_its_default_dflash_draft() {
+    let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9341 })
+        .await
+        .unwrap();
+    let mesh_config = plugin::MeshConfig::default();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let model_path = temp_dir.path().join("Qwen3.8-27B-UD-Q4_K_M.gguf");
+    write_fake_native_mtp_gguf_model(&model_path);
+    let draft_path = temp_dir.path().join("Qwen3.8-27B-DFlash2-Q8_0.gguf");
+    write_fake_dflash_draft(&draft_path, &[1, 16, 31, 46, 61]);
+    let compact_meta = crate::models::gguf::GgufCompactMeta {
+        architecture: "qwen35".to_string(),
+        layer_count: 64,
+        embedding_size: 5120,
+        basename: Some("Qwen3.8".to_string()),
+        ..Default::default()
+    };
+    let identity = package(64);
+    let local_id = node.id();
+    let generation = SplitTopologyGeneration::new(
+        "dflash-topology".into(),
+        "dflash-run".into(),
+        1,
+        vec![SplitParticipant::new(local_id, 24_000_000_000, None)],
+        vec![
+            local_stage(local_id, 0, 0, 32),
+            local_stage(local_id, 1, 32, 64),
+        ],
+    );
+    let spec = SplitGenerationLoadSpec {
+        node: &node,
+        mesh_config: &mesh_config,
+        model_ref: "unsloth/Qwen3.8-27B-GGUF:UD-Q4_K_M",
+        config_model_id: None,
+        runtime_profile: "",
+        model_path: &model_path,
+        package: &identity,
+        generation: &generation,
+        projector_path: None,
+        ctx_size: 4096,
+        compact_meta: &compact_meta,
+        split_certification: skippy::SplitCertificationAdmission::Certified,
+        capacity_budget_bytes: None,
+        pinned_gpu: None,
+        device_override: None,
+        slots: 1,
+        cache_type_k_override: None,
+        cache_type_v_override: None,
+        n_batch_override: None,
+        n_ubatch_override: None,
+        flash_attention_override: FlashAttentionType::Auto,
+        openai_guardrail_policy: openai_guardrail_policy_handle(
+            skippy_inference_api::GuardrailMode::Disabled,
+        ),
+        skippy_telemetry: skippy::SkippyTelemetryOptions::off(),
+        survey_telemetry: survey::SurveyTelemetry::disabled(),
+        serving_hooks_factory: None,
+        local_source_required: false,
+    };
+    // The draft as the cache check leaves it once the download has landed.
+    let settings =
+        split_generation_load_settings_with(&spec, SplitDefaultDraft::Checked(draft_path))
+            .await
+            .expect("split settings should resolve");
+
+    assert_eq!(
+        settings.embedded_openai.speculative.effective_strategy,
+        "dflash"
+    );
+    assert!(!settings.embedded_openai.native_mtp_enabled);
+    let plan = settings
+        .split_dflash
+        .expect("a split of a cataloged target drafts with its default");
+    assert_eq!(plan.target_layers, vec![1, 16, 31, 46, 61]);
+    // The final stage fetches and checks its own copy from the catalog source.
+    let source = plan
+        .draft_source
+        .expect("a default draft travels by source");
+    assert_eq!(
+        (source.repo.as_str(), source.file.as_str()),
+        (
+            "z-lab/Qwen3.8-27B-DFlash2-GGUF",
+            "Qwen3.8-27B-DFlash2-Q8_0.gguf"
+        )
     );
 }
 

@@ -1098,20 +1098,19 @@ fn auto_does_not_select_a_dflash_draft() {
 }
 
 #[test]
-fn dflash_plan_is_dropped_for_split_targets_unless_pairing_fails_closed() {
-    let resolved = resolve_with_dflash_draft("dflash", "warn_disable");
-    let staged = resolved
-        .to_embedded_openai_args(4096, true)
-        .expect("staged translation drops DFlash");
-    assert!(staged.speculative.dflash.is_none());
-    assert_eq!(staged.speculative.effective_strategy, "disabled");
-
-    let resolved = resolve_with_dflash_draft("dflash", "fail_closed");
-    let err = resolved
-        .to_embedded_openai_args(4096, true)
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("complete target model"), "{err}");
+fn split_targets_keep_an_explicit_dflash_plan() {
+    for pairing_fault in ["warn_disable", "fail_closed"] {
+        let resolved = resolve_with_dflash_draft("dflash", pairing_fault);
+        // The configured cap holds on a split too.
+        assert!(resolved.speculative.draft_max_tokens_configured);
+        let staged = resolved
+            .to_embedded_openai_args(4096, true)
+            .expect("staged translation keeps DFlash");
+        let dflash = staged.speculative.dflash.expect("split DFlash plan");
+        assert_eq!(dflash.max_draft_tokens, Some(8));
+        assert_eq!(staged.speculative.effective_strategy, "dflash");
+        assert!(!staged.native_mtp_enabled);
+    }
 }
 
 /// A Qwen3.5-9B target alone in its directory, so no sibling draft is found.
@@ -1244,6 +1243,8 @@ fn a_default_dflash_draft_is_served_only_once_fetched() {
         &model_path,
         &target_meta("qwen35", 32, 4096, 0),
     );
+    // A default draft's cap is a default, so a split may shorten it.
+    assert!(!resolved.speculative.draft_max_tokens_configured);
 
     resolved
         .speculative
@@ -1262,9 +1263,15 @@ fn a_default_dflash_draft_is_served_only_once_fetched() {
             .map(|dflash| dflash.draft_model_path),
         Some(draft.path().to_path_buf())
     );
-    // A split target drops a default draft even when pairing fails closed.
+    // A split target keeps a fetched default draft too.
     let staged = resolved.to_embedded_openai_args(4096, true).unwrap();
-    assert!(staged.speculative.dflash.is_none());
+    assert_eq!(
+        staged
+            .speculative
+            .dflash
+            .map(|dflash| dflash.draft_model_path),
+        Some(draft.path().to_path_buf())
+    );
 
     resolved.speculative.drop_default_dflash();
     assert!(resolved.speculative.default_dflash.is_none());

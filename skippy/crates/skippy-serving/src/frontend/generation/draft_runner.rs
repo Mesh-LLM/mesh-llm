@@ -257,7 +257,16 @@ pub(in crate::frontend) fn attach_dflash_draft(
         return Ok(None);
     };
     if config.downstream.is_some() {
-        bail!("DFlash drafts require single-stage serving; the target is split across stages");
+        // Split target: the final stage drafts, and this stage forwards the
+        // inputs of the draft's target layers it owns.
+        let plan = crate::split_dflash::SplitDFlashStage::from_draft(dflash, false, n_gpu_layers)?;
+        let layers = lock_runtime(runtime).model.attach_dflash_capture(
+            &plan.target_layers,
+            config.layer_start,
+            config.layer_end,
+        )?;
+        tracing::info!(layers = ?layers, "split DFlash target-layer capture attached on stage 0");
+        return Ok(None);
     }
     let path = dflash.draft_model_path.as_path();
     if !path.is_file() {

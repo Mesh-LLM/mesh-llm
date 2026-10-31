@@ -327,6 +327,12 @@ pub(super) async fn start_runtime_split_model(
             ctx_size_override: spec.ctx_size_override,
             parallel_override: spec.parallel_override,
             placement: spec.placement,
+            final_stage_reserve_bytes: split_dflash_final_stage_reserve(
+                &spec,
+                model_ref,
+                &package,
+                &compact_meta,
+            ),
         },
         cache_type_k_override: spec.cache_type_k_override.map(str::to_string),
         cache_type_v_override: spec.cache_type_v_override.map(str::to_string),
@@ -368,6 +374,31 @@ struct SplitRuntimeStartPreparation {
     planned_topology: PlannedRuntimeSliceTopology,
     stage_admissions: Vec<skippy_protocol::StageAdmissionDescriptor>,
     topology_locked: bool,
+}
+
+/// See [`loading::split_dflash_final_stage_reserve_bytes`].
+fn split_dflash_final_stage_reserve(
+    spec: &LocalRuntimeModelStartSpec<'_>,
+    model_ref: &str,
+    package: &skippy::SkippyPackageIdentity,
+    compact_meta: &models::gguf::GgufCompactMeta,
+) -> u64 {
+    loading::split_dflash_final_stage_reserve_bytes(
+        skippy::SkippyConfigResolveRequest {
+            mesh_config: spec.mesh_config,
+            model_id: model_ref,
+            model_path: spec.model_path,
+            model_bytes: package.source_model_bytes,
+            allocatable_memory_bytes: spec
+                .capacity_budget_bytes
+                .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes())),
+            request_defaults: None,
+            package_generation: package.generation.as_ref(),
+            compact_meta: Some(compact_meta),
+        },
+        spec.config_model_id,
+        package,
+    )
 }
 
 async fn prepare_split_runtime_start(
@@ -416,7 +447,19 @@ async fn prepare_split_runtime_start(
         ctx_size_override: spec.ctx_size_override,
         parallel_override: spec.parallel_override,
         placement: spec.placement,
+        final_stage_reserve_bytes: split_dflash_final_stage_reserve(
+            spec,
+            model_ref,
+            &package,
+            &compact_meta,
+        ),
     };
+    if resources.final_stage_reserve_bytes > 0 {
+        tracing::info!(
+            bytes = resources.final_stage_reserve_bytes,
+            "split DFlash: the final stage also loads the token embeddings its draft borrows"
+        );
+    }
     let configured_locked_stages = load_configured_split_assignments(
         spec.mesh_config,
         spec.config_model_id,
