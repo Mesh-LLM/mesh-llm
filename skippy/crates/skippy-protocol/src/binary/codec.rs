@@ -204,8 +204,7 @@ pub fn recv_reply(mut reader: impl Read) -> io::Result<StageReply> {
     let (native_mtp_draft, dflash_health) = read_native_mtp_draft(&mut reader)?;
     let mut stats = read_reply_stats(&mut reader)?;
     if dflash_health {
-        stats.dflash_feature_rows_missing = read_i64(&mut reader)?;
-        stats.dflash_draft_context_resets = read_i64(&mut reader)?;
+        read_dflash_health(&mut reader, &mut stats)?;
     }
     let log_probabilities = if kind == WireReplyKind::TokenScores {
         if !predicted_tokens.is_empty() || native_mtp_draft.is_some() || predicted != -1 {
@@ -932,8 +931,47 @@ fn write_reply_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Resu
     writer.write_all(&bytes)?;
     // The reply marker announced these; see `REPLY_DFLASH_HEALTH`.
     if stats.has_dflash_health() {
-        write_i64(&mut writer, stats.dflash_feature_rows_missing)?;
-        write_i64(&mut writer, stats.dflash_draft_context_resets)?;
+        write_dflash_health(&mut writer, stats)?;
+    }
+    Ok(())
+}
+
+/// Most split DFlash counters a reply may carry. Bounds what a reader skips.
+const MAX_DFLASH_HEALTH_COUNTERS: usize = 64;
+
+/// The split DFlash counters, in wire order. Append new counters at the end:
+/// the block carries its own count, so a reader takes the counters it knows
+/// and skips the rest, and a writer that sends fewer leaves the rest zero.
+fn dflash_health_counters(stats: &mut StageReplyStats) -> [&mut i64; 2] {
+    [
+        &mut stats.dflash_feature_rows_missing,
+        &mut stats.dflash_draft_context_resets,
+    ]
+}
+
+fn write_dflash_health(mut writer: impl Write, mut stats: StageReplyStats) -> io::Result<()> {
+    let counters = dflash_health_counters(&mut stats);
+    write_i32(
+        &mut writer,
+        i32::try_from(counters.len()).map_err(|_| invalid_data("too many DFlash counters"))?,
+    )?;
+    for counter in counters {
+        write_i64(&mut writer, *counter)?;
+    }
+    Ok(())
+}
+
+fn read_dflash_health(mut reader: impl Read, stats: &mut StageReplyStats) -> io::Result<()> {
+    let count = usize::try_from(read_i32(&mut reader)?)
+        .ok()
+        .filter(|count| *count <= MAX_DFLASH_HEALTH_COUNTERS)
+        .ok_or_else(|| invalid_data("invalid DFlash counter count"))?;
+    let mut known = dflash_health_counters(stats).into_iter();
+    for _ in 0..count {
+        let value = read_i64(&mut reader)?;
+        if let Some(counter) = known.next() {
+            *counter = value;
+        }
     }
     Ok(())
 }
