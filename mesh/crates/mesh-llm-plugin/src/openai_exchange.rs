@@ -295,6 +295,23 @@ pub struct OpenAiExchangeEvent {
     /// Legacy field retained for source compatibility; v1 hosts use the booleans above.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_completeness: Option<String>,
+    /// The selected remote mesh peer's advertised offer for the model, on a
+    /// `backend_selected` event from a host that lists
+    /// [`crate::host_capabilities::OPENAI_EXCHANGE_BACKEND_PRICING`]. See that
+    /// capability for what its absence means.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pricing: Option<OpenAiExchangePricing>,
+}
+
+/// A peer's advertised price, in millisatoshis per million tokens, as the
+/// host's routing reads it.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct OpenAiExchangePricing {
+    pub input_msat_per_million: u64,
+    pub output_msat_per_million: u64,
+    /// Percentage off reported cached input; absent when zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_discount_percent: Option<u8>,
 }
 
 impl OpenAiExchangeEvent {
@@ -307,8 +324,38 @@ impl OpenAiExchangeEvent {
 
 #[cfg(test)]
 mod event_tests {
-    use super::OpenAiExchangeEvent;
+    use super::{OpenAiExchangeEvent, OpenAiExchangePricing};
     use serde_json::json;
+
+    #[test]
+    fn the_typed_view_carries_the_selected_peers_price() {
+        let base = json!({"exchange_id":"exchange", "phase":"backend_selected",
+            "endpoint":"chat_completions", "observation_point":"backend_dispatch",
+            "method":"POST", "path":"/v1/chat/completions"});
+        let mut priced = base.clone();
+        priced["pricing"] = json!({"input_msat_per_million": 10, "output_msat_per_million": 20,
+            "cache_discount_percent": 25});
+        assert_eq!(
+            OpenAiExchangeEvent::parse(&priced).unwrap().pricing,
+            Some(OpenAiExchangePricing {
+                input_msat_per_million: 10,
+                output_msat_per_million: 20,
+                cache_discount_percent: Some(25),
+            })
+        );
+        let mut no_discount = base.clone();
+        no_discount["pricing"] =
+            json!({"input_msat_per_million": 10, "output_msat_per_million": 20});
+        assert_eq!(
+            OpenAiExchangeEvent::parse(&no_discount)
+                .unwrap()
+                .pricing
+                .unwrap()
+                .cache_discount_percent,
+            None
+        );
+        assert!(OpenAiExchangeEvent::parse(&base).unwrap().pricing.is_none());
+    }
 
     #[test]
     fn parses_host_phases_and_terminal_evidence_without_losing_false() {
