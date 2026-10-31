@@ -233,6 +233,7 @@ async fn configured_activation_codec_reaches_every_stage_load() {
         stage_index: downstream_stage.stage_index,
         endpoint: "127.0.0.1:41001".to_string(),
         node_id: Some(downstream_stage.node_id),
+        persistent_lane_marker: false,
     };
     let loads = [
         split_runtime_stage_load_request(
