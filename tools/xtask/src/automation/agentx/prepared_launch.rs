@@ -57,8 +57,7 @@ pub(super) fn doctor(
             "doctor".into(),
         ],
     )?;
-    command::run(&spec, 120, &output.join("doctor"))?;
-    let value: Value = serde_json::from_slice(&std::fs::read(output.join("doctor.stdout.log"))?)?;
+    let value = command::public_json(&spec, 120, &output.join("doctor"))?;
     if value["native_runtime"]["path"].as_str() != tools.runtime.path.to_str()
         || value
             .get("runtime_issue")
@@ -66,7 +65,10 @@ pub(super) fn doctor(
     {
         return Err("doctor must select the exact prepared runtime leaf without issue".into());
     }
-    Ok(())
+    write(
+        &output.join("doctor.json"),
+        &json!({"native_runtime_path":value["native_runtime"]["path"],"runtime_issue":value["runtime_issue"]}),
+    )
 }
 
 pub(super) fn effective_config(input: &Prepared, server: &process::ProcessSpec) -> DynResult<()> {
@@ -86,10 +88,7 @@ pub(super) fn effective_config(input: &Prepared, server: &process::ProcessSpec) 
     probe
         .arguments
         .push(process::Value::Public("--print-effective-config".into()));
-    command::run(&probe, 900, &input.output.join("effective-config"))?;
-    let value: Value = serde_json::from_slice(&std::fs::read(
-        input.output.join("effective-config.stdout.log"),
-    )?)?;
+    let value = command::public_json(&probe, 900, &input.output.join("effective-config"))?;
     validate_config(
         &value,
         input

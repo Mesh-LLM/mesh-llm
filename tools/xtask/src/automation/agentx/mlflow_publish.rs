@@ -95,15 +95,7 @@ impl Client {
             ]);
         }
         let spec = command::spec(&self.output, "curl", &args)?;
-        command::run(&spec, 140, &self.output.join(&label))?;
-        let bytes = crate::automation::receipt_files::bounded(
-            &self.output.join(format!("{label}.stdout.log")),
-            4 * 1024 * 1024,
-        )?;
-        if bytes.iter().all(u8::is_ascii_whitespace) {
-            return Ok(Value::Null);
-        }
-        Ok(serde_json::from_slice(&bytes)?)
+        command::public_json(&spec, 140, &self.output.join(&label))
     }
     fn api(&mut self, operation: &str, body: &Value) -> DynResult<Value> {
         self.request(
