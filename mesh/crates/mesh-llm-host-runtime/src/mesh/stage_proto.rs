@@ -1466,8 +1466,8 @@ mod tests {
             kv_unified: Some(true),
             swa_full: Some(false),
             cache_idle_slots: Some(3),
-            cpu_moe: None,
-            n_cpu_moe: None,
+            cpu_moe: Some(false),
+            n_cpu_moe: Some(4),
             activation_codec_policy: skippy_stage_proto::StageActivationCodecPolicy::FixedV1 as i32,
         };
         let load = skippy_stage_proto::LoadStage {

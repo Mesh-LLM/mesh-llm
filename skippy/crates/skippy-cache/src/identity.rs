@@ -122,16 +122,14 @@ fn update_layout_identity(hasher: &mut blake3::Hasher, config: &StageConfig) {
     // therefore how the exported page is assembled.
     hasher.update(&config.n_gpu_layers.to_le_bytes());
     // Host-resident routed experts run on CPU kernels, so pages produced with
-    // a different expert placement are not interchangeable either.
-    hasher.update(b"host-expert-layers:");
-    match config.host_expert_layers {
-        Some(layers) => {
-            hasher.update(&layers.start.to_le_bytes());
-            hasher.update(&layers.end.to_le_bytes());
-        }
-        None => {
-            hasher.update(b"none");
-        }
+    // a different expert placement are not interchangeable. The range is
+    // hashed only when one is set: configs that never use host-resident
+    // experts must keep the identity they had before the feature, or the
+    // upgrade alone would invalidate every existing cache entry.
+    if let Some(layers) = config.host_expert_layers {
+        hasher.update(b"host-expert-layers:");
+        hasher.update(&layers.start.to_le_bytes());
+        hasher.update(&layers.end.to_le_bytes());
     }
     // Backend identity: CUDA/Metal/Vulkan/CPU pages are not interchangeable.
     match config.selected_device.as_ref() {

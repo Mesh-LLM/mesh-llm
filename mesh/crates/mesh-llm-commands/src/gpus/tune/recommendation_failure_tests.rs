@@ -59,6 +59,7 @@ fn moe_metadata() -> TuneGgufMetadata {
         profile.expert_tensor_bytes = 32 * gib();
         profile.base_resident_bytes = 8 * gib();
         profile.expert_used_count = 8;
+        profile.expert_block_bytes = Some(vec![gib(); 32]);
     }
     metadata
 }
@@ -165,6 +166,121 @@ fn gpu_tune_preserves_an_operator_n_cpu_moe() {
         },
     });
 
+    assert!(matches!(
+        status_for(&plan, TuneField::NCpuMoe),
+        TuneFieldStatus::Preserved { .. }
+    ));
+}
+
+fn preserved_hardware_config(
+    cpu_moe: Option<mesh_llm_config::BoolOrAuto>,
+    n_cpu_moe: Option<u32>,
+) -> MeshConfig {
+    MeshConfig {
+        defaults: Some(mesh_llm_config::ModelConfigDefaults {
+            hardware: Some(mesh_llm_config::HardwareConfig {
+                cpu_moe,
+                n_cpu_moe,
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn gpu_tune_keeps_an_explicit_cpu_moe_false_off_the_host_expert_path() {
+    let config = preserved_hardware_config(Some(mesh_llm_config::BoolOrAuto::Bool(false)), None);
+    let plan = build_tune_plan(TuneRecommendationInput {
+        apply_mode: TuneApplyMode::ApplyMissing,
+        config: &config,
+        target: &recommendation_target(false),
+        metadata: &moe_metadata(),
+        hardware: &gpu_hardware(24 * gib()),
+        survey: &HardwareSurvey {
+            system_ram_bytes: Some(128 * gib()),
+            ..survey_with_gpu(24 * gib(), 128 * gib())
+        },
+    });
+
+    // cpu_moe = false pins every routed expert to the accelerator, so the
+    // plan cannot move expert banks to host memory and must fall back to
+    // partial GPU layers.
+    match status_for(&plan, TuneField::GpuLayers) {
+        TuneFieldStatus::Applied { recommendation, .. } => match &recommendation.value {
+            TuneRecommendedValue::GpuLayers(TuneGpuLayersValue::Count(count)) => {
+                assert!(*count > 0);
+            }
+            other => panic!("expected partial gpu layer count, got {other:?}"),
+        },
+        other => panic!("expected applied gpu_layers, got {other:?}"),
+    }
+    assert!(matches!(
+        status_for(&plan, TuneField::CpuMoe),
+        TuneFieldStatus::Preserved { .. }
+    ));
+}
+
+#[test]
+fn gpu_tune_serves_every_layer_when_a_kept_n_cpu_moe_fits() {
+    // 20 of the 32 GiB of expert banks on the host leaves 20 GiB resident,
+    // which fits the ~22 GiB accelerator budget.
+    let config = preserved_hardware_config(None, Some(20));
+    let plan = build_tune_plan(TuneRecommendationInput {
+        apply_mode: TuneApplyMode::ApplyMissing,
+        config: &config,
+        target: &recommendation_target(false),
+        metadata: &moe_metadata(),
+        hardware: &gpu_hardware(24 * gib()),
+        survey: &HardwareSurvey {
+            system_ram_bytes: Some(128 * gib()),
+            ..survey_with_gpu(24 * gib(), 128 * gib())
+        },
+    });
+
+    match status_for(&plan, TuneField::GpuLayers) {
+        TuneFieldStatus::Applied { recommendation, .. } => assert_eq!(
+            recommendation.value,
+            TuneRecommendedValue::GpuLayers(TuneGpuLayersValue::All)
+        ),
+        other => panic!("expected every layer on the accelerator, got {other:?}"),
+    }
+    assert!(matches!(
+        status_for(&plan, TuneField::NCpuMoe),
+        TuneFieldStatus::Preserved { .. }
+    ));
+}
+
+#[test]
+fn gpu_tune_falls_back_to_partial_layers_when_a_kept_n_cpu_moe_does_not_fit() {
+    // Four host blocks only move 4 GiB of experts: 36 GiB stays resident
+    // against a ~22 GiB accelerator budget, so the operator's count cannot
+    // fit. The plan must fall back to partial GPU layers rather than
+    // recommend a different host-expert block count, because the preserved
+    // operator value is what gets written.
+    let config = preserved_hardware_config(None, Some(4));
+    let plan = build_tune_plan(TuneRecommendationInput {
+        apply_mode: TuneApplyMode::ApplyMissing,
+        config: &config,
+        target: &recommendation_target(false),
+        metadata: &moe_metadata(),
+        hardware: &gpu_hardware(24 * gib()),
+        survey: &HardwareSurvey {
+            system_ram_bytes: Some(128 * gib()),
+            ..survey_with_gpu(24 * gib(), 128 * gib())
+        },
+    });
+
+    match status_for(&plan, TuneField::GpuLayers) {
+        TuneFieldStatus::Applied { recommendation, .. } => match &recommendation.value {
+            TuneRecommendedValue::GpuLayers(TuneGpuLayersValue::Count(count)) => {
+                assert!(*count > 0);
+            }
+            other => panic!("expected partial gpu layer count, got {other:?}"),
+        },
+        other => panic!("expected applied gpu_layers, got {other:?}"),
+    }
     assert!(matches!(
         status_for(&plan, TuneField::NCpuMoe),
         TuneFieldStatus::Preserved { .. }

@@ -17,7 +17,8 @@ pub(crate) struct TuneRecommendationInput<'a> {
 pub(crate) fn build_tune_plan(input: TuneRecommendationInput<'_>) -> TunePlan {
     let model_entry = matched_model_entry(input.config, input.target);
     let defaults = input.config.defaults.as_ref();
-    let fit = plan_fit(input.metadata, input.hardware, input.survey);
+    let placement = placement_constraints(input.apply_mode, model_entry, defaults);
+    let fit = plan_fit(input.metadata, input.hardware, input.survey, placement);
     let recommended_quant = recommended_kv_cache_quant(input.metadata.model_bytes);
     let recommended_cache_type = tune_kv_cache_type_from_quant(recommended_quant);
 
@@ -119,8 +120,12 @@ pub(crate) struct PlannedFit {
 /// Fit a mixture-of-experts model on the accelerator by moving the routed
 /// experts of the fewest leading blocks into host memory.
 ///
-/// Experts are assumed evenly spread across blocks, which matches the dense
-/// MoE families the tuner sees. Host memory must hold every moved expert.
+/// The moved bytes are the exact per-block expert sums from the tensor
+/// scan: models with dense leading blocks hold no expert bytes in their
+/// first blocks, so an even spread would understate what stays resident.
+/// Without per-block attribution there is no safe estimate, so no
+/// host-expert recommendation is made. Host memory must hold every moved
+/// expert.
 fn find_host_expert_fit(
     metadata: &TuneGgufMetadata,
     layer_count: u32,
@@ -135,9 +140,9 @@ fn find_host_expert_fit(
     if profile.expert_count == 0 || profile.expert_tensor_bytes == 0 {
         return None;
     }
-    let expert_bytes_per_block = profile.expert_tensor_bytes.div_ceil(u64::from(layer_count));
+    profile.expert_block_bytes.as_ref()?;
     (1..=layer_count).find_map(|blocks| {
-        let moved = expert_bytes_per_block.saturating_mul(u64::from(blocks));
+        let moved = host_expert_bytes_for_blocks(metadata, blocks)?;
         if moved > host_budget {
             return None;
         }
@@ -176,10 +181,89 @@ fn find_partial_gpu_layers_fit(
     None
 }
 
+/// Exact routed-expert bytes of the first `blocks` model blocks, from the
+/// tensor scan's per-block attribution. `None` without attribution: an
+/// even-spread guess is unsafe for models with dense leading blocks.
+fn host_expert_bytes_for_blocks(metadata: &TuneGgufMetadata, blocks: u32) -> Option<u64> {
+    let TuneTensorProfile::Exact(profile) = &metadata.tensor_profile else {
+        return None;
+    };
+    let per_block = profile.expert_block_bytes.as_ref()?;
+    Some(per_block.iter().take(blocks as usize).copied().sum())
+}
+
+/// Placement settings the written configuration keeps, which the fit must
+/// respect instead of recommending around them.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct PlacementConstraints {
+    /// A preserved `cpu_moe = false` keeps every routed expert on the
+    /// accelerator, so host-expert moves are not available to the plan.
+    pub(crate) cpu_moe_false: bool,
+    /// A preserved `n_cpu_moe` block count the written config will keep;
+    /// `Some(0)` pins every expert to the accelerator like `cpu_moe = false`.
+    pub(crate) kept_n_cpu_moe: Option<u32>,
+}
+
+/// Resolve the placement the written config will carry, mirroring
+/// `push_cpu_moe_status` (a `cpu_moe` source is preserved in every mode)
+/// and `push_n_cpu_moe_status` (`n_cpu_moe` is preserved unless replaced).
+fn placement_constraints(
+    apply_mode: TuneApplyMode,
+    model_entry: Option<&ModelConfigEntry>,
+    defaults: Option<&mesh_llm_config::ModelConfigDefaults>,
+) -> PlacementConstraints {
+    let model_hardware = model_entry.and_then(|entry| entry.hardware.as_ref());
+    let cpu_moe = explicit_cpu_moe(model_hardware)
+        .or_else(|| explicit_cpu_moe(defaults.and_then(|value| value.hardware.as_ref())));
+    let n_cpu_moe = (apply_mode != TuneApplyMode::ReplaceExisting)
+        .then(|| {
+            model_hardware
+                .and_then(|hardware| hardware.n_cpu_moe)
+                .or_else(|| defaults?.hardware.as_ref()?.n_cpu_moe)
+        })
+        .flatten();
+    PlacementConstraints {
+        cpu_moe_false: cpu_moe == Some(false),
+        kept_n_cpu_moe: n_cpu_moe,
+    }
+}
+
+/// Resolve an explicit `cpu_moe` boolean; `auto` leaves expert placement to
+/// `n_cpu_moe`.
+fn explicit_cpu_moe(hardware: Option<&mesh_llm_config::HardwareConfig>) -> Option<bool> {
+    hardware
+        .and_then(|hardware| hardware.cpu_moe.as_ref())
+        .and_then(|value| match value {
+            mesh_llm_config::BoolOrAuto::Bool(flag) => Some(*flag),
+            mesh_llm_config::BoolOrAuto::String(_) => None,
+        })
+}
+
+/// Check the fit with the operator's preserved host-expert block count:
+/// those blocks' routed experts must fit in host memory and the remaining
+/// resident bytes on the accelerator.
+fn fit_with_kept_host_experts(
+    metadata: &TuneGgufMetadata,
+    blocks: u32,
+    selected_budget: u64,
+    host_budget: u64,
+    kv_bytes_per_token: u64,
+    quant: skippy_model_artifact::gguf::GgufKvCacheQuant,
+) -> Option<u32> {
+    let moved = host_expert_bytes_for_blocks(metadata, blocks)?;
+    if moved > host_budget {
+        return None;
+    }
+    let resident = metadata.model_bytes.saturating_sub(moved);
+    minimum_context_fits(resident, selected_budget, kv_bytes_per_token)
+        .then(|| planned_context_length(&metadata.compact_meta, resident, selected_budget, quant))
+}
+
 fn plan_fit(
     metadata: &TuneGgufMetadata,
     hardware: &TuneHardwareEvaluation,
     survey: &HardwareSurvey,
+    placement: PlacementConstraints,
 ) -> PlannedFit {
     let quant = recommended_kv_cache_quant(metadata.model_bytes);
     let kv_bytes_per_token = quant
@@ -223,16 +307,55 @@ fn plan_fit(
                         quant,
                     ),
                 ))
-            } else if let Some((blocks, ctx_size)) = find_host_expert_fit(
-                metadata,
-                layer_count,
-                selected_budget,
-                host_budget,
-                kv_bytes_per_token,
-                quant,
-            ) {
-                host_expert_blocks = Some(blocks);
-                Some((TuneGpuLayersValue::All, ctx_size))
+            } else if !placement.cpu_moe_false && placement.kept_n_cpu_moe != Some(0) {
+                if let Some(kept) = placement.kept_n_cpu_moe {
+                    // The operator's n_cpu_moe is preserved on write in every
+                    // mode but ReplaceExisting, so the kept count is the only
+                    // host-expert plan that can actually be persisted; when it
+                    // does not fit, fall back to the CPU/partial-layer paths
+                    // rather than recommending a different block count.
+                    match fit_with_kept_host_experts(
+                        metadata,
+                        kept,
+                        selected_budget,
+                        host_budget,
+                        kv_bytes_per_token,
+                        quant,
+                    ) {
+                        Some(ctx_size) => {
+                            host_expert_blocks = Some(kept);
+                            Some((TuneGpuLayersValue::All, ctx_size))
+                        }
+                        None if !cpu_can_fit => None,
+                        None => find_partial_gpu_layers_fit(
+                            metadata,
+                            layer_count,
+                            selected_budget,
+                            kv_bytes_per_token,
+                            quant,
+                        ),
+                    }
+                } else if let Some((blocks, ctx_size)) = find_host_expert_fit(
+                    metadata,
+                    layer_count,
+                    selected_budget,
+                    host_budget,
+                    kv_bytes_per_token,
+                    quant,
+                ) {
+                    host_expert_blocks = Some(blocks);
+                    Some((TuneGpuLayersValue::All, ctx_size))
+                } else if !cpu_can_fit {
+                    None
+                } else {
+                    find_partial_gpu_layers_fit(
+                        metadata,
+                        layer_count,
+                        selected_budget,
+                        kv_bytes_per_token,
+                        quant,
+                    )
+                }
             } else if !cpu_can_fit {
                 None
             } else {

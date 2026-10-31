@@ -85,6 +85,71 @@ impl HostExpertLayers {
     }
 }
 
+#[cfg(test)]
+mod host_expert_layer_tests {
+    use super::{HostExpertLayers, HostExpertPolicy};
+
+    fn layers(start: u32, end: u32) -> Option<HostExpertLayers> {
+        HostExpertLayers::new(start, end)
+    }
+
+    #[test]
+    fn n_cpu_moe_counts_blocks_from_block_zero() {
+        // A later split stage may hold none of the first N blocks.
+        let policy = HostExpertPolicy {
+            cpu_moe: None,
+            n_cpu_moe: Some(12),
+        };
+        assert_eq!(HostExpertLayers::for_stage(0, 64, policy), layers(0, 12));
+        assert_eq!(HostExpertLayers::for_stage(32, 64, policy), None);
+    }
+
+    #[test]
+    fn n_cpu_moe_is_clamped_to_the_stage_end() {
+        let policy = HostExpertPolicy {
+            cpu_moe: None,
+            n_cpu_moe: Some(50),
+        };
+        assert_eq!(HostExpertLayers::for_stage(0, 32, policy), layers(0, 32));
+        assert_eq!(HostExpertLayers::for_stage(32, 64, policy), layers(32, 50));
+    }
+
+    #[test]
+    fn zero_n_cpu_moe_keeps_every_expert_on_the_accelerator() {
+        let policy = HostExpertPolicy {
+            cpu_moe: None,
+            n_cpu_moe: Some(0),
+        };
+        assert_eq!(HostExpertLayers::for_stage(0, 64, policy), None);
+    }
+
+    #[test]
+    fn cpu_moe_true_hosts_the_whole_stage() {
+        let policy = HostExpertPolicy {
+            cpu_moe: Some(true),
+            n_cpu_moe: None,
+        };
+        assert_eq!(HostExpertLayers::for_stage(32, 64, policy), layers(32, 64));
+    }
+
+    #[test]
+    fn cpu_moe_false_wins_over_n_cpu_moe() {
+        let policy = HostExpertPolicy {
+            cpu_moe: Some(false),
+            n_cpu_moe: Some(32),
+        };
+        assert_eq!(HostExpertLayers::for_stage(0, 64, policy), None);
+    }
+
+    #[test]
+    fn no_policy_keeps_every_expert_on_the_accelerator() {
+        assert_eq!(
+            HostExpertLayers::for_stage(0, 64, HostExpertPolicy::default()),
+            None
+        );
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GlmDsaPolicy {
