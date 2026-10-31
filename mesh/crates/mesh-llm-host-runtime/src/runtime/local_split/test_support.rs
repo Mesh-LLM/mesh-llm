@@ -715,7 +715,7 @@ async fn split_load_of_a_paired_native_mtp_target_keeps_native_mtp() {
     let temp_dir = tempfile::tempdir().unwrap();
     let model_path = temp_dir.path().join("Qwen3.8-27B-UD-Q4_K_M.gguf");
     write_fake_native_mtp_gguf_model(&model_path);
-    // Qwen3.8-27B has a default DFlash pairing, whose draft is not cached here.
+    // Qwen3.8-27B has a default DFlash pairing; the load sees no cached draft.
     let compact_meta = crate::models::gguf::GgufCompactMeta {
         architecture: "qwen35".to_string(),
         layer_count: 64,
@@ -765,7 +765,7 @@ async fn split_load_of_a_paired_native_mtp_target_keeps_native_mtp() {
         serving_hooks_factory: None,
         local_source_required: false,
     };
-    let settings = split_generation_load_settings(&spec)
+    let settings = split_generation_load_settings_with(&spec, SplitDefaultDraft::Uncached)
         .await
         .expect("split settings should resolve");
 

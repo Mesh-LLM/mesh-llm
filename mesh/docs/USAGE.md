@@ -1169,9 +1169,9 @@ node's own cache), and each block is verified in one pass through every
 stage. Split blocks are capped at four draft tokens unless `draft_max_tokens`
 is set, because every drafted token is a verify row on every stage.
 
-DFlash drafts tokens for greedy and sampled requests; requests that ask for logprobs
-decode normally. DSpark and LiliCorr drafts and Windows runtimes are not
-supported.
+DFlash drafts tokens for greedy and sampled requests; requests that ask for
+logprobs decode normally. DSpark and LiliCorr drafts and Windows runtimes are
+not supported.
 
 ### Run-ahead admission
 
