@@ -13,6 +13,18 @@ use crate::path_cstring::path_to_cstring;
 use crate::runtime_events;
 use crate::session::StageSession;
 use crate::vocabulary::{ensure_in_vocabulary, vocabulary_size};
+mod receipt_glue;
+mod receipts;
+
+pub use receipt_glue::{
+    ReceiptGlueInput, ReceiptGlueRequestRef, ReceiptGlueResult, ReceiptGlueTensor,
+    ReceiptGlueValues, StoredRowError, receipt_stored_row_error,
+};
+pub use receipts::{
+    ReceiptMemoryEvent, ReceiptRecorderSink, ReceiptReplayStepRef, ReceiptReplayer,
+    ReceiptTensorView, ReceiptUbatchView, RecordedUbatch,
+};
+
 use crate::{
     ActivationBoundaryDesc, ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateJsonResult,
     ChatTemplateMessage, ChatTemplateOptions, LoadedModelCapability, ModelOpenEventQueue,
@@ -101,6 +113,7 @@ struct StageModelInner {
     raw: *mut RawModel,
     terminal_stage: bool,
     capability: Option<LoadedModelCapability>,
+    receipt_recorder: receipts::InstalledRecorder,
 }
 
 /// A read-only model handle for vocabulary operations that do not touch a
@@ -163,6 +176,7 @@ impl StageModel {
                 raw: std::ptr::null_mut(),
                 terminal_stage: true,
                 capability: None,
+                receipt_recorder: Default::default(),
             }),
             media: None,
         }
@@ -227,6 +241,7 @@ impl StageModel {
                 raw,
                 terminal_stage: config.is_terminal_stage(),
                 capability,
+                receipt_recorder: Default::default(),
             }),
             media,
         })

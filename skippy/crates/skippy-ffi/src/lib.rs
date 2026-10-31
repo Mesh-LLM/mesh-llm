@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 74;
+pub const ABI_VERSION_PATCH: u32 = 75;
 
 // Propagate static native archive changes through Cargo dependency metadata so
 // final binaries are relinked after CMake rebuilds llama.cpp.
@@ -18,6 +18,7 @@ mod activation;
 mod dynamic;
 mod model;
 mod multimodal;
+mod receipts;
 mod runtime;
 mod sampling;
 mod stage_plan;
@@ -67,6 +68,7 @@ pub use multimodal::{
     MtmdHelperGenAudioOutputType, MtmdHelperInitOpt, MtmdHelperVideo, MtmdHelperVideoInitParams,
     MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
 };
+pub use receipts::*;
 pub use runtime::{
     NativeRuntimeLoadError, abi_features, llama_model_is_diffusion, llama_model_is_hybrid,
     llama_model_is_recurrent, llama_model_meta_val_str, try_abi_features,
@@ -134,27 +136,29 @@ pub use dynamic::{
     skippy_import_state, skippy_iteration_batch_sampled, skippy_laya_model_free,
     skippy_laya_model_info_v1, skippy_laya_model_memory_v1, skippy_laya_model_open,
     skippy_laya_read, skippy_laya_tokenize, skippy_model_attach_mtp_draft_model_fn,
-    skippy_model_free, skippy_model_info_free, skippy_model_info_open, skippy_model_info_tensor_at,
-    skippy_model_info_tensor_count, skippy_model_input_activation_boundary,
-    skippy_model_llama_model, skippy_model_memory_cache_capabilities, skippy_model_open,
-    skippy_model_open_from_parts, skippy_model_open_from_parts_with_events_fn,
-    skippy_model_open_from_source, skippy_model_open_with_events_fn,
-    skippy_model_output_activation_boundary, skippy_model_supports_causal_readout,
+    skippy_model_eval_receipt_glue, skippy_model_free, skippy_model_info_free,
+    skippy_model_info_open, skippy_model_info_tensor_at, skippy_model_info_tensor_count,
+    skippy_model_input_activation_boundary, skippy_model_llama_model,
+    skippy_model_memory_cache_capabilities, skippy_model_open, skippy_model_open_from_parts,
+    skippy_model_open_from_parts_with_events_fn, skippy_model_open_from_source,
+    skippy_model_open_with_events_fn, skippy_model_output_activation_boundary,
+    skippy_model_release_receipt_scratch, skippy_model_replay_receipt,
+    skippy_model_set_receipt_recorder, skippy_model_supports_causal_readout,
     skippy_model_workload_info_v1, skippy_ngram_cache_append, skippy_ngram_cache_create,
     skippy_ngram_cache_draft, skippy_ngram_cache_free, skippy_ngram_cache_reset,
     skippy_parse_chat_response_json, skippy_prefill_chunk, skippy_prefill_chunk_frame,
     skippy_prefill_chunk_frame_sampled, skippy_prefill_chunk_frame_sampled_with_positions,
-    skippy_prefill_chunk_frame_with_positions, skippy_retire_verify_checkpoint,
-    skippy_session_batch_size, skippy_session_begin_external_decode,
-    skippy_session_configure_chat_sampling, skippy_session_copy_output_activation_frame,
-    skippy_session_create, skippy_session_create_from_resident_prefix,
-    skippy_session_drop_sequence, skippy_session_embed, skippy_session_encode_prompt,
-    skippy_session_end_external_decode, skippy_session_free, skippy_session_last_token_signal,
-    skippy_session_llama_context, skippy_session_memory_used_cells, skippy_session_position,
-    skippy_session_rerank, skippy_session_reset, skippy_session_restore_prefix,
-    skippy_session_restore_token_history, skippy_session_sample_current,
-    skippy_session_save_prefix, skippy_session_sequence_id, skippy_session_set_position,
-    skippy_session_signal_window, skippy_session_take_token_logprobs,
+    skippy_prefill_chunk_frame_with_positions, skippy_receipt_stored_row_error,
+    skippy_retire_verify_checkpoint, skippy_session_batch_size,
+    skippy_session_begin_external_decode, skippy_session_configure_chat_sampling,
+    skippy_session_copy_output_activation_frame, skippy_session_create,
+    skippy_session_create_from_resident_prefix, skippy_session_drop_sequence, skippy_session_embed,
+    skippy_session_encode_prompt, skippy_session_end_external_decode, skippy_session_free,
+    skippy_session_last_token_signal, skippy_session_llama_context,
+    skippy_session_memory_used_cells, skippy_session_position, skippy_session_rerank,
+    skippy_session_reset, skippy_session_restore_prefix, skippy_session_restore_token_history,
+    skippy_session_sample_current, skippy_session_save_prefix, skippy_session_sequence_id,
+    skippy_session_set_position, skippy_session_signal_window, skippy_session_take_token_logprobs,
     skippy_stage_plan_describe_v1, skippy_stage_plan_free, skippy_stage_plan_profile_at_v1,
     skippy_stage_plan_resident_tensor_at_v1, skippy_stage_plan_state_at_v1,
     skippy_stage_plan_string_v1, skippy_stage_plan_validate_chain_v1,
@@ -198,27 +202,29 @@ pub use static_bindings::{
     skippy_import_full_state, skippy_import_kv_page, skippy_import_recurrent_state,
     skippy_import_state, skippy_iteration_batch_sampled, skippy_laya_model_free,
     skippy_laya_model_info_v1, skippy_laya_model_memory_v1, skippy_laya_model_open,
-    skippy_laya_read, skippy_laya_tokenize, skippy_model_attach_mtp_draft_model, skippy_model_free,
-    skippy_model_info_free, skippy_model_info_open, skippy_model_info_tensor_at,
-    skippy_model_info_tensor_count, skippy_model_input_activation_boundary,
-    skippy_model_llama_model, skippy_model_memory_cache_capabilities, skippy_model_open,
-    skippy_model_open_from_parts, skippy_model_open_from_source,
-    skippy_model_output_activation_boundary, skippy_model_supports_causal_readout,
+    skippy_laya_read, skippy_laya_tokenize, skippy_model_attach_mtp_draft_model,
+    skippy_model_eval_receipt_glue, skippy_model_free, skippy_model_info_free,
+    skippy_model_info_open, skippy_model_info_tensor_at, skippy_model_info_tensor_count,
+    skippy_model_input_activation_boundary, skippy_model_llama_model,
+    skippy_model_memory_cache_capabilities, skippy_model_open, skippy_model_open_from_parts,
+    skippy_model_open_from_source, skippy_model_output_activation_boundary,
+    skippy_model_release_receipt_scratch, skippy_model_replay_receipt,
+    skippy_model_set_receipt_recorder, skippy_model_supports_causal_readout,
     skippy_model_workload_info_v1, skippy_ngram_cache_append, skippy_ngram_cache_create,
     skippy_ngram_cache_draft, skippy_ngram_cache_free, skippy_ngram_cache_reset,
     skippy_parse_chat_response_json, skippy_prefill_chunk, skippy_prefill_chunk_frame,
     skippy_prefill_chunk_frame_sampled, skippy_prefill_chunk_frame_sampled_with_positions,
-    skippy_prefill_chunk_frame_with_positions, skippy_retire_verify_checkpoint,
-    skippy_session_batch_size, skippy_session_begin_external_decode,
-    skippy_session_configure_chat_sampling, skippy_session_copy_output_activation_frame,
-    skippy_session_create, skippy_session_create_from_resident_prefix,
-    skippy_session_drop_sequence, skippy_session_embed, skippy_session_encode_prompt,
-    skippy_session_end_external_decode, skippy_session_free, skippy_session_last_token_signal,
-    skippy_session_llama_context, skippy_session_memory_used_cells, skippy_session_position,
-    skippy_session_rerank, skippy_session_reset, skippy_session_restore_prefix,
-    skippy_session_restore_token_history, skippy_session_sample_current,
-    skippy_session_save_prefix, skippy_session_sequence_id, skippy_session_set_position,
-    skippy_session_signal_window, skippy_session_take_token_logprobs,
+    skippy_prefill_chunk_frame_with_positions, skippy_receipt_stored_row_error,
+    skippy_retire_verify_checkpoint, skippy_session_batch_size,
+    skippy_session_begin_external_decode, skippy_session_configure_chat_sampling,
+    skippy_session_copy_output_activation_frame, skippy_session_create,
+    skippy_session_create_from_resident_prefix, skippy_session_drop_sequence, skippy_session_embed,
+    skippy_session_encode_prompt, skippy_session_end_external_decode, skippy_session_free,
+    skippy_session_last_token_signal, skippy_session_llama_context,
+    skippy_session_memory_used_cells, skippy_session_position, skippy_session_rerank,
+    skippy_session_reset, skippy_session_restore_prefix, skippy_session_restore_token_history,
+    skippy_session_sample_current, skippy_session_save_prefix, skippy_session_sequence_id,
+    skippy_session_set_position, skippy_session_signal_window, skippy_session_take_token_logprobs,
     skippy_stage_plan_describe_v1, skippy_stage_plan_free, skippy_stage_plan_profile_at_v1,
     skippy_stage_plan_resident_tensor_at_v1, skippy_stage_plan_state_at_v1,
     skippy_stage_plan_string_v1, skippy_stage_plan_validate_chain_v1,

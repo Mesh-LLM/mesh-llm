@@ -33,6 +33,7 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 | [skippy/CONFIGURATION.md](../../skippy/docs/CONFIGURATION.md) | Authoritative operator matrix for Skippy config keys and rejection boundaries |
 | [skippy/PROMPT_CACHE.md](../../skippy/docs/PROMPT_CACHE.md) | OpenAI prompt-prefix cache behavior, defaults, telemetry, and benchmark flow |
 | [skippy/KV_CACHE_DISK.md](../../skippy/docs/KV_CACHE_DISK.md) | Operator guide for the node-local disk prompt cache (L3): config, modes, status, prune/clear, corruption handling |
+| [skippy/RECEIPTS.md](../../skippy/docs/RECEIPTS.md) | Experimental verifiable inference receipts for split serving: flags, auditor, HTTP API, limits |
 | [skippy/PIPELINED_VERIFY_WINDOW.md](../../skippy/docs/PIPELINED_VERIFY_WINDOW.md) | Native MTP, anchored N-gram extension, VerifyWindow protocol, pipeline behavior, and telemetry |
 | [skippy/SUFFIX_NGRAM_PROPOSER.md](../../skippy/docs/SUFFIX_NGRAM_PROPOSER.md) | Long exact-suffix proposer design, invariants, telemetry, and benchmark contract |
 | [skippy/DATA_FLOW.md](../../skippy/docs/DATA_FLOW.md) | Stage data flow and transport details |

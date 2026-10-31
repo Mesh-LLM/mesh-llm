@@ -531,6 +531,7 @@ if [[ "$LLAMA_STAGE_FULL_REPLAY" == "ON" ]]; then
   BUILD_TARGETS+=(
     test-skippy-cachegen-import
     test-skippy-kv-cells-contiguous
+    test-skippy-receipt-classify
     test-skippy-kv-page-export
     test-skippy-model-loader-accounting
     test-skippy-recurrent-state-roundtrip

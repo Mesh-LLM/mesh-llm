@@ -1,6 +1,38 @@
 use super::*;
 
 impl RuntimeState {
+    /// Remembers which native sequence serves a session, while receipts are on.
+    pub(super) fn note_receipt_sequence(&mut self, session_id: &str) {
+        if self.receipts.is_none() {
+            return;
+        }
+        if let Some(sequence) = self
+            .sessions
+            .get(session_id)
+            .and_then(|lane| lane.session.native_sequence_id().ok())
+        {
+            self.receipt_sequences
+                .insert(session_id.to_string(), sequence);
+        }
+    }
+
+    /// Turns receipts on: later session bindings are remembered for commits.
+    pub fn set_receipts(&mut self, receipts: Arc<crate::receipts::StageReceipts>) {
+        self.receipts = Some(receipts);
+    }
+
+    pub fn receipts(&self) -> Option<&Arc<crate::receipts::StageReceipts>> {
+        self.receipts.as_ref()
+    }
+
+    /// The native sequence that serves, or last served, a session.
+    pub fn receipt_sequence(&self, session_id: &str) -> Option<i32> {
+        self.sessions
+            .get(session_id)
+            .and_then(|lane| lane.session.native_sequence_id().ok())
+            .or_else(|| self.receipt_sequences.get(session_id).copied())
+    }
+
     pub fn prewarm_idle_sessions(
         &mut self,
         target_idle_sessions: usize,
@@ -347,6 +379,7 @@ impl RuntimeState {
         let mut idle = self.idle_sessions.swap_remove(index);
         idle.resident_prefix = None;
         self.sessions.insert(session_id.to_string(), idle);
+        self.note_receipt_sequence(session_id);
         self.session_token_counts
             .insert(session_id.to_string(), token_count);
         self.session_resident_prefixes.insert(
@@ -482,6 +515,7 @@ impl RuntimeState {
         self.sessions.insert(session_id.to_string(), lane_session);
         self.session_token_counts
             .insert(session_id.to_string(), token_ids.len() as u64);
+        self.note_receipt_sequence(session_id);
         Ok(())
     }
 

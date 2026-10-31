@@ -445,6 +445,7 @@ fn run_binary_stage(
         openai,
         l3_manager,
         compute_meter,
+        receipts,
     } = options;
     // With an OpenAI frontend, a stop request closes HTTP admission first.
     // Keep worker connections and prediction returns alive until Axum drains.
@@ -479,6 +480,9 @@ fn run_binary_stage(
     // (#1954).
     let max_inflight = max_inflight
         .min(usize::try_from(lock_runtime(&runtime).lane_count()).unwrap_or(usize::MAX));
+    if let Some(receipts) = receipts {
+        crate::receipts::start(receipts, &config, runtime.clone())?;
+    }
     let (input_boundary, output_boundary) = {
         let runtime = lock_runtime(&runtime);
         (

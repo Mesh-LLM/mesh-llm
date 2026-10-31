@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **20 headers** and **124 exported functions**.
+Current generated surface: **21 headers** and **129 exported functions**.
 
 ## Quick navigation
 
@@ -123,6 +123,16 @@ Current generated surface: **20 headers** and **124 exported functions**.
       <a class="skippy-api-index__group-title" href="#skippy-header-model-source-h"><code>model_source.h</code><span>1 function</span></a>
       <div class="skippy-api-index__functions">
         <a href="#skippy-fn-skippy-model-open-from-source"><code>skippy_model_open_from_source</code></a>
+      </div>
+    </section>
+    <section class="skippy-api-index__group">
+      <a class="skippy-api-index__group-title" href="#skippy-header-receipts-h"><code>receipts.h</code><span>5 functions</span></a>
+      <div class="skippy-api-index__functions">
+        <a href="#skippy-fn-skippy-model-set-receipt-recorder"><code>skippy_model_set_receipt_recorder</code></a>
+        <a href="#skippy-fn-skippy-model-replay-receipt"><code>skippy_model_replay_receipt</code></a>
+        <a href="#skippy-fn-skippy-model-release-receipt-scratch"><code>skippy_model_release_receipt_scratch</code></a>
+        <a href="#skippy-fn-skippy-model-eval-receipt-glue"><code>skippy_model_eval_receipt_glue</code></a>
+        <a href="#skippy-fn-skippy-receipt-stored-row-error"><code>skippy_receipt_stored_row_error</code></a>
       </div>
     </section>
     <section class="skippy-api-index__group">
@@ -262,6 +272,7 @@ Capability consumers can include a narrower header:
 | `include/skippy/logprobs.h` | Per-token log-probabilities recorded while sampling, for OpenAI-style logprobs. A decode call whose sampling config sets SKIPPY_SAMPLING_FLAG_LOGPROBS records, for every token it samples, the token's log-probability and the most likely alternatives. The distribution is the model's raw one: softmax of the logits at temperature 1, before penalties, truncation or temperature, which is what OpenAI-compatible clients and output verifiers compare against. |
 | `include/skippy/model_package.h` | Inspects GGUF tensors and writes metadata and multi-part packages. |
 | `include/skippy/model_source.h` | Callback-backed model construction and load-time quantization. |
+| `include/skippy/receipts.h` | Recording and replay for verifiable inference receipts. A receipt commits, for every layer a stage runs, to the residual stream entering the layer and to the values entering and leaving its token-mixing regions (attention, recurrent state updates), with KV-cache rows as stored. Which ops mix tokens is decided per ggml op from the built graph; a graph with an op outside that table, or one that breaks a receipt guard, is reported as unreceiptable with the reason (mesh/docs/design/RECEIPTS_GLUE.md). While serving, the recorder reports each ubatch: its geometry (tokens, sequences, positions, output rows, KV cells, n_kv), the stage input rows, and the committed tensors of every layer. It also reports every KV-cache operation that changes which cells a sequence holds. To open a challenge, the caller replays the recorded ubatches of one sequence in a scratch context of the same model. Other sequences' columns are replaced by dummy columns at the recorded cells, and the recorded cells and n_kv are forced, so the challenged sequence computes bit for bit what it computed while serving. The replay also reports the inputs and outputs of every weight matmul of the challenged layer. An auditor checks the glue between those values by evaluating the layer itself: skippy_model_eval_receipt_glue() computes one layer on opened values, with every weight matmul and token-mixing output replaced by the opened value. |
 | `include/skippy/runtime.h` | Model loading, session lifecycle, and llama.cpp context access. |
 | `include/skippy/sampling.h` | Sampling parameters shared by single-token and batched decode calls. |
 | `include/skippy/signals.h` | Generation uncertainty and repetition signals for routing or policy. |
@@ -1098,6 +1109,84 @@ LLAMA_API enum skippy_status skippy_model_open_from_source(
         int32_t quantization_ftype,
         const struct skippy_runtime_config * config,
         struct skippy_model ** out_model,
+        struct skippy_error ** out_error);
+```
+
+<a class="skippy-api-backlink" href="#skippy-function-index">↩ Back to function index</a>
+
+<a id="skippy-header-receipts-h"></a>
+### `receipts.h`
+
+<a id="skippy-fn-skippy-model-set-receipt-recorder"></a>
+#### `skippy_model_set_receipt_recorder`
+
+Installs or, with both callbacks NULL, removes the receipt recorder. The callbacks run on the thread that decodes or changes the KV cache. The recorder marks the committed tensors as graph outputs, which keeps them alive and may disable some kernel fusions; replay marks the same tensors. The stage needs a plain unified KV cache with one stream, and flash attention, so V rows are stored untransposed.
+
+```cpp
+LLAMA_API enum skippy_status skippy_model_set_receipt_recorder(
+         struct skippy_model * model,
+        skippy_receipt_ubatch_fn on_ubatch,
+        skippy_receipt_memory_fn on_memory,
+        void * user_data,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-model-replay-receipt"></a>
+#### `skippy_model_replay_receipt`
+
+Replays one sequence in the model's scratch context. The scratch context is created on first use with the stage context's parameters and kept until skippy_model_release_receipt_scratch(). Each replay starts from an empty cache. After every decode step, the columns of sequences other than `seq` are removed. A captured step reports the committed tensors of `layer`, its weight matmuls' inputs, outputs and experts, its selections, and the residual leaving it. Every step stops computing once those are done, so later layers and the output head are skipped and their values are undefined.
+
+```cpp
+LLAMA_API enum skippy_status skippy_model_replay_receipt(
+         struct skippy_model * model,
+        int32_t seq,
+        int32_t layer,
+        const struct skippy_receipt_replay_step * steps,
+        size_t n_steps,
+        skippy_receipt_ubatch_fn on_capture,
+        void * user_data,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-model-release-receipt-scratch"></a>
+#### `skippy_model_release_receipt_scratch`
+
+Frees the scratch context that receipt replays run in. The next replay creates it again. When a replay is running, the context is kept and the call still succeeds.
+
+```cpp
+LLAMA_API enum skippy_status skippy_model_release_receipt_scratch(
+         struct skippy_model * model,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-model-eval-receipt-glue"></a>
+#### `skippy_model_eval_receipt_glue`
+
+Evaluates the glue of one layer on opened values. The model must hold `layer`; an auditor loads a stage of that layer alone. Each column is computed as its own sequence at its position, starting from the opened residual. Every weight matmul, token-mixing output and selection takes the given value instead of being computed, so the layer's large weights are never read. `on_result` is called once with the computed values: weight matmul inputs and experts, token-mixing inputs, KV rows before storage, selection scores, the residual leaving the layer, and the weights read inside token-mixing regions.
+
+```cpp
+LLAMA_API enum skippy_status skippy_model_eval_receipt_glue(
+         struct skippy_model * model,
+        const struct skippy_receipt_glue_request * request,
+        skippy_receipt_ubatch_fn on_result,
+        void * user_data,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-receipt-stored-row-error"></a>
+#### `skippy_receipt_stored_row_error`
+
+Compares a stored KV row with the f32 row an auditor computed. Sets `stored_error` to the L2 distance between the dequantized stored row and `computed`, `rounding_error` to the distance between `computed` and its own round trip through `ggml_type`, and `norm` to the L2 norm of `computed`. An honestly stored row is about one rounding error away.
+
+```cpp
+LLAMA_API enum skippy_status skippy_receipt_stored_row_error(
+         int32_t ggml_type,
+        const void * stored,
+        const float * computed,
+        int64_t n,
+        double * stored_error,
+        double * rounding_error,
+        double * norm,
         struct skippy_error ** out_error);
 ```
 
@@ -2080,7 +2169,7 @@ The headers also define the following enums, structs, opaque handles, and ABI co
 
 - `activation.h`: `skippy_activation_part_desc`, `skippy_activation_boundary_desc`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_FRAME_VERSION = 2`, `SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION = 2`, `SKIPPY_ACTIVATION_IDENTITY_BYTES = 32`, `SKIPPY_ACTIVATION_MAX_DIMS = 4`, `SKIPPY_ACTIVATION_MAX_PARTS = 16`, `SKIPPY_ACTIVATION_PART_OPTIONAL = (UINT32_C(1) << 0)`
 - `asr.h`: `skippy_asr_model`, `skippy_asr_result`, `skippy_asr_info_v1`, `skippy_asr_transcribe_params_v1`, `skippy_asr_segment_v1`, `SKIPPY_ASR_INFO_V1_ABI_VERSION = 1`, `SKIPPY_ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION = 1`, `SKIPPY_ASR_SEGMENT_V1_ABI_VERSION = 1`, `SKIPPY_ASR_SAMPLE_RATE = 16000`, `SKIPPY_ASR_MAX_SAMPLES = (SKIPPY_ASR_SAMPLE_RATE * 60 * 30)`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 74`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`, `SKIPPY_FEATURE_NON_CHAT_WORKLOADS = ((uint64_t)1 << 37)`, `SKIPPY_FEATURE_SYSTEM_ONE = ((uint64_t)1 << 38)`, `SKIPPY_FEATURE_CACHEGEN_KV_PAGE = (UINT64_C(1) << 39)`, `SKIPPY_FEATURE_LAYA_DECISIONS = (UINT64_C(1) << 40)`, `SKIPPY_FEATURE_SPEECH_RECOGNITION = (UINT64_C(1) << 41)`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 75`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`, `SKIPPY_FEATURE_NON_CHAT_WORKLOADS = ((uint64_t)1 << 37)`, `SKIPPY_FEATURE_SYSTEM_ONE = ((uint64_t)1 << 38)`, `SKIPPY_FEATURE_CACHEGEN_KV_PAGE = (UINT64_C(1) << 39)`, `SKIPPY_FEATURE_LAYA_DECISIONS = (UINT64_C(1) << 40)`, `SKIPPY_FEATURE_SPEECH_RECOGNITION = (UINT64_C(1) << 41)`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `execution.h`: `skippy_token_score_request`, `skippy_iteration_request`
@@ -2088,6 +2177,7 @@ The headers also define the following enums, structs, opaque handles, and ABI co
 - `logprobs.h`: `skippy_logprob_entry`, `skippy_token_logprobs`, `SKIPPY_MAX_TOP_LOGPROBS = 20`
 - `model_package.h`: `skippy_tensor_role`, `skippy_model_info`, `skippy_tensor_info`
 - `model_source.h`: `skippy_model`, `skippy_runtime_config`, `skippy_model_imatrix_entry_v1`, `skippy_model_tensor_source_v1`, `SKIPPY_MODEL_TENSOR_SOURCE_V1_ABI_VERSION = 1`
+- `receipts.h`: `skippy_receipt_tensor_kind`, `skippy_receipt_tensor_flag`, `skippy_receipt_tensor`, `skippy_receipt_ubatch`, `skippy_receipt_memory_op`, `skippy_receipt_memory_event`, `skippy_receipt_replay_kind`, `skippy_receipt_replay_step`, `skippy_receipt_glue_value`, `skippy_receipt_glue_request`
 - `runtime.h`: `skippy_load_mode`, `skippy_mtp_source`, `skippy_model`, `skippy_session`, `skippy_activation_boundary_desc`, `skippy_runtime_config`, `SKIPPY_GLM_DSA_POLICY_PROFILE_NONE = 0`, `SKIPPY_GLM_DSA_POLICY_PROFILE_V1 = 1`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_ATTN = (UINT32_C(1) << 0)`, `SKIPPY_GLM_DSA_POLICY_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 1)`, `SKIPPY_GLM_DSA_POLICY_DISABLE_COMPACT_FLASH_ATTN = (UINT32_C(1) << 2)`, `SKIPPY_GLM_DSA_POLICY_UNPROVEN_LARGE_DIRECT_SPARSE_PREFILL = (UINT32_C(1) << 3)`, `SKIPPY_TRISTATE_AUTO = (-1)`, `SKIPPY_TRISTATE_FALSE = (0)`, `SKIPPY_TRISTATE_TRUE = (1)`
 - `sampling.h`: `skippy_sampler_type`, `skippy_sampling_config`, `SKIPPY_MAX_LOGIT_BIAS = 256`, `SKIPPY_MAX_SAMPLERS = 16`, `SKIPPY_MAX_DRY_SEQUENCE_BREAKERS = 8`, `SKIPPY_MAX_DRY_SEQUENCE_BREAKER_BYTES = 16`, `SKIPPY_SAMPLING_FLAG_ENABLED = (1u << 0)`, `SKIPPY_SAMPLING_FLAG_IGNORE_EOS = (1u << 1)`, `SKIPPY_SAMPLING_FLAG_LOGPROBS = (1u << 2)`
 - `signals.h`: `skippy_token_signal`, `skippy_generation_signal_window`
