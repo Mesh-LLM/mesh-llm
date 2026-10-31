@@ -34,6 +34,8 @@ mod durable_prefix;
 #[path = "tests/recurrent_fixture.rs"]
 mod recurrent_fixture;
 use recurrent_fixture::recurrent_test_backend;
+#[path = "tests/cold_offload_concurrency.rs"]
+mod cold_offload_concurrency;
 #[path = "tests/cooperative_prefill.rs"]
 mod cooperative_prefill;
 
