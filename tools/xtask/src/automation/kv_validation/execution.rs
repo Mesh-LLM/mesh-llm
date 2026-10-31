@@ -109,7 +109,7 @@ pub(super) fn run(input: Cell, output: &Path) -> DynResult<()> {
     let passed = result.is_ok() && finish.is_ok() && Instant::now() < deadline;
     publish(
         &output.join("result.json"),
-        &json!({"schema_version":1,"status":if passed {"passed"} else {"failed"},"model_key":input.model_key,"request":input,"failure":result.as_ref().err().map(ToString::to_string),"interrupt_failure":finish.as_ref().err().map(ToString::to_string),"scope":"KVdtype_dispatch_generic_c1_cache_plus_declared_recurrent_regressions_not_long_c4_L3_or_performance"}),
+        &json!({"schema_version":1,"status":if passed {"passed"} else {"failed"},"model_key":input.model_key,"request":input,"failure":result.as_ref().err().map(ToString::to_string),"interrupt_failure":finish.as_ref().err().map(ToString::to_string),"scope":"KVdtype_dispatch_generic_c1_cache_plus_recurrent_runtime_L3_restart_not_long_c4_process_restart_or_performance"}),
     )?;
     archive(output)?;
     finish?;
@@ -285,6 +285,8 @@ fn recurrent(
     for suffix in [
         "recurrent_chat_checkpoint_preserves_cached_output_parity",
         "recurrent_post_decode_checkpoint_reuses_a_growing_prompt",
+        "durable_prefix::native_cold_prefix_survives_runtime_restart",
+        "durable_prefix::native_cold_offload_refusal_keeps_inference_usable",
     ] {
         let test = format!("frontend::local_generation::tests::{suffix}");
         let text = child(

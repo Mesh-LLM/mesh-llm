@@ -317,3 +317,7 @@ mod native_reservation_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "tests/native_spill_failures.rs"]
+mod native_spill_failures;

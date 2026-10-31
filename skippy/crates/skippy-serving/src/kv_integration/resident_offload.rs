@@ -10,7 +10,7 @@ pub(super) struct NativeOffloadClaim {
 }
 
 impl NativeOffloadClaim {
-    fn acquire(
+    pub(in crate::kv_integration) fn acquire(
         claims: &Arc<Mutex<BTreeSet<String>>>,
         namespace: &str,
         tokens: &[i32],
