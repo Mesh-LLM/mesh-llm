@@ -1,6 +1,6 @@
-From f644ed55e3ed368fc752f8aa7b37a8829a94a7ce Mon Sep 17 00:00:00 2001
+From 49e7635856484a30c1e98fc5755e50c933d26306 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
-Date: Sat, 31 Oct 2026 16:18:58 +1100
+Date: Sat, 31 Oct 2026 17:14:46 +1100
 Subject: [PATCH] feat(ggml): read request-local KV indices in flash attention
 
 ---
@@ -18,7 +18,7 @@ Subject: [PATCH] feat(ggml): read request-local KV indices in flash attention
  ggml/src/ggml-cuda/fattn-mma-f16.cuh          | 208 ++++++----
  ggml/src/ggml-cuda/fattn-tile.cuh             |  95 ++++-
  ggml/src/ggml-cuda/fattn-vec.cuh              |  53 ++-
- ggml/src/ggml-cuda/fattn.cu                   |  63 ++-
+ ggml/src/ggml-cuda/fattn.cu                   |  68 +++-
  ggml/src/ggml-cuda/ggml-cuda.cu               |   1 +
  ggml/src/ggml-et/ggml-et.cpp                  |   3 +
  ggml/src/ggml-hexagon/ggml-hexagon.cpp        |   2 +-
@@ -36,7 +36,7 @@ Subject: [PATCH] feat(ggml): read request-local KV indices in flash attention
  ggml/src/ggml-webgpu/ggml-webgpu.cpp          |   2 +-
  ggml/src/ggml.c                               |  44 +-
  src/CMakeLists.txt                            |   2 +
- src/llama-graph-kv-read.cpp                   | 126 ++++++
+ src/llama-graph-kv-read.cpp                   | 134 +++++++
  src/llama-graph.cpp                           |  85 ++--
  src/llama-graph.h                             |  21 +-
  src/llama-kv-cache.h                          |   2 +
@@ -44,7 +44,7 @@ Subject: [PATCH] feat(ggml): read request-local KV indices in flash attention
  src/llama-kv-read.h                           |  20 +
  tests/CMakeLists.txt                          |   2 +
  tests/test-flash-attn-indexed.cpp             | 378 ++++++++++++++++++
- 40 files changed, 1687 insertions(+), 207 deletions(-)
+ 40 files changed, 1698 insertions(+), 209 deletions(-)
  create mode 100644 ggml/src/ggml-cpu/attention-indexed.cpp
  create mode 100644 ggml/src/ggml-cpu/attention-indexed.h
  create mode 100644 ggml/src/ggml-cuda/fattn-indexed.cuh
@@ -1356,7 +1356,7 @@ index 57a285565..596165504 100644
  #endif // FLASH_ATTN_AVAILABLE
  }
 diff --git a/ggml/src/ggml-cuda/fattn.cu b/ggml/src/ggml-cuda/fattn.cu
-index 5fa3e5308..3825a51f1 100644
+index 5fa3e5308..b74322b6f 100644
 --- a/ggml/src/ggml-cuda/fattn.cu
 +++ b/ggml/src/ggml-cuda/fattn.cu
 @@ -130,6 +130,9 @@ bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(const int cc, const ggml_
@@ -1378,7 +1378,33 @@ index 5fa3e5308..3825a51f1 100644
      for (const ggml_tensor * t : {Q, K, V, mask}) {
          if (t == nullptr || ggml_is_quantized(t->type)) {
              continue;
-@@ -537,6 +540,27 @@ static bool ggml_cuda_fattn_kv_type_supported(const ggml_type type) {
+@@ -357,6 +360,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
+         case 576: {
+             // For Deepseek, go straight to the ncols1 switch to avoid compiling unnecessary kernels.
+             GGML_ASSERT(V->ne[0] == 512);
++            const int64_t kv_span = dst->src[5] ? dst->src[5]->ne[0] : K->ne[1];
+             float max_bias = 0.0f;
+             memcpy(&max_bias, (const float *) KQV->op_params + 1, sizeof(float));
+ 
+@@ -375,7 +379,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
+                     break;
+                 }
+                 if (cc >= GGML_CUDA_CC_BLACKWELL) {
+-                    if (Q->ne[1] <= 4 && K->ne[1] >= 65536) {
++                    if (Q->ne[1] <= 4 && kv_span >= 65536) {
+                         ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<576, 512, 16>(ctx, dst);
+                         break;
+                     }
+@@ -392,7 +396,7 @@ static void ggml_cuda_flash_attn_ext_mma_f16(ggml_backend_cuda_context & ctx, gg
+                 }
+                 if (cc >= GGML_CUDA_CC_TURING) {
+                     if (Q->ne[1] <= 4) {
+-                        if (K->ne[1] <= 16384) {
++                        if (kv_span <= 16384) {
+                             ggml_cuda_flash_attn_ext_mma_f16_switch_ncols1<576, 512, 16>(ctx, dst);
+                             break;
+                         }
+@@ -537,6 +541,27 @@ static bool ggml_cuda_fattn_kv_type_supported(const ggml_type type) {
      }
  }
  
@@ -1406,7 +1432,7 @@ index 5fa3e5308..3825a51f1 100644
  static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
  #ifndef FLASH_ATTN_AVAILABLE
      GGML_UNUSED(device); GGML_UNUSED(dst);
-@@ -557,7 +581,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
+@@ -557,7 +582,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
  
      // The effective batch size for the kernel can be increased by gqa_ratio.
      // The kernel versions without this optimization are also used for ALiBi, if there is no mask, or if the KV cache is not padded,
@@ -1415,7 +1441,7 @@ index 5fa3e5308..3825a51f1 100644
      for (const ggml_tensor * t : {Q, K, V, mask}) {
          if (t == nullptr || ggml_is_quantized(t->type)) {
              continue;
-@@ -629,9 +653,40 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
+@@ -629,9 +654,40 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
          return BEST_FATTN_KERNEL_NONE;
      }
  
@@ -1457,7 +1483,7 @@ index 5fa3e5308..3825a51f1 100644
  
      // If Turing tensor cores are available, use them:
      if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
-@@ -749,7 +804,7 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
+@@ -749,7 +805,7 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
      }
  
      const ggml_cuda_flash_attn_ext_f16_extra_data f16_extra =
@@ -2446,10 +2472,10 @@ index d55e38363..0e9996f97 100644
      llama-kv-cache-dsa-iswa.cpp
 diff --git a/src/llama-graph-kv-read.cpp b/src/llama-graph-kv-read.cpp
 new file mode 100644
-index 000000000..69788b4ec
+index 000000000..379c7f458
 --- /dev/null
 +++ b/src/llama-graph-kv-read.cpp
-@@ -0,0 +1,126 @@
+@@ -0,0 +1,134 @@
 +#include "llama-graph.h"
 +
 +#include "llama-cparams.h"
@@ -2558,11 +2584,19 @@ index 000000000..69788b4ec
 +    const uint32_t queries = read_plan.queries_per_request;
 +    std::vector<ggml_fp16_t> mask(ggml_nelements(self_read_mask));
 +    const ggml_fp16_t drop = ggml_fp32_to_fp16(-INFINITY);
++    const ggml_fp16_t keep = ggml_fp32_to_fp16(0.0f);
 +    std::fill(mask.begin(), mask.end(), drop);
 +    for (uint32_t request = 0; request < read_plan.request_count; ++request) {
++        const auto * begin = read_plan.positions.data() + static_cast<size_t>(request) * extent;
++        const auto * end = begin + read_plan.lengths[request];
 +        for (uint32_t query = 0; query < queries; ++query) {
 +            const llama_pos position = ubatch.pos[request * queries + query];
 +            auto * row = mask.data() + (static_cast<size_t>(request) * queries + query) * extent;
++            if (hparams.f_max_alibi_bias <= 0) {
++                const auto * visible = std::upper_bound(begin, end, position);
++                std::fill(row, row + (visible - begin), keep);
++                continue;
++            }
 +            for (int32_t slot = 0; slot < read_plan.lengths[request]; ++slot) {
 +                const llama_pos key_position = read_plan.positions[request * extent + slot];
 +                if (key_position > position) {
