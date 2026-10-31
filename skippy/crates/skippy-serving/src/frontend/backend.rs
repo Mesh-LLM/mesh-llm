@@ -35,7 +35,6 @@ use crate::frontend::generation::completion_response_from_generated_text;
 use crate::frontend::generation::ensure_requested_model;
 use crate::frontend::generation::generation_event_to_chat_chunk;
 use crate::frontend::generation::generation_event_to_completion_chunk;
-use crate::frontend::generation::generation_predicted_wait_error;
 use crate::frontend::generation::generation_queue_timeout_error;
 use crate::frontend::generation::template_exposes_reasoning;
 use crate::frontend::request::{
@@ -576,12 +575,7 @@ impl GenerationAdmissionController {
                 self.generation_service_estimator
                     .set_concurrency(self.generation_limit.current_limit());
                 let predicted_wait_ms = self.generation_service_estimator.predicted_wait_ms();
-                let queued_work = self
-                    .generation_service_estimator
-                    .reserve_queued(work, admission_timeout)
-                    .map_err(|predicted_wait_ms| {
-                        generation_predicted_wait_error(predicted_wait_ms, admission_timeout)
-                    })?;
+                let queued_work = self.generation_service_estimator.reserve_queued(work);
                 let resources = lease
                     .acquire(
                         self.generation_limit.semaphore(),
