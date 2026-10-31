@@ -33,6 +33,8 @@ skippy-package-format = { path = "../skippy-package-format", version = "0.78.0" 
 skippy-api = { path = "../skippy-api", version = "0.78.0" }
 skippy-events = { path = "../skippy-events", version = "0.78.0" }
 skippy-protocol = { path = "../skippy-protocol", version = "0.78.0" }
+skippy-receipts = { path = "../skippy-receipts", version = "0.78.0" }
+rand = "0.10"
 skippy-runtime-install = { path = "../skippy-runtime-install", version = "0.78.0" }
 skippy-topology = { path = "../skippy-topology", version = "0.78.0" }
 tokio = { version = "1", features = ["rt", "time", "macros", "fs"] }

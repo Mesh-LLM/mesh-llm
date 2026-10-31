@@ -810,3 +810,39 @@ fn documented_example_is_a_valid_complete_settings_file() {
         );
     }
 }
+
+#[test]
+fn receipts_flags_are_binary_stage_settings() {
+    assert_eq!(section("receipts-listen"), "distributed");
+    let Command::Serve(args) = parse_test(&[
+        "skippy",
+        "serve",
+        "--model",
+        "missing.gguf",
+        "--receipts-listen",
+        "127.0.0.1:9501",
+    ])
+    .unwrap()
+    .command
+    else {
+        panic!()
+    };
+    assert!(
+        args.public
+            .settings
+            .validate_mode(&args)
+            .unwrap_err()
+            .to_string()
+            .contains("--receipts-listen requires --stage-transport binary")
+    );
+    assert!(
+        parse_test(&[
+            "skippy",
+            "serve",
+            "--model",
+            "missing.gguf",
+            "--receipts-allow-remote",
+        ])
+        .is_err()
+    );
+}

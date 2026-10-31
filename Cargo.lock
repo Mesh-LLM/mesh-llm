@@ -8776,6 +8776,7 @@ dependencies = [
  "skippy-model-hf",
  "skippy-native-runtime",
  "skippy-protocol",
+ "skippy-receipts",
  "skippy-runtime",
  "skippy-runtime-install",
  "skippy-serving",
@@ -8795,6 +8796,7 @@ dependencies = [
  "crossterm",
  "futures",
  "hex",
+ "rand 0.10.2",
  "ratatui",
  "reqwest 0.13.5",
  "rustyline",
@@ -8813,6 +8815,7 @@ dependencies = [
  "skippy-model-resolver",
  "skippy-package-format",
  "skippy-protocol",
+ "skippy-receipts",
  "skippy-runtime-install",
  "skippy-topology",
  "tabwriter",
@@ -9130,6 +9133,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "skippy-receipts"
+version = "0.78.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "blake3",
+ "bytemuck",
+ "half",
+ "hex",
+ "rand 0.10.2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "skippy-runtime"
 version = "0.78.0"
 dependencies = [
@@ -9196,6 +9214,7 @@ dependencies = [
  "futures-util",
  "libc",
  "opentelemetry-proto",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -9207,6 +9226,7 @@ dependencies = [
  "skippy-model-artifact",
  "skippy-package-format",
  "skippy-protocol",
+ "skippy-receipts",
  "skippy-runtime",
  "skippy-scheduler",
  "skippy-tokenizer",

@@ -234,6 +234,7 @@ fn replay_explicit_builds_retained_skippy_gates_and_runs_bounded_filtered_ctest(
         "skippy-renamed-multishard-planning",
         "skippy-stage-slice-plan",
         "test-skippy-kv-cells-contiguous",
+        "test-skippy-receipt-classify",
         "test-skippy-kv-page-export",
         "test-skippy-model-loader-accounting",
         "test-skippy-recurrent-state-roundtrip",

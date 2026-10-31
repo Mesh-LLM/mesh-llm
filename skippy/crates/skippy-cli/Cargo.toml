@@ -28,6 +28,7 @@ skippy-config = { path = "../skippy-config", version = "0.78.0" }
 skippy-coordinator = { path = "../skippy-coordinator", version = "0.78.0" }
 skippy-events = { path = "../skippy-events", version = "0.78.0" }
 skippy-protocol = { path = "../skippy-protocol", version = "0.78.0" }
+skippy-receipts = { path = "../skippy-receipts", version = "0.78.0" }
 skippy-runtime-install = { path = "../skippy-runtime-install", version = "0.78.0" }
 skippy-runtime = { path = "../skippy-runtime", version = "0.78.0" }
 skippy-serving = { path = "../skippy-serving", version = "0.78.0" }

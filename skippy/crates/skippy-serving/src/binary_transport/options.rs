@@ -40,6 +40,8 @@ pub struct BinaryStageOptions {
     pub compute_meter: Option<std::sync::Arc<crate::compute_meter::StageComputeMeter>>,
     /// Optional node-scoped durable cache manager supplied by the embedding host.
     pub l3_manager: Option<skippy_cache::L3CacheManager>,
+    /// Opt-in verifiable inference receipts. `None` leaves them off.
+    pub receipts: Option<crate::receipts::ReceiptsOptions>,
 }
 
 #[derive(Clone)]

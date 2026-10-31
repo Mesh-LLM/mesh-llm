@@ -371,6 +371,10 @@ with their runtime purpose; existing controls follow in the same sections.
 | `--async-prefill-forward` | `async_prefill_forward` | See `skippy serve --help` for values and defaults. |
 | `--no-async-prefill-forward` | `no_async_prefill_forward` | See `skippy serve --help` for values and defaults. |
 | `--downstream-connect-timeout-secs` | `downstream_connect_timeout_secs` | See `skippy serve --help` for values and defaults. |
+| `--receipts-listen` | `receipts_listen` | Serve verifiable inference receipts; see [RECEIPTS.md](RECEIPTS.md) |
+| `--receipts-allow-remote` | `receipts_allow_remote` | Permit a non-loopback receipts address |
+| `--receipts-downstream` | `receipts_downstream` | Receipts API of the next stage |
+| `--receipts-claimed-model` | `receipts_claimed_model` | Model named in receipts |
 
 ### [runtime]
 

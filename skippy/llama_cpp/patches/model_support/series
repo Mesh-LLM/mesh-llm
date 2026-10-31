@@ -8,3 +8,4 @@
 0008-models-add-qwen3moe-native-mtp.patch
 0009-skippy-add-whisper-speech-recognition.patch
 0010-skippy-record-per-token-logprobs-while-sampling.patch
+0011-skippy-add-receipt-recorder-and-replay.patch

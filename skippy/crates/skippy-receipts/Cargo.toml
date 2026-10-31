@@ -1,0 +1,27 @@
+[package]
+name = "skippy-receipts"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+description = "Verifiable inference receipts for Skippy: commitments, openings, and client-side weight-row audits"
+repository = "https://github.com/Mesh-LLM/mesh-llm"
+homepage = "https://github.com/Mesh-LLM/mesh-llm"
+readme = "README.md"
+
+[lib]
+name = "skippy_receipts"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow.workspace = true
+base64 = "0.22"
+blake3.workspace = true
+bytemuck = "1"
+half = "2"
+hex = "0.4"
+rand = "0.10"
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

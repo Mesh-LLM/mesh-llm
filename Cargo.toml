@@ -53,6 +53,7 @@ members = [
     "skippy/crates/skippy-events",
     "skippy/crates/skippy-tokenizer",
     "skippy/crates/skippy-protocol",
+    "skippy/crates/skippy-receipts",
     "skippy/crates/skippy-coordinator",
     "skippy/crates/skippy-topology",
     "skippy/crates/skippy-cache",

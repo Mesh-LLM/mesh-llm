@@ -1,0 +1,160 @@
+# Receipts implementation plan
+
+This plan turns [RECEIPTS.md](RECEIPTS.md) into milestones. Each milestone
+leaves `skippy serve` working with receipts off, which stays the default.
+
+## Milestone 0: end-to-end demo (built, then replaced by milestone 1)
+
+Milestone 0 stored every matmul column. Milestone 1 replaced its native tap
+and leaf layout; serving, the HTTP API and the auditor carried over.
+
+What it built:
+
+- **Native tap** (ABI 0.1.75). `skippy_model_set_receipt_tap` reported every
+  `blk.<layer>.*.weight` matmul of the stage context with its f32 input and
+  output columns and each column's sequence and position.
+- **`skippy-receipts` crate.** Wire shapes, BLAKE3 leaves and Merkle paths,
+  the node-side recorder, challenge drawing, GGUF row reads, and the client
+  row checks with the CUDA and CPU Q8 rounding profiles.
+- **Serving.** `skippy serve --stage-transport binary --receipts-listen ADDR
+  [--receipts-downstream URL] [--receipts-claimed-model NAME]`. At the end of a
+  turn, stage 0 commits its leaves, asks the next stage to commit the same
+  session and positions, and keeps the receipt under the request's
+  `x-request-id`. Each stage serves `GET /receipts/{id}`,
+  `POST /receipts/commit` and `POST /receipts/open`. An open for a layer of a
+  later stage is forwarded down the chain. The API binds only a loopback
+  address unless the operator passes `--receipts-allow-remote`.
+- **Auditor.** `skippy audit-receipt --claimed-model GGUF` sends a chat
+  request, fetches the receipt, draws a challenge (one layer weighted by
+  bytes, 16 positions), and checks Merkle paths and 16 random rows per matrix.
+  It exits non-zero on failure.
+
+The operator guide is [skippy/RECEIPTS.md](../../../skippy/docs/RECEIPTS.md).
+
+Verified on a two-stage Qwen3-4B split on one RTX 5060 Ti:
+
+| Case | Result |
+|---|---|
+| Serve Q8_0, claim Q8_0 | PASS on stage 0 and stage 1 layers, max error 1e-4 to 4e-4 |
+| Serve Q6_K on both stages, claim Q8_0 | FAIL on every matrix, error 7e-3 to 5e-2 |
+
+How the demo differs from the design:
+
+| Design | Demo |
+|---|---|
+| Leaf = residual and mixer outputs; node replays the turn to open | Leaf = every weight matmul's input and output column; the node stores them in host memory: the live turn in full, committed turns up to 8 GiB per stage |
+| Signed, chained turn roots | Unsigned per-turn roots, no chaining |
+| Receipt at the end of the response stream | Receipt fetched by `x-request-id` after the response |
+| Output head, attention, DeltaNet and MoE checks | Dense weight matmuls only. The output head and glue ops are not checked |
+| Verifier in the host runtime, rows from Hugging Face | CLI verifier, rows from a local GGUF |
+| All quant types | F32, F16, BF16 and Q8_0 weights only |
+
+Known limits of the demo:
+
+- Receipts made decode 1.8x slower on an RTX 5060 Ti and 2.3x slower on an
+  RTX 5090, and prefill 9x to 10x slower, in a release build. The scheduler
+  stopped after every matmul and copied its columns to the host.
+- Only binary split serving commits receipts. Single-stage `skippy serve` and
+  Mesh-launched stages do not.
+- On the last layer of the final stage, the attention output and FFN matmuls
+  run only for output rows, so their leaves cover fewer positions. The
+  verifier does not yet check that every expected matrix is present.
+
+## Milestone 1: replay instead of storage (in progress)
+
+Built:
+
+- **Native recorder and replay**
+  (`model_support/0011-skippy-add-receipt-recorder-and-replay.patch`,
+  ABI 0.1.75). `skippy_model_set_receipt_recorder` reports each computed
+  ubatch: its geometry (tokens, sequences, positions, output rows, KV cells,
+  n_kv), the stage input rows, the residual stream entering every layer and the
+  stage output, and each layer's token-mixing inputs, stored KV rows (in the
+  cache's type) and token-mixing outputs. It also reports KV-cache operations.
+  `skippy_model_replay_receipt` replays one sequence in a scratch context. It
+  forces the recorded KV cells and n_kv and puts dummy columns where other
+  sequences were. It reports the challenged layer's committed tensors, every
+  weight matmul's input and output (with the experts of a `mul_mat_id`), its
+  selections, and stops each step after that layer.
+  `skippy_model_release_receipt_scratch` frees the scratch context.
+- **Receipt tensors from graph structure**
+  ([RECEIPTS_GLUE.md](RECEIPTS_GLUE.md)). A classifier with a per-ggml-op
+  table finds each layer's weight matmuls, token-mixing regions, stored rows
+  and routers between Skippy's block boundaries. No code names an
+  architecture, a weight or a node. A graph it cannot classify gets no
+  receipt, with a reason.
+- **Leaves.** Per position, a stage commits `2 · layers + 1` leaves: the
+  residual entering each layer, a token-mixing leaf per layer, and the stage
+  output. Each value is hashed with its ggml type. Receipt wire version 3.
+- **Recorder.** Keeps leaf hashes and a replay log per native sequence, not
+  activations. It refuses a sequence whose cells it cannot reproduce: a copied
+  prefix, a position shift, a state load, or compaction.
+- **Opening cost.** A replay stops after the challenged layer, which cuts an
+  opening to between 1/3 and 2/3 of its earlier time on the two-stage split.
+  A repeated challenge is answered from kept openings (128 MiB per stage). A
+  receipt is replayed for at most 4 distinct challenges. Serving frees the
+  replay context after 60 seconds idle.
+- **Glue checks.** The auditor loads the challenged layer of the claimed GGUF
+  on the CPU and computes it on the opened values with libllama
+  (`skippy_model_eval_receipt_glue`). It compares the matmul inputs, expert
+  ids, token-mixing inputs, stored KV rows, selections and the residual out
+  with the opening. Routers are row-checked on every row.
+- **Throughput.** Committed tensors are copied into pinned host memory and
+  hashed on up to 8 threads, off the decoding thread, while the next ubatch
+  computes. Two-stage Qwen3-4B Q8_0 on one RTX 5060 Ti, release build, wire
+  version 3: decode 3% slower, prefill 1.38x slower.
+
+Verified with wire version 3, two-stage splits on one RTX 5060 Ti and on the
+CPU:
+
+| Case | Result |
+|---|---|
+| Qwen3-4B, serve Q8_0, claim Q8_0 | PASS on layers 0, 5, 17, 18, 30 and 35. Row errors 1e-4 to 3e-4; glue errors at most 3e-6 (GPU against the CPU) |
+| Qwen3-4B, serve Q6_K, claim Q8_0 | FAIL on every matrix, error 1e-2 to 1e-1. Merkle paths, replay and glue pass |
+| granite-3.1-3b-a800m (MoE), serve Q8_0 | PASS on layers 0, 5, 20 and 31. Expert ids and selections match the CPU exactly |
+| granite-3.1-3b-a800m, serve Q6_K, claim Q8_0 | FAIL on every quantized matrix; the f32 router passes |
+| Qwen3-4B with a q8_0 KV cache | No receipt: the key rotation llama.cpp applies before a quantized cache is not classified yet |
+| Qwen3.5-9B (hybrid) | No receipt: the recorder needs a plain KV cache |
+
+Left to do:
+
+- Replay on Metal, Vulkan (forced f32 accumulation), ROCm and ARM CPU. Only
+  CUDA on Blackwell has been tested.
+- Prefix cache, native MTP and multi-stream KV caches. They are refused now.
+- Recurrent and hybrid memory (Mamba, the gated delta net), so their state
+  can be replayed, and the key rotation of quantized KV caches.
+- Overlap the device-to-host copy with compute, or hash on the device, to
+  remove the remaining per-ubatch copy cost.
+- Done when: replay reproduces committed leaves bit for bit on CUDA, Metal,
+  Vulkan and ARM CPU through real `skippy serve`, with prefix cache and native
+  MTP on.
+
+## Milestone 2: protocol on the response
+
+- Put the receipt in the final response body and the last stream chunk.
+- Sign and chain turn roots with the node key. Bind sampler, seed, llama.cpp
+  pin, backend id and ubatch boundaries.
+- Carry commit and open over the stage control plane instead of a side HTTP
+  port, and enable receipts for Mesh-launched stages.
+
+## Milestone 3: host runtime verifier
+
+- Move the verifier into the host runtime. Read the GGUF header and rows from
+  Hugging Face with range requests, pinned by revision and LFS hash.
+- Add the output head unit, the loose attention check, DeltaNet and Mamba
+  checks, and MoE (token, expert) pairs.
+- Add rounding profiles for K-quants and the other common types, and the
+  per-backend tables.
+- Audit at least 10% of turns with a 10-second challenge window.
+
+## Milestone 4: payments and trust tiers
+
+- Add the `audit_pending` final state and pay audited finals after the verdict.
+- Block a failing peer locally and keep the failure as provable evidence.
+- Let a request policy require `receipts` ([TRUST_TIERS.md](TRUST_TIERS.md)).
+
+## Later
+
+- DSA (DeepSeek-V4, GLM-5.x) openings and the indexer glue check.
+- ROCm profiles and replay.
+- The phone verifier.

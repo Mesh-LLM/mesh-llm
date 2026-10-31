@@ -16,6 +16,7 @@ impl ServeSettings {
             let section = super::section(name);
             if args.stage_transport.is_none()
                 && (section == "network"
+                    || name.starts_with("receipts-")
                     || matches!(
                         name.as_str(),
                         "activation-codec"
