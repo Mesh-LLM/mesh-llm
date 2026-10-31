@@ -111,8 +111,10 @@ pub(crate) fn split_dflash_draft_source(
 /// downloads in the background, this load serves without speculation, and the
 /// next load of the model picks the draft up. A draft that fails its checks
 /// also serves without speculation. A plan without a source (a configured
-/// draft, or an older planner) loads its path as sent, and so does a source
-/// this node's catalog does not pin.
+/// draft, or an older planner) loads its path as sent. A source this node's
+/// catalog does not pin serves without speculation: the planner's path names a
+/// file on the planner's node, which this node cannot check against the
+/// pinned digest.
 pub(crate) async fn materialize_split_dflash_draft(
     plan: &mut skippy_serving::split_dflash::SplitDFlashStage,
 ) {
@@ -137,7 +139,11 @@ fn resolve_split_dflash_draft(
     cached_or_fetch: impl FnOnce(&'static DFlashPairing) -> bool,
     verify: impl FnOnce(&'static DFlashPairing, PathBuf) -> Result<PathBuf>,
 ) {
+    if plan.draft_source.is_none() {
+        return;
+    }
     let Some(pairing) = split_dflash_catalog_pairing(plan) else {
+        plan.draft_model_path = None;
         return;
     };
     if !cached_or_fetch(pairing) {
@@ -154,6 +160,9 @@ fn resolve_split_dflash_draft(
                 draft = pairing.draft.repo,
                 "split DFlash draft unavailable, serving without speculation: {error:#}"
             );
+            if error.downcast_ref::<CorruptDraft>().is_some() {
+                discard_cached_draft(&pairing.draft.cache_path());
+            }
             None
         }
     };
@@ -170,7 +179,7 @@ fn split_dflash_catalog_pairing(
     if pairing.is_none() {
         tracing::warn!(
             draft = %format!("{}/{}@{}", source.repo, source.file, source.revision),
-            "split DFlash draft is not in this node's catalog; loading the planner's path"
+            "split DFlash draft is not in this node's catalog; serving without speculation"
         );
     }
     pairing
@@ -357,12 +366,15 @@ mod tests {
         let mut plan = final_stage_plan(None);
         resolve_split_dflash_draft(&mut plan, |_| unreachable!(), |_, _| unreachable!());
         assert_eq!(plan.draft_model_path, sent);
+    }
 
+    #[test]
+    fn a_source_this_node_does_not_pin_serves_without_speculation() {
         let mut unknown = split_dflash_draft_source(qwen36_27b());
         unknown.revision = "main".into();
         let mut plan = final_stage_plan(Some(unknown));
         resolve_split_dflash_draft(&mut plan, |_| unreachable!(), |_, _| unreachable!());
-        assert_eq!(plan.draft_model_path, sent);
+        assert_eq!(plan.draft_model_path, None);
     }
 
     #[test]
