@@ -22,6 +22,18 @@ The new command passed end to end locally on the pinned Qwen3.5-4B model with
 all eight Metal formats. This does not mark the full four-model/backend suite,
 long-prefix ownership, L3 restart or throughput comparisons complete.
 
+The hybrid rows now also require a bounded native cold-eviction/runtime-restart
+regression. On local Qwen3.5-4B Metal and CPU, the 64-token checkpoint survives source
+lane release, cold eviction, and fresh model/runtime/cache construction with an
+L3 hit, identical attention/recurrent bytes and four identical fixed-input
+continuation predictions. This is one-process runtime-restart evidence; the
+fresh-process server and long-prefix L3 cases below remain open. Separate native
+spill tests cover queue-full, disconnect, underestimated payload and blocked /
+refused writes, checking that bytes and identity claims are released.
+The model-backed refusal case also passes on both backends: a one-byte L3 budget
+cannot retain a checkpoint, but eviction frees native attention cells and cold
+recomputation produces identical fixed-input predictions.
+
 ## Retain PR #2657's correctness requirements
 
 Cache-owned immutable checkpoints replace the old execution-lane pinning and
