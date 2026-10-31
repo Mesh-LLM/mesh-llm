@@ -44,6 +44,11 @@ struct Peer {
 
 impl Peer {
     fn new(cached: [u64; 4]) -> Self {
+        Self::with_content(cached, ["answer-0", "answer-0", "answer-2", "answer-2"])
+    }
+
+    fn with_content(cached: [u64; 4], content: [&str; 4]) -> Self {
+        let content = content.map(str::to_owned);
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
         let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
@@ -67,7 +72,7 @@ impl Peer {
                         let index = requests.len();
                         requests.push(request);
                         let response = json!({
-                            "choices": [{"message": {"content": format!("answer-{index}")}}],
+                            "choices": [{"message": {"content": content.get(index).cloned().unwrap_or_default()}}],
                             "usage": {"prompt_tokens": 100,
                                 "prompt_tokens_details": {"cached_tokens": cached.get(index).copied().unwrap_or(0)}}
                         }).to_string();
@@ -152,11 +157,13 @@ fn assert_sequence(requests: &[Value]) {
         assert_eq!(request["model"], "fixture-model");
         assert_eq!(request["max_tokens"], 8);
         assert_eq!(request["reasoning_effort"], "none");
+        assert_eq!(request["temperature"], 0);
+        assert_eq!(request["seed"], 42);
         assert_eq!(
             request["messages"][0],
             json!({"role": "user", "content": "A finite cache prefix.\n"})
         );
-        assert_eq!(request.as_object().unwrap().len(), 4);
+        assert_eq!(request.as_object().unwrap().len(), 6);
     }
     if requests.len() > 1 {
         assert_eq!(
@@ -242,4 +249,44 @@ fn actual_cache_api_rejects_zero_tokens_and_empty_prompt_before_http() {
             .contains("prompt file is empty")
     );
     assert!(peer.finish().is_empty());
+}
+
+#[test]
+fn generated_content_mismatch_fails_before_any_later_request() {
+    let prompt = Prompt::new();
+    for (contents, requests_expected) in [
+        (["seed", "changed", "grown", "grown"], 2),
+        (["seed", "seed", "grown", "changed"], 4),
+    ] {
+        let peer = Peer::with_content([0, 50, 50, 50], contents);
+        let error = run(args(&peer, &prompt)).unwrap_err().to_string();
+        assert!(error.contains("generated-content mismatch"), "{error}");
+        assert_eq!(peer.finish().len(), requests_expected);
+    }
+}
+
+#[test]
+fn cold_seed_must_be_uncached_and_nonempty() {
+    let prompt = Prompt::new();
+    for (cached, contents, expected) in [
+        (
+            [1, 50, 50, 50],
+            ["seed", "seed", "grown", "grown"],
+            "cold seed unexpectedly",
+        ),
+        (
+            [0, 50, 50, 50],
+            ["", "", "grown", "grown"],
+            "cold seed returned empty",
+        ),
+    ] {
+        let peer = Peer::with_content(cached, contents);
+        assert!(
+            run(args(&peer, &prompt))
+                .unwrap_err()
+                .to_string()
+                .contains(expected)
+        );
+        assert_eq!(peer.finish().len(), 1);
+    }
 }

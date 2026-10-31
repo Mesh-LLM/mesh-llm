@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "prepared": {"path": "/opt/kv-prepared/prepared.json", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+  "model_key": "qwen3.5-4b-q4-k-m",
+  "model": "/models/Qwen3.5-4B-Q4_K_M.gguf",
+  "port": 19337,
+  "execution_seconds": 1800
+}

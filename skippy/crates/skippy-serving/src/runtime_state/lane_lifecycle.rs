@@ -434,6 +434,11 @@ impl RuntimeState {
         Ok(())
     }
 
+    pub fn resident_prefix_bytes(&mut self, session_id: &str, cache_seq_id: i32) -> Result<u64> {
+        self.session(session_id)?
+            .resident_prefix_bytes(cache_seq_id)
+    }
+
     pub fn save_resident_prefix(
         &mut self,
         session_id: &str,
@@ -452,6 +457,7 @@ impl RuntimeState {
     ) -> Result<()> {
         let session = self.session(session_id)?;
         session.restore_prefix(cache_seq_id, token_ids)?;
+        session.restore_token_history(token_ids)?;
         self.session_token_counts
             .insert(session_id.to_string(), token_ids.len() as u64);
         Ok(())

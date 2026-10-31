@@ -1132,7 +1132,10 @@ impl StageOpenAiBackend {
         prefill_tokens: &[i32],
         restored_prefill_tokens: usize,
     ) -> Option<PrefillKvIdentity> {
-        let kv = self.kv.as_ref().filter(|kv| kv.payload_is_exact_state())?;
+        let kv = self
+            .kv
+            .as_ref()
+            .filter(|kv| kv.retains_recurrent_checkpoints())?;
         let base = self.local_kv_message_base(session_id, request.ids);
         let shared_checkpoint =
             kv.exact_shared_checkpoint_identity(&self.config, &base, 0, prefill_tokens);

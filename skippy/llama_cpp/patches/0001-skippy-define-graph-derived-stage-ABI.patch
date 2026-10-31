@@ -1,7 +1,7 @@
-From c68f7f87c95675d47f6138f0d3b7e991c30de6c2 Mon Sep 17 00:00:00 2001
+From 2361c1f9638a3fc328786d23c90cadd82009a744 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 1/6] feat(skippy): define graph-derived native ABI
+Subject: [PATCH] feat(skippy): define graph-derived native ABI
 
 ---
  include/skippy.h                      |  29 +++
@@ -17,10 +17,10 @@ Subject: [PATCH 1/6] feat(skippy): define graph-derived native ABI
  include/skippy/signals.h              |  53 +++++
  include/skippy/speculative_decoding.h |  71 +++++++
  include/skippy/stage_plan.h           | 252 +++++++++++++++++++++++
- include/skippy/state.h                | 236 ++++++++++++++++++++++
+ include/skippy/state.h                | 274 +++++++++++++++++++++++++
  include/skippy/tokenization.h         |  85 ++++++++
  include/skippy/workloads.h            |  93 +++++++++
- 16 files changed, 2110 insertions(+)
+ 16 files changed, 2148 insertions(+)
  create mode 100644 include/skippy.h
  create mode 100644 include/skippy/activation.h
  create mode 100644 include/skippy/common.h
@@ -1055,7 +1055,7 @@ index 000000000..5d77f4804
 +#endif // SKIPPY_MODEL_SOURCE_H
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
 new file mode 100644
-index 000000000..799bdca2d
+index 000000000..b47c55f82
 --- /dev/null
 +++ b/include/skippy/runtime.h
 @@ -0,0 +1,277 @@
@@ -1157,7 +1157,7 @@ index 000000000..799bdca2d
 +    // Tri-state KV/session controls resolved from `model_fit` config.
 +    /** @brief Whether K/V tensors are offloaded to the compute backend (mirrors upstream `offload_kqv`). */
 +    int32_t kv_offload;
-+    /** @brief Whether the KV cache is unified across sequences/lanes (mirrors upstream `kv_unified`). AUTO derives the setting from lane count; recurrent and hybrid models force it true. */
++    /** @brief Whether the KV cache is unified across sequences/lanes (mirrors upstream `kv_unified`). AUTO enables unified caching at every lane count. Explicit false selects non-unified caching, except recurrent and hybrid models force it true. */
 +    int32_t kv_unified;
 +    /** @brief Whether sliding-window-attention layers use a full, unshifted cache window (mirrors upstream `swa_full`). */
 +    int32_t swa_full;
@@ -1814,10 +1814,10 @@ index 000000000..962674190
 +#endif // SKIPPY_STAGE_PLAN_H
 diff --git a/include/skippy/state.h b/include/skippy/state.h
 new file mode 100644
-index 000000000..1cfaaa5c6
+index 000000000..0fe373d78
 --- /dev/null
 +++ b/include/skippy/state.h
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,274 @@
 +#ifndef SKIPPY_STATE_H
 +#define SKIPPY_STATE_H
 +
@@ -1837,6 +1837,10 @@ index 000000000..1cfaaa5c6
 +    SKIPPY_MEMORY_CACHE_RESIDENT = 1 << 0,
 +    SKIPPY_MEMORY_CACHE_KV_RECURRENT = 1 << 1,
 +    SKIPPY_MEMORY_CACHE_FULL_STATE = 1 << 2,
++    /** Resident prefixes restore only their exact saved recurrent checkpoint boundary. */
++    SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT = 1 << 3,
++    /** Complete resident prefixes contain attention cells in addition to any recurrent state. */
++    SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION = 1 << 4,
 +};
 +
 +/** @brief Returns complete cache representations admitted by the built graph and loaded memory.
@@ -1956,7 +1960,7 @@ index 000000000..1cfaaa5c6
 +        size_t * out_bytes,
 +        struct skippy_error ** out_error);
 +
-+/** @brief Exports recurrent state for models that maintain recurrent memory. */
++/** @brief Exports only recurrent memory; attention pages are exported independently. */
 +LLAMA_API enum skippy_status skippy_export_recurrent_state(
 +        struct skippy_session * session,
 +        void * output,
@@ -1973,7 +1977,7 @@ index 000000000..1cfaaa5c6
 +        size_t input_bytes,
 +        struct skippy_error ** out_error);
 +
-+/** @brief Imports recurrent state into a session. */
++/** @brief Imports recurrent-only state into a session. */
 +LLAMA_API enum skippy_status skippy_import_recurrent_state(
 +        struct skippy_session * session,
 +        const void * input,
@@ -2022,19 +2026,53 @@ index 000000000..1cfaaa5c6
 +        size_t record_count,
 +        struct skippy_error ** out_error);
 +
-+/** @brief Saves a session prefix into a resident cache sequence. */
++/** @brief Retains shared attention cells and an immutable recurrent checkpoint owned by the cache.
++ * Recurrent memory requires token_count equal to the current session position.
++ */
 +LLAMA_API enum skippy_status skippy_session_save_prefix(
 +        struct skippy_session * session,
 +        int32_t cache_seq_id,
 +        uint64_t token_count,
 +        struct skippy_error ** out_error);
 +
-+/** @brief Restores a session prefix from a resident cache sequence. */
++/** @brief Shares retained attention cells and restores a private mutable recurrent row.
++ * Token identity must match; recurrent prefixes require the exact saved boundary.
++ */
 +LLAMA_API enum skippy_status skippy_session_restore_prefix(
 +        struct skippy_session * session,
 +        int32_t cache_seq_id,
 +        const llama_token * token_ids,
 +        size_t token_count,
++        struct skippy_error ** out_error);
++
++/** @brief Exports a cache-owned attention page for cold offload without claiming or restoring an execution lane. */
++LLAMA_API enum skippy_status skippy_session_export_resident_kv_page(
++        struct skippy_session * session,
++        int32_t cache_seq_id,
++        int32_t layer_start,
++        int32_t layer_end,
++        uint64_t token_start,
++        uint64_t token_count,
++        struct skippy_kv_page_desc * out_desc,
++        void * output,
++        size_t output_capacity,
++        size_t * out_bytes,
++        struct skippy_error ** out_error);
++
++/** @brief Copies a cache-owned recurrent-only checkpoint for cold offload; a size query does not read tensors. */
++LLAMA_API enum skippy_status skippy_session_export_resident_recurrent_state(
++        struct skippy_session * session,
++        int32_t cache_seq_id,
++        void * output,
++        size_t output_capacity,
++        size_t * out_bytes,
++        struct skippy_error ** out_error);
++
++/** @brief Reports cache-owned recurrent checkpoint and token identity bytes; shared attention cells remain in the native pool. */
++LLAMA_API enum skippy_status skippy_session_resident_prefix_bytes(
++        struct skippy_session * session,
++        int32_t cache_seq_id,
++        uint64_t * out_bytes,
 +        struct skippy_error ** out_error);
 +
 +/** @brief Reports physically occupied cells in the session's unified KV cache. */
@@ -2245,5 +2283,5 @@ index 000000000..6aff32414
 +
 +#endif  // SKIPPY_WORKLOADS_H
 -- 
-2.55.0
+2.56.0
 

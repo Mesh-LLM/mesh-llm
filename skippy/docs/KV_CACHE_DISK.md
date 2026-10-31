@@ -1,5 +1,12 @@
 # KV-Cache Disk Tier — Operator Guide
 
+Complete native resident prefix caching uses radix-owned attention references
+and recurrent checkpoints. It exports to persistent L3 at cold eviction
+boundaries, rather than writing through on every warm cache record. Committed
+L3 entries survive model unload and process restart; hot prefixes that have not
+been persisted do not. Offload is bounded and best effort, and shutdown does
+not flush all resident entries. See [prompt-cache ownership](PROMPT_CACHE.md).
+
 The node-local **disk prompt cache** is the durable tier under Skippy's radix
 cache: exported continuation (KV) state is cut into content-addressed segments
 and committed under manifests so a later run can restore an exact prefix from
@@ -18,8 +25,16 @@ directory, or a minimum-free reserve below 1 GiB — by returning an error, so a
 node refuses to start on a broken cache setting rather than silently ignoring
 it. A *valid* configuration is then **fail-open for inference**: if the store
 cannot open, reaches low space, or cannot admit a write, the node logs a warning
-and serves with cold prefill. Valid runtime unavailability never blocks
-generation.
+and serves with cold prefill. Runtime unavailability does not turn a cache
+miss into an inference failure.
+
+Cold offload still materializes native attention state synchronously before
+queuing background hashing and disk writes. Large or fragmented prefixes can
+therefore delay the request that needs eviction, even though disk I/O runs on
+a worker. The queue reserves payload bytes before export and has a strict
+4 GiB limit; an entry or backlog that cannot fit is skipped. Warm resident
+hits avoid this attention export. An L3 restore and an L3 offload have different
+costs, so measure them separately when choosing disk-cache settings.
 
 ## Modes and safe defaults
 
@@ -67,7 +82,11 @@ Notes:
 - Directories must be absolute. Relative paths (including bare-drive forms like
   `C:\cache` on non-Windows hosts) fail closed rather than resolving under the
   working directory.
-- `codec = "native"` is the default. `codec = "cachegen"` is opt-in and only
+- Resident-prefix offload writes native components so its reserved byte budget
+  also bounds payload workspace. Experimental CacheGen encoding remains on the
+  separate serialized-exporter path.
+- `codec = "native"` is the default. On that serialized path,
+  `codec = "cachegen"` is opt-in and only
   writes CacheGen archives for explicitly qualified Metal F32/F32, F32/F16,
   and F16/F32 KV layouts. Every other backend or layout writes native pages.
 

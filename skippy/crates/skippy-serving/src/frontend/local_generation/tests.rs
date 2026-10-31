@@ -29,9 +29,13 @@ use skippy_inference_api::{ChatCompletionRequest, InferenceBackend};
 use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode};
 use skippy_runtime::SamplingConfig;
 
+#[path = "tests/durable_prefix.rs"]
+mod durable_prefix;
+
 // The real-model tests below are deliberately ignored by default. The
 // fixture contract is explicit: run them with both model-path variables set;
-// optionally set SKIPPY_RECURRENT_CACHE_TEST_MODEL_ID to override the model id.
+// optionally set SKIPPY_RECURRENT_CACHE_TEST_MODEL_ID to override the model id
+// and SKIPPY_RECURRENT_CACHE_TEST_GPU_LAYERS=99 to validate the GPU backend.
 // For example:
 //
 // SKIPPY_RECURRENT_CACHE_TEST_MODEL=/path/model.gguf \
@@ -162,6 +166,8 @@ fn wait_for_receipts(sink: &RecordingReceiptSink, expected: usize) {
     panic!("timed out waiting for {expected} generation receipts");
 }
 
+const RECURRENT_TEST_CHECKPOINT_RAM_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+
 fn recurrent_test_backend(
     run_id: &str,
     backend_model_id: &str,
@@ -170,6 +176,7 @@ fn recurrent_test_backend(
     default_max_tokens: u32,
     token_budget: usize,
 ) -> Result<(StageOpenAiBackend, SpeculativeDecodeConfig)> {
+    skippy_runtime::test_support::require_native_runtime();
     let model_path = std::env::var_os("SKIPPY_RECURRENT_CACHE_TEST_MODEL").ok_or_else(|| {
         anyhow::anyhow!("SKIPPY_RECURRENT_CACHE_TEST_MODEL is required for this ignored test")
     })?;
@@ -206,7 +213,12 @@ fn recurrent_test_backend(
         lane_count: 1,
         n_batch: Some(batch_size),
         n_ubatch: Some(batch_size),
-        n_gpu_layers: 0,
+        n_gpu_layers: std::env::var("SKIPPY_RECURRENT_CACHE_TEST_GPU_LAYERS")
+            .ok()
+            .map(|value| value.parse::<i32>())
+            .transpose()
+            .map_err(|error| anyhow::anyhow!("invalid recurrent cache GPU layer count: {error}"))?
+            .unwrap_or(0),
         mmap: Some(true),
         mlock: false,
         repack: false,
@@ -230,7 +242,7 @@ fn recurrent_test_backend(
             mode: StageKvCacheMode::LookupRecord,
             max_entries: 8,
             max_bytes: 0,
-            l2_max_bytes: 0,
+            l2_max_bytes: RECURRENT_TEST_CHECKPOINT_RAM_BYTES,
             codec: skippy_protocol::StageKvCacheCodec::Native,
             min_tokens: 1,
             shared_prefix_stride_tokens: 1,
@@ -245,10 +257,27 @@ fn recurrent_test_backend(
     };
     let runtime = load_runtime(&config)?
         .ok_or_else(|| anyhow::anyhow!("recurrent cache test runtime was not loaded"))?;
-    let kv =
-        KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Recurrent)?
-            .map(Arc::new)
-            .ok_or_else(|| anyhow::anyhow!("recurrent cache test did not enable KV integration"))?;
+    let kv = KvStageIntegration::from_loaded_model(
+        &config,
+        crate::runtime_state::loaded_model_state_kind(Some(&runtime)),
+        crate::runtime_state::loaded_memory_cache_capabilities(Some(&runtime)),
+        None,
+    )?
+    .map(Arc::new)
+    .ok_or_else(|| anyhow::anyhow!("recurrent cache test did not enable KV integration"))?;
+    assert!(
+        kv.records_resident_prefixes(),
+        "fixture must exercise native prefix ownership"
+    );
+    assert!(
+        kv.resident_requires_checkpoint(),
+        "fixture requires recurrent native memory"
+    );
+    assert_eq!(
+        kv.resident_checkpoint_max_bytes,
+        RECURRENT_TEST_CHECKPOINT_RAM_BYTES
+    );
+    assert_eq!(kv.resident_config.max_entries, 8);
     let telemetry = Telemetry::new(None, 1, config.clone(), TelemetryLevel::Off);
     let speculative = SpeculativeDecodeConfig::default();
     let iteration_scheduler =
