@@ -180,6 +180,8 @@ test-all:
     # serial without changing the environment of other packages' child tests.
     echo "--- Repository automation tests ---"
     just with-lld cargo test --package xtask -- --test-threads=1
+    echo "--- Process supervision tests ---"
+    just with-lld cargo test --package process-supervision -- --test-threads=1
     echo "--- Static Skippy package-builder tests ---"
     just with-lld cargo test --package skippy-package-builder --no-default-features
     echo "--- Static Skippy runtime tests ---"
