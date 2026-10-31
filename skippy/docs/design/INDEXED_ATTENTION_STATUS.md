@@ -3,8 +3,9 @@
 Status on 2026-10-31: implementation available for review. All eight real-model
 attention layers match existing dense CUDA attention exactly at the same logical
 layout. Strict cache tests pass on CUDA and Metal. Comparison against the old
-physical layout still fails; that diagnostic is retained below. Final performance
-qualification and four-model CUDA coverage are in progress.
+physical layout still fails; that diagnostic is retained below. The final CUDA
+AgentX arm completes at 26.91 output tokens/s versus a fresh same-host standard
+vanilla arm at 26.34. All four selected models pass their CUDA KV-format matrix.
 
 ## Change
 
@@ -33,6 +34,15 @@ reviewers can inspect it independently.
   formats and all 64 CPU mixed K/V pairs. Graph checks require indices, lengths,
   the requested KV type, and the selected backend throughout prefill and decode.
   These are execution smoke checks, not cross-path numerical parity evidence.
+- The four selected Q4_K_M models each pass all 64 CUDA mixed K/V pairs: dense
+  Qwen3-4B (36 attention layers), hybrid Qwen3.5-4B (8), Qwen3-Coder-30B (48),
+  and hybrid MoE Qwen3.5-35B (10). Source-identical Spark 000907 runs cover the
+  middle two; the final performance runtime on Spark 000137 covers the other
+  two. Each matrix loads its model once and checks every executed attention
+  graph's indices, lengths, K/V types and GPU backend. The final checked-in
+  driver additionally requires the exact expected attention-layer count and
+  all-vocabulary finite logits; earlier frozen smoke drivers check NaN-free
+  logits and a finite greedy-selected logit. Their proof scopes remain distinct.
 - Final CUDA proof job `job_x7fs8vb280zjz00`, run `run_nd0p378y1k069ct`, passes
   all eight real-model attention-layer replays, resident ownership checks, and
   the unchanged Qwen3.5-4B chat-parity and growing-checkpoint tests. The final
@@ -121,6 +131,29 @@ The time without GPU activity falls to `1.63 / 1.36 / 1.43 s`, from
 including indexed attention's roughly `4.24 s` versus vanilla's `2.88 s`.
 This still trails the saved standard-vanilla pressure control. Full fixed-cohort
 job `job_agr2k8yy2ry29qe` is the separate performance qualification.
+
+## Full fixed-work replay
+
+The final candidate job `job_agr2k8yy2ry29qe`, run `run_spranb971p0czpp`,
+completed successfully on Spark 000137: **26.9097 output tokens/s**, all 69
+requests and 18,713 output tokens, zero errors. It read 3,562,313 cached prompt
+tokens out of 3,940,542 presented tokens, the same cache work as the preceding
+admission-fixed baseline. Peak sampled process RSS was 10.38 GiB.
+
+The fresh same-host standard vanilla confirmation (`job_jhe5qzycenack95`, run
+`run_ghdjyknby3jdsmd`) also succeeds: **26.3370 output tokens/s**, 69 requests,
+18,713 outputs and zero errors. It reads 3,566,742 cached prompt tokens and
+peaks at 13.92 GiB sampled process RSS. Standard uses four separate KV slots;
+Skippy retains unified KV. Both resolve 20 generation and 20 batch threads,
+batch 2,048, microbatch 512 and F16 KV. Standard's thread settings resolve from
+defaults and are verified in its log; Skippy passes them explicitly.
+
+This sequential single pair puts Skippy 2.17% ahead and supports throughput
+parity on this workload, not a universal speedup claim. The previous standard
+control was 26.8779, which illustrates run variation. This is not a six-arm
+ABBAAB campaign or qualification of every model/concurrency. Source, runtime,
+model, fixed-work, raw artifacts and GPU clock/temperature evidence are retained
+in the independent comparison receipts.
 
 The reusable four-model CUDA/Metal/CPU validation work is tracked in
 [todo.md](../../../todo.md).
