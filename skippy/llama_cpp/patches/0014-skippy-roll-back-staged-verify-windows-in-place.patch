@@ -38,7 +38,7 @@ checkpoint, buffer reuse) and its rollback-count ABI.
  include/skippy/state.h                        |  13 ++
  src/CMakeLists.txt                            |  19 ++
  src/skippy-verify-checkpoint.h                |   9 +-
- src/skippy/activation.cpp                     | 126 +++++-----
+ src/skippy/activation.cpp                     | 139 ++++++-----
  src/skippy/execution-batch.cpp                |   7 +
  src/skippy/execution-single.cpp               |   5 +
  src/skippy/runtime_support.h                  |   7 +
@@ -49,7 +49,7 @@ checkpoint, buffer reuse) and its rollback-count ABI.
  src/skippy/verify_window.cpp                  | 216 ++++++++++++++++++
  src/skippy/verify_window.h                    |  38 +++
  ...st-skippy-verify-checkpoint-retirement.cpp |   9 +
- 15 files changed, 601 insertions(+), 73 deletions(-)
+ 15 files changed, 613 insertions(+), 74 deletions(-)
  create mode 100644 src/skippy/tests/verify_rollback.cpp
  create mode 100644 src/skippy/verify_window.cpp
  create mode 100644 src/skippy/verify_window.h
@@ -162,7 +162,7 @@ index 8793000c1..f6ce0295e 100644
      return true;
  }
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
-index 71323d934..48b744f19 100644
+index 71323d934..00423d6f4 100644
 --- a/src/skippy/activation.cpp
 +++ b/src/skippy/activation.cpp
 @@ -6,6 +6,7 @@
@@ -312,16 +312,32 @@ index 71323d934..48b744f19 100644
          size_t token_count,
          skippy_activation_desc & prefix_desc) {
      prefix_desc = checkpoint.input_desc;
-@@ -875,7 +887,7 @@ static std::vector<uint8_t> skippy_verify_prefix_activation_payload(
+@@ -872,11 +884,22 @@ static std::vector<uint8_t> skippy_verify_prefix_activation_payload(
+         const auto * source = static_cast<const uint8_t *>(skippy_activation_part_payload(
+                 &checkpoint.input_desc, checkpoint.input_payload.data(), &source_part));
+         if (source == nullptr) return {};
++        // The prefix starts `row_start` tokens into the checkpoint along the
++        // part's token axis, whichever axis that is. Rows along axis 0 are
++        // contiguous, so an axis-0 offset moves the start of every row; it
++        // must land on an element of an unblocked type.
++        const int32_t axis = part.token_axis;
++        if (static_cast<int64_t>(row_start + token_count) > source_part.dimensions[axis]) return {};
++        if (axis == 0 && row_start != 0 && ggml_blck_size(type) != 1) return {};
          for (int64_t i3 = 0; i3 < part.dimensions[3]; ++i3) {
              for (int64_t i2 = 0; i2 < part.dimensions[2]; ++i2) {
                  for (int64_t i1 = 0; i1 < part.dimensions[1]; ++i1) {
 -                    const size_t source_offset = static_cast<size_t>(i1) * source_part.byte_strides[1] +
-+                    const size_t source_offset = (row_start + static_cast<size_t>(i1)) * source_part.byte_strides[1] +
-                             static_cast<size_t>(i2) * source_part.byte_strides[2] + static_cast<size_t>(i3) * source_part.byte_strides[3];
+-                            static_cast<size_t>(i2) * source_part.byte_strides[2] + static_cast<size_t>(i3) * source_part.byte_strides[3];
++                    int64_t index[SKIPPY_ACTIVATION_MAX_DIMS] = { 0, i1, i2, i3 };
++                    index[axis] += static_cast<int64_t>(row_start);
++                    size_t source_offset = 0;
++                    for (int dimension = 0; dimension < SKIPPY_ACTIVATION_MAX_DIMS; ++dimension) {
++                        source_offset += static_cast<size_t>(index[dimension]) * source_part.byte_strides[dimension];
++                    }
                      payload.insert(payload.end(), source + source_offset, source + source_offset + row_bytes);
                  }
-@@ -911,7 +923,7 @@ static bool skippy_trim_verify_attention(
+             }
+@@ -911,7 +934,7 @@ static bool skippy_trim_verify_attention(
  
  static void skippy_mark_verify_restore_failed(skippy_session * session) {
      session->reset_required = true;
@@ -330,7 +346,7 @@ index 71323d934..48b744f19 100644
      skippy_mtp_clear_session_state(session);
  }
  
-@@ -933,8 +945,8 @@ enum skippy_status skippy_restore_verify_prefix(
+@@ -933,8 +956,8 @@ enum skippy_status skippy_restore_verify_prefix(
      *out_restored = false;
      const skippy_verify_checkpoint * checkpoint = nullptr;
      for (auto it = session->verify_checkpoints.rbegin(); it != session->verify_checkpoints.rend(); ++it) {
@@ -341,7 +357,7 @@ index 71323d934..48b744f19 100644
          if (it->valid && token_count >= token_start && token_count < token_end) {
              checkpoint = &*it;
              break;
-@@ -958,8 +970,10 @@ enum skippy_status skippy_restore_verify_prefix(
+@@ -958,8 +981,10 @@ enum skippy_status skippy_restore_verify_prefix(
                  out_error);
      }
  
@@ -353,7 +369,7 @@ index 71323d934..48b744f19 100644
          return skippy_fail_verify_restore(
                  session,
                  SKIPPY_STATUS_RUNTIME_ERROR,
-@@ -967,10 +981,9 @@ enum skippy_status skippy_restore_verify_prefix(
+@@ -967,10 +992,9 @@ enum skippy_status skippy_restore_verify_prefix(
                  out_error);
      }
  
@@ -367,7 +383,7 @@ index 71323d934..48b744f19 100644
          return skippy_fail_verify_restore(
                  session,
                  SKIPPY_STATUS_RUNTIME_ERROR,
-@@ -983,6 +996,7 @@ enum skippy_status skippy_restore_verify_prefix(
+@@ -983,6 +1007,7 @@ enum skippy_status skippy_restore_verify_prefix(
          skippy_activation_desc input_desc = {};
          std::vector<uint8_t> input_payload = skippy_verify_prefix_activation_payload(
                  *checkpoint,
@@ -375,7 +391,7 @@ index 71323d934..48b744f19 100644
                  accepted_count,
                  input_desc);
          if (input_payload.empty()) {
-@@ -996,7 +1010,7 @@ enum skippy_status skippy_restore_verify_prefix(
+@@ -996,7 +1021,7 @@ enum skippy_status skippy_restore_verify_prefix(
                  session,
                  &input_desc,
                  input_payload.data(),
@@ -384,7 +400,7 @@ index 71323d934..48b744f19 100644
                  nullptr,
                  0,
                  accepted_count,
-@@ -1006,7 +1020,7 @@ enum skippy_status skippy_restore_verify_prefix(
+@@ -1006,7 +1031,7 @@ enum skippy_status skippy_restore_verify_prefix(
      } else if (accepted_count > 0) {
          status = skippy_decode_tokens(
                  session,
