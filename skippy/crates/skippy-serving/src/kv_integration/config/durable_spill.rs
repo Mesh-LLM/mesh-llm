@@ -1,25 +1,26 @@
 use super::*;
 
 #[derive(Clone, Copy)]
-pub(super) struct DurableRecordTarget<'a> {
-    pub(super) l3: Option<&'a L3Tier>,
-    pub(super) cachegen_enabled: bool,
+pub(in crate::kv_integration) struct DurableRecordTarget<'a> {
+    pub(in crate::kv_integration) l3: Option<&'a L3Tier>,
+    pub(in crate::kv_integration) cachegen_enabled: bool,
     #[cfg(test)]
-    pub(super) before_l3_spill: Option<&'a dyn Fn()>,
+    pub(in crate::kv_integration) before_l3_spill: Option<&'a dyn Fn()>,
 }
 
 /// Exact-state payload handed from the serving worker to durable storage.
 #[derive(Debug)]
-pub(super) struct PendingDurableSpill {
-    pub(super) page_id: String,
-    pub(super) payload: skippy_cache::ExactStatePayload,
-    pub(super) extra: super::super::ExactStateExtra,
-    pub(super) namespace: String,
-    pub(super) token_ids: Vec<i32>,
-    pub(super) l3_cost: Option<skippy_cache::policy::CostSample>,
+pub(in crate::kv_integration) struct PendingDurableSpill {
+    pub(in crate::kv_integration) page_id: String,
+    pub(in crate::kv_integration) payload: skippy_cache::ExactStatePayload,
+    pub(in crate::kv_integration) extra: super::super::ExactStateExtra,
+    pub(in crate::kv_integration) namespace: String,
+    pub(in crate::kv_integration) token_ids: Vec<i32>,
+    pub(in crate::kv_integration) native_raw: bool,
+    pub(in crate::kv_integration) l3_cost: Option<skippy_cache::policy::CostSample>,
 }
 
-struct DurableSpillReservation {
+pub(in crate::kv_integration) struct DurableSpillReservation {
     bytes: u64,
     held_bytes: Arc<std::sync::atomic::AtomicU64>,
 }
@@ -34,10 +35,11 @@ impl Drop for DurableSpillReservation {
 struct QueuedDurableSpill {
     pending: PendingDurableSpill,
     _reservation: DurableSpillReservation,
+    _native_claim: Option<super::super::resident_offload::NativeOffloadClaim>,
 }
 
-#[derive(Clone)]
-pub(super) struct DurableSpillSender {
+#[derive(Debug, Clone)]
+pub(in crate::kv_integration) struct DurableSpillSender {
     tx: std::sync::mpsc::SyncSender<QueuedDurableSpill>,
     held_bytes: Arc<std::sync::atomic::AtomicU64>,
     byte_cap: u64,
@@ -52,12 +54,58 @@ impl DurableSpillSender {
         }
     }
 
+    /// Reserve bounded host bytes before materializing a native cold prefix.
+    /// Unlike the legacy recorder, native offload never admits an oversized exception.
+    pub(in crate::kv_integration) fn try_reserve(
+        &self,
+        bytes: u64,
+    ) -> Option<DurableSpillReservation> {
+        let mut held = self.held_bytes.load(std::sync::atomic::Ordering::Acquire);
+        loop {
+            if bytes > self.byte_cap.saturating_sub(held) {
+                return None;
+            }
+            match self.held_bytes.compare_exchange_weak(
+                held,
+                held + bytes,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            ) {
+                Ok(_) => {
+                    return Some(DurableSpillReservation {
+                        bytes,
+                        held_bytes: Arc::clone(&self.held_bytes),
+                    });
+                }
+                Err(actual) => held = actual,
+            }
+        }
+    }
+
+    pub(in crate::kv_integration) fn send_reserved(
+        &self,
+        pending: PendingDurableSpill,
+        reservation: DurableSpillReservation,
+        claim: super::super::resident_offload::NativeOffloadClaim,
+    ) -> bool {
+        if pending.payload.byte_len() > reservation.bytes {
+            return false;
+        }
+        self.tx
+            .try_send(QueuedDurableSpill {
+                pending,
+                _reservation: reservation,
+                _native_claim: Some(claim),
+            })
+            .is_ok()
+    }
+
     /// Queue one spill without ever blocking the serving worker.
     ///
     /// The reservation remains live while the spill is queued and while the
     /// durable worker is writing it. A single oversized spill is admitted only
     /// when no other spill bytes are outstanding, matching record admission.
-    pub(super) fn try_send(&self, pending: PendingDurableSpill) -> bool {
+    pub(in crate::kv_integration) fn try_send(&self, pending: PendingDurableSpill) -> bool {
         let bytes = pending.payload.byte_len();
         let held = self
             .held_bytes
@@ -69,6 +117,7 @@ impl DurableSpillSender {
         }
         let queued = QueuedDurableSpill {
             pending,
+            _native_claim: None,
             _reservation: DurableSpillReservation {
                 bytes,
                 held_bytes: Arc::clone(&self.held_bytes),
@@ -84,7 +133,7 @@ type DurableSpillWorker = (
 );
 
 /// Starts the optional bounded worker that isolates durable I/O from L1 publication.
-pub(super) fn start_durable_spill_worker(
+pub(in crate::kv_integration) fn start_durable_spill_worker(
     l3: Option<Arc<L3Tier>>,
     cachegen_enabled: bool,
     byte_cap: u64,
@@ -104,6 +153,7 @@ pub(super) fn start_durable_spill_worker(
                 let QueuedDurableSpill {
                     pending,
                     _reservation,
+                    _native_claim,
                 } = queued;
                 #[cfg(test)]
                 received.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
@@ -118,7 +168,7 @@ pub(super) fn start_durable_spill_worker(
 }
 
 /// Persists one exact-state payload without affecting its already-published L1 entry.
-pub(super) fn spill_exact_record_to_l3(
+pub(in crate::kv_integration) fn spill_exact_record_to_l3(
     l3: &L3Tier,
     cachegen_enabled: bool,
     pending: PendingDurableSpill,
@@ -130,6 +180,7 @@ pub(super) fn spill_exact_record_to_l3(
         namespace,
         token_ids,
         l3_cost,
+        native_raw,
     } = pending;
     let kv_desc_json = extra
         .kv_desc
@@ -139,7 +190,7 @@ pub(super) fn spill_exact_record_to_l3(
         .kv_desc
         .as_ref()
         .and_then(|desc| kv_page_geometry(desc, payload.byte_len()));
-    let cachegen_spill = if cachegen_enabled {
+    let cachegen_spill = if cachegen_enabled && !native_raw {
         match (extra.kv_desc.as_ref(), payload.kv_bytes().ok().flatten()) {
             (Some(desc), Some(kv)) if !kv.is_empty() && cachegen_descriptor_is_qualified(desc) => {
                 match skippy_runtime::encode_cachegen_kv_page(desc, kv.as_ref()) {
@@ -216,6 +267,7 @@ mod tests {
             namespace: "model".to_string(),
             token_ids: vec![1, 2],
             l3_cost: None,
+            native_raw: false,
         }
     }
 
@@ -243,5 +295,25 @@ mod tests {
         );
 
         assert!(sender.try_send(pending(8)));
+    }
+}
+
+#[cfg(test)]
+mod native_reservation_tests {
+    use super::*;
+
+    #[test]
+    fn native_export_reservation_is_strict_and_released_without_materialization() {
+        let (tx, _rx) = std::sync::mpsc::sync_channel(2);
+        let sender = DurableSpillSender::new(tx, 10);
+        let held = sender.try_reserve(8).unwrap();
+        assert!(sender.try_reserve(3).is_none());
+        assert!(sender.try_reserve(11).is_none());
+        drop(held);
+        assert!(sender.try_reserve(10).is_some());
+        assert_eq!(
+            sender.held_bytes.load(std::sync::atomic::Ordering::Acquire),
+            0
+        );
     }
 }

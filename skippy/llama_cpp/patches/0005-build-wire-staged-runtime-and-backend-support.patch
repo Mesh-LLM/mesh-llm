@@ -1,4 +1,4 @@
-From bc711264ee6c876c9a73ab7ebe02e8732eb76285 Mon Sep 17 00:00:00 2001
+From bce8935ae7f97ad31ced4f84cec49a55229383ca Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] build(skippy): wire native runtime and backend support
@@ -31,11 +31,11 @@ Subject: [PATCH] build(skippy): wire native runtime and backend support
  ggml/src/ggml-metal/ggml-metal-impl.h      |  34 +-
  ggml/src/ggml-metal/ggml-metal.cpp         |   3 +
  ggml/src/ggml-metal/kernels/cachegen.metal | 195 ++++++
- src/CMakeLists.txt                         | 680 ++++++++++++++++++++-
+ src/CMakeLists.txt                         | 683 ++++++++++++++++++++-
  tools/mtmd/mtmd-audio.cpp                  |   2 +
  tools/mtmd/mtmd-helper.cpp                 |  35 +-
  tools/mtmd/mtmd-helper.h                   |  16 +
- 31 files changed, 3184 insertions(+), 164 deletions(-)
+ 31 files changed, 3187 insertions(+), 164 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 ggml/src/ggml-cuda/cachegen.cu
  create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
@@ -3444,7 +3444,7 @@ index 000000000..728899e4b
 +    }
 +}
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 97250c2e8..5e02baa49 100644
+index 97250c2e8..9b84e446f 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -1,4 +1,5 @@
@@ -3453,7 +3453,7 @@ index 97250c2e8..5e02baa49 100644
  
  #
  # libraries
-@@ -47,6 +48,50 @@ set(LLAMA_CORE_SOURCES
+@@ -47,6 +48,51 @@ set(LLAMA_CORE_SOURCES
  add_library(llama
              ../include/llama.h
              ${LLAMA_CORE_SOURCES}
@@ -3496,6 +3496,7 @@ index 97250c2e8..5e02baa49 100644
 +            skippy/stage_realization.cpp
 +            skippy/stage_execution_contract.cpp
 +            skippy/state.cpp
++            skippy/resident_prefix.cpp
 +            skippy/state_memory.cpp
 +            skippy/state_effects.cpp
 +            skippy/speculative_decoding.cpp
@@ -3504,7 +3505,7 @@ index 97250c2e8..5e02baa49 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -60,19 +105,648 @@ set_target_properties(llama PROPERTIES
+@@ -60,19 +106,650 @@ set_target_properties(llama PROPERTIES
  )
  
  # exclude non-model sources from unity build
@@ -3812,12 +3813,14 @@ index 97250c2e8..5e02baa49 100644
 +    set_tests_properties(skippy_generate_gemma_fixture PROPERTIES
 +        FIXTURES_SETUP skippy-model-loader-fixtures)
 +
-+    add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
++    add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp skippy/tests/resident_checkpoint_gpu.cpp)
 +    target_include_directories(skippy-sampling-history PRIVATE .)
 +    target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
 +    target_link_libraries(skippy-sampling-history PRIVATE llama)
++    add_test(NAME skippy_resident_checkpoint_gpu_long COMMAND skippy-sampling-history resident-gpu-long)
++    set_tests_properties(skippy_resident_checkpoint_gpu_long PROPERTIES SKIP_RETURN_CODE 77)
 +    function(add_skippy_sampling_history_tests family fixture state)
-+        foreach(mode grammar penalty)
++        foreach(mode grammar penalty resident)
 +            add_test(NAME skippy_sampling_history_${family}_${mode}
 +                COMMAND skippy-sampling-history
 +                    "${SKIPPY_MODEL_FIXTURE_DIR}/${family}-dense.gguf" ${mode} ${state})

@@ -1,4 +1,4 @@
-From fff93dbf9dd00992bb7e105b27a3222994f46f4e Mon Sep 17 00:00:00 2001
+From b5419ee7bc594fcbe2126c36993bacb17fcc0866 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
@@ -45,20 +45,21 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/model_lifecycle.cpp          |  155 +++
  src/skippy/model_load_config.cpp        |  213 ++++
  src/skippy/model_load_config_internal.h |   35 +
- src/skippy/model_loading.cpp            | 1189 +++++++++++++++++++++++
+ src/skippy/model_loading.cpp            | 1188 +++++++++++++++++++++++
  src/skippy/model_loading_internal.h     |   38 +
  src/skippy/model_package.cpp            |  782 +++++++++++++++
  src/skippy/model_source.cpp             |  463 +++++++++
  src/skippy/package_tensor_binding.cpp   |  120 +++
  src/skippy/package_tensor_binding.h     |   27 +
  src/skippy/rerank_template.h            |   36 +
+ src/skippy/resident_prefix.cpp          |  446 +++++++++
  src/skippy/runtime_support.h            |   47 +
- src/skippy/runtime_types.h              |  183 ++++
+ src/skippy/runtime_types.h              |  190 ++++
  src/skippy/sampling.cpp                 |  602 ++++++++++++
  src/skippy/sampling_config.cpp          |  178 ++++
  src/skippy/sampling_internal.h          |   67 ++
  src/skippy/sampling_vocab.cpp           |   74 ++
- src/skippy/session.cpp                  |  521 ++++++++++
+ src/skippy/session.cpp                  |  501 ++++++++++
  src/skippy/speculative_decoding.cpp     |  568 +++++++++++
  src/skippy/speculative_internal.h       |   32 +
  src/skippy/stage_execution_contract.cpp |   72 ++
@@ -68,16 +69,16 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/stage_realization.h          |   21 +
  src/skippy/stage_slice_plan.cpp         |  871 +++++++++++++++++
  src/skippy/stage_slice_plan.h           |  119 +++
- src/skippy/state.cpp                    | 1185 ++++++++++++++++++++++
+ src/skippy/state.cpp                    |  743 ++++++++++++++
  src/skippy/state_effects.cpp            |  450 +++++++++
  src/skippy/state_effects.h              |   74 ++
- src/skippy/state_memory.cpp             |  116 +++
+ src/skippy/state_memory.cpp             |  115 +++
  src/skippy/state_memory.h               |   16 +
  src/skippy/tokenization.cpp             |  179 ++++
  src/skippy/verification.cpp             |  256 +++++
  src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 73 files changed, 16241 insertions(+), 395 deletions(-)
+ 74 files changed, 16230 insertions(+), 395 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -119,6 +120,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  create mode 100644 src/skippy/package_tensor_binding.cpp
  create mode 100644 src/skippy/package_tensor_binding.h
  create mode 100644 src/skippy/rerank_template.h
+ create mode 100644 src/skippy/resident_prefix.cpp
  create mode 100644 src/skippy/runtime_support.h
  create mode 100644 src/skippy/runtime_types.h
  create mode 100644 src/skippy/sampling.cpp
@@ -7693,10 +7695,10 @@ index 000000000..554d2bdd3
 +skippy_context_capabilities skippy_context_capabilities_of(const llama_model * model);
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
 new file mode 100644
-index 000000000..60a27669f
+index 000000000..b82ec9aca
 --- /dev/null
 +++ b/src/skippy/model_loading.cpp
-@@ -0,0 +1,1189 @@
+@@ -0,0 +1,1188 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -8571,7 +8573,6 @@ index 000000000..60a27669f
 +
 +
 +    stage_model->lane_in_use.assign(stage_model->lane_count, false);
-+    stage_model->lane_resident_prefix_tokens.resize(stage_model->lane_count);
 +
 +    const uint64_t native_model_id = reinterpret_cast<uint64_t>(stage_model);
 +    if (event_scope != nullptr) {
@@ -10388,6 +10389,458 @@ index 000000000..f0c3b2ea7
 +    }
 +    return rendered;
 +}
+diff --git a/src/skippy/resident_prefix.cpp b/src/skippy/resident_prefix.cpp
+new file mode 100644
+index 000000000..1b82ba6ba
+--- /dev/null
++++ b/src/skippy/resident_prefix.cpp
+@@ -0,0 +1,446 @@
++#include "skippy/state.h"
++#include "skippy/state_memory.h"
++#include "skippy/errors.h"
++#include "skippy/runtime_support.h"
++#include "skippy/runtime_types.h"
++#include "skippy-verify-checkpoint.h"
++#include "llama-io.h"
++#include "llama-kv-cache.h"
++#include "llama-kv-cache-iswa.h"
++#include "llama-memory-hybrid.h"
++#include "llama-memory-hybrid-iswa.h"
++#include "llama-memory-recurrent.h"
++#include "ggml-backend.h"
++
++#include <algorithm>
++#include <cstring>
++#include <limits>
++#include <stdexcept>
++
++namespace {
++
++// These adapters cover complete memory objects, not model-family names. Never
++// silently drop auxiliary state belonging to an unknown derived memory type.
++llama_memory_t attention_memory(llama_memory_t memory) {
++    if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory)) {
++        return hybrid->get_mem_attn();
++    }
++    if (auto * hybrid = dynamic_cast<llama_memory_hybrid_iswa *>(memory)) {
++        return hybrid->get_mem_attn();
++    }
++    return skippy_memory_recurrent_adapter(memory) ? nullptr : memory;
++}
++
++skippy_status validate_session(skippy_session * session, int32_t cache_seq_id,
++        skippy_error ** error) {
++    if (!session || !session->ctx || !session->stage_model || !session->ctx->get_memory()) {
++        skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "model-backed session is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (cache_seq_id < static_cast<int32_t>(session->stage_model->lane_count * 2)
++            || cache_seq_id >= LLAMA_MAX_SEQ) {
++        skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "cache sequence id is outside the resident cache range");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    auto * memory = session->ctx->get_memory();
++    if (!(skippy_model_memory_cache_capabilities(session->stage_model) & SKIPPY_MEMORY_CACHE_RESIDENT)
++            || (attention_memory(memory) && !session->ctx->get_cparams().kv_unified)) {
++        skippy_set_error(error, SKIPPY_STATUS_UNSUPPORTED, "memory does not support complete shared resident prefixes");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++    return SKIPPY_STATUS_OK;
++}
++
++// A size query never touches tensor bytes. Export writes directly to the
++// caller's allocation, avoiding an extra full recurrent payload temporary.
++class recurrent_buffer_writer final : public llama_io_write_i {
++public:
++    recurrent_buffer_writer(void * data = nullptr, size_t capacity = 0)
++        : data(static_cast<uint8_t *>(data)), capacity(capacity) {}
++    void write(const void * source, size_t bytes) override {
++        reserve(bytes);
++        if (data && bytes) { std::memcpy(data + position, source, bytes); }
++        position += bytes;
++    }
++    void write_tensor(ggml_tensor * tensor, size_t offset, size_t bytes) override {
++        reserve(bytes);
++        if (data && bytes) { ggml_backend_tensor_get(tensor, data + position, offset, bytes); }
++        position += bytes;
++    }
++    size_t n_bytes() override { return position; }
++private:
++    void reserve(size_t bytes) const {
++        if (bytes > std::numeric_limits<size_t>::max() - position
++                || (data && (position > capacity || bytes > capacity - position))) {
++            throw std::runtime_error("recurrent export buffer is too small");
++        }
++    }
++    uint8_t * data;
++    size_t capacity;
++    size_t position = 0;
++};
++
++class checkpoint_writer final : public llama_io_write_i {
++public:
++    void write(const void * source, size_t bytes) override {
++        const auto * data = static_cast<const uint8_t *>(source);
++        if (bytes) { payload.insert(payload.end(), data, data + bytes); }
++    }
++    void write_tensor(ggml_tensor * tensor, size_t offset, size_t bytes) override {
++        const size_t start = payload.size();
++        payload.resize(start + bytes);
++        if (bytes) { ggml_backend_tensor_get(tensor, payload.data() + start, offset, bytes); }
++    }
++    size_t n_bytes() override { return payload.size(); }
++    std::vector<uint8_t> payload;
++};
++
++class checkpoint_reader final : public llama_io_read_i {
++public:
++    explicit checkpoint_reader(const std::vector<uint8_t> & payload) : payload(payload.data()), bytes(payload.size()) {}
++    checkpoint_reader(const uint8_t * payload, size_t bytes) : payload(payload), bytes(bytes) {}
++    void read(void * destination, size_t bytes) override {
++        require(bytes);
++        if (bytes) { std::memcpy(destination, payload + position, bytes); }
++        position += bytes;
++    }
++    void read_tensor(ggml_tensor * tensor, size_t offset, size_t bytes) override {
++        require(bytes);
++        if (bytes) { ggml_backend_tensor_set(tensor, payload + position, offset, bytes); }
++        position += bytes;
++    }
++    size_t n_bytes() override { return position; }
++private:
++    void require(size_t bytes) const {
++        if (bytes > this->bytes - position) {
++            throw std::runtime_error("resident recurrent checkpoint is truncated");
++        }
++    }
++    const uint8_t * payload;
++    const size_t bytes;
++    size_t position = 0;
++};
++
++skippy_status validate_checkpoint(skippy_session * session, int32_t cache_seq_id,
++        const llama_token * tokens, size_t count, skippy_error ** error) {
++    auto status = validate_session(session, cache_seq_id, error);
++    if (status != SKIPPY_STATUS_OK) { return status; }
++    if (count > static_cast<size_t>(std::numeric_limits<int32_t>::max()) || (count && !tokens)) {
++        skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "resident prefix tokens are invalid");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    const auto & checkpoints = session->stage_model->resident_prefixes;
++    const auto found = checkpoints.find(cache_seq_id);
++    if (found == checkpoints.end() || count > found->second.tokens.size()
++            || (skippy_memory_recurrent_adapter(session->ctx->get_memory())
++                && count != found->second.tokens.size())
++            || (count && !std::equal(tokens, tokens + count, found->second.tokens.begin()))) {
++        skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "resident prefix identity or exact recurrent boundary does not match");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    auto * attention = attention_memory(session->ctx->get_memory());
++    if (attention && count && attention->seq_pos_max(cache_seq_id) < static_cast<llama_pos>(count - 1)) {
++        skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "resident attention prefix is incomplete");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    return SKIPPY_STATUS_OK;
++}
++
++skippy_status restore_checkpoint(skippy_session * session, int32_t cache_seq_id,
++        const llama_token * tokens, size_t count, skippy_error ** error) {
++    const auto valid = validate_session(session, cache_seq_id, error);
++    if (valid != SKIPPY_STATUS_OK) { return valid; }
++    std::lock_guard<std::mutex> lock(session->stage_model->resident_prefix_mutex);
++    const auto status = validate_checkpoint(session, cache_seq_id, tokens, count, error);
++    if (status != SKIPPY_STATUS_OK) { return status; }
++    // Allocate history before clearing live state. Checkpoint bytes stay immutable
++    // while each restoring lane receives its own mutable recurrent row.
++    std::vector<llama_token> history;
++    if (count) { history.assign(tokens, tokens + count); }
++    skippy_synchronize_context_if_pending(session->stage_model);
++    auto * memory = session->ctx->get_memory();
++    if (!memory->seq_rm(session->seq_id, -1, -1)) {
++        throw std::runtime_error("failed to clear execution lane for resident prefix");
++    }
++    const auto & checkpoint = session->stage_model->resident_prefixes.at(cache_seq_id);
++    try {
++        if (auto * recurrent = skippy_memory_recurrent_adapter(memory)) {
++            checkpoint_reader reader(checkpoint.recurrent);
++            recurrent->state_read(reader, session->seq_id, LLAMA_STATE_SEQ_FLAGS_NONE);
++            if (reader.n_bytes() != checkpoint.recurrent.size()) {
++                throw std::runtime_error("resident recurrent checkpoint has trailing data");
++            }
++        }
++        if (auto * attention = attention_memory(memory)) {
++            if (count) { attention->seq_cp(cache_seq_id, session->seq_id, 0, static_cast<llama_pos>(count)); }
++        }
++    } catch (...) {
++        memory->seq_rm(session->seq_id, -1, -1);
++        session->n_past = 0;
++        session->token_history.clear();
++        throw;
++    }
++    session->n_past = static_cast<int32_t>(count);
++    session->token_history = std::move(history);
++    skippy_mtp_clear_session_state(session);
++    session->verify_checkpoints.clear();
++    return skippy_success(error);
++}
++
++skippy_status native_error(skippy_error ** error, const std::exception & exception) {
++    skippy_set_error(error, SKIPPY_STATUS_RUNTIME_ERROR, exception.what());
++    return SKIPPY_STATUS_RUNTIME_ERROR;
++}
++
++bool used_attention_cells(llama_memory_t memory, uint64_t * cells) {
++    if (!memory) { *cells = 0; return true; }
++    if (auto * kv = dynamic_cast<llama_kv_cache *>(memory)) {
++        *cells = kv->get_used_cells();
++        return true;
++    }
++    if (auto * iswa = dynamic_cast<llama_kv_cache_iswa *>(memory)) {
++        *cells = std::max(iswa->get_base()->get_used_cells(), iswa->get_swa()->get_used_cells());
++        return true;
++    }
++    return false;
++}
++
++} // namespace
++
++extern "C" {
++
++enum skippy_status skippy_session_save_prefix(skippy_session * session, int32_t cache_seq_id,
++        uint64_t token_count, skippy_error ** error) {
++    const auto status = validate_session(session, cache_seq_id, error);
++    if (status != SKIPPY_STATUS_OK) { return status; }
++    if (token_count == 0 || token_count > static_cast<uint64_t>(std::max(session->n_past, 0))
++            || token_count > session->token_history.size()
++            || (skippy_memory_recurrent_adapter(session->ctx->get_memory())
++                && token_count != static_cast<uint64_t>(session->n_past))) {
++        skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "resident save requires an available exact checkpoint boundary");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    try {
++        std::lock_guard<std::mutex> lock(session->stage_model->resident_prefix_mutex);
++        auto & checkpoints = session->stage_model->resident_prefixes;
++        const auto previous = checkpoints.find(cache_seq_id);
++        if (previous != checkpoints.end()) {
++            if (previous->second.tokens.size() == token_count
++                    && std::equal(previous->second.tokens.begin(), previous->second.tokens.end(), session->token_history.begin())) {
++                return skippy_success(error);
++            }
++            skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "resident cache sequence already owns a different prefix");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
++        skippy_resident_checkpoint checkpoint;
++        checkpoint.tokens.assign(session->token_history.begin(), session->token_history.begin() + token_count);
++        skippy_synchronize_context_if_pending(session->stage_model);
++        auto * memory = session->ctx->get_memory();
++        if (auto * recurrent = skippy_memory_recurrent_adapter(memory)) {
++            recurrent_buffer_writer measure;
++            recurrent->state_write(measure, session->seq_id, LLAMA_STATE_SEQ_FLAGS_NONE);
++            checkpoint_writer writer;
++            writer.payload.reserve(measure.n_bytes());
++            recurrent->state_write(writer, session->seq_id, LLAMA_STATE_SEQ_FLAGS_NONE);
++            checkpoint.recurrent = std::move(writer.payload);
++        }
++        // Allocate metadata first. On allocation failure during seq_cp, remove
++        // every partially attached attention reference and unpublished map node.
++        auto [entry, inserted] = checkpoints.try_emplace(cache_seq_id);
++        GGML_ASSERT(inserted);
++        auto * attention = attention_memory(memory);
++        try {
++            if (attention) {
++                attention->seq_cp(session->seq_id, cache_seq_id, 0, static_cast<llama_pos>(token_count));
++            }
++            entry->second = std::move(checkpoint);
++        } catch (...) {
++            if (attention) { attention->seq_rm(cache_seq_id, -1, -1); }
++            checkpoints.erase(entry);
++            throw;
++        }
++        return skippy_success(error);
++    } catch (const std::exception & exception) { return native_error(error, exception); }
++}
++
++enum skippy_status skippy_session_restore_prefix(skippy_session * session, int32_t cache_seq_id,
++        const llama_token * tokens, size_t count, skippy_error ** error) {
++    try { return restore_checkpoint(session, cache_seq_id, tokens, count, error); }
++    catch (const std::exception & exception) { return native_error(error, exception); }
++}
++
++enum skippy_status skippy_session_create_from_resident_prefix(skippy_model * model, int32_t cache_seq_id,
++        const llama_token * tokens, size_t count, skippy_session ** output, skippy_error ** error) {
++    if (!model || !model->ctx || !output) {
++        skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "model and output session are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    *output = nullptr;
++    skippy_session * session = nullptr;
++    auto status = skippy_session_create(model, &session, error);
++    if (status != SKIPPY_STATUS_OK) { return status; }
++    status = skippy_session_restore_prefix(session, cache_seq_id, tokens, count, error);
++    if (status != SKIPPY_STATUS_OK) {
++        skippy_session_free(session, nullptr);
++        return status;
++    }
++    *output = session;
++    return skippy_success(error);
++}
++
++enum skippy_status skippy_session_drop_sequence(skippy_session * session, int32_t cache_seq_id,
++        skippy_error ** error) {
++    try {
++        const auto status = validate_session(session, cache_seq_id, error);
++        if (status != SKIPPY_STATUS_OK) { return status; }
++        std::lock_guard<std::mutex> lock(session->stage_model->resident_prefix_mutex);
++        skippy_synchronize_context_if_pending(session->stage_model);
++        if (auto * attention = attention_memory(session->ctx->get_memory())) {
++            if (!attention->seq_rm(cache_seq_id, -1, -1)) {
++                skippy_set_error(error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to drop resident attention prefix");
++                return SKIPPY_STATUS_RUNTIME_ERROR;
++            }
++        }
++        session->stage_model->resident_prefixes.erase(cache_seq_id);
++        return skippy_success(error);
++    } catch (const std::exception & exception) { return native_error(error, exception); }
++}
++
++enum skippy_status skippy_session_resident_prefix_bytes(skippy_session * session, int32_t cache_seq_id,
++        uint64_t * output, skippy_error ** error) {
++    try {
++        if (!output) {
++            skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "resident byte count output is required");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
++        *output = 0;
++        const auto status = validate_session(session, cache_seq_id, error);
++        if (status != SKIPPY_STATUS_OK) { return status; }
++        std::lock_guard<std::mutex> lock(session->stage_model->resident_prefix_mutex);
++        const auto & checkpoints = session->stage_model->resident_prefixes;
++        const auto found = checkpoints.find(cache_seq_id);
++        if (found != checkpoints.end()) {
++            *output = found->second.recurrent.capacity() + found->second.tokens.capacity() * sizeof(llama_token);
++        }
++        return skippy_success(error);
++    } catch (const std::exception & exception) { return native_error(error, exception); }
++}
++
++enum skippy_status skippy_session_memory_used_cells(skippy_session * session, uint64_t * output,
++        skippy_error ** error) {
++    if (!session || !session->ctx || !output) {
++        skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and cell count output are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    *output = 0;
++    if (!used_attention_cells(attention_memory(session->ctx->get_memory()), output)) {
++        skippy_set_error(error, SKIPPY_STATUS_UNSUPPORTED, "attention occupancy is unavailable for this memory type");
++        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++    return skippy_success(error);
++}
++
++enum skippy_status skippy_export_recurrent_state(skippy_session * session, void * output,
++        size_t capacity, size_t * bytes, skippy_error ** error) {
++    if (!session || !session->ctx || !bytes) {
++        skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and recurrent byte count are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    *bytes = 0;
++    try {
++        auto * recurrent = skippy_memory_recurrent_adapter(session->ctx->get_memory());
++        if (!recurrent) { return skippy_success(error); }
++        skippy_synchronize_context_if_pending(session->stage_model);
++        recurrent_buffer_writer measure;
++        recurrent->state_write(measure, session->seq_id, LLAMA_STATE_SEQ_FLAGS_NONE);
++        *bytes = measure.n_bytes();
++        if (!output || capacity < *bytes) {
++            skippy_set_error(error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "recurrent output buffer is too small");
++            return SKIPPY_STATUS_BUFFER_TOO_SMALL;
++        }
++        recurrent_buffer_writer writer(output, capacity);
++        recurrent->state_write(writer, session->seq_id, LLAMA_STATE_SEQ_FLAGS_NONE);
++        return skippy_success(error);
++    } catch (const std::exception & exception) { return native_error(error, exception); }
++}
++
++enum skippy_status skippy_import_recurrent_state(skippy_session * session, const void * input,
++        size_t bytes, skippy_error ** error) {
++    if (!bytes) { return skippy_success(error); }
++    if (!session || !session->ctx || !input) {
++        skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and recurrent payload are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    try {
++        auto * recurrent = skippy_memory_recurrent_adapter(session->ctx->get_memory());
++        if (!recurrent) {
++            skippy_set_error(error, SKIPPY_STATUS_UNSUPPORTED, "runtime has no recurrent memory");
++            return SKIPPY_STATUS_UNSUPPORTED;
++        }
++        skippy_synchronize_context_if_pending(session->stage_model);
++        checkpoint_reader reader(static_cast<const uint8_t *>(input), bytes);
++        recurrent->state_read(reader, session->seq_id, LLAMA_STATE_SEQ_FLAGS_NONE);
++        if (reader.n_bytes() != bytes) {
++            throw std::runtime_error("recurrent checkpoint has trailing data");
++        }
++        return skippy_success(error);
++    } catch (const std::exception & exception) { return native_error(error, exception); }
++}
++
++enum skippy_status skippy_session_export_resident_recurrent_state(skippy_session * session,
++        int32_t cache_seq_id, void * output, size_t capacity, size_t * bytes, skippy_error ** error) {
++    if (!bytes) {
++        skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "recurrent byte count is required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    *bytes = 0;
++    const auto valid = validate_session(session, cache_seq_id, error);
++    if (valid != SKIPPY_STATUS_OK) { return valid; }
++    try {
++        std::lock_guard<std::mutex> lock(session->stage_model->resident_prefix_mutex);
++        const auto found = session->stage_model->resident_prefixes.find(cache_seq_id);
++        if (found == session->stage_model->resident_prefixes.end()) {
++            skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "resident checkpoint is unavailable");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
++        const auto & payload = found->second.recurrent;
++        *bytes = payload.size();
++        if (payload.empty()) { return skippy_success(error); }
++        if (!output || capacity < payload.size()) {
++            skippy_set_error(error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "recurrent output buffer is too small");
++            return SKIPPY_STATUS_BUFFER_TOO_SMALL;
++        }
++        std::memcpy(output, payload.data(), payload.size());
++        return skippy_success(error);
++    } catch (const std::exception & exception) { return native_error(error, exception); }
++}
++
++enum skippy_status skippy_session_export_resident_kv_page(skippy_session * session,
++        int32_t cache_seq_id, int32_t layer_start, int32_t layer_end,
++        uint64_t token_start, uint64_t token_count, skippy_kv_page_desc * descriptor,
++        void * output, size_t capacity, size_t * bytes, skippy_error ** error) {
++    if (bytes) { *bytes = 0; }
++    const auto valid = validate_session(session, cache_seq_id, error);
++    if (valid != SKIPPY_STATUS_OK) { return valid; }
++    try {
++        std::lock_guard<std::mutex> lock(session->stage_model->resident_prefix_mutex);
++        const auto found = session->stage_model->resident_prefixes.find(cache_seq_id);
++        if (found == session->stage_model->resident_prefixes.end()
++                || token_start > found->second.tokens.size()
++                || token_count > found->second.tokens.size() - token_start) {
++            skippy_set_error(error, SKIPPY_STATUS_INVALID_ARGUMENT, "resident KV export exceeds the saved prefix");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
++        // This stack view neither claims an execution lane nor changes its
++        // state. Only the explicitly requested cold payload is materialized.
++        skippy_session view{};
++        view.stage_model = session->stage_model;
++        view.ctx = session->ctx;
++        view.seq_id = cache_seq_id;
++        view.n_past = static_cast<int32_t>(found->second.tokens.size());
++        return skippy_export_kv_page(&view, layer_start, layer_end, token_start,
++                token_count, descriptor, output, capacity, bytes, error);
++    } catch (const std::exception & exception) { return native_error(error, exception); }
++}
++
++} // extern "C"
 diff --git a/src/skippy/runtime_support.h b/src/skippy/runtime_support.h
 new file mode 100644
 index 000000000..d7e991307
@@ -10443,10 +10896,10 @@ index 000000000..d7e991307
 +        skippy_error ** out_error);
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
 new file mode 100644
-index 000000000..f19a25b76
+index 000000000..38cd35c47
 --- /dev/null
 +++ b/src/skippy/runtime_types.h
-@@ -0,0 +1,183 @@
+@@ -0,0 +1,190 @@
 +#pragma once
 +
 +#include "skippy.h"
@@ -10458,6 +10911,7 @@ index 000000000..f19a25b76
 +#include <cstddef>
 +#include <cstdint>
 +#include <mutex>
++#include <map>
 +#include <string>
 +#include <vector>
 +
@@ -10532,6 +10986,13 @@ index 000000000..f19a25b76
 +    skippy_glm_dsa_hot_tensor hot_tensors[SKIPPY_GLM_DSA_HOT_TENSOR_LIMIT] = {};
 +};
 +
++// Cache-owned checkpoints outlive execution lanes. Attention remains in the
++// native shared cell pool; only the fixed-size recurrent component is copied.
++struct skippy_resident_checkpoint {
++    std::vector<llama_token> tokens;
++    std::vector<uint8_t> recurrent;
++};
++
 +struct skippy_model {
 +    llama_model * model = nullptr;
 +    llama_context * ctx = nullptr;
@@ -10559,7 +11020,8 @@ index 000000000..f19a25b76
 +    uint32_t lane_count = 1;
 +    std::mutex lane_mutex;
 +    std::vector<bool> lane_in_use;
-+    std::vector<std::vector<llama_token>> lane_resident_prefix_tokens;
++    std::mutex resident_prefix_mutex;
++    std::map<int32_t, skippy_resident_checkpoint> resident_prefixes;
 +    std::mutex chat_templates_mutex;
 +    void * chat_templates = nullptr;
 +    void (*chat_templates_free)(void *) = nullptr;
@@ -10585,8 +11047,6 @@ index 000000000..f19a25b76
 +    int32_t n_past = 0;
 +    bool borrowed_sequence = false;
 +    int32_t borrowed_prefix_tokens = 0;
-+    bool preserve_prefix_on_free = false;
-+    int32_t preserve_prefix_tokens = 0;
 +    std::vector<llama_token> token_history;
 +    std::vector<skippy_token_signal> signal_history;
 +    std::vector<llama_pos> prefill_positions;
@@ -11577,10 +12037,10 @@ index 000000000..baf83db44
 +}
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
 new file mode 100644
-index 000000000..f1de95cc5
+index 000000000..be612007f
 --- /dev/null
 +++ b/src/skippy/session.cpp
-@@ -0,0 +1,521 @@
+@@ -0,0 +1,501 @@
 +#include "skippy.h"
 +#include "skippy/errors.h"
 +#include "skippy/environment.h"
@@ -11729,9 +12189,6 @@ index 000000000..f1de95cc5
 +    session->mtp_next_pos = 0;
 +    if (skippy_mtp_available(session)) {
 +        skippy_mtp_clear_session_state(session);
-+    }
-+    if (static_cast<size_t>(seq_id) < model->lane_resident_prefix_tokens.size()) {
-+        model->lane_resident_prefix_tokens[static_cast<size_t>(seq_id)].clear();
 +    }
 +    if (llama_memory_t memory = model->ctx->get_memory()) {
 +        if (!llama_memory_seq_rm(memory, seq_id, -1, -1)) {
@@ -11994,24 +12451,7 @@ index 000000000..f1de95cc5
 +            g_skippy_external_decode_session = nullptr;
 +        }
 +        if (session->ctx != nullptr) {
-+            if (session->preserve_prefix_on_free && !session->borrowed_sequence && session->stage_model != nullptr) {
-+                skippy_synchronize_context_if_pending(session->stage_model);
-+                if (llama_memory_t memory = session->ctx->get_memory()) {
-+                    llama_memory_seq_rm(
-+                            memory,
-+                            session->seq_id,
-+                            static_cast<llama_pos>(session->preserve_prefix_tokens),
-+                            -1);
-+                }
-+            } else {
-+                skippy_session_reset(session, nullptr);
-+                if (!session->borrowed_sequence && session->stage_model != nullptr && session->seq_id >= 0) {
-+                    const size_t lane = static_cast<size_t>(session->seq_id);
-+                    if (lane < session->stage_model->lane_resident_prefix_tokens.size()) {
-+                        session->stage_model->lane_resident_prefix_tokens[lane].clear();
-+                    }
-+                }
-+            }
++            skippy_session_reset(session, nullptr);
 +        }
 +        skippy_clear_chat_sampling(session);
 +        if (!session->borrowed_sequence) {
@@ -14858,10 +15298,10 @@ index 000000000..2272a3fec
 +        std::string & error);
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
 new file mode 100644
-index 000000000..4d6a2a68c
+index 000000000..cf0838051
 --- /dev/null
 +++ b/src/skippy/state.cpp
-@@ -0,0 +1,1185 @@
+@@ -0,0 +1,743 @@
 +#include "skippy/state.h"
 +#include "skippy/state_memory.h"
 +#include "skippy/errors.h"
@@ -15141,121 +15581,6 @@ index 000000000..4d6a2a68c
 +        return status;
 +    }
 +    skippy_update_session_state_after_import(session, imported_position);
-+
-+    return skippy_success(out_error);
-+}
-+
-+static llama_memory_recurrent * skippy_get_recurrent_memory(
-+        skippy_session * session,
-+        skippy_error ** out_error) {
-+    if (session == nullptr || session->ctx == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
-+        return nullptr;
-+    }
-+
-+    llama_memory_t memory = session->ctx->get_memory();
-+    if (memory == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "runtime memory is unavailable");
-+        return nullptr;
-+    }
-+
-+    return skippy_memory_recurrent_adapter(memory);
-+}
-+
-+enum skippy_status skippy_export_recurrent_state(
-+        struct skippy_session * session,
-+        void * output,
-+        size_t output_capacity,
-+        size_t * out_bytes,
-+        struct skippy_error ** out_error) {
-+    if (out_bytes == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "out_bytes is required");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+
-+    *out_bytes = 0;
-+    skippy_error * recurrent_error = nullptr;
-+    llama_memory_recurrent * recurrent = skippy_get_recurrent_memory(session, &recurrent_error);
-+    if (recurrent_error != nullptr) {
-+        if (out_error != nullptr) {
-+            *out_error = recurrent_error;
-+        } else {
-+            skippy_error_free(recurrent_error);
-+        }
-+        return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
-+    }
-+    if (recurrent == nullptr) {
-+        return skippy_success(out_error);
-+    }
-+
-+    session->ctx->synchronize();
-+    const size_t bytes = llama_state_seq_get_size_ext(
-+            session->ctx,
-+            session->seq_id,
-+            LLAMA_STATE_SEQ_FLAGS_NONE);
-+    *out_bytes = bytes;
-+    if (bytes == 0) {
-+        return skippy_success(out_error);
-+    }
-+    if (output == nullptr || output_capacity < bytes) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_BUFFER_TOO_SMALL, "recurrent state output buffer is too small");
-+        return SKIPPY_STATUS_BUFFER_TOO_SMALL;
-+    }
-+
-+    const size_t written = llama_state_seq_get_data_ext(
-+            session->ctx,
-+            static_cast<uint8_t *>(output),
-+            output_capacity,
-+            session->seq_id,
-+            LLAMA_STATE_SEQ_FLAGS_NONE);
-+    if (written != bytes) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to export recurrent state");
-+        return SKIPPY_STATUS_RUNTIME_ERROR;
-+    }
-+
-+    return skippy_success(out_error);
-+}
-+
-+enum skippy_status skippy_import_recurrent_state(
-+        struct skippy_session * session,
-+        const void * input,
-+        size_t input_bytes,
-+        struct skippy_error ** out_error) {
-+    if (input_bytes == 0) {
-+        return skippy_success(out_error);
-+    }
-+    if (input == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "recurrent state input is required");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+
-+    skippy_error * recurrent_error = nullptr;
-+    llama_memory_recurrent * recurrent = skippy_get_recurrent_memory(session, &recurrent_error);
-+    if (recurrent_error != nullptr) {
-+        if (out_error != nullptr) {
-+            *out_error = recurrent_error;
-+        } else {
-+            skippy_error_free(recurrent_error);
-+        }
-+        return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
-+    }
-+    if (recurrent == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "runtime has no recurrent memory");
-+        return SKIPPY_STATUS_UNSUPPORTED;
-+    }
-+
-+    session->ctx->synchronize();
-+    const size_t read = llama_state_seq_set_data_ext(
-+            session->ctx,
-+            static_cast<const uint8_t *>(input),
-+            input_bytes,
-+            session->seq_id,
-+            LLAMA_STATE_SEQ_FLAGS_NONE);
-+    if (read != input_bytes) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to import recurrent state");
-+        return SKIPPY_STATUS_RUNTIME_ERROR;
-+    }
-+    session->ctx->synchronize();
 +
 +    return skippy_success(out_error);
 +}
@@ -15716,333 +16041,6 @@ index 000000000..4d6a2a68c
 +    session->verify_checkpoints.clear();
 +    session->ctx->synchronize();
 +
-+    return skippy_success(out_error);
-+}
-+
-+static bool skippy_is_reserved_sequence_id(
-+        const skippy_session * session,
-+        int32_t seq_id) {
-+    if (session == nullptr || session->stage_model == nullptr || seq_id < 0) {
-+        return true;
-+    }
-+    const int32_t reserved = static_cast<int32_t>(session->stage_model->lane_count) * 2;
-+    return seq_id < reserved;
-+}
-+
-+static bool skippy_is_reserved_sequence_id_for_model(
-+        const skippy_model * model,
-+        int32_t seq_id) {
-+    if (model == nullptr || seq_id < 0) {
-+        return true;
-+    }
-+    const int32_t reserved = static_cast<int32_t>(model->lane_count) * 2;
-+    return seq_id < reserved;
-+}
-+
-+static enum skippy_status skippy_get_resident_prefix_memory(
-+        skippy_session * session,
-+        llama_memory_t * out_memory,
-+        struct skippy_error ** out_error) {
-+    if (session == nullptr || session->ctx == nullptr || out_memory == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session is required");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+
-+    llama_memory_t memory = session->ctx->get_memory();
-+    if (memory == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "runtime memory is unavailable");
-+        return SKIPPY_STATUS_RUNTIME_ERROR;
-+    }
-+
-+    skippy_error * recurrent_error = nullptr;
-+    llama_memory_recurrent * recurrent = skippy_get_recurrent_memory(session, &recurrent_error);
-+    if (recurrent_error != nullptr) {
-+        if (out_error != nullptr) {
-+            *out_error = recurrent_error;
-+        } else {
-+            skippy_error_free(recurrent_error);
-+        }
-+        return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
-+    }
-+    if (recurrent != nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "resident prefix cache is not enabled for recurrent memory");
-+        return SKIPPY_STATUS_UNSUPPORTED;
-+    }
-+
-+    *out_memory = memory;
-+    return SKIPPY_STATUS_OK;
-+}
-+
-+enum skippy_status skippy_session_save_prefix(
-+        struct skippy_session * session,
-+        int32_t cache_seq_id,
-+        uint64_t token_count,
-+        struct skippy_error ** out_error) {
-+    if (token_count > static_cast<uint64_t>(std::numeric_limits<llama_pos>::max())) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "token_count exceeds llama position range");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+    if (session == nullptr || token_count > static_cast<uint64_t>(session->n_past)) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "cannot save prefix beyond current session position");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+    if (skippy_is_reserved_sequence_id(session, cache_seq_id)) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "cache sequence id overlaps execution lanes");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+
-+    llama_memory_t memory = nullptr;
-+    enum skippy_status status = skippy_get_resident_prefix_memory(session, &memory, out_error);
-+    if (status != SKIPPY_STATUS_OK) {
-+        return status;
-+    }
-+
-+    skippy_synchronize_context_if_pending(session->stage_model);
-+    if (!llama_memory_seq_rm(memory, cache_seq_id, -1, -1)) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to clear resident prefix sequence");
-+        return SKIPPY_STATUS_RUNTIME_ERROR;
-+    }
-+    if (token_count > 0) {
-+        llama_memory_seq_cp(memory, session->seq_id, cache_seq_id, 0, static_cast<llama_pos>(token_count));
-+    }
-+    if (!session->borrowed_sequence && session->stage_model != nullptr && session->seq_id >= 0) {
-+        const size_t lane = static_cast<size_t>(session->seq_id);
-+        if (lane < session->stage_model->lane_resident_prefix_tokens.size()
-+                && session->token_history.size() >= static_cast<size_t>(token_count)) {
-+            auto & lane_tokens = session->stage_model->lane_resident_prefix_tokens[lane];
-+            lane_tokens.assign(
-+                    session->token_history.begin(),
-+                    session->token_history.begin() + static_cast<ptrdiff_t>(token_count));
-+            session->preserve_prefix_on_free = true;
-+            session->preserve_prefix_tokens = static_cast<int32_t>(token_count);
-+        }
-+    }
-+    return skippy_success(out_error);
-+}
-+
-+enum skippy_status skippy_session_restore_prefix(
-+        struct skippy_session * session,
-+        int32_t cache_seq_id,
-+        const llama_token * token_ids,
-+        size_t token_count,
-+        struct skippy_error ** out_error) {
-+    if (token_count > static_cast<size_t>(std::numeric_limits<llama_pos>::max())) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "token_count exceeds llama position range");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+    if (token_count > 0 && token_ids == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "token_ids are required");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+    if (skippy_is_reserved_sequence_id(session, cache_seq_id)) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "cache sequence id overlaps execution lanes");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+
-+    llama_memory_t memory = nullptr;
-+    enum skippy_status status = skippy_get_resident_prefix_memory(session, &memory, out_error);
-+    if (status != SKIPPY_STATUS_OK) {
-+        return status;
-+    }
-+
-+    skippy_synchronize_context_if_pending(session->stage_model);
-+    if (token_count > 0) {
-+        const llama_pos max_pos = llama_memory_seq_pos_max(memory, cache_seq_id);
-+        if (max_pos < static_cast<llama_pos>(token_count - 1)) {
-+            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "resident prefix sequence is incomplete");
-+            return SKIPPY_STATUS_INVALID_ARGUMENT;
-+        }
-+    }
-+    if (!llama_memory_seq_rm(memory, session->seq_id, -1, -1)) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to clear execution lane");
-+        return SKIPPY_STATUS_RUNTIME_ERROR;
-+    }
-+    if (token_count > 0) {
-+        llama_memory_seq_cp(memory, cache_seq_id, session->seq_id, 0, static_cast<llama_pos>(token_count));
-+    }
-+    session->n_past = static_cast<int32_t>(token_count);
-+    if (token_count == 0) {
-+        session->token_history.clear();
-+    } else {
-+        session->token_history.assign(token_ids, token_ids + token_count);
-+    }
-+    session->signal_history.clear();
-+    skippy_mtp_clear_session_state(session);
-+    session->verify_checkpoints.clear();
-+    return skippy_success(out_error);
-+}
-+
-+enum skippy_status skippy_session_create_from_resident_prefix(
-+        struct skippy_model * model,
-+        int32_t cache_seq_id,
-+        const llama_token * token_ids,
-+        size_t token_count,
-+        struct skippy_session ** out_session,
-+        struct skippy_error ** out_error) {
-+    if (model == nullptr || model->model == nullptr || model->ctx == nullptr || out_session == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model and out_session are required");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+    *out_session = nullptr;
-+    if (token_count > static_cast<size_t>(std::numeric_limits<llama_pos>::max())
-+            || token_count > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "token_count exceeds supported position range");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+    if (token_count > 0 && token_ids == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "token_ids are required");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+    if (skippy_is_reserved_sequence_id_for_model(model, cache_seq_id)) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "cache sequence id overlaps execution lanes");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+
-+    const int32_t seq_id = skippy_claim_execution_lane(model);
-+    if (seq_id < 0) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "no skippy execution lane is available");
-+        return SKIPPY_STATUS_RUNTIME_ERROR;
-+    }
-+
-+    skippy_session temp{};
-+    temp.stage_model = model;
-+    temp.ctx = model->ctx;
-+    llama_memory_t memory = nullptr;
-+    enum skippy_status status = skippy_get_resident_prefix_memory(&temp, &memory, out_error);
-+    if (status != SKIPPY_STATUS_OK) {
-+        skippy_release_execution_lane(model, seq_id);
-+        return status;
-+    }
-+
-+    skippy_synchronize_context_if_pending(model);
-+    if (token_count > 0) {
-+        const llama_pos max_pos = llama_memory_seq_pos_max(memory, cache_seq_id);
-+        if (max_pos < static_cast<llama_pos>(token_count - 1)) {
-+            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "resident prefix sequence is incomplete");
-+            skippy_release_execution_lane(model, seq_id);
-+            return SKIPPY_STATUS_INVALID_ARGUMENT;
-+        }
-+    }
-+    bool lane_prefix_hit = false;
-+    const size_t lane = static_cast<size_t>(seq_id);
-+    if (lane < model->lane_resident_prefix_tokens.size()) {
-+        const auto & lane_tokens = model->lane_resident_prefix_tokens[lane];
-+        lane_prefix_hit = lane_tokens.size() == token_count
-+                && (token_count == 0 || std::equal(lane_tokens.begin(), lane_tokens.end(), token_ids));
-+    }
-+    if (!lane_prefix_hit) {
-+        if (!llama_memory_seq_rm(memory, seq_id, -1, -1)) {
-+            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to clear borrowed execution lane");
-+            skippy_release_execution_lane(model, seq_id);
-+            return SKIPPY_STATUS_RUNTIME_ERROR;
-+        }
-+        if (token_count > 0) {
-+            llama_memory_seq_cp(memory, cache_seq_id, seq_id, 0, static_cast<llama_pos>(token_count));
-+        }
-+    }
-+    if (!llama_memory_seq_rm(memory, seq_id, static_cast<llama_pos>(token_count), -1)) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to trim borrowed execution lane");
-+        skippy_release_execution_lane(model, seq_id);
-+        return SKIPPY_STATUS_RUNTIME_ERROR;
-+    }
-+
-+    skippy_session * session = new skippy_session{};
-+    session->stage_model = model;
-+    session->ctx = model->ctx;
-+    session->seq_id = seq_id;
-+    session->n_past = static_cast<int32_t>(token_count);
-+    session->borrowed_sequence = false;
-+    session->borrowed_prefix_tokens = 0;
-+    if (token_count > 0) {
-+        session->token_history.assign(token_ids, token_ids + token_count);
-+    }
-+    skippy_mtp_clear_session_state(session);
-+    *out_session = session;
-+    return skippy_success(out_error);
-+}
-+
-+enum skippy_status skippy_session_drop_sequence(
-+        struct skippy_session * session,
-+        int32_t seq_id,
-+        struct skippy_error ** out_error) {
-+    if (skippy_is_reserved_sequence_id(session, seq_id)) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "sequence id overlaps execution lanes");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+
-+    llama_memory_t memory = nullptr;
-+    enum skippy_status status = skippy_get_resident_prefix_memory(session, &memory, out_error);
-+    if (status != SKIPPY_STATUS_OK) {
-+        return status;
-+    }
-+    skippy_synchronize_context_if_pending(session->stage_model);
-+    if (!llama_memory_seq_rm(memory, seq_id, -1, -1)) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to drop resident prefix sequence");
-+        return SKIPPY_STATUS_RUNTIME_ERROR;
-+    }
-+    return skippy_success(out_error);
-+}
-+
-+static bool skippy_memory_used_cells(llama_memory_t memory, uint64_t * out_used_cells) {
-+    if (auto * cache = dynamic_cast<llama_kv_cache *>(memory)) {
-+        *out_used_cells = cache->get_used_cells();
-+        return true;
-+    }
-+    if (auto * dsa = dynamic_cast<llama_kv_cache_dsa *>(memory)) {
-+        *out_used_cells = std::max(dsa->get_mla()->get_used_cells(), dsa->get_lid()->get_used_cells());
-+        return true;
-+    }
-+    if (auto * iswa = dynamic_cast<llama_kv_cache_iswa *>(memory)) {
-+        *out_used_cells = std::max(iswa->get_base()->get_used_cells(), iswa->get_swa()->get_used_cells());
-+        return true;
-+    }
-+    if (auto * dsa_iswa = dynamic_cast<llama_kv_cache_dsa_iswa *>(memory)) {
-+        uint64_t dsa_used_cells = 0;
-+        if (!skippy_memory_used_cells(dsa_iswa->get_dsa(), &dsa_used_cells)) {
-+            return false;
-+        }
-+        *out_used_cells = std::max(dsa_used_cells, dsa_iswa->get_swa()->get_used_cells());
-+        return true;
-+    }
-+    if (auto * msa = dynamic_cast<llama_kv_cache_msa *>(memory)) {
-+        *out_used_cells = std::max(msa->get_base()->get_used_cells(), msa->get_idx()->get_used_cells());
-+        return true;
-+    }
-+    if (auto * dsv4 = dynamic_cast<llama_kv_cache_dsv4 *>(memory)) {
-+        uint64_t raw_used_cells = 0;
-+        if (!skippy_memory_used_cells(dsv4->get_raw(), &raw_used_cells)) {
-+            return false;
-+        }
-+        *out_used_cells = std::max({
-+                raw_used_cells,
-+                dsv4->get_csa()->get_used_cells(),
-+                dsv4->get_hca()->get_used_cells(),
-+                dsv4->get_lid()->get_used_cells(),
-+        });
-+        return true;
-+    }
-+    return false;
-+}
-+
-+enum skippy_status skippy_session_memory_used_cells(
-+        struct skippy_session * session,
-+        uint64_t * out_used_cells,
-+        struct skippy_error ** out_error) {
-+    if (out_used_cells == nullptr) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "out_used_cells is required");
-+        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    }
-+    *out_used_cells = 0;
-+
-+    llama_memory_t memory = nullptr;
-+    enum skippy_status status = skippy_get_resident_prefix_memory(session, &memory, out_error);
-+    if (status != SKIPPY_STATUS_OK) {
-+        return status;
-+    }
-+    if (!skippy_memory_used_cells(memory, out_used_cells)) {
-+        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "physical occupancy is unavailable for this memory type");
-+        return SKIPPY_STATUS_UNSUPPORTED;
-+    }
 +    return skippy_success(out_error);
 +}
 +
@@ -16585,10 +16583,10 @@ index 000000000..5bb6b779b
 +        std::string & error);
 diff --git a/src/skippy/state_memory.cpp b/src/skippy/state_memory.cpp
 new file mode 100644
-index 000000000..e271852ff
+index 000000000..2d7b1a2ae
 --- /dev/null
 +++ b/src/skippy/state_memory.cpp
-@@ -0,0 +1,116 @@
+@@ -0,0 +1,115 @@
 +#include "skippy/state_memory.h"
 +#include "skippy/state.h"
 +#include "skippy/runtime_types.h"
@@ -16647,16 +16645,16 @@ index 000000000..e271852ff
 +    // coverage merely from a successful dynamic_cast or a nonempty export.
 +    const auto & type = typeid(*memory);
 +    if (type == typeid(llama_kv_cache) || type == typeid(llama_kv_cache_iswa)) {
-+        return SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE;
++        return SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION | SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE;
 +    }
 +    if (type == typeid(llama_memory_recurrent)) {
 +        return skippy_memory_recurrent_adapter(memory)
-+                ? SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE : SKIPPY_MEMORY_CACHE_FULL_STATE;
++                ? SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT | SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE : SKIPPY_MEMORY_CACHE_FULL_STATE;
 +    }
 +    if (type == typeid(llama_memory_hybrid) || type == typeid(llama_memory_hybrid_iswa)) {
 +        return skippy_memory_recurrent_adapter(memory) &&
 +                (skippy_memory_kv_adapter(memory) || skippy_memory_iswa_adapter(memory))
-+                ? SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE : SKIPPY_MEMORY_CACHE_FULL_STATE;
++                ? SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION | SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT | SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE : SKIPPY_MEMORY_CACHE_FULL_STATE;
 +    }
 +    // DSA/MSA memories include an indexer tier. Until a real-model resident
 +    // save/restore proves that tier survives, use complete state snapshots.
@@ -16680,7 +16678,7 @@ index 000000000..e271852ff
 +    }
 +    // A phase with no persistent effects adds no cache restrictions. It must
 +    // not be confused with failed graph admission or unexported context state.
-+    uint32_t supported = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT |
++    uint32_t supported = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION | SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT | SKIPPY_MEMORY_CACHE_KV_RECURRENT |
 +            SKIPPY_MEMORY_CACHE_FULL_STATE;
 +    for (const auto & effect : effects) {
 +        switch (effect.kind) {
@@ -16689,7 +16687,6 @@ index 000000000..e271852ff
 +                break;
 +            case skippy_state_kind::recurrent_conv:
 +            case skippy_state_kind::recurrent_ssm:
-+                supported &= ~SKIPPY_MEMORY_CACHE_RESIDENT;
 +                break;
 +            case skippy_state_kind::derived_persistent:
 +                supported &= SKIPPY_MEMORY_CACHE_FULL_STATE;

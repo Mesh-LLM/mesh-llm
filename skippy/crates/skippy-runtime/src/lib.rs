@@ -20,6 +20,7 @@ mod native_test_evidence;
 mod ngram;
 pub mod package;
 mod path_cstring;
+mod resident_prefix;
 mod runtime_event_reporter;
 mod runtime_events;
 mod session;

@@ -254,8 +254,7 @@ pub fn local_openai_options(
         args.kv_cache_disk_dir.clone(),
         args.kv_cache_min_free.as_deref(),
     )?;
-    args.settings
-        .validate_cache_dependencies(&config, disk_cache.is_some())?;
+    args.settings.validate_cache_dependencies(&config)?;
     Ok(skippy_api::serving::LocalOpenAiOptions {
         tuning,
         config,

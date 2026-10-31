@@ -10,7 +10,6 @@ use crate::frontend::generation::request_allowed_tool_names;
 use crate::frontend::generation::tool_calls_requested;
 use crate::frontend::tool_emulation;
 use crate::frontend::util::openai_backend_error;
-use crate::kv_integration::StagePrefixCachePayload;
 use crate::runtime_state::panic_recovery::lock_runtime;
 use serde_json::Value;
 use skippy_inference_api::ChatCompletionRequest;
@@ -89,7 +88,7 @@ impl StageOpenAiBackend {
             let recurrent_cache_prefix_text = if self
                 .kv
                 .as_ref()
-                .is_some_and(|kv| kv.payload == StagePrefixCachePayload::KvRecurrent)
+                .is_some_and(|kv| kv.retains_recurrent_checkpoints())
                 && emulated.media.is_empty()
                 && options.add_assistant
             {
@@ -112,7 +111,7 @@ impl StageOpenAiBackend {
         let recurrent_cache_prefix_text = if self
             .kv
             .as_ref()
-            .is_some_and(|kv| kv.payload == StagePrefixCachePayload::KvRecurrent)
+            .is_some_and(|kv| kv.retains_recurrent_checkpoints())
             && native.media.is_empty()
             && options.add_assistant
         {

@@ -56,12 +56,8 @@ impl ServeSettings {
         }
     }
 
-    pub fn validate_cache_dependencies(&self, config: &StageConfig, disk: bool) -> Result<()> {
+    pub fn validate_cache_dependencies(&self, config: &StageConfig) -> Result<()> {
         if let Some(cache) = &config.kv_cache {
-            anyhow::ensure!(
-                cache.l2_max_bytes == 0 || disk,
-                "--prefix-cache-ram requires an enabled --kv-cache-disk tier"
-            );
             anyhow::ensure!(
                 cache.mode != StageKvCacheMode::Disabled || cache.l2_max_bytes == 0,
                 "RAM caching requires enabled prefix caching"

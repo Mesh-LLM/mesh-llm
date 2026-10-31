@@ -278,6 +278,23 @@ impl StageSession {
         Ok(())
     }
 
+    /// Host bytes owned by one native prefix, excluding shared attention cells.
+    pub fn resident_prefix_bytes(&mut self, cache_seq_id: i32) -> Result<u64> {
+        let mut bytes = 0;
+        let mut error = ptr::null_mut();
+        // SAFETY: The session is live and both output pointers are valid for this call.
+        let status = unsafe {
+            skippy_ffi::skippy_session_resident_prefix_bytes(
+                self.raw,
+                cache_seq_id,
+                &mut bytes,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        Ok(bytes)
+    }
+
     pub fn save_prefix(&mut self, cache_seq_id: i32, token_count: u64) -> Result<()> {
         let mut error = ptr::null_mut();
         let status = unsafe {

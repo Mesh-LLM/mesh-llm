@@ -1,3 +1,8 @@
+mod recording;
+mod selection;
+#[cfg(test)]
+use recording::resident_index_over_capacity;
+
 use anyhow::{Context, Result};
 use skippy_scheduler::{
     CapacityDemand, ComponentCapacitySnapshot, EvictableCacheEntry, plan_component_capacity,
@@ -279,10 +284,10 @@ impl KvStageIntegration {
             };
             #[cfg(test)]
             if !runtime.is_modelless_for_test() {
-                runtime.drop_resident_prefix_sequence(session_id, victim.value.seq_id)?;
+                self.release_native_prefix(runtime, session_id, victim)?;
             }
             #[cfg(not(test))]
-            runtime.drop_resident_prefix_sequence(session_id, victim.value.seq_id)?;
+            self.release_native_prefix(runtime, session_id, victim)?;
             let removed = radix
                 .evict_resident_candidate(&victim.namespace, &victim.tokens)
                 .with_context(|| {
@@ -345,7 +350,9 @@ impl KvStageIntegration {
             .radix
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let Some(radix_hit) = radix.peek_resident(&identity.namespace, &identity.token_ids) else {
+        let Some(radix_hit) =
+            self.peek_native_prefix(&radix, &identity.namespace, &identity.token_ids)
+        else {
             self.notify_kv_lifecycle(KvLifecycleEvent::CacheLookupMiss);
             return None;
         };
@@ -394,11 +401,15 @@ impl KvStageIntegration {
                     .radix
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                let eligible = radix
-                    .peek_resident(&identity.namespace, &identity.token_ids)
+                let eligible = self
+                    .peek_native_prefix(&radix, &identity.namespace, &identity.token_ids)
                     .is_some_and(|hit| self.meets_shared_prefix_min_tokens(hit.matched_tokens));
                 if eligible {
-                    radix.acquire_resident(&identity.namespace, &identity.token_ids)
+                    if self.resident_requires_checkpoint() {
+                        radix.acquire_resident_checkpoint(&identity.namespace, &identity.token_ids)
+                    } else {
+                        radix.acquire_resident(&identity.namespace, &identity.token_ids)
+                    }
                 } else {
                     None
                 }
@@ -461,8 +472,8 @@ impl KvStageIntegration {
         let mut evicted_entries = 0usize;
         let mut evicted_tokens = 0u64;
         while evicted_tokens < target_tokens {
-            let Some(removed) = evict_one_resident(&mut radix, &mut sequences, |seq_id| {
-                runtime.drop_resident_prefix_sequence(session_id, seq_id)
+            let Some(removed) = evict_one_resident(&mut radix, &mut sequences, |victim| {
+                self.release_native_prefix(runtime, session_id, victim)
             })?
             else {
                 break;
@@ -520,152 +531,12 @@ impl KvStageIntegration {
             evicted_tokens: decision.evicted_tokens,
         })
     }
-
-    pub fn record_resident_prefix(
-        &self,
-        runtime: &mut RuntimeState,
-        session_id: &str,
-        identity: &PrefillKvIdentity,
-        token_ids: &[i32],
-    ) -> Result<Option<ResidentPrefixRecord>> {
-        if !self.should_record() || self.payload != StagePrefixCachePayload::ResidentKv {
-            return Ok(None);
-        }
-        let requested_tokens = identity
-            .identity
-            .token_count
-            .try_into()
-            .unwrap_or(usize::MAX)
-            .min(token_ids.len());
-        if requested_tokens == 0 || (requested_tokens as u64) < self.checkpoint_policy.min_tokens {
-            return Ok(None);
-        }
-        let layer_count = identity
-            .identity
-            .layer_end
-            .saturating_sub(identity.identity.layer_start)
-            .max(1);
-        let token_count =
-            recordable_token_count(self.resident_config, requested_tokens, layer_count);
-        if token_count == 0 || (token_count as u64) < self.checkpoint_policy.min_tokens {
-            return Ok(None);
-        }
-        let estimated_bytes = resident_estimated_bytes(token_count as u64, layer_count);
-        let mut evicted_entries = 0usize;
-        let mut evicted_tokens = 0u64;
-        let seq_id = {
-            let mut radix = self
-                .radix
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let mut sequences = lock_resident_sequences(&self.resident_sequences);
-            if let Some(existing) =
-                radix.resident_exact(&identity.namespace, &identity.token_ids[..token_count])
-            {
-                let stats = radix.stats();
-                self.verify_resident_ownership(stats.resident_entries, sequences.stats().0)?;
-                return Ok(Some(ResidentPrefixRecord {
-                    page_id: existing.value.page_id,
-                    token_count,
-                    seq_id: existing.value.seq_id,
-                    stored: false,
-                    evicted_entries: 0,
-                    evicted_tokens: 0,
-                    entries: stats.resident_entries,
-                    resident_tokens: stats.resident_tokens,
-                }));
-            }
-
-            loop {
-                let stats = radix.stats();
-                // `resident_tokens` is a logical sum of every radix checkpoint
-                // depth. Native sequence snapshots share the underlying KV
-                // cells, so using that sum as physical occupancy evicts family
-                // prefixes even when the unified pool still has room. Physical
-                // capacity is enforced before restore/prefill by
-                // `admit_resident_capacity`; recording an alias adds no cells.
-                if !resident_index_over_capacity(self.resident_config, stats, estimated_bytes) {
-                    break;
-                }
-                let Some(removed) = evict_one_resident(&mut radix, &mut sequences, |seq_id| {
-                    runtime.drop_resident_prefix_sequence(session_id, seq_id)
-                })?
-                else {
-                    return Ok(None);
-                };
-                evicted_entries = evicted_entries.saturating_add(1);
-                evicted_tokens = evicted_tokens.saturating_add(removed.value.token_count);
-            }
-
-            sequences.allocate()?
-        };
-        if let Err(error) = runtime.save_resident_prefix(session_id, seq_id, token_count as u64) {
-            let mut sequences = lock_resident_sequences(&self.resident_sequences);
-            if let Err(release_error) = sequences.release(seq_id) {
-                sequences.force_quarantine(seq_id);
-                return Err(error).with_context(|| {
-                    format!(
-                        "quarantined resident sequence {seq_id} after native save and release failed: {release_error:#}"
-                    )
-                });
-            }
-            return Err(error);
-        }
-        let mut radix = self
-            .radix
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let mut sequences = lock_resident_sequences(&self.resident_sequences);
-        let inserted = insert_saved_resident(
-            &mut radix,
-            &mut sequences,
-            identity.namespace.clone(),
-            &identity.token_ids[..token_count],
-            estimated_bytes,
-            RadixResidentEntry {
-                page_id: identity.page_id.clone(),
-                seq_id,
-                token_count: token_count as u64,
-                recompute_cost: (token_count as u64).saturating_mul(u64::from(layer_count)),
-            },
-            |seq_id| runtime.drop_resident_prefix_sequence(session_id, seq_id),
-        )?;
-        if !inserted {
-            let existing = radix
-                .resident_exact(&identity.namespace, &identity.token_ids[..token_count])
-                .context("occupied resident radix entry disappeared after rejected insert")?;
-            let stats = radix.stats();
-            self.verify_resident_ownership(stats.resident_entries, sequences.stats().0)?;
-            return Ok(Some(ResidentPrefixRecord {
-                page_id: existing.value.page_id,
-                token_count,
-                seq_id: existing.value.seq_id,
-                stored: false,
-                evicted_entries,
-                evicted_tokens,
-                entries: stats.resident_entries,
-                resident_tokens: stats.resident_tokens,
-            }));
-        }
-        let stats = radix.stats();
-        self.verify_resident_ownership(stats.resident_entries, sequences.stats().0)?;
-        Ok(Some(ResidentPrefixRecord {
-            page_id: identity.page_id.clone(),
-            token_count,
-            seq_id,
-            stored: true,
-            evicted_entries,
-            evicted_tokens,
-            entries: stats.resident_entries,
-            resident_tokens: stats.resident_tokens,
-        }))
-    }
 }
 
 fn evict_one_resident(
     radix: &mut skippy_cache::UnifiedRadixCache<RadixResidentEntry, super::RadixExactEntry>,
     sequences: &mut ResidentSequencePool,
-    mut drop_native: impl FnMut(i32) -> Result<()>,
+    mut drop_native: impl FnMut(&skippy_cache::RadixEvictionCandidate<RadixResidentEntry>) -> Result<()>,
 ) -> Result<Option<skippy_cache::RadixEviction<RadixResidentEntry>>> {
     let candidates = radix.resident_eviction_candidates();
     if candidates.is_empty() {
@@ -704,7 +575,7 @@ fn evict_one_resident(
         .iter()
         .find(|candidate| candidate.value.seq_id.to_string() == *victim_id)
         .context("resident capacity planner selected missing victim")?;
-    drop_native(victim.value.seq_id)?;
+    drop_native(victim)?;
     let removed = radix
         .evict_resident_candidate(&victim.namespace, &victim.tokens)
         .expect("selected radix resident victim should exist");
@@ -760,51 +631,6 @@ fn insert_saved_resident(
             Err(error)
         }
     }
-}
-
-fn resident_estimated_bytes(token_count: u64, layer_count: u32) -> u64 {
-    token_count
-        .saturating_mul(u64::from(layer_count))
-        .saturating_mul(2)
-}
-
-/// Longest prefix this cache may record for a request whose identity covers
-/// `requested` tokens.
-///
-/// Two bounds keep the pinned cells out of the way of the active lanes, which
-/// share one unified `n_ctx` cell pool with the resident cache: the per-entry
-/// cell cap (`max_resident_tokens`, `n_ctx - n_ctx/8`) and the per-entry byte
-/// budget (`max_bytes`). Treating either as all-or-nothing silently disabled
-/// reuse for every prompt above the bound - a prompt one token over the cell cap
-/// re-prefilled in full on an identical re-send (mesh-llm#1358). Clamping keeps
-/// each bound exactly (pinned cells never exceed it, so the lane reserve is
-/// unchanged) and still makes most of an over-long prompt reusable, because
-/// restore is a longest-prefix match against the recorded entry.
-fn recordable_token_count(
-    config: skippy_cache::ResidentCacheConfig,
-    requested: usize,
-    layer_count: u32,
-) -> usize {
-    let mut allowed = requested;
-    if config.max_resident_tokens > 0 {
-        allowed = allowed.min(usize::try_from(config.max_resident_tokens).unwrap_or(usize::MAX));
-    }
-    if config.max_bytes > 0 {
-        let bytes_per_token = resident_estimated_bytes(1, layer_count).max(1);
-        allowed =
-            allowed.min(usize::try_from(config.max_bytes / bytes_per_token).unwrap_or(usize::MAX));
-    }
-    allowed
-}
-
-fn resident_index_over_capacity(
-    config: skippy_cache::ResidentCacheConfig,
-    stats: skippy_cache::UnifiedRadixCacheStats,
-    new_entry_bytes: u64,
-) -> bool {
-    stats.resident_entries.saturating_add(1) > config.max_entries
-        || (config.max_bytes > 0
-            && stats.resident_logical_bytes.saturating_add(new_entry_bytes) > config.max_bytes)
 }
 
 #[cfg(test)]
@@ -865,6 +691,8 @@ mod proactive_eviction_tests {
             &config,
             Some(ModelStateKind::Dense),
             Some(skippy_runtime::MemoryCacheCapabilities {
+                resident_attention: true,
+                resident_checkpoint: false,
                 resident: true,
                 kv_recurrent: true,
                 full_state: true,
@@ -993,7 +821,8 @@ mod proactive_eviction_tests {
             .unwrap();
         let mut dropped = None;
 
-        let removed = evict_one_resident(&mut radix, &mut sequences, |seq_id| {
+        let removed = evict_one_resident(&mut radix, &mut sequences, |victim| {
+            let seq_id = victim.value.seq_id;
             dropped = Some(seq_id);
             Ok(())
         })
@@ -1080,7 +909,8 @@ mod proactive_eviction_tests {
             .unwrap();
         let mut dropped = None;
 
-        let removed = evict_one_resident(&mut radix, &mut sequences, |seq_id| {
+        let removed = evict_one_resident(&mut radix, &mut sequences, |victim| {
+            let seq_id = victim.value.seq_id;
             dropped = Some(seq_id);
             Ok(())
         })
@@ -1217,85 +1047,5 @@ mod proactive_eviction_tests {
         assert_eq!(existing.value.page_id, "existing");
         assert_eq!(existing.value.seq_id, existing_seq_id);
         assert_eq!(sequences.allocate().unwrap(), duplicate_seq_id);
-    }
-}
-
-#[cfg(test)]
-mod resident_record_cap_tests {
-    use super::*;
-
-    fn config(max_resident_tokens: u64, max_bytes: u64) -> skippy_cache::ResidentCacheConfig {
-        skippy_cache::ResidentCacheConfig {
-            max_entries: 64,
-            max_bytes,
-            min_tokens: 1,
-            reserved_seq_count: 8,
-            max_resident_tokens,
-        }
-    }
-
-    #[test]
-    fn prompt_above_the_cell_cap_records_the_cap_instead_of_nothing() {
-        // mesh-llm#1358: n_ctx 28_672 -> cap 25_088. A 25_989-token prompt used
-        // to be dropped entirely; it must be recorded at the cap.
-        let ctx: u64 = 28_672;
-        let cap = ctx - ctx / 8;
-        assert_eq!(cap, 25_088);
-        assert_eq!(recordable_token_count(config(cap, 0), 25_989, 42), 25_088);
-        assert_eq!(recordable_token_count(config(cap, 0), 24_000, 42), 24_000);
-    }
-
-    #[test]
-    fn unset_caps_keep_the_requested_prefix() {
-        assert_eq!(recordable_token_count(config(0, 0), 40_000, 42), 40_000);
-    }
-
-    #[test]
-    fn byte_budget_clamps_to_whole_tokens() {
-        // 42 layers, two bytes per cell per token: 84 bytes/token.
-        assert_eq!(resident_estimated_bytes(1, 42), 84);
-        let budget = 84 * 1_000;
-        let clamped = recordable_token_count(config(0, budget), 40_000, 42);
-        assert_eq!(clamped, 1_000);
-        assert!(resident_estimated_bytes(clamped as u64, 42) <= budget);
-    }
-
-    #[test]
-    fn byte_budget_below_one_token_records_nothing() {
-        // Falls to 0 so the caller's min_tokens guard rejects the record
-        // instead of pinning a zero-length snapshot.
-        assert_eq!(recordable_token_count(config(0, 1), 40_000, 42), 0);
-    }
-
-    #[test]
-    fn clamped_entry_is_found_by_a_longer_request() {
-        // Restore is a longest-prefix match, so an entry recorded at the cap
-        // still serves a longer prompt: the identical re-send reuses the cap
-        // and prefills only the remainder.
-        let stored: Vec<i32> = (0..100).collect();
-        let mut radix: skippy_cache::UnifiedRadixCache<
-            RadixResidentEntry,
-            crate::kv_integration::RadixExactEntry,
-        > = skippy_cache::UnifiedRadixCache::new();
-        let mut sequences = ResidentSequencePool::new(4);
-        let seq_id = sequences.allocate().unwrap();
-        radix
-            .insert_resident(
-                "stage",
-                &stored,
-                100,
-                RadixResidentEntry {
-                    page_id: "page".to_string(),
-                    seq_id,
-                    token_count: 100,
-                    recompute_cost: 100,
-                },
-            )
-            .unwrap();
-        let longer: Vec<i32> = (0..140).collect();
-        let hit = radix
-            .peek_resident("stage", &longer)
-            .expect("clamped prefix must still match a longer request");
-        assert_eq!(hit.matched_tokens, 100);
     }
 }
