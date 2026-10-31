@@ -1614,7 +1614,7 @@ async fn route_prepared_request(
             request,
             None,
             "mesh",
-            super::exchange_admission::SelectedRouteTarget::MeshLabel(&format!("{target:?}")),
+            super::exchange_admission::SelectedRouteTarget::Mesh(&target),
             1,
         )
         .await

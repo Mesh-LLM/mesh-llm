@@ -363,15 +363,7 @@ impl ExternalPlugin {
                     host_info_json,
                     mesh_visibility: proto_mesh_visibility(self.host_mode.mesh_visibility),
                     settings_json,
-                    host_capabilities: vec![
-                        mesh_llm_plugin::host_capabilities::INVOCATION_CALLBACKS.to_string(),
-                        mesh_llm_plugin::models::ASSET_CAPABILITY.to_string(),
-                        mesh_llm_plugin::host_capabilities::PEER_BLOCKS.to_string(),
-                        mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.to_string(),
-                        mesh_llm_plugin::host_capabilities::PLUGIN_KEYS.to_string(),
-                        mesh_llm_plugin::host_capabilities::PLUGIN_STATUS.to_string(),
-                        mesh_llm_plugin::host_capabilities::LOCAL_INFERENCE_OBSERVATION.to_string(),
-                    ],
+                    host_capabilities: initialize_host_capabilities(),
                 }),
                 Some(self.spec.startup.init_timeout()),
             )
@@ -1066,6 +1058,25 @@ fn manifest_tool_summaries(manifest: &proto::PluginManifest) -> Vec<ToolSummary>
             input_schema_json: operation.input_schema_json.clone(),
         })
         .collect()
+}
+
+/// Optional features this host lists in `InitializeRequest.host_capabilities`.
+/// Exchange pricing is listed only when the build can send it.
+fn initialize_host_capabilities() -> Vec<String> {
+    let mut capabilities = vec![
+        mesh_llm_plugin::host_capabilities::INVOCATION_CALLBACKS.to_string(),
+        mesh_llm_plugin::models::ASSET_CAPABILITY.to_string(),
+        mesh_llm_plugin::host_capabilities::PEER_BLOCKS.to_string(),
+        mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.to_string(),
+        mesh_llm_plugin::host_capabilities::PLUGIN_KEYS.to_string(),
+        mesh_llm_plugin::host_capabilities::PLUGIN_STATUS.to_string(),
+        mesh_llm_plugin::host_capabilities::LOCAL_INFERENCE_OBSERVATION.to_string(),
+    ];
+    if cfg!(feature = "payments") {
+        capabilities
+            .push(mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE_BACKEND_PRICING.to_string());
+    }
+    capabilities
 }
 
 fn proto_mesh_visibility(mesh_visibility: MeshVisibility) -> i32 {
