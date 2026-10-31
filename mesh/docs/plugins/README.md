@@ -610,7 +610,11 @@ but serving models and the exchange hook until it is reviewed again.
 the node's own disk. By default it keeps SHA-256 digests of the request and
 response, never their text; its default entry does not allow the OpenAI
 exchange hook, so mesh-llm passes it no exchange text.
-It makes no network calls unless the operator configures a witness URL.
+By default 0.1.6 also sends this node's sealed record of a completed exchange
+to that exchange's counterparty over mesh-llm's peer connections;
+`share_record_at_completion = "off"` stops it (see
+[Upgrading to the default capsules 0.1.6](capsules-0.1.6-upgrade.md)).
+It makes no other network calls unless the operator configures a witness URL.
 
 ## Hugging Face Plugin Catalog
 

@@ -6,7 +6,8 @@ on those a node runs `capsules` only if its operator installed it. This note
 says what changes for such a node and for its peers, in what order to upgrade,
 and how to go back. Statements about `capsules` itself come from its
 [changelog at 0.1.6](https://github.com/Mesh-LLM/capsules/blob/v0.1.6/CHANGELOG.md)
-and its [0.1.6 INSTALL.md](https://github.com/Mesh-LLM/capsules/blob/v0.1.6/INSTALL.md).
+its [0.1.6 INSTALL.md](https://github.com/Mesh-LLM/capsules/blob/v0.1.6/INSTALL.md)
+and its [0.1.6 sharing policy](https://github.com/Mesh-LLM/capsules/blob/v0.1.6/docs/SHARING-POLICY.md).
 
 `capsules` keeps a signed record of the exchanges a node serves and answers
 peers' evidence requests about them. Its default entry allows no inference
@@ -29,35 +30,60 @@ no plugin keys, so `capsules` installed there sends unsigned requests.
 
 ## What 0.1.6 sends by default
 
-0.1.6 turns `share_record_at_completion` on (`counterparty`), reversing the
-default since 0.1.3. With no setting changed, a node pushes its own sealed
-record of each completed exchange to the other side of that exchange, and
-accepts that peer's record the same way. The record goes only to that peer.
-A node that installs `capsules` for the first time on 0.79 starts with this
-on. To keep the behaviour of 0.1.5, set `share_record_at_completion = "off"`,
-which neither sends nor accepts a pushed record. The value a node acts on is
-in `sharing-effective.json` in its data directory.
+**0.1.6 turns `share_record_at_completion` on by default (`counterparty`).**
+With no setting changed, a node pushes its own sealed record of each completed
+exchange to the other side of that exchange, and accepts that peer's record
+the same way. The record goes only to that peer, over mesh-llm's own peer
+connections. Each push also cuts a signed checkpoint of the node's log, and
+the checkpoint list is public, so a checkpoint's time can show when one
+exchange ended. A node that installs `capsules` for the first time on 0.79
+starts with this on.
 
-A pushed record is accepted only when the receiver knows the key that signed
-it: a key the host announced, one listed in `CAPSULES_PEER_KEYS`, or one a
-carried controller binding ties to a known key. A record from an unknown key
-is refused. A receiver on a release before 0.1.6 refuses a bundle carrying a
-controller binding as malformed, and the bundle is then sent again without it.
-Pushes between 0.1.6 and earlier releases have not otherwise been checked for
-this note.
+**Setting `share_record_at_completion = "off"` keeps 0.1.5's behaviour for
+records at completion:** the node neither sends nor accepts a pushed record.
+It does not undo the other 0.1.6 changes below. Set it under Configuration ›
+Plugins › Sharing policy, or with `CAPSULES_SHARE_RECORD_AT_COMPLETION=off` in
+the node's environment, which wins over the console. A node started with
+`--config <path>` also needs `MESH_LLM_CONFIG=<path>` in its environment, or
+`capsules` reads the default config file and the console setting does not
+reach it. To keep the push off from the start, set it before the node's first
+0.79 start, or before moving it to 0.1.6. The value a node acts on, and where
+it came from, are in `sharing-effective.json` in its data directory.
+
+A pushed record is accepted only when the receiver's own setting is on and it
+knows the key that signed it: a key the host announced for a directly
+connected peer, one listed in `CAPSULES_PEER_KEYS`, or one a carried
+controller binding ties to a known key. A record from an unknown key is
+refused. So a push is refused when:
+
+- the receiver runs 0.1.5 at its default, which is `off`, so in a mixed mesh
+  only pushes between 0.1.6 nodes are held;
+- the receiver's host announces no keys, as on mesh-llm 0.78.1 or older, and
+  `CAPSULES_PEER_KEYS` does not name the sender;
+- the sender is a client-only node (`mesh-llm client`), which gets a new peer
+  id at each start, and the receiver does not name its key in
+  `CAPSULES_PEER_KEYS`.
+
+A receiver on a release before 0.1.6 refuses a bundle carrying a controller
+binding as malformed, and the bundle is then sent again without it.
 
 ## Which versions answer each other
 
 | Asking node | Answering node on 0.1.6 answers |
 | --- | --- |
 | 0.1.6 or 0.1.5 on a 0.79 host | Everything its sharing settings allow. |
-| 0.1.6 or 0.1.5 on a host older than 0.79 (unsigned requests) | Checkpoints and `history_card/1`. No records under any setting. `served_summary/1` only with `share_standard_history = on`. |
+| 0.1.6 or 0.1.5 on a host older than 0.79 (unsigned requests) | Checkpoints and `history_card/1`. No records under any setting. `served_summary/1` and `service_history/1` only with `share_standard_history = on`. |
 | 0.1.4 | Nothing it can read: 0.1.6, like 0.1.5, answers in the interop profile's signed envelope, which 0.1.4 cannot parse. Its unsigned requests for records and `served_summary/1` are also refused. |
 
 0.1.6 asks under the newer interop profile (`evidence-interop/1`). A 0.1.5
 node refuses that, and 0.1.6 then asks once more under `evidence-interop/0`,
 which 0.1.5 answers. So 0.1.5 and 0.1.6 nodes exchange evidence in both
 directions, and a mesh on 0.1.5 can move to 0.1.6 one node at a time.
+
+On a node that pays for exchanges, 0.1.6 keeps its deal report on the node: a
+counterparty's range or full-history request that covers the report is
+refused whole. The counterparty can still ask for the deal's steps one record
+at a time.
 
 Between 0.1.4 and either 0.1.5 or 0.1.6, no evidence request succeeds in
 either direction until both run 0.1.5 or later. Each node still seals its own
@@ -66,7 +92,10 @@ records meanwhile.
 `served_summary/1` from 0.1.6 counts only witness receipts the answering node
 can verify under the witness keys it configures. Its `coverage.witnessed`
 can therefore drop below what 0.1.5 reported for the same log, and a receipt it
-cannot check is listed as `NOT_CHECKED`.
+cannot check is listed as `NOT_CHECKED`. For the same reason, the Evidence tab
+no longer shows a peer's history or record as verified when only the peer's
+own signatures check: without a receipt from a witness this node trusts, it
+says the answer is not witnessed.
 
 Signed requests also depend on the host change in
 Mesh-LLM/mesh-llm#2620: without it, a `capsules` process the host restarts
@@ -115,7 +144,10 @@ console. A node started with `--config <path>` also needs
 config file and the console setting does not reach it.
 
 That answers `served_summary/1` to any node, signed or not: before 0.1.5 every
-node could read it, so this restores the old exposure, not more. It helps a
+node could read it. On 0.1.6 the same setting also answers `service_history/1`,
+new in 0.1.6, to any node: the number of exchanges the node served in each
+closed week, per model it states and in total, with counts under 5 withheld.
+No earlier release exposed those counts. It helps a
 node on a host older than 0.79, or one whose host refused its key; it does not
 help a 0.1.4 node, which cannot read the answer. Turn it off again once every
 peer runs 0.1.5 or later on 0.79. No setting answers an unsigned request for a
@@ -130,10 +162,9 @@ requests are signed (`requests_signed`).
 instead of the digest of its JSON form, and its answers carry different
 octets. Every `artifact_digest` and anchor pin taken from a node on 0.1.4
 stops reproducing once that node runs 0.1.5 or 0.1.6, and a request pinned to
-an old anchor is refused `coverage_unsatisfiable`. 0.1.6 keeps the commitment
-and `history_card/1` unchanged and, apart from `served_summary/1`, answers
-byte for byte as 0.1.5 did, so a pin taken from a node on 0.1.5 needs no
-replacement. mesh-llm itself stores no pins.
+an old anchor is refused `coverage_unsatisfiable`. 0.1.6 leaves the
+commitment, the checkpoints and `history_card/1` unchanged, so a pin taken
+from a node on 0.1.5 needs no replacement. mesh-llm itself stores no pins.
 
 Whoever kept a pin from a 0.1.4 node, a peer's page or an outside verifier,
 replaces it after the answering node upgrades: ask that node for
@@ -182,4 +213,6 @@ An earlier release reading a log that 0.1.6 wrote has not been tested.
   data directory.
 - **mesh-llm back to 0.78.1.** 0.78.1 has no default plugins and does not
   remove the one 0.79 installed, so `capsules` 0.1.6 stays and runs unsigned.
-  Install 0.1.4 as above, or disable it, if the mesh still runs 0.1.4.
+  That host announces no keys, so the node refuses pushed records whose keys
+  `CAPSULES_PEER_KEYS` does not list, and peers refuse its pushes the same
+  way. Install 0.1.4 as above, or disable it, if the mesh still runs 0.1.4.
