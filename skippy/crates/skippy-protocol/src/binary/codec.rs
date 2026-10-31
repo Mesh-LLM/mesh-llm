@@ -112,7 +112,7 @@ pub fn send_reply_predicted_with_tokens_window_and_stats(
         predicted_tokens,
         window,
     )?;
-    write_native_mtp_draft(&mut writer, None)?;
+    write_native_mtp_draft(&mut writer, None, window.draft_follows)?;
     write_reply_stats(&mut writer, stats)
 }
 
@@ -146,7 +146,7 @@ pub fn send_reply_predicted_tokens_with_window_and_stats(
         predicted_tokens,
         window,
     )?;
-    write_native_mtp_draft(&mut writer, None)?;
+    write_native_mtp_draft(&mut writer, None, window.draft_follows)?;
     write_reply_stats(&mut writer, stats)
 }
 
@@ -174,7 +174,11 @@ pub fn send_reply_message(mut writer: impl Write, reply: &StageReply) -> io::Res
         &reply.predicted_tokens,
         reply.window,
     )?;
-    write_native_mtp_draft(&mut writer, reply.native_mtp_draft.as_ref())?;
+    write_native_mtp_draft(
+        &mut writer,
+        reply.native_mtp_draft.as_ref(),
+        reply.window.draft_follows,
+    )?;
     write_reply_stats(&mut writer, reply.stats)?;
     if reply.kind == WireReplyKind::TokenScores {
         super::readout::write_scores(&mut writer, &reply.log_probabilities)?;
@@ -196,8 +200,9 @@ pub fn recv_reply(mut reader: impl Read) -> io::Result<StageReply> {
     for _ in 0..predicted_count {
         predicted_tokens.push(read_i32(&mut reader)?);
     }
-    let window = read_reply_window(&mut reader)?;
-    let native_mtp_draft = read_native_mtp_draft(&mut reader)?;
+    let mut window = read_reply_window(&mut reader)?;
+    let (native_mtp_draft, draft_follows) = read_native_mtp_draft(&mut reader)?;
+    window.draft_follows = draft_follows;
     let stats = read_reply_stats(&mut reader)?;
     let log_probabilities = if kind == WireReplyKind::TokenScores {
         if !predicted_tokens.is_empty() || native_mtp_draft.is_some() || predicted != -1 {
@@ -238,19 +243,33 @@ fn write_reply_header(
     write_reply_window(&mut writer, window)
 }
 
+/// Reply marker bit: this verdict's next-block draft follows in a second
+/// reply (`StageReplyWindow::draft_follows`). Only sent to a sender that set
+/// `state_flags::SPLIT_DFLASH_EARLY_VERDICT`.
+const REPLY_DRAFT_FOLLOWS: i32 = 1 << 8;
+
 fn write_native_mtp_draft(
     mut writer: impl Write,
     draft: Option<&StageNativeMtpDraft>,
+    draft_follows: bool,
 ) -> io::Result<()> {
+    let follows_bit = if draft_follows {
+        REPLY_DRAFT_FOLLOWS
+    } else {
+        0
+    };
     let Some(draft) = draft else {
-        return write_i32(&mut writer, 0);
+        return write_i32(&mut writer, follows_bit);
     };
     if draft.token_ids.len() > MAX_STAGE_PREDICTED_TOKENS {
         return Err(invalid_input("too many native MTP draft tokens"));
     }
     // Marker 2 is only sent to a stage 0 that set
     // NATIVE_MTP_DRAFT_AFTER_CORRECTION; older readers reject it.
-    write_i32(&mut writer, if draft.follows_correction { 2 } else { 1 })?;
+    write_i32(
+        &mut writer,
+        follows_bit | if draft.follows_correction { 2 } else { 1 },
+    )?;
     write_i32(
         &mut writer,
         i32::try_from(draft.token_ids.len())
@@ -262,10 +281,12 @@ fn write_native_mtp_draft(
     write_i64(&mut writer, draft.proposal_compute_us)
 }
 
-/// Reads a reply's native MTP draft.
-fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<Option<StageNativeMtpDraft>> {
+/// Reads a reply's native MTP draft, and whether a draft reply follows the
+/// reply.
+fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<(Option<StageNativeMtpDraft>, bool)> {
     let marker = read_i32(&mut reader)?;
-    let draft = match marker {
+    let draft_follows = marker & REPLY_DRAFT_FOLLOWS != 0;
+    let draft = match marker & !REPLY_DRAFT_FOLLOWS {
         0 => None,
         marker @ (1 | 2) => {
             let token_count = checked_i32_len(
@@ -286,7 +307,7 @@ fn read_native_mtp_draft(mut reader: impl Read) -> io::Result<Option<StageNative
         }
         _ => return Err(invalid_data("unknown native MTP draft reply marker")),
     };
-    Ok(draft)
+    Ok((draft, draft_follows))
 }
 
 /// Serialize a validated current-generation stage message and its sidebands.
@@ -891,7 +912,7 @@ fn read_string_list(
     Ok(values)
 }
 
-const REPLY_STATS_FIELD_COUNT: usize = 31;
+const REPLY_STATS_FIELD_COUNT: usize = 34;
 const REPLY_STATS_WIRE_BYTES: usize = REPLY_STATS_FIELD_COUNT * std::mem::size_of::<i64>();
 
 fn write_reply_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Result<()> {
@@ -926,9 +947,12 @@ fn write_reply_window(mut writer: impl Write, window: StageReplyWindow) -> io::R
     write_i32(&mut writer, window.window_id)
 }
 
+/// The draft-follows flag rides the native MTP draft marker (see
+/// `REPLY_DRAFT_FOLLOWS`); only the window id is in the header.
 fn read_reply_window(mut reader: impl Read) -> io::Result<StageReplyWindow> {
     Ok(StageReplyWindow {
         window_id: read_i32(&mut reader)?,
+        draft_follows: false,
     })
 }
 
@@ -965,6 +989,9 @@ fn reply_stats_fields(stats: StageReplyStats) -> [i64; REPLY_STATS_FIELD_COUNT] 
         stats.dflash_draft_context_resets,
         stats.verify_rollbacks_in_place,
         stats.verify_rollbacks_checkpointed,
+        stats.dflash_draft_us,
+        stats.dflash_drafts,
+        stats.dflash_ingest_us,
     ]
 }
 
@@ -1001,6 +1028,9 @@ fn reply_stats_from_fields(fields: [i64; REPLY_STATS_FIELD_COUNT]) -> StageReply
         dflash_draft_context_resets: fields[28],
         verify_rollbacks_in_place: fields[29],
         verify_rollbacks_checkpointed: fields[30],
+        dflash_draft_us: fields[31],
+        dflash_drafts: fields[32],
+        dflash_ingest_us: fields[33],
     }
 }
 

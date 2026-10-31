@@ -48,8 +48,9 @@ pub use decision::{
 };
 pub use devices::{BackendDevice, BackendDeviceType, backend_devices};
 pub use dflash::{
-    DFLASH_BORROWED_TARGET_TENSOR, DFlashDraftInfo, DFlashDraftOptions, DFlashFeatureRows,
-    DFlashHealth, DFlashProposal, DFlashVariant, dflash_feature_identity, dflash_feature_layer,
+    DFLASH_BORROWED_TARGET_TENSOR, DFlashDraftInfo, DFlashDraftOptions, DFlashDraftStats,
+    DFlashFeatureEncoding, DFlashFeatureRows, DFlashHealth, DFlashProposal, DFlashVariant,
+    dflash_feature_identity, dflash_feature_layer, dflash_feature_payload_bytes,
     frame_has_dflash_features,
 };
 pub(crate) use error::ensure_ok;

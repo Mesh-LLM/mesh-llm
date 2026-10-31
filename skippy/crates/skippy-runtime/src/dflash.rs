@@ -15,6 +15,7 @@
 
 mod context;
 mod draft_batch;
+mod feature_wire;
 mod readout;
 mod split;
 
@@ -39,9 +40,8 @@ use draft_batch::{DraftBatch, target_feature_row};
 use readout::{argmax_token, block_draft_capacity, walk_dflash2_lattice};
 
 pub use context::DFlashHealth;
-pub use split::{
-    DFlashFeatureRows, dflash_feature_identity, dflash_feature_layer, frame_has_dflash_features,
-};
+pub use feature_wire::{DFlashFeatureEncoding, dflash_feature_identity, dflash_feature_layer};
+pub use split::{DFlashFeatureRows, dflash_feature_payload_bytes, frame_has_dflash_features};
 pub(crate) use split::{DFlashSplitSession, SharedDFlashCapture};
 
 const DFLASH_ARCHITECTURE: &str = "dflash";
@@ -98,7 +98,43 @@ pub struct DFlashDraftInfo {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DFlashProposal {
     pub tokens: Vec<i32>,
+    /// Draft time for this block: the block decode, plus the feature rows of
+    /// the last decode when their injection was deferred to it.
     pub proposal_compute_us: u64,
+}
+
+/// Where a session's draft spent its time since the session was last
+/// activated. Only decode-sized injections count; a prefill's rows are not
+/// per-window draft work.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DFlashDraftStats {
+    /// Block drafts, including empty ones from a draft without context.
+    pub proposals: u64,
+    /// Time in block decodes.
+    pub propose_us: u64,
+    /// Decode-sized feature injections, and the time they took.
+    pub ingests: u64,
+    pub ingest_us: u64,
+}
+
+impl DFlashDraftStats {
+    /// Injection and block time together: the draft's whole share of the
+    /// stage's time per window.
+    pub fn draft_us(self) -> u64 {
+        self.propose_us.saturating_add(self.ingest_us)
+    }
+}
+
+/// Feature rows of a target decode held back to be injected right before
+/// the next block draft, so that a split final stage can reply to stage 0
+/// first. The rows are copied out of the target's capture buffer, which the
+/// next target decode on any lane overwrites.
+struct PendingIngest {
+    features: Vec<f32>,
+    positions: Vec<i32>,
+    /// The target position after the rows.
+    end: u64,
+    truncate_from: Option<u64>,
 }
 
 pub(crate) struct DFlashDraft {
@@ -110,6 +146,9 @@ pub(crate) struct DFlashDraft {
     /// Per target layer: captured on this stage, or sent by an earlier stage
     /// of a split target.
     local_layers: Vec<bool>,
+    /// The target layer whose input is the activation this final stage
+    /// receives, when the draft reads it: its rows come from that activation.
+    input_layer: Option<u32>,
     lanes: i32,
     n_embd_target: usize,
     n_embd_draft: usize,
@@ -169,6 +208,7 @@ impl DFlashDraft {
                 selector_top_k: 0,
             },
             local_layers: Vec::new(),
+            input_layer: None,
             lanes,
             n_embd_target: 0,
             n_embd_draft: 0,
@@ -206,7 +246,8 @@ impl DFlashDraft {
         self.info.target_layer_ids = target_layer_ids(api, self.model, target_layers)?;
         // A final stage of a split target captures only the layers whose
         // input its graph produces; earlier stages send the rest with their
-        // activations, including the input of this stage's first layer.
+        // activations. The input of this stage's first layer is the
+        // activation it receives.
         let complete = config.resident_tensor_names.is_empty() && config.layer_start == 0;
         let local_end = if complete || config.layer_end == 0 {
             u32::MAX
@@ -219,6 +260,11 @@ impl DFlashDraft {
             .iter()
             .map(|&lid| split::stage_captures_layer_input(lid, config.layer_start, local_end))
             .collect();
+        self.input_layer = if complete {
+            None
+        } else {
+            split::stage_receives_layer_input(&self.info.target_layer_ids, config.layer_start)
+        };
         self.n_embd_target =
             positive_usize(unsafe { (api.model_n_embd)(target_model) }, "target n_embd")?;
         self.n_embd_draft =
@@ -286,12 +332,13 @@ impl DFlashDraft {
             }
         }
         write_native_log_note(format!(
-            "dflash draft attached variant={} block_size={} max_draft_tokens={} target_layers={:?} local_layers={:?} mask_token={} causal={causal} mrope={}",
+            "dflash draft attached variant={} block_size={} max_draft_tokens={} target_layers={:?} local_layers={:?} input_layer={:?} mask_token={} causal={causal} mrope={}",
             self.info.variant.as_str(),
             self.info.block_size,
             self.info.max_draft_tokens,
             self.info.target_layer_ids,
             self.local_layers,
+            self.input_layer,
             self.mask_token,
             self.mrope,
         ));
@@ -316,8 +363,22 @@ impl DFlashDraft {
         positions: &[i32],
         remote: Option<(&DFlashFeatureRows, usize)>,
     ) -> Result<()> {
+        let features = self.gather_features(first_row, positions, remote)?;
+        self.ingest_features(seq_id, &features, positions)
+    }
+
+    /// The draft's encoder input for `positions.len()` rows of the last
+    /// target decode, one row after another, every target layer per row.
+    /// Copied out, so it outlives the capture buffer the next target decode
+    /// overwrites.
+    fn gather_features(
+        &self,
+        first_row: usize,
+        positions: &[i32],
+        remote: Option<(&DFlashFeatureRows, usize)>,
+    ) -> Result<Vec<f32>> {
         if positions.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         // The capture buffer holds `n_batch` rows per layer, filled by the
         // target decode that just ran; reading past it would be out of bounds.
@@ -353,12 +414,26 @@ impl DFlashDraft {
             let all = unsafe { std::slice::from_raw_parts(data.cast_const(), layer_len) };
             layers.push(&all[first_value..]);
         }
+        let mut features = Vec::with_capacity(positions.len() * self.n_embd_target * layers.len());
+        for row in 0..positions.len() {
+            features.extend(target_feature_row(&layers, self.n_embd_target, row));
+        }
+        Ok(features)
+    }
+
+    /// Injects gathered encoder rows at `positions`, in microbatches.
+    fn ingest_features(&mut self, seq_id: i32, features: &[f32], positions: &[i32]) -> Result<()> {
+        if positions.is_empty() {
+            return Ok(());
+        }
+        let row_len = features.len() / positions.len();
         for (chunk_index, chunk) in positions.chunks(self.n_ubatch).enumerate() {
             self.batch.clear();
             let chunk_row = chunk_index * self.n_ubatch;
             for (offset, &position) in chunk.iter().enumerate() {
+                let row = chunk_row + offset;
                 self.batch.push_features(
-                    target_feature_row(&layers, self.n_embd_target, chunk_row + offset),
+                    features[row * row_len..(row + 1) * row_len].iter().copied(),
                     position,
                     seq_id,
                 );
@@ -684,6 +759,10 @@ fn meta_usize(model: *const Opaque, key: &str) -> Result<Option<usize>> {
         .transpose()
 }
 
+fn elapsed_us(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
+}
+
 fn positive_usize(value: i32, label: &str) -> Result<usize> {
     usize::try_from(value)
         .ok()
@@ -696,17 +775,34 @@ fn positive_usize(value: i32, label: &str) -> Result<usize> {
 pub(crate) struct DFlashSessionLink {
     draft: Weak<Mutex<DFlashDraft>>,
     seq_id: i32,
+    /// The draft's layer read from this stage's input activation, and the
+    /// target width.
+    pub(crate) input_layer: Option<(u32, usize)>,
     /// The target positions this lane's draft holds.
     context: DraftContext,
+    stats: DFlashDraftStats,
+    /// Hold back the next decode's feature rows until the next proposal.
+    defer_next_ingest: bool,
+    pending: Option<PendingIngest>,
 }
 
 impl DFlashSessionLink {
     pub(crate) fn new(draft: &Arc<Mutex<DFlashDraft>>, seq_id: i32) -> Option<Self> {
-        let owns_lane = lock_draft(draft).owns_lane(seq_id);
+        let (owns_lane, input_layer) = {
+            let draft = lock_draft(draft);
+            (
+                draft.owns_lane(seq_id),
+                draft.input_layer.map(|layer| (layer, draft.n_embd_target)),
+            )
+        };
         owns_lane.then(|| Self {
             draft: Arc::downgrade(draft),
             seq_id,
+            input_layer,
             context: DraftContext::empty(),
+            stats: DFlashDraftStats::default(),
+            defer_next_ingest: false,
+            pending: None,
         })
     }
 
@@ -716,7 +812,11 @@ impl DFlashSessionLink {
         Self {
             draft: Weak::new(),
             seq_id,
+            input_layer: None,
             context: DraftContext::empty(),
+            stats: DFlashDraftStats::default(),
+            defer_next_ingest: false,
+            pending: None,
         }
     }
 
@@ -724,6 +824,51 @@ impl DFlashSessionLink {
         let draft = self.draft.upgrade()?;
         let mut draft = lock_draft(&draft);
         Some(operation(&mut draft, self.seq_id))
+    }
+
+    /// Injects held-back feature rows. Every operation that reads or changes
+    /// the draft cache calls this first, so the cache always sees the rows in
+    /// decode order.
+    fn flush_pending(&mut self) {
+        let Some(pending) = self.pending.take() else {
+            return;
+        };
+        let started = Instant::now();
+        let injected = self.with_draft(|draft, seq_id| {
+            if let Some(from) = pending.truncate_from {
+                draft.truncate(seq_id, i32::try_from(from).unwrap_or(i32::MAX));
+            }
+            let injected = draft.ingest_features(seq_id, &pending.features, &pending.positions);
+            if injected.is_err() {
+                draft.clear(seq_id);
+            }
+            injected
+        });
+        self.record_ingest(pending.positions.len(), started);
+        self.finish_ingest(injected, pending.end);
+    }
+
+    fn record_ingest(&mut self, rows: usize, started: Instant) {
+        if rows <= MAX_BLOCK_SIZE {
+            self.stats.ingests += 1;
+            self.stats.ingest_us = self
+                .stats
+                .ingest_us
+                .saturating_add(u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX));
+        }
+    }
+
+    fn finish_ingest(&mut self, injected: Option<Result<()>>, end: u64) {
+        match injected {
+            Some(Ok(())) => self.context.ingested(end),
+            Some(Err(error)) => {
+                write_native_log_note(format!(
+                    "dflash feature injection failed, draft context cleared: {error:#}"
+                ));
+                self.context.lose(end);
+            }
+            None => {}
+        }
     }
 }
 
@@ -852,13 +997,21 @@ impl StageSession {
         let Some(link) = self.dflash.as_mut() else {
             return Ok(None);
         };
+        let started = Instant::now();
+        // Rows held back for this proposal go in first; their time is part
+        // of this block's draft time.
+        link.flush_pending();
+        link.stats.proposals += 1;
         // A draft missing any earlier target row proposes noise; the target
         // decodes this step serially instead.
         if !link.context.can_propose(anchor_position) {
-            return Ok(Some(DFlashProposal::default()));
+            return Ok(Some(DFlashProposal {
+                tokens: Vec::new(),
+                proposal_compute_us: elapsed_us(started),
+            }));
         }
         let position = i32::try_from(anchor_position).context("anchor position exceeds i32")?;
-        let started = Instant::now();
+        let propose_started = Instant::now();
         let tokens = link.with_draft(|draft, seq_id| {
             let tokens = draft.propose(seq_id, position, anchor, max_tokens);
             if tokens.is_err() {
@@ -881,10 +1034,38 @@ impl StageSession {
             }
             None => None,
         };
+        link.stats.propose_us = link
+            .stats
+            .propose_us
+            .saturating_add(elapsed_us(propose_started));
         Ok(tokens.map(|tokens| DFlashProposal {
             tokens,
-            proposal_compute_us: u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX),
+            proposal_compute_us: elapsed_us(started),
         }))
+    }
+
+    /// Holds back the feature rows of this session's next target decode until
+    /// its next proposal, instead of injecting them right after the decode. A
+    /// split final stage uses this to send stage 0 its verdict before it
+    /// spends any draft time. The draft sees the same rows in the same
+    /// batches either way, so proposals do not change.
+    pub fn dflash_defer_next_ingest(&mut self) {
+        if let Some(link) = self.dflash.as_mut() {
+            link.defer_next_ingest = true;
+        }
+    }
+
+    /// Whether feature rows are waiting for the next proposal.
+    pub fn dflash_ingest_pending(&self) -> bool {
+        self.dflash
+            .as_ref()
+            .is_some_and(|link| link.pending.is_some())
+    }
+
+    /// Where this session's draft spent its time since it was last activated.
+    /// `None` without a draft.
+    pub fn dflash_draft_stats(&self) -> Option<DFlashDraftStats> {
+        self.dflash.as_ref().map(|link| link.stats)
     }
 
     /// Feeds the target features of this session's rows in the last decode to
@@ -914,6 +1095,8 @@ impl StageSession {
         let Some(link) = self.dflash.as_mut() else {
             return;
         };
+        link.flush_pending();
+        let defer = std::mem::take(&mut link.defer_next_ingest);
         let count = u64::try_from(span_count).unwrap_or(u64::MAX);
         let Some(end) = end.filter(|end| *end >= count) else {
             write_native_log_note("dflash feature injection skipped: target position unknown");
@@ -946,27 +1129,41 @@ impl StageSession {
                 &trailing_positions
             }
         };
+        let remote = remote.as_ref().map(|(rows, consumed)| (rows, *consumed));
+        if defer && span_count <= MAX_BLOCK_SIZE {
+            let gathered =
+                link.with_draft(|draft, _| draft.gather_features(first_row, positions, remote));
+            match gathered {
+                Some(Ok(features)) => {
+                    link.pending = Some(PendingIngest {
+                        features,
+                        positions: positions.to_vec(),
+                        end,
+                        truncate_from,
+                    });
+                    return;
+                }
+                Some(Err(error)) => {
+                    link.with_draft(|draft, seq_id| draft.clear(seq_id));
+                    link.finish_ingest(Some(Err(error)), end);
+                    return;
+                }
+                None => return,
+            }
+        }
+        let started = Instant::now();
         let injected = link.with_draft(|draft, seq_id| {
             if let Some(from) = truncate_from {
                 draft.truncate(seq_id, i32::try_from(from).unwrap_or(i32::MAX));
             }
-            let remote = remote.as_ref().map(|(rows, consumed)| (rows, *consumed));
             let injected = draft.ingest(seq_id, first_row, positions, remote);
             if injected.is_err() {
                 draft.clear(seq_id);
             }
             injected
         });
-        match injected {
-            Some(Ok(())) => link.context.ingested(end),
-            Some(Err(error)) => {
-                write_native_log_note(format!(
-                    "dflash feature injection failed, draft context cleared: {error:#}"
-                ));
-                link.context.lose(end);
-            }
-            None => {}
-        }
+        link.record_ingest(span_count, started);
+        link.finish_ingest(injected, end);
     }
 
     /// Keeps the draft cache no longer than a rewound target session.
@@ -978,6 +1175,7 @@ impl StageSession {
         let Some(link) = self.dflash.as_mut() else {
             return;
         };
+        link.flush_pending();
         match position.and_then(|position| i32::try_from(position).ok().map(|p| (position, p))) {
             Some((position, native)) => {
                 link.with_draft(|draft, seq_id| draft.truncate(seq_id, native));
@@ -1005,6 +1203,9 @@ impl StageSession {
         let Some(link) = self.dflash.as_mut() else {
             return;
         };
+        // The cache is cleared below; held-back rows are moot.
+        link.pending = None;
+        link.defer_next_ingest = false;
         link.with_draft(|draft, seq_id| draft.clear(seq_id));
         match position {
             Some(position) => {
@@ -1034,6 +1235,7 @@ impl StageSession {
     pub fn dflash_reset_health(&mut self) {
         if let Some(link) = self.dflash.as_mut() {
             link.context.reset_health();
+            link.stats = DFlashDraftStats::default();
         }
         if let Some(split) = self.dflash_split.as_mut() {
             split.rows_dropped = 0;
@@ -1189,6 +1391,55 @@ mod tests {
         );
         session.dflash_reset_health();
         assert_eq!(session.dflash_health(), Some(DFlashHealth::default()));
+    }
+
+    #[test]
+    fn draft_stats_count_every_block_and_start_over_per_request() {
+        let mut session = drafting_session();
+        assert_eq!(
+            session.dflash_draft_stats(),
+            Some(DFlashDraftStats::default())
+        );
+        session.dflash_propose_at(5, 9, 4).unwrap().unwrap();
+        session.dflash_propose_at(6, 10, 4).unwrap().unwrap();
+        let stats = session.dflash_draft_stats().unwrap();
+        assert_eq!(stats.proposals, 2);
+        assert_eq!(stats.draft_us(), stats.propose_us + stats.ingest_us);
+        session.dflash_reset_health();
+        assert_eq!(
+            session.dflash_draft_stats(),
+            Some(DFlashDraftStats::default())
+        );
+    }
+
+    #[test]
+    fn a_deferred_ingest_is_held_only_until_the_next_draft_operation() {
+        crate::test_support::require_native_runtime();
+        let mut session = drafting_session();
+        let rows = [0.5_f32; 4];
+        session.dflash.as_mut().unwrap().pending = Some(PendingIngest {
+            features: rows.to_vec(),
+            positions: vec![3, 4],
+            end: 5,
+            truncate_from: None,
+        });
+        assert!(session.dflash_ingest_pending());
+        // A proposal injects held rows first; with the draft gone they are
+        // simply dropped, never carried past it.
+        session.dflash_propose_at(5, 5, 4).unwrap();
+        assert!(!session.dflash_ingest_pending());
+
+        session.dflash.as_mut().unwrap().pending = Some(PendingIngest {
+            features: rows.to_vec(),
+            positions: vec![5, 6],
+            end: 7,
+            truncate_from: None,
+        });
+        session.dflash_defer_next_ingest();
+        // A replaced target state makes held rows moot, and the deferral too.
+        session.dflash_after_replace();
+        assert!(!session.dflash_ingest_pending());
+        assert!(!session.dflash.as_ref().unwrap().defer_next_ingest);
     }
 
     #[test]

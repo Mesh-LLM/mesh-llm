@@ -11,7 +11,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{runtime_state::RuntimeState, telemetry::lifecycle_attrs};
+use crate::{
+    runtime_state::{DeferredDFlashDraft, RuntimeState},
+    telemetry::lifecycle_attrs,
+};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use skippy_metrics::attr;
@@ -599,7 +602,13 @@ pub(crate) fn run_binary_stage_message(
     options: BinaryStageExecutionOptions,
 ) -> Result<(i32, Vec<i32>, ActivationFrame, Option<StageNativeMtpDraft>)> {
     runtime.dflash_split_input(session_id, input);
+    // A draft owed for an earlier window is moot once the next message lands.
+    runtime.dflash_take_deferred_draft(session_id);
     let dflash_tokens = dflash_draft_tokens(runtime, message);
+    let early_verdict = dflash_early_verdict(message, dflash_tokens);
+    if early_verdict {
+        runtime.dflash_defer_next_ingest(session_id);
+    }
     let (predicted, mut predicted_tokens, mut output, mut draft) = execute_binary_stage_message(
         runtime,
         session_id,
@@ -610,6 +619,20 @@ pub(crate) fn run_binary_stage_message(
         dflash_tokens > 0,
     )?;
     runtime.dflash_split_output(session_id, &mut output);
+    if early_verdict {
+        // The verdict goes back first; the caller drafts with
+        // `run_deferred_dflash_draft` once it is on the wire.
+        runtime.dflash_defer_draft(
+            session_id,
+            DeferredDFlashDraft {
+                window: token_ids.to_vec(),
+                predicted_tokens: predicted_tokens.clone(),
+                max_tokens: dflash_tokens,
+                accepts_after_correction: message.state.accepts_native_mtp_draft_after_correction(),
+            },
+        );
+        return Ok((predicted, predicted_tokens, output, draft));
+    }
     if dflash_tokens > 0 {
         let window = (message.kind == WireMessageKind::VerifyWindow).then_some(token_ids);
         if let Some(proposal) = propose_dflash_after(
@@ -640,6 +663,47 @@ pub(crate) fn run_binary_stage_message(
         }
     }
     Ok((predicted, predicted_tokens, output, draft))
+}
+
+/// Whether to answer this message with an early verdict: a verify window
+/// whose sender reads one, on a final stage that drafts its next block.
+fn dflash_early_verdict(message: &StageWireMessage, dflash_tokens: usize) -> bool {
+    dflash_tokens > 0
+        && message.kind == WireMessageKind::VerifyWindow
+        && message.state.split_dflash_early_verdict()
+}
+
+/// Drafts the block a final stage owes stage 0 after an early verdict on
+/// this session's last verify window. `None` when nothing is owed, or the
+/// draft has nothing to propose, or proposes after a rejected window to a
+/// sender that cannot use it.
+pub(crate) fn run_deferred_dflash_draft(
+    runtime: &mut RuntimeState,
+    session_id: &str,
+) -> Result<Option<StageNativeMtpDraft>> {
+    let Some(deferred) = runtime.dflash_take_deferred_draft(session_id) else {
+        return Ok(None);
+    };
+    let Some(proposal) = propose_dflash_after(
+        runtime,
+        session_id,
+        Some(&deferred.window),
+        &deferred.predicted_tokens,
+        deferred.max_tokens,
+    )?
+    else {
+        return Ok(None);
+    };
+    let proposal = NativeMtpDraft {
+        token_ids: proposal.tokens,
+        proposal_compute_us: i64::try_from(proposal.proposal_compute_us).unwrap_or(i64::MAX),
+    };
+    Ok(verify_reply_native_mtp_draft(
+        Some(stage_native_mtp_draft(proposal)),
+        &deferred.window,
+        &deferred.predicted_tokens,
+        deferred.accepts_after_correction,
+    ))
 }
 
 /// Draft tokens stage 0 asked a DFlash final stage to propose with this
@@ -1101,8 +1165,10 @@ pub(in crate::binary_transport) fn first_decode_message_with_full_prompt_sideban
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_record_tokens_sideband, first_decode_message_with_full_prompt_sideband,
-        is_decode_frame_batch_candidate, prefix_cache_test_config,
+        BinaryStageExecutionOptions, DeferredDFlashDraft, RuntimeState,
+        decode_record_tokens_sideband, dflash_early_verdict,
+        first_decode_message_with_full_prompt_sideband, is_decode_frame_batch_candidate,
+        prefix_cache_test_config, run_binary_stage_message, run_deferred_dflash_draft,
         stage_output_activation_capacity, take_ready_downstream, take_warm_or_connect_downstream,
         token_sideband_or_fill, warm_downstream_is_healthy,
         warm_downstream_preconnect_enabled_from,
@@ -1288,6 +1354,88 @@ mod tests {
 
         assert!(error.to_string().contains("cancelled during shutdown"));
         task.join().unwrap();
+    }
+
+    #[test]
+    fn only_verify_windows_of_senders_that_ask_get_an_early_verdict() {
+        let mut verify = test_message(WireMessageKind::VerifyWindow, 5);
+        assert!(!dflash_early_verdict(&verify, 4));
+        verify.state.set_split_dflash_early_verdict(true);
+        assert!(dflash_early_verdict(&verify, 4));
+        // Nothing to draft: the reply carries everything.
+        assert!(!dflash_early_verdict(&verify, 0));
+        // A serial decode's draft rides its prediction vector.
+        let mut decode = test_message(WireMessageKind::DecodeEmbd, 1);
+        decode.state.set_split_dflash_early_verdict(true);
+        assert!(!dflash_early_verdict(&decode, 4));
+    }
+
+    #[test]
+    fn an_owed_draft_is_drafted_once_and_counted() {
+        skippy_runtime::test_support::require_native_runtime();
+        let mut runtime = RuntimeState::split_dflash_final_stage_for_test();
+        let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
+        state.set_split_dflash(true);
+        // Creates the session's lane.
+        runtime.dflash_split_input("s", None);
+        assert!(
+            run_deferred_dflash_draft(&mut runtime, "s")
+                .unwrap()
+                .is_none()
+        );
+
+        runtime.dflash_defer_draft(
+            "s",
+            DeferredDFlashDraft {
+                window: vec![10, 11, 12, 13, 14],
+                predicted_tokens: vec![11, 12, 99, 1, 2],
+                max_tokens: 4,
+                accepts_after_correction: true,
+            },
+        );
+        assert!(runtime.dflash_draft_deferred("s"));
+        // The detached draft has no context, so the block is empty, but it
+        // is drafted and counted.
+        let draft = run_deferred_dflash_draft(&mut runtime, "s").unwrap();
+        assert!(draft.is_none_or(|draft| draft.token_ids.is_empty()));
+        assert!(!runtime.dflash_draft_deferred("s"));
+        assert_eq!(runtime.dflash_reply_stats("s", state).dflash_drafts, 1);
+        // Nothing is owed twice.
+        assert!(
+            run_deferred_dflash_draft(&mut runtime, "s")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(runtime.dflash_reply_stats("s", state).dflash_drafts, 1);
+    }
+
+    #[test]
+    fn a_new_message_drops_a_draft_still_owed() {
+        let mut runtime = RuntimeState::split_dflash_final_stage_for_test();
+        runtime.dflash_split_input("s", None);
+        runtime.dflash_defer_draft(
+            "s",
+            DeferredDFlashDraft {
+                window: vec![1, 2],
+                predicted_tokens: vec![2, 3],
+                max_tokens: 4,
+                accepts_after_correction: false,
+            },
+        );
+        let stop = test_message(WireMessageKind::Stop, 0);
+        // Stop is not executable; the owed draft is dropped before that.
+        assert!(
+            run_binary_stage_message(
+                &mut runtime,
+                "s",
+                &stop,
+                &[],
+                None,
+                BinaryStageExecutionOptions::new(false, 0, false),
+            )
+            .is_err()
+        );
+        assert!(!runtime.dflash_draft_deferred("s"));
     }
 
     #[test]

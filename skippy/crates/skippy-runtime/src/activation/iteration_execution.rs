@@ -60,24 +60,19 @@ fn forward_dflash_features(
 }
 
 /// Hands a split final stage's draft the DFlash feature rows each request's
-/// input frame carries, as a stage message would. A frame without them leaves
-/// the draft nothing to ingest, which it counts as missing rows.
+/// input frame carries, as a stage message would, and lets a stage that
+/// starts on a draft target layer keep its input to forward. A frame without
+/// rows leaves the draft nothing to ingest, which it counts as missing rows.
 fn receive_dflash_features(requests: &mut [IterationBatchRequest<'_>]) {
     for request in requests.iter_mut() {
-        if !request.session.dflash_attached() {
+        if !request.session.dflash_reads_input() {
             continue;
         }
-        let rows = match request.input.map(crate::DFlashFeatureRows::from_frame) {
-            Some(Ok(rows)) => rows,
-            Some(Err(error)) => {
-                crate::write_native_log_note(format!(
-                    "dflash feature parts are malformed, dropped: {error:#}"
-                ));
-                None
-            }
-            None => None,
-        };
-        request.session.dflash_set_remote_features(rows);
+        if let Err(error) = request.session.dflash_receive_input(request.input) {
+            crate::write_native_log_note(format!(
+                "dflash feature rows are malformed, dropped: {error:#}"
+            ));
+        }
     }
 }
 

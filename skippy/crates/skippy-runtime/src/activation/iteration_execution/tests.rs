@@ -286,10 +286,12 @@ fn iteration_frames_carry_captured_dflash_rows() {
 
     forward_dflash_features(&mut requests, &mut frames);
 
-    assert_eq!(
-        crate::DFlashFeatureRows::from_frame(&frames[0]).unwrap(),
-        Some(rows)
-    );
+    let forwarded = crate::DFlashFeatureRows::from_frame(&frames[0])
+        .unwrap()
+        .expect("the capturing stage's frame carries its rows");
+    assert_eq!(forwarded.layer_ids().collect::<Vec<_>>(), vec![6]);
+    let value = forwarded.rows_of(6, 0, 1).unwrap()[0];
+    assert!((value - 0.5).abs() < 0.5 / 128.0, "{value}");
     assert_eq!(
         crate::DFlashFeatureRows::from_frame(&frames[1]).unwrap(),
         None
@@ -307,7 +309,8 @@ fn iteration_batches_hand_frame_features_to_the_draft() {
         desc: activation_desc(4),
         payload: vec![0; 4],
     };
-    rows.append_to_frame(&mut frame).unwrap();
+    rows.append_to_frame_as(&mut frame, crate::DFlashFeatureEncoding::Bf16)
+        .unwrap();
     let mut drafting = batch_session(true, true);
     drafting.dflash = Some(crate::dflash::DFlashSessionLink::detached(0));
     let mut capturing = batch_session(false, true);

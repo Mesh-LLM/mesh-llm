@@ -21,6 +21,8 @@ pub(crate) fn forwarded_stage_message(
 pub(crate) struct ForwardedStageMessage {
     pub message: StageWireMessage,
     pub activation_encode_ms: f64,
+    /// Bytes of the message's activation that are DFlash feature rows.
+    pub dflash_feature_bytes: usize,
 }
 
 /// Forward stage execution metadata while substituting the produced activation frame.
@@ -97,6 +99,7 @@ pub(crate) fn forwarded_stage_message_timed(
             raw_bytes: Vec::new(),
         },
         activation_encode_ms: encode_started.elapsed().as_secs_f64() * 1000.0,
+        dflash_feature_bytes: skippy_runtime::dflash_feature_payload_bytes(output),
     })
 }
 
@@ -339,6 +342,42 @@ mod tests {
         let decoded = decoded.activation_frame().unwrap().unwrap();
         assert_eq!(decoded.desc, stage_activation_desc(&frame.desc).unwrap());
         assert_eq!(&decoded.payload[8..], top_k);
+    }
+
+    #[test]
+    fn dflash_feature_rows_cross_every_codec_unchanged_and_are_counted() {
+        let mut frame = f32_frame(1, &[1.0, -2.0]);
+        let mut rows = skippy_runtime::DFlashFeatureRows::new(2, 1);
+        rows.insert(17, vec![3.0, -1.0]).unwrap();
+        rows.append_to_frame_as(&mut frame, skippy_runtime::DFlashFeatureEncoding::Q8)
+            .unwrap();
+        let features = frame.payload[8..].to_vec();
+        assert_eq!(features.len(), 4);
+        for codec in [
+            StageActivationCodec::RawF32V1,
+            StageActivationCodec::F16RneV1,
+            StageActivationCodec::S8RowF32RneV1,
+            StageActivationCodec::Fp8E4m3RowF32RneV1,
+            StageActivationCodec::Fp8E4m3Block32E8m0RneV1,
+        ] {
+            let mut config = stage_config();
+            config.activation_codec = codec;
+
+            let forwarded =
+                forwarded_stage_message_timed(&config, &incoming_message(), &frame, 2).unwrap();
+
+            assert_eq!(forwarded.dflash_feature_bytes, features.len());
+            let mut wire = Vec::new();
+            skippy_protocol::binary::write_stage_message(&mut wire, &forwarded.message).unwrap();
+            let decoded = skippy_protocol::binary::read_stage_message_for_codec(
+                std::io::Cursor::new(wire),
+                2,
+                codec,
+            )
+            .unwrap();
+            let decoded = decoded.activation_frame().unwrap().unwrap();
+            assert_eq!(&decoded.payload[8..], &features[..], "{codec:?}");
+        }
     }
 
     #[test]

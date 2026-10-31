@@ -978,7 +978,10 @@ mod tests {
                 proposal_compute_us: 123,
                 follows_correction: false,
             }),
-            window: skippy_protocol::binary::StageReplyWindow { window_id: 7 },
+            window: skippy_protocol::binary::StageReplyWindow {
+                window_id: 7,
+                draft_follows: false,
+            },
             stats: Default::default(),
         };
         send_direct_prediction_return(&mut server, reply).unwrap();

@@ -198,13 +198,19 @@ pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
 }
 
 /// The largest split DFlash draft-context counters a final stage reported
-/// for this generation's session. Its replies carry running totals.
+/// for this generation's session, whose replies carry running totals, and
+/// the feature-row bytes stage 0 sent it.
 #[derive(Debug, Default)]
 pub(in crate::frontend) struct SplitDFlashHealth {
     feature_rows_missing: std::sync::atomic::AtomicI64,
     draft_context_resets: std::sync::atomic::AtomicI64,
     verify_rollbacks_in_place: std::sync::atomic::AtomicI64,
     verify_rollbacks_checkpointed: std::sync::atomic::AtomicI64,
+    draft_us: std::sync::atomic::AtomicI64,
+    drafts: std::sync::atomic::AtomicI64,
+    ingest_us: std::sync::atomic::AtomicI64,
+    prefill_feature_bytes: std::sync::atomic::AtomicUsize,
+    decode_feature_bytes: std::sync::atomic::AtomicUsize,
 }
 
 /// Split DFlash counters for a generation's response timings.
@@ -216,6 +222,11 @@ pub(in crate::frontend) struct SplitDFlashCounts {
     /// back in place, and held in a host checkpoint.
     pub(in crate::frontend) downstream_rollbacks_in_place: i64,
     pub(in crate::frontend) downstream_rollbacks_checkpointed: i64,
+    /// The final stage's draft time, block drafts, and the part of that time
+    /// spent injecting feature rows.
+    pub(in crate::frontend) draft_us: i64,
+    pub(in crate::frontend) drafts: i64,
+    pub(in crate::frontend) ingest_us: i64,
     /// The same on stage 0, when it could be read.
     pub(in crate::frontend) stage0_rollbacks: Option<skippy_runtime::VerifyRollbackCounts>,
 }
@@ -231,6 +242,32 @@ impl SplitDFlashHealth {
             .fetch_max(stats.verify_rollbacks_in_place, Ordering::Relaxed);
         self.verify_rollbacks_checkpointed
             .fetch_max(stats.verify_rollbacks_checkpointed, Ordering::Relaxed);
+        self.draft_us
+            .fetch_max(stats.dflash_draft_us, Ordering::Relaxed);
+        self.drafts
+            .fetch_max(stats.dflash_drafts, Ordering::Relaxed);
+        self.ingest_us
+            .fetch_max(stats.dflash_ingest_us, Ordering::Relaxed);
+    }
+
+    /// Counts the DFlash feature-row bytes of a frame stage 0 forwarded, in
+    /// prefill or in decode (verify windows and fused restores included).
+    pub(in crate::frontend) fn record_feature_bytes(&self, prefill: bool, bytes: usize) {
+        use std::sync::atomic::Ordering;
+        let counter = if prefill {
+            &self.prefill_feature_bytes
+        } else {
+            &self.decode_feature_bytes
+        };
+        counter.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    pub(in crate::frontend) fn feature_bytes(&self) -> SplitDFlashFeatureBytes {
+        use std::sync::atomic::Ordering;
+        SplitDFlashFeatureBytes {
+            prefill_bytes: self.prefill_feature_bytes.load(Ordering::Relaxed),
+            decode_bytes: self.decode_feature_bytes.load(Ordering::Relaxed),
+        }
     }
 
     pub(in crate::frontend) fn counts(
@@ -245,6 +282,9 @@ impl SplitDFlashHealth {
             downstream_rollbacks_checkpointed: self
                 .verify_rollbacks_checkpointed
                 .load(Ordering::Relaxed),
+            draft_us: self.draft_us.load(Ordering::Relaxed),
+            drafts: self.drafts.load(Ordering::Relaxed),
+            ingest_us: self.ingest_us.load(Ordering::Relaxed),
             stage0_rollbacks,
         }
     }
@@ -255,6 +295,15 @@ impl EmbeddedStageZeroGeneration<'_> {
     /// decode and verify messages say so.
     pub(in crate::frontend) fn split_dflash(&self) -> bool {
         self.split_dflash_draft.is_some()
+    }
+
+    /// Records the DFlash feature-row bytes of a frame this generation
+    /// forwarded from stage 0.
+    pub(in crate::frontend) fn record_forwarded_features(&self, prefill: bool, bytes: usize) {
+        if self.split_dflash() {
+            self.split_dflash_health
+                .record_feature_bytes(prefill, bytes);
+        }
     }
 
     /// Records the draft-context counters a downstream reply carries.
@@ -343,6 +392,7 @@ pub(in crate::frontend) struct GeneratedText {
     pub(in crate::frontend) predicted_ms: f64,
     pub(in crate::frontend) queue_wait_ms: f64,
     pub(in crate::frontend) restore_ms: f64,
+    pub(in crate::frontend) split_prefix_cache: Option<SplitPrefixCacheStats>,
     pub(in crate::frontend) text: String,
     pub(in crate::frontend) finish_reason: FinishReason,
     pub(in crate::frontend) detokenize_ms: f64,
@@ -361,6 +411,16 @@ pub(in crate::frontend) struct ActivationWireStats {
     /// The configured codec, or `auto-lossless-v1` when the producer picks an
     /// exact encoding per frame.
     pub(in crate::frontend) codec: &'static str,
+    pub(in crate::frontend) prefill_bytes: usize,
+    pub(in crate::frontend) decode_bytes: usize,
+    /// On a split DFlash target, the share of those bytes that were the
+    /// draft's feature rows.
+    pub(in crate::frontend) dflash_features: Option<SplitDFlashFeatureBytes>,
+}
+
+/// DFlash feature-row payload bytes stage 0 sent to the next stage, by phase.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(in crate::frontend) struct SplitDFlashFeatureBytes {
     pub(in crate::frontend) prefill_bytes: usize,
     pub(in crate::frontend) decode_bytes: usize,
 }
@@ -395,6 +455,88 @@ impl ActivationWireStats {
         timings.insert(
             "activation_decode_bytes_per_token".to_string(),
             json!(per_token(self.decode_bytes, completion_tokens)),
+        );
+        if let Some(features) = self.dflash_features {
+            timings.insert(
+                "dflash_feature_prefill_bytes".to_string(),
+                json!(features.prefill_bytes),
+            );
+            timings.insert(
+                "dflash_feature_prefill_bytes_per_token".to_string(),
+                json!(per_token(features.prefill_bytes, prefill_tokens)),
+            );
+            timings.insert(
+                "dflash_feature_decode_bytes".to_string(),
+                json!(features.decode_bytes),
+            );
+            timings.insert(
+                "dflash_feature_decode_bytes_per_token".to_string(),
+                json!(per_token(features.decode_bytes, completion_tokens)),
+            );
+        }
+    }
+}
+
+/// A split's prompt prefix cache for one response, as stage 0 saw it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(in crate::frontend) struct SplitPrefixCacheStats {
+    /// Prompt tokens every stage restored instead of prefilling.
+    pub(in crate::frontend) hit_tokens: usize,
+    /// Stages that confirmed the restore, stage 0 included.
+    pub(in crate::frontend) hit_stages: u32,
+    /// Activation bytes stage 0 wrote to the next stage while prefilling the
+    /// rest of the prompt: the first hop, payload only.
+    pub(in crate::frontend) prefill_bytes_sent: usize,
+    /// Activation bytes the restore kept off the wire, over every hop between
+    /// the stages that restored.
+    pub(in crate::frontend) bytes_saved: usize,
+}
+
+impl SplitPrefixCacheStats {
+    /// Stats for a prefill that restored `hit_tokens` on `hit_stages` stages
+    /// and then sent `prefill_bytes_sent` for `prefilled_tokens` more. Saved
+    /// bytes are priced at this request's measured rate per prefilled token,
+    /// which includes any split DFlash feature rows, or at an f32 activation
+    /// row when nothing was prefilled.
+    pub(in crate::frontend) fn new(
+        hit_tokens: usize,
+        hit_stages: u32,
+        prefill_bytes_sent: usize,
+        prefilled_tokens: usize,
+        activation_width: i32,
+    ) -> Self {
+        let bytes_per_token = prefill_bytes_sent
+            .checked_div(prefilled_tokens)
+            .unwrap_or_else(|| {
+                usize::try_from(activation_width).unwrap_or(0) * std::mem::size_of::<f32>()
+            });
+        let hops = usize::try_from(hit_stages.saturating_sub(1)).unwrap_or(0);
+        Self {
+            hit_tokens,
+            hit_stages,
+            prefill_bytes_sent,
+            bytes_saved: hit_tokens
+                .saturating_mul(bytes_per_token)
+                .saturating_mul(hops),
+        }
+    }
+
+    fn insert_response_timings(&self, timings: &mut BTreeMap<String, Value>) {
+        timings.insert(
+            "prefix_cache_hit_tokens".to_string(),
+            json!(self.hit_tokens),
+        );
+        timings.insert(
+            "prefix_cache_hit_stages".to_string(),
+            json!(self.hit_stages),
+        );
+        timings.insert(
+            "prefix_cache_prefill_bytes_sent".to_string(),
+            json!(self.prefill_bytes_sent),
+        );
+        timings.insert(
+            "prefix_cache_bytes_saved".to_string(),
+            json!(self.bytes_saved),
         );
     }
 }
@@ -492,6 +634,9 @@ impl GeneratedText {
                 self.prompt_tokens.saturating_sub(1)
             };
             wire.insert_response_timings(&mut timings, prefill_tokens, self.completion_tokens);
+        }
+        if let Some(stats) = self.split_prefix_cache.as_ref() {
+            stats.insert_response_timings(&mut timings);
         }
         Some(timings)
     }

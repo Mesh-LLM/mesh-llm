@@ -142,7 +142,20 @@ pub(in crate::frontend) struct NativeMtpDecodeCounters {
     /// Compute on the stages after stage 0 across verify windows, including
     /// any draft the final stage runs before it replies.
     verify_window_downstream_compute_us: i64,
+    /// Per draft position (index 0 is the first proposed token): how often a
+    /// window verified it, and how often the target accepted it. A position
+    /// is verified when every position before it in its block was accepted.
+    draft_position_verified: [u64; MAX_TRACKED_DRAFT_POSITIONS],
+    draft_position_accepted: [u64; MAX_TRACKED_DRAFT_POSITIONS],
+    /// Split DFlash early verdicts: how long stage 0 still waited for the
+    /// draft after it had committed the verdict.
+    early_verdict_draft_waits: usize,
+    early_verdict_draft_wait_ms: f64,
 }
+
+/// Draft positions the per-position acceptance counters cover: a trained
+/// DFlash block's 15 proposals.
+const MAX_TRACKED_DRAFT_POSITIONS: usize = 15;
 
 impl NativeMtpDecodeCounters {
     pub(in crate::frontend) fn verify_window_verification_count(&self) -> usize {
@@ -151,6 +164,34 @@ impl NativeMtpDecodeCounters {
 
     pub(in crate::frontend) fn observe_verify_window_downstream_compute(&mut self, micros: i64) {
         self.verify_window_downstream_compute_us += micros.max(0);
+    }
+
+    /// Records a verify window over draft positions `offset..offset + width`
+    /// of its block, of which the first `accepted` were accepted.
+    pub(in crate::frontend) fn observe_draft_positions(
+        &mut self,
+        offset: usize,
+        width: usize,
+        accepted: usize,
+    ) {
+        let verified = width.min(accepted.saturating_add(1));
+        for index in 0..verified {
+            let Some(position) = offset
+                .checked_add(index)
+                .filter(|position| *position < MAX_TRACKED_DRAFT_POSITIONS)
+            else {
+                break;
+            };
+            self.draft_position_verified[position] += 1;
+            if index < accepted {
+                self.draft_position_accepted[position] += 1;
+            }
+        }
+    }
+
+    pub(in crate::frontend) fn observe_early_verdict_draft_wait(&mut self, wait_ms: f64) {
+        self.early_verdict_draft_waits += 1;
+        self.early_verdict_draft_wait_ms += wait_ms.max(0.0);
     }
 
     pub(in crate::frontend) fn observe_suppressed_cooldown_draft(&mut self) {
@@ -464,6 +505,33 @@ impl NativeMtpDecodeCounters {
             "native_mtp_verify_window_verifications".to_string(),
             json!(self.verify_window_verification_count),
         );
+        let positions = self
+            .draft_position_verified
+            .iter()
+            .rposition(|verified| *verified > 0)
+            .map_or(0, |last| last + 1);
+        if positions > 0 {
+            // Index i is draft position i + 1; accepted / verified at a
+            // position is its conditional acceptance.
+            timings.insert(
+                "draft_position_verified".to_string(),
+                json!(&self.draft_position_verified[..positions]),
+            );
+            timings.insert(
+                "draft_position_accepted".to_string(),
+                json!(&self.draft_position_accepted[..positions]),
+            );
+        }
+        if self.early_verdict_draft_waits > 0 {
+            timings.insert(
+                "dflash_early_verdicts".to_string(),
+                json!(self.early_verdict_draft_waits),
+            );
+            timings.insert(
+                "dflash_early_verdict_draft_wait_ms".to_string(),
+                json!(self.early_verdict_draft_wait_ms),
+            );
+        }
         timings.insert(
             "native_mtp_verify_window_downstream_compute_us".to_string(),
             json!(self.verify_window_downstream_compute_us),
@@ -661,6 +729,33 @@ mod tests {
         CompositeProposalProvider::from_options(options())
             .propose_with_ngram_extension(&[3], &context, 4, 4, Some(&mut cache))
             .unwrap()
+    }
+
+    #[test]
+    fn draft_positions_count_conditional_acceptance() {
+        let mut counters = NativeMtpDecodeCounters::default();
+        // A full block of four accepted.
+        counters.observe_draft_positions(0, 4, 4);
+        // Rejected at position 2: positions 1 and 2 verified, 1 accepted.
+        counters.observe_draft_positions(0, 4, 1);
+        // A narrower window over positions 3..=4 of an earlier block.
+        counters.observe_draft_positions(2, 2, 0);
+        let mut timings = BTreeMap::new();
+        counters.insert_response_timings(&mut timings);
+        assert_eq!(timings["draft_position_verified"], json!([2, 2, 2, 1]));
+        assert_eq!(timings["draft_position_accepted"], json!([2, 1, 1, 1]));
+        assert!(!timings.contains_key("dflash_early_verdicts"));
+
+        counters.observe_early_verdict_draft_wait(2.5);
+        counters.observe_draft_positions(14, 4, 4);
+        let mut timings = BTreeMap::new();
+        counters.insert_response_timings(&mut timings);
+        assert_eq!(timings["dflash_early_verdicts"], json!(1));
+        // Positions past a trained block are not tracked.
+        assert_eq!(
+            timings["draft_position_verified"].as_array().unwrap().len(),
+            MAX_TRACKED_DRAFT_POSITIONS
+        );
     }
 
     #[test]
