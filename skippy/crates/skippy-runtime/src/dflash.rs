@@ -1414,6 +1414,7 @@ mod tests {
 
     #[test]
     fn a_deferred_ingest_is_held_only_until_the_next_draft_operation() {
+        crate::test_support::require_native_runtime();
         let mut session = drafting_session();
         let rows = [0.5_f32; 4];
         session.dflash.as_mut().unwrap().pending = Some(PendingIngest {
