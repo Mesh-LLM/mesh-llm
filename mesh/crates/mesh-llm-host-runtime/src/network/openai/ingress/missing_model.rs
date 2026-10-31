@@ -184,6 +184,27 @@ pub(super) async fn route_missing_local_model(
         RemoteMeshRoute::NoRemoteHost => {}
     }
 
+    route_without_a_mesh_host(
+        tcp_stream,
+        request,
+        ctx,
+        model_name,
+        excluded,
+        route_observer,
+    )
+    .await
+}
+
+/// A model no mesh peer serves: a retryable 503 while it loads or drains
+/// here, the exclusion 409, a plugin, or a 404.
+async fn route_without_a_mesh_host(
+    tcp_stream: ClientStream,
+    request: &mut proxy::BufferedHttpRequest,
+    ctx: &IngressRouteContext<'_>,
+    model_name: &str,
+    excluded: &[iroh::EndpointId],
+    route_observer: OpenAiRouteObserver<'_>,
+) -> proxy::RouteDispatchOutcome {
     // Return 503 while the model loads or drains here so clients can retry;
     // return 404 only when the model truly doesn't exist anywhere.
     if unavailable_locally(ctx, model_name, excluded).await {
