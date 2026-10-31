@@ -1,4 +1,5 @@
 pub(super) mod cache_runtime;
+mod cache_wave;
 mod detached_runtime;
 mod direct_batch;
 mod direct_execution;
@@ -381,6 +382,7 @@ struct SchedulerWorker {
     max_commands_per_turn: usize,
     iteration_interval: Duration,
     active_runtime_sessions: usize,
+    cache_wave_sessions: usize,
     direct_wave_full: bool,
     telemetry: Option<Telemetry>,
     last_served_direct: bool,
@@ -495,6 +497,7 @@ impl IterationScheduler {
                     max_commands_per_turn: command_queue_capacity.min(MAX_COMMANDS_PER_TURN),
                     iteration_interval,
                     active_runtime_sessions: 0,
+                    cache_wave_sessions: 0,
                     direct_wave_full: false,
                     telemetry: Some(telemetry),
                     compute_meter,
@@ -898,6 +901,7 @@ impl SchedulerWorker {
             {
                 continue;
             }
+            self.refresh_cache_wave_sessions();
             if self.should_defer_cache_runtime() {
                 if !self.wait_for_scheduler_command(DIRECT_ITERATION_COALESCE_WINDOW) {
                     return;
@@ -907,7 +911,7 @@ impl SchedulerWorker {
             let cache_fill_wave_pending = should_fill_cache_runtime_wave(
                 !self.direct_iterations.is_empty(),
                 self.cache_runtime_queue.has_wave_aware_operations(),
-                self.active_runtime_sessions,
+                self.cache_wave_sessions,
                 self.max_direct_batch_size,
             );
             let coalesce_direct = should_coalesce_direct_iterations(
@@ -961,15 +965,6 @@ impl SchedulerWorker {
         }
     }
 
-    fn should_defer_cache_runtime(&self) -> bool {
-        self.cache_runtime_queue.has_wave_aware_operations()
-            && self.direct_wave_full
-            && self.active_runtime_sessions >= self.max_direct_batch_size
-            && self.direct_iterations.is_empty()
-            && self.requests.is_empty()
-            && !self.cache_runtime_queue.is_empty()
-    }
-
     fn wait_for_scheduler_command(&mut self, timeout: Duration) -> bool {
         match self.commands.recv_timeout(timeout) {
             Ok(SchedulerCommand::Shutdown) => {
@@ -982,47 +977,6 @@ impl SchedulerWorker {
             }
             Err(std_mpsc::RecvTimeoutError::Timeout) => true,
             Err(std_mpsc::RecvTimeoutError::Disconnected) => false,
-        }
-    }
-
-    fn run_work_turn(&mut self) {
-        let has_cache_runtime = !self.cache_runtime_queue.is_empty();
-        let has_wave_aware_cache_runtime = self.cache_runtime_queue.has_wave_aware_operations();
-        let has_direct = !self.direct_iterations.is_empty();
-        let has_planned = !self.requests.is_empty();
-        let has_iteration = has_planned || has_direct;
-        if has_wave_aware_cache_runtime
-            && has_direct
-            && self.active_runtime_sessions >= self.max_direct_batch_size
-        {
-            self.direct_wave_full = true;
-        }
-        let suppress_cache_runtime = should_suppress_cache_runtime(
-            has_wave_aware_cache_runtime,
-            self.direct_wave_full,
-            self.active_runtime_sessions,
-            self.max_direct_batch_size,
-        );
-        let fill_cache_wave = should_fill_cache_runtime_wave(
-            has_direct,
-            has_wave_aware_cache_runtime,
-            self.active_runtime_sessions,
-            self.max_direct_batch_size,
-        );
-        let serve_cache_runtime = !suppress_cache_runtime
-            && (fill_cache_wave
-                || should_serve_cache_runtime(
-                    has_cache_runtime,
-                    has_iteration,
-                    self.last_served_cache_runtime,
-                ));
-        self.cache_runtime_queue.advance_turn();
-        if serve_cache_runtime {
-            self.last_served_cache_runtime = true;
-            self.run_cache_runtime_operation();
-        } else {
-            self.last_served_cache_runtime = false;
-            self.run_iteration();
         }
     }
 
@@ -1045,8 +999,12 @@ impl SchedulerWorker {
         // waits, including lock contention, are excluded from the meter.
         let compute = (operation.run)(&self.runtime);
         self.record_compute(compute);
-        self.active_runtime_sessions = lock_runtime(&self.runtime).active_session_count();
-        if self.active_runtime_sessions < self.max_direct_batch_size {
+        {
+            let runtime = lock_runtime(&self.runtime);
+            self.active_runtime_sessions = runtime.active_session_count();
+            self.cache_wave_sessions = runtime.nonempty_active_session_count();
+        }
+        if self.cache_wave_sessions < self.max_direct_batch_size {
             self.direct_wave_full = false;
         } else if cache.as_ref().is_some_and(|cache| cache.wave_aware) {
             // A cache restore may complete before its caller can enqueue
@@ -1629,7 +1587,8 @@ impl SchedulerWorker {
             runtime.active_session_count()
         };
         self.active_runtime_sessions = active_runtime_sessions;
-        if active_runtime_sessions < self.max_direct_batch_size {
+        self.refresh_cache_wave_sessions();
+        if self.cache_wave_sessions < self.max_direct_batch_size {
             self.direct_wave_full = false;
         }
     }
