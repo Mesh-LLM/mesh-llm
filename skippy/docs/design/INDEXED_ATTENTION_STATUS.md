@@ -1,5 +1,65 @@
 # Indexed KV attention: review candidate
 
+## Current repair: retain ordinary attention execution
+
+The automatic indexed graph is being withheld because it fails the unchanged
+full-model baseline arithmetic contract. This also happens without saved cache
+owners or checkpoint imports: fresh base/head controls have exact same-source
+repeats, but cross-source maximum logit deltas are `0.223699808` at c1 and
+`0.857750654` at c4, with zero and three greedy differences respectively.
+These failures remain recorded; operator accuracy tests do not waive them.
+
+The conservative native repair candidate is `00983cf474939f13c2d8a151efe7355518642906`,
+tree `e709f20cf29ae4df087e4d20719fec5e267b554d`, queue
+`72b73c5eaf35a818d8b38043f41955565e4786eca998e4209456951bf00b38db`.
+It declines automatic indexed read plans at the common graph-admission point,
+consistently during construction and reuse. Ordinary attention retains its
+existing query layout, physical key extent and backend selection. This is not
+a CPU fallback, model exception, new configuration switch or tolerance change.
+The public indexed GGML operator remains independently available and tested.
+Default-model fixtures explicitly require absent index inputs and the selected
+backend; stored KV types and attention-input types are reported separately.
+
+The preceding ordinary-graph candidate `4c133af3` matched the retained CUDA c4
+canonical and fresh-context baseline exactly, but still differed at c1.
+Graph-disabled controls reproduced the same c1 difference. Nsight found 234
+registers and six VEC partial reductions in the baseline versus 150 registers
+and nine partials in the modified kernel. The occupancy-based launcher changed
+the partitioning without a selector change. This repair therefore preserves
+the original ordinary VEC body separately from indexed row loading. Selection
+depends only on the presence of index inputs; register and grid counts are not
+hardcoded. Source-matched CUDA builds now pass the unchanged fresh c1/c4
+baseline comparisons: all six repeat/cross comparisons have maximum logit
+delta zero and no greedy differences (`job_mkz3w1kj6zqmpy5`). The retained
+canonical c4 replay also passes all four comparisons exactly
+(`job_wjm2d0ge3h65req`). Actual Nsight launches restore 234 registers/thread,
+grid 1x6x16, block 32x4 and 16,640 shared bytes across all 256 observed VEC
+decode launches (`job_vs97wb6qvq6z4fz`). All 51 downloaded artifacts across
+these three controls passed independent size and SHA-256 verification.
+
+Strict cross-placement resident continuation remains a separate open contract.
+The actual Qwen3.5-4B CUDA fixture fails identically on retained ordinary `f71`
+and candidate `4c133af3`; saved prefix and cold-export bytes pass, but computed
+continuation logits and KV pages differ. Extra Llama-1B Metal tests also fail
+the unchanged strict continuation comparison. A separate public-API control
+against true unpatched llama.cpp reproduces the same F16 continuation deltas
+on Metal; full trace comparison remains separate from equal delta summaries.
+These failures remain recorded, rather
+than being hidden by passing operator tests or output-count hashes.
+
+Resident radix ownership, recurrent checkpoints, persistent L3, cooperative
+hybrid scheduling and longest RAM/L3 prefix selection remain independent.
+Restoring the ordinary graph also restores its physical-pool scaling cost.
+The historical idle-prefix scaling improvements below therefore do not describe
+this repair candidate. Exact numerical, mixed-KV, additional-model and AgentX
+qualification of the repaired default path remains incomplete. The local Just
+CLI/native package build passes at this exact native identity. A separate
+true-vanilla Gemma2 Metal control crosses its 4,096-token sliding window with
+a 6,144-token prefix and softcap 50: all six c1/c4 repeat/cross full-vocabulary
+comparisons are exact, with all 26 attention layers on the selected GPU.
+This is additional-model correctness evidence, not performance qualification.
+ABI remains 0.1.76.
+
 ## One-lane resident-cache correction
 
 Default native and MTP contexts now select unified KV even at one lane.
@@ -17,9 +77,9 @@ explicit non-unified one- and two-lane contexts report no resident support and
 reject saves. CUDA and actual dense-model HTTP reuse are pending on this fix.
 ABI 0.1.76 and the attention kernels are unchanged.
 
-## Combined candidate with indexed vector decode
+## Historical combined candidate with indexed vector decode
 
-The current branch integrates Jared Wyles's `18f0fa7a49142344c9297cfcbaf9a16352352189`.
+The earlier combined candidate integrated Jared Wyles's `18f0fa7a49142344c9297cfcbaf9a16352352189`.
 For eligible indexed CUDA queries of at most two tokens, F16/BF16 KV can now
 use the existing vector kernel; larger prefill and verification windows retain
 their existing selection. The owning patch was regenerated to correct stale

@@ -1,4 +1,4 @@
-From 81769eed0e2480936e957940f423a41c2757a409 Mon Sep 17 00:00:00 2001
+From 2dc7c44b3c6bcec63047af364966bc1f8e26be5f Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -19,7 +19,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  src/skippy/tests/resident_checkpoint_gpu.cpp  |  287 +++
  .../tests/residual_checkpoint_regression.h    |   52 +
  src/skippy/tests/runtime_events.cpp           |  695 +++++++
- src/skippy/tests/sampling_history.cpp         |  760 ++++++++
+ src/skippy/tests/sampling_history.cpp         |  778 ++++++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1151 ++++++++++++
@@ -39,7 +39,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 35 files changed, 10536 insertions(+), 32 deletions(-)
+ 35 files changed, 10554 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -6134,10 +6134,10 @@ index 000000000..00a6ff0ec
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..2375ce3e3
+index 000000000..062a9e078
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,760 @@
+@@ -0,0 +1,778 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
 +#include "../runtime_support.h"
@@ -6174,6 +6174,19 @@ index 000000000..2375ce3e3
 +    return -1;
 +}
 +
++ggml_type verify_attention_read(skippy_model * model, ggml_tensor * input, int32_t stored_type) {
++    if (stored_type != GGML_TYPE_F32) {
++        CHECK(input->type == stored_type);
++        return input->type;
++    }
++    // Ordinary FA reads explicitly convert an F32 cache on its selected backend.
++    CHECK(input->type == GGML_TYPE_F16 && input->op == GGML_OP_CPY);
++    CHECK(input->src[0] && input->src[0]->type == GGML_TYPE_F32);
++    auto * backend = ggml_backend_sched_get_tensor_backend(model->ctx->get_sched(), input);
++    CHECK(backend && std::strcmp(ggml_backend_name(backend), model->config.selected_backend_device) == 0);
++    return input->type;
++}
++
 +void verify_typed_attention(skippy_model * model, const skippy_kv_page_desc & page) {
 +    const auto & config = model->config;
 +    const auto check_types = [&](uint32_t k, uint32_t v) {
@@ -6192,12 +6205,16 @@ index 000000000..2375ce3e3
 +    CHECK(result && result->get_gf());
 +    auto * graph = result->get_gf();
 +    int attention = 0;
++    ggml_type actual_k = GGML_TYPE_COUNT;
++    ggml_type actual_v = GGML_TYPE_COUNT;
 +    for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
 +        auto * node = ggml_graph_node(graph, i);
 +        if (node->op != GGML_OP_FLASH_ATTN_EXT) { continue; }
 +        auto * backend = ggml_backend_sched_get_tensor_backend(model->ctx->get_sched(), node);
 +        CHECK(backend && std::strcmp(ggml_backend_name(backend), config.selected_backend_device) == 0);
-+        CHECK(node->src[1]->type == config.cache_type_k && node->src[2]->type == config.cache_type_v);
++        CHECK(node->src[5] == nullptr && node->src[6] == nullptr);
++        actual_k = verify_attention_read(model, node->src[1], config.cache_type_k);
++        actual_v = verify_attention_read(model, node->src[2], config.cache_type_v);
 +        ++attention;
 +    }
 +    int expected_attention = 0;
@@ -6205,9 +6222,10 @@ index 000000000..2375ce3e3
 +        expected_attention += !model->model->hparams.is_recr(layer);
 +    }
 +    CHECK(attention > 0 && attention == expected_attention);
-+    std::fprintf(stderr, "typed resident: backend=%s K=%s V=%s attention=%d expected=%d components=%u\n",
++    std::fprintf(stderr, "typed resident: backend=%s stored_K=%s stored_V=%s FA_K=%s FA_V=%s attention=%d expected=%d components=%u read_layout=ordinary\n",
 +            config.selected_backend_device, ggml_type_name(static_cast<ggml_type>(config.cache_type_k)),
-+            ggml_type_name(static_cast<ggml_type>(config.cache_type_v)), attention, expected_attention, page.component_count);
++            ggml_type_name(static_cast<ggml_type>(config.cache_type_v)), ggml_type_name(actual_k), ggml_type_name(actual_v),
++            attention, expected_attention, page.component_count);
 +}
 +
 +void ok(skippy_status status, skippy_error * error) {

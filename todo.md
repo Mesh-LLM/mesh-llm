@@ -68,6 +68,11 @@ These gates supplement the fixed four-model campaign. Product selection must
 depend on loaded capabilities, tensor geometry and backend support; model names
 and family allowlists must not choose a serving or kernel path.
 
+The repair withholds automatic indexed graph selection until the unchanged
+full-model arithmetic contract passes. Direct indexed-operator support is
+separate. Ordinary attention retains its physical-pool cost; do not carry the
+historical idle-pool scaling claim into the fallback candidate's results.
+
 - [ ] Preserve the common upstream CUDA hardware/GQA dispatch policy for indexed
   attention. Verify actual MMA selection for eligible wide-GQA decode and an
   eligible vector control, plus unchanged operator numerical and graph-replay
