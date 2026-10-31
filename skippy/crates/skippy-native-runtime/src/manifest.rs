@@ -153,9 +153,8 @@ impl NativeRuntimeReleaseManifest {
     }
 
     pub fn validate(&self) -> Result<()> {
-        if self.release_version.trim().is_empty() {
-            bail!("native runtime release manifest release_version is empty");
-        }
+        validate_runtime_identity(&self.release_version)
+            .context("native runtime release manifest has an invalid release_version")?;
         if self.skippy_abi.trim().is_empty() {
             bail!("native runtime release manifest skippy_abi is empty");
         }
@@ -175,8 +174,15 @@ impl NativeRuntimeReleaseManifest {
 }
 
 fn validate_artifact(artifact: &NativeRuntimeArtifact) -> Result<()> {
-    if artifact.id.trim().is_empty() {
-        bail!("native runtime artifact id is empty");
+    validate_runtime_identity(&artifact.id)
+        .with_context(|| format!("native runtime artifact {} has an invalid id", artifact.id))?;
+    if let Some(release_version) = &artifact.release_version {
+        validate_runtime_identity(release_version).with_context(|| {
+            format!(
+                "native runtime artifact {} has an invalid release_version",
+                artifact.id
+            )
+        })?;
     }
     if artifact.skippy_abi.trim().is_empty() {
         bail!(
@@ -274,6 +280,25 @@ fn checked_runtime_path(root: &Path, relative: &str) -> Result<PathBuf> {
         bail!("native runtime path is not a file: {}", path.display());
     }
     Ok(path)
+}
+
+/// Validate an identity that becomes exactly one path component of an install
+/// or cache location, so it can never walk out of the root that holds it.
+pub fn validate_runtime_identity(value: &str) -> Result<()> {
+    if value.is_empty() {
+        bail!("must not be empty");
+    }
+    if value.trim() != value {
+        bail!("must not have surrounding whitespace: {value:?}");
+    }
+    if value.contains(['/', '\\', ':', '\0']) {
+        bail!("must not contain a path separator or drive prefix: {value:?}");
+    }
+    let mut components = Path::new(value).components();
+    if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+        bail!("must be exactly one path component: {value:?}");
+    }
+    Ok(())
 }
 
 fn validate_runtime_path(relative: &str) -> Result<()> {
@@ -614,5 +639,91 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("for non-Linux OS"));
+    }
+
+    fn identity_artifact(id: &str) -> super::NativeRuntimeManifest {
+        super::NativeRuntimeManifest {
+            runtime: super::NativeRuntimeArtifact {
+                id: id.to_string(),
+                release_version: Some("0.68.0".to_string()),
+                skippy_abi: "0.1.25".to_string(),
+                platform: super::NativeRuntimePlatform {
+                    os: "linux".to_string(),
+                    arch: "x86_64".to_string(),
+                    target: None,
+                    min_glibc: None,
+                },
+                backend: crate::NativeRuntimeBackend::cpu(),
+                rank: 0,
+                libraries: vec!["lib/libmeshllm_ffi.so".to_string()],
+                files: Default::default(),
+                tools: Default::default(),
+                url: None,
+                sha256: None,
+                signature: None,
+            },
+        }
+    }
+
+    #[test]
+    fn artifact_identity_must_be_exactly_one_normal_path_component() {
+        for identity in [
+            "",
+            " ",
+            " runtime-a",
+            "runtime-a ",
+            "/",
+            "/etc/passwd",
+            "../victim",
+            "../../victim",
+            "..",
+            ".",
+            "runtime/x86_64",
+            "runtime\\x86_64",
+            "C:\\mesh-llm",
+            "\\\\nas\\share\\runtime",
+        ] {
+            assert!(
+                identity_artifact(identity).validate().is_err(),
+                "native runtime id {identity:?} must be rejected"
+            );
+        }
+        for identity in ["meshllm-native-linux-x86_64-cpu", "runtime.a-1"] {
+            identity_artifact(identity)
+                .validate()
+                .unwrap_or_else(|error| {
+                    panic!("native runtime id {identity:?} must be valid: {error}")
+                });
+        }
+    }
+
+    #[test]
+    fn artifact_release_version_must_be_exactly_one_normal_path_component() {
+        for version in ["", " ", "/opt/versions", "1.2/3", "../victim", ".."] {
+            let mut manifest = identity_artifact("runtime-a");
+            manifest.runtime.release_version = Some(version.to_string());
+            assert!(
+                manifest.validate().is_err(),
+                "native runtime release_version {version:?} must be rejected"
+            );
+        }
+        let mut manifest = identity_artifact("runtime-a");
+        manifest.runtime.release_version = None;
+        manifest.validate().unwrap();
+    }
+
+    #[test]
+    fn release_manifest_version_must_be_exactly_one_normal_path_component() {
+        for version in ["", " ", "/opt/versions", "1.2/3", "../victim", ".."] {
+            let manifest = super::NativeRuntimeReleaseManifest {
+                release_version: version.to_string(),
+                skippy_abi: "0.1.25".to_string(),
+                artifacts: vec![identity_artifact("runtime-a").runtime],
+            };
+            assert!(
+                manifest.validate().is_err(),
+                "release manifest version {version:?} must be rejected"
+            );
+        }
     }
 }

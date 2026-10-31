@@ -126,7 +126,7 @@ pub(in crate::binary_transport) fn take_ready_downstream(
                     last_error = Some(anyhow!("downstream ready deadline expired after connect"));
                     continue;
                 }
-                match complete_downstream_ready(&mut stream, deadline, shutdown) {
+                match complete_downstream_ready(&mut stream, deadline, shutdown, config) {
                     Ok(()) => return Ok(Some(stream)),
                     Err(error) => last_error = Some(error),
                 }
@@ -161,6 +161,7 @@ fn complete_downstream_ready(
     stream: &mut TcpStream,
     deadline: Instant,
     shutdown: &AtomicBool,
+    config: &StageConfig,
 ) -> Result<()> {
     ensure_downstream_acquisition_active(shutdown)?;
     let timeout = deadline
@@ -217,7 +218,16 @@ fn complete_downstream_ready(
     stream
         .set_read_timeout(None)
         .context("clear downstream ready timeout")?;
-    result
+    result?;
+    if config
+        .downstream
+        .as_ref()
+        .is_some_and(|peer| peer.persistent_lane_marker)
+    {
+        super::connection_mode::mark_persistent_lane(stream)
+            .context("mark preconnected downstream lane")?;
+    }
+    Ok(())
 }
 
 pub(in crate::binary_transport) fn warm_downstream_is_healthy(stream: &TcpStream) -> Result<bool> {
@@ -334,6 +344,7 @@ pub(crate) fn stage_output_activation_capacity(
         .unwrap_or(0);
     usize::try_from(bytes).context("output activation capacity exceeds usize")
 }
+/// Estimate reply framing and payload bytes for transport accounting.
 pub(in crate::binary_transport) fn estimated_reply_wire_bytes(
     reply_kind: WireReplyKind,
     predicted_token_count: usize,
@@ -344,6 +355,7 @@ pub(in crate::binary_transport) fn estimated_reply_wire_bytes(
         WireReplyKind::Ack => 0,
         WireReplyKind::PredictedToken => 1,
         WireReplyKind::PredictedTokens => predicted_token_count,
+        WireReplyKind::TokenScores => predicted_token_count + 1,
     };
     REPLY_HEADER_BYTES + token_count * std::mem::size_of::<i32>() + REPLY_STATS_BYTES
 }
@@ -571,6 +583,7 @@ impl BinaryStageExecutionOptions {
     }
 }
 
+/// Dispatch a validated stage request to its owning execution path.
 pub(crate) fn run_binary_stage_message(
     runtime: &mut RuntimeState,
     session_id: &str,
@@ -667,7 +680,8 @@ pub(crate) fn run_binary_stage_message(
             );
             Ok((predicted, predicted_tokens, output, draft))
         }
-        WireMessageKind::Stop
+        WireMessageKind::PrefillReadout
+        | WireMessageKind::Stop
         | WireMessageKind::StateImport
         | WireMessageKind::StateExport
         | WireMessageKind::ConfigureGeneration
@@ -932,6 +946,7 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
         downstream: Some(PeerConfig {
+            persistent_lane_marker: false,
             stage_id: "stage-1".to_string(),
             stage_index: 1,
             endpoint: "127.0.0.1:0".to_string(),
@@ -940,6 +955,7 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
     }
 }
 
+/// Construct a first-decode fixture carrying the full prompt sideband.
 #[cfg(test)]
 pub(in crate::binary_transport) fn first_decode_message_with_full_prompt_sideband()
 -> StageWireMessage {
@@ -959,6 +975,7 @@ pub(in crate::binary_transport) fn first_decode_message_with_full_prompt_sideban
         tokens: vec![101, 102, 103, 104],
         positions: Vec::new(),
         activation: Vec::new(),
+        readout_tokens: Vec::new(),
         raw_bytes: Vec::new(),
     }
 }
@@ -1180,6 +1197,7 @@ mod tests {
         assert_eq!(token_sideband_or_fill(&message).unwrap(), vec![201]);
     }
 
+    /// Construct a stage execution fixture with explicit identity and position.
     fn test_message(kind: WireMessageKind, token_count: i32) -> StageWireMessage {
         StageWireMessage {
             kind,
@@ -1193,6 +1211,7 @@ mod tests {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         }
     }

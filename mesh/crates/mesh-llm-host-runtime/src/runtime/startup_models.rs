@@ -19,6 +19,7 @@ use std::io::{IsTerminal, Read};
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
+mod layer_diagnostics;
 mod local_required;
 
 use local_required::resolve_local_required_startup_model;
@@ -210,6 +211,8 @@ pub(super) fn resolve_startup_mesh_creation_state(
     config: &plugin::MeshConfig,
 ) -> Result<StartupMeshCreationState> {
     let merged = plugin::MeshRequirementsConfig {
+        require_signed_gossip: options.require_signed_gossip
+            || config.mesh_requirements.require_signed_gossip,
         min_node_version: options
             .min_node_version
             .clone()
@@ -303,6 +306,7 @@ pub(crate) fn assert_mesh_requirements_cli_overrides_config_per_field_before_gen
     let config = plugin::MeshConfig {
         mesh_requirements: plugin::MeshRequirementsConfig {
             min_node_version: Some("0.65.0".into()),
+            require_signed_gossip: true,
             max_node_version: Some("0.65.9".into()),
             min_protocol_version: Some(1),
             max_protocol_version: Some(2),
@@ -334,6 +338,7 @@ pub(crate) fn assert_mesh_requirements_cli_overrides_config_per_field_before_gen
     assert_eq!(startup_state.requirements.protocol_generation.min, Some(1));
     assert_eq!(startup_state.requirements.protocol_generation.max, Some(5));
     assert!(startup_state.requirements.release_attestation.required);
+    assert!(startup_state.requirements.require_signed_gossip);
     assert_eq!(
         startup_state
             .requirements
@@ -437,6 +442,7 @@ pub(super) async fn prepare_runtime_startup(
     effective_mode: mesh_llm_config::RuntimeMode,
 ) -> Result<Option<PreparedRuntimeStartup>> {
     validate_runtime_cli_model_options(options)?;
+    super::native_model_lifecycle::sources::validate_split(config, options)?;
     let startup_specs = if effective_mode == mesh_llm_config::RuntimeMode::OnDemand
         && !cli_has_explicit_models(options)
     {
@@ -519,6 +525,7 @@ pub(super) fn runtime_options_for_test(args: &[&str]) -> RuntimeOptions {
             "--discover" => options.discover = Some(String::new()),
             "--split" => options.split = true,
             "--require-release-attestation" => options.require_release_attestation = true,
+            "--require-signed-gossip" => options.require_signed_gossip = true,
             "--join" => options.join.push(next_test_arg(&mut iter, arg).to_string()),
             "--model" => options.model.push(next_test_arg(&mut iter, arg).into()),
             "--gguf" => options.gguf.push(next_test_arg(&mut iter, arg).into()),
@@ -701,7 +708,7 @@ fn effective_startup_model_config(
     }
 }
 
-fn configured_server_alias(
+pub(super) fn configured_server_alias(
     model: &plugin::ModelConfigEntry,
     defaults: Option<&plugin::ModelConfigDefaults>,
 ) -> Option<String> {
@@ -757,6 +764,7 @@ fn matching_config_model<'a>(
     let mut matches = config
         .models
         .iter()
+        .filter(|model| model.provider.is_none())
         .filter(|model| model.model == model_ref);
     let Some(first) = matches.next() else {
         return Ok(None);
@@ -798,6 +806,14 @@ pub(super) fn skippy_local_source_required(
         == Some("local-required")
 }
 
+fn native_model_count(config: &plugin::MeshConfig) -> usize {
+    config
+        .models
+        .iter()
+        .filter(|model| model.provider.is_none())
+        .count()
+}
+
 pub(super) fn build_startup_model_specs(
     options: &RuntimeOptions,
     config: &plugin::MeshConfig,
@@ -805,6 +821,7 @@ pub(super) fn build_startup_model_specs(
     if options.client {
         return Ok(Vec::new());
     }
+    super::native_model_lifecycle::sources::validate_split(config, options)?;
 
     let mut specs = Vec::new();
     let default_skippy = config
@@ -933,13 +950,16 @@ pub(super) fn build_startup_model_specs(
         .as_ref()
         .and_then(|defaults| defaults.hardware.as_ref())
         .and_then(|hardware| hardware.model_path.as_ref());
-    if config.models.len() > 1 && default_model_path.is_some() {
+    if native_model_count(config) > 1 && default_model_path.is_some() {
         anyhow::bail!(
             "defaults.hardware.model_path cannot be used when multiple logical models are configured; set hardware.model_path on each model"
         );
     }
 
-    for model in &config.models {
+    for model in config.models.iter().filter(|model| {
+        model.provider.is_none()
+            && !super::native_model_lifecycle::is_on_demand_managed(config, model)
+    }) {
         let effective =
             effective_startup_model_config(&model.model, Some(model), config.defaults.as_ref());
         let local_source_required =
@@ -1272,15 +1292,26 @@ pub(super) fn resolve_split_layer_package(model_query: &str, model_path: &Path) 
 
     // Try remote catalog first for curated source-model metadata, then probe
     // Hugging Face directly for uncataloged package repos.
-    match models::remote_catalog::ensure_catalog() {
+    let catalog_reason = match models::remote_catalog::ensure_catalog() {
         Ok(()) => {
             if let Some(package_ref) = models::remote_catalog::find_layer_package(model_query) {
                 return Some(package_ref);
             }
+            "the model catalog lists no layer package for it".to_string()
         }
-        Err(err) => tracing::debug!("remote catalog unavailable: {err:#}"),
+        Err(err) => format!("the model catalog was unavailable: {err:#}"),
+    };
+    let package_ref = models::remote_catalog::find_huggingface_layer_package(model_query);
+    if package_ref.is_none() {
+        layer_diagnostics::report_unresolved_layer_package(
+            model_query,
+            &format!(
+                "{catalog_reason} and its Hugging Face repo exposes no readable \
+                 model-package.json"
+            ),
+        );
     }
-    models::remote_catalog::find_huggingface_layer_package(model_query)
+    package_ref
 }
 
 pub(super) fn preflight_pinned_startup_models(
@@ -1554,7 +1585,25 @@ pub(super) fn runtime_model_capacity_for_path(
 pub(super) async fn find_remote_catalog_model_exact_blocking(
     query: String,
 ) -> Option<models::remote_catalog::RemoteCatalogModel> {
-    tokio::task::spawn_blocking(move || models::find_remote_catalog_model_exact(&query))
+    catalog_model_unless_local_file(query, |query| {
+        models::find_remote_catalog_model_exact(query)
+    })
+    .await
+}
+
+/// An existing local file is never a catalog entry, so it isn't looked up, as
+/// `skippy serve` does: the lookup fetches the catalog first.
+pub(super) async fn catalog_model_unless_local_file<F>(
+    query: String,
+    lookup: F,
+) -> Option<models::remote_catalog::RemoteCatalogModel>
+where
+    F: FnOnce(&str) -> Option<models::remote_catalog::RemoteCatalogModel> + Send + 'static,
+{
+    if Path::new(&query).is_file() {
+        return None;
+    }
+    tokio::task::spawn_blocking(move || lookup(&query))
         .await
         .ok()
         .flatten()

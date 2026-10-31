@@ -12,6 +12,9 @@ mod exchange_admission;
 mod progress;
 mod stream_adapters;
 
+#[cfg(test)]
+mod workload_admission_tests;
+
 pub(crate) fn advertisable_routes(
     routes: Vec<crate::plugin::VirtualModelRoute>,
     concrete_models: &[String],
@@ -534,8 +537,15 @@ async fn virtual_model_candidates(
     virtual_ids: &std::collections::BTreeSet<String>,
     required_tokens: Option<u32>,
 ) -> Vec<VirtualModelCandidate> {
+    // Virtual inference sends chat completions, so its committee must obey the
+    // same workload admission policy as concrete chat routes.
+    const CHAT_PATH: &str = "/v1/chat/completions";
     let descriptors = node.all_served_model_descriptors().await;
+    let local_descriptors = node.served_model_descriptors().await;
     let local_models = node.hosted_models().await;
+    // Serving assignments are set when a local load starts; a model only joins
+    // `hosted_models` once it can answer.
+    let local_assignments = node.serving_models().await;
     let deprioritized_peers = node
         .peers()
         .await
@@ -553,11 +563,17 @@ async fn virtual_model_candidates(
     model_ids.sort();
     model_ids.dedup();
 
+    // Plugin-served models are advertised by name and dispatched by endpoint
+    // protocol, so they are the only local evidence for an id `hosted_models`
+    // does not list.
+    let plugin_descriptors = node.plugin_inference_descriptors().await;
     let mut candidates = Vec::new();
     for model_id in model_ids {
-        let descriptor = descriptors
-            .iter()
-            .find(|descriptor| descriptor.identity.model_name == model_id);
+        if !super::workload_routing::model_satisfies_request(&model_id, CHAT_PATH, &descriptors) {
+            continue;
+        }
+        let descriptor =
+            super::workload_routing::descriptor_for_request(&model_id, CHAT_PATH, &descriptors);
         let candidate_from = |target_node_id: Option<String>, context_length: Option<u32>| {
             let deprioritized = target_node_id
                 .as_ref()
@@ -580,7 +596,13 @@ async fn virtual_model_candidates(
             }
         };
         let has_local_instance = local_models.iter().any(|local| local == &model_id);
-        if has_local_instance {
+        if has_local_instance
+            && super::workload_routing::model_satisfies_request(
+                &model_id,
+                CHAT_PATH,
+                &local_descriptors,
+            )
+        {
             let context_length = node.local_model_context_length(&model_id).await;
             if context_can_satisfy(required_tokens, context_length) {
                 candidates.push(candidate_from(
@@ -609,6 +631,13 @@ async fn virtual_model_candidates(
         // become the direct route's non-retryable first choice.
         node.peer_blocks
             .retain_unblocked(&mut remote_hosts, crate::network::peer_blocks::now_ms());
+        let remote_hosts = super::workload_routing::eligible_remote_hosts(
+            node,
+            &model_id,
+            CHAT_PATH,
+            &remote_hosts,
+        )
+        .await;
         for host in remote_hosts {
             let context_length = node.peer_model_context_length(host, &model_id).await;
             if context_can_satisfy(required_tokens, context_length) {
@@ -619,12 +648,34 @@ async fn virtual_model_candidates(
             }
         }
 
-        // Plugin-backed inference models have no mesh endpoint. Keep one
-        // untargeted candidate when discovery found no host instance at all —
-        // never when instances exist but every one was filtered out, or the
-        // plugin's nested call would re-enter the ingress filter that just
-        // excluded them.
-        if !has_local_instance && !has_discovered_remote_host {
+        // Plugin-backed inference models have no mesh endpoint, and
+        // `hosted_models` lists native instances only, so a plugin-served id
+        // never has a local instance to match. Keep one untargeted candidate
+        // when discovery found no host at all -- never when instances exist but
+        // every one was filtered out, or the plugin's nested call would
+        // re-enter the ingress filter that just excluded them.
+        //
+        // The exception is a host filtered out on *workload class*: it cannot
+        // serve this request at all, so it must not hide the local plugin that
+        // serves the requested class (ndizazzo [P2], PR #2560). Requiring a
+        // matching plugin descriptor -- rather than model-level admission,
+        // which treats an absent descriptor as a legacy name-only chat
+        // advertisement -- keeps a name no plugin serves, such as a paid-only
+        // replica, out of the committee entirely.
+        //
+        // A model still loading locally is not plugin-backed either: its
+        // nested call would get 404 until the load finishes (#2674).
+        let plugin_serves_model = super::workload_routing::descriptor_for_request(
+            &model_id,
+            CHAT_PATH,
+            &plugin_descriptors,
+        )
+        .is_some();
+        let loading_locally = local_assignments.iter().any(|local| local == &model_id);
+        if !has_local_instance
+            && !loading_locally
+            && (!has_discovered_remote_host || plugin_serves_model)
+        {
             candidates.push(candidate_from(None, None));
         }
     }
@@ -751,6 +802,65 @@ mod tests {
         assert!(context_can_satisfy(Some(16_384), Some(32_768)));
         assert!(context_can_satisfy(Some(16_384), None));
         assert!(context_can_satisfy(None, Some(4_096)));
+    }
+
+    /// A local model is assigned when its load starts and hosted once it can
+    /// answer. In between it must not fall back to an untargeted candidate:
+    /// the committee's nested call would get 404 for the whole load.
+    #[tokio::test]
+    async fn a_local_model_still_loading_is_not_a_candidate() {
+        let node = crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+            .await
+            .expect("test node must start");
+        node.set_serving_models(vec!["local-model".into()]).await;
+
+        let loading =
+            virtual_model_candidates(&node, vec!["local-model".into()], &Default::default(), None)
+                .await;
+        assert!(
+            loading.is_empty(),
+            "a loading model must yield no candidate: {loading:?}"
+        );
+
+        node.set_hosted_models(vec!["local-model".into()]).await;
+        let hosted =
+            virtual_model_candidates(&node, vec!["local-model".into()], &Default::default(), None)
+                .await;
+        let targets = hosted
+            .iter()
+            .map(|candidate| candidate.target_node_id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(targets, vec![Some(hex::encode(node.id().as_bytes()))]);
+        node.endpoint.close().await;
+    }
+
+    /// Plugin-backed inference models have no mesh endpoint and are never a
+    /// local serving assignment, so they keep their untargeted candidate.
+    #[tokio::test]
+    async fn a_plugin_backed_model_keeps_its_untargeted_candidate() {
+        let node = crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+            .await
+            .expect("test node must start");
+        node.set_serving_models(vec!["local-model".into()]).await;
+
+        let candidates = virtual_model_candidates(
+            &node,
+            vec!["plugin-model".into()],
+            &Default::default(),
+            None,
+        )
+        .await;
+        let found = candidates
+            .iter()
+            .map(|candidate| {
+                (
+                    candidate.model_id.as_str(),
+                    candidate.target_node_id.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(found, vec![("plugin-model", None)]);
+        node.endpoint.close().await;
     }
 
     /// The candidate path's half of #2097: a replica that charges for the

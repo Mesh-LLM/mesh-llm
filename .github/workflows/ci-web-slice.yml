@@ -224,3 +224,6 @@ jobs:
       - name: Validate website data sources
         working-directory: ${{ steps.layout.outputs.website_dir }}
         run: npm run test:website-data
+      - name: Validate catalog filter attributes
+        working-directory: ${{ steps.layout.outputs.website_dir }}
+        run: npm run test:catalog-filters

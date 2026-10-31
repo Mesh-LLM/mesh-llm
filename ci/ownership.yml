@@ -8,7 +8,6 @@
     "tooling",
     "cli",
     "rust",
-    "plugin-capsules",
     "ui",
     "website",
     "runtime-product",
@@ -96,6 +95,8 @@
         "package-lock.json",
         "recipes/**",
         "schemas/**",
+        "skippy/skippy_api/**",
+        "skippy/skippy-api-rs/**",
         "scripts/**",
         "tools/**"
       ]
@@ -329,12 +330,6 @@
       ]
     },
     {
-      "domain": "plugin-capsules",
-      "patterns": [
-        "mesh/crates/mesh-llm-capsules-plugin/**"
-      ]
-    },
-    {
       "domain": "ui",
       "patterns": [
         "mesh/crates/mesh-llm-ui/**"
@@ -511,10 +506,6 @@
     {
       "domain": "cli",
       "crates": ["mesh-llm-cli"]
-    },
-    {
-      "domain": "plugin-capsules",
-      "crates": ["mesh-llm-capsules-plugin"]
     },
     {
       "domain": "runtime-product",

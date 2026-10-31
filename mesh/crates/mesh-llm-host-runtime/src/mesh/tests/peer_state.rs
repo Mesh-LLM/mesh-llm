@@ -39,6 +39,8 @@ fn peer_state_test_announcement(addr: EndpointAddr) -> super::PeerAnnouncement {
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
         decode_batch_policy_supported: true,
+        plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -579,6 +581,8 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
+        plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -953,6 +957,8 @@ fn transitive_peer_update_refreshes_metadata_fields() {
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
         decode_batch_policy_supported: true,
+        plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -1053,6 +1059,8 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
         decode_batch_policy_supported: true,
+        plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -1125,6 +1133,8 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
         decode_batch_policy_supported: true,
+        plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -2172,6 +2182,60 @@ async fn a_running_node_renews_its_ownership_certificate_inside_the_window() {
     };
     assert_eq!(peer_view(&first), OwnershipStatus::Expired);
     assert_eq!(peer_view(&renewed), OwnershipStatus::Verified);
+}
+
+/// A renewed certificate whose write fails is written on a later heartbeat,
+/// although the certificate in use is no longer inside its renewal window.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_failed_save_of_the_renewed_certificate_is_retried_on_the_next_heartbeat() {
+    use crate::crypto::{SignedNodeOwnership, sign_node_ownership};
+    const DAY_MS: u64 = 24 * 60 * 60 * 1000;
+    let owner = test_owner_keypair(0xd1, 0xd2);
+    let dir = tempfile::tempdir().expect("temp dir");
+    // A file where the ownership file's directory should be: writes fail.
+    let blocker = dir.path().join("identity");
+    std::fs::write(&blocker, b"not a directory").expect("blocker");
+    let ownership_file = blocker.join("node-ownership.json");
+    let mut node = super::Node::new_for_tests(super::NodeRole::Worker)
+        .await
+        .expect("test node");
+    node.owner_keypair = Some(owner.clone());
+    node.owner_attestation_path = Some(ownership_file.clone());
+    let due = sign_node_ownership(
+        &owner,
+        node.id().as_bytes(),
+        crate::mesh::current_time_unix_ms() + DAY_MS,
+        None,
+        None,
+    )
+    .expect("sign a certificate a day from expiry");
+    *node.owner_attestation.lock().await = Some(due);
+
+    node.run_heartbeat_cycle(&mut HashMap::new()).await;
+    let renewed = node
+        .owner_attestation
+        .lock()
+        .await
+        .clone()
+        .expect("the node keeps a certificate");
+    assert!(renewed.claim.expires_at_unix_ms > crate::mesh::current_time_unix_ms() + 6 * DAY_MS);
+    assert!(!ownership_file.exists(), "the write failed");
+
+    // The renewed certificate is outside the window now, so only the pending
+    // save can bring the file up to date.
+    std::fs::remove_file(&blocker).expect("unblock");
+    node.run_heartbeat_cycle(&mut HashMap::new()).await;
+    let saved: SignedNodeOwnership = serde_json::from_str(
+        &std::fs::read_to_string(&ownership_file).expect("written on the next heartbeat"),
+    )
+    .expect("a certificate");
+    assert_eq!(saved, renewed);
+    assert!(node.unsaved_owner_attestation.lock().await.is_none());
+
+    // Once saved, a heartbeat writes nothing more.
+    std::fs::remove_file(&ownership_file).expect("remove");
+    node.run_heartbeat_cycle(&mut HashMap::new()).await;
+    assert!(!ownership_file.exists());
 }
 
 #[tokio::test]

@@ -24,6 +24,8 @@ the hardware limitation or ownership boundary that prevents a final consumer.
 
 ## Reverse audit
 
+Native residency extension: `lifecycle.load`, `lifecycle.idle_timeout_secs`, and `lifecycle.prefetch` are consumed by `runtime/native_model_lifecycle.rs`; request leases and exact-instance eviction are tested in that module.
+
 The reverse audit covers every canonical manifest origin. The tables below
 call out changed sinks in detail; this inventory prevents an undocumented
 schema row or stale manifest row from passing review:
@@ -32,6 +34,7 @@ schema row or stale manifest row from passing review:
 `mesh_requirements.min_node_version`, `mesh_requirements.max_node_version`,
 `mesh_requirements.min_protocol_version`, `mesh_requirements.max_protocol_version`,
 `mesh_requirements.require_release_attestation`, `mesh_requirements.release_signer_keys`,
+`mesh_requirements.require_signed_gossip`,
 `owner_control.bind`, `owner_control.advertise_addr`, `payments.wallet`,
 `telemetry.enabled`,
 `telemetry.service_name`, `telemetry.endpoint`, `telemetry.headers`,
@@ -63,7 +66,8 @@ schema row or stale manifest row from passing review:
 `runtime.kv_cache.disk.minimum_free_mib`, `runtime.kv_cache.disk.codec`,
 `runtime.model_target_demand_upgrade_min_requests`,
 `runtime.model_target_demand_upgrade_max_age_secs`, `advanced.server.alias`,
-`model`, `hardware.model_path`, `hardware.hf_repo`, `hardware.hf_file`,
+`model`, `provider`, `variant`, `options`, `request_defaults`, `lifecycle`,
+`source`, `hardware.model_path`, `hardware.hf_repo`, `hardware.hf_file`,
 `model_fit.ctx_size`, `model_fit.batch`, `model_fit.ubatch`,
 `model_fit.cache_type_k`, `model_fit.cache_type_v`,
 `model_fit.kv_offload`, `model_fit.kv_unified`, `model_fit.cache_ram_mib`,
@@ -139,7 +143,7 @@ schema row or stale manifest row from passing review:
 `multimodal.generation_signal_window`, `plugin.<name>.name`,
 `plugin.<name>.enabled`, `plugin.<name>.web_ui_enabled`,
 `plugin.<name>.web_ui_primary_tab`, `plugin.<name>.allow_peer_blocks`,
-`plugin.<name>.command`, `plugin.<name>.args`, `plugin.<name>.url`,
+`plugin.<name>.allow_inference_observation`, `plugin.<name>.command`, `plugin.<name>.args`, `plugin.<name>.url`,
 `plugin.<name>.startup.connect_timeout_secs`,
 `plugin.<name>.startup.init_timeout_secs`, `plugin.<name>.startup.optional`,
 `plugin.<name>.startup.lazy_start`, `plugin.<name>.settings.*`,

@@ -127,6 +127,11 @@ impl StageOpenAiBackend {
             let mut prefill_chain_cache_stats = StageReplyStats::default();
             let mut prefill_stage0_full_recorded = false;
             let mut fused_first_decode = None;
+            let output_boundary = self
+                .iteration_scheduler
+                .execute_runtime("prefill-frame-budget", |runtime| {
+                    Ok(runtime.output_activation_boundary())
+                })?;
             let mut prefill_planner = request.prefill_chunk_policy.planner();
             if let Some(estimate) = lane_pool.prefill_transport_estimate() {
                 prefill_planner.calibrate_slowest_stage_rate(estimate.slowest_compute_ms_per_token);
@@ -190,8 +195,33 @@ impl StageOpenAiBackend {
                         )?;
                         return Ok(());
                     }
-                    let chunk_size =
+                    let mut chunk_size =
                         prefill_planner.chunk_size_for(chunk_index, prefill_token_count);
+                    if let Some(boundary) = output_boundary.as_ref() {
+                        let template = embedded_prefill_message(OpenAiPrefillChunk {
+                            seq_id: chunk_index,
+                            pos_start,
+                            prefill_token_count,
+                            tokens: &prefill_tokens[pos_start..pos_start + 1],
+                            request_id,
+                            session_id,
+                        })?;
+                        let codec = match request.config.activation_codec_policy {
+                            skippy_protocol::StageActivationCodecPolicy::Fixed => {
+                                request.config.activation_codec
+                            }
+                            skippy_protocol::StageActivationCodecPolicy::AutoLosslessV1 => {
+                                skippy_protocol::StageActivationCodec::RawF32V1
+                            }
+                        };
+                        chunk_size = super::prefill::bounded_chunk_size(
+                            chunk_size.min(prefill_tokens.len() - pos_start),
+                            boundary,
+                            codec,
+                            &template,
+                        )
+                        .map_err(openai_backend_error)?;
+                    }
                     let end = prefill_chunk_end(
                         pos_start,
                         chunk_size,

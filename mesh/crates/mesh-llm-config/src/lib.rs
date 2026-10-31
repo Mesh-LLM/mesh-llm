@@ -3,6 +3,7 @@ mod diagnostic;
 mod env_overrides;
 mod hardware_validation;
 mod local_model_path;
+pub mod managed_models;
 mod model;
 mod model_validation;
 mod openai_exchange;
@@ -10,6 +11,7 @@ mod plugin_validation;
 mod private_file;
 mod size;
 mod store;
+mod unknown_fields;
 mod validate;
 mod validation_support;
 #[cfg(test)]
@@ -987,6 +989,10 @@ gpu_id = "pci:0000:65:00.0"
                 vec!["plugin.<plugin-name>.allow_peer_blocks"],
             ),
             (
+                "PluginConfigEditor::allow_inference_observation",
+                vec!["plugin.<plugin-name>.allow_inference_observation"],
+            ),
+            (
                 "PluginConfigEditor::command",
                 vec!["plugin.<plugin-name>.command"],
             ),
@@ -1069,6 +1075,7 @@ gpu_id = "pci:0000:65:00.0"
             source_model,
             source_multimodal,
             source_runtime,
+            include_str!("managed_models.rs"),
             include_str!("openai_exchange.rs"),
         ];
         let occurrences = [
@@ -1082,6 +1089,7 @@ gpu_id = "pci:0000:65:00.0"
             ("KvDiskTierConfig", 1),
             ("MeshRequirementsConfig", 1),
             ("ModelConfigEntry", 1),
+            ("ModelLifecycle", 1),
             ("ModelFitConfig", 2),
             ("PrefixCacheConfig", 2),
             ("HardwareConfig", 2),
@@ -1117,6 +1125,7 @@ gpu_id = "pci:0000:65:00.0"
             "AuditConfig",
             "ModelConfigDefaults",
             "ModelConfigEntry",
+            "ModelLifecycle",
             "ModelFitConfig",
             "PrefixCacheConfig",
             "HardwareConfig",
@@ -1140,6 +1149,7 @@ gpu_id = "pci:0000:65:00.0"
             "extra",
             "gpu_id_from_legacy_shim",
             "lifecycle_log_parser_source",
+            "source_directory", // runtime origin, skipped by config serialization
             "lifecycle_log_parser_override",
             "download_override",
             "models",

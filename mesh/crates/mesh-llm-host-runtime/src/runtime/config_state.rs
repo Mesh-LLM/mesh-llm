@@ -405,10 +405,15 @@ impl ConfigState {
 
     pub(crate) fn prepare_apply(
         &self,
-        new_config: MeshConfig,
+        mut new_config: MeshConfig,
         expected_revision: u64,
     ) -> ConfigApplyPreparation {
         record_config_operational_event(ConfigOperationalEvent::ApplyStarted);
+        new_config.source_directory = self.config.source_directory.clone().or_else(|| {
+            std::path::absolute(&self.config_path)
+                .ok()
+                .and_then(|path| path.parent().map(Path::to_path_buf))
+        });
         let raw_toml = config_to_toml(&new_config).ok();
         let diagnostics = validate_config_diagnostics_with_installed_plugin_schemas(
             &new_config,

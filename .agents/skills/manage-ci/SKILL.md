@@ -35,6 +35,17 @@ command with Rust or component-owned tests: documented behavior, real output
 formats consumed by callers, valid-input files and exit semantics, and failure
 modes. Preserve exact bytes where a caller consumes or hashes them.
 
+`tools/ci-controller` owns CI planning (`ci plan`), lane result admission
+(`ci validate-lane`), the planner-side repository checks
+(`repository affected-crates`, `repository conventional-commits`, and
+`repository llama-upstream-pin`), and the shared `automation bootstrap` check.
+Its normal dependencies are limited to serde, serde_json, sha2, and hex. Full
+xtask keeps every command and delegates these to the library, so outputs, exit
+codes, and refusals match. `ci family-plan`, `ci validate-graph`, and all
+product, native, canary, and release automation stay in xtask. Put new
+repository automation in xtask unless it belongs to the controller's planning
+and validation scope.
+
 The explicit `prepare-automation` `hosted-bare` profile is an automation-only
 exception for GitHub-hosted Linux. It uses the existing stable Rust selection
 and locked Cargo without Just or compiler wrappers; default image preparation
@@ -69,10 +80,16 @@ producer's source, artifact ID, executable digest and runner OS/architecture;
 they never rebuild it and never fall back to `prepare-automation`. Its artifact
 name carries a `product-` prefix, so it cannot collide with or stand in for the
 protected `authority_*` artifacts, and it retains for one day. Jobs that must
-not wait on a producer (planners, commit convention, lane summaries) use
-`prepare-automation` with the `hosted-bare` profile, which restores an exact-key
-cached release executable and compiles only on a miss; the protected authority
-producers opt out of that cache so their bytes are always compiled in-run.
+not wait on a producer and only plan or validate (the entry planners through
+`compute-changes` and `plan-ci`, commit convention, and lane summaries) use
+`prepare-ci-controller`, which builds only the `ci-controller` executable on
+GitHub-hosted Linux, restores it from its own exact-key cache, compiles only on
+a miss, and exports `MESH_CI_CONTROLLER_BIN`. Other jobs without a producer,
+such as authority audits, canary summaries, Docker precheck, and preview
+dispatch, use `prepare-automation` with the `hosted-bare` profile, which
+restores an exact-key cached full xtask executable and compiles only on a miss;
+the protected authority producers opt out of that cache so their bytes are
+always compiled in-run.
 
 Do not implement Python emulation in xtask: repr/str formatting, argparse or
 JSON quirks, interpreter-limit emulation, or vendored parser/entity tables for
@@ -307,6 +324,13 @@ retired parser behavior, and source review still owns semantic emulation.
 - Use measured workload data to rebalance deterministic shards, but keep the
   checked-in algorithm reproducible. Use one Cargo invocation per shard unless
   a documented package-isolation check requires otherwise.
+- The local `just test-all` gate runs all `xtask` tests in a separate Cargo
+  invocation with `--test-threads=1`, because their signal scopes are
+  process-global. Pass the harness argument to that package only; a global
+  `RUST_TEST_THREADS` override also changes child-process output fixtures.
+- The portable local gate may parallelize JavaScript checks, but must finish
+  SDK checks before building the website: both stages invoke Cargo (the website
+  generates CLI documentation). Preserve every stage and aggregate failures.
 
 ### Dependencies, summaries, and cancellation
 
@@ -504,7 +528,11 @@ checked-in expiry are the maintainer-controlled approval boundary.
   jobs without a producer dependency; it is keyed exactly on every compiled
   input, is restored and saved only by the `hosted-bare` profile, and a miss
   compiles locally. The image profile (possibly on Depot's repository-wide
-  cache namespace) never restores an executable.
+  cache namespace) never restores an executable. `prepare-ci-controller` keeps
+  a separate exact-key identity (`ci-controller-hosted-...`) over the
+  controller's compiled inputs and never shares an entry with the full xtask
+  executable, whose key also hashes `tools/ci-controller/**` because xtask
+  compiles the controller library.
 - PR and smoke-only artifacts default to one-day retention. Release evidence
   follows the release policy.
 
@@ -616,15 +644,27 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Llama canary family fan-out
 
+The System One contract fixture must exercise both single-token causal
+readouts and multi-token likelihoods as supported execution paths, retaining
+all malformed/unsupported request refusals. Verify ordered finite scores,
+tokenizer lengths, probability semantics and zero generated tokens. Keep
+DiffusionGemma and Laya qualification separate; causal mechanics do not certify
+their behavior or classification quality.
+
 The final publisher must use an explicit `!cancelled()` status condition,
 require successful source resolution and final selection, and require
 `publish=true`. Optional repair and retry jobs may be skipped after a green
 pass; their skipped status must not suppress publication through GitHub's
 implicit `success()` condition.
 
-Default upstream selection uses GitHub's latest published stable release of
-`ggml-org/llama.cpp`, never an unqualified `master` tip or a `b*` prerelease.
-The hosted resolver validates the release and peels its tag to an exact commit
+Default upstream selection uses the most recently published release of
+`ggml-org/llama.cpp`, including prereleases and excluding drafts. Compare
+publication times across the paginated metadata feed; neither the pinned stable
+release nor feed position determines the target. The scan reads every page
+before selecting, because the feed is ordered by creation time and a draft
+created long ago but published recently sits on a late page; the 180-second
+lookup budget and the 1000-page ceiling bound a feed that only grows. The hosted
+resolver validates the release and peels its tag to an exact commit
 before any hardware work. Missing releases, malformed metadata, moved tags or
 API failures stop resolution without a fallback. Record the release tag and
 commit in the run summary. An explicit full `upstream_sha` remains an operator
@@ -678,11 +718,19 @@ Changed pins use up to three distributed repair attempts. Each attempt consists
 of one candidate pass followed by one independent verification pass when the
 candidate is green. Before the first candidate begins, a separate deterministic
 preflight verifies the immutable family plan and every pinned cache artifact.
-For the NAS-backed immutable model cache, validate pinned revision, blob path,
-byte size and GGUF metadata without hashing full model payloads. Re-reading
-the complete model roster over the NAS on every admission is too expensive.
-This gate does not detect same-size payload corruption; content verification
-belongs to cache population or a separate cache audit. Continue hashing
+For the NAS-backed immutable model cache, accept regular snapshot files and
+symlinks while retaining pinned revision, byte size, cache containment and GGUF
+metadata checks. Content-addressed blob paths retain their existing immutable-cache
+identity check. Other files require SHA-256 verification; on Unix, reuse a private
+job-account receipt only while the canonical path, expected digest, device/inode,
+size, modification time and change time match. Missing or stale receipts require
+rehashing. Receipts live in the account's local cache, never the read-only model
+cache, and are trusted state of that account rather than portable attestations.
+Allow 180 minutes for the preflight job so cold verification can read the full
+copied model roster over the NAS before later admissions reuse the receipts.
+Re-reading the complete model roster over the NAS on every admission is too
+expensive. Content-addressed blobs still rely on cache population or a separate
+audit for same-size corruption detection. Continue hashing
 controller plans, executable handoffs and certification evidence.
 Environment or process-supervision failures stop without asking Goose to repair
 source. Within a candidate build, prepare/build failures return to the same

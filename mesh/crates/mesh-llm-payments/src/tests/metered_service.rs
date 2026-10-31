@@ -303,6 +303,7 @@ async fn a_final_paid_while_admission_waits_is_not_a_strike() {
             .metered_admit(&MeteredRequest {
                 id: &id,
                 peer: "peer",
+                model: "test-model",
                 pricing: &rates(),
                 require_deposit: false,
             })
@@ -348,6 +349,7 @@ async fn three_unpaid_final_invoices_block_admission_until_one_is_paid() {
             .metered_admit(&MeteredRequest {
                 id: &id,
                 peer: "peer",
+                model: "test-model",
                 pricing: &rates(),
                 require_deposit: false,
             })
@@ -443,6 +445,7 @@ async fn expired_nonpayment_survives_restart_without_revoking_reearned_trust() {
             .metered_admit(&MeteredRequest {
                 id: "unpaid",
                 peer: "peer",
+                model: "test-model",
                 pricing: &rates(),
                 require_deposit: false,
             })
@@ -482,6 +485,7 @@ async fn expired_nonpayment_survives_restart_without_revoking_reearned_trust() {
             .metered_admit(&MeteredRequest {
                 id: &seed,
                 peer,
+                model: "test-model",
                 pricing: &rates(),
                 require_deposit: false,
             })
@@ -547,6 +551,7 @@ async fn restart_recovery_accepts_a_receipt_net_of_the_receivers_fee() {
                 .metered_admit(&MeteredRequest {
                     id,
                     peer: "peer",
+                    model: "test-model",
                     pricing: &rates(),
                     require_deposit: false,
                 })
@@ -636,6 +641,7 @@ async fn a_never_paid_final_gives_up_promptly_and_still_blocks_the_buyer() {
             .metered_admit(&MeteredRequest {
                 id: &id,
                 peer: "peer",
+                model: "test-model",
                 pricing: &rates(),
                 require_deposit: false,
             })
@@ -678,4 +684,130 @@ async fn a_never_paid_final_gives_up_promptly_and_still_blocks_the_buyer() {
             .unwrap(),
         ServeAdmitResponse::Blocked { .. }
     ));
+}
+
+#[tokio::test]
+async fn a_replayed_admission_keeps_the_deposit_it_was_admitted_with() {
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    let service = open(dir.path(), wallet);
+    let first = service.serve_admit(admit("r", "peer")).await.unwrap();
+    let invoice = deposit_invoice(&first);
+    assert_eq!(invoice.amount_msat, Some(1000));
+    // The operator raises the minimum before the buyer's replay arrives.
+    service.ledger.set_min_payment_msat(2000).unwrap();
+    let replay = service.serve_admit(admit("r", "peer")).await.unwrap();
+    assert_eq!(deposit_invoice(&replay), invoice);
+}
+
+#[tokio::test]
+async fn a_configured_deposit_is_separate_from_the_minimum_payment() {
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    let service = open(dir.path(), wallet.clone());
+    service.ledger.set_admission_deposit_msat(5000).unwrap();
+    let first = service.serve_admit(admit("r", "peer")).await.unwrap();
+    let ServeAdmitResponse::Deposit {
+        invoice,
+        min_payment_msat,
+        ..
+    } = first
+    else {
+        panic!("expected a deposit, got {first:?}");
+    };
+    assert_eq!((invoice.amount_msat, min_payment_msat), (Some(5000), 1000));
+    // The admitted deposit is frozen: a replay after the operator changes it
+    // returns the same invoice.
+    service.ledger.set_admission_deposit_msat(3000).unwrap();
+    let replay = service.serve_admit(admit("r", "peer")).await.unwrap();
+    assert_eq!(deposit_invoice(&replay), invoice);
+    received(&wallet, &invoice);
+    service.serve_deposit_confirmed("r").await.unwrap();
+    // A 5,500-msat bill leaves 500, raised to the 1,000 minimum, not the deposit.
+    let bill = service.serve_settle(settle("r", 300, 250)).await.unwrap();
+    assert_eq!(
+        (bill.bill_msat, bill.deposit_msat, bill.remaining_msat),
+        (5500, 5000, 1000)
+    );
+    assert_eq!(bill.invoice.unwrap().amount_msat, Some(1000));
+}
+
+#[tokio::test]
+async fn a_model_deposit_is_asked_instead_of_the_node_wide_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    let service = open(dir.path(), wallet.clone());
+    service
+        .ledger
+        .set_model_admission_deposit_msat(MODEL, Some(7000))
+        .unwrap();
+    let response = service.serve_admit(admit("r", "peer")).await.unwrap();
+    assert_eq!(deposit_invoice(&response).amount_msat, Some(7000));
+    service
+        .ledger
+        .set_model_admission_deposit_msat(MODEL, None)
+        .unwrap();
+    let response = service.serve_admit(admit("other", "peer")).await.unwrap();
+    assert_eq!(deposit_invoice(&response).amount_msat, Some(1000));
+}
+
+#[tokio::test]
+async fn a_reused_request_id_cannot_switch_to_a_model_with_a_larger_deposit() {
+    // Two equally priced models with different deposits: a buyer that reuses
+    // an admitted request's ID for the other model must not inherit the
+    // first model's deposit.
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    let service = open(dir.path(), wallet);
+    service.ledger.set_pricing("big", Some(&rates())).unwrap();
+    service
+        .ledger
+        .set_model_admission_deposit_msat("big", Some(50_000))
+        .unwrap();
+    let first = service.serve_admit(admit("r", "peer")).await.unwrap();
+    assert_eq!(deposit_invoice(&first).amount_msat, Some(1000));
+    let switched = service
+        .serve_admit(ServeAdmitRequest {
+            model: "big".into(),
+            ..admit("r", "peer")
+        })
+        .await;
+    assert!(
+        switched
+            .unwrap_err()
+            .to_string()
+            .contains("different metered terms"),
+        "a reused ID must not change model"
+    );
+    // The original model's replay still answers with its own deposit.
+    let replay = service.serve_admit(admit("r", "peer")).await.unwrap();
+    assert_eq!(deposit_invoice(&replay), deposit_invoice(&first));
+}
+
+#[tokio::test]
+async fn an_admitted_request_keeps_its_minimum_payment_through_settlement() {
+    let dir = tempfile::tempdir().unwrap();
+    let wallet = Arc::new(MockWallet::default());
+    let service = open(dir.path(), wallet.clone());
+    service.serve_admit(admit("r", "peer")).await.unwrap();
+    // The operator raises the minimum while the request is admitted.
+    service.ledger.set_min_payment_msat(5000).unwrap();
+    let replay = service.serve_admit(admit("r", "peer")).await.unwrap();
+    let ServeAdmitResponse::Deposit {
+        invoice,
+        min_payment_msat,
+        ..
+    } = replay
+    else {
+        panic!("expected a deposit, got {replay:?}");
+    };
+    // The replay restates the admitted terms the buyer saved.
+    assert_eq!((invoice.amount_msat, min_payment_msat), (Some(1000), 1000));
+    received(&wallet, &invoice);
+    service.serve_deposit_confirmed("r").await.unwrap();
+    // A 2,500-msat bill leaves 1,500: exact under the admitted 1,000 minimum,
+    // where the new 5,000 would have raised it.
+    let bill = service.serve_settle(settle("r", 150, 100)).await.unwrap();
+    assert_eq!(bill.remaining_msat, 1500);
+    assert_eq!(bill.invoice.unwrap().amount_msat, Some(1500));
 }

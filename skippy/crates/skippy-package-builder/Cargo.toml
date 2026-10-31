@@ -26,3 +26,6 @@ tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[dev-dependencies]
+skippy-runtime = { path = "../skippy-runtime", features = ["test-support"] }

@@ -142,6 +142,14 @@ pub(crate) fn hardware_snapshot_for_start(
 ) -> NodeHardwareSnapshot {
     let local_runtime_capacity_bytes =
         super::super::capacity::local_fit_capacity_bytes(&hw, max_vram_gb, host_ram_offload);
+    let host_ram_capacity_bytes = if !host_ram_offload
+        && !hw.is_soc
+        && super::super::capacity::mesh_capacity_bytes(&hw) > 0
+    {
+        hw.ram_offload_bytes
+    } else {
+        0
+    };
     let host_ram_offload_gain_bytes =
         super::super::capacity::host_ram_offload_gain_bytes(&hw, max_vram_gb, host_ram_offload);
     let mut vram_bytes = super::super::capacity::advertised_capacity_bytes(&hw, max_vram_gb);
@@ -182,6 +190,7 @@ pub(crate) fn hardware_snapshot_for_start(
     NodeHardwareSnapshot {
         vram_bytes,
         local_runtime_capacity_bytes,
+        host_ram_capacity_bytes,
         host_ram_offload_gain_bytes,
         gpu_name,
         hostname,
@@ -274,4 +283,13 @@ pub(crate) fn stamp_plugin_event_source(endpoint_id: EndpointId, source_peer_id:
     // the originator, so a local plugin must never be able to name another node
     // here; the plugin SDK leaves the field empty on the normal path.
     *source_peer_id = endpoint_id_hex(endpoint_id);
+}
+
+/// Load the configuration bound to this node before publishing its state.
+pub(super) fn load_config_state(
+    config_path: Option<&std::path::Path>,
+) -> Result<crate::runtime::config_state::ConfigState> {
+    let path = crate::plugin::config_path(config_path)
+        .unwrap_or_else(|_| std::path::PathBuf::from("config.toml"));
+    crate::runtime::config_state::ConfigState::load(&path)
 }

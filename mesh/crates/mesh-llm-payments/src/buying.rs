@@ -47,8 +47,8 @@ impl PaymentService {
             "seller minimum payment exceeds this node's configured minimum"
         );
         ensure!(
-            admission.deposit_msat == 0 || admission.deposit_msat == admission.min_payment_msat,
-            "deposit mismatch"
+            admission.deposit_msat <= self.ledger.admission_deposit_msat()?,
+            "seller deposit exceeds this node's configured deposit"
         );
         self.authorize_terms(&terms).await?;
         self.save_admission(&admission)

@@ -241,6 +241,7 @@ mod tests {
     };
     use crate::telemetry::TelemetryLevel;
 
+    /// Construct a forwarding fixture carrying explicit stage and session identity.
     fn message(kind: WireMessageKind, pos_start: i32) -> StageWireMessage {
         StageWireMessage {
             kind,
@@ -258,6 +259,7 @@ mod tests {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         }
     }
@@ -452,6 +454,7 @@ mod tests {
 
     fn forward_error_peer() -> PeerConfig {
         PeerConfig {
+            persistent_lane_marker: false,
             stage_id: "stage-1".to_string(),
             stage_index: 1,
             endpoint: "10.0.0.2:50051".to_string(),

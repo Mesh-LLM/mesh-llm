@@ -157,6 +157,7 @@ mod tests {
     use skippy_protocol::binary::StageStateHeader;
     use skippy_runtime::ModelStateKind;
 
+    /// Build a prefill fixture with a complete cacheable prompt identity.
     fn exact_prefill_fixture(prompt_token_count: i32) -> (KvStageIntegration, StageWireMessage) {
         let config = prefix_cache_test_config();
         let kv = KvStageIntegration::from_test_state(&config, ModelStateKind::Recurrent)
@@ -177,6 +178,7 @@ mod tests {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         };
         (kv, message)

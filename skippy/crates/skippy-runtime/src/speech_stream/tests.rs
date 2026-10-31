@@ -386,6 +386,33 @@ fn a_pass_hearing_fewer_words_than_confirmed_realigns_instead_of_stalling() {
 }
 
 #[test]
+fn a_shortened_hypothesis_keeps_the_last_confirmed_word_out_of_the_tail() {
+    let mut script = Script::new(vec![
+        vec![(900, " A B C D")],
+        vec![(1_900, " A B C D E")],
+        // The beginning was revised away, but D is still the confirmed boundary.
+        vec![(2_900, " C d, E")],
+        vec![(3_900, " C D E F")],
+        vec![(4_900, " C D E F G")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(manual());
+    for expected in [vec![], vec!["A B C D"], vec![], vec![" E"], vec![" F"]] {
+        let events = stream.push(&loud(1_000), &mut transcribe).unwrap();
+        assert_eq!(deltas(&events), expected);
+    }
+    let done = stream.commit(&mut transcribe).unwrap();
+    assert_eq!(deltas(&done), [" G"]);
+    assert_eq!(
+        done.last(),
+        Some(&SpeechStreamEvent::Completed {
+            turn: 0,
+            transcript: "A B C D E F G".into(),
+        })
+    );
+}
+
+#[test]
 fn silence_without_turn_detection_is_bounded_and_never_transcribed() {
     let config = SpeechStreamConfig {
         max_buffer_ms: 2_000,

@@ -60,8 +60,9 @@ fn invoke(
     let json = serde_json::from_slice(&fs::read(output).unwrap()).unwrap();
     (report, json)
 }
+/// The smoke matrix checks thirteen refusals and both supported causal methods.
 #[test]
-fn actual_contract_matrix_exercises_fourteen_refusals_and_consumed_report_statuses() {
+fn actual_contract_matrix_covers_thirteen_refusals_and_both_causal_readout_methods() {
     let server = server::Server::new("contract", "");
     let (report, json) = invoke(&server, "contract", "2", &Cancellation::default());
     assert!(report.process.success());
@@ -76,9 +77,18 @@ fn actual_contract_matrix_exercises_fourteen_refusals_and_consumed_report_status
         "choice-max",
         "score-min",
         "score-max",
-        "arch-message",
-        "arch-envelope",
-        "arch-success",
+        "causal-refusal",
+        "causal-evidence-missing",
+        "causal-question-missing",
+        "causal-method",
+        "causal-tokenizer",
+        "causal-token-fraction",
+        "causal-positive-score",
+        "causal-score-order",
+        "causal-cardinality",
+        "causal-semantics",
+        "causal-accounting",
+        "causal-generated",
         "unsupported-success",
         "unsupported-code",
     ] {

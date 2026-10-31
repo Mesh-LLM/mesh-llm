@@ -72,7 +72,12 @@ const MAX_AUDIO_MULTIPART_BODY_BYTES: usize = 64 * 1024 * 1024 + 1024 * 1024;
 /// Returning `None` means "no override configured", which leaves
 /// [`InferenceFrontendConfig::DEFAULT_BACKEND_TIMEOUT`] in place. Returning
 /// `Some(None)` means the operator explicitly disabled the timeout.
-fn configured_backend_timeout() -> Option<Option<Duration>> {
+///
+/// Public because the MeshLLM host proxy sits in front of this frontend and
+/// must not impose a shorter first-byte deadline than the one configured here:
+/// it reads this so its own budget covers it (see the host runtime's
+/// `network/openai/response/probe.rs`).
+pub fn configured_backend_timeout() -> Option<Option<Duration>> {
     let value = match std::env::var(BACKEND_TIMEOUT_SECS_ENV) {
         Ok(value) => value,
         Err(std::env::VarError::NotPresent) => return None,
@@ -1129,7 +1134,7 @@ pub(crate) struct CapsuleMarkerExtension(pub(crate) CapsuleMarker);
 /// `mesh/docs/plugins/openai-exchange-lifecycle-design-note.md`.
 static X_CAPSULE_ID_HEADER: HeaderName = HeaderName::from_static("x-capsule-id");
 
-/// Threads [`ChatCompletionResponse::exchange_id`] from the handler to
+/// Threads [`crate::chat::ChatCompletionResponse::exchange_id`] from the handler to
 /// `frontend_lifecycle_middleware`, mirroring [`CapsuleMarkerExtension`] —
 /// the same relay, for the exchange id rather than the response
 /// marker.

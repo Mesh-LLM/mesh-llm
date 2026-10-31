@@ -40,9 +40,12 @@ pub(crate) const MESH_TWIN_BRACKET_HEADER: &str = "x-mesh-twin-bracket";
 pub(super) const MAX_BODY_BYTES: usize = 8 * 1024 * 1024;
 const MAX_OBJECT_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024;
 const MAX_AUDIO_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024 + 64 * 1024;
+const MAX_DOCUMENT_UPLOAD_BODY_BYTES: usize = 64 * 1024 * 1024 + 64 * 1024;
 const MAX_CHUNKED_WIRE_BYTES: usize = MAX_BODY_BYTES * 6 + 64 * 1024;
 const MAX_OBJECT_UPLOAD_CHUNKED_WIRE_BYTES: usize = MAX_OBJECT_UPLOAD_BODY_BYTES * 6 + 64 * 1024;
 const MAX_AUDIO_UPLOAD_CHUNKED_WIRE_BYTES: usize = MAX_AUDIO_UPLOAD_BODY_BYTES * 6 + 64 * 1024;
+const MAX_DOCUMENT_UPLOAD_CHUNKED_WIRE_BYTES: usize =
+    MAX_DOCUMENT_UPLOAD_BODY_BYTES * 6 + 64 * 1024;
 pub(super) const MAX_HEADERS: usize = 64;
 const CRLF: &[u8] = b"\r\n";
 const LF: &[u8] = b"\n";
@@ -208,6 +211,11 @@ impl BufferedHttpRequest {
     /// cannot infer their eventual model context size from the wire length.
     pub fn is_audio_upload_request(&self) -> bool {
         self.method == "POST" && is_audio_upload_path(&self.client_path)
+    }
+
+    /// Document and typed image uploads are media, not model context.
+    pub fn is_document_ocr_request(&self) -> bool {
+        self.method == "POST" && is_document_ocr_path(&self.client_path)
     }
 
     /// A System One read renders `state` into every question's own bounded
@@ -472,7 +480,7 @@ where
                 .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?
                 .to_owned(),
         )
-    } else if is_audio_upload_path(&parsed.path) {
+    } else if is_audio_upload_path(&parsed.path) || is_document_ocr_path(&parsed.path) {
         match parsed.content_type.as_deref() {
             Some(content_type) => multipart_model_field(content_type, &body)
                 .map_err(|error| OpenAiRequestReadError::after_headers(error, &parsed))?,
@@ -678,6 +686,12 @@ fn body_limits_for_path(path: &str, default: HttpReadLimits) -> HttpReadLimits {
             max_body_bytes: MAX_AUDIO_UPLOAD_BODY_BYTES,
             max_chunked_wire_bytes: MAX_AUDIO_UPLOAD_CHUNKED_WIRE_BYTES,
         }
+    } else if is_document_ocr_path(path_only) {
+        HttpReadLimits {
+            max_header_bytes: default.max_header_bytes,
+            max_body_bytes: MAX_DOCUMENT_UPLOAD_BODY_BYTES,
+            max_chunked_wire_bytes: MAX_DOCUMENT_UPLOAD_CHUNKED_WIRE_BYTES,
+        }
     } else {
         default
     }
@@ -688,6 +702,13 @@ fn is_audio_upload_path(path: &str) -> bool {
     matches!(
         path.split('?').next().unwrap_or(path),
         "/v1/audio/transcriptions" | "/v1/audio/translations"
+    )
+}
+
+fn is_document_ocr_path(path: &str) -> bool {
+    matches!(
+        path.split('?').next().unwrap_or(path),
+        "/mesh/v1/documents/ocr" | "/mesh/v1/images/similarity" | "/mesh/v1/images/depth"
     )
 }
 

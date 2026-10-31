@@ -20,6 +20,11 @@ pub(super) fn is_audio_upload_path(path: &str) -> bool {
     )
 }
 
+/// Recognize document OCR uploads independently of query parameters.
+pub(super) fn is_document_ocr_path(path: &str) -> bool {
+    path.split('?').next().unwrap_or(path) == "/mesh/v1/documents/ocr"
+}
+
 /// Recognize the typed System One endpoint independently of query parameters.
 pub(super) fn is_system_one_path(path: &str) -> bool {
     matches!(
@@ -34,12 +39,16 @@ pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
         "/v1/chat/completions"
         | "/v1/completions"
         | "/v1/responses"
+        | "/v1/messages"
         | "/v1/audio/transcriptions"
         | "/v1/audio/translations" => Some(ModelWorkloadClass::CausalGeneration),
         "/v1/embeddings" => Some(ModelWorkloadClass::Embedding),
         "/v1/rerank" => Some(ModelWorkloadClass::Rerank),
         "/v1/audio/speech" => Some(ModelWorkloadClass::SpeechSynthesis),
         "/v1/realtime" => Some(ModelWorkloadClass::SpeechRecognition),
+        "/mesh/v1/documents/ocr" => Some(ModelWorkloadClass::DocumentOcr),
+        "/mesh/v1/images/similarity" => Some(ModelWorkloadClass::ImageTextSimilarity),
+        "/mesh/v1/images/depth" => Some(ModelWorkloadClass::DepthEstimation),
         _ => None,
     }
 }
@@ -237,9 +246,54 @@ pub(super) fn request_media(
             needs_audio: true,
             needs_vision: false,
         }
+    } else if is_binary_task_path(path) {
+        crate::network::router::MediaRequirements {
+            has_media: true,
+            needs_audio: false,
+            needs_vision: false,
+        }
     } else {
         body.map_or_else(Default::default, crate::network::router::media_requirements)
     }
+}
+
+/// Multipart tasks can select an automatic model without a JSON request body.
+pub(super) fn is_binary_task_path(path: &str) -> bool {
+    matches!(
+        path.split('?').next(),
+        Some("/mesh/v1/documents/ocr" | "/mesh/v1/images/similarity" | "/mesh/v1/images/depth")
+    )
+}
+
+/// Whether every advertisement of this model name serves document OCR.
+///
+/// `/v1/models` is the chat-compatible listing, so a local OCR-only plugin
+/// endpoint is deliberately absent from it. A peer advertises its plugin models
+/// by name, which would otherwise put an OCR-only model back on the list just
+/// because a different node hosts it. A name no descriptor claims stays listed:
+/// name-only advertisement is admitted for chat by default, exactly as
+/// `model_satisfies_workload_class` treats it.
+pub(crate) fn serves_only_document_ocr(model: &str, descriptors: &[ServedModelDescriptor]) -> bool {
+    let mut matching = descriptors
+        .iter()
+        .filter(|descriptor| descriptor_matches_routable_name(descriptor, model))
+        .peekable();
+    matching.peek().is_some()
+        && matching.all(|descriptor| {
+            descriptor
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.workload_class)
+                .is_some_and(|class| {
+                    matches!(
+                        class,
+                        ModelWorkloadClass::DocumentOcr
+                            | ModelWorkloadClass::SpeechRecognition
+                            | ModelWorkloadClass::ImageTextSimilarity
+                            | ModelWorkloadClass::DepthEstimation
+                    )
+                })
+        })
 }
 
 /// Pick metadata from a descriptor that supports this request, not whichever
@@ -287,6 +341,8 @@ pub(super) async fn eligible_targets(
     if request_workload_class(path).is_none() && !is_system_one_path(path) {
         return candidates.to_vec();
     }
+    // Local inference targets are native serving ports. Plugin descriptors are
+    // advertised separately for peer discovery and dispatched by the plugin path.
     let local = node.served_model_descriptors().await;
     let state = node.state.lock().await;
     candidates

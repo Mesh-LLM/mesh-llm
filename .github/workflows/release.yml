@@ -301,7 +301,9 @@ jobs:
           head_repository: ${{ github.event.pull_request.head.repo.full_name }}
           head_sha: ${{ github.sha }}
           ref: ${{ github.ref }}
-          depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
+          # force_hosted_runners (set by rolling previews) keeps every Linux leg on
+          # GitHub-hosted runners, matching how tagged releases from release/* run.
+          depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' && inputs.force_hosted_runners != true }}
           depot_pr_enabled: 'false'
           manual_use_depot: ${{ inputs.use_depot == true }}
 
@@ -633,6 +635,15 @@ jobs:
           persist-credentials: false
 
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable 2026-08-20
+
+      # Package verification runs through scripts/lib/automation.sh; the shared
+      # automation setup exports MESH_LLM_AUTOMATION_BIN so just is never needed.
+      # Depot Linux legs (DEPOT_RUNNERS_ENABLED main dispatch) have no supported
+      # profile, so dispatch with force_hosted_runners=true for full releases.
+      - name: Prepare automation
+        uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: ${{ runner.os == 'Linux' && 'hosted-bare' || 'image' }}
 
       - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
       - uses: ./.github/actions/configure-sccache-gha
@@ -1510,6 +1521,11 @@ jobs:
         uses: ./.github/actions/prepare-skippy-cli-input
         with:
           profile: release
+      # package-cli-release.sh runs mesh_automation; the just automation-run recipe is [unix]-only,
+      # so Windows needs the prebuilt automation binary.
+      - name: Prepare automation
+        if: env.MESH_LLM_AUTOMATION_BIN == ''
+        uses: ./.github/actions/prepare-automation
       - name: Package standalone Windows Skippy CLI
         shell: bash
         env:
@@ -1676,6 +1692,9 @@ jobs:
   build_native_runtime_windows_cpu:
     name: Build native runtime Windows x86_64 CPU
     needs: metadata
+    permissions:
+      contents: read
+      actions: read
     runs-on: windows-2022
     env:
       LLAMA_STAGE_BACKEND: cpu
@@ -1693,6 +1712,7 @@ jobs:
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch
       - name: Restore exact Windows CPU ABI cache
+        id: llama_cache
         uses: ./.github/actions/restore-windows-abi-cache
         with:
           backend: cpu
@@ -1715,6 +1735,15 @@ jobs:
           backend: cpu
           target: x86_64-pc-windows-msvc
           output_dir: dist/native-runtimes
+          allow_native_github_cache: "true"
+      - name: Save and verify Windows release ABI cache
+        if: steps.llama_cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/save-and-verify-actions-cache
+        with:
+          path: ${{ steps.llama_cache.outputs.cache-path }}
+          cache-key: ${{ steps.llama_cache.outputs.cache-primary-key }}
+          cache-ref: ${{ github.ref }}
+          cache-label: Windows release ABI
       - name: Upload native runtime
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
@@ -1728,6 +1757,9 @@ jobs:
     name: Build native runtime Windows x86_64 ${{ matrix.name }}
     needs: metadata
     if: ${{ needs.metadata.outputs.skip_gpu_bundles != 'true' }}
+    permissions:
+      contents: read
+      actions: read
     runs-on: windows-2022
     env:
       ROCM_HIP_SDK_FILENAME: AMD-Software-PRO-Edition-25.Q3-WinSvr2022-For-HIP.exe
@@ -1744,17 +1776,20 @@ jobs:
           - name: CUDA 12
             backend: cuda
             cuda_major: '12'
-            cuda_architectures: '61;75;80;86;87;89;90'
+            # The Linux lanes' lists minus SM 87 (Jetson Orin) and SM 121
+            # (GB10), which only ship in ARM Linux systems: no Windows x86_64
+            # host has them, and each architecture lengthens a cold build.
+            cuda_architectures: '61;75;80;86;89;90'
             cuda_sub_packages: '["nvcc", "cudart", "cublas", "cublas_dev", "visual_studio_integration"]'
             artifact_name: release-native-runtime-windows-x86_64-cuda12
-          # Same toolkit and architecture list as the Linux CUDA 13 lane, so
-          # Blackwell GPUs (SM 100/120) get a Windows runtime too. From CUDA 13
-          # the crt headers and nvvm (cicc) are separate installer packages.
+          # Same toolkit as the Linux CUDA 13 lane, so Blackwell GPUs (SM 100/120)
+          # get a Windows runtime too. From CUDA 13 the crt headers and nvvm
+          # (cicc) are separate installer packages.
           - name: CUDA 13
             backend: cuda
             cuda_major: '13'
             cuda_version: '13.1.2'
-            cuda_architectures: '75;80;86;87;89;90;100;103;120;121'
+            cuda_architectures: '75;80;86;89;90;100;103;120'
             cuda_sub_packages: '["nvcc", "crt", "nvvm", "cudart", "cublas", "cublas_dev", "visual_studio_integration"]'
             artifact_name: release-native-runtime-windows-x86_64-cuda13
           - name: ROCm
@@ -1776,6 +1811,7 @@ jobs:
         id: native_toolchain
         uses: ./.github/actions/resolve-native-toolchain-epoch
       - name: Restore exact Windows GPU ABI cache
+        id: llama_cache
         uses: ./.github/actions/restore-windows-abi-cache
         with:
           backend: ${{ matrix.backend }}
@@ -1861,6 +1897,15 @@ jobs:
           backend: ${{ matrix.backend }}
           target: x86_64-pc-windows-msvc
           output_dir: dist/native-runtimes
+          allow_native_github_cache: "true"
+      - name: Save and verify Windows release ABI cache
+        if: steps.llama_cache.outputs.cache-hit != 'true'
+        uses: ./.github/actions/save-and-verify-actions-cache
+        with:
+          path: ${{ steps.llama_cache.outputs.cache-path }}
+          cache-key: ${{ steps.llama_cache.outputs.cache-primary-key }}
+          cache-ref: ${{ github.ref }}
+          cache-label: Windows release ABI
       - name: Upload native runtime
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:

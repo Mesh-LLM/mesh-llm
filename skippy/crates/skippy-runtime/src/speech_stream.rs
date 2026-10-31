@@ -367,7 +367,11 @@ impl SpeechStream {
                 words.len(),
                 self.confirmed_in_buffer
             ));
-            self.confirmed_in_buffer = words.len();
+            self.confirmed_in_buffer = self
+                .confirmed
+                .last()
+                .and_then(|last| words.iter().rposition(|word| same_word(word, last)))
+                .map_or(words.len(), |position| position + 1);
             self.pending.clear();
         }
         let tail = &words[self.confirmed_in_buffer..];

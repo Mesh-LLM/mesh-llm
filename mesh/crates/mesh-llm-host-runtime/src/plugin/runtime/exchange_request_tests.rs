@@ -11,6 +11,7 @@ async fn running_observer() -> (Arc<ExternalPlugin>, mpsc::Receiver<super::proto
         args: Vec::new(),
         url: None,
         env: Default::default(),
+        settings: Default::default(),
         startup: Default::default(),
         web_ui_enabled: None,
         web_ui_primary_tab: None,
@@ -19,11 +20,14 @@ async fn running_observer() -> (Arc<ExternalPlugin>, mpsc::Receiver<super::proto
     }));
     let (outbound_tx, outbound_rx) = mpsc::channel(4);
     *plugin.runtime.lock().await = Some(PluginRuntime {
+        managed_models: Vec::new(),
         generation: 7,
         authenticated_peer: true,
         initialized_lifecycle: Some(Box::new(
             mesh_llm_plugin::openai_exchange::openai_exchange_hook("observe"),
         )),
+        status_declaration: Default::default(),
+        declares_inference_observation: false,
         _child: None,
         connection_task: tokio::spawn(std::future::pending()),
         outbound_tx,

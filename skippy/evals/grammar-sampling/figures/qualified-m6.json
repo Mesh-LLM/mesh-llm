@@ -1,0 +1,306 @@
+{
+  "measured_commit": "a9b37b71bb9ebcff51e321e7fcedba323f7d9458",
+  "frozen_baseline_commit": "3947de0cbc73fe5cbcaae548b297f03a401532d7",
+  "source_audit_sha256": "f0581d4c498d62071393eb244f0aa3aa79fbaa06ce3f58be57232034569cad1f",
+  "observations_sha256": "f0c90645d9d579da22f9cb543b822b6e259fdde018e484f3533daf5c2f4ff7e7",
+  "hardware": "Apple M6, 24 GB",
+  "model": "Qwen3.5-9B Q4_K_M",
+  "context_tokens": 4096,
+  "kv_key_type": "f16",
+  "kv_value_type": "f16",
+  "independent_blocks": 30,
+  "warmup_blocks_per_arm": 3,
+  "cases": 5,
+  "measured_rows": 900,
+  "warmup_rows": 2700,
+  "fresh_workers": 90,
+  "aggregation": "Case-balanced geometric means; latency is inverse sampler token rate. Ratio bounds are the preregistered bootstrap lower/upper 95% bounds over independent paired blocks, not error bars on absolute arm means.",
+  "arms": [
+    {
+      "arm": "A",
+      "scope": "fixed-input-native-sampler",
+      "p50_ns": 9822583,
+      "p95_ns": 10284208,
+      "geomean_tokens_s": 224.2044737608865,
+      "peak_rss_bytes": 6486867968
+    },
+    {
+      "arm": "A",
+      "scope": "teacher-forced-native-decode",
+      "p50_ns": 48604209,
+      "p95_ns": 49386541,
+      "geomean_tokens_s": 22.226809390085208,
+      "peak_rss_bytes": 6486867968
+    },
+    {
+      "arm": "B",
+      "scope": "fixed-input-native-sampler",
+      "p50_ns": 92250,
+      "p95_ns": 6980250,
+      "geomean_tokens_s": 1542.8998734382553,
+      "peak_rss_bytes": 6438060032
+    },
+    {
+      "arm": "B",
+      "scope": "teacher-forced-native-decode",
+      "p50_ns": 38770917,
+      "p95_ns": 45973500,
+      "geomean_tokens_s": 24.815402392738083,
+      "peak_rss_bytes": 6438060032
+    },
+    {
+      "arm": "C",
+      "scope": "fixed-input-native-sampler",
+      "p50_ns": 92291,
+      "p95_ns": 6982167,
+      "geomean_tokens_s": 1548.8504858224812,
+      "peak_rss_bytes": 6437371904
+    },
+    {
+      "arm": "C",
+      "scope": "teacher-forced-native-decode",
+      "p50_ns": 38745333,
+      "p95_ns": 45934375,
+      "geomean_tokens_s": 24.84017685472795,
+      "peak_rss_bytes": 6437371904
+    }
+  ],
+  "aggregate": [
+    {
+      "scope": "fixed-input-native-sampler",
+      "C_vs_B": {
+        "ratio": 0.9961580459581553,
+        "lower_95": 0.9938324053257871,
+        "upper_95": 0.998525856292879,
+        "paired_blocks": 30
+      },
+      "C_vs_A": {
+        "ratio": 0.1447554013851948,
+        "lower_95": 0.1444151450360665,
+        "upper_95": 0.1450821965106883,
+        "paired_blocks": 30
+      },
+      "within_one_percent": true,
+      "improves_existing": true
+    },
+    {
+      "scope": "teacher-forced-native-decode",
+      "C_vs_B": {
+        "ratio": 1.000998350201935,
+        "lower_95": 1.000182788723104,
+        "upper_95": 1.0018483339878277,
+        "paired_blocks": 30
+      },
+      "C_vs_A": {
+        "ratio": 1.1175772653095446,
+        "lower_95": 1.1167001624855344,
+        "upper_95": 1.118522309957883,
+        "paired_blocks": 30
+      },
+      "within_one_percent": true,
+      "improves_existing": true
+    }
+  ],
+  "per_case": [
+    {
+      "case": "Unicode-and-partial-UTF8",
+      "scope": "fixed-input-native-sampler",
+      "C_vs_B": {
+        "ratio": 0.9945510083144933,
+        "lower_95": 0.9906228277084946,
+        "upper_95": 0.9984293017213492,
+        "paired_blocks": 30
+      },
+      "C_vs_A": {
+        "ratio": 0.09538263120772694,
+        "lower_95": 0.0950639633637003,
+        "upper_95": 0.09570211150494769,
+        "paired_blocks": 30
+      },
+      "within_one_percent": true
+    },
+    {
+      "case": "Unicode-and-partial-UTF8",
+      "scope": "teacher-forced-native-decode",
+      "C_vs_B": {
+        "ratio": 1.0014270182076064,
+        "lower_95": 1.0003177174606537,
+        "upper_95": 1.0025402810514026,
+        "paired_blocks": 30
+      },
+      "C_vs_A": {
+        "ratio": 1.1916117529304995,
+        "lower_95": 1.1904164477240073,
+        "upper_95": 1.1927784357352031,
+        "paired_blocks": 30
+      },
+      "within_one_percent": true
+    },
+    {
+      "case": "closing-delimiters-and-EOS",
+      "scope": "fixed-input-native-sampler",
+      "C_vs_B": {
+        "ratio": 0.9907702659878033,
+        "lower_95": 0.9873584931433749,
+        "upper_95": 0.9941874103796035,
+        "paired_blocks": 30
+      },
+      "C_vs_A": {
+        "ratio": 0.11262244220041202,
+        "lower_95": 0.11223589289272176,
+        "upper_95": 0.11300565603775854,
+        "paired_blocks": 30
+      },
+      "within_one_percent": true
+    },
+    {
+      "case": "closing-delimiters-and-EOS",
+      "scope": "teacher-forced-native-decode",
+      "C_vs_B": {
+        "ratio": 1.0004162155672514,
+        "lower_95": 0.999455063377656,
+        "upper_95": 1.0013780137624664,
+        "paired_blocks": 30
+      },
+      "C_vs_A": {
+        "ratio": 1.1878412601415889,
+        "lower_95": 1.1868123565117485,
+        "upper_95": 1.18887869619659,
+        "paired_blocks": 30
+      },
+      "within_one_percent": true
+    },
+    {
+      "case": "large-HTML-write-argument",
+      "scope": "fixed-input-native-sampler",
+      "C_vs_B": {
+        "ratio": 0.9952999338479669,
+        "lower_95": 0.9933041672883729,
+        "upper_95": 0.9973206115481978,
+        "paired_blocks": 30
+      },
+      "C_vs_A": {
+        "ratio": 0.02343609117035075,
+        "lower_95": 0.023374370034049352,
+        "upper_95": 0.023496534588340667,
+        "paired_blocks": 30
+      },
+      "within_one_percent": true
+    },
+    {
+      "case": "large-HTML-write-argument",
+      "scope": "teacher-forced-native-decode",
+      "C_vs_B": {
+        "ratio": 1.0014751840698612,
+        "lower_95": 1.0004469950035686,
+        "upper_95": 1.002517922012001,
+        "paired_blocks": 30
+      },
+      "C_vs_A": {
+        "ratio": 1.2482663583743256,
+        "lower_95": 1.2466097368842342,
+        "upper_95": 1.2498495546546884,
+        "paired_blocks": 30
+      },
+      "within_one_percent": true
+    },
+    {
+      "case": "lazy-before-tool-trigger",
+      "scope": "fixed-input-native-sampler",
+      "C_vs_B": {
+        "ratio": 1.0009022392996563,
+        "lower_95": 0.9999750149796222,
+        "upper_95": 1.0018366790447657,
+        "paired_blocks": 30
+      },
+      "C_vs_A": {
+        "ratio": 0.2533150846251097,
+        "lower_95": 0.2531436093874311,
+        "upper_95": 0.25349140574995016,
+        "paired_blocks": 30
+      },
+      "within_one_percent": true
+    },
+    {
+      "case": "lazy-before-tool-trigger",
+      "scope": "teacher-forced-native-decode",
+      "C_vs_B": {
+        "ratio": 1.0013114191034174,
+        "lower_95": 1.0002335459725737,
+        "upper_95": 1.0024388239657436,
+        "paired_blocks": 30
+      },
+      "C_vs_A": {
+        "ratio": 0.9915562319338823,
+        "lower_95": 0.9905984197068897,
+        "upper_95": 0.9926512520244757,
+        "paired_blocks": 30
+      },
+      "within_one_percent": true
+    },
+    {
+      "case": "restricted-values-and-rejection-fallback",
+      "scope": "fixed-input-native-sampler",
+      "C_vs_B": {
+        "ratio": 0.9992992762782522,
+        "lower_95": 0.9955943371720202,
+        "upper_95": 1.002969614456248,
+        "paired_blocks": 30
+      },
+      "C_vs_A": {
+        "ratio": 0.9966287680767694,
+        "lower_95": 0.9928935620649824,
+        "upper_95": 1.0001502059029672,
+        "paired_blocks": 30
+      },
+      "within_one_percent": true
+    },
+    {
+      "case": "restricted-values-and-rejection-fallback",
+      "scope": "teacher-forced-native-decode",
+      "C_vs_B": {
+        "ratio": 1.0003625396531644,
+        "lower_95": 0.9989840571408811,
+        "upper_95": 1.0017071834405364,
+        "paired_blocks": 30
+      },
+      "C_vs_A": {
+        "ratio": 0.9951074848989144,
+        "lower_95": 0.9937888499365873,
+        "upper_95": 0.9964290864567451,
+        "paired_blocks": 30
+      },
+      "within_one_percent": true
+    }
+  ],
+  "jy_executions": [
+    {
+      "job_id": "job_qn6ncceq3rp3rn2",
+      "run_id": "run_cv38rv0cemfbrx4",
+      "measured_rows": 300,
+      "warmup_rows": 900,
+      "fresh_workers": 30,
+      "placement_samples": 215,
+      "observations_sha256": "e4dcfcf038ba089025a21f98b03575cd1134e75e03477ef002dc64e0add1af1d"
+    },
+    {
+      "job_id": "job_cgabgc2sdzkzbrw",
+      "run_id": "run_8ww3za3np240f6h",
+      "measured_rows": 300,
+      "warmup_rows": 900,
+      "fresh_workers": 30,
+      "placement_samples": 215,
+      "observations_sha256": "d121fa90e6120b72b6677c2c9afc6b517308a3139c7a68f1b338e384586250e6"
+    },
+    {
+      "job_id": "job_rs1tk0s5cj92pnr",
+      "run_id": "run_35p70f6aw20j451",
+      "measured_rows": 300,
+      "warmup_rows": 900,
+      "fresh_workers": 30,
+      "placement_samples": 211,
+      "observations_sha256": "5fb3deb43fd229f53b8bfcffd1dbb89fc62425a7fa9863ee86e348542c82ec66"
+    }
+  ],
+  "scope": "Fixed-input native sampler and teacher-forced native decode; synthetic workloads. No end-to-end or 35B claim."
+}

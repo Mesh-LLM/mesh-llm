@@ -10,6 +10,7 @@ use super::inventory::{
     InventoryScanCoordinator, InventoryScanDisposition, InventoryScanError, InventoryScanOutcome,
     InventoryScanResult, replace_local_instances_snapshot, replace_local_inventory_snapshot,
 };
+use super::plugin_status::{PluginStatusRejection, PluginStatusStore};
 use super::plugins::{
     PluginDataValue, PluginsSnapshotView, clear_plugin_data, clear_plugin_endpoints,
     plugins_snapshot, upsert_plugin_data, upsert_plugin_endpoint,
@@ -49,6 +50,8 @@ use tokio::sync::watch;
 #[derive(Default)]
 struct RuntimeDataSharedState {
     snapshots: RwLock<RuntimeDataSnapshots>,
+    /// Apart from `snapshots`, so that cloning them does not copy plugin data.
+    plugin_status: Mutex<PluginStatusStore>,
     subscriptions: RuntimeDataSubscriptions,
     inventory_scan: Mutex<InventoryScanCoordinator>,
     event_cutover_health: ShadowHealth,
@@ -385,6 +388,82 @@ impl RuntimeDataCollector {
                 clear_plugin_endpoints(&mut snapshots.plugin_endpoints, plugin_name);
             data_changed || endpoints_changed
         })
+    }
+
+    /// Keep `request` as `plugin_name`'s contribution to `/api/status`. The
+    /// caller vouches that it comes from the plugin's current initialized
+    /// connection `generation`, whose manifest declares `schema_version`.
+    pub(crate) fn publish_plugin_status(
+        &self,
+        plugin_name: &str,
+        generation: u64,
+        schema_version: u32,
+        request: &crate::plugin::proto::PublishPluginStatusRequest,
+    ) -> Result<crate::plugin::proto::PublishPluginStatusResponse, PluginStatusRejection> {
+        let mut store = self.plugin_status_store();
+        let accepted = store.publish(
+            plugin_name,
+            generation,
+            schema_version,
+            request,
+            tokio::time::Instant::now(),
+            crate::mesh::current_time_unix_ms(),
+        )?;
+        if let Some(fresh_for) = accepted.fresh_for
+            && let Some(expiry) = self.wake_status_after(fresh_for)
+        {
+            store.set_expiry(plugin_name, expiry);
+        }
+        drop(store);
+        self.shared.subscriptions.publish(RuntimeDataDirty::STATUS);
+        Ok(accepted.response)
+    }
+
+    /// The plugin connection `generation` is gone: its snapshot stays, shown
+    /// as unavailable.
+    pub(crate) fn mark_plugin_status_unavailable(&self, plugin_name: &str, generation: u64) {
+        let changed = self
+            .plugin_status_store()
+            .mark_unavailable(plugin_name, generation);
+        if changed {
+            self.shared.subscriptions.publish(RuntimeDataDirty::STATUS);
+        }
+    }
+
+    /// The plugin stopped for good: its snapshot goes.
+    pub(crate) fn remove_plugin_status(&self, plugin_name: &str) {
+        let changed = self.plugin_status_store().remove(plugin_name);
+        if changed {
+            self.shared.subscriptions.publish(RuntimeDataDirty::STATUS);
+        }
+    }
+
+    pub(crate) fn plugin_status_payloads(
+        &self,
+    ) -> BTreeMap<String, crate::api::status::PluginStatusPayload> {
+        self.plugin_status_store()
+            .payloads(tokio::time::Instant::now())
+    }
+
+    fn plugin_status_store(&self) -> std::sync::MutexGuard<'_, PluginStatusStore> {
+        self.shared
+            .plugin_status
+            .lock()
+            .expect("runtime data plugin status lock poisoned")
+    }
+
+    /// Mark status dirty once `after` has passed, so `/api/events` sends the
+    /// snapshot turning stale. Holds the collector weakly.
+    fn wake_status_after(&self, after: std::time::Duration) -> Option<tokio::task::AbortHandle> {
+        let runtime = tokio::runtime::Handle::try_current().ok()?;
+        let shared = Arc::downgrade(&self.shared);
+        let task = runtime.spawn(async move {
+            tokio::time::sleep(after).await;
+            if let Some(shared) = shared.upgrade() {
+                shared.subscriptions.publish(RuntimeDataDirty::STATUS);
+            }
+        });
+        Some(task.abort_handle())
     }
 
     pub(crate) fn build_hardware_view(&self, input: HardwareViewInput) -> HardwareViewSnapshot {
@@ -768,6 +847,7 @@ fn build_model_payload_from_catalog_entry(
         } else {
             "cold".into()
         },
+        workload_class: served_metadata.and_then(|metadata| metadata.workload_class),
         node_count,
         mesh_vram_gb,
         size_gb,

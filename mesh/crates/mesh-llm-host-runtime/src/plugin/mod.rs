@@ -11,9 +11,12 @@ mod health;
 mod identity_registration;
 mod identity_registry;
 mod identity_transport;
+pub(crate) mod inference_routing;
+mod model_assets;
 pub(crate) use exchange_lifecycle::{ExchangeSession, PhaseResult, request_event};
 pub(crate) mod identity_services;
 mod in_process;
+pub(crate) mod inference_observation;
 mod installed;
 pub(crate) mod mcp;
 pub mod openai_exchange;
@@ -96,7 +99,7 @@ use self::health::{endpoint_declared_capabilities, endpoint_record_from_plugin_s
 pub use self::in_process::{InProcessPluginRunner, InProcessPlugins};
 use self::runtime::ExternalPlugin;
 pub use self::startup::{PluginStartupOptions, PluginStartupSummary};
-pub(crate) use self::support::parse_optional_json;
+pub(crate) use self::support::{PluginRpcFailure, parse_optional_json};
 use self::support::{format_args_for_log, format_slice_for_log, format_tool_names_for_log};
 #[cfg(all(test, unix))]
 use self::transport::unix_socket_path;
@@ -1043,31 +1046,6 @@ impl PluginManager {
             .find(|route| route.model_id == model_id))
     }
 
-    pub async fn inference_models(&self) -> Result<Vec<String>> {
-        let mut models = Vec::new();
-        for endpoint in self.inference_endpoints().await? {
-            models.extend(endpoint.models);
-        }
-        models.sort();
-        models.dedup();
-        Ok(models)
-    }
-
-    pub async fn inference_endpoint_for_model(
-        &self,
-        model: &str,
-    ) -> Result<Option<InferenceEndpointRoute>> {
-        let mut endpoints = self.inference_endpoints().await?;
-        endpoints.sort_by(|a, b| {
-            a.plugin_name
-                .cmp(&b.plugin_name)
-                .then_with(|| a.endpoint_id.cmp(&b.endpoint_id))
-        });
-        Ok(endpoints
-            .into_iter()
-            .find(|endpoint| endpoint.models.iter().any(|candidate| candidate == model)))
-    }
-
     pub async fn capability_providers(&self) -> Result<Vec<PluginCapabilityProvider>> {
         Ok(self.inner.runtime_data.plugins_snapshot().providers)
     }
@@ -1736,5 +1714,9 @@ pub async fn run_plugin_process(name: String, args: Vec<String>) -> Result<()> {
     }
 }
 
+#[cfg(test)]
+mod inference_observation_e2e_tests;
+#[cfg(test)]
+mod status_contribution_tests;
 #[cfg(test)]
 mod tests;

@@ -168,6 +168,7 @@ async fn strict_multimodal_stage_loads() -> StrictMultimodalStageLoads {
         .expect("strict split settings");
     let downstream_stage = &generation.stages[1];
     let downstream = skippy::StagePeerDescriptor {
+        persistent_lane_marker: false,
         stage_id: downstream_stage.stage_id.clone(),
         stage_index: downstream_stage.stage_index,
         endpoint: "127.0.0.1:41001".to_string(),

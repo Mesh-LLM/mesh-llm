@@ -325,6 +325,8 @@ impl Node {
             is_membership: true,
             // This membership's mesh: peers, demand, and mesh identity.
             state: Arc::new(Mutex::new(MembershipState::default())),
+            gossip_verification: Arc::default(),
+            gossip_encoder: Arc::default(),
             plugin_message_history: Default::default(),
             direct_rescue_endpoints: super::super::direct_rescue::DirectRescueEndpoints::default(),
             host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
@@ -367,6 +369,7 @@ impl Node {
             plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
             control_listener: Arc::new(Mutex::new(None)),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+            native_model_lifecycle: self.native_model_lifecycle.clone(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
             #[cfg(feature = "payments")]
             payment_recovery: Arc::new(Mutex::new(None)),
@@ -376,6 +379,7 @@ impl Node {
             // Renewed in memory, never saved: the ownership file is the main
             // node's.
             owner_attestation_path: None,
+            unsaved_owner_attestation: Arc::default(),
             owner_summary: Arc::new(Mutex::new(owner_summary)),
             trust_store: Arc::new(Mutex::new(trust_store)),
             trust_policy: TrustPolicy::Allowlist,
@@ -393,6 +397,7 @@ impl Node {
             llama_ready: self.llama_ready.clone(),
             vram_bytes: self.vram_bytes,
             local_runtime_capacity_bytes: self.local_runtime_capacity_bytes,
+            host_ram_capacity_bytes: self.host_ram_capacity_bytes,
             host_ram_offload_gain_bytes: self.host_ram_offload_gain_bytes,
             inflight_requests: self.inflight_requests.clone(),
             inflight_change_tx: self.inflight_change_tx.clone(),

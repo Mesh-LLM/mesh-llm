@@ -137,7 +137,9 @@ impl OwnedChild {
         // PID targets only that group, never the supervisor or a recycled PGID.
         if unsafe { libc::kill(-self.group, signal) } < 0 {
             let error = io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::ESRCH) {
+            if !signal_found_no_live_member(error.raw_os_error(), || {
+                membership::group_active(self.group)
+            })? {
                 return Err(Failure::io("signal group", error));
             }
         }
@@ -175,5 +177,44 @@ impl Drop for OwnedChild {
         if let Err(error) = result {
             eprintln!("process emergency cleanup failed: {error}");
         }
+    }
+}
+
+/// Whether a failed group signal only means nothing live was left to signal.
+///
+/// `ESRCH` is that case directly. macOS also reports `EPERM` for a group whose
+/// remaining members are all unreaped zombies: the leader can exit between the
+/// supervisor's live-member check and the `kill`, so an exiting tree would
+/// otherwise look like a failed graceful stop. `EPERM` is accepted only when a
+/// fresh membership check finds no live member; any live member keeps it fatal.
+fn signal_found_no_live_member(
+    errno: Option<i32>,
+    group_active: impl FnOnce() -> Result<bool, Failure>,
+) -> Result<bool, Failure> {
+    match errno {
+        Some(libc::ESRCH) => Ok(true),
+        Some(libc::EPERM) => Ok(!group_active()?),
+        _ => Ok(false),
+    }
+}
+
+#[cfg(test)]
+mod signal_tests {
+    use super::*;
+
+    #[test]
+    fn eperm_on_a_group_with_no_live_member_is_not_a_signal_failure() {
+        assert!(signal_found_no_live_member(Some(libc::EPERM), || Ok(false)).unwrap());
+    }
+
+    #[test]
+    fn eperm_while_a_member_is_still_live_stays_a_signal_failure() {
+        assert!(!signal_found_no_live_member(Some(libc::EPERM), || Ok(true)).unwrap());
+    }
+
+    #[test]
+    fn esrch_is_accepted_and_other_errors_stay_failures() {
+        assert!(signal_found_no_live_member(Some(libc::ESRCH), || Ok(true)).unwrap());
+        assert!(!signal_found_no_live_member(Some(libc::EINVAL), || Ok(false)).unwrap());
     }
 }

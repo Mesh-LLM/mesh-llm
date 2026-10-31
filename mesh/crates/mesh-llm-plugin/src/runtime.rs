@@ -76,6 +76,15 @@ pub struct PluginInitializeRequest {
     /// Empty for a host older than this field.
     #[serde(default)]
     pub host_capabilities: Vec<String>,
+    /// The operator's `[plugin.settings]` for this plugin as a JSON object,
+    /// validated against the manifest's `config_schema`. `"{}"` when the
+    /// operator set nothing or the host is older than this field.
+    #[serde(default = "empty_settings_json")]
+    pub settings_json: String,
+}
+
+fn empty_settings_json() -> String {
+    "{}".to_string()
 }
 
 impl From<proto::InitializeRequest> for PluginInitializeRequest {
@@ -86,7 +95,17 @@ impl From<proto::InitializeRequest> for PluginInitializeRequest {
             host_info_json: value.host_info_json,
             mesh_visibility: MeshVisibility::from_proto(value.mesh_visibility),
             host_capabilities: value.host_capabilities,
+            settings_json: settings_json_or_default(value.settings_json),
         }
+    }
+}
+
+/// An older host sends nothing here; a plugin should see an empty object.
+fn settings_json_or_default(settings_json: String) -> String {
+    if settings_json.trim().is_empty() {
+        "{}".to_string()
+    } else {
+        settings_json
     }
 }
 
@@ -677,6 +696,8 @@ struct RuntimeState<P> {
     pending_host_responses: PendingHostResponses,
     /// What the host listed in its `InitializeRequest`; empty until then.
     host_capabilities: std::sync::RwLock<Arc<[String]>>,
+    /// The current local inference observation subscription, if any.
+    inference_observation: crate::inference_observation::FeedSlot,
     /// An error from `on_initialized`, which runs on its own task: it ends the
     /// runtime, as an error from the read loop does.
     fatal_tx: mpsc::Sender<anyhow::Error>,
@@ -723,6 +744,7 @@ impl PluginRuntime {
             outbound_tx,
             pending_host_responses: Arc::new(Mutex::new(HashMap::new())),
             host_capabilities: std::sync::RwLock::new(Arc::from([])),
+            inference_observation: Default::default(),
             fatal_tx,
         });
         let mut writer = tokio::spawn(Self::write_loop(
@@ -892,6 +914,10 @@ impl PluginRuntime {
                 Self::handle_initialize(state, request_id, request).await
             }
             proto::envelope::Payload::HealthRequest(_) => Self::handle_health(state, request_id),
+            proto::envelope::Payload::InferenceObservationBatch(batch) => {
+                state.inference_observation.deliver(batch);
+                Ok(true)
+            }
             proto::envelope::Payload::ShutdownRequest(_) => {
                 Self::write_payload(
                     &state,
@@ -1017,20 +1043,15 @@ impl PluginRuntime {
             Arc::from(request.host_capabilities.clone());
         let mut plugin = state.plugin.clone().write_owned().await;
         let mut context = Self::context(&state);
-        if plugin
-            .manifest()
-            .and_then(|m| m.openai_exchange_hook)
-            .is_some_and(|h| h.required)
-            && !context.host_supports(crate::host_capabilities::OPENAI_EXCHANGE)
-        {
+        if let Some(message) = crate::host_capabilities::unsupported_requirement(
+            plugin.manifest().as_ref(),
+            |capability| context.host_supports(capability),
+        ) {
             Self::write_payload(
                 &state,
                 request_id,
                 proto::envelope::Payload::ErrorResponse(
-                    PluginError::invalid_request(
-                        "host does not support required openai_exchange.v1 contract",
-                    )
-                    .into_error_response(),
+                    PluginError::invalid_request(message).into_error_response(),
                 ),
             )
             .await?;
@@ -1057,7 +1078,17 @@ impl PluginRuntime {
                 plugin_protocol_version: PROTOCOL_VERSION,
                 plugin_version: plugin.plugin_version(),
                 server_info_json: serde_json::to_string(&plugin.server_info())?,
-                capabilities: plugin.capabilities(),
+                capabilities: {
+                    let mut capabilities = plugin.capabilities();
+                    if context.host_supports(crate::host_capabilities::INVOCATION_CALLBACKS)
+                        && !capabilities
+                            .iter()
+                            .any(|value| value == crate::host_capabilities::INVOCATION_CALLBACKS)
+                    {
+                        capabilities.push(crate::host_capabilities::INVOCATION_CALLBACKS.into());
+                    }
+                    capabilities
+                },
                 manifest: plugin.manifest(),
             }),
         )
@@ -1119,7 +1150,7 @@ impl PluginRuntime {
         request: proto::RpcRequest,
     ) -> proto::envelope::Payload {
         let mut plugin = Self::plugin_for_request(state).await;
-        let mut context = Self::context(state);
+        let mut context = Self::context(state).with_invocation_id(request.invocation_id);
         match plugin.handle_rpc(request, &mut context).await {
             Ok(payload) => payload,
             Err(err) => proto::envelope::Payload::ErrorResponse(err.into_error_response()),
@@ -1131,7 +1162,7 @@ impl PluginRuntime {
         request: proto::InvokeServiceRequest,
     ) -> proto::envelope::Payload {
         let mut plugin = Self::plugin_for_request(state).await;
-        let mut context = Self::context(state);
+        let mut context = Self::context(state).with_invocation_id(request.invocation_id);
         match plugin.invoke_service(request, &mut context).await {
             Ok(Some(response)) => proto::envelope::Payload::InvokeServiceResponse(response),
             Ok(None) => proto::envelope::Payload::ErrorResponse(
@@ -1163,7 +1194,7 @@ impl PluginRuntime {
         notification: proto::RpcNotification,
     ) -> Result<bool> {
         let mut plugin = Self::plugin_for_request(state).await;
-        let mut context = Self::context(state);
+        let mut context = Self::context(state).with_invocation_id(notification.invocation_id);
         plugin
             .on_rpc_notification(notification, &mut context)
             .await?;
@@ -1255,6 +1286,7 @@ impl PluginRuntime {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .clone(),
         )
+        .with_inference_observation(state.inference_observation.clone())
     }
 
     async fn write_payload<P: Plugin + Clone + Sync>(
@@ -1365,6 +1397,7 @@ mod tests {
         let response = plugin
             .handle_rpc(
                 proto::RpcRequest {
+                    invocation_id: None,
                     method: method.into(),
                     params_json: params.to_string(),
                 },
@@ -1451,6 +1484,7 @@ mod tests {
         let op = plugin
             .invoke_service(
                 proto::InvokeServiceRequest {
+                    invocation_id: None,
                     kind: proto::ServiceKind::Operation as i32,
                     service_name: "echo".into(),
                     input_json: json!({ "message": "hello" }).to_string(),
@@ -1468,6 +1502,7 @@ mod tests {
         let prompt = plugin
             .invoke_service(
                 proto::InvokeServiceRequest {
+                    invocation_id: None,
                     kind: proto::ServiceKind::Prompt as i32,
                     service_name: "brief".into(),
                     input_json: serde_json::to_string(&GetPromptRequestParams::new("brief"))
@@ -1484,6 +1519,7 @@ mod tests {
         let resource = plugin
             .invoke_service(
                 proto::InvokeServiceRequest {
+                    invocation_id: None,
                     kind: proto::ServiceKind::Resource as i32,
                     service_name: "demo://state".into(),
                     input_json: serde_json::to_string(&ReadResourceRequestParams::new(
@@ -1503,6 +1539,7 @@ mod tests {
         let completion = plugin
             .invoke_service(
                 proto::InvokeServiceRequest {
+                    invocation_id: None,
                     kind: proto::ServiceKind::Completion as i32,
                     service_name: "brief".into(),
                     input_json: serde_json::to_string(&CompleteRequestParams::new(
@@ -1557,6 +1594,7 @@ mod tests {
         let response = plugin
             .invoke_service(
                 proto::InvokeServiceRequest {
+                    invocation_id: None,
                     kind: proto::ServiceKind::VirtualModel as i32,
                     service_name: "chat".into(),
                     input_json: json!({"request": {"model": "virtual-demo"}}).to_string(),
@@ -1616,6 +1654,7 @@ mod tests {
                 request_id: 1,
                 payload: Some(proto::envelope::Payload::InvokeServiceRequest(
                     proto::InvokeServiceRequest {
+                        invocation_id: None,
                         kind: proto::ServiceKind::Operation as i32,
                         service_name: "slow".into(),
                         input_json: "{}".into(),
@@ -1704,6 +1743,7 @@ mod tests {
                     request_id,
                     payload: Some(proto::envelope::Payload::InvokeServiceRequest(
                         proto::InvokeServiceRequest {
+                            invocation_id: None,
                             kind: proto::ServiceKind::Operation as i32,
                             service_name: "barrier".into(),
                             input_json: "{}".into(),

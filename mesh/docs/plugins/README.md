@@ -19,6 +19,8 @@ Plugin-specific documentation:
 - [Flash-MoE](flash-moe.md) - external OpenAI-compatible backend adapter for single-node SSD expert streaming
 - [Telemetry](telemetry.md) - OTLP metrics-only runtime telemetry and external metrics plugin notes
 - [Virtual models](virtual-models.md) - request-orchestrating models backed by a plugin and host-routed inference
+- [Managed provider models](managed-models.md) - model configuration, host-owned asset acquisition and provider residency policies
+- [Document OCR](document-ocr.md) - provider contract and mesh routing for `/mesh/v1/documents/ocr`, plus the sibling transcription, image/text similarity and depth task contracts
 - [Web UI exemplar](exemplars/web-ui/README.md) - source-owned maintainer sample for v1 plugin web UI projection, read directly by tests to catch drift
 
 The main goals are:
@@ -639,11 +641,12 @@ Required fields:
 | `author_email` | Plugin author or maintainer email.                                                            |
 | `author_name`  | Plugin author or maintainer display name.                                                     |
 
-Optional pin fields:
+Pin fields, required to install an entry by name. An entry without them stays
+searchable, but `mesh-llm plugins install <name>` refuses it:
 
 | Field     | Meaning                                                                                                   |
 | --------- | --------------------------------------------------------------------------------------------------------- |
-| `version` | The exact release tag the entry pins, such as `v0.1.0`.                                                   |
+| `version` | The exact release tag the entry pins, such as `v0.1.0`. Every install resolves this tag.                  |
 | `sha256`  | The SHA-256 of that release's archive, as lowercase hex, keyed by target triple. Requires `version`.      |
 
 ```json
@@ -662,12 +665,18 @@ Optional pin fields:
 }
 ```
 
-An ordinary `mesh-llm plugins install` ignores the pin fields. A default plugin
-(see [Default Plugins](#default-plugins)) is pinned in the default list itself;
-if its catalog entry also pins this platform, the two pins must agree, and the
-downloaded archive must match the pin as well as GitHub's reported digest
-before it is extracted. A disagreement or a mismatch is an error and nothing is
-installed, so a release asset replaced after it was pinned is refused.
+Installing an entry by name installs exactly what that entry pins. The resolver
+asks GitHub for the pinned `version` tag rather than the repository's latest,
+refuses a returned release whose tag is not the pinned one, and verifies the
+downloaded archive against the entry's `sha256` for the target before anything
+is extracted. GitHub's reported digest is a cross-check, not the authority:
+whoever controls a repository can replace a release, its assets, and the digests
+it reports, so a rewritten release is refused instead of launched. An entry that
+pins no version, or no digest for your platform, installs nothing.
+
+A default plugin (see [Default Plugins](#default-plugins)) is pinned in the
+default list itself; if its catalog entry also pins this platform, the two pins
+must agree, and the bundled archive must match them both.
 
 Catalog rules:
 
@@ -1388,6 +1397,144 @@ Every change is published once, as JSON, on the local channel
 
 `until_ms` and `reason` are omitted when absent. The host keeps no ranking, no
 history of changes, and no shared lists.
+
+## Status Contributions
+
+A plugin can add a snapshot of its own to the node's `GET /api/status`, so
+clients see it without querying a plugin endpoint. It declares
+`mesh_llm_plugin::plugin_status::plugin_status(schema_version)` in its manifest
+(`PluginManifest.plugin_status`), then publishes with
+`PluginContext::publish_status(&data, fresh_for)`, from `on_initialized` or any
+task holding an owned context. Each publication replaces the previous one;
+`withdraw_status` removes it. The host shows the latest one under the name it
+knows the plugin connection by, never a name the plugin claims, so one plugin
+cannot overwrite another's contribution or a core field:
+
+```json
+"plugins": {
+  "powermetrics": {
+    "schema_version": 1,
+    "state": "ready",
+    "received_at_unix_ms": 1793404800000,
+    "fresh_until_unix_ms": 1793404860000,
+    "data": { "source": "macmon", "idle_watts": 8.2 }
+  }
+}
+```
+
+`data` is the plugin's, in version `schema_version` of its own schema. The rest
+is the host's:
+
+- `state` is `ready` until `fresh_until_unix_ms`, then `stale`. A snapshot asks
+  for its freshness with `fresh_for`: 0 means 60 s, and the host keeps it
+  between 1 s and 1 h. When the plugin connection that published it closes or
+  fails, the snapshot stays, shown as `unavailable`, until a later connection
+  publishes. When the plugin is disabled, removed or shut down, it goes.
+- The timestamps say when the host last heard from the plugin. They say nothing
+  about how old the plugin's own readings are: a plugin that publishes an old or
+  missing sensor reading says so in `data`.
+
+The host refuses a publication from a plugin whose manifest does not declare
+`plugin_status`, from a connection that is no longer the plugin's current one,
+`data_json` that is not a JSON object or is larger than 16 KiB, and a snapshot
+sent less than 1 s after the previous one from the same connection. Refusals
+come back as an error and change nothing; a withdrawal is always accepted. A
+plugin may publish from `on_initialized`: a publication that arrives before the
+host has read the plugin's manifest waits for it.
+
+Reads serve the host's copy: `/api/status` never starts, restarts or calls a
+plugin, so a hung plugin cannot slow it. Every accepted publication, and every
+change of state, wakes `/api/events`, which sends the new status. Without any
+contribution, `plugins` is omitted and the response is unchanged. It is
+local to this node, like the rest of `/api/status`: nothing is gossiped.
+
+The host advertises the `plugin_status.v1` host capability in its
+`InitializeRequest`. Against a host without it, `publish_status` fails at once;
+a plugin that cannot run without it declares `.required(true)` and then refuses
+to initialize there. A default-managed plugin keeps its declaration only when
+its entry in `DEFAULT_PLUGINS` allows `Surface::StatusContributions`.
+
+## Local Inference Observation
+
+A plugin can follow what this node executes, to measure it (energy per token,
+for example) without sitting in the request path. It declares
+`mesh_llm_plugin::inference_observation::inference_observation()` in its
+manifest (`PluginManifest.inference_observation`), its operator opts it in:
+
+```toml
+[[plugin]]
+name = "example"
+allow_inference_observation = true
+```
+
+and it calls `PluginContext::subscribe_inference_observation()`, from
+`on_initialized` or any task holding an owned context. Without the declaration
+or the opt-in the host refuses the subscription and sends nothing. The setting
+is read when the plugin subscribes. A default-managed plugin keeps the
+declaration only if its `DEFAULT_PLUGINS` entry allows
+`Surface::InferenceObservation`; an unlisted default never keeps it.
+
+**What it covers.** The host composes an adapter into the lifecycle observer of
+each local inference frontend, so the feed has what this node executes: local
+API requests, and requests that arrived from peers, which the model-aware proxy
+also serves on the local frontend. A request this node only forwards to a peer
+never reaches one and never appears. Listing models and counting tokens are not
+executions. Not covered: split worker stages that have no frontend, and
+backends a plugin serves. A split's first stage reports the whole request,
+although later stages run on peers.
+
+**What it carries.** Activity and token counts only: never prompts, completion
+text, headers, admission decisions or keys. Execution ids are host counters,
+not request ids.
+
+**The feed.** The subscription answers with a snapshot: `host_generation`
+(random per host start), the `next_sequence` the following events start at,
+the local models whose frontends are serving, and every execution in flight
+(model, operation, streaming, start time, whether compute has finished). Then
+batches follow, in order, at least once a second. Each event has a sequence
+number one above the previous one, the host time it happened at (Unix
+nanoseconds, from a clock that is monotonic within a host generation), and an
+execution id:
+
+- `started`: a model execution began, with its model, operation and whether it
+  streams;
+- `first_output`: a stream produced its first output;
+- `compute_finished`: the backend finished computing. A streaming backend call
+  returns when the stream opens, so for a stream this comes when the stream
+  ends;
+- `usage`: prompt, cached and completion tokens, at most once per execution;
+- `ended`: completed, failed, cancelled, or dropped (the client went away),
+  exactly once and last;
+- `model_ready` / `model_unloaded`: a local model's first frontend started or
+  its last one stopped.
+
+A duplicate usage or terminal report from the frontend is not repeated, so no
+work is counted twice. A long stream stays in flight, and in every snapshot,
+until it ends: nothing expires for its age.
+
+**Timing.** Event times are when the frontend reported the event, not when the
+plugin received it. Each batch carries a `watermark`: every event at or before
+it has been delivered, so a plugin can settle an interval that ends before the
+watermark. The host stamps and queues each event under one lock and reads the
+watermark under the same lock, so nothing older can arrive later. A plugin on
+the same machine can compare the host clock with its own sensor clock through
+the snapshot's `taken_at_unix_ns`.
+
+**Loss.** The frontend's observer never waits on a plugin: it queues the event
+and returns. Each subscriber has a bounded queue of 4,096 events. When a
+subscriber falls that far behind, the host drops its queue and the next batch
+carries `loss` (the first lost sequence and how many were lost) and `resync`, a
+fresh snapshot listing what is still running, instead of events. The SDK holds
+up to 1,024 batches for a plugin that reads slowly, then reports
+`InferenceObservationItem::Overflowed`, and the plugin subscribes again. A plugin
+never has to read a gap as idle time. When the plugin restarts, its new
+connection subscribes again and gets a snapshot. A new `host_generation` means
+the host restarted, and earlier sequences and ids no longer apply.
+
+The host advertises the `local_inference_observation.v1` host capability.
+Against a host without it, `subscribe_inference_observation` fails at once; a
+plugin that cannot run without it declares `.required(true)` and refuses to
+initialize there.
 
 ## What The Host Owns
 
