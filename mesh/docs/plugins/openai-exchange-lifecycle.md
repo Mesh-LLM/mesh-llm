@@ -87,10 +87,12 @@ proof of a global execution claim.
 A `backend_selected` event for a remote mesh peer that charges for the model
 carries `pricing`, the peer's advertised offer that routing ranks by:
 `input_msat_per_million`, `output_msat_per_million`, and
-`cache_discount_percent` when it is not zero. The member is absent for a local
-or external target and for a free route. A host built with payments lists the
-`openai_exchange.backend_pricing.v1` host capability; on a host without it, an
-absent `pricing` says nothing about the price.
+`cache_discount_percent` when it is not zero. The member is absent for a free
+route, and also for a local or external target and a request that names no
+model, which the host never prices. A host built with payments lists the
+`openai_exchange.backend_pricing.v1` host capability. On such a host, an absent
+`pricing` means a free route only for a remote mesh target on a request that
+names a model; on a host without the capability it says nothing about the price.
 
 Rust authors can call `OpenAiExchangeEvent::parse(&event)` inside the existing
 raw JSON callback. The typed view preserves `observation_id` and the optional
