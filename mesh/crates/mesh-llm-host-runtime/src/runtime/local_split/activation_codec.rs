@@ -12,9 +12,16 @@ pub(super) struct SplitActivationCodec {
 }
 
 impl SplitActivationCodec {
-    /// The default. Frames carry exact values: RawF32, compacted to BF16 or
-    /// F16 only when the whole frame (sidebands included) round-trips
-    /// bit-for-bit, which real activations rarely do.
+    /// The default: f16 on every hop. Against single-node decode it keeps
+    /// top-1 agreement and greedy output (mean log-prob drift 0.0006 on
+    /// Qwen3.5-4B) at half of lossless's bytes, which shortens prefill and
+    /// decode on a slow link and costs nothing on a fast one. Every
+    /// stage-protocol peer decodes f16, so it needs no capability check.
+    pub(super) const DEFAULT: Self = Self::fixed(Codec::F16RneV1);
+
+    /// `lossless`: exact values. RawF32, compacted to BF16 or F16 only when
+    /// the whole frame (sidebands included) round-trips bit-for-bit, which
+    /// real activations rarely do.
     pub(super) const LOSSLESS: Self = Self {
         codec: Codec::RawF32V1,
         policy: Policy::AutoLosslessV1,
@@ -22,7 +29,7 @@ impl SplitActivationCodec {
 
     /// What an FP8 choice becomes when a stage cannot decode FP8: the
     /// closest-quality codec every stage-protocol peer decodes.
-    pub(super) const FP8_FALLBACK: Self = Self::fixed(Codec::F16RneV1);
+    pub(super) const FP8_FALLBACK: Self = Self::DEFAULT;
 
     const fn fixed(codec: Codec) -> Self {
         Self {

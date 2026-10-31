@@ -56,7 +56,7 @@ fn activation_codec_setting_round_trips_through_config_toml() {
 }
 
 #[test]
-fn split_activation_codec_resolves_model_then_defaults_then_lossless() {
+fn split_activation_codec_resolves_model_then_defaults_then_f16() {
     let path = Path::new("/models/m.gguf");
     let resolve = |config: &plugin::MeshConfig| {
         loading::configured_split_activation_codec(config, Some("codec-model"))
@@ -66,9 +66,14 @@ fn split_activation_codec_resolves_model_then_defaults_then_lossless() {
         policy: Policy::Fixed,
     };
 
+    // No setting anywhere: f16.
     assert_eq!(
         resolve(&codec_config(path, None, None)),
-        SplitActivationCodec::LOSSLESS
+        fixed(Codec::F16RneV1)
+    );
+    assert_eq!(
+        resolve(&codec_config(path, None, None)),
+        SplitActivationCodec::DEFAULT
     );
     assert_eq!(
         resolve(&codec_config(path, Some("f16"), None)),
@@ -96,7 +101,7 @@ fn split_activation_codec_resolves_model_then_defaults_then_lossless() {
             &codec_config(path, None, Some("s8-row")),
             Some("other-model")
         ),
-        SplitActivationCodec::LOSSLESS
+        SplitActivationCodec::DEFAULT
     );
     assert!(SplitActivationCodec::from_setting("int4").is_none());
     for (setting, codec) in [
@@ -179,15 +184,19 @@ fn fp8_codec_needs_every_stage_to_decode_it_and_falls_back_to_f16() {
     assert_eq!(missing, SplitActivationCodec::FP8_FALLBACK);
 }
 
-#[tokio::test]
-async fn configured_activation_codec_reaches_every_stage_load() {
+/// Every stage load of a two-stage split under `[defaults.skippy]` and model
+/// `activation_codec` settings, with the topology hash of a lossless plan.
+async fn split_stage_loads(
+    defaults: Option<&str>,
+    model: Option<&str>,
+) -> ([skippy::StageLoadRequest; 2], String) {
     let node = mesh::Node::new_for_tests(NodeRole::Host { http_port: 9337 })
         .await
         .unwrap();
     let temp_dir = tempfile::tempdir().unwrap();
     let model_path = temp_dir.path().join("codec-model.gguf");
     write_fake_gguf_model(&model_path);
-    let config = codec_config(&model_path, Some("f16"), Some("s8-row"));
+    let config = codec_config(&model_path, defaults, model);
     let package = package(40);
     let compact_meta =
         crate::models::gguf::scan_gguf_compact_meta(&model_path).expect("synthetic GGUF metadata");
@@ -256,19 +265,36 @@ async fn configured_activation_codec_reaches_every_stage_load() {
         .unwrap(),
     ];
 
+    let lossless_hash = split_topology_hash(
+        &lossless.stages,
+        &lossless.admissions,
+        lossless.activation_codec,
+        lossless.activation_codec_policy,
+    );
+    (loads, lossless_hash)
+}
+
+#[tokio::test]
+async fn configured_activation_codec_reaches_every_stage_load() {
+    let (loads, lossless_hash) = split_stage_loads(Some("f16"), Some("s8-row")).await;
+
     for load in &loads {
         assert_eq!(load.activation_codec, Codec::S8RowF32RneV1);
         assert_eq!(load.activation_codec_policy, Policy::Fixed);
         // Stages built for the lossless plan would not attest to this one.
-        assert_ne!(
-            load.topology_hash,
-            split_topology_hash(
-                &lossless.stages,
-                &lossless.admissions,
-                lossless.activation_codec,
-                lossless.activation_codec_policy,
-            )
-        );
+        assert_ne!(load.topology_hash, lossless_hash);
+    }
+    assert_eq!(loads[0].topology_hash, loads[1].topology_hash);
+}
+
+#[tokio::test]
+async fn a_split_load_with_no_codec_setting_sends_f16() {
+    let (loads, lossless_hash) = split_stage_loads(None, None).await;
+
+    for load in &loads {
+        assert_eq!(load.activation_codec, Codec::F16RneV1);
+        assert_eq!(load.activation_codec_policy, Policy::Fixed);
+        assert_ne!(load.topology_hash, lossless_hash);
     }
     assert_eq!(loads[0].topology_hash, loads[1].topology_hash);
 }

@@ -67,8 +67,8 @@ impl SplitTopologyGeneration {
             participants,
             stages,
             admissions: BTreeMap::new(),
-            activation_codec: SplitActivationCodec::LOSSLESS.codec,
-            activation_codec_policy: SplitActivationCodec::LOSSLESS.policy,
+            activation_codec: SplitActivationCodec::DEFAULT.codec,
+            activation_codec_policy: SplitActivationCodec::DEFAULT.policy,
         }
     }
 
