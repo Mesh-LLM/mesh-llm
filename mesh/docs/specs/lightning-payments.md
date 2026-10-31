@@ -904,8 +904,11 @@ it net of the fee). Both are omitted when the wallet or the `payments.v1`
 provider did not report them, and both are covered by `event_ref`. A
 settlement event also carries `preimage`, the payment's preimage as lowercase
 hex, on both sides, when the wallet reported one and it is 32 bytes whose
-SHA-256 equals `payment_hash`; any other value is dropped. Holding it proves
-the payment completed. It is omitted when the wallet or the `payments.v1`
+SHA-256 equals `payment_hash`; any other value is dropped. On a payer event it
+proves the payment completed: the payer holds it only once the payee released
+it. On a provider event it is the receiving wallet's own value, which the
+payee had before anyone paid, so it proves nothing beyond the wallet's report.
+It is omitted when the wallet or the `payments.v1`
 provider did not report one, and is covered by `event_ref`.
 Terms acceptance is `payer_asserted` (amount retains the legacy local
 `max_total_msat` metadata; it is not an enforced request spending cap);
@@ -933,8 +936,8 @@ correlation, disconnects, queue drops, process exits and restart recovery can
 leave incomplete evidence; there is no replay or complete audit-log guarantee.
 No raw invoice, wallet transaction ID, prompt or response text is
 published. A settled payment's preimage is published to these trusted local
-subscribers on both payer and provider settlements: it proves the invoice was
-paid and can't spend or claim anything. The wallet's local control API
+subscribers on both payer and provider settlements. It can't spend or claim
+anything, and only the payer's copy proves the invoice was paid. The wallet's local control API
 (`mesh-llm wallet transactions`) also shows it to the operator. Payment hashes
 are linkable metadata, and fee amounts can hint at which wallet a node uses.
 
