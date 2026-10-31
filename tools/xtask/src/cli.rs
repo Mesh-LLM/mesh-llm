@@ -106,6 +106,7 @@ pub(crate) struct Cli<'a> {
 
 pub(crate) enum CliCommand<'a> {
     KvValidation(&'a [String]),
+    Agentx(&'a [String]),
     MtpScheduler(&'a [String]),
     MtpSchedulerWorker(&'a [String]),
     SuffixProposer(&'a [String]),
@@ -300,6 +301,9 @@ impl<'a> Cli<'a> {
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "kv-validation" => {
                 CliCommand::KvValidation(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "agentx" => {
+                CliCommand::Agentx(rest)
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "cache-family-run" => {
                 CliCommand::CacheFamilyRun(rest)

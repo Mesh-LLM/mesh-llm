@@ -1,0 +1,7 @@
+{"metadata":{"benchmark_phase":"warmup"},"trace_data":{"request_send_start_ns":1792418963533980712,"response_receive_end_ns":1792418963742353121}}
+{"metadata":{"benchmark_phase":"warmup"},"trace_data":{"request_send_start_ns":1792418963538394598,"response_receive_end_ns":1792418963952754593}}
+{"metadata":{"benchmark_phase":"warmup"},"trace_data":{"request_send_start_ns":1792418963543063794,"response_receive_end_ns":1792418964162859507}}
+{"metadata":{"benchmark_phase":"warmup"},"trace_data":{"request_send_start_ns":1792418963536341455,"response_receive_end_ns":1792418991697525017}}
+{"metadata":{"benchmark_phase":"profiling"},"trace_data":{"request_send_start_ns":1792418991761966031,"response_receive_end_ns":1792419064375353124}}
+{"metadata":{"benchmark_phase":"profiling"},"trace_data":{"request_send_start_ns":1792418992673094438,"response_receive_end_ns":1792419068398475393}}
+{"metadata":{"benchmark_phase":"profiling"},"trace_data":{"request_send_start_ns":1792418991907700007,"response_receive_end_ns":1792419074310227604}}
