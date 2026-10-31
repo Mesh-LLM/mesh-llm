@@ -116,14 +116,11 @@ export function SchemaSetValueArrayControl({
   const items = parsed ?? []
   // Committed rows carry an id that survives removals, so a row never inherits another row's draft.
   // Row keys also include the stored value, so an outside change (Undo, Redo, Revert) remounts the
-  // row with the restored value. If the list changes length from outside, the ids are re-issued.
+  // row with the restored value. If the list changes length from outside, every id is re-issued, so no row can keep another's draft.
   const [rows, setRows] = useState(() => ({ ids: items.map((_, index) => index), next: items.length }))
   let current = rows
   if (rows.ids.length !== items.length) {
-    const ids = rows.ids.slice(0, items.length)
-    let next = rows.next
-    while (ids.length < items.length) ids.push(next++)
-    current = { ids, next }
+    current = { ids: items.map((_, index) => rows.next + index), next: rows.next + items.length }
     setRows(current)
   }
   const rowIds = current.ids

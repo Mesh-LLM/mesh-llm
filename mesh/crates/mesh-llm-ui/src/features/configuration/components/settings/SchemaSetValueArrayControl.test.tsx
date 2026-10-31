@@ -245,4 +245,25 @@ describe('SchemaSetValueArrayControl', () => {
     expect(screen.getByLabelText('Witnesses 1')).toHaveValue('https://a.example')
     expect(screen.getByLabelText('Witnesses 2')).toHaveValue('https://b.example')
   })
+
+  it('Undo of a Clear gives the restored rows fresh drafts, even when both rows hold the same value', async () => {
+    const both = '[{"endpoint":"https://a.example","public_key":"x"},{"endpoint":"https://a.example","public_key":"y"}]'
+    function UndoHarness() {
+      const [value, setValue] = useState(both)
+      return (
+        <>
+          <SchemaArrayControl onChange={setValue} setting={setting} value={value} />
+          <button onClick={() => setValue(both)} type="button">
+            undo
+          </button>
+        </>
+      )
+    }
+    render(<UndoHarness />)
+    fireEvent.change(screen.getByLabelText('Witnesses 2'), { target: { value: 'https://draft.example' } })
+    await userEvent.click(screen.getAllByRole('button', { name: 'Clear' })[0]!)
+    await userEvent.click(screen.getByRole('button', { name: 'undo' }))
+    expect(screen.getByLabelText('Witnesses 1')).toHaveValue('https://a.example')
+    expect(screen.getByLabelText('Witnesses 2')).toHaveValue('https://a.example')
+  })
 })
