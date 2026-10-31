@@ -63,6 +63,15 @@ impl Node {
                 "plugin does not declare mesh channel",
             ));
         }
+        if self
+            .local_channel_manager(&plugin_id, &request.channel)
+            .await
+            .is_some()
+        {
+            return Err(plugin_mesh_stream_error(
+                "a local channel never reaches the mesh",
+            ));
+        }
 
         request.plugin_id = plugin_id;
         let conn = match self.connection_for_peer_hex(&request.target_peer_id).await {

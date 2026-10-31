@@ -39,7 +39,7 @@ impl PluginManager {
         plugin_id: &str,
         message: proto::ChannelMessage,
     ) -> Result<()> {
-        let metadata_json = serde_json::json!({ "source_plugin": plugin_id }).to_string();
+        let metadata_json = local_metadata(&message.metadata_json, plugin_id);
         self.deliver_locally(
             Some(plugin_id),
             proto::ChannelMessage {
@@ -141,6 +141,20 @@ fn aggregate_broadcast_results(results: Vec<(String, Result<()>)>) -> Result<()>
     }
 }
 
+/// The publisher's `metadata_json` with `source_plugin` set by the host: a
+/// JSON object keeps its other members, anything else is replaced.
+fn local_metadata(published: &str, plugin_id: &str) -> String {
+    let mut object = serde_json::from_str::<serde_json::Value>(published)
+        .ok()
+        .and_then(|value| match value {
+            serde_json::Value::Object(object) => Some(object),
+            _ => None,
+        })
+        .unwrap_or_default();
+    object.insert("source_plugin".into(), plugin_id.into());
+    serde_json::Value::Object(object).to_string()
+}
+
 fn manifest_declares_local_channel(manifest: &proto::PluginManifest, channel: &str) -> bool {
     manifest
         .mesh_channels
@@ -211,6 +225,25 @@ mod tests {
             &manifest,
             "payment.lifecycle.v1"
         ));
+    }
+
+    #[test]
+    fn local_metadata_keeps_the_publishers_members_and_names_the_publisher() {
+        let merged: serde_json::Value = serde_json::from_str(&local_metadata(
+            r#"{"trace":"t-1","source_plugin":"forged"}"#,
+            "pay-lightning",
+        ))
+        .unwrap();
+        assert_eq!(
+            merged,
+            serde_json::json!({"trace": "t-1", "source_plugin": "pay-lightning"})
+        );
+        for not_an_object in ["", "[1]", "not json"] {
+            assert_eq!(
+                local_metadata(not_an_object, "pay-lightning"),
+                r#"{"source_plugin":"pay-lightning"}"#
+            );
+        }
     }
 
     /// One declaring plugin failing must not stop delivery to the rest —

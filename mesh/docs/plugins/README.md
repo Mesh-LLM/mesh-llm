@@ -1319,11 +1319,15 @@ A plugin may publish on a channel to the other plugins on its own node only, by
 declaring it local (`mesh_llm_plugin::mesh::local_channel(name)`, which sets
 `MeshChannelManifest.local`). The host then delivers that plugin's messages on
 the channel to every other loaded plugin that declares the same channel, and
-sends none to a peer. The delivery has the shape of the host's own local
-broadcast (`PluginManager::broadcast_channel_message`): an empty
-`source_peer_id`, `target_peer_id` set to the receiving plugin, and the
-publisher's name in `metadata_json` as `source_plugin`. A receiver declares the
-channel as usual (`mesh::channel(name)`).
+sends none to a peer: a bulk transfer on it is dropped and a mesh stream on it
+is refused. The delivery has the shape of the host's own local broadcast
+(`PluginManager::broadcast_channel_message`): an empty `source_peer_id` and
+`target_peer_id` set to the receiving plugin. The host sets `source_plugin` in
+`metadata_json` to the plugin the connection belongs to, keeping the
+publisher's other members when `metadata_json` is a JSON object. A plugin
+cannot publish as another: the host takes a message's plugin from its
+connection, never from the envelope. A receiver declares the channel as usual
+(`mesh::channel(name)`).
 
 The host advertises the `local_channels.v1` host capability. A host without it
 reads the declaration as an ordinary mesh channel and would send the messages

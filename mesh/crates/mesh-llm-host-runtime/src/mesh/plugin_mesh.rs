@@ -387,63 +387,12 @@ impl Node {
                 });
                 Ok(())
             }
-            crate::plugin::PluginMeshEvent::Channel {
-                plugin_id,
-                mut message,
-            } => {
-                // A channel the plugin publishes on locally never reaches the
-                // mesh: its messages go to the other plugins on this node.
-                let plugin_manager = self.plugin_manager.lock().await.clone();
-                if let Some(plugin_manager) = plugin_manager
-                    && plugin_manager
-                        .plugin_declares_local_channel(&plugin_id, &message.channel)
-                        .await
-                {
-                    return plugin_manager
-                        .relay_local_channel_message(&plugin_id, message)
-                        .await;
-                }
-                if !self
-                    .plugin_event_channel_declared(&plugin_id, &message.channel, "message")
+            crate::plugin::PluginMeshEvent::Channel { plugin_id, message } => {
+                self.forward_plugin_channel_message(plugin_id, message)
                     .await
-                {
-                    return Ok(());
-                }
-                stamp_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
-                let mut frame = crate::plugin::proto::MeshChannelFrame {
-                    plugin_id,
-                    message_id: new_plugin_message_id(&message.source_peer_id),
-                    message: Some(message),
-                    ..Default::default()
-                };
-                sign_channel_frame(&self.endpoint_secret_key, &mut frame);
-                if !self.remember_plugin_message(frame.message_id.clone()).await {
-                    return Ok(());
-                }
-                self.broadcast_plugin_channel_frame(&frame, None).await
             }
-            crate::plugin::PluginMeshEvent::BulkTransfer {
-                plugin_id,
-                mut message,
-            } => {
-                if !self
-                    .plugin_event_channel_declared(&plugin_id, &message.channel, "bulk transfer")
-                    .await
-                {
-                    return Ok(());
-                }
-                stamp_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
-                let mut frame = crate::plugin::proto::MeshBulkFrame {
-                    plugin_id,
-                    message_id: new_plugin_message_id(&message.source_peer_id),
-                    message: Some(message),
-                    ..Default::default()
-                };
-                sign_bulk_frame(&self.endpoint_secret_key, &mut frame);
-                if !self.remember_plugin_message(frame.message_id.clone()).await {
-                    return Ok(());
-                }
-                self.broadcast_plugin_bulk_frame(&frame, None).await
+            crate::plugin::PluginMeshEvent::BulkTransfer { plugin_id, message } => {
+                self.forward_plugin_bulk_transfer(plugin_id, message).await
             }
             crate::plugin::PluginMeshEvent::OpenStream {
                 plugin_id,
@@ -584,6 +533,98 @@ impl Node {
             node_id,
             binding_signature: bound.binding_signature.to_vec(),
         })
+    }
+
+    /// A plugin's own channel message: to the other local plugins on a
+    /// channel it declares local, else signed and sent to the mesh.
+    async fn forward_plugin_channel_message(
+        &self,
+        plugin_id: String,
+        mut message: crate::plugin::proto::ChannelMessage,
+    ) -> Result<()> {
+        // A channel the plugin publishes on locally never reaches the
+        // mesh: its messages go to the other plugins on this node.
+        if let Some(plugin_manager) = self
+            .local_channel_manager(&plugin_id, &message.channel)
+            .await
+        {
+            return plugin_manager
+                .relay_local_channel_message(&plugin_id, message)
+                .await;
+        }
+        if !self
+            .plugin_event_channel_declared(&plugin_id, &message.channel, "message")
+            .await
+        {
+            return Ok(());
+        }
+        stamp_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
+        let mut frame = crate::plugin::proto::MeshChannelFrame {
+            plugin_id,
+            message_id: new_plugin_message_id(&message.source_peer_id),
+            message: Some(message),
+            ..Default::default()
+        };
+        sign_channel_frame(&self.endpoint_secret_key, &mut frame);
+        if !self.remember_plugin_message(frame.message_id.clone()).await {
+            return Ok(());
+        }
+        self.broadcast_plugin_channel_frame(&frame, None).await
+    }
+
+    /// A plugin's own bulk transfer, sent to the mesh; dropped on a local
+    /// channel.
+    async fn forward_plugin_bulk_transfer(
+        &self,
+        plugin_id: String,
+        mut message: crate::plugin::proto::BulkTransferMessage,
+    ) -> Result<()> {
+        // Bulk transfers are peer-to-peer only; a local channel has no
+        // peer to send one to.
+        if self
+            .local_channel_manager(&plugin_id, &message.channel)
+            .await
+            .is_some()
+        {
+            tracing::warn!(
+                plugin = %plugin_id,
+                channel = %message.channel,
+                "dropping bulk transfer on a local channel: local channels never reach the mesh"
+            );
+            return Ok(());
+        }
+        if !self
+            .plugin_event_channel_declared(&plugin_id, &message.channel, "bulk transfer")
+            .await
+        {
+            return Ok(());
+        }
+        stamp_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
+        let mut frame = crate::plugin::proto::MeshBulkFrame {
+            plugin_id,
+            message_id: new_plugin_message_id(&message.source_peer_id),
+            message: Some(message),
+            ..Default::default()
+        };
+        sign_bulk_frame(&self.endpoint_secret_key, &mut frame);
+        if !self.remember_plugin_message(frame.message_id.clone()).await {
+            return Ok(());
+        }
+        self.broadcast_plugin_bulk_frame(&frame, None).await
+    }
+
+    /// The plugin manager, when `plugin_id` declares `channel` local
+    /// (`MeshChannelManifest.local`): nothing on it may reach a peer.
+    pub(crate) async fn local_channel_manager(
+        &self,
+        plugin_id: &str,
+        channel: &str,
+    ) -> Option<crate::plugin::PluginManager> {
+        let plugin_manager = self.plugin_manager().await?;
+        plugin_manager
+            .plugin_declares_local_channel(plugin_id, channel)
+            .await
+            .then_some(plugin_manager)
     }
 
     pub(crate) async fn plugin_event_channel_declared(
