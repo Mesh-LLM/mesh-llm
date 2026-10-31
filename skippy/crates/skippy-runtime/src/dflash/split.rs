@@ -105,7 +105,13 @@ fn frame_hidden_rows(frame: &ActivationFrame, n_embd: usize) -> Result<Vec<f32>>
         (3, 2) => usize::try_from(part.dimensions[1]).unwrap_or(0),
         _ => 0,
     };
-    let packed = [element, n_embd * element, n_embd * streams * element].map(|v| v as u64);
+    let row = n_embd
+        .checked_mul(element)
+        .context("hidden-state row stride")?;
+    let token = row
+        .checked_mul(streams)
+        .context("hidden-state token stride")?;
+    let packed = [element, row, token].map(|v| v as u64);
     let rank = usize::try_from(part.rank).unwrap_or(0).min(packed.len());
     let contiguous = part.byte_strides[..rank].iter().all(|&stride| stride == 0)
         || part.byte_strides[..rank] == packed[..rank];
@@ -117,7 +123,9 @@ fn frame_hidden_rows(frame: &ActivationFrame, n_embd: usize) -> Result<Vec<f32>>
         "primary activation part is not {n_embd}-wide contiguous hidden-state rows"
     );
     let start = usize::try_from(part.payload_offset).context("primary offset")?;
-    let bytes = tokens * streams * n_embd * element;
+    let bytes = tokens
+        .checked_mul(token)
+        .context("primary activation part size")?;
     let payload = frame
         .payload
         .get(start..start.saturating_add(bytes))
@@ -926,6 +934,9 @@ mod tests {
         );
         // Strides that are not packed streams are refused.
         output.desc.parts[0].byte_strides = [4, 16, 8, 0];
+        assert!(frame_hidden_rows(&output, 2).is_err());
+        // A stream count whose strides overflow is an error, not a panic.
+        output.desc.parts[0].dimensions[1] = i64::MAX;
         assert!(frame_hidden_rows(&output, 2).is_err());
     }
 
