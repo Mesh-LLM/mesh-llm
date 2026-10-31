@@ -109,6 +109,7 @@
       "automation-bootstrap",
       "automation-run",
       "ci-automation-contracts",
+      "ci-controller-bootstrap",
       "ci-crate-lists",
       "ci-legacy-contracts",
       "ci-sccache-seed-build",

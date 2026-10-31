@@ -412,6 +412,10 @@ pub(crate) fn installed_outcome(
     })
 }
 
+/// Installer-owned name for the downloaded archive inside the temporary
+/// workspace. It is never derived from manifest-supplied identity.
+const NATIVE_RUNTIME_ARCHIVE_FILE: &str = "runtime.tar.gz";
+
 async fn download_and_install_runtime(
     cache: &NativeRuntimeCache,
     artifact: &NativeRuntimeArtifact,
@@ -422,9 +426,7 @@ async fn download_and_install_runtime(
         .prefix("mesh-native-runtime-")
         .tempdir()
         .context("create native runtime download workspace")?;
-    let archive = temp
-        .path()
-        .join(format!("{}.tar.gz", artifact.native_runtime_id()));
+    let archive = temp.path().join(NATIVE_RUNTIME_ARCHIVE_FILE);
     download_runtime_archive(url, &archive, artifact, options).await?;
     let extracted = temp.path().join("extracted");
     fs::create_dir_all(&extracted).with_context(|| {

@@ -1,7 +1,8 @@
 use super::{
     MeshApi,
     access::{
-        is_trusted_local_request, request_host, request_origin, requires_trusted_local_access,
+        is_trusted_local_request, request_content_type_is_json, request_host, request_origin,
+        requires_json_content_type, requires_trusted_local_access,
     },
     assets::{respond_console_asset, respond_console_index},
     http::{http_body_text, respond_error},
@@ -299,6 +300,18 @@ async fn dispatch_management_request(
             stream,
             403,
             "This management route requires a trusted local caller",
+        )
+        .await?;
+        return Ok(());
+    }
+
+    if requires_json_content_type(method, path_only)
+        && !matches!(request_content_type_is_json(raw_request), Ok(true))
+    {
+        respond_error(
+            stream,
+            415,
+            "This management route requires a Content-Type of application/json",
         )
         .await?;
         return Ok(());

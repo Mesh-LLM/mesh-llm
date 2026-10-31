@@ -771,7 +771,13 @@ if (( FAILED_COUNT > 0 )); then
 fi
 
 if (( REQUIRE_LANES != 0 )); then
-  mapfile -t SKIPPED_LANES < <(
+  # macOS ships Bash 3.2, which has no mapfile/readarray.
+  SKIPPED_LANES=()
+  while IFS= read -r skipped_lane; do
+    if [[ -n "$skipped_lane" ]]; then
+      SKIPPED_LANES+=("$skipped_lane")
+    fi
+  done <<< "$(
     jq -sr \
       --argjson skip_speculative "$SKIP_SPECULATIVE" \
       '.[]
@@ -782,7 +788,7 @@ if (( REQUIRE_LANES != 0 )); then
          )
        | .name' \
       "$COMMANDS_JSONL"
-  )
+  )"
   if (( ${#SKIPPED_LANES[@]} > 0 )); then
     echo "promised certification lanes were skipped (missing required inputs):" >&2
     printf '  %s\n' "${SKIPPED_LANES[@]}" >&2

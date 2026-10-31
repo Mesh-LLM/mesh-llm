@@ -28,7 +28,12 @@ impl Node {
             completion_tokens,
         );
         if let Some(sink) = self.routing_telemetry_sink() {
-            sink.record_route_attempt(model, &attempt_target, outcome);
+            sink.record_route_attempt(
+                model,
+                &attempt_target,
+                outcome,
+                attempt_time.as_millis() as f64,
+            );
         }
         self.publish_routing_runtime_snapshot();
     }
@@ -53,7 +58,12 @@ impl Node {
             completion_tokens,
         );
         if let Some(sink) = self.routing_telemetry_sink() {
-            sink.record_route_attempt(model_ref.as_deref(), &attempt_target, outcome);
+            sink.record_route_attempt(
+                model_ref.as_deref(),
+                &attempt_target,
+                outcome,
+                attempt_time.as_millis() as f64,
+            );
         }
         self.publish_routing_runtime_snapshot();
     }

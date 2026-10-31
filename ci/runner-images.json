@@ -270,9 +270,52 @@
         "index_candidate_key": "candidate-index-public-ui"
       },
       "reference": "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:37dc12322bd2efaefc59e51ad58d8cd3284974cb23721d13f0ff3564715037bb"
+    },
+    "public-cpp-api": {
+      "backend": "cpu",
+      "environment": "public",
+      "native_toolchain_epoch": "mesh-llm-cuda-runner-sha256-656e4874af027e0b437427f4415fdaab51ff8b1cda444dcdd4bc331794f703c5",
+      "provenance": {
+        "admission_validator_revision": "2ca51592535c29ddbed768b75481451d3fa5a49e",
+        "cohort_sha256": "sha256:189f0408681bf999868a5a01cae3e5260c63d5aca0bbe613714cbb97b78ed2e8",
+        "origin": {
+          "event": "push",
+          "mesh_revision": "5e2fdddf6a6ea10d16e3689741483574f1274103",
+          "repository": "Mesh-LLM/mesh-llm-runner-images",
+          "repository_id": 1210986689,
+          "run_attempt": 1,
+          "run_id": 41127631709,
+          "runner_images_revision": "2ca51592535c29ddbed768b75481451d3fa5a49e",
+          "timestamp": "20261030210217",
+          "workflow_id": 318369515,
+          "workflow_path": ".github/workflows/build-and-push.yml"
+        },
+        "schema": 1,
+        "scope": "reviewed_producer_admission",
+        "validation": "offline_binding_only"
+      },
+      "receipt": {
+        "cohort_sha256": "sha256:189f0408681bf999868a5a01cae3e5260c63d5aca0bbe613714cbb97b78ed2e8",
+        "index_candidate_key": "candidate-index-public-cpu",
+        "schema": 1
+      },
+      "reference": "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:656e4874af027e0b437427f4415fdaab51ff8b1cda444dcdd4bc331794f703c5"
     }
   },
   "consumer_roles": {
+    "skippy-cpp-api": {
+      "image_id": "public-cpp-api",
+      "scope": "ordinary",
+      "bindings": [
+        {
+          "workflow": "ci-quality-slice.yml",
+          "job": "skippy_cpp_api",
+          "matrix_selector": null,
+          "image_expression": "{image}",
+          "epoch_field": null
+        }
+      ]
+    },
     "rust-clippy": {
       "image_id": "public-cpu",
       "scope": "ordinary",

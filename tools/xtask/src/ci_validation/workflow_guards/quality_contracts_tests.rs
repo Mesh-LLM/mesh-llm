@@ -250,3 +250,23 @@ fn quality_native_tooling_rejects_reintroduced_python_setup_and_installs() {
         assert!(quality(&document).is_err());
     }
 }
+
+#[test]
+fn controller_contracts_cannot_be_omitted_filtered_or_moved() {
+    let (source, targets) = inputs();
+    let line = "    just with-lld cargo test --locked -p ci-controller\n";
+    for changed in [
+        source.replace(line, ""),
+        source.replace(
+            line,
+            "    just with-lld cargo test --locked -p ci-controller --lib\n",
+        ),
+        source.replace(
+            line,
+            "    just with-lld cargo test --locked -p ci-controller || true\n",
+        ),
+        source.replace(line, &format!("{line}{line}")),
+    ] {
+        assert!(recipe(&changed, &targets).is_err());
+    }
+}

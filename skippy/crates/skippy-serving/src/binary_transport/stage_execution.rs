@@ -126,7 +126,7 @@ pub(in crate::binary_transport) fn take_ready_downstream(
                     last_error = Some(anyhow!("downstream ready deadline expired after connect"));
                     continue;
                 }
-                match complete_downstream_ready(&mut stream, deadline, shutdown) {
+                match complete_downstream_ready(&mut stream, deadline, shutdown, config) {
                     Ok(()) => return Ok(Some(stream)),
                     Err(error) => last_error = Some(error),
                 }
@@ -161,6 +161,7 @@ fn complete_downstream_ready(
     stream: &mut TcpStream,
     deadline: Instant,
     shutdown: &AtomicBool,
+    config: &StageConfig,
 ) -> Result<()> {
     ensure_downstream_acquisition_active(shutdown)?;
     let timeout = deadline
@@ -217,7 +218,16 @@ fn complete_downstream_ready(
     stream
         .set_read_timeout(None)
         .context("clear downstream ready timeout")?;
-    result
+    result?;
+    if config
+        .downstream
+        .as_ref()
+        .is_some_and(|peer| peer.persistent_lane_marker)
+    {
+        super::connection_mode::mark_persistent_lane(stream)
+            .context("mark preconnected downstream lane")?;
+    }
+    Ok(())
 }
 
 pub(in crate::binary_transport) fn warm_downstream_is_healthy(stream: &TcpStream) -> Result<bool> {
@@ -936,6 +946,7 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
         downstream: Some(PeerConfig {
+            persistent_lane_marker: false,
             stage_id: "stage-1".to_string(),
             stage_index: 1,
             endpoint: "127.0.0.1:0".to_string(),

@@ -90,6 +90,22 @@ pub struct RpcResult {
 pub(crate) type BridgeFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 pub trait PluginRpcBridge: Send + Sync {
+    fn handle_invocation_request(
+        &self,
+        plugin_name: String,
+        request: proto::RpcRequest,
+    ) -> BridgeFuture<Result<RpcResult, proto::ErrorResponse>> {
+        self.handle_request(plugin_name, request.method, request.params_json)
+    }
+
+    fn handle_invocation_notification(
+        &self,
+        plugin_name: String,
+        notification: proto::RpcNotification,
+    ) -> BridgeFuture<()> {
+        self.handle_notification(plugin_name, notification.method, notification.params_json)
+    }
+
     fn handle_request(
         &self,
         plugin_name: String,
@@ -238,6 +254,7 @@ impl PluginCapabilityProvider {
 pub struct InferenceEndpointRoute {
     pub plugin_name: String,
     pub endpoint_id: String,
+    pub protocol: Option<String>,
     pub address: String,
     pub models: Vec<String>,
 }

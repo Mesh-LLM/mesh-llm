@@ -27,6 +27,8 @@ const SIGNED_BOOTSTRAP_TOKEN_DOMAIN_TAG: &[u8] = b"mesh-llm-bootstrap-token-v1:"
 const DIRECT_NODE_ADMISSION_PROOF_VERSION: u32 = 1;
 const DIRECT_NODE_ADMISSION_PROOF_DOMAIN_TAG: &[u8] = b"mesh-llm-direct-node-admission-proof-v1:";
 const ED25519_SIGNATURE_ALGORITHM: &str = "ed25519";
+#[cfg(test)]
+mod signed_gossip_tests;
 pub const DIRECT_NODE_ADMISSION_PROOF_MAX_CLOCK_SKEW_MS: u64 = 30_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -73,6 +75,10 @@ pub struct DirectNodeAdmissionProof {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MeshRequirements {
+    /// Require origin-signed descriptions for peers learned through a relay.
+    /// Disabled for existing policies so rolling upgrades remain possible.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub require_signed_gossip: bool,
     #[serde(default)]
     pub node_version: NodeVersionBounds,
     #[serde(default)]
@@ -366,6 +372,12 @@ impl MeshGenesisPolicy {
             &mut buf,
             &normalized_release_attestation.allowed_signer_keys,
         );
+        // Preserve every existing policy hash when the extension is disabled.
+        // Legacy implementations omit this suffix and therefore cannot verify
+        // a strict policy after dropping its unknown protobuf field.
+        if self.requirements.require_signed_gossip {
+            buf.extend_from_slice(b"\0require-signed-gossip-v1");
+        }
         Ok(buf)
     }
 
@@ -591,6 +603,7 @@ impl MeshRequirements {
 
     pub fn to_proto(&self) -> proto_node::MeshRequirements {
         proto_node::MeshRequirements {
+            require_signed_gossip: self.require_signed_gossip,
             node_version: Some(self.node_version.to_proto()),
             protocol_generation: Some(self.protocol_generation.to_proto()),
             release_attestation: Some(self.release_attestation.to_proto()),
@@ -601,6 +614,7 @@ impl MeshRequirements {
         value: &proto_node::MeshRequirements,
     ) -> Result<Self, MeshRequirementRejectReason> {
         let requirements = Self {
+            require_signed_gossip: value.require_signed_gossip,
             node_version: value
                 .node_version
                 .as_ref()

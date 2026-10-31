@@ -45,6 +45,8 @@ pub(super) fn make_test_peer(id: EndpointId, rtt_ms: Option<u32>, vram_gb: u64) 
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
+        plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         owner_summary: OwnershipSummary::default(),
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
@@ -203,6 +205,7 @@ pub(super) fn requirement_policy(trusted_signer: &str) -> crate::MeshGenesisPoli
         requirement_policy_owner().owner_id(),
         1_717_171_717_000,
         crate::MeshRequirements {
+            require_signed_gossip: false,
             node_version: crate::NodeVersionBounds::default(),
             protocol_generation: crate::ProtocolGenerationBounds {
                 min: Some(NODE_PROTOCOL_GENERATION),
@@ -222,6 +225,7 @@ pub(super) fn requirement_policy_without_release_attestation() -> crate::MeshGen
         requirement_policy_owner().owner_id(),
         1_717_171_717_000,
         crate::MeshRequirements {
+            require_signed_gossip: false,
             node_version: crate::NodeVersionBounds::default(),
             protocol_generation: crate::ProtocolGenerationBounds {
                 min: Some(NODE_PROTOCOL_GENERATION),
@@ -428,6 +432,8 @@ pub(super) fn requirement_peer_announcement(
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
         decode_batch_policy_supported: true,
+        plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),

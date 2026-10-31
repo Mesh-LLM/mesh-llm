@@ -84,6 +84,7 @@ WORKSPACE_MEMBERS=(
   "skippy-model-package"
   "skippy-correctness"
   "llama-spec-bench"
+  "ci-controller"
   "trajectory-reader"
   "xtask"
 )
