@@ -156,7 +156,6 @@ impl MembershipState {
             peer.decode_batch_policy_supported = false;
             peer.plugin_origin_signature_supported = false;
             peer.persistent_lane_marker_supported = false;
-            peer.activation_codec_fp8_supported = false;
             peer.stage_protocol_generation_supported = false;
             peer.admitted = false;
             peer.last_seen = Instant::now() - Duration::from_secs(PEER_STALE_SECS * 2);

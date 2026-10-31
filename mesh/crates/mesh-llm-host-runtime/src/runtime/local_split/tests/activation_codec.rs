@@ -130,15 +130,6 @@ fn codec_generation(
     remote_id: iroh::EndpointId,
     choice: SplitActivationCodec,
 ) -> SplitTopologyGeneration {
-    codec_generation_with_fp8_peer(local_id, remote_id, choice, true)
-}
-
-fn codec_generation_with_fp8_peer(
-    local_id: iroh::EndpointId,
-    remote_id: iroh::EndpointId,
-    choice: SplitActivationCodec,
-    remote_decodes_fp8: bool,
-) -> SplitTopologyGeneration {
     let stages = vec![
         local_stage(local_id, 0, 0, 20),
         local_stage(remote_id, 1, 20, 40),
@@ -152,9 +143,8 @@ fn codec_generation_with_fp8_peer(
         "codec-run".into(),
         1,
         vec![
-            SplitParticipant::new(local_id, 24_000_000_000, None).with_activation_codec_fp8(true),
-            SplitParticipant::new(remote_id, 24_000_000_000, None)
-                .with_activation_codec_fp8(remote_decodes_fp8),
+            SplitParticipant::new(local_id, 24_000_000_000, None),
+            SplitParticipant::new(remote_id, 24_000_000_000, None),
         ],
         stages,
     )
@@ -164,33 +154,24 @@ fn codec_generation_with_fp8_peer(
 }
 
 #[test]
-fn fp8_codec_needs_every_stage_to_decode_it_and_falls_back_to_f16() {
+fn an_fp8_choice_reaches_the_generation_unchanged() {
     let fp8 = SplitActivationCodec::from_setting("fp8-e4m3-block32").unwrap();
-    let (local, remote) = (make_id(0x61), make_id(0x62));
-
-    let generation = codec_generation_with_fp8_peer(local, remote, fp8, true);
-    assert_eq!(generation.activation_codec, Codec::Fp8E4m3Block32E8m0RneV1);
-
-    let older_peer = codec_generation_with_fp8_peer(local, remote, fp8, false);
+    let local = make_id(0x61);
+    let generation = SplitTopologyGeneration::new(
+        "codec-topology".into(),
+        "codec-run".into(),
+        1,
+        vec![SplitParticipant::new(local, 24_000_000_000, None)],
+        vec![local_stage(local, 0, 0, 20), local_stage(local, 1, 20, 40)],
+    )
+    .with_activation_codec(fp8);
     assert_eq!(
         (
-            older_peer.activation_codec,
-            older_peer.activation_codec_policy
+            generation.activation_codec,
+            generation.activation_codec_policy
         ),
-        (Codec::F16RneV1, Policy::Fixed)
+        (Codec::Fp8E4m3Block32E8m0RneV1, Policy::Fixed)
     );
-
-    // Non-FP8 choices never depend on the capability.
-    let s8 = SplitActivationCodec::from_setting("s8-row").unwrap();
-    assert_eq!(
-        codec_generation_with_fp8_peer(local, remote, s8, false).activation_codec,
-        Codec::S8RowF32RneV1
-    );
-    // A stage whose node is not a known participant counts as unable.
-    let missing = SplitActivationCodec::from_setting("fp8-e4m3-row")
-        .unwrap()
-        .supported_by(&generation.stages, &generation.participants[..1]);
-    assert_eq!(missing, SplitActivationCodec::FP8_FALLBACK);
 }
 
 /// Every stage load of a two-stage split under `[defaults.skippy]` and model

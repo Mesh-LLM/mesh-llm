@@ -53,7 +53,6 @@ fn test_peer_announcement_first_joined_mesh_ts_roundtrip() {
         decode_batch_policy_supported: true,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
-        activation_codec_fp8_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -119,7 +118,6 @@ fn test_peer_announcement_first_joined_mesh_ts_roundtrip() {
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
-        activation_codec_fp8_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),

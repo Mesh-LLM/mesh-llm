@@ -27,10 +27,6 @@ pub const STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1: &str = "local-gguf
 /// coordinator needs to tell "declined" from "not understood" to warn instead
 /// of silently under-delivering the planned policy.
 pub const STAGE_SUBPROTOCOL_FEATURE_DECODE_BATCH_POLICY_V1: &str = "decode-batch-policy-v1";
-/// Stage decodes the FP8 activation codecs (`StageActivationCodec` wire ids
-/// 5-7). A peer without it rejects a `StageLoad` naming one, so the split
-/// coordinator only plans an FP8 codec when every stage advertises this.
-pub const STAGE_SUBPROTOCOL_FEATURE_ACTIVATION_CODEC_FP8_V1: &str = "activation-codec-fp8-v1";
 pub const STAGE_STREAM_CONTROL: u8 = 0x01;
 pub const STAGE_STREAM_TRANSPORT: u8 = 0x02;
 pub const STAGE_STREAM_ARTIFACT_TRANSFER: u8 = 0x03;
