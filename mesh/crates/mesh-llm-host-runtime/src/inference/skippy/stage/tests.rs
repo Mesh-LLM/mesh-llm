@@ -415,6 +415,11 @@ fn stage_load_failure_context_identifies_split_stage_shape() {
 
 #[tokio::test]
 async fn stage_control_shutdown_cancels_and_joins_an_active_readiness_probe() {
+    // How long a busy machine may take to start the probe and connect.
+    const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+    // Generous for a busy machine, and far below the probe's 900 s deadline:
+    // a shutdown that waited for it still fails.
+    const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let bind_addr = listener.local_addr().unwrap();
     let (accepted_tx, accepted_rx) = std::sync::mpsc::channel();
@@ -436,12 +441,10 @@ async fn stage_control_shutdown_cancels_and_joins_an_active_readiness_probe() {
     };
     let handle = spawn_stage_control_loop_with_state(state);
     accepted_rx
-        .recv_timeout(Duration::from_secs(30))
+        .recv_timeout(CONNECT_TIMEOUT)
         .expect("readiness probe connected to silent stage");
 
-    // Generous for a busy machine, and far below the probe's 900 s deadline:
-    // a shutdown that waited for it still fails.
-    tokio::time::timeout(Duration::from_secs(30), handle.shutdown())
+    tokio::time::timeout(SHUTDOWN_TIMEOUT, handle.shutdown())
         .await
         .expect("shutdown must not wait for the readiness deadline")
         .expect("stage control shutdown should succeed");
