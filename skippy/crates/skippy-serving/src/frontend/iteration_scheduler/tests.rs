@@ -800,7 +800,7 @@ fn full_direct_wave_suppresses_cache_runtime_while_direct_queue_is_temporarily_e
         last_served_cache_runtime: false,
         last_emitted_lifecycle_counters: (0, 0, 0, 0),
     };
-    worker.cache_runtime_queue.enqueue_with_payload(
+    worker.cache_runtime_queue.enqueue_with_policy(
         RuntimeOperation {
             label: "full-wave-cache",
             control: None,
@@ -812,7 +812,7 @@ fn full_direct_wave_suppresses_cache_runtime_while_direct_queue_is_temporarily_e
         skippy_scheduler::CacheAffinity::default(),
         Arc::from([1]),
         0,
-        StagePrefixCachePayload::KvRecurrent,
+        CacheSchedulingPolicy::Cooperative,
         None,
     );
 
