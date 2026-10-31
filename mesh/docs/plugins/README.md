@@ -542,7 +542,7 @@ the installed archive, extracted files, and local plugin metadata.
 ## Default Plugins
 
 The reviewed default list is `mesh_llm_plugin_manager::defaults::DEFAULT_PLUGINS`.
-Today it contains `capsules` 0.1.5. [Upgrading to the default capsules 0.1.5](capsules-0.1.5-upgrade.md)
+Today it contains `capsules` 0.1.6. [Upgrading to the default capsules 0.1.6](capsules-0.1.6-upgrade.md)
 says what changes for nodes and their peers, and how to roll back. Each entry pins a release version, the
 GitHub repository whose release publishes it, and an archive SHA-256 per
 supported platform. Payment and wallet plugins are excluded from the default

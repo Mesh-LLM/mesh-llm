@@ -128,20 +128,20 @@ impl DefaultPlugin {
 /// today: the plugin has no Windows build) reports it unsupported.
 pub const DEFAULT_PLUGINS: &[DefaultPlugin] = &[DefaultPlugin {
     name: "capsules",
-    version: "0.1.5",
+    version: "0.1.6",
     repository: "Mesh-LLM/capsules",
     sha256: &[
         (
             "aarch64-apple-darwin",
-            "fccf04aa60de46ef85744c1ca114d1f92f0b434d9dcaca4415e890997ccfbcad",
+            "3f1b7d81d64956fcda2c2ea11951f31765392f15748e5b5f001f0a39a57fa328",
         ),
         (
             "aarch64-unknown-linux-gnu",
-            "991e4256e29e0bf72629b290333af9fec87a923c51dd8b3eba6f70bb255b34cf",
+            "b47526ad2ea54c23db78958f434feed27d8649fc82c0f7c7466b279708e01ef3",
         ),
         (
             "x86_64-unknown-linux-gnu",
-            "ab6418ac15bff1bdf9de02c981fd0414694f6be7a27f4288032e560f2a636d1a",
+            "a85ff20517e7b1dfff58bc24a5febcc03994eaa5d3cde2b619fd91bbe4bc3c92",
         ),
     ],
     // An audit plugin: records, its page and its settings; it serves no model.
