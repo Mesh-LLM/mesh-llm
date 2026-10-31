@@ -46,6 +46,7 @@ pub fn run(repo_root: &Path, args: &[String], tool: &BootstrapTool) -> DynResult
     dependency_boundary::check(&metadata, tool)?;
     let binary = tool_binary(
         &metadata.target_directory,
+        &host,
         &std::env::current_exe()?,
         tool.recipe,
     )?;
@@ -117,8 +118,16 @@ impl Cargo {
 }
 
 /// Returns the absolute tool path when the running executable is Cargo's
-/// build output directly beneath the resolved target directory.
-fn tool_binary(target_directory: &Path, current_exe: &Path, recipe: &str) -> DynResult<PathBuf> {
+/// build output beneath the resolved target directory: `<target>/<profile>`,
+/// or `<target>/<host>/<profile>` when the build names the host triple
+/// explicitly. Another triple's output stays rejected: the dependency
+/// boundary is resolved for the host only.
+fn tool_binary(
+    target_directory: &Path,
+    host: &str,
+    current_exe: &Path,
+    recipe: &str,
+) -> DynResult<PathBuf> {
     let target = target_directory.canonicalize().map_err(|error| {
         format!(
             "automation bootstrap: Cargo target directory {} is not built ({error}); run `{recipe}`",
@@ -127,7 +136,7 @@ fn tool_binary(target_directory: &Path, current_exe: &Path, recipe: &str) -> Dyn
     })?;
     let binary = current_exe.canonicalize()?;
     let profile_parent = binary.parent().and_then(Path::parent);
-    if profile_parent != Some(target.as_path()) {
+    if !profile_parent.is_some_and(|parent| parent == target || parent == target.join(host)) {
         return Err(format!(
             "automation bootstrap: running tool {} is not Cargo's build output under {}; run `{recipe}`",
             binary.display(),
