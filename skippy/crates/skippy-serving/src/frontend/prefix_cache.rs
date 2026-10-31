@@ -187,7 +187,10 @@ impl StageOpenAiBackend {
         prefill_tokens: &[i32],
         restored_prefill_tokens: usize,
     ) -> Option<usize> {
-        let kv = self.kv.as_ref().filter(|kv| kv.payload_is_exact_state())?;
+        let kv = self
+            .kv
+            .as_ref()
+            .filter(|kv| kv.retains_recurrent_checkpoints())?;
         let shared_boundary = kv
             .exact_shared_checkpoint_token_count(prefill_tokens.len() as u64)
             .and_then(|token_count| usize::try_from(token_count).ok());
@@ -560,7 +563,7 @@ impl StageOpenAiBackend {
                     .collect::<InferenceResult<Vec<_>>>()
             },
         )?;
-        let exact_record_queued = kv.payload_is_exact_state()
+        let exact_record_queued = kv.retains_recurrent_checkpoints()
             && self.enqueue_exact_state_record_at_tokens(
                 session_id,
                 ids,
@@ -623,7 +626,10 @@ impl StageOpenAiBackend {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(false);
         };
-        if checkpoint_tokens.is_empty() || !kv.payload_is_exact_state() || !kv.should_record() {
+        if checkpoint_tokens.is_empty()
+            || !kv.retains_recurrent_checkpoints()
+            || !kv.should_record()
+        {
             return Ok(false);
         }
         let scheduler_backend = self.clone();

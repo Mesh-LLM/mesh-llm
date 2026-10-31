@@ -215,7 +215,7 @@ pub const OPTIONS: &[OptionSpec] = &[
         "cache",
         "kv_cache.l2_max_bytes",
         Kind::Bytes,
-        "Host-RAM tier: off or IEC size; requires disk caching",
+        "Resident checkpoint RAM budget: off for default or a fixed IEC size; independent of disk",
     ),
     option(
         "prefix-cache-max-entries",

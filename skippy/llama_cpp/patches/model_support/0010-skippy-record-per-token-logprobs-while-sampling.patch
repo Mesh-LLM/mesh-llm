@@ -20,11 +20,11 @@ to touch common.h it carries the queue's ABI version, 0.1.77.
  include/skippy/sampling.h      |  4 ++
  src/CMakeLists.txt             |  1 +
  src/skippy/logprobs.cpp        | 94 ++++++++++++++++++++++++++++++++++
+ src/skippy/resident_prefix.cpp |  1 +
  src/skippy/runtime_types.h     |  2 +
  src/skippy/sampling.cpp        | 21 +++++++-
  src/skippy/sampling_internal.h |  7 +++
  src/skippy/session.cpp         |  1 +
- src/skippy/state.cpp           |  1 +
  src/skippy/workloads.cpp       |  1 +
  12 files changed, 193 insertions(+), 2 deletions(-)
  create mode 100644 include/skippy/logprobs.h
@@ -255,6 +255,18 @@ index 000000000..43260dfc2
 +    *out_count = taken;
 +    return skippy_success(out_error);
 +}
+diff --git a/src/skippy/resident_prefix.cpp b/src/skippy/resident_prefix.cpp
+index 1b82ba6ba..42769ba7c 100644
+--- a/src/skippy/resident_prefix.cpp
++++ b/src/skippy/resident_prefix.cpp
+@@ -182,6 +182,7 @@ skippy_status restore_checkpoint(skippy_session * session, int32_t cache_seq_id,
+     }
+     session->n_past = static_cast<int32_t>(count);
+     session->token_history = std::move(history);
++    session->signal_history.clear();
+     skippy_mtp_clear_session_state(session);
+     session->verify_checkpoints.clear();
+     return skippy_success(error);
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
 index ec9fb94b1..cd8a82f7a 100644
 --- a/src/skippy/runtime_types.h
@@ -342,7 +354,7 @@ diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
 index a9251d2c9..13e318534 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
-@@ -379,6 +379,7 @@ enum skippy_status skippy_session_reset(
+@@ -376,6 +376,7 @@ enum skippy_status skippy_session_reset(
          session->token_history.clear();
      }
      session->signal_history.clear();

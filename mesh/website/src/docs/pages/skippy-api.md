@@ -216,6 +216,9 @@ Current generated surface: **21 headers** and **131 exported functions**.
         <a href="#skippy-fn-skippy-import-cachegen-kv-page-v1"><code>skippy_import_cachegen_kv_page_v1</code></a>
         <a href="#skippy-fn-skippy-session-save-prefix"><code>skippy_session_save_prefix</code></a>
         <a href="#skippy-fn-skippy-session-restore-prefix"><code>skippy_session_restore_prefix</code></a>
+        <a href="#skippy-fn-skippy-session-export-resident-kv-page"><code>skippy_session_export_resident_kv_page</code></a>
+        <a href="#skippy-fn-skippy-session-export-resident-recurrent-state"><code>skippy_session_export_resident_recurrent_state</code></a>
+        <a href="#skippy-fn-skippy-session-resident-prefix-bytes"><code>skippy_session_resident_prefix_bytes</code></a>
         <a href="#skippy-fn-skippy-session-memory-used-cells"><code>skippy_session_memory_used_cells</code></a>
         <a href="#skippy-fn-skippy-session-drop-sequence"><code>skippy_session_drop_sequence</code></a>
       </div>
@@ -1805,7 +1808,7 @@ LLAMA_API enum skippy_status skippy_export_full_state(
 <a id="skippy-fn-skippy-export-recurrent-state"></a>
 #### `skippy_export_recurrent_state`
 
-Exports recurrent state for models that maintain recurrent memory.
+Exports only recurrent memory; attention pages are exported independently.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_export_recurrent_state(
@@ -1834,7 +1837,7 @@ LLAMA_API enum skippy_status skippy_import_full_state(
 <a id="skippy-fn-skippy-import-recurrent-state"></a>
 #### `skippy_import_recurrent_state`
 
-Imports recurrent state into a session.
+Imports recurrent-only state into a session.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_import_recurrent_state(
@@ -1932,7 +1935,7 @@ LLAMA_API enum skippy_status skippy_import_cachegen_kv_page_v1(
 <a id="skippy-fn-skippy-session-save-prefix"></a>
 #### `skippy_session_save_prefix`
 
-Saves a session prefix into a resident cache sequence.
+Retains shared attention cells and an immutable recurrent checkpoint owned by the cache. Recurrent memory requires token_count equal to the current session position.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_session_save_prefix(
@@ -1945,7 +1948,7 @@ LLAMA_API enum skippy_status skippy_session_save_prefix(
 <a id="skippy-fn-skippy-session-restore-prefix"></a>
 #### `skippy_session_restore_prefix`
 
-Restores a session prefix from a resident cache sequence.
+Shares retained attention cells and restores a private mutable recurrent row. Token identity must match; recurrent prefixes require the exact saved boundary.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_session_restore_prefix(
@@ -1953,6 +1956,54 @@ LLAMA_API enum skippy_status skippy_session_restore_prefix(
         int32_t cache_seq_id,
         const llama_token * token_ids,
         size_t token_count,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-session-export-resident-kv-page"></a>
+#### `skippy_session_export_resident_kv_page`
+
+Exports a cache-owned attention page for cold offload without claiming or restoring an execution lane.
+
+```cpp
+LLAMA_API enum skippy_status skippy_session_export_resident_kv_page(
+         struct skippy_session * session,
+        int32_t cache_seq_id,
+        int32_t layer_start,
+        int32_t layer_end,
+        uint64_t token_start,
+        uint64_t token_count,
+        struct skippy_kv_page_desc * out_desc,
+        void * output,
+        size_t output_capacity,
+        size_t * out_bytes,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-session-export-resident-recurrent-state"></a>
+#### `skippy_session_export_resident_recurrent_state`
+
+Copies a cache-owned recurrent-only checkpoint for cold offload; a size query does not read tensors.
+
+```cpp
+LLAMA_API enum skippy_status skippy_session_export_resident_recurrent_state(
+         struct skippy_session * session,
+        int32_t cache_seq_id,
+        void * output,
+        size_t output_capacity,
+        size_t * out_bytes,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-session-resident-prefix-bytes"></a>
+#### `skippy_session_resident_prefix_bytes`
+
+Reports cache-owned recurrent checkpoint and token identity bytes; shared attention cells remain in the native pool.
+
+```cpp
+LLAMA_API enum skippy_status skippy_session_resident_prefix_bytes(
+         struct skippy_session * session,
+        int32_t cache_seq_id,
+        uint64_t * out_bytes,
         struct skippy_error ** out_error);
 ```
 

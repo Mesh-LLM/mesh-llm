@@ -198,7 +198,7 @@ async fn serve_binary_stage(mut args: ServeCommandArgs) -> Result<()> {
     let mut options = conversion::binary_stage_options(args.stage)?;
     args.public
         .settings
-        .validate_cache_dependencies(&options.config, disk_cache.is_some())?;
+        .validate_cache_dependencies(&options.config)?;
     if args.print_effective_config {
         let frontend = options.openai.as_ref().map(|stage| {
             let mut frontend = skippy_api::serving::InferenceOptions::embedded_stage_defaults(

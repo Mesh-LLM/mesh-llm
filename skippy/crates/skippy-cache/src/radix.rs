@@ -1,3 +1,6 @@
+mod resident_matching;
+use resident_matching::resident_backing_prefix;
+
 use std::collections::{BTreeMap, HashMap};
 
 use anyhow::{Result, bail};
@@ -707,86 +710,6 @@ fn ensure_node<'a, R, E>(
         .get_mut(&first)
         .and_then(|split| split.children.get_mut(&new_first))
         .expect("new split radix child should exist")
-}
-
-/// Find the longest query prefix backed by any resident sequence.
-///
-/// Unlike recurrent checkpoints, native resident KV can be sliced when copied:
-/// a cached sequence for `[1, 2, 3, 4]` can restore `[1, 2]` for a request that
-/// diverges at token 3. Native restore only reads the stored resident source,
-/// so multiple restores may hold references concurrently; eviction remains
-/// blocked until every reference is released.
-fn resident_backing_prefix<R, E>(
-    root: &RadixNode<R, E>,
-    tokens: &[i32],
-) -> Option<(usize, Vec<i32>)> {
-    let mut node = root;
-    let mut remaining = tokens;
-    let mut consumed = 0usize;
-    let mut path = Vec::new();
-    let mut best = None;
-
-    if node.components.resident.is_some() {
-        best = Some((0, Vec::new()));
-    }
-
-    while let Some(first) = remaining.first() {
-        let Some(child) = node.children.get(first) else {
-            // The query can diverge exactly at an existing branch point. No
-            // child starts with its next token, but any resident descendant
-            // still owns a native sequence that can be sliced to `consumed`.
-            // Without this fallback, the first two branches split the edge
-            // and every later sibling incorrectly becomes a full miss.
-            if consumed > 0
-                && let Some(stored_tokens) = nearest_resident_descendant(node, &path)
-            {
-                best = Some((consumed, stored_tokens));
-            }
-            break;
-        };
-        let common = common_prefix_len(&child.edge, remaining);
-        if common < child.edge.len() {
-            let mut child_path = path.clone();
-            child_path.extend_from_slice(&child.edge);
-            if common > 0
-                && let Some(stored_tokens) = nearest_resident_descendant(child, &child_path)
-            {
-                best = Some((consumed.saturating_add(common), stored_tokens));
-            }
-            break;
-        }
-        consumed = consumed.saturating_add(common);
-        remaining = &remaining[common..];
-        path.extend_from_slice(&child.edge);
-        node = child;
-        if node.components.resident.is_some() {
-            best = Some((consumed, path.clone()));
-        }
-    }
-
-    if remaining.is_empty()
-        && let Some(stored_tokens) = nearest_resident_descendant(node, &path)
-    {
-        best = Some((consumed, stored_tokens));
-    }
-    best.filter(|(matched, _)| *matched > 0)
-}
-
-fn nearest_resident_descendant<R, E>(
-    node: &RadixNode<R, E>,
-    node_path: &[i32],
-) -> Option<Vec<i32>> {
-    if node.components.resident.is_some() {
-        return Some(node_path.to_vec());
-    }
-    for child in node.children.values() {
-        let mut child_path = node_path.to_vec();
-        child_path.extend_from_slice(&child.edge);
-        if let Some(candidate) = nearest_resident_descendant(child, &child_path) {
-            return Some(candidate);
-        }
-    }
-    None
 }
 
 fn longest_component_prefix<R, E>(
