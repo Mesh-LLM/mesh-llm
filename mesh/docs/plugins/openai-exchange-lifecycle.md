@@ -85,9 +85,9 @@ of the same exchange. IDs asserted by a peer provide correlation; they are not
 proof of a global execution claim.
 
 A `backend_selected` event for a remote mesh peer that charges for the model
-carries `pricing`, the peer's advertised offer that routing ranks by:
-`input_msat_per_million`, `output_msat_per_million`, and
-`cache_discount_percent` when it is not zero. The member is absent for a free
+carries `pricing`, the peer's advertised offer: `input_msat_per_million`,
+`output_msat_per_million`, and `cache_discount_percent` when it is not zero
+(routing ranks offers by the two rates). The member is absent for a free
 route, and also for a local or external target and a request that names no
 model, which the host never prices. A host built with payments lists the
 `openai_exchange.backend_pricing.v1` host capability. On such a host, an absent
