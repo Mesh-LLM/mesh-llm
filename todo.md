@@ -62,6 +62,42 @@ concurrent c4 cases remain separately scoped below.
   benchmark contract and source-pinned results. Reconcile #2657's remaining
   correctness requirements before declaring it fully superseded.
 
+## PR #2746 regression repair gates
+
+These gates supplement the fixed four-model campaign. Product selection must
+depend on loaded capabilities, tensor geometry and backend support; model names
+and family allowlists must not choose a serving or kernel path.
+
+- [ ] Preserve the common upstream CUDA hardware/GQA dispatch policy for indexed
+  attention. Verify actual MMA selection for eligible wide-GQA decode and an
+  eligible vector control, plus unchanged operator numerical and graph-replay
+  gates. Kernel availability alone is not a performance qualification.
+- [ ] Prove that resident recurrent checkpoints retain cooperative suffix-prefill
+  and cache-wave scheduling with disk disabled. Decode must make progress before
+  a competing long prefill completes. Exercise cancellation and resource cleanup
+  without changing exact checkpoint boundaries.
+- [ ] Compare the longest valid resident and committed L3 prefixes using
+  metadata. Cover a short resident prefix with a longer L3 checkpoint, resident
+  ties, refused or failed L3 fill, and preservation of the resident fallback.
+- [ ] Exercise large native-owner cold offload during active decode with L3
+  admission pressure. Byte-budget safety alone does not establish bounded
+  request latency while snapshots are materialized.
+- [ ] Run genuine uncached base/head model controls and retain the original
+  strict physical-layout full-model numerical failure until the same contract
+  passes. Operator FP64 references and output-count hashes do not close it.
+- [ ] Extend cache save/restore/fork and cold-export correctness coverage to
+  supported quantized and mixed K/V pairs, retaining byte/state, fixed-input
+  logit and selected-token assertions. Finite-logit dispatch tests are separate.
+- [ ] Add pinned small-model probes for independent capability coverage: a
+  different head width/GQA and sliding-window/softcap attention. Verify actual
+  metadata and intended baseline fallback when indexing is unsupported; do not
+  count such a fallback as indexed-attention coverage. These models supplement
+  the existing four; they do not replace or alter their pinned qualification.
+- [ ] Restart affected M3 and allowed-Spark AgentX groups after the relevant
+  corrected-source gates pass. Keep original source943 results/failures and
+  source188 admission recovery separate, publish audited complete groups into
+  existing MLflow experiment6, and update public PR2746 with exact attribution.
+
 ## Retain PR #2657's correctness requirements
 
 Cache-owned immutable checkpoints replace the old execution-lane pinning and

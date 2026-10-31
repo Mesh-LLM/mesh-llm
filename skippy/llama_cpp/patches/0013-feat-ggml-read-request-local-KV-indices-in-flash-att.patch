@@ -1,4 +1,4 @@
-From 2196befc410fed4851b384c745a7fbd872a0724c Mon Sep 17 00:00:00 2001
+From e74a084cdab9d525274ccb2c1124b7757fd1d44e Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 31 Oct 2026 17:14:46 +1100
 Subject: [PATCH] feat(ggml): read request-local KV indices in flash attention
@@ -17,8 +17,8 @@ Subject: [PATCH] feat(ggml): read request-local KV indices in flash attention
  ggml/src/ggml-cuda/fattn-indexed.cuh          |  45 ++
  ggml/src/ggml-cuda/fattn-mma-f16.cuh          | 208 +++++---
  ggml/src/ggml-cuda/fattn-tile.cuh             |  95 +++-
- ggml/src/ggml-cuda/fattn-vec.cuh              |  53 ++-
- ggml/src/ggml-cuda/fattn.cu                   |  89 +++-
+ ggml/src/ggml-cuda/fattn-vec.cuh              |  53 +-
+ ggml/src/ggml-cuda/fattn.cu                   |  86 +++-
  ggml/src/ggml-cuda/ggml-cuda.cu               |   1 +
  ggml/src/ggml-et/ggml-et.cpp                  |   3 +
  ggml/src/ggml-hexagon/ggml-hexagon.cpp        |   2 +-
@@ -36,15 +36,15 @@ Subject: [PATCH] feat(ggml): read request-local KV indices in flash attention
  ggml/src/ggml-webgpu/ggml-webgpu.cpp          |   2 +-
  ggml/src/ggml.c                               |  44 +-
  src/CMakeLists.txt                            |   2 +
- src/llama-graph-kv-read.cpp                   | 134 ++++++
+ src/llama-graph-kv-read.cpp                   | 134 +++++
  src/llama-graph.cpp                           |  85 ++--
  src/llama-graph.h                             |  21 +-
  src/llama-kv-cache.h                          |   2 +
  src/llama-kv-read.cpp                         | 148 ++++++
  src/llama-kv-read.h                           |  20 +
  tests/CMakeLists.txt                          |   2 +
- tests/test-flash-attn-indexed.cpp             | 447 ++++++++++++++++++
- 40 files changed, 1788 insertions(+), 209 deletions(-)
+ tests/test-flash-attn-indexed.cpp             | 456 ++++++++++++++++++
+ 40 files changed, 1793 insertions(+), 210 deletions(-)
  create mode 100644 ggml/src/ggml-cpu/attention-indexed.cpp
  create mode 100644 ggml/src/ggml-cpu/attention-indexed.h
  create mode 100644 ggml/src/ggml-cuda/fattn-indexed.cuh
@@ -1356,7 +1356,7 @@ index 57a285565..596165504 100644
  #endif // FLASH_ATTN_AVAILABLE
  }
 diff --git a/ggml/src/ggml-cuda/fattn.cu b/ggml/src/ggml-cuda/fattn.cu
-index 5fa3e5308..793295602 100644
+index 5fa3e5308..2322406e0 100644
 --- a/ggml/src/ggml-cuda/fattn.cu
 +++ b/ggml/src/ggml-cuda/fattn.cu
 @@ -130,6 +130,9 @@ bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(const int cc, const ggml_
@@ -1461,7 +1461,7 @@ index 5fa3e5308..793295602 100644
      if (!ggml_cuda_fattn_kv_type_supported(K->type) || !ggml_cuda_fattn_kv_type_supported(V->type)) {
          return BEST_FATTN_KERNEL_NONE;
      }
-@@ -629,9 +664,51 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
+@@ -629,9 +664,46 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
          return BEST_FATTN_KERNEL_NONE;
      }
  
@@ -1483,19 +1483,9 @@ index 5fa3e5308..793295602 100644
 +        if (logit_softcap != 0.0f && !softcap_mma) {
 +            return BEST_FATTN_KERNEL_TILE;
 +        }
-+        if (Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && Q->ne[1] <= 2 &&
-+                K->type != GGML_TYPE_F32 && V->type != GGML_TYPE_F32 &&
-+                ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type) != nullptr) {
-+            return BEST_FATTN_KERNEL_VEC;
-+        }
 +        if (K->ne[0] == 576 && !ggml_cuda_fattn_v_aliases_k(K, V)) {
 +            return BEST_FATTN_KERNEL_TILE;
 +        }
-+        if ((turing_mma_available(cc) || volta_mma_available(cc) || amd_mfma_available(cc) || amd_wmma_available(cc)) &&
-+                Q->ne[0] != 40 && Q->ne[0] != 72) {
-+            return BEST_FATTN_KERNEL_MMA_F16;
-+        }
-+        return BEST_FATTN_KERNEL_TILE;
 +    }
 +
 +    if (logit_softcap != 0.0f && !softcap_mma) {
@@ -1510,11 +1500,25 @@ index 5fa3e5308..793295602 100644
      // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
      // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
 -    const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
-+    const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && (dst->src[5] ? dst->src[5]->ne[0] : K->ne[1]) % FATTN_KQ_STRIDE == 0;
++    const int64_t n_kv = dst->src[5] ? dst->src[5]->ne[0] : K->ne[1];
++    // Indexed readers do not convert the physical pool to F16 for missing vec types.
++    const bool vector_types = !dst->src[5] || (K->type != GGML_TYPE_F32 && V->type != GGML_TYPE_F32 &&
++            ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type) != nullptr);
++    const bool can_use_vector_kernel = vector_types && Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 &&
++            Q->ne[0] != 192 && n_kv % FATTN_KQ_STRIDE == 0;
  
      // If Turing tensor cores are available, use them:
      if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
-@@ -749,7 +826,7 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
+@@ -642,7 +714,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
+                     ggml_cuda_flash_attn_ext_mma_f16_may_use_sparse(K->ne[0], V->ne[0], 1, 8) &&
+                     ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(cc, dst, 1, 8);
+                 if (!sparse_decode && cc >= GGML_CUDA_CC_ADA_LOVELACE && Q->ne[1] == 1 && Q->ne[3] == 1 &&
+-                        !(gqa_ratio > 4 && (Q->ne[0] >= 256 || K->ne[1] >= 8192))) {
++                        !(gqa_ratio > 4 && (Q->ne[0] >= 256 || n_kv >= 8192))) {
+                     return BEST_FATTN_KERNEL_VEC;
+                 }
+             } else {
+@@ -749,7 +821,7 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
      }
  
      const ggml_cuda_flash_attn_ext_f16_extra_data f16_extra =
@@ -1524,10 +1528,10 @@ index 5fa3e5308..793295602 100644
      return f16_extra.end - (uintptr_t) dst->data;
  }
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index aeeb7ee27..09813eb41 100644
+index f860e8035..960a96e77 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -2760,6 +2760,7 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
+@@ -2759,6 +2759,7 @@ static bool ggml_cuda_graph_update_required(ggml_backend_cuda_context * cuda_ctx
          for (int j = 0; j < GGML_MAX_SRC; ++j) {
              if (cgraph->nodes[i]->src[j]) {
                  prop.node_src_data_ptrs[j] = cgraph->nodes[i]->src[j]->data;
@@ -2485,7 +2489,7 @@ index 01dc8d05c..d970209bf 100644
  void ggml_flash_attn_ext_set_prec(
          struct ggml_tensor * a,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index d55e38363..0e9996f97 100644
+index d7d61a2b7..3a5d04693 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -19,10 +19,12 @@ set(LLAMA_CORE_SOURCES
@@ -2642,7 +2646,7 @@ index 000000000..379c7f458
 +    ggml_backend_tensor_set(self_read_mask, mask.data(), 0, mask.size() * sizeof(ggml_fp16_t));
 +}
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index 569b27022..8e3dab5e9 100644
+index ec6e4d075..a91e2737c 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -591,6 +591,8 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
@@ -2757,7 +2761,7 @@ index 569b27022..8e3dab5e9 100644
  
      // the stream dim steps over one stream's worth of dim-2 (tokens): (ne[2]/n_stream) rows of stride nb[2].
      // q->nb[3]/n_stream only equals that for a contiguous q; nope-only MLA (glm5-next) passes a permuted
-@@ -3427,16 +3418,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
+@@ -3410,16 +3401,26 @@ ggml_tensor * llm_graph_context::build_attn_mha(
          }
  
          // this can happen when KV cache is not used (e.g. an embedding model with non-causal attn)
@@ -2788,7 +2792,7 @@ index 569b27022..8e3dab5e9 100644
          res->add_fused_node({LLM_FUSED_OP_FLASH_ATTN, cur, il});
  
          ggml_flash_attn_ext_add_sinks(cur, sinks);
-@@ -3643,6 +3644,8 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
+@@ -3626,6 +3627,8 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
          inp->self_kq_mask_cnv = inp->self_kq_mask;
      }
  
@@ -2797,7 +2801,7 @@ index 569b27022..8e3dab5e9 100644
      inp->self_k_rot = mctx_cur->build_input_k_rot(ctx0);
      inp->self_v_rot = mctx_cur->build_input_v_rot(ctx0);
  
-@@ -3724,7 +3727,11 @@ ggml_tensor * llm_graph_context::build_attn(
+@@ -3707,7 +3710,11 @@ ggml_tensor * llm_graph_context::build_attn(
  
      ggml_tensor * kq_mask = inp->get_kq_mask();
  
@@ -2864,7 +2868,7 @@ index a4ffee4e5..f32b6ef58 100644
      llm_graph_input_attn_no_cache * build_attn_inp_no_cache() const;
  
 diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
-index 021fdfe2e..df68f3c0d 100644
+index 80edf6865..8a2e09270 100644
 --- a/src/llama-kv-cache.h
 +++ b/src/llama-kv-cache.h
 @@ -15,6 +15,7 @@ struct llama_model;
@@ -2875,7 +2879,7 @@ index 021fdfe2e..df68f3c0d 100644
  
  //
  // llama_kv_cache
-@@ -470,6 +471,7 @@ public:
+@@ -466,6 +467,7 @@ public:
  
      uint32_t get_n_kv() const;
      uint32_t get_n_kv_pos_contiguous() const;
@@ -3078,10 +3082,10 @@ index def0ea7a6..0e279f1bc 100644
  llama_build_and_test(test-autorelease.cpp       LABEL "model")
 diff --git a/tests/test-flash-attn-indexed.cpp b/tests/test-flash-attn-indexed.cpp
 new file mode 100644
-index 000000000..940a387a5
+index 000000000..e96cce112
 --- /dev/null
 +++ b/tests/test-flash-attn-indexed.cpp
-@@ -0,0 +1,447 @@
+@@ -0,0 +1,456 @@
 +#include "ggml.h"
 +#include "ggml-alloc.h"
 +#include "ggml-backend.h"
@@ -3394,6 +3398,15 @@ index 000000000..940a387a5
 +
 +void run_unquantized_vector_cases(ggml_backend_t cpu, ggml_backend_t target) {
 +    const std::array<ggml_type, 2> types = {GGML_TYPE_F16, GGML_TYPE_BF16};
++    // Wide GQA must retain the shared hardware policy rather than force vec.
++    for (auto type_k : types) {
++        for (auto type_v : types) {
++            for (int64_t queries : {1, 2}) {
++                run_case(cpu, target, {queries, 256, true, false, false, false,
++                        type_k, type_v, 256, 256, 0.0f, 16});
++            }
++        }
++    }
 +    for (int64_t dimension : {64, 128, 256}) {
 +        for (auto type_k : types) {
 +            for (auto type_v : types) {

@@ -1,4 +1,4 @@
-From c64f74ef34bf23b1dcd2e497c712bf0f017ccb3d Mon Sep 17 00:00:00 2001
+From 81769eed0e2480936e957940f423a41c2757a409 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -19,7 +19,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  src/skippy/tests/resident_checkpoint_gpu.cpp  |  287 +++
  .../tests/residual_checkpoint_regression.h    |   52 +
  src/skippy/tests/runtime_events.cpp           |  695 +++++++
- src/skippy/tests/sampling_history.cpp         |  698 +++++++
+ src/skippy/tests/sampling_history.cpp         |  760 ++++++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1151 ++++++++++++
@@ -39,7 +39,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 35 files changed, 10474 insertions(+), 32 deletions(-)
+ 35 files changed, 10536 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -6134,14 +6134,15 @@ index 000000000..00a6ff0ec
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..d5305b8f0
+index 000000000..2375ce3e3
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,698 @@
+@@ -0,0 +1,760 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
 +#include "../runtime_support.h"
 +#include "llama-model.h"
++#include "llama-graph.h"
 +#include "ggml-backend.h"
 +#include "../../../common/sampling.h"
 +
@@ -6152,6 +6153,7 @@ index 000000000..d5305b8f0
 +#include <cstring>
 +#include <vector>
 +#include <limits>
++#include <iterator>
 +
 +#define CHECK(condition) do { if (!(condition)) { \
 +    std::fprintf(stderr, "CHECK failed: %s at %s:%d\n", #condition, __FILE__, __LINE__); \
@@ -6162,6 +6164,51 @@ index 000000000..d5305b8f0
 +namespace {
 +
 +bool require_recurrent = false;
++
++int32_t cache_type(const char * name) {
++    for (const auto type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16,
++            GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0}) {
++        if (std::strcmp(name, ggml_type_name(type)) == 0) { return type; }
++    }
++    CHECK(false && "unsupported test KV type");
++    return -1;
++}
++
++void verify_typed_attention(skippy_model * model, const skippy_kv_page_desc & page) {
++    const auto & config = model->config;
++    const auto check_types = [&](uint32_t k, uint32_t v) {
++        CHECK(k == static_cast<uint32_t>(config.cache_type_k));
++        CHECK(v == static_cast<uint32_t>(config.cache_type_v));
++    };
++    if (page.component_count) {
++        CHECK(page.component_count <= std::size(page.components));
++        for (uint32_t i = 0; i < page.component_count; ++i) {
++            check_types(page.components[i].k_type, page.components[i].v_type);
++        }
++    } else {
++        check_types(page.k_type, page.v_type);
++    }
++    auto * result = model->ctx->get_gf_res_prev_active();
++    CHECK(result && result->get_gf());
++    auto * graph = result->get_gf();
++    int attention = 0;
++    for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
++        auto * node = ggml_graph_node(graph, i);
++        if (node->op != GGML_OP_FLASH_ATTN_EXT) { continue; }
++        auto * backend = ggml_backend_sched_get_tensor_backend(model->ctx->get_sched(), node);
++        CHECK(backend && std::strcmp(ggml_backend_name(backend), config.selected_backend_device) == 0);
++        CHECK(node->src[1]->type == config.cache_type_k && node->src[2]->type == config.cache_type_v);
++        ++attention;
++    }
++    int expected_attention = 0;
++    for (uint32_t layer = 0; layer < model->model->hparams.n_layer(); ++layer) {
++        expected_attention += !model->model->hparams.is_recr(layer);
++    }
++    CHECK(attention > 0 && attention == expected_attention);
++    std::fprintf(stderr, "typed resident: backend=%s K=%s V=%s attention=%d expected=%d components=%u\n",
++            config.selected_backend_device, ggml_type_name(static_cast<ggml_type>(config.cache_type_k)),
++            ggml_type_name(static_cast<ggml_type>(config.cache_type_v)), attention, expected_attention, page.component_count);
++}
 +
 +void ok(skippy_status status, skippy_error * error) {
 +    if (status != SKIPPY_STATUS_OK) {
@@ -6496,7 +6543,7 @@ index 000000000..d5305b8f0
 +    CHECK(max_delta == 0.0f);
 +}
 +
-+void resident_prefix_ownership(skippy_model * model) {
++void resident_prefix_ownership(skippy_model * model, bool typed = false) {
 +    const auto capabilities = skippy_model_memory_cache_capabilities(model);
 +    CHECK(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT);
 +    CHECK(bool(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT) == require_recurrent);
@@ -6521,6 +6568,7 @@ index 000000000..d5305b8f0
 +    CHECK(checkpoint_bytes >= prefix.size() * sizeof(llama_token));
 +    const auto source_page = export_page(source, prefix.size());
 +    snapshot persistent(source, false);
++    if (typed) { verify_typed_attention(model, persistent.page); }
 +    if (require_recurrent) {
 +        CHECK(checkpoint_bytes > prefix.size() * sizeof(llama_token));
 +        error = nullptr;
@@ -6605,9 +6653,11 @@ index 000000000..d5305b8f0
 +    skippy_error_free(error);
 +    CHECK(recurrent_bytes == persistent.recurrent.size());
 +    if (recurrent_bytes) {
++        std::vector<uint8_t> retained_recurrent(recurrent_bytes);
 +        error = nullptr;
 +        ok(skippy_session_export_resident_recurrent_state(a, cache_id,
-+                persistent.recurrent.data(), recurrent_bytes, &recurrent_bytes, &error), error);
++                retained_recurrent.data(), recurrent_bytes, &recurrent_bytes, &error), error);
++        CHECK(retained_recurrent == persistent.recurrent);
 +    }
 +    CHECK(a->token_history == history_a && b->token_history == history_b);
 +    CHECK(a->n_past == static_cast<int32_t>(prefix.size()) && b->n_past == a->n_past);
@@ -6780,22 +6830,34 @@ index 000000000..d5305b8f0
 +        configure_test_gpu(config);
 +        return skippy_test_resident_checkpoint_gpu(model_path, config);
 +    }
-+    CHECK(argc == 4);
++    CHECK(argc == 4 || argc == 6);
 +    const bool grammar = std::strcmp(argv[2], "grammar") == 0;
 +    const bool state = std::strcmp(argv[2], "state") == 0;
 +    const bool resident = std::strcmp(argv[2], "resident") == 0;
 +    CHECK(grammar || state || resident || std::strcmp(argv[2], "penalty") == 0);
-+    CHECK(std::strcmp(argv[3], "dense") == 0 || std::strcmp(argv[3], "recurrent") == 0);
++    const bool automatic = resident && std::strcmp(argv[3], "auto") == 0;
++    CHECK(automatic || std::strcmp(argv[3], "dense") == 0 || std::strcmp(argv[3], "recurrent") == 0);
++    CHECK(argc == 4 || resident);
 +    require_recurrent = std::strcmp(argv[3], "recurrent") == 0;
 +    auto config = skippy_runtime_config_default();
 +    config.selected_backend_device = "CPU";
 +    configure_test_gpu(config);
++    if (argc == 6) {
++        config.cache_type_k = cache_type(argv[4]);
++        config.cache_type_v = cache_type(argv[5]);
++        config.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
++    }
 +    config.ctx_size = 512;
 +    if (resident) { config.lane_count = 2; config.kv_unified = 1; }
 +    skippy_model * model = nullptr;
 +    skippy_error * error = nullptr;
 +    const auto status = skippy_model_open(argv[1], &config, &model, &error);
 +    ok(status, error);
++    if (automatic) {
++        const auto capabilities = skippy_model_memory_cache_capabilities(model);
++        CHECK(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION);
++        require_recurrent = capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT;
++    }
 +    if (config.n_gpu_layers > 0) {
 +        CHECK(std::any_of(model->model->tensors_by_name.begin(), model->model->tensors_by_name.end(),
 +                [](const auto & item) {
@@ -6807,7 +6869,7 @@ index 000000000..d5305b8f0
 +        std::fprintf(stderr, "GPU ownership test: device=%s requested_layers=%d\n", config.selected_backend_device, config.n_gpu_layers);
 +    }
 +    if (resident) {
-+        resident_prefix_ownership(model);
++        resident_prefix_ownership(model, argc == 6);
 +    } else if (state) {
 +        // A dense stage's page already carries its whole checkpoint, so the
 +        // partial side payload is intentionally empty there.
