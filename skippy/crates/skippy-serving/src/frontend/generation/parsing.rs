@@ -4,14 +4,14 @@ use crate::frontend::message_content_to_generation_text;
 use crate::frontend::prefill::PrefillChunkPolicy;
 use serde_json::Value;
 use serde_json::json;
-use skippy_inference_api::ChatCompletionRequest;
-use skippy_inference_api::ChatCompletionResponse;
 use skippy_inference_api::ChatHookAction;
 use skippy_inference_api::ChatHookOutcome;
 use skippy_inference_api::FinishReason;
 use skippy_inference_api::InferenceError;
 use skippy_inference_api::InferenceResult;
 use skippy_inference_api::MessageContent;
+use skippy_inference_api::generation::GenerationRequest;
+use skippy_inference_api::generation::GenerationResponse;
 use skippy_runtime::ChatReasoningFormat;
 use skippy_runtime::ChatTemplateOptions;
 use skippy_runtime::GenerationSignalWindow;
@@ -169,7 +169,7 @@ pub(in crate::frontend) struct ParsedChatMessage {
     pub(in crate::frontend) tool_calls: Option<Value>,
 }
 
-pub(in crate::frontend) fn tool_calls_requested(request: &ChatCompletionRequest) -> bool {
+pub(in crate::frontend) fn tool_calls_requested(request: &GenerationRequest) -> bool {
     request.tools.as_ref().is_some_and(has_requested_tools)
         && !request
             .tool_choice
@@ -178,7 +178,7 @@ pub(in crate::frontend) fn tool_calls_requested(request: &ChatCompletionRequest)
 }
 
 pub(in crate::frontend) fn chat_output_parser_required(
-    request: &ChatCompletionRequest,
+    request: &GenerationRequest,
     template_options: &ChatTemplateOptions,
 ) -> bool {
     tool_calls_requested(request)
@@ -206,24 +206,24 @@ pub(in crate::frontend) fn apply_reasoning_visibility(
     Some(parsed)
 }
 
-pub(in crate::frontend) fn chat_response_from_generated_text(
+pub(in crate::frontend) fn generation_response_from_generated_text(
     model: String,
     output: &GeneratedText,
     parsed_message: Option<ParsedChatMessage>,
-) -> ChatCompletionResponse {
+) -> GenerationResponse {
     if let Some(parsed) = parsed_message {
         let finish_reason = if parsed.tool_calls.is_some() {
             FinishReason::ToolCalls
         } else {
             output.finish_reason
         };
-        return ChatCompletionResponse::from_parts(
+        return GenerationResponse::from_parts(
             skippy_inference_api::completion_id("chatcmpl"),
             skippy_inference_api::now_unix_secs(),
             model,
-            vec![skippy_inference_api::ChatCompletionChoice {
+            vec![skippy_inference_api::generation::GenerationChoice {
                 index: 0,
-                message: skippy_inference_api::AssistantMessage {
+                message: skippy_inference_api::generation::GeneratedMessage {
                     role: "assistant",
                     content: parsed.content,
                     reasoning_content: parsed.reasoning_content,
@@ -237,7 +237,7 @@ pub(in crate::frontend) fn chat_response_from_generated_text(
         );
     }
 
-    let mut response = ChatCompletionResponse::new_with_reason(
+    let mut response = GenerationResponse::new_with_reason(
         model,
         output.text.clone(),
         output.usage(),
@@ -313,7 +313,7 @@ fn completion_logprobs(output: &GeneratedText) -> Option<Value> {
 
 pub(in crate::frontend) fn parsed_chat_message_from_json(
     message_json: &str,
-    request: &ChatCompletionRequest,
+    request: &GenerationRequest,
 ) -> Option<ParsedChatMessage> {
     let value = serde_json::from_str::<Value>(message_json).ok()?;
     let tool_calls =
@@ -328,7 +328,7 @@ pub(in crate::frontend) fn parsed_chat_message_from_json(
 #[cfg(test)]
 pub(in crate::frontend) fn parsed_tool_calls_from_message_json(
     message_json: &str,
-    request: &ChatCompletionRequest,
+    request: &GenerationRequest,
 ) -> Option<ParsedToolCalls> {
     let value = serde_json::from_str::<Value>(message_json).ok()?;
     parsed_tool_calls_from_message_value(&value, request)
@@ -336,7 +336,7 @@ pub(in crate::frontend) fn parsed_tool_calls_from_message_json(
 
 pub(in crate::frontend) fn parsed_tool_calls_from_message_value(
     value: &Value,
-    request: &ChatCompletionRequest,
+    request: &GenerationRequest,
 ) -> Option<ParsedToolCalls> {
     if !tool_calls_requested(request) {
         return None;
@@ -375,9 +375,7 @@ pub(in crate::frontend) fn string_field(value: &Value, field: &str) -> Option<St
         .map(ToString::to_string)
 }
 
-pub(in crate::frontend) fn request_allowed_tool_names(
-    request: &ChatCompletionRequest,
-) -> Vec<String> {
+pub(in crate::frontend) fn request_allowed_tool_names(request: &GenerationRequest) -> Vec<String> {
     if let Some(choice_name) = request
         .tool_choice
         .as_ref()
@@ -443,7 +441,7 @@ pub(in crate::frontend) fn effective_tools_for_choice(
     }
 }
 
-pub(in crate::frontend) fn request_tool_names(request: &ChatCompletionRequest) -> Vec<String> {
+pub(in crate::frontend) fn request_tool_names(request: &GenerationRequest) -> Vec<String> {
     request
         .tools
         .as_ref()
@@ -496,7 +494,7 @@ pub(in crate::frontend) fn tool_calls_stream_delta(tool_calls: Value) -> Value {
 }
 
 pub(in crate::frontend) fn chat_message_generation_value(
-    message: &skippy_inference_api::ChatMessage,
+    message: &skippy_inference_api::generation::GenerationMessage,
     marker: &str,
     media: &mut Vec<MediaInput>,
 ) -> InferenceResult<Value> {

@@ -1,4 +1,5 @@
 use super::*;
+use skippy_inference_api::chat::ChatCompletionRequest;
 
 pub(super) fn prefix_cache_test_config() -> StageConfig {
     StageConfig {
@@ -191,8 +192,8 @@ pub(super) fn test_request_defaults() -> EmbeddedOpenAiRequestDefaults {
     }
 }
 
-pub(super) fn tool_request() -> ChatCompletionRequest {
-    serde_json::from_value(json!({
+pub(super) fn tool_request() -> GenerationRequest {
+    serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "look this up"}],
         "tools": [{
@@ -211,4 +212,5 @@ pub(super) fn tool_request() -> ChatCompletionRequest {
         }]
     }))
     .unwrap()
+    .into()
 }

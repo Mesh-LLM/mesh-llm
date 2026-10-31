@@ -1,9 +1,10 @@
 use super::support::*;
 use super::*;
+use skippy_inference_api::chat::ChatCompletionRequest;
 
 #[test]
 fn chat_runtime_feature_guard_allows_structured_output_for_guardrails() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}],
         "response_format": {
@@ -11,14 +12,15 @@ fn chat_runtime_feature_guard_allows_structured_output_for_guardrails() {
             "json_schema": {"name": "answer", "schema": {"type": "object"}}
         }
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     ensure_chat_runtime_features_supported(&request).unwrap();
 }
 
 #[derive(Default)]
 struct StructuredGuardrailRecordingBackend {
-    seen: Mutex<Option<ChatCompletionRequest>>,
+    seen: Mutex<Option<GenerationRequest>>,
 }
 
 #[async_trait]
@@ -29,18 +31,18 @@ impl InferenceBackend for StructuredGuardrailRecordingBackend {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         ensure_chat_runtime_features_supported(&request)
             .expect("guarded wrapper should downgrade backend-facing structured requests");
         *self.seen.lock().unwrap() = Some(request);
-        Ok(ChatCompletionResponse::from_parts(
+        Ok(GenerationResponse::from_parts(
             "chatcmpl-test".to_string(),
             123,
             "test".to_string(),
-            vec![ChatCompletionChoice {
+            vec![GenerationChoice {
                 index: 0,
-                message: AssistantMessage {
+                message: GeneratedMessage {
                     role: "assistant",
                     content: None,
                     reasoning_content: None,
@@ -63,9 +65,9 @@ impl InferenceBackend for StructuredGuardrailRecordingBackend {
 
     async fn chat_completion_stream(
         &self,
-        _request: ChatCompletionRequest,
+        _request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         unreachable!("streaming is not used in this test")
     }
 
@@ -96,7 +98,7 @@ async fn guarded_structured_output_is_not_rejected_by_runtime_feature_guard() {
         compaction: None,
     };
     let guarded = guardrails.wrap_backend(backend.clone());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}],
         "response_format": {
@@ -112,7 +114,8 @@ async fn guarded_structured_output_is_not_rejected_by_runtime_feature_guard() {
             }
         }
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let response = guarded.chat_completion(request).await.unwrap();
     assert_eq!(
@@ -162,7 +165,7 @@ async fn compaction_wraps_skippy_backend_even_when_guardrails_are_disabled() {
         compaction: Some(CompactionConfig::default()),
     };
     let wrapped = guardrails.wrap_backend(backend.clone());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [
             {"role": "tool", "content": "stale tool result"},
@@ -170,7 +173,8 @@ async fn compaction_wraps_skippy_backend_even_when_guardrails_are_disabled() {
         ],
         "mesh_compact": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let _ = wrapped.chat_completion(request).await;
 
@@ -231,14 +235,15 @@ async fn compaction_wraps_skippy_backend_with_runtime_context_limit() {
         }),
     };
     let wrapped = guardrails.wrap_backend_with_context_limit(backend.clone(), Some(1));
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [
             {"role": "tool", "content": "stale tool result"},
             {"role": "user", "content": "continue"}
         ]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     wrapped.chat_completion(request).await.unwrap();
 
@@ -261,7 +266,7 @@ async fn compaction_and_guardrails_can_stack() {
         compaction: Some(CompactionConfig::default()),
     };
     let wrapped = guardrails.wrap_backend(backend.clone());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [
             {"role": "tool", "content": "stale tool result"},
@@ -281,7 +286,8 @@ async fn compaction_and_guardrails_can_stack() {
         },
         "mesh_compact": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let response = wrapped.chat_completion(request).await.unwrap();
     assert_eq!(

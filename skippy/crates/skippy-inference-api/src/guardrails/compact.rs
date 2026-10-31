@@ -1,3 +1,4 @@
+use crate::generation::GenerationEventStream;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -9,14 +10,11 @@ use crate::{
     audio::{
         AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
     },
-    backend::{
-        ChatCompletionStream, CompletionStream, InferenceBackend, InferenceRequestContext,
-        InferenceResult,
-    },
-    chat::{ChatCompletionRequest, ChatCompletionResponse},
+    backend::{CompletionStream, InferenceBackend, InferenceRequestContext, InferenceResult},
     completions::{CompletionRequest, CompletionResponse},
     embeddings::{EmbeddingResponse, EmbeddingsRequest},
     errors::InferenceError,
+    generation::{GenerationRequest, GenerationResponse},
     models::ModelObject,
     rerank::{RerankRequest, RerankResponse},
     system_one::{SystemOneRequest, SystemOneResponse},
@@ -34,8 +32,8 @@ impl CompactingInferenceBackend {
 
     fn compact_request(
         &self,
-        mut request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionRequest> {
+        mut request: GenerationRequest,
+    ) -> InferenceResult<GenerationRequest> {
         let messages = request
             .messages
             .iter()
@@ -68,7 +66,7 @@ impl InferenceBackend for CompactingInferenceBackend {
     fn http_exchange_policy(&self) -> Option<Arc<dyn crate::http_exchange::HttpExchangePolicy>> {
         self.backend.http_exchange_policy()
     }
-    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> InferenceResult<u32> {
+    async fn count_chat_tokens(&self, request: GenerationRequest) -> InferenceResult<u32> {
         self.backend.count_chat_tokens(request).await
     }
 
@@ -82,17 +80,17 @@ impl InferenceBackend for CompactingInferenceBackend {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         self.chat_completion_with_context(request, InferenceRequestContext::new())
             .await
     }
 
     async fn chat_completion_with_context(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionResponse> {
+    ) -> InferenceResult<GenerationResponse> {
         self.backend
             .chat_completion_with_context(self.compact_request(request)?, context)
             .await
@@ -100,9 +98,9 @@ impl InferenceBackend for CompactingInferenceBackend {
 
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         self.backend
             .chat_completion_stream(self.compact_request(request)?, context)
             .await

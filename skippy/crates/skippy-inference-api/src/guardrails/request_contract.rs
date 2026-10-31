@@ -1,4 +1,4 @@
-use crate::chat::ChatCompletionRequest;
+use crate::generation::GenerationRequest;
 
 pub use skippy_guardrails::{
     GuardrailRequestContract, MESH_GUARDRAILS_FIELD, MeshGuardrailsOverride, ParallelToolCalls,
@@ -8,7 +8,7 @@ pub use skippy_guardrails::{
 #[cfg(test)]
 pub(crate) use skippy_guardrails::{RawResponseFormat, RawToolSpec};
 
-pub fn from_request(request: &ChatCompletionRequest) -> GuardrailRequestContract {
+pub fn from_request(request: &GenerationRequest) -> GuardrailRequestContract {
     GuardrailRequestContract::from_parts(
         request.tools.as_ref(),
         request.tool_choice.as_ref(),

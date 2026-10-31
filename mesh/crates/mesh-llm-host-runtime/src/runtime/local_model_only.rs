@@ -479,7 +479,7 @@ mod tests {
     use crate::runtime_events::{
         clear_runtime_event_engine, install_runtime_event_engine, runtime_event_engine,
     };
-    use skippy_inference_api::ChatCompletionRequest;
+    use skippy_inference_api::generation::GenerationRequest;
     use skippy_protocol::{StageKvCacheConfig, StageKvCacheMode};
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -554,12 +554,15 @@ mod tests {
         let backend = handle.backend();
 
         for attempt in 0..3 {
-            let request: ChatCompletionRequest = serde_json::from_value(serde_json::json!({
+            let request: GenerationRequest = serde_json::from_value::<
+                skippy_inference_api::chat::ChatCompletionRequest,
+            >(serde_json::json!({
                 "model": "local-test/unrecognized-family-model",
                 "messages": [{"role": "user", "content": format!("ping {attempt}")}],
                 "max_tokens": 4,
             }))
-            .expect("build chat completion request");
+            .expect("build chat completion request")
+            .into();
             backend
                 .chat_completion(request)
                 .await

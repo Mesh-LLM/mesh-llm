@@ -300,7 +300,7 @@ pub(super) fn exchange_output_digests_from_outcome(
 }
 
 /// Path 2's own "effective request" moment: the plugin/endpoint is resolved
-/// and dispatch is about to happen. There is no typed `ChatCompletionRequest`
+/// and dispatch is about to happen. There is no typed `GenerationRequest`
 /// on this path (see the #1331 design note), so the envelope carries only
 /// the model — the same narrow route fact path 1's `ChatExchangeRoute`
 /// carries. Mints the exchange id here, at admission, so it can pair this

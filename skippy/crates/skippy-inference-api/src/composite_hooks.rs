@@ -1,8 +1,8 @@
 //! Ordered core transformations composed with read-only exchange policies.
 use crate::{
-    CapsuleMarker, ChatCompletionOutcome, ChatCompletionRequest, ChatCompletionResponse,
-    ChatExchangeRoute, ChatHookOutcome, GenerationHookSignals, InferenceHookPolicy,
-    InferenceResult, PrefillHookSignals, apply_chat_hook_outcome,
+    CapsuleMarker, ChatCompletionOutcome, ChatExchangeRoute, ChatHookOutcome,
+    GenerationHookSignals, InferenceHookPolicy, InferenceResult, PrefillHookSignals,
+    apply_chat_hook_outcome, generation::GenerationRequest, generation::GenerationResponse,
 };
 use async_trait::async_trait;
 use std::sync::Arc;
@@ -19,7 +19,7 @@ impl CompositeOpenAiHookPolicy {
 impl InferenceHookPolicy for CompositeOpenAiHookPolicy {
     async fn before_chat_completion(
         &self,
-        request: &mut ChatCompletionRequest,
+        request: &mut GenerationRequest,
     ) -> InferenceResult<ChatHookOutcome> {
         for policy in &self.policies {
             let outcome = policy.before_chat_completion(request).await?;
@@ -29,7 +29,7 @@ impl InferenceHookPolicy for CompositeOpenAiHookPolicy {
     }
     async fn after_prefill(
         &self,
-        request: &mut ChatCompletionRequest,
+        request: &mut GenerationRequest,
         signals: PrefillHookSignals,
     ) -> InferenceResult<ChatHookOutcome> {
         for policy in &self.policies {
@@ -40,7 +40,7 @@ impl InferenceHookPolicy for CompositeOpenAiHookPolicy {
     }
     async fn mid_generation(
         &self,
-        request: &mut ChatCompletionRequest,
+        request: &mut GenerationRequest,
         signals: GenerationHookSignals,
     ) -> InferenceResult<ChatHookOutcome> {
         for policy in &self.policies {
@@ -51,7 +51,7 @@ impl InferenceHookPolicy for CompositeOpenAiHookPolicy {
     }
     async fn admit_effective_chat_completion(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         route: &ChatExchangeRoute,
     ) -> InferenceResult<()> {
         for policy in &self.policies {
@@ -75,7 +75,7 @@ impl InferenceHookPolicy for CompositeOpenAiHookPolicy {
     }
     async fn on_effective_chat_completion(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         route: &ChatExchangeRoute,
     ) {
         for policy in &self.policies {
@@ -89,7 +89,7 @@ impl InferenceHookPolicy for CompositeOpenAiHookPolicy {
     }
     async fn on_chat_completion_terminal(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         id: &str,
         outcome: &ChatCompletionOutcome<'_>,
     ) {
@@ -101,8 +101,8 @@ impl InferenceHookPolicy for CompositeOpenAiHookPolicy {
     }
     async fn capsule_marker_for_response(
         &self,
-        request: &ChatCompletionRequest,
-        response: &ChatCompletionResponse,
+        request: &GenerationRequest,
+        response: &GenerationResponse,
     ) -> Option<CapsuleMarker> {
         for policy in &self.policies {
             if let Some(marker) = policy.capsule_marker_for_response(request, response).await {

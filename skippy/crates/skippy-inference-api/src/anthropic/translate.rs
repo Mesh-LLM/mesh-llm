@@ -1,17 +1,8 @@
-//! Translation between the Anthropic Messages protocol and the internal
-//! OpenAI-shaped chat types.
+//! Anthropic Messages adapters for the protocol-neutral generation boundary.
 //!
-//! The chat types are the pipeline's common denominator: every backend
-//! (local runtime, mesh routing, MoA) consumes [`ChatCompletionRequest`] and
-//! produces [`ChatCompletionResponse`]/[`ChatCompletionChunk`]. Keeping the
-//! protocol boundary in this module (plus [`super::protocol`]) makes parity
-//! reviewable field by field.
-//!
-//! Anthropic carries tool results inside the *following user turn* (as
-//! `tool_result` blocks); the OpenAI pipeline carries them as distinct
-//! `role: "tool"` messages with a `tool_call_id`. One Anthropic message can
-//! therefore expand into several chat messages, so the request translation
-//! returns a flat `Vec<ChatMessage>`.
+//! Requests map directly to generation input; results and ordered deltas map
+//! directly back to Messages output. Tool results expand into distinct turns
+//! with their call identifiers, preserving the existing conversation order.
 
 use std::collections::BTreeMap;
 
@@ -22,13 +13,13 @@ use crate::anthropic::protocol::{
     AnthropicMessageStart, AnthropicMessagesRequest, AnthropicMessagesResponse,
     AnthropicMessagesStreamEvent, AnthropicResponseBlock, AnthropicSystemPrompt, AnthropicUsage,
 };
-use crate::chat::{
-    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatMessage,
-    MessageContent, MessageContentPart,
-};
 use crate::common::{FinishReason, Usage};
 use crate::common::{PromptCacheRetention, ReasoningConfig, ReasoningEffort};
 use crate::errors::InferenceError;
+use crate::generation::{
+    GenerationEvent, GenerationMessage, GenerationRequest, GenerationResponse, MessageContent,
+    MessageContentPart,
+};
 
 /// Anthropic stop reasons. `refusal` maps from the OpenAI content-filter
 /// finish reason; the `error` stop reason is produced only by in-band
@@ -38,10 +29,10 @@ pub const STOP_REASON_MAX_TOKENS: &str = "max_tokens";
 pub const STOP_REASON_TOOL_USE: &str = "tool_use";
 pub const STOP_REASON_REFUSAL: &str = "refusal";
 
-/// Translate a Messages request into the internal chat request.
-pub fn messages_request_to_chat_request(
+/// Translate a Messages request directly into generation input.
+pub fn messages_request_to_generation(
     mut request: AnthropicMessagesRequest,
-) -> Result<ChatCompletionRequest, InferenceError> {
+) -> Result<GenerationRequest, InferenceError> {
     if request.model.trim().is_empty() {
         return Err(InferenceError::invalid_request("model is required"));
     }
@@ -150,7 +141,7 @@ pub fn messages_request_to_chat_request(
         .map(translate_tool_choice)
         .transpose()?;
 
-    Ok(ChatCompletionRequest {
+    Ok(GenerationRequest {
         model: request.model,
         messages,
         stream: request.stream,
@@ -278,7 +269,7 @@ fn inline_system_text(content: &AnthropicMessageContent) -> String {
 fn expand_message(
     role: &str,
     content: &AnthropicMessageContent,
-    out: &mut Vec<ChatMessage>,
+    out: &mut Vec<GenerationMessage>,
 ) -> Result<(), InferenceError> {
     match content {
         AnthropicMessageContent::Text(text) => {
@@ -291,7 +282,7 @@ fn expand_message(
             let mut text_parts: Vec<String> = Vec::new();
             let mut media_parts: Vec<MessageContentPart> = Vec::new();
             let mut tool_calls: Vec<Value> = Vec::new();
-            let mut tool_results: Vec<ChatMessage> = Vec::new();
+            let mut tool_results: Vec<GenerationMessage> = Vec::new();
             for block in blocks {
                 match block {
                     AnthropicContentBlock::Text(text) => {
@@ -320,7 +311,7 @@ fn expand_message(
                     AnthropicContentBlock::ToolResult(tool_result) => {
                         let content =
                             tool_result_content(&tool_result.content, tool_result.is_error)?;
-                        tool_results.push(ChatMessage {
+                        tool_results.push(GenerationMessage {
                             role: "tool".to_string(),
                             content: Some(content),
                             extra: BTreeMap::from([(
@@ -349,7 +340,7 @@ fn expand_message(
                     let has_tool_results = !tool_results.is_empty();
                     out.extend(tool_results);
                     if media_parts.iter().any(|part| part.content_type != "text") {
-                        out.push(ChatMessage {
+                        out.push(GenerationMessage {
                             role: "user".into(),
                             content: Some(MessageContent::Parts(media_parts.clone())),
                             extra: BTreeMap::new(),
@@ -368,7 +359,7 @@ fn expand_message(
                     if !tool_calls.is_empty() {
                         extra.insert("tool_calls".to_string(), Value::Array(tool_calls));
                     }
-                    out.push(ChatMessage {
+                    out.push(GenerationMessage {
                         role: role.to_string(),
                         content: if text_parts.is_empty() {
                             None
@@ -427,8 +418,8 @@ fn image_part(value: &Value) -> Result<MessageContentPart, InferenceError> {
     })
 }
 
-fn text_message(role: &str, text: &str) -> ChatMessage {
-    ChatMessage {
+fn text_message(role: &str, text: &str) -> GenerationMessage {
+    GenerationMessage {
         role: role.to_string(),
         content: Some(MessageContent::Text(text.to_string())),
         extra: Default::default(),
@@ -547,9 +538,9 @@ fn translate_tool_choice(
     }
 }
 
-/// Build the non-streaming Messages response from a chat completion.
-pub fn messages_response_from_chat_response(
-    response: &ChatCompletionResponse,
+/// Build the non-streaming Messages response from a generation result.
+pub fn messages_response_from_generation(
+    response: &GenerationResponse,
 ) -> Result<AnthropicMessagesResponse, InferenceError> {
     let Some(choice) = response.choices.first() else {
         return Err(InferenceError::internal(
@@ -757,7 +748,7 @@ pub fn translate_stream_error_body(body: &Value) -> AnthropicMessagesStreamEvent
     }
 }
 
-/// Assistant-side accumulator: turns chat completion chunks into the
+/// Assistant-side accumulator: turns generation events into the
 /// Anthropic content-block event sequence.
 ///
 /// Chat chunks carry text deltas directly. Tool fragments are accumulated independently by upstream tool-call index.
@@ -791,7 +782,7 @@ impl MessagesStreamAssembler {
         self.finished = true;
     }
 
-    pub fn absorb(&mut self, chunk: &ChatCompletionChunk) -> Vec<AnthropicMessagesStreamEvent> {
+    pub fn absorb(&mut self, chunk: &GenerationEvent) -> Vec<AnthropicMessagesStreamEvent> {
         let mut events = Vec::new();
         if self.finished {
             return events;

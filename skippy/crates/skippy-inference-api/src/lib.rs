@@ -9,6 +9,7 @@ pub mod composite_hooks;
 mod decisions;
 pub mod embeddings;
 pub mod errors;
+pub mod generation;
 mod guardrails;
 pub mod hooks;
 pub mod http_exchange;
@@ -30,8 +31,7 @@ pub use audio::{
     AudioTranscriptionResponse, AudioTranscriptionSegment, AudioTranscriptionTiming,
 };
 pub use backend::{
-    CancellationToken, ChatCompletionStream, CompletionStream, InferenceBackend,
-    InferenceRequestContext, InferenceResult,
+    CancellationToken, CompletionStream, InferenceBackend, InferenceRequestContext, InferenceResult,
 };
 pub use chat::{
     AssistantMessage, CapsuleMarker, ChatCompletionChoice, ChatCompletionChunk,

@@ -1,3 +1,4 @@
+use crate::generation::GenerationEventStream;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -7,16 +8,13 @@ use crate::{
     audio::{
         AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
     },
-    backend::{
-        ChatCompletionStream, CompletionStream, InferenceBackend, InferenceRequestContext,
-        InferenceResult,
-    },
-    chat::{
-        CapsuleMarker, ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse,
-        ChatMessage, MessageContent, MessageContentPart, capsule_id_is_valid,
-    },
+    backend::{CompletionStream, InferenceBackend, InferenceRequestContext, InferenceResult},
     completions::{CompletionRequest, CompletionResponse},
     embeddings::{EmbeddingResponse, EmbeddingsRequest},
+    generation::{
+        CapsuleMarker, GenerationEvent, GenerationMessage, GenerationRequest, GenerationResponse,
+        MessageContent, MessageContentPart, capsule_id_is_valid,
+    },
     models::ModelObject,
     rerank::{RerankRequest, RerankResponse},
     system_one::{SystemOneRequest, SystemOneResponse},
@@ -110,7 +108,7 @@ pub trait InferenceHookPolicy: Send + Sync + 'static {
     /// Read-only admission after core transformations and before dispatch.
     async fn admit_effective_chat_completion(
         &self,
-        _request: &ChatCompletionRequest,
+        _request: &GenerationRequest,
         _route: &ChatExchangeRoute,
     ) -> InferenceResult<()> {
         Ok(())
@@ -128,14 +126,14 @@ pub trait InferenceHookPolicy: Send + Sync + 'static {
 
     async fn before_chat_completion(
         &self,
-        _request: &mut ChatCompletionRequest,
+        _request: &mut GenerationRequest,
     ) -> InferenceResult<ChatHookOutcome> {
         Ok(ChatHookOutcome::none())
     }
 
     async fn after_prefill(
         &self,
-        _request: &mut ChatCompletionRequest,
+        _request: &mut GenerationRequest,
         _signals: PrefillHookSignals,
     ) -> InferenceResult<ChatHookOutcome> {
         Ok(ChatHookOutcome::none())
@@ -143,7 +141,7 @@ pub trait InferenceHookPolicy: Send + Sync + 'static {
 
     async fn mid_generation(
         &self,
-        _request: &mut ChatCompletionRequest,
+        _request: &mut GenerationRequest,
         _signals: GenerationHookSignals,
     ) -> InferenceResult<ChatHookOutcome> {
         Ok(ChatHookOutcome::none())
@@ -160,7 +158,7 @@ pub trait InferenceHookPolicy: Send + Sync + 'static {
     /// identity to report here.
     async fn on_effective_chat_completion(
         &self,
-        _request: &ChatCompletionRequest,
+        _request: &GenerationRequest,
         _route: &ChatExchangeRoute,
     ) {
     }
@@ -176,7 +174,7 @@ pub trait InferenceHookPolicy: Send + Sync + 'static {
     /// requests.
     async fn on_chat_completion_terminal(
         &self,
-        _request: &ChatCompletionRequest,
+        _request: &GenerationRequest,
         _exchange_id: &str,
         _outcome: &ChatCompletionOutcome<'_>,
     ) {
@@ -188,16 +186,16 @@ pub trait InferenceHookPolicy: Send + Sync + 'static {
     /// Fires once, after the backend has returned a response and before
     /// [`Self::on_chat_completion_terminal`] and the HTTP response are
     /// produced. A `Some` return is attached to
-    /// [`ChatCompletionResponse::capsule_marker`], which the router turns
+    /// [`GenerationResponse::capsule_marker`], which the router turns
     /// into an `X-Capsule-Id` response header (see
     /// `frontend_lifecycle_middleware` in `router.rs`) — the write-capable
     /// half of the response leg that a plain observer method cannot provide,
-    /// since every other hook method here takes `&ChatCompletionResponse`.
+    /// since every other hook method here takes `&GenerationResponse`.
     /// Default: no marker (unchanged behavior for existing implementors).
     async fn capsule_marker_for_response(
         &self,
-        _request: &ChatCompletionRequest,
-        _response: &ChatCompletionResponse,
+        _request: &GenerationRequest,
+        _response: &GenerationResponse,
     ) -> Option<CapsuleMarker> {
         None
     }
@@ -218,7 +216,7 @@ pub trait InferenceHookPolicy: Send + Sync + 'static {
     /// pre-dispatch hooks — or ignores `request` in the post-dispatch ones —
     /// can override this to `false` to skip the clone; in that case the two
     /// post-dispatch hooks still fire, but with a default/empty
-    /// `ChatCompletionRequest` in place of the real one.
+    /// `GenerationRequest` in place of the real one.
     fn observes_dispatched_request(&self) -> bool {
         true
     }
@@ -236,7 +234,7 @@ pub struct ChatExchangeRoute {
 }
 
 impl ChatExchangeRoute {
-    pub fn for_request(request: &ChatCompletionRequest, exchange_id: impl Into<String>) -> Self {
+    pub fn for_request(request: &GenerationRequest, exchange_id: impl Into<String>) -> Self {
         Self {
             model: request.model.clone(),
             exchange_id: exchange_id.into(),
@@ -254,9 +252,7 @@ impl ChatExchangeRoute {
 #[non_exhaustive]
 pub enum ChatCompletionOutcome<'a> {
     /// The backend returned a response.
-    Success {
-        response: &'a ChatCompletionResponse,
-    },
+    Success { response: &'a GenerationResponse },
     /// The backend call failed or timed out.
     Error { status: u16, message: &'a str },
     /// An earlier hook (`before_chat_completion`) denied the request before
@@ -271,8 +267,8 @@ pub enum ChatCompletionOutcome<'a> {
     /// A streaming chat completion sent every chunk to the client and the
     /// underlying stream ended on its own (as opposed to being dropped
     /// mid-stream, which reports [`Self::Cancelled`] instead). Streaming
-    /// dispatches whole [`crate::chat::ChatCompletionChunk`]s rather than
-    /// one assembled [`ChatCompletionResponse`], so unlike [`Self::Success`]
+    /// dispatches whole [`crate::generation::GenerationEvent`]s rather than
+    /// one assembled [`GenerationResponse`], so unlike [`Self::Success`]
     /// there is no response to report here.
     StreamCompleted,
 }
@@ -294,7 +290,7 @@ pub enum ChatCompletionOutcome<'a> {
 /// from (and unable to block) whatever cancelled the original future.
 pub struct TerminalGuard {
     hooks: Arc<dyn InferenceHookPolicy>,
-    request: ChatCompletionRequest,
+    request: GenerationRequest,
     exchange_id: String,
     fired: bool,
 }
@@ -304,7 +300,7 @@ pub struct TerminalGuard {
 /// the stream polls a bounded callback before exposing EOF or error.
 /// Deliberately narrower than [`ChatCompletionOutcome`] — it omits
 /// [`ChatCompletionOutcome::Success`], which streaming never has a
-/// [`ChatCompletionResponse`] to report; [`ChatCompletionOutcome::Denied`],
+/// [`GenerationResponse`] to report; [`ChatCompletionOutcome::Denied`],
 /// which is always fired inline (before any stream exists to detach from);
 /// and [`ChatCompletionOutcome::Cancelled`], which [`Drop`] below fires
 /// directly without going through `into_terminal_future` at all.
@@ -328,7 +324,7 @@ impl OwnedChatCompletionOutcome {
 impl TerminalGuard {
     pub fn new(
         hooks: Arc<dyn InferenceHookPolicy>,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         exchange_id: String,
     ) -> Self {
         Self {
@@ -339,7 +335,7 @@ impl TerminalGuard {
         }
     }
 
-    pub fn set_request(&mut self, request: ChatCompletionRequest) {
+    pub fn set_request(&mut self, request: GenerationRequest) {
         self.request = request;
     }
 
@@ -420,7 +416,7 @@ impl InferenceBackend for HookedInferenceBackend {
             .http_exchange_policy()
             .or_else(|| self.backend.http_exchange_policy())
     }
-    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> InferenceResult<u32> {
+    async fn count_chat_tokens(&self, request: GenerationRequest) -> InferenceResult<u32> {
         self.backend.count_chat_tokens(request).await
     }
 
@@ -434,17 +430,17 @@ impl InferenceBackend for HookedInferenceBackend {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         self.chat_completion_with_context(request, InferenceRequestContext::new())
             .await
     }
 
     async fn chat_completion_with_context(
         &self,
-        mut request: ChatCompletionRequest,
+        mut request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionResponse> {
+    ) -> InferenceResult<GenerationResponse> {
         let exchange_id = uuid::Uuid::new_v4().to_string();
         // Armed immediately after minting the exchange id — before
         // `before_chat_completion` and `on_effective_chat_completion` run —
@@ -494,7 +490,7 @@ impl InferenceBackend for HookedInferenceBackend {
         let dispatched_request = if self.hooks.observes_dispatched_request() {
             request.clone()
         } else {
-            ChatCompletionRequest::default()
+            GenerationRequest::default()
         };
         // Swap in the post-mutation request now that dispatch is imminent,
         // so the backend-call `Cancelled` fallback and the final
@@ -540,9 +536,9 @@ impl InferenceBackend for HookedInferenceBackend {
 
     async fn chat_completion_stream(
         &self,
-        mut request: ChatCompletionRequest,
+        mut request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         let exchange_id = uuid::Uuid::new_v4().to_string();
         context.publish_exchange_id(exchange_id.clone());
         // Same admission-time arming as `chat_completion_with_context` above
@@ -680,7 +676,7 @@ impl InferenceBackend for HookedInferenceBackend {
     }
 }
 
-pub fn chat_skippy_hooks_enabled(request: &ChatCompletionRequest) -> bool {
+pub fn chat_skippy_hooks_enabled(request: &GenerationRequest) -> bool {
     request
         .extra
         .get(SKIPPY_HOOKS_FIELD)
@@ -689,7 +685,7 @@ pub fn chat_skippy_hooks_enabled(request: &ChatCompletionRequest) -> bool {
         .unwrap_or(false)
 }
 
-pub fn set_chat_skippy_hooks_enabled(request: &mut ChatCompletionRequest, enabled: bool) {
+pub fn set_chat_skippy_hooks_enabled(request: &mut GenerationRequest, enabled: bool) {
     request
         .extra
         .insert(SKIPPY_HOOKS_FIELD.to_string(), Value::Bool(enabled));
@@ -700,16 +696,19 @@ pub fn set_chat_skippy_hooks_enabled(request: &mut ChatCompletionRequest, enable
 }
 
 /// Transitional Rust API alias for callers compiled against older releases.
-pub fn chat_mesh_hooks_enabled(request: &ChatCompletionRequest) -> bool {
+pub fn chat_mesh_hooks_enabled(request: &GenerationRequest) -> bool {
     chat_skippy_hooks_enabled(request)
 }
 
 /// Transitional Rust API alias for callers compiled against older releases.
-pub fn set_chat_mesh_hooks_enabled(request: &mut ChatCompletionRequest, enabled: bool) {
+pub fn set_chat_mesh_hooks_enabled(request: &mut GenerationRequest, enabled: bool) {
     set_chat_skippy_hooks_enabled(request, enabled);
 }
 
-pub fn inject_text_into_chat_messages(messages: &mut Vec<ChatMessage>, text: impl Into<String>) {
+pub fn inject_text_into_chat_messages(
+    messages: &mut Vec<GenerationMessage>,
+    text: impl Into<String>,
+) {
     let text = text.into();
     if text.is_empty() {
         return;
@@ -722,7 +721,7 @@ pub fn inject_text_into_chat_messages(messages: &mut Vec<ChatMessage>, text: imp
     {
         inject_text_into_message(message, text);
     } else {
-        messages.push(ChatMessage {
+        messages.push(GenerationMessage {
             role: "user".to_string(),
             content: Some(MessageContent::Text(text)),
             extra: Default::default(),
@@ -730,7 +729,7 @@ pub fn inject_text_into_chat_messages(messages: &mut Vec<ChatMessage>, text: imp
     }
 }
 
-pub fn apply_chat_hook_outcome(request: &mut ChatCompletionRequest, outcome: &ChatHookOutcome) {
+pub fn apply_chat_hook_outcome(request: &mut GenerationRequest, outcome: &ChatHookOutcome) {
     for action in &outcome.actions {
         match action {
             ChatHookAction::InjectText { text } => {
@@ -744,7 +743,7 @@ pub fn apply_chat_hook_outcome(request: &mut ChatCompletionRequest, outcome: &Ch
     }
 }
 
-pub fn first_chat_media(messages: &[ChatMessage]) -> Option<ChatMediaRef> {
+pub fn first_chat_media(messages: &[GenerationMessage]) -> Option<ChatMediaRef> {
     messages
         .iter()
         .enumerate()
@@ -753,7 +752,7 @@ pub fn first_chat_media(messages: &[ChatMessage]) -> Option<ChatMediaRef> {
         .and_then(|(message_index, message)| media_from_message(message_index, message))
 }
 
-fn inject_text_into_message(message: &mut ChatMessage, text: String) {
+fn inject_text_into_message(message: &mut GenerationMessage, text: String) {
     match message.content.take() {
         Some(MessageContent::Text(existing)) => {
             message.content = Some(MessageContent::Text(format!("{text}{existing}")));
@@ -775,7 +774,7 @@ fn inject_text_into_message(message: &mut ChatMessage, text: String) {
     }
 }
 
-fn media_from_message(message_index: usize, message: &ChatMessage) -> Option<ChatMediaRef> {
+fn media_from_message(message_index: usize, message: &GenerationMessage) -> Option<ChatMediaRef> {
     let parts = match message.content.as_ref()? {
         MessageContent::Parts(parts) => parts,
         MessageContent::Text(_) | MessageContent::Other(_) => return None,
@@ -816,14 +815,14 @@ fn media_from_part(
     })
 }
 
-fn consume_chat_media(messages: &mut [ChatMessage], media: &ChatMediaRef) -> bool {
+fn consume_chat_media(messages: &mut [GenerationMessage], media: &ChatMediaRef) -> bool {
     let Some(message) = messages.get_mut(media.message_index) else {
         return false;
     };
     consume_message_media(message, media)
 }
 
-fn consume_message_media(message: &mut ChatMessage, media: &ChatMediaRef) -> bool {
+fn consume_message_media(message: &mut GenerationMessage, media: &ChatMediaRef) -> bool {
     if message.role != "user" {
         return false;
     }

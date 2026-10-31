@@ -14,18 +14,16 @@ use crate::{
     audio::{
         AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
     },
-    chat::{ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse},
     completions::{CompletionChunk, CompletionRequest, CompletionResponse},
     embeddings::{EmbeddingResponse, EmbeddingsRequest},
     errors::InferenceError,
+    generation::{GenerationEventStream, GenerationRequest, GenerationResponse},
     lifecycle::RequestId,
     models::ModelObject,
     rerank::{RerankRequest, RerankResponse},
     system_one::{SystemOneRequest, SystemOneResponse},
 };
 
-pub type ChatCompletionStream =
-    Pin<Box<dyn Stream<Item = InferenceResult<ChatCompletionChunk>> + Send + 'static>>;
 pub type CompletionStream =
     Pin<Box<dyn Stream<Item = InferenceResult<CompletionChunk>> + Send + 'static>>;
 
@@ -165,7 +163,7 @@ pub trait InferenceBackend: Send + Sync + 'static {
     async fn models(&self) -> InferenceResult<Vec<ModelObject>>;
 
     /// Count the model-rendered chat prompt without generating or running hooks.
-    async fn count_chat_tokens(&self, _request: ChatCompletionRequest) -> InferenceResult<u32> {
+    async fn count_chat_tokens(&self, _request: GenerationRequest) -> InferenceResult<u32> {
         Err(InferenceError::unsupported(
             "token counting is unavailable for this backend",
         ))
@@ -173,22 +171,22 @@ pub trait InferenceBackend: Send + Sync + 'static {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse>;
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse>;
 
     async fn chat_completion_with_context(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionResponse> {
+    ) -> InferenceResult<GenerationResponse> {
         self.chat_completion(request).await
     }
 
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream>;
+    ) -> InferenceResult<GenerationEventStream>;
 
     async fn completion(&self, _request: CompletionRequest) -> InferenceResult<CompletionResponse> {
         Err(InferenceError::unsupported(

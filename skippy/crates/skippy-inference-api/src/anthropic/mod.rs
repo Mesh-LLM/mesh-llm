@@ -27,8 +27,7 @@ pub use protocol::{
 };
 pub(crate) use routes::{AnthropicRejection, messages, messages_count_tokens};
 pub use translate::{
-    messages_request_to_chat_request, messages_response_from_chat_response,
-    translate_stream_error_body,
+    messages_request_to_generation, messages_response_from_generation, translate_stream_error_body,
 };
 
 pub use normalize::normalize_messages_request;

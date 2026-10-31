@@ -4,13 +4,15 @@
 //! transport, so a plugin sees one unified stream regardless of which
 //! in-process Rust hook interface produced an event.
 
+#[cfg(test)]
+use skippy_inference_api::chat::ChatCompletionRequest;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::Serialize;
 use skippy_inference_api::{
-    CapsuleMarker, ChatCompletionOutcome, ChatCompletionRequest, ChatCompletionResponse,
-    ChatExchangeRoute, InferenceHookPolicy,
+    CapsuleMarker, ChatCompletionOutcome, ChatExchangeRoute, InferenceHookPolicy,
+    generation::GenerationRequest, generation::GenerationResponse,
 };
 
 use super::PluginManager;
@@ -27,7 +29,7 @@ pub enum OpenAiExchangeDispatchPath {
     /// `skippy-inference-api`'s typed `InferenceHookPolicy`/`HookedInferenceBackend` seam.
     TypedFrontend,
     /// The raw-proxy ingress (`network/openai/ingress.rs`), used for
-    /// plugin-served models; never sees a typed `ChatCompletionRequest`.
+    /// plugin-served models; never sees a typed `GenerationRequest`.
     RawProxy,
     /// The raw-proxy ingress routes this exchange to a peer on the mesh
     /// rather than serving it locally (`route_missing_local_model`'s
@@ -735,7 +737,7 @@ impl OpenAiExchangeHookBridge {
 impl InferenceHookPolicy for OpenAiExchangeHookBridge {
     async fn on_effective_chat_completion(
         &self,
-        _request: &ChatCompletionRequest,
+        _request: &GenerationRequest,
         route: &ChatExchangeRoute,
     ) {
         self.channel
@@ -749,7 +751,7 @@ impl InferenceHookPolicy for OpenAiExchangeHookBridge {
 
     async fn on_chat_completion_terminal(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         exchange_id: &str,
         outcome: &ChatCompletionOutcome<'_>,
     ) {
@@ -784,7 +786,7 @@ impl InferenceHookPolicy for OpenAiExchangeHookBridge {
 
     /// Reference nonce sourcing for the rung-ladder response leg: a
     /// client-contributed `client_nonce` (landing in `request.extra` via
-    /// `ChatCompletionRequest`'s `#[serde(flatten)]` bag, the same mechanism
+    /// the wire adapter's preserved extension bag, the same mechanism
     /// `mesh_hooks` already uses) wins; absent that, mint a fallback rather
     /// than silently mislabeling it as client-supplied — mirroring
     /// `capsule-emit-mesh`'s own `client_nonce_source` tri-state
@@ -794,8 +796,8 @@ impl InferenceHookPolicy for OpenAiExchangeHookBridge {
     /// must not infer sourcing by sniffing this string.
     async fn capsule_marker_for_response(
         &self,
-        request: &ChatCompletionRequest,
-        response: &ChatCompletionResponse,
+        request: &GenerationRequest,
+        response: &GenerationResponse,
     ) -> Option<CapsuleMarker> {
         let nonce = match client_nonce_source(request) {
             ClientNonceSource::ClientSupplied => request
@@ -817,7 +819,7 @@ impl InferenceHookPolicy for OpenAiExchangeHookBridge {
 /// both [`OpenAiExchangeHookBridge::capsule_marker_for_response`] (to choose
 /// the nonce value) and [`OpenAiExchangeHookBridge::on_chat_completion_terminal`]
 /// (to label it on the envelope) so the two can never disagree.
-fn client_nonce_source(request: &ChatCompletionRequest) -> ClientNonceSource {
+fn client_nonce_source(request: &GenerationRequest) -> ClientNonceSource {
     if request
         .extra
         .get("client_nonce")
@@ -884,9 +886,9 @@ mod tests {
 
         async fn chat_completion(
             &self,
-            request: ChatCompletionRequest,
-        ) -> skippy_inference_api::InferenceResult<ChatCompletionResponse> {
-            Ok(ChatCompletionResponse::new(
+            request: GenerationRequest,
+        ) -> skippy_inference_api::InferenceResult<GenerationResponse> {
+            Ok(GenerationResponse::new(
                 request.model,
                 "ok",
                 Usage::new(1, 1),
@@ -895,20 +897,22 @@ mod tests {
 
         async fn chat_completion_stream(
             &self,
-            _request: ChatCompletionRequest,
+            _request: GenerationRequest,
             _context: skippy_inference_api::InferenceRequestContext,
-        ) -> skippy_inference_api::InferenceResult<skippy_inference_api::ChatCompletionStream>
-        {
+        ) -> skippy_inference_api::InferenceResult<
+            skippy_inference_api::generation::GenerationEventStream,
+        > {
             Ok(Box::pin(futures_util::stream::empty()))
         }
     }
 
-    fn chat_request(model: &str) -> ChatCompletionRequest {
-        serde_json::from_value(serde_json::json!({
+    fn chat_request(model: &str) -> GenerationRequest {
+        serde_json::from_value::<ChatCompletionRequest>(serde_json::json!({
             "model": model,
             "messages": [{"role": "user", "content": "hi"}]
         }))
         .unwrap()
+        .into()
     }
 
     /// Reference: a full request through `HookedInferenceBackend` wired with
@@ -1072,10 +1076,10 @@ mod tests {
 
         async fn chat_completion(
             &self,
-            request: ChatCompletionRequest,
-        ) -> skippy_inference_api::InferenceResult<ChatCompletionResponse> {
+            request: GenerationRequest,
+        ) -> skippy_inference_api::InferenceResult<GenerationResponse> {
             tokio::time::sleep(self.delay).await;
-            Ok(ChatCompletionResponse::new(
+            Ok(GenerationResponse::new(
                 request.model,
                 "ok",
                 Usage::new(1, 1),
@@ -1084,10 +1088,11 @@ mod tests {
 
         async fn chat_completion_stream(
             &self,
-            _request: ChatCompletionRequest,
+            _request: GenerationRequest,
             _context: skippy_inference_api::InferenceRequestContext,
-        ) -> skippy_inference_api::InferenceResult<skippy_inference_api::ChatCompletionStream>
-        {
+        ) -> skippy_inference_api::InferenceResult<
+            skippy_inference_api::generation::GenerationEventStream,
+        > {
             Ok(Box::pin(futures_util::stream::empty()))
         }
     }

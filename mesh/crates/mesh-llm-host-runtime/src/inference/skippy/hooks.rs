@@ -1,11 +1,12 @@
+#[cfg(test)]
+use skippy_inference_api::chat::ChatCompletionRequest;
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
 use skippy_inference_api::{
-    ChatCompletionRequest, ChatHookOutcome, ChatMediaKind, GenerationHookSignals,
-    InferenceHookPolicy, InferenceResult, PrefillHookSignals, chat_skippy_hooks_enabled,
-    first_chat_media,
+    ChatHookOutcome, ChatMediaKind, GenerationHookSignals, InferenceHookPolicy, InferenceResult,
+    PrefillHookSignals, chat_skippy_hooks_enabled, first_chat_media, generation::GenerationRequest,
 };
 
 use crate::{inference::virtual_llm, mesh};
@@ -42,7 +43,7 @@ impl MeshAutoHookPolicy {
 impl InferenceHookPolicy for MeshAutoHookPolicy {
     async fn before_chat_completion(
         &self,
-        request: &mut ChatCompletionRequest,
+        request: &mut GenerationRequest,
     ) -> InferenceResult<ChatHookOutcome> {
         if !chat_skippy_hooks_enabled(request) {
             return Ok(ChatHookOutcome::none());
@@ -66,7 +67,7 @@ impl InferenceHookPolicy for MeshAutoHookPolicy {
 
     async fn after_prefill(
         &self,
-        request: &mut ChatCompletionRequest,
+        request: &mut GenerationRequest,
         signals: PrefillHookSignals,
     ) -> InferenceResult<ChatHookOutcome> {
         if !chat_skippy_hooks_enabled(request) {
@@ -98,7 +99,7 @@ impl InferenceHookPolicy for MeshAutoHookPolicy {
 
     async fn mid_generation(
         &self,
-        request: &mut ChatCompletionRequest,
+        request: &mut GenerationRequest,
         signals: GenerationHookSignals,
     ) -> InferenceResult<ChatHookOutcome> {
         if !chat_skippy_hooks_enabled(request) {
@@ -322,7 +323,9 @@ fn virtual_hook_injected_text(response: &Value) -> Option<&str> {
         .filter(|text| !text.is_empty())
 }
 
-fn chat_messages_as_values(messages: &[skippy_inference_api::ChatMessage]) -> Vec<Value> {
+fn chat_messages_as_values(
+    messages: &[skippy_inference_api::generation::GenerationMessage],
+) -> Vec<Value> {
     serde_json::to_value(messages)
         .ok()
         .and_then(|value| value.as_array().cloned())
@@ -433,17 +436,18 @@ mod tests {
         )
     }
 
-    fn text_request(mesh_hooks: bool) -> ChatCompletionRequest {
-        serde_json::from_value(json!({
+    fn text_request(mesh_hooks: bool) -> GenerationRequest {
+        serde_json::from_value::<ChatCompletionRequest>(json!({
             "model": "auto",
             "messages": [{"role": "user", "content": "hello"}],
             "mesh_hooks": mesh_hooks
         }))
         .unwrap()
+        .into()
     }
 
-    fn image_request(mesh_hooks: bool) -> ChatCompletionRequest {
-        serde_json::from_value(json!({
+    fn image_request(mesh_hooks: bool) -> GenerationRequest {
+        serde_json::from_value::<ChatCompletionRequest>(json!({
             "model": "auto",
             "messages": [{
                 "role": "user",
@@ -455,10 +459,11 @@ mod tests {
             "mesh_hooks": mesh_hooks
         }))
         .unwrap()
+        .into()
     }
 
-    fn audio_request(mesh_hooks: bool) -> ChatCompletionRequest {
-        serde_json::from_value(json!({
+    fn audio_request(mesh_hooks: bool) -> GenerationRequest {
+        serde_json::from_value::<ChatCompletionRequest>(json!({
             "model": "auto",
             "messages": [{
                 "role": "user",
@@ -470,6 +475,7 @@ mod tests {
             "mesh_hooks": mesh_hooks
         }))
         .unwrap()
+        .into()
     }
 
     fn uncertain_signals() -> PrefillHookSignals {
@@ -527,18 +533,20 @@ mod tests {
 
     #[test]
     fn apply_chat_hook_outcome_injects_into_typed_messages() {
-        let mut request: ChatCompletionRequest = serde_json::from_value(json!({
-            "model": "auto",
-            "messages": [{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "what is this?"},
-                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
-                ]
-            }],
-            "mesh_hooks": true
-        }))
-        .unwrap();
+        let mut request: GenerationRequest =
+            serde_json::from_value::<ChatCompletionRequest>(json!({
+                "model": "auto",
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "what is this?"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}}
+                    ]
+                }],
+                "mesh_hooks": true
+            }))
+            .unwrap()
+            .into();
 
         apply_chat_hook_outcome(
             &mut request,

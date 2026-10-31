@@ -91,13 +91,18 @@ async fn direct_single_stage_serving_delivers_target_authoritative_native_receip
         return Ok(());
     };
     let model_path = Path::new(&model_path);
+    // Match embedded startup before exercising the opt-in native backend.
+    #[cfg(feature = "dynamic-native-runtime")]
+    crate::system::native_runtime::load_local_native_runtime_for_embedded_serving(
+        &crate::system::native_runtime::NativeRuntimeStartupSelection::current(),
+    )?;
     let model_bytes = std::fs::metadata(model_path)?.len();
     let model_id = "Qwen/Qwen3-0.6B:Q4_K_M";
     let mesh_config: mesh_llm_config::MeshConfig = toml::from_str(
         r#"
 [defaults.speculative]
 strategy = "ngram-suffix"
-ngram_min = 2
+ngram_min = 3
 ngram_max = 8
 ngram_max_proposal_tokens = 1
 "#,
@@ -132,13 +137,15 @@ ngram_max_proposal_tokens = 1
         None,
         crate::runtime::survey::SurveyTelemetry::disabled(),
     )?;
-    let request = serde_json::from_value(serde_json::json!({
-        "model": model_id,
-        "messages": [{"role": "user", "content": "Say hello."}],
-        "max_tokens": 2,
-        "temperature": 0.0
-    }))?;
-    let response = handle.chat_completion(request).await;
+    let request = serde_json::from_value::<skippy_inference_api::chat::ChatCompletionRequest>(
+        serde_json::json!({
+            "model": model_id,
+            "messages": [{"role": "user", "content": "Say hello."}],
+            "max_tokens": 2,
+            "temperature": 0.0
+        }),
+    )?;
+    let response = handle.chat_completion(request.into()).await;
     handle.shutdown();
     response?;
 
@@ -163,11 +170,13 @@ ngram_max_proposal_tokens = 1
             receipt.canonical_prediction_count,
             receipt.committed_tokens.len()
         );
+        // Verification executes the whole window, but rejected suffixes are not sampled.
+        assert!(receipt.verification_row_predictions.len() <= receipt.verification_rows);
+        assert!(receipt.canonical_prediction_count <= receipt.verification_row_predictions.len());
         assert_eq!(
-            receipt.verification_rows,
-            receipt.verification_row_predictions.len()
+            receipt.committed_tokens.as_ref(),
+            &receipt.verification_row_predictions[..receipt.canonical_prediction_count]
         );
-        assert!(receipt.canonical_prediction_count <= receipt.verification_rows);
         assert!(receipt.canonical_position >= receipt.base_position);
         assert!(receipt.canonical_position <= receipt.position_after_verification);
     }

@@ -9,13 +9,14 @@ use crate::frontend::prefill::PrefillChunkPolicy;
 use crate::runtime_state::RuntimeState;
 use futures_util::StreamExt;
 use serde_json::json;
-use skippy_inference_api::ChatCompletionChunk;
-use skippy_inference_api::ChatCompletionRequest;
-use skippy_inference_api::ChatCompletionResponse;
 use skippy_inference_api::ChatHookOutcome;
 use skippy_inference_api::FinishReason;
 use skippy_inference_api::InferenceHookPolicy;
 use skippy_inference_api::Usage;
+use skippy_inference_api::chat::ChatCompletionRequest;
+use skippy_inference_api::generation::GenerationEvent;
+use skippy_inference_api::generation::GenerationRequest;
+use skippy_inference_api::generation::GenerationResponse;
 use skippy_inference_api::set_chat_skippy_hooks_enabled;
 use tokio::runtime::Runtime;
 
@@ -937,14 +938,15 @@ fn untrusted_conversation_affinity_bypasses_session_registry() {
 
 #[test]
 fn direct_backend_calls_ignore_spoofed_request_trust_metadata() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "capture-model",
         "messages": [{"role": "user", "content": "hello"}],
         "mesh_internal_agent_session_id": "spoofed-session",
         "mesh_internal_agent_session_source": "x-litellm-session-id",
         "mesh_internal_agent_session_trusted": true
     }))
-    .expect("request with spoofed metadata");
+    .expect("request with spoofed metadata")
+    .into();
     let context = InferenceRequestContext::new();
     let ids = generation_ids(
         InferenceCacheHints::from_chat_request(&request),
@@ -1336,12 +1338,13 @@ fn non_chat_topology_guard_rejects_staged_and_filtered_models() {
     }
 }
 
-fn mesh_hooks_request(model: &str) -> ChatCompletionRequest {
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+fn mesh_hooks_request(model: &str) -> GenerationRequest {
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": model,
         "messages": [{"role": "user", "content": "hi"}],
     }))
-    .expect("minimal chat completion request");
+    .expect("minimal chat completion request")
+    .into();
     set_chat_skippy_hooks_enabled(&mut request, true);
     request
 }
@@ -1367,7 +1370,7 @@ struct RecordingHookPolicy {
 impl InferenceHookPolicy for RecordingHookPolicy {
     async fn before_chat_completion(
         &self,
-        _request: &mut ChatCompletionRequest,
+        _request: &mut GenerationRequest,
     ) -> InferenceResult<ChatHookOutcome> {
         if self.hang_before_dispatch {
             std::future::pending::<()>().await;
@@ -1380,7 +1383,7 @@ impl InferenceHookPolicy for RecordingHookPolicy {
 
     async fn on_chat_completion_terminal(
         &self,
-        _request: &ChatCompletionRequest,
+        _request: &GenerationRequest,
         exchange_id: &str,
         outcome: &ChatCompletionOutcome<'_>,
     ) {
@@ -1436,7 +1439,7 @@ async fn stage_backend_success_fires_terminal_exactly_once() {
 
     let response = backend
         .chat_completion_with_hooks(request, |request| async move {
-            Ok(ChatCompletionResponse::new(
+            Ok(GenerationResponse::new(
                 request.model,
                 "ok",
                 Usage::new(1, 1),
@@ -1467,7 +1470,7 @@ async fn stage_backend_success_attaches_the_same_exchange_id_the_terminal_hook_o
 
     let response = backend
         .chat_completion_with_hooks(request, |request| async move {
-            Ok(ChatCompletionResponse::new(
+            Ok(GenerationResponse::new(
                 request.model,
                 "ok",
                 Usage::new(1, 1),
@@ -1493,15 +1496,16 @@ async fn stage_backend_success_attaches_the_same_exchange_id_the_terminal_hook_o
 async fn stage_backend_success_without_mesh_hooks_carries_no_exchange_id() {
     let policy = Arc::new(RecordingHookPolicy::default());
     let backend = hooks_test_backend(Some(policy.clone()));
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "hooks-test-model",
         "messages": [{"role": "user", "content": "hi"}],
     }))
-    .expect("minimal chat completion request");
+    .expect("minimal chat completion request")
+    .into();
 
     let response = backend
         .chat_completion_with_hooks(request, |request| async move {
-            Ok(ChatCompletionResponse::new(
+            Ok(GenerationResponse::new(
                 request.model,
                 "ok",
                 Usage::new(1, 1),
@@ -1552,7 +1556,7 @@ async fn stage_backend_denied_request_never_dispatches_and_fires_terminal_exactl
         .chat_completion_with_hooks(request, move |request| {
             dispatched_flag.store(true, Ordering::Release);
             async move {
-                Ok(ChatCompletionResponse::new(
+                Ok(GenerationResponse::new(
                     request.model,
                     "ok",
                     Usage::new(0, 0),
@@ -1588,7 +1592,7 @@ async fn stage_backend_dropped_during_admission_hook_fires_exactly_one_cancelled
     let handle = tokio::spawn(async move {
         backend
             .chat_completion_with_hooks(request, |request| async move {
-                Ok(ChatCompletionResponse::new(
+                Ok(GenerationResponse::new(
                     request.model,
                     "ok",
                     Usage::new(0, 0),
@@ -1618,9 +1622,9 @@ async fn stage_backend_stream_that_ends_normally_fires_stream_completed_terminal
     let mut stream = backend
         .chat_completion_stream_with_hooks(request, &context, |request| async move {
             Ok(Box::pin(futures_util::stream::iter(vec![
-                Ok(ChatCompletionChunk::delta(request.model.clone(), "hi")),
-                Ok(ChatCompletionChunk::done(request.model)),
-            ])) as ChatCompletionStream)
+                Ok(GenerationEvent::delta(request.model.clone(), "hi")),
+                Ok(GenerationEvent::done(request.model)),
+            ])) as GenerationEventStream)
         })
         .await
         .expect("stream created");
@@ -1655,11 +1659,11 @@ async fn stage_backend_stream_dropped_mid_stream_fires_exactly_one_cancelled_ter
 
     let mut stream = backend
         .chat_completion_stream_with_hooks(request, &context, |request| async move {
-            let first = ChatCompletionChunk::delta(request.model, "partial");
+            let first = GenerationEvent::delta(request.model, "partial");
             Ok(Box::pin(
                 futures_util::stream::once(async move { Ok(first) })
                     .chain(futures_util::stream::pending()),
-            ) as ChatCompletionStream)
+            ) as GenerationEventStream)
         })
         .await
         .expect("stream created");
@@ -1682,9 +1686,9 @@ async fn stage_backend_stream_error_chunk_fires_error_terminal_exactly_once() {
     let mut stream = backend
         .chat_completion_stream_with_hooks(request, &context, |request| async move {
             Ok(Box::pin(futures_util::stream::iter(vec![
-                Ok(ChatCompletionChunk::delta(request.model, "hi")),
+                Ok(GenerationEvent::delta(request.model, "hi")),
                 Err(InferenceError::backend("upstream exploded")),
-            ])) as ChatCompletionStream)
+            ])) as GenerationEventStream)
         })
         .await
         .expect("stream created");

@@ -25,10 +25,10 @@ use crate::kv_integration::{KvStageIntegration, PrefillKvIdentity, StagePrefixCa
 use crate::runtime_state::{RuntimeSessionStats, RuntimeState};
 use axum::http::StatusCode;
 use serde_json::json;
-use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::InferenceError;
 use skippy_inference_api::InferenceErrorKind;
 use skippy_inference_api::InferenceResult;
+use skippy_inference_api::generation::GenerationRequest;
 use skippy_metrics::attr as attr_key;
 use skippy_runtime::NativeMtpDraft as RuntimeNativeMtpDraft;
 use skippy_runtime::SamplingConfig;
@@ -258,7 +258,7 @@ pub(super) struct DecodeState {
     pub(super) runtime_lock_acquires: usize,
     pub(super) runtime_sessions_before: Option<RuntimeSessionStats>,
     pub(super) runtime_sessions_after: Option<RuntimeSessionStats>,
-    pub(super) hook_request: Option<ChatCompletionRequest>,
+    pub(super) hook_request: Option<GenerationRequest>,
     pub(super) hook_runtime: Option<tokio::runtime::Handle>,
     pub(super) generation_hooks_active: bool,
     pub(super) linear_proposal_max_tokens: usize,

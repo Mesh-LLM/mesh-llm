@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value, json};
 pub(crate) use skippy_guardrails::strip_thinking_blocks;
 
-use crate::{chat::ChatCompletionResponse, common::FinishReason};
+use crate::{common::FinishReason, generation::GenerationResponse};
 
 use super::{
     request_contract::{ParallelToolCalls, RawToolChoice},
@@ -45,7 +45,7 @@ struct ParsedToolCall {
 
 pub(crate) fn classify_response(
     prepared: &PreparedGuardrailRequest,
-    response: &ChatCompletionResponse,
+    response: &GenerationResponse,
 ) -> ClassifiedGuardrailResponse {
     let Some(choice) = response.choices.first() else {
         return empty_output();

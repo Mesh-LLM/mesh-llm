@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use crate::chat::ChatCompletionRequest;
+use crate::generation::GenerationRequest;
 
 use super::structured::StructuredOutputSpec;
 
@@ -10,7 +10,7 @@ pub(crate) use skippy_guardrails::{
     request_uses_reserved_tool_name,
 };
 
-pub(crate) fn append_mesh_respond_tool(request: &mut ChatCompletionRequest) {
+pub(crate) fn append_mesh_respond_tool(request: &mut GenerationRequest) {
     let mut tools = match request.tools.take() {
         Some(Value::Array(entries)) => entries,
         Some(other) => {
@@ -24,7 +24,7 @@ pub(crate) fn append_mesh_respond_tool(request: &mut ChatCompletionRequest) {
 }
 
 pub(crate) fn append_mesh_emit_structured_tool(
-    request: &mut ChatCompletionRequest,
+    request: &mut GenerationRequest,
     structured_output: &StructuredOutputSpec,
 ) {
     let mut tools = match request.tools.take() {

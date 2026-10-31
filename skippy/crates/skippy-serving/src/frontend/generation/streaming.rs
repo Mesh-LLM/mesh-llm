@@ -20,13 +20,15 @@ use crate::frontend::util::valid_utf8_prefix_len;
 use crate::runtime_state::RuntimeState;
 use crate::runtime_state::panic_recovery::lock_runtime;
 use serde_json::Value;
-use skippy_inference_api::ChatCompletionChunk;
-use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::CompletionChunk;
 use skippy_inference_api::FinishReason;
 use skippy_inference_api::InferenceError;
 use skippy_inference_api::InferenceResult;
 use skippy_inference_api::Usage;
+#[cfg(test)]
+use skippy_inference_api::chat::ChatCompletionRequest;
+use skippy_inference_api::generation::GenerationEvent;
+use skippy_inference_api::generation::GenerationRequest;
 use skippy_runtime::StageModelReader;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -124,7 +126,7 @@ impl ChatStreamDeltas {
 pub(in crate::frontend) struct ChatOutputStreamParser {
     pub(in crate::frontend) backend: StageOpenAiBackend,
     model: StageModelReader,
-    pub(in crate::frontend) request: ChatCompletionRequest,
+    pub(in crate::frontend) request: GenerationRequest,
     pub(in crate::frontend) metadata: String,
     pub(in crate::frontend) text: String,
     deltas: ChatStreamDeltas,
@@ -142,7 +144,7 @@ fn empty_metadata_value(metadata: &Value, key: &str) -> bool {
 }
 
 fn chat_stream_can_passthrough_content(
-    request: &ChatCompletionRequest,
+    request: &GenerationRequest,
     metadata: &str,
     emit_reasoning: bool,
 ) -> bool {
@@ -185,7 +187,7 @@ fn chat_stream_can_passthrough_content(
 impl ChatOutputStreamParser {
     pub(in crate::frontend) fn new(
         backend: StageOpenAiBackend,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         metadata: String,
         emit_reasoning: bool,
     ) -> InferenceResult<Self> {
@@ -245,22 +247,19 @@ impl ChatOutputStreamParser {
     }
 }
 
-pub(in crate::frontend) fn generation_event_to_chat_chunk(
+pub(in crate::frontend) fn generation_event_to_inference_event(
     event: InferenceResult<GenerationStreamEvent>,
     model: &str,
-) -> InferenceResult<ChatCompletionChunk> {
+) -> InferenceResult<GenerationEvent> {
     match event? {
-        GenerationStreamEvent::Delta(delta) => {
-            Ok(ChatCompletionChunk::delta(model.to_string(), delta))
-        }
-        GenerationStreamEvent::ReasoningDelta(delta) => Ok(ChatCompletionChunk {
+        GenerationStreamEvent::Delta(delta) => Ok(GenerationEvent::delta(model.to_string(), delta)),
+        GenerationStreamEvent::ReasoningDelta(delta) => Ok(GenerationEvent {
             id: skippy_inference_api::completion_id("chatcmpl"),
-            object: "chat.completion.chunk",
             created: skippy_inference_api::now_unix_secs(),
             model: model.to_string(),
-            choices: vec![skippy_inference_api::ChatCompletionChunkChoice {
+            choices: vec![skippy_inference_api::generation::GenerationEventChoice {
                 index: 0,
-                delta: skippy_inference_api::ChatCompletionDelta {
+                delta: skippy_inference_api::generation::GenerationDelta {
                     role: None,
                     content: None,
                     reasoning_content: Some(delta),
@@ -272,14 +271,13 @@ pub(in crate::frontend) fn generation_event_to_chat_chunk(
             usage: None,
             timings: None,
         }),
-        GenerationStreamEvent::ToolCalls(tool_calls) => Ok(ChatCompletionChunk {
+        GenerationStreamEvent::ToolCalls(tool_calls) => Ok(GenerationEvent {
             id: skippy_inference_api::completion_id("chatcmpl"),
-            object: "chat.completion.chunk",
             created: skippy_inference_api::now_unix_secs(),
             model: model.to_string(),
-            choices: vec![skippy_inference_api::ChatCompletionChunkChoice {
+            choices: vec![skippy_inference_api::generation::GenerationEventChoice {
                 index: 0,
-                delta: skippy_inference_api::ChatCompletionDelta {
+                delta: skippy_inference_api::generation::GenerationDelta {
                     role: None,
                     content: None,
                     reasoning_content: None,
@@ -291,13 +289,14 @@ pub(in crate::frontend) fn generation_event_to_chat_chunk(
             usage: None,
             timings: None,
         }),
-        GenerationStreamEvent::Usage(usage, timings) => Ok(
-            ChatCompletionChunk::usage_with_timings(model.to_string(), usage, timings),
-        ),
-        GenerationStreamEvent::Done(reason) => Ok(ChatCompletionChunk::done_with_reason(
+        GenerationStreamEvent::Usage(usage, timings) => Ok(GenerationEvent::usage_with_timings(
             model.to_string(),
-            reason,
+            usage,
+            timings,
         )),
+        GenerationStreamEvent::Done(reason) => {
+            Ok(GenerationEvent::done_with_reason(model.to_string(), reason))
+        }
     }
 }
 
@@ -333,7 +332,7 @@ pub(in crate::frontend) enum TokenControl {
 /// native tool support (empty grammar triggers). Used to enable early
 /// generation stop once a complete emulated tool call has been produced.
 pub(in crate::frontend) fn emulation_generation_active(
-    hook_request: Option<&ChatCompletionRequest>,
+    hook_request: Option<&GenerationRequest>,
     prompt: &PreparedGenerationPrompt,
 ) -> bool {
     let Some(request) = hook_request else {
@@ -585,8 +584,8 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn request(extra: Value) -> ChatCompletionRequest {
-        serde_json::from_value(json!({
+    fn request(extra: Value) -> GenerationRequest {
+        serde_json::from_value::<ChatCompletionRequest>(json!({
             "model": "test",
             "messages": [{"role": "user", "content": "hello"}],
             "stream": true,
@@ -594,6 +593,7 @@ mod tests {
             "tools": extra.get("tools"),
         }))
         .expect("valid chat request")
+        .into()
     }
 
     #[test]

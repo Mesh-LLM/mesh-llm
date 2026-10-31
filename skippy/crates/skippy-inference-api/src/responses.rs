@@ -1219,6 +1219,11 @@ impl ResponseSseState {
 
 #[cfg(test)]
 mod tests {
+    use crate::generation::{
+        GeneratedMessage, GenerationChoice, GenerationEventStream, GenerationRequest,
+        GenerationResponse,
+    };
+
     use std::sync::{Arc, Mutex};
 
     use super::*;
@@ -1234,16 +1239,15 @@ mod tests {
     use tower::ServiceExt;
 
     use crate::{
-        AssistantMessage, ChatCompletionChoice, ChatCompletionRequest, ChatCompletionResponse,
-        ChatCompletionStream, CompletionRequest, CompletionResponse, CompletionStream,
-        FinishReason, GuardedInferenceBackend, GuardrailMode, GuardrailPolicy, InferenceBackend,
+        CompletionRequest, CompletionResponse, CompletionStream, FinishReason,
+        GuardedInferenceBackend, GuardrailMode, GuardrailPolicy, InferenceBackend,
         InferenceFrontendConfig, InferenceRequestContext, InferenceResult, ModelObject, Usage,
         router_for_with_config,
     };
 
     #[derive(Default)]
     struct GuardedResponsesBackend {
-        seen_chat_requests: Arc<Mutex<Vec<ChatCompletionRequest>>>,
+        seen_chat_requests: Arc<Mutex<Vec<GenerationRequest>>>,
     }
 
     #[async_trait]
@@ -1254,20 +1258,19 @@ mod tests {
 
         async fn chat_completion(
             &self,
-            request: ChatCompletionRequest,
-        ) -> InferenceResult<ChatCompletionResponse> {
+            request: GenerationRequest,
+        ) -> InferenceResult<GenerationResponse> {
             self.seen_chat_requests
                 .lock()
                 .unwrap()
                 .push(request.clone());
-            Ok(ChatCompletionResponse {
+            Ok(GenerationResponse {
                 id: "chatcmpl_guarded_structured".to_string(),
-                object: "chat.completion",
                 created: 123,
                 model: request.model,
-                choices: vec![ChatCompletionChoice {
+                choices: vec![GenerationChoice {
                     index: 0,
-                    message: AssistantMessage {
+                    message: GeneratedMessage {
                         role: "assistant",
                         content: None,
                         reasoning_content: None,
@@ -1291,11 +1294,11 @@ mod tests {
 
         async fn chat_completion_stream(
             &self,
-            request: ChatCompletionRequest,
+            request: GenerationRequest,
             _context: InferenceRequestContext,
-        ) -> InferenceResult<ChatCompletionStream> {
+        ) -> InferenceResult<GenerationEventStream> {
             Ok(Box::pin(stream::iter(vec![Ok(
-                crate::ChatCompletionChunk::done(request.model),
+                crate::generation::GenerationEvent::done(request.model),
             )])))
         }
 

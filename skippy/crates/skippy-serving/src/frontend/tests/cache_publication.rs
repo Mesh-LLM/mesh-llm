@@ -2,6 +2,7 @@
 use super::*;
 use crate::kv_integration::StagePrefixCachePayload;
 use crate::runtime_state::{loaded_memory_cache_capabilities, loaded_model_state_kind};
+use skippy_inference_api::chat::ChatCompletionRequest;
 
 fn cache_stats(kv: &KvStageIntegration) -> Value {
     let mut stats = serde_json::to_value(
@@ -17,19 +18,23 @@ fn cache_stats(kv: &KvStageIntegration) -> Value {
     stats
 }
 
-fn request(model: &str) -> Result<ChatCompletionRequest> {
-    Ok(serde_json::from_value(json!({
+fn request(model: &str) -> Result<GenerationRequest> {
+    Ok(serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": model,
         "messages": [{"role": "user", "content": include_str!(
             "../../../../../../ci/fixtures/skippy-cache-prompt-input.txt"
         )}],
         "max_tokens": 8,
         "reasoning_effort": "none"
-    }))?)
+    }))?
+    .into())
 }
 
-fn cached_tokens(response: &ChatCompletionResponse) -> u64 {
-    serde_json::to_value(response).unwrap()["usage"]["prompt_tokens_details"]["cached_tokens"]
+fn cached_tokens(response: &GenerationResponse) -> u64 {
+    serde_json::to_value(skippy_inference_api::chat::ChatCompletionResponse::from(
+        response.clone(),
+    ))
+    .unwrap()["usage"]["prompt_tokens_details"]["cached_tokens"]
         .as_u64()
         .unwrap_or(0)
 }

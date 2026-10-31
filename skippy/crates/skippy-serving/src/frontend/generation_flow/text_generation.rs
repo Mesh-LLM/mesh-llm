@@ -5,7 +5,7 @@ use crate::frontend::generation::{
 };
 use crate::frontend::util::{generation_stop_values, openai_backend_error};
 use serde_json::json;
-use skippy_inference_api::{ChatCompletionRequest, InferenceError, InferenceResult};
+use skippy_inference_api::{InferenceError, InferenceResult, generation::GenerationRequest};
 use skippy_runtime::{ModelWorkload, SamplingConfig};
 
 pub(super) fn resident_capacity_target_tokens(prompt_token_count: usize) -> u64 {
@@ -50,7 +50,7 @@ impl StageOpenAiBackend {
         token_budget_stats: (usize, usize),
         stop: Option<&skippy_inference_api::StopSequence>,
         mut sampling: SamplingConfig,
-        hook_request: Option<ChatCompletionRequest>,
+        hook_request: Option<GenerationRequest>,
         hook_runtime: Option<tokio::runtime::Handle>,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
         ids: InferenceGenerationIds,

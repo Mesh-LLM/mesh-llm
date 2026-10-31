@@ -1,4 +1,5 @@
 use super::*;
+use crate::chat::ChatCompletionRequest;
 
 #[test]
 fn tool_choice_none_accepts_plain_text_despite_tools() {
@@ -87,13 +88,14 @@ async fn tool_choice_none_retries_tool_call_then_accepts_text() {
         )),
     ]));
     let guarded = GuardedInferenceBackend::new(backend.clone(), one_retry_policy());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "answer without tools"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "tool_choice": "none"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let response = guarded.chat_completion(request).await.unwrap();
 
@@ -143,13 +145,14 @@ async fn structured_output_with_tool_choice_none_still_enforces_schema() {
         Ok(synthetic_structured_response()),
     ]));
     let guarded = GuardedInferenceBackend::new(backend.clone(), one_retry_policy());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "json"}],
         "response_format": supported_json_schema_response_format(),
         "tool_choice": "none"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let response = guarded.chat_completion(request).await.unwrap();
 
@@ -174,8 +177,10 @@ async fn forced_tool_mismatch_retries_with_original_forced_choice() {
         Ok(lookup_tool_response()),
     ]));
     let guarded = GuardedInferenceBackend::new(backend.clone(), one_retry_policy());
-    let request: ChatCompletionRequest =
-        serde_json::from_value(request_forced_lookup_tool_choice()).unwrap();
+    let request: GenerationRequest =
+        serde_json::from_value::<ChatCompletionRequest>(request_forced_lookup_tool_choice())
+            .unwrap()
+            .into();
     let expected_tool_choice = request.tool_choice.clone();
 
     let response = guarded.chat_completion(request).await.unwrap();
@@ -197,8 +202,10 @@ async fn parallel_tool_calls_false_retries_then_exhausts_multiple_calls() {
         Ok(invalid),
     ]));
     let guarded = GuardedInferenceBackend::new(backend.clone(), one_retry_policy());
-    let request: ChatCompletionRequest =
-        serde_json::from_value(request_parallel_tool_calls_false()).unwrap();
+    let request: GenerationRequest =
+        serde_json::from_value::<ChatCompletionRequest>(request_parallel_tool_calls_false())
+            .unwrap()
+            .into();
 
     let error = guarded.chat_completion(request).await.unwrap_err();
 
@@ -246,7 +253,7 @@ fn request_parallel_tool_calls_false() -> serde_json::Value {
     })
 }
 
-fn lookup_tool_response() -> ChatCompletionResponse {
+fn lookup_tool_response() -> GenerationResponse {
     response_with_tool_calls(
         "Qwen3-8B-Q4_K_M",
         json!([{"type":"function","function":{"name":"lookup","arguments":"{\"city\":\"Sydney\"}"}}]),
@@ -254,7 +261,7 @@ fn lookup_tool_response() -> ChatCompletionResponse {
     )
 }
 
-fn search_tool_response() -> ChatCompletionResponse {
+fn search_tool_response() -> GenerationResponse {
     response_with_tool_calls(
         "Qwen3-8B-Q4_K_M",
         json!([{"type":"function","function":{"name":"search","arguments":"{\"query\":\"Sydney weather\"}"}}]),
@@ -262,7 +269,7 @@ fn search_tool_response() -> ChatCompletionResponse {
     )
 }
 
-fn multiple_tool_calls_response() -> ChatCompletionResponse {
+fn multiple_tool_calls_response() -> GenerationResponse {
     response_with_tool_calls(
         "Qwen3-8B-Q4_K_M",
         json!([
@@ -273,7 +280,7 @@ fn multiple_tool_calls_response() -> ChatCompletionResponse {
     )
 }
 
-fn synthetic_structured_response() -> ChatCompletionResponse {
+fn synthetic_structured_response() -> GenerationResponse {
     response_with_tool_calls(
         "Qwen3-8B-Q4_K_M",
         json!([{"type":"function","function":{"name":MESH_EMIT_STRUCTURED_TOOL_NAME,"arguments":"{\"answer\":42}"}}]),
@@ -281,7 +288,7 @@ fn synthetic_structured_response() -> ChatCompletionResponse {
     )
 }
 
-async fn assert_tool_choice_none_retry_text_only(first_response: ChatCompletionResponse) {
+async fn assert_tool_choice_none_retry_text_only(first_response: GenerationResponse) {
     let backend = Arc::new(SequencedBackend::new(vec![
         Ok(first_response),
         Ok(response_with_content(
@@ -290,13 +297,14 @@ async fn assert_tool_choice_none_retry_text_only(first_response: ChatCompletionR
         )),
     ]));
     let guarded = GuardedInferenceBackend::new(backend.clone(), one_retry_policy());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "answer without tools"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "tool_choice": "none"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let response = guarded.chat_completion(request).await.unwrap();
 
@@ -319,7 +327,7 @@ fn classified_tool_call_count(classified: &ClassifiedGuardrailResponse) -> Optio
         .map(Vec::len)
 }
 
-fn request_tool_names(request: &ChatCompletionRequest) -> Vec<&str> {
+fn request_tool_names(request: &GenerationRequest) -> Vec<&str> {
     request
         .tools
         .as_ref()
@@ -332,8 +340,8 @@ fn request_tool_names(request: &ChatCompletionRequest) -> Vec<&str> {
         .collect()
 }
 
-fn retry_text(request: &ChatCompletionRequest) -> String {
-    crate::chat::message_content_to_text(
+fn retry_text(request: &GenerationRequest) -> String {
+    crate::generation::message_content_to_text(
         request.messages[0]
             .content
             .as_ref()

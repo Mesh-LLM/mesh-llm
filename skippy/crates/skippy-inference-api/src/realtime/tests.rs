@@ -1,3 +1,4 @@
+use crate::generation::{GenerationEventStream, GenerationRequest, GenerationResponse};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -6,10 +7,7 @@ use serde_json::{Value, json};
 use tokio_tungstenite::tungstenite::Message as ClientMessage;
 
 use super::*;
-use crate::{
-    ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, InferenceBackend,
-    InferenceResult, ModelObject,
-};
+use crate::{InferenceBackend, InferenceResult, ModelObject};
 
 #[test]
 fn beta_session_updates_set_model_language_and_vad() {
@@ -109,16 +107,16 @@ impl InferenceBackend for EchoBackend {
 
     async fn chat_completion(
         &self,
-        _request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        _request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         unreachable!()
     }
 
     async fn chat_completion_stream(
         &self,
-        _request: ChatCompletionRequest,
+        _request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         unreachable!()
     }
 

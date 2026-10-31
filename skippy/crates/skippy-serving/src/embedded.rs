@@ -954,9 +954,9 @@ mod lifecycle_tests {
         http::{Request, StatusCode},
     };
     use skippy_inference_api::{
-        ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream,
         InferenceFrontendRoute, InferenceLifecycleEvent, InferenceLifecycleObserver,
-        InferenceRequestContext, InferenceResult, ModelObject,
+        InferenceRequestContext, InferenceResult, ModelObject, generation::GenerationEventStream,
+        generation::GenerationRequest, generation::GenerationResponse,
     };
     use tower::ServiceExt;
 
@@ -972,8 +972,8 @@ mod lifecycle_tests {
 
         async fn chat_completion(
             &self,
-            _request: ChatCompletionRequest,
-        ) -> InferenceResult<ChatCompletionResponse> {
+            _request: GenerationRequest,
+        ) -> InferenceResult<GenerationResponse> {
             Err(skippy_inference_api::InferenceError::unsupported(
                 "not used by this test",
             ))
@@ -981,9 +981,9 @@ mod lifecycle_tests {
 
         async fn chat_completion_stream(
             &self,
-            _request: ChatCompletionRequest,
+            _request: GenerationRequest,
             _context: InferenceRequestContext,
-        ) -> InferenceResult<ChatCompletionStream> {
+        ) -> InferenceResult<GenerationEventStream> {
             Err(skippy_inference_api::InferenceError::unsupported(
                 "not used by this test",
             ))

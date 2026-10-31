@@ -10,7 +10,9 @@ use mesh_llm_node::serving::{
 use mesh_llm_system::hardware::{self, Metric};
 #[cfg(test)]
 use mesh_llm_types::models::capabilities::ModelCapabilities;
-use skippy_inference_api::{ChatCompletionRequest, ChatMessage, InferenceBackend, MessageContent};
+use skippy_inference_api::{
+    InferenceBackend, MessageContent, generation::GenerationMessage, generation::GenerationRequest,
+};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::path::Path;
@@ -427,11 +429,11 @@ impl EmbeddedServingController {
         messages: Vec<EmbeddedChatMessage>,
     ) -> Result<String> {
         let loaded = self.loaded_model(model).await?;
-        let request = ChatCompletionRequest {
+        let request = GenerationRequest {
             model: loaded.served.model_id.clone(),
             messages: messages
                 .into_iter()
-                .map(|message| ChatMessage {
+                .map(|message| GenerationMessage {
                     role: message.role,
                     content: Some(MessageContent::Text(message.content)),
                     extra: BTreeMap::new(),

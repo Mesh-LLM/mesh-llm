@@ -5,8 +5,8 @@ use serde_json::json;
 use skippy_inference_api::http_exchange::{HttpExchangeAdmission, HttpExchangePolicy};
 use skippy_inference_api::wire_bytes::{WireBytesCommitment, WireBytesObserver};
 use skippy_inference_api::{
-    CapsuleMarker, ChatCompletionOutcome, ChatCompletionRequest, ChatCompletionResponse,
-    ChatExchangeRoute, InferenceHookPolicy, InferenceResult,
+    CapsuleMarker, ChatCompletionOutcome, ChatExchangeRoute, InferenceHookPolicy, InferenceResult,
+    generation::GenerationRequest, generation::GenerationResponse,
 };
 use std::sync::{Arc, Mutex};
 
@@ -26,7 +26,7 @@ impl NodeExchangePolicy {
     }
     async fn admit_typed_request(
         &self,
-        request: &(impl serde::Serialize + Sync),
+        encode_request: impl FnOnce() -> Result<Vec<u8>, serde_json::Error> + Send,
         model: &str,
         endpoint: &str,
         path: &str,
@@ -38,7 +38,7 @@ impl NodeExchangePolicy {
         if !manager.has_exchange_hooks().await {
             return Ok(());
         }
-        let bytes = serde_json::to_vec(request).map_err(|_| {
+        let bytes = encode_request().map_err(|_| {
             skippy_inference_api::InferenceError::backend("cannot encode effective request")
         })?;
         let mut event = super::request_event(
@@ -87,11 +87,15 @@ impl InferenceHookPolicy for NodeExchangePolicy {
     }
     async fn admit_effective_chat_completion(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         route: &ChatExchangeRoute,
     ) -> InferenceResult<()> {
         self.admit_typed_request(
-            request,
+            || {
+                serde_json::to_vec(
+                    &skippy_inference_api::chat::request_view::ChatCompletionRequestRef(request),
+                )
+            },
             &request.model,
             "chat_completions",
             "/v1/chat/completions",
@@ -105,7 +109,7 @@ impl InferenceHookPolicy for NodeExchangePolicy {
         exchange_id: &str,
     ) -> InferenceResult<()> {
         self.admit_typed_request(
-            request,
+            || serde_json::to_vec(request),
             &request.model,
             "completions",
             "/v1/completions",
@@ -115,7 +119,7 @@ impl InferenceHookPolicy for NodeExchangePolicy {
     }
     async fn on_effective_chat_completion(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         route: &ChatExchangeRoute,
     ) {
         if let Some(bridge) = self.legacy_bridge().await {
@@ -124,7 +128,7 @@ impl InferenceHookPolicy for NodeExchangePolicy {
     }
     async fn on_chat_completion_terminal(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         id: &str,
         outcome: &ChatCompletionOutcome<'_>,
     ) {
@@ -158,8 +162,8 @@ impl InferenceHookPolicy for NodeExchangePolicy {
     }
     async fn capsule_marker_for_response(
         &self,
-        request: &ChatCompletionRequest,
-        response: &ChatCompletionResponse,
+        request: &GenerationRequest,
+        response: &GenerationResponse,
     ) -> Option<CapsuleMarker> {
         match self.legacy_bridge().await {
             Some(bridge) => bridge.capsule_marker_for_response(request, response).await,
