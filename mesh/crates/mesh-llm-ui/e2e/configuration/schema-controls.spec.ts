@@ -495,6 +495,7 @@ test.describe('schema-driven configuration controls', () => {
 
   test('saves signed gossip as a creation-time mesh policy', async ({ page }, testInfo) => {
     await page.goto(appUrl('/configuration/signing', testInfo))
+    await unlockOwnerControls(page)
     const policy = page.getByRole('radiogroup', { name: 'Require signed peer gossip' })
     await expect(policy.getByRole('radio', { name: 'off', exact: true })).toBeChecked()
     await expect(page.getByText(/Existing meshes keep their original policy\./)).toBeVisible()
