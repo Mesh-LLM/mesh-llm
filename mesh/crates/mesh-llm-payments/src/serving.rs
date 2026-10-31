@@ -350,5 +350,6 @@ fn settled(payment: &Transaction) -> SettledReceived {
     SettledReceived {
         credited_msat: (payment.amount_msat > 0).then_some(payment.amount_msat),
         fee_msat: Some(payment.fee_msat),
+        preimage: payment.preimage.clone(),
     }
 }

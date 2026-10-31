@@ -211,6 +211,7 @@ impl WalletProvider for MockWallet {
             status_msg: None,
             created_at_ms: crate::now_ms(),
             settled_at_ms: (!pending).then(crate::now_ms),
+            preimage: None,
         };
         self.payments
             .lock()
