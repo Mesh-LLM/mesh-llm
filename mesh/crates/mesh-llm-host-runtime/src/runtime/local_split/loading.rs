@@ -836,6 +836,22 @@ pub(super) fn split_runtime_stage_upstream(
 pub(super) async fn split_generation_load_settings<'a>(
     spec: &'a SplitGenerationLoadSpec<'_>,
 ) -> Result<SplitGenerationLoadSettings<'a>> {
+    split_generation_load_settings_with(spec, SplitDefaultDraft::FromCache).await
+}
+
+/// Where a split load takes a catalog default DFlash draft from.
+pub(super) enum SplitDefaultDraft {
+    /// The local Hugging Face cache, checked against the pinned digest.
+    FromCache,
+    /// A draft file that has already passed those checks.
+    #[cfg(test)]
+    Checked(PathBuf),
+}
+
+pub(super) async fn split_generation_load_settings_with<'a>(
+    spec: &'a SplitGenerationLoadSpec<'_>,
+    default_draft: SplitDefaultDraft,
+) -> Result<SplitGenerationLoadSettings<'a>> {
     let stage0 = spec
         .generation
         .stages
@@ -862,7 +878,11 @@ pub(super) async fn split_generation_load_settings<'a>(
     crate::inference::skippy::materialize_projector_url(&mut resolved).await?;
     // Attaches the cached default draft, or drops it (restoring the native MTP
     // it replaced) when it is not cached or fails its checks.
-    materialize_split_default_dflash(&mut resolved).await;
+    match default_draft {
+        SplitDefaultDraft::FromCache => materialize_split_default_dflash(&mut resolved).await,
+        #[cfg(test)]
+        SplitDefaultDraft::Checked(path) => resolved.speculative.set_default_dflash_draft(&path),
+    }
     resolved.model_fit.ctx_size = spec.ctx_size;
     resolved.throughput.parallel = spec.slots;
     if let Some(cache_type_k) = spec.cache_type_k_override {
