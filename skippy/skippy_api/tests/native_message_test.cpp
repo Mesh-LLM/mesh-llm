@@ -29,6 +29,7 @@ const skippy::Token one[]{skippy::Token{1}};
 using skippy::EmbeddingOutput;
 using skippy::F32Format;
 using skippy::ModelConfig;
+using skippy::NativePooling;
 using skippy::NativeRuntime;
 using skippy::RuntimeError;
 using skippy::Session;
@@ -97,7 +98,12 @@ public:
     const WorkloadInfo& workload() const {
         static constexpr WorkloadInfo reranker{
             .kind = WorkloadKind::Rerank,
+            .pooling = NativePooling::Rank,
+            .embedding_pooling = std::nullopt,
+            .output_dimensions = 0,
             .classifier_outputs = 1,
+            .has_encoder = true,
+            .has_decoder = false,
         };
         return reranker;
     }
@@ -126,6 +132,12 @@ public:
     const WorkloadInfo& workload() const {
         static constexpr WorkloadInfo encoder_decoder{
             .kind = WorkloadKind::EncoderDecoder,
+            .pooling = NativePooling::None,
+            .embedding_pooling = std::nullopt,
+            .output_dimensions = 0,
+            .classifier_outputs = 0,
+            .has_encoder = true,
+            .has_decoder = true,
         };
         return encoder_decoder;
     }
