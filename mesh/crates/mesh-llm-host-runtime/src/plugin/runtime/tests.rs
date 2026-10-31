@@ -908,3 +908,23 @@ async fn try_send_channel_message_does_not_block_on_a_full_outbound_queue() {
 
     drop(outbound_rx);
 }
+
+#[test]
+fn backend_pricing_is_listed_exactly_when_the_build_can_send_it() {
+    assert_eq!(
+        mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE_BACKEND_PRICING,
+        "openai_exchange.backend_pricing.v1"
+    );
+    let capabilities = initialize_host_capabilities();
+    assert_eq!(
+        capabilities
+            .iter()
+            .any(|capability| capability == "openai_exchange.backend_pricing.v1"),
+        cfg!(feature = "payments")
+    );
+    assert!(
+        capabilities
+            .iter()
+            .any(|capability| capability == mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE)
+    );
+}

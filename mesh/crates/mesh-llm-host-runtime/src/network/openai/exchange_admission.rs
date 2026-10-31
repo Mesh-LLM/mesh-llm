@@ -31,12 +31,14 @@ pub(super) async fn admit_selected_route(
         }
         _ => None,
     };
+    let pricing = selected_route_pricing(node, &target, model).await;
     let event = match selected_route_event(
         request,
         model,
         provider,
         target,
         model_identity.as_ref(),
+        pricing,
         attempt,
     ) {
         Ok(event) => event?,
@@ -85,6 +87,35 @@ pub(super) async fn selected_model_identity(
     Some(identity)
 }
 
+/// The selected remote mesh peer's payment offer for `model`, as routing ranks
+/// it (`Node::peer_payment_offer`), in `Pricing`'s own JSON form. `None` for a
+/// local target, an external URL, a request without a model, or a peer that
+/// serves the model for free.
+#[cfg(feature = "payments")]
+async fn selected_route_pricing(
+    node: &mesh::Node,
+    target: &SelectedRouteTarget<'_>,
+    model: Option<&str>,
+) -> Option<serde_json::Value> {
+    let (SelectedRouteTarget::Mesh(InferenceTarget::Remote(peer)), Some(model)) = (target, model)
+    else {
+        return None;
+    };
+    let pricing = node.peer_payment_offer(*peer, model).await?;
+    Some(json!(pricing))
+}
+
+/// Without the payments feature no peer can advertise a price, and the host
+/// does not list `openai_exchange.backend_pricing.v1`.
+#[cfg(not(feature = "payments"))]
+async fn selected_route_pricing(
+    _node: &mesh::Node,
+    _target: &SelectedRouteTarget<'_>,
+    _model: Option<&str>,
+) -> Option<serde_json::Value> {
+    None
+}
+
 async fn apply_selected_route_policy(
     manager: &crate::plugin::PluginManager,
     request: &transport::BufferedHttpRequest,
@@ -108,6 +139,7 @@ fn selected_route_event(
     provider: &str,
     target: SelectedRouteTarget<'_>,
     model_identity: Option<&mesh::ServedModelIdentity>,
+    pricing: Option<serde_json::Value>,
     attempt: usize,
 ) -> anyhow::Result<Option<serde_json::Value>> {
     let Some(endpoint) = exchange_endpoint(&request.client_path) else {
@@ -135,6 +167,9 @@ fn selected_route_event(
         if let Some(weights_digest) = &identity.weights_digest {
             event["weights_digest"] = json!(weights_digest);
         }
+    }
+    if let Some(pricing) = pricing {
+        event["pricing"] = pricing;
     }
     event["attempt"] = json!(attempt);
     event["effective_request_wire_digest"] = event["request_wire_digest"].take();
@@ -219,6 +254,7 @@ mod tests {
                 "plugin",
                 SelectedRouteTarget::Url(url),
                 None,
+                None,
                 1,
             )
             .unwrap()
@@ -243,6 +279,7 @@ mod tests {
                 "mesh",
                 SelectedRouteTarget::Mesh(&target),
                 None,
+                None,
                 2,
             )
             .unwrap()
@@ -250,6 +287,7 @@ mod tests {
             assert_eq!(event["target"], format!("{target:?}"));
             assert!(event.get("model_canonical_ref").is_none());
             assert!(event.get("weights_digest").is_none());
+            assert!(event.get("pricing").is_none());
         }
     }
 
@@ -271,6 +309,7 @@ mod tests {
             "mesh",
             SelectedRouteTarget::Mesh(&target),
             Some(&identity),
+            None,
             1,
         )
         .unwrap()
@@ -287,12 +326,161 @@ mod tests {
             "mesh",
             SelectedRouteTarget::Mesh(&target),
             Some(&identity),
+            None,
             1,
         )
         .unwrap()
         .unwrap();
         assert_eq!(event["model_canonical_ref"], "org/repo@main/model.gguf");
         assert!(event.get("weights_digest").is_none());
+    }
+
+    async fn chat_request() -> transport::BufferedHttpRequest {
+        let (mut reader, mut writer) = tokio::io::duplex(1024);
+        writer.write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}").await.unwrap();
+        transport::read_http_request(&mut reader).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn selected_event_carries_the_given_pricing_verbatim() {
+        let request = chat_request().await;
+        let peer = iroh::SecretKey::from_bytes(&[7; 32]).public();
+        let pricing = json!({"input_msat_per_million": 10, "output_msat_per_million": 20});
+        let event = selected_route_event(
+            &request,
+            Some("m"),
+            "mesh",
+            SelectedRouteTarget::Mesh(&InferenceTarget::Remote(peer)),
+            None,
+            Some(pricing.clone()),
+            1,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(event["pricing"], pricing);
+    }
+
+    /// A node that knows one peer serving `test`, priced by `offer` (free when
+    /// `None`).
+    #[cfg(feature = "payments")]
+    async fn node_with_peer(
+        offer: Option<mesh_llm_payments_types::pricing::Pricing>,
+    ) -> anyhow::Result<(mesh::Node, mesh::Node)> {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Client).await?;
+        let seller = mesh::Node::new_for_tests(mesh::NodeRole::Host { http_port: 0 }).await?;
+        let mut announcement =
+            seller.build_local_announcement(seller.snapshot_local_announcement_data().await);
+        if let Some(offer) = offer {
+            announcement.lightning_offers.insert("test".into(), offer);
+        }
+        node.add_peer_after_direct_requirements_validated(
+            seller.id(),
+            seller.endpoint.addr(),
+            &announcement,
+            Some(1),
+        )
+        .await;
+        Ok((node, seller))
+    }
+
+    #[cfg(feature = "payments")]
+    #[tokio::test]
+    async fn selected_remote_peer_pricing_is_its_offer_for_the_model() -> anyhow::Result<()> {
+        use mesh_llm_payments_types::pricing::Pricing;
+        for (cache_discount_percent, expected) in [
+            (
+                0,
+                json!({"input_msat_per_million": 10, "output_msat_per_million": 20}),
+            ),
+            (
+                25,
+                json!({
+                    "input_msat_per_million": 10,
+                    "output_msat_per_million": 20,
+                    "cache_discount_percent": 25,
+                }),
+            ),
+        ] {
+            let (node, seller) = node_with_peer(Some(Pricing {
+                input_msat_per_million: 10,
+                output_msat_per_million: 20,
+                cache_discount_percent,
+            }))
+            .await?;
+            let remote = InferenceTarget::Remote(seller.id());
+            let target = SelectedRouteTarget::Mesh(&remote);
+            let pricing = selected_route_pricing(&node, &target, Some("test")).await;
+            assert_eq!(pricing.as_ref(), Some(&expected));
+            let event = selected_route_event(
+                &chat_request().await,
+                Some("test"),
+                "mesh",
+                target,
+                None,
+                pricing,
+                1,
+            )?
+            .unwrap();
+            assert_eq!(event["pricing"], expected);
+            // Another model on the same peer has no offer: a free route.
+            let other = SelectedRouteTarget::Mesh(&remote);
+            assert_eq!(
+                selected_route_pricing(&node, &other, Some("other")).await,
+                None
+            );
+            // Without a model there is nothing to price.
+            assert_eq!(selected_route_pricing(&node, &other, None).await, None);
+            node.endpoint.close().await;
+            seller.endpoint.close().await;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(feature = "payments"))]
+    #[tokio::test]
+    async fn without_payments_no_route_carries_pricing() -> anyhow::Result<()> {
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Client).await?;
+        let peer = InferenceTarget::Remote(iroh::SecretKey::from_bytes(&[7; 32]).public());
+        let target = SelectedRouteTarget::Mesh(&peer);
+        assert_eq!(
+            selected_route_pricing(&node, &target, Some("test")).await,
+            None
+        );
+        node.endpoint.close().await;
+        Ok(())
+    }
+
+    #[cfg(feature = "payments")]
+    #[tokio::test]
+    async fn local_external_and_free_routes_carry_no_pricing() -> anyhow::Result<()> {
+        let (node, free_peer) = node_with_peer(None).await?;
+        let free = InferenceTarget::Remote(free_peer.id());
+        let local = InferenceTarget::Local(3131);
+        for target in [
+            SelectedRouteTarget::Mesh(&free),
+            SelectedRouteTarget::Mesh(&local),
+            SelectedRouteTarget::Mesh(&InferenceTarget::None),
+            SelectedRouteTarget::Url("https://example.com/v1"),
+        ] {
+            assert_eq!(
+                selected_route_pricing(&node, &target, Some("test")).await,
+                None
+            );
+        }
+        let event = selected_route_event(
+            &chat_request().await,
+            Some("test"),
+            "mesh",
+            SelectedRouteTarget::Mesh(&free),
+            None,
+            selected_route_pricing(&node, &SelectedRouteTarget::Mesh(&free), Some("test")).await,
+            1,
+        )?
+        .unwrap();
+        assert!(event.as_object().unwrap().get("pricing").is_none());
+        node.endpoint.close().await;
+        free_peer.endpoint.close().await;
+        Ok(())
     }
 }
 

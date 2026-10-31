@@ -34,6 +34,7 @@ fn event(request: &transport::BufferedHttpRequest) -> serde_json::Value {
         "external",
         SelectedRouteTarget::Url("https://example.com"),
         None,
+        None,
         1,
     )
     .unwrap()
@@ -132,6 +133,7 @@ async fn incomplete_effective_chunked_entity_cannot_silently_skip_admission() {
             Some("m"),
             "external",
             SelectedRouteTarget::Url("http://127.0.0.1:1"),
+            None,
             None,
             1,
         )
