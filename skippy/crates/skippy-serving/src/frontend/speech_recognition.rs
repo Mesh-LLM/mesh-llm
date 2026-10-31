@@ -303,11 +303,11 @@ impl LiveSession {
                 }
                 RealtimeInput::Clear => Ok(stream.clear()),
                 RealtimeInput::Configure(config) => {
-                    stream.set_config(stream_config(&config));
+                    let events = stream.set_config(stream_config(&config));
                     if resampler.input_rate() != config.input_sample_rate {
                         resampler = PcmResampler::new(config.input_sample_rate);
                     }
-                    Ok(Vec::new())
+                    Ok(events)
                 }
             };
             match events {
