@@ -142,6 +142,18 @@ fn owner_fields_roundtrip_through_proto_announcement() {
             .persistent_lane_marker_supported
     );
     assert!(roundtripped.activation_codec_fp8_supported);
+    assert_older_peer_lacks_fp8(&proto_pa);
+    let roundtripped = roundtripped
+        .owner_attestation
+        .expect("owner attestation must round-trip");
+    assert_eq!(roundtripped.claim.owner_id, "owner-abc");
+    assert_eq!(roundtripped.claim.cert_id, "cert-123");
+    assert_eq!(roundtripped.claim.node_label.as_deref(), Some("studio"));
+}
+
+/// A peer whose stage subprotocol predates the FP8 codecs still speaks the
+/// stage protocol but cannot decode FP8 activations.
+fn assert_older_peer_lacks_fp8(proto_pa: &crate::proto::node::PeerAnnouncement) {
     let mut without_fp8 = proto_pa.clone();
     for subprotocol in &mut without_fp8.subprotocols {
         subprotocol.features.retain(|feature| {
@@ -151,12 +163,6 @@ fn owner_fields_roundtrip_through_proto_announcement() {
     let (_, older_peer) = proto_ann_to_local(&without_fp8).expect("older peer announcement");
     assert!(!older_peer.activation_codec_fp8_supported);
     assert!(older_peer.stage_protocol_generation_supported);
-    let roundtripped = roundtripped
-        .owner_attestation
-        .expect("owner attestation must round-trip");
-    assert_eq!(roundtripped.claim.owner_id, "owner-abc");
-    assert_eq!(roundtripped.claim.cert_id, "cert-123");
-    assert_eq!(roundtripped.claim.node_label.as_deref(), Some("studio"));
 }
 
 pub(crate) fn assert_mixed_version_peer_ignores_missing_release_attestation() {
