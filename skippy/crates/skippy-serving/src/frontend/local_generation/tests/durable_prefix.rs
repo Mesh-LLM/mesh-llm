@@ -60,6 +60,189 @@ fn native_cold_prefix_survives_runtime_restart() -> Result<()> {
     require_restored_prefix(root.path(), &expected)
 }
 
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS; run explicitly with --ignored"]
+fn longer_durable_checkpoint_restores_despite_a_short_native_prefix() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let case = checkpoint_preference_case(root.path())?;
+    let CheckpointPreferenceCase {
+        backend,
+        tokens,
+        attention,
+        recurrent,
+        ..
+    } = case;
+    let kv = backend.kv.as_ref().unwrap();
+    let long = identity(&backend, &tokens);
+    let mut rt = backend.runtime.lock().unwrap();
+    let location = kv
+        .l3
+        .as_ref()
+        .unwrap()
+        .locate_longest(&long.namespace, &tokens, 64)?
+        .unwrap();
+    assert_eq!(location.token_count, 64);
+    let located_desc: skippy_runtime::RuntimeKvPageDesc =
+        serde_json::from_str(location.kv_desc_json.as_deref().unwrap())?;
+    located_desc.validate_payload(location.kv_bytes as usize)?;
+    let candidates = [identity(&backend, &tokens[..16]), long];
+    let restored = kv
+        .restore_exact_state(&mut rt, "target", &candidates)?
+        .unwrap_or_else(|| {
+            panic!("a short RAM hit must not hide the longer L3 checkpoint: {location:?}")
+        });
+    assert_eq!(restored.source, "l3");
+    assert_eq!(restored.token_count, tokens.len());
+    assert_eq!(
+        rt.export_kv_page("target", 0, tokens.len() as u64)?.payload,
+        attention
+    );
+    assert_eq!(rt.export_recurrent_state("target")?, recurrent);
+    Ok(())
+}
+
+struct CheckpointPreferenceCase {
+    backend: StageOpenAiBackend,
+    tokens: Vec<i32>,
+    attention: Vec<u8>,
+    recurrent: Vec<u8>,
+    descriptor: skippy_runtime::RuntimeKvPageDesc,
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS; run explicitly with --ignored"]
+fn failed_long_l3_import_rolls_back_then_reuses_the_short_native_owner() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let case = checkpoint_preference_case(root.path())?;
+    let backend = case.backend;
+    let kv = backend.kv.as_ref().unwrap();
+    let long = identity(&backend, &case.tokens);
+    // Correct attention metadata and bytes force the failure into recurrent import.
+    kv.l3.as_ref().unwrap().spill(
+        &long.namespace,
+        &case.tokens,
+        &skippy_cache::ExactStatePayload::kv_recurrent(case.attention, vec![0]),
+        Some(serde_json::to_string(&case.descriptor)?),
+        None,
+    )?;
+    {
+        let mut rt = backend.runtime.lock().unwrap();
+        assert!(
+            kv.restore_exact_state(
+                &mut rt,
+                "bad-import-probe",
+                &[identity(&backend, &case.tokens[..16]), long.clone()]
+            )
+            .is_err(),
+            "fixture must reach a native import error, not an early metadata miss"
+        );
+        assert_eq!(rt.session_token_count("bad-import-probe"), Some(0));
+        assert_eq!(rt.canonical_session_position("bad-import-probe")?, 0);
+        rt.drop_session_timed("bad-import-probe")?;
+        assert!(
+            rt.canonical_session_position("bad-import-probe").is_err(),
+            "an absent or discarded lane must not satisfy the clean retry gate"
+        );
+    }
+    let mut prompt = case.tokens;
+    prompt.push(11);
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
+        Some("l3-failure-fallback"),
+        true,
+        None,
+    );
+    let sampling = SamplingConfig {
+        enabled: false,
+        ..Default::default()
+    };
+    let stats = backend.generate_local_tokens(
+        LocalGeneration {
+            prompt_token_ids: &prompt,
+            recurrent_cache_prefix_token_ids: None,
+            max_tokens: 1,
+            sampling: &sampling,
+            chat_sampling_metadata: None,
+            speculative: &SpeculativeDecodeConfig::default(),
+            native_mtp_enabled: false,
+            hook_request: None,
+            hook_runtime: None,
+            cancellation: None,
+            ids: &ids,
+        },
+        |_| Ok(TokenControl::Continue),
+    )?;
+    assert_eq!(
+        stats.cached_prompt_tokens, 32,
+        "a failed longer durable restore must not discard the resident fallback"
+    );
+    assert_eq!(kv.radix.lock().unwrap().stats().resident_pinned_tokens, 0);
+    Ok(())
+}
+
+fn checkpoint_preference_case(root: &Path) -> Result<CheckpointPreferenceCase> {
+    let backend = backend_with_disk(root, 1 << 30)?;
+    let kv = backend.kv.as_ref().unwrap();
+    let tokens = [1, 2, 3, 4, 5, 6, 7, 8].repeat(8);
+    let long = identity(&backend, &tokens);
+    let (attention, recurrent, descriptor) = {
+        let mut rt = backend.runtime.lock().unwrap();
+        rt.prefill("long-source", &tokens[..16])?;
+        let shorter = rt.export_kv_page("long-source", 0, 16)?;
+        let shorter_recurrent = rt.export_recurrent_state("long-source")?;
+        kv.l3.as_ref().unwrap().spill(
+            &long.namespace,
+            &tokens[..16],
+            &skippy_cache::ExactStatePayload::kv_recurrent(shorter.payload, shorter_recurrent),
+            Some(serde_json::to_string(&shorter.desc)?),
+            None,
+        )?;
+        rt.prefill("long-source", &tokens[16..])?;
+        let page = rt.export_kv_page("long-source", 0, tokens.len() as u64)?;
+        let attention = page.payload;
+        let descriptor = page.desc;
+        let recurrent = rt.export_recurrent_state("long-source")?;
+        kv.record_resident_prefix(&mut rt, "long-source", &long, &tokens)?
+            .unwrap();
+        rt.drop_session_timed("long-source")?;
+        rt.ensure_session_active("eviction")?;
+        assert_eq!(
+            kv.evict_resident_prefix_for_tokens(&mut rt, "eviction", u64::MAX)?
+                .evicted_entries,
+            1
+        );
+        rt.drop_session_timed("eviction")?;
+        (attention, recurrent, descriptor)
+    };
+    let l3 = kv.l3.as_ref().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !l3
+        .locate_longest(&long.namespace, &tokens, 64)?
+        .is_some_and(|location| location.token_count == tokens.len() as u64)
+    {
+        anyhow::ensure!(
+            Instant::now() < deadline,
+            "long checkpoint was not committed"
+        );
+        thread::sleep(Duration::from_millis(2));
+    }
+    let short = identity(&backend, &tokens[..32]);
+    let mut rt = backend.runtime.lock().unwrap();
+    rt.prefill("short-source", &tokens[..32])?;
+    kv.record_resident_prefix(&mut rt, "short-source", &short, &tokens[..32])?
+        .unwrap();
+    rt.drop_session_timed("short-source")?;
+    assert_eq!(kv.probe_resident_prefix(&long).unwrap().token_count, 32);
+    drop(rt);
+    Ok(CheckpointPreferenceCase {
+        backend,
+        tokens,
+        attention,
+        recurrent,
+        descriptor,
+    })
+}
+
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 struct PrefixReference {
