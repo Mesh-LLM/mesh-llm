@@ -24,6 +24,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     }
     let env = h::member(step, "env")?;
     h::binding(env, "MESH_REF", "${{ inputs.mesh_ref }}")?;
+    h::binding(env, "MESH_ACTION", "${{ inputs.mesh_action }}")?;
     h::binding(env, "UPSTREAM", "${{ inputs.upstream_sha }}")?;
     h::binding(
         env,
@@ -41,7 +42,8 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
         "UPSTREAM",
         "${{ inputs.upstream_sha }}",
     )?;
-    h::binding(selection, "timeout-minutes", "3")?;
+    // The selection step must outlast the resolver's own 180-second API budget.
+    h::binding(selection, "timeout-minutes", "5")?;
     h::command(
         selection,
         &[
@@ -57,13 +59,14 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
     )?;
     let run = field(step, "run").ok_or("resolver run missing")?;
     if !run.contains("upstream=\"$SELECTED_UPSTREAM\"") || run.contains("ls-remote") {
-        return Err("default upstream must consume the admitted stable release commit".into());
+        return Err("default upstream must consume the admitted release commit".into());
     }
     h::command(
         step,
         &["\"$MESH_LLM_AUTOMATION_BIN\"", "repository", "selected-ref"],
         &[
             ("--ref", "\"$MESH_REF\""),
+            ("--action", "\"${MESH_ACTION:-certify}\""),
             ("--event", "\"$GITHUB_EVENT_NAME\""),
             ("--upstream", "\"$UPSTREAM\""),
             (
@@ -79,7 +82,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
 fn selected_output_order(run: &str) -> DynResult<()> {
     let run = run.replace("\\\n", " ");
     let (prefix, rest) = run
-        .split_once("if [[ -n \"$MESH_REF\" ]]; then")
+        .split_once("if [[ -n \"$MESH_REF\" || \"${MESH_ACTION:-certify}\" != certify ]]; then")
         .ok_or("explicit selected-ref branch missing")?;
     for key in ["mesh_source=", "certify=", "mode=", "upstream=", "changed="] {
         if prefix.contains(key) {

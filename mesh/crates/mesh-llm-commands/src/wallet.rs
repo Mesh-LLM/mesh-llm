@@ -40,8 +40,8 @@ pub async fn run(command: &WalletCommand, port: u16, config: Option<&Path>) -> R
                 bail!(
                     "mesh-llm is not running on port {port}; wallet operations need the running \
                      node because only it owns the wallet plugin. Start `mesh-llm` and retry. \
-                     (ledger-only commands such as policy, pricing, pending, blocked, \
-                     unblock and unpin work offline)"
+                     (ledger-only commands such as policy, pricing, min-payment, admission-deposit, \
+                     pending, blocked, unblock and unpin work offline)"
                 );
             }
             let directory = if let Some(config) = config {
@@ -122,13 +122,47 @@ fn control_command(command: &WalletCommand) -> Result<ControlCommand> {
                 })
                 .transpose()?,
         },
+        WalletCommand::MinPayment { sats } => ControlCommand::MinPayment {
+            value_msat: sats
+                .map(|sats| sats.checked_mul(1000).context("minimum payment overflow"))
+                .transpose()?,
+        },
+        WalletCommand::AdmissionDeposit { sats, default } => ControlCommand::AdmissionDeposit {
+            value_msat: sats
+                .map(|sats| sats.checked_mul(1000).context("deposit overflow"))
+                .transpose()?,
+            reset: *default,
+        },
         WalletCommand::Pricing {
             model,
             input_msat_per_million,
             output_msat_per_million,
+            cache_discount_percent,
             free,
+            deposit_sats,
+            default_deposit,
         } => {
-            if let Some(model) = model {
+            if let Some(model) = model
+                .as_ref()
+                .filter(|_| deposit_sats.is_some() || *default_deposit)
+            {
+                ControlCommand::SetModelAdmissionDeposit {
+                    model: model.clone(),
+                    value_msat: deposit_sats
+                        .map(|sats| sats.checked_mul(1000).context("deposit overflow"))
+                        .transpose()?,
+                }
+            } else if let (Some(model), Some(percent), None, None) = (
+                model,
+                cache_discount_percent,
+                input_msat_per_million,
+                output_msat_per_million,
+            ) {
+                ControlCommand::SetCacheDiscount {
+                    model: model.clone(),
+                    percent: *percent,
+                }
+            } else if let Some(model) = model {
                 ControlCommand::SetPricing {
                     model: model.clone(),
                     value: if *free {
@@ -137,6 +171,7 @@ fn control_command(command: &WalletCommand) -> Result<ControlCommand> {
                         Some(Pricing {
                             input_msat_per_million: input_msat_per_million.unwrap_or(500),
                             output_msat_per_million: output_msat_per_million.unwrap_or(1500),
+                            cache_discount_percent: cache_discount_percent.unwrap_or(0),
                         })
                     },
                 }
@@ -187,6 +222,41 @@ mod tests {
         assert_eq!(
             serde_json::to_value(command)?,
             serde_json::json!({"command": "unpin"})
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_model_deposit_sets_or_clears_only_that_deposit() -> Result<()> {
+        let pricing = |deposit_sats, default_deposit| WalletCommand::Pricing {
+            model: Some("m".into()),
+            input_msat_per_million: None,
+            output_msat_per_million: None,
+            cache_discount_percent: None,
+            free: false,
+            deposit_sats,
+            default_deposit,
+        };
+        assert_eq!(
+            serde_json::to_value(control_command(&pricing(Some(5), false))?)?,
+            serde_json::json!({"command": "set_model_admission_deposit", "model": "m", "value_msat": 5000})
+        );
+        assert_eq!(
+            serde_json::to_value(control_command(&pricing(None, true))?)?,
+            serde_json::json!({"command": "set_model_admission_deposit", "model": "m", "value_msat": null})
+        );
+        assert!(!requires_wallet(&control_command(&pricing(None, true))?));
+        Ok(())
+    }
+
+    #[test]
+    fn admission_deposit_default_resets_the_set_deposit() -> Result<()> {
+        assert_eq!(
+            serde_json::to_value(control_command(&WalletCommand::AdmissionDeposit {
+                sats: None,
+                default: true,
+            })?)?,
+            serde_json::json!({"command": "admission_deposit", "value_msat": null, "reset": true})
         );
         Ok(())
     }

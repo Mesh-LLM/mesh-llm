@@ -72,7 +72,12 @@ const MAX_AUDIO_MULTIPART_BODY_BYTES: usize = 64 * 1024 * 1024 + 1024 * 1024;
 /// Returning `None` means "no override configured", which leaves
 /// [`InferenceFrontendConfig::DEFAULT_BACKEND_TIMEOUT`] in place. Returning
 /// `Some(None)` means the operator explicitly disabled the timeout.
-fn configured_backend_timeout() -> Option<Option<Duration>> {
+///
+/// Public because the MeshLLM host proxy sits in front of this frontend and
+/// must not impose a shorter first-byte deadline than the one configured here:
+/// it reads this so its own budget covers it (see the host runtime's
+/// `network/openai/response/probe.rs`).
+pub fn configured_backend_timeout() -> Option<Option<Duration>> {
     let value = match std::env::var(BACKEND_TIMEOUT_SECS_ENV) {
         Ok(value) => value,
         Err(std::env::VarError::NotPresent) => return None,
@@ -294,6 +299,7 @@ pub fn router_for_with_config(
         .route("/v1/embeddings", post(embeddings))
         .route("/v1/rerank", post(rerank))
         .route("/v1/audio/speech", post(audio_speech))
+        .route("/v1/realtime", get(crate::realtime::realtime))
         .route(
             "/v1/audio/transcriptions",
             post(audio_transcriptions).layer(DefaultBodyLimit::max(MAX_AUDIO_MULTIPART_BODY_BYTES)),
@@ -577,14 +583,40 @@ async fn audio_text_request(
         },
     )
     .await?;
-    if response_format == "text" {
-        Ok((
-            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-            response.text,
-        )
-            .into_response())
-    } else {
-        Ok(Json(response).into_response())
+    render_transcription(&response_format, response, translate)
+}
+
+/// Render a transcript in the requested OpenAI `response_format`. Timed
+/// formats need a model that reports segment timing.
+fn render_transcription(
+    response_format: &str,
+    response: AudioTranscriptionResponse,
+    translate: bool,
+) -> Result<Response, InferenceError> {
+    let plain = |content_type: &'static str, body: String| {
+        Ok(([(header::CONTENT_TYPE, content_type)], body).into_response())
+    };
+    let timing = || {
+        response.timing.as_ref().ok_or_else(|| {
+            InferenceError::unsupported(format!(
+                "response_format '{response_format}' needs a model that reports segment timing"
+            ))
+        })
+    };
+    match response_format {
+        "text" => plain("text/plain; charset=utf-8", response.text),
+        "verbose_json" => {
+            Ok(Json(crate::audio::verbose_json(&response, timing()?, translate)).into_response())
+        }
+        "srt" => plain(
+            "application/x-subrip; charset=utf-8",
+            crate::audio::srt(timing()?),
+        ),
+        "vtt" => plain("text/vtt; charset=utf-8", crate::audio::vtt(timing()?)),
+        "json" => Ok(Json(response).into_response()),
+        other => Err(InferenceError::unsupported(format!(
+            "response_format '{other}' is not supported"
+        ))),
     }
 }
 
@@ -1102,7 +1134,7 @@ pub(crate) struct CapsuleMarkerExtension(pub(crate) CapsuleMarker);
 /// `mesh/docs/plugins/openai-exchange-lifecycle-design-note.md`.
 static X_CAPSULE_ID_HEADER: HeaderName = HeaderName::from_static("x-capsule-id");
 
-/// Threads [`ChatCompletionResponse::exchange_id`] from the handler to
+/// Threads [`crate::chat::ChatCompletionResponse::exchange_id`] from the handler to
 /// `frontend_lifecycle_middleware`, mirroring [`CapsuleMarkerExtension`] —
 /// the same relay, for the exchange id rather than the response
 /// marker.
@@ -1337,6 +1369,7 @@ fn lifecycle_route(uri: &Uri) -> InferenceFrontendRoute {
         "/v1/messages/count_tokens" => InferenceFrontendRoute::MessagesCountTokens,
         "/v1/messages" => InferenceFrontendRoute::Messages,
         "/systemone" => InferenceFrontendRoute::SystemOne,
+        "/v1/realtime" => InferenceFrontendRoute::Realtime,
         _ => InferenceFrontendRoute::Unknown,
     }
 }

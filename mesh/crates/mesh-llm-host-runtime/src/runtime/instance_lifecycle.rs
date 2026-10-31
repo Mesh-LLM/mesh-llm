@@ -491,14 +491,6 @@ impl InstanceLifecycleRecord {
         self.state.is_terminal()
     }
 
-    /// Reset drain state (for testing).
-    #[cfg(test)]
-    #[expect(dead_code, reason = "retained for focused drain state tests")]
-    fn reset_drain(&mut self) {
-        self.draining_initiated = false;
-        self.drain_deadline = None;
-    }
-
     /// Set in-flight count directly (for testing).
     #[cfg(test)]
     fn set_in_flight(&self, value: u64) {
@@ -509,12 +501,26 @@ impl InstanceLifecycleRecord {
 /// RAII token for a request admitted to one concrete runtime instance.
 pub(crate) struct InstanceRequestGuard {
     tracker: std::sync::Arc<InFlightTracker>,
+    _residency: Option<super::native_model_lifecycle::RequestLease>,
 }
 
 impl InstanceRequestGuard {
     pub(crate) fn new(tracker: std::sync::Arc<InFlightTracker>) -> Self {
         tracker.increment();
-        Self { tracker }
+        Self {
+            tracker,
+            _residency: None,
+        }
+    }
+}
+
+impl InstanceRequestGuard {
+    pub(crate) fn with_residency(
+        mut self,
+        lease: Option<super::native_model_lifecycle::RequestLease>,
+    ) -> Self {
+        self._residency = lease;
+        self
     }
 }
 

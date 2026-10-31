@@ -72,7 +72,27 @@ impl CanonicalPresentationContext {
         match self.route.as_deref() {
             Some("health" | "healthz" | "readyz") => "probe",
             Some("models" | "management_get_models") => "model_listing",
-            Some("chat_completions" | "completions" | "responses") => "inference",
+            // Every surface that runs a model is inference, not just the chat
+            // shapes: a transcription, an OCR page or a depth map is the same
+            // operation from the operator's point of view.
+            Some(
+                "chat_completions"
+                | "completions"
+                | "responses"
+                | "embeddings"
+                | "rerank"
+                | "audio_speech"
+                | "audio_transcriptions"
+                | "audio_translations"
+                | "realtime"
+                | "decisions"
+                | "messages"
+                | "messages_count_tokens"
+                | "system_one"
+                | "document_ocr"
+                | "image_text_similarity"
+                | "depth_estimation",
+            ) => "inference",
             Some(
                 "management_get_status"
                 | "management_get_events"
@@ -110,6 +130,14 @@ fn bounded_context_value(value: &str) -> Option<String> {
     Some(value.to_owned())
 }
 
+/// The closed route vocabulary shared by the presentation envelope and the
+/// request-summary metadata.
+///
+/// Every label a producer can emit must appear here, or the field is silently
+/// dropped and the request reads as an unknown path in the console. The
+/// non-chat inference surface and the Mesh task contracts are listed
+/// explicitly for that reason; `mesh-llm-host-runtime`'s
+/// `logging::request_metadata` test asserts the two vocabularies agree.
 fn closed_route(value: &str) -> Option<String> {
     let value = value.trim();
     let accepted = matches!(
@@ -121,6 +149,19 @@ fn closed_route(value: &str) -> Option<String> {
             | "chat_completions"
             | "completions"
             | "responses"
+            | "embeddings"
+            | "rerank"
+            | "audio_speech"
+            | "audio_transcriptions"
+            | "audio_translations"
+            | "realtime"
+            | "decisions"
+            | "messages"
+            | "messages_count_tokens"
+            | "system_one"
+            | "document_ocr"
+            | "image_text_similarity"
+            | "depth_estimation"
             | "management_get_status"
             | "management_get_models"
             | "management_get_events"
@@ -303,7 +344,6 @@ impl Eq for CanonicalEnvelope {}
 
 impl CanonicalEnvelope {
     /// Create a new envelope with the given fields. Identity fields default to None.
-    #[allow(dead_code)]
     pub fn new(
         event_id: EventId,
         request_id: RequestId,
@@ -354,34 +394,6 @@ impl CanonicalEnvelope {
 
         Ok(serde_json::from_value(value)?)
     }
-
-    /// Set the tenant ID. Returns `&mut self` for chaining.
-    #[allow(dead_code)]
-    pub fn with_tenant(mut self, tenant_id: String) -> Self {
-        self.tenant_id = Some(tenant_id);
-        self
-    }
-
-    /// Set the account ID. Returns `&mut self` for chaining.
-    #[allow(dead_code)]
-    pub fn with_account(mut self, account_id: String) -> Self {
-        self.account_id = Some(account_id);
-        self
-    }
-
-    /// Set the user ID. Returns `&mut self` for chaining.
-    #[allow(dead_code)]
-    pub fn with_user(mut self, user_id: String) -> Self {
-        self.user_id = Some(user_id);
-        self
-    }
-
-    /// Set the role. Returns `&mut self` for chaining.
-    #[allow(dead_code)]
-    pub fn with_role(mut self, role: String) -> Self {
-        self.role = Some(role);
-        self
-    }
 }
 
 #[cfg(test)]
@@ -422,7 +434,7 @@ mod tests {
 
     #[test]
     fn test_envelope_with_identity() {
-        let env = CanonicalEnvelope::new(
+        let mut env = CanonicalEnvelope::new(
             EventId::new(),
             RequestId::new(),
             ReplayChannel::Operations,
@@ -433,9 +445,9 @@ mod tests {
                 duration_ms: None,
                 usage: None,
             },
-        )
-        .with_tenant("t-abc".into())
-        .with_account("a-def".into());
+        );
+        env.tenant_id = Some("t-abc".into());
+        env.account_id = Some("a-def".into());
 
         assert_eq!(env.tenant_id, Some("t-abc".into()));
         assert_eq!(env.account_id, Some("a-def".into()));
@@ -485,7 +497,7 @@ mod tests {
 
     #[test]
     fn test_envelope_identity_included_when_set() {
-        let env = CanonicalEnvelope::new(
+        let mut env = CanonicalEnvelope::new(
             EventId::new(),
             RequestId::new(),
             ReplayChannel::Requests,
@@ -495,9 +507,9 @@ mod tests {
                 model: None,
                 method: None,
             },
-        )
-        .with_user("u-xyz".into())
-        .with_role("admin".into());
+        );
+        env.user_id = Some("u-xyz".into());
+        env.role = Some("admin".into());
 
         let json = serde_json::to_string(&env).unwrap();
         assert!(json.contains("user_id"));

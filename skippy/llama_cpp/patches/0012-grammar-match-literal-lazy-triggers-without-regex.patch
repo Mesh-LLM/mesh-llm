@@ -1,0 +1,126 @@
+From 96f8d0e83295e087a54a4fcb49ef93a0e9a84261 Mon Sep 17 00:00:00 2001
+From: Mesh-LLM CI <ci@mesh-llm.local>
+Date: Wed, 28 Oct 2026 20:57:15 +1300
+Subject: [PATCH] grammar: match literal lazy triggers without regex
+
+---
+ src/llama-grammar.cpp                   | 10 ++++
+ tests/CMakeLists.txt                    |  1 +
+ tests/test-grammar-trigger-patterns.cpp | 72 +++++++++++++++++++++++++
+ 3 files changed, 83 insertions(+)
+ create mode 100644 tests/test-grammar-trigger-patterns.cpp
+
+diff --git a/src/llama-grammar.cpp b/src/llama-grammar.cpp
+index 0a8a61e7e..da0187e13 100644
+--- a/src/llama-grammar.cpp
++++ b/src/llama-grammar.cpp
+@@ -380,6 +380,16 @@ static void print_rule(
+ //
+ 
+ size_t llama_grammar_trigger_pattern::find(const std::string & input) const {
++    // Literal triggers still match across token pieces in the caller's buffer;
++    // avoid a growing-buffer regex search without converting them to token IDs.
++    if (!pattern.empty() && regex.flags() == std::regex::ECMAScript &&
++            pattern.find_first_of(R"(\.^$|()[]{}*+?)") == std::string::npos &&
++            std::all_of(pattern.begin(), pattern.end(), [](unsigned char ch) {
++                return ch >= 0x20 && ch <= 0x7e;
++            })) {
++        return input.find(pattern);
++    }
++
+     auto find_start_pos = [](const std::smatch & match) {
+         // get from the first matched capturing group to the end of the string
+         size_t start = std::string::npos;
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index 991bf5479..535cdf51e 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -184,6 +184,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+     llama_build_and_test(test-sampling.cpp LINK llama)
+     llama_build_and_test(test-reasoning-budget.cpp)
+     llama_build_and_test(test-grammar-parser.cpp LINK llama)
++    llama_build_and_test(test-grammar-trigger-patterns.cpp LINK llama)
+     llama_build_and_test(test-grammar-integration.cpp)
+     llama_build_and_test(test-llama-grammar.cpp LINK llama)
+     llama_build_and_test(test-batch-alloc.cpp LINK llama)
+diff --git a/tests/test-grammar-trigger-patterns.cpp b/tests/test-grammar-trigger-patterns.cpp
+new file mode 100644
+index 000000000..6df57b5c6
+--- /dev/null
++++ b/tests/test-grammar-trigger-patterns.cpp
+@@ -0,0 +1,72 @@
++#ifdef NDEBUG
++#undef NDEBUG
++#endif
++
++#include "../src/llama-grammar.h"
++
++#include <cassert>
++#include <string>
++#include <vector>
++
++static void check_match(const std::string & pattern, const std::string & input, size_t expected) {
++    const llama_grammar_trigger_pattern literal{pattern, std::regex(pattern)};
++    // optimize preserves regex semantics but bypasses the conservative literal
++    // gate, giving an independent matcher for offsets and partial spellings.
++    const llama_grammar_trigger_pattern regex{
++        pattern, std::regex(pattern, std::regex::ECMAScript | std::regex::optimize)};
++    assert(literal.find(input) == expected);
++    assert(regex.find(input) == expected);
++}
++
++int main() {
++    const size_t absent = std::string::npos;
++    struct match_case {
++        std::string pattern;
++        std::string input;
++        size_t expected;
++    };
++    const std::vector<match_case> cases{
++        {"<tool_call>", "", absent},
++        {"<tool_call>", "thinking <tool_call>rest", 9},
++        {"<tool_call>", "<tool_call><tool_call>", 0},
++        {"word_42 -", "xword_42 -y", 1},
++        {"literal", "literals later literal", 0},
++        {"x", "πx", 2},
++        {"<tool_call>", std::string("\xce", 1) + "<tool_call>", 1},
++        {"<tool_call>", std::string("a\0b", 3) + "<tool_call>", 3},
++        {"", "", 0},
++        {"", "x", 0},
++        {R"(tool\.call)", "xx tool.call", 3},
++        {"prefix(suffix)", "xxprefixsuffix", 8},
++        {"^prefix(suffix)$", "prefixsuffix", 6},
++        {"prefix()suffix", "xxprefixsuffix", 2},
++        {"(empty)?(suffix)", "xxsuffix", 2},
++        {"(first)|(second)", "xxsecond", 2},
++        {"^abc$", "xabc", absent},
++        {"^abc$", "abc", 0},
++        {"[a-z]+", "12abc", 2},
++        {"a.*(b)", "xxab", 3},
++        {"λ", "πλ", 2},
++        {"a{2}", "zaa", 1},
++        {"a?", "bbb", 0},
++        {R"(\bword\b)", "sword word", 6},
++        {"(?=word)", "xxword", 2},
++        {R"(\^)", "x^", 1},
++    };
++    for (const auto & item : cases) {
++        check_match(item.pattern, item.input, item.expected);
++    }
++
++    const std::vector<std::string> pieces{
++        "thought ", "\xf0", "\x9f", "\x99", "\x82", "<to", "ol_", "call", ">", "x"};
++    std::string buffer;
++    for (size_t i = 0; i < pieces.size(); ++i) {
++        buffer += pieces[i];
++        check_match("<tool_call>", buffer, i < 8 ? absent : 12);
++    }
++
++    const llama_grammar_trigger_pattern insensitive{
++        "word", std::regex("word", std::regex::ECMAScript | std::regex::icase)};
++    assert(insensitive.find("WORD") == 0);
++    return 0;
++}
+-- 
+2.56.0
+

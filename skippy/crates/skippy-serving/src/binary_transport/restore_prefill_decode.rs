@@ -55,6 +55,7 @@ fn restore_prefill_decode_route(
     }
 }
 
+/// Restore a cached prefix and execute its remaining prefill or decode work.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn handle_binary_restore_prefill_decode_control(
     config: &StageConfig,
@@ -130,6 +131,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
                 kind: WireReplyKind::Ack,
                 predicted: 0,
                 predicted_tokens: Vec::new(),
+                log_probabilities: Vec::new(),
                 native_mtp_draft: None,
                 window: Default::default(),
                 stats: control_stats,
@@ -274,6 +276,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
             kind: WireReplyKind::PredictedToken,
             predicted: predicted_token,
             predicted_tokens: vec![predicted_token],
+            log_probabilities: Vec::new(),
             native_mtp_draft: None,
             window: Default::default(),
             stats: control_stats,
@@ -383,6 +386,7 @@ fn restore_decode_sideband(message: &StageWireMessage) -> Result<(&[i32], i32)> 
     Ok((prefix_tokens, current))
 }
 
+/// Project a fused restore request into a decode request without losing its identity.
 pub(super) fn restore_prefill_decode_as_decode_message(
     message: &StageWireMessage,
     current_token: i32,
@@ -403,6 +407,7 @@ pub(super) fn restore_prefill_decode_as_decode_message(
         tokens: vec![current_token],
         positions: Vec::new(),
         activation: Vec::new(),
+        readout_tokens: Vec::new(),
         raw_bytes: Vec::new(),
     }
 }
@@ -436,6 +441,7 @@ mod tests {
         );
     }
 
+    /// Fused-restore decode projection preserves chat sampling metadata.
     #[test]
     fn restore_prefill_decode_as_decode_preserves_chat_metadata() {
         let metadata = r#"{"grammar":"chat"}"#;
@@ -461,6 +467,7 @@ mod tests {
             tokens: vec![101, 102, 103, 104],
             positions: vec![0, 1, 2, 3],
             activation: vec![1, 2, 3, 4],
+            readout_tokens: Vec::new(),
             raw_bytes: vec![5, 6, 7, 8],
         };
 

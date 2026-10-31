@@ -152,7 +152,7 @@ impl Options {
                 values
                     .get("--config")
                     .copied()
-                    .unwrap_or("skippy/crates/skippy-bench/corpora/bench_corpus_sources.json"),
+                    .unwrap_or("skippy/evals/corpora/bench_corpus_sources.json"),
             ),
             output: PathBuf::from(
                 values

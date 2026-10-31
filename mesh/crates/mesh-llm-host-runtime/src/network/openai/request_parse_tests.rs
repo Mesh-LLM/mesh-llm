@@ -767,6 +767,29 @@ fn audio_upload_limits_are_path_scoped() {
 }
 
 #[tokio::test]
+async fn document_ocr_upload_extracts_model_from_multipart() {
+    let body = b"--ocr\r\nContent-Disposition: form-data; name=\"file\"; filename=\"page.png\"\r\n\r\nimage\r\n--ocr\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\ndatalab/indra-ocr\r\n--ocr--\r\n";
+    let headers = format!(
+        "POST /mesh/v1/documents/ocr HTTP/1.1\r\nHost: localhost\r\nContent-Type: multipart/form-data; boundary=ocr\r\nContent-Length: {}\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    let request = read_request_from_parts(vec![headers, body.to_vec()]).await;
+    assert_eq!(request.model_name.as_deref(), Some("datalab/indra-ocr"));
+    assert_eq!(request.body_len_bytes, body.len());
+}
+
+#[test]
+fn document_ocr_upload_limits_are_path_scoped() {
+    let limits = body_limits_for_path("/mesh/v1/documents/ocr?trace=1", HTTP_READ_LIMITS);
+    assert_eq!(limits.max_body_bytes, MAX_DOCUMENT_UPLOAD_BODY_BYTES);
+    assert_eq!(
+        limits.max_chunked_wire_bytes,
+        MAX_DOCUMENT_UPLOAD_CHUNKED_WIRE_BYTES
+    );
+}
+
+#[tokio::test]
 async fn test_read_http_request_expect_100_continue() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -803,6 +826,8 @@ async fn test_read_http_request_expect_100_continue() {
     assert!(!raw.contains("Expect: 100-continue"));
     assert!(raw.contains("Connection: close"));
 }
+/// Keeps only the first HTTP request when a client pipelines another request
+/// on the same connection, then closes the connection to reject the remainder.
 #[tokio::test]
 async fn test_read_http_request_truncates_pipelined_follow_up_bytes() {
     let request = read_request_from_parts(vec![
@@ -817,12 +842,8 @@ async fn test_read_http_request_truncates_pipelined_follow_up_bytes() {
     assert!(raw.contains("Connection: close\r\n\r\n"));
 }
 
-/// `probe_http_response_local` uses a much longer timeout (10 min)
-/// than `probe_http_response` (5 min), because local prefill can
-/// legitimately take minutes under load.
-///
-/// This test sends a response after a 2s delay and verifies that
-/// `probe_http_response_local` waits for it (well within its 10-min
+/// Enables both Mesh and Skippy hook flags in an OpenAI chat request while
+/// keeping the rewritten body and `Content-Length` consistent.
 #[test]
 fn test_inject_skippy_hooks_enabled() {
     let mut raw = b"POST /v1/chat/completions HTTP/1.1\r\nContent-Length: 25\r\n\r\n{\"model\":\"auto\",\"n\":1}".to_vec();
@@ -1250,4 +1271,23 @@ fn mesh_routing_header_values_rejects_non_utf8_x_mesh_exclude() {
     raw.extend_from_slice(b"\r\n\r\n{}");
     let request = request_with_raw(&raw);
     assert!(request.mesh_routing_header_values().is_err());
+}
+
+#[tokio::test]
+async fn only_realtime_upgrades_keep_bytes_after_the_head() {
+    let realtime = read_request_from_parts(vec![
+        b"GET /v1/realtime?model=m HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n\x81\x05early".to_vec(),
+    ])
+    .await;
+    assert!(realtime.raw.ends_with(b"\r\n\r\n\x81\x05early"));
+
+    let other = read_request_from_parts(vec![
+        b"POST /v1/chat/completions HTTP/1.1\r\nHost: x\r\nUpgrade: x\r\nConnection: upgrade\r\n\r\n{\"model\":\"m\"}".to_vec(),
+    ])
+    .await;
+    assert!(
+        other.raw.ends_with(b"\r\n\r\n"),
+        "{:?}",
+        String::from_utf8_lossy(&other.raw)
+    );
 }

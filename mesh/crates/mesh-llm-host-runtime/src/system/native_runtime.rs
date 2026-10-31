@@ -21,6 +21,8 @@ mod dynamic {
     #[derive(Clone, Debug)]
     pub(crate) struct LoadedNativeRuntime {
         pub(crate) native_runtime_id: String,
+        /// The release the runtime was loaded from; ids repeat across releases.
+        pub(crate) release_version: String,
         pub(crate) libraries: Vec<PathBuf>,
     }
 
@@ -47,6 +49,9 @@ mod dynamic {
         pub(crate) mesh_version: String,
         pub(crate) skippy_abi: Option<String>,
         pub(crate) runtime_selection: RuntimeSelection,
+        /// From `runtime.native_runtime.download`: off, startup uses only
+        /// bundled and installed runtimes and never fetches the release catalog.
+        pub(crate) allow_download: bool,
     }
 
     impl NativeRuntimeStartupSelection {
@@ -58,6 +63,7 @@ mod dynamic {
                     crate::system::native_runtime_install::current_skippy_abi_version(),
                 ),
                 runtime_selection: RuntimeSelection::Recommended,
+                allow_download: true,
             }
         }
 
@@ -71,6 +77,7 @@ mod dynamic {
                 mesh_version,
                 skippy_abi,
                 runtime_selection,
+                allow_download: true,
             }
         }
 
@@ -99,12 +106,15 @@ mod dynamic {
                     .map(mesh_llm_system::backend::BinaryFlavor::suffix)
                     .or(config.selection.as_deref()),
             )?;
+            let allow_download = config.download_enabled();
             Ok(match config.mesh_version {
-                Some(mesh_version) => {
-                    Self::explicit(mesh_version, config.skippy_abi, runtime_selection)
-                }
+                Some(mesh_version) => Self {
+                    allow_download,
+                    ..Self::explicit(mesh_version, config.skippy_abi, runtime_selection)
+                },
                 None => Self {
                     runtime_selection,
+                    allow_download,
                     ..Self::current()
                 },
             })
@@ -172,6 +182,7 @@ mod dynamic {
         resolution.completed();
         Ok(Some(LoadedNativeRuntime {
             native_runtime_id: plan.native_runtime_id,
+            release_version: plan.cache_mesh_version,
             libraries: plan.libraries,
         }))
     }
@@ -343,6 +354,7 @@ mod dynamic {
         })?;
         Ok(Some(LoadedNativeRuntime {
             native_runtime_id: plan.native_runtime_id,
+            release_version: plan.cache_mesh_version,
             libraries: plan.libraries,
         }))
     }
@@ -373,6 +385,7 @@ mod dynamic {
         options.release_version = startup_selection.mesh_version.clone();
         options.skippy_abi_version = startup_selection.skippy_abi.clone();
         options.selection = startup_selection.runtime_selection.clone();
+        options.allow_download &= startup_selection.allow_download;
         if options.cache_dir.is_none() {
             options.cache_dir = Some(cache.root().to_path_buf());
         }
@@ -467,8 +480,13 @@ mod dynamic {
             .skippy_abi_version
             .as_deref()
             .unwrap_or("not configured");
+        let downloads = if options.allow_download {
+            ""
+        } else {
+            " (runtime downloads at startup are off: `runtime.native_runtime.download` or `MESH_LLM_NO_RUNTIME_DOWNLOAD`)"
+        };
         format!(
-            "no compatible MeshLLM native runtime is installed or installable for MeshLLM {} / Skippy ABI {abi}; run `mesh-llm runtime install` or inspect available runtimes with `mesh-llm runtime list --available`",
+            "no compatible MeshLLM native runtime is installed or installable for Skippy runtime {} / ABI {abi}{downloads}; run `mesh-llm runtime install` or inspect available runtimes with `mesh-llm runtime list --available`",
             options.release_version
         )
     }
@@ -1854,6 +1872,7 @@ mod dynamic {
 
             let message = error.to_string();
             assert!(message.contains("no compatible MeshLLM native runtime"));
+            assert!(message.contains("for Skippy runtime 0.68.0 / ABI 0.1.25"));
             assert!(message.contains("mesh-llm runtime install"));
             assert!(message.contains("mesh-llm runtime list --available"));
             assert_eq!(install_calls.lock().unwrap().len(), 1);
@@ -1904,6 +1923,7 @@ mod dynamic {
                     mesh_version: Some("0.75.0".to_string()),
                     skippy_abi: Some("0.1.52".to_string()),
                     selection: Some("cuda13".to_string()),
+                    ..Default::default()
                 },
                 Some(mesh_llm_system::backend::BinaryFlavor::Vulkan),
             )
@@ -1927,6 +1947,7 @@ mod dynamic {
                     mesh_version: Some("0.75.0".to_string()),
                     skippy_abi: Some("0.1.52".to_string()),
                     selection: Some("cuda13".to_string()),
+                    ..Default::default()
                 },
                 None,
             )
@@ -2152,6 +2173,9 @@ mod dynamic {
             }
         }
     }
+
+    #[cfg(test)]
+    mod download_tests;
 
     #[cfg(test)]
     mod native_runtime_event_sink_tests {

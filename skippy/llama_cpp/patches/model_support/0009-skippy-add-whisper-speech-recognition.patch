@@ -1,0 +1,792 @@
+From 708ffe886e3d4d8dbd25abcaa8ae3162348aca56 Mon Sep 17 00:00:00 2001
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Thu, 22 Oct 2026 17:15:05 +1100
+Subject: [PATCH] skippy: add Whisper speech recognition
+
+Build pinned whisper.cpp on this tree's ggml targets and fold it into
+libllama when SKIPPY_WHISPER_SOURCE_DIR names its source, so the runtime
+carries one ggml for both llama and Whisper.
+
+skippy/asr.h opens a whisper.cpp model file outside skippy_model_open,
+decodes WAV, MP3, and FLAC uploads to 16 kHz mono PCM with a file-local
+miniaudio, and transcribes or translates with a fresh decoder state per
+call, so calls on one model may run concurrently. Runtimes built without
+whisper.cpp export the same symbols, leave
+SKIPPY_FEATURE_SPEECH_RECOGNITION clear, and report UNSUPPORTED.
+
+Bumps the Skippy ABI to 0.1.72.
+---
+ include/skippy.h        |   1 +
+ include/skippy/asr.h    | 172 +++++++++++++++
+ include/skippy/common.h |   4 +-
+ src/CMakeLists.txt      |  37 +++
+ src/skippy/abi.cpp      |   6 +-
+ src/skippy/asr.cpp      | 465 ++++++++++++++++++++++++++++++++++++++++
+ 6 files changed, 683 insertions(+), 2 deletions(-)
+ create mode 100644 include/skippy/asr.h
+ create mode 100644 src/skippy/asr.cpp
+
+diff --git a/include/skippy.h b/include/skippy.h
+index ac091dd24..4e33847d9 100644
+--- a/include/skippy.h
++++ b/include/skippy.h
+@@ -27,5 +27,6 @@
+ #include "skippy/workloads.h"
+ #include "skippy/system_one.h"
+ #include "skippy/laya.h"
++#include "skippy/asr.h"
+ 
+ #endif // SKIPPY_H
+diff --git a/include/skippy/asr.h b/include/skippy/asr.h
+new file mode 100644
+index 000000000..99d4a1094
+--- /dev/null
++++ b/include/skippy/asr.h
+@@ -0,0 +1,172 @@
++#ifndef SKIPPY_ASR_H
++#define SKIPPY_ASR_H
++
++/**
++ * @file skippy/asr.h
++ * @brief Full-model speech recognition (Whisper) over uploaded audio.
++ *
++ * An ASR model does not load through `skippy_model_open`; it owns its
++ * whisper.cpp model file and runs on the runtime's ggml backends. Callers
++ * decode an upload to 16 kHz mono PCM with `skippy_asr_decode_audio`, then
++ * transcribe or translate it with `skippy_asr_transcribe`. Each transcription
++ * holds its own decoder state, so calls on one model may run concurrently.
++ *
++ * Runtimes built without whisper.cpp still export every symbol; they leave
++ * SKIPPY_FEATURE_SPEECH_RECOGNITION clear and fail calls with
++ * SKIPPY_STATUS_UNSUPPORTED.
++ */
++
++#include "common.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define SKIPPY_ASR_INFO_V1_ABI_VERSION 1
++#define SKIPPY_ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION 1
++#define SKIPPY_ASR_SEGMENT_V1_ABI_VERSION 1
++/** Sample rate of the PCM that `skippy_asr_decode_audio` returns. */
++#define SKIPPY_ASR_SAMPLE_RATE 16000
++/**
++ * Longest audio `skippy_asr_decode_audio` decodes and `skippy_asr_transcribe`
++ * accepts: 30 minutes. Compressed uploads can expand far beyond their size,
++ * so the bound is on decoded samples, not input bytes.
++ */
++#define SKIPPY_ASR_MAX_SAMPLES (SKIPPY_ASR_SAMPLE_RATE * 60 * 30)
++
++struct skippy_asr_model;
++struct skippy_asr_result;
++
++/** @brief Shape and memory of an opened ASR model. */
++struct skippy_asr_info_v1 {
++    uint32_t struct_size;
++    uint32_t abi_version;
++    bool     multilingual;     /**< false for English-only (`.en`) models */
++    int32_t  n_vocab;
++    int32_t  n_audio_layer;
++    int32_t  n_text_layer;
++    int32_t  n_mels;
++    uint64_t weights_bytes;    /**< size of the model file, which is almost all tensor data */
++    bool     on_accelerator;   /**< weights live on a non-CPU device */
++};
++
++/** @brief Options for one transcription. Zero values select the defaults. */
++struct skippy_asr_transcribe_params_v1 {
++    uint32_t struct_size;
++    uint32_t abi_version;
++    /** ISO 639-1 code such as "en"; NULL, "" or "auto" detects the language. */
++    const char * language;
++    /** Translate the speech into English instead of transcribing it. */
++    bool translate;
++    /** Optional text that conditions the first window, such as vocabulary. */
++    const char * prompt;
++    /** 0 decodes greedily; above 0 samples, with fallback on low confidence. */
++    float temperature;
++    /** CPU threads for the parts that run on the CPU; 0 picks a default. */
++    int32_t n_threads;
++};
++
++/** @brief One timed segment of a transcription. */
++struct skippy_asr_segment_v1 {
++    uint32_t struct_size;
++    uint32_t abi_version;
++    int64_t  start_ms;
++    int64_t  end_ms;
++    /** UTF-8 text, owned by the result and valid until it is freed. */
++    const char * text;
++    /** Probability that the segment holds no speech. */
++    float    no_speech_prob;
++};
++
++/** @brief Polled between decoder steps; returning true cancels the call. */
++typedef bool (*skippy_asr_abort_callback)(void * user_data);
++
++/**
++ * @brief Opens a whisper.cpp model file (`ggml-*.bin`).
++ *
++ * `device` follows `skippy_laya_model_open`: NULL or "" is the CPU backend,
++ * "auto" is the first GPU device when one exists, and any other value names a
++ * ggml backend device such as "CUDA0" or "MTL0". Fails with
++ * SKIPPY_STATUS_UNSUPPORTED when the runtime was built without whisper.cpp,
++ * and with SKIPPY_STATUS_MODEL_ERROR when the file is not a Whisper model.
++ */
++LLAMA_API enum skippy_status skippy_asr_model_open(
++        const char * model_path,
++        const char * device,
++        struct skippy_asr_model ** out_model,
++        struct skippy_error ** out_error);
++
++/** @brief Releases a model returned by `skippy_asr_model_open`. */
++LLAMA_API void skippy_asr_model_free(struct skippy_asr_model * model);
++
++/**
++ * @brief Reports the model's shape and weight memory.
++ *
++ * `out_info` must be initialized with its `struct_size` and `abi_version`.
++ */
++LLAMA_API enum skippy_status skippy_asr_model_info_v1(
++        const struct skippy_asr_model * model,
++        struct skippy_asr_info_v1 * out_info,
++        struct skippy_error ** out_error);
++
++/**
++ * @brief Decodes a WAV, MP3, or FLAC upload to 16 kHz mono float PCM.
++ *
++ * Returns SKIPPY_STATUS_INVALID_ARGUMENT for any other container and for
++ * audio longer than SKIPPY_ASR_MAX_SAMPLES, which is refused while decoding
++ * rather than after. Free `*out_samples` with `skippy_asr_samples_free`.
++ */
++LLAMA_API enum skippy_status skippy_asr_decode_audio(
++        const uint8_t * data,
++        size_t len,
++        float ** out_samples,
++        size_t * out_sample_count,
++        struct skippy_error ** out_error);
++
++/** @brief Releases samples returned by `skippy_asr_decode_audio`. */
++LLAMA_API void skippy_asr_samples_free(float * samples);
++
++/**
++ * @brief Transcribes 16 kHz mono PCM.
++ *
++ * `params` must be initialized with its `struct_size` and `abi_version`.
++ * `abort_callback` may be NULL. A cancelled call fails with
++ * SKIPPY_STATUS_RUNTIME_ERROR and returns no result.
++ */
++LLAMA_API enum skippy_status skippy_asr_transcribe(
++        struct skippy_asr_model * model,
++        const float * samples,
++        size_t sample_count,
++        const struct skippy_asr_transcribe_params_v1 * params,
++        skippy_asr_abort_callback abort_callback,
++        void * abort_user_data,
++        struct skippy_asr_result ** out_result,
++        struct skippy_error ** out_error);
++
++/** @brief Number of segments in a transcription. */
++LLAMA_API size_t skippy_asr_result_segment_count(const struct skippy_asr_result * result);
++
++/**
++ * @brief Reads one segment. `out_segment` must be initialized with its
++ * `struct_size` and `abi_version`.
++ */
++LLAMA_API enum skippy_status skippy_asr_result_segment_v1(
++        const struct skippy_asr_result * result,
++        size_t index,
++        struct skippy_asr_segment_v1 * out_segment,
++        struct skippy_error ** out_error);
++
++/** @brief ISO 639-1 code of the spoken language, owned by the result. */
++LLAMA_API const char * skippy_asr_result_language(const struct skippy_asr_result * result);
++
++/** @brief Seconds of audio the result covers. */
++LLAMA_API double skippy_asr_result_duration_seconds(const struct skippy_asr_result * result);
++
++/** @brief Releases a result returned by `skippy_asr_transcribe`. */
++LLAMA_API void skippy_asr_result_free(struct skippy_asr_result * result);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif // SKIPPY_ASR_H
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 4da8a4664..f233bb47f 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 72
++#define SKIPPY_ABI_VERSION_PATCH 73
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+@@ -110,6 +110,8 @@ enum skippy_feature {
+ #define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
+ /** @brief Full-model Laya decision reads (`skippy/laya.h`). */
+ #define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)
++/** @brief Full-model speech recognition (`skippy/asr.h`). */
++#define SKIPPY_FEATURE_SPEECH_RECOGNITION     (UINT64_C(1) << 41)
+ 
+ enum skippy_status {
+     SKIPPY_STATUS_OK                      = 0,
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 93803e031..78e2c01f3 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -95,6 +95,7 @@ add_library(llama
+             skippy/system_one.cpp
+             skippy/laya.cpp
+             ../tools/laya/laya.cpp
++            skippy/asr.cpp
+             unicode.h
+             ${LLAMA_MODELS_SOURCES}
+             )
+@@ -121,6 +122,10 @@ set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h .
+ set_source_files_properties(${LLAMA_MODELS_SOURCES}
+     PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
+ 
++# The ASR source compiles a file-local miniaudio; keep it out of unity
++# composites so those definitions stay in their own translation unit.
++set_source_files_properties(skippy/asr.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
++
+ configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
+ 
+ target_include_directories(llama PRIVATE . ../common ../tools/laya ${CMAKE_CURRENT_BINARY_DIR})
+@@ -167,6 +172,38 @@ if (LLAMA_LLGUIDANCE)
+ endif()
+ 
+ 
++# Speech recognition: whisper.cpp built on this tree's ggml targets rather
++# than its own copy, and folded into libllama. Without a source directory the
++# skippy_asr_* entry points stay exported and report UNSUPPORTED.
++set(SKIPPY_WHISPER_SOURCE_DIR "" CACHE PATH "whisper.cpp source tree to build speech recognition from")
++target_include_directories(llama PRIVATE ../vendor)
++if (SKIPPY_WHISPER_SOURCE_DIR)
++    # Satisfy whisper.cpp's find_package(ggml) with the in-tree targets. The
++    # empty redirect makes find_package(ggml) succeed for the whole build
++    # without defining anything, which relies on whisper.cpp linking the bare
++    # `ggml` target (as its CMakeLists does) rather than ggml::ggml or
++    # variables a real ggml-config.cmake would set.
++    set(ggml_DIR "${CMAKE_CURRENT_BINARY_DIR}/skippy-ggml-package")
++    file(MAKE_DIRECTORY "${ggml_DIR}")
++    file(WRITE "${ggml_DIR}/ggml-config.cmake" "")
++    set(WHISPER_USE_SYSTEM_GGML ON  CACHE BOOL "" FORCE)
++    set(WHISPER_BUILD_EXAMPLES  OFF CACHE BOOL "" FORCE)
++    set(WHISPER_BUILD_TESTS     OFF CACHE BOOL "" FORCE)
++    set(WHISPER_BUILD_SERVER    OFF CACHE BOOL "" FORCE)
++    set(WHISPER_ALL_WARNINGS    OFF CACHE BOOL "" FORCE)
++    # whisper.cpp is linked into libllama as a static, position-independent
++    # archive whatever the link mode; restore both settings afterwards.
++    set(SKIPPY_SAVED_BUILD_SHARED_LIBS ${BUILD_SHARED_LIBS})
++    set(SKIPPY_SAVED_PIC ${CMAKE_POSITION_INDEPENDENT_CODE})
++    set(BUILD_SHARED_LIBS OFF)
++    set(CMAKE_POSITION_INDEPENDENT_CODE ON)
++    add_subdirectory(${SKIPPY_WHISPER_SOURCE_DIR} ${CMAKE_BINARY_DIR}/whisper EXCLUDE_FROM_ALL)
++    set(BUILD_SHARED_LIBS ${SKIPPY_SAVED_BUILD_SHARED_LIBS})
++    set(CMAKE_POSITION_INDEPENDENT_CODE ${SKIPPY_SAVED_PIC})
++    target_link_libraries(llama PRIVATE whisper)
++    target_compile_definitions(llama PRIVATE SKIPPY_HAS_WHISPER)
++endif()
++
+ if (LLAMA_STAGE_BUILD_TESTS)
+     target_compile_definitions(llama PRIVATE LLAMA_STAGE_BUILD_TESTS)
+ 
+diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
+index f806cdbdc..ed9825df3 100644
+--- a/src/skippy/abi.cpp
++++ b/src/skippy/abi.cpp
+@@ -48,7 +48,11 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
+            SKIPPY_FEATURE_SYSTEM_ONE |
+            SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
+-           SKIPPY_FEATURE_LAYA_DECISIONS;
++           SKIPPY_FEATURE_LAYA_DECISIONS |
++#if defined(SKIPPY_HAS_WHISPER)
++           SKIPPY_FEATURE_SPEECH_RECOGNITION |
++#endif
++           0;
+ }
+ 
+ void skippy_error_free(struct skippy_error * error) {
+diff --git a/src/skippy/asr.cpp b/src/skippy/asr.cpp
+new file mode 100644
+index 000000000..680549066
+--- /dev/null
++++ b/src/skippy/asr.cpp
+@@ -0,0 +1,465 @@
++#include "skippy/asr.h"
++#include "skippy/errors.h"
++
++#include <algorithm>
++#include <cstdint>
++#include <cstdlib>
++#include <cstring>
++#include <memory>
++#include <string>
++#include <thread>
++#include <vector>
++
++#if defined(SKIPPY_HAS_WHISPER)
++// miniaudio includes windows.h, whose min/max macros would rewrite
++// std::min/std::max below; the calls are parenthesized for the same reason.
++#if defined(_WIN32) && !defined(NOMINMAX)
++#define NOMINMAX
++#endif
++#include "ggml-backend.h"
++#include "whisper.h"
++
++#include <mutex>
++#include <sys/stat.h>
++
++// Decoders only, with every symbol file-local so they cannot collide with
++// the miniaudio copy that mtmd-helper compiles the same way. MA_API does not
++// reach miniaudio's one global, so rename it.
++#define ma_atomic_global_lock skippy_asr_ma_atomic_global_lock
++#define MINIAUDIO_IMPLEMENTATION
++#define MA_NO_ENCODING
++#define MA_NO_DEVICE_IO
++#define MA_NO_RESOURCE_MANAGER
++#define MA_NO_NODE_GRAPH
++#define MA_NO_ENGINE
++#define MA_NO_GENERATION
++#define MA_API static
++#include "miniaudio/miniaudio.h"
++#endif
++
++struct skippy_asr_model {
++#if defined(SKIPPY_HAS_WHISPER)
++    whisper_context * context = nullptr;
++    uint64_t weights_bytes = 0;
++    bool on_accelerator = false;
++
++    ~skippy_asr_model() {
++        if (context != nullptr) {
++            whisper_free(context);
++        }
++    }
++#endif
++};
++
++struct skippy_asr_segment_text {
++    int64_t start_ms = 0;
++    int64_t end_ms = 0;
++    std::string text;
++    float no_speech_prob = 0.0f;
++};
++
++struct skippy_asr_result {
++    std::vector<skippy_asr_segment_text> segments;
++    std::string language;
++    double duration_seconds = 0.0;
++};
++
++namespace {
++
++enum skippy_status asr_fail(
++        skippy_error ** out_error,
++        enum skippy_status status,
++        const std::string & message) {
++    skippy_set_error(out_error, status, message.c_str());
++    return status;
++}
++
++// Runs one exported entry point inside the exception containment, so no C++
++// exception can unwind into the Rust caller.
++template <typename Body>
++enum skippy_status asr_entry(skippy_error ** out_error, Body && body) {
++    enum skippy_status status = SKIPPY_STATUS_RUNTIME_ERROR;
++    if (!skippy_contain_native_failure(out_error, [&] { status = body(); })) {
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    return status;
++}
++
++#if defined(SKIPPY_HAS_WHISPER)
++
++// whisper.cpp installs its own ggml logger while it opens backends. Point it
++// at whichever sink the runtime already gave ggml, so ASR logs land beside
++// llama's instead of replacing them.
++void route_whisper_logs() {
++    static std::mutex lock;
++    std::lock_guard<std::mutex> guard(lock);
++    ggml_log_callback callback = nullptr;
++    void * user_data = nullptr;
++    ggml_log_get(&callback, &user_data);
++    whisper_log_set(callback, user_data);
++}
++
++bool is_gpu(ggml_backend_dev_t dev) {
++    const enum ggml_backend_dev_type type = ggml_backend_dev_type(dev);
++    return type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU;
++}
++
++// whisper.cpp selects a GPU by its position among GPU devices, so translate
++// the Laya-style device name into that ordinal.
++enum skippy_status resolve_device(
++        const char * device,
++        whisper_context_params & params,
++        bool & on_accelerator,
++        skippy_error ** out_error) {
++    params.use_gpu = false;
++    params.gpu_device = 0;
++    on_accelerator = false;
++    const std::string name = device == nullptr ? "" : device;
++    if (name.empty()) {
++        return skippy_success(out_error);
++    }
++    int ordinal = 0;
++    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
++        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
++        if (!is_gpu(dev)) {
++            if (name == ggml_backend_dev_name(dev)) {
++                return skippy_success(out_error);
++            }
++            continue;
++        }
++        if (name == "auto" || name == ggml_backend_dev_name(dev)) {
++            params.use_gpu = true;
++            params.gpu_device = ordinal;
++            on_accelerator = true;
++            return skippy_success(out_error);
++        }
++        ++ordinal;
++    }
++    if (name == "auto") {
++        return skippy_success(out_error);
++    }
++    return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "unknown ggml backend device '" + name + "'");
++}
++
++uint64_t file_bytes(const char * path) {
++    struct stat info {};
++    return stat(path, &info) == 0 ? static_cast<uint64_t>(info.st_size) : 0;
++}
++
++enum class decode_outcome { ok, failed, too_long };
++
++decode_outcome decode_audio(const uint8_t * data, size_t len, std::vector<float> & samples) {
++    ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 1, SKIPPY_ASR_SAMPLE_RATE);
++    // The linear resampler low-passes before it decimates; the steepest
++    // filter keeps 44.1/48 kHz content above 8 kHz out of the speech band.
++    config.resampling.linear.lpfOrder = MA_MAX_FILTER_ORDER;
++    ma_decoder decoder;
++    if (ma_decoder_init_memory(data, len, &config, &decoder) != MA_SUCCESS) {
++        return decode_outcome::failed;
++    }
++    // Read in chunks: VBR MP3 cannot always report its length up front.
++    constexpr ma_uint64 chunk = SKIPPY_ASR_SAMPLE_RATE;
++    decode_outcome outcome = decode_outcome::ok;
++    for (;;) {
++        if (samples.size() >= static_cast<size_t>(SKIPPY_ASR_MAX_SAMPLES)) {
++            outcome = decode_outcome::too_long;
++            break;
++        }
++        const size_t offset = samples.size();
++        samples.resize(offset + chunk);
++        ma_uint64 read = 0;
++        const ma_result result = ma_decoder_read_pcm_frames(&decoder, samples.data() + offset, chunk, &read);
++        samples.resize(offset + read);
++        if (result == MA_AT_END || (result == MA_SUCCESS && read < chunk)) {
++            break;
++        }
++        if (result != MA_SUCCESS) {
++            outcome = decode_outcome::failed;
++            break;
++        }
++    }
++    ma_decoder_uninit(&decoder);
++    return outcome;
++}
++
++bool is_supported_container(const uint8_t * data, size_t len) {
++    if (len < 12) {
++        return false;
++    }
++    const bool wav = std::memcmp(data, "RIFF", 4) == 0 && std::memcmp(data + 8, "WAVE", 4) == 0;
++    const bool mp3 = std::memcmp(data, "ID3", 3) == 0 || (data[0] == 0xFF && (data[1] & 0xE0) == 0xE0);
++    const bool flac = std::memcmp(data, "fLaC", 4) == 0;
++    return wav || mp3 || flac;
++}
++
++struct abort_bridge {
++    skippy_asr_abort_callback callback;
++    void * user_data;
++};
++
++bool whisper_abort(void * data) {
++    const auto * bridge = static_cast<const abort_bridge *>(data);
++    return bridge->callback(bridge->user_data);
++}
++
++struct state_deleter {
++    void operator()(whisper_state * state) const { whisper_free_state(state); }
++};
++
++#endif
++
++enum skippy_status unsupported(skippy_error ** out_error) {
++    return asr_fail(out_error, SKIPPY_STATUS_UNSUPPORTED, "this runtime was built without speech recognition");
++}
++
++} // namespace
++
++extern "C" enum skippy_status skippy_asr_model_open(
++        const char * model_path,
++        const char * device,
++        struct skippy_asr_model ** out_model,
++        struct skippy_error ** out_error) {
++    if (model_path == nullptr || out_model == nullptr) {
++        return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model_path and out_model are required");
++    }
++    *out_model = nullptr;
++#if defined(SKIPPY_HAS_WHISPER)
++    return asr_entry(out_error, [&] {
++        whisper_context_params params = whisper_context_default_params();
++        params.flash_attn = true;
++        bool on_accelerator = false;
++        const enum skippy_status status = resolve_device(device, params, on_accelerator, out_error);
++        if (status != SKIPPY_STATUS_OK) {
++            return status;
++        }
++        route_whisper_logs();
++        auto model = std::make_unique<skippy_asr_model>();
++        model->context = whisper_init_from_file_with_params_no_state(model_path, params);
++        if (model->context == nullptr) {
++            return asr_fail(out_error, SKIPPY_STATUS_MODEL_ERROR,
++                    std::string("failed to load Whisper model from ") + model_path);
++        }
++        model->weights_bytes = file_bytes(model_path);
++        model->on_accelerator = on_accelerator;
++        *out_model = model.release();
++        return skippy_success(out_error);
++    });
++#else
++    (void) device;
++    return unsupported(out_error);
++#endif
++}
++
++extern "C" void skippy_asr_model_free(struct skippy_asr_model * model) {
++    delete model;
++}
++
++extern "C" enum skippy_status skippy_asr_model_info_v1(
++        const struct skippy_asr_model * model,
++        struct skippy_asr_info_v1 * out_info,
++        struct skippy_error ** out_error) {
++    if (model == nullptr || out_info == nullptr) {
++        return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model and out_info are required");
++    }
++    if (out_info->struct_size < sizeof(skippy_asr_info_v1) ||
++            out_info->abi_version != SKIPPY_ASR_INFO_V1_ABI_VERSION) {
++        return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "unsupported skippy_asr_info_v1 layout");
++    }
++#if defined(SKIPPY_HAS_WHISPER)
++    whisper_context * ctx = model->context;
++    out_info->multilingual = whisper_is_multilingual(ctx) != 0;
++    out_info->n_vocab = whisper_model_n_vocab(ctx);
++    out_info->n_audio_layer = whisper_model_n_audio_layer(ctx);
++    out_info->n_text_layer = whisper_model_n_text_layer(ctx);
++    out_info->n_mels = whisper_model_n_mels(ctx);
++    out_info->weights_bytes = model->weights_bytes;
++    out_info->on_accelerator = model->on_accelerator;
++    return skippy_success(out_error);
++#else
++    return unsupported(out_error);
++#endif
++}
++
++extern "C" enum skippy_status skippy_asr_decode_audio(
++        const uint8_t * data,
++        size_t len,
++        float ** out_samples,
++        size_t * out_sample_count,
++        struct skippy_error ** out_error) {
++    if (data == nullptr || out_samples == nullptr || out_sample_count == nullptr) {
++        return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "data, out_samples, and out_sample_count are required");
++    }
++    *out_samples = nullptr;
++    *out_sample_count = 0;
++#if defined(SKIPPY_HAS_WHISPER)
++    return asr_entry(out_error, [&] {
++        if (!is_supported_container(data, len)) {
++            return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "unsupported audio format; send WAV, MP3, or FLAC");
++        }
++        std::vector<float> samples;
++        switch (decode_audio(data, len, samples)) {
++            case decode_outcome::ok:
++                break;
++            case decode_outcome::too_long:
++                return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                        "the audio upload is longer than 30 minutes");
++            case decode_outcome::failed:
++                return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "failed to decode the audio upload");
++        }
++        if (samples.empty()) {
++            return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "the audio upload holds no samples");
++        }
++        auto * owned = static_cast<float *>(std::malloc(samples.size() * sizeof(float)));
++        if (owned == nullptr) {
++            return asr_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "out of memory decoding audio");
++        }
++        std::memcpy(owned, samples.data(), samples.size() * sizeof(float));
++        *out_samples = owned;
++        *out_sample_count = samples.size();
++        return skippy_success(out_error);
++    });
++#else
++    (void) len;
++    return unsupported(out_error);
++#endif
++}
++
++extern "C" void skippy_asr_samples_free(float * samples) {
++    std::free(samples);
++}
++
++extern "C" enum skippy_status skippy_asr_transcribe(
++        struct skippy_asr_model * model,
++        const float * samples,
++        size_t sample_count,
++        const struct skippy_asr_transcribe_params_v1 * params,
++        skippy_asr_abort_callback abort_callback,
++        void * abort_user_data,
++        struct skippy_asr_result ** out_result,
++        struct skippy_error ** out_error) {
++    if (model == nullptr || samples == nullptr || params == nullptr || out_result == nullptr) {
++        return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "model, samples, params, and out_result are required");
++    }
++    *out_result = nullptr;
++    if (params->struct_size < sizeof(skippy_asr_transcribe_params_v1) ||
++            params->abi_version != SKIPPY_ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION) {
++        return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "unsupported skippy_asr_transcribe_params_v1 layout");
++    }
++    if (sample_count == 0 || sample_count > static_cast<size_t>(SKIPPY_ASR_MAX_SAMPLES)) {
++        return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                "sample_count must be between 1 and SKIPPY_ASR_MAX_SAMPLES (30 minutes)");
++    }
++#if defined(SKIPPY_HAS_WHISPER)
++    return asr_entry(out_error, [&] {
++        whisper_context * ctx = model->context;
++        std::string language = params->language == nullptr ? "" : params->language;
++        if (language.empty()) {
++            language = "auto";
++        }
++        if (language != "auto" && whisper_lang_id(language.c_str()) < 0) {
++            return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "unknown language '" + language + "'");
++        }
++        if (!whisper_is_multilingual(ctx) && (params->translate || (language != "auto" && language != "en"))) {
++            return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "this Whisper model is English-only; it cannot translate or transcribe '" + language + "'");
++        }
++
++        whisper_full_params full = whisper_full_default_params(WHISPER_SAMPLING_GREEDY);
++        // Default to at most four CPU threads; never exceed the hardware.
++        const int hardware = static_cast<int>((std::max)(1u, std::thread::hardware_concurrency()));
++        full.n_threads = params->n_threads > 0
++                ? (std::min)(params->n_threads, hardware)
++                : (std::min)(4, hardware);
++        full.translate = params->translate;
++        full.language = whisper_is_multilingual(ctx) ? language.c_str() : "en";
++        full.detect_language = false;
++        full.initial_prompt = params->prompt != nullptr && params->prompt[0] != '\0' ? params->prompt : nullptr;
++        full.temperature = (std::max)(0.0f, params->temperature);
++        full.print_progress = false;
++        full.print_realtime = false;
++        full.print_special = false;
++        full.print_timestamps = false;
++        abort_bridge bridge{abort_callback, abort_user_data};
++        if (abort_callback != nullptr) {
++            full.abort_callback = whisper_abort;
++            full.abort_callback_user_data = &bridge;
++        }
++
++        std::unique_ptr<whisper_state, state_deleter> state(whisper_init_state(ctx));
++        if (!state) {
++            return asr_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to allocate Whisper decoder state");
++        }
++        const int rc = whisper_full_with_state(ctx, state.get(), full, samples, static_cast<int>(sample_count));
++        if (abort_callback != nullptr && abort_callback(abort_user_data)) {
++            return asr_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "transcription cancelled");
++        }
++        if (rc != 0) {
++            return asr_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR,
++                    "Whisper transcription failed with code " + std::to_string(rc));
++        }
++
++        auto result = std::make_unique<skippy_asr_result>();
++        const int n_segments = whisper_full_n_segments_from_state(state.get());
++        result->segments.reserve(static_cast<size_t>((std::max)(0, n_segments)));
++        for (int i = 0; i < n_segments; ++i) {
++            skippy_asr_segment_text segment;
++            // whisper.cpp reports segment bounds in 10 ms ticks.
++            segment.start_ms = whisper_full_get_segment_t0_from_state(state.get(), i) * 10;
++            segment.end_ms = whisper_full_get_segment_t1_from_state(state.get(), i) * 10;
++            segment.text = whisper_full_get_segment_text_from_state(state.get(), i);
++            segment.no_speech_prob = whisper_full_get_segment_no_speech_prob_from_state(state.get(), i);
++            result->segments.push_back(std::move(segment));
++        }
++        const int lang_id = whisper_full_lang_id_from_state(state.get());
++        const char * lang = lang_id >= 0 ? whisper_lang_str(lang_id) : nullptr;
++        result->language = lang != nullptr ? lang : (language == "auto" ? "" : language);
++        result->duration_seconds = static_cast<double>(sample_count) / SKIPPY_ASR_SAMPLE_RATE;
++        *out_result = result.release();
++        return skippy_success(out_error);
++    });
++#else
++    (void) abort_callback;
++    (void) abort_user_data;
++    return unsupported(out_error);
++#endif
++}
++
++extern "C" size_t skippy_asr_result_segment_count(const struct skippy_asr_result * result) {
++    return result == nullptr ? 0 : result->segments.size();
++}
++
++extern "C" enum skippy_status skippy_asr_result_segment_v1(
++        const struct skippy_asr_result * result,
++        size_t index,
++        struct skippy_asr_segment_v1 * out_segment,
++        struct skippy_error ** out_error) {
++    if (result == nullptr || out_segment == nullptr) {
++        return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "result and out_segment are required");
++    }
++    if (out_segment->struct_size < sizeof(skippy_asr_segment_v1) ||
++            out_segment->abi_version != SKIPPY_ASR_SEGMENT_V1_ABI_VERSION) {
++        return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "unsupported skippy_asr_segment_v1 layout");
++    }
++    if (index >= result->segments.size()) {
++        return asr_fail(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "segment index out of range");
++    }
++    const skippy_asr_segment_text & segment = result->segments[index];
++    out_segment->start_ms = segment.start_ms;
++    out_segment->end_ms = segment.end_ms;
++    out_segment->text = segment.text.c_str();
++    out_segment->no_speech_prob = segment.no_speech_prob;
++    return skippy_success(out_error);
++}
++
++extern "C" const char * skippy_asr_result_language(const struct skippy_asr_result * result) {
++    return result == nullptr ? "" : result->language.c_str();
++}
++
++extern "C" double skippy_asr_result_duration_seconds(const struct skippy_asr_result * result) {
++    return result == nullptr ? 0.0 : result->duration_seconds;
++}
++
++extern "C" void skippy_asr_result_free(struct skippy_asr_result * result) {
++    delete result;
++}
+-- 
+2.56.0
+

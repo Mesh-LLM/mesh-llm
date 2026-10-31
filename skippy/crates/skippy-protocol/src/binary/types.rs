@@ -4,10 +4,9 @@ use crate::StageActivationCodec;
 
 use super::invalid_data;
 
-// v16 replaces family-specific activation state bits with a typed multipart frontier frame.
-// Stage peers must be upgraded together because the activation payload now starts with its
-// descriptor directory rather than an implicit F32 tensor.
-pub const STAGE_STATE_VERSION: i32 = 16;
+// v17 adds unsampled prefill readouts and bounded selected-score replies.
+// Stage peers must be upgraded together; the Mesh gossip envelope stays additive.
+pub const STAGE_STATE_VERSION: i32 = 17;
 pub const MAX_STAGE_LOGIT_BIAS: usize = 256;
 pub const MAX_STAGE_SAMPLERS: usize = 16;
 pub const MAX_STAGE_DRY_SEQUENCE_BREAKERS: usize = 8;
@@ -45,6 +44,7 @@ pub enum WireMessageKind {
     VerifyWindow = 21,
     RetireVerifyWindow = 22,
     DiscardStaleWindows = 23,
+    PrefillReadout = 24,
     StateExport = 13,
     ConfigureGeneration = 14,
     ProbePrefill = 15,
@@ -121,6 +121,7 @@ impl WireMessageKind {
 impl TryFrom<i32> for WireMessageKind {
     type Error = io::Error;
 
+    /// Decode a wire-message tag and reject unknown request kinds.
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::PrefillEmbd),
@@ -143,6 +144,7 @@ impl TryFrom<i32> for WireMessageKind {
             21 => Ok(Self::VerifyWindow),
             22 => Ok(Self::RetireVerifyWindow),
             23 => Ok(Self::DiscardStaleWindows),
+            24 => Ok(Self::PrefillReadout),
             _ => Err(invalid_data("unknown stage message kind")),
         }
     }
@@ -154,16 +156,19 @@ pub enum WireReplyKind {
     Ack = 1,
     PredictedToken = 2,
     PredictedTokens = 3,
+    TokenScores = 4,
 }
 
 impl TryFrom<i32> for WireReplyKind {
     type Error = io::Error;
 
+    /// Decode a wire-reply tag and reject unknown reply kinds.
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::Ack),
             2 => Ok(Self::PredictedToken),
             3 => Ok(Self::PredictedTokens),
+            4 => Ok(Self::TokenScores),
             _ => Err(invalid_data("unknown stage reply kind")),
         }
     }
@@ -184,6 +189,17 @@ pub mod state_flags {
     pub const SAMPLING: i32 = 1 << 3;
     pub const FULL_STATE: i32 = 1 << 4;
     pub const CHAT_SAMPLING_METADATA: i32 = 1 << 5;
+    /// Bits 8..=11: how many native MTP draft tokens the final stage should
+    /// propose for a decode or verify message, valid when
+    /// `NATIVE_MTP_DRAFT_TOKENS_SET` is present. Senders that predate the field
+    /// leave both clear and get the final stage's configured depth.
+    pub const NATIVE_MTP_DRAFT_TOKENS_SHIFT: u32 = 8;
+    pub const NATIVE_MTP_DRAFT_TOKENS_MASK: i32 = 0xF << NATIVE_MTP_DRAFT_TOKENS_SHIFT;
+    pub const NATIVE_MTP_DRAFT_TOKENS_SET: i32 = 1 << 12;
+    /// On a verify message: the sender accepts a native MTP draft that
+    /// continues after the first rejected row's correction token (reply
+    /// marker 2). Without it a final stage drops drafts from rejected windows.
+    pub const NATIVE_MTP_DRAFT_AFTER_CORRECTION: i32 = 1 << 13;
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -367,6 +383,41 @@ impl StageStateHeader {
         header
     }
 
+    /// Native MTP draft depth requested of the final stage, if the sender set
+    /// one. `Some(0)` asks for no drafts.
+    pub fn native_mtp_draft_tokens(self) -> Option<usize> {
+        if self.flags & state_flags::NATIVE_MTP_DRAFT_TOKENS_SET == 0 {
+            return None;
+        }
+        let value = (self.flags & state_flags::NATIVE_MTP_DRAFT_TOKENS_MASK)
+            >> state_flags::NATIVE_MTP_DRAFT_TOKENS_SHIFT;
+        Some(value as usize)
+    }
+
+    /// Requests `tokens` native MTP drafts from the final stage, saturating at
+    /// the field's width.
+    pub fn set_native_mtp_draft_tokens(&mut self, tokens: usize) {
+        let max = (state_flags::NATIVE_MTP_DRAFT_TOKENS_MASK
+            >> state_flags::NATIVE_MTP_DRAFT_TOKENS_SHIFT) as usize;
+        let value = tokens.min(max) as i32;
+        self.flags = (self.flags & !state_flags::NATIVE_MTP_DRAFT_TOKENS_MASK)
+            | (value << state_flags::NATIVE_MTP_DRAFT_TOKENS_SHIFT)
+            | state_flags::NATIVE_MTP_DRAFT_TOKENS_SET;
+    }
+
+    /// Whether the sender accepts drafts that follow a rejected window's correction.
+    pub fn accepts_native_mtp_draft_after_correction(self) -> bool {
+        self.flags & state_flags::NATIVE_MTP_DRAFT_AFTER_CORRECTION != 0
+    }
+
+    pub fn set_accepts_native_mtp_draft_after_correction(&mut self, accepts: bool) {
+        if accepts {
+            self.flags |= state_flags::NATIVE_MTP_DRAFT_AFTER_CORRECTION;
+        } else {
+            self.flags &= !state_flags::NATIVE_MTP_DRAFT_AFTER_CORRECTION;
+        }
+    }
+
     pub fn matches_kind(self, kind: WireMessageKind) -> bool {
         if matches!(
             kind,
@@ -447,6 +498,8 @@ pub struct StageWireMessage {
     pub positions: Vec<i32>,
     pub activation: Vec<u8>,
     pub raw_bytes: Vec<u8>,
+    /// Selected final-row vocabulary ids for PrefillReadout only.
+    pub readout_tokens: Vec<i32>,
 }
 
 impl StageWireMessage {
@@ -461,6 +514,7 @@ impl StageWireMessage {
                 | WireMessageKind::DecodeReadout
                 | WireMessageKind::DecodeLightCtx
                 | WireMessageKind::VerifyWindow
+                | WireMessageKind::PrefillReadout
         ) {
             return None;
         }
@@ -479,6 +533,7 @@ impl StageWireMessage {
         (self.kind == WireMessageKind::VerifyWindow).then_some(self.token_count)
     }
 
+    /// Estimate the serialized message size including all sideband payloads.
     pub fn estimated_wire_bytes(&self) -> usize {
         let sampling_bytes = self.sampling.as_ref().map_or(0, |sampling| {
             STAGE_SAMPLING_CONFIG_BASE_BYTES
@@ -497,6 +552,11 @@ impl StageWireMessage {
             .saturating_add(sampling_bytes)
             .saturating_add(chat_metadata_bytes)
             .saturating_add(self.payload_wire_bytes())
+            .saturating_add(if self.kind == WireMessageKind::PrefillReadout {
+                4 + 4 * self.readout_tokens.len()
+            } else {
+                0
+            })
     }
 
     fn payload_wire_bytes(&self) -> usize {
@@ -528,6 +588,7 @@ impl StageWireMessage {
         Self::stop_with_identity(0, 0)
     }
 
+    /// Construct a stop request bound to the specified stage and session identity.
     pub fn stop_with_identity(request_id: u64, session_id: u64) -> Self {
         Self {
             kind: WireMessageKind::Stop,
@@ -541,10 +602,12 @@ impl StageWireMessage {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         }
     }
 
+    /// Construct a generation-configuration control message for a stage session.
     pub fn configure_generation(
         request_id: u64,
         session_id: u64,
@@ -566,6 +629,7 @@ impl StageWireMessage {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         }
     }
@@ -594,7 +658,7 @@ fn sampling_string_list_wire_bytes(values: &[String], maximum_count: usize) -> u
         .sum()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StageReply {
     pub kind: WireReplyKind,
     pub predicted: i32,
@@ -603,6 +667,8 @@ pub struct StageReply {
     pub native_mtp_draft: Option<StageNativeMtpDraft>,
     pub window: StageReplyWindow,
     pub stats: StageReplyStats,
+    /// Full-vocabulary log probabilities, in the request's selected-token order.
+    pub log_probabilities: Vec<f32>,
 }
 
 /// A native MTP proposal associated with a stage reply.
@@ -614,6 +680,10 @@ pub struct StageReply {
 pub struct StageNativeMtpDraft {
     pub token_ids: Vec<i32>,
     pub proposal_compute_us: i64,
+    /// The verify window was rejected and this draft continues after the
+    /// first rejected row's predicted (correction) token. Otherwise it
+    /// continues after the window's last prediction.
+    pub follows_correction: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -787,8 +857,10 @@ fn better_prefill_calibration_sample(
         > i128::from(current_us) * i128::from(candidate_tokens)
 }
 
+/// Return the execution phase implied by this message kind.
 fn expected_phase(kind: WireMessageKind) -> WireStagePhase {
     if kind.is_prefill()
+        || kind == WireMessageKind::PrefillReadout
         || matches!(
             kind,
             WireMessageKind::StateImport | WireMessageKind::StateExport

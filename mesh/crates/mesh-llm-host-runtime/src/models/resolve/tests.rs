@@ -963,6 +963,7 @@ fn format_huggingface_display_ref_uses_selector_for_split_gguf() {
 #[tokio::test]
 #[serial]
 async fn download_exact_ref_bf16_shorthand_downloads_full_split_model() {
+    let _catalog_guard = empty_catalog_guard();
     let fixture = load_gemma_live_fixture();
     let cache = tempfile::tempdir().unwrap();
     let bf16_dir = cache.path().join("BF16");
@@ -976,7 +977,13 @@ async fn download_exact_ref_bf16_shorthand_downloads_full_split_model() {
         let siblings = fixture
             .siblings
             .iter()
-            .map(|file| (file.clone(), fixture.size_bytes.get(file).copied()))
+            // Keep the mocked download plan independent of live HEAD requests.
+            .map(|file| {
+                (
+                    file.clone(),
+                    Some(fixture.size_bytes.get(file).copied().unwrap_or(1)),
+                )
+            })
             .collect::<Vec<_>>();
         move |requested_repo, requested_revision| {
             if requested_repo == repo && requested_revision == "main" {
@@ -1213,5 +1220,42 @@ fn default_hf_file_follows_the_local_fit_budget_not_the_ram_credit() {
     assert_eq!(
         pick_gguf_for_budget(candidates, local_fit_capacity_bytes(&hw, None, true)).as_deref(),
         Some("model-Q8_0.gguf")
+    );
+}
+
+#[tokio::test]
+async fn exact_whisper_model_files_resolve_without_gguf_selection() {
+    let siblings = [
+        ("ggml-base.en.bin".to_string(), Some(147_964_211)),
+        (
+            "ggml-large-v3-turbo-q5_0.bin".to_string(),
+            Some(574_041_195),
+        ),
+        ("README.md".to_string(), Some(1_000)),
+    ];
+    let resolved = resolve_huggingface_file_from_sibling_entries(
+        "ggerganov/whisper.cpp",
+        None,
+        "ggml-large-v3-turbo-q5_0.bin",
+        &siblings,
+    )
+    .await
+    .unwrap();
+    assert_eq!(resolved, "ggml-large-v3-turbo-q5_0.bin");
+    assert!(is_whisper_model_file_name("models/ggml-base.en.bin"));
+    assert!(!is_whisper_model_file_name("pytorch_model.bin"));
+    assert!(!is_whisper_model_file_name("ggml-model-q4_0.bin"));
+    // A Whisper name missing from the repo is refused before any download.
+    let missing = resolve_huggingface_file_from_sibling_entries(
+        "ggerganov/whisper.cpp",
+        None,
+        "ggml-large-v9.bin",
+        &siblings,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        missing.to_string().contains("No file ggml-large-v9.bin"),
+        "{missing}"
     );
 }

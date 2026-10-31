@@ -25,10 +25,20 @@ pub const FEATURE_SYSTEM_ONE: u64 = 1 << 38;
 pub const FEATURE_CACHEGEN_KV_PAGE: u64 = 1 << 39;
 /// Full-model Laya decision reads (`skippy/laya.h`).
 pub const FEATURE_LAYA_DECISIONS: u64 = 1 << 40;
+/// Full-model speech recognition (`skippy/asr.h`); clear in runtimes built
+/// without whisper.cpp.
+pub const FEATURE_SPEECH_RECOGNITION: u64 = 1 << 41;
 pub const MODEL_TENSOR_SOURCE_V1_ABI_VERSION: u32 = 1;
 pub const WORKLOAD_INFO_V1_ABI_VERSION: u32 = 1;
 pub const LAYA_INFO_V1_ABI_VERSION: u32 = 1;
 pub const LAYA_MEMORY_V1_ABI_VERSION: u32 = 1;
+pub const ASR_INFO_V1_ABI_VERSION: u32 = 1;
+pub const ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION: u32 = 1;
+pub const ASR_SEGMENT_V1_ABI_VERSION: u32 = 1;
+/// Sample rate of the PCM `skippy_asr_decode_audio` returns.
+pub const ASR_SAMPLE_RATE: u32 = 16_000;
+/// Longest audio the ASR ABI decodes or transcribes: 30 minutes at 16 kHz.
+pub const ASR_MAX_SAMPLES: usize = 16_000 * 60 * 30;
 /// Question types the Laya decision head distinguishes, in native order.
 pub const LAYA_QTYPE_COUNT: usize = 3;
 
@@ -128,6 +138,16 @@ pub struct IterationRequest {
     pub input_desc: *const crate::ActivationDesc,
     pub input_payload: *const c_void,
     pub sample_last: bool,
+    pub readout: *const TokenScoreRequest,
+}
+
+/// Caller-owned buffers for an unsampled, final-row readout.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TokenScoreRequest {
+    pub token_ids: *const i32,
+    pub token_count: usize,
+    pub out_log_probabilities: *mut f32,
 }
 
 #[repr(C)]
@@ -213,6 +233,95 @@ pub struct LayaSequence {
     pub marker_offset: usize,
     pub marker_count: usize,
 }
+
+/// Shape and memory of an opened speech-recognition model.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AsrInfoV1 {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub multilingual: bool,
+    pub n_vocab: i32,
+    pub n_audio_layer: i32,
+    pub n_text_layer: i32,
+    pub n_mels: i32,
+    pub weights_bytes: u64,
+    pub on_accelerator: bool,
+}
+
+impl Default for AsrInfoV1 {
+    /// Initialize the ASR descriptor with its ABI size and version.
+    fn default() -> Self {
+        Self {
+            struct_size: std::mem::size_of::<Self>() as u32,
+            abi_version: ASR_INFO_V1_ABI_VERSION,
+            multilingual: false,
+            n_vocab: 0,
+            n_audio_layer: 0,
+            n_text_layer: 0,
+            n_mels: 0,
+            weights_bytes: 0,
+            on_accelerator: false,
+        }
+    }
+}
+
+/// Options for one transcription; null strings and zeros select defaults.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct AsrTranscribeParamsV1 {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub language: *const c_char,
+    pub translate: bool,
+    pub prompt: *const c_char,
+    pub temperature: f32,
+    pub n_threads: i32,
+}
+
+impl Default for AsrTranscribeParamsV1 {
+    /// Initialize the transcription options with their ABI size and version.
+    fn default() -> Self {
+        Self {
+            struct_size: std::mem::size_of::<Self>() as u32,
+            abi_version: ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION,
+            language: std::ptr::null(),
+            translate: false,
+            prompt: std::ptr::null(),
+            temperature: 0.0,
+            n_threads: 0,
+        }
+    }
+}
+
+/// One timed segment; `text` is owned by the native result.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct AsrSegmentV1 {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    pub start_ms: i64,
+    pub end_ms: i64,
+    pub text: *const c_char,
+    pub no_speech_prob: f32,
+}
+
+impl Default for AsrSegmentV1 {
+    /// Initialize the segment descriptor with its ABI size and version.
+    fn default() -> Self {
+        Self {
+            struct_size: std::mem::size_of::<Self>() as u32,
+            abi_version: ASR_SEGMENT_V1_ABI_VERSION,
+            start_ms: 0,
+            end_ms: 0,
+            text: std::ptr::null(),
+            no_speech_prob: 0.0,
+        }
+    }
+}
+
+/// Polled between decoder steps; returning true cancels the transcription.
+pub type AsrAbortCallback = Option<unsafe extern "C" fn(user_data: *mut c_void) -> bool>;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -544,6 +653,16 @@ pub struct LayaModel {
 }
 
 #[repr(C)]
+pub struct AsrModel {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
+pub struct AsrResult {
+    _private: [u8; 0],
+}
+
+#[repr(C)]
 pub struct NgramCache {
     _private: [u8; 0],
 }
@@ -588,6 +707,16 @@ pub type LlamaPerfContextFn = unsafe extern "C" fn(ctx: *mut Opaque) -> LlamaPer
 /// real load, and nothing on the host could see it before: the counter stopped
 /// at the C++ boundary, so the reuse hit rate had to be inferred from
 /// throughput deltas.
+///
+/// The layout must track the pinned upstream header exactly. `llama_perf_context`
+/// returns this struct by value, so the caller supplies the destination slot: a
+/// mirror that is *smaller* than the upstream struct does not fail to link or
+/// return obviously wrong numbers, it makes native code write past the
+/// destination. That is exactly what the v0.7.0 pin did — upstream added
+/// `n_reallocs_same`/`n_reallocs_diff` (52 payload bytes, 56 with tail padding,
+/// against this mirror's previous 48), and the resulting eight-byte stack
+/// overwrite surfaced as a SIGSEGV in the status reader that happens to call
+/// `llama_perf_context`, not as a wrong counter value.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct LlamaPerfContextData {
@@ -598,4 +727,8 @@ pub struct LlamaPerfContextData {
     pub n_p_eval: i32,
     pub n_eval: i32,
     pub n_reused: i32,
+    /// Graph reallocations during inference with an unchanged graph size.
+    pub n_reallocs_same: i32,
+    /// Graph reallocations during inference with a changed graph size.
+    pub n_reallocs_diff: i32,
 }

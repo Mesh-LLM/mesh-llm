@@ -140,8 +140,8 @@ impl SkippyRuntimeHandle {
         lock_runtime(&self.runtime).supports_speech_synthesis()
     }
 
-    /// True only when this loaded runtime can execute System One reads: a valid
-    /// decision canvas on one unsplit execution lane.
+    /// True when the loaded runtime serves a decision canvas or starts a
+    /// causal readout chain. Intermediate workers do not advertise an endpoint.
     pub fn supports_system_one(&self) -> bool {
         lock_runtime(&self.runtime).supports_system_one_endpoint()
     }

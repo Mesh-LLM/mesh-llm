@@ -291,12 +291,52 @@ pub(crate) fn start_laya_http_on(
     model: Arc<skippy_runtime::LayaModel>,
     bind_addr: std::net::SocketAddr,
 ) -> SkippyHttpHandle {
-    let lifecycle_observer = crate::network::openai::runtime_events::compose_lifecycle_observer(
-        crate::logging_runtime_state().and_then(|state| state.openai_lifecycle_observer()),
+    let lifecycle_observer = crate::plugin::inference_observation::adapter::observe_frontend(
+        crate::network::openai::runtime_events::compose_lifecycle_observer(
+            crate::logging_runtime_state().and_then(|state| state.openai_lifecycle_observer()),
+        ),
+        model_id,
     );
     let server = skippy_serving::start_openai_backend_with_lifecycle_observer(
         bind_addr,
         Arc::new(skippy_serving::LayaSystemOneBackend::new(model_id, model)),
+        lifecycle_observer,
+    );
+    SkippyHttpHandle {
+        port: bind_addr.port(),
+        server,
+    }
+}
+
+pub(crate) fn load_speech_recognition_model(
+    path: &Path,
+    device: Option<&str>,
+) -> Result<Arc<skippy_runtime::SpeechRecognitionModel>> {
+    crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
+    Ok(Arc::new(skippy_runtime::SpeechRecognitionModel::open(
+        path, device,
+    )?))
+}
+
+pub(crate) fn start_speech_recognition_http_on(
+    model_id: &str,
+    model: Arc<skippy_runtime::SpeechRecognitionModel>,
+    concurrency: usize,
+    bind_addr: std::net::SocketAddr,
+) -> SkippyHttpHandle {
+    let lifecycle_observer = crate::plugin::inference_observation::adapter::observe_frontend(
+        crate::network::openai::runtime_events::compose_lifecycle_observer(
+            crate::logging_runtime_state().and_then(|state| state.openai_lifecycle_observer()),
+        ),
+        model_id,
+    );
+    let server = skippy_serving::start_openai_backend_with_lifecycle_observer(
+        bind_addr,
+        Arc::new(skippy_serving::SpeechRecognitionBackend::new(
+            model_id,
+            model,
+            concurrency,
+        )),
         lifecycle_observer,
     );
     SkippyHttpHandle {
@@ -352,8 +392,11 @@ impl SkippyModelHandle {
             .runtime
             .tokenizer_capability()
             .context("loaded Skippy runtime cannot provide its stage-0 tokenizer capability")?;
-        let lifecycle_observer = crate::network::openai::runtime_events::compose_lifecycle_observer(
-            crate::logging_runtime_state().and_then(|state| state.openai_lifecycle_observer()),
+        let lifecycle_observer = crate::plugin::inference_observation::adapter::observe_frontend(
+            crate::network::openai::runtime_events::compose_lifecycle_observer(
+                crate::logging_runtime_state().and_then(|state| state.openai_lifecycle_observer()),
+            ),
+            &self.config.model_id,
         );
         let server = skippy_serving::start_openai_backend_with_tokenizer_and_lifecycle_observer(
             bind_addr,

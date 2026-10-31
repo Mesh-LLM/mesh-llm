@@ -504,18 +504,6 @@ impl ReplayBus {
     pub(crate) fn subscribe_updates(&self) -> broadcast::Receiver<ReplayUpdate> {
         self.updates.subscribe()
     }
-
-    /// Clone the drops counter for external observation.
-    #[allow(dead_code)]
-    pub fn drops_clone(&self) -> Arc<AtomicU64> {
-        self.drops.clone()
-    }
-
-    /// Clone the evictions counter for external observation.
-    #[allow(dead_code)]
-    pub fn evictions_clone(&self) -> Arc<AtomicU64> {
-        self.evictions.clone()
-    }
 }
 
 #[cfg(test)]

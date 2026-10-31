@@ -4,15 +4,21 @@ use mesh_llm_types::mesh::{DEMAND_TTL_SECS, merge_demand};
 use serde_json::json;
 use std::net::SocketAddr;
 
+mod membership;
 mod routing_telemetry;
 mod startup;
+
+pub(crate) use membership::{
+    LocalEndpoints, MembershipEntry, MembershipNodeConfig, MeshMemberships,
+    membership_token_endpoint,
+};
 
 pub use startup::detect_local_fit_bytes;
 #[cfg(test)]
 pub(crate) use startup::hardware_snapshot_for_start;
 use startup::{
-    advertised_hardware_for_start, bind_mesh_endpoint, init_owner_runtime, startup_secret_key,
-    wait_for_endpoint_online,
+    advertised_hardware_for_start, bind_mesh_endpoint, init_owner_runtime,
+    saved_owner_attestation_path, startup_secret_key, wait_for_endpoint_online,
 };
 pub(crate) use startup::{stamp_plugin_event_source, startup_transport_config};
 
@@ -78,6 +84,8 @@ pub struct Node {
     pub(crate) owner_keypair: Option<crate::crypto::OwnerKeypair>,
     pub(crate) local_mesh_requirements: crate::MeshRequirements,
     pub(crate) state: Arc<Mutex<MembershipState>>,
+    pub(crate) gossip_verification: Arc<super::signed_records::VerificationGate>,
+    pub(crate) gossip_encoder: Arc<crate::protocol::GossipFrameEncoder>,
     pub(crate) plugin_message_history: Arc<Mutex<super::plugin_mesh::PluginMessageHistory>>,
     /// Relay-disabled same-identity endpoints that own recovered direct connections.
     /// See [`super::direct_rescue`] for the ownership and shutdown rules.
@@ -116,6 +124,9 @@ pub struct Node {
     pub(crate) vram_bytes: u64,
     /// Local fit budget, which may additionally include CPU offload memory.
     pub(crate) local_runtime_capacity_bytes: u64,
+    /// Independent safe system-RAM budget for CPU-default models when global
+    /// host-RAM offload is disabled.
+    pub(crate) host_ram_capacity_bytes: u64,
     /// What `gpu.host_ram_offload = true` would add to the local fit budget.
     pub(crate) host_ram_offload_gain_bytes: u64,
     pub(crate) peer_change_tx: watch::Sender<usize>,
@@ -161,6 +172,13 @@ pub struct Node {
     pub(crate) plugin_manager: Arc<Mutex<Option<crate::plugin::PluginManager>>>,
     pub(crate) display_name: Arc<Mutex<Option<String>>>,
     pub(crate) owner_attestation: Arc<Mutex<Option<SignedNodeOwnership>>>,
+    /// Where a renewed ownership certificate is saved for `mesh-llm auth`.
+    /// `None` for a node whose certificate is not kept on disk: a mesh
+    /// membership's, since the file is the main node's, and a test node's.
+    pub(crate) owner_attestation_path: Option<std::path::PathBuf>,
+    /// A renewed certificate whose write to `owner_attestation_path` failed,
+    /// retried on every heartbeat until a write succeeds.
+    pub(crate) unsaved_owner_attestation: Arc<Mutex<Option<SignedNodeOwnership>>>,
     pub(crate) release_attestation: Arc<Mutex<Option<crate::ReleaseBuildAttestation>>>,
     pub(crate) release_attestation_summary: Arc<Mutex<crate::ReleaseAttestationSummary>>,
     pub(crate) owner_summary: Arc<Mutex<OwnershipSummary>>,
@@ -205,10 +223,20 @@ pub struct Node {
         >,
     >,
     pub(crate) owner_lifecycle_response_cache: OwnerLifecycleResponseCache,
-    /// Channel to send model lifecycle intents from owner-control commands to the reconciler.
-    /// Set during runtime initialization; None when running outside the control loop.
+    /// Shared request leases and residency policy across host memberships.
+    pub(crate) native_model_lifecycle:
+        Arc<std::sync::OnceLock<Arc<crate::runtime::native_model_lifecycle::NativeModelLifecycle>>>,
+    /// Channel to send model lifecycle intents to the reconciler.
+    /// Set during runtime initialization; None outside the control loop.
     pub(crate) model_intent_tx:
         Arc<tokio::sync::Mutex<Option<tokio::sync::mpsc::Sender<crate::runtime::ModelIntent>>>>,
+    /// Further meshes this node serves its models into (`node::membership`).
+    pub(crate) memberships: MeshMemberships,
+    /// This node's endpoint and its memberships', shared among them: none may
+    /// peer with another.
+    pub(crate) local_endpoints: LocalEndpoints,
+    /// A membership node: it keeps to the one mesh it was started for.
+    pub(crate) is_membership: bool,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -760,11 +788,7 @@ impl Node {
         let (tunnel_http_tx, tunnel_http_rx) = tokio::sync::mpsc::channel(256);
         let (stage_transport_tx, stage_transport_rx) = tokio::sync::mpsc::channel(256);
 
-        let config_state_init = {
-            let path = crate::plugin::config_path(config_path)
-                .unwrap_or_else(|_| std::path::PathBuf::from("config.toml"));
-            crate::runtime::config_state::ConfigState::load(&path)?
-        };
+        let config_state_init = startup::load_config_state(config_path)?;
         let hardware =
             advertised_hardware_for_start(config_state_init.config(), &role, max_vram_gb);
         let owner_runtime = init_owner_runtime(
@@ -840,6 +864,8 @@ impl Node {
             mesh_id: Arc::new(Mutex::new(None)),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
+            gossip_verification: Arc::default(),
+            gossip_encoder: Arc::default(),
             bootstrap_token: Arc::new(Mutex::new(None)),
             join_targets: Arc::new(Mutex::new(Vec::new())),
             first_joined_mesh_ts: Arc::new(Mutex::new(None)),
@@ -849,6 +875,7 @@ impl Node {
             )),
             vram_bytes: hardware.vram_bytes,
             local_runtime_capacity_bytes: hardware.local_runtime_capacity_bytes,
+            host_ram_capacity_bytes: hardware.host_ram_capacity_bytes,
             host_ram_offload_gain_bytes: hardware.host_ram_offload_gain_bytes,
             peer_change_tx,
             peer_change_rx,
@@ -912,7 +939,13 @@ impl Node {
             runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
             runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+            native_model_lifecycle: Arc::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
+            memberships: MeshMemberships::default(),
+            owner_attestation_path: saved_owner_attestation_path(),
+            unsaved_owner_attestation: Arc::default(),
+            local_endpoints: LocalEndpoints::default(),
+            is_membership: false,
         };
 
         node.maybe_start_control_listener(
@@ -1024,6 +1057,8 @@ impl Node {
             mesh_id: Arc::new(Mutex::new(None)),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
+            gossip_verification: Arc::default(),
+            gossip_encoder: Arc::default(),
             bootstrap_token: Arc::new(Mutex::new(None)),
             join_targets: Arc::new(Mutex::new(Vec::new())),
             first_joined_mesh_ts: Arc::new(Mutex::new(None)),
@@ -1033,6 +1068,7 @@ impl Node {
             )),
             vram_bytes: 0,
             local_runtime_capacity_bytes: 0,
+            host_ram_capacity_bytes: 0,
             host_ram_offload_gain_bytes: 0,
             advertised_memory: AdvertisedMemory::default(),
             peer_change_tx,
@@ -1098,7 +1134,13 @@ impl Node {
             runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
             runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+            native_model_lifecycle: Arc::default(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
+            memberships: MeshMemberships::default(),
+            owner_attestation_path: None,
+            unsaved_owner_attestation: Arc::default(),
+            local_endpoints: LocalEndpoints::default(),
+            is_membership: false,
         }
     }
 
@@ -1496,7 +1538,7 @@ impl Node {
     }
 
     pub async fn all_served_model_descriptors(&self) -> Vec<ServedModelDescriptor> {
-        let mut descriptors = self.served_model_descriptors.lock().await.clone();
+        let mut descriptors = self.local_descriptors_with_plugins().await;
         let peer_descriptors = {
             let state = self.state.lock().await;
             state
@@ -1567,15 +1609,20 @@ impl Node {
         let Some(lifecycle) = lifecycle else {
             return Ok(None);
         };
+        let residency = match self.native_model_lifecycle.get() {
+            Some(service) => service.lease_port(port).await,
+            None => None,
+        };
         let record = lifecycle.lock().await;
         if !record.is_accepting_work() {
             return Err(crate::runtime::InstanceAdmissionError::NotAccepting {
                 state: record.state(),
             });
         }
-        Ok(Some(crate::runtime::InstanceRequestGuard::new(
-            record.in_flight_tracker(),
-        )))
+        Ok(Some(
+            crate::runtime::InstanceRequestGuard::new(record.in_flight_tracker())
+                .with_residency(residency),
+        ))
     }
 
     pub(crate) async fn refresh_served_model_descriptors(&self) {
@@ -1753,9 +1800,14 @@ impl Node {
         }
     }
 
-    /// Re-gossip our state to all connected peers.
+    /// Re-gossip our state to all connected peers, in this mesh and in every
+    /// mesh this node is a member of.
     /// Call after changing assigned/hosted state, role, or configured models.
     pub async fn regossip(&self) {
+        self.regossip_with_memberships().await;
+    }
+
+    async fn regossip_connections(&self) {
         let conns: Vec<(EndpointId, Connection)> = {
             let state = self.state.lock().await;
             state

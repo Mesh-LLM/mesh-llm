@@ -3,7 +3,7 @@ set -euo pipefail
 
 BASE_URL="${BASE_URL:-http://127.0.0.1:9337/v1}"
 API_KEY="${API_KEY:-EMPTY}"
-LLAMA_BENCHY_FROM="${LLAMA_BENCHY_FROM:-git+https://github.com/eugr/llama-benchy}"
+LLAMA_BENCHY_FROM="${LLAMA_BENCHY_FROM:-git+https://github.com/eugr/llama-benchy@e9be344578cec17745066b220798b80a0d2686d3}"
 
 MODEL="${MODEL:-}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-}"

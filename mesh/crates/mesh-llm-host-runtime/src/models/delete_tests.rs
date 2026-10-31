@@ -8,6 +8,11 @@ use crate::models::delete::{
     resolve_model_identifier,
 };
 
+// These fixtures exercise explicitly named repositories in a temporary cache.
+// A live curated-catalog lookup is unrelated and can block the shared serial
+// test lock or replace the fixture's repository with a changing catalog entry.
+use crate::models::remote_catalog::set_catalog_entries_for_test;
+
 fn unique_temp_dir(prefix: &str) -> PathBuf {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -83,9 +88,11 @@ async fn resolve_model_identifier_rejects_direct_urls() {
     assert!(err.to_string().contains("does not support direct URLs"));
 }
 
+/// Split selectors resolve every shard belonging to the selected quantization.
 #[tokio::test]
 #[serial]
 async fn resolve_model_identifier_returns_all_split_shards_from_selector_ref() {
+    let _catalog = set_catalog_entries_for_test(Vec::new());
     let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
     let prev_hf_home = std::env::var_os("HF_HOME");
     let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
@@ -135,9 +142,11 @@ async fn resolve_model_identifier_returns_all_split_shards_from_selector_ref() {
     restore_env("XDG_CACHE_HOME", prev_xdg);
 }
 
+/// Deleting a selected split model preserves shards belonging to other models.
 #[tokio::test]
 #[serial]
 async fn delete_model_by_identifier_removes_only_the_resolved_split_shards() {
+    let _catalog = set_catalog_entries_for_test(Vec::new());
     let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
     let prev_hf_home = std::env::var_os("HF_HOME");
     let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
@@ -193,9 +202,11 @@ async fn delete_model_by_identifier_removes_only_the_resolved_split_shards() {
     restore_env("XDG_CACHE_HOME", prev_xdg);
 }
 
+/// Dotted quantization selectors retain their full model identity during deletion.
 #[tokio::test]
 #[serial]
 async fn delete_model_by_identifier_supports_dotted_quant_selector_refs() {
+    let _catalog = set_catalog_entries_for_test(Vec::new());
     let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
     let prev_hf_home = std::env::var_os("HF_HOME");
     let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
@@ -245,9 +256,11 @@ async fn delete_model_by_identifier_supports_dotted_quant_selector_refs() {
     restore_env("XDG_CACHE_HOME", prev_xdg);
 }
 
+/// Repository references follow the same selection rules as the shared resolver.
 #[tokio::test]
 #[serial]
 async fn resolve_model_identifier_repo_ref_matches_shared_resolver_semantics() {
+    let _catalog = set_catalog_entries_for_test(Vec::new());
     let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
     let prev_hf_home = std::env::var_os("HF_HOME");
     let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
@@ -322,9 +335,11 @@ async fn resolve_model_identifier_repo_ref_matches_shared_resolver_semantics() {
     restore_env("XDG_CACHE_HOME", prev_xdg);
 }
 
+/// Layer-package resolution includes every file belonging to the selected package.
 #[tokio::test]
 #[serial]
 async fn resolve_model_identifier_repo_ref_returns_all_layered_package_files() {
+    let _catalog = set_catalog_entries_for_test(Vec::new());
     let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
     let prev_hf_home = std::env::var_os("HF_HOME");
     let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
@@ -404,9 +419,11 @@ async fn resolve_model_identifier_repo_ref_returns_all_layered_package_files() {
     restore_env("XDG_CACHE_HOME", prev_xdg);
 }
 
+/// A layers repository without packaged GGUFs must not resolve as a runnable model.
 #[tokio::test]
 #[serial]
 async fn resolve_model_identifier_rejects_layers_repo_without_package_ggufs() {
+    let _catalog = set_catalog_entries_for_test(Vec::new());
     let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
     let prev_hf_home = std::env::var_os("HF_HOME");
     let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
@@ -451,9 +468,11 @@ async fn resolve_model_identifier_rejects_layers_repo_without_package_ggufs() {
     restore_env("XDG_CACHE_HOME", prev_xdg);
 }
 
+/// Deleting a layer package removes all of its resolved files.
 #[tokio::test]
 #[serial]
 async fn delete_model_by_identifier_removes_all_layered_package_files() {
+    let _catalog = set_catalog_entries_for_test(Vec::new());
     let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
     let prev_hf_home = std::env::var_os("HF_HOME");
     let prev_xdg = std::env::var_os("XDG_CACHE_HOME");

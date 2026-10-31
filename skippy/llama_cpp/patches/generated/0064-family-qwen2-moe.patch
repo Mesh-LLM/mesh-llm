@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/qwen2moe.cpp b/src/models/qwen2moe.cpp
-index 9e2cedf64872895c820317c3b9b2cea1e957b1cc..e22721ac49189bc20af2c58c1321357058d12879 100644
+index bbfbbe3c5bd365950b174cd7c14928ddd553b76e..417e8c203d14d5be23418ebb22115b6a5491833e 100644
 --- a/src/models/qwen2moe.cpp
 +++ b/src/models/qwen2moe.cpp
 @@ -84,6 +84,8 @@ llama_model_qwen2moe::graph::graph(const llama_model & model, const llm_graph_pa

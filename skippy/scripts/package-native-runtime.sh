@@ -26,6 +26,7 @@ source "$SCRIPT_DIR/lib/cuda-toolkit.sh"
 BUILD=0
 KEEP_RUNPATH=0
 MODEL_PACKAGE_TOOL=1
+ID_SUFFIX=""
 OUT_DIR="$REPO_ROOT/dist/native-runtimes"
 BACKEND="${LLAMA_STAGE_BACKEND:-${SKIPPY_LLAMA_BACKEND:-cpu}}"
 TARGET_TRIPLE="${MESH_NATIVE_RUNTIME_TARGET:-}"
@@ -46,6 +47,10 @@ Options:
   --keep-runpath      Linux: prepend $ORIGIN to existing runpaths, don't replace them.
   --no-model-package-tool
                       Leave out the offline skippy-package-builder.
+  --id-suffix NAME    Append -NAME to the runtime id, directory and archive
+                      (lowercase letters, digits, dashes), so a distribution's
+                      build is told apart from the release runtime of the same
+                      backend in `mesh-llm runtime list`.
   -h, --help          Show this help.
 
 Environment:
@@ -57,6 +62,8 @@ Environment:
   MESH_CUDA_VERSION / MESH_LLM_CUDA_TOOLKIT_MAJOR (validated against the selected compiler)
   MESH_LLM_CUDA_LICENSE_FILE (optional CUDA EULA/copyright file override)
   MESH_LLM_LLAMA_PIN_SHA
+  MESH_LLM_NATIVE_RUNTIME_RANK (manifest rank, default 0; among compatible
+                      runtimes the highest rank wins)
 EOF
 }
 
@@ -86,6 +93,10 @@ while [[ "$#" -gt 0 ]]; do
             MODEL_PACKAGE_TOOL=0
             shift
             ;;
+        --id-suffix)
+            ID_SUFFIX="${2:?missing id suffix}"
+            shift 2
+            ;;
         -h|--help)
             usage
             exit 0
@@ -105,6 +116,11 @@ case "$BACKEND" in
         exit 1
         ;;
 esac
+
+if [[ -n "$ID_SUFFIX" && ! "$ID_SUFFIX" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+    echo "invalid --id-suffix '$ID_SUFFIX': use lowercase letters, digits and dashes" >&2
+    exit 1
+fi
 
 host_os() {
     case "$(uname -s)" in
@@ -249,6 +265,44 @@ gpu_benchmark_tool_path() {
 
 model_package_tool_path() {
     printf 'tools/skippy-package-builder\n'
+}
+
+# rocBLAS and hipBLASLt load their kernels at run time from `rocblas/library`
+# and `hipblaslt/library` next to their DLLs. No import table names those
+# folders, so the DLL collector never copies them, and a packaged rocBLAS
+# without them cannot initialize (#2146). Copy them from the HIP SDK, keeping
+# the files every architecture shares and those of the configured targets.
+copy_windows_rocm_kernel_libraries() {
+    local lib_dir="$1" raw name source file base arch keep
+    local -a targets=()
+    raw="${LLAMA_STAGE_AMDGPU_TARGETS:-${SKIPPY_AMDGPU_TARGETS:-}}"
+    raw="${raw//;/ }"
+    raw="${raw//,/ }"
+    read -r -a targets <<< "$raw"
+    for name in rocblas hipblaslt; do
+        [[ -f "$lib_dir/$name.dll" ]] || continue
+        source="${ROCM_PATH:-}/bin/$name/library"
+        if [[ ! -d "$source" ]]; then
+            echo "$name.dll is packaged, but its kernels are not at $source; set ROCM_PATH to the HIP SDK" >&2
+            return 1
+        fi
+        mkdir -p "$lib_dir/$name/library"
+        for file in "$source"/*; do
+            base="$(basename "$file")"
+            keep=1
+            if [[ "$base" =~ gfx[0-9a-f]+ && "${#targets[@]}" -gt 0 ]]; then
+                keep=0
+                for arch in "${targets[@]}"; do
+                    if [[ "$base" =~ (^|[^0-9a-z])${arch}([^0-9a-z]|$) ]]; then
+                        keep=1
+                    fi
+                done
+            fi
+            if [[ "$keep" == 1 ]]; then
+                cp "$file" "$lib_dir/$name/library/$base"
+            fi
+        done
+    done
 }
 
 hip_offload_arch_args() {
@@ -696,7 +750,7 @@ runtime_arch="$(target_runtime_arch "$TARGET_TRIPLE")"
 if ! flavor="$(backend_flavor)"; then
     exit 1
 fi
-artifact_id="meshllm-native-runtime-${platform}-${flavor}"
+artifact_id="meshllm-native-runtime-${platform}-${flavor}${ID_SUFFIX:+-$ID_SUFFIX}"
 stage_dir="$OUT_DIR/$artifact_id"
 
 runtime_libraries=()
@@ -787,6 +841,7 @@ if [[ "$runtime_os" == "windows" ]]; then
         --lib-dir "$stage_dir/lib" \
         --scan-dir "$stage_dir/tools" \
         "${dependency_args[@]}"
+    copy_windows_rocm_kernel_libraries "$stage_dir/lib"
 
     library_paths=()
     while IFS= read -r library; do

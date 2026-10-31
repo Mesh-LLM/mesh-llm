@@ -9,6 +9,9 @@ pub(crate) struct NodeHardwareSnapshot {
     pub(crate) vram_bytes: u64,
     /// Broader local fit budget, which may include CPU offload memory.
     pub(crate) local_runtime_capacity_bytes: u64,
+    /// Independent safe system-RAM budget for CPU-default models when global
+    /// host-RAM offload is disabled.
+    pub(crate) host_ram_capacity_bytes: u64,
     /// What `gpu.host_ram_offload = true` would add to that budget; zero when
     /// it is already on or cannot change anything on this host.
     pub(crate) host_ram_offload_gain_bytes: u64,
@@ -1322,6 +1325,11 @@ impl Node {
         if peer_id == self.endpoint.id() {
             return Ok(true);
         }
+        anyhow::ensure!(
+            !self.local_endpoints.contains(peer_id),
+            "not connecting to {}: another mesh this node serves",
+            peer_id.fmt_short()
+        );
 
         if self.use_cached_connection_if_ready(peer_id).await? {
             return Ok(true);

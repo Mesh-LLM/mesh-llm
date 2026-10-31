@@ -1,7 +1,11 @@
 mod activation;
 mod activation_codec;
 mod codec;
+mod readout;
 mod types;
+
+#[cfg(test)]
+mod frame_budget_tests;
 
 pub use activation::{
     activation_frame_wire_bytes, decode_activation_frame, decode_raw_activation_frame,
@@ -10,11 +14,11 @@ pub use activation::{
 pub use activation_codec::f16_bits::{f16_bits_to_f32, f32_to_f16_bits};
 pub use codec::{
     read_stage_message, read_stage_message_for_codec, read_stage_message_for_codec_policy,
-    recv_ready, recv_reply, send_ready, send_reply_ack, send_reply_ack_with_stats,
-    send_reply_message, send_reply_predicted, send_reply_predicted_tokens_with_stats,
-    send_reply_predicted_tokens_with_window_and_stats, send_reply_predicted_with_stats,
-    send_reply_predicted_with_tokens_and_stats, send_reply_predicted_with_tokens_window_and_stats,
-    write_stage_message,
+    read_stage_message_for_codec_policy_with_frame_budget, recv_ready, recv_reply, send_ready,
+    send_reply_ack, send_reply_ack_with_stats, send_reply_message, send_reply_predicted,
+    send_reply_predicted_tokens_with_stats, send_reply_predicted_tokens_with_window_and_stats,
+    send_reply_predicted_with_stats, send_reply_predicted_with_tokens_and_stats,
+    send_reply_predicted_with_tokens_window_and_stats, write_stage_message,
 };
 pub use types::sampling_flags;
 pub use types::{
@@ -145,15 +149,40 @@ mod tests {
         assert_eq!(reply.native_mtp_draft, None);
     }
 
+    /// Native MTP drafts retain their typed payload across reply serialization.
     #[test]
     fn reply_round_trips_typed_native_mtp_draft() {
         let reply = StageReply {
             kind: WireReplyKind::PredictedToken,
             predicted: 42,
             predicted_tokens: vec![42],
+            log_probabilities: Vec::new(),
             native_mtp_draft: Some(StageNativeMtpDraft {
                 token_ids: vec![43, 44],
                 proposal_compute_us: 12_345,
+                follows_correction: false,
+            }),
+            window: StageReplyWindow::default(),
+            stats: StageReplyStats::default(),
+        };
+        let mut bytes = Vec::new();
+        send_reply_message(&mut bytes, &reply).unwrap();
+
+        assert_eq!(recv_reply(Cursor::new(bytes)).unwrap(), reply);
+    }
+
+    /// Corrected native MTP drafts retain their proposal sequence across serialization.
+    #[test]
+    fn reply_round_trips_native_mtp_draft_after_correction() {
+        let reply = StageReply {
+            kind: WireReplyKind::PredictedTokens,
+            predicted: 42,
+            predicted_tokens: vec![42, 7, 9],
+            log_probabilities: Vec::new(),
+            native_mtp_draft: Some(StageNativeMtpDraft {
+                token_ids: vec![43, 44, 45],
+                proposal_compute_us: 99,
+                follows_correction: true,
             }),
             window: StageReplyWindow::default(),
             stats: StageReplyStats::default(),
@@ -326,6 +355,7 @@ mod tests {
         }
     }
 
+    /// Construct an activation-bearing stage message for wire-format tests.
     fn activation_message(
         frame: &StageActivationFrame,
         codec: crate::StageActivationCodec,
@@ -349,6 +379,7 @@ mod tests {
             tokens: vec![11],
             positions: Vec::new(),
             activation: encode_activation_frame(codec, &frame.desc, &frame.payload).unwrap(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         }
     }
@@ -393,6 +424,33 @@ mod tests {
         assert_eq!(sampling.top_k, 40);
         assert_eq!(sampling.logit_bias[0].token_id, 123);
         assert_eq!(sampling.logit_bias[0].bias, -50.0);
+    }
+
+    #[test]
+    fn native_mtp_draft_depth_round_trips_beside_other_flags() {
+        let frame = multipart_activation_frame(1);
+        let mut message = activation_message(&frame, crate::StageActivationCodec::RawF32V1);
+        assert_eq!(message.state.native_mtp_draft_tokens(), None);
+        message.state.flags |= state_flags::LIGHT_CONTEXT;
+        message.state.set_native_mtp_draft_tokens(3);
+
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &message).unwrap();
+        let mut decoded = read_stage_message(Cursor::new(bytes), 2).unwrap();
+        assert_eq!(decoded.state.native_mtp_draft_tokens(), Some(3));
+        assert_ne!(decoded.state.flags & state_flags::LIGHT_CONTEXT, 0);
+
+        decoded.state.set_native_mtp_draft_tokens(99);
+        assert_eq!(decoded.state.native_mtp_draft_tokens(), Some(15));
+        decoded.state.set_native_mtp_draft_tokens(0);
+        assert_eq!(decoded.state.native_mtp_draft_tokens(), Some(0));
+        assert!(!decoded.state.accepts_native_mtp_draft_after_correction());
+        decoded
+            .state
+            .set_accepts_native_mtp_draft_after_correction(true);
+        assert!(decoded.state.accepts_native_mtp_draft_after_correction());
+        assert_eq!(decoded.state.native_mtp_draft_tokens(), Some(0));
+        assert_ne!(decoded.state.flags & state_flags::LIGHT_CONTEXT, 0);
     }
 
     #[test]
@@ -491,6 +549,7 @@ mod tests {
         );
     }
 
+    /// Verification-window requests preserve their coordinator-owned metadata.
     #[test]
     fn verify_window_message_round_trips_window_metadata() {
         let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
@@ -510,6 +569,7 @@ mod tests {
             tokens: vec![1001, 1002, 1003, 1004],
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         };
 
@@ -526,6 +586,7 @@ mod tests {
         assert_eq!(decoded.state.decode_step, 7);
     }
 
+    /// Only decode requests advertise an authoritative live session position.
     #[test]
     fn only_decode_messages_carry_authoritative_session_positions() {
         let mut decode = StageWireMessage {
@@ -540,6 +601,7 @@ mod tests {
             tokens: vec![3],
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         };
         assert_eq!(decode.authoritative_session_position(), Some(17));
@@ -578,6 +640,7 @@ mod tests {
         );
     }
 
+    /// Wire-size estimates include headers and every transmitted sideband.
     #[test]
     fn stage_message_estimates_full_wire_transfer_bytes() {
         let frame = multipart_activation_frame(2);
@@ -608,6 +671,7 @@ mod tests {
             tokens: vec![1, 2],
             positions: vec![0],
             activation: encode_raw_activation_frame(&frame).unwrap(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         };
 
@@ -733,6 +797,7 @@ mod tests {
         );
     }
 
+    /// Driver-origin messages round-trip without an activation payload.
     #[test]
     fn driver_origin_message_round_trips_without_activation() {
         let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
@@ -751,6 +816,7 @@ mod tests {
             tokens: vec![11, 22],
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         };
         let mut bytes = Vec::new();
@@ -765,6 +831,7 @@ mod tests {
         assert!(decoded.sampling.is_none());
     }
 
+    /// Stage-origin stop messages do not require activation data.
     #[test]
     fn stop_message_round_trips_without_activation_from_a_stage() {
         let mut state = StageStateHeader::new(WireMessageKind::Stop);
@@ -781,6 +848,7 @@ mod tests {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         };
 
@@ -828,6 +896,7 @@ mod tests {
         );
     }
 
+    /// Stage messages bulk-write sidebands while preserving the encoded wire bytes.
     #[test]
     fn stage_message_bulk_writes_sidebands() {
         let value_count = 4_096;
@@ -844,6 +913,7 @@ mod tests {
             tokens: (0..value_count).collect(),
             positions: (10_000..10_000 + value_count).collect(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         };
         let calls = Rc::new(Cell::new(0));
@@ -897,6 +967,7 @@ mod tests {
         );
     }
 
+    /// Prefill framing overhead remains bounded independently of prompt length.
     #[test]
     fn prefill_wire_overhead_is_fixed_and_bounded() {
         let mut state = StageStateHeader::new(WireMessageKind::PrefillEmbd);
@@ -916,6 +987,7 @@ mod tests {
             tokens,
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         };
         let mut bytes = Vec::new();
@@ -931,6 +1003,7 @@ mod tests {
         const { assert!(STAGE_WIRE_FIXED_HEADER_BYTES <= 80) };
     }
 
+    /// Verification retirement preserves the exact run, topology, stage and session.
     #[test]
     fn verify_retirement_round_trips_exact_identity() {
         let kind = WireMessageKind::RetireVerifyWindow;
@@ -946,6 +1019,7 @@ mod tests {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         };
         let mut bytes = Vec::new();
@@ -958,6 +1032,7 @@ mod tests {
         assert!(decoded.state.matches_kind(kind));
     }
 
+    /// Session-control messages carry only their fixed header.
     #[test]
     fn session_control_messages_are_fixed_header_only() {
         let kind = WireMessageKind::TrimSession;
@@ -973,6 +1048,7 @@ mod tests {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         };
         let mut bytes = Vec::new();
@@ -986,6 +1062,7 @@ mod tests {
         assert!(decoded.activation.is_empty());
     }
 
+    /// State imports preserve the exact exported byte payload.
     #[test]
     fn state_import_message_round_trips_raw_bytes() {
         let state = StageStateHeader::new(WireMessageKind::StateImport);
@@ -1001,6 +1078,7 @@ mod tests {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: vec![1, 2, 3, 4],
         };
         let mut bytes = Vec::new();
@@ -1029,6 +1107,7 @@ mod tests {
         );
     }
 
+    /// State imports reject mismatched declared and actual payload sizes.
     #[test]
     fn state_import_writer_rejects_raw_byte_count_mismatch() {
         let state = StageStateHeader::new(WireMessageKind::StateImport);
@@ -1044,6 +1123,7 @@ mod tests {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: vec![1, 2, 3, 4],
         };
         let mut bytes = Vec::new();
@@ -1053,6 +1133,7 @@ mod tests {
         assert_eq!(error.to_string(), "state import raw byte count mismatch");
     }
 
+    /// State exports request a snapshot without carrying imported bytes.
     #[test]
     fn state_export_message_round_trips_without_payload() {
         let state = StageStateHeader::new(WireMessageKind::StateExport);
@@ -1068,6 +1149,7 @@ mod tests {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         };
         let mut bytes = Vec::new();
@@ -1185,5 +1267,101 @@ mod tests {
             ]
             .contains(&selected)
         );
+    }
+
+    // #2218 regression coverage: the documented stage frame budget must reject
+    // declared lengths before any frame buffer is committed.
+
+    #[test]
+    fn budgeted_decode_rejects_oversized_state_import_before_payload() {
+        let state = StageStateHeader::new(WireMessageKind::StateImport);
+        let bytes = stage_frame_prefix(WireMessageKind::StateImport, 9 * 1024 * 1024, 0, 0, state);
+        let result = read_stage_message_for_codec_policy_with_frame_budget(
+            Cursor::new(bytes),
+            2048,
+            crate::StageActivationCodec::RawF32V1,
+            crate::StageActivationCodecPolicy::Fixed,
+            crate::MAX_STAGE_FRAME_BYTES,
+        );
+        assert_invalid_data(result, "state import byte count exceeds frame budget");
+    }
+
+    #[test]
+    fn budgeted_decode_rejects_oversized_activation_payload_before_payload() {
+        let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
+        state.source_stage_index = 0;
+        let mut bytes = Vec::new();
+        push_i32(&mut bytes, WireMessageKind::VerifyWindow as i32);
+        push_i32(&mut bytes, 0);
+        push_i32(&mut bytes, 1);
+        push_i32(&mut bytes, 0);
+        push_i32(&mut bytes, 0);
+        push_state_header(&mut bytes, state);
+        push_i32(&mut bytes, 9 * 1024 * 1024); // declared activation wire bytes
+        push_u64(&mut bytes, 7);
+        push_u64(&mut bytes, 11);
+        let result = read_stage_message_for_codec_policy_with_frame_budget(
+            Cursor::new(bytes),
+            2048,
+            crate::StageActivationCodec::RawF32V1,
+            crate::StageActivationCodecPolicy::Fixed,
+            crate::MAX_STAGE_FRAME_BYTES,
+        );
+        assert_invalid_data(result, "activation payload byte count exceeds frame budget");
+    }
+
+    #[test]
+    fn budgeted_decode_rejects_oversized_sideband_counts_before_payload() {
+        // 1M + 1M sideband values declare exactly 8 MiB of sideband bytes on top
+        // of the fixed header: past the 8 MiB frame budget, inside the count caps.
+        let state = StageStateHeader::new(WireMessageKind::VerifyWindow);
+        let bytes = stage_frame_prefix(
+            WireMessageKind::VerifyWindow,
+            0,
+            MAX_STAGE_SIDEBAND_VALUES as i32,
+            MAX_STAGE_SIDEBAND_VALUES as i32,
+            state,
+        );
+        let result = read_stage_message_for_codec_policy_with_frame_budget(
+            Cursor::new(bytes),
+            2048,
+            crate::StageActivationCodec::RawF32V1,
+            crate::StageActivationCodecPolicy::Fixed,
+            crate::MAX_STAGE_FRAME_BYTES,
+        );
+        assert_invalid_data(result, "sideband value count exceeds frame budget");
+    }
+
+    #[test]
+    fn budgeted_decode_rejects_oversized_chat_metadata_before_payload() {
+        let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
+        state.flags |= super::state_flags::CHAT_SAMPLING_METADATA;
+        let mut bytes = stage_frame_prefix(WireMessageKind::VerifyWindow, 0, 0, 0, state);
+        bytes.extend_from_slice(&(9 * 1024 * 1024u32).to_le_bytes());
+        let result = read_stage_message_for_codec_policy_with_frame_budget(
+            Cursor::new(bytes),
+            2048,
+            crate::StageActivationCodec::RawF32V1,
+            crate::StageActivationCodecPolicy::Fixed,
+            crate::MAX_STAGE_FRAME_BYTES,
+        );
+        assert_invalid_data(result, "chat sampling metadata length exceeds frame budget");
+    }
+
+    #[test]
+    fn budgeted_decode_round_trips_in_budget_frames() {
+        let frame = multipart_activation_frame(2);
+        let message = activation_message(&frame, crate::StageActivationCodec::RawF32V1);
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &message).unwrap();
+        let decoded = read_stage_message_for_codec_policy_with_frame_budget(
+            Cursor::new(bytes),
+            2,
+            crate::StageActivationCodec::RawF32V1,
+            crate::StageActivationCodecPolicy::Fixed,
+            crate::MAX_STAGE_FRAME_BYTES,
+        )
+        .expect("an in-budget frame must decode through the budgeted entry point");
+        assert_eq!(decoded.request_id, 7);
     }
 }

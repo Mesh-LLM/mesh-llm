@@ -63,6 +63,7 @@ pub struct RuntimeOptions {
     pub min_protocol_version: Option<u32>,
     pub max_protocol_version: Option<u32>,
     pub require_release_attestation: bool,
+    pub require_signed_gossip: bool,
     pub release_signer_key: Vec<String>,
     pub name: Option<String>,
     pub plugin: Option<String>,
@@ -111,7 +112,7 @@ pub struct RuntimeOptions {
     pub trust_policy: Option<TrustPolicy>,
     pub trust_owner: Vec<String>,
     pub nostr_discovery: bool,
-    /// Skip installing the default plugin list on first run.
+    /// Skip installing the default plugins when this node starts.
     pub no_default_plugins: bool,
     pub audit_log_path: Option<PathBuf>,
     pub audit_log_format: AuditLogFormat,
@@ -156,6 +157,7 @@ impl Default for RuntimeOptions {
             min_protocol_version: None,
             max_protocol_version: None,
             require_release_attestation: false,
+            require_signed_gossip: false,
             release_signer_key: Vec::new(),
             name: None,
             plugin: None,

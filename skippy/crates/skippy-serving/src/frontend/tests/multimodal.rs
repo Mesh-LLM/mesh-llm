@@ -67,7 +67,7 @@ fn multimodal_smoke_fixture() -> Result<Option<MultimodalSmokeFixture>> {
         .map(Ok)
         .unwrap_or_else(|| infer_activation_width(&model_path))?;
     let ctx_size = env_u32(MM_CTX_SIZE_ENV)?.unwrap_or(2048);
-    let max_tokens = env_u32(MM_MAX_TOKENS_ENV)?.unwrap_or(16);
+    let max_tokens = env_u32(MM_MAX_TOKENS_ENV)?.unwrap_or(256);
     let n_gpu_layers = env_i32(MM_N_GPU_LAYERS_ENV)?.unwrap_or(0);
     Ok(Some(MultimodalSmokeFixture {
         model_path,
@@ -270,7 +270,10 @@ fn multimodal_chat_request_with_max_tokens(
                 ]
             }],
             "max_tokens": max_tokens,
-            "temperature": 0.0
+            "temperature": 0.0,
+            "reasoning_effort": "none",
+            "reasoning_format": "auto",
+            "chat_template_kwargs": {"reasoning_strength": "none"}
         }))
         .context("build multimodal smoke request")
 }
@@ -300,11 +303,6 @@ fn validate_image_response(response: &ChatCompletionResponse) -> Result<()> {
         .context("expected a multimodal response choice")?;
     let message = &choice.message;
     let content = message.content.as_deref().unwrap_or_default().trim();
-    let reasoning = message
-        .reasoning_content
-        .as_deref()
-        .unwrap_or_default()
-        .trim();
     anyhow::ensure!(
         response.usage.completion_tokens > 0,
         "image response generated no tokens"
@@ -313,13 +311,15 @@ fn validate_image_response(response: &ChatCompletionResponse) -> Result<()> {
         message.tool_calls.is_none(),
         "image response unexpectedly called a tool"
     );
-    let valid = match choice.finish_reason {
-        Some(FinishReason::Length) => !content.is_empty() || !reasoning.is_empty(),
-        Some(FinishReason::Stop) => !content.is_empty(),
-        _ => false,
-    };
+    let valid = matches!(
+        choice.finish_reason,
+        Some(FinishReason::Length | FinishReason::Stop)
+    ) && !content.is_empty();
+    let has_visible_answer = !["<|start|>", "<|message|>", "<|eom|>", "<|eot|>"]
+        .iter()
+        .any(|marker| content.contains(marker));
     anyhow::ensure!(
-        valid,
+        valid && has_visible_answer,
         "expected image output (and a final answer on stop); response={response:?}"
     );
     Ok(())
@@ -328,13 +328,29 @@ fn validate_image_response(response: &ChatCompletionResponse) -> Result<()> {
 #[test]
 fn image_response_validation_distinguishes_truncation_from_completion() {
     for (content, reasoning, finish, tokens, valid) in [
-        (None, Some("Inspecting the grid"), "length", 16, true),
+        (None, Some("Inspecting the grid"), "length", 16, false),
         (Some("A red square"), None, "length", 16, true),
         (Some("A red square"), Some("Inspecting"), "stop", 25, true),
         (None, Some("Inspecting the grid"), "stop", 16, false),
         (None, None, "length", 16, false),
         (Some(" "), Some("\n"), "length", 16, false),
         (Some("A red square"), None, "stop", 0, false),
+        (
+            Some(" to=self<|message|>Thinking"),
+            None,
+            "length",
+            16,
+            false,
+        ),
+        (
+            Some(
+                " to=self<|message|>Thinking<|eom|><|start|>assistant to=user<|message|>A red square",
+            ),
+            None,
+            "length",
+            32,
+            false,
+        ),
         (Some("A red square"), None, "tool_calls", 16, false),
     ] {
         let finish_reason = serde_json::from_value(json!(finish)).expect("finish reason");
@@ -536,6 +552,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         stage1_addr,
     );
     stage1_config.upstream = Some(skippy_protocol::PeerConfig {
+        persistent_lane_marker: false,
         stage_id: "stage-0".to_string(),
         stage_index: 0,
         endpoint: stage0_addr.to_string(),
@@ -547,6 +564,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
     stage0_config.n_batch = Some(256);
     stage0_config.n_ubatch = Some(32);
     stage0_config.downstream = Some(skippy_protocol::PeerConfig {
+        persistent_lane_marker: false,
         stage_id: "stage-1".to_string(),
         stage_index: 1,
         endpoint: stage1_addr.to_string(),

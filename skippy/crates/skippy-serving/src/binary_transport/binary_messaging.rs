@@ -11,7 +11,7 @@ use std::{
     net::{TcpListener, TcpStream},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread::{self, JoinHandle},
     time::{Duration, Instant},
@@ -42,16 +42,17 @@ use serde_json::json;
 use skippy_config::validate_config;
 use skippy_protocol::PeerConfig;
 use skippy_protocol::StageConfig;
-use skippy_protocol::binary::{
-    StageWireMessage, WireMessageKind, read_stage_message_for_codec_policy, send_ready,
-};
+use skippy_protocol::binary::{StageWireMessage, WireMessageKind, send_ready};
 use skippy_runtime::ActivationBoundaryDesc;
 
 pub(in crate::binary_transport) mod async_forwarder;
 mod connection;
 mod control_messages;
+mod first_message;
+mod idle;
 mod message_receive;
 mod prefill_recording;
+mod readout;
 pub(in crate::binary_transport) mod reply;
 mod session_lifecycle;
 mod session_tracker;
@@ -60,11 +61,61 @@ mod summary;
 mod telemetry;
 
 use self::connection::handle_binary_connection;
+use self::idle::{IdleDeadlines, first_message_prefix};
 use self::session_tracker::ConnectionSessionOwnership;
 
 /// How often a waiting connection worker rechecks the shutdown flag, matching
 /// the downstream DOWNSTREAM_SHUTDOWN_POLL cadence in stage_execution.
 const WORKER_SHUTDOWN_POLL: Duration = Duration::from_millis(100);
+/// How long an accepted peer may stay silent before the connection worker
+/// gives up waiting for its first message (#2218).
+const STAGE_HANDSHAKE_DEADLINE: Duration = Duration::from_secs(30);
+
+/// Waits for the connection's first message to become readable.
+///
+/// The worker passes `STAGE_HANDSHAKE_DEADLINE` so a silent peer cannot hold
+/// the dedicated worker thread and its tracked socket past the deadline
+/// (#2218). Returns `Ok(false)` when the server is shutting down and
+/// `Err(TimedOut)` when the handshake deadline expires.
+fn wait_for_first_message(
+    control: &ConnectionWorkerControl,
+    stream: &TcpStream,
+    deadline: Duration,
+) -> io::Result<bool> {
+    control.wait_for_readable(stream, Some(deadline))
+}
+
+/// Admits connection worker threads against the process-wide connection cap
+/// (#2218): a single admitted peer must not be able to spawn unbounded
+/// worker threads by accepting and stalling connections.
+#[derive(Default)]
+struct ConnectionAdmission {
+    live: usize,
+    limit: usize,
+}
+
+impl ConnectionAdmission {
+    fn new(limit: usize) -> Self {
+        Self { live: 0, limit }
+    }
+
+    fn live(&self) -> usize {
+        self.live
+    }
+
+    /// Admits one connection while fewer than `limit` are live.
+    fn try_acquire(&mut self) -> bool {
+        if self.live >= self.limit {
+            return false;
+        }
+        self.live += 1;
+        true
+    }
+
+    fn release(&mut self, count: usize) {
+        self.live = self.live.saturating_sub(count);
+    }
+}
 
 /// Darwin `recv`/`peek` error for an expired `SO_RCVTIMEO` (os error 22).
 const EINVAL: i32 = 22;
@@ -188,6 +239,9 @@ pub(crate) fn insert_downstream_identity(
 struct ConnectionWorkerControl {
     shutting_down: AtomicBool,
     sockets: Mutex<Vec<std::net::TcpStream>>,
+    idle_deadlines: IdleDeadlines,
+    persistent_lane: AtomicBool,
+    requests_in_flight: AtomicUsize,
 }
 
 impl ConnectionWorkerControl {
@@ -248,7 +302,11 @@ impl ConnectionWorkerControl {
     /// connection error. For the same teardown window, if even arming the
     /// timeout fails with EINVAL while shutdown is in progress, report
     /// `Ok(false)` — the worker is winding down either way.
-    fn wait_for_readable(&self, stream: &TcpStream) -> io::Result<bool> {
+    fn wait_for_readable(
+        &self,
+        stream: &TcpStream,
+        deadline: Option<Duration>,
+    ) -> io::Result<bool> {
         let timeout_armed = match stream.set_read_timeout(Some(WORKER_SHUTDOWN_POLL)) {
             Ok(()) => true,
             // Darwin rejects SO_RCVTIMEO operations with EINVAL (os error 22)
@@ -258,6 +316,7 @@ impl ConnectionWorkerControl {
             Err(error) => return Err(error),
         };
         let mut probe = [0u8; 1];
+        let deadline_at = deadline.map(|limit| Instant::now() + limit);
         let ready = loop {
             if self.is_shutting_down() {
                 break false;
@@ -280,6 +339,13 @@ impl ConnectionWorkerControl {
                     let _ = stream.set_read_timeout(None);
                     return Err(error);
                 }
+            }
+            if deadline_at.is_some_and(|limit| Instant::now() >= limit) {
+                let _ = stream.set_read_timeout(None);
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "stage connection timed out waiting for a message",
+                ));
             }
         };
         // Best-effort cleanup: on Darwin, clearing SO_RCVTIMEO during
@@ -390,7 +456,6 @@ fn run_binary_stage(
     };
     let native_mtp_enabled = native_mtp_enabled && config.native_mtp_enabled;
     validate_config(&config, topology.as_ref())?;
-    let max_inflight = max_inflight.min(config.lane_count as usize);
     let telemetry = Telemetry::new(
         metrics_otlp_grpc,
         telemetry_queue_capacity,
@@ -409,6 +474,11 @@ fn run_binary_stage(
         None,
     )?
     .context("binary stage server requires model_path")?;
+    // In-flight admission is bounded by the lanes the runtime actually serves.
+    // The native encoder-decoder clamp can hold that below `config.lane_count`
+    // (#1954).
+    let max_inflight = max_inflight
+        .min(usize::try_from(lock_runtime(&runtime).lane_count()).unwrap_or(usize::MAX));
     let (input_boundary, output_boundary) = {
         let runtime = lock_runtime(&runtime);
         (
@@ -518,6 +588,12 @@ fn run_binary_stage(
         output_activation_width,
     );
 
+    // #2218: each accepted connection gets a dedicated worker thread plus a
+    // reader thread; admit them against a bounded permit so one peer cannot
+    // exhaust the process. Covers the main and the prediction-return
+    // connections of every in-flight request, plus headroom.
+    let connection_limit = 2 * max_inflight.max(1) + 8;
+    let mut connection_admission = ConnectionAdmission::new(connection_limit);
     let accept_result = (|| -> Result<()> {
         while !shutdown.load(Ordering::SeqCst) {
             if frontend_task
@@ -526,7 +602,9 @@ fn run_binary_stage(
             {
                 break;
             }
+            let live_before = connection_workers.0.len();
             let panicked_workers = connection_workers.reap_finished();
+            connection_admission.release(live_before.saturating_sub(connection_workers.0.len()));
             if panicked_workers > 0 {
                 telemetry.emit(
                     "stage.connection_worker_panic",
@@ -548,6 +626,23 @@ fn run_binary_stage(
                 Err(error) => return Err(error).context("accept binary stage connection"),
             };
             prepare_binary_stage_connection(&upstream)?;
+            if !connection_admission.try_acquire() {
+                telemetry.emit(
+                    "stage.connection_admission_rejected",
+                    BTreeMap::from([
+                        (
+                            "llama_stage.live_connections".to_string(),
+                            json!(connection_admission.live()),
+                        ),
+                        (
+                            "llama_stage.connection_limit".to_string(),
+                            json!(connection_limit),
+                        ),
+                    ]),
+                );
+                let _ = upstream.shutdown(std::net::Shutdown::Both);
+                continue;
+            }
             let peer_addr = upstream.peer_addr().ok();
             tracing::debug!(
                 "binary accepted connection: stage_id={} peer={peer_addr:?}",
@@ -582,23 +677,16 @@ fn run_binary_stage(
                         "binary sent ready: stage_id={} peer={peer_addr:?}",
                         config.stage_id
                     );
-                    if !task_control
-                        .wait_for_readable(&upstream)
-                        .context("wait for the first binary stage message")?
-                    {
-                        return Ok(());
-                    }
-                    let first_message = match read_stage_message_for_codec_policy(
+                    let Some(first_message) = first_message::read_first_message(
+                        &task_control,
                         &mut upstream,
+                        &config,
                         input_activation_width,
-                        config.activation_codec,
-                        config.activation_codec_policy,
-                    ) {
-                        Ok(message) => message,
-                        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => {
-                            return Ok(());
-                        }
-                        Err(error) => return Err(error.into()),
+                        STAGE_HANDSHAKE_DEADLINE,
+                    )
+                    .context("read the first binary stage message")?
+                    else {
+                        return Ok(());
                     };
                     if first_message.kind == WireMessageKind::PredictionReturnOpen {
                         if config.stage_index == 0 {
@@ -706,8 +794,8 @@ fn activation_width_from_graph(
 #[cfg(test)]
 mod shutdown_tests {
     use super::{
-        ConnectionWorker, ConnectionWorkerControl, ConnectionWorkers, activation_width_from_graph,
-        finish_connection_workers,
+        ConnectionAdmission, ConnectionWorker, ConnectionWorkerControl, ConnectionWorkers,
+        activation_width_from_graph, finish_connection_workers, wait_for_first_message,
     };
     use crate::test_activation::boundary_f32;
     use anyhow::anyhow;
@@ -789,7 +877,7 @@ mod shutdown_tests {
             let started = Instant::now();
             let mut ready = false;
             while !ready {
-                match task_control.wait_for_readable(&server) {
+                match task_control.wait_for_readable(&server, None) {
                     Ok(became_ready) => ready = became_ready,
                     Err(error) => panic!("idle poll must not fail: {error}"),
                 }
@@ -830,7 +918,7 @@ mod shutdown_tests {
         let control = Arc::new(ConnectionWorkerControl::default());
         control.track(&server).unwrap();
         control.shutdown();
-        let result = control.wait_for_readable(&server);
+        let result = control.wait_for_readable(&server, None);
         assert!(
             result.is_ok(),
             "poll after shutdown must not fail: {:?}",
@@ -847,7 +935,7 @@ mod shutdown_tests {
         control.track(&server).unwrap();
         let task_control = control.clone();
         let task = thread::spawn(move || {
-            if let Ok(true) = task_control.wait_for_readable(&server) {
+            if let Ok(true) = task_control.wait_for_readable(&server, None) {
                 let mut byte = [0u8; 1];
                 let _ = server.read(&mut byte);
             }
@@ -878,7 +966,7 @@ mod shutdown_tests {
         let finished = Arc::new(AtomicBool::new(false));
         let task_finished = finished.clone();
         let task = thread::spawn(move || {
-            if let Ok(true) = task_control.wait_for_readable(&server) {
+            if let Ok(true) = task_control.wait_for_readable(&server, None) {
                 let mut byte = [0u8; 1];
                 let _ = server.read(&mut byte);
             }
@@ -945,6 +1033,101 @@ mod shutdown_tests {
         stop_tx.send(()).unwrap();
         workers.shutdown().unwrap();
     }
+
+    /// #2218: a silent peer must not hold the first-message wait past the
+    /// handshake deadline; the wait must release the connection with an error
+    /// so the worker thread and its tracked socket are released.
+    #[test]
+    fn first_message_wait_releases_a_silent_peer_at_the_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let _silent_peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        let control = Arc::new(ConnectionWorkerControl::default());
+        control.track(&server).unwrap();
+        let wait_control = control.clone();
+        let (done, finished) = mpsc::channel();
+        let waiter = thread::spawn(move || {
+            let result = wait_for_first_message(&wait_control, &server, Duration::from_millis(500));
+            let _ = done.send(result);
+        });
+        let result = finished.recv_timeout(Duration::from_secs(5)).expect(
+            "a silent peer must not hold the first-message wait past the handshake deadline",
+        );
+        let _ = waiter.join();
+        assert!(
+            result.is_err(),
+            "an expired handshake must end the connection with an error, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn first_message_prefix_accepts_a_clean_close() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        let control = ConnectionWorkerControl::default();
+        peer.shutdown(std::net::Shutdown::Write).unwrap();
+
+        let prefix = super::first_message_prefix(&control, &mut server, Duration::from_secs(1));
+
+        assert!(prefix.unwrap().is_none());
+    }
+
+    #[test]
+    fn explicit_persistent_lane_survives_first_message_deadline() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut server, _) = listener.accept().unwrap();
+        crate::binary_transport::connection_mode::mark_persistent_lane(&mut peer).unwrap();
+        let control = Arc::new(ConnectionWorkerControl::default());
+        control.track(&server).unwrap();
+        let worker_control = control.clone();
+        let (done, finished) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            let result = super::first_message_prefix(
+                &worker_control,
+                &mut server,
+                Duration::from_millis(20),
+            );
+            done.send(result).unwrap();
+        });
+
+        assert!(matches!(
+            finished.recv_timeout(Duration::from_millis(300)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ));
+        control.shutdown();
+        assert!(
+            finished
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap()
+                .unwrap()
+                .is_none()
+        );
+        worker.join().unwrap();
+    }
+
+    /// #2218: connections beyond the cap must not spawn more worker threads;
+    /// reaping a finished worker frees its permit.
+    #[test]
+    fn connection_admission_rejects_connections_beyond_the_cap() {
+        let mut admission = ConnectionAdmission::new(4);
+        for _ in 0..4 {
+            assert!(
+                admission.try_acquire(),
+                "a live connection under the cap must be admitted"
+            );
+        }
+        assert!(
+            !admission.try_acquire(),
+            "a connection beyond the cap must not spawn another worker thread"
+        );
+        admission.release(1);
+        assert!(
+            admission.try_acquire(),
+            "reaping a finished worker must free its permit"
+        );
+    }
 }
 
 #[cfg(test)]
@@ -954,6 +1137,7 @@ mod downstream_error_telemetry_tests {
     use crate::telemetry::{Telemetry, TelemetryLevel};
     use skippy_protocol::binary::{StageStateHeader, WireMessageKind};
 
+    /// Create the opening stage request for binary-connection tests.
     fn first_message() -> StageWireMessage {
         StageWireMessage {
             kind: WireMessageKind::VerifyWindow,
@@ -967,12 +1151,14 @@ mod downstream_error_telemetry_tests {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         }
     }
 
     fn downstream_peer() -> PeerConfig {
         PeerConfig {
+            persistent_lane_marker: false,
             stage_id: "stage-2".to_string(),
             stage_index: 2,
             endpoint: "10.0.0.3:50052".to_string(),

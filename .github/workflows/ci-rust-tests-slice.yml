@@ -73,6 +73,14 @@ env:
   CACHE_NAMESPACE: mesh-llm
   CARGO_INCREMENTAL: "0"
   SCCACHE_GHA_ENABLED: "false"
+  # libtest gives every test thread the std default of 2 MiB. The Mesh daemon
+  # reserves 8 MiB for its application and Tokio threads
+  # (DEFAULT_THREAD_STACK_SIZE in mesh/crates/mesh-llm/src/main.rs) because
+  # unoptimized futures here do not fit in 2 MiB once the peer HTTP ingress
+  # chain is on the stack. Testing at 2 MiB spends that margin on debug-build
+  # frame sizes instead of the product, and the Windows platform-check lane
+  # already runs its `cargo test --lib` rows with this same value.
+  RUST_MIN_STACK: "8388608"
 
 jobs:
   runner_policy:
@@ -270,9 +278,6 @@ jobs:
         run: |
           npm install --global @anthropic-ai/claude-code@2.1.273
           test "$(claude --version | awk '{print $1}')" = "2.1.273"
-      - name: Prepare immutable research source for Skippy benchmark contracts
-        if: ${{ contains(fromJson(steps.resolve_batch_crates.outputs.crates), 'skippy-bench') }}
-        uses: ./.github/actions/prepare-python-research-source
       - name: Run isolated Cargo tests for the batch
         env:
           TEST_CRATES: ${{ steps.resolve_batch_crates.outputs.crates }}

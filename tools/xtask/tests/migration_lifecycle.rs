@@ -1,6 +1,8 @@
 #![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
 
+#[path = "../src/fixture_paths.rs"]
+mod fixture_paths;
 #[path = "migration_lifecycle/two_node_split/mod.rs"]
 mod two_node_split;
 
@@ -151,8 +153,7 @@ mod local_repair_inspection;
 #[path = "migration_lifecycle/package_input_admission.rs"]
 mod package_input_admission;
 
-#[path = "../src/ci_validation/lane_results/workflow_yaml.rs"]
-mod workflow_yaml;
+use ci_controller::lane_results::workflow_yaml;
 
 #[path = "migration_lifecycle/verification_source_cli.rs"]
 mod verification_source_cli;
@@ -417,6 +418,3 @@ mod cache_family_moe_cli;
 #[cfg(unix)]
 #[path = "migration_lifecycle/mtp_cli.rs"]
 mod mtp_cli;
-
-#[path = "migration_lifecycle/wan_stage_deployment.rs"]
-mod wan_stage_deployment;

@@ -778,9 +778,13 @@ Current branch status:
 - mesh ingress still keeps the raw-byte fast path and only normalizes when
   compatibility translation or blob rewriting requires it;
 - skippy runtime execution now returns OpenAI-compatible unsupported-feature
-  errors for structured-output constraints, tool-call execution, and logprob
-  scoring until runtime support lands, so requested behavior is not silently
-  ignored.
+  errors for structured-output constraints and tool-call execution until
+  runtime support lands, so requested behavior is not silently ignored;
+- local single-stage generation returns logprobs for non-streamed chat
+  completions (`top_logprobs` up to 20) and legacy completions (`logprobs` up
+  to 5): the native sampler records each drawn token's raw log-probability and
+  its most likely alternatives. Streamed requests, split serving, and chat
+  requests with `skippy_hooks` still return unsupported-feature errors.
 
 ### 5. Add `inference/skippy`
 

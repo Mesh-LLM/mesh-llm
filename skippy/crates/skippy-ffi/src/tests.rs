@@ -1,15 +1,17 @@
-use std::mem::{offset_of, size_of};
+use std::mem::{align_of, offset_of, size_of};
 
 use crate::{
-    ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, ActivationBoundaryDesc,
-    ActivationPartDesc, CACHEGEN_RECORD_EXACT, CACHEGEN_RECORD_F16, CACHEGEN_RECORD_F16_TRANSPOSED,
-    CACHEGEN_RECORD_F32, CACHEGEN_RECORD_F32_TRANSPOSED, CACHEGEN_RECORD_Q4_0,
-    CACHEGEN_RECORD_Q8_0, CACHEGEN_RECORD_V1_ABI_VERSION, CacheGenRecordV1,
-    LAYA_INFO_V1_ABI_VERSION, LAYA_MEMORY_V1_ABI_VERSION, LayaInfoV1, LayaMemoryV1, LayaSequence,
-    StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStateKind,
-    StagePlanStringRefV1, StagePlanValueDescV1, StagePlannerConfigV1, StagePlannerProfileV1,
-    StagePlannerTensorV1, WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1, WorkloadKind,
-    WorkloadPooling, runtime_abi_supported,
+    ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, ASR_SEGMENT_V1_ABI_VERSION,
+    AbiVersion, ActivationBoundaryDesc, ActivationPartDesc, AsrInfoV1, AsrSegmentV1,
+    AsrTranscribeParamsV1, CACHEGEN_RECORD_EXACT, CACHEGEN_RECORD_F16,
+    CACHEGEN_RECORD_F16_TRANSPOSED, CACHEGEN_RECORD_F32, CACHEGEN_RECORD_F32_TRANSPOSED,
+    CACHEGEN_RECORD_Q4_0, CACHEGEN_RECORD_Q8_0, CACHEGEN_RECORD_V1_ABI_VERSION, CacheGenRecordV1,
+    FEATURE_SPEECH_RECOGNITION, LAYA_INFO_V1_ABI_VERSION, LAYA_MEMORY_V1_ABI_VERSION, LayaInfoV1,
+    LayaMemoryV1, LayaSequence, LlamaPerfContextData, StagePlanDescV1, StagePlanProfileDescV1,
+    StagePlanStateDescV1, StagePlanStateKind, StagePlanStringRefV1, StagePlanValueDescV1,
+    StagePlannerConfigV1, StagePlannerProfileV1, StagePlannerTensorV1,
+    WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1, WorkloadKind, WorkloadPooling,
+    runtime_abi_supported,
 };
 
 #[cfg(target_pointer_width = "64")]
@@ -27,6 +29,23 @@ const fn version(major: u32, minor: u32, patch: u32) -> AbiVersion {
         minor,
         patch,
     }
+}
+
+/// The selected-token ABI matches the C request's size and field offsets.
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn selected_token_readout_matches_c_iteration_layout() {
+    assert_eq!(size_of::<crate::TokenScoreRequest>(), 24);
+    assert_eq!(align_of::<crate::TokenScoreRequest>(), 8);
+    assert_eq!(offset_of!(crate::TokenScoreRequest, token_count), 8);
+    assert_eq!(
+        offset_of!(crate::TokenScoreRequest, out_log_probabilities),
+        16
+    );
+    assert_eq!(size_of::<crate::IterationRequest>(), 80);
+    assert_eq!(offset_of!(crate::IterationRequest, sample_last), 64);
+    assert_eq!(offset_of!(crate::IterationRequest, readout), 72);
+    assert!(!runtime_abi_supported(version(0, 1, 73)));
 }
 
 #[test]
@@ -168,6 +187,25 @@ fn activation_boundary_descriptor_matches_native_layout() {
 }
 
 #[test]
+fn perf_context_data_matches_native_layout() {
+    // `llama_perf_context` returns this struct by value, so the caller supplies
+    // the destination slot: a mirror shorter than the pinned llama.h writes past
+    // it instead of returning a visibly wrong value. Independent C probe against
+    // the prepared llama.h at llama.cpp 620d2225 (v0.7.0).
+    assert_eq!(size_of::<LlamaPerfContextData>(), 56);
+    assert_eq!(align_of::<LlamaPerfContextData>(), 8);
+    assert_eq!(offset_of!(LlamaPerfContextData, t_start_ms), 0);
+    assert_eq!(offset_of!(LlamaPerfContextData, t_load_ms), 8);
+    assert_eq!(offset_of!(LlamaPerfContextData, t_p_eval_ms), 16);
+    assert_eq!(offset_of!(LlamaPerfContextData, t_eval_ms), 24);
+    assert_eq!(offset_of!(LlamaPerfContextData, n_p_eval), 32);
+    assert_eq!(offset_of!(LlamaPerfContextData, n_eval), 36);
+    assert_eq!(offset_of!(LlamaPerfContextData, n_reused), 40);
+    assert_eq!(offset_of!(LlamaPerfContextData, n_reallocs_same), 44);
+    assert_eq!(offset_of!(LlamaPerfContextData, n_reallocs_diff), 48);
+}
+
+#[test]
 #[cfg(target_pointer_width = "64")]
 fn cachegen_record_matches_native_layout() {
     assert_eq!(CACHEGEN_RECORD_V1_ABI_VERSION, 1);
@@ -293,6 +331,37 @@ fn native_mtmd_defaults_cross_the_ffi_boundary() {
     assert_eq!(params.batch_max_tokens, 1024);
     assert!(params.progress_callback.is_none());
     assert!(params.progress_callback_user_data.is_null());
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn asr_types_match_native_layout() {
+    assert_eq!(FEATURE_SPEECH_RECOGNITION, 1 << 41);
+    assert_eq!(size_of::<AsrInfoV1>(), 48);
+    assert_eq!(offset_of!(AsrInfoV1, multilingual), 8);
+    assert_eq!(offset_of!(AsrInfoV1, n_vocab), 12);
+    assert_eq!(offset_of!(AsrInfoV1, n_mels), 24);
+    assert_eq!(offset_of!(AsrInfoV1, weights_bytes), 32);
+    assert_eq!(offset_of!(AsrInfoV1, on_accelerator), 40);
+    assert_eq!(AsrInfoV1::default().struct_size, 48);
+
+    assert_eq!(size_of::<AsrTranscribeParamsV1>(), 40);
+    assert_eq!(offset_of!(AsrTranscribeParamsV1, language), 8);
+    assert_eq!(offset_of!(AsrTranscribeParamsV1, translate), 16);
+    assert_eq!(offset_of!(AsrTranscribeParamsV1, prompt), 24);
+    assert_eq!(offset_of!(AsrTranscribeParamsV1, temperature), 32);
+    assert_eq!(offset_of!(AsrTranscribeParamsV1, n_threads), 36);
+    assert_eq!(AsrTranscribeParamsV1::default().struct_size, 40);
+
+    assert_eq!(size_of::<AsrSegmentV1>(), 40);
+    assert_eq!(offset_of!(AsrSegmentV1, start_ms), 8);
+    assert_eq!(offset_of!(AsrSegmentV1, end_ms), 16);
+    assert_eq!(offset_of!(AsrSegmentV1, text), 24);
+    assert_eq!(offset_of!(AsrSegmentV1, no_speech_prob), 32);
+    assert_eq!(
+        AsrSegmentV1::default().abi_version,
+        ASR_SEGMENT_V1_ABI_VERSION
+    );
 }
 
 #[test]

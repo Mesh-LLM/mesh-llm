@@ -137,6 +137,7 @@ pub(super) fn service_context_fixture() -> (TempDir, ServiceInstallContext) {
         platform: SetupPlatform::Linux,
         home_dir: temp.path().join("home"),
         config_root: temp.path().join("config"),
+        local_data_root: temp.path().join("local"),
         binary_path,
         user_id: String::new(),
         start_service: false,

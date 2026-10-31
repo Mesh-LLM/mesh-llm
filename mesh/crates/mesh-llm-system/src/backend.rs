@@ -183,15 +183,11 @@ enum SignalOutcome {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminationOutcome {
     NotRunning,
+    /// The id now names another process, which was left alone.
+    NotOurs,
     Graceful,
     Killed,
     Failed,
-}
-
-impl TerminationOutcome {
-    pub fn is_success(self) -> bool {
-        !matches!(self, TerminationOutcome::Failed)
-    }
 }
 
 pub fn is_safe_kill_target(pid: u32) -> bool {
@@ -209,22 +205,29 @@ pub fn terminate_process_blocking(
         expected_start_time,
         ProcessSignal::Terminate,
     ) {
-        SignalOutcome::Sent => {}
-        SignalOutcome::AlreadyDead => return TerminationOutcome::NotRunning,
-        SignalOutcome::Skipped | SignalOutcome::Failed => return TerminationOutcome::Failed,
-    }
-
-    for _ in 0..20 {
-        std::thread::sleep(Duration::from_millis(250));
-        if crate::process::process_liveness(pid) == crate::process::Liveness::Dead {
-            return TerminationOutcome::Graceful;
+        SignalOutcome::Sent => {
+            for _ in 0..20 {
+                std::thread::sleep(Duration::from_millis(250));
+                if crate::process::process_liveness(pid) == crate::process::Liveness::Dead {
+                    return TerminationOutcome::Graceful;
+                }
+            }
         }
+        SignalOutcome::AlreadyDead => return TerminationOutcome::NotRunning,
+        SignalOutcome::Skipped => return TerminationOutcome::NotOurs,
+        // `taskkill` without `/F` asks a process to close its windows, and a
+        // console process such as a node owns none, so Windows refuses it
+        // ("can only be terminated forcefully"). Force it straight away there
+        // rather than give up on a process that is still running.
+        SignalOutcome::Failed if cfg!(windows) => {}
+        SignalOutcome::Failed => return TerminationOutcome::Failed,
     }
 
     match send_signal_if_matches(pid, expected_comm, expected_start_time, ProcessSignal::Kill) {
         SignalOutcome::Sent => TerminationOutcome::Killed,
         SignalOutcome::AlreadyDead => TerminationOutcome::Graceful,
-        SignalOutcome::Skipped | SignalOutcome::Failed => TerminationOutcome::Failed,
+        SignalOutcome::Skipped => TerminationOutcome::NotOurs,
+        SignalOutcome::Failed => TerminationOutcome::Failed,
     }
 }
 
@@ -239,18 +242,19 @@ fn send_signal_if_matches(
         return SignalOutcome::Failed;
     }
 
-    {
-        let matches = if let Some(expected_t) = expected_start_time {
-            crate::process::validate_pid_matches(pid, expected_comm, expected_t)
-        } else {
-            crate::process::process_name_matches(pid, expected_comm)
-        };
-        if !matches {
-            if crate::process::process_liveness(pid) == crate::process::Liveness::Dead {
-                return SignalOutcome::AlreadyDead;
-            }
+    // Only a process that is readable and different is someone else's; one
+    // whose identity could not be read is a failure to stop, not a stale
+    // record.
+    match crate::process::pid_identity(pid, expected_comm, expected_start_time) {
+        crate::process::PidIdentity::Recorded => {}
+        crate::process::PidIdentity::Gone => return SignalOutcome::AlreadyDead,
+        crate::process::PidIdentity::Other => {
             tracing::warn!("pid {pid} no longer matches {expected_comm}, skipping signal");
             return SignalOutcome::Skipped;
+        }
+        crate::process::PidIdentity::Unknown => {
+            tracing::warn!("could not read what pid {pid} is, not signalling it");
+            return SignalOutcome::Failed;
         }
     }
 
@@ -299,5 +303,48 @@ fn send_signal_if_matches(
                 SignalOutcome::Failed
             }
         }
+    }
+}
+
+#[cfg(all(test, windows))]
+mod termination_tests {
+    use super::*;
+    use std::process::{Child, Command, Stdio};
+
+    // A windowless console process, as a node is.
+    fn console_process() -> (Child, i64) {
+        let child = Command::new("ping")
+            .args(["-n", "30", "127.0.0.1"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn ping");
+        let started_at_unix = crate::process::process_started_at_unix(child.id())
+            .expect("start time")
+            .expect("ping is running");
+        (child, started_at_unix)
+    }
+
+    #[test]
+    fn a_console_process_that_refuses_taskkill_is_forced() {
+        let (mut child, started_at_unix) = console_process();
+
+        let outcome = terminate_process_blocking(child.id(), "PING", Some(started_at_unix));
+
+        assert_eq!(outcome, TerminationOutcome::Killed);
+        assert!(!child.wait().expect("wait for ping").success());
+    }
+
+    #[test]
+    fn a_live_process_with_another_start_time_is_left_alone() {
+        let (mut child, started_at_unix) = console_process();
+
+        let outcome = terminate_process_blocking(child.id(), "PING", Some(started_at_unix - 3600));
+
+        assert_eq!(outcome, TerminationOutcome::NotOurs);
+        assert!(child.try_wait().expect("try_wait").is_none());
+        child.kill().expect("kill ping");
+        let _ = child.wait();
     }
 }

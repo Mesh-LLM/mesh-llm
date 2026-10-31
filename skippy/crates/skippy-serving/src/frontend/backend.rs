@@ -312,7 +312,7 @@ fn should_emit_stream_usage(
     request_include_usage || context.observes_stream_usage()
 }
 
-struct GenerationSessionPermit {
+pub(in crate::frontend) struct GenerationSessionPermit {
     registry: Arc<Mutex<BTreeMap<String, Arc<GenerationSessionLockEntry>>>>,
     key: String,
     entry: Arc<GenerationSessionLockEntry>,
@@ -934,13 +934,9 @@ impl InferenceBackend for StageOpenAiBackend {
         ])
     }
 
+    /// Serve System One requests through the backend's selected execution path.
     async fn system_one(&self, request: SystemOneRequest) -> InferenceResult<SystemOneResponse> {
-        let backend = self.clone();
-        task::spawn_blocking(move || backend.run_system_one(request))
-            .await
-            .map_err(|error| {
-                InferenceError::backend(format!("System One execution task failed: {error}"))
-            })?
+        self.serve_system_one(request).await
     }
 
     async fn chat_completion(
@@ -1570,7 +1566,8 @@ impl InferenceBackend for StageOpenAiBackend {
 }
 
 impl StageOpenAiBackend {
-    async fn acquire_generation_admission(
+    /// Admit generation work subject to concurrency, queue, token-budget and cancellation gates.
+    pub(in crate::frontend) async fn acquire_generation_admission(
         &self,
         ids: &InferenceGenerationIds,
         cancellation: &skippy_inference_api::CancellationToken,
@@ -1877,7 +1874,6 @@ impl StageOpenAiBackend {
         let token_budget_stats = permit.token_budget_stats();
         let backend = self.clone();
         let chat_parse_metadata = prompt.chat_parse_metadata.clone();
-        let generation_gate = crate::frontend::generation_gate::find(ids.frontend_request_id)?;
         let (tx, rx) = mpsc::channel(16);
         let hook_runtime = Some(tokio::runtime::Handle::current());
         let sender = StreamEventSender::new(
@@ -1935,14 +1931,7 @@ impl StageOpenAiBackend {
                     } else {
                         vec![GenerationStreamEvent::Delta(chunk.to_string())]
                     };
-                    let emitted_output = !events.is_empty();
                     for event in events {
-                        sender.send(Ok(event), &context)?;
-                    }
-                    if emitted_output
-                        && let Some(event) =
-                            crate::frontend::generation_gate::usage_event(generation_gate.as_ref())
-                    {
                         sender.send(Ok(event), &context)?;
                     }
                     Ok(())

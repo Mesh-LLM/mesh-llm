@@ -27,9 +27,13 @@ use skippy_protocol::{
     },
 };
 use skippy_runtime::{
-    ACTIVATION_FRAME_VERSION, ACTIVATION_MAX_PARTS, ActivationDesc, ActivationFrame, NativeMtpDraft,
+    ACTIVATION_FRAME_VERSION, ACTIVATION_MAX_PARTS, ActivationDesc, ActivationFrame,
 };
 
+use super::native_mtp_reply::{
+    native_mtp_draft_tokens, native_mtp_prediction_tokens, stage_native_mtp_draft,
+    verify_reply_native_mtp_draft,
+};
 use super::peer_sampling::runtime_sampling_config;
 use super::prefill_execution::runtime_activation_frame;
 
@@ -122,7 +126,7 @@ pub(in crate::binary_transport) fn take_ready_downstream(
                     last_error = Some(anyhow!("downstream ready deadline expired after connect"));
                     continue;
                 }
-                match complete_downstream_ready(&mut stream, deadline, shutdown) {
+                match complete_downstream_ready(&mut stream, deadline, shutdown, config) {
                     Ok(()) => return Ok(Some(stream)),
                     Err(error) => last_error = Some(error),
                 }
@@ -157,6 +161,7 @@ fn complete_downstream_ready(
     stream: &mut TcpStream,
     deadline: Instant,
     shutdown: &AtomicBool,
+    config: &StageConfig,
 ) -> Result<()> {
     ensure_downstream_acquisition_active(shutdown)?;
     let timeout = deadline
@@ -213,7 +218,16 @@ fn complete_downstream_ready(
     stream
         .set_read_timeout(None)
         .context("clear downstream ready timeout")?;
-    result
+    result?;
+    if config
+        .downstream
+        .as_ref()
+        .is_some_and(|peer| peer.persistent_lane_marker)
+    {
+        super::connection_mode::mark_persistent_lane(stream)
+            .context("mark preconnected downstream lane")?;
+    }
+    Ok(())
 }
 
 pub(in crate::binary_transport) fn warm_downstream_is_healthy(stream: &TcpStream) -> Result<bool> {
@@ -315,63 +329,6 @@ pub(in crate::binary_transport) fn insert_optional_unix_nanos(
     }
 }
 
-fn native_mtp_prediction_tokens(predicted: i32, draft: Option<NativeMtpDraft>) -> Vec<i32> {
-    let Some(draft) = draft else {
-        return vec![predicted];
-    };
-    let token_count = i32::try_from(draft.token_ids.len()).unwrap_or(i32::MAX);
-    let mut tokens = Vec::with_capacity(draft.token_ids.len() + 3);
-    tokens.push(predicted);
-    tokens.push(token_count);
-    tokens.extend(draft.token_ids);
-    tokens.push(draft.proposal_compute_us.clamp(0, i64::from(i32::MAX)) as i32);
-    tokens
-}
-
-/// Converts the temporary llama-stage sideband into the typed stage reply field.
-///
-/// The C ABI still returns the proposal as a trailer. The network boundary is
-/// authoritative: consumers receive only target predictions plus a separate
-/// native-MTP draft. A malformed trailer is rejected instead of being exposed
-/// as target-model output.
-pub(in crate::binary_transport) fn split_native_mtp_reply(
-    message: &StageWireMessage,
-    prediction_tokens: &mut Vec<i32>,
-) -> Result<Option<StageNativeMtpDraft>> {
-    let sideband_offset = match message.kind {
-        WireMessageKind::DecodeEmbd
-        | WireMessageKind::DecodeReadout
-        | WireMessageKind::DecodeLightCtx
-        | WireMessageKind::DecodeReplayEmbd
-        | WireMessageKind::DecodeReplayFinalEmbd => 1,
-        _ => return Ok(None),
-    };
-    if prediction_tokens.len() <= sideband_offset {
-        return Ok(None);
-    }
-    let draft_token_count = usize::try_from(prediction_tokens[sideband_offset])
-        .map_err(|_| anyhow!("negative native MTP draft token count"))?;
-    let draft_start = sideband_offset + 1;
-    let draft_end = draft_start
-        .checked_add(draft_token_count)
-        .ok_or_else(|| anyhow!("native MTP draft token count overflow"))?;
-    let compute_index = draft_end;
-    if prediction_tokens.len() != compute_index + 1 {
-        bail!(
-            "malformed native MTP sideband: expected {} values, got {}",
-            compute_index + 1,
-            prediction_tokens.len()
-        );
-    }
-    let proposal_compute_us = i64::from(prediction_tokens[compute_index].max(0));
-    let token_ids = prediction_tokens[draft_start..draft_end].to_vec();
-    prediction_tokens.truncate(sideband_offset);
-    Ok((!token_ids.is_empty()).then_some(StageNativeMtpDraft {
-        token_ids,
-        proposal_compute_us,
-    }))
-}
-
 pub(crate) fn stage_output_activation_capacity(
     has_downstream: bool,
     token_count: i32,
@@ -387,6 +344,7 @@ pub(crate) fn stage_output_activation_capacity(
         .unwrap_or(0);
     usize::try_from(bytes).context("output activation capacity exceeds usize")
 }
+/// Estimate reply framing and payload bytes for transport accounting.
 pub(in crate::binary_transport) fn estimated_reply_wire_bytes(
     reply_kind: WireReplyKind,
     predicted_token_count: usize,
@@ -397,6 +355,7 @@ pub(in crate::binary_transport) fn estimated_reply_wire_bytes(
         WireReplyKind::Ack => 0,
         WireReplyKind::PredictedToken => 1,
         WireReplyKind::PredictedTokens => predicted_token_count,
+        WireReplyKind::TokenScores => predicted_token_count + 1,
     };
     REPLY_HEADER_BYTES + token_count * std::mem::size_of::<i32>() + REPLY_STATS_BYTES
 }
@@ -624,6 +583,7 @@ impl BinaryStageExecutionOptions {
     }
 }
 
+/// Dispatch a validated stage request to its owning execution path.
 pub(crate) fn run_binary_stage_message(
     runtime: &mut RuntimeState,
     session_id: &str,
@@ -674,7 +634,8 @@ pub(crate) fn run_binary_stage_message(
                 .unwrap_or(message.state.current_token);
             let sampling =
                 runtime_sampling_config(message.sampling.as_ref(), runtime.kv_pool_tokens());
-            if !options.native_mtp_enabled {
+            let draft_tokens = native_mtp_draft_tokens(message, options);
+            if !options.native_mtp_enabled || draft_tokens == 0 {
                 let (predicted, output) = runtime.decode_frame_sampled(
                     session_id,
                     token_id,
@@ -690,7 +651,7 @@ pub(crate) fn run_binary_stage_message(
                 sampling.as_ref(),
                 input,
                 options.output_capacity,
-                options.native_mtp_max_tokens,
+                draft_tokens,
             )?;
             Ok((
                 predicted,
@@ -708,17 +669,19 @@ pub(crate) fn run_binary_stage_message(
                 sampling.as_ref(),
                 input,
                 options.output_capacity,
-                options.native_mtp_max_tokens,
+                native_mtp_draft_tokens(message, options),
             )?;
             let predicted = predicted_tokens.first().copied().unwrap_or(0);
-            Ok((
-                predicted,
-                predicted_tokens,
-                output,
+            let draft = verify_reply_native_mtp_draft(
                 native_mtp.map(stage_native_mtp_draft),
-            ))
+                token_ids,
+                &predicted_tokens,
+                message.state.accepts_native_mtp_draft_after_correction(),
+            );
+            Ok((predicted, predicted_tokens, output, draft))
         }
-        WireMessageKind::Stop
+        WireMessageKind::PrefillReadout
+        | WireMessageKind::Stop
         | WireMessageKind::StateImport
         | WireMessageKind::StateExport
         | WireMessageKind::ConfigureGeneration
@@ -732,13 +695,6 @@ pub(crate) fn run_binary_stage_message(
         | WireMessageKind::PredictionReturnOpen => {
             bail!("message kind is not executable")
         }
-    }
-}
-
-fn stage_native_mtp_draft(draft: NativeMtpDraft) -> StageNativeMtpDraft {
-    StageNativeMtpDraft {
-        token_ids: draft.token_ids,
-        proposal_compute_us: draft.proposal_compute_us,
     }
 }
 
@@ -991,6 +947,7 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
         downstream: Some(PeerConfig {
+            persistent_lane_marker: false,
             stage_id: "stage-1".to_string(),
             stage_index: 1,
             endpoint: "127.0.0.1:0".to_string(),
@@ -999,6 +956,7 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
     }
 }
 
+/// Construct a first-decode fixture carrying the full prompt sideband.
 #[cfg(test)]
 pub(in crate::binary_transport) fn first_decode_message_with_full_prompt_sideband()
 -> StageWireMessage {
@@ -1018,6 +976,7 @@ pub(in crate::binary_transport) fn first_decode_message_with_full_prompt_sideban
         tokens: vec![101, 102, 103, 104],
         positions: Vec::new(),
         activation: Vec::new(),
+        readout_tokens: Vec::new(),
         raw_bytes: Vec::new(),
     }
 }
@@ -1026,7 +985,7 @@ pub(in crate::binary_transport) fn first_decode_message_with_full_prompt_sideban
 mod tests {
     use super::{
         decode_record_tokens_sideband, first_decode_message_with_full_prompt_sideband,
-        is_decode_frame_batch_candidate, prefix_cache_test_config, split_native_mtp_reply,
+        is_decode_frame_batch_candidate, prefix_cache_test_config,
         stage_output_activation_capacity, take_ready_downstream, take_warm_or_connect_downstream,
         token_sideband_or_fill, warm_downstream_is_healthy,
         warm_downstream_preconnect_enabled_from,
@@ -1239,45 +1198,7 @@ mod tests {
         assert_eq!(token_sideband_or_fill(&message).unwrap(), vec![201]);
     }
 
-    #[test]
-    fn native_mtp_sideband_is_removed_from_decode_predictions() {
-        let message = test_message(WireMessageKind::DecodeEmbd, 1);
-        let mut predictions = vec![11, 2, 14, 15, 123];
-
-        let draft = split_native_mtp_reply(&message, &mut predictions).unwrap();
-
-        assert_eq!(predictions, vec![11]);
-        assert_eq!(
-            draft,
-            Some(skippy_protocol::binary::StageNativeMtpDraft {
-                token_ids: vec![14, 15],
-                proposal_compute_us: 123,
-            })
-        );
-    }
-
-    #[test]
-    fn native_mtp_sideband_is_not_read_from_verify_predictions() {
-        let mut message = test_message(WireMessageKind::VerifyWindow, 3);
-        message.tokens = vec![10, 11, 12];
-        let mut predictions = vec![11, 12, 13, 2, 14, 15, 123];
-
-        let draft = split_native_mtp_reply(&message, &mut predictions).unwrap();
-
-        assert_eq!(predictions, vec![11, 12, 13, 2, 14, 15, 123]);
-        assert_eq!(draft, None);
-    }
-
-    #[test]
-    fn malformed_native_mtp_sideband_is_rejected() {
-        let message = test_message(WireMessageKind::DecodeEmbd, 1);
-        let mut predictions = vec![11, 2, 12];
-
-        let error = split_native_mtp_reply(&message, &mut predictions).unwrap_err();
-
-        assert!(error.to_string().contains("malformed native MTP sideband"));
-    }
-
+    /// Construct a stage execution fixture with explicit identity and position.
     fn test_message(kind: WireMessageKind, token_count: i32) -> StageWireMessage {
         StageWireMessage {
             kind,
@@ -1291,6 +1212,7 @@ mod tests {
             tokens: Vec::new(),
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         }
     }

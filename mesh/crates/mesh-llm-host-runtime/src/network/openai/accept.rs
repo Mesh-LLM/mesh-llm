@@ -76,7 +76,11 @@ pub(super) async fn bind_api_proxy_listener(
         Some(listener) => Some(listener),
         None => {
             let addr = if listen_all { "0.0.0.0" } else { "127.0.0.1" };
-            match tokio::net::TcpListener::bind(format!("{addr}:{port}")).await {
+            match crate::network::exclusive_listener::bind_exclusive_tcp_listener(&format!(
+                "{addr}:{port}"
+            ))
+            .await
+            {
                 Ok(listener) => Some(listener.into()),
                 Err(error) => {
                     tracing::error!("Failed to bind API proxy to port {port}: {error}");

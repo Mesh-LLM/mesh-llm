@@ -50,6 +50,7 @@ fn parse_args() -> Result<Args> {
     })
 }
 
+/// Build a stage request for the native MTP benchmark.
 fn message(
     kind: WireMessageKind,
     request_id: u64,
@@ -117,6 +118,7 @@ fn message(
         activation,
         tokens: token_ids,
         positions: Vec::new(),
+        readout_tokens: Vec::new(),
         raw_bytes: Vec::new(),
     })
 }

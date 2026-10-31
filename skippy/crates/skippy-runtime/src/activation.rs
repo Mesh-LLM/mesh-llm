@@ -1,3 +1,7 @@
+mod iteration_execution;
+
+use iteration_execution::{exporting_stage_requires_one_request, frame_has_optional_parts};
+
 use std::ffi::c_void;
 use std::ptr;
 
@@ -39,46 +43,6 @@ fn raw_input_desc_ptr(input: &RawInputFrame) -> *const RawActivationDesc {
         .map_or(ptr::null(), |desc| desc as *const RawActivationDesc)
 }
 
-fn collect_iteration_samples(
-    request_count: usize,
-    sampled_output_count: usize,
-    sampled_request_indexes: &[usize],
-    predicted_tokens: &[i32],
-) -> Result<Vec<IterationSample>> {
-    if sampled_output_count > request_count
-        || sampled_output_count > sampled_request_indexes.len()
-        || sampled_output_count > predicted_tokens.len()
-    {
-        return Err(anyhow!(
-            "native iteration returned {sampled_output_count} samples for {request_count} requests"
-        ));
-    }
-    let mut seen_samples = vec![false; request_count];
-    sampled_request_indexes
-        .iter()
-        .copied()
-        .zip(predicted_tokens.iter().copied())
-        .take(sampled_output_count)
-        .map(|(request_index, predicted_token)| {
-            let sampled = seen_samples.get_mut(request_index).ok_or_else(|| {
-                anyhow!(
-                    "native iteration sample references request {request_index}, but only {request_count} requests were submitted"
-                )
-            })?;
-            if *sampled {
-                return Err(anyhow!(
-                    "native iteration returned duplicate sample for request {request_index}"
-                ));
-            }
-            *sampled = true;
-            Ok(IterationSample {
-                request_index,
-                predicted_token,
-            })
-        })
-        .collect()
-}
-
 pub struct DecodeFrameBatchRequest<'a> {
     pub session: &'a mut StageSession,
     pub token_id: i32,
@@ -103,217 +67,6 @@ pub struct IterationBatchRequest<'a> {
 }
 
 impl StageSession {
-    /// Execute one scheduler iteration for every request as a single native
-    /// batch. Frames that carry optional parts, and exporting stages whose
-    /// memory splits an all-output batch by sequence, are executed one at a
-    /// time here, by decision, so the native layer never has to signal a
-    /// fallback.
-    pub fn iteration_batch_sampled(
-        requests: &mut [IterationBatchRequest<'_>],
-    ) -> Result<IterationBatchOutput> {
-        if requests
-            .iter()
-            .any(iteration_request_requires_one_at_a_time)
-        {
-            return Self::iteration_batch_sampled_one_at_a_time(requests);
-        }
-        Self::iteration_batch_sampled_raw(requests, &vec![0; requests.len()])
-    }
-
-    fn iteration_batch_sampled_raw(
-        requests: &mut [IterationBatchRequest<'_>],
-        output_capacities: &[usize],
-    ) -> Result<IterationBatchOutput> {
-        if requests.is_empty() {
-            return Ok(IterationBatchOutput {
-                request_outputs: Vec::new(),
-                samples: Vec::new(),
-            });
-        }
-        let raw_sampling = requests
-            .iter()
-            .map(|request| request.sampling.map(SamplingConfig::as_raw).transpose())
-            .collect::<Result<Vec<_>>>()?;
-        let input_frames = requests
-            .iter()
-            .map(|request| raw_input_frame(request.input))
-            .collect::<Result<Vec<_>>>()?;
-        let raw_requests = requests
-            .iter()
-            .zip(raw_sampling.iter())
-            .zip(input_frames.iter())
-            .map(|((request, sampling), input)| RawIterationRequest {
-                session: request.session.raw,
-                token_ids: request.token_ids.as_ptr(),
-                token_count: request.token_ids.len(),
-                positions: if request.positions.is_empty() {
-                    ptr::null()
-                } else {
-                    request.positions.as_ptr()
-                },
-                position_count: request.positions.len(),
-                sampling: sampling
-                    .as_ref()
-                    .map_or(ptr::null(), |config| config as *const RawSamplingConfig),
-                input_desc: raw_input_desc_ptr(input),
-                input_payload: input.1,
-                sample_last: request.sample_last,
-            })
-            .collect::<Vec<_>>();
-        let mut output_descs = vec![empty_raw_activation_desc(); requests.len()];
-        let mut output_payloads = output_capacities
-            .iter()
-            .map(|capacity| vec![0_u8; *capacity])
-            .collect::<Vec<_>>();
-        let output_payload_ptrs = output_payloads
-            .iter_mut()
-            .map(|payload| payload.as_mut_ptr().cast())
-            .collect::<Vec<_>>();
-        let mut output_bytes = vec![0_usize; requests.len()];
-        let mut sampled_request_indexes = vec![0_usize; requests.len()];
-        let mut predicted_tokens = vec![0_i32; requests.len()];
-        let mut sampled_output_count = 0_usize;
-        let mut error = ptr::null_mut();
-        let status = unsafe {
-            skippy_ffi::skippy_iteration_batch_sampled(
-                raw_requests.as_ptr(),
-                raw_requests.len(),
-                output_descs.as_mut_ptr(),
-                output_payload_ptrs.as_ptr(),
-                output_capacities.as_ptr(),
-                output_bytes.as_mut_ptr(),
-                sampled_request_indexes.as_mut_ptr(),
-                predicted_tokens.as_mut_ptr(),
-                predicted_tokens.len(),
-                &mut sampled_output_count,
-                &mut error,
-            )
-        };
-        if status == Status::BufferTooSmall
-            && output_bytes
-                .iter()
-                .zip(output_capacities.iter())
-                .any(|(required, capacity)| required > capacity)
-        {
-            free_error(error);
-            return Self::iteration_batch_sampled_raw(requests, &output_bytes);
-        }
-        ensure_ok(status, error)?;
-        let samples = collect_iteration_samples(
-            requests.len(),
-            sampled_output_count,
-            &sampled_request_indexes,
-            &predicted_tokens,
-        )?;
-        // The native call has already advanced every session, so compute all
-        // new counts before storing any: a mid-loop overflow error must not
-        // leave a subset of sessions updated and the rest desynced.
-        let updated_counts = requests
-            .iter()
-            .map(|request| {
-                request
-                    .session
-                    .token_count
-                    .checked_add(
-                        u64::try_from(request.token_ids.len())
-                            .context("token count exceeds u64")?,
-                    )
-                    .context("session token count overflow")
-            })
-            .collect::<Result<Vec<_>>>()?;
-        for (request, updated) in requests.iter_mut().zip(updated_counts) {
-            request.session.token_count = updated;
-        }
-        let request_outputs = output_payloads
-            .into_iter()
-            .zip(output_descs)
-            .zip(output_bytes)
-            .map(|((mut payload, desc), bytes)| {
-                payload.truncate(bytes);
-                ActivationFrame {
-                    desc: desc.into(),
-                    payload,
-                }
-            })
-            .collect();
-        Ok(IterationBatchOutput {
-            request_outputs,
-            samples,
-        })
-    }
-
-    fn iteration_batch_sampled_one_at_a_time(
-        requests: &mut [IterationBatchRequest<'_>],
-    ) -> Result<IterationBatchOutput> {
-        let mut request_outputs = Vec::with_capacity(requests.len());
-        let mut samples = Vec::new();
-        for (request_index, request) in requests.iter_mut().enumerate() {
-            let (predicted_token, output) =
-                Self::execute_one_iteration_request(request).map_err(|error| {
-                    anyhow::Error::new(PartialBatchExecution::new(request_index, error))
-                })?;
-            if iteration_request_should_emit_sample(request) {
-                samples.push(IterationSample {
-                    request_index,
-                    predicted_token,
-                });
-            }
-            request_outputs.push(output);
-        }
-        Ok(IterationBatchOutput {
-            request_outputs,
-            samples,
-        })
-    }
-
-    /// Execute one scheduler iteration request on its own. The caller owns the
-    /// partial-failure contract, so this returns plainly and every failure is
-    /// reported where the batch knows how many requests already ran.
-    fn execute_one_iteration_request(
-        request: &mut IterationBatchRequest<'_>,
-    ) -> Result<(i32, ActivationFrame)> {
-        if request.phase == IterationBatchPhase::Decode {
-            validate_serial_decode_request(request)?;
-            return request.session.decode_step_frame_sampled(
-                request.token_ids[0],
-                request.sampling,
-                request.input,
-                0,
-            );
-        }
-        if request.sample_last {
-            return if request.positions.is_empty() {
-                request.session.prefill_chunk_frame_sampled(
-                    request.token_ids,
-                    request.sampling,
-                    request.input,
-                    0,
-                )
-            } else {
-                request.session.prefill_chunk_frame_sampled_with_positions(
-                    request.token_ids,
-                    request.positions,
-                    request.sampling,
-                    request.input,
-                    0,
-                )
-            };
-        }
-        let output = if request.positions.is_empty() {
-            request
-                .session
-                .prefill_chunk_frame(request.token_ids, request.input, 0)?
-        } else {
-            request.session.prefill_chunk_frame_with_positions(
-                request.token_ids,
-                request.positions,
-                request.input,
-                0,
-            )?
-        };
-        Ok((-1, output))
-    }
-
     pub fn prefill_chunk_frame(
         &mut self,
         token_ids: &[i32],
@@ -834,6 +587,8 @@ impl StageSession {
     /// Verifies a frame-backed speculative window.
     ///
     /// Retire the exact checkpoint after full acceptance, or trim after rejection.
+    /// A returned MTP draft follows the same anchoring rule as
+    /// [`Self::verify_tokens_sampled_mtp`].
     pub fn verify_tokens_frame_sampled(
         &mut self,
         token_ids: &[i32],
@@ -863,11 +618,12 @@ impl StageSession {
     }
 
     /// Verifies a speculative span in one batched forward and returns both the
-    /// target predictions and the MTP draft produced at the final row.
+    /// target predictions and an MTP draft.
     ///
-    /// The draft describes the branch that was just verified, so it is only
-    /// meaningful when the caller accepts the whole span. Callers that trim
-    /// after a mismatch must discard it.
+    /// The draft continues after the last row whose input held: the final row
+    /// when every proposal was accepted, otherwise the first row whose
+    /// prediction rejected the next proposal. It is valid for a caller that
+    /// commits exactly the accepted prefix plus that row's prediction.
     ///
     /// Call [`crate::StageSession::retire_verify_checkpoint`] after full
     /// acceptance, or [`crate::StageSession::trim_session`] after a rejection.
@@ -1032,72 +788,8 @@ impl StageSession {
     }
 }
 
-fn iteration_request_should_emit_sample(request: &IterationBatchRequest<'_>) -> bool {
-    request.sample_last && request.session.terminal_stage
-}
-
-fn validate_serial_decode_request(request: &IterationBatchRequest<'_>) -> Result<()> {
-    let framed_origin = request.session.token_count() == 0
-        && request.input.is_some()
-        && (request.positions.is_empty() || request.positions == [0]);
-    anyhow::ensure!(
-        request.session.token_count() > 0 || framed_origin,
-        "serial decode fallback requires an established session or a framed origin decode"
-    );
-    anyhow::ensure!(
-        request.token_ids.len() == 1,
-        "serial decode fallback requires exactly one token"
-    );
-    anyhow::ensure!(
-        request.sample_last,
-        "serial decode fallback requires sampling"
-    );
-    if let Some(position) = request.positions.first() {
-        anyhow::ensure!(
-            request.positions.len() == 1,
-            "serial decode fallback accepts at most one explicit position"
-        );
-        let position = u64::try_from(*position).context("decode position is negative")?;
-        anyhow::ensure!(
-            position == request.session.token_count(),
-            "serial decode position {position} does not match session position {}",
-            request.session.token_count()
-        );
-    }
-    Ok(())
-}
-
-/// Whether a frame carries parts beyond the planned frontier (optional ports),
-/// which the native batched path does not concatenate.
-fn frame_has_optional_parts(frame: Option<&ActivationFrame>) -> bool {
-    frame.is_some_and(|frame| {
-        frame
-            .desc
-            .parts()
-            .map(|parts| parts.iter().any(|part| part.is_optional()))
-            .unwrap_or(true)
-    })
-}
-
-/// Whether one iteration request has to run on its own, outside the native
-/// batch.
-///
-/// The native batched path reads activation exports out of the graph result of
-/// the *last* native microbatch and slices them by request offset. That is
-/// sound only while the whole iteration is a single microbatch, so a frame
-/// carrying optional ports (which the batched frontier does not concatenate)
-/// or an exporting stage whose memory splits an all-output batch by sequence
-/// cannot batch.
-fn iteration_request_requires_one_at_a_time(request: &IterationBatchRequest<'_>) -> bool {
-    frame_has_optional_parts(request.input) || exporting_stage_requires_one_request(request.session)
-}
-
 fn decode_request_requires_one_at_a_time(request: &DecodeFrameBatchRequest<'_>) -> bool {
     frame_has_optional_parts(request.input) || exporting_stage_requires_one_request(request.session)
-}
-
-fn exporting_stage_requires_one_request(session: &StageSession) -> bool {
-    !session.terminal_stage && !session.batched_activation_exports
 }
 
 /// A batch that executed one request at a time and then failed part way
@@ -1147,20 +839,14 @@ impl std::error::Error for PartialBatchExecution {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        IterationBatchPhase, IterationBatchRequest, PartialBatchExecution,
-        collect_iteration_samples, iteration_request_requires_one_at_a_time,
-        iteration_request_should_emit_sample, raw_input_frame, validate_serial_decode_request,
-    };
-    use crate::StageSession;
+    use super::raw_input_frame;
     use crate::{
         ACTIVATION_FRAME_VERSION, ACTIVATION_MAX_PARTS, ActivationDesc, ActivationFrame,
         ActivationPartDesc, GGML_TYPE_F32,
     };
-    use anyhow::anyhow;
-    use std::ptr;
 
-    fn activation_desc(payload_bytes: u64) -> ActivationDesc {
+    /// Construct an activation descriptor for frame-validation fixtures.
+    pub(super) fn activation_desc(payload_bytes: u64) -> ActivationDesc {
         let mut parts = [ActivationPartDesc::default(); ACTIVATION_MAX_PARTS];
         parts[0] = ActivationPartDesc {
             ggml_type: GGML_TYPE_F32,
@@ -1200,6 +886,7 @@ mod tests {
         );
     }
 
+    /// Raw activation frames accept a payload matching their declared geometry.
     #[test]
     fn raw_input_frame_accepts_matching_payload_len() -> anyhow::Result<()> {
         let frame = ActivationFrame {
@@ -1212,234 +899,5 @@ mod tests {
         assert_eq!(desc.unwrap().payload_bytes, 1);
         assert_eq!(payload, frame.payload.as_ptr().cast());
         Ok(())
-    }
-
-    #[test]
-    fn serial_decode_accepts_explicit_phase_and_matching_position() {
-        let mut session = StageSession {
-            raw: ptr::null_mut(),
-            token_count: 4,
-            terminal_stage: true,
-            batched_activation_exports: true,
-        };
-        let request = IterationBatchRequest {
-            session: &mut session,
-            token_ids: &[7],
-            positions: &[],
-            sampling: None,
-            input: None,
-            sample_last: true,
-            phase: IterationBatchPhase::Decode,
-        };
-
-        validate_serial_decode_request(&request).unwrap();
-    }
-
-    #[test]
-    fn serial_decode_accepts_framed_origin_for_recurrent_downstream_stage() {
-        for positions in [&[][..], &[0][..]] {
-            let mut session = StageSession {
-                raw: ptr::null_mut(),
-                token_count: 0,
-                terminal_stage: true,
-                batched_activation_exports: true,
-            };
-            let frame = ActivationFrame {
-                desc: activation_desc(1),
-                payload: vec![1],
-            };
-            let request = IterationBatchRequest {
-                session: &mut session,
-                token_ids: &[7],
-                positions,
-                sampling: None,
-                input: Some(&frame),
-                sample_last: true,
-                phase: IterationBatchPhase::Decode,
-            };
-
-            validate_serial_decode_request(&request).unwrap();
-        }
-    }
-
-    #[test]
-    fn serial_decode_rejects_invalid_decode_shapes() {
-        for (session_tokens, token_ids, positions, sample_last) in [
-            (0, &[7][..], &[][..], true),
-            (4, &[7, 8][..], &[][..], true),
-            (4, &[7][..], &[3][..], true),
-            (4, &[7][..], &[][..], false),
-        ] {
-            let mut session = StageSession {
-                raw: ptr::null_mut(),
-                token_count: session_tokens,
-                terminal_stage: true,
-                batched_activation_exports: true,
-            };
-            let request = IterationBatchRequest {
-                session: &mut session,
-                token_ids,
-                positions,
-                sampling: None,
-                input: None,
-                sample_last,
-                phase: IterationBatchPhase::Decode,
-            };
-
-            assert!(validate_serial_decode_request(&request).is_err());
-        }
-    }
-
-    #[test]
-    fn one_token_prefill_tail_is_explicitly_not_decode() {
-        let mut session = StageSession {
-            raw: ptr::null_mut(),
-            token_count: 4,
-            terminal_stage: true,
-            batched_activation_exports: true,
-        };
-        let request = IterationBatchRequest {
-            session: &mut session,
-            token_ids: &[7],
-            positions: &[4],
-            sampling: None,
-            input: None,
-            sample_last: false,
-            phase: IterationBatchPhase::Prefill,
-        };
-        assert_eq!(request.phase, IterationBatchPhase::Prefill);
-    }
-
-    #[test]
-    fn serial_iteration_omits_samples_for_intermediate_stages() {
-        let mut session = StageSession {
-            raw: ptr::null_mut(),
-            token_count: 4,
-            terminal_stage: false,
-            batched_activation_exports: true,
-        };
-        let request = IterationBatchRequest {
-            session: &mut session,
-            token_ids: &[7],
-            positions: &[],
-            sampling: None,
-            input: None,
-            sample_last: true,
-            phase: IterationBatchPhase::Decode,
-        };
-
-        assert!(!iteration_request_should_emit_sample(&request));
-    }
-
-    #[test]
-    fn sparse_iteration_samples_preserve_explicit_request_indexes() -> anyhow::Result<()> {
-        let samples = collect_iteration_samples(3, 2, &[0, 2, 0], &[41, 99, 0])?;
-
-        assert_eq!(samples[0].request_index, 0);
-        assert_eq!(samples[0].predicted_token, 41);
-        assert_eq!(samples[1].request_index, 2);
-        assert_eq!(samples[1].predicted_token, 99);
-        Ok(())
-    }
-
-    #[test]
-    fn iteration_samples_reject_duplicate_or_out_of_range_indexes() {
-        assert!(collect_iteration_samples(3, 2, &[1, 1], &[41, 99]).is_err());
-        assert!(collect_iteration_samples(3, 1, &[3], &[41]).is_err());
-        assert!(collect_iteration_samples(3, 4, &[0, 1, 2, 0], &[1, 2, 3, 4]).is_err());
-    }
-
-    fn batch_session(terminal_stage: bool, batched_activation_exports: bool) -> StageSession {
-        StageSession {
-            raw: ptr::null_mut(),
-            token_count: 0,
-            terminal_stage,
-            batched_activation_exports,
-        }
-    }
-
-    fn decode_request<'a>(
-        session: &'a mut StageSession,
-        input: Option<&'a ActivationFrame>,
-    ) -> IterationBatchRequest<'a> {
-        IterationBatchRequest {
-            session,
-            token_ids: &[7],
-            positions: &[],
-            sampling: None,
-            input,
-            sample_last: true,
-            phase: IterationBatchPhase::Decode,
-        }
-    }
-
-    #[test]
-    fn native_invalid_argument_is_returned_without_serial_fallback() {
-        let mut first = batch_session(false, true);
-        let mut second = batch_session(false, true);
-        let error = StageSession::iteration_batch_sampled(&mut [
-            decode_request(&mut first, None),
-            decode_request(&mut second, None),
-        ])
-        .err()
-        .expect("null native sessions must be rejected");
-
-        assert!(error.to_string().contains("InvalidArgument"), "{error:#}");
-        assert!(error.downcast_ref::<PartialBatchExecution>().is_none());
-        assert_eq!(first.token_count, 0);
-        assert_eq!(second.token_count, 0);
-    }
-
-    #[test]
-    fn exporting_stages_that_cannot_batch_exports_run_one_at_a_time() {
-        let mut dense = batch_session(false, true);
-        assert!(
-            !iteration_request_requires_one_at_a_time(&decode_request(&mut dense, None)),
-            "an exporting attention stage with a unified split still batches"
-        );
-
-        let mut recurrent = batch_session(false, false);
-        assert!(
-            iteration_request_requires_one_at_a_time(&decode_request(&mut recurrent, None)),
-            "recurrent and hybrid memory splits an all-output batch by sequence"
-        );
-    }
-
-    #[test]
-    fn terminal_stages_batch_regardless_of_memory_splits() {
-        let mut terminal = batch_session(true, false);
-
-        assert!(
-            !iteration_request_requires_one_at_a_time(&decode_request(&mut terminal, None)),
-            "a terminal stage samples through llama's output-row translation, never exports"
-        );
-    }
-
-    #[test]
-    fn optional_activation_parts_always_run_one_at_a_time() {
-        let mut dense = batch_session(false, true);
-        let mut desc = activation_desc(1);
-        desc.parts[0].flags = skippy_ffi::ACTIVATION_PART_OPTIONAL;
-        let frame = ActivationFrame {
-            desc,
-            payload: vec![1],
-        };
-
-        assert!(iteration_request_requires_one_at_a_time(&decode_request(
-            &mut dense,
-            Some(&frame)
-        )));
-    }
-
-    #[test]
-    fn partial_batch_execution_reports_the_requests_that_already_ran() {
-        let error = anyhow::Error::new(PartialBatchExecution::new(2, anyhow!("native failed")));
-        let partial = error
-            .downcast_ref::<PartialBatchExecution>()
-            .expect("partial batch keeps its type through anyhow");
-
-        assert_eq!(partial.executed(), 2);
-        assert_eq!(partial.error().to_string(), "native failed");
-        assert!(partial.to_string().contains("executed 2 request(s)"));
     }
 }

@@ -17,6 +17,8 @@
 //! validate` agrees with real runtime support instead of drifting from it.
 
 mod checkpoint;
+mod lifecycle;
+mod managed_models;
 mod runtime;
 mod topology;
 
@@ -148,6 +150,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
+        path: "mesh_requirements.require_signed_gossip",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
         path: "mesh_requirements.release_signer_keys",
         status: WiringStatus::Wired,
         owner: "n/a",
@@ -184,6 +193,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
     },
     WiringEntry {
         path: "analytics.enabled",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
+        path: "updates.check",
         status: WiringStatus::Wired,
         owner: "n/a",
         reason: "",
@@ -532,6 +548,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         reason: "",
         behavior: WiringBehavior::None,
     },
+    WiringEntry {
+        path: "runtime.native_runtime.download",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
     runtime::KV_CACHE_DISK_MODE,
     runtime::KV_CACHE_DISK_DIRECTORY,
     runtime::KV_CACHE_DISK_BUDGET_MIB,
@@ -565,6 +588,11 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         reason: "",
         behavior: WiringBehavior::None,
     },
+    managed_models::PROVIDER,
+    managed_models::VARIANT,
+    managed_models::OPTIONS,
+    managed_models::REQUEST_DEFAULTS,
+    managed_models::SOURCE,
     WiringEntry {
         path: "hardware.model_path",
         status: WiringStatus::Wired,
@@ -1022,6 +1050,9 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         reason: "",
         behavior: WiringBehavior::None,
     },
+    lifecycle::LOAD,
+    lifecycle::IDLE,
+    lifecycle::PREFETCH,
     topology::MODE,
     topology::MANIFEST_SHA256,
     topology::STAGES,
@@ -1699,6 +1730,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
     },
     WiringEntry {
         path: "plugin.<name>.allow_peer_blocks",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
+        path: "plugin.<name>.allow_inference_observation",
         status: WiringStatus::Wired,
         owner: "n/a",
         reason: "",

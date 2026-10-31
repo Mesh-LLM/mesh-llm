@@ -124,6 +124,7 @@ pub(in crate::runner) struct BinaryDecodeMessageArgs<'a> {
     pub(in crate::runner) session_id: u64,
 }
 
+/// Build a decode request with the session and stage identities used by the runner.
 pub(in crate::runner) fn binary_decode_message(
     args: BinaryDecodeMessageArgs<'_>,
 ) -> Result<StageWireMessage> {
@@ -144,6 +145,7 @@ pub(in crate::runner) fn binary_decode_message(
         session_id: args.session_id,
         sampling: None,
         chat_sampling_metadata: None,
+        readout_tokens: Vec::new(),
         tokens: vec![args.token_id],
         positions: vec![args.decode_step],
         activation,

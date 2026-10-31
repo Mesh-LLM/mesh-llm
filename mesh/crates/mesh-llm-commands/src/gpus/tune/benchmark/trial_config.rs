@@ -19,6 +19,7 @@ pub(crate) fn trial_config(
     crate::gpus::tune_apply::apply_config_edits(&mut table, &prepared.plan.config_edits())?;
     apply_resolved_model_path(&mut table, prepared)?;
     apply_candidate_overrides(&mut table, candidate)?;
+    apply_base_parallel_override(&mut table, config, prepared)?;
 
     let mut models = toml_edit::ArrayOfTables::new();
     models.push(table);
@@ -41,6 +42,7 @@ pub(crate) fn apply_trial_runtime_config(
     if config.runtime.native_runtime.mesh_version.is_some()
         || config.runtime.native_runtime.skippy_abi.is_some()
         || config.runtime.native_runtime.selection.is_some()
+        || config.runtime.native_runtime.download.is_some()
     {
         let native_runtime = ensure_trial_subtable(runtime, "native_runtime")?;
 
@@ -52,6 +54,9 @@ pub(crate) fn apply_trial_runtime_config(
         }
         if let Some(selection) = config.runtime.native_runtime.selection.as_deref() {
             native_runtime["selection"] = toml_edit::value(selection);
+        }
+        if let Some(download) = config.runtime.native_runtime.download {
+            native_runtime["download"] = toml_edit::value(download);
         }
     }
 
@@ -166,6 +171,64 @@ pub(crate) fn apply_speculative_overrides(
         }
     }
     Ok(())
+}
+
+/// Carry the base config's effective serving-lane parallel into the standalone
+/// trial config (#2193).
+///
+/// A trial child reads the trial config as its *entire* config, so a parallel
+/// the base config pins must be written into the trial model table or the
+/// child falls through to the auto-planned lane default. The resolution
+/// mirrors the child's own startup precedence: the target model's per-model
+/// setting (throughput table or the flat legacy alias) before the global
+/// `defaults.throughput` / `[gpu]` settings. `None` keeps the auto-planned
+/// lane behavior.
+pub(crate) fn apply_base_parallel_override(
+    table: &mut toml_edit::Table,
+    config: &mesh_llm_config::MeshConfig,
+    prepared: &PreparedTunePlan,
+) -> anyhow::Result<()> {
+    if let Some(parallel) = base_config_parallel(config, prepared) {
+        let parallel = i64::try_from(parallel).map_err(|_| {
+            anyhow::anyhow!(
+                "base config parallel {} exceeds the TOML integer range",
+                parallel
+            )
+        })?;
+        let throughput = ensure_trial_subtable(table, "throughput")?;
+        throughput["parallel"] = toml_edit::value(parallel);
+    }
+    Ok(())
+}
+
+/// The effective parallel of the tune target in the base config, resolved the
+/// way the trial child host resolves it at startup.
+fn base_config_parallel(
+    config: &mesh_llm_config::MeshConfig,
+    prepared: &PreparedTunePlan,
+) -> Option<usize> {
+    let entry = prepared
+        .target
+        .config_matches
+        .first()
+        .and_then(|config_match| config.models.get(config_match.row_index));
+    entry
+        .and_then(|entry| {
+            entry
+                .throughput
+                .as_ref()
+                .and_then(|throughput| throughput.parallel)
+                .or(entry.parallel)
+        })
+        .or_else(|| {
+            config.defaults.as_ref().and_then(|defaults| {
+                defaults
+                    .throughput
+                    .as_ref()
+                    .and_then(|throughput| throughput.parallel)
+            })
+        })
+        .or(config.gpu.parallel)
 }
 
 pub(crate) fn ensure_trial_subtable<'a>(

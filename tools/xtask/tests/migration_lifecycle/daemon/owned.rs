@@ -6,17 +6,10 @@ fn d12_zero_retention_still_admits_owned_raw_correlation() {
     let directory = tempfile::tempdir().unwrap();
     let native = directory.path().join("native");
     std::fs::create_dir(&native).unwrap();
-    let fixture = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples")
-        .join(format!(
-            "migration_daemon_fixture{}",
-            std::env::consts::EXE_SUFFIX
-        ));
+    let fixture = crate::fixture_paths::examples_dir().join(format!(
+        "migration_daemon_fixture{}",
+        std::env::consts::EXE_SUFFIX
+    ));
     let plan = serde_json::json!({
         "status": "{\"api_port\":API,\"local_instances\":[{\"pid\":PID,\"is_self\":true}]}",
         "status_failures": 0, "models_code": 200, "models_body": [], "wire": null,

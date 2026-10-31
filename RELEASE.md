@@ -133,6 +133,21 @@ release archives contain `mesh-llm`, `host-imports.json`,
 `native-runtimes/<runtime-id>` directory. Backend-flavored archive names select
 different runtimes while retaining byte-identical host input for an OS/arch.
 
+macOS and Linux release archives also carry `plugins/`, holding the release
+archive of each default plugin the host pins for that target
+(`DEFAULT_PLUGINS` in `mesh-llm-plugin-manager`). `scripts/package-release.sh`
+lists them with `cargo xtool repository bundled-plugins --target <triple>`,
+downloads each from the plugin's own GitHub release, and fails unless it
+matches the pinned SHA-256 and the bundle's own host installs it as a default
+(`cargo xtool repository bundled-plugins-check --bundle <dir>`). The check runs
+even when nothing is listed, and fails if the host reports a default it pins for
+that platform as missing from the bundle. Packaging
+needs network access to GitHub; for an offline run, set
+`MESH_LLM_BUNDLED_PLUGINS_INPUT_DIR` to a directory that already holds the
+archives, which are checked against the pins all the same. Windows packaging
+(`package-release.ps1`) bundles no plugins; no default pins a Windows build
+today.
+
 Verify the packaged executable with `cargo run -p xtask -- release-attestation inspect --binary /tmp/test-bundle/mesh-llm --public-key-file /tmp/mesh-release-key.pub`.
 `valid` means the packaged binary matches a trusted release signer, `missing`
 means an unstamped build, and `invalid` means the bytes changed after packaging.
@@ -321,3 +336,33 @@ self-hosting path.
 Forks build without the secret and therefore never report. See
 `website/src/docs/pages/analytics.md` for the collected surface and the
 opt-out, and `crates/mesh-llm-analytics/README.md` for the design.
+
+## Rolling downloadable previews
+
+`rolling-preview.yml` dispatches the canonical Release workflow Tuesday and
+Friday at 03:23 UTC, or manually. Unique versions use
+`v<workspace-core>-preview.<run-id>.<attempt>`. It builds the full existing release
+matrix including bundled native runtimes, without publishing npm, crates.io,
+containers or downstream installers. Preview mode leaves main unchanged.
+All producers check out the release run's frozen source SHA and prepare the
+version locally. The publisher prepares an immutable tag, uploads to a draft,
+then exposes the complete prerelease without marking it latest.
+
+After merging, start the first run with:
+
+```bash
+gh workflow run rolling-preview.yml --ref main
+```
+
+Completed previews appear on the repository Releases page with a **Rolling
+preview** title. Choose the MeshLLM archive for your OS, architecture and backend,
+verify the adjacent SHA-256 checksum and extract the entire archive. Keep
+`native-runtimes` beside the executable. Model weights and GPU drivers remain
+separate prerequisites. Existing release smoke gates apply; publication is not
+proof of hardware inference on every GPU backend. The first live run and a real
+download-to-inference check remain required activation evidence.
+
+Failed uploads leave an unpublished draft for diagnosis; use a fresh version
+rather than overwriting tags. Previous previews remain available for rollback.
+This initial implementation neither deletes old releases nor skips unchanged
+source; there is no moving tag or automatic stable-user upgrade.

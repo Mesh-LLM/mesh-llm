@@ -1,5 +1,4 @@
 use super::daemon_startup::{check_mode_conflicts, resolve_effective_mode};
-use super::default_plugins::resolve_after_defaults;
 use super::failed_node_start::cleanup_failed_node_start;
 use super::join_sources;
 use super::plugin_host_role;
@@ -229,6 +228,7 @@ pub(super) fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) ->
         min_protocol_version: embedded.mesh_requirements.min_protocol_version,
         max_protocol_version: embedded.mesh_requirements.max_protocol_version,
         require_release_attestation: embedded.mesh_requirements.require_release_attestation,
+        require_signed_gossip: embedded.mesh_requirements.require_signed_gossip,
         release_signer_key: embedded.mesh_requirements.release_signer_keys,
         config: embedded.config_path,
         ..RuntimeOptions::default()
@@ -311,19 +311,10 @@ pub(super) async fn run_runtime_cli(
     })
     .await?;
 
-    // Finish the release check before startup continues.
-    if !checked_updates
-        && !options.command_is_update
-        && !options.command_uses_machine_output
-        && let Some(notice) = autoupdate::check_for_update(crate::BUILD_VERSION).await
-    {
-        let _ = emit_event(OutputEvent::Info {
-            message: notice.message,
-            context: None,
-        });
-    }
-
     let mut config = plugin::load_config(options.config.as_deref())?;
+
+    super::startup_update_check::announce_newer_release(&options, checked_updates, &config).await;
+
     let effective_mode = resolve_effective_mode(&options, config.runtime.mode);
     if let Err(error) = check_mode_conflicts(&options, explicit_surface, config.runtime.mode) {
         anyhow::bail!("mode conflict: {error}");
@@ -373,7 +364,7 @@ pub(super) async fn run_runtime_cli(
 
     let startup_mesh_creation_state = resolve_startup_mesh_creation_state(&options, &config)?;
     let cli_has_explicit_models = cli_has_explicit_models(&options);
-    let has_config_models = !config.models.is_empty();
+    let has_config_models = config.models.iter().any(|model| model.provider.is_none());
     let has_startup_models = cli_has_explicit_models || has_config_models;
 
     // Acquire the per-instance runtime directory and flock. Plain --client still
@@ -551,7 +542,11 @@ pub(in crate::runtime) fn apply_runtime_cli_speculative_overrides(
         .defaults
         .get_or_insert_with(plugin::ModelConfigDefaults::default)
         .speculative = Some(resolved_defaults);
-    for model in &mut config.models {
+    for model in config
+        .models
+        .iter_mut()
+        .filter(|model| model.provider.is_none())
+    {
         model.speculative = Some(plugin::SpeculativeConfig::with_precedence(
             Some(overrides),
             model.speculative.as_ref(),
@@ -611,7 +606,11 @@ pub(in crate::runtime) fn apply_runtime_cli_checkpoint_overrides(
     // Runtime CLI flags are process-wide serving overrides. Apply them to
     // config-declared models as well as defaults so model-local config cannot
     // unexpectedly take precedence over the explicit command line.
-    for model in &mut config.models {
+    for model in config
+        .models
+        .iter_mut()
+        .filter(|model| model.provider.is_none())
+    {
         let hardware = model
             .hardware
             .get_or_insert_with(plugin::HardwareConfig::default);
@@ -782,10 +781,7 @@ pub(super) fn configure_run_auto_process_state(
     }
 
     let native_log_rx = skippy_runtime::register_filtered_native_logs();
-    configure_startup_lifecycle_log_parser(
-        config.runtime.lifecycle_log_parser,
-        config.runtime.lifecycle_log_parser_source.as_str(),
-    );
+    configure_startup_lifecycle_log_parser(config.runtime.lifecycle_log_parser_selection());
     bridge_skippy_native_logs(native_log_rx);
     skippy::configure_materialized_stage_cache();
     configure_skippy_native_logging(runtime.as_ref().map(|runtime| runtime.dir()));
@@ -914,6 +910,7 @@ pub(super) async fn start_run_auto_node_and_plugins(
     if !options.headless && owner_config.keypair.is_none() {
         emit_configuration_ui_read_only_hint();
     }
+    crate::system::native_runtime_requirement::emit_unused_gpu_warnings();
     let max_vram = if options.client || !skippy_runtime::native_runtime_loaded() {
         Some(0.0)
     } else {
@@ -1015,7 +1012,11 @@ pub(super) fn register_pre_accept_local_source_policies(
         .as_ref()
         .and_then(|defaults| defaults.hardware.as_ref())
         .and_then(|hardware| hardware.model_path.as_deref());
-    for model in &config.models {
+    for model in config
+        .models
+        .iter()
+        .filter(|model| model.provider.is_none())
+    {
         let mut model_ids = BTreeSet::from([model.model.clone()]);
         let configured_path = model
             .hardware
@@ -1759,7 +1760,10 @@ async fn run_auto_inner(
     // legacy/profile-unaware request cannot bypass local-required policy in
     // that window. False entries deliberately clear stale in-process policy.
     register_pre_accept_local_source_policies(&config, &startup_specs);
-    let resolved_plugins = resolve_after_defaults(&config, &options).await?;
+    // The default plugins come from this release's bundled copy, never a
+    // download, and are installed before plugins are resolved.
+    super::default_plugins::provision_bundled_defaults_at_start(&config, &options);
+    let resolved_plugins = resolve_plugins_from_config(&config, &options)?;
     let swarm_capture = configure_swarm_capture(&options)?;
     tracing::debug!(
         mesh_requirements = ?runtime_startup_requirements(&startup_mesh_creation_state),
@@ -1798,7 +1802,13 @@ async fn run_auto_inner(
         initial_run_auto_requested_models(&startup_specs, &requested_model_names);
     node.set_requested_models(initial_requested_models).await;
 
-    run_auto_join_mesh_phase(&mut options, &node, &auto_join_candidates).await?;
+    // On cancellation, continue to the lifecycle owner below so it can run
+    // the existing ordered cleanup for the node we have already created.
+    tokio::select! {
+        biased;
+        _ = crate::sdk::embedded_shutdown::cancelled() => {},
+        result = run_auto_join_mesh_phase(&mut options, &node, &auto_join_candidates) => result?,
+    }
 
     let affinity_router = affinity::AffinityRouter::new();
 
@@ -1845,6 +1855,9 @@ async fn run_auto_inner(
 
     // Model intent channel: owner-control commands send intents here, control loop polls.
     let mut model_intent_rx = install_run_auto_model_intent_channel(node.clone()).await;
+    if !is_client && !super::startup_models::cli_has_explicit_models(&options) {
+        super::native_model_lifecycle::install(&node, &config, target_tx.subscribe()).await?;
+    }
 
     let model_name_for_console = String::new();
     let runtime_owner_key_path = resolve_runtime_owner_key_path(&options)?;
@@ -1859,6 +1872,7 @@ async fn run_auto_inner(
         affinity_router: &affinity_router,
         control_tx: &control_tx,
         owner_key_path: &runtime_owner_key_path,
+        update_check: config.updates.check_enabled(),
     })
     .await?;
     publish_initial_openai_guardrails_status(
@@ -2105,6 +2119,7 @@ mod tests {
                 web_ui_enabled: None,
                 web_ui_primary_tab: None,
                 allow_peer_blocks: None,
+                allow_inference_observation: None,
                 openai_exchange_grant: None,
                 command: Some("invalid-blobstore-command".to_owned()),
                 args: Vec::new(),

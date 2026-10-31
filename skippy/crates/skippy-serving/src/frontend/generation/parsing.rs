@@ -229,7 +229,7 @@ pub(in crate::frontend) fn chat_response_from_generated_text(
                     reasoning_content: parsed.reasoning_content,
                     tool_calls: parsed.tool_calls,
                 },
-                logprobs: None,
+                logprobs: chat_logprobs(output),
                 finish_reason: Some(finish_reason),
             }],
             output.usage(),
@@ -237,26 +237,78 @@ pub(in crate::frontend) fn chat_response_from_generated_text(
         );
     }
 
-    ChatCompletionResponse::new_with_reason(
+    let mut response = ChatCompletionResponse::new_with_reason(
         model,
         output.text.clone(),
         output.usage(),
         output.finish_reason,
     )
-    .with_timings(output.timings())
+    .with_timings(output.timings());
+    if let Some(choice) = response.choices.first_mut() {
+        choice.logprobs = chat_logprobs(output);
+    }
+    response
+}
+
+/// OpenAI chat `logprobs`: one entry per completion token.
+fn chat_logprobs(output: &GeneratedText) -> Option<Value> {
+    let candidate = |candidate: &super::GeneratedLogprobCandidate| {
+        json!({
+            "token": candidate.text,
+            "logprob": candidate.logprob,
+            "bytes": candidate.bytes,
+        })
+    };
+    let content = output
+        .token_logprobs
+        .as_ref()?
+        .iter()
+        .map(|entry| {
+            let mut value = candidate(&entry.token);
+            value["top_logprobs"] = Value::Array(entry.top.iter().map(candidate).collect());
+            value
+        })
+        .collect::<Vec<_>>();
+    Some(json!({ "content": content, "refusal": null }))
 }
 
 pub(in crate::frontend) fn completion_response_from_generated_text(
     model: String,
     output: &GeneratedText,
 ) -> skippy_inference_api::CompletionResponse {
-    skippy_inference_api::CompletionResponse::new_with_reason(
+    let mut response = skippy_inference_api::CompletionResponse::new_with_reason(
         model,
         output.text.clone(),
         output.usage(),
         output.finish_reason,
     )
-    .with_timings(output.timings())
+    .with_timings(output.timings());
+    if let Some(choice) = response.choices.first_mut() {
+        choice.logprobs = completion_logprobs(output);
+    }
+    response
+}
+
+/// OpenAI legacy completion `logprobs`: parallel lists, with the alternatives
+/// keyed by token text (the first, most likely, wins a repeated text).
+/// `text_offset` is left out: it only matters with `echo`, which is not supported.
+fn completion_logprobs(output: &GeneratedText) -> Option<Value> {
+    let entries = output.token_logprobs.as_ref()?;
+    let tokens = entries.iter().map(|entry| json!(entry.token.text));
+    let token_logprobs = entries.iter().map(|entry| json!(entry.token.logprob));
+    let top_logprobs = entries.iter().map(|entry| {
+        let mut top = serde_json::Map::new();
+        for candidate in &entry.top {
+            top.entry(candidate.text.clone())
+                .or_insert(json!(candidate.logprob));
+        }
+        Value::Object(top)
+    });
+    Some(json!({
+        "tokens": tokens.collect::<Vec<_>>(),
+        "token_logprobs": token_logprobs.collect::<Vec<_>>(),
+        "top_logprobs": top_logprobs.collect::<Vec<_>>(),
+    }))
 }
 
 pub(in crate::frontend) fn parsed_chat_message_from_json(
@@ -352,6 +404,43 @@ pub(in crate::frontend) fn tool_choice_function_name(value: &Value) -> Option<St
                 .filter(|choice| !matches!(*choice, "auto" | "none" | "required"))
         })
         .map(ToString::to_string)
+}
+
+/// The tool list to hand to the chat template and generation grammar. When
+/// `tool_choice` names one specific function, only that tool is passed so the
+/// constrained output can only be that call (a named choice is otherwise
+/// flattened to "required" over every offered tool, and the post-parse filter
+/// would drop a call to any other tool as an empty stop reply). Unnamed
+/// choices (`auto`/`required`/`none`/`any`) and a named tool that is not among
+/// the offered tools keep the original list.
+pub(in crate::frontend) fn effective_tools_for_choice(
+    tools: Option<&Value>,
+    tool_choice: Option<&Value>,
+) -> Option<Value> {
+    let tools = tools?;
+    let Some(choice) = tool_choice.and_then(tool_choice_function_name) else {
+        return Some(tools.clone());
+    };
+    let Some(entries) = tools.as_array() else {
+        return Some(tools.clone());
+    };
+    let filtered: Vec<Value> = entries
+        .iter()
+        .filter(|entry| {
+            entry
+                .get("function")
+                .and_then(|function| function.get("name"))
+                .or_else(|| entry.get("name"))
+                .and_then(Value::as_str)
+                .is_some_and(|name| name == choice)
+        })
+        .cloned()
+        .collect();
+    if filtered.is_empty() {
+        Some(tools.clone())
+    } else {
+        Some(Value::Array(filtered))
+    }
 }
 
 pub(in crate::frontend) fn request_tool_names(request: &ChatCompletionRequest) -> Vec<String> {

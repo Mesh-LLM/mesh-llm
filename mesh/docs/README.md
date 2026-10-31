@@ -11,6 +11,7 @@ Use this hub to find project guides that are not owned by a single Rust crate.
 | Install, run, service mode, model storage | [USAGE.md](USAGE.md) |
 | Private meshes, published meshes, public joining | [MESHES.md](MESHES.md) |
 | Local routing reputation and target cooldowns | [NODE_REP.md](NODE_REP.md) |
+| Pin an API request to a provider, inspect prices, or exclude peers | [PROVIDER_SELECTION.md](PROVIDER_SELECTION.md) |
 | SDK usage, examples, errors, lifecycle, platform support | [SDK.md](SDK.md) |
 | Language-specific SDK examples | [Rust](mesh/sdk/rust.md), [Node.js](mesh/sdk/node.md), [Swift](mesh/sdk/swift.md), [Kotlin/Android](mesh/sdk/kotlin.md) |
 | Run big models with Skippy layer splits | [SKIPPY_SPLITS.md](../../skippy/docs/SKIPPY_SPLITS.md) |
@@ -56,6 +57,7 @@ Use [SKIPPY_SPLITS.md](../../skippy/docs/SKIPPY_SPLITS.md) for Skippy split-serv
 | [plans/](plans/) | Narrow implementation plans that are not yet general design docs |
 | [specs/](specs/) | Focused behavior specs for individual features |
 | [specs/lightning-payments.md](specs/lightning-payments.md) | Planned Lightning payments PoC, wallet boundary, approvals, and settlement policy |
+| [specs/inference-audit-conformance.md](specs/inference-audit-conformance.md) | Draft bar for re-checkable behavioural audits: reference identity, scoring setup, thresholds, verdicts, audit corpus, records |
 | [design/OPENAI_GUARDRAILS.md](../../skippy/docs/design/OPENAI_GUARDRAILS.md) | OpenAI guardrail rollout defaults, v1 limits, telemetry privacy, and evidence scaffolding |
 
 Per-crate docs stay with their crates. The main binary crate overview lives at

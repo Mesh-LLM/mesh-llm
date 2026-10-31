@@ -964,6 +964,7 @@ mod tests {
                         entry.canonical_path.as_str(),
                         "version"
                             | "gpu.assignment"
+                            | "mesh_requirements.require_signed_gossip"
                             | "owner_control.advertise_addr"
                             | "runtime.debug"
                             | "runtime.listen_all"
@@ -1008,6 +1009,7 @@ mod tests {
                 downloaded_asset_name: "blackboard.tar.gz".into(),
                 install_path: PathBuf::from("/tmp/blackboard"),
                 enabled: true,
+                default_managed: false,
                 manifest: Some(InstalledPluginManifestMetadata {
                     openai_exchange_hook: None,
                     config_schema: None,
@@ -1016,6 +1018,7 @@ mod tests {
                 last_protocol_version: None,
                 last_status: None,
                 last_error: None,
+                verified_sha256: None,
             }],
         )
         .expect("schema aggregation should succeed")
@@ -1263,6 +1266,7 @@ mod tests {
                 downloaded_asset_name: "blackboard.tar.gz".into(),
                 install_path: PathBuf::from("/tmp/blackboard"),
                 enabled: true,
+                default_managed: false,
                 manifest: Some(InstalledPluginManifestMetadata {
                     openai_exchange_hook: None,
                     config_schema: Some(InstalledPluginConfigSchema {
@@ -1297,6 +1301,7 @@ mod tests {
                 last_protocol_version: None,
                 last_status: None,
                 last_error: None,
+                verified_sha256: None,
             }],
         )
         .expect("schema aggregation should succeed");
@@ -1337,6 +1342,7 @@ mod tests {
             downloaded_asset_name: format!("{plugin_name}.tar.gz"),
             install_path: PathBuf::from(format!("/tmp/{plugin_name}")),
             enabled: true,
+            default_managed: false,
             manifest: Some(InstalledPluginManifestMetadata {
                 openai_exchange_hook: None,
                 config_schema: Some(InstalledPluginConfigSchema {
@@ -1350,6 +1356,7 @@ mod tests {
             last_protocol_version: None,
             last_status: None,
             last_error: None,
+            verified_sha256: None,
         }
     }
 }

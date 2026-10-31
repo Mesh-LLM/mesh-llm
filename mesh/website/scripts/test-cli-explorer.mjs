@@ -563,6 +563,61 @@ async function assertInventoryContract(page, viewportName, search) {
   await page.waitForTimeout(80);
 }
 
+async function assertNamedDiscoveryEqualsContract(page, viewportName, search) {
+  const payload = JSON.parse(await page.locator("#cli-inventory-data").textContent());
+  const walk = (node, ancestors = []) => [
+    { node, ancestors },
+    ...(node.children || []).flatMap((child) => walk(child, [...ancestors, node.name])),
+  ];
+  const entries = walk(payload.root);
+  const equalsRequiredPaths = entries
+    .filter(({ node }) => node.kind === "option" && node.requireEquals === true)
+    .map(({ node }) => node.path)
+    .sort();
+  assert.deepEqual(
+    equalsRequiredPaths,
+    ["mesh-llm --discover", "mesh-llm client --discover", "mesh-llm serve --discover"],
+    `${viewportName}: requireEquals must flag exactly the named-discovery option`
+  );
+  const serveDiscover = entries.find(({ node }) => node.path === "mesh-llm serve --discover")?.node;
+  assert.ok(serveDiscover, `${viewportName}: serve surface is missing --discover`);
+  assert.deepEqual(serveDiscover.valueNames, ["DISCOVER"], `${viewportName}: --discover lost its value name`);
+
+  await search.fill("discover");
+  const results = page.locator('[role="option"]');
+  await results.first().waitFor({ state: "visible" });
+  const serveResult = page.locator('[role="option"][data-path="mesh-llm serve --discover"]');
+  assert.ok(await serveResult.count(), `${viewportName}: serve --discover is not searchable`);
+  assert.match(
+    (await serveResult.innerText()).trim(),
+    /--discover\[=DISCOVER\]/,
+    `${viewportName}: search result must show the equals form, not --discover DISCOVER`
+  );
+  await serveResult.click();
+  const inspector = page.locator("[data-inspector]").first();
+  await inspector.waitFor({ state: "visible" });
+  const copyButton = inspector.locator("[data-copy]").first();
+  assert.ok(await copyButton.count(), `${viewportName}: --discover inspector has no copy button`);
+  assert.equal(
+    await copyButton.getAttribute("data-copy"),
+    "mesh-llm serve --discover=DISCOVER",
+    `${viewportName}: copied command must join by name with the equals form`
+  );
+  assert.match(await inspector.innerText(), /equals required\s*yes/i, `${viewportName}: inspector omits the equals-required detail`);
+
+  await search.fill("model");
+  const modelResult = page.locator('[role="option"][data-path="mesh-llm serve --model"]');
+  await modelResult.first().waitFor({ state: "visible" });
+  await modelResult.click();
+  assert.equal(
+    await inspector.locator("[data-copy]").first().getAttribute("data-copy"),
+    "mesh-llm serve --model MODEL",
+    `${viewportName}: ordinary value-taking options must keep the space form`
+  );
+  await search.fill("");
+  await page.waitForTimeout(80);
+}
+
 async function assertDesktopOverview(page, viewportName) {
   if (viewportName !== "desktop") return;
   const appBox = await page.locator(".cli-explorer-app").boundingBox();
@@ -1023,6 +1078,7 @@ async function runExplorerAssertions(page, baseURL, viewportName) {
       `${viewportName}: CLI search input is missing`
     );
     await assertInventoryContract(page, viewportName, search);
+    await assertNamedDiscoveryEqualsContract(page, viewportName, search);
     const searchLabel = await search.evaluate((input) => {
       const labelledBy = input.getAttribute("aria-labelledby");
       const label = labelledBy ? document.getElementById(labelledBy) : document.querySelector(`label[for="${input.id}"]`);

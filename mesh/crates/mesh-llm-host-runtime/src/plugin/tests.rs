@@ -103,7 +103,11 @@ fn startup_virtual_model_lookup_rejects_concrete_collisions() {
     );
 }
 
+// The tests that check everything `resolve_plugins` returns are serial: it
+// also lists the store `MESH_LLM_PLUGIN_DIR` names, and the serial plugin
+// store tests point that variable at stores of their own while they run.
 #[test]
+#[serial_test::serial]
 fn resolves_default_builtin_plugins() {
     let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
     assert_eq!(resolved.externals.len(), 1);
@@ -120,6 +124,7 @@ fn wallet_entry(enabled: Option<bool>) -> PluginConfigEntry {
         web_ui_enabled: None,
         web_ui_primary_tab: None,
         allow_peer_blocks: None,
+        allow_inference_observation: None,
         openai_exchange_grant: None,
         command: None,
         args: Vec::new(),
@@ -130,6 +135,7 @@ fn wallet_entry(enabled: Option<bool>) -> PluginConfigEntry {
 }
 
 #[test]
+#[serial_test::serial]
 fn builtin_payments_is_served_in_process_and_can_be_switched_off() {
     super::config::TEST_PAYMENTS_COMPILED_IN.with(|slot| *slot.borrow_mut() = Some(true));
     let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
@@ -190,6 +196,7 @@ async fn builtin_plugin_without_arguments_refuses_them() {
 }
 
 #[test]
+#[serial_test::serial]
 fn retired_builtin_wallet_stanza_is_ignored() {
     // The built-in Lexe wallet was removed; an old stanza must not break
     // startup, whatever it sets, and registers nothing.
@@ -215,6 +222,7 @@ fn retired_builtin_wallet_stanza_is_ignored() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_wallet_plugin_is_an_ordinary_plugin() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -223,6 +231,7 @@ fn external_wallet_plugin_is_an_ordinary_plugin() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("/opt/wallets/lexe-wallet".into()),
             args: Vec::new(),
@@ -240,6 +249,7 @@ fn external_wallet_plugin_is_an_ordinary_plugin() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_can_be_configured() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -248,6 +258,7 @@ fn external_plugin_can_be_configured() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("mesh-llm-plugin-demo".into()),
             args: vec!["--stdio".into()],
@@ -276,6 +287,7 @@ fn failed_plugin_summary_redacts_urls_before_serialization() {
         args: Vec::new(),
         url: Some("https://plugin.example.test/v1".into()),
         env: BTreeMap::new(),
+        settings: Default::default(),
         startup: PluginStartupOptions {
             optional: true,
             ..PluginStartupOptions::default()
@@ -297,6 +309,7 @@ fn failed_plugin_summary_redacts_urls_before_serialization() {
 }
 
 #[test]
+#[serial_test::serial]
 fn blobstore_can_be_disabled() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -305,6 +318,7 @@ fn blobstore_can_be_disabled() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: None,
             args: Vec::new(),
@@ -321,6 +335,7 @@ fn blobstore_can_be_disabled() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_can_be_enabled_with_url() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -329,6 +344,7 @@ fn external_plugin_can_be_enabled_with_url() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("endpoint-plugin".into()),
             args: Vec::new(),
@@ -350,6 +366,7 @@ fn external_plugin_can_be_enabled_with_url() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_rejects_url_that_is_empty_after_normalization() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -358,6 +375,7 @@ fn external_plugin_rejects_url_that_is_empty_after_normalization() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("endpoint-plugin".into()),
             args: Vec::new(),
@@ -374,6 +392,7 @@ fn external_plugin_rejects_url_that_is_empty_after_normalization() {
 }
 
 #[test]
+#[serial_test::serial]
 fn remote_plugin_control_url_is_rejected_without_authentication() {
     let raw_url = "\u{2003}tcp://user:secret@127.0.0.1:19091/control?token=private\u{2003}";
     let config = MeshConfig {
@@ -383,6 +402,7 @@ fn remote_plugin_control_url_is_rejected_without_authentication() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: None,
             args: Vec::new(),
@@ -405,6 +425,7 @@ fn remote_plugin_control_url_is_rejected_without_authentication() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_can_be_enabled_with_command_args() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -413,6 +434,7 @@ fn external_plugin_can_be_enabled_with_command_args() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("/opt/plugins/endpoint-plugin".into()),
             args: vec!["--verbose".into()],
@@ -433,6 +455,7 @@ fn external_plugin_can_be_enabled_with_command_args() {
 }
 
 #[test]
+#[serial_test::serial]
 fn external_plugin_ignores_disabled_entry_without_install() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -441,6 +464,7 @@ fn external_plugin_ignores_disabled_entry_without_install() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: None,
             args: Vec::new(),
@@ -457,6 +481,7 @@ fn external_plugin_ignores_disabled_entry_without_install() {
 }
 
 #[test]
+#[serial_test::serial]
 fn default_builtins_are_resolved_on_public_meshes() {
     let resolved = resolve_plugins(
         &MeshConfig::default(),
@@ -471,6 +496,7 @@ fn default_builtins_are_resolved_on_public_meshes() {
 }
 
 #[test]
+#[serial_test::serial]
 fn resolves_external_plugin() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
@@ -479,6 +505,7 @@ fn resolves_external_plugin() {
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("/tmp/demo".into()),
             args: vec!["--flag".into()],
@@ -506,6 +533,7 @@ async fn plugin_load_failure_keeps_declared_web_ui_metadata() {
             args: Vec::new(),
             url: None,
             env: BTreeMap::new(),
+            settings: Default::default(),
             startup: PluginStartupOptions {
                 optional: true,
                 ..PluginStartupOptions::default()
@@ -568,4 +596,128 @@ fn windows_pipe_name_is_namespaced_by_instance_id() {
         windows_pipe_name("p1234-deadbeef", "Pipes"),
         r"\\.\pipe\mesh-llm-p1234-deadbeef-Pipes"
     );
+}
+
+/// A built-in plugin is listed among the resolved externals whenever it is
+/// enabled, but this host serves it itself and neither built-in exposes
+/// inference. Naming one as a model's provider must fail loudly instead of
+/// resolving and then serving nothing: native startup skips provider models.
+#[test]
+#[serial_test::serial]
+fn built_in_plugin_is_not_a_model_provider() {
+    let config: MeshConfig = toml::from_str(
+        r#"
+[[models]]
+model = "mystery"
+provider = "blobstore"
+"#,
+    )
+    .expect("config should parse");
+
+    let error = resolve_plugins(&config, private_host_mode())
+        .expect_err("a built-in plugin must not resolve as a model provider");
+    assert!(
+        error
+            .to_string()
+            .contains("selects unavailable provider 'blobstore'"),
+        "got: {error}"
+    );
+}
+
+/// The provider check must stay a check on *inference-capable* externals: a
+/// configured plugin command still resolves and still receives the model
+/// selection it serves.
+#[test]
+#[serial_test::serial]
+fn external_plugin_still_resolves_as_a_model_provider() {
+    let config: MeshConfig = toml::from_str(
+        r#"
+[[plugin]]
+name = "endpoint-plugin"
+command = "/opt/plugins/endpoint-plugin"
+
+[[models]]
+model = "mystery"
+provider = "endpoint-plugin"
+"#,
+    )
+    .expect("config should parse");
+
+    let resolved = resolve_plugins(&config, private_host_mode())
+        .expect("an external plugin command is a model provider");
+    let plugin = resolved
+        .externals
+        .iter()
+        .find(|spec| spec.name == "endpoint-plugin")
+        .expect("the configured plugin must resolve");
+    let models = plugin
+        .env
+        .get(mesh_llm_plugin::models::CONFIG_ENV)
+        .expect("the plugin must receive its model selection");
+    assert!(
+        models.contains("\"provider\":\"endpoint-plugin\""),
+        "got: {models}"
+    );
+}
+
+#[test]
+fn managed_sources_preserve_relative_config_and_resolve_runtime_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[[plugin]]
+name = "onnx"
+command = "/opt/onnx"
+[[models]]
+model = "owner/model@pin"
+provider = "onnx"
+[models.source]
+local_dir = "weights"
+"#,
+    )
+    .unwrap();
+    let config = load_config(Some(&path)).unwrap();
+    assert_eq!(
+        config.models[0].source.local_dir.as_deref(),
+        Some(std::path::Path::new("weights"))
+    );
+    assert!(
+        config_to_toml(&config)
+            .unwrap()
+            .contains("local_dir = \"weights\"")
+    );
+    let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
+    let spec = resolved
+        .externals
+        .iter()
+        .find(|spec| spec.name == "onnx")
+        .unwrap();
+    let models: Vec<mesh_llm_plugin::models::ManagedModelConfig> =
+        serde_json::from_str(&spec.env[mesh_llm_plugin::models::CONFIG_ENV]).unwrap();
+    assert_eq!(models[0].source.local_dir, Some(dir.path().join("weights")));
+}
+
+#[test]
+fn unavailable_providers_fail_file_validation_and_snapshot_parsing() {
+    for provider in ["blobstore", "payments", "missing-provider"] {
+        let raw = format!("[[models]]\nmodel = 'owner/model@pin'\nprovider = '{provider}'\n");
+        assert!(
+            parse_config_toml(&raw)
+                .unwrap_err()
+                .to_string()
+                .contains("unavailable provider")
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, &raw).unwrap();
+        assert!(
+            validate_config_file(Some(&path))
+                .unwrap()
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("unavailable provider"))
+        );
+    }
 }

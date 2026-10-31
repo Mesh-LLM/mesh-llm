@@ -6,7 +6,8 @@ pub use mesh_llm_embedded_runtime::{
     EmbeddedMeshAdmissionConfig, EmbeddedMeshDiscoveryMode, EmbeddedMeshHttpConfig,
     EmbeddedMeshLogFormat, EmbeddedMeshNetworkConfig, EmbeddedMeshNodeConfig, EmbeddedMeshNodeMode,
     EmbeddedMeshRequirementsConfig, EmbeddedMeshServingConfig, EmbeddedMeshStorageConfig,
-    EmbeddedTrustPolicy, SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION,
+    EmbeddedTrustPolicy, MeshMembershipConfig, MeshMembershipStatus,
+    SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION,
 };
 
 pub type MeshNodeStatus = mesh_llm_embedded_runtime::EmbeddedMeshNodeStatus;
@@ -45,12 +46,42 @@ impl MeshNode {
         Ok(OpenAiClient::new(self.api_base_url()))
     }
 
+    /// Starts live transcription on this node; see
+    /// [`crate::live_transcription`].
+    pub async fn start_live_transcription(
+        &self,
+        options: crate::live_transcription::LiveTranscriptionOptions,
+    ) -> anyhow::Result<crate::live_transcription::LiveTranscription> {
+        crate::live_transcription::LiveTranscription::start(self.api_base_url(), options).await
+    }
+
     pub async fn status(&self) -> anyhow::Result<MeshNodeStatus> {
         self.handle.status().await
     }
 
     pub async fn join_token(&self, token: impl Into<String>) -> anyhow::Result<()> {
         self.handle.join_token(token).await
+    }
+
+    /// Serves this node's models into a further mesh, with its own identity,
+    /// owner allowlist, peers and local API port, replacing a membership of
+    /// the same name. The models are not loaded again. See the crate README
+    /// for what a failed replacement leaves running.
+    pub async fn add_membership(
+        &self,
+        config: MeshMembershipConfig,
+    ) -> anyhow::Result<MeshMembershipStatus> {
+        self.handle.add_membership(config).await
+    }
+
+    /// Leaves a membership's mesh. Returns whether there was one by that name.
+    pub async fn remove_membership(&self, name: impl Into<String>) -> anyhow::Result<bool> {
+        self.handle.remove_membership(name).await
+    }
+
+    /// The running memberships, with their peers and any join failure.
+    pub async fn memberships(&self) -> anyhow::Result<Vec<MeshMembershipStatus>> {
+        self.handle.memberships().await
     }
 
     pub async fn shutdown(self) -> anyhow::Result<()> {
@@ -295,6 +326,12 @@ impl MeshNodeBuilder {
         self
     }
 
+    /// Require origin signatures for relayed records in a newly created mesh.
+    pub fn require_signed_gossip(mut self, required: bool) -> Self {
+        self.inner = self.inner.require_signed_gossip(required);
+        self
+    }
+
     pub fn release_signer_key(mut self, key: impl Into<String>) -> Self {
         self.inner = self.inner.release_signer_key(key);
         self
@@ -409,6 +446,20 @@ impl OpenAiClient {
             .bearer_auth(&self.api_key)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(body_json)
+    }
+
+    /// Starts live transcription against this client's node; see
+    /// [`crate::live_transcription`].
+    pub async fn start_live_transcription(
+        &self,
+        options: crate::live_transcription::LiveTranscriptionOptions,
+    ) -> anyhow::Result<crate::live_transcription::LiveTranscription> {
+        crate::live_transcription::LiveTranscription::start_with_api_key(
+            &self.base_url,
+            Some(&self.api_key),
+            options,
+        )
+        .await
     }
 
     pub async fn models(&self) -> anyhow::Result<serde_json::Value> {

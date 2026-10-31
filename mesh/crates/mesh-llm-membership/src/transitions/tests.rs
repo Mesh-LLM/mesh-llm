@@ -54,6 +54,8 @@ pub(crate) fn test_announcement(ts: Option<u64>) -> PeerAnnouncement {
         stage_status_list_supported: true,
         local_gguf_content_id_supported: true,
         decode_batch_policy_supported: true,
+        plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
         advertised_model_throughput: vec![],
@@ -81,13 +83,15 @@ fn apply(state: &mut MembershipState, ann: &PeerAnnouncement) -> TransitivePeerU
 #[test]
 fn bridge_cannot_admit_peer_or_refresh_direct_liveness() {
     let mut state = MembershipState::default();
-    let ann = test_announcement(None);
+    let mut ann = test_announcement(None);
+    ann.persistent_lane_marker_supported = true;
     let TransitivePeerUpdate::Added(peer) = apply(&mut state, &ann) else {
         panic!("expected new peer")
     };
     assert!(!peer.is_admitted());
     assert!(!peer.local_gguf_content_id_supported);
     assert!(!peer.stage_protocol_generation_supported);
+    assert!(!peer.persistent_lane_marker_supported);
     assert!(peer.last_seen.elapsed() >= Duration::from_secs(PEER_STALE_SECS * 2));
     let last_seen = peer.last_seen;
     let TransitivePeerUpdate::Updated {
@@ -135,7 +139,8 @@ fn dead_peer_quarantine_expires_but_local_peer_is_always_ignored() {
 #[test]
 fn direct_admission_promotes_transitive_peer_and_clears_policy_rejection() {
     let mut state = MembershipState::default();
-    let ann = test_announcement(None);
+    let mut ann = test_announcement(None);
+    ann.persistent_lane_marker_supported = true;
     apply(&mut state, &ann);
     state
         .policy_rejected_peers
@@ -152,20 +157,25 @@ fn direct_admission_promotes_transitive_peer_and_clears_policy_rejection() {
         .expect("existing transitive peer");
     assert!(update.peer.is_admitted());
     assert!(update.peer.local_gguf_content_id_supported);
+    assert!(update.peer.persistent_lane_marker_supported);
     assert_eq!(update.peer.last_seen, now);
     assert_eq!(update.admitted_count, 1);
     assert!(!state.policy_rejected_peers.contains_key(&ann.addr.id));
 }
 
 #[test]
-fn transitive_serving_update_reports_count_without_renewing_direct_proof() {
+fn transitive_serving_update_preserves_live_direct_state_and_proof() {
     let mut state = MembershipState::default();
     let mut ann = test_announcement(None);
     let (direct, count) = state.insert_new_direct_peer(
         ann.addr.id,
         ann.addr.clone(),
         &ann,
-        OwnershipSummary::default(),
+        OwnershipSummary {
+            owner_id: Some("direct-owner".into()),
+            verified: true,
+            ..Default::default()
+        },
     );
     assert_eq!(count, 1);
     ann.serving_models.push("model".into());
@@ -177,8 +187,10 @@ fn transitive_serving_update_reports_count_without_renewing_direct_proof() {
     else {
         panic!("expected update")
     };
-    assert!(changed);
-    assert_eq!(admitted_count, Some(1));
+    assert!(!changed);
+    assert_eq!(admitted_count, None);
+    assert_eq!(peer.serving_models, direct.serving_models);
+    assert_eq!(peer.owner_summary, direct.owner_summary);
     assert_eq!(peer.last_seen, direct.last_seen);
     assert!(peer.is_admitted());
 }
@@ -298,6 +310,7 @@ fn transitive_prices_propagate_until_direct_admission() {
         mesh_llm_payments_types::pricing::Pricing {
             input_msat_per_million: 500,
             output_msat_per_million: 1500,
+            cache_discount_percent: 0,
         },
     );
     apply(&mut state, &ann);

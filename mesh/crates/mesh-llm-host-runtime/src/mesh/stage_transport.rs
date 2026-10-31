@@ -233,23 +233,54 @@ pub(crate) async fn wait_local_stage_control_response(
 }
 
 /// Whether `remote` may bridge a transport stream into the local stage named
-/// by `open`. Only nodes assigned to a stage of the same topology run qualify.
-/// Stage ids are visible to every mesh peer, so without this any peer could
-/// feed activations and decode steps into a stage it does not belong to.
+/// by `open`. Only the target stage's assigned predecessor (its coordinator
+/// for the first downstream stage) or, for stage 0, the final stage's owner
+/// whose predictions return to stage 0, may open a transport into that stage.
+/// Stage ids are visible to every mesh peer, so without the edge check any
+/// peer assigned to the run could feed activations and decode steps into a
+/// stage it does not belong to.
 pub(crate) fn stage_transport_allowed_by_topology<'a>(
     topologies: impl IntoIterator<Item = &'a StageTopologyInstance>,
     remote: EndpointId,
     open: &skippy_protocol::proto::stage::StageTransportOpen,
 ) -> bool {
     topologies.into_iter().any(|topology| {
-        topology.topology_id == open.topology_id
-            && topology.run_id == open.run_id
-            && topology
-                .stages
-                .iter()
-                .any(|stage| stage.stage_id == open.stage_id)
-            && topology.stages.iter().any(|stage| stage.node_id == remote)
+        if topology.topology_id != open.topology_id || topology.run_id != open.run_id {
+            return false;
+        }
+        topology
+            .stages
+            .iter()
+            .find(|stage| stage.stage_id == open.stage_id)
+            .is_some_and(|target| stage_transport_edge_allowed(topology, target, remote))
     })
+}
+
+/// The transport edges that may open a raw stream into `target`: the owner of
+/// the assigned predecessor stage and, for stage 0, the final stage's owner.
+fn stage_transport_edge_allowed(
+    topology: &StageTopologyInstance,
+    target: &StageAssignment,
+    remote: EndpointId,
+) -> bool {
+    let final_index = topology
+        .stages
+        .iter()
+        .map(|stage| stage.stage_index)
+        .max()
+        .unwrap_or(0);
+    let is_predecessor_owner = topology.stages.iter().any(|stage| {
+        stage.node_id == remote
+            && target.stage_index > 0
+            && stage.stage_index == target.stage_index - 1
+    });
+    let is_final_owner_returning = target.stage_index == 0
+        && final_index > 0
+        && topology
+            .stages
+            .iter()
+            .any(|stage| stage.node_id == remote && stage.stage_index == final_index);
+    is_predecessor_owner || is_final_owner_returning
 }
 
 pub(crate) fn artifact_transfer_allowed_by_topology(
@@ -566,7 +597,7 @@ pub struct InflightRequestGuard {
 
 impl Drop for InflightRequestGuard {
     fn drop(&mut self) {
-        let _ = self.inflight_requests.fetch_update(
+        let _ = self.inflight_requests.try_update(
             std::sync::atomic::Ordering::Relaxed,
             std::sync::atomic::Ordering::Relaxed,
             |current| current.checked_sub(1),
@@ -890,6 +921,7 @@ impl Node {
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
         tx.send(crate::inference::skippy::StageControlCommand::Execute {
             request: crate::inference::skippy::StageControlRequest::Status(filter),
+            requester: self.endpoint.id(),
             resp: resp_tx,
         })
         .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;
@@ -925,14 +957,32 @@ impl Node {
         let Some(tx) = control_tx else {
             anyhow::bail!("stage control is not available");
         };
+        let stop_bridge_target = match &request {
+            crate::inference::skippy::StageControlRequest::Stop(stop) => Some((
+                stop.topology_id.clone(),
+                stop.run_id.clone(),
+                stop.stage_id.clone(),
+            )),
+            _ => None,
+        };
         let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
         tx.send(crate::inference::skippy::StageControlCommand::Execute {
             request,
+            requester: self.endpoint.id(),
             resp: resp_tx,
         })
         .map_err(|_| anyhow::anyhow!("stage control loop is unavailable"))?;
         let response = wait_local_stage_control_response(resp_rx, timeout).await?;
         drop(control_tx_guard);
+        // The stage-to-stage transport bridge is aborted only after the
+        // stage-control loop removed a running stage (#2217).
+        if let Some((topology_id, run_id, stage_id)) = stop_bridge_target
+            && let crate::inference::skippy::StageControlResponse::Ready(ready) = &response
+            && ready.removed_running_stage
+        {
+            self.stop_stage_transport_bridge(&topology_id, &run_id, &stage_id)
+                .await;
+        }
         match &response {
             crate::inference::skippy::StageControlResponse::Ready(ready) => {
                 self.record_stage_status(Some(self.endpoint.id()), ready.status.clone())
@@ -1171,7 +1221,7 @@ impl Node {
             .insert(key, bind_addr.into());
     }
 
-    /// Whether `remote` belongs to the topology run of the stage `open` targets.
+    /// Whether `remote` holds a transport edge into the stage `open` targets.
     pub(crate) async fn stage_transport_allowed(
         &self,
         remote: EndpointId,

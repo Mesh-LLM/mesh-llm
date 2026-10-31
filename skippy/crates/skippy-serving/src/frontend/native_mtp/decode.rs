@@ -696,6 +696,7 @@ mod tests {
 
     #[test]
     fn counters_track_verify_window_verification_by_origin() {
+        skippy_runtime::test_support::require_native_runtime();
         let mut counters = NativeMtpDecodeCounters::default();
         counters.observe_verify_window_verification(NativeMtpDraftOrigin::InitialSerial, true);
         counters.observe_verify_window_verification(NativeMtpDraftOrigin::SerialAfterGap, false);
@@ -813,6 +814,7 @@ mod tests {
 
     #[test]
     fn response_timings_show_hybrid_chunk_evidence() {
+        skippy_runtime::test_support::require_native_runtime();
         let mut counters = NativeMtpDecodeCounters::default();
         counters.observe_verify_window_verification(NativeMtpDraftOrigin::InitialSerial, true);
         counters.observe_hybrid_proposal(&composite_proposal(), 3);
@@ -909,6 +911,7 @@ mod tests {
 
     #[test]
     fn composite_proposal_totals_include_pure_ngram_candidates() {
+        skippy_runtime::test_support::require_native_runtime();
         let mut counters = NativeMtpDecodeCounters::default();
         let context = [1, 2, 3, 1, 2, 3, 1, 2];
         let mut cache = HistoryNgramProposer::new_cache(2, 2).unwrap();

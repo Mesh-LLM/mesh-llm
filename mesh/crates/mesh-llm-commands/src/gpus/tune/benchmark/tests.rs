@@ -121,6 +121,225 @@ fn trial_config_renders_string_paths_and_hardware_edits() {
     );
 }
 
+/// #2193: a tune trial child reads the trial config as its *entire* config, so
+/// the base config's parallel setting must be carried into it. Before the fix
+/// the model table was rebuilt from scratch and `parallel` was never carried,
+/// so the trial child fell through to the skippy coordinator's
+/// llama-server-compatible 4-lane auto default and the total tuned context
+/// ballooned to 4x the requested `ctx_size`.
+#[test]
+fn trial_config_honors_the_one_lane_base_parallel() {
+    for (label, base_toml) in [
+        (
+            "model-level parallel",
+            "version = 1\n\n[[models]]\nmodel = \"model.gguf\"\nparallel = 1\n",
+        ),
+        (
+            "global defaults parallel",
+            "version = 1\n\n[defaults.throughput]\nparallel = 1\n\n[[models]]\nmodel = \"model.gguf\"\n",
+        ),
+    ] {
+        let base = mesh_llm_config::parse_config_toml(base_toml)
+            .unwrap_or_else(|error| panic!("base config parses ({label}): {error}"));
+        assert_eq!(
+            trial_effective_parallel(&base),
+            Some(1),
+            "base config must resolve to one lane ({label})"
+        );
+        let prepared = prepared_plan_fixture(
+            "/tmp/model.gguf",
+            vec![ConfigModelMatch {
+                row_index: 0,
+                configured_model: "model.gguf".to_string(),
+            }],
+            Vec::new(),
+        );
+        let candidate = TuneBenchmarkCandidate {
+            ctx_size: 196_608,
+            batch: 2048,
+            ubatch: 1024,
+            cache_type_k: TuneKvCacheType::Q8_0,
+            cache_type_v: TuneKvCacheType::Q8_0,
+            mmap: TuneBoolOrAutoValue::Disabled,
+            mlock: false,
+            speculative: TuneBenchmarkSpeculativeCandidate::Disabled,
+            flash_attention: None,
+        };
+        let rendered = trial_config(&base, &prepared, &candidate).expect("trial config renders");
+        let plan = planned_trial_launch(&rendered, 196_608);
+        assert_eq!(
+            plan.slots, 1,
+            "one-lane base config ({label}) must launch 1 serving lane, not the {}-lane auto default",
+            plan.slots
+        );
+        let total = plan.context_length * u32::try_from(plan.slots).unwrap();
+        assert_eq!(
+            total, 196_608,
+            "total tuned context must stay 196608 ({label}), not {} (4x the requested context)",
+            total
+        );
+    }
+}
+
+/// A per-model parallel must beat the global default in the trial config,
+/// matching the child host's own model-before-global precedence.
+#[test]
+fn trial_config_prefers_model_parallel_over_defaults() {
+    let base =
+        mesh_llm_config::parse_config_toml(
+            "version = 1\n\n[defaults.throughput]\nparallel = 1\n\n[[models]]\nmodel = \"model.gguf\"\nparallel = 2\n",
+        )
+        .expect("base config parses");
+    let prepared = prepared_plan_fixture(
+        "/tmp/model.gguf",
+        vec![ConfigModelMatch {
+            row_index: 0,
+            configured_model: "model.gguf".to_string(),
+        }],
+        Vec::new(),
+    );
+    let candidate = TuneBenchmarkCandidate {
+        ctx_size: 4096,
+        batch: 2048,
+        ubatch: 1024,
+        cache_type_k: TuneKvCacheType::Q8_0,
+        cache_type_v: TuneKvCacheType::Q8_0,
+        mmap: TuneBoolOrAutoValue::Disabled,
+        mlock: false,
+        speculative: TuneBenchmarkSpeculativeCandidate::Disabled,
+        flash_attention: None,
+    };
+    let rendered = trial_config(&base, &prepared, &candidate).expect("trial config renders");
+    let trial = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
+    assert_eq!(trial_effective_parallel(&trial), Some(2));
+}
+
+/// A base config without any parallel setting keeps the trial child's
+/// auto-planned lane behavior; the fix must not invent a lane count.
+#[test]
+fn trial_config_keeps_auto_lanes_when_base_config_has_no_parallel() {
+    let base =
+        mesh_llm_config::parse_config_toml("version = 1\n\n[[models]]\nmodel = \"model.gguf\"\n")
+            .expect("base config parses");
+    let prepared = prepared_plan_fixture(
+        "/tmp/model.gguf",
+        vec![ConfigModelMatch {
+            row_index: 0,
+            configured_model: "model.gguf".to_string(),
+        }],
+        Vec::new(),
+    );
+    let candidate = TuneBenchmarkCandidate {
+        ctx_size: 4096,
+        batch: 2048,
+        ubatch: 1024,
+        cache_type_k: TuneKvCacheType::Q8_0,
+        cache_type_v: TuneKvCacheType::Q8_0,
+        mmap: TuneBoolOrAutoValue::Disabled,
+        mlock: false,
+        speculative: TuneBenchmarkSpeculativeCandidate::Disabled,
+        flash_attention: None,
+    };
+    let rendered = trial_config(&base, &prepared, &candidate).expect("trial config renders");
+    let plan = planned_trial_launch(&rendered, 4096);
+    assert_eq!(plan.slots, 4, "auto default lane count must be unchanged");
+}
+
+/// A speculative (MTP) candidate must not disturb the inherited lane count;
+/// the one-lane base setting survives an MTP-head sweep candidate.
+#[test]
+fn trial_config_honors_base_parallel_with_mtp_candidate() {
+    let base = mesh_llm_config::parse_config_toml(
+        "version = 1\n\n[[models]]\nmodel = \"model.gguf\"\nparallel = 1\n",
+    )
+    .expect("base config parses");
+    let prepared = prepared_plan_fixture(
+        "/tmp/model.gguf",
+        vec![ConfigModelMatch {
+            row_index: 0,
+            configured_model: "model.gguf".to_string(),
+        }],
+        Vec::new(),
+    );
+    let candidate = TuneBenchmarkCandidate {
+        ctx_size: 196_608,
+        batch: 2048,
+        ubatch: 1024,
+        cache_type_k: TuneKvCacheType::Q8_0,
+        cache_type_v: TuneKvCacheType::Q8_0,
+        mmap: TuneBoolOrAutoValue::Disabled,
+        mlock: false,
+        speculative: TuneBenchmarkSpeculativeCandidate::Mtp {
+            draft_model: None,
+            draft_max_tokens: 3,
+            draft_min_tokens: 0,
+            draft_acceptance_threshold: None,
+            draft_split_probability: None,
+        },
+        flash_attention: None,
+    };
+    let rendered = trial_config(&base, &prepared, &candidate).expect("trial config renders");
+    let plan = planned_trial_launch(&rendered, 196_608);
+    assert_eq!(
+        plan.slots, 1,
+        "MTP candidate must not change the lane count"
+    );
+    let total = plan.context_length * u32::try_from(plan.slots).unwrap();
+    assert_eq!(total, 196_608);
+}
+
+/// Resolves the effective serving-lane parallel from a mesh config using the
+/// same precedence the trial child host applies at startup: the per-model
+/// setting (table form or the flat legacy alias) before the global
+/// `defaults.throughput` / `[gpu]` settings; `None` means auto-planned lanes.
+fn trial_effective_parallel(config: &mesh_llm_config::MeshConfig) -> Option<usize> {
+    config
+        .models
+        .first()
+        .and_then(|entry| {
+            entry
+                .throughput
+                .as_ref()
+                .and_then(|throughput| throughput.parallel)
+                .or(entry.parallel)
+        })
+        .or_else(|| {
+            config.defaults.as_ref().and_then(|defaults| {
+                defaults
+                    .throughput
+                    .as_ref()
+                    .and_then(|throughput| throughput.parallel)
+            })
+        })
+        .or(config.gpu.parallel)
+}
+
+/// Mirrors the trial child's launch decision: resolve the effective parallel
+/// from the standalone trial config, then run the skippy coordinator's
+/// resource planner — the same planner that picks the lane count on the real
+/// host — at the candidate's explicit `ctx_size`.
+fn planned_trial_launch(
+    rendered: &str,
+    ctx_size: u32,
+) -> skippy_coordinator::resource_planning::RuntimeResourcePlan {
+    let trial = mesh_llm_config::parse_config_toml(rendered).expect("trial config parses");
+    skippy_coordinator::resource_planning::plan_runtime_resources(
+        skippy_coordinator::resource_planning::RuntimeResourcePlanInput {
+            ctx_size_override: Some(ctx_size),
+            parallel_override: trial_effective_parallel(&trial),
+            model_bytes: 4_000_000_000,
+            projector_bytes: 0,
+            vram_bytes: 32_000_000_000,
+            metadata: None,
+            kv_cache_quant: skippy_model_artifact::gguf::GgufKvCacheQuant::F16,
+            local_layer_fraction: None,
+            planning_profile:
+                skippy_coordinator::resource_planning::RuntimeResourcePlanningProfile::SharedMesh,
+            measured_buffers: None,
+        },
+    )
+}
+
 #[test]
 fn trial_config_includes_runtime_native_runtime() {
     let prepared = prepared_plan_fixture("/tmp/model.gguf", Vec::new(), Vec::new());
@@ -141,6 +360,7 @@ fn trial_config_includes_runtime_native_runtime() {
     config.runtime.native_runtime.skippy_abi = Some("0.1.25".to_string());
     config.runtime.native_runtime.selection =
         Some("exact:meshllm-native-runtime-linux-x86_64-cuda12".to_string());
+    config.runtime.native_runtime.download = Some(false);
 
     let rendered = trial_config(&config, &prepared, &candidate).expect("trial config renders");
     let parsed = mesh_llm_config::parse_config_toml(&rendered).expect("trial config parses");
@@ -157,6 +377,7 @@ fn trial_config_includes_runtime_native_runtime() {
         parsed.runtime.native_runtime.selection.as_deref(),
         Some("exact:meshllm-native-runtime-linux-x86_64-cuda12")
     );
+    assert_eq!(parsed.runtime.native_runtime.download, Some(false));
 }
 
 #[test]
@@ -1046,5 +1267,94 @@ fn new_streaming_report_marks_streaming_v1_and_records_trial_unit() {
             .as_str()
             .unwrap()
             .contains("warmup")
+    );
+}
+
+/// In-process reproduction of issue #2192: what MTP verify path does a tune
+/// trial request select, versus the manual-request form?
+///
+/// The batched native-MTP "accept-and-skip" verify path is admitted by
+/// skippy-serving only while generation hooks are inactive
+/// (`native_mtp_span_admitted = native_mtp_enabled && !generation_hooks_active
+/// && ...`, tuned to greedy sampling with no logprobs — the tune request's
+/// shape). The mesh host force-enables generation hooks for auto-routed chat
+/// requests: `build_mesh_request_plan` injects `mesh_hooks: true` whenever the
+/// model is the auto directive (`if is_auto_request { inject_skippy_hooks_flag
+/// (raw, true) }`, where `is_auto_request` is true for a model-less request or
+/// the `mesh`/`auto` directive). So a tune request addressed as `model:auto`
+/// is routed through hooks and falls back to the serial MTP verify path, while
+/// the manual-request form (concrete model id, `mesh_hooks: false`) takes the
+/// batched path. The helpers below mirror those two host/skippy decisions
+/// in-process so the routing selection is observable without a GPU or a real
+/// model.
+fn mesh_host_forces_generation_hooks(model: &str) -> bool {
+    // mesh-llm-host-runtime `automatic::is_directive`: the `mesh` directive or
+    // the deprecated `auto` alias; a model-less chat request also auto-routes.
+    model.is_empty() || model == "mesh" || model == "auto"
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TuneMtpVerifyPath {
+    Batched,
+    Serial,
+}
+
+fn mtp_verify_path(native_mtp_enabled: bool, generation_hooks_active: bool) -> TuneMtpVerifyPath {
+    // skippy-serving `native_mtp_span_admitted = native_mtp_enabled &&
+    // !generation_hooks_active && ...` (MTP head present, greedy, no logprobs).
+    if native_mtp_enabled && !generation_hooks_active {
+        TuneMtpVerifyPath::Batched
+    } else {
+        TuneMtpVerifyPath::Serial
+    }
+}
+
+#[test]
+fn tune_trial_request_routes_to_batched_mtp_verify_not_serial_fallback() {
+    // A trial child serves exactly one model; `prepared_plan_fixture` names it
+    // by its filesystem path, which is exactly the concrete ref the trial
+    // config registers under `appended_model_ref`.
+    let prepared = prepared_plan_fixture("/tmp/model.gguf", Vec::new(), Vec::new());
+    let expected_model = "/tmp/model.gguf";
+
+    // The model the tune trial request is actually sent with (issue #2192 seam).
+    let request_model = trial_chat_request_model(&prepared);
+    let generation_hooks_active = mesh_host_forces_generation_hooks(&request_model);
+    let path = mtp_verify_path(
+        /* native_mtp_enabled: trial config sets speculative.strategy = "mtp" */ true,
+        generation_hooks_active,
+    );
+
+    // The tune trial request must select the batched native-MTP verify path (the
+    // intended MTP implementation), not the serial fallback. On the buggy
+    // `model:auto` form the host force-injects mesh hooks, enabling generation
+    // hooks and standing down the batched MTP span.
+    assert_eq!(
+        path,
+        TuneMtpVerifyPath::Batched,
+        "tune trial request (model `{request_model}`) routed to the serial MTP fallback: \
+         auto-routed requests are force-injected with mesh_hooks, enabling generation \
+         hooks and standing down the batched native-MTP verify path"
+    );
+    // The request must name the concrete served model to stay off the
+    // auto-routing path that injects the hooks.
+    assert_eq!(
+        request_model, expected_model,
+        "tune trial request must name the concrete served model, \
+         not the auto directive (auto-routing force-injects mesh_hooks)"
+    );
+
+    // Contrast: the manual-request form (concrete model id, mesh_hooks: false)
+    // takes the batched path; the legacy `model:auto` form is what forced the
+    // serial fallback the issue measured.
+    assert_eq!(
+        mtp_verify_path(true, mesh_host_forces_generation_hooks(expected_model)),
+        TuneMtpVerifyPath::Batched,
+        "manual-request form (concrete model id) takes the batched MTP verify path"
+    );
+    assert_eq!(
+        mtp_verify_path(true, mesh_host_forces_generation_hooks("auto")),
+        TuneMtpVerifyPath::Serial,
+        "legacy model:auto form is force-routed through hooks to the serial fallback"
     );
 }

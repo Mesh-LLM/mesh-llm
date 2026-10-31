@@ -162,6 +162,13 @@ fn execute_bound(
     report["exit_code"] = json!(observed.process.status.and_then(|status| status.code()));
     report["supervisor_outcome"] = json!(format!("{:?}", observed.process.outcome));
     report["cleanup_complete"] = json!(observed.process.cleanup.complete);
+    report["output_capture_complete"] =
+        json!(!observed.process.stdout.truncated && !observed.process.stderr.truncated);
+    report["memory_guard_status"] = json!(if observed.guard_error.is_none() {
+        "passed"
+    } else {
+        "failed"
+    });
     if let Some(error) = observed.guard_error {
         return Err(error.into());
     }
@@ -194,6 +201,7 @@ fn run_admitted_battery(
     evidence: &std::path::Path,
 ) -> DynResult<guard::Monitored> {
     let reserve = observation::admission(initial, peak)?;
+    report["admission_status"] = json!("passed");
     report["physical_bytes"] = json!(initial.total);
     report["initial_available_bytes"] = json!(initial.available);
     report["reserve_bytes"] = json!(reserve);

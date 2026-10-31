@@ -1,5 +1,5 @@
-//! OpenAI Decisions wire contract over the local, text-only System One backend.
-//! https://developers.openai.com/api/docs/guides/decisions
+//! OpenAI Decisions wire contract with model-specific System One readouts.
+//! <https://developers.openai.com/api/docs/guides/decisions>
 
 use std::collections::{BTreeMap, HashSet};
 
@@ -59,6 +59,9 @@ enum DecisionInputPart {
 }
 
 impl DecisionInput {
+    /// Flatten user text messages and parts in arrival order, separated by blank lines.
+    /// Reject other roles, non-message items, and image parts rather than silently
+    /// discarding input that the local text-only backend cannot interpret.
     fn text(&self) -> Result<String, InferenceError> {
         match self {
             Self::Text(text) => Ok(text.clone()),
@@ -145,6 +148,8 @@ struct ScoreLevel {
     description: Option<String>,
 }
 
+/// Accept a string when the field is present, including an empty string, but reject null.
+/// The field's `serde(default)` handles omission separately by supplying `None`.
 fn optional_string_without_null<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -153,6 +158,8 @@ where
 }
 
 impl DecisionsQuestion {
+    /// Return the caller's optional response name; internal question IDs use positions
+    /// so omitted or repeated names do not overwrite independently scored questions.
     fn name(&self) -> Option<&str> {
         match self {
             Self::Predicate { name, .. } | Self::Choice { name, .. } | Self::Score { name, .. } => {
@@ -161,6 +168,9 @@ impl DecisionsQuestion {
         }
     }
 
+    /// Translate a predicate, choice, or score into the corresponding backend question.
+    /// Validate distinct choice values and score labels, preserving candidate order;
+    /// omitted descriptions fall back to the candidate's value or label.
     fn to_system_one(&self) -> Result<SystemOneQuestion, InferenceError> {
         match self {
             Self::Predicate { instructions, .. } => Ok(SystemOneQuestion::Noul {
@@ -207,6 +217,7 @@ impl DecisionsQuestion {
         }
     }
 
+    /// Borrow the question's instructions without interpreting or rewriting their text.
     fn instructions(&self) -> &str {
         match self {
             Self::Predicate { instructions, .. }
@@ -216,6 +227,9 @@ impl DecisionsQuestion {
     }
 }
 
+/// Assign backend string keys to a nonempty list of distinct typed choice values.
+/// Preserve caller strings and escape generated boolean keys on collision, keeping
+/// boolean values separate from strings such as "true" or "__boolean_true".
 fn choice_keys(choices: &[ChoiceOption]) -> Result<Vec<String>, InferenceError> {
     let mut values = HashSet::new();
     if choices.is_empty()
@@ -250,6 +264,9 @@ fn choice_keys(choices: &[ChoiceOption]) -> Result<Vec<String>, InferenceError> 
 }
 
 impl DecisionsRequest {
+    /// Validate request metadata and convert text input and questions for System One.
+    /// Assign positional question IDs for response reconstruction, independent of names.
+    /// Leave adapter-only execution options unset so the backend uses its defaults.
     pub(crate) fn to_system_one(&self) -> Result<SystemOneRequest, InferenceError> {
         if self.model.trim().is_empty() || self.questions.is_empty() {
             return Err(InferenceError::invalid_request(
@@ -281,6 +298,7 @@ impl DecisionsRequest {
         })
     }
 
+    /// Map internal decision results and evidence back to the caller's question order.
     pub(crate) fn response(
         &self,
         result: SystemOneResponse,
@@ -313,8 +331,24 @@ impl DecisionsRequest {
         }).collect::<Result<Vec<_>, InferenceError>>()?;
         Ok(DecisionsResponse {
             model: result.model,
-            answers,
+            answers: answers
+                .into_iter()
+                .enumerate()
+                .map(|(index, answer)| {
+                    let key = format!("question_{index}");
+                    let readout = result.readouts.get(&key).cloned();
+                    if readout.is_none()
+                        && (result.readout_usage.is_some() || !result.readouts.is_empty())
+                    {
+                        return Err(InferenceError::backend(format!(
+                            "Decisions backend omitted readout {key:?}"
+                        )));
+                    }
+                    Ok(DecisionsAnswerEntry { answer, readout })
+                })
+                .collect::<Result<Vec<_>, InferenceError>>()?,
             usage: DecisionsUsage::from(result.usage),
+            readout_usage: result.readout_usage,
         })
     }
 }
@@ -322,8 +356,18 @@ impl DecisionsRequest {
 #[derive(Debug, Serialize)]
 pub(crate) struct DecisionsResponse {
     model: String,
-    answers: Vec<DecisionsAnswer>,
+    answers: Vec<DecisionsAnswerEntry>,
     usage: DecisionsUsage,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readout_usage: Option<crate::system_one::DecisionReadoutUsage>,
+}
+
+#[derive(Debug, Serialize)]
+struct DecisionsAnswerEntry {
+    #[serde(flatten)]
+    answer: DecisionsAnswer,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    readout: Option<crate::system_one::DecisionReadout>,
 }
 
 #[derive(Debug, Serialize)]
@@ -381,11 +425,14 @@ struct OutputTokensDetails {
 }
 
 impl From<SystemOneUsage> for DecisionsUsage {
+    /// Project backend usage without losing its measured prefix-cache reuse.
     fn from(usage: SystemOneUsage) -> Self {
         Self {
             input_tokens: usage.input_tokens,
             input_tokens_details: InputTokensDetails {
-                cached_tokens: 0,
+                cached_tokens: usage.cached_tokens,
+                // Snapshot persistence is not token evaluation; no write-token
+                // measurement is available from these adapters.
                 cache_write_tokens: 0,
             },
             output_tokens: usage.output_tokens,
@@ -394,5 +441,116 @@ impl From<SystemOneUsage> for DecisionsUsage {
             },
             total_tokens: usage.input_tokens.saturating_add(usage.output_tokens),
         }
+    }
+}
+
+#[cfg(test)]
+mod readout_tests {
+    use super::*;
+    use crate::system_one::{DecisionReadout, DecisionReadoutUsage};
+
+    /// Causal execution must report evidence for every answer, including an empty map.
+    #[test]
+    fn missing_causal_readout_is_a_backend_error() {
+        for partial in [false, true] {
+            let request: DecisionsRequest = serde_json::from_value(serde_json::json!({
+                "model": "test", "input": "state", "questions": [
+                    {"type": "predicate", "instructions": "first?"},
+                    {"type": "predicate", "instructions": "second?"}
+                ]
+            }))
+            .unwrap();
+            let result = SystemOneResponse {
+                model: "test".into(),
+                answers: (0..2)
+                    .map(|i| {
+                        (
+                            format!("question_{i}"),
+                            SystemOneAnswer::Noul { noul: 0.75 },
+                        )
+                    })
+                    .collect(),
+                usage: SystemOneUsage {
+                    input_tokens: 5,
+                    output_tokens: 0,
+                    cached_tokens: 0,
+                },
+                readout_usage: Some(DecisionReadoutUsage::default()),
+                readouts: if partial {
+                    [("question_0".into(), DecisionReadout {
+                        method: "selected_token_logits", normalization: "sum_log_probabilities",
+                        probability_semantics: "relative_candidate_probability_not_calibrated_truth",
+                        candidate_log_probabilities: vec![-1.0, -2.0], candidate_token_counts: vec![1, 1],
+                        evaluated_tokens: 5, cached_tokens: 0,
+                    })].into()
+                } else {
+                    BTreeMap::new()
+                },
+            };
+            let error = request.response(result).unwrap_err();
+            assert_eq!(error.status(), axum::http::StatusCode::BAD_GATEWAY);
+            let missing = usize::from(partial);
+            assert!(
+                error
+                    .message()
+                    .contains(&format!("omitted readout \"question_{missing}\""))
+            );
+        }
+    }
+
+    /// Answers and readout evidence retain question order even beyond ten questions.
+    #[test]
+    fn restores_original_question_order_for_answers_and_evidence() {
+        let request: DecisionsRequest = serde_json::from_value(serde_json::json!({
+            "model": "test", "input": "shared state", "questions": (0..12).map(|i| serde_json::json!({
+                "type": "predicate", "name": format!("q{i}"), "instructions": "Is this relevant?"
+            })).collect::<Vec<_>>()
+        })).unwrap();
+        let usage = DecisionReadoutUsage {
+            evaluated_tokens: 120,
+            cached_tokens: 60,
+            cache_preparation_tokens: 10,
+        };
+        let result = SystemOneResponse {
+            model: "test".into(),
+            answers: (0..12).map(|i| (format!("question_{i}"), SystemOneAnswer::Noul { noul: i as f32 / 12.0 })).collect(),
+            usage: SystemOneUsage { input_tokens: 180, output_tokens: 0, cached_tokens: 60 },
+            readout_usage: Some(usage),
+            readouts: (0..12).map(|i| (format!("question_{i}"), DecisionReadout {
+                method: "selected_token_logits", normalization: "sum_log_probabilities", probability_semantics: "relative_candidate_probability_not_calibrated_truth",
+                candidate_log_probabilities: vec![-1.0, -2.0], candidate_token_counts: vec![1, 1], evaluated_tokens: i, cached_tokens: 5,
+            })).collect(),
+        };
+        let json = serde_json::to_value(request.response(result).unwrap()).unwrap();
+        for i in 0..12 {
+            assert_eq!(json["answers"][i]["name"], format!("q{i}"));
+            assert_eq!(json["answers"][i]["readout"]["evaluated_tokens"], i);
+        }
+        assert_eq!(json["readout_usage"], serde_json::to_value(usage).unwrap());
+        assert_eq!(json["usage"]["output_tokens"], 0);
+        assert_eq!(json["usage"]["input_tokens_details"]["cached_tokens"], 60);
+    }
+
+    /// Legacy decision responses omit evidence that only causal execution can produce.
+    #[test]
+    fn legacy_adapter_responses_do_not_gain_causal_evidence() {
+        let request: DecisionsRequest = serde_json::from_value(serde_json::json!({
+            "model": "legacy", "input": "state", "questions": [{"type": "predicate", "instructions": "yes?"}]
+        })).unwrap();
+        let result = SystemOneResponse {
+            model: "legacy".into(),
+            answers: [("question_0".into(), SystemOneAnswer::Noul { noul: 0.75 })].into(),
+            usage: SystemOneUsage {
+                input_tokens: 5,
+                output_tokens: 0,
+                cached_tokens: 0,
+            },
+            readouts: BTreeMap::new(),
+            readout_usage: None,
+        };
+        let json = serde_json::to_value(request.response(result).unwrap()).unwrap();
+        assert!(json.get("readout_usage").is_none());
+        assert!(json["answers"][0].get("readout").is_none());
+        assert_eq!(json["answers"][0]["probability"], 0.75);
     }
 }

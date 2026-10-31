@@ -10,6 +10,8 @@ mod cli_output;
 mod command;
 #[path = "automation/command_interrupt/mod.rs"]
 pub(crate) mod command_interrupt;
+#[cfg(test)]
+mod fixture_paths;
 mod installer_fixtures;
 mod model_registry;
 mod native_policy;
@@ -95,7 +97,6 @@ fn run() -> DynResult<()> {
             rest,
         ),
         cli::CliCommand::WanObservation(rest) => automation::wan_observation::run(rest),
-        cli::CliCommand::WanStageDeployment(rest) => automation::wan_stage_deployment::run(rest),
         cli::CliCommand::SystemOneCases(rest) => automation::system_one_cases::run(rest),
         cli::CliCommand::SystemOneSmoke(rest) => automation::system_one_smoke::run(rest),
         cli::CliCommand::DecisionsSmoke(rest) => automation::decisions_smoke::run(rest),
@@ -190,9 +191,12 @@ fn run() -> DynResult<()> {
                 Some(root) => root,
                 None => repository::RepositoryRoot::resolve(None)?,
             };
-            ci_plan::run(root.as_path(), rest)
+            ci_controller::plan::run(root.as_path(), rest)
         }
-        cli::CliCommand::CiValidate(verb, rest) => ci_validation::lane_results::run(verb, rest),
+        cli::CliCommand::CiValidate(verb, rest) => match verb {
+            "validate-graph" => ci_validation::entrypoint_graph::run(rest),
+            _ => ci_controller::lane_results::run(rest),
+        },
         cli::CliCommand::CiFamilyPlan(rest) => {
             let root = match explicit_root {
                 Some(root) => root,
@@ -269,7 +273,7 @@ fn run() -> DynResult<()> {
                     Ok(automation::daemon_readiness::run(root, rest)?)
                 }
                 cli::RepositoryCommand::AutomationBootstrap(rest) => {
-                    automation_bootstrap::run(root, rest)
+                    ci_controller::bootstrap::run(root, rest, &automation_bootstrap::XTASK)
                 }
                 cli::RepositoryCommand::ReleaseTargets => {
                     repo_consistency::check_release_targets_command(root)

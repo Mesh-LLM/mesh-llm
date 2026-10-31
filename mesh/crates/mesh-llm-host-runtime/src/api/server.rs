@@ -1,7 +1,8 @@
 use super::{
     MeshApi,
     access::{
-        is_trusted_local_request, request_host, request_origin, requires_trusted_local_access,
+        is_trusted_local_request, request_content_type_is_json, request_host, request_origin,
+        requires_json_content_type, requires_trusted_local_access,
     },
     assets::{respond_console_asset, respond_console_index},
     http::{http_body_text, respond_error},
@@ -123,19 +124,33 @@ async fn spawn_inflight_watcher(state: MeshApi) {
 }
 
 fn spawn_latest_version_check(state: MeshApi) {
-    tokio::spawn(async move {
-        let Some(latest) = crate::system::autoupdate::latest_release_version().await else {
-            return;
-        };
-        if !crate::system::autoupdate::version_newer(&latest, crate::VERSION) {
-            return;
-        }
-        {
-            let mut inner = state.inner.lock().await;
-            inner.latest_version = Some(latest);
-        }
-        state.push_status().await;
-    });
+    tokio::spawn(record_latest_version(
+        state,
+        crate::system::autoupdate::latest_release_version,
+    ));
+}
+
+/// Runs `fetch` and shows a newer release in the console, unless
+/// `updates.check` turns the check off.
+pub(super) async fn record_latest_version<F, Fut>(state: MeshApi, fetch: F)
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = Option<String>>,
+{
+    if !state.inner.lock().await.update_check {
+        return;
+    }
+    let Some(latest) = fetch().await else {
+        return;
+    };
+    if !crate::system::autoupdate::version_newer(&latest, crate::VERSION) {
+        return;
+    }
+    {
+        let mut inner = state.inner.lock().await;
+        inner.latest_version = Some(latest);
+    }
+    state.push_status().await;
 }
 
 async fn bind_management_listener(
@@ -146,7 +161,11 @@ async fn bind_management_listener(
     let addr = if listen_all { "0.0.0.0" } else { "127.0.0.1" };
     match existing_listener {
         Some(listener) => Some(listener),
-        None => match TcpListener::bind(format!("{addr}:{port}")).await {
+        None => match crate::network::exclusive_listener::bind_exclusive_tcp_listener(&format!(
+            "{addr}:{port}"
+        ))
+        .await
+        {
             Ok(listener) => Some(listener),
             Err(e) => {
                 tracing::error!("Management API: failed to bind :{port}: {e}");
@@ -281,6 +300,18 @@ async fn dispatch_management_request(
             stream,
             403,
             "This management route requires a trusted local caller",
+        )
+        .await?;
+        return Ok(());
+    }
+
+    if requires_json_content_type(method, path_only)
+        && !matches!(request_content_type_is_json(raw_request), Ok(true))
+    {
+        respond_error(
+            stream,
+            415,
+            "This management route requires a Content-Type of application/json",
         )
         .await?;
         return Ok(());

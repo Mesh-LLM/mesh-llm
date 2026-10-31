@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/falcon-h1.cpp b/src/models/falcon-h1.cpp
-index d6ef2d51986235c36b66254a5a12b1a844dc9200..93a28a045ff41b6846dedc20a6d2b0129b115fee 100644
+index a7f9e55765f21f2aeb3450b27a1b39853c51ab1f..d2d91b5f588cabd6901361923eab2de1d3ccdef1 100644
 --- a/src/models/falcon-h1.cpp
 +++ b/src/models/falcon-h1.cpp
 @@ -130,6 +130,8 @@ llama_model_falcon_h1::graph::graph(const llama_model & model, const llm_graph_p

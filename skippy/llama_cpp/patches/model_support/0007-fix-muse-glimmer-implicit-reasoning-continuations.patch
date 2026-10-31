@@ -1,0 +1,40 @@
+From 791b47969325d9e55fba2cd5bea5d53e1cac0206 Mon Sep 17 00:00:00 2001
+From: James Dumay <jameswdumay@gmail.com>
+Date: Sat, 17 Oct 2026 03:37:10 +1100
+Subject: [PATCH] fix(muse-glimmer): parse implicit reasoning continuations
+
+---
+
+diff --git a/common/parsers/muse-glimmer.cpp b/common/parsers/muse-glimmer.cpp
+index 78ff50727..846264b60 100644
+--- a/common/parsers/muse-glimmer.cpp
++++ b/common/parsers/muse-glimmer.cpp
+@@ -56,7 +56,10 @@ common_chat_params common_chat_params_init_muse_glimmer(const common_chat_templa
+         }
+ 
+         if (extract_reasoning) {
+-            p.rule("analysis", p.literal(" to=self<|message|>") + p.reasoning(p.until("<|eom|>")) + p.literal("<|eom|>"));
++            // Some checkpoints continue directly into the reasoning body
++            // after the assistant generation prefix.
++            auto reasoning_route = p.literal(" to=self<|message|>") | p.negate(p.literal(" to="));
++            p.rule("analysis", reasoning_route + p.reasoning(p.until("<|eom|>")) + p.literal("<|eom|>"));
+         } else {
+             p.rule("analysis", p.literal(" to=self<|message|>") + p.content(p.until("<|eom|>")) + p.literal("<|eom|>"));
+         }
+diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
+index c6be5a10a..57887bc73 100644
+--- a/tests/test-chat.cpp
++++ b/tests/test-chat.cpp
+@@ -6821,6 +6821,12 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
+             .expect(message_assist)
+             .run();
+ 
++        tst.test(" can continue.<|eom|><|start|>assistant to=user<|message|>A red square.<|eot|>")
++            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
++            .expect_reasoning(" can continue.")
++            .expect_content("A red square.")
++            .run();
++
+         // A tool call as the first message of the turn: "<|start|>assistant" is the
+         // generation prompt, so the output starts at " to=".
+         tst.test(" to=special_function<|message|>" + call_markup)

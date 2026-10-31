@@ -12,7 +12,7 @@ use skippy_runtime::{
     ModelInfo, MtpSource, RuntimeConfig, RuntimeLoadMode, StageModel, StageSession,
 };
 
-const DEFAULT_CORPUS: &str = "skippy/crates/skippy-bench/corpora/kv_mixed_prompts.jsonl";
+const DEFAULT_CORPUS: &str = "skippy/evals/corpora/kv_mixed_prompts.jsonl";
 
 #[derive(Parser)]
 #[command(about = "Benchmark a target/draft model pair for speculative decoding")]

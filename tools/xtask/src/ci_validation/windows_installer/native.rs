@@ -36,6 +36,9 @@ impl Installed {
             .close()
             .expect("owned installer fixture directory deletion failed");
     }
+    pub(super) fn stderr(&self) -> String {
+        String::from_utf8_lossy(&self.report.stderr.bytes_retained).into_owned()
+    }
     pub(super) fn path(&self, relative: &str) -> PathBuf {
         self.root.path().join(relative)
     }
@@ -87,9 +90,7 @@ pub(super) fn system_powershell() -> PathBuf {
     path
 }
 pub(super) fn fixture_host() -> Vec<u8> {
-    let unit_binary = std::env::current_exe().unwrap();
-    let target_debug = unit_binary.parent().unwrap().parent().unwrap();
-    let path = target_debug.join("examples/migration_generator_fixture.exe");
+    let path = crate::fixture_paths::examples_dir().join("migration_generator_fixture.exe");
     let metadata = fs::symlink_metadata(&path).unwrap_or_else(|error| {
         panic!(
             "build existing migration_generator_fixture example before native installer tests: {}: {error}",
@@ -381,6 +382,11 @@ fn native_windows_installer_stale_cleanup_failure_keeps_committed_new_product() 
         .unwrap();
     });
     result.rejected();
+    assert!(
+        result.stderr().contains("stale binary path is a directory"),
+        "{}",
+        result.stderr()
+    );
     assert!(result.path("bin/mesh-llm.exe").is_file());
     assert!(
         result

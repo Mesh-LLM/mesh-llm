@@ -11,11 +11,13 @@ use std::collections::{HashMap, HashSet};
 
 mod served_descriptors;
 
+/// Build the stage advertisement from this node's supported capabilities.
 fn skippy_stage_subprotocols(
     artifact_transfer_supported: bool,
     stage_protocol_generation_supported: bool,
     status_list_supported: bool,
     local_gguf_content_id_supported: bool,
+    persistent_lane_marker_supported: bool,
 ) -> Vec<crate::proto::node::MeshSubprotocol> {
     let mut features = vec![
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string(),
@@ -27,9 +29,13 @@ fn skippy_stage_subprotocols(
         features
             .push(skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1.to_string());
     }
+    if persistent_lane_marker_supported {
+        features
+            .push(skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_PERSISTENT_LANE_MARKER.to_string());
+    }
     if stage_protocol_generation_supported {
         features.push(
-            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11.to_string(),
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12.to_string(),
         );
     }
     if artifact_transfer_supported {
@@ -80,9 +86,10 @@ fn supports_decode_batch_policy(subprotocols: &[crate::proto::node::MeshSubproto
     )
 }
 
+/// Accept a stage generation only when one descriptor contains its entire bundle.
 fn supports_skippy_stage_generation(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
     let required_features = [
-        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
@@ -385,6 +392,10 @@ fn local_workload_class_to_proto(workload: crate::mesh::ModelWorkloadClass) -> i
         Local::EncoderDecoder => Proto::EncoderDecoder as i32,
         Local::SpeechSynthesis => Proto::SpeechSynthesis as i32,
         Local::Decision => Proto::Decision as i32,
+        Local::SpeechRecognition => Proto::SpeechRecognition as i32,
+        Local::DocumentOcr => Proto::DocumentOcr as i32,
+        Local::ImageTextSimilarity => Proto::ImageTextSimilarity as i32,
+        Local::DepthEstimation => Proto::DepthEstimation as i32,
         // Preserve explicit denial when relaying metadata. Zero is the legacy
         // unspecified value and must not erase an unknown workload.
         Local::Unknown => -1,
@@ -403,6 +414,10 @@ fn proto_workload_class_to_local(value: i32) -> Option<crate::mesh::ModelWorkloa
         Ok(Proto::EncoderDecoder) => Some(Local::EncoderDecoder),
         Ok(Proto::SpeechSynthesis) => Some(Local::SpeechSynthesis),
         Ok(Proto::Decision) => Some(Local::Decision),
+        Ok(Proto::SpeechRecognition) => Some(Local::SpeechRecognition),
+        Ok(Proto::DocumentOcr) => Some(Local::DocumentOcr),
+        Ok(Proto::ImageTextSimilarity) => Some(Local::ImageTextSimilarity),
+        Ok(Proto::DepthEstimation) => Some(Local::DepthEstimation),
         Ok(Proto::Unspecified) => None,
         Err(_) => Some(Local::Unknown),
     }
@@ -918,12 +933,23 @@ pub(crate) fn local_ann_to_proto_ann(
             .iter()
             .map(local_throughput_hint_to_proto)
             .collect(),
-        subprotocols: skippy_stage_subprotocols(
-            ann.artifact_transfer_supported,
-            ann.stage_protocol_generation_supported,
-            ann.stage_status_list_supported,
-            ann.local_gguf_content_id_supported,
-        ),
+        subprotocols: {
+            let mut subprotocols = skippy_stage_subprotocols(
+                ann.artifact_transfer_supported,
+                ann.stage_protocol_generation_supported,
+                ann.stage_status_list_supported,
+                ann.local_gguf_content_id_supported,
+                ann.persistent_lane_marker_supported,
+            );
+            if ann.plugin_origin_signature_supported {
+                subprotocols.push(crate::proto::node::MeshSubprotocol {
+                    name: mesh_llm_protocol::PLUGIN_MESH_SUBPROTOCOL.into(),
+                    major: 1,
+                    features: vec![mesh_llm_protocol::PLUGIN_ORIGIN_SIGNATURE_FEATURE.into()],
+                });
+            }
+            subprotocols
+        },
         inference_admission_state: ann.inference_admission_state.map(|state| state as i32),
         lightning_offers: {
             #[cfg(feature = "payments")]
@@ -1191,6 +1217,18 @@ pub(crate) fn proto_ann_to_local(
         stage_status_list_supported: supports_skippy_status_list(&pa.subprotocols),
         local_gguf_content_id_supported: supports_local_gguf_content_id(&pa.subprotocols),
         decode_batch_policy_supported: supports_decode_batch_policy(&pa.subprotocols),
+        plugin_origin_signature_supported: pa.subprotocols.iter().any(|subprotocol| {
+            subprotocol.name == mesh_llm_protocol::PLUGIN_MESH_SUBPROTOCOL
+                && subprotocol.major == 1
+                && subprotocol
+                    .features
+                    .iter()
+                    .any(|feature| feature == mesh_llm_protocol::PLUGIN_ORIGIN_SIGNATURE_FEATURE)
+        }),
+        persistent_lane_marker_supported: supports_skippy_stage_feature(
+            &pa.subprotocols,
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_PERSISTENT_LANE_MARKER,
+        ),
         advertised_model_throughput: pa
             .advertised_model_throughput
             .iter()
@@ -1384,6 +1422,7 @@ fn legacy_proto_config_to_mesh(
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: p.command.clone(),
             args: p.args.clone(),
@@ -1399,6 +1438,7 @@ fn legacy_proto_config_to_mesh(
         .map(|requirements| crate::plugin::mesh_requirements_config_from_runtime(&requirements))
         .unwrap_or_default();
     let mut config = MeshConfig {
+        source_directory: None,
         version: Some(snapshot.version),
         gpu: GpuConfig {
             host_ram_offload: None,
@@ -1409,6 +1449,7 @@ fn legacy_proto_config_to_mesh(
         owner_control: Default::default(),
         telemetry: Default::default(),
         analytics: Default::default(),
+        updates: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models,
@@ -1474,6 +1515,8 @@ mod tests {
             crate::mesh::ModelWorkloadClass::EncoderDecoder,
             crate::mesh::ModelWorkloadClass::SpeechSynthesis,
             crate::mesh::ModelWorkloadClass::Decision,
+            crate::mesh::ModelWorkloadClass::SpeechRecognition,
+            crate::mesh::ModelWorkloadClass::DocumentOcr,
             crate::mesh::ModelWorkloadClass::Unknown,
         ] {
             let local = crate::mesh::ServedModelMetadata {

@@ -98,6 +98,15 @@ pub struct AudioTranscriptionRequest {
 impl AudioTranscriptionRequest {
     pub const MAX_FILE_BYTES: usize = MAX_AUDIO_BYTES;
 
+    /// Whether the requested format needs per-segment timing
+    /// (`verbose_json`, `srt`, `vtt`), which only some models report.
+    pub fn needs_segment_timing(&self) -> bool {
+        matches!(
+            self.response_format.as_str(),
+            "verbose_json" | "srt" | "vtt"
+        )
+    }
+
     /// Enforce upload size, output format, and the finite `[0, 1]` temperature range.
     pub fn validate(&self) -> InferenceResult<()> {
         if self.model.trim().is_empty() {
@@ -114,9 +123,12 @@ impl AudioTranscriptionRequest {
                 Self::MAX_FILE_BYTES
             )));
         }
-        if !matches!(self.response_format.as_str(), "json" | "text") {
+        if !matches!(
+            self.response_format.as_str(),
+            "json" | "text" | "verbose_json" | "srt" | "vtt"
+        ) {
             return Err(InferenceError::unsupported(
-                "response_format must be 'json' or 'text'",
+                "response_format must be 'json', 'text', 'verbose_json', 'srt', or 'vtt'",
             ));
         }
         if self
@@ -131,9 +143,105 @@ impl AudioTranscriptionRequest {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct AudioTranscriptionResponse {
     pub text: String,
+    /// Segment timing from models that report it; `verbose_json`, `srt`, and
+    /// `vtt` need it.
+    #[serde(skip)]
+    pub timing: Option<AudioTranscriptionTiming>,
+}
+
+impl AudioTranscriptionResponse {
+    /// A transcript without segment timing.
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            timing: None,
+        }
+    }
+}
+
+/// Language, length, and timed segments of a transcription.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct AudioTranscriptionTiming {
+    /// ISO 639-1 code of the spoken language; empty when unknown.
+    pub language: String,
+    /// Seconds of audio transcribed.
+    pub duration: f64,
+    pub segments: Vec<AudioTranscriptionSegment>,
+}
+
+/// One timed segment, in the `verbose_json` shape.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct AudioTranscriptionSegment {
+    pub id: usize,
+    /// Seconds from the start of the audio.
+    pub start: f64,
+    pub end: f64,
+    pub text: String,
+    pub no_speech_prob: f32,
+}
+
+/// Renders `verbose_json`: the OpenAI field subset these models report.
+pub(crate) fn verbose_json(
+    response: &AudioTranscriptionResponse,
+    timing: &AudioTranscriptionTiming,
+    translate: bool,
+) -> serde_json::Value {
+    serde_json::json!({
+        "task": if translate { "translate" } else { "transcribe" },
+        "language": timing.language,
+        "duration": timing.duration,
+        "text": response.text,
+        "segments": timing.segments,
+    })
+}
+
+/// Renders SubRip subtitles: numbered cues with `HH:MM:SS,mmm` bounds.
+pub(crate) fn srt(timing: &AudioTranscriptionTiming) -> String {
+    let mut out = String::new();
+    for (index, segment) in timing.segments.iter().enumerate() {
+        out.push_str(&format!(
+            "{}\n{} --> {}\n{}\n\n",
+            index + 1,
+            subtitle_time(segment.start, ','),
+            subtitle_time(cue_end(segment), ','),
+            segment.text.trim()
+        ));
+    }
+    out
+}
+
+/// Renders WebVTT subtitles with `HH:MM:SS.mmm` cue bounds.
+pub(crate) fn vtt(timing: &AudioTranscriptionTiming) -> String {
+    let mut out = String::from("WEBVTT\n\n");
+    for segment in &timing.segments {
+        out.push_str(&format!(
+            "{} --> {}\n{}\n\n",
+            subtitle_time(segment.start, '.'),
+            subtitle_time(cue_end(segment), '.'),
+            segment.text.trim()
+        ));
+    }
+    out
+}
+
+/// A cue's end, never before its start: Whisper can emit zero-length or
+/// rounded segments, and players reject an end earlier than the start.
+fn cue_end(segment: &AudioTranscriptionSegment) -> f64 {
+    segment.end.max(segment.start)
+}
+
+fn subtitle_time(seconds: f64, separator: char) -> String {
+    let millis = (seconds.max(0.0) * 1000.0).round() as u64;
+    format!(
+        "{:02}:{:02}:{:02}{separator}{:03}",
+        millis / 3_600_000,
+        millis / 60_000 % 60,
+        millis / 1000 % 60,
+        millis % 1000
+    )
 }
 
 #[cfg(test)]
@@ -151,6 +259,73 @@ mod tests {
             response_format: "json".to_string(),
             temperature,
         }
+    }
+
+    fn timing() -> AudioTranscriptionTiming {
+        AudioTranscriptionTiming {
+            language: "en".into(),
+            duration: 3_725.5,
+            segments: vec![
+                AudioTranscriptionSegment {
+                    id: 0,
+                    start: 0.0,
+                    end: 1.25,
+                    text: " Hello.".into(),
+                    no_speech_prob: 0.01,
+                },
+                AudioTranscriptionSegment {
+                    id: 1,
+                    start: 3_723.0,
+                    end: 3_725.5,
+                    text: " Bye. ".into(),
+                    no_speech_prob: 0.02,
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn subtitles_number_cues_and_format_hours() {
+        assert_eq!(
+            srt(&timing()),
+            "1\n00:00:00,000 --> 00:00:01,250\nHello.\n\n2\n01:02:03,000 --> 01:02:05,500\nBye.\n\n"
+        );
+        assert_eq!(
+            vtt(&timing()),
+            "WEBVTT\n\n00:00:00.000 --> 00:00:01.250\nHello.\n\n01:02:03.000 --> 01:02:05.500\nBye.\n\n"
+        );
+    }
+
+    #[test]
+    fn subtitle_cues_never_end_before_they_start() {
+        let mut timing = timing();
+        timing.segments[0].end = -1.0;
+        assert!(srt(&timing).starts_with("1\n00:00:00,000 --> 00:00:00,000\n"));
+    }
+
+    #[test]
+    fn verbose_json_names_the_task_and_carries_segments() {
+        let response = AudioTranscriptionResponse {
+            text: "Hello. Bye.".into(),
+            timing: Some(timing()),
+        };
+        let body = verbose_json(&response, response.timing.as_ref().unwrap(), true);
+        assert_eq!(body["task"], "translate");
+        assert_eq!(body["language"], "en");
+        assert_eq!(body["segments"][1]["start"], 3_723.0);
+        assert_eq!(body["text"], "Hello. Bye.");
+    }
+
+    #[test]
+    fn every_openai_response_format_is_accepted() {
+        for format in ["json", "text", "verbose_json", "srt", "vtt"] {
+            let mut request = transcription(None);
+            request.response_format = format.into();
+            assert!(request.validate().is_ok(), "{format}");
+        }
+        let mut request = transcription(None);
+        request.response_format = "xml".into();
+        assert!(request.validate().is_err());
     }
 
     #[test]

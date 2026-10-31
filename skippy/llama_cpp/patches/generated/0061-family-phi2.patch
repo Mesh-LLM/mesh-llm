@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/phi2.cpp b/src/models/phi2.cpp
-index 81b1ad12cc02526f264001614f8ccaf0466e33de..70ac8cca6bdd4b7ed9e22a4b23ec0e6ccaf7d379 100644
+index de14cfe37b8486ddd6ec10dcdaacc36571e12db4..6a6e56b85f41aed5e337bfdee4995802b0b39af4 100644
 --- a/src/models/phi2.cpp
 +++ b/src/models/phi2.cpp
 @@ -64,6 +64,8 @@ llama_model_phi2::graph::graph(const llama_model & model, const llm_graph_params

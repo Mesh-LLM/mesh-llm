@@ -78,6 +78,8 @@ impl Fixture {
             .env("LLAMA_WORKDIR", &self.work)
             .env("LLAMA_STAGE_BUILD_DIR", &self.build)
             .env("LLAMA_STAGE_BACKEND", "cpu")
+            // Keep the stubbed build offline: no whisper.cpp fetch.
+            .env("SKIPPY_SPEECH_RECOGNITION", "OFF")
             .env("LLAMA_STAGE_LINK_MODE", "dynamic")
             .env("LLAMA_STAGE_USE_SCCACHE", "0")
             .env("CMAKE_BUILD_PARALLEL_LEVEL", "1")
@@ -171,7 +173,7 @@ fn linux_omits_macos_target() {
     assert!(!fixture.log().contains("CMAKE_OSX_DEPLOYMENT_TARGET"));
 }
 #[test]
-fn cuda_disables_graph_capture() {
+fn cuda_enables_graph_capture() {
     let fixture = Fixture::new(true);
     success(
         fixture
@@ -181,7 +183,7 @@ fn cuda_disables_graph_capture() {
             .unwrap(),
     );
     assert!(fixture.log().contains("-DGGML_CUDA=ON"));
-    assert!(fixture.stamp().contains("cmake-arg=-DGGML_CUDA_GRAPHS=OFF"));
+    assert!(fixture.stamp().contains("cmake-arg=-DGGML_CUDA_GRAPHS=ON"));
 }
 #[test]
 fn mismatched_generator_clears_cache() {

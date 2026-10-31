@@ -9,18 +9,26 @@ use mesh_llm_payments_types::contract::{RoutingBudgetRequest, RoutingBudgetRespo
 pub(super) async fn rank(
     node: &Node,
     model: &str,
-    input_estimate: u64,
     max_output: u64,
     candidates: &mut RankedCandidates<InferenceTarget>,
     request_body: Option<&serde_json::Value>,
 ) -> Result<bool, &'static str> {
     let mut prices = std::collections::HashMap::new();
+    let mut unpayable = Vec::new();
     for target in &candidates.ordered {
         if let InferenceTarget::Remote(peer) = target
             && let Some(price) = node.peer_payment_offer(*peer, model).await
         {
-            prices.insert(*peer, price);
+            if node.peer_offers_payable(*peer).await {
+                prices.insert(*peer, price);
+            } else {
+                unpayable.push(*peer);
+            }
         }
+    }
+    drop_unpayable_sellers(model, &unpayable, candidates);
+    if !unpayable.is_empty() && candidates.ordered.is_empty() {
+        return Err("paid providers for this model use a payment protocol this node cannot pay");
     }
     if prices.is_empty() {
         return Ok(false);
@@ -45,10 +53,13 @@ pub(super) async fn rank(
             InferenceTarget::Local(_) => Some((0, 0)),
             InferenceTarget::Remote(peer) => match prices.get(peer) {
                 Some(price) => {
-                    let input_amount = price.input_charge(input_estimate).ok()?;
-                    let cost = input_amount.checked_add(price.output_charge(max_output).ok()?)?;
-                    let total = price.request_cap_msat(input_amount, max_output).ok()?;
-                    (intent.permits(price, total) && total <= available).then_some((1, cost))
+                    // The daily budget only gates new work: any allowance left
+                    // admits it, and admitted work settles even past the budget.
+                    // Price order uses the output allowance's cost, input rate
+                    // breaking ties; it is ordering, not a spending check.
+                    let cost = price.output_charge(max_output).unwrap_or(u64::MAX);
+                    (intent.permits(price) && available > 0)
+                        .then_some((1, cost.saturating_add(price.input_msat_per_million)))
                 }
                 None => Some((2, 0)),
             },
@@ -81,13 +92,42 @@ pub(super) async fn rank(
         return Ok(false);
     }
     candidates.ordered.sort_by_key(|target| key(target));
-    let first = candidates.ordered.first().and_then(&key);
+    let first = candidates.ordered.first().and_then(key);
     candidates.equivalent_prefix = candidates
         .ordered
         .iter()
         .take_while(|target| key(target) == first)
         .count();
     Ok(true)
+}
+
+/// Remove sellers charging for `model` over a payment protocol this node
+/// cannot speak (an older release, or a newer one). They cannot be paid, and
+/// serve the model only for payment, so they are not free candidates either.
+#[cfg(feature = "payments")]
+fn drop_unpayable_sellers(
+    model: &str,
+    unpayable: &[iroh::EndpointId],
+    candidates: &mut RankedCandidates<InferenceTarget>,
+) {
+    if unpayable.is_empty() {
+        return;
+    }
+    tracing::info!(
+        model,
+        sellers = ?unpayable.iter().map(|peer| peer.fmt_short().to_string()).collect::<Vec<_>>(),
+        "skipped paid sellers on a payment protocol this node cannot pay"
+    );
+    let removed_prefix = candidates.ordered[..candidates.equivalent_prefix]
+        .iter()
+        .filter(
+            |target| matches!(target, InferenceTarget::Remote(peer) if unpayable.contains(peer)),
+        )
+        .count();
+    candidates.ordered.retain(
+        |target| !matches!(target, InferenceTarget::Remote(peer) if unpayable.contains(peer)),
+    );
+    candidates.equivalent_prefix -= removed_prefix;
 }
 
 /// Remove paid providers this node has blocked for repeatedly taking the input
@@ -155,7 +195,6 @@ pub(super) async fn rank_remote_hosts(
     let payment_ranked = rank(
         node,
         model,
-        (request.body_len_bytes as u64).div_ceil(4),
         u64::from(request.completion_tokens.unwrap_or(256)),
         &mut ranked,
         request.body_json.as_ref(),
@@ -179,7 +218,6 @@ pub(super) async fn rank_remote_hosts(
 pub(super) async fn rank(
     _node: &Node,
     _model: &str,
-    _input_estimate: u64,
     _max_output: u64,
     _candidates: &mut RankedCandidates<InferenceTarget>,
     _request_body: Option<&serde_json::Value>,
@@ -218,6 +256,52 @@ mod tests {
     use mesh_llm_payments::{intent::PaymentIntent, pricing::Pricing, service::PaymentService};
 
     #[tokio::test]
+    async fn sellers_on_another_payment_protocol_are_neither_paid_nor_free() -> anyhow::Result<()> {
+        let node = Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
+        let seller = Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
+        let mut announcement =
+            seller.build_local_announcement(seller.snapshot_local_announcement_data().await);
+        announcement.lightning_offers.insert(
+            "test".into(),
+            Pricing {
+                input_msat_per_million: 1,
+                output_msat_per_million: 1,
+                cache_discount_percent: 0,
+            },
+        );
+        // As decoded from a release that advertised prices without a version.
+        announcement.lightning_offers.protocol = 0;
+        node.add_peer_after_direct_requirements_validated(
+            seller.id(),
+            seller.endpoint.addr(),
+            &announcement,
+            Some(1),
+        )
+        .await;
+        assert!(!node.peer_offers_payable(seller.id()).await);
+        let free = iroh::SecretKey::generate().public();
+        let mut candidates = RankedCandidates {
+            ordered: vec![
+                InferenceTarget::Remote(seller.id()),
+                InferenceTarget::Remote(free),
+            ],
+            equivalent_prefix: 2,
+        };
+        assert!(!rank(&node, "test", 1, &mut candidates, None).await.unwrap());
+        assert_eq!(candidates.ordered, vec![InferenceTarget::Remote(free)]);
+        assert_eq!(candidates.equivalent_prefix, 1);
+        let mut only_legacy = RankedCandidates {
+            ordered: vec![InferenceTarget::Remote(seller.id())],
+            equivalent_prefix: 1,
+        };
+        let error = rank(&node, "test", 1, &mut only_legacy, None)
+            .await
+            .unwrap_err();
+        assert!(error.contains("payment protocol"), "{error}");
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn free_only_excludes_paid_without_provisioning_a_wallet() -> anyhow::Result<()> {
         let directory = tempfile::tempdir()?;
         let node = Node::new_for_tests(crate::mesh::NodeRole::Client).await?;
@@ -233,6 +317,7 @@ mod tests {
             Pricing {
                 input_msat_per_million: 1,
                 output_msat_per_million: 1,
+                cache_discount_percent: 0,
             },
         );
         node.add_peer_after_direct_requirements_validated(
@@ -271,11 +356,7 @@ mod tests {
         assert_eq!(hosts, vec![free]);
         assert_eq!(equivalent_hosts, 1);
         // Only free targets remain, so the route is left unranked by price.
-        assert!(
-            !rank(&node, "test", 1, 1, &mut candidates, None)
-                .await
-                .unwrap()
-        );
+        assert!(!rank(&node, "test", 1, &mut candidates, None).await.unwrap());
         assert_eq!(candidates.ordered, vec![InferenceTarget::Remote(free)]);
         assert_eq!(candidates.equivalent_prefix, 1);
         // The free route keeps its context/throughput tiering: a tied run of
@@ -292,7 +373,7 @@ mod tests {
             ],
             equivalent_prefix: 3,
         };
-        assert!(!rank(&node, "test", 1, 1, &mut tiered, None).await.unwrap());
+        assert!(!rank(&node, "test", 1, &mut tiered, None).await.unwrap());
         assert_eq!(
             tiered.ordered,
             vec![
@@ -306,16 +387,12 @@ mod tests {
             ordered: vec![InferenceTarget::Remote(seller.id())],
             equivalent_prefix: 1,
         };
-        assert!(
-            rank(&node, "test", 1, 1, &mut paid_only, None)
-                .await
-                .is_err()
-        );
+        assert!(rank(&node, "test", 1, &mut paid_only, None).await.is_err());
         let mut empty = RankedCandidates {
             ordered: vec![],
             equivalent_prefix: 0,
         };
-        assert!(!rank(&node, "test", 1, 1, &mut empty, None).await.unwrap());
+        assert!(!rank(&node, "test", 1, &mut empty, None).await.unwrap());
         assert!(!service.has_wallet());
         assert!(service.ledger.requests()?.is_empty());
         assert!(matches!(
@@ -344,6 +421,7 @@ mod tests {
         let price = Pricing {
             input_msat_per_million: 1,
             output_msat_per_million: 1,
+            cache_discount_percent: 0,
         };
         let mut prices = std::collections::HashMap::from([(bad, price.clone()), (good, price)]);
         let mut candidates = RankedCandidates {

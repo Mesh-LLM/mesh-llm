@@ -143,7 +143,15 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
     let mut eligible_startup_models = Vec::new();
     if !shutdown_requested {
         for spec in &eligible_startup_specs {
-            match resolve_eager_startup_models(options, config, std::slice::from_ref(spec)).await {
+            let resolved = tokio::select! {
+                biased;
+                _ = crate::sdk::embedded_shutdown::cancelled() => {
+                    shutdown_requested = true;
+                    break;
+                }
+                result = resolve_eager_startup_models(options, config, std::slice::from_ref(spec)) => result,
+            };
+            match resolved {
                 Ok(mut models) => {
                     let model_ref = spec.model_ref.to_string_lossy();
                     if let Some((intent_id, _, _)) =
@@ -346,6 +354,8 @@ pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
     } = ctx;
     super::node_lifecycle_events::emit_node_draining();
     node.broadcast_leaving().await;
+    // Memberships serve this node's models, so they leave their meshes first.
+    node.close_memberships().await;
 
     unpublish_run_auto_nostr_listing(options).await;
     if let Some(handle) = discovery_publisher {
@@ -411,7 +421,14 @@ pub(super) async fn run_auto_handle_control_request(
 
     match cmd {
         api::RuntimeControlRequest::Join { invite_token, resp } => {
-            let result = ctx.node.join_with_retry(&invite_token).await;
+            let result = tokio::select! {
+                biased;
+                _ = crate::sdk::embedded_shutdown::cancelled() => {
+                    let _ = resp.send(Err(anyhow::anyhow!("embedded runtime is shutting down")));
+                    return true;
+                }
+                result = ctx.node.join_with_retry(&invite_token) => result,
+            };
             let _ = resp.send(result);
             false
         }
@@ -446,6 +463,31 @@ pub(super) async fn run_auto_handle_control_request(
                 completion: Some(resp),
             };
             run_auto_handle_model_intent(ctx, intent).await;
+            false
+        }
+        // Membership changes take seconds (relay, endpoint close) and apply
+        // one at a time among themselves, so they run beside the control loop.
+        // One still under way at shutdown closes itself.
+        api::RuntimeControlRequest::AddMembership { config, resp } => {
+            let membership = super::memberships::MembershipContext {
+                options: std::sync::Arc::new(ctx.options.clone()),
+                node: ctx.node.clone(),
+                targets: ctx.target_tx.subscribe(),
+            };
+            tokio::spawn(async move {
+                let _ = resp.send(super::memberships::add_membership(&membership, config).await);
+            });
+            false
+        }
+        api::RuntimeControlRequest::RemoveMembership { name, resp } => {
+            let node = ctx.node.clone();
+            tokio::spawn(async move {
+                let _ = resp.send(super::memberships::remove_membership(&node, &name).await);
+            });
+            false
+        }
+        api::RuntimeControlRequest::Memberships { resp } => {
+            let _ = resp.send(super::memberships::membership_statuses(ctx.node).await);
             false
         }
         api::RuntimeControlRequest::SetOpenAiGuardrailMode { mode, resp } => {
@@ -532,9 +574,14 @@ pub(super) async fn run_auto_handle_model_intent(
                     .stack_load_completion(&spec, &profile, tx);
             }
 
-            let result =
-                run_auto_load_runtime_model(ctx, spec.clone(), config_model_id, profile.clone())
-                    .await;
+            let result = run_auto_load_runtime_model(
+                ctx,
+                spec.clone(),
+                config_model_id,
+                profile.clone(),
+                source == IntentSource::NativeLifecycle,
+            )
+            .await;
             match &result {
                 Ok(response) => {
                     ctx.model_target_reconciliation_state
@@ -599,6 +646,20 @@ async fn run_auto_handle_unload_intent(
         runtime_unload_candidates(ctx.runtime_models, ctx.managed_models),
     )
     .ok();
+    if source == IntentSource::NativeLifecycle
+        && !super::native_model_lifecycle::idle_unload_allowed(
+            &ctx.model_target_reconciliation_state,
+            resolved_unload.as_ref(),
+            canonical_model_ref.as_deref(),
+        )
+    {
+        if let Some(tx) = completion {
+            let _ = tx.send(Err(anyhow::anyhow!(
+                "idle eviction requires an unsplit instance without a maintained owner intent"
+            )));
+        }
+        return;
+    }
     let intent_id = if let Some(candidate) = &resolved_unload {
         suppress_desired_for_resolved_unload_candidate(
             &mut ctx.model_target_reconciliation_state,
@@ -746,6 +807,12 @@ pub(super) async fn run_auto_runtime_event_loop(
         .set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         tokio::select! {
+            biased;
+            _ = crate::sdk::embedded_shutdown::cancelled() => {
+                ctx.startup_ready_reporter.mark_shutdown_requested();
+                emit_shutdown(None).await;
+                break;
+            }
             _ = dashboard_context_usage_tick.tick() => {
                 let updates = ctx.runtime_models
                     .iter()

@@ -1,7 +1,8 @@
 use std::ffi::{c_char, c_int, c_void};
 
 use crate::{
-    ActivationBoundaryDesc, ActivationDesc, BackendDevice, Error, GenerationSignalWindow,
+    ActivationBoundaryDesc, ActivationDesc, AsrAbortCallback, AsrInfoV1, AsrModel, AsrResult,
+    AsrSegmentV1, AsrTranscribeParamsV1, BackendDevice, Error, GenerationSignalWindow,
     IterationRequest, KvPageDesc, LayaInfoV1, LayaMemoryV1, LayaModel, LayaSequence,
     LlamaLogCallback, LlamaModelQuantizeParams, LlamaPerfContextData, Model, ModelInfo,
     ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
@@ -10,7 +11,7 @@ use crate::{
     NativeMtpDraft, NgramCache, Opaque, RuntimeConfig, SamplingConfig, Session, StagePlan,
     StagePlanDescV1, StagePlanProfileDescV1, StagePlanStateDescV1, StagePlanStringRefV1,
     StagePlanValueDescV1, StagePlanValueKind, StagePlanner, StagePlannerConfigV1, Status,
-    SystemOneSlot, TensorInfo, TokenSignal, WorkloadInfoV1,
+    SystemOneSlot, TensorInfo, TokenLogprobs, TokenSignal, WorkloadInfoV1,
 };
 
 unsafe extern "C" {
@@ -116,6 +117,11 @@ unsafe extern "C" {
 
     pub fn skippy_model_llama_model(model: *const Model) -> *const Opaque;
 
+    /// Probe whether a live model can return unsampled causal next-token scores.
+    ///
+    /// `model` must be null or a valid Skippy model handle retained for this call.
+    pub fn skippy_model_supports_causal_readout(model: *const Model) -> bool;
+
     pub fn llama_model_is_recurrent(model: *const Opaque) -> bool;
 
     /// Borrow the vocabulary of a llama model.
@@ -213,6 +219,57 @@ unsafe extern "C" {
         act_logits_capacity: usize,
         out_error: *mut *mut Error,
     ) -> Status;
+
+    pub fn skippy_asr_model_open(
+        model_path: *const c_char,
+        device: *const c_char,
+        out_model: *mut *mut AsrModel,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_asr_model_free(model: *mut AsrModel);
+
+    pub fn skippy_asr_model_info_v1(
+        model: *const AsrModel,
+        out_info: *mut AsrInfoV1,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_asr_decode_audio(
+        data: *const u8,
+        len: usize,
+        out_samples: *mut *mut f32,
+        out_sample_count: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_asr_samples_free(samples: *mut f32);
+
+    pub fn skippy_asr_transcribe(
+        model: *mut AsrModel,
+        samples: *const f32,
+        sample_count: usize,
+        params: *const AsrTranscribeParamsV1,
+        abort_callback: AsrAbortCallback,
+        abort_user_data: *mut c_void,
+        out_result: *mut *mut AsrResult,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_asr_result_segment_count(result: *const AsrResult) -> usize;
+
+    pub fn skippy_asr_result_segment_v1(
+        result: *const AsrResult,
+        index: usize,
+        out_segment: *mut AsrSegmentV1,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_asr_result_language(result: *const AsrResult) -> *const c_char;
+
+    pub fn skippy_asr_result_duration_seconds(result: *const AsrResult) -> f64;
+
+    pub fn skippy_asr_result_free(result: *mut AsrResult);
 
     /// Query an opened model's workload class, pooling, and full-model constraints.
     pub fn skippy_model_workload_info_v1(
@@ -529,6 +586,14 @@ unsafe extern "C" {
     pub fn skippy_session_last_token_signal(
         session: *mut Session,
         out_signal: *mut TokenSignal,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_session_take_token_logprobs(
+        session: *mut Session,
+        out_entries: *mut TokenLogprobs,
+        capacity: usize,
+        out_count: *mut usize,
         out_error: *mut *mut Error,
     ) -> Status;
 

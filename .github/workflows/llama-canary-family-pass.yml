@@ -6,7 +6,7 @@ on:
         type: string
         required: true
       mesh_source:
-        description: Frozen trusted MeshLLM commit for certify-only mode
+        description: Frozen trusted MeshLLM commit for unchanged certification passes
         type: string
         default: ''
       upstream:
@@ -65,7 +65,7 @@ jobs:
   build:
     # These persistent machines only execute the protected main workflow.
     if: github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, family-certify]
+    runs-on: [self-hosted, macOS, ARM64, jy-managed, family-certify, accelerator-memory-128plus]
     timeout-minutes: 1430
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}
@@ -254,7 +254,7 @@ jobs:
   family:
     name: ${{ inputs.pass_id }} / ${{ matrix.families }}
     needs: build
-    runs-on: [self-hosted, family-certify, "${{ matrix.memory_tier }}"]
+    runs-on: [self-hosted, macOS, ARM64, jy-managed, family-certify, "${{ matrix.memory_tier }}"]
     timeout-minutes: 780
     strategy:
       fail-fast: false
@@ -434,7 +434,7 @@ jobs:
     name: ${{ inputs.pass_id }} infrastructure retry / ${{ matrix.families }}
     needs: [build, aggregate]
     if: ${{ !cancelled() && needs.aggregate.outputs.state == 'infrastructure_retryable' }}
-    runs-on: [self-hosted, family-certify, "${{ matrix.memory_tier }}"]
+    runs-on: [self-hosted, macOS, ARM64, jy-managed, family-certify, "${{ matrix.memory_tier }}"]
     timeout-minutes: 780
     strategy:
       fail-fast: false

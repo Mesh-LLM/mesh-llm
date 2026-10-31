@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use skippy_protocol::{
-    StageActivationCodec, StageActivationCodecPolicy,
-    binary::{StageWireMessage, read_stage_message_for_codec_policy},
+    MAX_STAGE_FRAME_BYTES, StageActivationCodec, StageActivationCodecPolicy,
+    binary::{StageWireMessage, read_stage_message_for_codec_policy_with_frame_budget},
 };
 use std::io;
 use std::net::{Shutdown, TcpStream};
@@ -9,33 +9,46 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::ConnectionWorkerControl;
 use super::stale_discard::StaleDiscardRegistry;
+
+#[cfg(test)]
+mod idle_tests;
 
 static BINARY_SESSION_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// A framed-read source that can be abandoned while a frame is half read.
 ///
-/// On Windows, shutting a socket down does not release a `recv` already
-/// pending on it, even on the exact handle the read uses, so a peer that sends
-/// a frame prefix and stalls would keep the reader thread, and `Drop`'s join,
-/// blocked. There the framed read runs under a short read timeout, and this
-/// retries each timed-out read until the reader is stopped. Retrying inside
-/// `read` keeps the bytes `read_exact` already has, so a frame that is only
-/// slow still arrives whole. On Unix no timeout is armed and the shutdown
-/// wakes the read as before.
+/// The framed read runs under a short read timeout on every platform, and
+/// this retries each timed-out read until the frame completes, the reader is
+/// stopped, or the frame's decode deadline passes. Retrying inside `read`
+/// keeps the bytes `read_exact` already has, so a frame that is only slow
+/// still arrives whole, while a peer that sends a frame prefix and stalls
+/// releases the worker and its admission permit. The short timeout is also
+/// what lets Windows notice shutdown: there, shutting a socket down does not
+/// release a `recv` already pending on it, even on the exact handle the read
+/// uses.
 struct StoppableRead<'a> {
     stream: &'a TcpStream,
     stopped: &'a AtomicBool,
     worker_control: &'a ConnectionWorkerControl,
+    /// When the rest of the current frame must have arrived. Each received
+    /// byte moves it forward, so a slow peer that keeps sending is never cut
+    /// off, while one that stalls mid-frame releases the worker.
+    frame_deadline: Instant,
 }
 
 impl io::Read for StoppableRead<'_> {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
             match io::Read::read(&mut &*self.stream, buf) {
+                Ok(read) => {
+                    self.frame_deadline =
+                        Instant::now() + self.worker_control.idle_deadlines.frame_decode;
+                    return Ok(read);
+                }
                 Err(error)
                     if matches!(
                         error.kind(),
@@ -48,6 +61,13 @@ impl io::Read for StoppableRead<'_> {
                         return Err(io::Error::new(
                             io::ErrorKind::ConnectionAborted,
                             "inbound message reader stopped mid-frame",
+                        ));
+                    }
+                    if Instant::now() >= self.frame_deadline {
+                        tracing::debug!("closing stage connection stalled mid-frame");
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "stage connection stalled mid-frame",
                         ));
                     }
                 }
@@ -68,11 +88,16 @@ pub(super) fn next_connection_session_id() -> u64 {
 ///
 /// A discard therefore usually overtakes the stale windows queued ahead of
 /// it. It is not guaranteed to: `INBOUND_LOOKAHEAD_BYTES` binds first for
-/// wide frames (a full 64-window backlog of `MAX_STAGE_FRAME_BYTES` frames is
-/// far past the byte ceiling), and the reader then parks with the discard
-/// still unread. That degrades to executing the stale tail — today's cost
-/// without this path — rather than deadlocking, because the executor keeps
-/// draining the queue.
+/// wide frames (a full 64-window backlog of `MAX_STAGE_FRAME_BYTES`-sized
+/// frames is far past the byte ceiling), and the reader then parks with the
+/// discard still unread. That degrades to executing the stale tail — today's
+/// cost without this path — rather than deadlocking, because the executor
+/// keeps draining the queue.
+///
+/// Every frame the reader accepts is bounded by the documented
+/// `MAX_STAGE_FRAME_BYTES` budget on its declared lengths before allocation
+/// (#2218), so a single peer cannot commit more than one frame's worth of
+/// userspace buffer on top of this backlog ceiling.
 pub(super) const INBOUND_LOOKAHEAD_MESSAGES: usize =
     2 * skippy_protocol::MAX_VERIFY_WINDOW_PIPELINE_DEPTH;
 
@@ -107,6 +132,8 @@ pub(super) struct InboundMessageReader {
     thread: Option<thread::JoinHandle<()>>,
     queued_bytes: Arc<AtomicUsize>,
     stopped: Arc<AtomicBool>,
+    worker_control: Arc<ConnectionWorkerControl>,
+    holding_message: AtomicBool,
 }
 
 impl Drop for InboundMessageReader {
@@ -144,6 +171,7 @@ pub(super) fn spawn_message_reader(
             .context("clone upstream stream for inbound message reader")?,
     );
     let reader = stream.clone();
+    let handle_control = worker_control.clone();
     let (sender, receiver) = mpsc::sync_channel(capacity.max(INBOUND_LOOKAHEAD_MESSAGES));
     let queued_bytes = Arc::new(AtomicUsize::new(0));
     let reader_queued_bytes = queued_bytes.clone();
@@ -165,7 +193,7 @@ pub(super) fn spawn_message_reader(
             // an idle socket; a peer that sends a frame prefix and stalls
             // leaves the read below blocked mid-frame, which is why `Drop`
             // shuts down this exact handle.
-            match worker_control.wait_for_readable(&reader) {
+            match worker_control.wait_for_idle_message(&reader) {
                 Ok(true) => {}
                 Ok(false) => return,
                 Err(error) => {
@@ -178,18 +206,26 @@ pub(super) fn spawn_message_reader(
             // does not release a read already pending on the handle, so the
             // framed read keeps a short timeout and `StoppableRead` gives up
             // once the reader is stopped.
-            #[cfg(windows)]
+            // The framed read polls in short slices on every platform so it
+            // can give up on a frame that stalls part-way (and, on Windows,
+            // notice shutdown); `StoppableRead` retries each slice until the
+            // frame completes or its decode deadline passes.
             let _ = reader.set_read_timeout(Some(super::WORKER_SHUTDOWN_POLL));
             let mut source = StoppableRead {
                 stream: &reader,
                 stopped: &reader_stopped,
                 worker_control: &worker_control,
+                frame_deadline: Instant::now() + worker_control.idle_deadlines.frame_decode,
             };
-            match read_stage_message_for_codec_policy(
+            // The declared frame lengths are checked against the documented
+            // frame budget before the reader commits a same-size buffer
+            // (#2218); the queue ceilings below still bound the backlog.
+            match read_stage_message_for_codec_policy_with_frame_budget(
                 &mut source,
                 activation_width,
                 activation_codec,
                 activation_codec_policy,
+                MAX_STAGE_FRAME_BYTES,
             ) {
                 Ok(message) => {
                     if message.kind.is_stale_window_discard() {
@@ -197,6 +233,7 @@ pub(super) fn spawn_message_reader(
                     }
                     let message_bytes = message.estimated_wire_bytes();
                     reader_queued_bytes.fetch_add(message_bytes, Ordering::AcqRel);
+                    worker_control.request_started();
                     if sender.send(Ok(message)).is_err() {
                         return;
                     }
@@ -214,6 +251,8 @@ pub(super) fn spawn_message_reader(
         thread: Some(thread),
         queued_bytes,
         stopped,
+        worker_control: handle_control,
+        holding_message: AtomicBool::new(false),
     })
 }
 
@@ -226,7 +265,14 @@ impl InboundMessageReader {
         pending_prefill_replies: usize,
         observed_message_count: usize,
     ) -> Result<Option<StageWireMessage>> {
+        // Asking for the next message means the executor is done with the one
+        // it held, so the connection is no longer busy on its account.
+        if self.holding_message.swap(false, Ordering::AcqRel) {
+            self.worker_control.request_finished();
+        }
         if first_message.is_some() {
+            self.worker_control.request_started();
+            self.holding_message.store(true, Ordering::Release);
             return Ok(first_message);
         }
         let receiver = self
@@ -235,6 +281,7 @@ impl InboundMessageReader {
             .expect("inbound receiver present until drop");
         match receiver.recv() {
             Ok(Ok(message)) => {
+                self.holding_message.store(true, Ordering::Release);
                 // Saturating, not a load-then-subtract: the counter must
                 // never wrap, or the reader parks on the ceiling forever.
                 let bytes = message.estimated_wire_bytes();
@@ -290,6 +337,7 @@ mod tests {
         )
     }
 
+    /// Construct a control-message fixture for bounded receive tests.
     fn control_message(kind: WireMessageKind, tokens: Vec<i32>) -> StageWireMessage {
         StageWireMessage {
             kind,
@@ -303,6 +351,7 @@ mod tests {
             tokens,
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         }
     }
@@ -477,5 +526,68 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("drop must shut the socket down and join the blocked reader thread");
         drop(peer);
+    }
+
+    /// #2218: a peer that declares a frame past the documented
+    /// `MAX_STAGE_FRAME_BYTES` budget must be rejected on the declared length
+    /// before the reader commits a same-size buffer.
+    #[test]
+    fn reader_rejects_frames_over_the_stage_frame_budget() {
+        let (mut peer, upstream) = connected_pair();
+        let registry = Arc::new(StaleDiscardRegistry::default());
+        let reader = spawn_test_message_reader(&upstream, 1, registry).expect("spawn");
+
+        // A state import frame header declaring 16 MiB of raw bytes — past
+        // the 8 MiB frame budget, inside the 512 MiB protocol cap — with no
+        // payload bytes behind it.
+        let declared: i32 = 16 * 1024 * 1024;
+        let mut bytes = Vec::new();
+        let push = |bytes: &mut Vec<u8>, value: i32| {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        };
+        push(&mut bytes, WireMessageKind::StateImport as i32);
+        push(&mut bytes, 0);
+        push(&mut bytes, declared); // raw byte count
+        push(&mut bytes, 0);
+        push(&mut bytes, 0);
+        let state = StageStateHeader::new(WireMessageKind::StateImport);
+        push(&mut bytes, state.version);
+        push(&mut bytes, state.seq_id);
+        push(&mut bytes, state.phase);
+        push(&mut bytes, state.flags);
+        push(&mut bytes, state.checkpoint_generation);
+        push(&mut bytes, state.prompt_token_count);
+        push(&mut bytes, state.decode_step);
+        push(&mut bytes, state.current_token);
+        push(&mut bytes, state.source_stage_index);
+        push(&mut bytes, 1); // RawF32V1 binary wire id
+        push(&mut bytes, 0); // activation wire byte count
+        bytes.extend_from_slice(&7u64.to_le_bytes());
+        bytes.extend_from_slice(&11u64.to_le_bytes());
+        peer.write_all(&bytes)
+            .expect("write the oversized frame header");
+        drop(peer); // close the peer so a (mis)read of the payload ends in EOF
+
+        let error = match reader.next(None, 0, 0) {
+            Ok(Some(message)) => {
+                panic!("a 16 MiB declared frame must be rejected, not delivered: {message:?}")
+            }
+            Ok(None) => {
+                panic!("a 16 MiB declared frame must produce a per-frame error, not a clean close")
+            }
+            Err(error) => error,
+        };
+        // The context message is opaque; the budget rejection must be the
+        // inner codec error in the chain, not a payload-read failure.
+        let chain = format!("{error:?}");
+        assert!(
+            chain.contains("frame budget"),
+            "the declared length must be rejected against the frame budget before allocation, got: {chain}"
+        );
+        assert!(
+            !chain.contains("failed to fill whole buffer"),
+            "the frame must be rejected on the declared length, not after a payload read: {chain}"
+        );
+        drop(reader);
     }
 }

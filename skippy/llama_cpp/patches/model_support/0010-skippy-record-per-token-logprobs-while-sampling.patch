@@ -1,0 +1,378 @@
+From 842237d84843242384556809d0aca2907c480194 Mon Sep 17 00:00:00 2001
+From: Virgile-pct <pourchetvirgile@gmail.com>
+Date: Wed, 21 Oct 2026 23:42:33 +0200
+Subject: [PATCH] skippy: record per-token logprobs while sampling
+
+A sampling config with SKIPPY_SAMPLING_FLAG_LOGPROBS records, for every
+token skippy_sample_token_ith samples, the token's log-probability under the
+raw distribution (temperature 1, before penalties or truncation) and its
+top_logprobs most likely alternatives (at most SKIPPY_MAX_TOP_LOGPROBS, 20).
+skippy_session_take_token_logprobs moves them out, oldest first; a session
+reset drops them. A logprobs request never attaches backend (in-graph)
+sampling, which skips copying the raw logits row; a token drawn while the
+lane still carried a backend sampler from an earlier request is recorded
+as unreadable instead of being read from a stale row. ABI 0.1.72 -> 0.1.73.
+---
+ include/skippy.h               |  1 +
+ include/skippy/common.h        |  2 +-
+ include/skippy/logprobs.h      | 60 ++++++++++++++++++++++
+ include/skippy/sampling.h      |  4 ++
+ src/CMakeLists.txt             |  1 +
+ src/skippy/logprobs.cpp        | 94 ++++++++++++++++++++++++++++++++++
+ src/skippy/runtime_types.h     |  2 +
+ src/skippy/sampling.cpp        | 21 +++++++-
+ src/skippy/sampling_internal.h |  7 +++
+ src/skippy/session.cpp         |  1 +
+ src/skippy/state.cpp           |  1 +
+ src/skippy/workloads.cpp       |  1 +
+ 12 files changed, 193 insertions(+), 2 deletions(-)
+ create mode 100644 include/skippy/logprobs.h
+ create mode 100644 src/skippy/logprobs.cpp
+
+diff --git a/include/skippy.h b/include/skippy.h
+index 4e33847d9..9497734b7 100644
+--- a/include/skippy.h
++++ b/include/skippy.h
+@@ -24,6 +24,7 @@
+ #include "skippy/tokenization.h"
+ #include "skippy/model_package.h"
+ #include "skippy/signals.h"
++#include "skippy/logprobs.h"
+ #include "skippy/workloads.h"
+ #include "skippy/system_one.h"
+ #include "skippy/laya.h"
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index f233bb47f..80710eb3b 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 73
++#define SKIPPY_ABI_VERSION_PATCH 75
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+diff --git a/include/skippy/logprobs.h b/include/skippy/logprobs.h
+new file mode 100644
+index 000000000..c7f4ab5cd
+--- /dev/null
++++ b/include/skippy/logprobs.h
+@@ -0,0 +1,60 @@
++#ifndef SKIPPY_LOGPROBS_H
++#define SKIPPY_LOGPROBS_H
++
++/**
++ * @file skippy/logprobs.h
++ * @brief Per-token log-probabilities recorded while sampling, for OpenAI-style logprobs.
++ *
++ * A decode call whose sampling config sets SKIPPY_SAMPLING_FLAG_LOGPROBS records,
++ * for every token it samples, the token's log-probability and the most likely
++ * alternatives. The distribution is the model's raw one: softmax of the logits
++ * at temperature 1, before penalties, truncation or temperature, which is what
++ * OpenAI-compatible clients and output verifiers compare against.
++ */
++
++#include "runtime.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/** @brief Most alternatives recorded per token (OpenAI's top_logprobs limit). */
++#define SKIPPY_MAX_TOP_LOGPROBS 20
++
++/** @brief One candidate token and its log-probability. */
++struct skippy_logprob_entry {
++    int32_t token;
++    float logprob;
++};
++
++/** @brief Log-probabilities recorded for one sampled token. */
++struct skippy_token_logprobs {
++    /** The sampled token. */
++    int32_t token;
++    /** Its log-probability; NaN when the logits row was not available. */
++    float logprob;
++    /** Number of valid entries in top, most likely first. */
++    uint32_t top_count;
++    struct skippy_logprob_entry top[SKIPPY_MAX_TOP_LOGPROBS];
++};
++
++/**
++ * @brief Moves recorded per-token log-probabilities out of the session, oldest first.
++ *
++ * Copies up to capacity entries into out_entries and removes them from the
++ * session. With out_entries NULL or capacity 0, nothing is removed and
++ * out_count receives the number of pending entries. Entries are also dropped
++ * when the session resets.
++ */
++LLAMA_API enum skippy_status skippy_session_take_token_logprobs(
++        struct skippy_session * session,
++        struct skippy_token_logprobs * out_entries,
++        size_t capacity,
++        size_t * out_count,
++        struct skippy_error ** out_error);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif // SKIPPY_LOGPROBS_H
+diff --git a/include/skippy/sampling.h b/include/skippy/sampling.h
+index 1b42f32c0..c1a755c4c 100644
+--- a/include/skippy/sampling.h
++++ b/include/skippy/sampling.h
+@@ -18,6 +18,8 @@ extern "C" {
+ #define SKIPPY_MAX_DRY_SEQUENCE_BREAKER_BYTES 16
+ #define SKIPPY_SAMPLING_FLAG_ENABLED (1u << 0)
+ #define SKIPPY_SAMPLING_FLAG_IGNORE_EOS (1u << 1)
++/** Record each sampled token's log-probability and top_logprobs alternatives (skippy/logprobs.h). */
++#define SKIPPY_SAMPLING_FLAG_LOGPROBS (1u << 2)
+ 
+ enum skippy_sampler_type {
+     SKIPPY_SAMPLER_PENALTIES = 1,
+@@ -67,6 +69,8 @@ struct skippy_sampling_config {
+     llama_logit_bias logit_bias[SKIPPY_MAX_LOGIT_BIAS];
+     /** -1 disables enforcement; 0 closes reasoning immediately; positive values cap reasoning tokens. */
+     int32_t reasoning_budget_tokens;
++    /** Alternatives recorded per token with SKIPPY_SAMPLING_FLAG_LOGPROBS, up to SKIPPY_MAX_TOP_LOGPROBS. */
++    uint32_t top_logprobs;
+ };
+ 
+ #ifdef __cplusplus
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 78e2c01f3..0d453a1e7 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -82,6 +82,7 @@ add_library(llama
+             skippy/sampling_config.cpp
+             skippy/chat_sampling.cpp
+             skippy/sampling_vocab.cpp
++            skippy/logprobs.cpp
+             skippy/stage_slice_plan.cpp
+             skippy/stage_plan.cpp
+             skippy/stage_realization.cpp
+diff --git a/src/skippy/logprobs.cpp b/src/skippy/logprobs.cpp
+new file mode 100644
+index 000000000..43260dfc2
+--- /dev/null
++++ b/src/skippy/logprobs.cpp
+@@ -0,0 +1,94 @@
++#include "errors.h"
++#include "runtime_types.h"
++#include "sampling_internal.h"
++
++#include <algorithm>
++#include <cmath>
++#include <limits>
++
++bool skippy_sampling_wants_logprobs(const skippy_sampling_config * sampling) {
++    return sampling != nullptr && sampling->version != 0 &&
++           (sampling->flags & SKIPPY_SAMPLING_FLAG_LOGPROBS) != 0;
++}
++
++void skippy_record_token_logprobs(
++        skippy_session * session,
++        const skippy_sampling_config * sampling,
++        int32_t logits_index,
++        llama_token token,
++        bool raw_logits_valid) {
++    if (session == nullptr || session->ctx == nullptr || session->stage_model == nullptr ||
++            !skippy_sampling_wants_logprobs(sampling)) {
++        return;
++    }
++    skippy_token_logprobs entry = {};
++    entry.token = token;
++    entry.logprob = std::numeric_limits<float>::quiet_NaN();
++
++    const llama_vocab * vocab = llama_model_get_vocab(session->stage_model->model);
++    const int32_t n_vocab = llama_vocab_n_tokens(vocab);
++    const float * logits = raw_logits_valid ? llama_get_logits_ith(session->ctx, logits_index) : nullptr;
++    if (logits == nullptr || n_vocab <= 0 || token < 0 || token >= n_vocab) {
++        session->token_logprobs.push_back(entry);
++        return;
++    }
++
++    float max_logit = -std::numeric_limits<float>::infinity();
++    for (int32_t v = 0; v < n_vocab; ++v) {
++        max_logit = std::max(max_logit, logits[v]);
++    }
++    double sum_exp = 0.0;
++    for (int32_t v = 0; v < n_vocab; ++v) {
++        sum_exp += std::exp(static_cast<double>(logits[v] - max_logit));
++    }
++    if (!std::isfinite(max_logit) || !(sum_exp > 0.0) || !std::isfinite(sum_exp)) {
++        session->token_logprobs.push_back(entry);
++        return;
++    }
++    const double log_sum_exp = static_cast<double>(max_logit) + std::log(sum_exp);
++    entry.logprob = static_cast<float>(static_cast<double>(logits[token]) - log_sum_exp);
++
++    // Top-N by a bounded insertion: N is at most 20, and almost every logit
++    // falls below the current N-th best, so this is one pass over the row.
++    const uint32_t wanted = std::min<uint32_t>(sampling->top_logprobs, SKIPPY_MAX_TOP_LOGPROBS);
++    uint32_t count = 0;
++    for (int32_t v = 0; v < n_vocab && wanted > 0; ++v) {
++        const float logit = logits[v];
++        if (count == wanted && logit <= logits[entry.top[count - 1].token]) {
++            continue;
++        }
++        uint32_t at = count < wanted ? count++ : wanted - 1;
++        while (at > 0 && logits[entry.top[at - 1].token] < logit) {
++            entry.top[at] = entry.top[at - 1];
++            --at;
++        }
++        entry.top[at].token = v;
++    }
++    for (uint32_t i = 0; i < count; ++i) {
++        entry.top[i].logprob = static_cast<float>(static_cast<double>(logits[entry.top[i].token]) - log_sum_exp);
++    }
++    entry.top_count = count;
++    session->token_logprobs.push_back(entry);
++}
++
++enum skippy_status skippy_session_take_token_logprobs(
++        struct skippy_session * session,
++        struct skippy_token_logprobs * out_entries,
++        size_t capacity,
++        size_t * out_count,
++        struct skippy_error ** out_error) {
++    if (session == nullptr || out_count == nullptr) {
++        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and out_count are required");
++        return SKIPPY_STATUS_INVALID_ARGUMENT;
++    }
++    if (out_entries == nullptr || capacity == 0) {
++        *out_count = session->token_logprobs.size();
++        return skippy_success(out_error);
++    }
++    const size_t taken = std::min(capacity, session->token_logprobs.size());
++    std::copy_n(session->token_logprobs.begin(), taken, out_entries);
++    session->token_logprobs.erase(session->token_logprobs.begin(),
++                                  session->token_logprobs.begin() + static_cast<std::ptrdiff_t>(taken));
++    *out_count = taken;
++    return skippy_success(out_error);
++}
+diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
+index f44e874d9..d5dc18f06 100644
+--- a/src/skippy/runtime_types.h
++++ b/src/skippy/runtime_types.h
+@@ -140,6 +140,8 @@ struct skippy_session {
+     int32_t preserve_prefix_tokens = 0;
+     std::vector<llama_token> token_history;
+     std::vector<skippy_token_signal> signal_history;
++    // Recorded by sampling with SKIPPY_SAMPLING_FLAG_LOGPROBS until the caller takes them.
++    std::vector<skippy_token_logprobs> token_logprobs;
+     std::vector<llama_pos> prefill_positions;
+     std::vector<int32_t> prefill_n_seq_ids;
+     std::vector<llama_seq_id> prefill_seq_ids;
+diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
+index de5fa6ba5..22aaa6a30 100644
+--- a/src/skippy/sampling.cpp
++++ b/src/skippy/sampling.cpp
+@@ -426,6 +426,9 @@ static bool skippy_sampling_chain_is_reusable_for(
+             session->sampling_backend_retired) {
+         return false;
+     }
++    if (session->sampling_backend_enabled && skippy_sampling_wants_logprobs(sampling)) {
++        return false;
++    }
+     if (sampling != nullptr &&
+             skippy_sampling_configs_equal(session->sampling_config, *sampling)) {
+         return true;
+@@ -561,13 +564,14 @@ void skippy_refresh_backend_sampling(
+             session->sampling_chain != nullptr &&
+             !session->sampling_has_grammar &&
+             !session->sampling_has_reasoning_budget &&
++            !skippy_sampling_wants_logprobs(sampling) &&
+             skippy_sampling_is_greedy_equivalent(sampling)) {
+         session->sampling_backend_enabled =
+                 llama_set_sampler(session->ctx, session->seq_id, session->sampling_chain);
+     }
+ }
+ 
+-llama_token skippy_sample_token_ith(
++static llama_token skippy_sample_token_ith_impl(
+         skippy_session * session,
+         const skippy_sampling_config * sampling,
+         int32_t logits_index) {
+@@ -597,6 +601,21 @@ llama_token skippy_sample_token_ith(
+     return LLAMA_TOKEN_NULL;
+ }
+ 
++llama_token skippy_sample_token_ith(
++        skippy_session * session,
++        const skippy_sampling_config * sampling,
++        int32_t logits_index) {
++    try {
++        const bool raw_logits_valid = session == nullptr || !session->sampling_backend_enabled;
++        const llama_token token = skippy_sample_token_ith_impl(session, sampling, logits_index);
++        skippy_record_token_logprobs(session, sampling, logits_index, token, raw_logits_valid);
++        return token;
++    } catch (...) {
++        if (session != nullptr) { session->reset_required = true; }
++        return LLAMA_TOKEN_NULL;
++    }
++}
++
+ llama_token skippy_sample_token(
+         skippy_session * session,
+         const skippy_sampling_config * sampling) {
+diff --git a/src/skippy/sampling_internal.h b/src/skippy/sampling_internal.h
+index 7bbf16016..81bc26ff5 100644
+--- a/src/skippy/sampling_internal.h
++++ b/src/skippy/sampling_internal.h
+@@ -18,6 +18,13 @@ struct skippy_session;
+ 
+ void skippy_record_tokens(skippy_session * session, const llama_token * token_ids, size_t token_count);
+ void skippy_record_signal(skippy_session * session, int32_t logits_index);
++bool skippy_sampling_wants_logprobs(const skippy_sampling_config * sampling);
++void skippy_record_token_logprobs(
++        skippy_session * session,
++        const skippy_sampling_config * sampling,
++        int32_t logits_index,
++        llama_token token,
++        bool raw_logits_valid);
+ enum skippy_status skippy_decode_tokens(
+         skippy_session * session,
+         const llama_token * token_ids,
+diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
+index 36c972d92..3bd92390c 100644
+--- a/src/skippy/session.cpp
++++ b/src/skippy/session.cpp
+@@ -379,6 +379,7 @@ enum skippy_status skippy_session_reset(
+         session->token_history.clear();
+     }
+     session->signal_history.clear();
++    session->token_logprobs.clear();
+     // Keep a reusable backend sampler attached across reset. Detaching it
+     // makes the next sampled decode reattach the chain and mark the scheduler
+     // for reserve, which rebuilds compute buffers at every request boundary.
+diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
+index 0f9b3a27c..2eb002bd2 100644
+--- a/src/skippy/state.cpp
++++ b/src/skippy/state.cpp
+@@ -1003,6 +1003,7 @@ enum skippy_status skippy_session_restore_prefix(
+         session->token_history.assign(token_ids, token_ids + token_count);
+     }
+     session->signal_history.clear();
++    session->token_logprobs.clear();
+     skippy_mtp_clear_session_state(session);
+     session->verify_checkpoints.clear();
+     return skippy_success(out_error);
+diff --git a/src/skippy/workloads.cpp b/src/skippy/workloads.cpp
+index d3de66cbe..3ca967bf3 100644
+--- a/src/skippy/workloads.cpp
++++ b/src/skippy/workloads.cpp
+@@ -91,6 +91,7 @@ void skippy_prepare_non_chat_workload(skippy_session * session) {
+     session->n_past = 0;
+     session->token_history.clear();
+     session->signal_history.clear();
++    session->token_logprobs.clear();
+ }
+ 
+ namespace {
+-- 
+2.56.0
+

@@ -499,6 +499,26 @@ pub struct PeerConfig {
     pub stage_id: String,
     pub stage_index: u32,
     pub endpoint: String,
+    /// Send the persistent-lane marker only after the caller confirms peer support.
+    #[serde(default)]
+    pub persistent_lane_marker: bool,
+}
+
+#[cfg(test)]
+mod peer_config_tests {
+    use super::PeerConfig;
+
+    #[test]
+    fn persistent_lane_marker_is_opt_in() {
+        let mut value = serde_json::json!({
+            "stage_id": "stage-1", "stage_index": 1, "endpoint": "127.0.0.1:9001"
+        });
+        let legacy: PeerConfig = serde_json::from_value(value.clone()).unwrap();
+        assert!(!legacy.persistent_lane_marker);
+        value["persistent_lane_marker"] = true.into();
+        let capable: PeerConfig = serde_json::from_value(value).unwrap();
+        assert!(capable.persistent_lane_marker);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]

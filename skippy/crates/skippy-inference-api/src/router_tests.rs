@@ -428,6 +428,7 @@ impl InferenceBackend for FakeBackend {
         Ok(vec![ModelObject::new("org/repo:Q4_K_M")])
     }
 
+    /// Return deterministic System One fixtures for HTTP adapter contract tests.
     async fn system_one(&self, request: SystemOneRequest) -> InferenceResult<SystemOneResponse> {
         if request.questions.contains_key("question_0") {
             let answers = request
@@ -481,16 +482,21 @@ impl InferenceBackend for FakeBackend {
                 })
                 .collect();
             return Ok(SystemOneResponse {
+                readouts: Default::default(),
+                readout_usage: None,
                 model: request.model,
                 answers,
                 usage: crate::SystemOneUsage {
                     input_tokens: 12,
                     output_tokens: 0,
+                    cached_tokens: 0,
                 },
             });
         }
         if request.questions.contains_key("urgent") {
             return Ok(SystemOneResponse {
+                readouts: Default::default(),
+                readout_usage: None,
                 model: request.model,
                 answers: [
                     (
@@ -528,10 +534,13 @@ impl InferenceBackend for FakeBackend {
                 usage: crate::SystemOneUsage {
                     input_tokens: 12,
                     output_tokens: 0,
+                    cached_tokens: 0,
                 },
             });
         }
         Ok(SystemOneResponse {
+            readouts: Default::default(),
+            readout_usage: None,
             model: request.model,
             answers: [(
                 "safe".to_string(),
@@ -542,6 +551,7 @@ impl InferenceBackend for FakeBackend {
             usage: crate::SystemOneUsage {
                 input_tokens: 12,
                 output_tokens: 0,
+                cached_tokens: 0,
             },
         })
     }
@@ -759,9 +769,10 @@ impl InferenceBackend for FakeBackend {
         request: AudioTranscriptionRequest,
         _context: InferenceRequestContext,
     ) -> InferenceResult<AudioTranscriptionResponse> {
-        Ok(AudioTranscriptionResponse {
-            text: format!("transcribed {} bytes", request.file.len()),
-        })
+        Ok(AudioTranscriptionResponse::text(format!(
+            "transcribed {} bytes",
+            request.file.len()
+        )))
     }
 
     /// Return a translation fixture containing the upload length.
@@ -772,6 +783,17 @@ impl InferenceBackend for FakeBackend {
     ) -> InferenceResult<AudioTranscriptionResponse> {
         Ok(AudioTranscriptionResponse {
             text: format!("translated {} bytes", request.file.len()),
+            timing: Some(crate::audio::AudioTranscriptionTiming {
+                language: "en".into(),
+                duration: 1.5,
+                segments: vec![crate::audio::AudioTranscriptionSegment {
+                    id: 0,
+                    start: 0.0,
+                    end: 1.5,
+                    text: " translated".into(),
+                    no_speech_prob: 0.0,
+                }],
+            }),
         })
     }
 }
@@ -949,6 +971,35 @@ fn upstream_error_body_maps_legacy_string_error_shape() {
     );
     assert_eq!(value["error"]["type"], "server_error");
     assert_eq!(value["error"]["code"], "service_unavailable");
+}
+
+#[test]
+fn upstream_client_errors_are_not_reported_as_server_errors() {
+    // A task provider rejects a response type the route cannot produce, or a
+    // request the plugin considers unprocessable. Both are the caller's to fix,
+    // and a body that says `server_error` invites a retry that can never work.
+    for (status, expected_type) in [
+        (406, "invalid_request_error"),
+        (409, "invalid_request_error"),
+        (413, "invalid_request_error"),
+        (422, "invalid_request_error"),
+    ] {
+        let body = br#"{"error":{"message":"no supported response representation is acceptable"}}"#;
+        let mapped = map_upstream_error_body(status, body).expect("body should be remapped");
+        let value: Value = serde_json::from_slice(&mapped).unwrap();
+        assert_eq!(
+            value["error"]["type"], expected_type,
+            "status {status} should not report a client error as a server error"
+        );
+        assert_eq!(
+            value["error"]["message"],
+            "no supported response representation is acceptable"
+        );
+    }
+    let mapped = map_upstream_error_body(413, br#"{"message":"upload too large"}"#)
+        .expect("body should be remapped");
+    let value: Value = serde_json::from_slice(&mapped).unwrap();
+    assert_eq!(value["error"]["code"], "payload_too_large");
 }
 
 #[test]

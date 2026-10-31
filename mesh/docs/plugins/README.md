@@ -19,6 +19,8 @@ Plugin-specific documentation:
 - [Flash-MoE](flash-moe.md) - external OpenAI-compatible backend adapter for single-node SSD expert streaming
 - [Telemetry](telemetry.md) - OTLP metrics-only runtime telemetry and external metrics plugin notes
 - [Virtual models](virtual-models.md) - request-orchestrating models backed by a plugin and host-routed inference
+- [Managed provider models](managed-models.md) - model configuration, host-owned asset acquisition and provider residency policies
+- [Document OCR](document-ocr.md) - provider contract and mesh routing for `/mesh/v1/documents/ocr`, plus the sibling transcription, image/text similarity and depth task contracts
 - [Web UI exemplar](exemplars/web-ui/README.md) - source-owned maintainer sample for v1 plugin web UI projection, read directly by tests to catch drift
 
 The main goals are:
@@ -539,43 +541,75 @@ the installed archive, extracted files, and local plugin metadata.
 
 ## Default Plugins
 
-A fresh node installs a short list of default plugins once, on first run
-(`mesh_llm_plugin_manager::defaults::DEFAULT_PLUGINS`). The list starts empty;
-each entry is added by its own change. Payment and wallet plugins are never on
-it: a node pays or gets paid only through a plugin its operator chose. A
-default installs as an ordinary package, so it can serve a web UI like any
-installed plugin.
+The reviewed default list is `mesh_llm_plugin_manager::defaults::DEFAULT_PLUGINS`.
+Today it contains `capsules` 0.1.4. Each entry pins a release version, the
+GitHub repository whose release publishes it, and an archive SHA-256 per
+supported platform. Payment and wallet plugins are excluded from the default
+list.
 
-Each entry is pinned in the list itself: an exact release version and the
-SHA-256 of that release's archive for each platform (macOS arm64, Linux x86_64,
-Linux arm64). The catalog says where the plugin lives; if its entry also pins
-this platform (`version` and `sha256`), the two pins must agree. The download
-must match the pin as well as GitHub's reported digest. A platform without a
-pin, a disagreement, a mismatch, or no network means the plugin is not
-installed and the node starts normally; the install is tried again on the next
-start, bounded to 30 seconds. Bumping a default is one entry in the list per
-release.
+**A node installs a default only from its release's bundled copy, never from
+a download.** The bundled copy is the plugin archive in a `plugins/` directory
+beside the `mesh-llm` binary; native packages keep it at
+`lib/mesh-llm/<version>/plugins` and the Homebrew formula under `libexec`.
+`MESH_LLM_BUNDLED_PLUGINS_DIR` names another directory.
+- **When it is installed:** when a node starts, and on `mesh-llm plugins
+  install-defaults`, the host installs each default from that bundled copy,
+  after checking the archive against the compiled pin. Both are local and
+  quick; neither makes a network call.
+- **No bundled copy:** a missing copy is reported. With no `plugins/`
+  directory at all ("this install bundles no plugins") it is an info line;
+  a `plugins/` directory without the archive is a warning. Nothing is
+  downloaded instead, and there is no fallback. A digest mismatch is refused.
+- **What a release bundles:** macOS and Linux release archives carry each
+  pinned default's release archive in `plugins/`. The release job downloads it
+  from the plugin's own GitHub release, checks it against the pin, and fails
+  unless the bundle's host installs it. `mesh-llm update` installs the new
+  release's `plugins/` with the host. A development build carries none, so it
+  reports the info line.
+- **Windows:** the list pins no Windows build, so the default reports "no
+  reviewed release for this platform".
 
-The node says what it did: one line when a default is installed, naming the
-version and how to remove it, and one warning when it couldn't be. After that a
-default is silent: later starts don't look it up, download it, or log about it.
+To turn the defaults off, pass `--no-default-plugins` to `mesh-llm update`, or
+run `mesh-llm plugins install-defaults --off`. Each records the choice in the plugin store:
+an installed default is disabled, and one that is not installed is recorded as
+turned off, so no later start installs it. The record is per plugin: it
+covers the defaults the build that wrote it lists, not a default a later
+release adds. `MESH_LLM_NO_DEFAULT_PLUGINS=1`, or `--no-default-plugins` on
+`serve` or `client`, skips defaults for the processes that see it. Provisioning prints one line for
+a default it leaves alone: one you run from your own `[[plugin]]` entry or
+install, one disabled or turned off, a platform with no reviewed release, or
+an install with no bundled copy.
 
-Opting out:
+`plugin-install.json` records whether an installation is default managed. A
+new release's bundled copy replaces an enabled default-managed install when
+the node starts. An operator-installed plugin with the same name is left
+alone; so is one the operator runs from a `[[plugin]]` entry that sets
+`command` or `url`. A `[[plugin]]` entry that only holds settings, as the
+console writes when an operator saves one, configures the installed default
+and leaves it default managed. `mesh-llm plugins update` reinstalls a
+default-managed plugin from the bundled copy too. Disabling a default
+preserves the installed record and keeps it at its installed version.
+Deleting a default removes it and records in the plugin store that it stays
+off, so no later start installs it again; `mesh-llm plugins disable <name>`
+records the same for a default that is not installed. `mesh-llm plugins enable
+<name>` undoes that, and the next start installs it from the bundled copy.
+There is no separate offered-defaults state file.
 
-| How | Effect |
-| --- | ------ |
-| `mesh-llm serve --no-default-plugins` | This start offers no defaults. |
-| `MESH_LLM_NO_DEFAULT_PLUGINS=1` | Same, from the environment. |
-| `[[plugin]]` with the plugin's `name` and `enabled = false` in the config | The operator has chosen: the default is recorded as offered and never installed. |
-| `mesh-llm plugins disable <name>` | Keeps it installed but not launched. |
-| `mesh-llm plugins delete <name>` | Removes it; it is not reinstalled. |
+A default plugin that fails to start is optional: its failure is reported as
+an inactive plugin and does not abort node startup. A default-managed plugin
+keeps only the surfaces its entry allows: before publishing routes, the host
+removes everything else from its initialization manifest and logs a warning
+naming each removed surface. No default entry allows inference endpoints or
+virtual models, so a default plugin cannot serve a model, nor the OpenAI
+exchange hook, which sees every OpenAI exchange the node handles. A
+default-managed plugin that is no longer on this build's list keeps everything
+but serving models and the exchange hook until it is reviewed again.
 
-Once installed, a default is an ordinary installed plugin. Each default is
-offered once (recorded in `defaults-offered.json` in the plugin store), so a
-removed default is never reinstalled, and a plugin the operator already
-installed or lists in their config is left alone. If that record exists but
-can't be read, no default is offered until it is fixed or removed, so a removed
-default never comes back through a damaged file.
+`capsules` keeps a signed record of each request this node serves, on
+the node's own disk. By default it keeps SHA-256 digests of the request and
+response, never their text; its default entry does not allow the OpenAI
+exchange hook, so mesh-llm passes it no exchange text.
+It makes no network calls unless the operator configures a witness URL.
 
 ## Hugging Face Plugin Catalog
 
@@ -607,11 +641,12 @@ Required fields:
 | `author_email` | Plugin author or maintainer email.                                                            |
 | `author_name`  | Plugin author or maintainer display name.                                                     |
 
-Optional pin fields:
+Pin fields, required to install an entry by name. An entry without them stays
+searchable, but `mesh-llm plugins install <name>` refuses it:
 
 | Field     | Meaning                                                                                                   |
 | --------- | --------------------------------------------------------------------------------------------------------- |
-| `version` | The exact release tag the entry pins, such as `v0.1.0`.                                                   |
+| `version` | The exact release tag the entry pins, such as `v0.1.0`. Every install resolves this tag.                  |
 | `sha256`  | The SHA-256 of that release's archive, as lowercase hex, keyed by target triple. Requires `version`.      |
 
 ```json
@@ -630,12 +665,18 @@ Optional pin fields:
 }
 ```
 
-An ordinary `mesh-llm plugins install` ignores the pin fields. A default plugin
-(see [Default Plugins](#default-plugins)) is pinned in the default list itself;
-if its catalog entry also pins this platform, the two pins must agree, and the
-downloaded archive must match the pin as well as GitHub's reported digest
-before it is extracted. A disagreement or a mismatch is an error and nothing is
-installed, so a release asset replaced after it was pinned is refused.
+Installing an entry by name installs exactly what that entry pins. The resolver
+asks GitHub for the pinned `version` tag rather than the repository's latest,
+refuses a returned release whose tag is not the pinned one, and verifies the
+downloaded archive against the entry's `sha256` for the target before anything
+is extracted. GitHub's reported digest is a cross-check, not the authority:
+whoever controls a repository can replace a release, its assets, and the digests
+it reports, so a rewritten release is refused instead of launched. An entry that
+pins no version, or no digest for your platform, installs nothing.
+
+A default plugin (see [Default Plugins](#default-plugins)) is pinned in the
+default list itself; if its catalog entry also pins this platform, the two pins
+must agree, and the bundled archive must match them both.
 
 Catalog rules:
 
@@ -1356,6 +1397,144 @@ Every change is published once, as JSON, on the local channel
 
 `until_ms` and `reason` are omitted when absent. The host keeps no ranking, no
 history of changes, and no shared lists.
+
+## Status Contributions
+
+A plugin can add a snapshot of its own to the node's `GET /api/status`, so
+clients see it without querying a plugin endpoint. It declares
+`mesh_llm_plugin::plugin_status::plugin_status(schema_version)` in its manifest
+(`PluginManifest.plugin_status`), then publishes with
+`PluginContext::publish_status(&data, fresh_for)`, from `on_initialized` or any
+task holding an owned context. Each publication replaces the previous one;
+`withdraw_status` removes it. The host shows the latest one under the name it
+knows the plugin connection by, never a name the plugin claims, so one plugin
+cannot overwrite another's contribution or a core field:
+
+```json
+"plugins": {
+  "powermetrics": {
+    "schema_version": 1,
+    "state": "ready",
+    "received_at_unix_ms": 1793404800000,
+    "fresh_until_unix_ms": 1793404860000,
+    "data": { "source": "macmon", "idle_watts": 8.2 }
+  }
+}
+```
+
+`data` is the plugin's, in version `schema_version` of its own schema. The rest
+is the host's:
+
+- `state` is `ready` until `fresh_until_unix_ms`, then `stale`. A snapshot asks
+  for its freshness with `fresh_for`: 0 means 60 s, and the host keeps it
+  between 1 s and 1 h. When the plugin connection that published it closes or
+  fails, the snapshot stays, shown as `unavailable`, until a later connection
+  publishes. When the plugin is disabled, removed or shut down, it goes.
+- The timestamps say when the host last heard from the plugin. They say nothing
+  about how old the plugin's own readings are: a plugin that publishes an old or
+  missing sensor reading says so in `data`.
+
+The host refuses a publication from a plugin whose manifest does not declare
+`plugin_status`, from a connection that is no longer the plugin's current one,
+`data_json` that is not a JSON object or is larger than 16 KiB, and a snapshot
+sent less than 1 s after the previous one from the same connection. Refusals
+come back as an error and change nothing; a withdrawal is always accepted. A
+plugin may publish from `on_initialized`: a publication that arrives before the
+host has read the plugin's manifest waits for it.
+
+Reads serve the host's copy: `/api/status` never starts, restarts or calls a
+plugin, so a hung plugin cannot slow it. Every accepted publication, and every
+change of state, wakes `/api/events`, which sends the new status. Without any
+contribution, `plugins` is omitted and the response is unchanged. It is
+local to this node, like the rest of `/api/status`: nothing is gossiped.
+
+The host advertises the `plugin_status.v1` host capability in its
+`InitializeRequest`. Against a host without it, `publish_status` fails at once;
+a plugin that cannot run without it declares `.required(true)` and then refuses
+to initialize there. A default-managed plugin keeps its declaration only when
+its entry in `DEFAULT_PLUGINS` allows `Surface::StatusContributions`.
+
+## Local Inference Observation
+
+A plugin can follow what this node executes, to measure it (energy per token,
+for example) without sitting in the request path. It declares
+`mesh_llm_plugin::inference_observation::inference_observation()` in its
+manifest (`PluginManifest.inference_observation`), its operator opts it in:
+
+```toml
+[[plugin]]
+name = "example"
+allow_inference_observation = true
+```
+
+and it calls `PluginContext::subscribe_inference_observation()`, from
+`on_initialized` or any task holding an owned context. Without the declaration
+or the opt-in the host refuses the subscription and sends nothing. The setting
+is read when the plugin subscribes. A default-managed plugin keeps the
+declaration only if its `DEFAULT_PLUGINS` entry allows
+`Surface::InferenceObservation`; an unlisted default never keeps it.
+
+**What it covers.** The host composes an adapter into the lifecycle observer of
+each local inference frontend, so the feed has what this node executes: local
+API requests, and requests that arrived from peers, which the model-aware proxy
+also serves on the local frontend. A request this node only forwards to a peer
+never reaches one and never appears. Listing models and counting tokens are not
+executions. Not covered: split worker stages that have no frontend, and
+backends a plugin serves. A split's first stage reports the whole request,
+although later stages run on peers.
+
+**What it carries.** Activity and token counts only: never prompts, completion
+text, headers, admission decisions or keys. Execution ids are host counters,
+not request ids.
+
+**The feed.** The subscription answers with a snapshot: `host_generation`
+(random per host start), the `next_sequence` the following events start at,
+the local models whose frontends are serving, and every execution in flight
+(model, operation, streaming, start time, whether compute has finished). Then
+batches follow, in order, at least once a second. Each event has a sequence
+number one above the previous one, the host time it happened at (Unix
+nanoseconds, from a clock that is monotonic within a host generation), and an
+execution id:
+
+- `started`: a model execution began, with its model, operation and whether it
+  streams;
+- `first_output`: a stream produced its first output;
+- `compute_finished`: the backend finished computing. A streaming backend call
+  returns when the stream opens, so for a stream this comes when the stream
+  ends;
+- `usage`: prompt, cached and completion tokens, at most once per execution;
+- `ended`: completed, failed, cancelled, or dropped (the client went away),
+  exactly once and last;
+- `model_ready` / `model_unloaded`: a local model's first frontend started or
+  its last one stopped.
+
+A duplicate usage or terminal report from the frontend is not repeated, so no
+work is counted twice. A long stream stays in flight, and in every snapshot,
+until it ends: nothing expires for its age.
+
+**Timing.** Event times are when the frontend reported the event, not when the
+plugin received it. Each batch carries a `watermark`: every event at or before
+it has been delivered, so a plugin can settle an interval that ends before the
+watermark. The host stamps and queues each event under one lock and reads the
+watermark under the same lock, so nothing older can arrive later. A plugin on
+the same machine can compare the host clock with its own sensor clock through
+the snapshot's `taken_at_unix_ns`.
+
+**Loss.** The frontend's observer never waits on a plugin: it queues the event
+and returns. Each subscriber has a bounded queue of 4,096 events. When a
+subscriber falls that far behind, the host drops its queue and the next batch
+carries `loss` (the first lost sequence and how many were lost) and `resync`, a
+fresh snapshot listing what is still running, instead of events. The SDK holds
+up to 1,024 batches for a plugin that reads slowly, then reports
+`InferenceObservationItem::Overflowed`, and the plugin subscribes again. A plugin
+never has to read a gap as idle time. When the plugin restarts, its new
+connection subscribes again and gets a snapshot. A new `host_generation` means
+the host restarted, and earlier sequences and ids no longer apply.
+
+The host advertises the `local_inference_observation.v1` host capability.
+Against a host without it, `subscribe_inference_observation` fails at once; a
+plugin that cannot run without it declares `.required(true)` and refuses to
+initialize there.
 
 ## What The Host Owns
 

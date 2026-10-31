@@ -201,8 +201,9 @@ async fn cancelled_observation_preserves_pending_payment_for_restart() -> Result
         assert!(paying.await.unwrap_err().is_cancelled());
         assert_eq!(service.ledger.pending_charges()?.len(), 1);
         assert_eq!(
-            service.ledger.available_budget(100_000, crate::now_ms())?,
-            0
+            service.ledger.available_budget(crate::now_ms())?,
+            1000,
+            "pending charges do not reduce the admission allowance"
         );
     }
     publish(&wallet, &charge.invoice, false, PaymentStatus::Succeeded);
@@ -231,7 +232,7 @@ async fn incoming_notification_wait_expires_without_polling() -> Result<()> {
 }
 
 #[tokio::test(start_paused = true)]
-async fn notification_error_keeps_reservation_until_authoritative_recovery() -> Result<()> {
+async fn notification_error_keeps_payment_pending_until_authoritative_recovery() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let wallet = Arc::new(MockWallet::default());
     wallet.pending.store(true, Ordering::SeqCst);
@@ -248,10 +249,7 @@ async fn notification_error_keeps_reservation_until_authoritative_recovery() -> 
     wallet.updates.notify_waiters();
     assert!(paying.await?.is_err());
     assert_eq!(service.ledger.pending_charges()?.len(), 1);
-    assert_eq!(
-        service.ledger.available_budget(100_000, crate::now_ms())?,
-        0
-    );
+    assert_eq!(service.ledger.available_budget(crate::now_ms())?, 1000);
     wallet.lookup_unavailable.store(false, Ordering::SeqCst);
     publish(&wallet, &charge.invoice, false, PaymentStatus::Succeeded);
     service.reconcile_pending().await?;
@@ -398,40 +396,63 @@ async fn arrival_wait_gives_up_at_its_own_deadline_before_the_invoice_expires() 
 }
 
 #[tokio::test]
-async fn output_invoice_expiry_is_chosen_by_the_host_not_the_wallet() -> Result<()> {
+async fn metered_invoice_expiries_are_chosen_by_the_host_not_the_wallet() -> Result<()> {
+    use crate::ledger::metered::{MeteredOutcome, MeteredRequest};
+    use mesh_llm_payments_types::metering::MeteredUsage;
     let dir = tempfile::tempdir()?;
     let wallet = Arc::new(MockWallet::default());
-    let service = PaymentService::with_provider(dir.path(), wallet.clone())?;
+    let service = Arc::new(PaymentService::with_provider(dir.path(), wallet.clone())?);
     let pricing = Pricing {
-        input_msat_per_million: 1000,
-        output_msat_per_million: 1000,
+        input_msat_per_million: 100_000_000,
+        output_msat_per_million: 100_000_000,
+        cache_discount_percent: 0,
     };
-    service
-        .ledger
-        .begin_serving("served", "peer", &pricing, 1000)?;
-    service.ledger.record_delivered_tokens("served", 10)?;
-    service.ledger.finish_serving("served")?;
-    // Input receipt is a precondition for invoicing output.
-    let input = invoice(9, 1);
-    service
-        .ledger
-        .record_receivable(&crate::ledger::receivables::Receivable {
+    service.ledger.set_pricing("m", Some(&pricing))?;
+    // A deposit is an input-side invoice: short-lived.
+    let admitted = service
+        .serve_admit(mesh_llm_payments_types::contract::ServeAdmitRequest {
+            billing_revision: mesh_llm_payments_types::contract::BillingRevision::V3,
             request_id: "served".into(),
-            peer: "peer".into(),
-            segment: 0,
-            invoice: input.clone(),
-            tokens: 1,
-            paid: false,
-        })?;
-    publish(&wallet, &input, true, PaymentStatus::Succeeded);
-    let receipt = service
-        .output_receivable("served")
-        .await?
-        .expect("output invoice");
-    assert_eq!(receipt.segment, 1);
+            buyer: "peer".into(),
+            model: "m".into(),
+            pricing: pricing.clone(),
+        })
+        .await?;
+    assert!(matches!(
+        admitted,
+        mesh_llm_payments_types::contract::ServeAdmitResponse::Deposit { .. }
+    ));
     assert_eq!(
         wallet.invoice_expiries.lock().unwrap().as_slice(),
-        [crate::lifetimes::OUTPUT_INVOICE_EXPIRY_SECS]
+        [crate::lifetimes::DEPOSIT_INVOICE_EXPIRY_SECS]
+    );
+    // The final invoice bills delivered output: the buyer gets longer to pay.
+    service.ledger.metered_admit(&MeteredRequest {
+        id: "trusted",
+        peer: "peer",
+        model: "test-model",
+        pricing: &pricing,
+        require_deposit: false,
+    })?;
+    service.ledger.metered_finalize(
+        "trusted",
+        MeteredOutcome::Usage(MeteredUsage {
+            prompt_tokens: 10,
+            completion_tokens: 10,
+            cached_tokens: 0,
+        }),
+    )?;
+    let bill = service.serve_recover("trusted").await?;
+    assert!(matches!(
+        bill,
+        mesh_llm_payments_types::contract::ServeRecoverResponse::Billed { .. }
+    ));
+    assert_eq!(
+        wallet.invoice_expiries.lock().unwrap().as_slice(),
+        [
+            crate::lifetimes::DEPOSIT_INVOICE_EXPIRY_SECS,
+            crate::lifetimes::FINAL_INVOICE_EXPIRY_SECS
+        ]
     );
     // Funding invoices get the long human-facing lifetime.
     service

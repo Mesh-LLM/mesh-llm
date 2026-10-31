@@ -58,6 +58,7 @@ pub(super) fn prefix_cache_test_config() -> StageConfig {
         bind_addr: "127.0.0.1:0".to_string(),
         upstream: None,
         downstream: Some(PeerConfig {
+            persistent_lane_marker: false,
             stage_id: "stage-1".to_string(),
             stage_index: 1,
             endpoint: "127.0.0.1:0".to_string(),

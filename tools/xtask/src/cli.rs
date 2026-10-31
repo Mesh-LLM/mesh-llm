@@ -1,5 +1,5 @@
 use crate::command::DynResult;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const HF_CONVERTED_ARTIFACT_USAGE: &str =
     "usage: cargo xtool hf-converted-artifact preflight --artifact-dir <directory>";
@@ -15,7 +15,6 @@ pub(crate) fn print_usage() {
     );
     println!("  cargo xtool automation endpoint-model-discovery --help");
     println!("  cargo xtool automation wan-observation --help");
-    println!("  cargo xtool automation wan-stage-deployment --help");
     println!("  cargo xtool automation system-one-cases --help");
     println!("  cargo xtool automation system-one-smoke --help");
     println!("  cargo xtool automation decisions-smoke --help");
@@ -97,7 +96,7 @@ pub(crate) fn print_usage() {
 
 const NATIVE_USAGE: &str = "usage:\n  cargo xtool native select-runtime --root <dir> --os <os> --arch <arch> --backend <backend> [--cuda-major <major>]\n  cargo xtool native verify-host-dependencies <binary> [--format {elf|macho|pe}] [--report <path>] [--bind-sha256] [--no-import-policy] [--max-glibc <version|declared>]\n  cargo xtool native linux-runtime-deps {collect|verify|order} --lib-dir <dir> [--scan-dir <dir>]... [--arch {x86_64|aarch64|arm}] [--search-dir <dir>]... [--cuda-major {12|13}] [--primary <name>]\n  cargo xtool native windows-runtime-deps {collect|verify} --lib-dir <dir> [--scan-dir <dir>]... [--search-dir <dir>]...\n  cargo xtool native release-matrix --manifest <json> [--required-target <os>/<arch>/<backend>]... [<artifact>...]\n  cargo xtool native verify-runtime-package [--portable] [--expected-backend KIND] [--expected-target TARGET] <artifact>...\n  cargo xtool native package-source-version {workspace|abi|runtime} SOURCE (experimental)";
 
-const USAGE: &str = "usage:\n  cargo xtool artifact verify-checksum <artifact>\n  cargo xtool artifact extract-tar <archive> <destination>\n  cargo xtool artifact extract-zip <archive> <destination>\n  cargo xtool automation {inventory|policy} --check\n  cargo xtool automation bootstrap\n  cargo xtool automation ui-build --ui-dir PATH [--logs-dir PATH] [--timeout-secs 1..3600] [--pnpm-command PATH [--pnpm-script PATH]]\n  cargo xtool automation parity --suite ci [--evidence <dir>] [--interpreter <path> | --rust-only]\n  cargo xtool automation guardrail-corpus --help\n  cargo xtool automation event-benchmark-run --help\n  cargo xtool automation replay-matrix validate --matrix <path>\n  cargo xtool ci plan [--manifest-root <path>] < plan-input.json\n  cargo xtool ci validate-lane --lane-plan <json> --needs <json> [--workflow <lane.yml>] [--plan-digest <sha256> --canonical-plan <json>]\n  cargo xtool ci validate-graph --workflows <dir>\n  cargo xtool ci-ops runner-identity [--root <path>] [--catalog <path>] {validate|check|diagnose|lookup|seed-key|bind} ...\n  cargo xtool ci-ops build-cache {status|prune|build} [--workspace <path>] [--target-dir <path>] [--max-size <size>] [--max-age <days>] [--json] [--execute] [-- <build command>...]\n  cargo xtool ci-ops sccache-stats --artifact-name <name> --output <path> [--github-output <path>] [--cache-expectation {cold|warm|opportunistic}] [--minimum-hit-rate <float>]\n  cargo xtool ci-ops sccache-summary [--format text|json] [--minimum-hit-rate <0..1>] <evidence-path>...\n  cargo xtool ci-ops performance-history --artifact <dir> --output <jsonl> --report <md> [--baseline <path>] [--gate]\n  cargo xtool ci-ops collect-metrics --input <path|-> [--json-out <path|->] [--status <status>] [--top <n>] [--label KEY=VALUE]...\n  cargo xtool models generate [--registry <path>] [--check]\n  cargo xtool models resolve <manifest> --cadence <cadence> [--artifact-id <id>] [--require-single-file] [--github-output <path> [--github-output-prefix <name_>]] [--verify-root <dir>]\n  cargo xtool models restore-inputs --github-output <path> [--model-url <url> --model-file <name> | --model-manifest <path> --model-cadence <cadence> [--model-artifact-id <id>]]\n  cargo xtool models parity-download --manifest <path> --model-manifest <path> --cadence manual --hf-command <absolute-path> [--dry-run] [--status <csv>] [--priority <csv>] [--timeout-secs <1..86400>]\n  cargo xtool prepared-input <consumer> ... (UI, static ABI, native SDK inputs)\n  cargo xtool release inventory [--repo <owner/name>] [--head <ref>] [--release-tag <tag>] [--output <json>]\n  cargo xtool release notes-base <target-tag> < tags.txt\n  cargo xtool release notes-link --body <md> --range <a..b> --repo <owner/name> --out-body <md> --out-links <json> [--repo-root <dir>] [--api-budget <n>]\n  cargo xtool release notes-classify --body <md> (--has-entries | --range <a..b> --version <v> --date <d> --out <json>) [--repo-root <dir>] [--links <json>]\n  cargo xtool repo-consistency release-targets\n  cargo xtool repo-consistency ci-crate-lists\n  cargo xtool repo-consistency publish-crates\n  cargo xtool repo-consistency test-all-rust-crate-coverage\n  cargo xtool repo-consistency no-console-print\n  cargo xtool repository docker-precheck --dockerfile PATH --shared-core true|false --fly-ui-builder true|false --entrypoint-modes true|false --workflow-no-qemu true|false\n  cargo xtool repository affected-crates [--stdin | <path>...]\n  cargo xtool repository conventional-commits (--message <subject> | --range <range> | <file>) [--trailers-only]\n  cargo xtool repository env-mutation-census [--root <path>] [--file <path>]...\n  cargo xtool repository llama-upstream-pin [--repository <path>] [--upstream-url <url>] <base-sha> <head-sha>\n  cargo xtool repository selected-ref --ref <branch-or-sha> --expected-origin <url> --event workflow_dispatch [--repository <path>] [--upstream <sha>] [--github-output <path> --summary <path>] [--timeout-secs <seconds>]\n  cargo xtool split-payloads {certify|artifact-for-sha256} ...\n  cargo xtool release-attestation generate-keypair --private-key-out <path> --public-key-out <path>\n  cargo xtool release-attestation stamp --binary <path> --signing-key-file <path> [--node-version <semver>] [--build-id <id>] [--commit <sha>] [--target-triple <triple>] [--protocol-min <n>] [--protocol-max <n>]\n  cargo xtool release-attestation inspect --binary <path> [--public-key-file <path>] [--json]\n  (cargo run -p xtask -- <domain> <command> ... remains supported)";
+const USAGE: &str = "usage:\n  cargo xtool artifact verify-checksum <artifact>\n  cargo xtool artifact extract-tar <archive> <destination>\n  cargo xtool artifact extract-zip <archive> <destination>\n  cargo xtool automation {inventory|policy} --check\n  cargo xtool automation bootstrap\n  cargo xtool automation ui-build --ui-dir PATH [--logs-dir PATH] [--timeout-secs 1..3600] [--pnpm-command PATH [--pnpm-script PATH]]\n  cargo xtool automation parity --suite ci [--evidence <dir>] [--interpreter <path> | --rust-only]\n  cargo xtool automation guardrail-corpus --help\n  cargo xtool automation event-benchmark-run --help\n  cargo xtool automation replay-matrix validate --matrix <path>\n  cargo xtool ci plan [--manifest-root <path>] < plan-input.json\n  cargo xtool ci validate-lane --lane-plan <json> --needs <json> [--workflow <lane.yml>] [--plan-digest <sha256> --canonical-plan <json>]\n  cargo xtool ci validate-graph --workflows <dir>\n  cargo xtool ci-ops runner-identity [--root <path>] [--catalog <path>] {validate|check|diagnose|lookup|seed-key|bind} ...\n  cargo xtool ci-ops build-cache {status|prune|build} [--workspace <path>] [--target-dir <path>] [--max-size <size>] [--max-age <days>] [--json] [--execute] [-- <build command>...]\n  cargo xtool ci-ops sccache-stats --artifact-name <name> --output <path> [--github-output <path>] [--cache-expectation {cold|warm|opportunistic}] [--minimum-hit-rate <float>]\n  cargo xtool ci-ops sccache-summary [--format text|json] [--minimum-hit-rate <0..1>] <evidence-path>...\n  cargo xtool ci-ops performance-history --artifact <dir> --output <jsonl> --report <md> [--baseline <path>] [--gate]\n  cargo xtool ci-ops collect-metrics --input <path|-> [--json-out <path|->] [--status <status>] [--top <n>] [--label KEY=VALUE]...\n  cargo xtool models generate [--registry <path>] [--check]\n  cargo xtool models resolve <manifest> --cadence <cadence> [--artifact-id <id>] [--require-single-file] [--github-output <path> [--github-output-prefix <name_>]] [--verify-root <dir>]\n  cargo xtool models restore-inputs --github-output <path> [--model-url <url> --model-file <name> | --model-manifest <path> --model-cadence <cadence> [--model-artifact-id <id>]]\n  cargo xtool models parity-download --manifest <path> --model-manifest <path> --cadence manual --hf-command <absolute-path> [--dry-run] [--status <csv>] [--priority <csv>] [--timeout-secs <1..86400>]\n  cargo xtool prepared-input <consumer> ... (UI, static ABI, native SDK inputs)\n  cargo xtool release inventory [--repo <owner/name>] [--head <ref>] [--release-tag <tag>] [--output <json>]\n  cargo xtool release notes-base <target-tag> < tags.txt\n  cargo xtool release notes-link --body <md> --range <a..b> --repo <owner/name> --out-body <md> --out-links <json> [--repo-root <dir>] [--api-budget <n>]\n  cargo xtool release notes-classify --body <md> (--has-entries | --range <a..b> --version <v> --date <d> --out <json>) [--repo-root <dir>] [--links <json>]\n  cargo xtool repo-consistency release-targets\n  cargo xtool repo-consistency ci-crate-lists\n  cargo xtool repo-consistency publish-crates\n  cargo xtool repo-consistency test-all-rust-crate-coverage\n  cargo xtool repo-consistency no-console-print\n  cargo xtool repository docker-precheck --dockerfile PATH --shared-core true|false --fly-ui-builder true|false --entrypoint-modes true|false --workflow-no-qemu true|false\n  cargo xtool repository affected-crates [--stdin | <path>...]\n  cargo xtool repository bundled-plugins --target <triple> [--defaults <path>]\n  cargo xtool repository bundled-plugins-check --bundle <dir>\n  cargo xtool repository conventional-commits (--message <subject> | --range <range> | <file>) [--trailers-only]\n  cargo xtool repository env-mutation-census [--root <path>] [--file <path>]...\n  cargo xtool repository llama-upstream-pin [--repository <path>] [--upstream-url <url>] <base-sha> <head-sha>\n  cargo xtool repository selected-ref --ref <branch-or-sha> --expected-origin <url> --event workflow_dispatch [--repository <path>] [--upstream <sha>] [--github-output <path> --summary <path>] [--timeout-secs <seconds>]\n  cargo xtool split-payloads {certify|artifact-for-sha256} ...\n  cargo xtool release-attestation generate-keypair --private-key-out <path> --public-key-out <path>\n  cargo xtool release-attestation stamp --binary <path> --signing-key-file <path> [--node-version <semver>] [--build-id <id>] [--commit <sha>] [--target-triple <triple>] [--protocol-min <n>] [--protocol-max <n>]\n  cargo xtool release-attestation inspect --binary <path> [--public-key-file <path>] [--json]\n  (cargo run -p xtask -- <domain> <command> ... remains supported)";
 
 pub(crate) struct Cli<'a> {
     pub(crate) root: Option<PathBuf>,
@@ -134,7 +133,6 @@ pub(crate) enum CliCommand<'a> {
     WorkloadSmoke(&'a [String]),
     Stability(&'a [String]),
     WanObservation(&'a [String]),
-    WanStageDeployment(&'a [String]),
     SystemOneCases(&'a [String]),
     SystemOneSmoke(&'a [String]),
     DecisionsSmoke(&'a [String]),
@@ -204,6 +202,8 @@ pub(crate) enum RepositoryCheck {
     LlamaUpstreamRelease,
     SelectedRef,
     DockerPrecheck,
+    BundledPlugins,
+    BundledPluginsCheck,
 }
 
 pub(crate) enum RepositoryCommand<'a> {
@@ -221,18 +221,7 @@ pub(crate) enum RepositoryCommand<'a> {
 
 impl<'a> Cli<'a> {
     pub(crate) fn parse(args: &'a [String]) -> DynResult<Self> {
-        let (root, command_args) = match args {
-            [flag, value, rest @ ..] if flag == "--repo-root" => {
-                if value.starts_with("--") {
-                    return Err("missing value for --repo-root".into());
-                }
-                (Some(Path::new(value).to_path_buf()), rest)
-            }
-            [flag, ..] if flag == "--repo-root" => {
-                return Err("missing value for --repo-root".into());
-            }
-            _ => (None, args),
-        };
+        let (root, command_args) = ci_controller::repository::parse_root_prefix(args)?;
         let command = match command_args {
             [domain, scope, rest @ ..] if domain == "automation" && scope == "mtp-scheduler" => {
                 CliCommand::MtpScheduler(rest)
@@ -373,11 +362,6 @@ impl<'a> Cli<'a> {
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "system-one-smoke" => {
                 CliCommand::SystemOneSmoke(rest)
-            }
-            [domain, scope, rest @ ..]
-                if domain == "automation" && scope == "wan-stage-deployment" =>
-            {
-                CliCommand::WanStageDeployment(rest)
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "wan-observation" => {
                 CliCommand::WanObservation(rest)
@@ -584,6 +568,8 @@ impl<'a> Cli<'a> {
                     "llama-upstream-release" => RepositoryCheck::LlamaUpstreamRelease,
                     "selected-ref" => RepositoryCheck::SelectedRef,
                     "docker-precheck" => RepositoryCheck::DockerPrecheck,
+                    "bundled-plugins" => RepositoryCheck::BundledPlugins,
+                    "bundled-plugins-check" => RepositoryCheck::BundledPluginsCheck,
                     _ => return Err(USAGE.into()),
                 };
                 CliCommand::Check(check, rest)

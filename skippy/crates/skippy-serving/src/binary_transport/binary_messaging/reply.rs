@@ -122,6 +122,7 @@ mod tests {
     use super::*;
     use skippy_protocol::binary::{StageStateHeader, StageWireMessage, WireMessageKind};
 
+    /// Verification replies report the coordinator's window identity.
     #[test]
     fn verify_window_reply_reports_only_the_coordinator_window_id() {
         let kind = WireMessageKind::VerifyWindow;
@@ -139,6 +140,7 @@ mod tests {
             tokens: vec![10, 11, 12],
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         };
 

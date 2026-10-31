@@ -1013,8 +1013,9 @@ fn runtime_model_planning_bytes_rejects_legacy_layer_package() {
     let dir = tempfile::tempdir().unwrap();
     write_test_layer_package(dir.path(), 4_800_000_000);
 
-    let error = runtime_model_planning_bytes(dir.path())
-        .unwrap_err()
+    let error = runtime_model_sizing(dir.path())
+        .err()
+        .expect("legacy layer package must be rejected")
         .to_string();
 
     assert!(error.contains("requires package schema 2"), "{error}");
@@ -1451,7 +1452,11 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
     tokio::spawn(async move {
         while let Some(command) = control_rx.recv().await {
             let (request, resp) = match command {
-                skippy::StageControlCommand::Execute { request, resp } => (request, resp),
+                skippy::StageControlCommand::Execute {
+                    request,
+                    requester: _,
+                    resp,
+                } => (request, resp),
                 skippy::StageControlCommand::ValidateLoad { resp, .. } => {
                     let _ = resp.send(None);
                     continue;
@@ -1475,6 +1480,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
                 skippy::StageControlRequest::Load(load) => Ok(skippy::StageControlResponse::Ready(
                     skippy::StageReadyResponse {
                         accepted: true,
+                        removed_running_stage: false,
                         status: test_stage_status_from_load(load, skippy::StageRuntimeState::Ready),
                         error: None,
                     },
@@ -1482,6 +1488,7 @@ async fn load_split_runtime_generation_stops_candidate_stages_after_partial_load
                 skippy::StageControlRequest::Stop(stop) => Ok(skippy::StageControlResponse::Ready(
                     skippy::StageReadyResponse {
                         accepted: true,
+                        removed_running_stage: true,
                         status: test_stage_status_from_stop(stop),
                         error: None,
                     },

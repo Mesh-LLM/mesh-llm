@@ -43,6 +43,7 @@ async fn remote_request(missing_ingress: bool) -> Result<()> {
         Pricing {
             input_msat_per_million: 1_000_000,
             output_msat_per_million: 1_000_000,
+            cache_discount_percent: 0,
         },
     );
     assert!(
@@ -80,6 +81,9 @@ async fn remote_request(missing_ingress: bool) -> Result<()> {
     .await?;
     drop(accepted_connection);
     drop(targets_tx);
+    let payments_manager = relay.take_plugin_manager().await.expect("payments manager");
+    payments_manager.shutdown().await;
+    drop(payments_manager);
     caller.endpoint.close().await;
     relay.endpoint.close().await;
     provider.endpoint.close().await;

@@ -1,0 +1,241 @@
+From 9bd1fbef131bebe017d83f67067b0bebbf1c4b2c Mon Sep 17 00:00:00 2001
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Fri, 16 Oct 2026 19:21:00 +0300
+Subject: [PATCH] feat(skippy): place routed experts of a block range in host
+ memory
+
+Add host_expert_layer_start/end to skippy_runtime_config. When the range
+is non-empty, every model load installs one tensor buffer-type override
+that routes the routed-expert banks (ffn_{up,down,gate,gate_up}_exps) of
+those blocks to the CPU buffer type, the same mechanism as upstream
+--n-cpu-moe. Attention, shared experts and the dense trunk stay on the
+accelerator. Routing and precision are unchanged.
+
+The override list and its pattern are owned by a load-scoped storage
+object because llama.cpp borrows both until the load call returns.
+---
+ include/skippy/common.h                       |  2 +-
+ include/skippy/runtime.h                      |  6 +++
+ src/skippy/model_load_config.cpp              | 26 +++++++++++++
+ src/skippy/model_load_config_internal.h       | 16 ++++++++
+ src/skippy/model_loading.cpp                  |  6 +++
+ src/skippy/model_source.cpp                   |  2 +
+ .../tests/hardware_application_probe.cpp      | 37 +++++++++++++++++++
+ 7 files changed, 94 insertions(+), 1 deletion(-)
+
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index 3f6aab137..b9b5259af 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -46,7 +46,7 @@ extern "C" {
+ 
+ #define SKIPPY_ABI_VERSION_MAJOR 0
+ #define SKIPPY_ABI_VERSION_MINOR 1
+-#define SKIPPY_ABI_VERSION_PATCH 67
++#define SKIPPY_ABI_VERSION_PATCH 68
+ 
+ #if defined(_MSC_VER)
+ #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
+diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
+index 799bdca2d..90a8760d4 100644
+--- a/include/skippy/runtime.h
++++ b/include/skippy/runtime.h
+@@ -117,6 +117,12 @@ struct skippy_runtime_config {
+     int32_t main_gpu;
+     /** @brief How to split the model across multiple GPUs (mirrors upstream `llama_split_mode`). SKIPPY_TRISTATE_AUTO (-1) preserves llama.cpp's derived default; 0=none, 1=layer, 2=row, 3=tensor. */
+     int32_t split_mode;
++
++    // Routed-expert placement for mixture-of-experts models.
++    /** @brief First absolute block index whose routed-expert tensors (`ffn_{up,down,gate,gate_up}_exps`) load into host memory (the CPU buffer type) instead of accelerator memory. Mirrors upstream `--n-cpu-moe` for a block range. */
++    int32_t host_expert_layer_start;
++    /** @brief One past the last such block index. `host_expert_layer_end <= host_expert_layer_start` keeps every routed expert on the accelerator. Routing and precision are unchanged; only weight placement differs. */
++    int32_t host_expert_layer_end;
+ };
+ 
+ /** @brief Returns a C-safe runtime configuration with all derived-default controls set to auto. */
+diff --git a/src/skippy/model_load_config.cpp b/src/skippy/model_load_config.cpp
+index 2e8d3c4ed..efa2866fe 100644
+--- a/src/skippy/model_load_config.cpp
++++ b/src/skippy/model_load_config.cpp
+@@ -176,6 +176,32 @@ void skippy_apply_model_load_memory_config(
+     }
+ }
+ 
++void skippy_apply_host_expert_placement(
++        const struct skippy_runtime_config * config,
++        llama_model_params & params,
++        skippy_tensor_placement_storage & storage) {
++    storage.host_expert_pattern.clear();
++    storage.overrides.clear();
++    if (config == nullptr || config->host_expert_layer_start < 0 ||
++            config->host_expert_layer_end <= config->host_expert_layer_start) {
++        return;
++    }
++    // One alternation over the block indices keeps a single regex per tensor
++    // lookup; upstream's --n-cpu-moe adds one override per block instead.
++    std::string blocks;
++    for (int32_t block = config->host_expert_layer_start; block < config->host_expert_layer_end; ++block) {
++        if (!blocks.empty()) {
++            blocks += '|';
++        }
++        blocks += std::to_string(block);
++    }
++    storage.host_expert_pattern =
++            "^blk\\.(?:" + blocks + ")\\.ffn_(up|down|gate|gate_up)_(ch|)exps";
++    storage.overrides.push_back({storage.host_expert_pattern.c_str(), ggml_backend_cpu_buffer_type()});
++    storage.overrides.push_back({nullptr, nullptr});
++    params.tensor_buft_overrides = storage.overrides.data();
++}
++
+ void skippy_apply_context_hardware_config(
+         const struct skippy_runtime_config * config,
+         llama_context_params & params) {
+diff --git a/src/skippy/model_load_config_internal.h b/src/skippy/model_load_config_internal.h
+index 554d2bdd3..e3649e713 100644
+--- a/src/skippy/model_load_config_internal.h
++++ b/src/skippy/model_load_config_internal.h
+@@ -6,6 +6,7 @@
+ #include "llama.h"
+ 
+ #include <cstdint>
++#include <string>
+ #include <vector>
+ 
+ struct skippy_error;
+@@ -20,6 +21,21 @@ enum skippy_status skippy_apply_selected_backend_device(
+ void skippy_apply_model_load_memory_config(
+         const skippy_runtime_config * config,
+         llama_model_params & params);
++
++// Owns the tensor buffer-type override list a model load borrows. llama.cpp
++// keeps raw pointers to the patterns and the null-terminated array until the
++// load call returns, so this must outlive that call.
++struct skippy_tensor_placement_storage {
++    std::string host_expert_pattern;
++    std::vector<llama_model_tensor_buft_override> overrides;
++};
++
++// Route the routed-expert tensors of the configured block range to the CPU
++// buffer type. Leaves params untouched when the range is empty.
++void skippy_apply_host_expert_placement(
++        const skippy_runtime_config * config,
++        llama_model_params & params,
++        skippy_tensor_placement_storage & storage);
+ void skippy_apply_context_hardware_config(
+         const skippy_runtime_config * config,
+         llama_context_params & params);
+diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
+index 60a27669f..7305cc529 100644
+--- a/src/skippy/model_loading.cpp
++++ b/src/skippy/model_loading.cpp
+@@ -962,10 +962,12 @@ enum skippy_status skippy_model_open_impl(
+     }
+ 
+     llama_model_params params = llama_model_default_params();
++    skippy_tensor_placement_storage tensor_placement;
+     skippy_enable_integrated_mtp_tensors(config, params);
+     if (config != nullptr) {
+         params.n_gpu_layers = config->n_gpu_layers;
+         skippy_apply_model_load_memory_config(config, params);
++        skippy_apply_host_expert_placement(config, params, tensor_placement);
+     }
+     if (event_scope.is_enabled()) {
+         params.progress_callback = skippy_model_open_progress_callback;
+@@ -1052,10 +1054,12 @@ enum skippy_status skippy_model_open_from_parts_impl(
+     }
+ 
+     llama_model_params params = llama_model_default_params();
++    skippy_tensor_placement_storage tensor_placement;
+     skippy_enable_integrated_mtp_tensors(config, params);
+     if (config != nullptr) {
+         params.n_gpu_layers = config->n_gpu_layers;
+         skippy_apply_model_load_memory_config(config, params);
++        skippy_apply_host_expert_placement(config, params, tensor_placement);
+     }
+     if (event_scope.is_enabled()) {
+         params.progress_callback = skippy_model_open_progress_callback;
+@@ -1129,9 +1133,11 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
+     // The guard above already established an external MTP source, so this model
+     // backs an LLAMA_CONTEXT_TYPE_MTP draft context and must retain MTP tensors.
+     model_params.load_mtp = true;
++    skippy_tensor_placement_storage tensor_placement;
+     if (config != nullptr) {
+         model_params.n_gpu_layers = config->n_gpu_layers;
+         skippy_apply_model_load_memory_config(config, model_params);
++        skippy_apply_host_expert_placement(config, model_params, tensor_placement);
+     }
+ 
+     llama_backend_init();
+diff --git a/src/skippy/model_source.cpp b/src/skippy/model_source.cpp
+index 02ad771ad..2b91f2b71 100644
+--- a/src/skippy/model_source.cpp
++++ b/src/skippy/model_source.cpp
+@@ -393,9 +393,11 @@ static enum skippy_status skippy_model_open_from_source_impl(
+     llama_model_params params = llama_model_default_params();
+     params.load_mtp = config != nullptr && skippy_runtime_is_terminal_stage(config) &&
+                       (skippy_runtime_has_stage_plan(config) || config->mtp_source == SKIPPY_MTP_SOURCE_INTEGRATED);
++    skippy_tensor_placement_storage tensor_placement;
+     if (config != nullptr) {
+         params.n_gpu_layers = config->n_gpu_layers;
+         skippy_apply_model_load_memory_config(config, params);
++        skippy_apply_host_expert_placement(config, params, tensor_placement);
+     }
+     llama_backend_init();
+     if (!ggml_backend_reg_count()) {
+diff --git a/src/skippy/tests/hardware_application_probe.cpp b/src/skippy/tests/hardware_application_probe.cpp
+index 471968158..29999dfd0 100644
+--- a/src/skippy/tests/hardware_application_probe.cpp
++++ b/src/skippy/tests/hardware_application_probe.cpp
+@@ -2,6 +2,7 @@
+ #include "skippy/runtime.h"
+ 
+ #include <cstdio>
++#include <regex>
+ 
+ static bool require(bool condition, const char * message) {
+     if (!condition) {
+@@ -72,5 +73,41 @@ int main() {
+     skippy_apply_context_hardware_config(&config, context_params);
+     passed &= require(context_params.op_offload, "true op_offload override was not applied");
+ 
++    skippy_runtime_config experts = skippy_runtime_config_default();
++    passed &= require(experts.host_expert_layer_end <= experts.host_expert_layer_start,
++            "default config must keep every routed expert on the accelerator");
++    llama_model_params resident_params = llama_model_default_params();
++    skippy_tensor_placement_storage resident_storage;
++    skippy_apply_host_expert_placement(&experts, resident_params, resident_storage);
++    passed &= require(resident_params.tensor_buft_overrides == nullptr,
++            "an empty host-expert range must not install tensor overrides");
++
++    experts.host_expert_layer_start = 2;
++    experts.host_expert_layer_end = 4;
++    llama_model_params host_params = llama_model_default_params();
++    skippy_tensor_placement_storage host_storage;
++    skippy_apply_host_expert_placement(&experts, host_params, host_storage);
++    const llama_model_tensor_buft_override * overrides = host_params.tensor_buft_overrides;
++    passed &= require(overrides != nullptr, "a host-expert range must install a tensor override");
++    if (overrides != nullptr) {
++        passed &= require(overrides[0].buft == ggml_backend_cpu_buffer_type(),
++                "host-resident experts must use the CPU buffer type");
++        passed &= require(overrides[1].pattern == nullptr,
++                "the override list must be null-terminated");
++        const std::regex pattern(overrides[0].pattern);
++        passed &= require(std::regex_search("blk.2.ffn_up_exps.weight", pattern),
++                "block 2 routed experts must match");
++        passed &= require(std::regex_search("blk.3.ffn_gate_up_exps.weight", pattern),
++                "merged gate/up expert banks must match");
++        passed &= require(!std::regex_search("blk.4.ffn_down_exps.weight", pattern),
++                "blocks past the range must stay on the accelerator");
++        passed &= require(!std::regex_search("blk.12.ffn_down_exps.weight", pattern),
++                "block 12 must not match block 2 by prefix");
++        passed &= require(!std::regex_search("blk.2.ffn_up_shexp.weight", pattern),
++                "shared experts are not routed and must stay on the accelerator");
++        passed &= require(!std::regex_search("blk.2.attn_q.weight", pattern),
++                "attention weights must stay on the accelerator");
++    }
++
+     return passed ? 0 : 1;
+ }
+-- 
+2.56.0
+

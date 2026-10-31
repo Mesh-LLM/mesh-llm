@@ -906,8 +906,8 @@ cached and a worker does not:
   to open `skippy-stage/2`, then Skippy artifact-transfer stream 0x03, to
   fetch only its assigned package files before the normal HF fallback path.
 - Current/released mixed mesh: a coordinator without the complete
-  `stage-generation-11` control/status/content-identity/admission bundle must not
-  be selected for a generation-11 split topology. Missing `artifact-transfer`
+  `stage-generation-12` control/status/content-identity/admission bundle must not
+  be selected for a generation-12 split topology. Missing `artifact-transfer`
   only prevents peer cache
   sourcing; the worker may still participate when local/HF package resolution
   provides an independent source.
@@ -1386,6 +1386,50 @@ Run the command-surface smoke on every product platform without device
 passthrough. Separately qualify backend loading and a minimal operation on
 suitable CUDA, ROCm, Vulkan, or Metal hardware. Preserve unique temp paths and
 ports and verify process/listener cleanup.
+
+## Native model hot loading
+
+The opt-in [live hot-loading test](../../crates/mesh-llm/tests/native_hot_load_live.rs)
+starts the shipped Mesh binary with isolated user/runtime directories and temporary
+loopback ports. It requires a real local causal GGUF and a compatible packaged
+native runtime; it does not mock model loading or use an external model server.
+It reuses `smollm2-q8-inference` from the shared
+[product smoke manifest](../../../ci/model-artifacts/manifests/product-smoke.json),
+also used by product, scripted-binary and SDK smoke tests: SmolLM2-135M-Instruct
+Q8_0 (about 138 MiB). The registry owns the pinned revision, filename and digest.
+
+Build the local runtime with `just skippy` (or select a backend, such as
+`just skippy metal` on macOS), then run from the repository root:
+
+Restore that shared fixture into the usual `$HOME/.models` cache and verify it
+against the manifest before execution:
+
+```bash
+cargo xtool models resolve ci/model-artifacts/manifests/product-smoke.json \
+  --cadence pull-request --artifact-id smollm2-q8-inference \
+  --require-single-file --verify-root "$HOME/.models"
+
+MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR="$PWD/target/debug/native-runtimes" \
+cargo test -p mesh-llm --test native_hot_load_live -- --ignored --nocapture
+```
+
+The test defaults to the manifest's filename under `$HOME/.models`. Set
+`MESH_LLM_HOT_LOAD_TEST_GGUF` to an absolute path if the same restored fixture
+lives elsewhere; the test rejects a file whose size differs from the shared
+fixture and checks its GGUF header. The restore/verification step owns digest
+validation. The test selects
+CPU execution, disables relays, and uses strict local model resolution with
+prefetch disabled. It verifies an initially empty runtime, token generation on
+the first HTTP request, idle removal of the native instance, closure of its
+backend port, preservation of the disk weights, and generation through a new
+instance on the second request while the original Mesh process remains alive.
+
+Ordinary package tests compile this test but leave it ignored because runtime
+and weight assets are external prerequisites. Explicit execution fails if the
+GGUF, runtime, generation or lifecycle checks are unavailable or incorrect;
+missing prerequisites never count as a live pass. Startup/state waits and
+inference requests have deadlines, and the child process is reaped on success
+or failure. Child logs are included in startup, state and generation failures.
 
 ## Deploy to remote node
 

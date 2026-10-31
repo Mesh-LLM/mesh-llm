@@ -39,9 +39,10 @@ pub use validation::{
     MAX_VERIFY_WINDOW_RUNAHEAD_TOKENS, SCHEMA_VERSION, STAGE_ALPN_V2, STAGE_PROTOCOL_GENERATION,
     STAGE_STREAM_ARTIFACT_TRANSFER, STAGE_STREAM_CONTROL, STAGE_STREAM_TRANSPORT,
     STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER, STAGE_SUBPROTOCOL_FEATURE_DECODE_BATCH_POLICY_V1,
-    STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1, STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
+    STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
+    STAGE_SUBPROTOCOL_FEATURE_PERSISTENT_LANE_MARKER, STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
     STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION,
-    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
+    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12, STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
     STAGE_SUBPROTOCOL_MAJOR, STAGE_SUBPROTOCOL_NAME, StageFrameError,
     validate_stage_admission_descriptor, validate_stage_artifact_transfer_request,
     validate_stage_artifact_transfer_response, validate_stage_control_request,
@@ -273,17 +274,18 @@ mod tests {
         );
     }
     use super::{
-        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11,
+        STAGE_PROTOCOL_GENERATION, STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12,
         StageFrameError, validate_stage_admission_descriptor,
         validate_stage_artifact_transfer_request, validate_stage_artifact_transfer_response,
         validate_stage_control_request, validate_stage_control_response,
         validate_stage_transport_open,
     };
 
+    /// The advertised stage capability names the exact current protocol generation.
     #[test]
     fn stage_protocol_generation_feature_names_current_generation() {
         assert_eq!(
-            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V11,
+            STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12,
             format!("stage-generation-{STAGE_PROTOCOL_GENERATION}")
         );
     }

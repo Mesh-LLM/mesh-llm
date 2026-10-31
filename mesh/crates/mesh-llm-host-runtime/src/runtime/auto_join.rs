@@ -22,14 +22,18 @@ pub(super) async fn maybe_discover_join_candidates(
     // a file is still a configured token, and discovery must not run over it.
     let effective_join_tokens = options.effective_join_tokens();
     let discover_active = options.auto || options.discover.is_some();
-    if !discover_active || !effective_join_tokens.is_empty() {
-        return Ok(None);
-    }
 
+    // `--discover <name>` names the mesh even when a join token, not
+    // discovery, picks it: `/api/status` and the Nostr or LAN rediscovery
+    // that follows a token join both read this name.
     if let Some(name) = options.discover.as_ref().filter(|name| !name.is_empty())
         && options.mesh_name.is_none()
     {
         options.mesh_name = Some(name.clone());
+    }
+
+    if !discover_active || !effective_join_tokens.is_empty() {
+        return Ok(None);
     }
 
     // Plan the model a new mesh starts with on what this node can hold without
@@ -236,13 +240,13 @@ pub fn console_session_mode_for_runtime_surface(
 }
 
 pub(super) fn initial_console_session_mode_for_surface(
-    explicit_surface: Option<RuntimeSurface>,
+    _explicit_surface: Option<RuntimeSurface>,
     current_mode: ConsoleSessionMode,
 ) -> ConsoleSessionMode {
-    match explicit_surface {
-        Some(RuntimeSurface::Serve | RuntimeSurface::Client) => current_mode,
-        _ => ConsoleSessionMode::None,
-    }
+    // Bare runtime flags (`--auto`, `--model`, `--client`, ...) are
+    // compatibility spellings, not a request to disable the dashboard.
+    // One-shot commands and no-argument help return before this point.
+    current_mode
 }
 
 /// Pick which model this node should serve.
@@ -555,6 +559,7 @@ pub(super) async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, nod
         // private-mesh service retried a dead credential for days with nothing
         // an operator would see.
         let mut last_failure: Option<String> = None;
+        let mut own_token_noticed = false;
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(60)).await;
             // Re-resolve file-backed tokens on every tick so a rotated invite
@@ -563,6 +568,25 @@ pub(super) async fn spawn_run_auto_post_join_tasks(options: &RuntimeOptions, nod
                 resolve_rejoin_tokens(&rejoin_tokens, &rejoin_join_files, rejoin_config.as_deref());
             let mut join_failure: Option<String> = None;
             for t in &tokens {
+                // A token that names this node's own identity can never join
+                // (a node cannot join itself) — e.g. one join file pushed to
+                // every node in the mesh. Skip it, with one notice, instead
+                // of retrying it forever at error level (issue #2352).
+                if rejoin_node.invite_token_names_own_identity(t) {
+                    if !own_token_noticed {
+                        let message = "invite token names this node's own identity — \
+                            rejoin will not join it (it is this node's own invite token; a \
+                            node cannot join itself)"
+                            .to_string();
+                        tracing::info!("{message}");
+                        let _ = emit_event(OutputEvent::Warning {
+                            message,
+                            context: None,
+                        });
+                        own_token_noticed = true;
+                    }
+                    continue;
+                }
                 if let Err(e) = rejoin_node.join(t).await {
                     join_failure = Some(format!("Rejoin failed: {e}"));
                 }

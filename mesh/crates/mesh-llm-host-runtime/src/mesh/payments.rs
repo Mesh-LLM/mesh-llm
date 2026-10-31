@@ -9,6 +9,17 @@ impl super::Node {
         let state = self.state.lock().await;
         peer_offer_for_model(state.peers.get(&peer)?, model).cloned()
     }
+
+    /// Whether this node can pay `peer`: it advertises no prices, or sells
+    /// them over the payment protocol this node speaks. A paid peer on an
+    /// older or unknown protocol must not get paid traffic, and is not free.
+    pub(crate) async fn peer_offers_payable(&self, peer: iroh::EndpointId) -> bool {
+        let state = self.state.lock().await;
+        state
+            .peers
+            .get(&peer)
+            .is_some_and(|peer| peer.lightning_offers.payable())
+    }
 }
 
 /// The price a peer advertises for `model`, as routing reads it.

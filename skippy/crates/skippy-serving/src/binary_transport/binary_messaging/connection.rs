@@ -34,6 +34,7 @@ use crate::binary_transport::direct_return::PredictionReturnSinks;
 use crate::binary_transport::forwarded_stage_message_timed;
 use crate::binary_transport::kv_eviction::binary_proactive_eviction_plan;
 use crate::binary_transport::kv_eviction::evict_binary_resident_prefix_for_decode;
+use crate::binary_transport::native_mtp_reply::split_native_mtp_reply;
 use crate::binary_transport::peer_sampling::runtime_sampling_config;
 use crate::binary_transport::prefill_execution::{
     executable_prefill_start, suffix_activation_frame,
@@ -46,7 +47,6 @@ use crate::binary_transport::stage_execution::elapsed_ms;
 use crate::binary_transport::stage_execution::empty_activation_frame;
 use crate::binary_transport::stage_execution::input_activation_frame;
 use crate::binary_transport::stage_execution::nanos_delta_ms;
-use crate::binary_transport::stage_execution::split_native_mtp_reply;
 use crate::binary_transport::stage_execution::stage_mask;
 use crate::binary_transport::stage_execution::token_sideband_or_fill;
 use crate::binary_transport::stage_execution::{
@@ -131,6 +131,7 @@ pub(super) fn handle_binary_connection(
     combine_connection_and_cleanup_results(result, cleanup_result)
 }
 
+/// Process one stage connection's control and execution messages with session cleanup.
 #[allow(clippy::too_many_arguments)]
 fn handle_binary_connection_messages(
     config: &StageConfig,
@@ -207,7 +208,7 @@ fn handle_binary_connection_messages(
         let message_started = Instant::now();
         let session_id = binary_message_session_id(connection_session_id, &message);
         let session_key = session_id.to_string();
-        session_tracker.touch(&session_key);
+        session_tracker.touch(&session_key)?;
         emit_binary_message_received(
             telemetry,
             config,
@@ -334,6 +335,34 @@ fn handle_binary_connection_messages(
             continue;
         }
 
+        if message.kind == WireMessageKind::PrefillReadout {
+            if let Some(forwarder) = async_forwarder.as_mut() {
+                forwarder.flush()?;
+            }
+            super::reply::drain_deferred_prefill_replies(
+                downstream.as_mut(),
+                &mut pending_prefill_replies,
+                &mut pending_reply_stats,
+            )?;
+            let reply = super::readout::ReadoutStage {
+                config,
+                topology,
+                scheduler: iteration_scheduler,
+                downstream: downstream.as_mut(),
+                wire_condition: downstream_wire_condition,
+                activation_width: output_activation_width,
+                kv,
+                telemetry,
+            }
+            .execute(
+                &mut message,
+                &session_key,
+                std::mem::take(&mut pending_reply_stats),
+            )?;
+            send_stage_reply(upstream, reply)?;
+            continue;
+        }
+
         if message.kind == WireMessageKind::StateImport {
             bail!("binary state import is no longer supported by the skippy runtime ABI");
         }
@@ -361,6 +390,7 @@ fn handle_binary_connection_messages(
                 kind: WireReplyKind::PredictedTokens,
                 predicted: message.state.current_token,
                 predicted_tokens: Vec::new(),
+                log_probabilities: Vec::new(),
                 native_mtp_draft: None,
                 window: reply_window_for_message(&message),
                 stats: StageReplyStats::default(),
@@ -1095,6 +1125,7 @@ fn handle_binary_connection_messages(
                 predicted: predicted_token,
                 predicted_tokens,
                 native_mtp_draft,
+                log_probabilities: Vec::new(),
                 window: reply_window,
                 stats: message_reply_stats,
             };

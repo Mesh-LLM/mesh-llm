@@ -1,42 +1,30 @@
 mod affected_crates;
+mod bundled_plugins;
 pub(crate) mod cargo_packages;
 mod cargo_projection;
 pub(crate) mod check_args;
 pub(crate) mod check_report;
-mod conventional_commit;
 mod docker_precheck;
 mod env_census;
 mod publish_order;
 pub(crate) mod publish_roster;
 mod selected_ref;
 pub(crate) mod text;
-mod upstream_pin;
 mod upstream_release;
 
 use crate::cli::RepositoryCheck;
 use crate::command::DynResult;
-use std::path::{Path, PathBuf};
+use ci_controller::repository::{CheckRoots, conventional_commit, upstream_pin};
 
-/// Runs a ported check. `--repo-root` (when given) replaces the working
-/// directory for Cargo/git discovery and the default checkout for the
-/// Python-derived checks; otherwise they resolve the checkout lazily, only
-/// when their own `--root`/`--repository` is absent.
+/// Runs a ported check with the shared `CheckRoots` discovery semantics.
 pub(crate) fn run_check(
     check: RepositoryCheck,
     args: &[String],
     explicit_root: Option<RepositoryRoot>,
 ) -> DynResult<()> {
-    let cwd = match &explicit_root {
-        Some(root) => root.as_path().to_path_buf(),
-        None => std::env::current_dir()?,
-    };
-    let default_root = move || -> DynResult<PathBuf> {
-        let root = match explicit_root {
-            Some(root) => root,
-            None => RepositoryRoot::resolve(None)?,
-        };
-        Ok(root.0)
-    };
+    let roots = CheckRoots::new(explicit_root)?;
+    let cwd = roots.cwd().to_path_buf();
+    let default_root = roots.default_root();
     match check {
         RepositoryCheck::CargoTargetDirectory => cargo_projection::run(args),
         RepositoryCheck::PublishOrder => publish_order::run(args),
@@ -48,40 +36,9 @@ pub(crate) fn run_check(
         RepositoryCheck::LlamaUpstreamRelease => upstream_release::run(args),
         RepositoryCheck::SelectedRef => selected_ref::run(args, default_root),
         RepositoryCheck::DockerPrecheck => docker_precheck::run(args, default_root),
+        RepositoryCheck::BundledPlugins => bundled_plugins::list(args, default_root),
+        RepositoryCheck::BundledPluginsCheck => bundled_plugins::bundle_check(args),
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct RepositoryRoot(PathBuf);
-
-impl RepositoryRoot {
-    pub(crate) fn resolve(explicit: Option<&Path>) -> DynResult<Self> {
-        let start = match explicit {
-            Some(path) => path
-                .canonicalize()
-                .map_err(|error| format!("invalid repo root {}: {error}", path.display()))?,
-            None => std::env::current_dir()?,
-        };
-        let root = match explicit {
-            Some(_) => Some(start.as_path()),
-            None => start.ancestors().find(|path| Self::has_markers(path)),
-        }
-        .ok_or_else(|| format!("could not find repo root from {}", start.display()))?;
-        if !Self::has_markers(root) {
-            return Err(format!(
-                "invalid repo root {}: missing workspace markers",
-                root.display()
-            )
-            .into());
-        }
-        Ok(Self(root.to_path_buf()))
-    }
-
-    fn has_markers(path: &Path) -> bool {
-        path.join("Cargo.toml").is_file() && path.join("tools/xtask/Cargo.toml").is_file()
-    }
-
-    pub(crate) fn as_path(&self) -> &Path {
-        &self.0
-    }
-}
+pub(crate) use ci_controller::repository::RepositoryRoot;

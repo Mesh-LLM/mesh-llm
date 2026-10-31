@@ -73,6 +73,7 @@ impl LiveHost {
             install_root: root.path().join("installed"),
             catalog_url: "unused".into(),
             target: PluginTarget::current().unwrap(),
+            bundled_plugins_dir: None,
         };
         let installed = mesh_llm_plugin_manager::install::install_plugin_archive(
             NAME,
@@ -676,6 +677,7 @@ fn fixture_spec(
         command: installed.executable_path().display().to_string(),
         args,
         url: None,
+        settings: Default::default(),
         startup: Default::default(),
         web_ui_enabled: None,
         web_ui_primary_tab: None,

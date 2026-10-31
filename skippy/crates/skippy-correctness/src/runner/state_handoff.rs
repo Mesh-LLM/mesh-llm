@@ -1692,6 +1692,7 @@ fn synthetic_activation_frame(
     }
 }
 
+/// Prefill the source session before exporting its state for the handoff proof.
 fn send_prefill_for_state_handoff(
     stream: &mut std::net::TcpStream,
     tokens: &[i32],
@@ -1719,6 +1720,7 @@ fn send_prefill_for_state_handoff(
         session_id: 1,
         sampling: None,
         chat_sampling_metadata: None,
+        readout_tokens: Vec::new(),
         tokens: tokens.to_vec(),
         positions: Vec::new(),
         activation,
@@ -1732,6 +1734,7 @@ fn send_prefill_for_state_handoff(
     Ok(())
 }
 
+/// Export a session's state through the binary transport for a handoff fixture.
 fn export_state_over_binary(
     stream: &mut std::net::TcpStream,
     activation_width: i32,
@@ -1750,6 +1753,7 @@ fn export_state_over_binary(
         session_id: 1,
         sampling: None,
         chat_sampling_metadata: None,
+        readout_tokens: Vec::new(),
         tokens: Vec::new(),
         positions: Vec::new(),
         activation: Vec::new(),
@@ -1767,6 +1771,7 @@ fn export_state_over_binary(
     Ok(reply.raw_bytes)
 }
 
+/// Import previously exported bytes into the destination session.
 fn import_state_over_binary(
     stream: &mut std::net::TcpStream,
     state_bytes: &[u8],
@@ -1786,6 +1791,7 @@ fn import_state_over_binary(
         session_id: 1,
         sampling: None,
         chat_sampling_metadata: None,
+        readout_tokens: Vec::new(),
         tokens: Vec::new(),
         positions: Vec::new(),
         activation: Vec::new(),
@@ -1799,6 +1805,7 @@ fn import_state_over_binary(
     Ok(())
 }
 
+/// Decode after state handoff using the preserved session position.
 fn decode_for_state_handoff(
     stream: &mut std::net::TcpStream,
     token_id: i32,
@@ -1823,6 +1830,7 @@ fn decode_for_state_handoff(
         session_id: 1,
         sampling: None,
         chat_sampling_metadata: None,
+        readout_tokens: Vec::new(),
         tokens: vec![token_id],
         positions: Vec::new(),
         activation,

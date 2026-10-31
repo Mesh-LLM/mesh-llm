@@ -1,46 +1,48 @@
-From 15c4d79953466704e2162634c4b2b97843f875c7 Mon Sep 17 00:00:00 2001
+From bc711264ee6c876c9a73ab7ebe02e8732eb76285 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 5/6] build(skippy): wire native runtime and backend support
+Subject: [PATCH] build(skippy): wire native runtime and backend support
 
 ---
  CMakeLists.txt                             |  17 +
- common/CMakeLists.txt                      |   3 +-
+ common/CMakeLists.txt                      |  40 +-
  common/chat-auto-parser-generator.cpp      |  51 +-
  common/chat-diff-analyzer.cpp              |  10 +-
  common/chat-peg-parser.cpp                 |  15 +-
  common/chat-peg-parser.h                   |   2 +-
- common/chat.cpp                            | 126 ++++-
+ common/chat.cpp                            | 126 +++-
  common/chat.h                              |   5 +-
- common/ngram-cache.cpp                     | 158 +++++-
+ common/ngram-cache.cpp                     | 158 ++++-
+ common/peg-parser.cpp                      | 337 ++++++++++
+ common/peg-parser.h                        |   8 +
  common/reasoning-budget.cpp                | 119 ++--
  common/reasoning-budget.h                  |  16 +-
- common/stage-chat.cpp                      | 368 ++++++++++++
+ common/stage-chat.cpp                      | 363 +++++++++++
  ggml/cmake/common.cmake                    |   9 +-
  ggml/include/ggml-backend.h                |  27 +
  ggml/src/ggml-backend.cpp                  |  25 +-
- ggml/src/ggml-cuda/cachegen.cu             | 223 ++++++++
+ ggml/src/ggml-cuda/cachegen.cu             | 223 +++++++
  ggml/src/ggml-cuda/cachegen.cuh            |  27 +
- ggml/src/ggml-cuda/ggml-cuda.cu            | 344 +++++++++++-
+ ggml/src/ggml-cuda/ggml-cuda.cu            | 344 ++++++++++-
  ggml/src/ggml-cuda/vendors/hip.h           |   1 +
  ggml/src/ggml-metal/CMakeLists.txt         |   1 +
  ggml/src/ggml-metal/ggml-metal-device.h    |   7 +
- ggml/src/ggml-metal/ggml-metal-device.m    | 452 ++++++++++++++-
+ ggml/src/ggml-metal/ggml-metal-device.m    | 452 +++++++++++++-
  ggml/src/ggml-metal/ggml-metal-impl.h      |  34 +-
  ggml/src/ggml-metal/ggml-metal.cpp         |   3 +
- ggml/src/ggml-metal/kernels/cachegen.metal | 195 +++++++
- src/CMakeLists.txt                         | 620 ++++++++++++++++++++-
+ ggml/src/ggml-metal/kernels/cachegen.metal | 195 ++++++
+ src/CMakeLists.txt                         | 680 ++++++++++++++++++++-
  tools/mtmd/mtmd-audio.cpp                  |   2 +
- tools/mtmd/mtmd-helper.cpp                 |  36 +-
+ tools/mtmd/mtmd-helper.cpp                 |  35 +-
  tools/mtmd/mtmd-helper.h                   |  16 +
- 29 files changed, 2785 insertions(+), 127 deletions(-)
+ 31 files changed, 3184 insertions(+), 164 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 ggml/src/ggml-cuda/cachegen.cu
  create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
  create mode 100644 ggml/src/ggml-metal/kernels/cachegen.metal
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 8a874c96e..beb8af2a7 100644
+index 12f45558f..3edaa3e74 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -2,6 +2,18 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit
@@ -61,7 +63,7 @@ index 8a874c96e..beb8af2a7 100644
 +
  ### llama.cpp version
  set(LLAMA_VERSION_MAJOR 0)
- set(LLAMA_VERSION_MINOR 5)
+ set(LLAMA_VERSION_MINOR 7)
 @@ -281,6 +293,7 @@ set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location o
  
  set(LLAMA_PUBLIC_HEADERS
@@ -82,22 +84,34 @@ index 8a874c96e..beb8af2a7 100644
  if (LLAMA_BUILD_COMMON)
      install(TARGETS llama-common LIBRARY)
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
-index 2b307c59d..650e14517 100644
+index 2b307c59d..7e6b889ee 100644
 --- a/common/CMakeLists.txt
 +++ b/common/CMakeLists.txt
-@@ -101,10 +101,10 @@ add_library(${TARGET}
+@@ -86,10 +86,7 @@ add_library(${TARGET}
+     json-schema-to-grammar.cpp
+     json-schema.cpp
+     json-schema.h
+-    json.cpp
+     json.h
+-    llguidance.cpp
+-    log.cpp
+     log.h
+     ngram-cache.cpp
+     ngram-cache.h
+@@ -101,10 +98,10 @@ add_library(${TARGET}
      peg-parser.h
      preset.cpp
      preset.h
 -    reasoning-budget.cpp
      reasoning-budget.h
-     sampling.cpp
+-    sampling.cpp
      sampling.h
++    sampling-report.cpp
 +    stage-chat.cpp
      speculative.cpp
      speculative.h
      subproc.cpp
-@@ -143,6 +143,7 @@ endif()
+@@ -143,6 +140,7 @@ endif()
  
  if (BUILD_SHARED_LIBS)
      set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -105,8 +119,45 @@ index 2b307c59d..650e14517 100644
  
      # TODO: make fine-grained exports in the future
      set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
+@@ -151,36 +149,4 @@ endif()
+ target_link_libraries(${TARGET} PUBLIC  llama-common-base)
+ target_link_libraries(${TARGET} PRIVATE cpp-httplib)
+ 
+-if (LLAMA_LLGUIDANCE)
+-    include(ExternalProject)
+-    set(LLGUIDANCE_SRC ${CMAKE_BINARY_DIR}/llguidance/source)
+-    set(LLGUIDANCE_PATH ${LLGUIDANCE_SRC}/target/release)
+-    set(LLGUIDANCE_LIB_NAME "${CMAKE_STATIC_LIBRARY_PREFIX}llguidance${CMAKE_STATIC_LIBRARY_SUFFIX}")
+-
+-    ExternalProject_Add(llguidance_ext
+-        GIT_REPOSITORY https://github.com/guidance-ai/llguidance
+-        # v1.0.1:
+-        GIT_TAG d795912fedc7d393de740177ea9ea761e7905774
+-        PREFIX ${CMAKE_BINARY_DIR}/llguidance
+-        SOURCE_DIR ${LLGUIDANCE_SRC}
+-        BUILD_IN_SOURCE TRUE
+-        CONFIGURE_COMMAND ""
+-        BUILD_COMMAND cargo build --release --package llguidance
+-        INSTALL_COMMAND ""
+-        BUILD_BYPRODUCTS ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME} ${LLGUIDANCE_PATH}/llguidance.h
+-        UPDATE_COMMAND ""
+-    )
+-    target_compile_definitions(${TARGET} PUBLIC LLAMA_USE_LLGUIDANCE)
+-
+-    add_library(llguidance STATIC IMPORTED)
+-    set_target_properties(llguidance PROPERTIES IMPORTED_LOCATION ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME})
+-    add_dependencies(llguidance llguidance_ext)
+-
+-    target_include_directories(${TARGET} PRIVATE ${LLGUIDANCE_PATH})
+-    target_link_libraries(${TARGET} PRIVATE llguidance)
+-    if (WIN32)
+-        target_link_libraries(${TARGET} PRIVATE ws2_32 userenv ntdll bcrypt)
+-    endif()
+-endif()
+-
+ target_link_libraries(${TARGET} PUBLIC llama Threads::Threads)
 diff --git a/common/chat-auto-parser-generator.cpp b/common/chat-auto-parser-generator.cpp
-index b78789d8c..0fca78375 100644
+index 9b918b366..fbb39cb3a 100644
 --- a/common/chat-auto-parser-generator.cpp
 +++ b/common/chat-auto-parser-generator.cpp
 @@ -13,6 +13,18 @@
@@ -128,7 +179,7 @@ index b78789d8c..0fca78375 100644
  namespace autoparser {
  
  parser_build_context::parser_build_context(common_chat_peg_builder & p, const generation_params & inputs) :
-@@ -84,7 +96,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &
+@@ -83,7 +95,7 @@ common_chat_params peg_generator::generate_parser(const common_chat_template &
          // Set grammar triggers based on tool section markers (fall back to per-call markers)
          if (data.grammar_lazy) {
              data.grammar_triggers = {
@@ -137,7 +188,7 @@ index b78789d8c..0fca78375 100644
              };
              if (autoparser.tools.format.openai_wrapper_trigger) {
                  // model emits the OpenAI function wrapper, trigger on it
-@@ -368,7 +380,9 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
+@@ -367,7 +379,9 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
          const auto & func = tool.at("function");
          std::string  name = func.at("name");
  
@@ -147,8 +198,8 @@ index b78789d8c..0fca78375 100644
 +        // presence structurally instead of validating after the fact.
          std::vector<common_peg_parser> required_parsers;
          std::vector<common_peg_parser> optional_parsers;
-         foreach_parameter(func, [&](const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
-@@ -391,22 +405,33 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
+         foreach_parameter(func, [&](size_t param_index, const common_chat_schema_property & param, const common_chat_schema_document_ptr & doc) {
+@@ -390,22 +404,33 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
              }
          });
  
@@ -235,7 +286,7 @@ index a7e370578..39ffa20f1 100644
  
      template_params params_content_only;
 diff --git a/common/chat-peg-parser.cpp b/common/chat-peg-parser.cpp
-index f82797495..6971cf5b0 100644
+index 74b81dcdd..ec9836787 100644
 --- a/common/chat-peg-parser.cpp
 +++ b/common/chat-peg-parser.cpp
 @@ -386,11 +386,12 @@ void common_chat_peg_mapper::map(const common_peg_ast_node & node) {
@@ -252,29 +303,29 @@ index f82797495..6971cf5b0 100644
          ++arg_count;
  
          auto & target = args_target();
-@@ -667,10 +668,10 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
+@@ -672,10 +673,10 @@ common_peg_parser common_chat_peg_builder::build_json_tools_function_is_key(
          // Arguments — either wrapped in args_key or parsed directly
          common_peg_parser args_parser = eps();
          if (args_key.empty()) {
--            args_parser = tool_args(schema(json(), "tool-" + name + "-schema", params));
-+            args_parser = tool_args(schema(json_object(), "tool-" + name + "-schema", params));
+-            args_parser = tool_args(schema(json(), "tool-" + std::to_string(i) + "-schema", params));
++            args_parser = tool_args(schema(json_object(), "tool-" + std::to_string(i) + "-schema", params));
          } else {
              args_parser = literal("\"" + effective_args_key + "\"") + space() + literal(":") + space() +
--                          tool_args(schema(json(), "tool-" + name + "-schema", params));
-+                          tool_args(schema(json_object(), "tool-" + name + "-schema", params));
+-                          tool_args(schema(json(), "tool-" + std::to_string(i) + "-schema", params));
++                          tool_args(schema(json_object(), "tool-" + std::to_string(i) + "-schema", params));
          }
          inner_fields.push_back(args_parser);
  
-@@ -731,7 +732,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
+@@ -737,7 +738,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_nested_keys(
          auto nested_name = literal("\"" + nested_name_field + "\"") + space() + literal(":") + space() +
                            atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
          auto nested_args = literal("\"" + nested_args_field + "\"") + space() + literal(":") + space() +
--                          tool_args(schema(json(), "tool-" + name + "-schema", params));
-+                          tool_args(schema(json_object(), "tool-" + name + "-schema", params));
+-                          tool_args(schema(json(), "tool-" + std::to_string(i) + "-schema", params));
++                          tool_args(schema(json_object(), "tool-" + std::to_string(i) + "-schema", params));
  
          auto nested_object = literal("{") + space() +
                              nested_name + space() + literal(",") + space() +
-@@ -787,7 +788,9 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
+@@ -793,7 +794,9 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
  
      auto tool_choices    = choice();
      auto name_key_parser = literal("\"" + effective_name_key + "\"");
@@ -283,14 +334,14 @@ index f82797495..6971cf5b0 100644
 +                               ? choice({ literal("\"arguments\""), literal("\"args\"") })
 +                               : literal("\"" + effective_args_key + "\"");
  
-     for (const auto & tool_def : tools) {
-         if (!tool_def.contains("function")) {
-@@ -800,7 +803,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
+     for (size_t i = 0; i < tools.size(); i++) {
+         const auto & tool_def = tools[i];
+@@ -807,7 +810,7 @@ common_peg_parser common_chat_peg_builder::build_json_tools_flat_keys(
          auto tool_name_ = name_key_parser + space() + literal(":") + space() +
                           atomic(literal("\"") + tool_name(literal(name)) + literal("\""));
          auto tool_args_ = args_key_parser + space() + literal(":") + space() +
--                         tool_args(schema(json(), "tool-" + name + "-schema", params));
-+                         tool_args(schema(json_object(), "tool-" + name + "-schema", params));
+-                         tool_args(schema(json(), "tool-" + std::to_string(i) + "-schema", params));
++                         tool_args(schema(json_object(), "tool-" + std::to_string(i) + "-schema", params));
  
          // Build ID parsers if keys are provided
          common_peg_parser id_parser = eps();
@@ -315,10 +366,10 @@ index 114fa049f..7723d4e35 100644
      common_peg_parser permute(const std::string & rule_prefix, const std::vector<common_peg_parser> & parsers);
  
 diff --git a/common/chat.cpp b/common/chat.cpp
-index ed1942e15..49e1f53a0 100644
+index 485671308..287d92bc2 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
-@@ -227,6 +227,11 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
+@@ -196,6 +196,11 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
                  });
              }
          }
@@ -330,7 +381,7 @@ index ed1942e15..49e1f53a0 100644
      } else {
          jmsg["content"] = "";
      }
-@@ -391,6 +396,7 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
+@@ -360,6 +365,7 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
  
              auto has_content    = message.contains("content");
              auto has_tool_calls = message.contains("tool_calls");
@@ -338,7 +389,7 @@ index ed1942e15..49e1f53a0 100644
              if (has_content) {
                  const auto & content = message.at("content");
                  if (content.is_string()) {
-@@ -409,7 +415,9 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
+@@ -378,7 +384,9 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                          msg_part.text = part.at("text");
                          msg.content_parts.push_back(msg_part);
                      }
@@ -349,7 +400,7 @@ index ed1942e15..49e1f53a0 100644
                      throw std::invalid_argument("Invalid 'content' type: expected string or array, got " +
                                                  content.dump() +
                                                  " (ref: https://github.com/ggml-org/llama.cpp/issues/8367)");
-@@ -445,11 +453,6 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
+@@ -414,11 +422,6 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                      msg.tool_calls.push_back(tc);
                  }
              }
@@ -361,7 +412,7 @@ index ed1942e15..49e1f53a0 100644
              if (message.contains("reasoning_content")) {
                  msg.reasoning_content = message.at("reasoning_content");
              }
-@@ -720,6 +723,113 @@ std::string common_chat_format_example(const struct common_chat_templates *
+@@ -692,6 +695,113 @@ std::string common_chat_format_example(const struct common_chat_templates *
      "  {{- '<|im_start|>assistant\n' -}}\n"                                               \
      "{%- endif -%}"
  
@@ -475,7 +526,7 @@ index ed1942e15..49e1f53a0 100644
  void common_chat_templates_free(struct common_chat_templates * tmpls) {
      delete tmpls;
  }
-@@ -777,6 +887,10 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model *
+@@ -749,6 +859,10 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model *
      } else {
          default_template_src = chat_template_override;
      }
@@ -487,10 +538,10 @@ index ed1942e15..49e1f53a0 100644
          if (!template_tool_use_src.empty()) {
              default_template_src = template_tool_use_src;
 diff --git a/common/chat.h b/common/chat.h
-index 0e1423a5a..71c803597 100644
+index dcff94919..02df091df 100644
 --- a/common/chat.h
 +++ b/common/chat.h
-@@ -85,6 +85,8 @@ struct common_chat_msg {
+@@ -94,6 +94,8 @@ struct common_chat_msg {
      std::string                               reasoning_content;
      std::string                               tool_name;
      std::string                               tool_call_id;
@@ -499,7 +550,7 @@ index 0e1423a5a..71c803597 100644
  
      common_json to_json_oaicompat(bool concat_typed_text = false) const;
  
-@@ -121,7 +123,8 @@ struct common_chat_msg {
+@@ -130,7 +132,8 @@ struct common_chat_msg {
      bool operator==(const common_chat_msg & other) const {
          return role == other.role && content == other.content && content_parts == other.content_parts &&
                 tool_calls == other.tool_calls && reasoning_content == other.reasoning_content &&
@@ -716,6 +767,373 @@ index dce54b364..6d97b2dd8 100644
          }
          if (drafted_token == LLAMA_TOKEN_NULL) {
              drafted_token = try_draft(nc_static, ngram_static);
+diff --git a/common/peg-parser.cpp b/common/peg-parser.cpp
+index 8033f7e81..04242b919 100644
+--- a/common/peg-parser.cpp
++++ b/common/peg-parser.cpp
+@@ -1814,6 +1814,343 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
+     }
+ }
+ 
++
++static common_json serialize_parser_variant(const common_peg_parser_variant & variant) {
++    using json = common_json;
++
++    return std::visit([](const auto & p) -> json {
++        using T = std::decay_t<decltype(p)>;
++
++        if constexpr (std::is_same_v<T, common_peg_epsilon_parser>) {
++            return json{{"type", "epsilon"}};
++        } else if constexpr (std::is_same_v<T, common_peg_start_parser>) {
++            return json{{"type", "start"}};
++        } else if constexpr (std::is_same_v<T, common_peg_end_parser>) {
++            return json{{"type", "end"}};
++        } else if constexpr (std::is_same_v<T, common_peg_literal_parser>) {
++            return json{{"type", "literal"}, {"literal", p.literal}};
++        } else if constexpr (std::is_same_v<T, common_peg_sequence_parser>) {
++            return json{{"type", "sequence"}, {"children", p.children}};
++        } else if constexpr (std::is_same_v<T, common_peg_choice_parser>) {
++            return json{{"type", "choice"}, {"children", p.children}};
++        } else if constexpr (std::is_same_v<T, common_peg_repetition_parser>) {
++            return json{
++                {"type", "repetition"},
++                {"child", p.child},
++                {"min_count", p.min_count},
++                {"max_count", p.max_count}
++            };
++        } else if constexpr (std::is_same_v<T, common_peg_and_parser>) {
++            return json{{"type", "and"}, {"child", p.child}};
++        } else if constexpr (std::is_same_v<T, common_peg_not_parser>) {
++            return json{{"type", "not"}, {"child", p.child}};
++        } else if constexpr (std::is_same_v<T, common_peg_any_parser>) {
++            return json{{"type", "any"}};
++        } else if constexpr (std::is_same_v<T, common_peg_space_parser>) {
++            return json{{"type", "space"}};
++        } else if constexpr (std::is_same_v<T, common_peg_chars_parser>) {
++            json ranges = json::array();
++            for (const auto & range : p.ranges) {
++                ranges.push_back({{"start", range.start}, {"end", range.end}});
++            }
++            return json{
++                {"type", "chars"},
++                {"pattern", p.pattern},
++                {"ranges", ranges},
++                {"negated", p.negated},
++                {"min_count", p.min_count},
++                {"max_count", p.max_count}
++            };
++        } else if constexpr (std::is_same_v<T, common_peg_string_parser>) {
++            return json{{"type", "string"}, {"delimiter", std::string(1, p.delimiter)}};
++        } else if constexpr (std::is_same_v<T, common_peg_until_parser>) {
++            return json{{"type", "until"}, {"delimiters", p.delimiters}};
++        } else if constexpr (std::is_same_v<T, common_peg_schema_parser>) {
++            return json{
++                {"type", "schema"},
++                {"child", p.child},
++                {"name", p.name},
++                {"raw", p.raw}
++            };
++        } else if constexpr (std::is_same_v<T, common_peg_rule_parser>) {
++            return json{
++                {"type", "rule"},
++                {"name", p.name},
++                {"child", p.child},
++                {"trigger", p.trigger}
++            };
++        } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
++            return json{{"type", "ref"}, {"name", p.name}};
++        } else if constexpr (std::is_same_v<T, common_peg_atomic_parser>) {
++            return json{{"type", "atomic"}, {"child", p.child}};
++        } else if constexpr (std::is_same_v<T, common_peg_tag_parser>) {
++            return json{
++                {"type", "tag"},
++                {"child", p.child},
++                {"tag", p.tag}
++            };
++        } else if constexpr (std::is_same_v<T, common_peg_gbnf_parser>) {
++            return json{{"type", "gbnf"}, {"child", p.child}, {"grammar", p.grammar}};
++        } else if constexpr (std::is_same_v<T, common_peg_ac_parser>) {
++            return json{{"type", "ac"}, {"child", p.child}, {"delimiters", p.delimiters}};
++        }
++    }, variant);
++}
++
++common_json common_peg_arena::to_json() const {
++    auto parsers = common_json::array();
++    for (const auto & parser : parsers_) {
++        parsers.push_back(serialize_parser_variant(parser));
++    }
++    return common_json{
++        {"parsers", parsers},
++        {"rules", rules_},
++        {"root", root_}
++    };
++}
++
++static common_peg_parser_variant deserialize_parser_variant(const common_json & j) {
++    if (!j.contains("type") || !j["type"].is_string()) {
++        throw std::runtime_error("Parser variant JSON missing or invalid 'type' field");
++    }
++
++    std::string type = j["type"];
++
++    if (type == "epsilon") {
++        return common_peg_epsilon_parser{};
++    }
++    if (type == "start") {
++        return common_peg_start_parser{};
++    }
++    if (type == "end") {
++        return common_peg_end_parser{};
++    }
++    if (type == "literal") {
++        if (!j.contains("literal") || !j["literal"].is_string()) {
++            throw std::runtime_error("literal parser missing or invalid 'literal' field");
++        }
++        return common_peg_literal_parser{j["literal"]};
++    }
++    if (type == "sequence") {
++        if (!j.contains("children") || !j["children"].is_array()) {
++            throw std::runtime_error("sequence parser missing or invalid 'children' field");
++        }
++        return common_peg_sequence_parser{j["children"].get<std::vector<common_peg_parser_id>>()};
++    }
++    if (type == "choice") {
++        if (!j.contains("children") || !j["children"].is_array()) {
++            throw std::runtime_error("choice parser missing or invalid 'children' field");
++        }
++        return common_peg_choice_parser{j["children"].get<std::vector<common_peg_parser_id>>()};
++    }
++    if (type == "repetition") {
++        if (!j.contains("child") || !j.contains("min_count") || !j.contains("max_count")) {
++            throw std::runtime_error("repetition parser missing required fields");
++        }
++        return common_peg_repetition_parser{
++            j["child"].get<common_peg_parser_id>(),
++            j["min_count"].get<int>(),
++            j["max_count"].get<int>()
++        };
++    }
++    if (type == "and") {
++        if (!j.contains("child")) {
++            throw std::runtime_error("and parser missing 'child' field");
++        }
++        return common_peg_and_parser{j["child"].get<common_peg_parser_id>()};
++    }
++    if (type == "not") {
++        if (!j.contains("child")) {
++            throw std::runtime_error("not parser missing 'child' field");
++        }
++        return common_peg_not_parser{j["child"].get<common_peg_parser_id>()};
++    }
++    if (type == "any") {
++        return common_peg_any_parser{};
++    }
++    if (type == "space") {
++        return common_peg_space_parser{};
++    }
++    if (type == "chars") {
++        if (!j.contains("pattern") || !j.contains("ranges") || !j.contains("negated") ||
++            !j.contains("min_count") || !j.contains("max_count")) {
++            throw std::runtime_error("chars parser missing required fields");
++        }
++        common_peg_chars_parser parser;
++        parser.pattern = j["pattern"];
++        parser.negated = j["negated"].get<bool>();
++        parser.min_count = j["min_count"].get<int>();
++        parser.max_count = j["max_count"].get<int>();
++        for (const auto & range_json : j["ranges"]) {
++            if (!range_json.contains("start") || !range_json.contains("end")) {
++                throw std::runtime_error("char_range missing 'start' or 'end' field");
++            }
++            parser.ranges.push_back({
++                range_json["start"].get<uint32_t>(),
++                range_json["end"].get<uint32_t>()
++            });
++        }
++        return parser;
++    }
++    if (type == "string") {
++        if (!j.contains("delimiter")) {
++            throw std::runtime_error("string parser missing delimiter field.");
++        }
++        std::string delimiter = j["delimiter"];
++        if (delimiter.empty()) {
++            throw std::runtime_error("string parser delimiter is empty.");
++        }
++        return common_peg_string_parser{delimiter[0]};
++    }
++    if (type == "until") {
++        if (!j.contains("delimiters") || !j["delimiters"].is_array()) {
++            throw std::runtime_error("until parser missing or invalid 'delimiters' field");
++        }
++        return common_peg_until_parser{j["delimiters"].get<std::vector<std::string>>()};
++    }
++    if (type == "schema") {
++        if (!j.contains("child") || !j.contains("name") || !j.contains("raw")) {
++            throw std::runtime_error("schema parser missing required fields");
++        }
++        common_peg_schema_parser parser;
++        parser.child = j["child"].get<common_peg_parser_id>();
++        parser.name = j["name"];
++        parser.raw = j["raw"].get<bool>();
++        return parser;
++    }
++    if (type == "rule") {
++        if (!j.contains("name") || !j.contains("child") || !j.contains("trigger")) {
++            throw std::runtime_error("rule parser missing required fields");
++        }
++        return common_peg_rule_parser{
++            j["name"].get<std::string>(),
++            j["child"].get<common_peg_parser_id>(),
++            j["trigger"].get<bool>()
++        };
++    }
++    if (type == "ref") {
++        if (!j.contains("name") || !j["name"].is_string()) {
++            throw std::runtime_error("ref parser missing or invalid 'name' field");
++        }
++        return common_peg_ref_parser{j["name"]};
++    }
++    if (type == "atomic") {
++        if (!j.contains("child")) {
++            throw std::runtime_error("atomic parser missing required fields");
++        }
++        return common_peg_atomic_parser{
++            j["child"].get<common_peg_parser_id>(),
++        };
++    }
++    if (type == "tag") {
++        if (!j.contains("child") || !j.contains("tag")) {
++            throw std::runtime_error("tag parser missing required fields");
++        }
++        return common_peg_tag_parser{
++            j["child"].get<common_peg_parser_id>(),
++            j["tag"].get<std::string>(),
++        };
++    }
++
++    if (type == "gbnf") {
++        if (!j.contains("child") || !j.contains("grammar")) {
++            throw std::runtime_error("gbnf parser missing required fields");
++        }
++        return common_peg_gbnf_parser{
++            j["child"].get<common_peg_parser_id>(),
++            j["grammar"].get<std::string>(),
++        };
++    }
++
++    if (type == "ac") {
++        if (!j.contains("child") || !j.contains("delimiters") || !j["delimiters"].is_array() || j["delimiters"].empty()) {
++            throw std::runtime_error("ac parser requires 'child' and a non-empty 'delimiters' array");
++        }
++        return common_peg_ac_parser{
++            j["child"].get<common_peg_parser_id>(),
++            j["delimiters"].get<std::vector<std::string>>(),
++        };
++    }
++
++    throw std::runtime_error("Unknown parser type: " + type);
++}
++
++common_peg_arena common_peg_arena::from_json(const common_json & j) {
++    if (!j.contains("parsers") || !j["parsers"].is_array()) {
++        throw std::runtime_error("JSON missing or invalid 'parsers' array");
++    }
++    if (!j.contains("rules") || !j["rules"].is_object()) {
++        throw std::runtime_error("JSON missing or invalid 'rules' object");
++    }
++    if (!j.contains("root")) {
++        throw std::runtime_error("JSON missing 'root' field");
++    }
++
++    common_peg_arena arena;
++
++    const auto & parsers_json = j["parsers"];
++    arena.parsers_.reserve(parsers_json.size());
++    for (const auto & parser_json : parsers_json) {
++        arena.parsers_.push_back(deserialize_parser_variant(parser_json));
++    }
++
++    arena.rules_ = j["rules"].get<std::unordered_map<std::string, common_peg_parser_id>>();
++
++    for (const auto & [name, id] : arena.rules_) {
++        if (id >= arena.parsers_.size()) {
++            throw std::runtime_error("Rule '" + name + "' references invalid parser ID: " + std::to_string(id));
++        }
++    }
++
++    arena.root_ = j["root"].get<common_peg_parser_id>();
++    if (arena.root_ != COMMON_PEG_INVALID_PARSER_ID && arena.root_ >= arena.parsers_.size()) {
++        throw std::runtime_error("Root references invalid parser ID: " + std::to_string(arena.root_));
++    }
++
++    // Validate every child ID stored inside parser variants and every ref target name: rule and root
++    // checks alone leave sequence/choice children and single-child variants able to hold dangling IDs.
++    const auto validate_child = [&arena](common_peg_parser_id id, const char * owner) {
++        if (id >= arena.parsers_.size()) {
++            throw std::runtime_error(std::string(owner) + " references invalid parser ID: " + std::to_string(id));
++        }
++    };
++    for (const auto & parser : arena.parsers_) {
++        std::visit([&](const auto & p) {
++            using T = std::decay_t<decltype(p)>;
++            if constexpr (std::is_same_v<T, common_peg_sequence_parser> ||
++                          std::is_same_v<T, common_peg_choice_parser>) {
++                for (const common_peg_parser_id child : p.children) {
++                    validate_child(child, "sequence/choice parser");
++                }
++            } else if constexpr (std::is_same_v<T, common_peg_repetition_parser> ||
++                                 std::is_same_v<T, common_peg_and_parser> ||
++                                 std::is_same_v<T, common_peg_not_parser> ||
++                                 std::is_same_v<T, common_peg_schema_parser> ||
++                                 std::is_same_v<T, common_peg_rule_parser> ||
++                                 std::is_same_v<T, common_peg_atomic_parser> ||
++                                 std::is_same_v<T, common_peg_tag_parser> ||
++                                 std::is_same_v<T, common_peg_gbnf_parser> ||
++                                 std::is_same_v<T, common_peg_ac_parser>) {
++                validate_child(p.child, "child parser");
++            } else if constexpr (std::is_same_v<T, common_peg_ref_parser>) {
++                if (arena.rules_.find(p.name) == arena.rules_.end()) {
++                    throw std::runtime_error("ref parser references unknown rule: " + p.name);
++                }
++            }
++        }, parser);
++    }
++
++    return arena;
++}
++
++std::string common_peg_arena::save() const {
++    return to_json().dump();
++}
++
++void common_peg_arena::load(const std::string & data) {
++    *this = from_json(common_json::parse(data));
++}
++
+ common_peg_arena build_peg_parser(const std::function<common_peg_parser(common_peg_parser_builder & builder)> & fn) {
+     common_peg_parser_builder builder;
+     builder.set_root(fn(builder));
+diff --git a/common/peg-parser.h b/common/peg-parser.h
+index 9255d6eb9..af189997f 100644
+--- a/common/peg-parser.h
++++ b/common/peg-parser.h
+@@ -357,6 +357,14 @@ class common_peg_arena {
+ 
+     std::string dump(common_peg_parser_id id) const;
+ 
++    // Round-trip the arena through JSON so a caller can keep a built parser outside
++    // the process that produced it, e.g. the Skippy chat-template metadata blob.
++    common_json to_json() const;
++    static common_peg_arena from_json(const common_json & j);
++
++    std::string save() const;
++    void load(const std::string & data);
++
+     friend class common_peg_parser_builder;
+ 
+   private:
 diff --git a/common/reasoning-budget.cpp b/common/reasoning-budget.cpp
 index 4884299f3..8fd446e67 100644
 --- a/common/reasoning-budget.cpp
@@ -1005,10 +1423,10 @@ index 1b89a04c4..85d5c35dc 100644
 +LLAMA_API bool common_reasoning_budget_force(struct llama_sampler * smpl);
 diff --git a/common/stage-chat.cpp b/common/stage-chat.cpp
 new file mode 100644
-index 000000000..2302d7c6b
+index 000000000..c3362e2a7
 --- /dev/null
 +++ b/common/stage-chat.cpp
-@@ -0,0 +1,368 @@
+@@ -0,0 +1,363 @@
 +#include "chat.h"
 +#include "skippy.h"
 +
@@ -1168,7 +1586,7 @@ index 000000000..2302d7c6b
 +        {"thinking_start_tag", params.thinking_start_tag},
 +        {"thinking_end_tags", params.thinking_end_tags},
 +        {"parse_tool_calls", parse_tool_calls},
-+        {"chat_parser", params.parser},
++        {"chat_parser", params.parser.save()},
 +        {"grammar", params.grammar},
 +        {"grammar_lazy", params.grammar_lazy},
 +        {"grammar_triggers", skippy_common_grammar_triggers_to_json(params.grammar_triggers)},
@@ -1293,7 +1711,7 @@ index 000000000..2302d7c6b
 +            params.grammar_lazy = false;
 +            params.grammar_triggers.clear();
 +        }
-+        prompt = params.prompt;
++        prompt = params.prompt.str();
 +
 +        const bool parse_tool_calls = !inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE;
 +        metadata = skippy_common_chat_metadata_json(
@@ -1348,18 +1766,13 @@ index 000000000..2302d7c6b
 +        json metadata = json::parse(metadata_json);
 +        common_chat_parser_params params;
 +        params.format = static_cast<common_chat_format>(metadata.value("chat_format", 0));
-+        const std::string reasoning_format = metadata.value("reasoning_format", std::string());
-+        if (!reasoning_format.empty()) {
-+            params.reasoning_format = common_reasoning_format_from_name(reasoning_format);
-+        }
-+        params.generation_prompt = metadata.value("generation_prompt", std::string());
-+        params.parse_tool_calls = metadata.value("parse_tool_calls", true);
++        params.generation_prompt = common_chat_input(metadata.value("generation_prompt", std::string()));
 +        const std::string parser = metadata.value("chat_parser", std::string());
 +        if (!parser.empty()) {
 +            params.parser.load(parser);
 +        }
 +
-+        common_chat_msg msg = common_chat_parse(generated_text, is_partial, params);
++        common_chat_msg msg = common_chat_parse(common_chat_input(generated_text), is_partial, params);
 +        output = common_chat_msgs_to_json_oaicompat({ msg }).at(0).dump();
 +    } catch (const std::exception & e) {
 +        skippy_common_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED,
@@ -1378,10 +1791,10 @@ index 000000000..2302d7c6b
 +    return skippy_common_success(out_error);
 +}
 diff --git a/ggml/cmake/common.cmake b/ggml/cmake/common.cmake
-index 25eff7a5e..29e71898b 100644
+index f3610298f..fdf4ac7b6 100644
 --- a/ggml/cmake/common.cmake
 +++ b/ggml/cmake/common.cmake
-@@ -92,8 +92,13 @@ function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
+@@ -93,8 +93,13 @@ function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
      endif()
      list(REMOVE_DUPLICATES FA_COMBINATIONS)
  
@@ -1398,10 +1811,10 @@ index 25eff7a5e..29e71898b 100644
          foreach (TYPE_K IN LISTS FA_TYPES)
              if ("${TYPE_K}-${TYPE_V}" IN_LIST FA_COMBINATIONS)
 diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
-index cc3f8cd36..2256fecbc 100644
+index 7a65d8121..fbc940129 100644
 --- a/ggml/include/ggml-backend.h
 +++ b/ggml/include/ggml-backend.h
-@@ -224,6 +224,33 @@ extern "C" {
+@@ -226,6 +226,33 @@ extern "C" {
      };
      typedef struct ggml_backend_feature * (*ggml_backend_get_features_t)(ggml_backend_reg_t reg);
  
@@ -1436,10 +1849,10 @@ index cc3f8cd36..2256fecbc 100644
      // Backend registry
      //
 diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
-index 20bf96501..ecc9ca6f1 100644
+index ffbcba366..2afd1b8ec 100644
 --- a/ggml/src/ggml-backend.cpp
 +++ b/ggml/src/ggml-backend.cpp
-@@ -1069,14 +1069,30 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
+@@ -1217,14 +1217,30 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
      sched->n_graph_inputs = 0;
      sched->is_reset = false;
  
@@ -1472,9 +1885,9 @@ index 20bf96501..ecc9ca6f1 100644
      sched->ctx = ggml_init(params);
      if (sched->ctx == NULL) {
          GGML_ABORT("%s: failed to initialize context\n", __func__);
-@@ -1887,8 +1903,9 @@ ggml_backend_sched_t ggml_backend_sched_new(
-     sched->debug_graph_size = 0;
-     sched->debug_prev_graph_size = 0;
+@@ -1988,8 +2004,9 @@ ggml_backend_sched_t ggml_backend_sched_new(
+     sched->graph_size      = 0;
+     sched->prev_graph_size = 0;
  
 -    sched->context_buffer_size = ggml_sched_max_splits*GGML_SCHED_MAX_SPLIT_INPUTS*2*sizeof(struct ggml_tensor) + ggml_graph_overhead_custom(graph_size, false);
 -    sched->context_buffer = (char *) malloc(sched->context_buffer_size);
@@ -1747,7 +2160,7 @@ index 000000000..7118c9aa9
 +
 +#endif // !defined(GGML_USE_MUSA)
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 9dd34c866..b77c901f6 100644
+index 7c45d0d1f..f860e8035 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -10,6 +10,7 @@
@@ -1766,9 +2179,9 @@ index 9dd34c866..b77c901f6 100644
  #include <cstdarg>
  #include <cstdio>
  #include <cstdlib>
-@@ -5373,7 +5375,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
+@@ -5660,7 +5662,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                  return false;
-             } break;
+             }
          case GGML_OP_DUP:
 -                return true;
 +            {
@@ -1779,8 +2192,8 @@ index 9dd34c866..b77c901f6 100644
 +            } break;
          case GGML_OP_ARGMAX:
          case GGML_OP_COUNT_EQUAL:
-             {
-@@ -5727,7 +5734,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+             return true;
+@@ -6016,7 +6023,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      #endif
  
      #ifdef GGML_CUDA_FA_QUANTS
@@ -1794,7 +2207,7 @@ index 9dd34c866..b77c901f6 100644
      #endif
  
      {
-@@ -5753,6 +5765,329 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -6042,6 +6054,329 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      GGML_UNUSED(reg);
  }
  
@@ -2124,7 +2537,7 @@ index 9dd34c866..b77c901f6 100644
  static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
      GGML_UNUSED(reg);
      if (strcmp(name, "ggml_backend_comm_init") == 0) {
-@@ -5773,6 +6108,11 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+@@ -6062,6 +6397,11 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_cuda_get_features;
      }
@@ -2137,7 +2550,7 @@ index 9dd34c866..b77c901f6 100644
  }
  
 diff --git a/ggml/src/ggml-cuda/vendors/hip.h b/ggml/src/ggml-cuda/vendors/hip.h
-index 0a2f2829e..00c17046d 100644
+index da7e3da0b..a867531b6 100644
 --- a/ggml/src/ggml-cuda/vendors/hip.h
 +++ b/ggml/src/ggml-cuda/vendors/hip.h
 @@ -30,6 +30,7 @@
@@ -2149,19 +2562,19 @@ index 0a2f2829e..00c17046d 100644
  #define __shfl_xor_sync(mask, var, laneMask, width) __shfl_xor(var, laneMask, width)
  #define __all_sync(mask, var) __all(var)
 diff --git a/ggml/src/ggml-metal/CMakeLists.txt b/ggml/src/ggml-metal/CMakeLists.txt
-index e7afdb695..e886ce822 100644
+index 91691b223..a6d145e69 100644
 --- a/ggml/src/ggml-metal/CMakeLists.txt
 +++ b/ggml/src/ggml-metal/CMakeLists.txt
-@@ -31,6 +31,7 @@ set(METALLIB_KERNELS_DEQUANTIZE "${CMAKE_CURRENT_SOURCE_DIR}/kernels/dequantize.
- set(METALLIB_KERNELS_QUANTIZE   "${CMAKE_CURRENT_SOURCE_DIR}/kernels/quantize.h")
+@@ -37,6 +37,7 @@ set(METALLIB_KERNELS_FA_SHARED
+ )
  
  set(METALLIB_KERNEL_SOURCES
 +    kernels/cachegen.metal
-     kernels/fa.metal
-     kernels/mul_mv.metal
-     kernels/mul_mm.metal
+     kernels/fa_aux.metal
+     kernels/fa_f16.metal
+     kernels/fa_f32.metal
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.h b/ggml/src/ggml-metal/ggml-metal-device.h
-index 1bdaecc73..26d6c7bdc 100644
+index 4012b9d5f..e51558652 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.h
 +++ b/ggml/src/ggml-metal/ggml-metal-device.h
 @@ -1,6 +1,7 @@
@@ -2172,7 +2585,7 @@ index 1bdaecc73..26d6c7bdc 100644
  
  #ifdef __cplusplus
  extern "C" {
-@@ -361,6 +362,12 @@ void   ggml_metal_buffer_clear        (ggml_metal_buffer_t buf, uint8_t value);
+@@ -369,6 +370,12 @@ void   ggml_metal_buffer_clear        (ggml_metal_buffer_t buf, uint8_t value);
  //
  struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, const struct ggml_tensor * t);
  
@@ -2186,7 +2599,7 @@ index 1bdaecc73..26d6c7bdc 100644
  }
  #endif
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index 81ea7f9d7..4c18b04e6 100644
+index d1bce8bad..5b23ddf7f 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
 @@ -11,6 +11,8 @@
@@ -2203,10 +2616,10 @@ index 81ea7f9d7..4c18b04e6 100644
  //   ggml_metallib_<name>_{start,end} embed-symbol stem.
  #define GGML_METAL_LIBS \
 +    X(CACHEGEN,        cachegen)       \
-     X(FA,              fa)             \
-     X(MUL_MV,          mul_mv)         \
-     X(MUL_MM,          mul_mm)         \
-@@ -164,6 +167,11 @@ struct ggml_metal_library {
+     X(FA_AUX,          fa_aux)         \
+     X(FA_F16,          fa_f16)         \
+     X(FA_F32,          fa_f32)         \
+@@ -180,6 +183,11 @@ struct ggml_metal_library {
      ggml_metal_device_t dev;
      ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
  
@@ -2218,7 +2631,7 @@ index 81ea7f9d7..4c18b04e6 100644
      NSLock * lock;
  };
  
-@@ -193,6 +201,98 @@ static void ggml_metal_compile_options_set_lang(MTLCompileOptions * options, boo
+@@ -209,6 +217,98 @@ static void ggml_metal_compile_options_set_lang(MTLCompileOptions * options, boo
      options.languageVersion = (MTLLanguageVersion) MTLLanguageVersion4_0_GGML;
  }
  
@@ -2317,7 +2730,7 @@ index 81ea7f9d7..4c18b04e6 100644
  // Parse a `#include "name"` line. Returns the quoted name in *include_name on
  // success. Whitespace-tolerant; ignores `#include <...>` (system headers).
  static bool ggml_metal_library_parse_quoted_include(NSString * line, NSString ** include_name) {
-@@ -303,12 +403,14 @@ static bool ggml_metal_library_compile_all(
+@@ -319,12 +419,14 @@ static bool ggml_metal_library_compile_all(
          id<MTLDevice> device,
          NSDictionary * prep,
          NSString * (^source_for_kind)(int kind, NSError ** err),
@@ -2333,7 +2746,7 @@ index 81ea7f9d7..4c18b04e6 100644
  
      dispatch_group_t group = dispatch_group_create();
      dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
-@@ -327,6 +429,11 @@ static bool ggml_metal_library_compile_all(
+@@ -343,6 +445,11 @@ static bool ggml_metal_library_compile_all(
                  return;
              }
  
@@ -2345,7 +2758,7 @@ index 81ea7f9d7..4c18b04e6 100644
              id<MTLLibrary> lib = nil;
  
              @autoreleasepool {
-@@ -361,6 +468,18 @@ static bool ggml_metal_library_compile_all(
+@@ -377,6 +484,18 @@ static bool ggml_metal_library_compile_all(
  
      const bool ok = !atomic_load(&any_failure);
  
@@ -2364,7 +2777,7 @@ index 81ea7f9d7..4c18b04e6 100644
      if (ok) {
          const int64_t t_total = ggml_time_us() - t_start;
          int64_t t_max = 0;
-@@ -468,19 +587,23 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -484,19 +603,23 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
  #undef X
      };
  
@@ -2389,7 +2802,7 @@ index 81ea7f9d7..4c18b04e6 100644
      return res;
  #else
  #ifdef SWIFT_PACKAGE
-@@ -532,6 +655,9 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -548,6 +671,9 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
          }
  
          GGML_LOG_INFO("%s: loaded in %.3f sec\n", __func__, (ggml_time_us() - t_start) / 1e6);
@@ -2399,7 +2812,7 @@ index 81ea7f9d7..4c18b04e6 100644
          return res;
      }
  
-@@ -566,10 +692,11 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -582,10 +708,11 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
          path_per_kind[kind] = [path_source retain];
      }
  
@@ -2412,7 +2825,7 @@ index 81ea7f9d7..4c18b04e6 100644
  
      for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
          [path_per_kind[kind] release];
-@@ -581,6 +708,8 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
+@@ -597,6 +724,8 @@ ggml_metal_library_t ggml_metal_library_init(ggml_metal_device_t dev) {
          return NULL;
      }
  
@@ -2421,7 +2834,7 @@ index 81ea7f9d7..4c18b04e6 100644
      return res;
  #endif
  }
-@@ -675,6 +804,14 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
+@@ -691,6 +820,14 @@ void ggml_metal_library_free(ggml_metal_library_t lib) {
  
      ggml_metal_pipelines_free(lib->pipelines);
  
@@ -2436,7 +2849,7 @@ index 81ea7f9d7..4c18b04e6 100644
      [lib->lock release];
  
      free(lib);
-@@ -768,7 +905,32 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
+@@ -784,7 +921,32 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
          }
  
          id<MTLDevice> device = ggml_metal_device_get_obj(lib->dev);
@@ -2470,7 +2883,7 @@ index 81ea7f9d7..4c18b04e6 100644
  
          [mtl_function release];
  
-@@ -1744,6 +1906,29 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+@@ -1754,6 +1916,29 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
              if (op->src[1]->type != op->src[2]->type) {
                  return false;
              }
@@ -2500,7 +2913,7 @@ index 81ea7f9d7..4c18b04e6 100644
              switch (op->src[1]->type) {
                  case GGML_TYPE_F32:
                  case GGML_TYPE_F16:
-@@ -2502,3 +2687,262 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
+@@ -2515,3 +2700,262 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
  
      return res;
  }
@@ -2764,10 +3177,10 @@ index 81ea7f9d7..4c18b04e6 100644
 +    return true;
 +}
 diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
-index 490dd83a1..3f8e638eb 100644
+index 4ffb5a77d..d151a600d 100644
 --- a/ggml/src/ggml-metal/ggml-metal-impl.h
 +++ b/ggml/src/ggml-metal/ggml-metal-impl.h
-@@ -1029,6 +1029,23 @@ typedef struct {
+@@ -1036,6 +1036,23 @@ typedef struct {
      uint64_t nb3;
  } ggml_metal_kargs_solve_tri;
  
@@ -2791,7 +3204,7 @@ index 490dd83a1..3f8e638eb 100644
  typedef struct {
      int32_t  ne00t;
      int32_t  ne00;
-@@ -1262,23 +1279,6 @@ typedef struct {
+@@ -1278,23 +1295,6 @@ typedef struct {
      int64_t val;
  } ggml_metal_kargs_memset;
  
@@ -2816,10 +3229,10 @@ index 490dd83a1..3f8e638eb 100644
      int32_t  n_tokens;
      int32_t  n_iter;
 diff --git a/ggml/src/ggml-metal/ggml-metal.cpp b/ggml/src/ggml-metal/ggml-metal.cpp
-index c6c8ce836..dc176a9ef 100644
+index 344882e04..f8732fbca 100644
 --- a/ggml/src/ggml-metal/ggml-metal.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal.cpp
-@@ -940,6 +940,9 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const
+@@ -946,6 +946,9 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_metal_get_features;
      }
@@ -3031,10 +3444,16 @@ index 000000000..728899e4b
 +    }
 +}
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index afdaddc79..0ad03a3e5 100644
+index 97250c2e8..5e02baa49 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -46,6 +46,39 @@ set(LLAMA_CORE_SOURCES
+@@ -1,4 +1,5 @@
+ llama_add_compile_flags()
++find_package(Threads REQUIRED)
+ 
+ #
+ # libraries
+@@ -47,6 +48,50 @@ set(LLAMA_CORE_SOURCES
  add_library(llama
              ../include/llama.h
              ${LLAMA_CORE_SOURCES}
@@ -3059,7 +3478,18 @@ index afdaddc79..0ad03a3e5 100644
 +            skippy/model_package.cpp
 +            skippy/package_tensor_binding.cpp
 +            ../common/reasoning-budget.cpp
++            ../common/sampling.cpp
++            ../common/sampling-config.cpp
++            ../common/sampling-timing.cpp
++            ../common/tokenization.cpp
++            ../common/regex-escape.cpp
++            ../common/log-terminal.cpp
++            ../common/log.cpp
++            ../common/json.cpp
++            ../common/llguidance.cpp
 +            skippy/sampling.cpp
++            skippy/sampling_config.cpp
++            skippy/chat_sampling.cpp
 +            skippy/sampling_vocab.cpp
 +            skippy/stage_slice_plan.cpp
 +            skippy/stage_plan.cpp
@@ -3074,12 +3504,16 @@ index afdaddc79..0ad03a3e5 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -59,19 +92,602 @@ set_target_properties(llama PROPERTIES
+@@ -60,19 +105,648 @@ set_target_properties(llama PROPERTIES
  )
  
  # exclude non-model sources from unity build
 -set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h
 +set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h ../common/reasoning-budget.cpp
++    ../common/sampling.cpp ../common/sampling-config.cpp ../common/sampling-timing.cpp
++    ../common/tokenization.cpp ../common/regex-escape.cpp ../common/log-terminal.cpp
++    ../common/log.cpp ../common/json.cpp
++    ../common/llguidance.cpp
 +    PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
 +
 +# Keep model sources out of the unity build as well. The Skippy stage
@@ -3099,9 +3533,42 @@ index afdaddc79..0ad03a3e5 100644
 +# entries with its own clang, which cannot read a PCH produced by the
 +# configured compiler, so the llama target must stay PCH-free.
 +# target_precompile_headers (llama PRIVATE models/models.h)
- 
- target_link_libraries(llama PUBLIC ggml)
- 
++
++target_link_libraries(llama PUBLIC ggml PRIVATE Threads::Threads vendor::nlohmann)
++
++if (LLAMA_LLGUIDANCE)
++    include(ExternalProject)
++    set(LLGUIDANCE_SRC ${CMAKE_BINARY_DIR}/llguidance/source)
++    set(LLGUIDANCE_PATH ${LLGUIDANCE_SRC}/target/release)
++    set(LLGUIDANCE_LIB_NAME "${CMAKE_STATIC_LIBRARY_PREFIX}llguidance${CMAKE_STATIC_LIBRARY_SUFFIX}")
++
++    ExternalProject_Add(llguidance_ext
++        GIT_REPOSITORY https://github.com/guidance-ai/llguidance
++        # v1.0.1:
++        GIT_TAG d795912fedc7d393de740177ea9ea761e7905774
++        PREFIX ${CMAKE_BINARY_DIR}/llguidance
++        SOURCE_DIR ${LLGUIDANCE_SRC}
++        BUILD_IN_SOURCE TRUE
++        CONFIGURE_COMMAND ""
++        BUILD_COMMAND cargo build --release --package llguidance
++        INSTALL_COMMAND ""
++        BUILD_BYPRODUCTS ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME} ${LLGUIDANCE_PATH}/llguidance.h
++        UPDATE_COMMAND ""
++    )
++    target_compile_definitions(llama PUBLIC LLAMA_USE_LLGUIDANCE)
++
++    add_library(llguidance STATIC IMPORTED)
++    set_target_properties(llguidance PROPERTIES IMPORTED_LOCATION ${LLGUIDANCE_PATH}/${LLGUIDANCE_LIB_NAME})
++    add_dependencies(llguidance llguidance_ext)
++
++    target_include_directories(llama PRIVATE ${LLGUIDANCE_PATH})
++    target_link_libraries(llama PRIVATE llguidance)
++    if (WIN32)
++        target_link_libraries(llama PRIVATE ws2_32 userenv ntdll bcrypt)
++    endif()
++endif()
++
++
 +if (LLAMA_STAGE_BUILD_TESTS)
 +    target_compile_definitions(llama PRIVATE LLAMA_STAGE_BUILD_TESTS)
 +
@@ -3362,6 +3829,16 @@ index afdaddc79..0ad03a3e5 100644
 +    add_skippy_sampling_history_tests(qwen35 skippy-noalloc-qwen35-fixture recurrent)
 +    add_skippy_sampling_history_tests(granitehybrid skippy-noalloc-granite-hybrid-fixture recurrent)
 +
++    function(add_skippy_sampling_history_state_tests family fixture state)
++        add_test(NAME skippy_sampling_history_${family}_state
++            COMMAND skippy-sampling-history
++                "${SKIPPY_MODEL_FIXTURE_DIR}/${family}-dense.gguf" state ${state})
++        set_tests_properties(skippy_sampling_history_${family}_state PROPERTIES
++            FIXTURES_REQUIRED ${fixture})
++    endfunction()
++    add_skippy_sampling_history_state_tests(granitehybrid skippy-noalloc-granite-hybrid-fixture recurrent)
+ 
+-target_link_libraries(llama PUBLIC ggml)
 +    add_test(
 +        NAME skippy_generate_qwen3_fixture
 +        COMMAND skippy-model-fixture-generator
@@ -3669,7 +4146,7 @@ index afdaddc79..0ad03a3e5 100644
 +        FIXTURES_REQUIRED skippy-noalloc-mamba-fixture)
 +
 +endif()
-+
+ 
  if (BUILD_SHARED_LIBS)
      set_target_properties(llama PROPERTIES POSITION_INDEPENDENT_CODE ON)
      target_compile_definitions(llama PRIVATE LLAMA_BUILD)
@@ -3680,18 +4157,18 @@ index afdaddc79..0ad03a3e5 100644
 +    target_link_libraries(llama PRIVATE ${SKIPPY_ACCELERATE_FRAMEWORK})
 +endif()
 diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
-index c25bf4ec8..6f017519f 100644
+index 1b4ea60bf..2eebb90bd 100644
 --- a/tools/mtmd/mtmd-audio.cpp
 +++ b/tools/mtmd/mtmd-audio.cpp
-@@ -283,6 +283,7 @@ struct filter_params {
-     bool    norm_per_feature = false;
-     bool    use_magnitude   = false;  // |X| instead of |X|^2
+@@ -285,6 +285,7 @@ struct filter_params {
      float   mel_floor       = 5.960464477539063e-08f;
+     bool    mel_floor_add   = false;  // log(x + floor) instead of log(max(x, floor))
+     bool    std_eps_after_sqrt = false;  // std + eps instead of sqrt(var + eps)
 +    float   power_floor     = 0.0f;   // clamp |X|^2 to this before sqrt (0 = disabled)
  };
  
  static void log_mel_spectrogram_worker_thread(int                        ith,
-@@ -327,6 +328,7 @@ static void log_mel_spectrogram_worker_thread(int                        ith,
+@@ -329,6 +330,7 @@ static void log_mel_spectrogram_worker_thread(int                        ith,
          // Calculate modulus^2 (power) or modulus (magnitude)
          for (int j = 0; j < n_fft_bins; j++) {
              float power = (fft_out[2 * j + 0] * fft_out[2 * j + 0] + fft_out[2 * j + 1] * fft_out[2 * j + 1]);
@@ -3700,7 +4177,7 @@ index c25bf4ec8..6f017519f 100644
          }
  
 diff --git a/tools/mtmd/mtmd-helper.cpp b/tools/mtmd/mtmd-helper.cpp
-index bdf8bf6fe..cc16807ba 100644
+index eba034f79..e1373d4cc 100644
 --- a/tools/mtmd/mtmd-helper.cpp
 +++ b/tools/mtmd/mtmd-helper.cpp
 @@ -207,6 +207,25 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
@@ -3728,19 +4205,18 @@ index bdf8bf6fe..cc16807ba 100644
 +    }
      GGML_ASSERT(n_batch > 0);
      int32_t ret;
-     llama_batch text_batch = llama_batch_init(n_batch, 0, 1);
-@@ -239,6 +258,10 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
-                 llama_batch_free(text_batch);
+     auto chunk_type = mtmd_input_chunk_get_type(chunk);
+@@ -237,6 +256,9 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+                 LOG_ERR("failed to decode text\n");
                  return ret;
              }
-+            if (callback != nullptr && (ret = callback(text_batch.n_tokens, user_data)) != 0) {
-+                llama_batch_free(text_batch);
++            if (callback != nullptr && (ret = callback(n_added, user_data)) != 0) {
 +                return ret;
 +            }
-             *new_n_past += text_batch.n_tokens;
+             *new_n_past += n_added;
          }
  
-@@ -258,7 +281,18 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+@@ -255,7 +277,18 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
          LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
  
          float * embd = mtmd_get_output_embd(ctx);
@@ -3751,17 +4227,17 @@ index bdf8bf6fe..cc16807ba 100644
 +            void *                            user_data;
 +        } capture{ callback, user_data };
 +
-+        const auto after_decode = [](llama_batch batch, void * opaque) -> int32_t {
++        const auto after_decode = [](const mtmd_helper_embd_batch * batch, void * opaque) -> int32_t {
 +            auto * capture = static_cast<callback_context *>(opaque);
-+            return capture->callback(batch.n_tokens, capture->user_data);
++            return capture->callback(batch->n_tokens, capture->user_data);
 +        };
 +        ret = mtmd_helper_decode_image_chunk(ctx, lctx, chunk, embd, n_past, seq_id, n_batch, new_n_past,
 +                                             callback != nullptr ? +after_decode : nullptr, &capture);
          if (ret != 0) {
              LOG_ERR("failed to decode %s\n", name);
-             llama_batch_free(text_batch);
+             return ret;
 diff --git a/tools/mtmd/mtmd-helper.h b/tools/mtmd/mtmd-helper.h
-index 10f2171c0..1bc8c89c5 100644
+index 7436230f0..f9fe048ff 100644
 --- a/tools/mtmd/mtmd-helper.h
 +++ b/tools/mtmd/mtmd-helper.h
 @@ -117,6 +117,22 @@ MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
@@ -3784,9 +4260,9 @@ index 10f2171c0..1bc8c89c5 100644
 +                                                             mtmd_helper_chunk_decode_callback callback,
 +                                                             void *                            user_data);
 +
- typedef int32_t (*mtmd_helper_post_decode_callback)(struct llama_batch batch, void * user_data);
- 
- // helper function to decode an image whose embeddings have already been calculated
+ // one decoded sub-batch of embeddings, passed to mtmd_helper_post_decode_callback
+ struct mtmd_helper_embd_batch {
+     int32_t n_tokens;
 -- 
 2.56.0
 

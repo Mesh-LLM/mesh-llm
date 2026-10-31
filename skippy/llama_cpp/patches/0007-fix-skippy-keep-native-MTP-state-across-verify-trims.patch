@@ -1,0 +1,273 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Daniel Winter <danielwinterw@gmail.com>
+Date: Sat, 10 Oct 2026 17:10:06 +0100
+Subject: [PATCH] fix(skippy): keep native MTP state across verify trims
+
+A rejected verify window used to cost the MTP sidecar its whole prefix:
+trimming the session cleared the sidecar's cache and seed, so the next
+decode returned no draft and later drafts attended only to tokens decoded
+after the trim. On a split, stage 0 trims after every rejection.
+
+Sync now keeps the trunk hidden rows at the tail of each batch. A trim back
+into that batch only drops the sidecar rows past the trim point and reseeds
+from the last kept token, for single-head sidecars with their own cache;
+anything else still clears.
+
+Verification also drafts from the right place after a mismatch: the first
+row that rejected its proposal, continuing from that row's correction token,
+instead of the last row, whose input was a rejected token. A caller that
+commits the accepted prefix plus the correction can use that draft
+directly, so a rejection no longer costs an extra decode before speculation
+resumes. Callers that discard drafts from rejected windows are unaffected.
+---
+ src/skippy/runtime_support.h        |   1 +
+ src/skippy/runtime_types.h          |   5 ++
+ src/skippy/speculative_decoding.cpp | 107 ++++++++++++++++++++++++++++
+ src/skippy/speculative_internal.h   |  12 ++++
+ src/skippy/state.cpp                |   2 +-
+ src/skippy/verification.cpp         |  25 +++++--
+ 6 files changed, 144 insertions(+), 8 deletions(-)
+
+diff --git a/src/skippy/runtime_support.h b/src/skippy/runtime_support.h
+index 55499ea20..1c1cdb8fa 100644
+--- a/src/skippy/runtime_support.h
++++ b/src/skippy/runtime_support.h
+@@ -39,6 +39,7 @@ void skippy_mark_context_synchronized(skippy_model * model);
+ void skippy_synchronize_context_if_pending(skippy_model * model);
+ bool skippy_memory_needs_verify_checkpoint(llama_memory_t memory);
+ void skippy_mtp_clear_session_state(skippy_session * session);
++void skippy_mtp_trim_session_state(skippy_session * session, llama_pos token_count);
+ void skippy_clear_chat_sampling(skippy_session * session);
+ bool skippy_verify_window_can_roll_back_in_place(
+         const skippy_session * session,
+diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
+index fa97e12a5..8c7b99651 100644
+--- a/src/skippy/runtime_types.h
++++ b/src/skippy/runtime_types.h
+@@ -172,6 +172,11 @@ struct skippy_session {
+     // is the boundary the next sync prunes back to once the accepted prefix is
+     // known.
+     llama_pos mtp_pending_draft_end = 0;
++    // Trunk hidden rows from the tail of the last synced batch, starting at
++    // mtp_recent_h_start. A trim back into that batch restores the MTP seed
++    // from here instead of discarding the sidecar's whole prefix.
++    std::vector<float> mtp_recent_h;
++    llama_pos mtp_recent_h_start = 0;
+     std::vector<skippy_pending_activation_part> pending_activation_exports;
+     bool reset_required = false;
+     std::vector<skippy_verify_checkpoint> verify_checkpoints;
+diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
+index 3d15111fb..7f55c0d88 100644
+--- a/src/skippy/speculative_decoding.cpp
++++ b/src/skippy/speculative_decoding.cpp
+@@ -91,6 +91,8 @@ void skippy_mtp_clear_session_state(skippy_session * session) {
+     session->mtp_pending_draft_pos = 0;
+     session->mtp_pending_draft_token = -1;
+     session->mtp_pending_draft_end = 0;
++    session->mtp_recent_h.clear();
++    session->mtp_recent_h_start = 0;
+     if (skippy_mtp_available(session)) {
+         if (llama_memory_t memory = session->stage_model->mtp_ctx->get_memory()) {
+             llama_memory_seq_rm(memory, session->seq_id, -1, -1);
+@@ -98,6 +100,78 @@ void skippy_mtp_clear_session_state(skippy_session * session) {
+     }
+ }
+ 
++static bool skippy_mtp_shares_target_memory(
++        const llama_context * mtp_ctx,
++        const llama_context * target_ctx);
++
++static constexpr size_t SKIPPY_MTP_RECENT_HIDDEN_ROWS = 16;
++
++static size_t skippy_mtp_hidden_width(const skippy_session * session) {
++    const int32_t n_hidden = llama_model_n_embd_out(session->stage_model->model);
++    return n_hidden > 0 ? static_cast<size_t>(n_hidden) : 0;
++}
++
++// Keeps the trunk hidden rows at the tail of a batch that was just decoded.
++static void skippy_mtp_remember_recent_hidden(skippy_session * session, size_t token_count, llama_pos token_start) {
++    const size_t width = skippy_mtp_hidden_width(session);
++    const size_t kept = std::min(token_count, SKIPPY_MTP_RECENT_HIDDEN_ROWS);
++    session->mtp_recent_h.clear();
++    session->mtp_recent_h_start = token_start + static_cast<llama_pos>(token_count - kept);
++    for (size_t row = token_count - kept; row < token_count && width > 0; ++row) {
++        const float * h = llama_get_embeddings_nextn_ith(session->ctx, static_cast<int32_t>(row));
++        if (h == nullptr) {
++            session->mtp_recent_h.clear();
++            return;
++        }
++        session->mtp_recent_h.insert(session->mtp_recent_h.end(), h, h + width);
++    }
++}
++
++static const float * skippy_mtp_recent_hidden_at(const skippy_session * session, llama_pos pos) {
++    const size_t width = skippy_mtp_hidden_width(session);
++    if (width == 0 || pos < session->mtp_recent_h_start) {
++        return nullptr;
++    }
++    const size_t row = static_cast<size_t>(pos - session->mtp_recent_h_start);
++    if ((row + 1) * width > session->mtp_recent_h.size()) {
++        return nullptr;
++    }
++    return session->mtp_recent_h.data() + row * width;
++}
++
++// Rewinds the sidecar to `token_count` committed tokens. A single-head sidecar
++// whose rows below the trim point are intact only loses the rejected suffix:
++// its seed becomes the trunk hidden state of the last kept token. Anything
++// else falls back to discarding the sidecar's state for this sequence.
++void skippy_mtp_trim_session_state(skippy_session * session, llama_pos token_count) {
++    if (session == nullptr) {
++        return;
++    }
++    const bool single_head = skippy_mtp_available(session) &&
++            llama_get_model(session->stage_model->mtp_ctx)->hparams.n_layer_nextn == 1;
++    const float * seed = token_count > 0 ? skippy_mtp_recent_hidden_at(session, token_count - 1) : nullptr;
++    const bool keep_prefix = single_head && session->mtp_prefix_valid && seed != nullptr &&
++            session->mtp_next_pos >= token_count &&
++            !skippy_mtp_shares_target_memory(session->stage_model->mtp_ctx, session->ctx);
++    if (!keep_prefix) {
++        skippy_mtp_clear_session_state(session);
++        return;
++    }
++    if (llama_memory_t memory = session->stage_model->mtp_ctx->get_memory()) {
++        llama_memory_seq_rm(memory, session->seq_id, token_count, -1);
++    }
++    session->mtp_pending_h.assign(seed, seed + skippy_mtp_hidden_width(session));
++    session->mtp_has_pending_h = true;
++    session->mtp_next_pos = token_count;
++    session->mtp_has_pending_draft = false;
++    session->mtp_pending_draft_pos = 0;
++    session->mtp_pending_draft_token = -1;
++    session->mtp_pending_draft_end = 0;
++    const size_t width = skippy_mtp_hidden_width(session);
++    const size_t keep_rows = static_cast<size_t>(token_count - session->mtp_recent_h_start);
++    session->mtp_recent_h.resize(keep_rows * width);
++}
++
+ static bool skippy_mtp_shares_target_memory(
+         const llama_context * mtp_ctx,
+         const llama_context * target_ctx) {
+@@ -149,6 +223,7 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+         std::memcpy(session->mtp_pending_h.data(), h_last, row_bytes);
+         session->mtp_has_pending_h = true;
+         session->mtp_next_pos = token_start + static_cast<int32_t>(token_count);
++        skippy_mtp_remember_recent_hidden(session, token_count, token_start);
+         session->mtp_has_pending_draft = false;
+         session->mtp_pending_draft_pos = 0;
+         session->mtp_pending_draft_token = -1;
+@@ -333,6 +408,7 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+     }
+     std::memcpy(session->mtp_pending_h.data(), h_last, row_bytes);
+     session->mtp_has_pending_h = true;
++    skippy_mtp_remember_recent_hidden(session, token_count, token_start);
+     if (reprime_prefix) {
+         session->mtp_prefix_valid = true;
+     }
+@@ -566,3 +642,34 @@ enum skippy_status skippy_mtp_propose_next(
+     }
+     return skippy_success(out_error);
+ }
++
++enum skippy_status skippy_mtp_propose_after_row(
++        skippy_session * session,
++        llama_pos token_start,
++        size_t anchor_row,
++        llama_token predicted_token,
++        size_t max_draft_tokens,
++        skippy_native_mtp_draft * out_mtp_draft,
++        skippy_error ** out_error) {
++    if (out_mtp_draft != nullptr) {
++        *out_mtp_draft = {1, false, 0, {}, 0};
++    }
++    const llama_pos anchor_end = token_start + static_cast<llama_pos>(anchor_row) + 1;
++    if (!skippy_mtp_available(session) || !session->mtp_prefix_valid || anchor_end > session->n_past) {
++        return skippy_success(out_error);
++    }
++    const llama_pos verified_end = session->n_past;
++    if (anchor_end < verified_end) {
++        // The rows past the anchor stay in the trunk cache until the caller
++        // trims them; the sidecar starts over from the anchor now.
++        skippy_mtp_trim_session_state(session, anchor_end);
++        if (!session->mtp_has_pending_h) {
++            return skippy_success(out_error);
++        }
++    }
++    session->n_past = anchor_end;
++    const enum skippy_status status =
++            skippy_mtp_propose_next(session, predicted_token, max_draft_tokens, out_mtp_draft, out_error);
++    session->n_past = verified_end;
++    return status;
++}
+diff --git a/src/skippy/speculative_internal.h b/src/skippy/speculative_internal.h
+index d8276944d..3a147d14d 100644
+--- a/src/skippy/speculative_internal.h
++++ b/src/skippy/speculative_internal.h
+@@ -30,3 +30,15 @@ enum skippy_status skippy_mtp_propose_next(
+         size_t max_draft_tokens,
+         skippy_native_mtp_draft * out_mtp_draft,
+         skippy_error ** out_error);
++// Proposes after row `anchor_row` of the batch just verified at `token_start`,
++// continuing from that row's predicted (correction) token. Rows past the
++// anchor were conditioned on a rejected proposal; their sidecar rows are
++// dropped first.
++enum skippy_status skippy_mtp_propose_after_row(
++        skippy_session * session,
++        llama_pos token_start,
++        size_t anchor_row,
++        llama_token predicted_token,
++        size_t max_draft_tokens,
++        skippy_native_mtp_draft * out_mtp_draft,
++        skippy_error ** out_error);
+diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
+index 4d6a2a68c..0f9b3a27c 100644
+--- a/src/skippy/state.cpp
++++ b/src/skippy/state.cpp
+@@ -848,7 +848,7 @@ enum skippy_status skippy_trim_session(
+     if (session->signal_history.size() > token_count) {
+         session->signal_history.resize(static_cast<size_t>(token_count));
+     }
+-    skippy_mtp_clear_session_state(session);
++    skippy_mtp_trim_session_state(session, static_cast<llama_pos>(token_count));
+     session->verify_checkpoints.clear();
+     session->ctx->synchronize();
+ 
+diff --git a/src/skippy/verification.cpp b/src/skippy/verification.cpp
+index e078d867c..c8b6e163f 100644
+--- a/src/skippy/verification.cpp
++++ b/src/skippy/verification.cpp
+@@ -244,13 +244,24 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+                 break;
+             }
+         }
+-        if (out_mtp_draft != nullptr && token_count > 0 && !proposal_mismatched) {
+-            status = skippy_mtp_propose_next(
+-                    session,
+-                    output_tokens[token_count - 1],
+-                    max_draft_tokens,
+-                    out_mtp_draft,
+-                    out_error);
++        // Draft from the last row whose input was confirmed: the first row
++        // that rejected the proposal (its prediction is the correction the
++        // caller commits next), or the final row when every proposal held.
++        size_t anchor_row = *out_token_count - 1;
++        for (size_t i = 0; !proposal_mismatched && i + 1 < token_count; ++i) {
++            if (output_tokens[i] != token_ids[i + 1]) {
++                anchor_row = i;
++                break;
++            }
++        }
++        if (out_mtp_draft != nullptr && token_count > 0) {
++            const llama_pos token_start = session->n_past - static_cast<llama_pos>(token_count);
++            status = anchor_row + 1 == token_count
++                    ? skippy_mtp_propose_next(
++                              session, output_tokens[anchor_row], max_draft_tokens, out_mtp_draft, out_error)
++                    : skippy_mtp_propose_after_row(
++                              session, token_start, anchor_row, output_tokens[anchor_row],
++                              max_draft_tokens, out_mtp_draft, out_error);
+             if (status != SKIPPY_STATUS_OK) {
+                 return status;
+             }
+-- 
+2.54.0 (Apple Git-157)
+

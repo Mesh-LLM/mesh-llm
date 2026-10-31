@@ -23,6 +23,7 @@ pub(crate) struct ForwardedStageMessage {
     pub activation_encode_ms: f64,
 }
 
+/// Forward stage execution metadata while substituting the produced activation frame.
 pub(crate) fn forwarded_stage_message_timed(
     config: &StageConfig,
     incoming: &StageWireMessage,
@@ -86,10 +87,13 @@ pub(crate) fn forwarded_stage_message_timed(
             request_id: incoming.request_id,
             session_id: incoming.session_id,
             sampling: incoming.sampling.clone(),
-            chat_sampling_metadata: None,
+            // Fused restore/decode samples before the later ConfigureGeneration
+            // message; every hop must carry its grammar and reasoning metadata.
+            chat_sampling_metadata: incoming.chat_sampling_metadata.clone(),
             tokens: incoming.tokens.clone(),
             positions: incoming.positions.clone(),
             activation,
+            readout_tokens: incoming.readout_tokens.clone(),
             raw_bytes: Vec::new(),
         },
         activation_encode_ms: encode_started.elapsed().as_secs_f64() * 1000.0,
@@ -179,6 +183,7 @@ mod tests {
             load_mode: LoadMode::RuntimeSlice,
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: Some(PeerConfig {
+                persistent_lane_marker: false,
                 stage_id: "stage-0".to_string(),
                 stage_index: 0,
                 endpoint: "tcp://127.0.0.1:19000".to_string(),
@@ -188,6 +193,7 @@ mod tests {
         }
     }
 
+    /// Construct an incoming stage request for forwarding regression tests.
     fn incoming_message() -> StageWireMessage {
         StageWireMessage {
             kind: WireMessageKind::DecodeEmbd,
@@ -201,6 +207,7 @@ mod tests {
             tokens: vec![11],
             positions: Vec::new(),
             activation: Vec::new(),
+            readout_tokens: Vec::new(),
             raw_bytes: Vec::new(),
         }
     }
@@ -230,6 +237,38 @@ mod tests {
                 },
             ],
         )
+    }
+
+    /// Fused restore requests retain sampling metadata across downstream hops.
+    #[test]
+    fn fused_restore_preserves_sampling_metadata_across_stage_hops() {
+        let mut incoming = incoming_message();
+        incoming.kind = WireMessageKind::TryRestorePrefillDecode;
+        incoming.state = StageStateHeader::new(incoming.kind);
+        incoming.state.prompt_token_count = 3;
+        incoming.pos_start = 2;
+        incoming.tokens = vec![7, 9, 11];
+        incoming.chat_sampling_metadata =
+            Some(r#"{"grammar":"root ::= \"B\" | \"S\"","grammar_lazy":false}"#.into());
+        let metadata = incoming.chat_sampling_metadata.clone();
+        let mut output = two_f32_part_frame(&[1.0, 2.0, 3.0, 4.0]);
+        for stage_index in 0..2 {
+            let mut config = stage_config();
+            config.stage_index = stage_index;
+            output.desc.producer_stage_index = stage_index as i32;
+            let forwarded = forwarded_stage_message(&config, &incoming, &output, 2).unwrap();
+            let mut wire = Vec::new();
+            skippy_protocol::binary::write_stage_message(&mut wire, &forwarded).unwrap();
+            incoming = skippy_protocol::binary::read_stage_message_for_codec(
+                std::io::Cursor::new(wire),
+                2,
+                config.activation_codec,
+            )
+            .unwrap();
+            assert_eq!(incoming.chat_sampling_metadata, metadata);
+            assert_eq!(incoming.tokens, [7, 9, 11]);
+            assert_eq!(incoming.state.prompt_token_count, 3);
+        }
     }
 
     #[test]

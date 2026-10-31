@@ -55,6 +55,9 @@ impl Replay {
         for (key, value) in [
             ("LLAMA_STAGE_LINK_MODE", "static".into()),
             ("LLAMA_STAGE_BACKEND", backend.into()),
+            // The stubbed build stays offline and produces no whisper.cpp
+            // archive.
+            ("SKIPPY_SPEECH_RECOGNITION", "OFF".into()),
             (
                 "LLAMA_STAGE_FULL_REPLAY",
                 if replay { "ON" } else { "OFF" }.into(),
@@ -204,6 +207,7 @@ fn replay_default_product_disables_standard_private_and_nonchat_gates() {
     assert!(!calls.iter().any(|call| call.tool == "ctest"));
     replay.finish();
 }
+/// Explicit oracle builds retain required native gates and bounded CTest execution.
 #[test]
 fn replay_explicit_builds_retained_skippy_gates_and_runs_bounded_filtered_ctest() {
     let replay = Replay::new();
@@ -221,6 +225,7 @@ fn replay_explicit_builds_retained_skippy_gates_and_runs_bounded_filtered_ctest(
     }
     for target in [
         "skippy-graph-build-inputs",
+        "skippy-selected-logits",
         "skippy-hardware-application-probe",
         "skippy-model-fixture-generator",
         "skippy-model-loader-accounting",

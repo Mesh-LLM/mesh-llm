@@ -23,6 +23,7 @@ impl OldHost {
             install_root: root.path().join("installed"),
             catalog_url: "unused".into(),
             target: PluginTarget::current().unwrap(),
+            bundled_plugins_dir: None,
         };
         let installed = mesh_llm_plugin_manager::install::install_plugin_archive(
             "openai-exchange-observer",
@@ -87,6 +88,7 @@ impl OldHost {
                 host_version: "generation-3-without-lifecycle".into(),
                 host_info_json: "{}".into(),
                 mesh_visibility: proto::MeshVisibility::Private as i32,
+                settings_json: String::new(),
                 host_capabilities: Vec::new(),
             }),
         )
@@ -113,6 +115,7 @@ async fn installed_generation3_child_without_lifecycle_manifest_initializes_and_
         .exchange(
             2,
             proto::envelope::Payload::InvokeServiceRequest(proto::InvokeServiceRequest {
+                invocation_id: None,
                 kind: proto::ServiceKind::Operation as i32,
                 service_name: "legacy_echo".into(),
                 input_json: "{\"sentinel\":\"legacy-operated\"}".into(),

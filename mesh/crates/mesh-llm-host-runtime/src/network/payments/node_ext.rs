@@ -277,6 +277,8 @@ mod tests {
             .await?;
         assert!(bad.is_error);
         manager.shutdown().await;
+        drop(node.take_plugin_manager().await);
+        node.endpoint.close().await;
         Ok(())
     }
 
@@ -409,6 +411,9 @@ mod tests {
             mesh_llm_payments::service::PaymentService::open(&directory).is_err(),
             "lock must be held while the engine is live"
         );
+        // Let supervision enter its idle interval before stopping the node.
+        // Shutdown before its first poll would conceal idle ownership retention.
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         manager.shutdown().await;
         drop(manager);
         drop(node.take_plugin_manager().await);

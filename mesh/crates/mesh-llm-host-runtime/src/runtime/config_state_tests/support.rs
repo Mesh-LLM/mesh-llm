@@ -88,6 +88,7 @@ pub(super) fn test_dir() -> PathBuf {
 
 pub(super) fn minimal_valid_config() -> MeshConfig {
     MeshConfig {
+        source_directory: None,
         version: Some(1),
         gpu: GpuConfig {
             host_ram_offload: None,
@@ -98,6 +99,7 @@ pub(super) fn minimal_valid_config() -> MeshConfig {
         owner_control: Default::default(),
         telemetry: Default::default(),
         analytics: Default::default(),
+        updates: Default::default(),
         defaults: None,
         runtime: Default::default(),
         models: vec![],
@@ -120,6 +122,7 @@ pub(super) fn installed_plugin_metadata(
         downloaded_asset_name: format!("{name}.tar.gz"),
         install_path: std::env::temp_dir().join(format!("mesh-llm-plugin-{name}")),
         enabled: true,
+        default_managed: false,
         manifest: Some(InstalledPluginManifestMetadata {
             openai_exchange_hook: None,
             config_schema: schema,
@@ -128,6 +131,7 @@ pub(super) fn installed_plugin_metadata(
         last_protocol_version: Some(1),
         last_status: Some("installed".to_string()),
         last_error: None,
+        verified_sha256: None,
     }
 }
 

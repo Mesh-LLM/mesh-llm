@@ -3,6 +3,7 @@ mod multimodal;
 mod profile;
 mod runtime;
 mod schema_types;
+mod updates;
 
 pub use built_in_schema::{
     BuiltInConfigPathResolution, built_in_config_schema_descriptor, built_in_config_settings,
@@ -16,6 +17,7 @@ pub use runtime::{
     DEFAULT_DRAIN_TIMEOUT_SECS, RuntimeActivityConfig, RuntimeMode, StartupFailurePolicy,
 };
 pub use schema_types::*;
+pub use updates::UpdatesConfig;
 
 pub use mesh_llm_types::runtime::ModelRuntimeKind;
 use serde::ser::SerializeStruct;
@@ -28,6 +30,9 @@ use crate::ConfigValueSource;
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct MeshConfig {
+    /// Runtime origin used to resolve paths without rewriting persisted values.
+    #[serde(skip)]
+    pub source_directory: Option<std::path::PathBuf>,
     #[serde(default)]
     pub version: Option<u32>,
     #[serde(default)]
@@ -40,6 +45,8 @@ pub struct MeshConfig {
     pub telemetry: TelemetryConfig,
     #[serde(default)]
     pub analytics: AnalyticsConfig,
+    #[serde(default)]
+    pub updates: UpdatesConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
     #[serde(default)]
@@ -129,6 +136,11 @@ pub struct RuntimeConfig {
     pub lifecycle_log_parser: LifecycleLogParserMode,
     #[serde(skip)]
     pub lifecycle_log_parser_source: ConfigValueSource,
+    /// Set by `MESH_LLM_LIFECYCLE_LOG_PARSER` for this process only. Never
+    /// saved, so an applied config cannot write the variable into
+    /// `config.toml`.
+    #[serde(skip)]
+    pub lifecycle_log_parser_override: Option<LifecycleLogParserMode>,
     /// Seconds before forcibly unloading a draining instance (default 30).
     #[serde(default = "default_drain_timeout_secs")]
     pub drain_timeout_secs: u64,
@@ -162,6 +174,7 @@ impl Default for RuntimeConfig {
             startup_failure_policy: runtime::StartupFailurePolicy::default(),
             lifecycle_log_parser: LifecycleLogParserMode::default(),
             lifecycle_log_parser_source: ConfigValueSource::Default,
+            lifecycle_log_parser_override: None,
             drain_timeout_secs: runtime::DEFAULT_DRAIN_TIMEOUT_SECS,
             drain_timeout_max_secs: runtime::DEFAULT_DRAIN_TIMEOUT_MAX_SECS,
             activity: runtime::RuntimeActivityConfig::default(),
@@ -273,10 +286,28 @@ pub struct NativeRuntimeConfig {
     pub skippy_abi: Option<String>,
     #[serde(default)]
     pub selection: Option<String>,
+    /// Whether startup may fetch the release catalog and download a runtime.
+    /// Unset means yes; off, only bundled and installed runtimes load.
+    /// `mesh-llm runtime install` ignores it.
+    #[serde(default)]
+    pub download: Option<bool>,
+    /// Set by `MESH_LLM_NO_RUNTIME_DOWNLOAD` for this process only. Never
+    /// saved, so an applied config cannot write the variable into `config.toml`.
+    #[serde(skip)]
+    pub download_override: Option<bool>,
+}
+
+impl NativeRuntimeConfig {
+    pub fn download_enabled(&self) -> bool {
+        self.download_override.or(self.download) != Some(false)
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct MeshRequirementsConfig {
+    /// Require origin-signed relayed peer records in newly created meshes.
+    #[serde(default)]
+    pub require_signed_gossip: bool,
     #[serde(default)]
     pub min_node_version: Option<String>,
     #[serde(default)]
@@ -324,6 +355,12 @@ pub struct ModelConfigDefaults {
 #[derive(Clone, Debug, Default)]
 pub struct ModelConfigEntry {
     pub model: String,
+    pub provider: Option<String>,
+    pub variant: Option<String>,
+    pub options: BTreeMap<String, toml::Value>,
+    pub provider_request_defaults: BTreeMap<String, toml::Value>,
+    pub lifecycle: crate::managed_models::ModelLifecycle,
+    pub source: crate::managed_models::ModelSource,
     pub mmproj: Option<String>,
     pub ctx_size: Option<u32>,
     pub gpu_id: Option<String>,
@@ -352,6 +389,7 @@ impl Serialize for ModelConfigEntry {
     {
         let mut state = serializer.serialize_struct("ModelConfigEntry", 19)?;
         state.serialize_field("model", &self.model)?;
+        self.serialize_model_management(&mut state)?;
         if let Some(value) = &self.mmproj {
             state.serialize_field("mmproj", value)?;
         }
@@ -1190,6 +1228,8 @@ struct RawMeshConfig {
     #[serde(default)]
     analytics: AnalyticsConfig,
     #[serde(default)]
+    updates: UpdatesConfig,
+    #[serde(default)]
     logging: LoggingConfig,
     #[serde(default)]
     defaults: Option<ModelConfigDefaults>,
@@ -1246,8 +1286,18 @@ struct RawModelConfigDefaults {
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
-struct RawModelConfigEntry {
+pub(crate) struct RawModelConfigEntry {
     model: String,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    variant: Option<String>,
+    #[serde(default)]
+    options: BTreeMap<String, toml::Value>,
+    #[serde(default)]
+    lifecycle: crate::managed_models::ModelLifecycle,
+    #[serde(default)]
+    source: crate::managed_models::ModelSource,
     #[serde(default)]
     mmproj: Option<String>,
     #[serde(default)]
@@ -1279,11 +1329,16 @@ struct RawModelConfigEntry {
     #[serde(default)]
     speculative: Option<SpeculativeConfig>,
     #[serde(default)]
-    request_defaults: Option<RequestDefaultsConfig>,
+    request_defaults: Option<toml::Value>,
     #[serde(default)]
     multimodal: Option<MultimodalConfig>,
     #[serde(default)]
     advanced: Option<AdvancedConfig>,
+    /// Keys a `[[models]]` row sets that the row struct does not know. Kept
+    /// out of `ModelConfigEntry` on purpose; validation warns about them
+    /// (see `unknown_fields::unknown_model_row_field_diagnostics`).
+    #[serde(flatten, default)]
+    pub(crate) extra: BTreeMap<String, toml::Value>,
 }
 
 impl<'de> Deserialize<'de> for MeshConfig {
@@ -1294,11 +1349,13 @@ impl<'de> Deserialize<'de> for MeshConfig {
         let raw = RawMeshConfig::deserialize(deserializer)?;
         Ok(Self {
             version: raw.version,
+            source_directory: None,
             gpu: raw.gpu,
             mesh_requirements: raw.mesh_requirements,
             owner_control: raw.owner_control,
             telemetry: raw.telemetry,
             analytics: raw.analytics,
+            updates: raw.updates,
             logging: raw.logging,
             defaults: raw.defaults,
             runtime: raw.runtime,
@@ -1325,8 +1382,18 @@ impl<'de> Deserialize<'de> for ModelConfigEntry {
     where
         D: serde::Deserializer<'de>,
     {
-        let raw = RawModelConfigEntry::deserialize(deserializer)?;
-        Ok(Self::from_raw(raw))
+        let mut raw = RawModelConfigEntry::deserialize(deserializer)?;
+        let request_defaults = raw.request_defaults.take();
+        let mut model = Self::from_raw(raw);
+        if let Some(value) = request_defaults {
+            if model.provider.is_some() {
+                model.provider_request_defaults =
+                    value.try_into().map_err(serde::de::Error::custom)?;
+            } else {
+                model.request_defaults = Some(value.try_into().map_err(serde::de::Error::custom)?);
+            }
+        }
+        Ok(model)
     }
 }
 
@@ -1381,6 +1448,13 @@ impl ModelConfigEntry {
 
         Self {
             model: raw.model,
+            provider: raw.provider,
+            variant: raw.variant,
+            options: raw.options,
+            provider_request_defaults: Default::default(),
+            lifecycle: raw.lifecycle,
+            source: raw.source,
+
             mmproj: multimodal
                 .as_ref()
                 .and_then(|config| config.mmproj.clone())
@@ -1412,7 +1486,7 @@ impl ModelConfigEntry {
             topology: raw.topology,
             skippy: raw.skippy,
             speculative: raw.speculative,
-            request_defaults: raw.request_defaults,
+            request_defaults: None,
             multimodal,
             advanced: raw.advanced,
             gpu_id_from_legacy_shim,
@@ -1768,6 +1842,11 @@ pub struct PluginConfigEntry {
     /// peer. Host-owned; off unless the operator turns it on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allow_peer_blocks: Option<bool>,
+    /// Whether this plugin may subscribe to the local inference observation
+    /// feed (what this node executes, token counts included). Host-owned; off
+    /// unless the operator turns it on. Read when the plugin subscribes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allow_inference_observation: Option<bool>,
     /// Explicit operator lifecycle permissions. An absent grant gives no access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub openai_exchange_grant: Option<crate::OpenAiExchangeGrant>,
@@ -1818,6 +1897,12 @@ impl PluginConfigEntry {
     /// plugin request peer routing blocks. Operator blocks never need it.
     pub const fn peer_blocks_allowed(&self) -> bool {
         matches!(self.allow_peer_blocks, Some(true))
+    }
+
+    /// Off unless the operator has explicitly opted in: only then may the
+    /// plugin subscribe to the local inference observation feed.
+    pub const fn inference_observation_allowed(&self) -> bool {
+        matches!(self.allow_inference_observation, Some(true))
     }
 }
 

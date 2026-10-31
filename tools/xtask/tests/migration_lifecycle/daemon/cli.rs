@@ -3,13 +3,7 @@ use crate::support::{Case, Sentinel};
 
 pub(super) fn case(plan: &Plan) -> Case {
     let case = Case::new(crate::protocol::Behavior::Clean, vec![]);
-    let fixture = std::env::current_exe()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("examples/migration_daemon_fixture");
+    let fixture = crate::fixture_paths::examples_dir().join("migration_daemon_fixture");
     std::fs::copy(fixture, &case.binary).unwrap();
     std::fs::write(
         case.native.join("daemon.json"),

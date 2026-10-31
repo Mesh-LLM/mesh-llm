@@ -47,6 +47,22 @@ fn actual_protected_controller_bootstrap_and_selected_output_order_are_admitted(
     check(&actual()).unwrap();
 }
 #[test]
+fn selection_step_timeout_is_pinned_to_one_bounded_value() {
+    for minutes in ["3", "30", "${{ inputs.timeout_minutes }}"] {
+        let mut workflows = actual();
+        let upstream = steps(&mut workflows)
+            .iter_mut()
+            .find(|step| field(step, "id") == Some("upstream"))
+            .unwrap();
+        *field_mut(upstream, "timeout-minutes") = Node::Scalar(minutes.into());
+        assert!(
+            check(&workflows).is_err(),
+            "admitted timeout-minutes {minutes}"
+        );
+    }
+}
+
+#[test]
 fn upstream_release_selection_cannot_be_bypassed_or_run_for_selected_mesh_source() {
     let mut workflows = actual();
     let upstream = steps(&mut workflows)
@@ -128,6 +144,23 @@ fn selected_compiler_bootstrap_authority_and_masked_owner_execution_are_rejected
         "--expected-origin \"$GITHUB_SERVER_URL/$GITHUB_REPOSITORY\"",
         "--expected-origin \"$MESH_REF\"",
     );
+    *field_mut(step, "run") = Node::Scalar(run);
+    assert!(check(&workflows).is_err());
+}
+
+#[test]
+fn selected_action_cannot_be_unbound_or_omit_native_admission() {
+    for replacement in ["certify-and-publish", "$UNTRUSTED_ACTION"] {
+        let mut workflows = actual();
+        let step = resolve(&mut workflows);
+        *field_mut(field_mut(step, "env"), "MESH_ACTION") = Node::Scalar(replacement.into());
+        assert!(check(&workflows).is_err());
+    }
+    let mut workflows = actual();
+    let step = resolve(&mut workflows);
+    let run = field(step, "run")
+        .unwrap()
+        .replace("--action \"${MESH_ACTION:-certify}\"", "--action certify");
     *field_mut(step, "run") = Node::Scalar(run);
     assert!(check(&workflows).is_err());
 }

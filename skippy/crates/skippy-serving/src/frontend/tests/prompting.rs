@@ -174,6 +174,7 @@ fn chat_response_from_parsed_message_separates_reasoning_content() {
         detokenize_ms: 0.0,
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
+        token_logprobs: None,
     };
     let parsed = ParsedChatMessage {
         content: Some("Final answer.".to_string()),
@@ -228,6 +229,7 @@ fn generated_text_timings_are_present_without_native_mtp() {
         detokenize_ms: 0.0,
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
+        token_logprobs: None,
     };
 
     let timings = output.timings().expect("standard timings");
@@ -266,6 +268,7 @@ fn generated_text_timings_report_standalone_speculative_totals() {
         detokenize_ms: 0.0,
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
+        token_logprobs: None,
     };
 
     let timings = output.timings().expect("standalone speculative timings");
@@ -277,6 +280,7 @@ fn generated_text_timings_report_standalone_speculative_totals() {
 
 #[test]
 fn generated_text_timings_prefer_composite_proposal_totals() {
+    skippy_runtime::test_support::require_native_runtime();
     let mut counters = NativeMtpDecodeCounters::default();
     let context = [1, 2, 3, 1, 2, 3, 1, 2];
     let mut cache = HistoryNgramProposer::new_cache(2, 2).unwrap();
@@ -319,6 +323,7 @@ fn generated_text_timings_prefer_composite_proposal_totals() {
         detokenize_ms: 0.0,
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
+        token_logprobs: None,
     };
 
     let timings = output.timings().expect("timings");
@@ -428,6 +433,96 @@ fn tool_choice_limits_allowed_tool_name() {
     )
     .expect("selected tool call");
     assert_eq!(parsed.tool_calls[0]["function"]["name"], "search");
+}
+
+#[test]
+fn named_tool_choice_reduces_offered_tools_to_the_named_tool() {
+    let tools = json!([
+        {"type": "function", "function": {"name": "get_weather"}},
+        {"type": "function", "function": {"name": "read_file"}}
+    ]);
+    let choice = json!({"type": "function", "function": {"name": "get_weather"}});
+
+    let restricted = effective_tools_for_choice(Some(&tools), Some(&choice))
+        .expect("offered tools stay offered");
+    let entries = restricted.as_array().expect("tool list");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["function"]["name"], "get_weather");
+}
+
+#[test]
+fn bare_string_named_tool_choice_reduces_offered_tools() {
+    let tools = json!([
+        {"type": "function", "function": {"name": "lookup"}},
+        {"type": "function", "function": {"name": "search"}}
+    ]);
+
+    let restricted =
+        effective_tools_for_choice(Some(&tools), Some(&json!("search"))).expect("offered tools");
+    let entries = restricted.as_array().expect("tool list");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["function"]["name"], "search");
+}
+
+#[test]
+fn anthropic_named_tool_choice_reduces_offered_tools() {
+    let tools = json!([
+        {"type": "function", "function": {"name": "lookup"}},
+        {"type": "function", "function": {"name": "search"}}
+    ]);
+    let choice = json!({"type": "tool", "name": "lookup"});
+
+    let restricted =
+        effective_tools_for_choice(Some(&tools), Some(&choice)).expect("offered tools");
+    let entries = restricted.as_array().expect("tool list");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["function"]["name"], "lookup");
+}
+
+#[test]
+fn named_tool_choice_keeps_full_list_when_name_is_not_offered() {
+    let tools = json!([
+        {"type": "function", "function": {"name": "lookup"}},
+        {"type": "function", "function": {"name": "search"}}
+    ]);
+    let choice = json!({"type": "function", "function": {"name": "missing"}});
+
+    let kept = effective_tools_for_choice(Some(&tools), Some(&choice)).expect("offered tools");
+    assert_eq!(kept, tools, "unoffered names keep today's tool list");
+}
+
+#[test]
+fn named_tool_choice_restricts_top_level_tool_names() {
+    let tools = json!([
+        {"name": "lookup", "input_schema": {"type": "object"}},
+        {"name": "search", "input_schema": {"type": "object"}}
+    ]);
+    let choice = json!({"type": "tool", "name": "lookup"});
+
+    let restricted = effective_tools_for_choice(Some(&tools), Some(&choice))
+        .expect("offered tools stay offered");
+
+    assert_eq!(restricted, json!([tools[0]]));
+}
+
+#[test]
+fn unnamed_tool_choice_keeps_all_offered_tools() {
+    let tools = json!([
+        {"type": "function", "function": {"name": "lookup"}},
+        {"type": "function", "function": {"name": "search"}}
+    ]);
+    for choice in [
+        None,
+        Some(json!("auto")),
+        Some(json!("required")),
+        Some(json!("none")),
+        Some(json!({"type": "any"})),
+    ] {
+        let kept =
+            effective_tools_for_choice(Some(&tools), choice.as_ref()).expect("offered tools");
+        assert_eq!(kept, tools, "choice {choice:?} must not drop offered tools");
+    }
+    assert!(effective_tools_for_choice(None, Some(&json!("lookup"))).is_none());
 }
 
 #[test]
@@ -608,4 +703,97 @@ fn chat_message_generation_value_preserves_omitted_content() {
 
     assert!(!value.as_object().unwrap().contains_key("content"));
     assert_eq!(value["tool_calls"][0]["id"], "call_123");
+}
+
+/// Two generated tokens with recorded logprobs; the second one's row was unreadable.
+fn generated_text_with_logprobs() -> GeneratedText {
+    let candidate = |text: &str, logprob: Option<f32>| GeneratedLogprobCandidate {
+        text: text.to_string(),
+        bytes: text.as_bytes().to_vec(),
+        logprob,
+    };
+    GeneratedText {
+        prompt_tokens: 4,
+        completion_tokens: 2,
+        cache_status: "disabled",
+        cached_prompt_tokens: 0,
+        matched_prefix_tokens: 0,
+        suffix_prefill_tokens: 0,
+        cache_hit_kind: None,
+        native_mtp_stats: NativeMtpStats::default(),
+        native_mtp_decode_telemetry: None,
+        verify_window_pipeline_stats: None,
+        speculative_stats: None,
+        prompt_ms: 0.0,
+        predicted_ms: 0.0,
+        queue_wait_ms: 0.0,
+        restore_ms: 0.0,
+        text: "Hi!".to_string(),
+        finish_reason: FinishReason::Stop,
+        detokenize_ms: 0.0,
+        text_emit_ms: 0.0,
+        eog_check_ms: 0.0,
+        token_logprobs: Some(vec![
+            GeneratedTokenLogprob {
+                token: candidate("Hi", Some(-0.25)),
+                top: vec![candidate("Hi", Some(-0.25)), candidate("Hello", Some(-1.5))],
+            },
+            GeneratedTokenLogprob {
+                token: candidate("!", None),
+                top: Vec::new(),
+            },
+        ]),
+    }
+}
+
+#[test]
+fn chat_response_reports_token_logprobs_in_openai_shape() {
+    let output = generated_text_with_logprobs();
+
+    let response = chat_response_from_generated_text("qwen".to_string(), &output, None);
+
+    assert_eq!(
+        response.choices[0].logprobs,
+        Some(json!({
+            "content": [
+                {
+                    "token": "Hi",
+                    "logprob": -0.25,
+                    "bytes": [72, 105],
+                    "top_logprobs": [
+                        {"token": "Hi", "logprob": -0.25, "bytes": [72, 105]},
+                        {"token": "Hello", "logprob": -1.5, "bytes": [72, 101, 108, 108, 111]}
+                    ]
+                },
+                {"token": "!", "logprob": null, "bytes": [33], "top_logprobs": []}
+            ],
+            "refusal": null
+        }))
+    );
+
+    let mut plain = output;
+    plain.token_logprobs = None;
+    let response = chat_response_from_generated_text("qwen".to_string(), &plain, None);
+    assert_eq!(response.choices[0].logprobs, None);
+}
+
+#[test]
+fn completion_response_reports_token_logprobs_in_legacy_shape() {
+    let output = generated_text_with_logprobs();
+
+    let response = completion_response_from_generated_text("qwen".to_string(), &output);
+
+    assert_eq!(
+        response.choices[0].logprobs,
+        Some(json!({
+            "tokens": ["Hi", "!"],
+            "token_logprobs": [-0.25, null],
+            "top_logprobs": [{"Hi": -0.25, "Hello": -1.5}, {}]
+        }))
+    );
+
+    let mut plain = output;
+    plain.token_logprobs = None;
+    let response = completion_response_from_generated_text("qwen".to_string(), &plain);
+    assert_eq!(response.choices[0].logprobs, None);
 }

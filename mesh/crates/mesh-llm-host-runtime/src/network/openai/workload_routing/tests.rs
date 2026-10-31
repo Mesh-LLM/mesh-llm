@@ -1,5 +1,64 @@
 use super::*;
 
+/// The inference surface the OpenAI frontend router recognizes: every route
+/// the router can dispatch to a model target, plus the metadata routes it
+/// serves without model execution. The coverage test below requires every
+/// entry to be workload-classified, System One, or explicitly exempt — a new
+/// route fails CI until it is classified.
+const ROUTER_INFERENCES_PATHS: [&str; 19] = [
+    "/v1/chat/completions",
+    "/v1/completions",
+    "/v1/responses",
+    "/v1/messages",
+    "/v1/embeddings",
+    "/v1/rerank",
+    "/v1/audio/speech",
+    "/v1/audio/transcriptions",
+    "/v1/audio/translations",
+    "/v1/realtime",
+    "/v1/models",
+    "/models",
+    "/v1/tokenize",
+    "/v1/messages/count_tokens",
+    "/systemone",
+    "/v1/decisions",
+    "/mesh/v1/documents/ocr",
+    "/mesh/v1/images/similarity",
+    "/mesh/v1/images/depth",
+];
+
+#[test]
+fn document_ocr_uses_only_the_mesh_namespace() {
+    for path in ["/mesh/v1/documents/ocr", "/mesh/v1/documents/ocr?trace=1"] {
+        assert!(is_document_ocr_path(path));
+        assert_eq!(
+            request_workload_class(path),
+            Some(ModelWorkloadClass::DocumentOcr)
+        );
+    }
+    assert!(!is_document_ocr_path("/v1/documents/ocr"));
+    assert_eq!(request_workload_class("/v1/documents/ocr"), None);
+}
+
+#[test]
+/// Every inference path the frontend router recognizes must carry a workload
+/// class (or be System One). An unclassified route gets no workload admission
+/// at all (fail-open), so a new route fails this gate until it is classified.
+fn router_inference_paths_are_all_classified() {
+    for path in ROUTER_INFERENCES_PATHS {
+        // Metadata routes are served without model execution: no workload class by design.
+        let exempt = matches!(
+            path,
+            "/v1/models" | "/models" | "/v1/tokenize" | "/v1/messages/count_tokens"
+        );
+        let classified = request_workload_class(path).is_some() || is_system_one_path(path);
+        assert!(
+            classified || exempt,
+            "inference path {path} is unclassified and unexempt: it would be admitted without workload filtering"
+        );
+    }
+}
+
 #[test]
 /// Distinguish unrecognized explicit metadata from the old absent-field contract.
 fn unknown_workloads_never_inherit_legacy_admission() {
@@ -223,4 +282,100 @@ fn system_one_requires_its_own_advertised_capability() {
         "/v1/decisions",
         std::slice::from_ref(&unsupported)
     ));
+}
+
+#[test]
+/// A speech-recognition model with verified audio takes both audio-to-text
+/// endpoints and nothing that generates chat text.
+fn speech_recognition_models_serve_only_audio_to_text() {
+    let mut whisper =
+        descriptor_with_workload("whisper", mesh::ModelWorkloadClass::SpeechRecognition);
+    whisper.capabilities_known = true;
+    whisper.capabilities = crate::models::ModelCapabilities {
+        audio: crate::models::CapabilityLevel::Supported,
+        multimodal: true,
+        ..Default::default()
+    };
+    let descriptors = [whisper];
+    for path in ["/v1/audio/transcriptions", "/v1/audio/translations"] {
+        assert!(
+            model_satisfies_request("whisper", path, &descriptors),
+            "{path}"
+        );
+    }
+    for path in [
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/v1/responses",
+        "/v1/embeddings",
+        "/v1/audio/speech",
+    ] {
+        assert!(
+            !model_satisfies_request("whisper", path, &descriptors),
+            "{path}"
+        );
+    }
+}
+
+#[test]
+/// The class alone is not enough: audio upload still needs verified audio.
+fn speech_recognition_without_verified_audio_is_not_routable() {
+    let descriptors = [descriptor_with_workload(
+        "whisper",
+        mesh::ModelWorkloadClass::SpeechRecognition,
+    )];
+    assert!(!model_satisfies_request(
+        "whisper",
+        "/v1/audio/transcriptions",
+        &descriptors
+    ));
+}
+
+#[test]
+/// The mixed-version promise: a peer whose metadata decodes as an unknown
+/// class (an older node reading a newer class, or the reverse) is never sent
+/// audio, even when it advertises verified audio.
+fn unknown_class_peers_never_receive_audio() {
+    let mut future = descriptor_with_workload("whisper", mesh::ModelWorkloadClass::Unknown);
+    future.capabilities_known = true;
+    future.capabilities = crate::models::ModelCapabilities {
+        audio: crate::models::CapabilityLevel::Supported,
+        multimodal: true,
+        ..Default::default()
+    };
+    let descriptors = [future];
+    for path in [
+        "/v1/audio/transcriptions",
+        "/v1/audio/translations",
+        "/v1/chat/completions",
+    ] {
+        assert!(
+            !model_satisfies_request("whisper", path, &descriptors),
+            "{path}"
+        );
+    }
+}
+
+#[test]
+/// `/v1/models` is the chat-compatible listing, so a name the mesh only serves
+/// for document OCR stays off it -- including when a peer is what advertises it.
+fn document_ocr_only_names_are_excluded_from_the_chat_listing() {
+    let descriptors = [
+        descriptor_with_workload("ocr-only", mesh::ModelWorkloadClass::DocumentOcr),
+        descriptor_with_workload("shared", mesh::ModelWorkloadClass::DocumentOcr),
+        descriptor_with_workload("shared", mesh::ModelWorkloadClass::CausalGeneration),
+        descriptor_with_workload("chat", mesh::ModelWorkloadClass::CausalGeneration),
+        local_gguf_descriptor("unnamed-legacy"),
+    ];
+    assert!(serves_only_document_ocr("ocr-only", &descriptors));
+    assert!(!serves_only_document_ocr("shared", &descriptors));
+    assert!(!serves_only_document_ocr("chat", &descriptors));
+    assert!(
+        !serves_only_document_ocr("unnamed-legacy", &descriptors),
+        "name-only advertisement is admitted for chat, so it stays listed"
+    );
+    assert!(
+        !serves_only_document_ocr("peer-only", &descriptors),
+        "a model no descriptor claims is not an OCR model"
+    );
 }

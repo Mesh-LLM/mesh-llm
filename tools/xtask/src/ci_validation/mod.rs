@@ -2,9 +2,12 @@
 
 mod crate_coverage;
 mod documentation;
+pub(crate) mod entrypoint_graph;
 mod entrypoints;
 pub(crate) mod lane_results;
+mod platform_member_filter;
 mod producers;
+mod python_tooling;
 mod release_compilation;
 mod release_containers;
 mod release_dispatch;
@@ -21,12 +24,14 @@ pub(crate) use crate_coverage::{
 use documentation::check_documentation_invariants;
 use entrypoints::{check_orchestrator_invariants, check_workflow_invariants};
 use producers::{ProducerInvariantSources, check_producer_invariants};
+pub(crate) use python_tooling::check as check_python_tooling;
 use release_containers::check_release_container_contracts;
 use release_dispatch::check_release_dispatch_version_preparation;
 use windows_runtime::check_windows_dynamic_runtime_contract;
 
 pub(crate) fn check_docs_and_workflow_invariants(repo_root: &Path) -> DynResult<()> {
     workflow_guards::check(repo_root)?;
+    platform_member_filter::check(repo_root)?;
     check_current_ci_invariants(repo_root)
 }
 

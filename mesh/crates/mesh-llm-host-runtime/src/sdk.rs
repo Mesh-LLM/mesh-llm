@@ -20,10 +20,15 @@ use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
 
 mod embedded_config;
+#[cfg(test)]
+mod embedded_lifecycle_tests;
 pub(crate) mod embedded_logging;
+mod embedded_memberships;
 mod embedded_openai;
+pub(crate) mod embedded_shutdown;
 mod embedded_startup;
 
+pub use crate::runtime::{MeshMembershipConfig, MeshMembershipStatus};
 pub use embedded_config::*;
 pub use embedded_openai::{EmbeddedOpenAiResponse, EmbeddedOpenAiStream, EmbeddedSseEvent};
 
@@ -63,7 +68,7 @@ pub struct EmbeddedServeHandle {
     invite_token: Option<String>,
     control_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::api::RuntimeControlRequest>>,
     task: Option<std::thread::JoinHandle<Result<()>>>,
-    _config_snapshot: NamedTempFile,
+    shutdown: tokio::sync::watch::Sender<bool>,
 }
 
 pub type EmbeddedMeshNodeHandle = EmbeddedServeHandle;
@@ -107,10 +112,10 @@ impl EmbeddedServeHandle {
             .context("embedded mesh runtime join response dropped")?
     }
 
+    /// Request cancellation and wait until the runtime thread finishes cleanup.
+    /// Dropping the handle also requests cancellation, but does not wait for it.
     pub async fn stop(mut self) -> Result<()> {
-        if !self.request_shutdown("sdk") && !self.task_finished() {
-            anyhow::bail!("embedded mesh runtime control channel is unavailable");
-        }
+        self.request_shutdown("sdk");
         let task = self
             .task
             .take()
@@ -119,23 +124,17 @@ impl EmbeddedServeHandle {
         Ok(())
     }
 
-    fn request_shutdown(&mut self, source: &'static str) -> bool {
-        self.control_tx.take().is_some_and(|tx| {
-            tx.send(crate::api::RuntimeControlRequest::Shutdown { source })
-                .is_ok()
-        })
-    }
-
-    fn task_finished(&self) -> bool {
-        self.task
-            .as_ref()
-            .is_none_or(std::thread::JoinHandle::is_finished)
+    fn request_shutdown(&mut self, source: &'static str) {
+        self.shutdown.send_replace(true);
+        if let Some(tx) = self.control_tx.take() {
+            let _ = tx.send(crate::api::RuntimeControlRequest::Shutdown { source });
+        }
     }
 }
 
 impl Drop for EmbeddedServeHandle {
     fn drop(&mut self) {
-        let _ = self.request_shutdown("sdk-drop");
+        self.request_shutdown("sdk-drop");
     }
 }
 
@@ -152,6 +151,7 @@ pub async fn start_embedded_node(
     )?;
     drop(isolated_config);
     let (control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
     let runtime_options = embedded_runtime_options(&config, Some(control_rx));
     let api_base_url = format!("http://127.0.0.1:{}/v1", config.http.api_port);
     let console_url = format!("http://127.0.0.1:{}", config.http.console_port);
@@ -161,19 +161,46 @@ pub async fn start_embedded_node(
         .name("mesh-llm-embedded-serve".to_string())
         .stack_size(stack_size)
         .spawn(move || {
+            // The snapshot must outlive startup cancellation and a dropped
+            // handle, until the runtime has actually finished its cleanup.
+            let _config_snapshot = config_snapshot;
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .thread_name("mesh-llm-embedded-worker")
                 .thread_stack_size(stack_size)
                 .build()
                 .context("build embedded mesh runtime")?;
-            runtime.block_on(crate::runtime::run_embedded_runtime(runtime_options))
+            runtime.block_on(embedded_shutdown::SHUTDOWN.scope(
+                shutdown_rx,
+                crate::runtime::run_embedded_runtime(runtime_options),
+            ))
         })
         .context("spawn embedded mesh runtime thread")?;
-    let status = match wait_for_embedded_status(&console_url, startup_timeout, &task).await {
+    // Install Drop's cancellation guard before the first await after spawning.
+    let mut handle = EmbeddedServeHandle {
+        api_base_url,
+        console_url,
+        invite_token: None,
+        control_tx: Some(control_tx),
+        task: Some(task),
+        shutdown,
+    };
+    let status = match wait_for_embedded_status(
+        &handle.console_url,
+        startup_timeout,
+        handle.task.as_ref().expect("runtime task"),
+    )
+    .await
+    {
         Ok(status) => status,
         Err(error) => {
-            if let Err(shutdown_error) = shutdown_failed_embedded_startup(control_tx, task).await {
+            handle.request_shutdown("sdk-startup-error");
+            if let Err(shutdown_error) = join_embedded_runtime_thread_with_timeout(
+                handle.task.take().expect("runtime task"),
+                EMBEDDED_STARTUP_SHUTDOWN_TIMEOUT,
+            )
+            .await
+            {
                 return Err(error).with_context(|| {
                     format!(
                         "failed to shut down embedded mesh runtime after startup error: {shutdown_error}"
@@ -183,14 +210,8 @@ pub async fn start_embedded_node(
             return Err(error);
         }
     };
-    Ok(EmbeddedServeHandle {
-        api_base_url,
-        console_url,
-        invite_token: token_from_status(&status),
-        control_tx: Some(control_tx),
-        task: Some(task),
-        _config_snapshot: config_snapshot,
-    })
+    handle.invite_token = token_from_status(&status);
+    Ok(handle)
 }
 
 pub async fn start_embedded_serve(config: EmbeddedServeConfig) -> Result<EmbeddedServeHandle> {
@@ -254,6 +275,7 @@ fn embedded_runtime_options(
         trust_policy: config.admission.trust_policy.map(Into::into),
         trust_owner: config.admission.trusted_owners.clone(),
         mesh_requirements: crate::plugin::MeshRequirementsConfig {
+            require_signed_gossip: config.admission.mesh_requirements.require_signed_gossip,
             min_node_version: config.admission.mesh_requirements.min_node_version.clone(),
             max_node_version: config.admission.mesh_requirements.max_node_version.clone(),
             min_protocol_version: config.admission.mesh_requirements.min_protocol_version,
@@ -273,16 +295,6 @@ fn embedded_runtime_options(
         headless: !config.http.console_ui,
         control_rx,
     }
-}
-
-async fn shutdown_failed_embedded_startup(
-    control_tx: tokio::sync::mpsc::UnboundedSender<crate::api::RuntimeControlRequest>,
-    task: std::thread::JoinHandle<Result<()>>,
-) -> Result<()> {
-    let _ = control_tx.send(crate::api::RuntimeControlRequest::Shutdown {
-        source: "sdk-startup-error",
-    });
-    join_embedded_runtime_thread_with_timeout(task, EMBEDDED_STARTUP_SHUTDOWN_TIMEOUT).await
 }
 
 async fn join_embedded_runtime_thread(task: std::thread::JoinHandle<Result<()>>) -> Result<()> {
@@ -340,7 +352,7 @@ async fn wait_for_embedded_status(
 }
 
 async fn fetch_json(url: &str) -> Result<serde_json::Value> {
-    let response = reqwest::Client::new()
+    let response = crate::network::local_http::local_http_client()
         .get(url)
         .send()
         .await
@@ -819,6 +831,7 @@ mod tests {
             .trust_owner("owner-a")
             .trust_owner("owner-b")
             .min_node_version("0.65.0")
+            .require_signed_gossip(true)
             .signed_join_tokens(true)
             .build();
         let options = embedded_runtime_options(&config, None);
@@ -864,6 +877,7 @@ mod tests {
         );
         assert_eq!(options.mesh_requirements.min_protocol_version, Some(1));
         assert!(!options.mesh_requirements.require_release_attestation);
+        assert!(options.mesh_requirements.require_signed_gossip);
     }
 
     #[test]

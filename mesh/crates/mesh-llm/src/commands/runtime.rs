@@ -951,6 +951,7 @@ mod tests {
     #[test]
     fn control_plane_api_cli_builds_apply_request_body() {
         let config = MeshConfig {
+            source_directory: None,
             version: Some(1),
             gpu: GpuConfig {
                 assignment: GpuAssignment::Auto,
@@ -963,6 +964,7 @@ mod tests {
             owner_control: Default::default(),
             telemetry: Default::default(),
             analytics: Default::default(),
+            updates: Default::default(),
             logging: Default::default(),
             defaults: None,
             runtime: Default::default(),

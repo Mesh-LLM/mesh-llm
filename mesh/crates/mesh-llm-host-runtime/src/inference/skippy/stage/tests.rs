@@ -23,6 +23,7 @@ async fn stage_control_shutdown_closes_and_joins_the_control_loop() {
                     run_id: None,
                     stage_id: None,
                 }),
+                requester: coordinator_id(),
                 resp,
             })
             .is_err(),
@@ -126,6 +127,7 @@ fn load_request() -> StageLoadRequest {
         load_mode: LoadMode::RuntimeSlice,
         upstream: None,
         downstream: Some(StagePeerDescriptor {
+            persistent_lane_marker: false,
             stage_id: "stage-1".to_string(),
             stage_index: 1,
             endpoint: "127.0.0.1:9001".to_string(),
@@ -136,6 +138,20 @@ fn load_request() -> StageLoadRequest {
 
 fn coordinator_id() -> iroh::EndpointId {
     iroh::EndpointId::from(iroh::SecretKey::from_bytes(&[0x5a; 32]).public())
+}
+
+#[test]
+fn peer_config_preserves_only_the_resolved_marker_capability() {
+    for supported in [false, true] {
+        let peer = StagePeerDescriptor {
+            persistent_lane_marker: supported,
+            stage_id: "stage-1".into(),
+            stage_index: 1,
+            endpoint: "127.0.0.1:9001".into(),
+            node_id: None,
+        };
+        assert_eq!(peer_config(&peer).persistent_lane_marker, supported);
+    }
 }
 
 fn coordinator_claim_from_load(
@@ -217,7 +233,7 @@ async fn accepted_coordinator_claim_allows_fenced_load() {
     let claim = coordinator_claim_from_load(&load, coordinator_id);
     let mut state = StageControlState::default();
 
-    let ack = state.claim(claim).await.unwrap();
+    let ack = state.claim(claim, coordinator_id).await.unwrap();
     assert!(ack.accepted);
 
     assert_eq!(state.validate_load_claim(&load), None);
@@ -618,7 +634,7 @@ async fn unavailable_native_runtime_rejects_remote_and_local_stage_loads() {
         StageControlRequest::Load(load_request()),
         StageControlRequest::LoadLocal(load_request()),
     ] {
-        let response = state.handle(request).await.unwrap();
+        let response = state.handle(request, coordinator_id()).await.unwrap();
         let StageControlResponse::Ready(response) = response else {
             panic!("load must return a readiness response");
         };

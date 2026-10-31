@@ -104,25 +104,10 @@ impl TestSink {
         self.fail_flag.store(1, AtomicOrdering::Release);
     }
 
-    /// Clear the failing flag.
-    #[allow(dead_code)]
-    pub(super) fn clear_fail(&self) {
-        self.fail_flag.store(0, AtomicOrdering::Release);
-    }
-
     /// Get all records captured so far (for test assertions).
     #[allow(dead_code)]
     pub(super) fn records(&self) -> Vec<TestRecord> {
         self.records.lock().unwrap().clone()
-    }
-
-    /// Count of audit entries with a specific level.
-    #[allow(dead_code)]
-    pub(super) fn audit_count_by_level(&self, level: &str) -> usize {
-        self.records()
-            .iter()
-            .filter(|r| matches!(r, TestRecord::AuditEntry { level: lvl, .. } if lvl == level))
-            .count()
     }
 
     /// Reset records to empty (for multi-phase tests).
@@ -379,7 +364,7 @@ impl Clock for TestClock {
     fn now(&self) -> String {
         let n = self
             .counter
-            .fetch_update(
+            .try_update(
                 AtomicOrdering::Relaxed,
                 AtomicOrdering::Relaxed,
                 |current| current.checked_add(1),

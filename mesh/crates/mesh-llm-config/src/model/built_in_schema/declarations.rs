@@ -25,6 +25,10 @@ fn build_built_in_config_schema() -> ConfigSchema {
             ConfigValueSchema::Boolean,
         ),
         top_level_setting(
+            "mesh_requirements.require_signed_gossip",
+            ConfigValueSchema::Boolean,
+        ),
+        top_level_setting(
             "mesh_requirements.release_signer_keys",
             ConfigValueSchema::Array {
                 items: Box::new(ConfigValueSchema::String),
@@ -45,6 +49,7 @@ fn build_built_in_config_schema() -> ConfigSchema {
         telemetry_setting("telemetry.prompt_shape_metrics", ConfigValueSchema::Boolean),
         telemetry_setting("telemetry.metrics.endpoint", ConfigValueSchema::Url),
         analytics_setting("analytics.enabled", ConfigValueSchema::Boolean),
+        updates_setting("updates.check", ConfigValueSchema::Boolean),
         logging_audit_setting("logging.audit.enabled", ConfigValueSchema::Boolean),
         logging_audit_setting("logging.audit.log_path", ConfigValueSchema::Path),
         logging_audit_setting("logging.audit.log_format", string_enum(["json_lines"])),
@@ -115,6 +120,10 @@ fn build_built_in_config_schema() -> ConfigSchema {
         native_runtime_setting(
             "runtime.native_runtime.selection",
             one_of([string_enum(["recommended"]), ConfigValueSchema::String]),
+        ),
+        native_runtime_setting(
+            "runtime.native_runtime.download",
+            ConfigValueSchema::Boolean,
         ),
         kv_disk_setting(
             "runtime.kv_cache.disk.mode",
@@ -205,6 +214,16 @@ fn model_entry_settings() -> Vec<ConfigSettingSchema> {
         &format!("{model_prefix}.model"),
         ConfigValueSchema::String,
     )];
+    settings.extend([
+        basic_setting(&format!("{model_prefix}.provider"), ConfigValueSchema::String),
+        basic_setting(&format!("{model_prefix}.variant"), ConfigValueSchema::String),
+        basic_setting(&format!("{model_prefix}.options"), ConfigValueSchema::object()),
+        basic_setting(&format!("{model_prefix}.request_defaults"), ConfigValueSchema::object()),
+        top_level_setting(&format!("{model_prefix}.lifecycle.load"), string_enum(["startup", "on_demand"])),
+        top_level_setting(&format!("{model_prefix}.lifecycle.idle_timeout_secs"), ConfigValueSchema::Integer),
+        top_level_setting(&format!("{model_prefix}.lifecycle.prefetch"), ConfigValueSchema::Boolean),
+        basic_setting(&format!("{model_prefix}.source"), ConfigValueSchema::object()),
+    ]);
     settings.extend(model_fit_settings(
         &format!("{model_prefix}.model_fit"),
         &[
@@ -319,6 +338,12 @@ fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
             setting.restart_scope = ConfigRestartScope::None;
             setting
         },
+        // Read when the plugin subscribes, so turning it off ends a running
+        // subscription only when the plugin restarts.
+        plugin_setting(
+            &format!("{plugin_prefix}.allow_inference_observation"),
+            ConfigValueSchema::Boolean,
+        ),
         plugin_setting(
             &format!("{plugin_prefix}.command"),
             ConfigValueSchema::String,
@@ -531,11 +556,42 @@ fn hardware_settings(
         experimental_setting(
             &format!("{prefix}.checkpoint_quantization"),
             string_enum([
-                "preserve", "F32", "F16", "BF16", "Q1_0", "Q2_0", "Q4_0", "Q4_1", "Q5_0",
-                "Q5_1", "IQ2_XXS", "IQ2_XS", "IQ2_S", "IQ2_M", "IQ1_S", "IQ1_M", "TQ1_0",
-                "TQ2_0", "Q2_K", "Q2_K_S", "IQ3_XS", "IQ3_XXS", "IQ3_S", "IQ3_M", "Q3_K_S",
-                "Q3_K_M", "Q3_K_L", "IQ4_NL", "IQ4_XS", "Q4_K_S", "Q4_K_M", "Q5_K_S",
-                "Q5_K_M", "Q6_K", "Q8_0", "MXFP4_MOE",
+                "preserve",
+                "F32",
+                "F16",
+                "BF16",
+                "Q1_0",
+                "Q2_0",
+                "Q4_0",
+                "Q4_1",
+                "Q5_0",
+                "Q5_1",
+                "IQ2_XXS",
+                "IQ2_XS",
+                "IQ2_S",
+                "IQ2_M",
+                "IQ1_S",
+                "IQ1_M",
+                "TQ1_0",
+                "TQ2_0",
+                "Q2_K",
+                "Q2_K_S",
+                "IQ3_XS",
+                "IQ3_XXS",
+                "IQ3_S",
+                "IQ3_M",
+                "Q3_K_S",
+                "Q3_K_M",
+                "Q3_K_L",
+                "IQ4_NL",
+                "IQ4_XS",
+                "Q4_K_S",
+                "Q4_K_M",
+                "Q5_K_S",
+                "Q5_K_M",
+                "Q6_K",
+                "Q8_0",
+                "MXFP4_MOE",
             ]),
         ),
         experimental_setting(
@@ -807,7 +863,10 @@ fn speculative_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
             &format!("{prefix}.verify_window_runahead_tokens"),
             integer_or_auto_schema(),
         ),
-        basic_setting(&format!("{prefix}.ngram_fallback"), ConfigValueSchema::String),
+        basic_setting(
+            &format!("{prefix}.ngram_fallback"),
+            ConfigValueSchema::String,
+        ),
         basic_setting(&format!("{prefix}.gate"), bool_or_auto_schema()),
         basic_setting(
             &format!("{prefix}.gate_min_window_s"),

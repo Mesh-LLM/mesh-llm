@@ -20,6 +20,7 @@ pub(crate) use mesh_llm_control_api::status::metrics::{
 pub(crate) use mesh_llm_control_api::status::runtime::*;
 use serde::Serialize;
 use skippy_serving::InferenceGuardrailsStatus;
+use std::collections::BTreeMap;
 
 pub(crate) fn current_runtime_events_summary() -> Option<RuntimeEventsStatusSummary> {
     let engine = crate::runtime_events::runtime_event_engine()?;
@@ -391,6 +392,36 @@ pub(crate) struct StatusPayload {
     /// state has been initialized so older consumers retain their prior shape.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) logging: Option<LoggingStatusPayload>,
+    /// `plugins`: snapshots plugins published over their local connections,
+    /// by the host's name for each plugin; see [`PluginStatusPayload`].
+    /// Local-only, and omitted while no plugin contributes, so the shape is
+    /// unchanged.
+    #[serde(rename = "plugins", skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) plugin_status: BTreeMap<String, PluginStatusPayload>,
+}
+
+/// One plugin's contribution to `/api/status`. The host owns everything but
+/// `data`, which is the plugin's own, in version `schema_version` of its own
+/// schema. The state and timestamps say when the host last heard from the
+/// plugin, not how old the plugin's readings are.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub(crate) struct PluginStatusPayload {
+    pub(crate) schema_version: u32,
+    pub(crate) state: PluginStatusState,
+    pub(crate) received_at_unix_ms: u64,
+    pub(crate) fresh_until_unix_ms: u64,
+    pub(crate) data: serde_json::Value,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PluginStatusState {
+    /// Published within the freshness the plugin asked for.
+    Ready,
+    /// Its freshness ran out before the plugin published again.
+    Stale,
+    /// The plugin connection that published it is gone.
+    Unavailable,
 }
 
 /// Local-only plugin-mesh frame telemetry.
@@ -587,6 +618,11 @@ pub(crate) struct MeshModelPayload {
     pub(crate) name: String,
     pub(crate) display_name: String,
     pub(crate) status: String,
+    /// The workload the loaded runtime actually serves, the same value the
+    /// model endpoints admit against. Absent for a peer that predates
+    /// workload advertisement, which is not evidence of any class.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) workload_class: Option<crate::mesh::ModelWorkloadClass>,
     pub(crate) node_count: usize,
     pub(crate) mesh_vram_gb: f64,
     pub(crate) size_gb: f64,
@@ -1059,6 +1095,7 @@ mod tests {
             recent_mesh_rejections: vec![],
             plugin_frame_telemetry: PluginFrameTelemetryPayload::default(),
             logging: None,
+            plugin_status: Default::default(),
         };
 
         let json = serde_json::to_string(&status).expect("serialization failed");
@@ -1134,6 +1171,7 @@ mod tests {
             recent_mesh_rejections: vec![],
             plugin_frame_telemetry: PluginFrameTelemetryPayload::default(),
             logging: None,
+            plugin_status: Default::default(),
         };
 
         let json = serde_json::to_string(&status).expect("serialization failed");
@@ -1209,6 +1247,7 @@ mod tests {
             recent_mesh_rejections: vec![],
             plugin_frame_telemetry: PluginFrameTelemetryPayload::default(),
             logging: None,
+            plugin_status: Default::default(),
         };
 
         let json = serde_json::to_value(&status).expect("serialization failed");
@@ -1279,6 +1318,7 @@ mod tests {
             recent_mesh_rejections: vec![],
             plugin_frame_telemetry: PluginFrameTelemetryPayload::default(),
             logging: None,
+            plugin_status: Default::default(),
         };
 
         let json = serde_json::to_value(&status).expect("serialization failed");

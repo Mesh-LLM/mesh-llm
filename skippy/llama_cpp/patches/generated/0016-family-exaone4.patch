@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/exaone4.cpp b/src/models/exaone4.cpp
-index c1c55957a4fd792f6027432dc787c27ce99e0792..7cb835d94cc06066e553374a7750b8245f7a6559 100644
+index 80447908e142e4e1dfb380a3c39e3362a84f01b6..2e82075585e5dcffaa3dc8bbb8c70890e9bfab7a 100644
 --- a/src/models/exaone4.cpp
 +++ b/src/models/exaone4.cpp
 @@ -105,6 +105,8 @@ llama_model_exaone4::graph<iswa>::graph(const llama_model & model, const llm_gra

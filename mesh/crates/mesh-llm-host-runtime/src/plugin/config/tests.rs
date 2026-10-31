@@ -2,7 +2,7 @@ use super::*;
 use crate::plugin::schema_validation::plugin_schema_availability_from_store_root;
 use mesh_llm_config::{
     ConfigDiagnosticCode, ConfigDiagnosticSeverity, FlashAttentionType,
-    validate_config_diagnostics_with_plugin_schemas, with_env_override_for_test,
+    env_override_in_child_for_test, validate_config_diagnostics_with_plugin_schemas,
 };
 use mesh_llm_plugin_manager::{
     InstalledPluginApplyMode, InstalledPluginConfigSchema, InstalledPluginConstraint,
@@ -10,7 +10,7 @@ use mesh_llm_plugin_manager::{
     InstalledPluginSettingSchema, InstalledPluginValueKind, InstalledPluginValueSchema,
     InstalledPluginVisibility, PluginStore,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use tempfile::TempDir;
 
 const FULL_SURFACE_VALID_FIXTURE: &str =
@@ -32,6 +32,8 @@ fn config_override_env_names_owner_totality_is_unchanged() {
         &[
             "MESH_LLM_CONFIG",
             "MESH_LLM_LIFECYCLE_LOG_PARSER",
+            "MESH_LLM_NO_UPDATE_CHECK",
+            "MESH_LLM_NO_RUNTIME_DOWNLOAD",
             "MESH_LLM_BENCHMARK_TUNE_TRIAL",
             "MESH_LLM_EVENT_SYSTEM_TRIAL_MODE"
         ]
@@ -39,58 +41,76 @@ fn config_override_env_names_owner_totality_is_unchanged() {
 }
 
 #[test]
-#[serial_test::serial]
 fn load_config_through_production_wrapper_applies_lifecycle_log_parser_env_override() {
+    if !env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::load_config_through_production_wrapper_applies_lifecycle_log_parser_env_override"
+        ),
+        "MESH_LLM_LIFECYCLE_LOG_PARSER",
+        "enabled",
+    ) {
+        return;
+    }
     let temp = TempDir::new().unwrap();
     let config_path = temp.path().join("config.toml");
     std::fs::write(&config_path, "version = 1\n").unwrap();
 
-    let result = with_env_override_for_test("MESH_LLM_LIFECYCLE_LOG_PARSER", "enabled", || {
-        load_config(Some(&config_path))
-    });
+    let result = load_config(Some(&config_path));
 
     let config = result.expect("config should load through the production wrapper");
+    let selection = config.runtime.lifecycle_log_parser_selection();
     assert_eq!(
-        config.runtime.lifecycle_log_parser,
+        selection.mode,
         mesh_llm_config::LifecycleLogParserMode::Enabled,
         "the plugin-aware production load_config wrapper must honor \
              MESH_LLM_LIFECYCLE_LOG_PARSER the same way mesh_llm_config::load_config does"
     );
-    assert_eq!(
-        config.runtime.lifecycle_log_parser_source,
-        mesh_llm_config::ConfigValueSource::Env
-    );
+    assert_eq!(selection.source, mesh_llm_config::ConfigValueSource::Env);
 }
 
 #[test]
-#[serial_test::serial]
 fn load_config_through_production_wrapper_applies_env_override_when_file_absent() {
+    if !env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::load_config_through_production_wrapper_applies_env_override_when_file_absent"
+        ),
+        "MESH_LLM_LIFECYCLE_LOG_PARSER",
+        "enabled",
+    ) {
+        return;
+    }
     let temp = TempDir::new().unwrap();
     let config_path = temp.path().join("does-not-exist.toml");
 
-    let result = with_env_override_for_test("MESH_LLM_LIFECYCLE_LOG_PARSER", "enabled", || {
-        load_config(Some(&config_path))
-    });
+    let result = load_config(Some(&config_path));
 
     let config =
         result.expect("a default config (no file on disk) must still honor the env override");
     assert_eq!(
-        config.runtime.lifecycle_log_parser,
+        config.runtime.lifecycle_log_parser_selection().mode,
         mesh_llm_config::LifecycleLogParserMode::Enabled
     );
 }
 
 #[test]
-#[serial_test::serial]
 fn load_config_through_production_wrapper_rejects_invalid_lifecycle_log_parser_env_override() {
+    if !env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::load_config_through_production_wrapper_rejects_invalid_lifecycle_log_parser_env_override"
+        ),
+        "MESH_LLM_LIFECYCLE_LOG_PARSER",
+        "not-a-real-mode",
+    ) {
+        return;
+    }
     let temp = TempDir::new().unwrap();
     let config_path = temp.path().join("config.toml");
     std::fs::write(&config_path, "version = 1\n").unwrap();
 
-    let result =
-        with_env_override_for_test("MESH_LLM_LIFECYCLE_LOG_PARSER", "not-a-real-mode", || {
-            load_config(Some(&config_path))
-        });
+    let result = load_config(Some(&config_path));
 
     let err = result.expect_err(
         "an invalid MESH_LLM_LIFECYCLE_LOG_PARSER value must fail startup through the \
@@ -100,23 +120,162 @@ fn load_config_through_production_wrapper_rejects_invalid_lifecycle_log_parser_e
 }
 
 #[test]
-#[serial_test::serial]
 fn validate_config_file_through_production_wrapper_rejects_invalid_lifecycle_log_parser_env_override()
  {
+    if !env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::validate_config_file_through_production_wrapper_rejects_invalid_lifecycle_log_parser_env_override"
+        ),
+        "MESH_LLM_LIFECYCLE_LOG_PARSER",
+        "not-a-real-mode",
+    ) {
+        return;
+    }
     let temp = TempDir::new().unwrap();
     let config_path = temp.path().join("config.toml");
     std::fs::write(&config_path, "version = 1\n").unwrap();
 
-    let result =
-        with_env_override_for_test("MESH_LLM_LIFECYCLE_LOG_PARSER", "not-a-real-mode", || {
-            validate_config_file(Some(&config_path))
-        });
+    let result = validate_config_file(Some(&config_path));
 
     let err = result.expect_err(
         "an invalid MESH_LLM_LIFECYCLE_LOG_PARSER value must fail `mesh-llm config validate` \
              through the production plugin-aware wrapper, never be silently dropped",
     );
     assert!(format!("{err:#}").contains("MESH_LLM_LIFECYCLE_LOG_PARSER"));
+}
+
+#[test]
+fn load_config_through_production_wrapper_applies_no_update_check_env_override() {
+    if !env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::load_config_through_production_wrapper_applies_no_update_check_env_override"
+        ),
+        "MESH_LLM_NO_UPDATE_CHECK",
+        "0",
+    ) {
+        return;
+    }
+    let temp = TempDir::new().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(&config_path, "version = 1\n\n[updates]\ncheck = false\n").unwrap();
+
+    let config =
+        load_config(Some(&config_path)).expect("config should load through the production wrapper");
+    assert!(
+        config.updates.check_enabled(),
+        "MESH_LLM_NO_UPDATE_CHECK=0 must override updates.check = false"
+    );
+}
+
+#[test]
+fn load_config_through_production_wrapper_applies_no_update_check_env_override_without_a_file() {
+    if !env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::load_config_through_production_wrapper_applies_no_update_check_env_override_without_a_file"
+        ),
+        "MESH_LLM_NO_UPDATE_CHECK",
+        "1",
+    ) {
+        return;
+    }
+    let temp = TempDir::new().unwrap();
+
+    let config = load_config(Some(&temp.path().join("does-not-exist.toml")))
+        .expect("a default config must still honor the env override");
+    assert!(!config.updates.check_enabled());
+}
+
+#[test]
+fn load_config_through_production_wrapper_rejects_invalid_no_update_check_env_override() {
+    if !env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::load_config_through_production_wrapper_rejects_invalid_no_update_check_env_override"
+        ),
+        "MESH_LLM_NO_UPDATE_CHECK",
+        "yes",
+    ) {
+        return;
+    }
+    let temp = TempDir::new().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(&config_path, "version = 1\n").unwrap();
+
+    let err = load_config(Some(&config_path))
+        .expect_err("an invalid MESH_LLM_NO_UPDATE_CHECK value must fail, never be defaulted");
+    assert!(format!("{err:#}").contains("MESH_LLM_NO_UPDATE_CHECK"));
+}
+
+#[test]
+fn load_config_through_production_wrapper_applies_no_runtime_download_env_override() {
+    if !env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::load_config_through_production_wrapper_applies_no_runtime_download_env_override"
+        ),
+        "MESH_LLM_NO_RUNTIME_DOWNLOAD",
+        "0",
+    ) {
+        return;
+    }
+    let temp = TempDir::new().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(
+        &config_path,
+        "version = 1\n\n[runtime.native_runtime]\ndownload = false\n",
+    )
+    .unwrap();
+
+    let config =
+        load_config(Some(&config_path)).expect("config should load through the production wrapper");
+    assert!(
+        config.runtime.native_runtime.download_enabled(),
+        "MESH_LLM_NO_RUNTIME_DOWNLOAD=0 must override runtime.native_runtime.download = false"
+    );
+}
+
+#[test]
+fn load_config_through_production_wrapper_applies_no_runtime_download_env_override_without_a_file()
+{
+    if !env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::load_config_through_production_wrapper_applies_no_runtime_download_env_override_without_a_file"
+        ),
+        "MESH_LLM_NO_RUNTIME_DOWNLOAD",
+        "1",
+    ) {
+        return;
+    }
+    let temp = TempDir::new().unwrap();
+
+    let config = load_config(Some(&temp.path().join("does-not-exist.toml")))
+        .expect("a default config must still honor the env override");
+    assert!(!config.runtime.native_runtime.download_enabled());
+}
+
+#[test]
+fn load_config_through_production_wrapper_rejects_invalid_no_runtime_download_env_override() {
+    if !env_override_in_child_for_test(
+        concat!(
+            module_path!(),
+            "::load_config_through_production_wrapper_rejects_invalid_no_runtime_download_env_override"
+        ),
+        "MESH_LLM_NO_RUNTIME_DOWNLOAD",
+        "yes",
+    ) {
+        return;
+    }
+    let temp = TempDir::new().unwrap();
+    let config_path = temp.path().join("config.toml");
+    std::fs::write(&config_path, "version = 1\n").unwrap();
+
+    let err = load_config(Some(&config_path))
+        .expect_err("an invalid MESH_LLM_NO_RUNTIME_DOWNLOAD value must fail, never be defaulted");
+    assert!(format!("{err:#}").contains("MESH_LLM_NO_RUNTIME_DOWNLOAD"));
 }
 
 fn documented_matrix_key_paths() -> BTreeSet<String> {
@@ -149,6 +308,12 @@ fn documented_matrix_key_paths() -> BTreeSet<String> {
 fn test_model(name: &str) -> ModelConfigEntry {
     ModelConfigEntry {
         model: name.into(),
+        provider: None,
+        variant: None,
+        options: BTreeMap::new(),
+        provider_request_defaults: BTreeMap::new(),
+        lifecycle: Default::default(),
+        source: Default::default(),
         mmproj: None,
         ctx_size: None,
         gpu_id: None,
@@ -183,6 +348,7 @@ fn installed_plugin_metadata(
         downloaded_asset_name: format!("{name}.tar.gz"),
         install_path: std::env::temp_dir().join(format!("mesh-llm-plugin-{name}")),
         enabled: true,
+        default_managed: false,
         manifest: Some(InstalledPluginManifestMetadata {
             openai_exchange_hook: None,
             config_schema: schema,
@@ -191,6 +357,7 @@ fn installed_plugin_metadata(
         last_protocol_version: Some(1),
         last_status: Some("installed".to_string()),
         last_error: None,
+        verified_sha256: None,
     }
 }
 

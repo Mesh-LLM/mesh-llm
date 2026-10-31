@@ -148,7 +148,7 @@ fn graph_release_metadata_trust_and_canonical_version_precede_runner_selection()
             "git merge-base --is-ancestor \"$GITHUB_SHA\" refs/remotes/origin/main",
             "Manual release tag already exists and is immutable",
             "git ls-remote --tags origin",
-            "Canary release: leaving main unchanged",
+            "Canary/preview release: leaving main unchanged",
             "does not contain its complete version update",
         ],
     );
@@ -198,7 +198,9 @@ fn graph_release_selector_and_secret_hosts_keep_approved_effective_runner_author
     assert_eq!(input(selector, "ref"), Some("${{ github.ref }}"));
     assert_eq!(
         input(selector, "depot_main_enabled"),
-        Some("${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}")
+        // Rolling previews pass force_hosted_runners=true so main dispatches stay
+        // on GitHub-hosted runners, like tagged releases from release/* refs.
+        Some("${{ vars.DEPOT_RUNNERS_ENABLED == 'true' && inputs.force_hosted_runners != true }}")
     );
     assert_eq!(
         input(selector, "manual_use_depot"),

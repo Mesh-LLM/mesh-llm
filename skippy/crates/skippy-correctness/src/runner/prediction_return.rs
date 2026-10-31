@@ -197,6 +197,7 @@ mod tests {
         StageStateHeader, StageWireMessage, send_reply_predicted, write_stage_message,
     };
 
+    /// Receive a prediction through the dedicated direct-return endpoint.
     #[test]
     fn receives_prediction_over_direct_return_endpoint() {
         let listener = PredictionReturnListener::start().unwrap();
@@ -218,6 +219,7 @@ mod tests {
                 session_id: 13,
                 sampling: None,
                 chat_sampling_metadata: None,
+                readout_tokens: Vec::new(),
                 tokens: Vec::new(),
                 positions: Vec::new(),
                 activation: Vec::new(),
@@ -253,6 +255,7 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(1));
     }
 
+    /// A closed direct-return stream reports a transport error instead of a prediction.
     #[test]
     fn closed_return_stream_reports_the_transport_failure() {
         let listener = PredictionReturnListener::start().unwrap();
@@ -277,6 +280,7 @@ mod tests {
                 session_id: 19,
                 sampling: None,
                 chat_sampling_metadata: None,
+                readout_tokens: Vec::new(),
                 tokens: Vec::new(),
                 positions: Vec::new(),
                 activation: Vec::new(),

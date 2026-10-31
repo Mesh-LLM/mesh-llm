@@ -47,6 +47,7 @@ impl crate::network::metrics::RoutingTelemetrySink for PromptShapeSink {
         _model: Option<&str>,
         _target: &crate::network::metrics::AttemptTarget,
         _outcome: crate::network::metrics::AttemptOutcome,
+        _attempt_ms: f64,
     ) {
     }
 
@@ -113,6 +114,8 @@ pub(super) fn test_peer_serving_model(peer_id: iroh::EndpointId, model: &str) ->
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
+        plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -781,5 +784,69 @@ async fn system_one_read_is_not_sized_by_its_body() -> Result<()> {
         .await,
         vec![peer_id]
     );
+    Ok(())
+}
+
+#[cfg(feature = "payments")]
+fn paid_auto_peer(peer_id: iroh::EndpointId, model: &str) -> mesh::PeerInfo {
+    let mut peer = test_peer_serving_model(peer_id, model);
+    peer.lightning_offers.insert(
+        model.to_owned(),
+        mesh_llm_payments_types::pricing::Pricing {
+            input_msat_per_million: 1,
+            output_msat_per_million: 1,
+            cache_discount_percent: 0,
+        },
+    );
+    peer
+}
+
+#[cfg(feature = "payments")]
+#[tokio::test]
+async fn auto_plan_excludes_paid_model_before_selection() -> Result<()> {
+    let paid = "paid-model-70B";
+    let free = "free-model-7B";
+    let paid_id = iroh::SecretKey::generate().public();
+    let free_id = iroh::SecretKey::generate().public();
+    let node = test_node_with_remote_models(&[(paid, paid_id), (free, free_id)]).await;
+    node.insert_test_peer(paid_auto_peer(paid_id, paid)).await;
+    let affinity = AffinityRouter::new();
+    let mut request = text_auto_request();
+    let plan = build_mesh_request_plan(&node, &mut request, false, &affinity)
+        .await
+        .map_err(|_| anyhow::anyhow!("free alternate should be selected"))?;
+    assert_eq!(plan.effective_model.as_deref(), Some(free));
+    assert_eq!(plan.target_hosts, vec![free_id]);
+    node.endpoint.close().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn multipart_image_auto_request_reaches_workload_selection() -> Result<()> {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client).await?;
+    let affinity = AffinityRouter::new();
+    for path in ["/mesh/v1/images/similarity", "/mesh/v1/images/depth"] {
+        let mut request = text_auto_request();
+        request.client_path = path.into();
+        request.path = path.into();
+        request.body_json = None;
+        request.body_bytes = Some(b"--multipart\r\n\xff\r\n".to_vec());
+        request.body_json_attempted = true;
+        let result = resolve_auto_model_request(AutoModelRequestArgs {
+            node: &node,
+            request: &mut request,
+            served: &[],
+            descriptors: &[],
+            is_auto_request: true,
+            auto_session_key: None,
+            required_tokens: None,
+            affinity: &affinity,
+        })
+        .await;
+        assert!(
+            matches!(result, AutoModelResolution::UnsupportedWorkload),
+            "multipart auto must attempt workload selection"
+        );
+    }
     Ok(())
 }

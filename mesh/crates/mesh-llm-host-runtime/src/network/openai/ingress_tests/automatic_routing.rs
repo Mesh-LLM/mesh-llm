@@ -286,8 +286,14 @@ async fn audio_upload_routes_only_to_an_advertised_audio_workload() {
                 AutoRouteResolution::WorkloadUnsupported(workload) => {
                     panic!("advertised audio-to-text model was rejected for {workload:?}")
                 }
+                AutoRouteResolution::PaymentRequired(reason) => {
+                    panic!("unexpected payment denial: {reason}")
+                }
                 AutoRouteResolution::MediaUnsupported => {
                     panic!("advertised audio-to-text model was rejected for media")
+                }
+                AutoRouteResolution::NoModelReady => {
+                    panic!("models are served, so nothing to wait for")
                 }
             }
         }
@@ -384,7 +390,11 @@ async fn legacy_chat_audio_remains_routable() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("legacy chat-audio was rejected for {workload:?}")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("legacy model advertises audio input"),
+        AutoRouteResolution::NoModelReady => panic!("models are served, so nothing to wait for"),
     }
 }
 
@@ -418,7 +428,11 @@ async fn embedding_auto_route_selects_only_an_embedding_model() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("embedding model was advertised but {workload:?} was rejected")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("embedding request has no media"),
+        AutoRouteResolution::NoModelReady => panic!("models are served, so nothing to wait for"),
     }
 }
 
@@ -502,7 +516,11 @@ async fn plain_text_directive_stays_on_the_committee() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("text request is not a media failure"),
+        AutoRouteResolution::NoModelReady => panic!("models are served, so nothing to wait for"),
     }
 }
 
@@ -537,9 +555,13 @@ async fn image_request_resolves_to_a_vision_capable_model() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => {
             panic!("a vision-capable model is served, so this must not fail")
         }
+        AutoRouteResolution::NoModelReady => panic!("models are served, so nothing to wait for"),
     }
 }
 
@@ -593,7 +615,11 @@ async fn deprecated_alias_behaves_exactly_like_the_directive() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("text request is not a media failure"),
+        AutoRouteResolution::NoModelReady => panic!("models are served, so nothing to wait for"),
     }
 }
 
@@ -636,7 +662,11 @@ async fn streaming_directive_resolves_to_a_single_model() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("no media in this request"),
+        AutoRouteResolution::NoModelReady => panic!("models are served, so nothing to wait for"),
     }
 }
 
@@ -665,7 +695,11 @@ async fn model_less_request_resolves_to_a_single_model() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("no media in this request"),
+        AutoRouteResolution::NoModelReady => panic!("models are served, so nothing to wait for"),
     }
 }
 
@@ -717,6 +751,8 @@ fn peer_serving(peer_id: iroh::EndpointId, model: &str, vision: bool) -> mesh::P
         stage_status_list_supported: false,
         local_gguf_content_id_supported: false,
         decode_batch_policy_supported: false,
+        plugin_origin_signature_supported: false,
+        persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -796,9 +832,13 @@ async fn image_request_selects_a_vision_model_served_only_by_a_peer() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => {
             panic!("a peer serves a vision model, so this must not be refused")
         }
+        AutoRouteResolution::NoModelReady => panic!("models are served, so nothing to wait for"),
     }
 }
 
@@ -828,7 +868,11 @@ async fn text_request_still_convenes_a_committee_across_two_nodes() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("text request is not a media failure"),
+        AutoRouteResolution::NoModelReady => panic!("models are served, so nothing to wait for"),
     }
 }
 
@@ -856,7 +900,11 @@ async fn an_explicitly_named_model_is_never_reinterpreted() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("explicit routing is untouched"),
+        AutoRouteResolution::NoModelReady => panic!("models are served, so nothing to wait for"),
     }
 }
 
@@ -1011,6 +1059,23 @@ async fn a_non_chat_endpoint_resolves_to_a_single_model() {
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             panic!("generation request unexpectedly rejected for {workload:?}")
         }
+        AutoRouteResolution::PaymentRequired(reason) => {
+            panic!("unexpected payment denial: {reason}")
+        }
         AutoRouteResolution::MediaUnsupported => panic!("no media in this request"),
+        AutoRouteResolution::NoModelReady => panic!("models are served, so nothing to wait for"),
     }
+}
+
+#[tokio::test]
+async fn directive_before_any_model_is_served_waits_instead_of_rejecting() {
+    // While the only model is still loading the node serves nothing. That is
+    // transient, so it must not read as a workload no served model supports.
+    let (node, targets) = node_serving(&[]).await;
+    let mut body = text_body(Some(automatic::DIRECTIVE));
+    body["stream"] = serde_json::json!(true);
+
+    let resolution = resolve(Some(automatic::DIRECTIVE), &body, &node, &targets, &[]).await;
+
+    assert!(matches!(resolution, AutoRouteResolution::NoModelReady));
 }
