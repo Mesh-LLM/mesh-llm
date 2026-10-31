@@ -25,6 +25,7 @@ mod memberships;
 mod model_lifecycle;
 mod model_presentation;
 pub(crate) mod model_reconciliation;
+pub(crate) mod native_model_lifecycle;
 mod node_lifecycle_events;
 mod operational_logging;
 mod options;
