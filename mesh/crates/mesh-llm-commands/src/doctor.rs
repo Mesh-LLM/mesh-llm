@@ -20,7 +20,7 @@ pub async fn run_network_doctor(port: u16, json_output: bool) -> Result<()> {
 }
 
 async fn fetch_network_report(port: u16) -> Result<Value> {
-    let client = reqwest::Client::builder()
+    let client = mesh_llm_system::local_http::local_http_client_builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
     let url = format!("http://127.0.0.1:{port}/api/diagnostics/network");
