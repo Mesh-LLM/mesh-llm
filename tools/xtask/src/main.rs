@@ -75,6 +75,9 @@ fn run() -> DynResult<()> {
         cli::CliCommand::EventBenchmarkComparison(rest) => {
             automation::event_benchmark_comparison::run(rest)
         }
+        cli::CliCommand::SkippyBenchmarkCompare(rest) => {
+            automation::skippy_benchmark_compare::run(rest)
+        }
         cli::CliCommand::AgenticPromptManifest(rest) => {
             automation::agentic_prompt_manifest::run(rest)
         }
