@@ -80,6 +80,7 @@ async fn spawn_with_runner(
             args: Vec::new(),
             url: None,
             env: BTreeMap::new(),
+            settings: Default::default(),
             startup: crate::plugin::PluginStartupOptions {
                 lazy_start,
                 ..crate::plugin::PluginStartupOptions::default()

@@ -5,18 +5,22 @@ use mesh_llm_types::mesh::{DEMAND_TTL_SECS, merge_demand};
 
 mod control_listener;
 mod memberships;
+mod signed_gossip;
 
 include!("connections.rs");
+include!("own_invite_token.rs");
 include!("admission/helpers.rs");
 include!("endpoint_shutdown.rs");
 include!("protocol_compat.rs");
 include!("owner_control.rs");
 include!("stage_transport.rs");
+include!("stage_control_identity.rs");
 include!("peer_state.rs");
 include!("plugin_snapshot.rs");
 include!("protocol_frames.rs");
 include!("admission.rs");
 include!("requirements.rs");
+include!("plugin_mesh_identity.rs");
 
 mod split_coverage {
     use super::super::*;

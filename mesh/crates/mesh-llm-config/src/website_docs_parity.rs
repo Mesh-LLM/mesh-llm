@@ -70,10 +70,19 @@ mod tests {
         format!("{CONFIG_TOML_MD}\n{CONFIG_DEFAULTS_MD}\n{CONFIG_MODELS_MD}\n{CONFIG_REFERENCE_MD}")
     }
 
-    /// The built-in schema has exactly two top-level fields with no dot in
+    /// The built-in schema includes top-level fields with no dot in
     /// their canonical path: the schema-version field and the required
-    /// `[[models]]` entry's `model` reference.
-    const DOTLESS_TOP_LEVEL_FIELDS: [&str; 2] = ["version", "model"];
+    /// `[[models]]` entry's model reference and managed-provider controls.
+    const DOTLESS_TOP_LEVEL_FIELDS: [&str; 8] = [
+        "version",
+        "model",
+        "provider",
+        "variant",
+        "options",
+        "request_defaults",
+        "lifecycle",
+        "source",
+    ];
 
     fn looks_like_config_path(candidate: &str) -> bool {
         if DOTLESS_TOP_LEVEL_FIELDS.contains(&candidate) {

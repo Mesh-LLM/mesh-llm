@@ -331,6 +331,7 @@ mod tests {
         let mut options = options();
         options.config.model_path = Some("does-not-exist.gguf".into());
         options.config.downstream = Some(skippy_protocol::PeerConfig {
+            persistent_lane_marker: false,
             stage_id: "stage-1".into(),
             stage_index: 1,
             endpoint: "127.0.0.1:19001".into(),

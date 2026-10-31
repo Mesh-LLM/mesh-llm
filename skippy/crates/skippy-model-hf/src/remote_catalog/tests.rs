@@ -331,6 +331,15 @@ fn hf_layer_package_probe_preserves_explicit_revision() {
 }
 
 #[test]
+fn hf_probe_failure_warning_classifies_the_repository_name() {
+    assert!(repo_uses_layer_package_suffix("meshllm/Qwen3-8B-layers"));
+    assert!(!repo_uses_layer_package_suffix("unsloth/Qwen3-8B-GGUF"));
+    assert!(!repo_uses_layer_package_suffix(
+        "meshllm-layers/Qwen3-8B-GGUF"
+    ));
+}
+
+#[test]
 fn parse_entries_recursive_uses_sorted_directory_order() {
     let temp = tempfile::tempdir().unwrap();
     let z_dir = temp.path().join("z");

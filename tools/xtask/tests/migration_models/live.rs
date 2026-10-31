@@ -6,7 +6,7 @@ use crate::support::{Stage, TestResult, assert_streams, fixture_dir, repository_
 use serde_json::Value;
 use std::fs;
 
-const OUTPUTS: [&str; 13] = [
+const OUTPUTS: [&str; 14] = [
     "ci/llama-canary/family-certified.json",
     "ci/model-artifacts/manifests/product-smoke.json",
     "ci/model-artifacts/manifests/scripted-binary-smoke.json",
@@ -20,6 +20,7 @@ const OUTPUTS: [&str; 13] = [
     "ci/model-artifacts/manifests/skippy-parity.json",
     "ci/model-artifacts/manifests/competitive-benchmark.json",
     "ci/model-artifacts/manifests/radix-cache.json",
+    "ci/model-artifacts/manifests/skippy-cpp-api.json",
 ];
 
 #[test]
@@ -46,7 +47,7 @@ fn migration_models_regenerated_real_registry_is_byte_identical() -> TestResult 
         "",
         "",
     );
-    // Then: all thirteen outputs equal the checked-in bytes.
+    // Then: every output equals the checked-in bytes.
     for path in OUTPUTS {
         assert_eq!(
             stage.read(path)?,
@@ -65,7 +66,7 @@ fn migration_models_frozen_manifests_match_the_checkout() -> TestResult {
         let name = path.rsplit('/').next().ok_or("manifest name")?;
         // Then: frozen artifact payloads remain unchanged apart from the
         // registry digest and Qwen's added System One membership.
-        if name == "skippy-system-one-smoke.json" {
+        if matches!(name, "skippy-system-one-smoke.json" | "skippy-cpp-api.json") {
             continue;
         }
         let mut frozen: Value =
@@ -95,6 +96,16 @@ fn migration_models_frozen_manifests_match_the_checkout() -> TestResult {
                         .as_array_mut()
                         .ok_or("frozen Qwen suites")?
                         .push(Value::from("skippy-system-one-smoke"));
+                }
+                if row["id"] == "smollm2-q8-inference" {
+                    row["suites"]
+                        .as_array_mut()
+                        .ok_or("frozen SmolLM suites")?
+                        .push(Value::from("skippy-cpp-api"));
+                    row["cadences"]
+                        .as_array_mut()
+                        .ok_or("frozen SmolLM cadences")?
+                        .push(Value::from("manual"));
                 }
             }
         }

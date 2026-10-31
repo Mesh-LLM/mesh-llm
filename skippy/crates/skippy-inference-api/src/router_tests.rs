@@ -974,6 +974,35 @@ fn upstream_error_body_maps_legacy_string_error_shape() {
 }
 
 #[test]
+fn upstream_client_errors_are_not_reported_as_server_errors() {
+    // A task provider rejects a response type the route cannot produce, or a
+    // request the plugin considers unprocessable. Both are the caller's to fix,
+    // and a body that says `server_error` invites a retry that can never work.
+    for (status, expected_type) in [
+        (406, "invalid_request_error"),
+        (409, "invalid_request_error"),
+        (413, "invalid_request_error"),
+        (422, "invalid_request_error"),
+    ] {
+        let body = br#"{"error":{"message":"no supported response representation is acceptable"}}"#;
+        let mapped = map_upstream_error_body(status, body).expect("body should be remapped");
+        let value: Value = serde_json::from_slice(&mapped).unwrap();
+        assert_eq!(
+            value["error"]["type"], expected_type,
+            "status {status} should not report a client error as a server error"
+        );
+        assert_eq!(
+            value["error"]["message"],
+            "no supported response representation is acceptable"
+        );
+    }
+    let mapped = map_upstream_error_body(413, br#"{"message":"upload too large"}"#)
+        .expect("body should be remapped");
+    let value: Value = serde_json::from_slice(&mapped).unwrap();
+    assert_eq!(value["error"]["code"], "payload_too_large");
+}
+
+#[test]
 fn already_openai_error_passthrough_is_detected() {
     let value = json!({
         "error": {

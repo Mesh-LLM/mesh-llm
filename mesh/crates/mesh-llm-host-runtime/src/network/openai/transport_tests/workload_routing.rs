@@ -21,8 +21,13 @@ async fn document_ocr_requires_ocr_metadata_on_each_target() {
         election::InferenceTarget::Remote(ocr),
     ];
     assert_eq!(
-        workload_routing::eligible_targets(&node, MODEL, "/v1/documents/ocr?trace=1", &candidates)
-            .await,
+        workload_routing::eligible_targets(
+            &node,
+            MODEL,
+            "/mesh/v1/documents/ocr?trace=1",
+            &candidates
+        )
+        .await,
         vec![election::InferenceTarget::Remote(ocr)]
     );
 }
@@ -50,7 +55,7 @@ async fn ocr_plugin_does_not_authorize_a_native_port_with_same_model_name() {
     node.set_plugin_manager(manager).await;
     let native = vec![election::InferenceTarget::Local(9337)];
     assert!(
-        workload_routing::eligible_targets(&node, MODEL, "/v1/documents/ocr", &native)
+        workload_routing::eligible_targets(&node, MODEL, "/mesh/v1/documents/ocr", &native)
             .await
             .is_empty()
     );

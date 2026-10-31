@@ -50,24 +50,23 @@ fn spawn_runtime_model_exit_watcher(
     });
 }
 
-async fn plan_runtime_model_bytes(model_path: &Path, requested_model: &str) -> u64 {
+async fn plan_runtime_model_sizing(model_path: &Path, requested_model: &str) -> RuntimeModelSizing {
     let planning_path = model_path.to_path_buf();
-    tokio::task::spawn_blocking(move || runtime_model_planning_bytes(&planning_path))
+    tokio::task::spawn_blocking(move || runtime_model_sizing(&planning_path))
         .await
-        .unwrap_or_else(|err| {
-            Err(anyhow::anyhow!(
-                "join runtime model byte planning task: {err}"
-            ))
-        })
+        .unwrap_or_else(|err| Err(anyhow::anyhow!("join runtime model sizing task: {err}")))
         .unwrap_or_else(|err| {
             let fallback = election::total_model_bytes(model_path);
             tracing::warn!(
                 model = %requested_model,
                 error = %err,
                 fallback_bytes = fallback,
-                "failed to resolve runtime model planning bytes; using filesystem size fallback"
+                "failed to resolve runtime model sizing; using filesystem size fallback"
             );
-            fallback
+            RuntimeModelSizing {
+                model_bytes: fallback,
+                compact_meta: None,
+            }
         })
 }
 
@@ -81,7 +80,7 @@ fn resolve_runtime_model_config<'a>(
     let matching = config
         .models
         .iter()
-        .filter(|model| model.model == selector)
+        .filter(|model| model.provider.is_none() && model.model == selector)
         .collect::<Vec<_>>();
     if matching.is_empty() {
         anyhow::ensure!(
@@ -187,6 +186,7 @@ struct ResolvedRuntimeModelSource {
 
 /// State owned by the post-launch registration phase.
 struct RuntimeModelLaunchSuccess {
+    native_residency: bool,
     requested_model: String,
     config_model_id: Option<String>,
     profile: String,
@@ -303,6 +303,7 @@ async fn finish_runtime_model_load(
     success: RuntimeModelLaunchSuccess,
 ) -> api::RuntimeLoadResponse {
     let RuntimeModelLaunchSuccess {
+        native_residency,
         requested_model,
         config_model_id,
         profile,
@@ -338,7 +339,6 @@ async fn finish_runtime_model_load(
     });
     ctx.survey_telemetry
         .record_launch_success(&survey_loaded_model, launch_started.elapsed());
-    add_runtime_local_target(ctx.target_tx, &loaded_name, handle.port);
     // Publish Skippy's render-only reasoning-control observations for this model,
     // so `/v1/models` can attach them to the entry this node serves.
     skippy::register_local_thinking(&loaded_name, handle.thinking.as_ref());
@@ -403,6 +403,7 @@ async fn finish_runtime_model_load(
     );
     ctx.runtime_survey_models
         .insert(instance_id.clone(), survey_loaded_model);
+    let loaded_port = handle.port;
     let loaded_backend = handle.backend.clone();
     let loaded_context_length = handle.context_length;
     let lifecycle = std::sync::Arc::new(tokio::sync::Mutex::new(InstanceLifecycleRecord::new(
@@ -421,6 +422,15 @@ async fn finish_runtime_model_load(
             lifecycle,
         },
     );
+    if native_residency && let Some(service) = ctx.node.native_model_lifecycle.get() {
+        service.record_loaded(
+            config_model_id.as_deref().unwrap_or(&requested_model),
+            &instance_id,
+            &loaded_name,
+            loaded_port,
+        );
+    }
+    add_runtime_local_target(ctx.target_tx, &loaded_name, loaded_port);
     record_runtime_model_load_terminal(
         RuntimeOperationalEvent::ModelReady,
         &loaded_name,
@@ -439,12 +449,67 @@ async fn finish_runtime_model_load(
     }
 }
 
+/// Audit configured preflight before any native source policy is published.
+async fn prepare_configured_runtime_load(
+    ctx: &RunAutoRuntimeLoopContext<'_>,
+    model_overrides: Option<&plugin::ModelConfigEntry>,
+    config_model_id: Option<&str>,
+    instance_id: &str,
+    load_started: Instant,
+) -> Result<Option<super::configured_load::ConfiguredLoadPlan>> {
+    match model_overrides.filter(|model| {
+        config_model_id.is_some()
+            && model.lifecycle.load == mesh_llm_config::managed_models::ModelLoadPolicy::OnDemand
+    }) {
+        Some(model) => Ok(Some(audit_runtime_model_load_result(
+            super::configured_load::prepare(ctx, model).await,
+            runtime_model_audit_context(None, instance_id),
+            load_started,
+        )?)),
+        None => Ok(None),
+    }
+}
+
+/// Pair capacity admission failure auditing with source-policy rollback.
+fn reserve_audited_runtime_capacity(
+    ctx: &mut RunAutoRuntimeLoopContext<'_>,
+    instance_id: &str,
+    runtime_model_name: &str,
+    profile: &str,
+    target: RuntimeCapacityTarget<'_>,
+    model_bytes: u64,
+    load_started: Instant,
+) -> Result<RuntimeCapacityReservation> {
+    match audit_runtime_model_load_result(
+        reserve_runtime_capacity_for_model(
+            ctx.runtime_capacity_ledger,
+            instance_id,
+            runtime_model_name,
+            target,
+            model_bytes,
+        ),
+        runtime_model_audit_context(Some(runtime_model_name), instance_id),
+        load_started,
+    ) {
+        Ok(reservation) => Ok(reservation),
+        Err(error) => {
+            super::unload::unregister_local_source_policy_if_unused(
+                ctx,
+                runtime_model_name,
+                profile,
+            );
+            Err(error)
+        }
+    }
+}
+
 /// Run auto-load for a runtime model.
 pub(crate) async fn run_auto_load_runtime_model(
     ctx: &mut RunAutoRuntimeLoopContext<'_>,
     spec: String,
     config_model_id: Option<String>,
     profile: String,
+    native_residency: bool,
 ) -> Result<api::RuntimeLoadResponse> {
     crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let (spec, profile) = normalize_runtime_model_request_for_config(
@@ -468,57 +533,93 @@ pub(crate) async fn run_auto_load_runtime_model(
         runtime_model_audit_context(None, &instance_id),
         load_started,
     )?;
-    let ResolvedRuntimeModelSource {
-        model_path,
-        runtime_model_name,
-        local_source_required,
-    } = resolve_runtime_model_source(
+    let prepared = prepare_configured_runtime_load(
         ctx,
-        &spec,
-        config_model_id.as_deref(),
-        &profile,
         model_overrides,
+        config_model_id.as_deref(),
         &instance_id,
         load_started,
     )
     .await?;
+    let ResolvedRuntimeModelSource {
+        model_path,
+        runtime_model_name,
+        local_source_required,
+    } = match prepared.as_ref() {
+        Some(prepared) => ResolvedRuntimeModelSource {
+            model_path: prepared.plan.resolved_path.clone(),
+            runtime_model_name: prepared.plan.declared_ref.clone(),
+            local_source_required: prepared.plan.local_source_required,
+        },
+        None => {
+            resolve_runtime_model_source(
+                ctx,
+                &spec,
+                config_model_id.as_deref(),
+                &profile,
+                model_overrides,
+                &instance_id,
+                load_started,
+            )
+            .await?
+        }
+    };
+    let pinned_gpu = prepared
+        .as_ref()
+        .and_then(|prepared| prepared.plan.pinned_gpu.as_ref());
+    let mmproj_path = prepared
+        .as_ref()
+        .and_then(|prepared| prepared.plan.mmproj_path.as_deref());
+    let device_override = prepared.as_ref().and_then(|prepared| {
+        super::super::startup_models::startup_device_override(prepared.plan.gpu_id.as_deref())
+    });
+    let capacity_bytes = prepared
+        .as_ref()
+        .map(|prepared| prepared.capacity_bytes)
+        .unwrap_or_else(|| ctx.node.local_runtime_capacity_bytes());
     // §8.2 "model resolution completed": the model's source is now known
     // (local path or remote catalog ref), before any native load work.
     load_op.resolution_completed(&runtime_model_name);
     let requested_model = spec.clone();
-    let model_bytes = plan_runtime_model_bytes(&model_path, &requested_model).await;
+    let sizing = plan_runtime_model_sizing(&model_path, &requested_model).await;
+    let model_bytes = sizing.model_bytes;
+    let admission_bytes = audit_runtime_model_load_result(
+        super::configured_load::model_and_projector_bytes(model_bytes, mmproj_path),
+        runtime_model_audit_context(Some(&runtime_model_name), &instance_id),
+        load_started,
+    )?;
+    // Configured preflight must succeed before publishing its source policy.
+    skippy::register_local_source_policy(&runtime_model_name, &profile, local_source_required);
+    let device_override = if super::super::local_laya::is_laya(sizing.compact_meta.as_ref()) {
+        super::super::local_laya::resolve_laya_device(
+            device_override.as_deref(),
+            pinned_gpu.map(|gpu| gpu.backend_device.as_str()),
+        )
+    } else {
+        device_override
+    };
+    let capacity_target = RuntimeCapacityTarget {
+        compact_meta: sizing.compact_meta.as_ref(),
+        pinned_gpu,
+        device_override: device_override.as_deref(),
+        node_capacity_bytes: capacity_bytes,
+        host_ram_capacity_bytes: ctx.node.host_ram_capacity_bytes,
+    };
     let ctx_size_override = runtime_model_ctx_size_override(ctx.options, model_overrides);
     let parallel_override = crate::runtime::startup_models::resolve_model_parallel_override(
         model_overrides.and_then(|m| m.parallel),
         &ctx.config.gpu,
     );
-    let capacity_reservation = match audit_runtime_model_load_result(
-        reserve_runtime_capacity_for_model(
-            ctx.runtime_capacity_ledger,
-            &instance_id,
-            &runtime_model_name,
-            None,
-            ctx.node.local_runtime_capacity_bytes(),
-            model_bytes,
-        ),
-        runtime_model_audit_context(Some(&runtime_model_name), &instance_id),
+    let capacity_reservation = reserve_audited_runtime_capacity(
+        ctx,
+        &instance_id,
+        &runtime_model_name,
+        &profile,
+        capacity_target,
+        admission_bytes,
         load_started,
-    ) {
-        Ok(reservation) => {
-            // §8.4 "model capacity changed": local capacity is now
-            // reserved for this load.
-            load_op.capacity_changed(&runtime_model_name);
-            reservation
-        }
-        Err(error) => {
-            super::unload::unregister_local_source_policy_if_unused(
-                ctx,
-                &runtime_model_name,
-                &profile,
-            );
-            return Err(error);
-        }
-    };
+    )?;
+    load_op.capacity_changed(&runtime_model_name);
     add_serving_assignment(ctx.node, ctx.primary_model_name, &runtime_model_name).await;
     let launch_started = Instant::now();
     let capacity_budget_bytes = capacity_reservation.capacity_budget_bytes();
@@ -531,12 +632,14 @@ pub(crate) async fn run_auto_load_runtime_model(
                 .or_else(|| model_overrides.map(|model| model.model.as_str())),
             runtime_profile: &profile,
             model_path: &model_path,
-            preindexed_split_package: None,
+            preindexed_split_package: prepared
+                .as_ref()
+                .and_then(|prepared| prepared.plan.preindexed_split_package.as_ref()),
             model_bytes,
-            mmproj_override: None,
+            mmproj_override: mmproj_path,
             ctx_size_override,
-            pinned_gpu: None,
-            device_override: None,
+            pinned_gpu,
+            device_override: device_override.clone(),
             capacity_budget_bytes: Some(capacity_budget_bytes),
             cache_type_k_override: model_overrides.and_then(|m| m.cache_type_k.as_deref()),
             cache_type_v_override: model_overrides.and_then(|m| m.cache_type_v.as_deref()),
@@ -601,6 +704,7 @@ pub(crate) async fn run_auto_load_runtime_model(
     Ok(finish_runtime_model_load(
         ctx,
         RuntimeModelLaunchSuccess {
+            native_residency,
             requested_model,
             config_model_id,
             profile,
@@ -744,6 +848,22 @@ mod tests {
         .expect_err("a stale config selector must not enter unconfigured resolution");
 
         assert!(error.to_string().contains("is no longer present"));
+    }
+
+    #[test]
+    fn provider_entry_does_not_ambiguate_a_native_runtime_profile() {
+        let native = strict_model("org/model");
+        let profile = native.derived_profile();
+        let provider = ModelConfigEntry {
+            model: "org/model".into(),
+            provider: Some("onnx".into()),
+            ..Default::default()
+        };
+        let config = config_with(vec![provider, native]);
+        let (model, actual) =
+            resolve_runtime_model_config(&config, Some("org/model"), "org/model", "").unwrap();
+        assert!(model.unwrap().provider.is_none());
+        assert_eq!(actual, profile);
     }
 
     #[test]

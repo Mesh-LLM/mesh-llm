@@ -25,3 +25,18 @@ Host-only orchestration, process lifecycle, plugin config loading, MCP bridge
 hosting, and built-in plugin wiring should remain in the host crate for now and
 move later to a dedicated plugin-host crate. Keep this crate focused on the
 stable API and protocol surface that plugin authors can depend on.
+
+## Invocation callbacks
+
+Hosts and SDK runtimes negotiate `invocation_callbacks.v1` during initialization.
+The host assigns an optional `invocation_id` to forwarded RPC and service calls.
+`PluginContext::request_host` and `notify_host` echo it automatically, including
+from a context retained with `owned()`. Keep that invocation context when spawning
+work; a fresh context has no callback owner.
+
+Capable plugins can serve concurrent MCP calls. The host routes each callback to
+its exact originating session and rejects missing, unknown, or finished IDs.
+Callbacks already running may finish, but cannot keep a completed invocation open
+for new callbacks. Legacy plugins retain per-plugin serialization. The new proto3
+fields are optional, and the protocol version and existing field numbers stay
+unchanged.

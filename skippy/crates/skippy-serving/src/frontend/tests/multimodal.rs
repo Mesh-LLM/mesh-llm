@@ -551,6 +551,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         stage1_addr,
     );
     stage1_config.upstream = Some(skippy_protocol::PeerConfig {
+        persistent_lane_marker: false,
         stage_id: "stage-0".to_string(),
         stage_index: 0,
         endpoint: stage0_addr.to_string(),
@@ -562,6 +563,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
     stage0_config.n_batch = Some(256);
     stage0_config.n_ubatch = Some(32);
     stage0_config.downstream = Some(skippy_protocol::PeerConfig {
+        persistent_lane_marker: false,
         stage_id: "stage-1".to_string(),
         stage_index: 1,
         endpoint: stage1_addr.to_string(),

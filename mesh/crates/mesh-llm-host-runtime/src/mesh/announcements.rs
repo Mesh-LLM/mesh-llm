@@ -210,6 +210,17 @@ impl Node {
                             model_name,
                             ..Default::default()
                         },
+                        capabilities_known: true,
+                        capabilities: crate::models::ModelCapabilities {
+                            audio: if workload_class
+                                == crate::mesh::ModelWorkloadClass::SpeechRecognition
+                            {
+                                crate::models::CapabilityLevel::Supported
+                            } else {
+                                crate::models::CapabilityLevel::None
+                            },
+                            ..Default::default()
+                        },
                         metadata: Some(ServedModelMetadata {
                             workload_class: Some(workload_class),
                             ..Default::default()
@@ -285,6 +296,8 @@ impl Node {
             // Advertised unconditionally: there is no build-time variability
             // behind it, unlike artifact transfer.
             decode_batch_policy_supported: true,
+            plugin_origin_signature_supported: true,
+            persistent_lane_marker_supported: true,
             advertised_model_throughput: data.advertised_model_throughput,
             #[cfg(feature = "payments")]
             lightning_offers: data.lightning_offers.into(),
