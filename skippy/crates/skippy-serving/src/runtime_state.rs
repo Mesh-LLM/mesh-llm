@@ -224,13 +224,7 @@ impl RuntimeState {
     pub fn output_activation_boundary(&self) -> Option<ActivationBoundaryDesc> {
         self.model.output_activation_boundary()
     }
-    /// A runtime with no model behind it, for tests that exercise code paths
-    /// which never touch the model.
-    ///
-    /// [`Self::session_stats`] is pure Rust over the lane bookkeeping below, so
-    /// status/observability behaviour can be tested without loading a GGUF.
-    /// Any call that reaches [`Self::model`] will dereference a null handle, so
-    /// this must not be used to drive inference.
+
     /// A modelless split DFlash final stage with one idle lane whose draft
     /// is already gone, for tests of draft bookkeeping above the runtime.
     #[cfg(test)]
@@ -246,6 +240,13 @@ impl RuntimeState {
         runtime
     }
 
+    /// A runtime with no model behind it, for tests that exercise code paths
+    /// which never touch the model.
+    ///
+    /// [`Self::session_stats`] is pure Rust over the lane bookkeeping below, so
+    /// status/observability behaviour can be tested without loading a GGUF.
+    /// Any call that reaches [`Self::model`] will dereference a null handle, so
+    /// this must not be used to drive inference.
     #[cfg(test)]
     pub(crate) fn new_modelless_for_test(lane_count: u32) -> Self {
         Self::new_modelless_with_capacity_for_test(lane_count, 0)
