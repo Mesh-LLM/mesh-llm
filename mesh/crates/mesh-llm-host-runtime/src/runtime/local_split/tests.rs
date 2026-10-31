@@ -1305,7 +1305,7 @@ fn split_participant_signature_includes_package_signals_for_claim_identity() {
 }
 
 #[test]
-fn new_split_generation_uses_automatic_lossless_activation_codecs() {
+fn new_split_generation_uses_f16_activations() {
     let generation = SplitTopologyGeneration::new(
         "topology-a".into(),
         "run-a".into(),
@@ -1316,11 +1316,11 @@ fn new_split_generation_uses_automatic_lossless_activation_codecs() {
 
     assert_eq!(
         generation.activation_codec,
-        skippy_protocol::StageActivationCodec::RawF32V1
+        skippy_protocol::StageActivationCodec::F16RneV1
     );
     assert_eq!(
         generation.activation_codec_policy,
-        skippy_protocol::StageActivationCodecPolicy::AutoLosslessV1
+        skippy_protocol::StageActivationCodecPolicy::Fixed
     );
 }
 
