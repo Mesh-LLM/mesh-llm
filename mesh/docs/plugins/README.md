@@ -614,7 +614,9 @@ By default 0.1.6 also sends this node's sealed record of a completed exchange
 to that exchange's counterparty over mesh-llm's peer connections;
 `share_record_at_completion = "off"` stops it (see
 [Upgrading to the default capsules 0.1.6](capsules-0.1.6-upgrade.md)).
-It makes no other network calls unless the operator configures a witness URL.
+Apart from that push and the evidence requests it asks and answers over peer
+connections, it makes no network calls unless the operator configures a
+witness URL.
 
 ## Hugging Face Plugin Catalog
 
