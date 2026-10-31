@@ -160,6 +160,11 @@ pub mod host_capabilities {
                 "host does not support required local_inference_observation.v1 observation",
             );
         }
+        if manifest.mesh_channels.iter().any(|channel| channel.local)
+            && !host_supports(LOCAL_CHANNELS)
+        {
+            return Some("host does not support required local_channels.v1 channels");
+        }
         None
     }
 }

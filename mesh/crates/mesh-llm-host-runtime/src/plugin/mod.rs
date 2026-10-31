@@ -1,5 +1,5 @@
 mod capability_registration;
-mod channel_broadcast;
+pub(crate) mod channel_broadcast;
 mod config;
 mod exchange_grants;
 mod exchange_lifecycle;

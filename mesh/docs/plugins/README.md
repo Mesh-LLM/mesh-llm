@@ -1330,9 +1330,13 @@ connection, never from the envelope. A receiver declares the channel as usual
 (`mesh::channel(name)`).
 
 The host advertises the `local_channels.v1` host capability. A host without it
-reads the declaration as an ordinary mesh channel and would send the messages
-to peers, so a plugin checks `context.host_supports(LOCAL_CHANNELS)` before
-publishing on a local channel.
+would read the declaration as an ordinary mesh channel and send the messages to
+peers, so the plugin runtime refuses to initialize a plugin whose manifest
+declares a local channel on such a host.
+
+`source_plugin` names a local publisher only when `source_peer_id` is empty.
+The host removes `source_plugin` from the `metadata_json` of every frame that
+arrives from the mesh, so a peer cannot claim it.
 
 ## Plugin Keys
 

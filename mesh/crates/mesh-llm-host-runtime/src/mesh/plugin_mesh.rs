@@ -868,6 +868,11 @@ impl Node {
         if message.source_peer_id.is_empty() {
             message.source_peer_id = endpoint_id_hex(remote);
         }
+        // `source_plugin` is the host's claim about a local publisher; a peer
+        // must not be able to set it. The signed frame itself is forwarded
+        // unchanged below.
+        message.metadata_json =
+            crate::plugin::channel_broadcast::without_source_plugin(&message.metadata_json);
         // A rejected frame never enters deduplication, so a relay cannot spend
         // the origin's message ID with an unauthenticated claim.
         if !self.remember_plugin_message(frame.message_id.clone()).await {

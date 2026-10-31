@@ -155,6 +155,21 @@ fn local_metadata(published: &str, plugin_id: &str) -> String {
     serde_json::Value::Object(object).to_string()
 }
 
+/// A mesh peer's `metadata_json` without `source_plugin`: only
+/// [`local_metadata`] names the publisher, so a frame from the mesh must not
+/// be able to claim a local plugin's identity.
+pub(crate) fn without_source_plugin(metadata_json: &str) -> String {
+    let Ok(serde_json::Value::Object(mut object)) =
+        serde_json::from_str::<serde_json::Value>(metadata_json)
+    else {
+        return metadata_json.to_string();
+    };
+    if object.remove("source_plugin").is_none() {
+        return metadata_json.to_string();
+    }
+    serde_json::Value::Object(object).to_string()
+}
+
 fn manifest_declares_local_channel(manifest: &proto::PluginManifest, channel: &str) -> bool {
     manifest
         .mesh_channels
@@ -197,6 +212,18 @@ mod tests {
             "openai.exchange.v1"
         ));
         assert!(!manifest_declares_mesh_channel(&manifest, "other.channel"));
+    }
+
+    #[test]
+    fn a_mesh_frame_cannot_claim_a_source_plugin() {
+        let stripped: serde_json::Value = serde_json::from_str(&without_source_plugin(
+            r#"{"trace":"t-1","source_plugin":"pay-lightning"}"#,
+        ))
+        .unwrap();
+        assert_eq!(stripped, serde_json::json!({"trace": "t-1"}));
+        for untouched in ["", "[1]", "not json", r#"{"trace":"t-1"}"#] {
+            assert_eq!(without_source_plugin(untouched), untouched);
+        }
     }
 
     #[test]
