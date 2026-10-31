@@ -212,7 +212,35 @@ impl SplitTopologyCoordinator {
         self.evaluate_replan("membership_changed").await
     }
 
+    /// Withdraw the active generation when a newer coordinator has claimed
+    /// this model and may have placed a stage here; serving on would hold
+    /// both topologies' weights on this node.
+    async fn withdraw_if_superseded(&mut self, reason: &'static str) -> Option<bool> {
+        let rejection = super::loading::split_coordinator_superseded(
+            &self.node,
+            &self.model_ref,
+            &self.package,
+            &self.active,
+        )
+        .await?;
+        tracing::warn!(
+            model_ref = self.model_ref,
+            reason,
+            topology_id = self.active.topology_id,
+            generation = self.active.generation,
+            rejection,
+            "split coordinator lease superseded by a newer coordinator; withdrawing active generation"
+        );
+        Some(
+            self.publish_withdrawal("coordinator_superseded", Vec::new())
+                .await,
+        )
+    }
+
     async fn evaluate_replan(&mut self, reason: &'static str) -> bool {
+        if let Some(should_continue) = self.withdraw_if_superseded(reason).await {
+            return should_continue;
+        }
         let local_capacity_override = split_replan_local_capacity_override(
             self.capacity_budget_bytes,
             self.pinned_gpu
