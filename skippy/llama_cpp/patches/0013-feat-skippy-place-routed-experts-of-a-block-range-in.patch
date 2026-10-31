@@ -1,4 +1,4 @@
-From 9bd1fbef131bebe017d83f67067b0bebbf1c4b2c Mon Sep 17 00:00:00 2001
+From 3f2412d2aee75610f4f74cc9b55f4817bab8b6eb Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Fri, 16 Oct 2026 19:21:00 +0300
 Subject: [PATCH] feat(skippy): place routed experts of a block range in host
@@ -16,12 +16,12 @@ object because llama.cpp borrows both until the load call returns.
 ---
  include/skippy/common.h                       |  2 +-
  include/skippy/runtime.h                      |  6 +++
- src/skippy/model_load_config.cpp              | 26 +++++++++++++
- src/skippy/model_load_config_internal.h       | 16 ++++++++
+ src/skippy/model_load_config.cpp              | 33 ++++++++++++++
+ src/skippy/model_load_config_internal.h       | 16 +++++++
  src/skippy/model_loading.cpp                  |  6 +++
  src/skippy/model_source.cpp                   |  2 +
- .../tests/hardware_application_probe.cpp      | 37 +++++++++++++++++++
- 7 files changed, 94 insertions(+), 1 deletion(-)
+ .../tests/hardware_application_probe.cpp      | 45 +++++++++++++++++++
+ 7 files changed, 109 insertions(+), 1 deletion(-)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 index 3f6aab137..b9b5259af 100644
@@ -37,7 +37,7 @@ index 3f6aab137..b9b5259af 100644
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
-index 799bdca2d..90a8760d4 100644
+index 799bdca2d..bc4da9a07 100644
 --- a/include/skippy/runtime.h
 +++ b/include/skippy/runtime.h
 @@ -117,6 +117,12 @@ struct skippy_runtime_config {
@@ -48,19 +48,24 @@ index 799bdca2d..90a8760d4 100644
 +    // Routed-expert placement for mixture-of-experts models.
 +    /** @brief First absolute block index whose routed-expert tensors (`ffn_{up,down,gate,gate_up}_exps`) load into host memory (the CPU buffer type) instead of accelerator memory. Mirrors upstream `--n-cpu-moe` for a block range. */
 +    int32_t host_expert_layer_start;
-+    /** @brief One past the last such block index. `host_expert_layer_end <= host_expert_layer_start` keeps every routed expert on the accelerator. Routing and precision are unchanged; only weight placement differs. */
++    /** @brief One past the last such block index. `host_expert_layer_end <= host_expert_layer_start` keeps every routed expert on the accelerator, and a range wider than 4096 blocks is ignored the same way: no supported model approaches that block count, and the bound keeps override construction proportional to the model. Routing and precision are unchanged; only weight placement differs. */
 +    int32_t host_expert_layer_end;
  };
  
  /** @brief Returns a C-safe runtime configuration with all derived-default controls set to auto. */
 diff --git a/src/skippy/model_load_config.cpp b/src/skippy/model_load_config.cpp
-index 2e8d3c4ed..efa2866fe 100644
+index 2e8d3c4ed..5a5834038 100644
 --- a/src/skippy/model_load_config.cpp
 +++ b/src/skippy/model_load_config.cpp
-@@ -176,6 +176,32 @@ void skippy_apply_model_load_memory_config(
+@@ -176,6 +176,39 @@ void skippy_apply_model_load_memory_config(
      }
  }
  
++// No supported model approaches this block count; the bound keeps the tensor
++// override pattern proportional to real models when a caller passes a
++// range that was never validated against a model.
++constexpr int32_t kMaximumHostExpertBlockSpan = 4096;
++
 +void skippy_apply_host_expert_placement(
 +        const struct skippy_runtime_config * config,
 +        llama_model_params & params,
@@ -68,7 +73,9 @@ index 2e8d3c4ed..efa2866fe 100644
 +    storage.host_expert_pattern.clear();
 +    storage.overrides.clear();
 +    if (config == nullptr || config->host_expert_layer_start < 0 ||
-+            config->host_expert_layer_end <= config->host_expert_layer_start) {
++            config->host_expert_layer_end <= config->host_expert_layer_start ||
++            config->host_expert_layer_end - config->host_expert_layer_start >
++                    kMaximumHostExpertBlockSpan) {
 +        return;
 +    }
 +    // One alternation over the block indices keeps a single regex per tensor
@@ -183,7 +190,7 @@ index 02ad771ad..2b91f2b71 100644
      llama_backend_init();
      if (!ggml_backend_reg_count()) {
 diff --git a/src/skippy/tests/hardware_application_probe.cpp b/src/skippy/tests/hardware_application_probe.cpp
-index 471968158..29999dfd0 100644
+index 471968158..772d380e2 100644
 --- a/src/skippy/tests/hardware_application_probe.cpp
 +++ b/src/skippy/tests/hardware_application_probe.cpp
 @@ -2,6 +2,7 @@
@@ -194,7 +201,7 @@ index 471968158..29999dfd0 100644
  
  static bool require(bool condition, const char * message) {
      if (!condition) {
-@@ -72,5 +73,41 @@ int main() {
+@@ -72,5 +73,49 @@ int main() {
      skippy_apply_context_hardware_config(&config, context_params);
      passed &= require(context_params.op_offload, "true op_offload override was not applied");
  
@@ -233,6 +240,14 @@ index 471968158..29999dfd0 100644
 +        passed &= require(!std::regex_search("blk.2.attn_q.weight", pattern),
 +                "attention weights must stay on the accelerator");
 +    }
++
++    experts.host_expert_layer_start = 0;
++    experts.host_expert_layer_end = 2147483647;
++    llama_model_params unbounded_params = llama_model_default_params();
++    skippy_tensor_placement_storage unbounded_storage;
++    skippy_apply_host_expert_placement(&experts, unbounded_params, unbounded_storage);
++    passed &= require(unbounded_params.tensor_buft_overrides == nullptr,
++            "an implausible host-expert span must not install tensor overrides");
 +
      return passed ? 0 : 1;
  }
