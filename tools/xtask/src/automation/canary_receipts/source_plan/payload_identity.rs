@@ -7,14 +7,14 @@ use std::{
     fs::{self, File, Metadata, OpenOptions},
     io::Read,
     path::{Path, PathBuf},
-    time::UNIX_EPOCH,
+    time::SystemTime,
 };
 
 #[derive(Debug, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct FileState {
     size: u64,
-    modified: (u64, u32),
+    modified: SystemTime,
     #[cfg(unix)]
     device: u64,
     #[cfg(unix)]
@@ -28,12 +28,11 @@ impl FileState {
         if !metadata.is_file() {
             return Err("model payload is not a regular file".into());
         }
-        let modified = metadata.modified()?.duration_since(UNIX_EPOCH)?;
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         Ok(Self {
             size: metadata.len(),
-            modified: (modified.as_secs(), modified.subsec_nanos()),
+            modified: metadata.modified()?,
             #[cfg(unix)]
             device: metadata.dev(),
             #[cfg(unix)]
