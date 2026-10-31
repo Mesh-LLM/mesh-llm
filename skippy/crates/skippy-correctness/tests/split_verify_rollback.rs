@@ -245,6 +245,8 @@ fn accepted_rows(window: &[i32], predicted: &[i32]) -> usize {
 struct Run {
     committed: Vec<i32>,
     probe: Vec<(i32, Vec<ActivationFrame>)>,
+    /// How each stage held its verify windows, before the probe.
+    rollbacks: Vec<skippy_runtime::VerifyRollbackCounts>,
 }
 
 /// Probes the target with the last committed token and the reference
@@ -256,6 +258,11 @@ fn finish(
     reference: &[i32],
     label: &str,
 ) -> Result<Run> {
+    let rollbacks = target
+        .sessions()
+        .into_iter()
+        .map(|session| session.verify_rollback_counts())
+        .collect::<Result<Vec<_>>>()?;
     let mut tokens = vec![current];
     tokens.extend(&reference[committed.len()..committed.len() + PROBE_TOKENS - 1]);
     let probe = target.probe(&tokens)?;
@@ -266,7 +273,11 @@ fn finish(
             "{label}: probe step {step} predicted {predicted}, the full model decodes {expected}"
         );
     }
-    Ok(Run { committed, probe })
+    Ok(Run {
+        committed,
+        probe,
+        rollbacks,
+    })
 }
 
 /// Commits `predicted[..=accepted]`, checking each token against the full
@@ -540,6 +551,21 @@ fn check_split(
         &reference[..changing.committed.len()],
         "{label}"
     );
+    // Each run took the path it compares: every stage rolled windows back in
+    // place with deep snapshots, and through host checkpoints with shallow
+    // ones.
+    for (stage, counts) in in_place.rollbacks.iter().enumerate() {
+        assert!(
+            counts.in_place > 0,
+            "{stages} stages: stage {stage} rolled back no window in place: {counts:?}"
+        );
+    }
+    for (stage, counts) in checkpointed.rollbacks.iter().enumerate() {
+        assert!(
+            counts.checkpointed > 0,
+            "{stages} stages: stage {stage} held no window in a checkpoint: {counts:?}"
+        );
+    }
     assert_eq!(in_place.committed, checkpointed.committed);
     assert_eq!(in_place.committed, single.committed);
     let common = pipelined.committed.len().min(single.committed.len());
