@@ -1,5 +1,7 @@
+mod bound_operation;
 mod default_plugin_policy;
 mod request;
+mod request_dispatch;
 
 use super::config::{ExternalPluginSpec, PluginHostMode};
 use super::plugin_manifest_overview;
@@ -364,7 +366,9 @@ impl ExternalPlugin {
                     mesh_visibility: proto_mesh_visibility(self.host_mode.mesh_visibility),
                     settings_json,
                     host_capabilities: vec![
+                        mesh_llm_plugin::operation_binding::CAPABILITY.to_string(),
                         mesh_llm_plugin::host_capabilities::INVOCATION_CALLBACKS.to_string(),
+                        mesh_llm_plugin::host_capabilities::MODEL_REQUIREMENTS.to_string(),
                         mesh_llm_plugin::models::ASSET_CAPABILITY.to_string(),
                         mesh_llm_plugin::host_capabilities::PEER_BLOCKS.to_string(),
                         mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.to_string(),
@@ -880,66 +884,6 @@ impl ExternalPlugin {
         ))
     }
 
-    async fn request_once(
-        &self,
-        generation: u64,
-        outbound_tx: mpsc::Sender<proto::Envelope>,
-        pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<proto::Envelope>>>>>,
-        payload: proto::envelope::Payload,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<proto::Envelope> {
-        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-        pending.lock().await.insert(request_id, tx);
-
-        let envelope = proto::Envelope {
-            protocol_version: PROTOCOL_VERSION,
-            plugin_id: self.spec.name.clone(),
-            request_id,
-            payload: Some(payload),
-        };
-
-        if let Err(_send_err) = outbound_tx.send(envelope).await {
-            pending.lock().await.remove(&request_id);
-            self.handle_runtime_failure(
-                Some(generation),
-                format!("Plugin '{}' is not accepting requests", self.spec.name),
-            )
-            .await;
-            bail!("Plugin '{}' is not accepting requests", self.spec.name);
-        }
-
-        let response = match timeout {
-            Some(timeout) => match tokio::time::timeout(timeout, rx).await {
-                Ok(response) => response,
-                Err(_) => {
-                    pending.lock().await.remove(&request_id);
-                    self.handle_runtime_failure(
-                        Some(generation),
-                        format!("Plugin '{}' timed out", self.spec.name),
-                    )
-                    .await;
-                    return Err(anyhow::Error::new(PluginTimeout {
-                        plugin_name: self.spec.name.clone(),
-                    }));
-                }
-            },
-            None => rx.await,
-        };
-
-        match response {
-            Ok(resp) => resp,
-            Err(_recv_err) => {
-                self.handle_runtime_failure(
-                    Some(generation),
-                    format!("Plugin '{}' dropped the response channel", self.spec.name),
-                )
-                .await;
-                bail!("Plugin '{}' dropped the response channel", self.spec.name);
-            }
-        }
-    }
-
     async fn handle_runtime_failure(&self, generation: Option<u64>, reason: String) {
         let reason = crate::logging::policy::redact_urls_in_text(&reason);
         let failed_runtime = {
@@ -1085,7 +1029,3 @@ fn plugin_web_ui_asset_root(spec: &ExternalPluginSpec) -> Option<PathBuf> {
 #[cfg(test)]
 #[path = "runtime/tests.rs"]
 pub(crate) mod tests;
-
-#[cfg(all(test, feature = "payments"))]
-#[path = "runtime/payment_failure_tests.rs"]
-mod payment_failure_tests;

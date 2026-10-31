@@ -167,7 +167,6 @@ pub(crate) mod agent_recording_proxy;
 
 pub(crate) mod native_runtime_evidence;
 
-pub(crate) mod lightning_compatibility;
 pub(crate) mod remote_handoff_summary;
 
 pub(crate) mod cache_family_moe;

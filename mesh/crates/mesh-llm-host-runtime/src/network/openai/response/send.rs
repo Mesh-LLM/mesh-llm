@@ -71,6 +71,8 @@ async fn send_json_with_status_and_headers_inner(
     let status = match code {
         200 => "OK",
         400 => "Bad Request",
+        402 => "Payment Required",
+        403 => "Forbidden",
         404 => "Not Found",
         410 => "Gone",
         409 => "Conflict",
@@ -99,13 +101,6 @@ async fn send_json_with_status_and_headers_inner(
 
 pub async fn send_400(stream: ClientStream, msg: &str) -> std::io::Result<()> {
     send_openai_error(stream, 400, msg, None).await
-}
-
-// Currently reached only by the paid-ingress rejection path; compiled out with
-// wallets. Ungate if a wallet-free caller needs a bare error response.
-#[cfg(feature = "payments")]
-pub async fn send_error(stream: ClientStream, code: u16, msg: &str) -> std::io::Result<()> {
-    send_openai_error(stream, code, msg, None).await
 }
 
 /// Write a locally generated bounded OpenAI JSON error and record the exact
@@ -154,6 +149,7 @@ async fn send_openai_error(
     let status = match code {
         200 => "OK",
         401 => "Unauthorized",
+        402 => "Payment Required",
         403 => "Forbidden",
         404 => "Not Found",
         410 => "Gone",
@@ -171,7 +167,7 @@ async fn send_openai_error(
         let kind = match code {
             400 | 422 => "invalid_request_error",
             401 => "authentication_error",
-            403 => "permission_error",
+            402 | 403 => "permission_error",
             404 => "not_found_error",
             413 => "request_too_large",
             429 => "rate_limit_error",
@@ -297,22 +293,6 @@ mod tests {
             "value CRLF must be stripped; got {buf:?}"
         );
         assert_eq!(buf.matches("\r\n").count(), 1);
-    }
-
-    #[cfg(feature = "payments")]
-    #[tokio::test]
-    async fn test_send_error_429_includes_retry_after() {
-        let response = capture_proxy_error_response(|stream| async move {
-            super::send_error(stream, 429, "model not available").await
-        })
-        .await;
-        let body = response_json_body(&response);
-
-        assert!(response.starts_with("HTTP/1.1 429 Too Many Requests\r\n"));
-        assert!(response.contains("Retry-After: 5\r\n"));
-        assert_eq!(body["error"]["message"], "model not available");
-        assert_eq!(body["error"]["type"], "rate_limit_error");
-        assert_eq!(body["error"]["code"], "rate_limit_exceeded");
     }
 
     #[tokio::test]

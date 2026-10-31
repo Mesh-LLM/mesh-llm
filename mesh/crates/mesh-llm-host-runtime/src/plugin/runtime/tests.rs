@@ -73,6 +73,8 @@ fn installed_metadata_with_web_ui(
                     reason: Some("bundle failed validation".into()),
                 },
             }),
+            operation_bindings: Vec::new(),
+            peer_blocks: false,
         }),
         last_protocol_version: Some(1),
         last_status: Some("running".into()),
@@ -88,6 +90,7 @@ pub(super) fn plugin_spec(
     asset_root: Option<&str>,
 ) -> ExternalPluginSpec {
     ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         openai_exchange_grant: None,
         name: "demo".into(),
         command: "mesh-llm-plugin-demo".into(),
@@ -151,6 +154,7 @@ pub(crate) fn in_process_plugin(
     runner: crate::plugin::InProcessPluginRunner,
 ) -> ExternalPlugin {
     let mut plugin = plugin_for_spec(ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         openai_exchange_grant: None,
         name: name.into(),
         command: String::new(),
@@ -468,6 +472,7 @@ fn child_env_includes_valid_package_web_ui_asset_root() {
 fn configured_plugin_url_is_normalized_before_child_env_export() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "demo".into(),
             enabled: Some(true),
             web_ui_enabled: None,

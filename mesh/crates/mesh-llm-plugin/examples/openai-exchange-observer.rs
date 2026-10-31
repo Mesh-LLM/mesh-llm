@@ -136,6 +136,11 @@ async fn main() -> anyhow::Result<()> {
                         .ok()
                         .as_deref()
                         .is_some_and(|model| event["model"].as_str() == Some(model));
+                // `MESH_LLM_EXEMPLAR_DENY_STATUS=402` turns the deny into a
+                // satisfiable gate verdict.
+                let deny_status = std::env::var("MESH_LLM_EXEMPLAR_DENY_STATUS")
+                    .ok()
+                    .and_then(|status| status.parse::<u16>().ok());
                 let denied = admission
                     && event["parse_status"] != "invalid_json"
                     && (selected_denied
@@ -169,6 +174,7 @@ async fn main() -> anyhow::Result<()> {
                     } else {
                         OpenAiAdmissionDecision::Abstain
                     },
+                    status: deny_status.filter(|_| denied),
                     annotations: Vec::new(),
                     response_headers: Vec::new(),
                     reason: denied.then(|| "Model denied by exemplar operator policy".into()),

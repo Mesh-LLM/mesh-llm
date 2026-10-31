@@ -42,8 +42,6 @@ fn peer_state_test_announcement(addr: EndpointAddr) -> super::PeerAnnouncement {
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
         cache_affinity: None,
         latency_ms: None,
         latency_source: None,
@@ -549,6 +547,7 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
         experts_summary: Some(experts.clone()),
         available_model_sizes: model_sizes.clone(),
         served_model_descriptors: vec![ServedModelDescriptor {
+            requires: Vec::new(),
             identity: ServedModelIdentity {
                 model_name: "Qwen3-8B-Q4_K_M".to_string(),
                 is_primary: true,
@@ -584,8 +583,6 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
         cache_affinity: None,
         latency_ms: None,
         latency_source: None,
@@ -719,6 +716,7 @@ fn proto_ann_to_local_treats_missing_default_capability_provenance_as_unknown() 
         endpoint_id: peer_id.as_bytes().to_vec(),
         role: NodeRole::Worker as i32,
         served_model_descriptors: vec![crate::proto::node::ServedModelDescriptor {
+            requires: Vec::new(),
             identity: Some(crate::proto::node::ServedModelIdentity {
                 model_name: "Qwen3VL-2B-Instruct-Q4_K_M".to_string(),
                 source_kind: crate::proto::node::ModelSourceKind::LocalGguf as i32,
@@ -960,8 +958,6 @@ fn transitive_peer_update_refreshes_metadata_fields() {
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
         cache_affinity: None,
         latency_ms: None,
         latency_source: None,
@@ -1062,8 +1058,6 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
         cache_affinity: None,
         latency_ms: None,
         latency_source: None,
@@ -1136,8 +1130,6 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
         cache_affinity: None,
         latency_ms: None,
         latency_source: None,
@@ -1653,6 +1645,7 @@ fn weights_digest_does_not_cross_the_gossip_wire() {
         addrs: Default::default(),
     });
     local_ann.served_model_descriptors = vec![ServedModelDescriptor {
+        requires: Vec::new(),
         identity: ServedModelIdentity {
             model_name: "test-model".to_string(),
             source_kind: ModelSourceKind::LocalGguf,

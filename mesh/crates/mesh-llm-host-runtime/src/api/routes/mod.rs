@@ -20,8 +20,6 @@ pub(crate) mod runtime_control_state;
 mod runtime_control_state_sources;
 pub(crate) mod runtime_events;
 mod search;
-#[cfg(feature = "payments")]
-mod wallet;
 
 use super::MeshApi;
 use std::future::Future;
@@ -45,11 +43,6 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
     |stream, state, method, path, path_only, body, _req, raw_request, caller| {
         Box::pin(async move {
             match (method, path_only) {
-                #[cfg(feature = "payments")]
-                ("POST", "/api/wallet") => {
-                    wallet::handle(stream, state, body).await?;
-                    Ok(true)
-                }
                 (method, route_path) if logs::is_route(route_path) => {
                     logs::handle(stream, method, path, body, raw_request).await?;
                     Ok(true)

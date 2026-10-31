@@ -18,8 +18,18 @@ pub(crate) mod identity_services;
 mod in_process;
 pub(crate) mod inference_observation;
 mod installed;
+
+/// Whether the installed package named `plugin_id` asked for peer-block
+/// permission (granted at install; a config entry's `allow_peer_blocks` wins).
+pub(crate) fn installed_plugin_peer_blocks(plugin_id: &str) -> bool {
+    installed::installed_plugin_metadata_for_name(plugin_id)
+        .ok()
+        .flatten()
+        .is_some_and(|metadata| installed::installed_peer_blocks(&metadata))
+}
 pub(crate) mod mcp;
 pub mod openai_exchange;
+mod operation_bindings;
 pub(crate) mod operations;
 mod runtime;
 mod schema_validation;
@@ -114,13 +124,6 @@ use mesh_llm_plugin::MeshVisibility;
 use mesh_llm_plugin_manager::store::InstalledPluginWebUiValidationStatus;
 
 pub const BLOBSTORE_PLUGIN_ID: &str = "blobstore";
-/// Name of the removed built-in Lexe wallet. A leftover `[[plugin]]` stanza
-/// with this name is ignored with a warning; Lexe now ships as the external
-/// `lexe-wallet` plugin.
-pub const RETIRED_WALLET_LEXE_PLUGIN_ID: &str = "wallet-lexe";
-/// Built-in payments engine, served in-process as the `payments.v1`
-/// capability. Registered only with the `payments` feature.
-pub const PAYMENTS_PLUGIN_ID: &str = "payments";
 pub const MOA_PLUGIN_ID: &str = mesh_llm_moa_plugin::PLUGIN_ID;
 pub(crate) const PROTOCOL_VERSION: u32 = mesh_llm_plugin::PROTOCOL_VERSION;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
@@ -135,6 +138,7 @@ pub struct PluginManager {
 }
 
 pub(in crate::plugin) struct PluginManagerInner {
+    operation_bindings: operation_bindings::BindingRegistry,
     capability_registration: capability_registration::CapabilityRegistration,
     pub(in crate::plugin) identity_registry: Arc<Mutex<identity_registry::PluginIdentityRegistry>>,
     pub(in crate::plugin) exchange_grants: exchange_grants::ExchangeGrantRegistry,
@@ -219,6 +223,7 @@ impl PluginManager {
         let rpc_bridge = Arc::new(Mutex::new(None));
         let runtime_data = RuntimeDataCollector::new();
         let instance_id = make_instance_id();
+        let operation_bindings = operation_bindings::BindingRegistry::from_specs(&specs.externals)?;
         let exchange_grants = exchange_grants::ExchangeGrantRegistry::from_specs(&specs.externals);
         let (plugins, failed_plugins) = Self::load_external_plugins(
             specs,
@@ -232,6 +237,7 @@ impl PluginManager {
         .await?;
         let manager = Self {
             inner: Arc::new(PluginManagerInner {
+                operation_bindings,
                 capability_registration: Default::default(),
                 identity_registry: Arc::default(),
                 exchange_grants,
@@ -459,6 +465,7 @@ impl PluginManager {
     pub fn for_test_bridge(plugin_names: &[&str], bridge: Arc<dyn PluginRpcBridge>) -> Self {
         Self {
             inner: Arc::new(PluginManagerInner {
+                operation_bindings: Default::default(),
                 capability_registration: Default::default(),
                 identity_registry: Arc::default(),
                 exchange_grants: Default::default(),
@@ -486,6 +493,7 @@ impl PluginManager {
     pub(crate) fn for_test_summaries(summaries: Vec<PluginSummary>) -> Self {
         Self {
             inner: Arc::new(PluginManagerInner {
+                operation_bindings: Default::default(),
                 capability_registration: Default::default(),
                 identity_registry: Arc::default(),
                 exchange_grants: Default::default(),
@@ -1346,6 +1354,16 @@ impl PluginManager {
     /// manifest, so this doubles as an "already running" check: a stopped or
     /// never-started plugin has no cached manifest and returns `None` here.
     async fn manifest_snapshot(&self, plugin_name: &str) -> Option<proto::PluginManifest> {
+        #[cfg(test)]
+        if self.is_test_bridge_enabled(plugin_name) {
+            return self
+                .inner
+                .test_manifests
+                .lock()
+                .await
+                .get(plugin_name)
+                .cloned();
+        }
         self.inner
             .plugins
             .get(plugin_name)?

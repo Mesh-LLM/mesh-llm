@@ -53,6 +53,7 @@ mod tests {
             verified_sha256: None,
         };
         ExternalPluginSpec {
+            operation_bindings: Vec::new(),
             name: metadata.name.clone(),
             command: metadata.executable_path().to_str().unwrap().into(),
             args: vec!["--identity".into()],

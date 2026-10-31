@@ -13,6 +13,7 @@ mod io;
 mod manifest;
 pub mod models;
 pub mod openai_exchange;
+pub mod operation_binding;
 pub mod plugin_status;
 mod runtime;
 mod simple_plugin;
@@ -70,8 +71,9 @@ pub use manifest::{
     mcp_tcp_endpoint, mcp_unix_socket_endpoint, mesh_channel, mesh_event_local_accepting,
     mesh_event_local_standby, mesh_event_mesh_id_updated, mesh_event_peer_down, mesh_event_peer_up,
     mesh_event_peer_updated, mesh_event_subscription, openai_http_inference_endpoint, operation,
-    package_manifest_json, plugin_manifest, prompt_service, resource, resource_template_service,
-    virtual_model, web_ui, web_ui_bundle, web_ui_config_section, web_ui_contribution, web_ui_page,
+    operation_binding, package_manifest_json, plugin_manifest, prompt_service, resource,
+    resource_template_service, virtual_model, web_ui, web_ui_bundle, web_ui_config_section,
+    web_ui_contribution, web_ui_page,
 };
 pub use virtual_model::{
     HostInferenceRequest, HostInferenceResponse, VirtualModelCandidate, VirtualModelInvocation,
@@ -105,6 +107,8 @@ pub const PROTOCOL_VERSION: u32 = 3;
 pub mod host_capabilities {
     /// Invocation-scoped RPC callbacks carry the host-assigned parent call ID.
     pub const INVOCATION_CALLBACKS: &str = "invocation_callbacks.v1";
+    /// The host accepts model channel requirements.
+    pub const MODEL_REQUIREMENTS: &str = "model_requirements.v1";
     /// The host supports permissioned OpenAI exchange lifecycle services.
     pub const OPENAI_EXCHANGE: &str = crate::openai_exchange::OPENAI_EXCHANGE_CAPABILITY;
     /// The host accepts `PeerBlockRequest`.

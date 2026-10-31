@@ -356,6 +356,22 @@ impl Node {
         event: crate::plugin::PluginMeshEvent,
     ) -> Result<()> {
         match event {
+            crate::plugin::PluginMeshEvent::BoundOperation {
+                plugin_id,
+                generation,
+                request,
+                response_tx,
+            } => {
+                if let Some(manager) = self.plugin_manager().await {
+                    tokio::spawn(async move {
+                        let result = manager
+                            .bound_operation(&plugin_id, generation, request)
+                            .await;
+                        let _ = response_tx.send(result);
+                    });
+                }
+                Ok(())
+            }
             crate::plugin::PluginMeshEvent::IdentityService {
                 plugin_id,
                 request,
@@ -439,6 +455,18 @@ impl Node {
                 let _ = response_tx.send(response);
                 Ok(())
             }
+            crate::plugin::PluginMeshEvent::ModelRequirementsWithdraw { plugin_id } => {
+                self.model_requirements.lock().await.remove(&plugin_id);
+                Ok(())
+            }
+            crate::plugin::PluginMeshEvent::ModelRequirement {
+                plugin_id,
+                request,
+                response_tx,
+            } => {
+                let _ = response_tx.send(self.apply_model_requirement(&plugin_id, request).await);
+                Ok(())
+            }
             crate::plugin::PluginMeshEvent::PluginKey {
                 plugin_id,
                 request,
@@ -494,6 +522,7 @@ impl Node {
                 // A disabled or removed plugin no longer runs here, so this
                 // node stops vouching for its key and showing its status.
                 self.plugin_keys.remove_own(&plugin_id);
+                self.model_requirements.lock().await.remove(&plugin_id);
                 self.runtime_data_collector()
                     .remove_plugin_status(&plugin_id);
                 Ok(())

@@ -61,7 +61,12 @@ pub use route_model::route_model_request;
 /// transport failure from a client disconnect.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RouteDispatchOutcome {
-    PolicyDenied,
+    /// A plugin denied the exchange and the client was told so. The status
+    /// is the one the denying plugin chose: 403 (never) or 402 (its gate can
+    /// be satisfied and the request retried).
+    PolicyDenied {
+        status_code: u16,
+    },
     RequiredHookFailed,
     Responded(u16),
     RespondedWithUsage {
@@ -141,7 +146,7 @@ pub(super) fn record_virtual_model_stream_lifecycle(
             status_code: 200..=299,
             ..
         } => observer.stream_completed(None),
-        RouteDispatchOutcome::PolicyDenied
+        RouteDispatchOutcome::PolicyDenied { .. }
         | RouteDispatchOutcome::RequiredHookFailed
         | RouteDispatchOutcome::Failed(_)
         | RouteDispatchOutcome::FailedWithStatus { .. }
@@ -153,11 +158,21 @@ pub(super) fn record_virtual_model_stream_lifecycle(
 }
 
 impl RouteDispatchOutcome {
+    /// The outcome of an admission rejection the client has already been sent:
+    /// a plugin deny (402 or 403) is `PolicyDenied`; anything else the host
+    /// synthesised because a required hook was unavailable.
+    pub(crate) const fn admission_rejected(status_code: u16) -> Self {
+        match status_code {
+            402 | 403 => Self::PolicyDenied { status_code },
+            _ => Self::RequiredHookFailed,
+        }
+    }
+
     pub(crate) const fn response_written(self) -> bool {
         matches!(
             self,
             Self::Responded(_)
-                | Self::PolicyDenied
+                | Self::PolicyDenied { .. }
                 | Self::RequiredHookFailed
                 | Self::RespondedWithUsage { .. }
                 | Self::RespondedWithDigests { .. }
@@ -166,10 +181,12 @@ impl RouteDispatchOutcome {
 
     pub(crate) fn terminal_outcome(self) -> crate::logging::TerminalOutcome {
         match self {
-            Self::PolicyDenied => crate::logging::TerminalOutcome::RejectedWithStatus {
-                reason: Some("plugin_policy_denied".into()),
-                status_code: 403,
-            },
+            Self::PolicyDenied { status_code } => {
+                crate::logging::TerminalOutcome::RejectedWithStatus {
+                    reason: Some("plugin_policy_denied".into()),
+                    status_code,
+                }
+            }
             Self::RequiredHookFailed => crate::logging::TerminalOutcome::FailedWithStatus {
                 error: "plugin_hook_unavailable".into(),
                 status_code: 503,
@@ -267,7 +284,6 @@ pub(crate) fn request_context_budget(request: &BufferedHttpRequest) -> Option<u3
 }
 
 enum AutoModelResolution {
-    PaymentRequired(&'static str),
     Model(Option<String>),
     UnsupportedMedia,
     UnsupportedWorkload,
@@ -290,7 +306,6 @@ struct MeshRequestPlan {
 }
 
 enum MeshRequestFailure {
-    PaymentRequired(&'static str),
     UnsupportedMedia,
     UnsupportedWorkload,
     ModelUnavailable(String),
@@ -566,9 +581,6 @@ async fn build_mesh_request_plan(
     .await
     {
         AutoModelResolution::Model(model) => model.or(request.model_name.clone()),
-        AutoModelResolution::PaymentRequired(reason) => {
-            return Err(MeshRequestFailure::PaymentRequired(reason));
-        }
         AutoModelResolution::UnsupportedMedia => {
             return Err(MeshRequestFailure::UnsupportedMedia);
         }
@@ -618,7 +630,7 @@ async fn build_mesh_request_plan(
         &resolved_hosts,
         affinity,
     );
-    let (mut target_hosts, mut equivalent_hosts) = order_mesh_target_hosts(
+    let (target_hosts, equivalent_hosts) = order_mesh_target_hosts(
         node,
         effective_model.as_deref(),
         required_tokens,
@@ -626,18 +638,6 @@ async fn build_mesh_request_plan(
         affinity,
     )
     .await;
-    if let Some(model) = effective_model.as_deref() {
-        let payment_ranked = super::payment_routing::rank_remote_hosts(
-            node,
-            model,
-            request,
-            &mut target_hosts,
-            &mut equivalent_hosts,
-        )
-        .await
-        .map_err(MeshRequestFailure::PaymentRequired)?;
-        prepared.affinity_applied |= payment_ranked;
-    }
     Ok(MeshRequestPlan {
         effective_model,
         auto_session_key,
@@ -750,10 +750,6 @@ async fn handle_mesh_request_failure(
 ) {
     let mut tcp_stream = Some(tcp_stream);
     match failure {
-        MeshRequestFailure::PaymentRequired(reason) => {
-            let _ =
-                send_error_observed(tcp_stream.take().unwrap(), 402, reason, route_observer).await;
-        }
         MeshRequestFailure::UnsupportedWorkload => {
             let _ = send_error_observed(
                 tcp_stream.take().unwrap(),
@@ -836,7 +832,6 @@ async fn route_mesh_request_attempts(
             &request.raw,
             ResponseRetryPolicy::next_target_available(idx + 1 < total_targets),
             RouteAttemptLoggingContext {
-                exchange_id: None,
                 request_id: request.request_id,
                 retry_policy: ResponseRetryPolicy::next_target_available(idx + 1 < total_targets),
                 response_adapter: request.response_adapter,
@@ -987,8 +982,8 @@ fn proxy_result_metadata(result: &RouteAttemptResult) -> (Option<u16>, Option<&'
         ),
         RouteAttemptResult::RetryableTimeout => (None, Some("timeout")),
         RouteAttemptResult::RetryableUnavailable => (None, Some("unavailable")),
-        RouteAttemptResult::RetryablePaymentRequired => (None, Some("payment_required")),
         RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_) => (None, Some("rejected")),
         RouteAttemptResult::CommittedStreamFailure { status_code } => {
             (Some(*status_code), Some("upstream_stream_incomplete"))
@@ -1059,12 +1054,12 @@ fn handle_mesh_attempt_result(
             })
         }
         RouteAttemptResult::RetryableContextOverflow => handle_retryable_context_overflow(context),
+        RouteAttemptResult::RetryableGateUnsatisfied => handle_retryable_gate_unsatisfied(context),
         RouteAttemptResult::RetryableResponseQuality(failure) => {
             handle_retryable_mesh_response_quality(context, failure)
         }
         RouteAttemptResult::RetryableTimeout => handle_retryable_mesh_timeout(context),
         RouteAttemptResult::RetryableUnavailable => handle_retryable_mesh_unavailable(context),
-        RouteAttemptResult::RetryablePaymentRequired => handle_retryable_mesh_unavailable(context),
         RouteAttemptResult::CommittedStreamFailure { .. } => {
             MeshAttemptDisposition::Return(attempt_result)
         }
@@ -1131,7 +1126,7 @@ fn terminal_outcome_for_mesh_route_result(
             crate::logging::TerminalOutcome::Cancelled(Some("client_disconnected".into()))
         }
         RouteAttemptResult::RetryableContextOverflow
-        | RouteAttemptResult::RetryablePaymentRequired
+        | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableTimeout
         | RouteAttemptResult::RetryableUnavailable => {
@@ -1145,9 +1140,6 @@ fn terminal_outcome_for_mesh_request_failure(
     failure: &MeshRequestFailure,
 ) -> crate::logging::TerminalOutcome {
     match failure {
-        MeshRequestFailure::PaymentRequired(_) => {
-            crate::logging::TerminalOutcome::Rejected(Some("payment_required".into()))
-        }
         MeshRequestFailure::UnsupportedWorkload => {
             crate::logging::TerminalOutcome::Rejected(Some("unsupported_workload".into()))
         }
@@ -1169,6 +1161,23 @@ fn handle_retryable_context_overflow(
     tracing::warn!(
         "Host {} rejected request with context overflow-style 400, trying next",
         context.target_host.fmt_short()
+    );
+    forget_failed_target_cache_leases(context);
+    context.state.last_retryable = true;
+    MeshAttemptDisposition::Continue
+}
+
+fn handle_retryable_gate_unsatisfied(
+    context: &mut MeshAttemptResultContext<'_>,
+) -> MeshAttemptDisposition {
+    // The 402 was never relayed; `record_target_outcome` has already cached
+    // the (model, host) verdict, so the next request skips this host while an
+    // alternative exists. Routing diagnostics are the only place a plugin-less
+    // operator ever sees a gate: "peer answered 402, trying next".
+    tracing::info!(
+        "Host {} answered 402 for {:?} (gate unsatisfied), trying next",
+        context.target_host.fmt_short(),
+        context.effective_model
     );
     forget_failed_target_cache_leases(context);
     context.state.last_retryable = true;
@@ -1316,7 +1325,7 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
     let Some(available) = router::filter_media_compatible_candidates(&with_caps, &media) else {
         return AutoModelResolution::UnsupportedMedia;
     };
-    let (available, ready_models) = match auto_route::payment_admission::admitted_models(
+    let (available, ready_models) = auto_route::readiness::ready_models(
         node,
         None,
         request,
@@ -1324,11 +1333,7 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
         required_tokens,
         affinity,
     )
-    .await
-    {
-        Ok(pool) => pool,
-        Err(reason) => return AutoModelResolution::PaymentRequired(reason),
-    };
+    .await;
     if let Some(model) = lookup_cached_auto_model(
         node,
         descriptors,
@@ -1658,7 +1663,6 @@ pub async fn route_to_target(
         prefetched,
         retry_policy,
         RouteAttemptLoggingContext {
-            exchange_id: None,
             request_id,
             retry_policy,
             response_adapter,
@@ -1721,8 +1725,8 @@ pub async fn route_to_target(
             .await;
             response_outcome(504, result)
         }
-        RouteAttemptResult::RetryablePaymentRequired
-        | RouteAttemptResult::RetryableContextOverflow
+        RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableUnavailable => {
             node.record_routed_request(
@@ -1785,7 +1789,6 @@ pub async fn route_http_endpoint_request(
         &request.raw,
         &request.path,
         RouteAttemptLoggingContext {
-            exchange_id: None,
             request_id: request.request_id,
             retry_policy: ResponseRetryPolicy::next_target_available(false),
             response_adapter: request.response_adapter,
@@ -1840,8 +1843,8 @@ pub async fn route_http_endpoint_request(
             delivered_outcome(status_code, usage, output_digests)
         }
         RouteAttemptResult::RetryableTimeout
-        | RouteAttemptResult::RetryablePaymentRequired
         | RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableUnavailable => {
             node.record_routed_request(
@@ -1865,91 +1868,3 @@ pub async fn route_http_endpoint_request(
 #[cfg(test)]
 #[path = "transport_tests.rs"]
 mod tests;
-
-#[cfg(all(test, feature = "payments"))]
-pub(crate) async fn test_paid_target_attempt(
-    node: &mesh::Node,
-    client: &mut ClientStream,
-    peer: iroh::EndpointId,
-    raw: &[u8],
-    exchange_id: &str,
-) -> bool {
-    let result = route_attempt_for_target(
-        node,
-        client,
-        &election::InferenceTarget::Remote(peer),
-        None,
-        raw,
-        ResponseRetryPolicy::next_target_available(true),
-        RouteAttemptLoggingContext {
-            exchange_id: Some(exchange_id),
-            request_id: Default::default(),
-            retry_policy: ResponseRetryPolicy::next_target_available(true),
-            response_adapter: ResponseAdapter::None,
-            route_observer: OpenAiRouteObserver::default(),
-            served_by: None,
-            peer_capsule_id: None,
-        },
-    )
-    .await;
-    should_retry_uncommitted_remote_attempt(result)
-}
-
-#[cfg(all(test, feature = "payments"))]
-pub(crate) async fn test_paid_multi_target(
-    node: mesh::Node,
-    client: ClientStream,
-    peers: Vec<iroh::EndpointId>,
-) -> RouteDispatchOutcome {
-    let body = serde_json::json!({"model":"test","prompt":"hi","max_tokens":8});
-    let bytes = serde_json::to_vec(&body).unwrap();
-    let request = BufferedHttpRequest {
-        raw: format!(
-            "POST /v1/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\n\r\n{}",
-            bytes.len(),
-            body
-        )
-        .into_bytes(),
-        method: "POST".into(),
-        path: "/v1/completions".into(),
-        client_path: "/v1/completions".into(),
-        request_id: Default::default(),
-        body_json: Some(body),
-        body_json_attempted: true,
-        body_len_bytes: bytes.len(),
-        body_bytes: Some(bytes),
-        completion_tokens: Some(8),
-        stream: None,
-        model_name: Some("test".into()),
-        request_object_request_ids: vec![],
-        response_adapter: ResponseAdapter::None,
-        correlation_id: None,
-        exchange_observation_id: None,
-    };
-    let mut targets = election::ModelTargets::default();
-    targets.targets.insert(
-        "test".into(),
-        peers
-            .into_iter()
-            .map(election::InferenceTarget::Remote)
-            .collect(),
-    );
-    route_model_request(
-        node,
-        client,
-        &targets,
-        "test",
-        &request,
-        RouteModelRequestContext {
-            local_execution_only: false,
-            exchange_id: Some("multi-provider-exchange"),
-            required_tokens: None,
-            affinity: &AffinityRouter::new(),
-            route_observer: OpenAiRouteObserver::default(),
-            served_by_header: None,
-            peer_capsule_id: None,
-            served_by_node_id: None,
-        },
-    )
-    .await
-}

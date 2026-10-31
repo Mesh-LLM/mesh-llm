@@ -66,8 +66,7 @@ pub(super) async fn shutdown_run_auto_services(
 ) {
     node.shutdown_control_listener().await;
     plugin_manager.shutdown().await;
-    // Break the Node <-> in-process payments runner cycle so the engine and
-    // its process lock are released before an embedded restart.
+    // Release plugin runner references before an embedded restart.
     drop(node.take_plugin_manager().await);
     api_proxy_handle.abort();
     let _ = api_proxy_handle.await;

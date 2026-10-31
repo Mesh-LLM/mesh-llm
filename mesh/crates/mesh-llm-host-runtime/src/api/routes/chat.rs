@@ -6,8 +6,8 @@ use tokio::net::TcpStream;
 /// the trusted-local check (loopback peer + local `Host`/`Origin`).
 ///
 /// The console forwards inference to the OpenAI port over a fresh loopback
-/// socket, so without this the payment boundary in
-/// `network::openai::response::paid` would see every forwarded caller as local
+/// socket, so without this the exchange hook's caller-trust
+/// check would see every forwarded caller as local
 /// — including remote ones reaching a `--listen-all` console (Loupe #3051).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CallerTrust {
@@ -90,7 +90,7 @@ pub(super) async fn handle(
     match TcpStream::connect(&target).await {
         Ok(mut upstream) => {
             // A remote caller must stay remote across the loopback hop so the
-            // payment gate charges (or refuses) it like any other remote peer.
+            // exchange hook admits (or refuses) it like any other remote peer.
             let _remote_origin = match caller {
                 CallerTrust::TrustedLocal => None,
                 CallerTrust::Untrusted => Some(

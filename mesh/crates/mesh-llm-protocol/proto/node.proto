@@ -78,7 +78,7 @@ message NodeRecord {
   repeated MeshSubprotocol subprotocols = 19;
   InferenceAdmissionState admission_state = 20;
   repeated AdvertisedModelThroughput throughput = 21;
-  repeated LightningOffer lightning_offers = 22;
+  reserved 22;
   optional SignedNodeOwnership owner_attestation = 23;
   optional SignedMeshGenesisPolicy genesis_policy = 24;
   optional ReleaseBuildAttestation release_attestation = 25;
@@ -156,7 +156,7 @@ message PeerAnnouncement {
   // Never verified by mesh-llm itself — carried opaquely so a receiver MAY
   // verify independently.
   optional ClaimedLogHead claimed_log_head = 51;
-  repeated LightningOffer lightning_offers = 52;
+  reserved 52;
   // Public keys plugins on this node sign with, each bound to this node's key;
   // see `PluginKey`. At most 16, one per plugin.
   repeated PluginKey plugin_keys = 53;
@@ -247,19 +247,6 @@ message ClaimedLogHead {
   string signature_algorithm = 6;
 }
 
-// Presence means payment is required for this exact model, protocol v1.
-message LightningOffer {
-  string model = 1;
-  uint64 input_msat_per_million = 2;
-  uint64 output_msat_per_million = 3;
-  // Deprecated and ignored on read; sellers send 1 for older buyers.
-  uint64 minimum_invoice_msat = 4;
-  // Optional cached-input discount percentage, 0..100; absent means full rate.
-  uint32 cache_discount_percent = 5;
-  // Payment protocol the seller accepts payment over (3 = metered v3).
-  // Absent (0) on releases before v3; buyers skip such paid offers.
-  uint32 payment_protocol = 6;
-}
 
 enum InferenceAdmissionState {
   INFERENCE_ADMISSION_STATE_UNSPECIFIED = 0;
@@ -445,6 +432,13 @@ message ServedModelDescriptor {
   optional ModelTopology topology = 3;
   optional bool capabilities_known = 4;
   optional ServedModelMetadata metadata = 5;
+  // Local clients must speak every named plugin channel. Empty means ungated.
+  repeated ChannelRequirement requires = 6;
+}
+
+message ChannelRequirement {
+  string channel = 1;
+  bytes terms = 2;
 }
 
 message ServedModelMetadata {

@@ -147,8 +147,7 @@ pub struct ServingProvenance {
     /// The mesh node that asked this host to serve the exchange, hex-encoded.
     /// Set only when the request arrived over a mesh connection, from that
     /// connection's own QUIC-authenticated remote `EndpointId`: the HTTP
-    /// tunnel's (`network/tunnel/inbound_http.rs`) or, on the paid serving
-    /// path, the payments stream's (`network/payments/server.rs`). Never from
+    /// tunnel (`network/tunnel/inbound_http.rs`). Never from
     /// anything the request carries, so a client cannot set or spoof it.
     /// Omitted for a request that reached this node's local API directly (no
     /// requesting mesh node) and on every non-host-served path.

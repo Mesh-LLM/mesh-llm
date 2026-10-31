@@ -13,15 +13,6 @@ pub async fn send_models_list_with_descriptors(
     node: Option<&mesh::Node>,
 ) -> std::io::Result<()> {
     let body = models_list_json_with_virtual(models, descriptors, runtimes, virtual_models);
-    #[cfg(feature = "payments")]
-    let body = {
-        let mut body = body;
-        if let Some(node) = node {
-            super::model_prices::attach_prices(&mut body, models, descriptors, node).await;
-        }
-        body
-    };
-    #[cfg(not(feature = "payments"))]
     let _ = node;
     let body = body.to_string();
     let resp = format!(
@@ -244,6 +235,11 @@ fn models_list_json_with_virtual(
             {
                 object.insert("metadata".to_string(), metadata);
             }
+            if let Some(requires) = descriptor.and_then(|d| model_requirements_json(&d.requires))
+                && let Some(object) = model.as_object_mut()
+            {
+                object.insert("requires".to_string(), requires);
+            }
             // Skippy probes the loaded model's selected chat template and owns the
             // result; this node republishes it verbatim. Absent when the model was
             // not probed here — an unprobed control is unknown, not off.
@@ -257,6 +253,45 @@ fn models_list_json_with_virtual(
         .collect();
 
     serde_json::json!({ "object": "list", "data": data })
+}
+
+/// The plugin channels a model requires, with the terms its provider's plugin
+/// attached, republished verbatim so clients and plugins can list and compare
+/// what the mesh is offering. The host does not interpret the terms: they are
+/// UTF-8 text when the plugin wrote text, otherwise base64 with
+/// `terms_encoding: "base64"`. Absent when the model is ungated.
+fn model_requirements_json(
+    requires: &[mesh_llm_types::mesh::ChannelRequirement],
+) -> Option<serde_json::Value> {
+    use base64::Engine as _;
+    if requires.is_empty() {
+        return None;
+    }
+    let entries: Vec<serde_json::Value> = requires
+        .iter()
+        .map(|requirement| {
+            let mut entry = serde_json::Map::new();
+            entry.insert("channel".into(), requirement.channel.clone().into());
+            if !requirement.terms.is_empty() {
+                match std::str::from_utf8(&requirement.terms) {
+                    Ok(text) => {
+                        entry.insert("terms".into(), text.into());
+                    }
+                    Err(_) => {
+                        entry.insert(
+                            "terms".into(),
+                            base64::engine::general_purpose::STANDARD
+                                .encode(&requirement.terms)
+                                .into(),
+                        );
+                        entry.insert("terms_encoding".into(), "base64".into());
+                    }
+                }
+            }
+            serde_json::Value::Object(entry)
+        })
+        .collect();
+    Some(serde_json::Value::Array(entries))
 }
 
 fn model_metadata_json(
@@ -420,6 +455,39 @@ mod tests {
         assert_eq!(thinking["toggle"], "observed");
         assert_eq!(thinking["efforts"][1], "medium");
         crate::inference::skippy::forget_local_thinking(model);
+    }
+
+    /// Channel requirements and the terms a plugin attached are republished
+    /// verbatim per model, so a client or plugin can list and compare offers
+    /// without the host knowing what the terms mean. Ungated models carry none.
+    #[test]
+    fn models_list_republishes_channel_requirements_and_terms() {
+        let gated = "Qwen3-32B-Q4_K_M-gated";
+        let open = "Qwen3-32B-Q4_K_M-open";
+        let mut descriptor = local_gguf_descriptor(gated);
+        descriptor.requires = vec![
+            mesh_llm_types::mesh::ChannelRequirement {
+                channel: "example.offer.v1".into(),
+                terms: br#"{"unit":"token","rate":3}"#.to_vec(),
+            },
+            mesh_llm_types::mesh::ChannelRequirement {
+                channel: "example.binary.v1".into(),
+                terms: vec![0xff, 0x00, 0x01],
+            },
+        ];
+        let body = models_list_json(
+            &[gated.to_string(), open.to_string()],
+            &[descriptor, local_gguf_descriptor(open)],
+            &[],
+        );
+        let requires = &body["data"][0]["requires"];
+        assert_eq!(requires[0]["channel"], "example.offer.v1");
+        assert_eq!(requires[0]["terms"], r#"{"unit":"token","rate":3}"#);
+        assert!(requires[0].get("terms_encoding").is_none());
+        assert_eq!(requires[1]["channel"], "example.binary.v1");
+        assert_eq!(requires[1]["terms"], "/wAB");
+        assert_eq!(requires[1]["terms_encoding"], "base64");
+        assert!(body["data"][1].get("requires").is_none());
     }
 
     #[test]

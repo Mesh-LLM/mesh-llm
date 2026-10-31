@@ -15,7 +15,7 @@ use super::{IngressRouteContext, twin_bracket_id};
 /// outcome carries no HTTP status at all (a dropped/failed connection).
 pub(super) fn plugin_route_status(outcome: &proxy::RouteDispatchOutcome) -> Option<u16> {
     match *outcome {
-        proxy::RouteDispatchOutcome::PolicyDenied => Some(403),
+        proxy::RouteDispatchOutcome::PolicyDenied { status_code } => Some(status_code),
         proxy::RouteDispatchOutcome::RequiredHookFailed => Some(503),
         proxy::RouteDispatchOutcome::Responded(status) => Some(status),
         proxy::RouteDispatchOutcome::RespondedWithUsage { status_code, .. } => Some(status_code),

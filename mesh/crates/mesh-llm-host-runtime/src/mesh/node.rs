@@ -199,15 +199,18 @@ pub struct Node {
     pub(crate) config_state: Arc<tokio::sync::Mutex<crate::runtime::config_state::ConfigState>>,
     /// Peers this node's operator chose to stop routing to (local only).
     pub(crate) peer_blocks: crate::network::peer_blocks::PeerBlocks,
+    /// The route-health table the serving surface routes with, registered by
+    /// [`crate::network::affinity::AffinityRouter::for_node`], so a plugin
+    /// vouching for a peer (an UNBLOCK) can lift that peer's cooldowns.
+    pub(crate) route_target_health:
+        Arc<std::sync::OnceLock<crate::network::target_health::TargetHealth>>,
     /// Plugin public keys this node announces, and the verified ones its
     /// directly-connected peers announce (`mesh::plugin_keys`).
     pub(crate) plugin_keys: crate::mesh::plugin_keys::PluginKeys,
+    pub(crate) model_requirements: super::model_requirements::ModelRequirements,
+    pub(crate) unmatched_model_requirements:
+        Arc<tokio::sync::Mutex<std::collections::HashSet<(String, String)>>>,
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
-    #[cfg(feature = "payments")]
-    pub(crate) payments: crate::network::payments::PaymentsSlot,
-    /// Stops the payment-recovery loop, which holds a `Node` clone.
-    #[cfg(feature = "payments")]
-    pub(crate) payment_recovery: crate::network::payments::PaymentRecoverySlot,
     /// Shared activity policy guard for ingress admission checks.
     pub(crate) activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard,
     /// Whether activity admission details are being advertised onto a public mesh.
@@ -678,8 +681,6 @@ impl Node {
             close_endpoint_gracefully(&lifecycle.endpoint, "owner-control").await;
         }
         self.shutdown_stage_control().await;
-        #[cfg(feature = "payments")]
-        self.shutdown_payment_recovery().await;
     }
 
     async fn shutdown_stage_control(&self) {
@@ -902,6 +903,8 @@ impl Node {
             display_name: Arc::new(Mutex::new(None)),
             owner_attestation: Arc::new(Mutex::new(owner_runtime.owner_attestation)),
             plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
+            model_requirements: Default::default(),
+            unmatched_model_requirements: Default::default(),
             release_attestation: Arc::new(Mutex::new(None)),
             release_attestation_summary: Arc::new(Mutex::new(
                 crate::ReleaseAttestationSummary::default(),
@@ -922,14 +925,11 @@ impl Node {
             gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
             config_state: Arc::new(tokio::sync::Mutex::new(config_state_init)),
             peer_blocks: crate::network::peer_blocks::PeerBlocks::for_this_node(),
+            route_target_health: Arc::new(std::sync::OnceLock::new()),
             config_revision_tx: {
                 let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);
                 Arc::new(tx)
             },
-            #[cfg(feature = "payments")]
-            payments: Arc::new(tokio::sync::OnceCell::new()),
-            #[cfg(feature = "payments")]
-            payment_recovery: Arc::new(Mutex::new(None)),
             activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
                 &activity_policy_config,
             ),
@@ -1096,6 +1096,8 @@ impl Node {
             display_name: Arc::new(Mutex::new(None)),
             owner_attestation: Arc::new(Mutex::new(None)),
             plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
+            model_requirements: Default::default(),
+            unmatched_model_requirements: Default::default(),
             release_attestation: Arc::new(Mutex::new(None)),
             release_attestation_summary: Arc::new(Mutex::new(
                 crate::ReleaseAttestationSummary::default(),
@@ -1117,14 +1119,11 @@ impl Node {
                 crate::runtime::config_state::ConfigState::default(),
             )),
             peer_blocks: crate::network::peer_blocks::PeerBlocks::in_memory(),
+            route_target_health: Arc::new(std::sync::OnceLock::new()),
             config_revision_tx: {
                 let (tx, _rx) = tokio::sync::watch::channel(0);
                 Arc::new(tx)
             },
-            #[cfg(feature = "payments")]
-            payments: Arc::new(tokio::sync::OnceCell::new()),
-            #[cfg(feature = "payments")]
-            payment_recovery: Arc::new(Mutex::new(None)),
             activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
                 &mesh_llm_config::RuntimeActivityConfig::default(),
             ),
@@ -1397,6 +1396,7 @@ impl Node {
                     local_file_name: Some(format!("{model_name}.gguf")),
                     ..Default::default()
                 },
+                requires: Vec::new(),
                 capabilities_known: false,
                 capabilities: crate::models::ModelCapabilities::default(),
                 topology: None,
@@ -1538,7 +1538,10 @@ impl Node {
     }
 
     pub async fn all_served_model_descriptors(&self) -> Vec<ServedModelDescriptor> {
-        let mut descriptors = self.local_descriptors_with_plugins().await;
+        // Local descriptors carry the channel requirements plugins attached,
+        // exactly as peers see them in announcements.
+        let hosted_models = self.hosted_models.lock().await.clone();
+        let mut descriptors = self.descriptors_with_requirements(&hosted_models).await;
         let peer_descriptors = {
             let state = self.state.lock().await;
             state
@@ -1676,10 +1679,7 @@ impl Node {
         *self.display_name.lock().await = Some(name);
     }
 
-    /// Removes the plugin manager from this node. The in-process payments
-    /// runner holds a `Node` clone, so a manager left installed forms a
-    /// Node -> manager -> runner -> Node cycle that keeps the payments engine
-    /// (and its `service.lock`) alive after an embedded stop.
+    /// Removes the plugin manager, releasing any runner references to this node.
     pub async fn take_plugin_manager(&self) -> Option<crate::plugin::PluginManager> {
         self.plugin_manager.lock().await.take()
     }

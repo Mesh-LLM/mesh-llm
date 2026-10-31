@@ -114,6 +114,8 @@ pub(super) fn format_plugin(command: &mesh_llm_cli::PluginCommand, assembly: &mu
             assembly.redact("query", query.is_some());
         }
         PluginCommand::List => assembly.command.push_str(" plugins list"),
+        // The plugin, operation and input are the plugin's own: one redacted name.
+        PluginCommand::Call { .. } => format_plugin_name("call", assembly),
     }
 }
 

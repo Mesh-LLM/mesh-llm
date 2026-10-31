@@ -931,6 +931,8 @@ Subcommands:
 
 - `plugins install <reference>`: install from a catalog name, GitHub
   `owner/repository`, or GitHub URL.
+  A plugin whose `plugin.toml` lists `requires = [...]` has each missing
+  requirement installed from the catalog as well.
 - `plugins install --archive <PATH> --name <NAME> [--version <VERSION>]`:
   install a local `.tar.gz` or `.zip` release archive. `--name` is required;
   `--version` defaults to `dev`. These flags conflict with `<reference>`.
@@ -938,6 +940,8 @@ Subcommands:
 - `plugins enable <name>`: mark an installed plugin runnable by mesh-llm.
 - `plugins disable <name>`: keep the plugin on disk but prevent host startup from launching it.
 - `plugins delete <name>`: remove the extracted files and local metadata.
+  Refused while another installed plugin lists `<name>` in its `plugin.toml`
+  `requires`; delete that plugin first.
 - `plugins info <name>`: show source, version, target, path, and latest known status.
 - `plugins search [query]`: search the plugin catalog.
 - `plugins list`: list installed, auto-registered, and configured plugins.

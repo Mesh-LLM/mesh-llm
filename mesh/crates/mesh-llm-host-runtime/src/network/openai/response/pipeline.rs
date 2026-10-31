@@ -28,7 +28,7 @@ fn capsule_nonce_headers(headers: &reqwest::header::HeaderMap) -> (Option<String
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipelineProxyResult {
-    PolicyDenied,
+    PolicyDenied { status_code: u16 },
     RequiredHookFailed,
     Responded(u16),
     RespondedWithUsage { status_code: u16, usage: TokenUsage },

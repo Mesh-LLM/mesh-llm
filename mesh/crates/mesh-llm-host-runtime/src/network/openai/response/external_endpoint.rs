@@ -27,7 +27,6 @@ pub(in crate::network::openai) async fn route_http_endpoint_attempt(
     logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
     let RouteAttemptLoggingContext {
-        exchange_id: _,
         request_id,
         retry_policy,
         response_adapter,
@@ -451,7 +450,6 @@ mod tests {
                 &prefetched,
                 "/v1/chat/completions",
                 RouteAttemptLoggingContext {
-                    exchange_id: None,
                     request_id: RequestId::new(),
                     retry_policy: ResponseRetryPolicy::next_target_available(false),
                     response_adapter: ResponseAdapter::OpenAiChatCompletionsJson,

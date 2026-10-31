@@ -134,8 +134,7 @@ pub fn install_bundled_default(
     };
     store.save(&metadata)?;
     progress.report(PluginProgressEvent::Installed {
-        name: metadata.name.clone(),
-        version: metadata.installed_version.clone(),
+        installed: Box::new(metadata.clone()),
     });
     Ok(Some(InstallOutcome {
         metadata,

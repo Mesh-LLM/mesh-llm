@@ -123,14 +123,8 @@ pub(in crate::network::openai::response) async fn relay_translated_json<R: Async
     request_id: RequestId,
     anthropic: bool,
 ) -> Result<RouteAttemptResult> {
-    if retry_policy.context_overflow && probe.retryable_context_overflow {
-        return Ok(RouteAttemptResult::RetryableContextOverflow);
-    }
-    if crate::network::openai::response::common::withheld_payment_required_response(
-        retry_policy,
-        probe.status_code,
-    ) {
-        return Ok(RouteAttemptResult::RetryablePaymentRequired);
+    if let Some(result) = super::common::retry_before_relay(&probe, retry_policy) {
+        return Ok(result);
     }
 
     if !anthropic && !(200..300).contains(&probe.status_code) {
@@ -222,14 +216,8 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     route_observer: OpenAiRouteObserver<'_>,
     request_id: RequestId,
 ) -> Result<RouteAttemptResult> {
-    if retry_policy.context_overflow && probe.retryable_context_overflow {
-        return Ok(RouteAttemptResult::RetryableContextOverflow);
-    }
-    if crate::network::openai::response::common::withheld_payment_required_response(
-        retry_policy,
-        probe.status_code,
-    ) {
-        return Ok(RouteAttemptResult::RetryablePaymentRequired);
+    if let Some(result) = super::common::retry_before_relay(&probe, retry_policy) {
+        return Ok(result);
     }
 
     if !(200..300).contains(&probe.status_code) {

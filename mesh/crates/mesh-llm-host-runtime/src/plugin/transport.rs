@@ -1,3 +1,5 @@
+mod model_requirements;
+mod operation_binding;
 use super::runtime::PluginRuntime;
 use super::{PROTOCOL_VERSION, PluginMeshEvent, PluginRpcBridge, PluginSummary, proto};
 use anyhow::{Context, Result, anyhow, bail};
@@ -88,6 +90,7 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
      generation,
      peer_state| {
         let authenticated_peer = peer_state.load(Ordering::Acquire);
+        let binding_capacity = Arc::new(tokio::sync::Semaphore::new(8));
         Box::pin(async move {
             let observation =
                 super::inference_observation::subscription::ConnectionSubscription::default();
@@ -163,6 +166,15 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                         outbound_tx.clone(),
                                     );
                                 }
+                                Some(super::proto::envelope::Payload::ModelRequirementRequest(request)) => {
+                                    model_requirements::forward_request(
+                                        plugin_name.clone(),
+                                        request_id,
+                                        request,
+                                        mesh_tx.clone(),
+                                        outbound_tx.clone(),
+                                    );
+                                }
                                 Some(super::proto::envelope::Payload::PluginKeyRequest(request)) => {
                                     // Announced under the connection's own name,
                                     // so one plugin cannot set another's key.
@@ -204,6 +216,14 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                     );
                                 }
                                 Some(super::proto::envelope::Payload::RpcRequest(request)) => {
+                                    if request.method == mesh_llm_plugin::operation_binding::METHOD {
+                                        operation_binding::forward(
+                                            plugin_name.clone(), request_id, request,
+                                            PluginRequestPeer { authenticated: authenticated_peer, runtime: runtime.clone(), generation },
+                                            mesh_tx.clone(), outbound_tx.clone(), binding_capacity.clone(),
+                                        );
+                                        continue;
+                                    }
                                     forward_plugin_request(
                                         plugin_name.clone(),
                                         request_id,
@@ -258,6 +278,14 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
             };
 
             if was_active_runtime {
+                let _ = mesh_tx
+                    .send_timeout(
+                        PluginMeshEvent::ModelRequirementsWithdraw {
+                            plugin_id: plugin_name.clone(),
+                        },
+                        Duration::from_secs(1),
+                    )
+                    .await;
                 if let Err(err) = result {
                     tracing::warn!(
                         plugin = %plugin_name,

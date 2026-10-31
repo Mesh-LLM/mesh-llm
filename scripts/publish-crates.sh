@@ -381,8 +381,6 @@ publish_crates=(
     skippy-native-runtime
     mesh-llm-config
     mesh-llm-plugin
-    mesh-llm-wallet
-    mesh-llm-payments-types
     mesh-llm-membership
     skippy-coordinator
     skippy-topology
@@ -398,7 +396,6 @@ publish_crates=(
     mesh-llm-build-info
     mesh-llm-analytics
     mesh-llm-release-footer
-    mesh-llm-payments
     mesh-llm-ui
     mesh-llm-console-server
     mesh-llm-tui

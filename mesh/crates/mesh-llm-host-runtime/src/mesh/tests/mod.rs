@@ -38,3 +38,5 @@ mod split_coverage {
         include!("stage_control.rs");
     }
 }
+
+mod model_requirements;

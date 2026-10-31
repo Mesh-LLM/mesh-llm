@@ -3441,15 +3441,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hashlink"
-version = "0.12.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a596f1b20ed2cc5ecac41a164aaebc7258057060f06c0cf7a2ba3991ee7990fb"
-dependencies = [
- "hashbrown 0.17.1",
-]
-
-[[package]]
 name = "heapify"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4443,26 +4434,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lightning-invoice"
-version = "0.35.0-rc1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "91904130b6a2f76655b96d827c817fd6f16e2fed3adfc23a91973f5c37a0f482"
-dependencies = [
- "bech32 0.11.1",
- "bitcoin",
- "lightning-types",
-]
-
-[[package]]
-name = "lightning-types"
-version = "0.4.0-rc1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8c1be11e911ca70c5205e934c9371226a99c37b8c8d29c2be646accbfa70ac09"
-dependencies = [
- "bitcoin",
-]
-
-[[package]]
 name = "line-clipping"
 version = "0.3.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4684,7 +4655,6 @@ dependencies = [
  "mesh-llm-commands",
  "mesh-llm-events",
  "mesh-llm-host-runtime",
- "mesh-llm-payments",
  "mesh-llm-plugin",
  "mesh-llm-plugin-manager",
  "mesh-llm-system",
@@ -4800,7 +4770,6 @@ dependencies = [
  "mesh-llm-config",
  "mesh-llm-events",
  "mesh-llm-identity",
- "mesh-llm-payments",
  "mesh-llm-plugin-manager",
  "mesh-llm-system",
  "mesh-llm-tui",
@@ -4877,9 +4846,7 @@ dependencies = [
 name = "mesh-llm-embedded-runtime"
 version = "0.78.0"
 dependencies = [
- "anyhow",
  "mesh-llm-host-runtime",
- "mesh-llm-payments",
 ]
 
 [[package]]
@@ -4936,7 +4903,6 @@ dependencies = [
  "iroh",
  "iroh-relay",
  "libc",
- "lightning-invoice",
  "mdns-sd",
  "mesh-llm-analytics",
  "mesh-llm-build-info",
@@ -4949,8 +4915,6 @@ dependencies = [
  "mesh-llm-membership",
  "mesh-llm-moa-plugin",
  "mesh-llm-node",
- "mesh-llm-payments",
- "mesh-llm-payments-types",
  "mesh-llm-plugin",
  "mesh-llm-plugin-manager",
  "mesh-llm-protocol",
@@ -4961,7 +4925,6 @@ dependencies = [
  "mesh-llm-transport",
  "mesh-llm-types",
  "mesh-llm-ui",
- "mesh-llm-wallet",
  "mesh-native-serving-plugin-host",
  "nostr-sdk",
  "opentelemetry",
@@ -5067,7 +5030,6 @@ dependencies = [
  "hex",
  "iroh",
  "mesh-llm-identity",
- "mesh-llm-payments-types",
  "mesh-llm-protocol",
  "mesh-llm-routing",
  "mesh-llm-types",
@@ -5126,35 +5088,6 @@ dependencies = [
 [[package]]
 name = "mesh-llm-payments"
 version = "0.78.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bitcoin",
- "fs2",
- "lightning-invoice",
- "mesh-llm-payments-types",
- "mesh-llm-plugin",
- "mesh-llm-wallet",
- "rmcp",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
-]
-
-[[package]]
-name = "mesh-llm-payments-types"
-version = "0.78.0"
-dependencies = [
- "anyhow",
- "httparse",
- "mesh-llm-plugin",
- "mesh-llm-wallet",
- "serde",
- "serde_json",
- "tokio",
-]
 
 [[package]]
 name = "mesh-llm-plugin"
@@ -5194,6 +5127,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tokio",
+ "toml 1.1.6+spec-1.1.0",
  "zip",
 ]
 
@@ -5250,7 +5184,6 @@ dependencies = [
  "mesh-llm-embedded-runtime",
  "mesh-llm-host-runtime",
  "mesh-llm-identity",
- "mesh-llm-payments",
  "mesh-llm-plugin-manager",
  "reqwest 0.13.5",
  "rustls",
@@ -5387,21 +5320,6 @@ dependencies = [
 [[package]]
 name = "mesh-llm-wallet"
 version = "0.78.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "bitcoin",
- "hex",
- "lightning-invoice",
- "mesh-llm-plugin",
- "rmcp",
- "schemars",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tempfile",
- "tokio",
-]
 
 [[package]]
 name = "mesh-mixture-of-agents"
@@ -7929,16 +7847,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsqlite-vfs"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c51c9ae4df8a7fba42103df5c621fa3c37eccf3a3c650879e90fc48b11cc192c"
-dependencies = [
- "hashbrown 0.16.1",
- "thiserror 2.0.21",
-]
-
-[[package]]
 name = "rtoolbox"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7957,10 +7865,8 @@ dependencies = [
  "bitflags 2.13.2",
  "fallible-iterator",
  "fallible-streaming-iterator",
- "hashlink",
  "libsqlite3-sys",
  "smallvec",
- "sqlite-wasm-rs",
 ]
 
 [[package]]
@@ -9367,18 +9273,6 @@ dependencies = [
  "nom 7.1.3",
  "serde",
  "unicode-segmentation",
-]
-
-[[package]]
-name = "sqlite-wasm-rs"
-version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dc3efc0da82635d7e1ced0053bbbfa8c7ab9645d0bf36ceb4f7127bb85315d75"
-dependencies = [
- "cc",
- "js-sys",
- "rsqlite-vfs",
- "wasm-bindgen",
 ]
 
 [[package]]

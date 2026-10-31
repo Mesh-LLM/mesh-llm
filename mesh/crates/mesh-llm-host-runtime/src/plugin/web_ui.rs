@@ -513,6 +513,8 @@ pub(super) fn installed_metadata_with_web_ui(
                     },
                 },
             ),
+            operation_bindings: Vec::new(),
+            peer_blocks: false,
         }),
         last_protocol_version: Some(1),
         last_status: Some("running".into()),
