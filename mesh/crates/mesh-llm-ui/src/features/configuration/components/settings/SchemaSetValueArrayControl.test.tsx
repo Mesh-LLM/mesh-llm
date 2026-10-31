@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { describe, expect, it } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { describe, expect, it, vi } from 'vitest'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ConfigurationDefaultsSetting, ConfigurationSettingObjectSchema } from '@/features/app-tabs/types'
 import { SchemaArrayControl } from './SchemaArrayControl'
@@ -32,7 +32,7 @@ function Harness({ initial = '' }: { initial?: string }) {
   return (
     <>
       <SchemaArrayControl onChange={setValue} setting={setting} value={value} />
-      <output data-testid="value">{value}</output>
+      <div data-testid="value">{value}</div>
     </>
   )
 }
@@ -52,16 +52,16 @@ describe('SchemaSetValueArrayControl', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Set' }))
     expect(screen.getByTestId('value')).toHaveTextContent('[{"endpoint":"https://witness.example.org"}]')
     expect(screen.getByLabelText('Witnesses 1')).toHaveAttribute('data-set', 'true')
-    expect(
-      screen.getByText('Set. Click Save config to keep it; takes effect when mesh-llm restarts.')
-    ).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Set. Click Save config to keep it; takes effect when mesh-llm restarts.'
+    )
     expect(screen.queryByText(/Not set/)).not.toBeInTheDocument()
   })
 
   it('edits a set value and sets it again; Set is disabled until the value changes', async () => {
     render(<Harness initial='[{"endpoint":"https://a.example"}]' />)
     const set = screen.getByRole('button', { name: 'Set' })
-    expect(set).toBeDisabled()
+    expect(set).toHaveAttribute('aria-disabled', 'true')
     fireEvent.change(screen.getByLabelText('Witnesses 1'), { target: { value: 'https://b.example' } })
     expect(screen.getByTestId('value')).toHaveTextContent('https://a.example')
     await userEvent.click(set)
@@ -125,7 +125,7 @@ describe('SchemaSetValueArrayControl', () => {
             setting={{ ...setting, valueSchema: { kind: 'array', items: nested } }}
             value={value}
           />
-          <output data-testid="value">{value}</output>
+          <div data-testid="value">{value}</div>
         </>
       )
     }
@@ -195,7 +195,7 @@ describe('SchemaSetValueArrayControl', () => {
             setting={{ ...setting, valueSchema: { kind: 'array', items: two } }}
             value={value}
           />
-          <output data-testid="value">{value}</output>
+          <div data-testid="value">{value}</div>
         </>
       )
     }
@@ -281,6 +281,44 @@ describe('SchemaSetValueArrayControl', () => {
     const set = screen.getByRole('button', { name: 'Set' })
     await userEvent.click(set)
     expect(document.activeElement).toBe(set)
-    expect(screen.getByText(/Set\. Click Save config to keep it/)).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('Set. Click Save config to keep it')
+  })
+
+  it('announces the confirmation in one live region, even when Set replaces the greyed row', async () => {
+    render(<Harness />)
+    await userEvent.click(screen.getByRole('button', { name: 'Set' }))
+    expect(screen.getByRole('status')).toHaveTextContent('Set. Click Save config to keep it')
+  })
+
+  it('a change from outside ends the confirmation, and the confirmation ends after 6 seconds', () => {
+    vi.useFakeTimers()
+    try {
+      function UndoHarness() {
+        const [value, setValue] = useState('[{"endpoint":"https://a.example"}]')
+        return (
+          <>
+            <SchemaArrayControl onChange={setValue} setting={setting} value={value} />
+            <button onClick={() => setValue('[{"endpoint":"https://a.example"}]')} type="button">
+              undo
+            </button>
+          </>
+        )
+      }
+      render(<UndoHarness />)
+      fireEvent.change(screen.getByLabelText('Witnesses 1'), { target: { value: 'https://b.example' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Set' }))
+      expect(screen.getByRole('status')).toHaveTextContent('Set. Click Save config')
+      act(() => vi.advanceTimersByTime(5000))
+      expect(screen.getByRole('status')).toHaveTextContent('Set. Click Save config')
+      act(() => vi.advanceTimersByTime(1500))
+      expect(screen.getByRole('status')).toHaveTextContent('')
+      fireEvent.change(screen.getByLabelText('Witnesses 1'), { target: { value: 'https://c.example' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Set' }))
+      expect(screen.getByRole('status')).toHaveTextContent('Set. Click Save config')
+      fireEvent.click(screen.getByRole('button', { name: 'undo' }))
+      expect(screen.getByRole('status')).toHaveTextContent('')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

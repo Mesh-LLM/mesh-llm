@@ -54,7 +54,7 @@ function SetRow({
 }: SetRowProps) {
   const [draft, setDraft] = useState(committed ?? '')
   // An outside change to the stored value (Undo, Redo, Revert) replaces the draft, without remounting the
-  // row: Set keeps keyboard focus and the confirmation's live region.
+  // row, so Set on an existing row keeps keyboard focus.
   const [seen, setSeen] = useState(committed)
   if (seen !== committed) {
     setSeen(committed)
@@ -94,10 +94,20 @@ function SetRow({
         spellCheck={false}
         value={shown}
       />
-      <Button disabled={!canSet} onClick={() => onSet(shown.trim())} size="sm" type="button" variant="outline">
+      {/* aria-disabled, not disabled: a button that disables itself on click loses keyboard focus in browsers. */}
+      <Button
+        aria-disabled={canSet ? undefined : true}
+        className={cn(!canSet && 'cursor-not-allowed opacity-50')}
+        onClick={() => {
+          if (canSet) onSet(shown.trim())
+        }}
+        size="sm"
+        type="button"
+        variant="outline"
+      >
         Set
       </Button>
-      <span aria-live="polite" className="inline-flex min-w-4 shrink-0 items-center gap-1 text-good type-caption">
+      <span aria-hidden="true" className="inline-flex min-w-4 shrink-0 items-center gap-1 text-good type-caption">
         {confirmed ? (
           <>
             <Check aria-hidden="true" className="size-4" />
@@ -129,8 +139,8 @@ export function SchemaSetValueArrayControl({
   const parsed = parseSchemaObjectArrayValue(value)
   const items = parsed ?? []
   // Committed rows carry an id that survives removals, so a row never inherits another row's draft.
-  // Row keys also include the stored value, so an outside change (Undo, Redo, Revert) remounts the
-  // row with the restored value. If the list changes length from outside, every id is re-issued, so no row can keep another's draft.
+  // Row keys are the ids alone; an outside change to a row's stored value resets its draft in place (SetRow).
+  // If the list changes length from outside, every id is re-issued, so no row can keep another's draft.
   const [rows, setRows] = useState(() => ({ ids: items.map((_, index) => index), next: items.length }))
   let current = rows
   if (rows.ids.length !== items.length) {
@@ -140,6 +150,9 @@ export function SchemaSetValueArrayControl({
   const rowIds = current.ids
   const [pending, setPending] = useState<readonly number[]>([])
   const [confirmedRow, setConfirmedRow] = useState<number | null>(null)
+  const [lastEmitted, setLastEmitted] = useState<string | null>(null)
+  // A change this control did not make (Undo, Redo, Revert) ends the confirmation: it described the undone value.
+  if (confirmedRow !== null && value !== lastEmitted) setConfirmedRow(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(timer.current), [])
   const flash = (row: number) => {
@@ -166,7 +179,11 @@ export function SchemaSetValueArrayControl({
     : 'Set. Click Save config to keep it.'
   const itemName = singularItemLabel(setting.label).toLowerCase()
 
-  const emit = (next: readonly Record<string, unknown>[]) => onChange(JSON.stringify(next))
+  const emit = (next: readonly Record<string, unknown>[]) => {
+    const text = JSON.stringify(next)
+    setLastEmitted(text)
+    onChange(text)
+  }
   const rest: ConfigurationSettingObjectSchema = {
     ...itemSchema,
     properties: (itemSchema.properties ?? []).filter((property) => property.name !== primary.name)
@@ -179,6 +196,10 @@ export function SchemaSetValueArrayControl({
 
   return (
     <div className="grid w-full min-w-0 gap-2.5">
+      {/* One live region for the whole control, so the confirmation is announced even when Set replaces a row. */}
+      <p aria-live="polite" className="sr-only" role="status">
+        {confirmedRow === null ? '' : savedText}
+      </p>
       {items.length === 0 && pending.length === 0 && placeholder ? (
         <div className="grid gap-1">
           <SetRow
