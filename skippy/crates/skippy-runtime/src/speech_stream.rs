@@ -34,6 +34,10 @@ const SPEECH_START_FRAMES: usize = 3;
 const MAX_NO_SPEECH_PROB: f32 = 0.6;
 /// Confirmed text kept as the prompt once its audio is trimmed away.
 const PROMPT_TAIL_CHARS: usize = 200;
+/// Audio a turn needs before any of its words are confirmed. With less,
+/// Whisper may miss or mishear the first word in two passes alike, and a word
+/// confirmed wrongly stays wrong; a pass a second becomes the default's two.
+const MIN_CONFIRM_MS: u64 = 2_000;
 
 /// Server-side turn detection, in the shape of OpenAI's `server_vad`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -79,6 +83,9 @@ pub struct SpeechStreamConfig {
     /// Buffer length past which unconfirmed words are confirmed anyway, to
     /// stay inside Whisper's 30 s window.
     pub max_buffer_ms: u32,
+    /// Report the words a pass heard but has not confirmed, so a caller can
+    /// show speech a pass sooner than the deltas do.
+    pub tentative: bool,
 }
 
 impl Default for SpeechStreamConfig {
@@ -90,6 +97,7 @@ impl Default for SpeechStreamConfig {
             step_ms: 1_000,
             trim_after_ms: 15_000,
             max_buffer_ms: 28_000,
+            tentative: false,
         }
     }
 }
@@ -114,6 +122,13 @@ pub enum SpeechStreamEvent {
     Completed {
         turn: u64,
         transcript: String,
+    },
+    /// What the latest pass heard after the confirmed text, when
+    /// [`SpeechStreamConfig::tentative`] is set. It may change: each replaces
+    /// the last, an empty one clears it, and `Completed` supersedes it.
+    Tentative {
+        turn: u64,
+        text: String,
     },
 }
 
@@ -145,6 +160,8 @@ pub struct SpeechStream {
     confirmed_in_buffer: usize,
     /// The previous pass's words after the confirmed ones.
     pending: Vec<String>,
+    /// The tentative text last reported, so an unchanged one isn't repeated.
+    reported_tentative: String,
     last_pass_at: u64,
 }
 
@@ -165,6 +182,7 @@ impl SpeechStream {
             confirmed: Vec::new(),
             confirmed_in_buffer: 0,
             pending: Vec::new(),
+            reported_tentative: String::new(),
             last_pass_at: 0,
         }
     }
@@ -177,6 +195,11 @@ impl SpeechStream {
     /// `turn_detection`, `step_ms`, or buffer bound governs the very next
     /// frame and pass. Language and prompt reach the next pass.
     pub fn set_config(&mut self, config: SpeechStreamConfig) {
+        if config.tentative != self.config.tentative {
+            // A consumer that stopped asking may have cleared its display;
+            // the next pass must be free to repeat the last text it saw.
+            self.reported_tentative.clear();
+        }
         self.config = config;
     }
 
@@ -232,11 +255,20 @@ impl SpeechStream {
     }
 
     /// Drops the current turn's audio and unconfirmed words without a
-    /// transcript.
-    pub fn clear(&mut self) {
+    /// transcript. Tentative text already reported for that turn is replaced
+    /// by an empty event, so a consumer stops showing the discarded words.
+    pub fn clear(&mut self) -> Vec<SpeechStreamEvent> {
+        let mut events = Vec::new();
+        if self.config.tentative && !self.reported_tentative.is_empty() {
+            events.push(SpeechStreamEvent::Tentative {
+                turn: self.turn,
+                text: String::new(),
+            });
+        }
         self.reset_turn();
         self.preroll.clear();
         self.partial_frame.clear();
+        events
     }
 
     fn push_frame(
@@ -343,11 +375,17 @@ impl SpeechStream {
             self.pending.clear();
         }
         let tail = &words[self.confirmed_in_buffer..];
-        let agreed = tail
-            .iter()
-            .zip(&self.pending)
-            .take_while(|(now, before)| same_word(now, before))
-            .count();
+        // Only a turn's start is held back; later words have the earlier ones
+        // as context.
+        let heard_ms = self.buffer.len() as u64 / SAMPLES_PER_MS;
+        let agreed = if self.confirmed.is_empty() && heard_ms < MIN_CONFIRM_MS {
+            0
+        } else {
+            tail.iter()
+                .zip(&self.pending)
+                .take_while(|(now, before)| same_word(now, before))
+                .count()
+        };
         let (newly_confirmed, pending) = tail.split_at(agreed);
         self.pending = pending.to_vec();
         self.confirm(newly_confirmed.to_vec(), events);
@@ -365,7 +403,26 @@ impl SpeechStream {
         } else if buffer_ms > u64::from(self.config.trim_after_ms) {
             self.trim_confirmed(&segments);
         }
+        self.report_tentative(events);
         Ok(())
+    }
+
+    fn report_tentative(&mut self, events: &mut Vec<SpeechStreamEvent>) {
+        if !self.config.tentative {
+            return;
+        }
+        let mut text = self.pending.join(" ");
+        // Like a delta, it reads on from the confirmed text.
+        if !text.is_empty() && !self.confirmed.is_empty() {
+            text.insert(0, ' ');
+        }
+        if text != self.reported_tentative {
+            self.reported_tentative.clone_from(&text);
+            events.push(SpeechStreamEvent::Tentative {
+                turn: self.turn,
+                text,
+            });
+        }
     }
 
     /// Cuts the buffer at the end of the last segment whose words are all
@@ -422,6 +479,7 @@ impl SpeechStream {
         self.confirmed.clear();
         self.confirmed_in_buffer = 0;
         self.pending.clear();
+        self.reported_tentative.clear();
         self.speech_frames = 0;
         self.silence_samples = 0;
     }
