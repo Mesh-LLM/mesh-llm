@@ -848,7 +848,19 @@ impl PackagedPluginConstraint {
 }
 
 pub fn mesh_channel(name: impl Into<String>) -> ManifestEntry {
-    ManifestEntry::MeshChannel(proto::MeshChannelManifest { name: name.into() })
+    ManifestEntry::MeshChannel(proto::MeshChannelManifest {
+        name: name.into(),
+        local: false,
+    })
+}
+
+/// A channel this plugin publishes on to the other plugins on its node only
+/// (see [`crate::host_capabilities::LOCAL_CHANNELS`]).
+pub fn local_channel(name: impl Into<String>) -> ManifestEntry {
+    ManifestEntry::MeshChannel(proto::MeshChannelManifest {
+        name: name.into(),
+        local: true,
+    })
 }
 
 pub fn mesh_event_subscription(kind: proto::mesh_event::Kind) -> ManifestEntry {
@@ -1993,5 +2005,18 @@ mod tests {
             error_chain_contains(&error, "unknown plugin config apply mode"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn local_channel_declares_the_channel_local_and_mesh_channel_does_not() {
+        let ManifestEntry::MeshChannel(local) = local_channel("payment.lifecycle.v1") else {
+            panic!("local_channel is a mesh channel entry");
+        };
+        assert!(local.local);
+        assert_eq!(local.name, "payment.lifecycle.v1");
+        let ManifestEntry::MeshChannel(mesh) = mesh_channel("pay.ln.v1") else {
+            panic!("mesh_channel is a mesh channel entry");
+        };
+        assert!(!mesh.local);
     }
 }
