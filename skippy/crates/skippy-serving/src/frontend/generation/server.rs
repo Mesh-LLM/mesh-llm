@@ -353,6 +353,10 @@ fn embedded_openai_backend_with_scheduler(
         args.telemetry.emit("stage.kv_payload_selected", attrs);
     }
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
+    let generation_token_budget = {
+        let runtime = crate::runtime_state::panic_recovery::lock_runtime(&args.runtime);
+        Arc::new(GenerationTokenBudget::for_runtime(&runtime, ctx_size))
+    };
     let iteration_scheduler = match iteration_scheduler {
         Some(iteration_scheduler) => iteration_scheduler,
         None => IterationScheduler::new(
@@ -416,7 +420,7 @@ fn embedded_openai_backend_with_scheduler(
             args.generation_concurrency,
         )),
         generation_session_locks: Arc::new(Mutex::new(BTreeMap::new())),
-        generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
+        generation_token_budget,
         hook_policy: args.hook_policy,
         generation_receipt: args.generation_receipt,
         generation_lifecycle: args.generation_lifecycle,
