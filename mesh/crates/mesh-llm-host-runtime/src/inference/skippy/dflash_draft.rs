@@ -3,7 +3,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 
 use super::resolver::DFlashPairing;
 
@@ -50,7 +50,36 @@ pub(crate) async fn materialize_default_dflash_draft(resolved: &mut super::Resol
                 draft = pairing.draft.repo,
                 "DFlash draft unavailable, serving without speculation: {error:#}"
             );
+            if error.downcast_ref::<CorruptDraft>().is_some() {
+                discard_cached_draft(&pairing.draft.cache_path());
+            }
             resolved.speculative.drop_default_dflash();
+        }
+    }
+}
+
+/// A cached draft whose size or digest is not the pinned one: a partial or
+/// corrupted download, which a fresh download repairs.
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+struct CorruptDraft(String);
+
+/// Removes a corrupt cached draft, the snapshot entry and the blob it points
+/// to, so the next load downloads it again instead of finding it cached. The
+/// downloader returns an existing snapshot as is, so the blob has to go too.
+fn discard_cached_draft(path: &Path) {
+    let blob = std::fs::canonicalize(path).ok();
+    for path in std::iter::once(path.to_path_buf()).chain(blob) {
+        match std::fs::remove_file(&path) {
+            Ok(()) => tracing::info!(
+                path = %path.display(),
+                "removed a corrupt DFlash draft; the next load downloads it again"
+            ),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => tracing::warn!(
+                path = %path.display(),
+                "could not remove a corrupt DFlash draft: {error}"
+            ),
         }
     }
 }
@@ -114,19 +143,23 @@ fn verify_dflash_draft(pairing: &'static DFlashPairing, path: PathBuf) -> Result
     let bytes = std::fs::metadata(&path)
         .with_context(|| format!("read {}", path.display()))?
         .len();
-    ensure!(
-        bytes == draft.bytes,
-        "{} is {bytes} bytes, expected {}",
-        path.display(),
-        draft.bytes
-    );
+    if bytes != draft.bytes {
+        return Err(CorruptDraft(format!(
+            "{} is {bytes} bytes, expected {}",
+            path.display(),
+            draft.bytes
+        ))
+        .into());
+    }
     let sha256 = crate::models::artifact_transfer::file_sha256_hex(&path)?;
-    ensure!(
-        sha256 == draft.sha256,
-        "{} has sha256 {sha256}, expected {}",
-        path.display(),
-        draft.sha256
-    );
+    if sha256 != draft.sha256 {
+        return Err(CorruptDraft(format!(
+            "{} has sha256 {sha256}, expected {}",
+            path.display(),
+            draft.sha256
+        ))
+        .into());
+    }
     pairing.check_draft(&path)?;
     Ok(path)
 }
@@ -171,6 +204,30 @@ mod tests {
         .await
         .expect("the download starts in the background");
         assert_eq!(started.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn a_corrupt_draft_is_removed_with_its_blob() {
+        let cache = tempfile::tempdir().unwrap();
+        let blob = cache.path().join("blobs").join("deadbeef");
+        std::fs::create_dir_all(blob.parent().unwrap()).unwrap();
+        std::fs::write(&blob, b"partial").unwrap();
+        let snapshot = cache
+            .path()
+            .join("snapshots")
+            .join("rev")
+            .join("draft.gguf");
+        std::fs::create_dir_all(snapshot.parent().unwrap()).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&blob, &snapshot).unwrap();
+        #[cfg(not(unix))]
+        std::fs::copy(&blob, &snapshot).unwrap();
+
+        discard_cached_draft(&snapshot);
+
+        assert!(std::fs::symlink_metadata(&snapshot).is_err());
+        #[cfg(unix)]
+        assert!(!blob.exists());
     }
 
     #[tokio::test]
