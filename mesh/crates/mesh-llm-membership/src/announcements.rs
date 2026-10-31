@@ -157,7 +157,6 @@ pub fn peer_meaningfully_changed(old: &PeerInfo, new: &PeerInfo) -> bool {
         || old.decode_batch_policy_supported != new.decode_batch_policy_supported
         || old.plugin_origin_signature_supported != new.plugin_origin_signature_supported
         || old.persistent_lane_marker_supported != new.persistent_lane_marker_supported
-        || old.activation_codec_fp8_supported != new.activation_codec_fp8_supported
         || lightning_offers_changed(old, new)
         || crate::advertised_state_changed(&old.cache_affinity, &new.cache_affinity)
         || old.version != new.version
@@ -346,7 +345,6 @@ pub fn announcement_from_peer(peer: &PeerInfo) -> PeerAnnouncement {
         decode_batch_policy_supported: peer.decode_batch_policy_supported,
         plugin_origin_signature_supported: peer.plugin_origin_signature_supported,
         persistent_lane_marker_supported: peer.persistent_lane_marker_supported,
-        activation_codec_fp8_supported: peer.activation_codec_fp8_supported,
         advertised_model_throughput: peer.advertised_model_throughput.clone(),
         #[cfg(feature = "payments")]
         lightning_offers: peer.lightning_offers.clone(),
@@ -435,7 +433,6 @@ pub fn update_existing_direct_peer(
     existing.decode_batch_policy_supported = ann.decode_batch_policy_supported;
     existing.plugin_origin_signature_supported = ann.plugin_origin_signature_supported;
     existing.persistent_lane_marker_supported = ann.persistent_lane_marker_supported;
-    existing.activation_codec_fp8_supported = ann.activation_codec_fp8_supported;
     existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
     #[cfg(feature = "payments")]
     {

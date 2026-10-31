@@ -41,7 +41,6 @@ fn peer_state_test_announcement(addr: EndpointAddr) -> super::PeerAnnouncement {
         decode_batch_policy_supported: true,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
-        activation_codec_fp8_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -584,7 +583,6 @@ fn gossip_frame_roundtrip_preserves_scanned_model_metadata() {
         decode_batch_policy_supported: false,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
-        activation_codec_fp8_supported: false,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -1001,7 +999,6 @@ fn transitive_peer_update_refreshes_metadata_fields() {
         decode_batch_policy_supported: true,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
-        activation_codec_fp8_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -1104,7 +1101,6 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         decode_batch_policy_supported: true,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
-        activation_codec_fp8_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
@@ -1179,7 +1175,6 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         decode_batch_policy_supported: true,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
-        activation_codec_fp8_supported: true,
         advertised_model_throughput: vec![],
         #[cfg(feature = "payments")]
         lightning_offers: Default::default(),
