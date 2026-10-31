@@ -1,0 +1,19 @@
+{
+  "backend": "cuda",
+  "product_source_commit": "0000000000000000000000000000000000000000",
+  "native_source_commit": "0000000000000000000000000000000000000000",
+  "native_patch_digest": "COPY_ACTUAL_MANIFEST_BUILD_LLAMA_PATCH_DIGEST",
+  "runtime": {"path": "/opt/kv-runtime", "sha256": ""},
+  "skippy": {"path": "/opt/kv-tools/skippy", "sha256": ""},
+  "llama": {"path": "/opt/standard/bin/llama-server", "sha256": ""},
+  "standard_runtime": {"path": "/opt/standard/bin", "sha256": ""},
+  "standard_upstream": "620d2225cc436ab0b001e3200e590e3b286ef9ab",
+  "client": {"path": "/opt/agentx-env/bin/agentx", "sha256": ""},
+  "client_environment": {"path": "/opt/agentx-env", "sha256": ""},
+  "client_lock": {"path": "/opt/mesh-llm/skippy/evals/agentx/uv.lock", "sha256": ""},
+  "tokenizer": {"path": "/models/tokenizer-snapshot", "sha256": ""},
+  "threads": 20,
+  "diagnostic_generation_lanes": null,
+  "diagnostic_cpu": false,
+  "cell_seconds": 10200
+}
