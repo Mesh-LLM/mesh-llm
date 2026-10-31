@@ -69,6 +69,8 @@ pub struct Transaction {
     /// whose provider reports one. A payer holds it only once the payee
     /// released it, so it proves the payment completed. Providers leave it
     /// `None` for pending and failed payments, and when their API has none.
+    /// Besides the host's settlement events, the operator sees it through the
+    /// wallet's local control API.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preimage: Option<String>,
 }
