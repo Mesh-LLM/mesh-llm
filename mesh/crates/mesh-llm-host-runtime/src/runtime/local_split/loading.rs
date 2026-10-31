@@ -1010,7 +1010,12 @@ pub(super) async fn split_coordinator_superseded(
     package: &skippy::SkippyPackageIdentity,
     generation: &SplitTopologyGeneration,
 ) -> Option<String> {
-    let claim = split_coordinator_claim(node.id(), model_ref, package, generation);
+    let claim = renewed_claim(split_coordinator_claim(
+        node.id(),
+        model_ref,
+        package,
+        generation,
+    ));
     let response = node
         .send_local_stage_control(skippy::StageControlRequest::Claim(claim))
         .await;
@@ -1020,6 +1025,20 @@ pub(super) async fn split_coordinator_superseded(
         }
         Ok(_) | Err(_) => None,
     }
+}
+
+/// `claim` with its lease extended from now. The generation keeps the lease it
+/// was planned with, and the fence rejects an expired claim before it looks up
+/// the holder, so a generation serving past its lease could no longer see a
+/// takeover. The lease is not part of a claim's epoch, so the fence accepts a
+/// renewal of the claim it holds.
+pub(super) fn renewed_claim(
+    mut claim: skippy::StageCoordinatorClaim,
+) -> skippy::StageCoordinatorClaim {
+    claim.lease_until_unix_ms = claim
+        .lease_until_unix_ms
+        .max(super::split_coordinator_lease_until_unix_ms());
+    claim
 }
 
 /// The rejection of our re-sent claim, when the claim that holds the model

@@ -795,6 +795,12 @@ fn check_upstream_layer_range(
     (layer_start, layer_end): (i32, i32),
 ) -> Result<()> {
     let expected = upstream_layer_range(topology, message);
+    if topology.is_some() && expected.is_none() {
+        bail!(
+            "activation frame came from stage {}, which the stage topology does not list",
+            message.state.source_stage_index
+        );
+    }
     let matches = match expected {
         Some(expected) => (layer_start, layer_end) == expected,
         None => layer_end == config.layer_start as i32 && (0..layer_end).contains(&layer_start),
@@ -1230,6 +1236,9 @@ mod tests {
         };
         check_upstream_layer_range(&config, Some(&topology), &message, (11, 23)).unwrap();
         assert!(check_upstream_layer_range(&config, Some(&topology), &message, (0, 23)).is_err());
+        // A topology that does not list the sender rejects the frame.
+        message.state.source_stage_index = 99;
+        assert!(check_upstream_layer_range(&config, Some(&topology), &message, (11, 23)).is_err());
     }
 
     #[test]

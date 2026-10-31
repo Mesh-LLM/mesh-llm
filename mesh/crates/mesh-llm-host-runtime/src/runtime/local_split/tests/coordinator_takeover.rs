@@ -91,6 +91,29 @@ async fn a_newer_coordinator_claim_supersedes_the_loading_coordinator() {
 }
 
 #[tokio::test]
+async fn a_takeover_is_seen_after_our_planned_lease_has_expired() {
+    let control = skippy::spawn_stage_control_loop(skippy::SkippyTelemetryOptions::default());
+    let ours = claim(&local(), 11, "a");
+    assert!(send_claim(&control, ours.clone()).await.accepted);
+    assert!(
+        send_claim(&control, claim(&newer(), 12, "b"))
+            .await
+            .accepted
+    );
+
+    // The generation still carries the lease it was planned with, now past.
+    let expired = skippy::StageCoordinatorClaim {
+        lease_until_unix_ms: 1,
+        ..ours
+    };
+    let ack = send_claim(&control, loading::renewed_claim(expired)).await;
+    assert!(!ack.accepted);
+    let reason = superseded_claim_reason(&local(), &ack).expect("the takeover is seen");
+    assert!(reason.contains(&newer()), "{reason}");
+    control.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_failed_cutover_of_our_own_is_not_a_takeover() {
     let control = skippy::spawn_stage_control_loop(skippy::SkippyTelemetryOptions::default());
     let active = claim(&local(), 11, "a");

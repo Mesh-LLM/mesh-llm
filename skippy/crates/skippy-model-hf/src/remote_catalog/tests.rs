@@ -360,6 +360,42 @@ fn hf_layer_package_probe_uses_cached_snapshot_for_pinned_revision() {
 
 #[test]
 #[serial]
+fn hf_layer_package_probe_resolves_a_cached_named_revision_through_its_ref() {
+    let _probe_guard = set_hf_model_file_probe_for_test(|_, _, _| false);
+    let temp = tempfile::tempdir().unwrap();
+    let commit = "1341078ef859d8ddf5cad491c619c463491fac82";
+    let repo_cache = temp.path().join("models--meshllm--named-package-layers");
+    let snapshot = repo_cache.join("snapshots").join(commit);
+    fs::create_dir_all(&snapshot).unwrap();
+    fs::write(snapshot.join("model-package.json"), b"{}").unwrap();
+    fs::create_dir_all(repo_cache.join("refs")).unwrap();
+    fs::write(repo_cache.join("refs").join("v1"), format!("{commit}\n")).unwrap();
+    let prev = std::env::var_os("HF_HUB_CACHE");
+    // SAFETY: the enclosing test contract is `#[serial]`, so this process
+    // environment mutation cannot race another test.
+    unsafe { std::env::set_var("HF_HUB_CACHE", temp.path()) };
+
+    let named = find_huggingface_layer_package("meshllm/named-package-layers@v1");
+    let unknown = find_huggingface_layer_package("meshllm/named-package-layers@v2");
+
+    match prev {
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
+        Some(val) => unsafe { std::env::set_var("HF_HUB_CACHE", val) },
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
+        None => unsafe { std::env::remove_var("HF_HUB_CACHE") },
+    }
+    // The requested revision is kept in the package reference.
+    assert_eq!(
+        named,
+        Some("hf://meshllm/named-package-layers@v1".to_string())
+    );
+    assert_eq!(unknown, None);
+}
+
+#[test]
+#[serial]
 fn hf_layer_package_probe_preserves_explicit_revision() {
     let _probe_guard = set_hf_model_file_probe_for_test(|repo, revision, file| {
         repo == "meshllm/custom-package" && revision == "abc123" && file == "model-package.json"
