@@ -258,6 +258,9 @@ dynamic_symbols! {
     skippy_model_memory_cache_capabilities(model: *const Model) -> u32;
     skippy_export_recurrent_state(session: *mut Session, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_import_recurrent_state(session: *mut Session, input: *const c_void, input_bytes: usize, out_error: *mut *mut Error) -> Status;
+    skippy_session_export_resident_kv_page(session: *mut Session, cache_seq_id: i32, layer_start: i32, layer_end: i32, token_start: u64, token_count: u64, out_desc: *mut KvPageDesc, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+    skippy_session_export_resident_recurrent_state(session: *mut Session, cache_seq_id: i32, output: *mut c_void, output_capacity: usize, out_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
+    skippy_session_resident_prefix_bytes(session: *mut Session, cache_seq_id: i32, out_bytes: *mut u64, out_error: *mut *mut Error) -> Status;
     skippy_session_save_prefix(session: *mut Session, cache_seq_id: i32, token_count: u64, out_error: *mut *mut Error) -> Status;
     skippy_session_restore_prefix(session: *mut Session, cache_seq_id: i32, token_ids: *const i32, token_count: usize, out_error: *mut *mut Error) -> Status;
     skippy_session_memory_used_cells(session: *mut Session, out_used_cells: *mut u64, out_error: *mut *mut Error) -> Status;

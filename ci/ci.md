@@ -1,5 +1,13 @@
 # MeshLLM CI topology
 
+`automation kv-validation` is an explicit manual diagnostic surface, separate
+from the five required PR/main lanes. One backend producer prepares matching
+tools and the external indexed-attention model harness once; four model jobs
+reuse the immutable prepared image. The Linux JY adapter emits CPU/CUDA custom
+jobs without dispatching them. Native Metal uses the local worker command.
+No automatic GPU/model fan-out or required-check topology changes accompany
+this foundation. See `skippy/evals/kv-validation/README.md` for its bounded scope.
+
 ## Standalone C++ API qualification
 
 The protected catalog admits `skippy/skippy_api/**` and

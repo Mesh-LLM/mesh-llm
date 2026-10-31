@@ -626,11 +626,17 @@ fn invalid_controls_fail_before_loading_models() {
             .unwrap_err();
         assert!(error.to_string().contains(message), "{error}");
     }
+}
+
+#[test]
+fn checkpoint_ram_budget_does_not_require_disk() {
     let Command::Serve(args) = parse_test(&[
         "skippy",
         "serve",
         "--model",
         "missing.gguf",
+        "--prefix-cache",
+        "on",
         "--prefix-cache-ram",
         "1GiB",
     ])
@@ -641,13 +647,27 @@ fn invalid_controls_fail_before_loading_models() {
     };
     let mut stage: StageConfig = serde_json::from_value(skippy_config::example_config()).unwrap();
     args.public.settings.apply_stage(&mut stage).unwrap();
+    args.public
+        .settings
+        .validate_cache_dependencies(&stage)
+        .unwrap();
+    assert_eq!(
+        stage.kv_cache.as_ref().unwrap().l2_max_bytes,
+        1024 * 1024 * 1024
+    );
+    let tuning = args
+        .public
+        .settings
+        .tuning(args.public.openai_guardrails)
+        .unwrap();
+    let report = args.public.settings.report(&stage, None, &tuning);
+    assert_eq!(report["constraints"]["ram_cache_requires_disk"], false);
+    stage.kv_cache.as_mut().unwrap().mode = skippy_protocol::StageKvCacheMode::Disabled;
     assert!(
         args.public
             .settings
-            .validate_cache_dependencies(&stage, false)
-            .unwrap_err()
-            .to_string()
-            .contains("requires")
+            .validate_cache_dependencies(&stage)
+            .is_err()
     );
 }
 

@@ -10,12 +10,18 @@
 
 use std::sync::atomic::Ordering;
 
+mod spill_payload;
+mod spill_segments;
+use spill_payload::SpillPayload;
+
+#[cfg(test)]
+use crate::l3::SegmentCodecIdentity;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
 use crate::l3::{
     HandoffManifest, HandoffSegmentRef, HandoffSegmentStore, MANIFEST_VERSION, PayloadCodec,
-    PayloadGeometry, SegmentCodecIdentity, StoreLimits, StoreUsage, segment_digest,
+    PayloadGeometry, StoreLimits, StoreUsage, segment_digest,
 };
 use crate::manager::{
     BenefitRestoreObservation, L3ActivitySnapshot, L3CacheManager, L3EffectiveStatus,
@@ -128,58 +134,6 @@ pub struct L3Tier {
     model_identity: String,
     state_identity: String,
     segment_bytes: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum SegmentRepresentation {
-    Raw,
-    NativeKvPage,
-    CacheGenKv {
-        decoded_len: u64,
-        calibration_digest: String,
-    },
-}
-
-impl SegmentRepresentation {
-    fn identity(&self, encoded_len: u64) -> SegmentCodecIdentity {
-        match self {
-            Self::Raw => SegmentCodecIdentity::raw(encoded_len),
-            Self::NativeKvPage => SegmentCodecIdentity::native_kv_page(encoded_len),
-            Self::CacheGenKv {
-                decoded_len,
-                calibration_digest,
-            } => SegmentCodecIdentity::cachegen_archive(*decoded_len, calibration_digest.clone()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct SegmentCut {
-    offset: u64,
-    len: u64,
-    label: String,
-    representation: SegmentRepresentation,
-}
-
-fn append_fixed_cuts(
-    cuts: &mut Vec<SegmentCut>,
-    offset: &mut u64,
-    bytes: u64,
-    segment_bytes: u64,
-    representation: SegmentRepresentation,
-) {
-    let mut remaining = bytes;
-    while remaining > 0 {
-        let len = segment_bytes.max(1).min(remaining);
-        cuts.push(SegmentCut {
-            offset: *offset,
-            len,
-            label: String::new(),
-            representation: representation.clone(),
-        });
-        *offset = offset.saturating_add(len);
-        remaining -= len;
-    }
 }
 
 impl L3Tier {
@@ -425,81 +379,12 @@ impl L3Tier {
             cost,
             mut cachegen,
         } = options;
-        if payload.byte_len() == 0 {
-            bail!(
-                "refusing to spill an empty exact-state payload: no state component was exported"
-            );
-        }
         let token_count = token_ids.len() as u64;
-        let (mut kv, recurrent): (Vec<u8>, Vec<u8>) = match payload.kind() {
-            ExactStatePayloadKind::FullState => (
-                payload
-                    .full_state_bytes_timed()
-                    .context("failed to reconstruct full state for spill")?
-                    .0
-                    .into_owned(),
-                Vec::new(),
-            ),
-            ExactStatePayloadKind::RecurrentOnly => (
-                Vec::new(),
-                payload
-                    .recurrent_state_bytes()
-                    .context("failed to reconstruct recurrent state for spill")?
-                    .into_owned(),
-            ),
-            ExactStatePayloadKind::KvRecurrent => (
-                {
-                    let kv = payload
-                        .kv_bytes()
-                        .context("failed to reconstruct KV bytes for spill")?
-                        .map(|bytes| bytes.into_owned())
-                        .unwrap_or_default();
-                    if kv.is_empty() {
-                        bail!("refusing to spill kv-recurrent state without a KV component");
-                    }
-                    kv
-                },
-                payload
-                    .recurrent_state_bytes()
-                    .context("failed to reconstruct recurrent state for spill")?
-                    .into_owned(),
-            ),
-        };
-
-        let kv_decoded_bytes = kv.len() as u64;
-        if let Some(cachegen) = cachegen.as_mut() {
-            if payload.kind() != ExactStatePayloadKind::KvRecurrent
-                || cachegen.archive.is_empty()
-                || cachegen.decoded_len != kv_decoded_bytes
-                || cachegen.calibration_digest.is_empty()
-                || kv_desc_json.as_deref().is_none_or(str::is_empty)
-            {
-                bail!(
-                    "invalid CacheGen spill: archive, descriptor, and decoded KV length are required"
-                );
-            }
-            let decoded_len = usize::try_from(cachegen.decoded_len)
-                .context("CacheGen decoded KV length exceeds usize")?;
-            crate::cachegen::archive::validate_archive(&cachegen.archive, decoded_len)
-                .context("invalid CacheGen archive supplied for L3 spill")?;
-            kv = std::mem::take(&mut cachegen.archive);
-        }
-
-        // For full-state and recurrent-only exactly one component is populated,
-        // and KV states reach gigabytes: concatenating would peak at twice the
-        // payload for no benefit. Only a genuine composite needs the copy.
-        let (kv_bytes, recurrent_bytes) = (kv.len() as u64, recurrent.len() as u64);
-        let wire = if recurrent.is_empty() {
-            kv
-        } else if kv.is_empty() {
-            recurrent
-        } else {
-            let mut wire = Vec::with_capacity(kv.len() + recurrent.len());
-            wire.extend_from_slice(&kv);
-            wire.extend_from_slice(&recurrent);
-            wire
-        };
-        let payload_digest = segment_digest(&wire);
+        let wire = SpillPayload::new(payload, cachegen.as_mut(), kv_desc_json.as_deref())?;
+        let kv_decoded_bytes = wire.decoded_kv_bytes;
+        let kv_bytes = wire.kv_bytes();
+        let recurrent_bytes = wire.recurrent_bytes();
+        let payload_digest = wire.digest();
 
         let mut manifest = HandoffManifest::new_for_model(
             self.model_identity.clone(),
@@ -543,79 +428,22 @@ impl L3Tier {
                 }
                 matches
             });
-        let cuts = match geometry {
-            Some(geometry) => geometry
-                .plan(self.segment_bytes as u64)
-                .into_iter()
-                .map(|(offset, len, label)| SegmentCut {
-                    offset,
-                    len,
-                    representation: if native_kv_passthrough && offset < kv_bytes {
-                        SegmentRepresentation::NativeKvPage
-                    } else {
-                        SegmentRepresentation::Raw
-                    },
-                    label,
-                })
-                .collect(),
-            None => {
-                let mut cuts = Vec::new();
-                let mut offset = 0u64;
-                if let Some(cachegen) = cachegen.as_ref() {
-                    cuts.push(SegmentCut {
-                        offset: 0,
-                        len: kv_bytes,
-                        representation: SegmentRepresentation::CacheGenKv {
-                            decoded_len: cachegen.decoded_len,
-                            calibration_digest: cachegen.calibration_digest.clone(),
-                        },
-                        label: "cachegen-kv-archive".to_string(),
-                    });
-                    offset = kv_bytes;
-                    append_fixed_cuts(
-                        &mut cuts,
-                        &mut offset,
-                        recurrent_bytes,
-                        self.segment_bytes as u64,
-                        SegmentRepresentation::Raw,
-                    );
-                } else if native_kv_passthrough {
-                    append_fixed_cuts(
-                        &mut cuts,
-                        &mut offset,
-                        kv_bytes,
-                        self.segment_bytes as u64,
-                        SegmentRepresentation::NativeKvPage,
-                    );
-                    append_fixed_cuts(
-                        &mut cuts,
-                        &mut offset,
-                        recurrent_bytes,
-                        self.segment_bytes as u64,
-                        SegmentRepresentation::Raw,
-                    );
-                } else {
-                    append_fixed_cuts(
-                        &mut cuts,
-                        &mut offset,
-                        wire.len() as u64,
-                        self.segment_bytes as u64,
-                        SegmentRepresentation::Raw,
-                    );
-                }
-                cuts
-            }
-        };
-        let segment_slices = cuts
+        let cuts = spill_segments::SpillSegmentPlan {
+            segment_bytes: self.segment_bytes as u64,
+            kv_bytes,
+            recurrent_bytes,
+            native_kv: native_kv_passthrough,
+            cachegen: cachegen.as_ref(),
+        }
+        .cuts(geometry);
+        let segment_views = cuts
             .iter()
-            .map(|cut| {
-                let start = usize::try_from(cut.offset).context("segment offset exceeds usize")?;
-                let end = start
-                    .checked_add(usize::try_from(cut.len).context("segment length exceeds usize")?)
-                    .context("segment range overflows")?;
-                Ok(&wire[start..end])
-            })
+            .map(|cut| wire.segment(cut.offset, cut.len, self.segment_bytes.max(1)))
             .collect::<Result<Vec<_>>>()?;
+        let segment_slices = segment_views
+            .iter()
+            .map(std::ops::Deref::deref)
+            .collect::<Vec<_>>();
         manifest.segments = cuts
             .iter()
             .zip(&segment_slices)

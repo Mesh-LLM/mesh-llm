@@ -701,6 +701,35 @@ unsafe extern "C" {
         out_error: *mut *mut Error,
     ) -> Status;
 
+    pub fn skippy_session_export_resident_kv_page(
+        session: *mut Session,
+        cache_seq_id: i32,
+        layer_start: i32,
+        layer_end: i32,
+        token_start: u64,
+        token_count: u64,
+        out_desc: *mut KvPageDesc,
+        output: *mut c_void,
+        output_capacity: usize,
+        out_bytes: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+    pub fn skippy_session_export_resident_recurrent_state(
+        session: *mut Session,
+        cache_seq_id: i32,
+        output: *mut c_void,
+        output_capacity: usize,
+        out_bytes: *mut usize,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
+    pub fn skippy_session_resident_prefix_bytes(
+        session: *mut Session,
+        cache_seq_id: i32,
+        out_bytes: *mut u64,
+        out_error: *mut *mut Error,
+    ) -> Status;
+
     pub fn skippy_session_save_prefix(
         session: *mut Session,
         cache_seq_id: i32,

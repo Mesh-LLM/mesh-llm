@@ -1,4 +1,4 @@
-From 2791bcb2a18231a52fd23d05150663ebba1f70d8 Mon Sep 17 00:00:00 2001
+From 2dc7c44b3c6bcec63047af364966bc1f8e26be5f Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -16,9 +16,10 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  src/skippy/tests/noalloc_graph_planning.cpp   | 1107 +++++++++++
  src/skippy/tests/profile_residency.cpp        |  258 +++
  .../tests/renamed_multishard_planning.cpp     | 1659 +++++++++++++++++
+ src/skippy/tests/resident_checkpoint_gpu.cpp  |  287 +++
  .../tests/residual_checkpoint_regression.h    |   52 +
  src/skippy/tests/runtime_events.cpp           |  695 +++++++
- src/skippy/tests/sampling_history.cpp         |  459 +++++
+ src/skippy/tests/sampling_history.cpp         |  778 ++++++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1151 ++++++++++++
@@ -34,11 +35,11 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-kv-cells-contiguous.cpp     |   20 +
  tests/test-skippy-kv-page-export.cpp          |  367 ++++
  tests/test-skippy-model-loader-accounting.cpp |  320 ++++
- .../test-skippy-recurrent-state-roundtrip.cpp |  159 ++
+ .../test-skippy-recurrent-state-roundtrip.cpp |  199 ++
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 34 files changed, 9908 insertions(+), 32 deletions(-)
+ 35 files changed, 10554 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -51,6 +52,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  create mode 100644 src/skippy/tests/noalloc_graph_planning.cpp
  create mode 100644 src/skippy/tests/profile_residency.cpp
  create mode 100644 src/skippy/tests/renamed_multishard_planning.cpp
+ create mode 100644 src/skippy/tests/resident_checkpoint_gpu.cpp
  create mode 100644 src/skippy/tests/residual_checkpoint_regression.h
  create mode 100644 src/skippy/tests/runtime_events.cpp
  create mode 100644 src/skippy/tests/sampling_history.cpp
@@ -5078,6 +5080,299 @@ index 000000000..5335c1599
 +    llama_backend_free();
 +    return result;
 +}
+diff --git a/src/skippy/tests/resident_checkpoint_gpu.cpp b/src/skippy/tests/resident_checkpoint_gpu.cpp
+new file mode 100644
+index 000000000..691e92c37
+--- /dev/null
++++ b/src/skippy/tests/resident_checkpoint_gpu.cpp
+@@ -0,0 +1,287 @@
++// Opt-in real-model GPU proof: separate checkpoint ownership from HTTP scheduling.
++#include "skippy.h"
++#include "../runtime_types.h"
++#include "llama-model.h"
++#include "ggml-backend.h"
++
++#include <algorithm>
++#include <array>
++#include <cmath>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <limits>
++#include <vector>
++
++int skippy_test_resident_checkpoint_gpu(const char * model_path, skippy_runtime_config config);
++
++namespace {
++constexpr size_t lanes = 4;
++constexpr size_t suffix_steps = 32;
++constexpr size_t pressure_tokens = 4096;
++using Sessions = std::array<skippy_session *, lanes>;
++using Prefixes = std::array<std::vector<llama_token>, lanes>;
++
++#define REQUIRE(condition) do { if (!(condition)) { \
++    std::fprintf(stderr, "long GPU checkpoint failed: %s at %s:%d\n", #condition, __FILE__, __LINE__); \
++    std::exit(1); } } while (0)
++
++void ok(skippy_status status, skippy_error * error) {
++    if (status != SKIPPY_STATUS_OK) {
++        std::fprintf(stderr, "long GPU native error: %s\n", error ? error->message : "no detail");
++        std::exit(1);
++    }
++    skippy_error_free(error);
++}
++
++size_t prefix_tokens() {
++    const char * value = std::getenv("SKIPPY_NATIVE_TEST_PREFIX_TOKENS");
++    if (!value) { return 23497; }
++    REQUIRE(*value && std::strspn(value, "0123456789") == std::strlen(value));
++    const unsigned long count = std::strtoul(value, nullptr, 10);
++    REQUIRE(count >= 128 && count <= 65536);
++    return static_cast<size_t>(count);
++}
++
++Sessions create(skippy_model * model) {
++    Sessions sessions{};
++    for (auto & session : sessions) {
++        skippy_error * error = nullptr;
++        const auto status = skippy_session_create(model, &session, &error);
++        ok(status, error);
++    }
++    return sessions;
++}
++
++void release(Sessions & sessions) {
++    for (auto & session : sessions) {
++        skippy_error * error = nullptr;
++        const auto status = skippy_session_free(session, &error);
++        ok(status, error);
++        session = nullptr;
++    }
++}
++
++void prefill(Sessions & sessions, const Prefixes & prefixes) {
++    // Identical explicit chunk and lane order in every cold reference arm.
++    for (size_t offset = 0; offset < prefixes[0].size(); offset += 512) {
++        for (size_t lane = 0; lane < lanes; ++lane) {
++            const size_t count = std::min<size_t>(512, prefixes[lane].size() - offset);
++            skippy_error * error = nullptr;
++            size_t bytes = 0;
++            const auto status = skippy_prefill_chunk(sessions[lane], prefixes[lane].data() + offset,
++                    count, nullptr, 0, nullptr, 0, &bytes, &error);
++            ok(status, error);
++        }
++    }
++}
++
++Prefixes tokens(size_t count, int32_t vocab_size, int32_t salt) {
++    REQUIRE(vocab_size > 64);
++    const int32_t span = std::min<int32_t>(vocab_size - 32, 4096);
++    Prefixes prefixes;
++    for (size_t lane = 0; lane < lanes; ++lane) {
++        prefixes[lane].reserve(count);
++        for (size_t i = 0; i < count; ++i) {
++            prefixes[lane].push_back(32 + static_cast<int32_t>((i * 17 + lane * 101 + salt) % span));
++        }
++    }
++    return prefixes;
++}
++
++struct Components {
++    std::vector<uint8_t> kv;
++    std::vector<uint8_t> recurrent;
++};
++
++Components components(skippy_session * session) {
++    const int32_t layers = static_cast<int32_t>(session->stage_model->model->hparams.n_layer());
++    skippy_kv_page_desc desc{};
++    size_t bytes = 0;
++    skippy_error * error = nullptr;
++    auto status = skippy_export_kv_page(session, 0, layers, 0, session->n_past,
++            &desc, nullptr, 0, &bytes, &error);
++    REQUIRE(status == SKIPPY_STATUS_BUFFER_TOO_SMALL && bytes > 0);
++    skippy_error_free(error);
++    Components result;
++    result.kv.resize(bytes);
++    error = nullptr;
++    status = skippy_export_kv_page(session, 0, layers, 0, session->n_past,
++            &desc, result.kv.data(), result.kv.size(), &bytes, &error);
++    ok(status, error);
++    result.kv.resize(bytes);
++    error = nullptr;
++    status = skippy_export_recurrent_state(session, nullptr, 0, &bytes, &error);
++    REQUIRE(status == SKIPPY_STATUS_BUFFER_TOO_SMALL && bytes > 0);
++    skippy_error_free(error);
++    result.recurrent.resize(bytes);
++    error = nullptr;
++    status = skippy_export_recurrent_state(session, result.recurrent.data(),
++            result.recurrent.size(), &bytes, &error);
++    ok(status, error);
++    result.recurrent.resize(bytes);
++    return result;
++}
++
++struct DecodeRows {
++    std::array<llama_token, lanes> greedy;
++    std::array<std::vector<float>, lanes> logits;
++};
++
++using DecodeTrace = std::vector<DecodeRows>;
++
++DecodeTrace decode_fixed_suffix(Sessions & sessions, int32_t vocab_size) {
++    skippy_sampling_config sampling{};
++    sampling.version = 1;
++    sampling.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
++    sampling.repeat_penalty = 1.0f;
++    sampling.temperature = 0;
++    sampling.top_k = 1;
++    sampling.reasoning_budget_tokens = -1;
++    DecodeTrace trace;
++    trace.reserve(suffix_steps);
++    for (size_t step = 0; step < suffix_steps; ++step) {
++        std::array<llama_token, lanes> input{};
++        for (size_t lane = 0; lane < lanes; ++lane) {
++            input[lane] = 32 + static_cast<llama_token>((step * 11 + lane * 37) % (vocab_size - 32));
++        }
++        DecodeRows rows;
++        skippy_error * error = nullptr;
++        std::array<skippy_iteration_request, lanes> requests{};
++        std::array<size_t, lanes> sampled_indexes{};
++        size_t sampled_count = 0;
++        for (size_t lane = 0; lane < lanes; ++lane) {
++            requests[lane].session = sessions[lane];
++            requests[lane].token_ids = &input[lane];
++            requests[lane].token_count = 1;
++            requests[lane].sampling = &sampling;
++            requests[lane].sample_last = true;
++        }
++        const auto status = skippy_iteration_batch_sampled(requests.data(), requests.size(),
++                nullptr, nullptr, nullptr, nullptr, sampled_indexes.data(), rows.greedy.data(),
++                rows.greedy.size(), &sampled_count, &error);
++        ok(status, error);
++        REQUIRE(sampled_count == lanes);
++        for (size_t lane = 0; lane < lanes; ++lane) {
++            REQUIRE(sampled_indexes[lane] == lane);
++            const float * logits = llama_get_logits_ith(sessions[lane]->ctx, static_cast<int32_t>(lane));
++            REQUIRE(logits != nullptr);
++            rows.logits[lane].assign(logits, logits + vocab_size);
++            REQUIRE(std::all_of(rows.logits[lane].begin(), rows.logits[lane].end(),
++                    [](float value) { return std::isfinite(value); }));
++        }
++        trace.push_back(std::move(rows));
++    }
++    return trace;
++}
++
++bool compare(const char * arm, const DecodeTrace & reference, const DecodeTrace & actual) {
++    REQUIRE(reference.size() == actual.size());
++    float max_delta = 0;
++    size_t mismatched_greedy = 0;
++    for (size_t step = 0; step < reference.size(); ++step) {
++        for (size_t lane = 0; lane < lanes; ++lane) {
++            mismatched_greedy += reference[step].greedy[lane] != actual[step].greedy[lane];
++            REQUIRE(reference[step].logits[lane].size() == actual[step].logits[lane].size());
++            for (size_t token = 0; token < reference[step].logits[lane].size(); ++token) {
++                max_delta = std::max(max_delta,
++                        std::fabs(reference[step].logits[lane][token] - actual[step].logits[lane][token]));
++            }
++        }
++    }
++    std::fprintf(stderr, "%s: batch=4 steps=%zu max_logit_delta=%.9g greedy_mismatches=%zu\n",
++            arm, reference.size(), max_delta, mismatched_greedy);
++    return max_delta <= 1e-6f && mismatched_greedy == 0;
++}
++
++void save(Sessions & sessions, size_t count) {
++    for (size_t lane = 0; lane < lanes; ++lane) {
++        skippy_error * error = nullptr;
++        const auto status = skippy_session_save_prefix(sessions[lane], static_cast<int32_t>(8 + lane), count, &error);
++        ok(status, error);
++    }
++}
++
++Sessions restore(skippy_model * model, const Prefixes & prefixes) {
++    Sessions sessions{};
++    for (size_t lane = 0; lane < lanes; ++lane) {
++        skippy_error * error = nullptr;
++        const auto status = skippy_session_create_from_resident_prefix(model, static_cast<int32_t>(8 + lane),
++                prefixes[lane].data(), prefixes[lane].size(), &sessions[lane], &error);
++        ok(status, error);
++    }
++    return sessions;
++}
++
++void require_gpu_weights(skippy_model * model) {
++    REQUIRE(std::any_of(model->model->tensors_by_name.begin(), model->model->tensors_by_name.end(),
++            [](const auto & item) {
++                if (!item.second->buffer || ggml_backend_buffer_is_host(item.second->buffer)) { return false; }
++                const auto type = ggml_backend_dev_type(ggml_backend_buft_get_device(
++                        ggml_backend_buffer_get_type(item.second->buffer)));
++                return type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU;
++            }));
++}
++
++} // namespace
++
++int skippy_test_resident_checkpoint_gpu(const char * model_path, skippy_runtime_config config) {
++    REQUIRE(model_path && *model_path && config.n_gpu_layers > 0);
++    const size_t count = prefix_tokens();
++    config.ctx_size = static_cast<int32_t>(count + pressure_tokens + suffix_steps + 64);
++    config.lane_count = lanes;
++    config.kv_unified = 1;
++    config.n_batch = 512;
++    config.n_ubatch = 512;
++    skippy_model * model = nullptr;
++    skippy_error * error = nullptr;
++    auto status = skippy_model_open(model_path, &config, &model, &error);
++    ok(status, error);
++    require_gpu_weights(model);
++    REQUIRE(config.ctx_size <= llama_model_n_ctx_train(model->model));
++    const auto capabilities = skippy_model_memory_cache_capabilities(model);
++    REQUIRE(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION);
++    REQUIRE(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT);
++    const int32_t vocab_size = llama_vocab_n_tokens(llama_model_get_vocab(model->model));
++    const auto prefixes = tokens(count, vocab_size, 0);
++    auto source = create(model);
++    prefill(source, prefixes);
++    save(source, count);
++    std::array<Components, lanes> expected;
++    for (size_t lane = 0; lane < lanes; ++lane) { expected[lane] = components(source[lane]); }
++    const auto reference = decode_fixed_suffix(source, vocab_size);
++    release(source);
++
++    auto pressure = create(model);
++    prefill(pressure, tokens(pressure_tokens, vocab_size, 503));
++    release(pressure);
++    auto warm = restore(model, prefixes);
++    for (size_t lane = 0; lane < lanes; ++lane) {
++        const auto restored = components(warm[lane]);
++        std::fprintf(stderr, "checkpoint lane=%zu tokens=%zu kv_bytes=%zu recurrent_bytes=%zu kv_exact=%d recurrent_exact=%d\n",
++                lane, count, restored.kv.size(), restored.recurrent.size(),
++                restored.kv == expected[lane].kv, restored.recurrent == expected[lane].recurrent);
++        REQUIRE(restored.kv == expected[lane].kv);
++        REQUIRE(restored.recurrent == expected[lane].recurrent);
++    }
++    const auto restored_trace = decode_fixed_suffix(warm, vocab_size);
++    const bool passed = compare("resident restore vs reference", reference, restored_trace);
++    for (size_t lane = 0; lane < lanes; ++lane) {
++        error = nullptr;
++        status = skippy_session_drop_sequence(warm[0], static_cast<int32_t>(8 + lane), &error);
++        ok(status, error);
++    }
++    release(warm);
++    if (!passed) {
++        // Preserve the strict failure. A same-shape second cold reference
++        // distinguishes backend drift before any tolerance change is proposed.
++        auto repeated = create(model);
++        prefill(repeated, prefixes);
++        compare("cold reference vs repeated cold reference", reference, decode_fixed_suffix(repeated, vocab_size));
++        release(repeated);
++    }
++    error = nullptr;
++    status = skippy_model_free(model, &error);
++    ok(status, error);
++    return passed ? 0 : 1;
++}
 diff --git a/src/skippy/tests/residual_checkpoint_regression.h b/src/skippy/tests/residual_checkpoint_regression.h
 new file mode 100644
 index 000000000..31734bf56
@@ -5138,7 +5433,7 @@ index 000000000..31734bf56
 +}
 diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
 new file mode 100644
-index 000000000..cb420a561
+index 000000000..00a6ff0ec
 --- /dev/null
 +++ b/src/skippy/tests/runtime_events.cpp
 @@ -0,0 +1,695 @@
@@ -5839,30 +6134,99 @@ index 000000000..cb420a561
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..932b031a9
+index 000000000..062a9e078
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,459 @@
+@@ -0,0 +1,778 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
 +#include "../runtime_support.h"
 +#include "llama-model.h"
++#include "llama-graph.h"
++#include "ggml-backend.h"
 +#include "../../../common/sampling.h"
 +
 +#include <cstdio>
++#include <algorithm>
 +#include <cstdlib>
 +#include <cmath>
 +#include <cstring>
 +#include <vector>
 +#include <limits>
++#include <iterator>
 +
 +#define CHECK(condition) do { if (!(condition)) { \
 +    std::fprintf(stderr, "CHECK failed: %s at %s:%d\n", #condition, __FILE__, __LINE__); \
 +    std::exit(1); } } while (0)
 +
++int skippy_test_resident_checkpoint_gpu(const char * model_path, skippy_runtime_config config);
++
 +namespace {
 +
 +bool require_recurrent = false;
++
++int32_t cache_type(const char * name) {
++    for (const auto type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16,
++            GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0}) {
++        if (std::strcmp(name, ggml_type_name(type)) == 0) { return type; }
++    }
++    CHECK(false && "unsupported test KV type");
++    return -1;
++}
++
++ggml_type verify_attention_read(skippy_model * model, ggml_tensor * input, int32_t stored_type) {
++    if (stored_type != GGML_TYPE_F32) {
++        CHECK(input->type == stored_type);
++        return input->type;
++    }
++    // Ordinary FA reads explicitly convert an F32 cache on its selected backend.
++    CHECK(input->type == GGML_TYPE_F16 && input->op == GGML_OP_CPY);
++    CHECK(input->src[0] && input->src[0]->type == GGML_TYPE_F32);
++    auto * backend = ggml_backend_sched_get_tensor_backend(model->ctx->get_sched(), input);
++    CHECK(backend && std::strcmp(ggml_backend_name(backend), model->config.selected_backend_device) == 0);
++    return input->type;
++}
++
++void verify_typed_attention(skippy_model * model, const skippy_kv_page_desc & page) {
++    const auto & config = model->config;
++    const auto check_types = [&](uint32_t k, uint32_t v) {
++        CHECK(k == static_cast<uint32_t>(config.cache_type_k));
++        CHECK(v == static_cast<uint32_t>(config.cache_type_v));
++    };
++    if (page.component_count) {
++        CHECK(page.component_count <= std::size(page.components));
++        for (uint32_t i = 0; i < page.component_count; ++i) {
++            check_types(page.components[i].k_type, page.components[i].v_type);
++        }
++    } else {
++        check_types(page.k_type, page.v_type);
++    }
++    auto * result = model->ctx->get_gf_res_prev_active();
++    CHECK(result && result->get_gf());
++    auto * graph = result->get_gf();
++    int attention = 0;
++    ggml_type actual_k = GGML_TYPE_COUNT;
++    ggml_type actual_v = GGML_TYPE_COUNT;
++    for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
++        auto * node = ggml_graph_node(graph, i);
++        if (node->op != GGML_OP_FLASH_ATTN_EXT) { continue; }
++        auto * backend = ggml_backend_sched_get_tensor_backend(model->ctx->get_sched(), node);
++        CHECK(backend && std::strcmp(ggml_backend_name(backend), config.selected_backend_device) == 0);
++        CHECK(node->src[5] == nullptr && node->src[6] == nullptr);
++        actual_k = verify_attention_read(model, node->src[1], config.cache_type_k);
++        actual_v = verify_attention_read(model, node->src[2], config.cache_type_v);
++        ++attention;
++    }
++    int expected_attention = 0;
++    for (uint32_t layer = 0; layer < model->model->hparams.n_layer(); ++layer) {
++        expected_attention += !model->model->hparams.is_recr(layer);
++    }
++    CHECK(attention > 0 && attention == expected_attention);
++    std::fprintf(stderr, "typed resident: backend=%s stored_K=%s stored_V=%s FA_K=%s FA_V=%s attention=%d expected=%d components=%u read_layout=ordinary\n",
++            config.selected_backend_device, ggml_type_name(static_cast<ggml_type>(config.cache_type_k)),
++            ggml_type_name(static_cast<ggml_type>(config.cache_type_v)), ggml_type_name(actual_k), ggml_type_name(actual_v),
++            attention, expected_attention, page.component_count);
++}
 +
 +void ok(skippy_status status, skippy_error * error) {
 +    if (status != SKIPPY_STATUS_OK) {
@@ -5870,6 +6234,31 @@ index 000000000..932b031a9
 +        std::exit(1);
 +    }
 +    skippy_error_free(error);
++}
++
++void configure_test_gpu(skippy_runtime_config & config) {
++    config.n_gpu_layers = 0;
++    const char * value = std::getenv("SKIPPY_NATIVE_TEST_GPU_LAYERS");
++    if (!value) { return; }
++    CHECK(*value && std::strspn(value, "0123456789") == std::strlen(value));
++    const unsigned long layers = std::strtoul(value, nullptr, 10);
++    CHECK(layers <= static_cast<unsigned long>(std::numeric_limits<int32_t>::max()));
++    if (!layers) { return; }
++    size_t count = 0;
++    skippy_error * error = nullptr;
++    auto status = skippy_backend_device_count(&count, &error);
++    ok(status, error);
++    for (size_t i = 0; i < count; ++i) {
++        skippy_backend_device device{};
++        error = nullptr;
++        status = skippy_backend_device_at(i, &device, &error);
++        ok(status, error);
++        if (device.type != SKIPPY_BACKEND_DEVICE_TYPE_GPU && device.type != SKIPPY_BACKEND_DEVICE_TYPE_IGPU) { continue; }
++        config.selected_backend_device = device.name;
++        config.n_gpu_layers = static_cast<int32_t>(layers);
++        return;
++    }
++    CHECK(false && "GPU layers requested but no GPU backend is available");
 +}
 +
 +void prefill(skippy_session * session, const std::vector<llama_token> & tokens) {
@@ -6101,33 +6490,6 @@ index 000000000..932b031a9
 +    return payload;
 +}
 +
-+std::vector<uint8_t> export_recurrent(skippy_session * session) {
-+    skippy_error * error = nullptr;
-+    size_t bytes = 0;
-+    auto status = skippy_export_recurrent_state(session, nullptr, 0, &bytes, &error);
-+    CHECK(status == SKIPPY_STATUS_BUFFER_TOO_SMALL || status == SKIPPY_STATUS_OK);
-+    skippy_error_free(error);
-+    error = nullptr;
-+    std::vector<uint8_t> payload(bytes);
-+    status = skippy_export_recurrent_state(session, payload.data(), payload.size(), &bytes, &error);
-+    ok(status, error);
-+    payload.resize(bytes);
-+    return payload;
-+}
-+
-+void restore_recurrent(skippy_session * session, const std::vector<uint8_t> & payload,
-+        const std::vector<llama_token> & prefix) {
-+    skippy_error * error = nullptr;
-+    auto status = skippy_import_recurrent_state(session, payload.data(), payload.size(), &error);
-+    ok(status, error);
-+    error = nullptr;
-+    status = skippy_session_set_position(session, prefix.size(), &error);
-+    ok(status, error);
-+    error = nullptr;
-+    status = skippy_session_restore_token_history(session, prefix.data(), prefix.size(), &error);
-+    ok(status, error);
-+}
-+
 +skippy_sampling_config greedy_config() {
 +    skippy_sampling_config config{};
 +    config.version = 1;
@@ -6154,27 +6516,20 @@ index 000000000..932b031a9
 +    return std::vector<float>(logits, logits + n_vocab);
 +}
 +
-+// A declared-exact stage checkpoint must be reconstructible from its export
-+// alone. LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY is an alias of
-+// LLAMA_STATE_SEQ_FLAGS_SWA_ONLY: it writes the recurrent and sliding-window
-+// half of a hybrid memory and nothing from a full-attention KV cache, so a
-+// session restored from that half carries no full-attention cells and decodes a
-+// different continuation from an uninterrupted prefill. Compare the attention
-+// page the restored session exposes with the source's page, and the next-token
-+// logits of a restored prefix with those of the same prefix prefilled from
-+// scratch.
++// Exact hybrid restoration combines attention pages with a separate recurrent
++// checkpoint. The recurrent component must never duplicate full-attention KV.
 +void state_round_trip(skippy_model * model) {
 +    const std::vector<llama_token> prefix(128, 1);
 +    auto * source = create(model);
 +    prefill(source, prefix);
 +    const auto source_page = export_page(source, prefix.size());
 +    CHECK(!source_page.empty());
-+    const auto recurrent = export_recurrent(source);
-+    CHECK(!recurrent.empty());
++    const snapshot checkpoint(source, false);
++    CHECK(!checkpoint.recurrent.empty());
 +    release(source);
 +
 +    auto * restored = create(model);
-+    restore_recurrent(restored, recurrent, prefix);
++    checkpoint.restore(restored, prefix);
 +    const auto restored_page = export_page(restored, prefix.size());
 +    CHECK(restored_page.size() == source_page.size());
 +    CHECK(std::memcmp(restored_page.data(), source_page.data(), source_page.size()) == 0);
@@ -6187,7 +6542,7 @@ index 000000000..932b031a9
 +    const auto cold_logits = decode_logits(cold, suffix.back());
 +    release(cold);
 +    auto * warm = create(model);
-+    restore_recurrent(warm, recurrent, prefix);
++    checkpoint.restore(warm, prefix);
 +    prefill(warm, suffix);
 +    const auto warm_logits = decode_logits(warm, suffix.back());
 +    release(warm);
@@ -6205,6 +6560,174 @@ index 000000000..932b031a9
 +            max_delta, differing, cold_logits.size());
 +    CHECK(max_delta == 0.0f);
 +}
++
++void resident_prefix_ownership(skippy_model * model, bool typed = false) {
++    const auto capabilities = skippy_model_memory_cache_capabilities(model);
++    CHECK(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT);
++    CHECK(bool(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT) == require_recurrent);
++    const std::vector<llama_token> prefix(128, 1);
++    const std::vector<llama_token> suffix_a{2, 3, 4};
++    const std::vector<llama_token> suffix_b{5, 6, 7};
++    constexpr int32_t cache_id = 8;
++    auto * source = create(model);
++    prefill(source, prefix);
++    skippy_error * error = nullptr;
++    uint64_t before_cells = 0;
++    ok(skippy_session_memory_used_cells(source, &before_cells, &error), error);
++    error = nullptr;
++    ok(skippy_session_save_prefix(source, cache_id, prefix.size(), &error), error);
++    uint64_t after_cells = 0;
++    error = nullptr;
++    ok(skippy_session_memory_used_cells(source, &after_cells, &error), error);
++    CHECK(before_cells == after_cells); // Sharing must not allocate attention cells.
++    uint64_t checkpoint_bytes = 0;
++    error = nullptr;
++    ok(skippy_session_resident_prefix_bytes(source, cache_id, &checkpoint_bytes, &error), error);
++    CHECK(checkpoint_bytes >= prefix.size() * sizeof(llama_token));
++    const auto source_page = export_page(source, prefix.size());
++    snapshot persistent(source, false);
++    if (typed) { verify_typed_attention(model, persistent.page); }
++    if (require_recurrent) {
++        CHECK(checkpoint_bytes > prefix.size() * sizeof(llama_token));
++        error = nullptr;
++        CHECK(skippy_session_save_prefix(source, cache_id, prefix.size() - 1, &error)
++                == SKIPPY_STATUS_INVALID_ARGUMENT);
++        skippy_error_free(error);
++        uint64_t unchanged_bytes = 0;
++        error = nullptr;
++        ok(skippy_session_resident_prefix_bytes(source, cache_id, &unchanged_bytes, &error), error);
++        CHECK(unchanged_bytes == checkpoint_bytes);
++    }
++    for (const auto token : suffix_a) { prefill(source, {token}); }
++    const auto expected_a = decode_logits(source, suffix_a.back());
++    const auto expected_page_a = export_page(source, source->n_past);
++    release(source); // Originating lane and mutable recurrent row are gone.
++
++    auto * recycled = create(model);
++    prefill(recycled, std::vector<llama_token>(32, 9));
++    decode_logits(recycled, 10);
++    release(recycled);
++    auto * cold_b = create(model);
++    prefill(cold_b, prefix);
++    for (const auto token : suffix_b) { prefill(cold_b, {token}); }
++    const auto expected_b = decode_logits(cold_b, suffix_b.back());
++    const auto expected_page_b = export_page(cold_b, cold_b->n_past);
++    release(cold_b);
++
++    // Invalid identity and boundary must neither claim a lane nor damage the
++    // cached checkpoint; repeatedly exercising create catches leaked claims.
++    auto wrong_tokens = prefix;
++    wrong_tokens.back() = 12;
++    for (int attempt = 0; attempt < 4; ++attempt) {
++        skippy_session * invalid = nullptr;
++        error = nullptr;
++        CHECK(skippy_session_create_from_resident_prefix(model, cache_id,
++                wrong_tokens.data(), wrong_tokens.size(), &invalid, &error)
++                == SKIPPY_STATUS_INVALID_ARGUMENT);
++        skippy_error_free(error);
++        CHECK(invalid == nullptr);
++    }
++    if (require_recurrent) {
++        skippy_session * invalid = nullptr;
++        error = nullptr;
++        CHECK(skippy_session_create_from_resident_prefix(model, cache_id,
++                prefix.data(), prefix.size() - 1, &invalid, &error)
++                == SKIPPY_STATUS_INVALID_ARGUMENT);
++        skippy_error_free(error);
++        CHECK(invalid == nullptr);
++    }
++    auto restore = [&]() {
++        skippy_session * restored = nullptr;
++        error = nullptr;
++        ok(skippy_session_create_from_resident_prefix(model, cache_id,
++                prefix.data(), prefix.size(), &restored, &error), error);
++        CHECK(restored->token_history == prefix);
++        CHECK(export_page(restored, prefix.size()) == source_page);
++        return restored;
++    };
++    auto * a = restore();
++    auto * b = restore();
++    // All execution lanes are occupied. Cold offload exports the cache-owned
++    // state directly, without restoring over either live borrower.
++    const auto history_a = a->token_history;
++    const auto history_b = b->token_history;
++    size_t kv_bytes = 0;
++    error = nullptr;
++    CHECK(skippy_session_export_resident_kv_page(a, cache_id, 0, persistent.layers,
++            0, prefix.size(), &persistent.page, nullptr, 0, &kv_bytes, &error)
++            == SKIPPY_STATUS_BUFFER_TOO_SMALL);
++    skippy_error_free(error);
++    CHECK(kv_bytes == persistent.payload.size());
++    error = nullptr;
++    ok(skippy_session_export_resident_kv_page(a, cache_id, 0, persistent.layers,
++            0, prefix.size(), &persistent.page, persistent.payload.data(), kv_bytes,
++            &kv_bytes, &error), error);
++    CHECK(persistent.payload == source_page);
++    size_t recurrent_bytes = 0;
++    error = nullptr;
++    const auto recurrent_status = skippy_session_export_resident_recurrent_state(a,
++            cache_id, nullptr, 0, &recurrent_bytes, &error);
++    CHECK(recurrent_status == (require_recurrent ? SKIPPY_STATUS_BUFFER_TOO_SMALL : SKIPPY_STATUS_OK));
++    skippy_error_free(error);
++    CHECK(recurrent_bytes == persistent.recurrent.size());
++    if (recurrent_bytes) {
++        std::vector<uint8_t> retained_recurrent(recurrent_bytes);
++        error = nullptr;
++        ok(skippy_session_export_resident_recurrent_state(a, cache_id,
++                retained_recurrent.data(), recurrent_bytes, &recurrent_bytes, &error), error);
++        CHECK(retained_recurrent == persistent.recurrent);
++    }
++    CHECK(a->token_history == history_a && b->token_history == history_b);
++    CHECK(a->n_past == static_cast<int32_t>(prefix.size()) && b->n_past == a->n_past);
++    for (size_t i = 0; i < suffix_a.size(); ++i) {
++        prefill(a, {suffix_a[i]});
++        prefill(b, {suffix_b[i]});
++    }
++    // Evicting radix ownership must leave both active borrowers valid.
++    error = nullptr;
++    ok(skippy_session_drop_sequence(a, cache_id, &error), error);
++    uint64_t dropped_bytes = 1;
++    error = nullptr;
++    ok(skippy_session_resident_prefix_bytes(a, cache_id, &dropped_bytes, &error), error);
++    CHECK(dropped_bytes == 0);
++    const auto actual_a = decode_logits(a, suffix_a.back());
++    const auto actual_b = decode_logits(b, suffix_b.back());
++    float delta_a = 0, delta_b = 0;
++    for (size_t i = 0; i < actual_a.size(); ++i) {
++        delta_a = std::max(delta_a, std::fabs(actual_a[i] - expected_a[i]));
++        delta_b = std::max(delta_b, std::fabs(actual_b[i] - expected_b[i]));
++    }
++    std::fprintf(stderr, "resident fork: max delta a=%.9g b=%.9g page a=%d b=%d\n", delta_a, delta_b,
++            export_page(a, a->n_past) == expected_page_a, export_page(b, b->n_past) == expected_page_b);
++    // Different shared-pool occupancy changes the CPU attention reduction
++    // shape. Measured drift is below 2e-7; reject nonfinite or larger errors
++    // and require the selected greedy token to remain identical.
++    for (const auto value : actual_a) { CHECK(std::isfinite(value)); }
++    for (const auto value : actual_b) { CHECK(std::isfinite(value)); }
++    CHECK(delta_a <= 1e-6f && delta_b <= 1e-6f);
++    CHECK(std::max_element(actual_a.begin(), actual_a.end()) - actual_a.begin()
++            == std::max_element(expected_a.begin(), expected_a.end()) - expected_a.begin());
++    CHECK(std::max_element(actual_b.begin(), actual_b.end()) - actual_b.begin()
++            == std::max_element(expected_b.begin(), expected_b.end()) - expected_b.begin());
++    if (require_recurrent) {
++        CHECK(export_page(a, a->n_past) == expected_page_a);
++        CHECK(export_page(b, b->n_past) == expected_page_b);
++    }
++    release(a);
++    release(b);
++    // The resident owner has been evicted. The independently exported payload
++    // still reconstructs both attention and recurrent state in a new lane.
++    auto * persisted = create(model);
++    persistent.restore(persisted, prefix);
++    CHECK(export_page(persisted, prefix.size()) == source_page);
++    for (const auto token : suffix_a) { prefill(persisted, {token}); }
++    const auto persisted_logits = decode_logits(persisted, suffix_a.back());
++    for (size_t i = 0; i < persisted_logits.size(); ++i) {
++        CHECK(std::isfinite(persisted_logits[i]));
++        CHECK(std::fabs(persisted_logits[i] - expected_a[i]) <= 1e-6f);
++    }
++    release(persisted);
++    }
 +
 +void adapter_contracts(skippy_model * model) {
 +    auto * session = create(model);
@@ -6261,23 +6784,111 @@ index 000000000..932b031a9
 +    release(session);
 +}
 +
++void dense_resident_configuration(const char * path, skippy_runtime_config config) {
++    config.lane_count = 1;
++    config.kv_unified = SKIPPY_TRISTATE_AUTO;
++    skippy_model * model = nullptr;
++    skippy_error * error = nullptr;
++    ok(skippy_model_open(path, &config, &model, &error), error);
++    CHECK(model->ctx->get_cparams().kv_unified);
++    CHECK(skippy_model_memory_cache_capabilities(model) & SKIPPY_MEMORY_CACHE_RESIDENT);
++    constexpr int32_t cache_id = 8;
++    const std::vector<llama_token> tokens(16, 1);
++    auto * source = create(model);
++    prefill(source, tokens);
++    const auto page = export_page(source, tokens.size());
++    error = nullptr;
++    ok(skippy_session_save_prefix(source, cache_id, tokens.size(), &error), error);
++    const auto expected = decode_logits(source, 2);
++    release(source);
++    skippy_session * restored = nullptr;
++    error = nullptr;
++    ok(skippy_session_create_from_resident_prefix(model, cache_id,
++            tokens.data(), tokens.size(), &restored, &error), error);
++    CHECK(export_page(restored, tokens.size()) == page);
++    CHECK(decode_logits(restored, 2) == expected);
++    release(restored);
++    error = nullptr;
++    ok(skippy_model_free(model, &error), error);
++
++    // Explicit overrides remain supported, but must not claim resident APIs
++    // that reject this context. Cover both one stream and real multi-stream.
++    for (const uint32_t lanes : {1u, 2u}) {
++        config.lane_count = lanes;
++        config.kv_unified = SKIPPY_TRISTATE_FALSE;
++        model = nullptr;
++        error = nullptr;
++        ok(skippy_model_open(path, &config, &model, &error), error);
++        CHECK(!model->ctx->get_cparams().kv_unified);
++        const auto capabilities = skippy_model_memory_cache_capabilities(model);
++        CHECK(!(capabilities & (SKIPPY_MEMORY_CACHE_RESIDENT
++                | SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION
++                | SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT)));
++        CHECK(capabilities & SKIPPY_MEMORY_CACHE_KV_RECURRENT);
++        source = create(model);
++        prefill(source, tokens);
++        error = nullptr;
++        CHECK(skippy_session_save_prefix(source, cache_id, tokens.size(), &error)
++                == SKIPPY_STATUS_UNSUPPORTED);
++        skippy_error_free(error);
++        release(source);
++        error = nullptr;
++        ok(skippy_model_free(model, &error), error);
++    }
++}
++
 +} // namespace
 +
 +int main(int argc, char ** argv) {
-+    CHECK(argc == 4);
++    if (argc == 2 && std::strcmp(argv[1], "resident-gpu-long") == 0) {
++        const char * model_path = std::getenv("SKIPPY_NATIVE_TEST_REAL_MODEL");
++        if (!model_path) { std::fprintf(stderr, "SKIPPY_NATIVE_TEST_REAL_MODEL is unset; skipping real GPU checkpoint proof\n"); return 77; }
++        auto config = skippy_runtime_config_default();
++        config.selected_backend_device = "CPU";
++        configure_test_gpu(config);
++        return skippy_test_resident_checkpoint_gpu(model_path, config);
++    }
++    CHECK(argc == 4 || argc == 6);
 +    const bool grammar = std::strcmp(argv[2], "grammar") == 0;
 +    const bool state = std::strcmp(argv[2], "state") == 0;
-+    CHECK(grammar || state || std::strcmp(argv[2], "penalty") == 0);
-+    CHECK(std::strcmp(argv[3], "dense") == 0 || std::strcmp(argv[3], "recurrent") == 0);
++    const bool resident = std::strcmp(argv[2], "resident") == 0;
++    CHECK(grammar || state || resident || std::strcmp(argv[2], "penalty") == 0);
++    const bool automatic = resident && std::strcmp(argv[3], "auto") == 0;
++    CHECK(automatic || std::strcmp(argv[3], "dense") == 0 || std::strcmp(argv[3], "recurrent") == 0);
++    CHECK(argc == 4 || resident);
 +    require_recurrent = std::strcmp(argv[3], "recurrent") == 0;
 +    auto config = skippy_runtime_config_default();
 +    config.selected_backend_device = "CPU";
++    configure_test_gpu(config);
++    if (argc == 6) {
++        config.cache_type_k = cache_type(argv[4]);
++        config.cache_type_v = cache_type(argv[5]);
++        config.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
++    }
 +    config.ctx_size = 512;
++    if (resident) { config.lane_count = 2; config.kv_unified = 1; }
 +    skippy_model * model = nullptr;
 +    skippy_error * error = nullptr;
 +    const auto status = skippy_model_open(argv[1], &config, &model, &error);
 +    ok(status, error);
-+    if (state) {
++    if (automatic) {
++        const auto capabilities = skippy_model_memory_cache_capabilities(model);
++        CHECK(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION);
++        require_recurrent = capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT;
++    }
++    if (config.n_gpu_layers > 0) {
++        CHECK(std::any_of(model->model->tensors_by_name.begin(), model->model->tensors_by_name.end(),
++                [](const auto & item) {
++                    if (!item.second->buffer || ggml_backend_buffer_is_host(item.second->buffer)) { return false; }
++                    const auto type = ggml_backend_dev_type(ggml_backend_buft_get_device(
++                            ggml_backend_buffer_get_type(item.second->buffer)));
++                    return type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU;
++                }));
++        std::fprintf(stderr, "GPU ownership test: device=%s requested_layers=%d\n", config.selected_backend_device, config.n_gpu_layers);
++    }
++    if (resident) {
++        resident_prefix_ownership(model, argc == 6);
++    } else if (state) {
 +        // A dense stage's page already carries its whole checkpoint, so the
 +        // partial side payload is intentionally empty there.
 +        CHECK(require_recurrent);
@@ -6300,6 +6911,9 @@ index 000000000..932b031a9
 +    error = nullptr;
 +    const auto freed = skippy_model_free(model, &error);
 +    ok(freed, error);
++    if (resident && !require_recurrent) {
++        dense_resident_configuration(argv[1], config);
++    }
 +    return 0;
 +}
 diff --git a/src/skippy/tests/stage_plan_header.c b/src/skippy/tests/stage_plan_header.c
@@ -9478,7 +10092,7 @@ index 000000000..0e95c35b2
 +}
 diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
 new file mode 100644
-index 000000000..8b595464f
+index 000000000..7e774468a
 --- /dev/null
 +++ b/tests/test-skippy-kv-page-export.cpp
 @@ -0,0 +1,367 @@
@@ -9522,12 +10136,12 @@ index 000000000..8b595464f
 +        });
 +        return skippy_graph_cache_capabilities(result);
 +    };
-+    const uint32_t dense = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT |
++    const uint32_t dense = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION | SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT | SKIPPY_MEMORY_CACHE_KV_RECURRENT |
 +            SKIPPY_MEMORY_CACHE_FULL_STATE;
 +    if (capabilities(skippy_state_kind::kv_key) != dense ||
 +            capabilities(skippy_state_kind::kv_value) != dense ||
-+            capabilities(skippy_state_kind::recurrent_conv) != (SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
-+            capabilities(skippy_state_kind::recurrent_ssm) != (SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
++            capabilities(skippy_state_kind::recurrent_conv) != dense ||
++            capabilities(skippy_state_kind::recurrent_ssm) != dense ||
 +            capabilities(skippy_state_kind::derived_persistent) != SKIPPY_MEMORY_CACHE_FULL_STATE) {
 +        return false;
 +    }
@@ -9602,7 +10216,7 @@ index 000000000..8b595464f
 +            {});
 +
 +    if (skippy_memory_cache_capabilities(&kv) !=
-+            (SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
++            (SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION | SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
 +            skippy_model_memory_cache_capabilities(nullptr) != 0) {
 +        return 1;
 +    }
@@ -10177,14 +10791,16 @@ index 000000000..22b92c0a8
 +}
 diff --git a/tests/test-skippy-recurrent-state-roundtrip.cpp b/tests/test-skippy-recurrent-state-roundtrip.cpp
 new file mode 100644
-index 000000000..9ef80a6ce
+index 000000000..9bc3ba02c
 --- /dev/null
 +++ b/tests/test-skippy-recurrent-state-roundtrip.cpp
-@@ -0,0 +1,159 @@
+@@ -0,0 +1,199 @@
 +#include "../src/llama-batch.h"
 +#include "../src/llama-io.h"
 +#include "../src/llama-memory-recurrent.h"
 +#include "../src/llama-model.h"
++#include "../src/skippy/state_memory.h"
++#include "skippy/state.h"
 +
 +#include "ggml-backend.h"
 +
@@ -10270,6 +10886,13 @@ index 000000000..9ef80a6ce
 +    model->hparams.ssm_d_inner = 2;
 +
 +    auto source = make_memory(*model);
++    const auto capabilities = skippy_memory_cache_capabilities(&source);
++    if (!(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT)
++            || !(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT)
++            || (capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION)) {
++        std::fprintf(stderr, "pure recurrent memory has an incorrect resident attention contract\n");
++        return 13;
++    }
 +    llama_pos source_pos = 7;
 +    llama_seq_id source_seq_id = 0;
 +    llama_seq_id * source_seq_ids = &source_seq_id;
@@ -10336,6 +10959,37 @@ index 000000000..9ef80a6ce
 +    if (restored_r != source_r || restored_s != source_s) {
 +        std::fprintf(stderr, "recurrent tensor data changed during cross-sequence restore\n");
 +        return 7;
++    }
++
++    // Immutable cache-owned bytes survive source lane removal and reuse.
++    if (!source.seq_rm(source_seq_id, -1, -1)) { return 8; }
++    const std::vector<float> changed_r = { 91.0f, 92.0f, 93.0f, 94.0f };
++    ggml_backend_tensor_set(source.r_l[0], changed_r.data(), 0, changed_r.size() * sizeof(float));
++    buffer_reader second_reader(writer.data);
++    destination.state_read(second_reader, 0, LLAMA_STATE_SEQ_FLAGS_NONE);
++    const auto a_row = destination.cells[0].tail;
++    const auto b_row = destination.cells[1].tail;
++    if (a_row < 0 || b_row < 0 || a_row == b_row) {
++        std::fprintf(stderr, "restored recurrent borrowers did not receive private mutable rows\n");
++        return 9;
++    }
++    ggml_backend_tensor_set(destination.r_l[0], changed_r.data(),
++            destination.r_l[0]->nb[1] * a_row, changed_r.size() * sizeof(float));
++    buffer_writer preserved_b;
++    destination.state_write(preserved_b, 1, LLAMA_STATE_SEQ_FLAGS_NONE);
++    if (preserved_b.data != writer.data) {
++        std::fprintf(stderr, "diverging borrower changed another recurrent checkpoint\n");
++        return 10;
++    }
++    // The original checkpoint can restore again after either borrower is freed.
++    if (!destination.seq_rm(0, -1, -1)) { return 11; }
++    buffer_reader third_reader(writer.data);
++    destination.state_read(third_reader, 0, LLAMA_STATE_SEQ_FLAGS_NONE);
++    buffer_writer restored_a;
++    destination.state_write(restored_a, 0, LLAMA_STATE_SEQ_FLAGS_NONE);
++    if (restored_a.data != writer.data) {
++        std::fprintf(stderr, "recurrent checkpoint changed after repeated lane recycling\n");
++        return 12;
 +    }
 +
 +    return 0;

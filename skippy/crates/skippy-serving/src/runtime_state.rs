@@ -17,12 +17,18 @@ use skippy_runtime::{
     WorkloadInfo, parse_cache_type,
 };
 
+mod context_capacity;
 mod frame_operations;
 mod lane_lifecycle;
 pub mod lifecycle;
 pub mod panic_recovery;
+mod resident_prefix;
 mod restore_transaction;
 mod state_transfer;
+
+#[cfg(test)]
+use context_capacity::lane_count_for_workload;
+use context_capacity::{ContextCapacity, effective_lane_count};
 
 pub use lifecycle::{SessionLifecycleEvent, SessionLifecycleObserver};
 
@@ -39,11 +45,7 @@ pub struct RuntimeState {
     layer_start: u32,
     layer_end: u32,
     lane_count: u32,
-    /// Size of the context's KV cell pool, in tokens (llama.cpp `n_ctx`). In
-    /// unified-KV mode every lane draws decode/prefill cells from this single
-    /// shared pool, so it is the real ceiling for scheduler admission — see
-    /// [`Self::kv_pool_tokens`].
-    ctx_size: u32,
+    context_capacity: ContextCapacity,
     /// High-water mark of lane indices ever handed out. Combined with
     /// [`Self::free_lane_indices`], the count of live lanes equals
     /// `next_lane_index - free_lane_indices.len()`.
@@ -224,7 +226,7 @@ impl RuntimeState {
             layer_start: 0,
             layer_end: 1,
             lane_count,
-            ctx_size,
+            context_capacity: ContextCapacity::modelless(ctx_size),
             next_lane_index: 0,
             free_lane_indices: Vec::new(),
             sessions: BTreeMap::new(),
@@ -279,16 +281,6 @@ impl RuntimeState {
 
     pub(crate) fn active_session_count(&self) -> usize {
         self.sessions.len()
-    }
-
-    /// Total KV cell pool available to this context, in tokens (`n_ctx`).
-    ///
-    /// In unified-KV mode all lanes share this single pool, so it is the real
-    /// token budget the iteration scheduler must admit against. Returns 0 for
-    /// the modelless test runtime, in which case callers should fall back to a
-    /// configured default.
-    pub fn kv_pool_tokens(&self) -> u32 {
-        self.ctx_size
     }
 
     #[cfg(test)]
@@ -373,12 +365,14 @@ fn runtime_from_loaded_model(
 ) -> Result<Arc<Mutex<RuntimeState>>> {
     reject_unsupported_staged_workload(config, &model)?;
     let lane_count = effective_lane_count(config.lane_count, &model)?;
+    let context_capacity =
+        ContextCapacity::for_loaded_model(config.ctx_size, lane_count, model.has_native_model())?;
     Ok(Arc::new(Mutex::new(RuntimeState {
         model,
         layer_start: config.layer_start,
         layer_end: config.layer_end,
         lane_count,
-        ctx_size: config.ctx_size,
+        context_capacity,
         next_lane_index: 0,
         free_lane_indices: Vec::new(),
         sessions: BTreeMap::new(),
@@ -426,38 +420,6 @@ pub fn load_runtime_with_overrides_and_open_events(
         model,
         session_lifecycle_observer,
     )?))
-}
-
-/// Effective lane-admission bound for a loaded model.
-///
-/// Mirrors the native encoder-decoder serialization (skippy/llama_cpp/patches/
-/// 0002-skippy-implement-graph-planning-realization-and-runt.patch:
-/// `lane_count = encoder_decoder ? 1 : configured_lane_count`):
-/// encoder output is context-global in llama.cpp, so native only ever serves
-/// lane 0 for encoder-decoder models. Admission must not assign lane indices
-/// that native will never serve. The load-bypass dummy has no native model,
-/// so there is no native contract to mirror and the configured value stands.
-fn effective_lane_count(configured: u32, model: &StageModel) -> Result<u32> {
-    if !model.has_native_model() {
-        return Ok(configured);
-    }
-    Ok(lane_count_for_workload(
-        configured,
-        model.workload_info()?.kind,
-    ))
-}
-
-/// Pure lane-clamp decision: encoder-decoder work is serialized onto one
-/// lane (see [`effective_lane_count`]); every other workload keeps the
-/// configured bound.
-fn lane_count_for_workload(configured: u32, workload: ModelWorkload) -> u32 {
-    if configured <= 1 {
-        return configured;
-    }
-    if workload == ModelWorkload::EncoderDecoder {
-        return 1;
-    }
-    configured
 }
 
 /// Reject full-model-only workloads before filtered stages can begin serving.

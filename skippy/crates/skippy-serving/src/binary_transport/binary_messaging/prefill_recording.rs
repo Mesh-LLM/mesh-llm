@@ -259,6 +259,8 @@ mod tests {
             &config,
             Some(ModelStateKind::Dense),
             Some(skippy_runtime::MemoryCacheCapabilities {
+                resident_attention: true,
+                resident_checkpoint: false,
                 resident: true,
                 kv_recurrent: true,
                 full_state: true,
@@ -271,7 +273,8 @@ mod tests {
         let (_, message) = exact_prefill_fixture(970);
 
         assert!(kv.records_resident_prefixes());
-        assert!(kv.payload_is_exact_state());
+        assert!(!kv.payload_is_exact_state());
+        assert!(kv.exact_state_payload().is_some());
         assert!(!kv.exact_state_record_token_count_allowed(970, 970));
         assert!(exact_prefill_record_allowed(&kv, &message, 970));
     }

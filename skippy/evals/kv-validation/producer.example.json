@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "backend": "cuda",
+  "workspace": "/opt/mesh-llm",
+  "native_source": "/opt/mesh-llm/.deps/llama.cpp",
+  "native_source_commit": "0000000000000000000000000000000000000000",
+  "runtime_bundle": "/opt/mesh-llm/dist/native-runtimes/meshllm-native-runtime-linux-aarch64-cuda13",
+  "runtime_sha256": "",
+  "cli": {"path": "/opt/mesh-llm/target/release/skippy", "sha256": ""},
+  "correctness": {"path": "/opt/mesh-llm/target/release/skippy-correctness", "sha256": ""},
+  "serving_tests": {"path": "/opt/kv-tools/skippy-serving-tests", "sha256": ""},
+  "just": "/usr/local/bin/just",
+  "cmake": "/usr/bin/cmake"
+}

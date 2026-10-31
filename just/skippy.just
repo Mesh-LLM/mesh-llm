@@ -1,3 +1,23 @@
+# Prepare the pinned evaluator once, then run or plan explicit model cells.
+skippy-kv-prepare input output:
+    @just automation-run automation kv-validation prepare --input "{{ input }}" --output "{{ output }}"
+
+skippy-kv-validate input output:
+    @just automation-run automation kv-validation run --input "{{ input }}" --output "{{ output }}"
+
+skippy-kv-jy-plan input output:
+    @just automation-run automation kv-validation jy-plan --input "{{ input }}" --output "{{ output }}"
+
+# Install only the locked upstream client environment; final workers stay offline.
+agentx-setup:
+    uv sync --locked --managed-python --python 3.12 --project skippy/evals/agentx
+
+agentx-comparison input output:
+    @just automation-run automation agentx comparison --input "{{ input }}" --output "{{ output }}"
+
+agentx-mlflow-export input output:
+    @just automation-run automation agentx mlflow-export --input "{{ input }}" --output "{{ output }}"
+
 # Build the complete standalone Skippy product for local iteration.
 [unix]
 skippy backend="" cuda_arch="" rocm_arch="":

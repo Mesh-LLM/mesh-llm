@@ -1,6 +1,21 @@
 use super::*;
 
 impl RuntimeState {
+    /// Active execution lanes with token state. Sampling configuration alone
+    /// reserves a real lane at position zero, but cannot fill a decode wave:
+    /// its required cache restore still needs a scheduler turn. This count is
+    /// never used for physical lane or KV-capacity admission.
+    pub(crate) fn nonempty_active_session_count(&self) -> usize {
+        self.sessions
+            .keys()
+            .filter(|id| {
+                self.session_token_counts
+                    .get(*id)
+                    .is_some_and(|&tokens| tokens > 0)
+            })
+            .count()
+    }
+
     pub fn prewarm_idle_sessions(
         &mut self,
         target_idle_sessions: usize,
@@ -434,6 +449,11 @@ impl RuntimeState {
         Ok(())
     }
 
+    pub fn resident_prefix_bytes(&mut self, session_id: &str, cache_seq_id: i32) -> Result<u64> {
+        self.session(session_id)?
+            .resident_prefix_bytes(cache_seq_id)
+    }
+
     pub fn save_resident_prefix(
         &mut self,
         session_id: &str,
@@ -452,6 +472,7 @@ impl RuntimeState {
     ) -> Result<()> {
         let session = self.session(session_id)?;
         session.restore_prefix(cache_seq_id, token_ids)?;
+        session.restore_token_history(token_ids)?;
         self.session_token_counts
             .insert(session_id.to_string(), token_ids.len() as u64);
         Ok(())

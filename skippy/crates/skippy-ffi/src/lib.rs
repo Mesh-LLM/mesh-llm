@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 74;
+pub const ABI_VERSION_PATCH: u32 = 76;
 
 // Propagate static native archive changes through Cargo dependency metadata so
 // final binaries are relinked after CMake rebuilds llama.cpp.
@@ -149,9 +149,11 @@ pub use dynamic::{
     skippy_session_configure_chat_sampling, skippy_session_copy_output_activation_frame,
     skippy_session_create, skippy_session_create_from_resident_prefix,
     skippy_session_drop_sequence, skippy_session_embed, skippy_session_encode_prompt,
-    skippy_session_end_external_decode, skippy_session_free, skippy_session_last_token_signal,
-    skippy_session_llama_context, skippy_session_memory_used_cells, skippy_session_position,
-    skippy_session_rerank, skippy_session_reset, skippy_session_restore_prefix,
+    skippy_session_end_external_decode, skippy_session_export_resident_kv_page,
+    skippy_session_export_resident_recurrent_state, skippy_session_free,
+    skippy_session_last_token_signal, skippy_session_llama_context,
+    skippy_session_memory_used_cells, skippy_session_position, skippy_session_rerank,
+    skippy_session_reset, skippy_session_resident_prefix_bytes, skippy_session_restore_prefix,
     skippy_session_restore_token_history, skippy_session_sample_current,
     skippy_session_save_prefix, skippy_session_sequence_id, skippy_session_set_position,
     skippy_session_signal_window, skippy_session_take_token_logprobs,
@@ -213,9 +215,11 @@ pub use static_bindings::{
     skippy_session_configure_chat_sampling, skippy_session_copy_output_activation_frame,
     skippy_session_create, skippy_session_create_from_resident_prefix,
     skippy_session_drop_sequence, skippy_session_embed, skippy_session_encode_prompt,
-    skippy_session_end_external_decode, skippy_session_free, skippy_session_last_token_signal,
-    skippy_session_llama_context, skippy_session_memory_used_cells, skippy_session_position,
-    skippy_session_rerank, skippy_session_reset, skippy_session_restore_prefix,
+    skippy_session_end_external_decode, skippy_session_export_resident_kv_page,
+    skippy_session_export_resident_recurrent_state, skippy_session_free,
+    skippy_session_last_token_signal, skippy_session_llama_context,
+    skippy_session_memory_used_cells, skippy_session_position, skippy_session_rerank,
+    skippy_session_reset, skippy_session_resident_prefix_bytes, skippy_session_restore_prefix,
     skippy_session_restore_token_history, skippy_session_sample_current,
     skippy_session_save_prefix, skippy_session_sequence_id, skippy_session_set_position,
     skippy_session_signal_window, skippy_session_take_token_logprobs,

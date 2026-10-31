@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **20 headers** and **124 exported functions**.
+Current generated surface: **20 headers** and **127 exported functions**.
 
 ## Quick navigation
 
@@ -188,7 +188,7 @@ Current generated surface: **20 headers** and **124 exported functions**.
       </div>
     </section>
     <section class="skippy-api-index__group">
-      <a class="skippy-api-index__group-title" href="#skippy-header-state-h"><code>state.h</code><span>16 functions</span></a>
+      <a class="skippy-api-index__group-title" href="#skippy-header-state-h"><code>state.h</code><span>19 functions</span></a>
       <div class="skippy-api-index__functions">
         <a href="#skippy-fn-skippy-model-memory-cache-capabilities"><code>skippy_model_memory_cache_capabilities</code></a>
         <a href="#skippy-fn-skippy-export-state"><code>skippy_export_state</code></a>
@@ -204,6 +204,9 @@ Current generated surface: **20 headers** and **124 exported functions**.
         <a href="#skippy-fn-skippy-import-cachegen-kv-page-v1"><code>skippy_import_cachegen_kv_page_v1</code></a>
         <a href="#skippy-fn-skippy-session-save-prefix"><code>skippy_session_save_prefix</code></a>
         <a href="#skippy-fn-skippy-session-restore-prefix"><code>skippy_session_restore_prefix</code></a>
+        <a href="#skippy-fn-skippy-session-export-resident-kv-page"><code>skippy_session_export_resident_kv_page</code></a>
+        <a href="#skippy-fn-skippy-session-export-resident-recurrent-state"><code>skippy_session_export_resident_recurrent_state</code></a>
+        <a href="#skippy-fn-skippy-session-resident-prefix-bytes"><code>skippy_session_resident_prefix_bytes</code></a>
         <a href="#skippy-fn-skippy-session-memory-used-cells"><code>skippy_session_memory_used_cells</code></a>
         <a href="#skippy-fn-skippy-session-drop-sequence"><code>skippy_session_drop_sequence</code></a>
       </div>
@@ -1701,7 +1704,7 @@ LLAMA_API enum skippy_status skippy_export_full_state(
 <a id="skippy-fn-skippy-export-recurrent-state"></a>
 #### `skippy_export_recurrent_state`
 
-Exports recurrent state for models that maintain recurrent memory.
+Exports only recurrent memory; attention pages are exported independently.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_export_recurrent_state(
@@ -1730,7 +1733,7 @@ LLAMA_API enum skippy_status skippy_import_full_state(
 <a id="skippy-fn-skippy-import-recurrent-state"></a>
 #### `skippy_import_recurrent_state`
 
-Imports recurrent state into a session.
+Imports recurrent-only state into a session.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_import_recurrent_state(
@@ -1815,7 +1818,7 @@ LLAMA_API enum skippy_status skippy_import_cachegen_kv_page_v1(
 <a id="skippy-fn-skippy-session-save-prefix"></a>
 #### `skippy_session_save_prefix`
 
-Saves a session prefix into a resident cache sequence.
+Retains shared attention cells and an immutable recurrent checkpoint owned by the cache. Recurrent memory requires token_count equal to the current session position.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_session_save_prefix(
@@ -1828,7 +1831,7 @@ LLAMA_API enum skippy_status skippy_session_save_prefix(
 <a id="skippy-fn-skippy-session-restore-prefix"></a>
 #### `skippy_session_restore_prefix`
 
-Restores a session prefix from a resident cache sequence.
+Shares retained attention cells and restores a private mutable recurrent row. Token identity must match; recurrent prefixes require the exact saved boundary.
 
 ```cpp
 LLAMA_API enum skippy_status skippy_session_restore_prefix(
@@ -1836,6 +1839,54 @@ LLAMA_API enum skippy_status skippy_session_restore_prefix(
         int32_t cache_seq_id,
         const llama_token * token_ids,
         size_t token_count,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-session-export-resident-kv-page"></a>
+#### `skippy_session_export_resident_kv_page`
+
+Exports a cache-owned attention page for cold offload without claiming or restoring an execution lane.
+
+```cpp
+LLAMA_API enum skippy_status skippy_session_export_resident_kv_page(
+         struct skippy_session * session,
+        int32_t cache_seq_id,
+        int32_t layer_start,
+        int32_t layer_end,
+        uint64_t token_start,
+        uint64_t token_count,
+        struct skippy_kv_page_desc * out_desc,
+        void * output,
+        size_t output_capacity,
+        size_t * out_bytes,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-session-export-resident-recurrent-state"></a>
+#### `skippy_session_export_resident_recurrent_state`
+
+Copies a cache-owned recurrent-only checkpoint for cold offload; a size query does not read tensors.
+
+```cpp
+LLAMA_API enum skippy_status skippy_session_export_resident_recurrent_state(
+         struct skippy_session * session,
+        int32_t cache_seq_id,
+        void * output,
+        size_t output_capacity,
+        size_t * out_bytes,
+        struct skippy_error ** out_error);
+```
+
+<a id="skippy-fn-skippy-session-resident-prefix-bytes"></a>
+#### `skippy_session_resident_prefix_bytes`
+
+Reports cache-owned recurrent checkpoint and token identity bytes; shared attention cells remain in the native pool.
+
+```cpp
+LLAMA_API enum skippy_status skippy_session_resident_prefix_bytes(
+         struct skippy_session * session,
+        int32_t cache_seq_id,
+        uint64_t * out_bytes,
         struct skippy_error ** out_error);
 ```
 
@@ -2080,7 +2131,7 @@ The headers also define the following enums, structs, opaque handles, and ABI co
 
 - `activation.h`: `skippy_activation_part_desc`, `skippy_activation_boundary_desc`, `skippy_activation_desc`, `SKIPPY_ACTIVATION_FRAME_VERSION = 2`, `SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION = 2`, `SKIPPY_ACTIVATION_IDENTITY_BYTES = 32`, `SKIPPY_ACTIVATION_MAX_DIMS = 4`, `SKIPPY_ACTIVATION_MAX_PARTS = 16`, `SKIPPY_ACTIVATION_PART_OPTIONAL = (UINT32_C(1) << 0)`
 - `asr.h`: `skippy_asr_model`, `skippy_asr_result`, `skippy_asr_info_v1`, `skippy_asr_transcribe_params_v1`, `skippy_asr_segment_v1`, `SKIPPY_ASR_INFO_V1_ABI_VERSION = 1`, `SKIPPY_ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION = 1`, `SKIPPY_ASR_SEGMENT_V1_ABI_VERSION = 1`, `SKIPPY_ASR_SAMPLE_RATE = 16000`, `SKIPPY_ASR_MAX_SAMPLES = (SKIPPY_ASR_SAMPLE_RATE * 60 * 30)`
-- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 74`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`, `SKIPPY_FEATURE_NON_CHAT_WORKLOADS = ((uint64_t)1 << 37)`, `SKIPPY_FEATURE_SYSTEM_ONE = ((uint64_t)1 << 38)`, `SKIPPY_FEATURE_CACHEGEN_KV_PAGE = (UINT64_C(1) << 39)`, `SKIPPY_FEATURE_LAYA_DECISIONS = (UINT64_C(1) << 40)`, `SKIPPY_FEATURE_SPEECH_RECOGNITION = (UINT64_C(1) << 41)`
+- `common.h`: `skippy_feature`, `skippy_status`, `skippy_error`, `skippy_abi_version`, `SKIPPY_ABI_VERSION_MAJOR = 0`, `SKIPPY_ABI_VERSION_MINOR = 1`, `SKIPPY_ABI_VERSION_PATCH = 76`, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER = ((uint64_t)1 << 31)`, `SKIPPY_FEATURE_MODEL_LOAD_EVENTS_V2 = ((uint64_t)1 << 32)`, `SKIPPY_FEATURE_KV_EVENTS = ((uint64_t)1 << 33)`, `SKIPPY_FEATURE_DEVICE_EVENTS = ((uint64_t)1 << 34)`, `SKIPPY_FEATURE_DIAGNOSTIC_EVENTS = ((uint64_t)1 << 35)`, `SKIPPY_FEATURE_UNLOAD_EVENTS = ((uint64_t)1 << 36)`, `SKIPPY_FEATURE_NON_CHAT_WORKLOADS = ((uint64_t)1 << 37)`, `SKIPPY_FEATURE_SYSTEM_ONE = ((uint64_t)1 << 38)`, `SKIPPY_FEATURE_CACHEGEN_KV_PAGE = (UINT64_C(1) << 39)`, `SKIPPY_FEATURE_LAYA_DECISIONS = (UINT64_C(1) << 40)`, `SKIPPY_FEATURE_SPEECH_RECOGNITION = (UINT64_C(1) << 41)`
 - `devices.h`: `skippy_backend_device_type`, `skippy_backend_device_cap`, `skippy_backend_device`
 - `events.h`: `skippy_runtime_event_v1`, `skippy_runtime_event_reporter_v1`, `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION = 1`
 - `execution.h`: `skippy_token_score_request`, `skippy_iteration_request`

@@ -42,6 +42,10 @@ pub enum ModelStateKind {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct MemoryCacheCapabilities {
     pub resident: bool,
+    /// Resident state is an indivisible recurrent checkpoint, not a sliceable KV alias.
+    pub resident_checkpoint: bool,
+    /// Native resident prefixes contain attention cells as well as any checkpoint.
+    pub resident_attention: bool,
     pub kv_recurrent: bool,
     pub full_state: bool,
 }
@@ -50,6 +54,8 @@ impl MemoryCacheCapabilities {
     pub(crate) fn from_native_bits(bits: u32) -> Self {
         Self {
             resident: bits & 1 != 0,
+            resident_checkpoint: bits & 8 != 0,
+            resident_attention: bits & 16 != 0,
             kv_recurrent: bits & 2 != 0,
             full_state: bits & 4 != 0,
         }

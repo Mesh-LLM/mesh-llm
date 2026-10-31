@@ -17,14 +17,15 @@ pub(super) fn effective_cache_payload(
     }
 }
 
-/// Durable tiers require an admitted byte exporter; resident handles cannot spill.
+/// Resident prefixes materialize complete components only at cold offload boundaries.
 pub(super) fn durable_cache_payload(
     admitted: MemoryCacheCapabilities,
 ) -> Option<StagePrefixCachePayload> {
-    effective_cache_payload(MemoryCacheCapabilities {
-        resident: false,
-        ..admitted
-    })
+    if admitted.resident {
+        Some(StagePrefixCachePayload::KvRecurrent)
+    } else {
+        effective_cache_payload(admitted)
+    }
 }
 
 #[cfg(test)]
@@ -58,13 +59,15 @@ mod tests {
         ] {
             assert_eq!(
                 effective_cache_payload(MemoryCacheCapabilities {
+                    resident_attention: resident,
+                    resident_checkpoint: false,
                     resident,
                     kv_recurrent,
                     full_state,
                 }),
                 expected,
             );
-            let durable = if kv_recurrent {
+            let durable = if resident || kv_recurrent {
                 Some(StagePrefixCachePayload::KvRecurrent)
             } else if full_state {
                 Some(StagePrefixCachePayload::FullState)
@@ -73,6 +76,8 @@ mod tests {
             };
             assert_eq!(
                 durable_cache_payload(MemoryCacheCapabilities {
+                    resident_attention: resident,
+                    resident_checkpoint: false,
                     resident,
                     kv_recurrent,
                     full_state,

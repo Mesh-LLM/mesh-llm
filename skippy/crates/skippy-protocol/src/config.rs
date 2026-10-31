@@ -392,8 +392,10 @@ pub struct StageKvCacheConfig {
     pub max_entries: usize,
     #[serde(default)]
     pub max_bytes: u64,
-    /// Hard byte budget for the opt-in host-RAM L2 exact-state tier.
-    /// Zero keeps L2 disabled.
+    /// Host-RAM byte budget. Native resident caching uses this for retained
+    /// checkpoint and token metadata, independently of disk; zero selects its
+    /// bounded default. Serialized runtimes use an opt-in L2 mirror, where zero
+    /// disables that mirror.
     #[serde(default)]
     pub l2_max_bytes: u64,
     /// Exact-state retention ceiling; None derives eight times max_bytes.

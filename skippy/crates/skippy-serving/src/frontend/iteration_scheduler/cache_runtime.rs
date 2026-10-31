@@ -1,7 +1,13 @@
-use super::RuntimeOperation;
-use crate::kv_integration::StagePrefixCachePayload;
+use super::{
+    CacheRuntimeContext, IterationScheduler, RuntimeOperation, SchedulerCommand,
+    SchedulerRuntimeOutcome, cache_runtime_operation, wait_for_cache_runtime,
+};
+use crate::kv_integration::scheduling::CacheSchedulingPolicy;
+use crate::runtime_state::RuntimeState;
+use skippy_inference_api::InferenceResult;
 use skippy_scheduler::{CacheAffinity, CacheAwareCandidate, order_cache_aware_candidates};
 use std::sync::Arc;
+use std::time::Instant;
 
 pub(super) type CacheAffinityRefresh = Box<dyn Fn() -> CacheAffinity + Send>;
 
@@ -12,7 +18,7 @@ pub(super) struct CacheAwareRuntimeOperation {
     priority: u64,
     enqueued_turn: u64,
     order: u64,
-    payload: StagePrefixCachePayload,
+    scheduling: CacheSchedulingPolicy,
     refresh_affinity: Option<CacheAffinityRefresh>,
     affinity_initialized: bool,
     stale_affinity_fallback: bool,
@@ -29,7 +35,7 @@ pub(super) struct CacheRuntimeTelemetry {
 }
 
 struct CacheRuntimeEnqueueState {
-    payload: StagePrefixCachePayload,
+    scheduling: CacheSchedulingPolicy,
     refresh_affinity: Option<CacheAffinityRefresh>,
     affinity_initialized: bool,
 }
@@ -80,7 +86,7 @@ impl CacheRuntimeQueue {
             prompt_tokens,
             priority,
             CacheRuntimeEnqueueState {
-                payload: StagePrefixCachePayload::ResidentKv,
+                scheduling: CacheSchedulingPolicy::Serialized,
                 refresh_affinity,
                 affinity_initialized: true,
             },
@@ -88,13 +94,13 @@ impl CacheRuntimeQueue {
     }
 
     #[cfg(test)]
-    pub(super) fn enqueue_with_payload(
+    pub(super) fn enqueue_with_policy(
         &mut self,
         operation: RuntimeOperation,
         affinity: CacheAffinity,
         prompt_tokens: Arc<[i32]>,
         priority: u64,
-        payload: StagePrefixCachePayload,
+        scheduling: CacheSchedulingPolicy,
         refresh_affinity: Option<CacheAffinityRefresh>,
     ) {
         self.enqueue_with_affinity_state(
@@ -103,7 +109,7 @@ impl CacheRuntimeQueue {
             prompt_tokens,
             priority,
             CacheRuntimeEnqueueState {
-                payload,
+                scheduling,
                 refresh_affinity,
                 affinity_initialized: true,
             },
@@ -115,7 +121,7 @@ impl CacheRuntimeQueue {
         operation: RuntimeOperation,
         prompt_tokens: Arc<[i32]>,
         priority: u64,
-        payload: StagePrefixCachePayload,
+        scheduling: CacheSchedulingPolicy,
         refresh_affinity: CacheAffinityRefresh,
     ) {
         self.enqueue_with_affinity_state(
@@ -124,7 +130,7 @@ impl CacheRuntimeQueue {
             prompt_tokens,
             priority,
             CacheRuntimeEnqueueState {
-                payload,
+                scheduling,
                 refresh_affinity: Some(refresh_affinity),
                 affinity_initialized: false,
             },
@@ -148,7 +154,7 @@ impl CacheRuntimeQueue {
             priority,
             enqueued_turn: self.turn,
             order,
-            payload: state.payload,
+            scheduling: state.scheduling,
             refresh_affinity: state.refresh_affinity,
             affinity_initialized: state.affinity_initialized,
             stale_affinity_fallback: false,
@@ -163,7 +169,7 @@ impl CacheRuntimeQueue {
     pub(super) fn has_wave_aware_operations(&self) -> bool {
         self.operations
             .iter()
-            .any(|operation| cache_runtime_wave_enabled(operation.payload))
+            .any(|operation| cache_runtime_wave_enabled(operation.scheduling))
     }
 
     pub(super) fn pop_next(
@@ -188,7 +194,7 @@ impl CacheRuntimeQueue {
                 .map(|stage| stage.cache_epoch)
                 .max()
                 .unwrap_or(0),
-            wave_aware: cache_runtime_wave_enabled(queued.payload),
+            wave_aware: cache_runtime_wave_enabled(queued.scheduling),
             stale_affinity_fallback: queued.stale_affinity_fallback,
         };
         Some((queued, telemetry))
@@ -295,9 +301,9 @@ pub(super) fn should_suppress_cache_runtime(
         && active_runtime_sessions >= max_direct_batch_size
 }
 
-/// Direct-only work still coalesces, but a queued Resident KV operation keeps
-/// the legacy scheduler turn cadence. Recurrent-state cache work opts into the
-/// wave coalescing behavior.
+/// Serialized resident work retains its existing turn cadence. Loaded
+/// checkpoint-capable work cooperates with direct iteration waves regardless
+/// of whether its state is retained as a native owner or serialized payload.
 pub(super) fn should_coalesce_direct_iterations(
     has_cache_runtime: bool,
     has_wave_aware_cache_runtime: bool,
@@ -305,8 +311,50 @@ pub(super) fn should_coalesce_direct_iterations(
     !has_cache_runtime || has_wave_aware_cache_runtime
 }
 
-pub(super) fn cache_runtime_wave_enabled(payload: StagePrefixCachePayload) -> bool {
-    payload.is_exact_state()
+pub(super) fn cache_runtime_wave_enabled(scheduling: CacheSchedulingPolicy) -> bool {
+    scheduling.cooperative()
+}
+
+pub(crate) struct CacheAwareRuntimeRequest<'a> {
+    pub(crate) operation_id: String,
+    pub(crate) deadline: Instant,
+    pub(crate) cancellation: Option<&'a skippy_inference_api::CancellationToken>,
+    pub(crate) prompt_tokens: Arc<[i32]>,
+    pub(crate) priority: u64,
+    pub(crate) scheduling: CacheSchedulingPolicy,
+    pub(crate) refresh_affinity: CacheAffinityRefresh,
+}
+
+impl IterationScheduler {
+    /// Queue cache restore/prefill work by stage-local radix affinity while
+    /// retaining aging and decode-turn fairness.
+    pub(crate) fn execute_cache_aware_runtime_timed<T>(
+        &self,
+        label: &'static str,
+        request: CacheAwareRuntimeRequest<'_>,
+        operation: impl FnOnce(&mut RuntimeState, &CacheRuntimeContext) -> InferenceResult<T>
+        + Send
+        + 'static,
+    ) -> InferenceResult<SchedulerRuntimeOutcome<T>>
+    where
+        T: Send + 'static,
+    {
+        let (runtime_operation, result, control) = cache_runtime_operation(
+            label,
+            request.operation_id,
+            request.deadline,
+            request.cancellation,
+            operation,
+        );
+        self.enqueue_command(SchedulerCommand::ExecuteCacheAwareRuntime(
+            runtime_operation,
+            request.prompt_tokens,
+            request.priority,
+            request.scheduling,
+            request.refresh_affinity,
+        ))?;
+        wait_for_cache_runtime(result, &control)
+    }
 }
 
 #[cfg(test)]
@@ -366,15 +414,12 @@ mod tests {
     }
 
     #[test]
-    fn cache_wave_gates_are_opt_in_by_payload() {
+    fn cache_wave_gates_follow_cooperative_scheduling() {
         assert!(!cache_runtime_wave_enabled(
-            StagePrefixCachePayload::ResidentKv
+            CacheSchedulingPolicy::Serialized
         ));
         assert!(cache_runtime_wave_enabled(
-            StagePrefixCachePayload::KvRecurrent
-        ));
-        assert!(cache_runtime_wave_enabled(
-            StagePrefixCachePayload::FullState
+            CacheSchedulingPolicy::Cooperative
         ));
 
         assert!(!should_fill_cache_runtime_wave(true, false, 1, 4));
@@ -384,7 +429,7 @@ mod tests {
     }
 
     #[test]
-    fn queue_wave_awareness_and_coalescing_are_payload_specific() {
+    fn queue_wave_awareness_and_coalescing_follow_scheduling_policy() {
         let (selected, _selected_rx) = mpsc::channel();
         let mut resident_queue = CacheRuntimeQueue::new(4_096, true);
         resident_queue.enqueue(
@@ -417,17 +462,15 @@ mod tests {
             resident_queue.has_wave_aware_operations(),
         ));
 
-        for payload in [
-            StagePrefixCachePayload::KvRecurrent,
-            StagePrefixCachePayload::FullState,
-        ] {
+        {
+            let scheduling = CacheSchedulingPolicy::Cooperative;
             let mut queue = CacheRuntimeQueue::new(4_096, true);
-            queue.enqueue_with_payload(
+            queue.enqueue_with_policy(
                 operation(&selected, "recurrent"),
                 CacheAffinity::default(),
                 Arc::from([1]),
                 0,
-                payload,
+                scheduling,
                 None,
             );
             assert!(queue.has_wave_aware_operations());
@@ -572,7 +615,7 @@ mod tests {
             operation(&selected, "lazy"),
             Arc::from([1, 2, 3]),
             0,
-            StagePrefixCachePayload::ResidentKv,
+            CacheSchedulingPolicy::Serialized,
             Box::new(move || {
                 refresh_count.fetch_add(1, Ordering::Relaxed);
                 CacheAffinity::from_stage(StageCacheAffinity {

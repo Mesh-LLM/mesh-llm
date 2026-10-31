@@ -14,14 +14,12 @@ use super::{
 
 const MAX_PREFIX_PROBES: usize = 64;
 
+mod resident_preference;
+use resident_preference::DurableRestoreLookup;
 mod restore;
 
 fn l3_fill_claim_key(l3: &skippy_cache::L3Tier, location: &skippy_cache::L3Location) -> String {
     format!("{}:{}", l3.state_identity(), location.manifest_key)
-}
-
-fn resident_prefix_is_preferred(matched_tokens: usize, exact_tokens: Option<usize>) -> bool {
-    exact_tokens.is_none_or(|exact_tokens| matched_tokens > exact_tokens)
 }
 
 fn preflight_l3_kv_location(
@@ -167,37 +165,6 @@ impl Drop for ExactStateAdmissionCredit {
 }
 
 impl KvStageIntegration {
-    fn available_exact_prefix_tokens(
-        &self,
-        identities: &[PrefillKvIdentity],
-        shared_durable_fallback: bool,
-    ) -> Option<usize> {
-        identities
-            .iter()
-            .filter_map(|identity| {
-                let warm = self
-                    .radix
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .peek_recurrent(&identity.namespace, &identity.token_ids)
-                    .map(|exact| exact.matched_tokens);
-                if warm.is_some() {
-                    return warm;
-                }
-                let l3 = self.l3.as_ref()?;
-                let durable_token_ids = if shared_durable_fallback {
-                    self.durable_exact_lookup_token_ids(&identity.token_ids)
-                } else {
-                    &identity.token_ids
-                };
-                l3.locate_longest(&identity.namespace, durable_token_ids, MAX_PREFIX_PROBES)
-                    .ok()
-                    .flatten()
-                    .and_then(|location| usize::try_from(location.token_count).ok())
-            })
-            .max()
-    }
-
     pub(crate) fn l3_benefit_cost(
         &self,
         cold_prefill_cost: Option<f64>,
@@ -218,25 +185,8 @@ impl KvStageIntegration {
         if !self.should_lookup() || self.exact_state_payload().is_none() {
             return Ok(None);
         }
-        // Dense L3 uses serialized exact state only as the durable floor.
-        // Compare the available serving paths before either mutates the lane:
-        // prefer warm native resident KV only when it restores a longer prefix,
-        // while an equal-length warm or durable exact checkpoint retains priority.
-        if self.payload == StagePrefixCachePayload::ResidentKv {
-            let resident_tokens = identities
-                .iter()
-                .filter_map(|identity| self.probe_resident_prefix(identity))
-                .map(|resident| resident.token_count)
-                .max();
-            if let Some(resident_tokens) = resident_tokens {
-                let exact_tokens =
-                    self.available_exact_prefix_tokens(identities, shared_durable_fallback);
-                if resident_prefix_is_preferred(resident_tokens, exact_tokens) {
-                    return Ok(None);
-                }
-            }
-        }
-        for identity in identities {
+        for candidate in self.ordered_restore_candidates(identities, shared_durable_fallback) {
+            let identity = candidate.identity;
             let lookup_started = Instant::now();
             let (lookup, entries) = {
                 let mut radix = self
@@ -262,9 +212,12 @@ impl KvStageIntegration {
                     runtime,
                     session_id,
                     identity,
-                    lookup_started,
+                    DurableRestoreLookup {
+                        started: lookup_started,
+                        location: candidate.location.as_ref(),
+                        shared_fallback: shared_durable_fallback,
+                    },
                     cold_prefill_cost,
-                    shared_durable_fallback,
                 )? {
                     return restore::finish_restore(runtime, session_id, identity, restored);
                 }
@@ -532,6 +485,9 @@ impl KvStageIntegration {
         l3_cost: Option<skippy_cache::policy::CostSample>,
         write_through_l3: bool,
     ) -> Result<Option<ExactStateRecord>> {
+        if self.records_resident_prefixes() {
+            return Ok(None);
+        }
         let Some(exact_state_payload) = self.exact_state_payload() else {
             return Ok(None);
         };
@@ -718,9 +674,8 @@ impl KvStageIntegration {
         runtime: &mut RuntimeState,
         session_id: &str,
         identity: &PrefillKvIdentity,
-        lookup_started: Instant,
+        lookup: DurableRestoreLookup<'_>,
         cold_prefill_cost: Option<f64>,
-        shared_durable_fallback: bool,
     ) -> Result<Option<ExactStateRestore>> {
         let Some(l3) = &self.l3 else {
             return Ok(None);
@@ -729,23 +684,26 @@ impl KvStageIntegration {
         // load on the located entry's manifest key: same-length queries for
         // different prefixes never suppress each other, and different-length
         // queries resolving to one entry never load it twice.
-        let durable_token_ids = if shared_durable_fallback {
+        let durable_token_ids = if lookup.shared_fallback {
             self.durable_exact_lookup_token_ids(&identity.token_ids)
         } else {
             &identity.token_ids
         };
-        let location =
+        let location = if let Some(location) = lookup.location {
+            location.clone()
+        } else {
             match l3.locate_longest(&identity.namespace, durable_token_ids, MAX_PREFIX_PROBES) {
                 Ok(Some(location)) => location,
                 // Nothing stored, or a corrupt / identity-mismatched entry.
                 // Either way the miss path is the safe one; the tier has
                 // recorded the reason for the status surface.
                 Ok(None) | Err(_) => return Ok(None),
-            };
+            }
+        };
         // L3 remains the authority for L2: locate and validate the current
         // manifest identity before a host-RAM mirror may serve the request.
         if let Some(restored) =
-            self.restore_from_l2(runtime, session_id, identity, &location, lookup_started)?
+            self.restore_from_l2(runtime, session_id, identity, &location, lookup.started)?
         {
             return Ok(Some(restored));
         }
@@ -767,7 +725,7 @@ impl KvStageIntegration {
             runtime,
             session_id,
             identity,
-            lookup_started,
+            lookup.started,
             l3,
             &location,
             cold_prefill_cost,
@@ -827,6 +785,9 @@ impl KvStageIntegration {
         {
             return Ok(None);
         }
+        if !self.native_payload_is_complete(fill.payload.kind()) {
+            return Ok(None);
+        }
         let fill_ms = fill_started.elapsed().as_secs_f64() * 1000.0;
         let token_count = fill.token_count;
         let kv_desc: Option<skippy_runtime::RuntimeKvPageDesc> = native_kv_desc.or_else(|| {
@@ -867,6 +828,13 @@ impl KvStageIntegration {
                     .payload
                     .recurrent_state_bytes()
                     .context("reconstruct L3 recurrent payload")?;
+                if !self.native_components_are_complete(
+                    kv.as_ref().map_or(0, |bytes| bytes.len() as u64),
+                    recurrent.len() as u64,
+                    kv_desc.is_some(),
+                ) {
+                    return Ok(None);
+                }
                 if recurrent.is_empty() && !self.dense_without_recurrent {
                     return Ok(None);
                 }
@@ -897,6 +865,13 @@ impl KvStageIntegration {
                     _ => None,
                 };
 
+                if self
+                    .loaded_memory_cache
+                    .is_some_and(|caps| caps.resident && caps.resident_attention)
+                    && kv_page.is_none()
+                {
+                    return Ok(None);
+                }
                 if let Some((kv, desc)) = kv_page {
                     let import_started = Instant::now();
                     if fill.cachegen_kv {
@@ -942,7 +917,15 @@ impl KvStageIntegration {
         // Re-warm the RAM tier off the request path. A drop is fine: the
         // disk copy stays authoritative. The fill claim rides along so the
         // worker releases it only once the entry is radix-resident.
-        if fill.cachegen_kv {
+        if self.records_resident_prefixes() {
+            let tokens = &identity.token_ids[..token_count as usize];
+            runtime.restore_token_history(session_id, tokens)?;
+            let mut prefix = identity.clone();
+            prefix.token_ids = tokens.to_vec();
+            prefix.identity.token_count = token_count;
+            let _ = self.record_resident_prefix(runtime, session_id, &prefix, tokens);
+        }
+        if fill.cachegen_kv || self.records_resident_prefixes() {
             return Ok(Some(ExactStateRestore {
                 page_id: identity.page_id.clone(),
                 token_count: token_count as usize,
@@ -955,7 +938,11 @@ impl KvStageIntegration {
                 lookup_ms,
                 kv_import_ms,
                 recurrent_import_ms,
-                source: "l3-cachegen",
+                source: if fill.cachegen_kv {
+                    "l3-cachegen"
+                } else {
+                    "l3"
+                },
                 fill_ms,
                 rewarm_enqueued: false,
             }));
@@ -1079,7 +1066,7 @@ impl From<skippy_cache::ExactStatePayloadKind> for StagePrefixCachePayload {
         match kind {
             skippy_cache::ExactStatePayloadKind::FullState => Self::FullState,
             skippy_cache::ExactStatePayloadKind::KvRecurrent => Self::KvRecurrent,
-            skippy_cache::ExactStatePayloadKind::RecurrentOnly => Self::Disabled,
+            skippy_cache::ExactStatePayloadKind::RecurrentOnly => Self::KvRecurrent,
         }
     }
 }
@@ -1105,23 +1092,12 @@ mod tests {
 
     use skippy_cache::{L3Location, UnifiedRadixCache};
 
-    use super::{
-        is_native_kv_unavailable, preflight_l3_kv_location, resident_prefix_is_preferred,
-        try_touch_exact_state,
-    };
+    use super::{is_native_kv_unavailable, preflight_l3_kv_location, try_touch_exact_state};
 
     type TestRadix = UnifiedRadixCache<
         crate::kv_integration::RadixResidentEntry,
         crate::kv_integration::RadixExactEntry,
     >;
-
-    #[test]
-    fn longer_resident_prefixes_skip_exact_restore() {
-        assert!(resident_prefix_is_preferred(4_000, None));
-        assert!(resident_prefix_is_preferred(4_001, Some(4_000)));
-        assert!(!resident_prefix_is_preferred(4_000, Some(4_000)));
-        assert!(!resident_prefix_is_preferred(200, Some(4_000)));
-    }
 
     #[test]
     fn empty_kv_layer_range_is_an_unavailable_optional_kv_component() {
@@ -1186,7 +1162,7 @@ mod tests {
         }
     }
 
-    fn native_desc() -> skippy_runtime::RuntimeKvPageDesc {
+    pub(super) fn native_desc() -> skippy_runtime::RuntimeKvPageDesc {
         skippy_runtime::RuntimeKvPageDesc {
             version: 1,
             layer_start: 0,

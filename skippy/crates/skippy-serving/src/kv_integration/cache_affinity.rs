@@ -22,8 +22,8 @@ impl KvStageIntegration {
         let matched_tokens = identities
             .iter()
             .filter_map(|identity| match self.payload {
-                StagePrefixCachePayload::ResidentKv => radix
-                    .peek_resident(&identity.namespace, &identity.token_ids)
+                StagePrefixCachePayload::ResidentKv => self
+                    .peek_native_prefix(&radix, &identity.namespace, &identity.token_ids)
                     .map(|hit| hit.matched_tokens),
                 StagePrefixCachePayload::KvRecurrent | StagePrefixCachePayload::FullState => radix
                     .peek_recurrent(&identity.namespace, &identity.token_ids)
@@ -149,5 +149,103 @@ mod tests {
 
         release_tx.send(()).unwrap();
         holder.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod checkpoint_matching_tests {
+    use super::*;
+    use crate::kv_integration::RadixResidentEntry;
+    use skippy_protocol::{MessageBase, StageKvCacheConfig, StageKvCacheMode};
+    use skippy_runtime::MemoryCacheCapabilities;
+
+    #[test]
+    fn scheduler_and_restore_probe_choose_the_same_complete_checkpoint() {
+        let config = StageConfig {
+            kv_cache: Some(StageKvCacheConfig {
+                mode: StageKvCacheMode::LookupRecord,
+                max_entries: 64,
+                max_bytes: 0,
+                l2_max_bytes: 128,
+                exact_max_bytes: None,
+                codec: Default::default(),
+                min_tokens: 1,
+                shared_prefix_stride_tokens: 128,
+                shared_prefix_record_limit: 2,
+            }),
+            ..StageConfig::default()
+        };
+        // An arbitrary state-kind label cannot override the loaded memory contract.
+        let integration = KvStageIntegration::from_loaded_model_with_l3_manager(
+            &config,
+            Some(skippy_runtime::ModelStateKind::Dense),
+            Some(MemoryCacheCapabilities {
+                resident: true,
+                resident_checkpoint: true,
+                resident_attention: true,
+                kv_recurrent: true,
+                full_state: true,
+            }),
+            None,
+            None,
+        )
+        .unwrap()
+        .unwrap();
+        assert!(
+            !integration.native_components_are_complete(32, 0, true),
+            "KV-only cannot restore hybrid state"
+        );
+        assert!(
+            !integration.native_components_are_complete(0, 32, true),
+            "hybrid state requires attention KV"
+        );
+        assert!(
+            !integration.native_components_are_complete(32, 32, false),
+            "attention state requires a descriptor"
+        );
+        assert!(integration.native_components_are_complete(32, 32, true));
+        let base = MessageBase {
+            schema_version: skippy_protocol::SCHEMA_VERSION,
+            run_id: "run".into(),
+            request_id: "request".into(),
+            session_id: "session".into(),
+            stage_id: "stage".into(),
+            stage_index: 0,
+            topology_id: "topology".into(),
+            model_id: None,
+            tokenizer_id: None,
+            chat_template_id: None,
+            seq: None,
+        };
+        let short = integration.prefill_identity(&config, &base, 0, &[1, 2]);
+        let longer = integration.prefill_identity(&config, &base, 0, &[1, 2, 3, 4]);
+        let query = integration.prefill_identity(&config, &base, 0, &[1, 2, 3, 8]);
+        {
+            let mut radix = integration.radix.lock().unwrap();
+            for (identity, seq) in [(&short, 8), (&longer, 9)] {
+                radix
+                    .insert_resident(
+                        &identity.namespace,
+                        &identity.token_ids,
+                        32,
+                        RadixResidentEntry {
+                            page_id: identity.page_id.clone(),
+                            seq_id: seq,
+                            token_count: identity.token_ids.len() as u64,
+                            recompute_cost: 1,
+                        },
+                    )
+                    .unwrap();
+            }
+        }
+        assert_eq!(
+            integration
+                .probe_resident_prefix(&query)
+                .unwrap()
+                .token_count,
+            2
+        );
+        let affinity = integration.peek_cache_affinity(&config, &[query]);
+        assert_eq!(affinity.matched_tokens(), 2);
     }
 }

@@ -1,165 +1,105 @@
-# Skippy OpenAI Prompt Cache
+# Skippy OpenAI prompt cache
 
-Skippy OpenAI serving has an automatic prompt-prefix cache for normal text
-generation. The cache is intended to provide the same operator-facing outcome
-as llama-server prompt reuse: repeated prompts, and prompts with a long shared
-prefix, avoid recomputing the whole prefix on later requests.
+Skippy reuses exact token prefixes through a radix tree. A cache entry owns its
+native continuation state independently of a request or an execution lane.
+Recycling a lane releases the request's state; it does not discard cache-owned
+prefixes.
 
-## llama-server Reference Behavior
+## Shared attention and recurrent checkpoints
 
-llama-server keeps prompt state in serving slots. With `cache_prompt` enabled,
-each request compares its prompt tokens with the selected slot and reuses the
-longest common prefix already resident in that slot. With `--cache-ram`,
-llama-server can also save idle slot state into a RAM prompt cache and reload
-the closest reusable prompt state later. No client cache key is required for
-the common case.
+The loaded runtime admits complete cache representations from its graph and
+memory capabilities. Serving does not choose a representation by model name.
 
-Important llama-server properties:
+For an admitted resident representation:
 
-- `cache_prompt` controls per-request prompt reuse.
-- `--cache-ram N` enables RAM prompt-cache storage.
-- idle slots may be saved to the prompt cache and cleared.
-- later requests choose reusable state by prompt similarity or cache lookup.
-- reported timings include cached versus processed prompt tokens.
+- Attention KV remains in the native memory pool. Cache sequence references
+  share existing cells; retaining a prefix does not export those cells to RAM.
+- A hybrid or recurrent prefix also owns an immutable recurrent checkpoint at
+  a recorded token boundary. Restoring it copies the recurrent component into
+  an execution lane and shares the corresponding attention cells.
+- A request holds a lease while restoring an entry. Eviction cannot remove a
+  leased source. Divergent continuations cannot mutate the saved checkpoint.
+- Dense attention can reuse the common part of a longer stored prefix.
+  Recurrent state can resume only at a saved checkpoint whose entire token
+  path is a prefix of the request. A longer recurrent checkpoint cannot be
+  truncated to an arbitrary common-prefix length.
 
-## Skippy Behavior
+This follows SGLang's radix ownership model: token paths identify shared KV
+blocks, while recurrent state has separate checkpoint ownership. It is an
+adaptation to llama.cpp's native memory interfaces, rather than a dependency
+on SGLang's Torch-based runtime. See the pinned upstream
+[radix cache](https://github.com/sgl-project/sglang/blob/1f152be6c5e1a36f27f1800762f5e0131f127a41/python/sglang/srt/mem_cache/radix_cache.py)
+and [Mamba cache component](https://github.com/sgl-project/sglang/blob/1f152be6c5e1a36f27f1800762f5e0131f127a41/python/sglang/srt/mem_cache/unified_cache/components/mamba.py).
 
-Skippy uses the stage KV integration rather than llama-server slots. When a
-stage has `kv_cache.mode = "lookup-record"`, Skippy records prompt-prefix
-state after prefill and probes that state before later OpenAI chat/completion
-requests. A client `prompt_cache_key` is optional; ordinary requests without a
-key share the default namespace and can hit automatically.
+## Identity and lifetime
 
-Skippy records exact prompt-prefix identities and a small shared-prefix grid.
-The exact path covers identical prompts. The shared-prefix path covers prompts
-whose common prefix falls on the configured stride, such as a stable system
-prompt or tool schema followed by different user tails. This is not arbitrary
-llama-server LCP slot selection; it is deterministic prefix identity probing.
+A hit must match the model weights, layer range, runtime state layout,
+position rules, namespace, and token prefix. The radix key describes these
+inputs; serving does not discover common prefixes by hashing exported KV
+payloads. An optional client `prompt_cache_key` separates namespaces. Requests
+without a key share the default namespace.
 
-Skippy reports cache state in OpenAI usage and telemetry:
+Run and topology instance IDs do not fragment the namespace. Equivalent
+placements can reuse state when the numerical model and state layout match.
 
-- `usage.prompt_tokens_details.cached_tokens` is the OpenAI-compatible cached
-  prompt token count.
-- `stage.openai_generation_summary` emits `skippy.kv.status`, one of
-  `disabled`, `miss`, or `hit`.
-- The same summary emits `skippy.kv.cached_prompt_tokens`,
-  `skippy.kv.matched_prefix_tokens`, `skippy.kv.suffix_prefill_tokens`, and
-  `skippy.kv.hit_kind`. The hit kind is `none` for disabled or missed cache
-  lookups.
+A saved native prefix remains usable after the originating session is freed.
+Eviction drops the cache's native attention references and recurrent checkpoint.
+The attention pool releases cells once no cache entry or request references
+them. Unloading the model releases its retained state.
 
-## Exact-State Retention
+## Capacity
 
-Recurrent and hybrid families store an exact-state snapshot: the complete
-native session state, which is indivisible and includes recurrent and
-convolution buffers. The stage byte budget (`prefix_cache.max_bytes`, or
-`SKIPPY_KV_CACHE_MAX_BYTES`) is derived from attention KV metadata, so it
-systematically undercounts those snapshots and a single snapshot can exceed it.
+Attention admission uses physical occupancy of the shared native pool. Adding
+logical prefix lengths would count shared cells repeatedly and evict reusable
+state prematurely. Active restore leases protect their source from eviction.
 
-The exact catalog therefore treats that budget as a soft cap. It keeps a small
-working set of snapshots past the soft cap, so concurrent sessions on one stage
-do not evict each other on every request, and it never evicts its last entry,
-because a snapshot that self-evicts leaves the stage with no exact prefix reuse
-at all. A hard limit bounds that allowance and defaults to a multiple of the
-soft cap, but it is not an absolute physical-byte ceiling: the last indivisible
-snapshot remains reusable even when it exceeds the limit. Set
-`SKIPPY_KV_CACHE_EXACT_MAX_BYTES` to pin the limit in bytes on a worker whose
-memory headroom does not match the attention-derived estimate; `0` disables the
-limit. Both limits are reported on
-`stage.openai_generation_summary` as `skippy.exact_cache.max_bytes` and
-`skippy.exact_cache.hard_max_bytes`.
+Retained attention cells also affect the physical span read by llama.cpp's
+attention kernels. Masked idle cells can increase attention work even when a
+request gets a cache hit. This ownership change does not port SGLang's paged
+attention kernels; benchmark both reuse and attention cost as the retained
+working set grows.
 
-## Host-RAM L2 Cache
+Recurrent checkpoints consume host RAM independently of the attention pool.
+Their budget is bounded and does not require a disk cache. An entry that cannot
+fit the checkpoint budget is not retained; it cannot remain indefinitely over
+budget merely because it is the last entry. Standalone
+`--prefix-cache-ram SIZE` or Mesh's `model_fit.cache_ram_mib` supplies this
+budget. A zero/unset value selects the bounded 1 GiB native-cache default;
+disable prefix caching itself to retain no entries.
 
-Set `model_fit.cache_ram_mib` to a positive MiB value to enable the bounded
-host-RAM exact-state tier for that model. The default value, `0`, leaves L2
-disabled. Prefix caching and the node-local L3 cache must also be enabled.
+## Persistence boundary
 
-Exact-state lookup proceeds from the in-process radix cache (L1), to host RAM
-(L2), then to the node-local disk cache (L3). L3 remains authoritative: the
-server locates the current durable manifest before serving an L2 mirror and
-requires the mirror digest to match it. The cache worker promotes an L3 fill
-on its second hit within ten minutes, or on the first hit for prefixes of at
-least 4,096 tokens. Payloads larger than 64 MiB stay out of L2. A verified L2
-hit restores the request immediately and queues the same payload to rewarm L1.
-Rewarm records do not rewrite an existing L3 entry. Unloading the stage drops
-its L2 tier.
+The resident path does not eagerly export complete KV state into a blob store
+or mirror every new prefix to disk. When persistent L3 is enabled, eviction is
+the cold offload boundary: serving exports the retained attention cells and
+their recurrent checkpoint, then queues a bounded durable write before
+releasing native cache ownership. Disk payload integrity remains verified.
 
-`stage.openai_generation_summary` reports `skippy.kv.l2.enabled`, budget and
-resident byte counts, logical bytes, entries, segments, hits, misses, inserts,
-evictions, and admission refusals. Exact-hit telemetry identifies the restore
-source as `l2` and includes fill time and whether the L1 rewarm was queued.
+An L3 fill restores the complete state after a resident miss and can warm the
+native radix cache again. Completed durable records survive a process restart.
+Entries still held only in native memory, and writes interrupted before their
+manifest commits, do not. Model unload and shutdown do not promise to flush
+every hot prefix. A refused or failed best-effort offload becomes a cache miss
+and cold prefill, rather than an inference failure.
 
-## Durable admission
+Durable identity includes the native ABI and state layout. Older serialized
+entries are not imported into the new runtime; they miss and are recomputed.
+No migration of the superseded cache representation is required.
 
-After a stage has measured an L3 restore, local OpenAI serving uses that
-restore-cost EWMA with the generation service estimator's cold-prefill cost.
-New entries remain in L1 probation and reach L3 after two observed reuses.
-Admission scores reuse probability and saved prefill time per exclusive and
-fractionally shared byte. Under disk pressure, the shared node manager removes
-the lowest-benefit inactive manifests first and preserves active pins. Before
-the first usable timing sample, or on serving paths without one, the existing
-reference-aware LRU write-through remains the safe fallback.
+Portable state export/import also remains available for explicit transfer and
+correctness checks. Runtimes without a complete resident representation use
+their admitted serialized representation. See [the disk-tier
+guide](KV_CACHE_DISK.md) for persistent store controls.
 
-The L3 activity status reports `benefit_probation`, `benefit_persist`,
-`benefit_lru_fallback`, and `benefit_evictions` counters.
+## Observing reuse
 
-## mesh-llm Defaults
+`usage.prompt_tokens_details.cached_tokens` reports cached input tokens in the
+OpenAI response. Generation telemetry also reports cache status, matched prefix
+length, suffix-prefill tokens, and hit kind. A match identifies reusable state;
+it is not proof that generated tokens are correct.
 
-mesh-llm wires Skippy prefix cache through family policy. For supported model
-families, generated `StageConfig` values receive a bounded cache config with
-`mode = "lookup-record"` and a production payload such as `resident-kv` or
-`kv-recurrent`. This applies to normal mesh-llm embedded Skippy serving without
-requiring users to send `prompt_cache_key`.
-
-The default is conditional, not universal:
-
-- unsupported or unknown families may leave `kv_cache` unset.
-- raw `skippy serve` leaves cache off unless the stage config or
-  `SKIPPY_KV_CACHE`/`SKIPPY_PREFIX_CACHE` enables it.
-- operators can disable cache with `model_fit.prompt_cache = false` or
-  `model_fit.prefix_cache.enabled = false`.
-- recurrent-state families use `kv-recurrent` rather than `resident-kv` when
-  the family policy requires it.
-
-## Benchmarking
-
-Use `just automation-run automation openai-cache-matrix` to compare cold and warm behavior
-across native llama-server and Skippy OpenAI endpoints. The native command records four
-rows:
-
-- cold native: llama-server with request cache disabled.
-- cold Skippy: Skippy endpoint started with prefix cache disabled.
-- warm native: llama-server with request cache enabled.
-- warm Skippy: Skippy endpoint started with prefix cache enabled.
-
-The report is intended to prove cache behavior before comparing timing. Each
-row includes a verdict, observed cache statuses, prompt tokens, cacheable
-prefix tokens, cached tokens, suffix/uncached prefix tokens, and cache
-efficiency. For Skippy OpenAI chat generation, the cacheable prefix excludes
-the final current token that drives decode, so `cacheable = prompt_tokens - 1`.
-
-Example:
-
-```bash
-just automation-run automation openai-cache-matrix \
-  --llama-cold-base-url http://127.0.0.1:8081 \
-  --llama-warm-base-url http://127.0.0.1:8082 \
-  --skippy-cold-base-url http://127.0.0.1:9337/v1 \
-  --skippy-warm-base-url http://127.0.0.1:9447/v1 \
-  --model Qwen/Qwen3-0.6B:Q4_K_M \
-  --output-dir target/skippy-openai-cache-matrix/local
-```
-
-Start the cold native endpoint with `--cache-ram 0`. Start the warm native
-endpoint with `--cache-ram N` or the llama-server default prompt-cache setting.
-
-The default benchmark pattern is `exact`, so the warmup and measured request
-use the same prompt. To exercise Skippy's shared-prefix grid against
-llama-server's LCP reuse, add `--pattern shared-prefix`. By default, the command
-exits non-zero when either warm row reports zero cached tokens; use
-`--allow-missing-warm-cache` only for exploratory timing runs where the endpoint
-does not expose cached-token counts.
-
-The cold Skippy endpoint should use a config with no `kv_cache` or with
-`kv_cache.mode = "disabled"`. The warm Skippy endpoint should use mesh-llm
-family defaults or an explicit `lookup-record` prefix cache.
+Validate cold, repeated, changed-tail, and lane-pressure requests separately.
+Use uninterrupted continuations as the correctness reference for restored and
+forked state, and compare cache reuse and timings against vanilla llama on the
+same model, prompt tokens, output limits, and concurrency. Report actual native
+and Rust binary provenance with the results.
