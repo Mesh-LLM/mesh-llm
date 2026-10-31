@@ -7,6 +7,11 @@ use skippy_runtime_install::{
     host_runtime_profile, install_native_runtime,
 };
 use std::path::Path;
+// For the included test_support module's `crate::` path.
+use skippy_runtime_install::NATIVE_RUNTIME_BUNDLE_DIR_ENV;
+
+#[path = "../src/test_support.rs"]
+mod test_support;
 
 const CATALOG_ABI: &str = "0.0.0";
 
@@ -96,6 +101,9 @@ fn run_install(
 
 #[test]
 fn current_install_uses_matching_bundle_despite_stale_catalog_and_cache() {
+    crate::rerun_without_bundle_env!(
+        current_install_uses_matching_bundle_despite_stale_catalog_and_cache
+    );
     let temp = tempfile::tempdir().unwrap();
     let mut options = install_options(temp.path(), runtime_release_version());
     let bundle = temp.path().join("current-bundle");
@@ -119,6 +127,9 @@ fn current_install_uses_matching_bundle_despite_stale_catalog_and_cache() {
 
 #[test]
 fn current_install_rejects_stale_catalog_instead_of_returning_cached_runtime() {
+    crate::rerun_without_bundle_env!(
+        current_install_rejects_stale_catalog_instead_of_returning_cached_runtime
+    );
     let temp = tempfile::tempdir().unwrap();
     let error = run_install(install_options(temp.path(), runtime_release_version())).unwrap_err();
     let rejection = error

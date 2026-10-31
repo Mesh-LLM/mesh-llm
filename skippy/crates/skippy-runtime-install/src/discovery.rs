@@ -475,6 +475,9 @@ mod tests {
 
     #[test]
     fn local_runtime_listing_prefers_bundle_and_includes_distinct_cache_entries() {
+        crate::rerun_without_bundle_env!(
+            local_runtime_listing_prefers_bundle_and_includes_distinct_cache_entries
+        );
         let temp = tempfile::tempdir().unwrap();
         let bundle = temp.path().join("bundle");
         let cached_source = temp.path().join("cached-source");
@@ -496,6 +499,9 @@ mod tests {
 
     #[test]
     fn local_runtime_listing_skips_malformed_bundle_and_cache_candidates() {
+        crate::rerun_without_bundle_env!(
+            local_runtime_listing_skips_malformed_bundle_and_cache_candidates
+        );
         let temp = tempfile::tempdir().unwrap();
         let product = temp.path().join("mesh-bundle");
         let malformed_bundle = product.join("native-runtimes/malformed-bundle");
