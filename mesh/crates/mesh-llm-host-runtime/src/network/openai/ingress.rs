@@ -2045,7 +2045,27 @@ async fn try_handle_virtual_model_intercept(
     }
 }
 
-async fn handle_api_proxy_connection(
+// Keep the large per-connection state out of each caller's async frame. Boxing
+// inside an async fn is too late: that fn's callers already reserve its state.
+fn handle_api_proxy_connection(
+    node: mesh::Node,
+    tcp_stream: ClientStream,
+    targets: election::ModelTargets,
+    affinity: affinity::AffinityRouter,
+    ingress_type: crate::runtime::IngressType,
+    requested_by: Option<iroh::EndpointId>,
+) -> impl std::future::Future<Output = ()> + Send {
+    Box::pin(handle_api_proxy_connection_inner(
+        node,
+        tcp_stream,
+        targets,
+        affinity,
+        ingress_type,
+        requested_by,
+    ))
+}
+
+async fn handle_api_proxy_connection_inner(
     node: mesh::Node,
     mut tcp_stream: ClientStream,
     targets: election::ModelTargets,
