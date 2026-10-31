@@ -104,22 +104,20 @@ runs:
         cat /tmp/changed_files.txt
 
     # Hosted planning runners lack just and the runner image toolchain, so
-    # affected-crates.sh needs a prebuilt automation binary.
-    - name: Prepare automation for crate routing
-      if: runner.os == 'Linux' && runner.environment == 'github-hosted' && env.MESH_LLM_AUTOMATION_BIN == ''
-      uses: ./.github/actions/prepare-automation
-      with:
-        runner-profile: hosted-bare
+    # crate routing runs through the prebuilt narrow controller.
+    - name: Prepare CI controller for crate routing
+      if: env.MESH_CI_CONTROLLER_BIN == ''
+      uses: ./.github/actions/prepare-ci-controller
 
-    - name: Run affected-crates.sh
+    - name: Route changed paths to affected crates
       id: crates
       shell: bash
       run: |
         # Handle __force_all__ sentinel: if present, use a known Rust file to trigger all_rust=true
         if grep -q "^__force_all__$" /tmp/changed_files.txt; then
-          echo "Cargo.lock" | bash scripts/affected-crates.sh --stdin > /tmp/crates_output.json
+          echo "Cargo.lock" | "$MESH_CI_CONTROLLER_BIN" repository affected-crates --stdin > /tmp/crates_output.json
         else
-          cat /tmp/changed_files.txt | bash scripts/affected-crates.sh --stdin > /tmp/crates_output.json
+          cat /tmp/changed_files.txt | "$MESH_CI_CONTROLLER_BIN" repository affected-crates --stdin > /tmp/crates_output.json
         fi
 
         cat /tmp/crates_output.json

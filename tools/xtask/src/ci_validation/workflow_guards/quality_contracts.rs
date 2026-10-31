@@ -178,6 +178,7 @@ fn recipe(source: &str, targets: &[String]) -> DynResult<()> {
     }
     invocation(commands[test], targets)?;
     reader_component(&commands, build, fixture, test)?;
+    controller_component(&commands, build, fixture)?;
     snapshot_component(source, &commands)
 }
 
@@ -204,9 +205,22 @@ fn reader_component(commands: &[&str], build: usize, fixture: usize, test: usize
             && index != build
             && index != test
             && !required.contains(line)
+            && *line != CONTROLLER_TEST
         {
             return Err("unexpected Cargo invocation in required contracts".into());
         }
+    }
+    Ok(())
+}
+
+/// The narrow controller is contract-tested here, unfiltered, rather than in the
+/// Rust test matrix (`CONTRACT_TESTED_CRATES`).
+const CONTROLLER_TEST: &str = "just with-lld cargo test --locked -p ci-controller";
+
+fn controller_component(commands: &[&str], build: usize, fixture: usize) -> DynResult<()> {
+    let current = position(commands, CONTROLLER_TEST)?;
+    if commands[current] != CONTROLLER_TEST || current <= build || current >= fixture {
+        return Err("controller contracts must run in full after the inert build".into());
     }
     Ok(())
 }

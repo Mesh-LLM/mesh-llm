@@ -111,16 +111,14 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
-      - uses: ./.github/actions/prepare-automation
-        with:
-          runner-profile: hosted-bare
+      - uses: ./.github/actions/prepare-ci-controller
       - name: Validate planned website jobs
         id: validate
         continue-on-error: true
         env:
           LANE_PLAN: ${{ inputs.lane_plan_json }}
           NEEDS_RESULTS: ${{ toJson(needs) }}
-        run: '"$MESH_LLM_AUTOMATION_BIN" ci validate-lane --lane-plan "$LANE_PLAN" --needs "$NEEDS_RESULTS"'
+        run: '"$MESH_CI_CONTROLLER_BIN" ci validate-lane --lane-plan "$LANE_PLAN" --needs "$NEEDS_RESULTS"'
       - if: ${{ !cancelled() }}
         uses: ./.github/actions/report-ci-lane
         with:

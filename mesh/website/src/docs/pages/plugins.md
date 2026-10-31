@@ -10,7 +10,7 @@ Use this page to install a plugin. If you are writing one, start with [Developin
 
 ## Official plugins
 
-The Mesh-LLM organization currently publishes six first-party plugin repositories. They are separate from the main `mesh-llm` repository and release native archives for supported platforms.
+The Mesh-LLM organization currently publishes seven first-party plugin repositories. They are separate from the main `mesh-llm` repository and release native archives for supported platforms.
 
 | Plugin | Use it for | Install |
 | --- | --- | --- |
@@ -20,6 +20,7 @@ The Mesh-LLM organization currently publishes six first-party plugin repositorie
 | [`metrics`](https://github.com/Mesh-LLM/metrics) | Advertise metrics support for mesh-llm telemetry. Configure the OTLP destination in mesh-llm, not in the plugin. | `mesh-llm plugins install metrics` |
 | [`agents`](https://github.com/Mesh-LLM/agents) | Run mesh-native A2A agents and expose their tools through the mesh MCP endpoint. | `mesh-llm plugins install agents` |
 | [`ds4-plugin`](https://github.com/Mesh-LLM/ds4-plugin) | Run [DwarfStar (ds4)](https://github.com/antirez/ds4) models such as DeepSeek V4 Flash on Apple Silicon. Add `[[plugin]] name = "ds4-plugin"`, `args = ["serve", "--model", "ds4f-q2"]` to config; the model downloads on first start. [Setup](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/plugins/dwarfstar.md). | `mesh-llm plugins install Mesh-LLM/ds4-plugin` |
+| [`powermetrics-plugin`](https://github.com/Mesh-LLM/powermetrics-plugin) | Measure the energy this node spends per output token from GPU power (NVIDIA, AMD, Apple Silicon), what it costs at your electricity price, and how that compares with your own seller prices, on an Energy page in the console. Add `[[plugin]] name = "powermetrics-plugin"`, `allow_inference_observation = true` to config. [Setup](https://github.com/Mesh-LLM/powermetrics-plugin#readme). | `mesh-llm plugins install Mesh-LLM/powermetrics-plugin` |
 
 The catalog can also contain community plugins. Search it before installing an unfamiliar integration:
 

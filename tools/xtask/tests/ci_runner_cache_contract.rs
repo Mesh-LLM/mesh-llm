@@ -8,9 +8,7 @@ mod process;
 mod runtime;
 #[path = "ci_runner_cache_contract/support.rs"]
 mod support;
-#[allow(dead_code)]
-#[path = "../src/ci_validation/lane_results/workflow_yaml.rs"]
-mod workflow_yaml;
+use ci_controller::lane_results::workflow_yaml;
 
 #[path = "../src/ci_validation/workflow_guards/cache_authority.rs"]
 mod cache_authority;
