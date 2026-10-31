@@ -102,13 +102,14 @@ pub(crate) struct FakeObservations {
 
 pub(crate) struct FakeState {
     start_delay: Duration,
-    poll_delay: Duration,
+    poll_gate: Option<Arc<CallbackGate>>,
     poll_returns_candidate: bool,
     poll_fails: bool,
     commit_delay: Duration,
     commit_gate: Option<Arc<CallbackGate>>,
     report_delay: Duration,
     report_gate: Option<Arc<CallbackGate>>,
+    discard_gate: Option<Arc<CallbackGate>>,
     proposal_gate: Option<Arc<CallbackGate>>,
     begin_fails: bool,
     events: Arc<Mutex<Vec<&'static str>>>,
@@ -196,7 +197,9 @@ unsafe extern "C" fn fake_poll_proposal(
     output: *mut abi::ProposalOutput,
 ) -> abi::ProposalPollStatus {
     let state = unsafe { &*instance.cast::<FakeState>() };
-    thread::sleep(state.poll_delay);
+    if let Some(gate) = &state.poll_gate {
+        gate.wait();
+    }
     if state.poll_fails {
         return abi::ProposalPollStatus::FAILED;
     }
@@ -251,6 +254,9 @@ unsafe extern "C" fn fake_discard_proposal(
     // Publish the event only after its observation is complete: tests wait on
     // this marker before reading the discard reason from another thread.
     state.events.lock().unwrap().push("discard");
+    if let Some(gate) = &state.discard_gate {
+        gate.wait();
+    }
     thread::sleep(state.report_delay);
     abi::PluginStatus::OK
 }
@@ -281,10 +287,6 @@ pub(crate) fn fake_table() -> abi::NativeServingPluginV2 {
         discard_proposal: fake_discard_proposal,
         last_error: fake_last_error,
     }
-}
-
-pub(crate) fn fake_active(start_delay: Duration) -> ActivePlugin {
-    fake_active_with_events(start_delay).0
 }
 
 pub(crate) fn fake_active_with_events(
@@ -362,13 +364,14 @@ pub(crate) fn fake_active_with_timing_and_gates(
     let shutdown_count = Arc::new(AtomicUsize::new(0));
     let state = Box::new(FakeState {
         start_delay,
-        poll_delay: Duration::ZERO,
+        poll_gate: None,
         poll_returns_candidate: false,
         poll_fails: false,
         commit_delay,
         commit_gate,
         report_delay,
         report_gate,
+        discard_gate: None,
         proposal_gate,
         begin_fails,
         events: Arc::clone(&events),
@@ -409,6 +412,36 @@ pub(crate) fn fake_active_with_candidate_and_proposal_gate(
     active
 }
 
+/// Builds a plugin whose proposal callback waits on `proposal_gate`.
+pub(crate) fn fake_active_with_proposal_gate(proposal_gate: Arc<CallbackGate>) -> ActivePlugin {
+    let (active, _, _) = fake_active_with_timing_and_gates(
+        Duration::ZERO,
+        Duration::ZERO,
+        Duration::ZERO,
+        false,
+        None,
+        Some(proposal_gate),
+        None,
+    );
+    active
+}
+
+/// Builds a plugin whose commit callback waits on `commit_gate`.
+pub(crate) fn fake_active_with_commit_gate(
+    commit_gate: Arc<CallbackGate>,
+) -> (ActivePlugin, Arc<Mutex<Vec<&'static str>>>) {
+    let (active, events, _) = fake_active_with_timing_and_gates(
+        Duration::ZERO,
+        Duration::ZERO,
+        Duration::ZERO,
+        false,
+        None,
+        None,
+        Some(commit_gate),
+    );
+    (active, events)
+}
+
 pub(crate) fn fake_active_with_candidate_and_report_and_commit_gate(
     report_gate: Arc<CallbackGate>,
     commit_gate: Arc<CallbackGate>,
@@ -429,12 +462,27 @@ pub(crate) fn fake_active_with_candidate_and_report_and_commit_gate(
     (active, events)
 }
 
-pub(crate) fn fake_active_with_late_candidate(poll_delay: Duration) -> ActivePlugin {
+/// Builds a plugin whose passive discard callback waits on `discard_gate`.
+pub(crate) fn fake_active_with_discard_gate(
+    discard_gate: Arc<CallbackGate>,
+) -> (ActivePlugin, Arc<Mutex<Vec<&'static str>>>) {
+    let (active, events, _) =
+        fake_active_with_timing(Duration::ZERO, Duration::ZERO, Duration::ZERO, false);
+    let instance = active.instance.unwrap().as_ptr().cast::<FakeState>();
+    unsafe {
+        (*instance).discard_gate = Some(discard_gate);
+    }
+    (active, events)
+}
+
+/// Builds a plugin whose candidate waits on `poll_gate`, so a test can hand it
+/// back after the proposal's deadline.
+pub(crate) fn fake_active_with_late_candidate(poll_gate: Arc<CallbackGate>) -> ActivePlugin {
     let (active, _, _) =
         fake_active_with_timing(Duration::ZERO, Duration::ZERO, Duration::ZERO, false);
     let instance = active.instance.unwrap().as_ptr().cast::<FakeState>();
     unsafe {
-        (*instance).poll_delay = poll_delay;
+        (*instance).poll_gate = Some(poll_gate);
         (*instance).poll_returns_candidate = true;
     }
     active
