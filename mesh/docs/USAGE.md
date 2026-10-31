@@ -1176,12 +1176,13 @@ Three split optimisations are on by default, and each has an
 environment-variable off switch for diagnosis. The final stage answers a
 verified window before it drafts the next block, so stage 0 commits and streams
 the window while the draft runs (`SKIPPY_DFLASH_EARLY_VERDICT=0` turns this
-off). Feature rows
-travel as Q8 blocks, about half the bytes of BF16; the draft only proposes, so
-this can change acceptance but never output
-(`SKIPPY_DFLASH_FEATURE_ENCODING=bf16` sends BF16 rows). A cached prompt prefix
-is restored on every stage, so a repeated conversation prefix is not
-re-forwarded (`SKIPPY_PREFIX_CACHE=off` turns the prefix cache off entirely).
+off). Feature rows travel as Q8 blocks, about half the bytes of BF16; the draft
+only proposes, so this can change acceptance but never output
+(`SKIPPY_DFLASH_FEATURE_ENCODING=bf16` sends BF16 rows). When every stage's
+prefix cache holds a repeated conversation prefix, each stage restores it and
+the prefix is not re-forwarded; on any miss, or with the cache off, the prompt
+is forwarded as usual (`SKIPPY_PREFIX_CACHE=off` turns the prefix cache off
+entirely).
 
 DFlash drafts tokens for greedy and sampled requests; requests that ask for
 logprobs decode normally. DSpark and LiliCorr drafts and Windows runtimes are
