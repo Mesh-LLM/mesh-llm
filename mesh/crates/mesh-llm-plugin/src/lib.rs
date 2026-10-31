@@ -110,9 +110,12 @@ pub mod host_capabilities {
     /// The host accepts `PeerBlockRequest`.
     pub const PEER_BLOCKS: &str = "peer_blocks.v1";
     /// The host's `backend_selected` OpenAI exchange event carries `pricing`
-    /// when the selected remote mesh peer charges for the model. Its absence
-    /// on a host that lists this means a free route; a host that does not
-    /// list it never sends a price.
+    /// when the selected remote mesh peer charges for the model. On a host
+    /// that lists this, its absence means the peer advertises no offer only
+    /// for a remote mesh target on a request that names a model; for a local
+    /// or external target, or a request with no model, the host prices
+    /// nothing and absence says nothing about cost. A host that does not list
+    /// it never sends a price.
     pub const OPENAI_EXCHANGE_BACKEND_PRICING: &str = "openai_exchange.backend_pricing.v1";
     /// The host accepts `PluginKeyRequest` and announces the key it binds.
     pub const PLUGIN_KEYS: &str = "plugin_keys.v1";
