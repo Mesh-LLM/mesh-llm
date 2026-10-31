@@ -309,7 +309,7 @@ pub struct InvoiceRequest {
 /// provider that answers `{}` still conforms; the host then knows only the
 /// invoice amount. Values are what the wallet reported, not checked against
 /// the invoice (an overpayment shows as a credit above the invoice amount).
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct SettledReceived {
     /// The inbound transaction's `amount_msat`: what the wallet reports it
     /// credited. Lexe reports it net of the receive fee (995 for a 1,000 msat
@@ -323,6 +323,18 @@ pub struct SettledReceived {
     /// The inbound transaction's `preimage`, when the wallet reported one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preimage: Option<String>,
+}
+
+/// Like a derived `Debug`, but `preimage` prints as `<redacted>`: it is bearer
+/// proof of payment and must not reach logs.
+impl std::fmt::Debug for SettledReceived {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SettledReceived")
+            .field("credited_msat", &self.credited_msat)
+            .field("fee_msat", &self.fee_msat)
+            .field("preimage", &self.preimage.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -350,6 +362,7 @@ mod tests {
             fee_msat: Some(5),
             preimage: Some("ab".repeat(32)),
         };
+        assert!(!format!("{full:?}").contains(&"ab".repeat(32)));
         assert_eq!(
             serde_json::to_string(&full).unwrap(),
             format!(
