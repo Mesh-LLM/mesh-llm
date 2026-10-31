@@ -1169,10 +1169,11 @@ node's own cache), and each block is verified in one pass through every
 stage. Split blocks are capped at four draft tokens unless `draft_max_tokens`
 is set, because every drafted token is a verify row on every stage.
 
-Three split optimisations are on by default, and each has an environment off
-switch for diagnosis. The final stage answers a verified window before it
-drafts the next block, so stage 0 commits and streams the window while the
-draft runs (`SKIPPY_DFLASH_EARLY_VERDICT=0` turns this off). Feature rows
+Three split optimisations are on by default, and each has an
+environment-variable off switch for diagnosis. The final stage answers a
+verified window before it drafts the next block, so stage 0 commits and streams
+the window while the draft runs (`SKIPPY_DFLASH_EARLY_VERDICT=0` turns this
+off). Feature rows
 travel as Q8 blocks, about half the bytes of BF16; the draft only proposes, so
 this can change acceptance but never output
 (`SKIPPY_DFLASH_FEATURE_ENCODING=bf16` sends BF16 rows). A cached prompt prefix
