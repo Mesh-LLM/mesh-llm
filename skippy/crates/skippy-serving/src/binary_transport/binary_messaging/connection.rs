@@ -1157,8 +1157,27 @@ fn handle_binary_connection_messages(
                 send_stage_reply(&mut *upstream, reply)
                     .context("send fallback upstream predicted reply")?;
             }
+            upstream_reply_end_unix_nanos = Some(now_unix_nanos() as u64);
+            let reply_write_ms = elapsed_ms(reply_started);
+            upstream_reply_ms += reply_write_ms;
+            emit_upstream_reply_write_span(
+                telemetry,
+                config,
+                session_id,
+                &message,
+                UpstreamReplyWriteSpan {
+                    reply_kind,
+                    predicted_token_count,
+                    start_unix_nanos: reply_start_unix_nanos,
+                    end_unix_nanos: upstream_reply_end_unix_nanos.unwrap_or(reply_start_unix_nanos),
+                    write_ms: reply_write_ms,
+                },
+            );
             if dflash_draft_follows {
-                // Stage 0 commits the verdict while this stage drafts.
+                // Stage 0 commits the verdict while this stage drafts. The
+                // reply timing above covers the verdict only; the draft's
+                // compute is reported in its own counters
+                // (dflash_draft_us, dflash_ingest_us).
                 let draft_reply = deferred_dflash_draft_reply(
                     iteration_scheduler,
                     &session_key,
@@ -1176,22 +1195,6 @@ fn handle_binary_connection_messages(
                         .context("send fallback upstream DFlash draft reply")?;
                 }
             }
-            upstream_reply_end_unix_nanos = Some(now_unix_nanos() as u64);
-            let reply_write_ms = elapsed_ms(reply_started);
-            upstream_reply_ms += reply_write_ms;
-            emit_upstream_reply_write_span(
-                telemetry,
-                config,
-                session_id,
-                &message,
-                UpstreamReplyWriteSpan {
-                    reply_kind,
-                    predicted_token_count,
-                    start_unix_nanos: reply_start_unix_nanos,
-                    end_unix_nanos: upstream_reply_end_unix_nanos.unwrap_or(reply_start_unix_nanos),
-                    write_ms: reply_write_ms,
-                },
-            );
         } else if !early_prefill_ack {
             record_prefill_edge_transport(
                 &mut message_reply_stats,
