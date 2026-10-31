@@ -484,11 +484,12 @@ impl GeneratedText {
             stats.insert_response_timings(&mut timings);
         }
         if let Some(wire) = self.activation_wire.as_ref() {
-            // A prefix-cache hit forwards only the suffix.
+            // Stage 0 prefills all but the last prompt token, which the first
+            // decode carries; a prefix-cache hit forwards only the suffix.
             let prefill_tokens = if self.suffix_prefill_tokens > 0 {
                 self.suffix_prefill_tokens
             } else {
-                self.prompt_tokens
+                self.prompt_tokens.saturating_sub(1)
             };
             wire.insert_response_timings(&mut timings, prefill_tokens, self.completion_tokens);
         }
