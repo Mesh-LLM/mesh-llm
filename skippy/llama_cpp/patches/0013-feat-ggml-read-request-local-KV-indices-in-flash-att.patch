@@ -1461,7 +1461,6 @@ index 5fa3e5308..b74322b6f 100644
 +            return BEST_FATTN_KERNEL_NONE;
 +        }
 +        if (Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && Q->ne[1] <= 2 &&
-+                (ggml_is_quantized(K->type) || ggml_is_quantized(V->type)) &&
 +                K->type != GGML_TYPE_F32 && V->type != GGML_TYPE_F32 &&
 +                ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type) != nullptr) {
 +            return BEST_FATTN_KERNEL_VEC;
