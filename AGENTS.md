@@ -27,6 +27,19 @@ Always use `just`. Never build manually. Bare `just` (or `just build`) builds Sk
 
 `cargo check` and `cargo build` do not count as complete product builds: they skip native ABI preparation and the console, and `cargo check` produces no binary. Choose the owning product's `AGENTS.md` for product-specific build and packaging commands. See `CONTRIBUTING.md` for the full workflow.
 
+### Distribution builds
+
+Packagers build MeshLLM and Skippy from source in a clean environment and install them as system packages. Keep that possible:
+
+- No build step downloads when its input is already provided (a pinned source checkout, vendored crates and node modules), and the build runs no prebuilt tools: a tool it needs is taken from the environment when it is set, as `PROTOC` is.
+- The code compiles with the newer compilers distributions ship, not only with CI's: include what you use.
+- Build steps work with read-only inputs, and installed files stay read-only: keep state under the user's or service's directories. Replacing the binary in place is for release-bundle installs only.
+- Every connection to an outside service a packaged node doesn't need (the update check, release and model catalogs, analytics) can be turned off by a setting, and local features work without a CA bundle.
+- A distribution build can keep the runpaths of native libraries, and compatibility is checked against the libraries the process actually loads.
+- Prefer platform APIs to spawning system tools (`ps`, `sysctl`, `hostname`); a minimal system may not have them.
+- An empty environment variable counts as unset: service units and environment files produce them.
+- Anything that refers to an installed binary, such as a service unit, uses the stable command on `PATH`, not a versioned path behind it.
+
 ## Shared module design
 
 Do not introduce generic buckets.
@@ -120,6 +133,18 @@ transitional until Rust or component-owned tests cover their shape and intent.
 Do not commit Python emulation or differential tests that invoke Python; delete
 each legacy implementation with its last caller switch and validate in normal
 CI. Preserve real consumed outputs and failure semantics.
+
+### Tests in clean build environments
+
+Distribution packagers run the test suite while building MeshLLM and Skippy, in a clean environment that has only the declared build dependencies, often on busy or slow machines. Every test that runs by default must pass there; a test that really needs the network or particular hardware is `#[ignore]`d with the reason.
+
+- No network: no DNS, no outgoing connections, no CA bundle. Serve fixtures locally, as the lifecycle tests do with a local `HF_ENDPOINT`.
+- Only declared tools: no fixed paths such as `/usr/bin/true` or `/bin/bash`, and no system tools a minimal environment lacks (`ps`, `sysctl`). Use the standard library, or find a tool on `PATH`.
+- No usable home: `HOME` may be read-only or missing. Keep all state in the test's own temporary directories and pass those paths to child processes.
+- A foreign environment: the builder may set any variable, including MeshLLM's own `MESH_LLM_*` ones, and there may be no terminal. Set or remove what a test depends on for the child process (`Command::env`, `env_remove`); otherwise follow the process-environment mutation contract in `mesh/docs/design/TESTING.md`.
+- Slow and busy machines: don't let a result depend on machine speed. Wait for the event or state itself instead of sleeping, give each wait a generous bound, and retry only failures that are transient by nature, such as `ETXTBSY` right after writing an executable.
+- Build options: tests also run with the options packagers use, such as the dynamic native runtime.
+- Large test binaries: a debug test binary can be gigabytes, so code on the startup path must not read its own executable in full.
 
 ## Pre-Commit Checklist
 
