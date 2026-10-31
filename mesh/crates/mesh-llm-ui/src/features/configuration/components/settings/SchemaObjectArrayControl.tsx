@@ -5,36 +5,14 @@ import { SchemaObjectFields } from '@/features/configuration/components/settings
 import type { SchemaSettingControlProps } from '@/features/configuration/components/settings/schema-control-utils'
 import {
   createSchemaObjectDefault,
-  isSchemaRecord,
   parseSchemaObjectArrayValue,
   schemaValueFromInput,
-  singularItemLabel
+  singularItemLabel,
+  updateObjectPath
 } from '@/features/configuration/lib/schema-object-array'
 
 type SchemaObjectArrayControlProps = SchemaSettingControlProps & {
   readonly itemSchema: ConfigurationSettingObjectSchema
-}
-
-function updateObjectPath(
-  value: Record<string, unknown>,
-  path: readonly string[],
-  nextValue: unknown
-): Record<string, unknown> {
-  const [name, ...remainingPath] = path
-  if (!name) return value
-
-  if (remainingPath.length === 0) {
-    const next = { ...value }
-    if (nextValue === undefined) delete next[name]
-    else next[name] = nextValue
-    return next
-  }
-
-  const child = value[name]
-  return {
-    ...value,
-    [name]: updateObjectPath(isSchemaRecord(child) ? child : {}, remainingPath, nextValue)
-  }
 }
 
 function moveItem(

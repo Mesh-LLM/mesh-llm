@@ -1,25 +1,25 @@
 import { Check, Plus } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import type { ConfigurationSettingObjectProperty, ConfigurationSettingObjectSchema } from '@/features/app-tabs/types'
+import type { ConfigurationSettingObjectSchema } from '@/features/app-tabs/types'
 import { SchemaObjectFields } from '@/features/configuration/components/settings/SchemaObjectFields'
 import {
   TEXT_FIELD_BASE_CLASS,
   type SchemaSettingControlProps
 } from '@/features/configuration/components/settings/schema-control-utils'
-import { parseSchemaObjectArrayValue, singularItemLabel } from '@/features/configuration/lib/schema-object-array'
+import {
+  parseSchemaObjectArrayValue,
+  schemaValueFromInput,
+  setValuePrimaryProperty,
+  singularItemLabel,
+  updateObjectPath
+} from '@/features/configuration/lib/schema-object-array'
 import { cn } from '@/lib/cn'
 
 const CONFIRM_MS = 2000
 
 type SchemaSetValueArrayControlProps = SchemaSettingControlProps & {
   readonly itemSchema: ConfigurationSettingObjectSchema
-}
-
-// The one property the Set button commits: the first required one, else the first.
-function primaryProperty(schema: ConfigurationSettingObjectSchema): ConfigurationSettingObjectProperty | undefined {
-  const properties = schema.properties ?? []
-  return properties.find((property) => property.required) ?? properties[0]
 }
 
 type SetRowProps = {
@@ -106,9 +106,10 @@ export function SchemaSetValueArrayControl({
   setting,
   value
 }: SchemaSetValueArrayControlProps) {
-  const primary = primaryProperty(itemSchema)
+  const primary = setValuePrimaryProperty(itemSchema)
   const items = parseSchemaObjectArrayValue(value) ?? []
-  const [pending, setPending] = useState(0)
+  const [pending, setPending] = useState<readonly number[]>([])
+  const nextPendingId = useRef(0)
   const [confirmedRow, setConfirmedRow] = useState<number | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(timer.current), [])
@@ -136,9 +137,18 @@ export function SchemaSetValueArrayControl({
     return typeof raw === 'string' ? raw : ''
   }
 
+  // Keyed by value (and repeat count), so removing an earlier row never hands its draft to a later one.
+  const seen = new Map<string, number>()
+  const rowKeys = items.map((item) => {
+    const text = stringOf(item)
+    const count = seen.get(text) ?? 0
+    seen.set(text, count + 1)
+    return `row-${count}-${text}`
+  })
+
   return (
     <div className="grid w-full min-w-0 gap-2.5" data-invalid={invalid ? 'true' : undefined}>
-      {items.length === 0 && pending === 0 && placeholder ? (
+      {items.length === 0 && pending.length === 0 && placeholder ? (
         <div className="grid gap-1">
           <SetRow
             ariaLabel={`${setting.label} (not set)`}
@@ -157,7 +167,7 @@ export function SchemaSetValueArrayControl({
         </div>
       ) : null}
       {items.map((item, index) => (
-        <div className="grid min-w-0 gap-2" key={`row-${index}`}>
+        <div className="grid min-w-0 gap-2" key={rowKeys[index]}>
           <SetRow
             ariaLabel={`${setting.label} ${index + 1}`}
             committed={stringOf(item)}
@@ -180,15 +190,19 @@ export function SchemaSetValueArrayControl({
               ariaPrefix={`${setting.label} ${index + 1}`}
               disabled={disabled}
               invalid={invalid}
-              onValueChange={(_path, property, next) =>
+              onValueChange={(path, property, next) =>
                 emit(
-                  items.map((existing, itemIndex) => {
-                    if (itemIndex !== index) return existing
-                    const updated = { ...existing }
-                    if (next.length === 0 && !property.required) delete updated[property.name]
-                    else updated[property.name] = next
-                    return updated
-                  })
+                  items.map((existing, itemIndex) =>
+                    itemIndex === index
+                      ? updateObjectPath(
+                          existing,
+                          path,
+                          next.length === 0 && !property.required
+                            ? undefined
+                            : schemaValueFromInput(property.value_schema, next)
+                        )
+                      : existing
+                  )
                 )
               }
               schema={rest}
@@ -197,17 +211,17 @@ export function SchemaSetValueArrayControl({
           ) : null}
         </div>
       ))}
-      {Array.from({ length: pending }, (_, index) => (
+      {pending.map((id, index) => (
         <SetRow
           ariaLabel={`${setting.label} ${items.length + index + 1}`}
           committed={undefined}
           confirmed={false}
           confirmedText={savedText}
           disabled={disabled}
-          key={`pending-${index}`}
+          key={`pending-${id}`}
           onSet={(next) => {
             emit([...items, { [primary.name]: next }])
-            setPending((count) => Math.max(0, count - 1))
+            setPending((ids) => ids.filter((pendingId) => pendingId !== id))
             flash(items.length)
           }}
           placeholder={undefined}
@@ -216,7 +230,7 @@ export function SchemaSetValueArrayControl({
       <Button
         className="justify-self-start"
         disabled={disabled}
-        onClick={() => setPending((count) => count + 1)}
+        onClick={() => setPending((ids) => [...ids, nextPendingId.current++])}
         size="sm"
         type="button"
         variant="ghost"

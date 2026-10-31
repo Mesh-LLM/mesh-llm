@@ -77,4 +77,74 @@ describe('SchemaSetValueArrayControl', () => {
     await userEvent.click(screen.getAllByRole('button', { name: 'Clear' })[0]!)
     expect(screen.getByTestId('value')).toHaveTextContent('[{"endpoint":"https://c.example"}]')
   })
+
+  it('clearing the first of two rows leaves the second row showing its own value', async () => {
+    render(<Harness initial='[{"endpoint":"https://a.example"},{"endpoint":"https://b.example"}]' />)
+    fireEvent.change(screen.getByLabelText('Witnesses 1'), { target: { value: 'https://a-edited.example' } })
+    await userEvent.click(screen.getAllByRole('button', { name: 'Clear' })[0]!)
+    expect(screen.getByLabelText('Witnesses 1')).toHaveValue('https://b.example')
+    expect(screen.getByTestId('value')).toHaveTextContent('[{"endpoint":"https://b.example"}]')
+  })
+
+  it('Set on the first of two pending rows keeps the second row and its draft', async () => {
+    render(<Harness initial='[{"endpoint":"https://a.example"}]' />)
+    const add = screen.getByRole('button', { name: /Add your own/ })
+    await userEvent.click(add)
+    await userEvent.click(add)
+    fireEvent.change(screen.getByLabelText('Witnesses 2'), { target: { value: 'https://one.example' } })
+    fireEvent.change(screen.getByLabelText('Witnesses 3'), { target: { value: 'https://two.example' } })
+    await userEvent.click(screen.getAllByRole('button', { name: 'Set' })[1]!)
+    expect(screen.getByTestId('value')).toHaveTextContent('https://one.example')
+    expect(screen.getByLabelText('Witnesses 3')).toHaveValue('https://two.example')
+  })
+
+  it('edits a nested secondary property at its own path', () => {
+    const nested: ConfigurationSettingObjectSchema = {
+      kind: 'object',
+      properties: [
+        { label: 'Endpoint', name: 'endpoint', required: true, value_schema: { kind: 'url' } },
+        {
+          label: 'Auth',
+          name: 'auth',
+          required: false,
+          value_schema: {
+            kind: 'object',
+            properties: [{ label: 'Token', name: 'token', required: false, value_schema: { kind: 'string' } }]
+          }
+        }
+      ]
+    }
+    function NestedHarness() {
+      const [value, setValue] = useState('[{"endpoint":"https://a.example"}]')
+      return (
+        <>
+          <SchemaArrayControl
+            onChange={setValue}
+            setting={{ ...setting, valueSchema: { kind: 'array', items: nested } }}
+            value={value}
+          />
+          <output data-testid="value">{value}</output>
+        </>
+      )
+    }
+    render(<NestedHarness />)
+    fireEvent.change(screen.getByLabelText(/Token/), { target: { value: 'abc' } })
+    expect(screen.getByTestId('value')).toHaveTextContent('[{"endpoint":"https://a.example","auth":{"token":"abc"}}]')
+  })
+
+  it('keeps the plain object-array rows when the primary property is not a string', () => {
+    const numeric: ConfigurationSettingObjectSchema = {
+      kind: 'object',
+      properties: [{ label: 'Weight', name: 'weight', required: true, value_schema: { kind: 'integer' } }]
+    }
+    render(
+      <SchemaArrayControl
+        onChange={() => {}}
+        setting={{ ...setting, valueSchema: { kind: 'array', items: numeric } }}
+        value='[{"weight":3}]'
+      />
+    )
+    expect(screen.queryByRole('button', { name: 'Set' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Add witness/ })).toBeInTheDocument()
+  })
 })

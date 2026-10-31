@@ -1,4 +1,8 @@
-import type { ConfigurationSettingObjectSchema, ConfigurationSettingValueSchema } from '@/features/app-tabs/types'
+import type {
+  ConfigurationSettingObjectProperty,
+  ConfigurationSettingObjectSchema,
+  ConfigurationSettingValueSchema
+} from '@/features/app-tabs/types'
 
 // Renderer id a plugin sets to get explicit-Set rows (see SchemaSetValueArrayControl).
 export const SET_VALUE_RENDERER_ID = 'set-value'
@@ -15,8 +19,41 @@ export function singularItemLabel(label: string): string {
   return `${singular.charAt(0).toUpperCase()}${singular.slice(1)}`
 }
 
+export function updateObjectPath(
+  value: Record<string, unknown>,
+  path: readonly string[],
+  nextValue: unknown
+): Record<string, unknown> {
+  const [name, ...remainingPath] = path
+  if (!name) return value
+
+  if (remainingPath.length === 0) {
+    const next = { ...value }
+    if (nextValue === undefined) delete next[name]
+    else next[name] = nextValue
+    return next
+  }
+
+  const child = value[name]
+  return {
+    ...value,
+    [name]: updateObjectPath(isSchemaRecord(child) ? child : {}, remainingPath, nextValue)
+  }
+}
+
 export function isSchemaRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+// The property a set-value row commits: the first required one, and only when its schema is a plain
+// string. Anything else is not a value a text box can set, so the setting keeps its object-array rows.
+export function setValuePrimaryProperty(
+  schema: ConfigurationSettingObjectSchema
+): ConfigurationSettingObjectProperty | undefined {
+  const first = (schema.properties ?? []).find((property) => property.required)
+  if (!first) return undefined
+  const kind = first.value_schema.kind
+  return kind === 'string' || kind === 'url' || kind === 'path' || kind === 'socket_addr' ? first : undefined
 }
 
 export function objectArrayItemSchema(
