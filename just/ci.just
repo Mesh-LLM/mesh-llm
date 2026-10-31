@@ -174,6 +174,7 @@ test-all:
         --exclude skippy-runtime \
         --exclude skippy-serving \
         --exclude skippy-cli \
+        --exclude process-supervision \
         --exclude xtask
     # Automation fixtures own process-global signal scopes. Keep this harness
     # serial without changing the environment of other packages' child tests.
