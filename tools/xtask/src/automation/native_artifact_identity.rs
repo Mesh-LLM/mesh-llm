@@ -42,7 +42,7 @@ fn complete_tree(root: &Path) -> DynResult<()> {
     Ok(())
 }
 
-fn observe(root: &Path) -> DynResult<String> {
+pub(in crate::automation) fn observe(root: &Path) -> DynResult<String> {
     if !root.is_absolute() || !root.is_dir() {
         return Err("native artifact observation requires an absolute directory".into());
     }

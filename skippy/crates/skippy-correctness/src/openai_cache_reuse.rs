@@ -24,31 +24,47 @@ pub fn run(args: OpenAiCacheReuseArgs) -> Result<()> {
     let url = format!("{}/chat/completions", args.base_url.trim_end_matches('/'));
     let first_turn = vec![json!({"role": "user", "content": prompt})];
     let seed = complete(&client, &url, &args.model, &first_turn, args.max_tokens)?;
+    ensure!(
+        seed.cached_tokens == 0,
+        "cold seed unexpectedly reused a prompt prefix"
+    );
+    ensure!(!seed.content.is_empty(), "cold seed returned empty content");
     let repeat = complete(&client, &url, &args.model, &first_turn, args.max_tokens)?;
     require_hit("repeat", &repeat)?;
+    require_content("repeat", &seed, &repeat)?;
 
     let mut growing_turn = first_turn;
-    growing_turn.push(json!({"role": "assistant", "content": seed.content}));
+    growing_turn.push(json!({"role": "assistant", "content": seed.content.clone()}));
     growing_turn.push(json!({"role": "user", "content": "Summarize your answer in one word."}));
     let grown_seed = complete(&client, &url, &args.model, &growing_turn, args.max_tokens)?;
     require_hit("growing chat", &grown_seed)?;
+    ensure!(
+        !grown_seed.content.is_empty(),
+        "growing chat returned empty content"
+    );
     let grown_repeat = complete(&client, &url, &args.model, &growing_turn, args.max_tokens)?;
     require_hit("growing chat repeat", &grown_repeat)?;
+    require_content("growing chat repeat", &grown_seed, &grown_repeat)?;
     println!(
         "{}",
-        serde_json::to_string_pretty(&json!({
+        serde_json::to_string(&json!({
             "status": "pass",
+            "content_parity": "exact",
+            "cold_content": seed.content,
             "repeat": {
                 "cached_tokens": repeat.cached_tokens,
-                "prompt_tokens": repeat.prompt_tokens
+                "prompt_tokens": repeat.prompt_tokens,
+                "content": repeat.content
             },
             "growing_chat_repeat": {
                 "cached_tokens": grown_repeat.cached_tokens,
-                "prompt_tokens": grown_repeat.prompt_tokens
+                "prompt_tokens": grown_repeat.prompt_tokens,
+                "content": grown_repeat.content
             },
             "growing_chat": {
                 "cached_tokens": grown_seed.cached_tokens,
-                "prompt_tokens": grown_seed.prompt_tokens
+                "prompt_tokens": grown_seed.prompt_tokens,
+                "content": grown_seed.content
             }
         }))?
     );
@@ -68,6 +84,8 @@ fn complete(
             "model": model,
             "messages": messages,
             "max_tokens": max_tokens,
+            "temperature": 0,
+            "seed": 42,
             "reasoning_effort": "none"
         }))
         .send()
@@ -93,6 +111,16 @@ fn complete(
         prompt_tokens,
         cached_tokens,
     })
+}
+
+fn require_content(label: &str, expected: &Completion, actual: &Completion) -> Result<()> {
+    ensure!(
+        actual.content == expected.content,
+        "{label} generated-content mismatch: expected={:?} actual={:?}",
+        expected.content,
+        actual.content
+    );
+    Ok(())
 }
 
 fn require_hit(label: &str, completion: &Completion) -> Result<()> {

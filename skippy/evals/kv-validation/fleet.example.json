@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "backend": "cuda",
+  "source_commit": "0000000000000000000000000000000000000000",
+  "prepared_image": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "automation": "/opt/mesh-llm/target/release/xtask",
+  "prepared": {"path": "/opt/kv-prepared/prepared.json", "sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+  "nodes": [{"id": "spark-000137", "hostname": "spark-james"}],
+  "execution_seconds": 1800
+}
