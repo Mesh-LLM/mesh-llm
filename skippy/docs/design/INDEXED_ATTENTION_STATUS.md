@@ -1,5 +1,22 @@
 # Indexed KV attention: review candidate
 
+## One-lane resident-cache correction
+
+Default native and MTP contexts now select unified KV even at one lane.
+Previously, dense one-lane contexts selected non-unified KV while advertising
+resident caching; native prefix saves then returned unsupported and repeated
+HTTP requests reused zero tokens. Explicit non-unified attention contexts now
+omit the resident capability flags that their save API cannot honor.
+
+Native `11aa69c53e118958f3dc0ab0870f89f3d24d7897`, tree
+`b085f1e7672c73be8ec821c84bdad7401600fe91`, queue digest
+`0378e014f6c267fd03b078a285dff03fb25f42502e3fbed8907926010296299f`
+replays cleanly. The expanded dense resident fixture passes on CPU and Metal:
+default one-lane save, source release, byte-exact restore and next logits;
+explicit non-unified one- and two-lane contexts report no resident support and
+reject saves. CUDA and actual dense-model HTTP reuse are pending on this fix.
+ABI 0.1.76 and the attention kernels are unchanged.
+
 ## Combined candidate with indexed vector decode
 
 The current branch integrates Jared Wyles's `18f0fa7a49142344c9297cfcbaf9a16352352189`.
@@ -19,12 +36,22 @@ Expanded operator cases cover Q2, mixed F16/BF16, no-mask/no-sink execution,
 softcap eligibility and four alternating metadata phases spanning graph replay.
 
 CUDA correctness and performance qualification for this combined source are
-pending. The measurements below remain attributed to their original source;
+recorded separately from the one-lane fix above. Source `382c6c62a` passes the
+CUDA operator, real-model cache/L3, fresh-process and all-eight-layer FP64
+gates; actual F16 attention uses the vector kernel. Its complete same-host c4
+pair measures 26.805 Skippy versus 26.577 standard llama output tokens/s,
+69 requests and 18,713 outputs per arm with zero errors. This single pair is
+interim evidence, not a complete ABBAAB group. Its verified metrics and artifacts
+are in [the existing MLflow experiment](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/90be7573cb6c49fcb3cdc7032861f656).
+The older measurements below remain attributed to their original source;
 they do not qualify the new dispatch. The full four-model c1/c2/c4 ABBAAB sweep
 will record a new campaign within the existing MLflow experiment
 `agentx-skippy-vs-llama` (ID 6), preserving historical runs.
 
-Status on 2026-10-31: implementation available for review. All eight real-model
+## Prior-source qualification (`1b3f2e6fc36d`)
+
+The following results qualify the preceding source, before Jared's vector
+selection change. All eight real-model
 attention layers match existing dense CUDA attention exactly at the same logical
 layout. Strict cache tests pass on CUDA and Metal. Comparison against the old
 physical layout still fails; that diagnostic is retained below. The final CUDA

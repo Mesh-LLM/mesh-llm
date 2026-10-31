@@ -1,4 +1,4 @@
-From db9e87ddaad9dc147d57160f2d4277a2cf375450 Mon Sep 17 00:00:00 2001
+From 2361c1f9638a3fc328786d23c90cadd82009a744 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): define graph-derived native ABI
@@ -1055,7 +1055,7 @@ index 000000000..5d77f4804
 +#endif // SKIPPY_MODEL_SOURCE_H
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
 new file mode 100644
-index 000000000..799bdca2d
+index 000000000..b47c55f82
 --- /dev/null
 +++ b/include/skippy/runtime.h
 @@ -0,0 +1,277 @@
@@ -1157,7 +1157,7 @@ index 000000000..799bdca2d
 +    // Tri-state KV/session controls resolved from `model_fit` config.
 +    /** @brief Whether K/V tensors are offloaded to the compute backend (mirrors upstream `offload_kqv`). */
 +    int32_t kv_offload;
-+    /** @brief Whether the KV cache is unified across sequences/lanes (mirrors upstream `kv_unified`). AUTO derives the setting from lane count; recurrent and hybrid models force it true. */
++    /** @brief Whether the KV cache is unified across sequences/lanes (mirrors upstream `kv_unified`). AUTO enables unified caching at every lane count. Explicit false selects non-unified caching, except recurrent and hybrid models force it true. */
 +    int32_t kv_unified;
 +    /** @brief Whether sliding-window-attention layers use a full, unshifted cache window (mirrors upstream `swa_full`). */
 +    int32_t swa_full;

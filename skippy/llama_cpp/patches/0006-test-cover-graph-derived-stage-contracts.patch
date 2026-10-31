@@ -1,4 +1,4 @@
-From f686612e8eb9c8db1053723c477804a6d0fef8de Mon Sep 17 00:00:00 2001
+From c64f74ef34bf23b1dcd2e497c712bf0f017ccb3d Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -19,7 +19,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  src/skippy/tests/resident_checkpoint_gpu.cpp  |  287 +++
  .../tests/residual_checkpoint_regression.h    |   52 +
  src/skippy/tests/runtime_events.cpp           |  695 +++++++
- src/skippy/tests/sampling_history.cpp         |  642 +++++++
+ src/skippy/tests/sampling_history.cpp         |  698 +++++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1151 ++++++++++++
@@ -39,7 +39,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 35 files changed, 10418 insertions(+), 32 deletions(-)
+ 35 files changed, 10474 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -6134,10 +6134,10 @@ index 000000000..00a6ff0ec
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..619d23ea9
+index 000000000..d5305b8f0
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,642 @@
+@@ -0,0 +1,698 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
 +#include "../runtime_support.h"
@@ -6716,6 +6716,59 @@ index 000000000..619d23ea9
 +    release(session);
 +}
 +
++void dense_resident_configuration(const char * path, skippy_runtime_config config) {
++    config.lane_count = 1;
++    config.kv_unified = SKIPPY_TRISTATE_AUTO;
++    skippy_model * model = nullptr;
++    skippy_error * error = nullptr;
++    ok(skippy_model_open(path, &config, &model, &error), error);
++    CHECK(model->ctx->get_cparams().kv_unified);
++    CHECK(skippy_model_memory_cache_capabilities(model) & SKIPPY_MEMORY_CACHE_RESIDENT);
++    constexpr int32_t cache_id = 8;
++    const std::vector<llama_token> tokens(16, 1);
++    auto * source = create(model);
++    prefill(source, tokens);
++    const auto page = export_page(source, tokens.size());
++    error = nullptr;
++    ok(skippy_session_save_prefix(source, cache_id, tokens.size(), &error), error);
++    const auto expected = decode_logits(source, 2);
++    release(source);
++    skippy_session * restored = nullptr;
++    error = nullptr;
++    ok(skippy_session_create_from_resident_prefix(model, cache_id,
++            tokens.data(), tokens.size(), &restored, &error), error);
++    CHECK(export_page(restored, tokens.size()) == page);
++    CHECK(decode_logits(restored, 2) == expected);
++    release(restored);
++    error = nullptr;
++    ok(skippy_model_free(model, &error), error);
++
++    // Explicit overrides remain supported, but must not claim resident APIs
++    // that reject this context. Cover both one stream and real multi-stream.
++    for (const uint32_t lanes : {1u, 2u}) {
++        config.lane_count = lanes;
++        config.kv_unified = SKIPPY_TRISTATE_FALSE;
++        model = nullptr;
++        error = nullptr;
++        ok(skippy_model_open(path, &config, &model, &error), error);
++        CHECK(!model->ctx->get_cparams().kv_unified);
++        const auto capabilities = skippy_model_memory_cache_capabilities(model);
++        CHECK(!(capabilities & (SKIPPY_MEMORY_CACHE_RESIDENT
++                | SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION
++                | SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT)));
++        CHECK(capabilities & SKIPPY_MEMORY_CACHE_KV_RECURRENT);
++        source = create(model);
++        prefill(source, tokens);
++        error = nullptr;
++        CHECK(skippy_session_save_prefix(source, cache_id, tokens.size(), &error)
++                == SKIPPY_STATUS_UNSUPPORTED);
++        skippy_error_free(error);
++        release(source);
++        error = nullptr;
++        ok(skippy_model_free(model, &error), error);
++    }
++}
++
 +} // namespace
 +
 +int main(int argc, char ** argv) {
@@ -6778,6 +6831,9 @@ index 000000000..619d23ea9
 +    error = nullptr;
 +    const auto freed = skippy_model_free(model, &error);
 +    ok(freed, error);
++    if (resident && !require_recurrent) {
++        dense_resident_configuration(argv[1], config);
++    }
 +    return 0;
 +}
 diff --git a/src/skippy/tests/stage_plan_header.c b/src/skippy/tests/stage_plan_header.c
