@@ -479,6 +479,7 @@ async fn make_test_node_with_requirements(
         runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
         runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
         owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+        native_model_lifecycle: Arc::default(),
         model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
         memberships: super::node::MeshMemberships::default(),
         owner_attestation_path: None,

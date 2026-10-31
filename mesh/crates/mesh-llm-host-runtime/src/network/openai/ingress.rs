@@ -1,3 +1,5 @@
+mod native_residency;
+use native_residency::route_request;
 mod buffered_exchange;
 mod exchange_events;
 mod execution;
@@ -206,6 +208,9 @@ async fn handle_models_list_request(
     let descriptors = node.all_served_model_descriptors().await;
     let mut models = callable_models(targets);
     models.extend(node.models_being_served().await);
+    if let Some(lifecycle) = node.native_model_lifecycle.get() {
+        models.extend(lifecycle.model_names().cloned());
+    }
     if let Some(plugin_manager) = plugin_manager
         && let Ok(mut external_models) = plugin_manager.chat_inference_models().await
     {
@@ -348,7 +353,7 @@ async fn resolve_auto_routed_model(
     if let Some(model) = request.model_name.as_deref()
         && !automatic::is_directive(model)
     {
-        return explicit_model_route(request, model, descriptors);
+        return native_residency::named_model_route(node, request, model, descriptors);
     }
 
     request.ensure_body_json();
@@ -1402,7 +1407,7 @@ async fn finish_plugin_response(
 
 /// Route a model-bearing or model-less request: local candidates unless
 /// `x-mesh-target`/`x-mesh-exclude` force this node out of consideration.
-async fn route_request(
+async fn route_prepared_request(
     local_execution_only: bool,
     tcp_stream: ClientStream,
     request: &mut proxy::BufferedHttpRequest,
@@ -2064,7 +2069,27 @@ async fn try_handle_virtual_model_intercept(
     }
 }
 
-async fn handle_api_proxy_connection(
+// Keep the large per-connection state out of each caller's async frame. Boxing
+// inside an async fn is too late: that fn's callers already reserve its state.
+fn handle_api_proxy_connection(
+    node: mesh::Node,
+    tcp_stream: ClientStream,
+    targets: election::ModelTargets,
+    affinity: affinity::AffinityRouter,
+    ingress_type: crate::runtime::IngressType,
+    requested_by: Option<iroh::EndpointId>,
+) -> impl std::future::Future<Output = ()> + Send {
+    Box::pin(handle_api_proxy_connection_inner(
+        node,
+        tcp_stream,
+        targets,
+        affinity,
+        ingress_type,
+        requested_by,
+    ))
+}
+
+async fn handle_api_proxy_connection_inner(
     node: mesh::Node,
     mut tcp_stream: ClientStream,
     targets: election::ModelTargets,

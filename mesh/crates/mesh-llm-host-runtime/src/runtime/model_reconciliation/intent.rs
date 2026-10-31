@@ -6,6 +6,7 @@ use crate::api::status::ModelTargetCapacityAdviceState;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum IntentSource {
     StartupConfig,
+    NativeLifecycle,
     ApiLoad,
     ApiUnload,
     #[expect(
@@ -33,7 +34,7 @@ impl IntentSource {
             Self::ApiLoad | Self::ApiUnload | Self::LocalCli => 4,
             Self::OwnerLoad | Self::OwnerUnload | Self::OwnerEnsure | Self::OwnerDrain => 3,
             Self::StartupConfig => 2,
-            Self::MeshDemand => 1,
+            Self::NativeLifecycle | Self::MeshDemand => 1,
         }
     }
 
