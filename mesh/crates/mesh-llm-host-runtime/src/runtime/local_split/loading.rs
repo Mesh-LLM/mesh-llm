@@ -870,6 +870,9 @@ pub(super) enum SplitDefaultDraft {
     /// A draft file that has already passed those checks.
     #[cfg(test)]
     Checked(PathBuf),
+    /// No cached draft, whatever the local cache holds.
+    #[cfg(test)]
+    Uncached,
 }
 
 pub(super) async fn split_generation_load_settings_with<'a>(
@@ -906,6 +909,8 @@ pub(super) async fn split_generation_load_settings_with<'a>(
         SplitDefaultDraft::FromCache => materialize_split_default_dflash(&mut resolved).await,
         #[cfg(test)]
         SplitDefaultDraft::Checked(path) => resolved.speculative.set_default_dflash_draft(&path),
+        #[cfg(test)]
+        SplitDefaultDraft::Uncached => resolved.speculative.drop_default_dflash(),
     }
     resolved.model_fit.ctx_size = spec.ctx_size;
     resolved.throughput.parallel = spec.slots;
