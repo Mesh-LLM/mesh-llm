@@ -1180,7 +1180,7 @@ travel as Q8 blocks, about half the bytes of BF16; the draft only proposes, so
 this can change acceptance but never output
 (`SKIPPY_DFLASH_FEATURE_ENCODING=bf16` sends BF16 rows). A cached prompt prefix
 is restored on every stage, so a repeated conversation prefix is not
-re-forwarded.
+re-forwarded (`SKIPPY_PREFIX_CACHE=off` turns the prefix cache off entirely).
 
 DFlash drafts tokens for greedy and sampled requests; requests that ask for
 logprobs decode normally. DSpark and LiliCorr drafts and Windows runtimes are
