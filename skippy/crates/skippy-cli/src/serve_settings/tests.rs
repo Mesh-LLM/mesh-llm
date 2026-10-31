@@ -655,6 +655,13 @@ fn checkpoint_ram_budget_does_not_require_disk() {
         stage.kv_cache.as_ref().unwrap().l2_max_bytes,
         1024 * 1024 * 1024
     );
+    let tuning = args
+        .public
+        .settings
+        .tuning(args.public.openai_guardrails)
+        .unwrap();
+    let report = args.public.settings.report(&stage, None, &tuning);
+    assert_eq!(report["constraints"]["ram_cache_requires_disk"], false);
     stage.kv_cache.as_mut().unwrap().mode = skippy_protocol::StageKvCacheMode::Disabled;
     assert!(
         args.public
