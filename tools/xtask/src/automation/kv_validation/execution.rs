@@ -109,7 +109,7 @@ pub(super) fn run(input: Cell, output: &Path) -> DynResult<()> {
     let passed = result.is_ok() && finish.is_ok() && Instant::now() < deadline;
     publish(
         &output.join("result.json"),
-        &json!({"schema_version":1,"status":if passed {"passed"} else {"failed"},"model_key":input.model_key,"request":input,"failure":result.as_ref().err().map(ToString::to_string),"interrupt_failure":finish.as_ref().err().map(ToString::to_string),"scope":"KVdtype_dispatch_generic_c1_cache_plus_recurrent_runtime_L3_restart_not_long_c4_process_restart_or_performance"}),
+        &json!({"schema_version":1,"status":if passed {"passed"} else {"failed"},"model_key":input.model_key,"request":input,"failure":result.as_ref().err().map(ToString::to_string),"interrupt_failure":finish.as_ref().err().map(ToString::to_string),"scope":"KVdtype_dispatch_generic_c1_cache_plus_recurrent_L3_process_restart_not_long_c4_HTTP_restart_or_performance"}),
     )?;
     archive(output)?;
     finish?;
@@ -306,5 +306,46 @@ fn recurrent(
         )?;
         evidence::rust_test(&text, &test)?;
     }
+    process_restart(prepared, &env, output, deadline, cancel)?;
     Ok(())
+}
+
+fn process_restart(
+    prepared: &Prepared,
+    env: &[(&str, OsString)],
+    output: &Path,
+    deadline: Instant,
+    cancel: &Cancellation,
+) -> DynResult<()> {
+    let root = output.join("l3-process-restart");
+    std::fs::create_dir(&root)?;
+    let test =
+        "frontend::local_generation::tests::durable_prefix::native_cold_prefix_process_stage";
+    for phase in ["seed", "restore"] {
+        let mut phase_env = env.to_vec();
+        phase_env.extend([
+            ("SKIPPY_L3_TEST_ROOT", root.clone().into_os_string()),
+            ("SKIPPY_L3_TEST_PHASE", phase.into()),
+        ]);
+        let text = child(
+            &prepared.producer.serving_tests.path,
+            vec![
+                "--exact".into(),
+                test.into(),
+                "--ignored".into(),
+                "--nocapture".into(),
+                "--test-threads=1".into(),
+            ],
+            (output, output),
+            &format!("l3-process-{phase}"),
+            remaining(deadline)?,
+            cancel,
+            &phase_env,
+        )?;
+        evidence::rust_test(&text, test)?;
+    }
+    evidence::process_restart(&crate::automation::receipt_files::bounded(
+        &root.join("restart-receipt.json"),
+        4096,
+    )?)
 }

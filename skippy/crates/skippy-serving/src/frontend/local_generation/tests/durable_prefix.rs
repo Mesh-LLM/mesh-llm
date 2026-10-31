@@ -1,7 +1,9 @@
 //! A fresh runtime must restore cold-evicted native state from committed L3.
 use super::*;
+use sha2::{Digest, Sha256};
 use skippy_cache::{L3CacheManager, StoreLimits};
 use skippy_protocol::MessageBase;
+use std::fmt::Write as _;
 use std::{path::Path, time::Instant};
 
 fn backend_with_disk(root: &Path, disk_bytes: u64) -> Result<StageOpenAiBackend> {
@@ -54,10 +56,32 @@ fn identity(
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS; run explicitly with --ignored"]
 fn native_cold_prefix_survives_runtime_restart() -> Result<()> {
     let root = tempfile::tempdir()?;
+    let expected = capture_and_commit(root.path())?;
+    require_restored_prefix(root.path(), &expected)
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+struct PrefixReference {
+    seed_process_id: u32,
+    attention_sha256: String,
+    recurrent_sha256: String,
+    predictions: Vec<i32>,
+}
+
+fn digest(bytes: &[u8]) -> String {
+    let mut text = String::with_capacity(64);
+    for byte in Sha256::digest(bytes) {
+        write!(&mut text, "{byte:02x}").unwrap();
+    }
+    text
+}
+
+fn capture_and_commit(root: &Path) -> Result<PrefixReference> {
     let tokens = [1, 2, 3, 4, 5, 6, 7, 8].repeat(8);
     let inputs = [11, 12, 13, 14];
-    let (expected_kv, expected_recurrent, expected_output, stored) = {
-        let backend = backend_with_disk(root.path(), 1 << 30)?;
+    let reference = {
+        let backend = backend_with_disk(root, 1 << 30)?;
         let kv = backend.kv.as_ref().expect("disk cache enabled");
         let stored = identity(&backend, &tokens);
         let (attention, recurrent, output) = {
@@ -97,9 +121,21 @@ fn native_cold_prefix_survives_runtime_restart() -> Result<()> {
             );
             thread::sleep(Duration::from_millis(2));
         }
-        (attention, recurrent, output, stored)
+        PrefixReference {
+            seed_process_id: std::process::id(),
+            attention_sha256: digest(&attention),
+            recurrent_sha256: digest(&recurrent),
+            predictions: output,
+        }
     }; // Drop the model, runtime, cache and joined writer before reopening L3.
-    let backend = backend_with_disk(root.path(), 1 << 30)?;
+    Ok(reference)
+}
+
+fn require_restored_prefix(root: &Path, expected: &PrefixReference) -> Result<()> {
+    let tokens = [1, 2, 3, 4, 5, 6, 7, 8].repeat(8);
+    let inputs = [11, 12, 13, 14];
+    let backend = backend_with_disk(root, 1 << 30)?;
+    let stored = identity(&backend, &tokens);
     let kv = backend
         .kv
         .as_ref()
@@ -114,15 +150,18 @@ fn native_cold_prefix_survives_runtime_restart() -> Result<()> {
         runtime.canonical_session_position("restarted")?,
         tokens.len() as u64
     );
-    assert!(
-        runtime
-            .export_kv_page("restarted", 0, tokens.len() as u64)?
-            .payload
-            == expected_kv,
+    assert_eq!(
+        digest(
+            &runtime
+                .export_kv_page("restarted", 0, tokens.len() as u64)?
+                .payload
+        ),
+        expected.attention_sha256,
         "attention bytes changed after L3 restore"
     );
-    assert!(
-        runtime.export_recurrent_state("restarted")? == expected_recurrent,
+    assert_eq!(
+        digest(&runtime.export_recurrent_state("restarted")?),
+        expected.recurrent_sha256,
         "recurrent bytes changed after L3 restore"
     );
     let actual = inputs
@@ -130,9 +169,62 @@ fn native_cold_prefix_survives_runtime_restart() -> Result<()> {
         .map(|&token| runtime.decode("restarted", token))
         .collect::<Result<Vec<_>>>()?;
     assert_eq!(
-        actual, expected_output,
+        actual, expected.predictions,
         "fixed-input continuation changed after L3 restore"
     );
+    Ok(())
+}
+
+/// Invoked twice by the typed validator, which owns separate child processes.
+#[test]
+#[ignore = "requires the validator's private phase/root and pinned model environment"]
+fn native_cold_prefix_process_stage() -> Result<()> {
+    let root = std::path::PathBuf::from(
+        std::env::var_os("SKIPPY_L3_TEST_ROOT")
+            .ok_or_else(|| anyhow::anyhow!("SKIPPY_L3_TEST_ROOT is required"))?,
+    );
+    anyhow::ensure!(
+        root.is_absolute() && root.is_dir(),
+        "private L3 test root must exist"
+    );
+    let l3 = root.join("l3");
+    let reference = root.join("reference.json");
+    match std::env::var("SKIPPY_L3_TEST_PHASE")?.as_str() {
+        "seed" => {
+            anyhow::ensure!(
+                !l3.exists() && !reference.exists(),
+                "seed requires fresh L3 evidence"
+            );
+            let captured = capture_and_commit(&l3)?;
+            std::fs::write(reference, serde_json::to_vec(&captured)?)?;
+        }
+        "restore" => {
+            anyhow::ensure!(l3.is_dir(), "persisted L3 directory missing");
+            anyhow::ensure!(
+                std::fs::metadata(&reference)?.len() <= 4096,
+                "L3 reference exceeds bound"
+            );
+            let expected: PrefixReference = serde_json::from_slice(&std::fs::read(reference)?)?;
+            anyhow::ensure!(
+                expected.seed_process_id != std::process::id(),
+                "L3 restore requires a fresh process"
+            );
+            anyhow::ensure!(
+                expected.predictions.len() == 4,
+                "L3 reference lacks continuation predictions"
+            );
+            require_restored_prefix(&l3, &expected)?;
+            std::fs::write(
+                root.join("restart-receipt.json"),
+                serde_json::to_vec(&serde_json::json!({
+                    "status":"passed", "source":"l3", "seed_process_id":expected.seed_process_id,
+                    "restore_process_id":std::process::id(), "state_integrity":"sha256_exact",
+                    "fixed_input_predictions":expected.predictions
+                }))?,
+            )?;
+        }
+        _ => bail!("L3 process phase must be seed or restore"),
+    }
     Ok(())
 }
 

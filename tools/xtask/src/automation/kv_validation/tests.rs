@@ -4,6 +4,33 @@ use super::{
 };
 use std::path::PathBuf;
 
+#[test]
+fn l3_restart_requires_distinct_processes_exact_state_and_typed_predictions() {
+    let valid = serde_json::json!({"status":"passed","source":"l3","seed_process_id":1,
+        "restore_process_id":2,"state_integrity":"sha256_exact","fixed_input_predictions":[1,2,3,4]});
+    let check = |value| evidence::process_restart(&serde_json::to_vec(&value).unwrap());
+    check(valid.clone()).unwrap();
+    for (field, value) in [
+        ("seed_process_id", serde_json::json!(0)),
+        ("restore_process_id", serde_json::json!(1)),
+        ("source", serde_json::json!("radix")),
+        ("status", serde_json::json!("failed")),
+        ("state_integrity", serde_json::json!("token_counts_only")),
+        ("fixed_input_predictions", serde_json::json!([1, 2, 3])),
+        (
+            "fixed_input_predictions",
+            serde_json::json!(["1", "2", "3", "4"]),
+        ),
+    ] {
+        let mut invalid = valid.clone();
+        invalid[field] = value;
+        assert!(check(invalid).is_err(), "accepted invalid {field}");
+    }
+    let mut invalid = valid;
+    invalid["arbitrary_headers"] = serde_json::json!({});
+    assert!(check(invalid).is_err());
+}
+
 #[cfg(unix)]
 #[test]
 fn evidence_archive_receipt_binds_contents_and_excludes_runtime_symlinks() {

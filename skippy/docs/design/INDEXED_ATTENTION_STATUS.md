@@ -1,5 +1,29 @@
 # Indexed KV attention: review candidate
 
+## Combined candidate with indexed vector decode
+
+The current branch integrates Jared Wyles's `18f0fa7a49142344c9297cfcbaf9a16352352189`.
+For eligible indexed CUDA queries of at most two tokens, F16/BF16 KV can now
+use the existing vector kernel; larger prefill and verification windows retain
+their existing selection. The owning patch was regenerated to correct stale
+mail-patch hunk counts after the guard removal. The combined candidate also
+checks compiled CUDA softcap capabilities: unsupported V widths are refused;
+supported wide shapes without an MMA softcap variant use the existing tile
+kernel. D64 softcapping remains explicitly unsupported on CUDA and cannot count
+as GPU qualification through CPU fallback.
+
+Clean queue replay produces native `9e5ce4cd088fd30193702e7cb176857ef3f47dee`,
+tree `bc57c588724ca8cfedb714ea357a5f3370b6068a`, queue digest
+`ef74e663109626492be260e879ac0492b71a3963dab035d54d3e8b430eec0297`.
+Expanded operator cases cover Q2, mixed F16/BF16, no-mask/no-sink execution,
+softcap eligibility and four alternating metadata phases spanning graph replay.
+
+CUDA correctness and performance qualification for this combined source are
+pending. The measurements below remain attributed to their original source;
+they do not qualify the new dispatch. The full four-model c1/c2/c4 ABBAAB sweep
+will record a new campaign within the existing MLflow experiment
+`agentx-skippy-vs-llama` (ID 6), preserving historical runs.
+
 Status on 2026-10-31: implementation available for review. All eight real-model
 attention layers match existing dense CUDA attention exactly at the same logical
 layout. Strict cache tests pass on CUDA and Metal. Comparison against the old

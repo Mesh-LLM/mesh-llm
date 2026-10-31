@@ -2,6 +2,35 @@ use super::contract::Backend;
 use crate::command::DynResult;
 use std::collections::{BTreeMap, BTreeSet};
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RestartReceipt {
+    status: String,
+    source: String,
+    seed_process_id: u32,
+    restore_process_id: u32,
+    state_integrity: String,
+    fixed_input_predictions: Vec<i32>,
+}
+
+pub(super) fn process_restart(bytes: &[u8]) -> DynResult<()> {
+    let receipt: RestartReceipt = serde_json::from_slice(bytes)?;
+    if receipt.status != "passed"
+        || receipt.source != "l3"
+        || receipt.seed_process_id == 0
+        || receipt.restore_process_id == 0
+        || receipt.seed_process_id == receipt.restore_process_id
+        || receipt.state_integrity != "sha256_exact"
+        || receipt.fixed_input_predictions.len() != 4
+    {
+        return Err(
+            "L3 restart lacks separate successful processes and exact state/content evidence"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct CacheEvidence {

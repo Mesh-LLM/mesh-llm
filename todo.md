@@ -34,6 +34,34 @@ The model-backed refusal case also passes on both backends: a one-byte L3 budget
 cannot retain a checkpoint, but eviction frees native attention cells and cold
 recomputation produces identical fixed-input predictions.
 
+The combined Jared vector-decode candidate additionally passes the bounded
+native **process** restart on local Metal: separate supervised seed/restore
+children, a committed L3 hit, complete attention/recurrent SHA-256 equality and
+four identical fixed-input predictions. Long-prefix, HTTP-server restart and
+concurrent c4 cases remain separately scoped below.
+
+## Combined-source AgentX sweep
+
+- [x] Integrate Jared's indexed F16/BF16 vector-decode route and regenerate its
+  owning mail patch; retain compiled-kernel softcap eligibility and expand Q2,
+  mixed-type and post-capture graph-replay operator tests.
+- [x] Package the combined Metal runtime and pass the local model-backed
+  foundation, including the native process-restart gate.
+- [ ] Qualify the changed CUDA route with actual kernel evidence, the expanded
+  operator cases, independent FP64 and strict cache/L3 model gates.
+- [ ] Prepare one CUDA producer per isolated lab and one Metal producer, reusing
+  verified artifacts across models and compatible workers.
+- [ ] Finish the reusable full AgentX runner: four pinned models, c1/c2/c4,
+  complete recorded work, ABBAAB, standard vanilla and observed product-auto
+  Skippy capacity. Do not substitute the correctness foundation for this runner.
+- [ ] Run and audit all eight model/backend sweeps (144 engine cells), preserving
+  raw work, resolved settings, source/runtime/tool identities and failures.
+- [ ] Record the new campaign and linked runs in existing MLflow experiment
+  **6 `agentx-skippy-vs-llama`**, preserving historical campaigns.
+- [ ] Rewrite the AgentX PR descriptions around the final implementation,
+  benchmark contract and source-pinned results. Reconcile #2657's remaining
+  correctness requirements before declaring it fully superseded.
+
 ## Retain PR #2657's correctness requirements
 
 Cache-owned immutable checkpoints replace the old execution-lane pinning and

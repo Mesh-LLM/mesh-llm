@@ -1,4 +1,4 @@
-From 49e7635856484a30c1e98fc5755e50c933d26306 Mon Sep 17 00:00:00 2001
+From 2196befc410fed4851b384c745a7fbd872a0724c Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Sat, 31 Oct 2026 17:14:46 +1100
 Subject: [PATCH] feat(ggml): read request-local KV indices in flash attention
@@ -8,26 +8,26 @@ Subject: [PATCH] feat(ggml): read request-local KV indices in flash attention
  ggml/src/ggml-backend-meta.cpp                |   5 +
  ggml/src/ggml-cann/ggml-cann.cpp              |   3 +
  ggml/src/ggml-cpu/CMakeLists.txt              |   2 +
- ggml/src/ggml-cpu/attention-indexed.cpp       | 121 ++++++
+ ggml/src/ggml-cpu/attention-indexed.cpp       | 121 +++++
  ggml/src/ggml-cpu/attention-indexed.h         |   7 +
  ggml/src/ggml-cpu/ops.cpp                     |   5 +
  ggml/src/ggml-cpu/spacemit/ime.cpp            |   3 +
  ggml/src/ggml-cuda/common.cuh                 |   1 +
  ggml/src/ggml-cuda/fattn-common.cuh           |  66 ++-
- ggml/src/ggml-cuda/fattn-indexed.cuh          |  45 +++
- ggml/src/ggml-cuda/fattn-mma-f16.cuh          | 208 ++++++----
- ggml/src/ggml-cuda/fattn-tile.cuh             |  95 ++++-
+ ggml/src/ggml-cuda/fattn-indexed.cuh          |  45 ++
+ ggml/src/ggml-cuda/fattn-mma-f16.cuh          | 208 +++++---
+ ggml/src/ggml-cuda/fattn-tile.cuh             |  95 +++-
  ggml/src/ggml-cuda/fattn-vec.cuh              |  53 ++-
- ggml/src/ggml-cuda/fattn.cu                   |  68 +++-
+ ggml/src/ggml-cuda/fattn.cu                   |  89 +++-
  ggml/src/ggml-cuda/ggml-cuda.cu               |   1 +
  ggml/src/ggml-et/ggml-et.cpp                  |   3 +
  ggml/src/ggml-hexagon/ggml-hexagon.cpp        |   2 +-
- .../ggml-metal/ggml-metal-attention-indexed.h |  90 +++++
+ .../ggml-metal/ggml-metal-attention-indexed.h |  90 ++++
  ggml/src/ggml-metal/ggml-metal-device.cpp     |  12 +-
  ggml/src/ggml-metal/ggml-metal-device.m       |   5 +
  ggml/src/ggml-metal/ggml-metal-impl.h         |  10 +
  ggml/src/ggml-metal/ggml-metal-ops.cpp        |  62 ++-
- ggml/src/ggml-metal/kernels/fa_common.metal   | 144 ++++++-
+ ggml/src/ggml-metal/kernels/fa_common.metal   | 144 +++++-
  .../ggml-metal/kernels/fa_vec_common.metal    |  29 +-
  ggml/src/ggml-opencl/ggml-opencl.cpp          |   3 +
  ggml/src/ggml-openvino/ggml-openvino.cpp      |   3 +
@@ -36,15 +36,15 @@ Subject: [PATCH] feat(ggml): read request-local KV indices in flash attention
  ggml/src/ggml-webgpu/ggml-webgpu.cpp          |   2 +-
  ggml/src/ggml.c                               |  44 +-
  src/CMakeLists.txt                            |   2 +
- src/llama-graph-kv-read.cpp                   | 134 +++++++
+ src/llama-graph-kv-read.cpp                   | 134 ++++++
  src/llama-graph.cpp                           |  85 ++--
  src/llama-graph.h                             |  21 +-
  src/llama-kv-cache.h                          |   2 +
- src/llama-kv-read.cpp                         | 148 +++++++
+ src/llama-kv-read.cpp                         | 148 ++++++
  src/llama-kv-read.h                           |  20 +
  tests/CMakeLists.txt                          |   2 +
- tests/test-flash-attn-indexed.cpp             | 378 ++++++++++++++++++
- 40 files changed, 1698 insertions(+), 209 deletions(-)
+ tests/test-flash-attn-indexed.cpp             | 447 ++++++++++++++++++
+ 40 files changed, 1788 insertions(+), 209 deletions(-)
  create mode 100644 ggml/src/ggml-cpu/attention-indexed.cpp
  create mode 100644 ggml/src/ggml-cpu/attention-indexed.h
  create mode 100644 ggml/src/ggml-cuda/fattn-indexed.cuh
@@ -1356,7 +1356,7 @@ index 57a285565..596165504 100644
  #endif // FLASH_ATTN_AVAILABLE
  }
 diff --git a/ggml/src/ggml-cuda/fattn.cu b/ggml/src/ggml-cuda/fattn.cu
-index 5fa3e5308..b74322b6f 100644
+index 5fa3e5308..793295602 100644
 --- a/ggml/src/ggml-cuda/fattn.cu
 +++ b/ggml/src/ggml-cuda/fattn.cu
 @@ -130,6 +130,9 @@ bool ggml_cuda_flash_attn_ext_mma_f16_shall_use_sparse(const int cc, const ggml_
@@ -1432,7 +1432,12 @@ index 5fa3e5308..b74322b6f 100644
  static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const ggml_tensor * dst) {
  #ifndef FLASH_ATTN_AVAILABLE
      GGML_UNUSED(device); GGML_UNUSED(dst);
-@@ -557,7 +582,7 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
+@@ -554,10 +579,12 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
+ 
+     float max_bias = 0.0f;
+     memcpy(&max_bias, (const float *) KQV->op_params + 1, sizeof(float));
++    float logit_softcap = 0.0f;
++    memcpy(&logit_softcap, (const float *) KQV->op_params + 2, sizeof(float));
  
      // The effective batch size for the kernel can be increased by gqa_ratio.
      // The kernel versions without this optimization are also used for ALiBi, if there is no mask, or if the KV cache is not padded,
@@ -1441,7 +1446,22 @@ index 5fa3e5308..b74322b6f 100644
      for (const ggml_tensor * t : {Q, K, V, mask}) {
          if (t == nullptr || ggml_is_quantized(t->type)) {
              continue;
-@@ -629,9 +654,40 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
+@@ -621,6 +648,14 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
+             return BEST_FATTN_KERNEL_NONE;
+     }
+ 
++    // Match compiled softcap variants, not just the unsoftcapped head shapes.
++    // Tile kernels support these V widths; MMA additionally needs a matching
++    // compiled K width. Unsupported shapes must never enter NO_DEVICE_CODE.
++    const bool softcap_mma = K->ne[0] == 128 || K->ne[0] == 256 || K->ne[0] == 512;
++    if (logit_softcap != 0.0f && V->ne[0] != 128 && V->ne[0] != 256 && V->ne[0] != 512) {
++        return BEST_FATTN_KERNEL_NONE;
++    }
++
+     if (!ggml_cuda_fattn_kv_type_supported(K->type) || !ggml_cuda_fattn_kv_type_supported(V->type)) {
+         return BEST_FATTN_KERNEL_NONE;
+     }
+@@ -629,9 +664,51 @@ static best_fattn_kernel ggml_cuda_get_best_fattn_kernel(const int device, const
          return BEST_FATTN_KERNEL_NONE;
      }
  
@@ -1460,8 +1480,10 @@ index 5fa3e5308..b74322b6f 100644
 +                K->ne[3] != V->ne[3] || Q->ne[3] % K->ne[3] != 0) {
 +            return BEST_FATTN_KERNEL_NONE;
 +        }
++        if (logit_softcap != 0.0f && !softcap_mma) {
++            return BEST_FATTN_KERNEL_TILE;
++        }
 +        if (Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && Q->ne[1] <= 2 &&
-+                (ggml_is_quantized(K->type) || ggml_is_quantized(V->type)) &&
 +                K->type != GGML_TYPE_F32 && V->type != GGML_TYPE_F32 &&
 +                ggml_cuda_get_fattn_vec_case(Q->ne[0], K->type, V->type) != nullptr) {
 +            return BEST_FATTN_KERNEL_VEC;
@@ -1476,6 +1498,15 @@ index 5fa3e5308..b74322b6f 100644
 +        return BEST_FATTN_KERNEL_TILE;
 +    }
 +
++    if (logit_softcap != 0.0f && !softcap_mma) {
++        // The dense 576/512 tile path has only GQA4/GQA16 variants; indexed
++        // independent pools already have their generic single-head tile path.
++        if (K->ne[0] == 576 && gqa_ratio % 4 != 0) {
++            return BEST_FATTN_KERNEL_NONE;
++        }
++        return BEST_FATTN_KERNEL_TILE;
++    }
++
      // For small batch sizes the vector kernel may be preferable over the kernels optimized for large batch sizes:
      // 192 satisfies % 64 == 0 but has no vec instance (DKQ != DV); force it onto the MMA path.
 -    const bool can_use_vector_kernel = Q->ne[0] <= 256 && Q->ne[0] % 64 == 0 && Q->ne[0] != 192 && K->ne[1] % FATTN_KQ_STRIDE == 0;
@@ -1483,7 +1514,7 @@ index 5fa3e5308..b74322b6f 100644
  
      // If Turing tensor cores are available, use them:
      if (turing_mma_available(cc) && Q->ne[0] != 40 && Q->ne[0] != 72) {
-@@ -749,7 +805,7 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
+@@ -749,7 +826,7 @@ size_t ggml_cuda_flash_attn_ext_get_alloc_size(int device, const ggml_tensor * d
      }
  
      const ggml_cuda_flash_attn_ext_f16_extra_data f16_extra =
@@ -3047,10 +3078,10 @@ index def0ea7a6..0e279f1bc 100644
  llama_build_and_test(test-autorelease.cpp       LABEL "model")
 diff --git a/tests/test-flash-attn-indexed.cpp b/tests/test-flash-attn-indexed.cpp
 new file mode 100644
-index 000000000..813953ac1
+index 000000000..940a387a5
 --- /dev/null
 +++ b/tests/test-flash-attn-indexed.cpp
-@@ -0,0 +1,378 @@
+@@ -0,0 +1,447 @@
 +#include "ggml.h"
 +#include "ggml-alloc.h"
 +#include "ggml-backend.h"
@@ -3086,6 +3117,7 @@ index 000000000..813953ac1
 +    int64_t dv = 256;
 +    float max_bias = 1.5f;
 +    int64_t heads = 8;
++    float logit_softcap = 0.0f;
 +};
 +
 +void require(bool condition, const char * message) {
@@ -3140,7 +3172,8 @@ index 000000000..813953ac1
 +        std::fill(indices.begin(), indices.end(), -1);
 +        std::fill(logical_k.begin(), logical_k.end(), 0);
 +        std::fill(logical_v.begin(), logical_v.end(), 0);
-+        const std::array<int32_t, requests> counts = phase == 0 ?
++        const int epoch = phase % 2;
++        const std::array<int32_t, requests> counts = epoch == 0 ?
 +                std::array<int32_t, requests>{0, 31, 65, int32_t(width - 7)} :
 +                std::array<int32_t, requests>{65, int32_t(width - 9), 0, 31};
 +        for (int64_t request = 0; request < requests; ++request) {
@@ -3149,7 +3182,7 @@ index 000000000..813953ac1
 +                lengths[request*index_queries + query] = count;
 +                for (int32_t slot = 0; slot < count; ++slot) {
 +                    // Shared first rows plus interleaved, nonmonotonic physical rows.
-+                    const int32_t physical = int32_t((slot*37 + (slot < 5 ? 0 : request*53) + phase*101) % physical_rows);
++                    const int32_t physical = int32_t((slot*37 + (slot < 5 ? 0 : request*53) + epoch*101) % physical_rows);
 +                    indices[(request*index_queries + query)*width + slot] = physical;
 +                }
 +            }
@@ -3221,10 +3254,12 @@ index 000000000..813953ac1
 +            indices = ggml_new_tensor_4d(ctx, GGML_TYPE_I32, data.spec.logical_rows, data.index_queries, 1, requests);
 +            lengths = ggml_new_tensor_4d(ctx, GGML_TYPE_I32, 1, data.index_queries, 1, requests);
 +            output = ggml_flash_attn_ext_indexed(ctx, q, k, v, mask, indices, lengths,
-+                    1.0f/std::sqrt(float(data.spec.dk)), data.spec.mask ? data.spec.max_bias : 0.0f, 0.0f);
++                    1.0f/std::sqrt(float(data.spec.dk)), data.spec.mask ? data.spec.max_bias : 0.0f,
++                    data.spec.logit_softcap);
 +        } else {
 +            output = ggml_flash_attn_ext(ctx, q, k, v, mask,
-+                    1.0f/std::sqrt(float(data.spec.dk)), data.spec.mask ? data.spec.max_bias : 0.0f, 0.0f);
++                    1.0f/std::sqrt(float(data.spec.dk)), data.spec.mask ? data.spec.max_bias : 0.0f,
++                    data.spec.logit_softcap);
 +        }
 +        if (data.spec.sinks) {
 +            sinks = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, data.spec.heads);
@@ -3295,11 +3330,12 @@ index 000000000..813953ac1
 +            require(error/energy <= max_nmse, "indexed attention exceeds existing FA NMSE tolerance");
 +        }
 +    }
-+    std::printf("PASS backend=%s K=%s V=%s dk=%lld dv=%lld heads=%lld bias=%.2f q=%lld logical=%lld mask=%d sinks=%d query_local=%d strided_q=%d phase=%d max_request_nmse=%.9g max_abs=%.9g\n",
++    std::printf("PASS backend=%s K=%s V=%s dk=%lld dv=%lld heads=%lld bias=%.2f q=%lld logical=%lld mask=%d sinks=%d query_local=%d strided_q=%d softcap=%.2f phase=%d max_request_nmse=%.9g max_abs=%.9g\n",
 +            backend, ggml_type_name(data.spec.type_k), ggml_type_name(data.spec.type_v),
 +            (long long) data.spec.dk, (long long) data.spec.dv, (long long) data.spec.heads,
 +            data.spec.mask ? data.spec.max_bias : 0.0f, (long long) data.spec.queries, (long long) data.spec.logical_rows,
-+            data.spec.mask, data.spec.sinks, data.spec.query_local, data.spec.strided_query, phase, maximum_nmse, max_absolute);
++            data.spec.mask, data.spec.sinks, data.spec.query_local, data.spec.strided_query,
++            data.spec.logit_softcap, phase, maximum_nmse, max_absolute);
 +}
 +
 +void set_threads(ggml_backend_t backend) {
@@ -3338,17 +3374,79 @@ index 000000000..813953ac1
 +            const bool dense_supported = ggml_backend_supports_op(target, reference.output);
 +            require(!spec.mask || spec.query_local || !dense_supported,
 +                    "selected backend must support the canonical masked request-local shape");
-+            std::printf("SKIP optional backend=%s K=%s V=%s q=%lld mask=%d query_local=%d dense_admission=%d: indexed shape explicitly unsupported; CPU verification remains required\n",
++            std::printf("SKIP optional backend=%s K=%s V=%s q=%lld mask=%d query_local=%d softcap=%.2f dense_admission=%d: indexed shape explicitly unsupported; CPU verification remains required\n",
 +                    ggml_backend_name(target), ggml_type_name(spec.type_k), ggml_type_name(spec.type_v),
-+                    (long long) spec.queries, spec.mask, spec.query_local, dense_supported);
++                    (long long) spec.queries, spec.mask, spec.query_local, spec.logit_softcap, dense_supported);
 +        }
 +    }
-+    for (int phase = 0; phase < 2; ++phase) {
++    // The first call warms the backend and the second may capture its graph.
++    // Repeat changed metadata after capture so the same graph must read fresh
++    // request maps and lengths, including a request becoming empty/nonempty.
++    for (int phase = 0; phase < 4; ++phase) {
 +        data.refresh(phase);
 +        const auto expected = reference.run(cpu, data);
 +        compare(expected, indexed.run(cpu, data), data, ggml_backend_name(cpu), phase);
 +        if (device) {
 +            compare(expected, device->run(target, data), data, ggml_backend_name(target), phase);
++        }
++    }
++}
++
++void run_unquantized_vector_cases(ggml_backend_t cpu, ggml_backend_t target) {
++    const std::array<ggml_type, 2> types = {GGML_TYPE_F16, GGML_TYPE_BF16};
++    for (int64_t dimension : {64, 128, 256}) {
++        for (auto type_k : types) {
++            for (auto type_v : types) {
++                for (int64_t queries : {1, 2}) {
++                    if (dimension != 256) {
++                        run_case(cpu, target, {queries, 256, true, true, false, false,
++                                type_k, type_v, dimension, dimension});
++                    }
++                    run_case(cpu, target, {queries, 256, false, false, false, false,
++                            type_k, type_v, dimension, dimension});
++                    if (dimension != 64) {
++                        run_case(cpu, target, {queries, 256, true, true, false, false,
++                                type_k, type_v, dimension, dimension, 0.0f, 8, 4.0f});
++                    }
++                }
++            }
++        }
++    }
++    run_case(cpu, target, {2, 256, true, true, false, true,
++            GGML_TYPE_F16, GGML_TYPE_BF16, 128, 128});
++}
++
++void run_softcap_capability_cases(ggml_backend_t cpu, ggml_backend_t target) {
++    const auto registry = ggml_backend_dev_backend_reg(ggml_backend_get_device(target));
++    const bool cuda = std::strcmp(ggml_backend_reg_name(registry), "CUDA") == 0;
++    for (auto type_k : {GGML_TYPE_F16, GGML_TYPE_BF16}) {
++        for (auto type_v : {GGML_TYPE_F16, GGML_TYPE_BF16}) {
++            for (int64_t queries : {1, 2}) {
++                attention_case spec{queries, 256, true, true, false, false,
++                        type_k, type_v, 64, 64, 0.0f, 8, 4.0f};
++                if (cuda) {
++                    inputs data(spec);
++                    graph_fixture dense(cpu, data, false);
++                    graph_fixture indexed(cpu, data, true);
++                    require(!ggml_backend_supports_op(target, dense.output) &&
++                            !ggml_backend_supports_op(target, indexed.output),
++                            "CUDA must refuse head64 softcap without a compiled kernel");
++                    std::printf("PASS CUDA admission refuses unsupported softcap K=%s V=%s dk=64 q=%lld\n",
++                            ggml_type_name(type_k), ggml_type_name(type_v), (long long) queries);
++                }
++                // CPU reference coverage is separate; a CUDA skip is not a GPU pass.
++                run_case(cpu, target, spec);
++            }
++        }
++    }
++    const std::array<std::array<int64_t, 3>, 5> shapes = {{{192, 128, 16},
++            {320, 256, 64}, {512, 512, 8}, {576, 512, 8}, {576, 512, 4}}};
++    for (const auto & shape : shapes) {
++        for (auto type : {GGML_TYPE_F16, GGML_TYPE_BF16}) {
++            for (int64_t queries : {1, 2}) {
++                run_case(cpu, target, {queries, 256, true, true, false, false,
++                        type, type, shape[0], shape[1], 0.0f, shape[2], 4.0f});
++            }
 +        }
 +    }
 +}
@@ -3377,7 +3475,7 @@ index 000000000..813953ac1
 +                ggml_backend_dev_type(ggml_backend_get_device(selected.get())) == GGML_BACKEND_DEVICE_TYPE_CPU;
 +        auto target = selected && !selected_cpu ? selected.get() : cpu.get();
 +        std::printf("indexed FA: CPU reference and target=%s; per-request NMSE limit=%.9g\n", ggml_backend_name(target), max_nmse);
-+        for (int64_t queries : {1, 4, 31, 32, 64}) {
++        for (int64_t queries : {1, 2, 4, 31, 32, 64}) {
 +            run_case(cpu.get(), target, {queries, 256, true, true});
 +        }
 +        run_case(cpu.get(), target, {1, 4352, true, true});
@@ -3388,11 +3486,13 @@ index 000000000..813953ac1
 +                GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0};
 +        for (auto type_k : types) {
 +            for (auto type_v : types) {
-+                for (int64_t queries : {1, 32}) {
++                for (int64_t queries : {1, 2, 32}) {
 +                    run_case(cpu.get(), target, {queries, 256, true, true, false, false, type_k, type_v});
 +                }
 +            }
 +        }
++        run_unquantized_vector_cases(cpu.get(), target);
++        run_softcap_capability_cases(cpu.get(), target);
 +        const std::array<std::array<int64_t, 2>, 13> head_shapes = {{{32, 32}, {64, 64}, {96, 96},
 +                {96, 64}, {128, 128}, {128, 96}, {192, 192}, {192, 128}, {256, 256},
 +                {320, 256}, {512, 512}, {576, 512}, {128, 64}}};
