@@ -3,6 +3,7 @@ pub(crate) mod agent_fixture_evidence;
 pub(crate) mod agent_fixture_inputs;
 pub(crate) mod agent_model;
 pub(crate) mod agentic_prompt_manifest;
+pub(crate) mod agentx;
 pub(crate) mod binary_stage_readiness;
 pub(crate) mod cache_family_cell;
 pub(crate) mod cache_family_correctness;
