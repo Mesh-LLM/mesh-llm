@@ -307,3 +307,64 @@ fn gpu_tune_reports_dense_models_as_having_no_routed_experts() {
         }
     }
 }
+
+#[test]
+fn gpu_tune_plans_the_whole_block_range_when_cpu_moe_is_true() {
+    // The defaults-level cpu_moe = true wins over the model's n_cpu_moe, so
+    // the load hosts every routed expert regardless of the kept count: the
+    // plan must validate that all-block allocation, not the count 4.
+    let config = preserved_hardware_config(Some(mesh_llm_config::BoolOrAuto::Bool(true)), Some(4));
+    let plan = build_tune_plan(TuneRecommendationInput {
+        apply_mode: TuneApplyMode::ApplyMissing,
+        config: &config,
+        target: &recommendation_target(false),
+        metadata: &moe_metadata(),
+        hardware: &gpu_hardware(24 * gib()),
+        survey: &HardwareSurvey {
+            system_ram_bytes: Some(128 * gib()),
+            ..survey_with_gpu(24 * gib(), 128 * gib())
+        },
+    });
+
+    match status_for(&plan, TuneField::GpuLayers) {
+        TuneFieldStatus::Applied { recommendation, .. } => assert_eq!(
+            recommendation.value,
+            TuneRecommendedValue::GpuLayers(TuneGpuLayersValue::All)
+        ),
+        other => panic!("expected every layer on the accelerator, got {other:?}"),
+    }
+    assert!(matches!(
+        status_for(&plan, TuneField::CpuMoe),
+        TuneFieldStatus::Preserved { .. }
+    ));
+}
+
+#[test]
+fn gpu_tune_errors_when_a_true_cpu_moe_cannot_host_every_expert() {
+    // All 32 GiB of expert banks must reach host memory under cpu_moe = true;
+    // 16 GiB of RAM cannot hold them, and partial GPU layers cannot relieve
+    // the pinned host placement, so the plan reports insufficient memory
+    // instead of blessing a configuration that cannot load.
+    let config = preserved_hardware_config(Some(mesh_llm_config::BoolOrAuto::Bool(true)), None);
+    let plan = build_tune_plan(TuneRecommendationInput {
+        apply_mode: TuneApplyMode::ApplyMissing,
+        config: &config,
+        target: &recommendation_target(false),
+        metadata: &moe_metadata(),
+        hardware: &gpu_hardware(24 * gib()),
+        survey: &HardwareSurvey {
+            system_ram_bytes: Some(16 * gib()),
+            ..survey_with_gpu(24 * gib(), 128 * gib())
+        },
+    });
+
+    assert!(
+        plan.diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == TuneDiagnosticCode::InsufficientMemory)
+    );
+    assert!(matches!(
+        status_for(&plan, TuneField::GpuLayers),
+        TuneFieldStatus::Error { .. }
+    ));
+}

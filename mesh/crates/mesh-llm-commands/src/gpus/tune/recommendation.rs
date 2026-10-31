@@ -199,6 +199,10 @@ pub(crate) struct PlacementConstraints {
     /// A preserved `cpu_moe = false` keeps every routed expert on the
     /// accelerator, so host-expert moves are not available to the plan.
     pub(crate) cpu_moe_false: bool,
+    /// A preserved `cpu_moe = true` hosts every block's routed experts on
+    /// the host at load time regardless of `n_cpu_moe`, so the plan must
+    /// validate the all-block host allocation instead of a partial count.
+    pub(crate) cpu_moe_true: bool,
     /// A preserved `n_cpu_moe` block count the written config will keep;
     /// `Some(0)` pins every expert to the accelerator like `cpu_moe = false`.
     pub(crate) kept_n_cpu_moe: Option<u32>,
@@ -224,6 +228,7 @@ fn placement_constraints(
         .flatten();
     PlacementConstraints {
         cpu_moe_false: cpu_moe == Some(false),
+        cpu_moe_true: cpu_moe == Some(true),
         kept_n_cpu_moe: n_cpu_moe,
     }
 }
@@ -280,6 +285,22 @@ fn plan_fit(
         .map(|ram| derive_fit_target_mib(ram).saturating_mul(1024 * 1024))
         .unwrap_or(cpu_budget);
     let mut host_expert_blocks = None;
+    let has_routed_experts = match &metadata.tensor_profile {
+        TuneTensorProfile::Exact(profile) => {
+            profile.expert_count > 0 && profile.expert_tensor_bytes > 0
+        }
+        _ => false,
+    };
+    // A preserved cpu_moe = true hosts every routed expert on the host at
+    // load time regardless of n_cpu_moe, so the plan must validate the
+    // all-block host allocation instead of a partial count; for dense
+    // models the flag is inert.
+    let all_blocks_host = placement.cpu_moe_true && has_routed_experts;
+    let kept_n_cpu_moe = if all_blocks_host {
+        Some(layer_count)
+    } else {
+        placement.kept_n_cpu_moe
+    };
     let chosen = match &hardware.evaluated_device.target {
         TuneDeviceTarget::Cpu => {
             if cpu_can_fit {
@@ -297,7 +318,9 @@ fn plan_fit(
             }
         }
         TuneDeviceTarget::Gpu(_) => {
-            if minimum_context_fits(metadata.model_bytes, selected_budget, kv_bytes_per_token) {
+            if !all_blocks_host
+                && minimum_context_fits(metadata.model_bytes, selected_budget, kv_bytes_per_token)
+            {
                 Some((
                     TuneGpuLayersValue::All,
                     planned_context_length(
@@ -307,8 +330,8 @@ fn plan_fit(
                         quant,
                     ),
                 ))
-            } else if !placement.cpu_moe_false && placement.kept_n_cpu_moe != Some(0) {
-                if let Some(kept) = placement.kept_n_cpu_moe {
+            } else if !placement.cpu_moe_false && kept_n_cpu_moe != Some(0) {
+                if let Some(kept) = kept_n_cpu_moe {
                     // The operator's n_cpu_moe is preserved on write in every
                     // mode but ReplaceExisting, so the kept count is the only
                     // host-expert plan that can actually be persisted; when it
@@ -326,7 +349,11 @@ fn plan_fit(
                             host_expert_blocks = Some(kept);
                             Some((TuneGpuLayersValue::All, ctx_size))
                         }
-                        None if !cpu_can_fit => None,
+                        // A pinned cpu_moe = true fixes the host placement:
+                        // partial GPU layers cannot relieve it, so an
+                        // unfittable all-block allocation is an error rather
+                        // than a fallback plan.
+                        None if !cpu_can_fit || all_blocks_host => None,
                         None => find_partial_gpu_layers_fit(
                             metadata,
                             layer_count,

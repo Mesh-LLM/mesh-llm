@@ -814,7 +814,11 @@ fn expert_block_index(name: &str) -> Option<usize> {
     if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
-    digits.parse::<usize>().ok()
+    // A model cannot hold more blocks than tensors, so a wider index comes
+    // from a malformed or hostile name: treat it as unattributable rather
+    // than sizing the per-block vector from it.
+    let block = digits.parse::<usize>().ok()?;
+    (block <= MAX_GGUF_TENSOR_COUNT).then_some(block)
 }
 
 /// Scan GGUF tensor metadata and estimate which bytes are always resident versus
@@ -1560,6 +1564,30 @@ mod tests {
         assert_eq!(profile.expert_tensor_bytes, 64);
         // An expert tensor with no blk.N prefix cannot be attributed to a
         // block, so the per-block view is withdrawn entirely.
+        assert_eq!(profile.expert_block_bytes, None);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn scan_gguf_tensor_byte_profile_ignores_implausible_block_indices() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&2i64.to_le_bytes());
+        bytes.extend_from_slice(&0i64.to_le_bytes());
+
+        push_tensor_info(&mut bytes, "blk.0.attn_q.weight", 0);
+        push_tensor_info(&mut bytes, "blk.4000000000000.ffn_up_exps.weight", 32);
+
+        let data_start = align_offset(bytes.len() as u64, 32) as usize;
+        bytes.resize(data_start, 0);
+        bytes.resize(data_start + 96, 0);
+
+        let path = write_bytes("skippy-model-artifact-gguf-block-attribution-huge", &bytes);
+        // A block index no tensor count could justify must not size the
+        // per-block vector; attribution is withdrawn instead of allocating.
+        let profile = scan_gguf_tensor_byte_profile(&path).unwrap();
+        assert_eq!(profile.expert_tensor_bytes, 64);
         assert_eq!(profile.expert_block_bytes, None);
         let _ = std::fs::remove_file(path);
     }
