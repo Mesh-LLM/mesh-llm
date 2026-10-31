@@ -1164,8 +1164,10 @@ measured verify cost and acceptance of each request, up to the cap;
 `SKIPPY_DFLASH_ADAPTIVE=0` is an off switch that pins blocks at the cap.
 
 DFlash needs the complete target model on one node. A model that is split
-across nodes serves without the draft, unless `pairing_fault = "fail_closed"`,
-which rejects the load. DFlash drafts for greedy and sampled requests; requests
+across nodes serves without its cataloged draft, falling back to native MTP when
+the GGUF carries NextN layers. An explicit DFlash draft on a split model is
+dropped too, unless `pairing_fault = "fail_closed"`, which rejects the load.
+DFlash drafts for greedy and sampled requests; requests
 that ask for logprobs decode normally. DSpark and LiliCorr drafts and Windows
 runtimes are not supported.
 
