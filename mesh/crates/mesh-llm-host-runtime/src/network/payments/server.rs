@@ -340,7 +340,7 @@ async fn dispatch(
     exchange_events::end_exchange(
         node,
         exchange.zip(delivered),
-        exchange_events::paid_response_adapter(&session.request),
+        &session.request,
         usage.is_some(),
         &session.terms.model,
         request_digest.as_deref(),
