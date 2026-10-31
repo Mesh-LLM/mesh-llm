@@ -13,6 +13,8 @@ const TOOL: BootstrapTool = BootstrapTool {
     recipe: "just automation-bootstrap",
 };
 
+const HOST: &str = "x86_64-unknown-linux-gnu";
+
 fn package(name: &str, local: bool, links: Option<&str>) -> Value {
     json!({
         "id": format!("{name}-id"),
@@ -173,10 +175,45 @@ fn migration_bootstrap_tool_binary_accepts_profile_output() -> DynResult<()> {
     let binary = target.join("debug/xtask");
     fs::write(&binary, b"tool")?;
     // When the running executable is that output.
-    let resolved = tool_binary(&target, &binary, TOOL.recipe)?;
+    let resolved = tool_binary(&target, HOST, &binary, TOOL.recipe)?;
     // Then its absolute canonical path is returned.
     assert_eq!(resolved, binary.canonicalize()?);
     assert!(resolved.is_absolute());
+    fs::remove_dir_all(target)?;
+    Ok(())
+}
+
+#[test]
+fn migration_bootstrap_tool_binary_accepts_host_triple_output() -> DynResult<()> {
+    // Given a build that named the host triple: <target>/<host>/debug/xtask.
+    let target = unique_temp_dir("xtask-bootstrap-target");
+    let profile = target.join(HOST).join("debug");
+    fs::create_dir_all(&profile)?;
+    let binary = profile.join("xtask");
+    fs::write(&binary, b"tool")?;
+    // When the running executable is that output, then it is accepted.
+    assert_eq!(
+        tool_binary(&target, HOST, &binary, TOOL.recipe)?,
+        binary.canonicalize()?
+    );
+    fs::remove_dir_all(target)?;
+    Ok(())
+}
+
+#[test]
+fn migration_bootstrap_tool_binary_rejects_another_triples_output() -> DynResult<()> {
+    // Given a cross build's output: <target>/<other triple>/debug/xtask.
+    let target = unique_temp_dir("xtask-bootstrap-target");
+    let profile = target.join("aarch64-unknown-linux-gnu/debug");
+    fs::create_dir_all(&profile)?;
+    let binary = profile.join("xtask");
+    fs::write(&binary, b"tool")?;
+    // When it claims to be the host's bootstrap output, then it is rejected.
+    let error = tool_binary(&target, HOST, &binary, TOOL.recipe).unwrap_err();
+    assert!(
+        error.to_string().contains("is not Cargo's build output"),
+        "{error}"
+    );
     fs::remove_dir_all(target)?;
     Ok(())
 }
@@ -191,7 +228,7 @@ fn migration_bootstrap_tool_binary_rejects_copy_outside_target() -> DynResult<()
     let copy = elsewhere.join("xtask");
     fs::write(&copy, b"tool")?;
     // When the copy claims to be the bootstrap output.
-    let error = tool_binary(&target, &copy, TOOL.recipe).unwrap_err();
+    let error = tool_binary(&target, HOST, &copy, TOOL.recipe).unwrap_err();
     // Then it is rejected with the rebuild instruction.
     assert!(
         error.to_string().contains("just automation-bootstrap"),
@@ -207,7 +244,7 @@ fn migration_bootstrap_tool_binary_rejects_unbuilt_target_root() {
     // Given a target directory that does not exist yet.
     let target = unique_temp_dir("xtask-bootstrap-unbuilt");
     // When a bootstrap path is requested, then the error says to build first.
-    let error = tool_binary(&target, &target.join("debug/xtask"), TOOL.recipe).unwrap_err();
+    let error = tool_binary(&target, HOST, &target.join("debug/xtask"), TOOL.recipe).unwrap_err();
     assert!(error.to_string().contains("is not built"), "{error}");
 }
 
