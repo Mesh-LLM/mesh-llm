@@ -1,6 +1,21 @@
 use super::*;
 
 impl RuntimeState {
+    /// Active execution lanes with token state. Sampling configuration alone
+    /// reserves a real lane at position zero, but cannot fill a decode wave:
+    /// its required cache restore still needs a scheduler turn. This count is
+    /// never used for physical lane or KV-capacity admission.
+    pub(crate) fn nonempty_active_session_count(&self) -> usize {
+        self.sessions
+            .keys()
+            .filter(|id| {
+                self.session_token_counts
+                    .get(*id)
+                    .is_some_and(|&tokens| tokens > 0)
+            })
+            .count()
+    }
+
     pub fn prewarm_idle_sessions(
         &mut self,
         target_idle_sessions: usize,
