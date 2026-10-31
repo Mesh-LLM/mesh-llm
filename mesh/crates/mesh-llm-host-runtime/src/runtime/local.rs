@@ -1,8 +1,8 @@
 use super::capacity::runtime_model_required_bytes;
 use super::context_planning::{
     RuntimeResourcePlan, RuntimeResourcePlanInput, RuntimeResourcePlanningProfile,
-    plan_runtime_resources,
 };
+use super::local_dflash_plan::{plan_with_default_dflash_draft, planned_default_dflash_draft};
 use super::local_memory_plan::{
     MemoryPlanMeasurementKey, MemoryPlanStartPath, emit_measured_memory_reconciliation,
     emit_memory_plan_resolved, measured_buffers_footprint,
@@ -1094,7 +1094,7 @@ pub(super) async fn start_local_openai_model(
         spec.flash_attention_override,
     ));
 
-    let plan = plan_runtime_resources(RuntimeResourcePlanInput {
+    let plan_input = RuntimeResourcePlanInput {
         ctx_size_override: spec.ctx_size_override,
         parallel_override: spec.parallel_override,
         model_bytes: local_model_bytes,
@@ -1105,7 +1105,20 @@ pub(super) async fn start_local_openai_model(
         local_layer_fraction,
         planning_profile: spec.planning_profile,
         measured_buffers: measured_buffers_footprint(&measurement_key),
-    });
+    };
+    // Only a direct GGUF load keeps a DFlash draft (package loads are staged).
+    let default_dflash_draft = package
+        .is_none()
+        .then(|| planned_default_dflash_draft(&spec, &model_name, compact_meta.as_ref()))
+        .flatten();
+    let (plan, default_dflash_planned) =
+        plan_with_default_dflash_draft(plan_input, default_dflash_draft);
+    if default_dflash_draft.is_some() && !default_dflash_planned {
+        tracing::warn!(
+            model = model_name,
+            "the default DFlash draft does not fit beside the minimum context; serving without speculation"
+        );
+    }
     anyhow::ensure!(
         !plan
             .breakdown
@@ -1133,6 +1146,7 @@ pub(super) async fn start_local_openai_model(
             plan,
             measurement_key,
             compact_meta.as_ref(),
+            default_dflash_planned,
         )
         .await
     }
@@ -1145,6 +1159,7 @@ async fn start_local_skippy_model(
     plan: RuntimeResourcePlan,
     measurement_key: MemoryPlanMeasurementKey,
     compact_meta: Option<&models::gguf::GgufCompactMeta>,
+    default_dflash_planned: bool,
 ) -> Result<(
     String,
     LocalRuntimeModelHandle,
@@ -1166,7 +1181,13 @@ async fn start_local_skippy_model(
         fallback_projector_path,
         compact_meta,
     )?;
+    // The memory plan holds room for the default DFlash draft only when it
+    // fits; without that room the draft is not attached.
+    if !default_dflash_planned {
+        resolved.speculative.drop_default_dflash();
+    }
     crate::inference::skippy::materialize_projector_url(&mut resolved).await?;
+    crate::inference::skippy::materialize_default_dflash_draft(&mut resolved).await;
     tracing::info!(
         model = model_name,
         "KV cache: {} K + {} V, {}K context",
@@ -1316,6 +1337,8 @@ async fn start_local_package_v2_model(
         fallback_projector_path,
         compact_meta,
     )?;
+    // Package loads are staged and never attach the default DFlash draft.
+    resolved.speculative.drop_default_dflash();
     crate::inference::skippy::materialize_projector_url(&mut resolved).await?;
     tracing::info!(
         model = model_name,

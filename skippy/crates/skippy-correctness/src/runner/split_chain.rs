@@ -368,6 +368,7 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         direct_io: false,
         main_gpu: None,
         split_mode: skippy_runtime::SplitMode::Auto,
+        recurrent_rollback_tokens: 0,
         selected_backend_device: None,
         load_mode: runtime_load_mode(args.stage_load_mode),
         projector_path: None,

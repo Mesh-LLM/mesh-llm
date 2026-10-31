@@ -614,6 +614,7 @@ pub struct RuntimeConfig {
     pub has_main_gpu_override: bool,
     pub main_gpu: i32,
     pub split_mode: i32,
+    pub recurrent_rollback_tokens: u32,
 }
 
 /// Sentinel for `RuntimeConfig` tri-state fields: keep the native derived default.

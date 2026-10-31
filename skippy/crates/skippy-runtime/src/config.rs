@@ -147,6 +147,10 @@ pub struct RuntimeConfig {
     pub main_gpu: Option<u32>,
     /// How to split the model across multiple GPUs.
     pub split_mode: SplitMode,
+    /// Recurrent-state rollback depth for recurrent and hybrid models. A
+    /// speculative plan sets it to its largest verify window so verify rolls
+    /// back in place; `0` keeps the native default.
+    pub recurrent_rollback_tokens: u32,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -390,6 +394,7 @@ impl RuntimeConfig {
                     .context("main_gpu exceeds i32")?
                     .unwrap_or(0),
                 split_mode: self.split_mode.as_raw(),
+                recurrent_rollback_tokens: self.recurrent_rollback_tokens,
             },
             _selected_backend_device: selected_backend_device,
             _resident_tensor_names: resident_tensor_names,
@@ -509,6 +514,7 @@ impl Default for RuntimeConfig {
             direct_io: false,
             main_gpu: None,
             split_mode: SplitMode::Auto,
+            recurrent_rollback_tokens: 0,
         }
     }
 }
