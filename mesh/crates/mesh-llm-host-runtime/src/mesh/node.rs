@@ -1550,20 +1550,6 @@ impl Node {
         descriptors
     }
 
-    pub async fn all_model_runtime_descriptors(&self) -> Vec<ModelRuntimeDescriptor> {
-        let mut runtimes = self.model_runtime_descriptors.lock().await.clone();
-        let peer_runtimes = {
-            let state = self.state.lock().await;
-            state
-                .peers
-                .values()
-                .flat_map(|peer| peer.served_model_runtime.clone())
-                .collect::<Vec<_>>()
-        };
-        runtimes.extend(peer_runtimes);
-        runtimes
-    }
-
     pub async fn serving_models(&self) -> Vec<String> {
         self.serving_models.lock().await.clone()
     }

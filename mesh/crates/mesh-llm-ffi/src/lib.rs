@@ -11,18 +11,24 @@ static SDK_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 });
 
 mod conversions;
+mod documents;
 mod errors;
 mod events;
 mod handles;
+mod live_transcription;
+mod memberships;
+mod model_discovery;
 mod native_runtime;
 mod native_runtime_types;
 mod node;
+mod node_config;
 mod request_types;
 mod runtime_blocking;
 
 pub use errors::FfiError;
 pub use events::OpenAiStreamEventNative;
 pub use handles::MeshNodeHandle;
+pub use live_transcription::LiveTranscriptionNative;
 pub use native_runtime::{
     current_mesh_version, current_skippy_abi_version, install_native_runtime,
     installed_native_runtimes, prune_native_runtimes, remove_native_runtime,
@@ -34,4 +40,5 @@ pub use native_runtime_types::{
     NativeRuntimeVerificationPolicyNative, OpenAiStreamListener,
 };
 pub use node::create_node;
+pub use node_config::create_node_config_json;
 pub use request_types::{ModelNative, NodeStatusNative, OpenAiResponseNative};

@@ -420,6 +420,10 @@ pub(super) async fn run_auto_handle_control_request(
     use super::{IntentSource, ModelIntent};
 
     match cmd {
+        api::RuntimeControlRequest::DiscoverModels { resp } => {
+            crate::models::discovery::respond(ctx.node.clone(), resp);
+            false
+        }
         api::RuntimeControlRequest::Join { invite_token, resp } => {
             let result = tokio::select! {
                 biased;

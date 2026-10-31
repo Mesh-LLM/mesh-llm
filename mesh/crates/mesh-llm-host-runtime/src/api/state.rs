@@ -43,6 +43,10 @@ impl Serialize for PublicationState {
 }
 
 pub enum RuntimeControlRequest {
+    DiscoverModels {
+        resp:
+            tokio::sync::oneshot::Sender<anyhow::Result<Vec<crate::models::discovery::MeshModel>>>,
+    },
     Join {
         invite_token: String,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
