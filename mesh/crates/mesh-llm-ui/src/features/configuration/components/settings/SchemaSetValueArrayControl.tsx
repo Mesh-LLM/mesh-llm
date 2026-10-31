@@ -7,7 +7,7 @@ import {
   TEXT_FIELD_BASE_CLASS,
   type SchemaSettingControlProps
 } from '@/features/configuration/components/settings/schema-control-utils'
-import { parseSchemaObjectArrayValue } from '@/features/configuration/lib/schema-object-array'
+import { parseSchemaObjectArrayValue, singularItemLabel } from '@/features/configuration/lib/schema-object-array'
 import { cn } from '@/lib/cn'
 
 const CONFIRM_MS = 2000
@@ -26,6 +26,7 @@ type SetRowProps = {
   readonly ariaLabel: string
   readonly committed: string | undefined
   readonly confirmed: boolean
+  readonly confirmedText: string
   readonly disabled: boolean
   readonly ghost?: boolean
   readonly onRemove?: () => void
@@ -38,6 +39,7 @@ function SetRow({
   ariaLabel,
   committed,
   confirmed,
+  confirmedText,
   disabled,
   ghost = false,
   onRemove,
@@ -77,8 +79,13 @@ function SetRow({
       <Button disabled={!canSet} onClick={set} size="sm" type="button" variant="outline">
         Set
       </Button>
-      <span aria-live="polite" className="inline-flex w-4 shrink-0 text-good">
-        {confirmed ? <Check aria-label="Saved" className="size-4" /> : null}
+      <span aria-live="polite" className="inline-flex min-w-4 shrink-0 items-center gap-1 text-good type-caption">
+        {confirmed ? (
+          <>
+            <Check aria-hidden="true" className="size-4" />
+            {confirmedText}
+          </>
+        ) : null}
       </span>
       {onRemove ? (
         <Button disabled={disabled} onClick={onRemove} size="sm" type="button" variant="ghost">
@@ -112,6 +119,12 @@ export function SchemaSetValueArrayControl({
   }
   const placeholder = 'placeholder' in setting.control ? setting.control.placeholder : undefined
   if (!primary) return null
+  const restartRequired =
+    setting.restartScope === 'process_restart' ||
+    setting.restartScope === 'mesh_restart' ||
+    setting.mutability === 'restart-required'
+  const savedText = restartRequired ? 'Saved. Takes effect when mesh-llm restarts.' : 'Saved.'
+  const itemName = singularItemLabel(setting.label).toLowerCase()
 
   const emit = (next: readonly Record<string, unknown>[]) => onChange(JSON.stringify(next))
   const rest: ConfigurationSettingObjectSchema = {
@@ -126,18 +139,22 @@ export function SchemaSetValueArrayControl({
   return (
     <div className="grid w-full min-w-0 gap-2.5" data-invalid={invalid ? 'true' : undefined}>
       {items.length === 0 && pending === 0 && placeholder ? (
-        <SetRow
-          ariaLabel={`${setting.label} (not set)`}
-          committed={undefined}
-          confirmed={confirmedRow === 0}
-          disabled={disabled}
-          ghost
-          onSet={(next) => {
-            emit([{ [primary.name]: next }])
-            flash(0)
-          }}
-          placeholder={placeholder}
-        />
+        <div className="grid gap-1">
+          <SetRow
+            ariaLabel={`${setting.label} (not set)`}
+            committed={undefined}
+            confirmed={confirmedRow === 0}
+            confirmedText={savedText}
+            disabled={disabled}
+            ghost
+            onSet={(next) => {
+              emit([{ [primary.name]: next }])
+              flash(0)
+            }}
+            placeholder={placeholder}
+          />
+          <p className="type-caption text-fg-dim">{`Not set: no ${itemName} until you click Set.`}</p>
+        </div>
       ) : null}
       {items.map((item, index) => (
         <div className="grid min-w-0 gap-2" key={`row-${index}`}>
@@ -145,6 +162,7 @@ export function SchemaSetValueArrayControl({
             ariaLabel={`${setting.label} ${index + 1}`}
             committed={stringOf(item)}
             confirmed={confirmedRow === index}
+            confirmedText={savedText}
             disabled={disabled}
             onRemove={() => emit(items.filter((_, itemIndex) => itemIndex !== index))}
             onSet={(next) => {
@@ -184,6 +202,7 @@ export function SchemaSetValueArrayControl({
           ariaLabel={`${setting.label} ${items.length + index + 1}`}
           committed={undefined}
           confirmed={false}
+          confirmedText={savedText}
           disabled={disabled}
           key={`pending-${index}`}
           onSet={(next) => {

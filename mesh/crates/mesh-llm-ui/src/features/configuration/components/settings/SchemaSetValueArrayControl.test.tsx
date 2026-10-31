@@ -22,6 +22,7 @@ const setting: ConfigurationDefaultsSetting = {
   inheritedLabel: 'Witnesses',
   canonicalPath: 'plugin.capsules.witness',
   rendererId: 'set-value',
+  restartScope: 'process_restart',
   control: { kind: 'text', name: 'witness', value: '', placeholder: 'https://witness.example.org' },
   valueSchema: { kind: 'array', items: itemSchema }
 }
@@ -43,6 +44,7 @@ describe('SchemaSetValueArrayControl', () => {
     expect(input).toHaveValue('https://witness.example.org')
     expect(input).toHaveAttribute('data-set', 'false')
     expect(screen.getByTestId('value')).toHaveTextContent('')
+    expect(screen.getByText('Not set: no witness until you click Set.')).toBeInTheDocument()
   })
 
   it('Set stores the value, turns it set, and shows a brief checkmark', async () => {
@@ -50,7 +52,8 @@ describe('SchemaSetValueArrayControl', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Set' }))
     expect(screen.getByTestId('value')).toHaveTextContent('[{"endpoint":"https://witness.example.org"}]')
     expect(screen.getByLabelText('Witnesses 1')).toHaveAttribute('data-set', 'true')
-    expect(screen.getByLabelText('Saved')).toBeInTheDocument()
+    expect(screen.getByText('Saved. Takes effect when mesh-llm restarts.')).toBeInTheDocument()
+    expect(screen.queryByText(/Not set/)).not.toBeInTheDocument()
   })
 
   it('edits a set value and sets it again; Set is disabled until the value changes', async () => {

@@ -3,6 +3,18 @@ import type { ConfigurationSettingObjectSchema, ConfigurationSettingValueSchema 
 // Renderer id a plugin sets to get explicit-Set rows (see SchemaSetValueArrayControl).
 export const SET_VALUE_RENDERER_ID = 'set-value'
 
+export function singularItemLabel(label: string): string {
+  const noun = label.trim().split(/\s+/).at(-1) ?? 'item'
+  const singular = noun.endsWith('ies')
+    ? `${noun.slice(0, -3)}y`
+    : noun.endsWith('sses')
+      ? noun.slice(0, -2)
+      : noun.endsWith('s') && !noun.endsWith('ss')
+        ? noun.slice(0, -1)
+        : noun
+  return `${singular.charAt(0).toUpperCase()}${singular.slice(1)}`
+}
+
 export function isSchemaRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
