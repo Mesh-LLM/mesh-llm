@@ -318,6 +318,8 @@ pub(super) struct SplitParticipant {
     /// nothing but lower throughput, so placement warns rather than leaving it
     /// to be inferred.
     pub(super) decode_batch_policy_supported: bool,
+    /// Whether this peer decodes the FP8 activation codecs. A peer without
+    /// them rejects a stage load naming one, so the coordinator falls back.
     availability_score: u32,
     /// Weight bytes per second this node streams during decode, from its GPU
     /// memory-bandwidth benchmark. Used by `--auto-balance` placement.

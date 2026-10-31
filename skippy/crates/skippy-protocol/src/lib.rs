@@ -112,12 +112,7 @@ mod tests {
 
     #[test]
     fn activation_codec_policy_fixed_identity_matches_codec_identity_byte_for_byte() {
-        for codec in [
-            super::StageActivationCodec::RawF32V1,
-            super::StageActivationCodec::F16RneV1,
-            super::StageActivationCodec::Bf16RneV1,
-            super::StageActivationCodec::S8RowF32RneV1,
-        ] {
+        for codec in super::StageActivationCodec::ALL {
             assert_eq!(
                 super::StageActivationCodecPolicy::Fixed.identity(codec),
                 codec.identity()
@@ -180,8 +175,8 @@ mod tests {
         use super::StageActivationCodec as C;
         use super::StageActivationCodecPolicy as P;
         // Fixed admits only the configured codec.
-        for codec in [C::RawF32V1, C::F16RneV1, C::Bf16RneV1, C::S8RowF32RneV1] {
-            for frame in [C::RawF32V1, C::F16RneV1, C::Bf16RneV1, C::S8RowF32RneV1] {
+        for codec in C::ALL {
+            for frame in C::ALL {
                 assert_eq!(P::Fixed.permits(codec, frame), codec == frame);
             }
         }
@@ -190,12 +185,41 @@ mod tests {
         assert!(P::AutoLosslessV1.permits(C::RawF32V1, C::RawF32V1));
         assert!(P::AutoLosslessV1.permits(C::RawF32V1, C::Bf16RneV1));
         assert!(P::AutoLosslessV1.permits(C::RawF32V1, C::F16RneV1));
-        assert!(!P::AutoLosslessV1.permits(C::RawF32V1, C::S8RowF32RneV1));
-        for fallback in [C::F16RneV1, C::Bf16RneV1, C::S8RowF32RneV1] {
-            for frame in [C::RawF32V1, C::F16RneV1, C::Bf16RneV1, C::S8RowF32RneV1] {
+        for lossy in C::ALL.into_iter().skip(3) {
+            assert!(!P::AutoLosslessV1.permits(C::RawF32V1, lossy), "{lossy:?}");
+        }
+        for fallback in C::ALL.into_iter().skip(1) {
+            for frame in C::ALL {
                 assert!(!P::AutoLosslessV1.permits(fallback, frame));
             }
         }
+    }
+
+    #[test]
+    fn activation_codec_wire_ids_are_stable_and_fp8_is_gated() {
+        use super::StageActivationCodec as C;
+        for (index, codec) in C::ALL.into_iter().enumerate() {
+            let wire_id = i32::try_from(index + 1).unwrap();
+            assert_eq!(codec.binary_wire_id(), wire_id);
+            assert_eq!(C::from_binary_wire_id(wire_id), Some(codec));
+            assert_eq!(
+                super::proto::stage::StageActivationCodec::try_from(wire_id)
+                    .unwrap()
+                    .as_str_name()
+                    .trim_start_matches("STAGE_ACTIVATION_CODEC_")
+                    .to_ascii_lowercase()
+                    .replace('_', "-"),
+                codec.identity(),
+            );
+            assert_eq!(codec.is_fp8(), wire_id >= 5, "{codec:?}");
+        }
+        assert_eq!(C::from_binary_wire_id(8), None);
+        let json = serde_json::to_string(&C::Fp8E4m3Block32E8m0RneV1).unwrap();
+        assert_eq!(json, "\"fp8-e4m3-block32-e8m0-rne-v1\"");
+        assert_eq!(
+            serde_json::from_str::<C>(&json).unwrap(),
+            C::Fp8E4m3Block32E8m0RneV1
+        );
     }
 
     #[test]
@@ -206,7 +230,12 @@ mod tests {
         assert!(!P::AutoLosslessV1.compatible(C::F16RneV1));
         assert!(!P::AutoLosslessV1.compatible(C::Bf16RneV1));
         assert!(!P::AutoLosslessV1.compatible(C::S8RowF32RneV1));
-        for codec in [C::RawF32V1, C::F16RneV1, C::Bf16RneV1, C::S8RowF32RneV1] {
+        for codec in C::ALL {
+            assert_eq!(
+                P::AutoLosslessV1.compatible(codec),
+                codec == C::RawF32V1,
+                "{codec:?}"
+            );
             assert!(P::Fixed.compatible(codec));
         }
     }
