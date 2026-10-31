@@ -318,80 +318,51 @@ fn hf_layer_package_probe_requires_manifest_not_repo_name() {
 }
 
 #[test]
-#[serial]
-fn hf_layer_package_probe_uses_cached_snapshot_for_pinned_revision() {
-    // A local-only revision is unknown to the Hub; the probe must not be asked.
-    let _probe_guard = set_hf_model_file_probe_for_test(|_, _, _| false);
-    let temp = tempfile::tempdir().unwrap();
+fn cached_package_snapshot_needs_the_package_manifest() {
+    // A local-only revision is unknown to the Hub, so only the cache can say
+    // it is a package; a snapshot without the manifest is not one.
+    let hub = tempfile::tempdir().unwrap();
     let revision = "1341078ef859d8ddf5cad491c619c463491fac82";
-    let snapshot = temp
+    let snapshot = hub
         .path()
         .join("models--meshllm--local-package-layers")
         .join("snapshots")
         .join(revision);
     fs::create_dir_all(snapshot.join("shared")).unwrap();
     fs::write(snapshot.join("shared").join("output.gguf"), b"GGUF").unwrap();
-    let prev = std::env::var_os("HF_HUB_CACHE");
-    // SAFETY: the enclosing test contract is `#[serial]`, so this process
-    // environment mutation cannot race another test.
-    unsafe { std::env::set_var("HF_HUB_CACHE", temp.path()) };
+    let lookup =
+        || cached_layer_package_snapshot(hub.path(), "meshllm/local-package-layers", revision);
 
-    let query = format!("meshllm/local-package-layers@{revision}");
-    let without_manifest = find_huggingface_layer_package(&query);
+    assert_eq!(lookup(), None);
     fs::write(snapshot.join("model-package.json"), b"{}").unwrap();
-    let with_manifest = find_huggingface_layer_package(&query);
-    let unpinned = find_huggingface_layer_package("meshllm/local-package-layers");
-
-    match prev {
-        // SAFETY: the enclosing test contract is `#[serial]`, so this process
-        // environment mutation cannot race another test.
-        Some(val) => unsafe { std::env::set_var("HF_HUB_CACHE", val) },
-        // SAFETY: the enclosing test contract is `#[serial]`, so this process
-        // environment mutation cannot race another test.
-        None => unsafe { std::env::remove_var("HF_HUB_CACHE") },
-    }
-    assert_eq!(without_manifest, None);
-    assert_eq!(
-        with_manifest,
-        Some(format!("hf://meshllm/local-package-layers@{revision}"))
-    );
-    assert_eq!(unpinned, None);
+    assert_eq!(lookup(), Some(snapshot));
 }
 
 #[test]
-#[serial]
-fn hf_layer_package_probe_resolves_a_cached_named_revision_through_its_ref() {
-    let _probe_guard = set_hf_model_file_probe_for_test(|_, _, _| false);
-    let temp = tempfile::tempdir().unwrap();
+fn cached_package_snapshot_resolves_named_revisions_through_their_refs() {
+    let hub = tempfile::tempdir().unwrap();
     let commit = "1341078ef859d8ddf5cad491c619c463491fac82";
-    let repo_cache = temp.path().join("models--meshllm--named-package-layers");
+    let repo_cache = hub.path().join("models--meshllm--named-package-layers");
     let snapshot = repo_cache.join("snapshots").join(commit);
     fs::create_dir_all(&snapshot).unwrap();
     fs::write(snapshot.join("model-package.json"), b"{}").unwrap();
-    fs::create_dir_all(repo_cache.join("refs")).unwrap();
+    fs::create_dir_all(repo_cache.join("refs").join("refs").join("pr")).unwrap();
     fs::write(repo_cache.join("refs").join("v1"), format!("{commit}\n")).unwrap();
-    let prev = std::env::var_os("HF_HUB_CACHE");
-    // SAFETY: the enclosing test contract is `#[serial]`, so this process
-    // environment mutation cannot race another test.
-    unsafe { std::env::set_var("HF_HUB_CACHE", temp.path()) };
+    fs::write(
+        repo_cache.join("refs").join("refs").join("pr").join("1"),
+        commit,
+    )
+    .unwrap();
+    let lookup = |revision| {
+        cached_layer_package_snapshot(hub.path(), "meshllm/named-package-layers", revision)
+    };
 
-    let named = find_huggingface_layer_package("meshllm/named-package-layers@v1");
-    let unknown = find_huggingface_layer_package("meshllm/named-package-layers@v2");
-
-    match prev {
-        // SAFETY: the enclosing test contract is `#[serial]`, so this process
-        // environment mutation cannot race another test.
-        Some(val) => unsafe { std::env::set_var("HF_HUB_CACHE", val) },
-        // SAFETY: the enclosing test contract is `#[serial]`, so this process
-        // environment mutation cannot race another test.
-        None => unsafe { std::env::remove_var("HF_HUB_CACHE") },
-    }
-    // The requested revision is kept in the package reference.
-    assert_eq!(
-        named,
-        Some("hf://meshllm/named-package-layers@v1".to_string())
-    );
-    assert_eq!(unknown, None);
+    assert_eq!(lookup(commit), Some(snapshot.clone()));
+    assert_eq!(lookup("v1"), Some(snapshot.clone()));
+    assert_eq!(lookup("refs/pr/1"), Some(snapshot));
+    assert_eq!(lookup("v2"), None);
+    assert_eq!(lookup("refs/../v1"), None);
+    assert_eq!(lookup("../snapshots"), None);
 }
 
 #[test]

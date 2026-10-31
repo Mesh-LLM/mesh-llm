@@ -429,12 +429,19 @@ fn parse_exact_huggingface_repo(input: &str) -> Option<(String, Option<String>)>
 fn cached_layer_package_snapshot(hub_cache: &Path, repo: &str, revision: &str) -> Option<PathBuf> {
     let repo_cache = hub_cache.join(format!("models--{}", repo.replace('/', "--")));
     let snapshots = repo_cache.join("snapshots");
-    let commit = if snapshots.join(single_path_component(revision)?).is_dir() {
-        revision.to_string()
-    } else {
-        let commit = std::fs::read_to_string(repo_cache.join("refs").join(revision)).ok()?;
-        single_path_component(commit.trim())?.to_string()
-    };
+    let commit =
+        if single_path_component(revision).is_some_and(|name| snapshots.join(name).is_dir()) {
+            revision.to_string()
+        } else {
+            // Named refs may nest (`refs/pr/1`); every component must stay inside
+            // `refs/`.
+            let mut ref_path = repo_cache.join("refs");
+            for component in revision.split('/') {
+                ref_path.push(single_path_component(component)?);
+            }
+            let commit = std::fs::read_to_string(ref_path).ok()?;
+            single_path_component(commit.trim())?.to_string()
+        };
     let snapshot = snapshots.join(commit);
     snapshot
         .join("model-package.json")
