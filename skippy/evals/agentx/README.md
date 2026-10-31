@@ -68,6 +68,9 @@ capacity observations, raw client records/HTTP traces, lifecycle/memory/work
 receipts, scalar summaries, final result and a sibling archive+SHA receipt.
 Failure retains partial evidence and returns nonzero. Clean process-tree
 shutdown is required; no partial campaign becomes a successful point.
+Doctor, effective-config and MLflow JSON are parsed from bounded structured
+capture, independently of redacted diagnostic logs. Public evidence projections
+remain available even when ordinary logs suppress a line containing `token`.
 
 ## Capacity and backend policy
 
