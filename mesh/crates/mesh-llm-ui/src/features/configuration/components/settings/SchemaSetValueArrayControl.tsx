@@ -115,10 +115,18 @@ export function SchemaSetValueArrayControl({
   const parsed = parseSchemaObjectArrayValue(value)
   const items = parsed ?? []
   // Committed rows carry an id that survives removals, so a row never inherits another row's draft.
-  // If the list changes length from outside, the rows past what we track get positional ids.
-  const nextId = useRef(items.length)
-  const [trackedIds, setTrackedIds] = useState<readonly number[]>(() => items.map((_, index) => index))
-  const rowIds = items.map((_, index) => trackedIds[index] ?? -(index + 1))
+  // Row keys also include the stored value, so an outside change (Undo, Redo, Revert) remounts the
+  // row with the restored value. If the list changes length from outside, the ids are re-issued.
+  const [rows, setRows] = useState(() => ({ ids: items.map((_, index) => index), next: items.length }))
+  let current = rows
+  if (rows.ids.length !== items.length) {
+    const ids = rows.ids.slice(0, items.length)
+    let next = rows.next
+    while (ids.length < items.length) ids.push(next++)
+    current = { ids, next }
+    setRows(current)
+  }
+  const rowIds = current.ids
   const [pending, setPending] = useState<readonly number[]>([])
   const [confirmedRow, setConfirmedRow] = useState<number | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -181,7 +189,7 @@ export function SchemaSetValueArrayControl({
         </div>
       ) : null}
       {items.map((item, index) => (
-        <div className="grid min-w-0 gap-2" key={`row-${rowIds[index]}`}>
+        <div className="grid min-w-0 gap-2" key={`row-${rowIds[index]}-${stringOf(item)}`}>
           <SetRow
             ariaDescribedBy={ariaDescribedBy}
             ariaLabel={`${setting.label} ${index + 1}`}
@@ -191,7 +199,7 @@ export function SchemaSetValueArrayControl({
             disabled={disabled}
             invalid={invalid}
             onRemove={() => {
-              setTrackedIds(rowIds.filter((_, rowIndex) => rowIndex !== index))
+              setRows({ ids: rowIds.filter((_, rowIndex) => rowIndex !== index), next: current.next })
               setConfirmedRow(null)
               emit(items.filter((_, itemIndex) => itemIndex !== index))
             }}
@@ -244,7 +252,7 @@ export function SchemaSetValueArrayControl({
           key={`pending-${id}`}
           onRemove={() => removePending(id)}
           onSet={(next) => {
-            setTrackedIds([...rowIds, id])
+            setRows({ ids: [...rowIds, id], next: current.next })
             emit([...items, { ...createSchemaObjectDefault(itemSchema), [primary.name]: next }])
             removePending(id)
             flash(items.length)
@@ -255,7 +263,10 @@ export function SchemaSetValueArrayControl({
       <Button
         className="justify-self-start"
         disabled={disabled}
-        onClick={() => setPending((ids) => [...ids, nextId.current++])}
+        onClick={() => {
+          setRows({ ids: rowIds, next: current.next + 1 })
+          setPending((ids) => [...ids, current.next])
+        }}
         size="sm"
         type="button"
         variant="ghost"

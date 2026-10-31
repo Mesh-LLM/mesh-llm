@@ -203,4 +203,46 @@ describe('SchemaSetValueArrayControl', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Set' }))
     expect(screen.getByTestId('value')).toHaveTextContent('[{"endpoint":"https://witness.example.org","weight":0}]')
   })
+
+  it('shows the restored value when the stored list is changed from outside (Undo)', async () => {
+    function UndoHarness() {
+      const [value, setValue] = useState('[{"endpoint":"https://a.example"}]')
+      return (
+        <>
+          <SchemaArrayControl onChange={setValue} setting={setting} value={value} />
+          <button onClick={() => setValue('[{"endpoint":"https://a.example"}]')} type="button">
+            undo
+          </button>
+        </>
+      )
+    }
+    render(<UndoHarness />)
+    fireEvent.change(screen.getByLabelText('Witnesses 1'), { target: { value: 'https://b.example' } })
+    await userEvent.click(screen.getByRole('button', { name: 'Set' }))
+    expect(screen.getByLabelText('Witnesses 1')).toHaveValue('https://b.example')
+    await userEvent.click(screen.getByRole('button', { name: 'undo' }))
+    expect(screen.getByLabelText('Witnesses 1')).toHaveValue('https://a.example')
+  })
+
+  it('Undo of a Clear restores both rows with their own values', async () => {
+    function UndoHarness() {
+      const [value, setValue] = useState('[{"endpoint":"https://a.example"},{"endpoint":"https://b.example"}]')
+      return (
+        <>
+          <SchemaArrayControl onChange={setValue} setting={setting} value={value} />
+          <button
+            onClick={() => setValue('[{"endpoint":"https://a.example"},{"endpoint":"https://b.example"}]')}
+            type="button"
+          >
+            undo
+          </button>
+        </>
+      )
+    }
+    render(<UndoHarness />)
+    await userEvent.click(screen.getAllByRole('button', { name: 'Clear' })[0]!)
+    await userEvent.click(screen.getByRole('button', { name: 'undo' }))
+    expect(screen.getByLabelText('Witnesses 1')).toHaveValue('https://a.example')
+    expect(screen.getByLabelText('Witnesses 2')).toHaveValue('https://b.example')
+  })
 })
