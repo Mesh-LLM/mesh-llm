@@ -1,7 +1,8 @@
 import { cn } from '@/lib/cn'
 import { SchemaObjectArrayControl } from '@/features/configuration/components/settings/SchemaObjectArrayControl'
 import type { SchemaSettingControlProps } from '@/features/configuration/components/settings/schema-control-utils'
-import { objectArrayItemSchema } from '@/features/configuration/lib/schema-object-array'
+import { SchemaSetValueArrayControl } from '@/features/configuration/components/settings/SchemaSetValueArrayControl'
+import { objectArrayItemSchema, SET_VALUE_RENDERER_ID } from '@/features/configuration/lib/schema-object-array'
 
 function arrayItems(value: string) {
   return value
@@ -12,6 +13,9 @@ function arrayItems(value: string) {
 
 export function SchemaArrayControl(props: SchemaSettingControlProps) {
   const itemSchema = objectArrayItemSchema(props.setting.valueSchema)
+  if (itemSchema && props.setting.rendererId === SET_VALUE_RENDERER_ID) {
+    return <SchemaSetValueArrayControl {...props} itemSchema={itemSchema} />
+  }
   if (itemSchema) return <SchemaObjectArrayControl {...props} itemSchema={itemSchema} />
 
   const { ariaDescribedBy, disabled = false, invalid = false, onChange, setting, value } = props

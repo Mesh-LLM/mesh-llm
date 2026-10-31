@@ -1,5 +1,8 @@
 import type { ConfigurationSettingObjectSchema, ConfigurationSettingValueSchema } from '@/features/app-tabs/types'
 
+// Renderer id a plugin sets to get explicit-Set rows (see SchemaSetValueArrayControl).
+export const SET_VALUE_RENDERER_ID = 'set-value'
+
 export function isSchemaRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
