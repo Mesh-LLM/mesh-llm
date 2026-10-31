@@ -1,7 +1,7 @@
-From 842237d84843242384556809d0aca2907c480194 Mon Sep 17 00:00:00 2001
+From b01c5ce7bc79106bf6cc094fbba1aa6cf6b3083c Mon Sep 17 00:00:00 2001
 From: Virgile-pct <pourchetvirgile@gmail.com>
 Date: Wed, 21 Oct 2026 23:42:33 +0200
-Subject: [PATCH] skippy: record per-token logprobs while sampling
+Subject: [PATCH 10/10] skippy: record per-token logprobs while sampling
 
 A sampling config with SKIPPY_SAMPLING_FLAG_LOGPROBS records, for every
 token skippy_sample_token_ith samples, the token's log-probability under the
@@ -143,7 +143,7 @@ index 1b42f32c0..c1a755c4c 100644
  
  #ifdef __cplusplus
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 78e2c01f3..0d453a1e7 100644
+index e8657d188..afe1ac4ef 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -82,6 +82,7 @@ add_library(llama
@@ -374,5 +374,5 @@ index d3de66cbe..3ca967bf3 100644
  
  namespace {
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/granite-swa.cpp b/src/models/granite-swa.cpp
-index e993cfc9101afbff9e108a7fad1c4c7b55a98f71..c34923c2e60be2b60c255b8055135d95a95757c6 100644
+index aa55966ca2fade9535bda86b724d11b0db44f19a..692ce269d7146ac10599a8dc89b9c990ec103312 100644
 --- a/src/models/granite-swa.cpp
 +++ b/src/models/granite-swa.cpp
 @@ -149,6 +149,8 @@ llama_model_granite_swa::graph::graph(
@@ -21,7 +21,7 @@ index e993cfc9101afbff9e108a7fad1c4c7b55a98f71..c34923c2e60be2b60c255b8055135d95
  
          // Granite Vision 4.1 deepstack: inject the projector stream that
          // targets decoder layer `il` before the decoder runs.
-@@ -185,6 +187,7 @@ llama_model_granite_swa::graph::graph(
+@@ -187,6 +189,7 @@ llama_model_granite_swa::graph::graph(
  
          // input for next layer
          inpL = cur;

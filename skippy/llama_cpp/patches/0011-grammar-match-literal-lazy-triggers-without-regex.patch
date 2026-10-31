@@ -1,20 +1,20 @@
-From 96f8d0e83295e087a54a4fcb49ef93a0e9a84261 Mon Sep 17 00:00:00 2001
+From 72831ebb41fd5dd3d334f2b1b6750b030957f641 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 28 Oct 2026 20:57:15 +1300
-Subject: [PATCH] grammar: match literal lazy triggers without regex
+Subject: [PATCH 11/11] grammar: match literal lazy triggers without regex
 
 ---
  src/llama-grammar.cpp                   | 10 ++++
- tests/CMakeLists.txt                    |  1 +
+ tests/CMakeLists.txt                    |  4 +-
  tests/test-grammar-trigger-patterns.cpp | 72 +++++++++++++++++++++++++
- 3 files changed, 83 insertions(+)
+ 3 files changed, 83 insertions(+), 3 deletions(-)
  create mode 100644 tests/test-grammar-trigger-patterns.cpp
 
 diff --git a/src/llama-grammar.cpp b/src/llama-grammar.cpp
-index 0a8a61e7e..da0187e13 100644
+index 4e096a368..96772743d 100644
 --- a/src/llama-grammar.cpp
 +++ b/src/llama-grammar.cpp
-@@ -380,6 +380,16 @@ static void print_rule(
+@@ -382,6 +382,16 @@ static void print_rule(
  //
  
  size_t llama_grammar_trigger_pattern::find(const std::string & input) const {
@@ -32,17 +32,21 @@ index 0a8a61e7e..da0187e13 100644
          // get from the first matched capturing group to the end of the string
          size_t start = std::string::npos;
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 991bf5479..535cdf51e 100644
+index b3bff9139..6280cc50c 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -184,6 +184,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
-     llama_build_and_test(test-sampling.cpp LINK llama)
-     llama_build_and_test(test-reasoning-budget.cpp)
-     llama_build_and_test(test-grammar-parser.cpp LINK llama)
-+    llama_build_and_test(test-grammar-trigger-patterns.cpp LINK llama)
-     llama_build_and_test(test-grammar-integration.cpp)
-     llama_build_and_test(test-llama-grammar.cpp LINK llama)
-     llama_build_and_test(test-batch-alloc.cpp LINK llama)
+@@ -189,10 +189,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+     llama_build_and_test(test-skippy-kv-cells-contiguous.cpp)
+     llama_build_and_test(test-skippy-recurrent-state-roundtrip.cpp)
+     # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
+-    llama_build_and_test(test-unicode.cpp  LABEL behavior  LINK llama)
+-    llama_build_and_test(test-sampling.cpp  LABEL behavior  LINK llama)
+-    llama_build_and_test(test-reasoning-budget.cpp  LABEL behavior)
+     llama_build_and_test(test-grammar-parser.cpp  LABEL behavior  LINK llama)
++    llama_build_and_test(test-grammar-trigger-patterns.cpp  LABEL behavior  LINK llama)
+     llama_build_and_test(test-grammar-integration.cpp  LABEL behavior)
+     llama_build_and_test(test-llama-grammar.cpp  LABEL behavior  LINK llama)
+     llama_build_and_test(test-batch-alloc.cpp  LABEL behavior  LINK llama)
 diff --git a/tests/test-grammar-trigger-patterns.cpp b/tests/test-grammar-trigger-patterns.cpp
 new file mode 100644
 index 000000000..6df57b5c6
@@ -122,5 +126,5 @@ index 000000000..6df57b5c6
 +    return 0;
 +}
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

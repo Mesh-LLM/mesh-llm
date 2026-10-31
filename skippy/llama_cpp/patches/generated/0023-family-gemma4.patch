@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/gemma4.cpp b/src/models/gemma4.cpp
-index e8e2e911dc306d6719c4dbcd284acae743b90d62..72d0ccb033fd42f6926b5c1bc6564966387c9cda 100644
+index 3555706db8eac85b436197a92e1b84dd4b6b49c1..500346e4d212eac9a7c2ab275a5dc4ae38e1bb81 100644
 --- a/src/models/gemma4.cpp
 +++ b/src/models/gemma4.cpp
 @@ -191,6 +191,8 @@ llama_model_gemma4::graph::graph(const llama_model & model, const llm_graph_para

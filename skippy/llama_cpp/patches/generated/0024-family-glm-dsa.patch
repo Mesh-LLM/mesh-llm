@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/glm-dsa.cpp b/src/models/glm-dsa.cpp
-index 0f59c03f270a068a1e0478b1ee13ee16e39abff0..f7191893eb8a0f51243fa907279f7cd3e994b16c 100644
+index 4a10def00f6fa016224be3ec33b1cb606d0fc9da..6681123df1628f425a33f200e220bf74d6b873a4 100644
 --- a/src/models/glm-dsa.cpp
 +++ b/src/models/glm-dsa.cpp
 @@ -300,6 +300,8 @@ llama_model_glm_dsa::graph::graph(const llama_model & model, const llm_graph_par

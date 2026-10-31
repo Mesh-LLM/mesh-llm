@@ -1,7 +1,7 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From a79ffbdaeffa6f64f6d70c46973f4129fb0a9098 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sat, 10 Oct 2026 17:10:06 +0100
-Subject: [PATCH] fix(skippy): keep native MTP state across verify trims
+Subject: [PATCH 07/11] fix(skippy): keep native MTP state across verify trims
 
 A rejected verify window used to cost the MTP sidecar its whole prefix:
 trimming the session cleared the sidecar's cache and seed, so the next
@@ -29,10 +29,10 @@ resumes. Callers that discard drafts from rejected windows are unaffected.
  6 files changed, 144 insertions(+), 8 deletions(-)
 
 diff --git a/src/skippy/runtime_support.h b/src/skippy/runtime_support.h
-index 55499ea20..1c1cdb8fa 100644
+index d7e991307..8ba595623 100644
 --- a/src/skippy/runtime_support.h
 +++ b/src/skippy/runtime_support.h
-@@ -39,6 +39,7 @@ void skippy_mark_context_synchronized(skippy_model * model);
+@@ -36,6 +36,7 @@ void skippy_mark_context_synchronized(skippy_model * model);
  void skippy_synchronize_context_if_pending(skippy_model * model);
  bool skippy_memory_needs_verify_checkpoint(llama_memory_t memory);
  void skippy_mtp_clear_session_state(skippy_session * session);
@@ -41,10 +41,10 @@ index 55499ea20..1c1cdb8fa 100644
  bool skippy_verify_window_can_roll_back_in_place(
          const skippy_session * session,
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
-index fa97e12a5..8c7b99651 100644
+index f19a25b76..38ebae8d7 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
-@@ -172,6 +172,11 @@ struct skippy_session {
+@@ -177,6 +177,11 @@ struct skippy_session {
      // is the boundary the next sync prunes back to once the accepted prefix is
      // known.
      llama_pos mtp_pending_draft_end = 0;
@@ -233,10 +233,10 @@ index 4d6a2a68c..0f9b3a27c 100644
      session->ctx->synchronize();
  
 diff --git a/src/skippy/verification.cpp b/src/skippy/verification.cpp
-index e078d867c..c8b6e163f 100644
+index 0812485d7..bb3c0e621 100644
 --- a/src/skippy/verification.cpp
 +++ b/src/skippy/verification.cpp
-@@ -244,13 +244,24 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+@@ -230,13 +230,24 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
                  break;
              }
          }

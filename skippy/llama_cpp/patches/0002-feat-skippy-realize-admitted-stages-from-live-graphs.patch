@@ -1,7 +1,7 @@
-From fff93dbf9dd00992bb7e105b27a3222994f46f4e Mon Sep 17 00:00:00 2001
+From 60c4066bd4258e67836e04ad3eeaea19d6fd0848 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
+Subject: [PATCH 02/11] feat(skippy): realize admitted stages from live graphs
 
 ---
  common/common.cpp                       |  109 ---
@@ -146,10 +146,10 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  create mode 100644 src/skippy/workloads_internal.h
 
 diff --git a/common/common.cpp b/common/common.cpp
-index c5db22832..7b6f6102d 100644
+index 04e348805..8d0dfe864 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
-@@ -66,14 +66,6 @@
+@@ -67,14 +67,6 @@
  #pragma warning(disable: 4244 4267) // possible loss of data
  #endif
  
@@ -164,7 +164,7 @@ index c5db22832..7b6f6102d 100644
  //
  // CPU utils
  //
-@@ -524,11 +516,6 @@ void string_replace_all(std::string & s, const std::string & search, const std::
+@@ -542,11 +534,6 @@ void string_replace_all(std::string & s, const std::string & search, const std::
      s = std::move(builder);
  }
  
@@ -176,7 +176,7 @@ index c5db22832..7b6f6102d 100644
  std::string string_join(const std::vector<std::string> & values, const std::string & separator) {
      std::ostringstream result;
      for (size_t i = 0; i < values.size(); ++i) {
-@@ -1038,48 +1025,6 @@ std::filesystem::path fs_get_cache_file(const std::string & filename) {
+@@ -1060,48 +1047,6 @@ std::filesystem::path fs_get_cache_file(const std::string & filename) {
  // TTY utils
  //
  
@@ -225,7 +225,7 @@ index c5db22832..7b6f6102d 100644
  //
  // Model utils
  //
-@@ -1824,60 +1769,6 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
+@@ -1864,60 +1809,6 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
  // Vocab utils
  //
  
@@ -287,10 +287,10 @@ index c5db22832..7b6f6102d 100644
      const llama_model * model = llama_get_model(ctx);
      const llama_vocab * vocab = llama_model_get_vocab(model);
 diff --git a/common/common.h b/common/common.h
-index 2cd6e2ec9..54a928f04 100644
+index d0e33fb75..b24b490a8 100644
 --- a/common/common.h
 +++ b/common/common.h
-@@ -41,7 +41,7 @@
+@@ -43,7 +43,7 @@
  #define die(msg)          do { fputs("error: " msg "\n", stderr);                exit(1); } while (0)
  #define die_fmt(fmt, ...) do { fprintf(stderr, "error: " fmt "\n", __VA_ARGS__); exit(1); } while (0)
  
@@ -299,7 +299,7 @@ index 2cd6e2ec9..54a928f04 100644
      common_time_meas(int64_t & t_acc, bool disable = false);
      ~common_time_meas();
  
-@@ -299,7 +299,7 @@ struct common_params_sampling {
+@@ -301,7 +301,7 @@ struct common_params_sampling {
      bool backend_sampling = false;
  
      // print the parameters into a string
@@ -308,7 +308,7 @@ index 2cd6e2ec9..54a928f04 100644
  };
  
  struct common_params_model {
-@@ -809,7 +809,7 @@ std::string string_repeat(const std::string & str, size_t n);
+@@ -817,7 +817,7 @@ std::string string_repeat(const std::string & str, size_t n);
  
  void string_replace_all(std::string & s, const std::string & search, const std::string & replace);
  
@@ -317,7 +317,7 @@ index 2cd6e2ec9..54a928f04 100644
  
  template<class T>
  static std::vector<T> string_split(const std::string & str, char delim) {
-@@ -944,11 +944,11 @@ void fs_write_atomic(const std::filesystem::path & path, const std::string & dat
+@@ -949,11 +949,11 @@ void fs_write_atomic(const std::filesystem::path & path, const std::string & dat
  //
  
  // Auto-detect if colors can be enabled based on terminal and environment
@@ -332,7 +332,7 @@ index 2cd6e2ec9..54a928f04 100644
  
  //
  // Model utils
-@@ -1156,13 +1156,13 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
+@@ -1170,13 +1170,13 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
  
  // tokenizes a string into a vector of tokens
  // should work similar to Python's `tokenizer.encode`
@@ -348,7 +348,7 @@ index 2cd6e2ec9..54a928f04 100644
      const struct llama_vocab * vocab,
             const std::string & text,
                          bool   add_special,
-@@ -1170,12 +1170,12 @@ std::vector<llama_token> common_tokenize(
+@@ -1184,12 +1184,12 @@ std::vector<llama_token> common_tokenize(
  
  // tokenizes a token into a piece, optionally renders special/control tokens
  // should work similar to Python's `tokenizer.id_to_piece`
@@ -17568,5 +17568,5 @@ index 000000000..cc9279e7e
 +// attached from an earlier chat request.
 +void skippy_prepare_non_chat_workload(skippy_session * session);
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

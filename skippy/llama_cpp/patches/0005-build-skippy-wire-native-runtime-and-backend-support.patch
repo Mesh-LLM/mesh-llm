@@ -1,7 +1,7 @@
-From bc711264ee6c876c9a73ab7ebe02e8732eb76285 Mon Sep 17 00:00:00 2001
+From 3a5bc8564dc2c70adda001f9e6e21a20803f8172 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH] build(skippy): wire native runtime and backend support
+Subject: [PATCH 05/11] build(skippy): wire native runtime and backend support
 
 ---
  CMakeLists.txt                             |  17 +
@@ -11,7 +11,7 @@ Subject: [PATCH] build(skippy): wire native runtime and backend support
  common/chat-peg-parser.cpp                 |  15 +-
  common/chat-peg-parser.h                   |   2 +-
  common/chat.cpp                            | 126 +++-
- common/chat.h                              |   5 +-
+ common/chat.h                              |   6 +-
  common/ngram-cache.cpp                     | 158 ++++-
  common/peg-parser.cpp                      | 337 ++++++++++
  common/peg-parser.h                        |   8 +
@@ -28,21 +28,20 @@ Subject: [PATCH] build(skippy): wire native runtime and backend support
  ggml/src/ggml-metal/CMakeLists.txt         |   1 +
  ggml/src/ggml-metal/ggml-metal-device.h    |   7 +
  ggml/src/ggml-metal/ggml-metal-device.m    | 452 +++++++++++++-
- ggml/src/ggml-metal/ggml-metal-impl.h      |  34 +-
  ggml/src/ggml-metal/ggml-metal.cpp         |   3 +
  ggml/src/ggml-metal/kernels/cachegen.metal | 195 ++++++
  src/CMakeLists.txt                         | 680 ++++++++++++++++++++-
  tools/mtmd/mtmd-audio.cpp                  |   2 +
  tools/mtmd/mtmd-helper.cpp                 |  35 +-
  tools/mtmd/mtmd-helper.h                   |  16 +
- 31 files changed, 3184 insertions(+), 164 deletions(-)
+ 30 files changed, 3168 insertions(+), 147 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 ggml/src/ggml-cuda/cachegen.cu
  create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
  create mode 100644 ggml/src/ggml-metal/kernels/cachegen.metal
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 12f45558f..3edaa3e74 100644
+index e37c8aa4c..c84be83bc 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -2,6 +2,18 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit
@@ -63,8 +62,8 @@ index 12f45558f..3edaa3e74 100644
 +
  ### llama.cpp version
  set(LLAMA_VERSION_MAJOR 0)
- set(LLAMA_VERSION_MINOR 7)
-@@ -281,6 +293,7 @@ set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location o
+ set(LLAMA_VERSION_MINOR 8)
+@@ -285,6 +297,7 @@ set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location o
  
  set(LLAMA_PUBLIC_HEADERS
      ${CMAKE_CURRENT_SOURCE_DIR}/include/llama.h
@@ -72,7 +71,7 @@ index 12f45558f..3edaa3e74 100644
      ${CMAKE_CURRENT_SOURCE_DIR}/include/llama-cpp.h)
  
  set_target_properties(llama
-@@ -288,6 +301,10 @@ set_target_properties(llama
+@@ -292,6 +305,10 @@ set_target_properties(llama
          PUBLIC_HEADER "${LLAMA_PUBLIC_HEADERS}")
  
  install(TARGETS llama LIBRARY PUBLIC_HEADER)
@@ -84,10 +83,10 @@ index 12f45558f..3edaa3e74 100644
  if (LLAMA_BUILD_COMMON)
      install(TARGETS llama-common LIBRARY)
 diff --git a/common/CMakeLists.txt b/common/CMakeLists.txt
-index 2b307c59d..7e6b889ee 100644
+index 8e3c88dac..73e044e63 100644
 --- a/common/CMakeLists.txt
 +++ b/common/CMakeLists.txt
-@@ -86,10 +86,7 @@ add_library(${TARGET}
+@@ -88,10 +88,7 @@ add_library(${TARGET}
      json-schema-to-grammar.cpp
      json-schema.cpp
      json-schema.h
@@ -98,7 +97,7 @@ index 2b307c59d..7e6b889ee 100644
      log.h
      ngram-cache.cpp
      ngram-cache.h
-@@ -101,10 +98,10 @@ add_library(${TARGET}
+@@ -103,10 +100,10 @@ add_library(${TARGET}
      peg-parser.h
      preset.cpp
      preset.h
@@ -111,7 +110,7 @@ index 2b307c59d..7e6b889ee 100644
      speculative.cpp
      speculative.h
      subproc.cpp
-@@ -143,6 +140,7 @@ endif()
+@@ -145,6 +142,7 @@ endif()
  
  if (BUILD_SHARED_LIBS)
      set_target_properties(${TARGET} PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -119,7 +118,7 @@ index 2b307c59d..7e6b889ee 100644
  
      # TODO: make fine-grained exports in the future
      set_target_properties(${TARGET} PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
-@@ -151,36 +149,4 @@ endif()
+@@ -153,38 +151,6 @@ endif()
  target_link_libraries(${TARGET} PUBLIC  llama-common-base)
  target_link_libraries(${TARGET} PRIVATE cpp-httplib)
  
@@ -156,6 +155,8 @@ index 2b307c59d..7e6b889ee 100644
 -endif()
 -
  target_link_libraries(${TARGET} PUBLIC llama Threads::Threads)
+ 
+ if (CMAKE_SYSTEM_NAME MATCHES "AIX")
 diff --git a/common/chat-auto-parser-generator.cpp b/common/chat-auto-parser-generator.cpp
 index 9b918b366..fbb39cb3a 100644
 --- a/common/chat-auto-parser-generator.cpp
@@ -366,11 +367,11 @@ index 114fa049f..7723d4e35 100644
      common_peg_parser permute(const std::string & rule_prefix, const std::vector<common_peg_parser> & parsers);
  
 diff --git a/common/chat.cpp b/common/chat.cpp
-index 485671308..287d92bc2 100644
+index 5f956e64e..94bcaef71 100644
 --- a/common/chat.cpp
 +++ b/common/chat.cpp
-@@ -196,6 +196,11 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
-                 });
+@@ -203,6 +203,11 @@ json common_chat_msg::to_json_oaicompat(bool concat_typed_text) const {
+                 }
              }
          }
 +    } else if (!content_present) {
@@ -381,7 +382,7 @@ index 485671308..287d92bc2 100644
      } else {
          jmsg["content"] = "";
      }
-@@ -360,6 +365,7 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
+@@ -368,6 +373,7 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
  
              auto has_content    = message.contains("content");
              auto has_tool_calls = message.contains("tool_calls");
@@ -389,8 +390,8 @@ index 485671308..287d92bc2 100644
              if (has_content) {
                  const auto & content = message.at("content");
                  if (content.is_string()) {
-@@ -378,7 +384,9 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
-                         msg_part.text = part.at("text");
+@@ -390,7 +396,9 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
+                         }
                          msg.content_parts.push_back(msg_part);
                      }
 -                } else if (!content.is_null()) {
@@ -400,7 +401,7 @@ index 485671308..287d92bc2 100644
                      throw std::invalid_argument("Invalid 'content' type: expected string or array, got " +
                                                  content.dump() +
                                                  " (ref: https://github.com/ggml-org/llama.cpp/issues/8367)");
-@@ -414,11 +422,6 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
+@@ -426,11 +434,6 @@ std::vector<common_chat_msg> common_chat_msgs_parse_oaicompat(const json & messa
                      msg.tool_calls.push_back(tc);
                  }
              }
@@ -412,7 +413,7 @@ index 485671308..287d92bc2 100644
              if (message.contains("reasoning_content")) {
                  msg.reasoning_content = message.at("reasoning_content");
              }
-@@ -692,6 +695,113 @@ std::string common_chat_format_example(const struct common_chat_templates *
+@@ -796,6 +799,113 @@ std::string common_chat_format_example(const struct common_chat_templates *
      "  {{- '<|im_start|>assistant\n' -}}\n"                                               \
      "{%- endif -%}"
  
@@ -526,7 +527,7 @@ index 485671308..287d92bc2 100644
  void common_chat_templates_free(struct common_chat_templates * tmpls) {
      delete tmpls;
  }
-@@ -749,6 +859,10 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model *
+@@ -904,6 +1014,10 @@ common_chat_templates_ptr common_chat_templates_init(const struct llama_model *
      } else {
          default_template_src = chat_template_override;
      }
@@ -538,19 +539,20 @@ index 485671308..287d92bc2 100644
          if (!template_tool_use_src.empty()) {
              default_template_src = template_tool_use_src;
 diff --git a/common/chat.h b/common/chat.h
-index dcff94919..02df091df 100644
+index ebfc80f51..585b55d25 100644
 --- a/common/chat.h
 +++ b/common/chat.h
-@@ -94,6 +94,8 @@ struct common_chat_msg {
-     std::string                               reasoning_content;
-     std::string                               tool_name;
-     std::string                               tool_call_id;
+@@ -98,6 +98,9 @@ struct common_chat_msg {
+     // non-OpenAI message keys as a JSON object string, only for templates that read them (DeepSeek V4.1)
+     std::string                               extra_json;
+ 
 +    bool                                      content_present = true;
 +    bool                                      content_is_null = false;
- 
++
      common_json to_json_oaicompat(bool concat_typed_text = false) const;
  
-@@ -130,7 +132,8 @@ struct common_chat_msg {
+     std::string render_content(const std::string & delimiter = "\n\n") const;
+@@ -133,7 +136,8 @@ struct common_chat_msg {
      bool operator==(const common_chat_msg & other) const {
          return role == other.role && content == other.content && content_parts == other.content_parts &&
                 tool_calls == other.tool_calls && reasoning_content == other.reasoning_content &&
@@ -561,7 +563,7 @@ index dcff94919..02df091df 100644
  
      bool operator!=(const common_chat_msg & other) const { return !(*this == other); }
 diff --git a/common/ngram-cache.cpp b/common/ngram-cache.cpp
-index dce54b364..6d97b2dd8 100644
+index 419a0ebc9..2c844ba2f 100644
 --- a/common/ngram-cache.cpp
 +++ b/common/ngram-cache.cpp
 @@ -1,14 +1,161 @@
@@ -729,7 +731,7 @@ index dce54b364..6d97b2dd8 100644
 @@ -97,12 +244,13 @@ static llama_token try_draft(common_ngram_cache & nc_static, const common_ngram
  // Try to draft a token from primary cache (context/dynamic), validate with static cache:
  static llama_token try_draft(
-     common_ngram_cache & nc_primary, const std::vector<common_ngram> & ngrams_primary, common_ngram_cache_part & part_static,
+     common_ngram_cache & nc_primary, const std::vector<common_ngram> & ngrams_primary, const common_ngram_cache_part & part_static,
 -    const int * min_sample_size, const int * min_percent) {
 +    const int * min_sample_size, const int * min_percent, int ngram_min) {
  
@@ -754,7 +756,7 @@ index dce54b364..6d97b2dd8 100644
              continue;;
          }
          drafted_token = max_token;
-@@ -179,10 +327,10 @@ void common_ngram_cache_draft(
+@@ -177,10 +325,10 @@ void common_ngram_cache_draft(
              ngrams_cd.push_back(ngram_cd);
          }
          if (drafted_token == LLAMA_TOKEN_NULL) {
@@ -768,10 +770,10 @@ index dce54b364..6d97b2dd8 100644
          if (drafted_token == LLAMA_TOKEN_NULL) {
              drafted_token = try_draft(nc_static, ngram_static);
 diff --git a/common/peg-parser.cpp b/common/peg-parser.cpp
-index 8033f7e81..04242b919 100644
+index e2ccb77bb..0fb48ab5c 100644
 --- a/common/peg-parser.cpp
 +++ b/common/peg-parser.cpp
-@@ -1814,6 +1814,343 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
+@@ -1827,6 +1827,343 @@ void common_peg_arena::build_grammar(const common_grammar_builder & builder, boo
      }
  }
  
@@ -1116,10 +1118,10 @@ index 8033f7e81..04242b919 100644
      common_peg_parser_builder builder;
      builder.set_root(fn(builder));
 diff --git a/common/peg-parser.h b/common/peg-parser.h
-index 9255d6eb9..af189997f 100644
+index 46df99875..5b41e7eba 100644
 --- a/common/peg-parser.h
 +++ b/common/peg-parser.h
-@@ -357,6 +357,14 @@ class common_peg_arena {
+@@ -365,6 +365,14 @@ class common_peg_arena {
  
      std::string dump(common_peg_parser_id id) const;
  
@@ -1135,7 +1137,7 @@ index 9255d6eb9..af189997f 100644
  
    private:
 diff --git a/common/reasoning-budget.cpp b/common/reasoning-budget.cpp
-index 4884299f3..8fd446e67 100644
+index 81b7c3e56..6a8006881 100644
 --- a/common/reasoning-budget.cpp
 +++ b/common/reasoning-budget.cpp
 @@ -1,9 +1,4 @@
@@ -1305,15 +1307,15 @@ index 4884299f3..8fd446e67 100644
                      }
                  }
              }
-@@ -139,7 +164,6 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
-             if (ctx->force_pos >= ctx->forced_tokens.size()) {
+@@ -140,7 +165,6 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
+             if (match >= 0 || ctx->force_pos >= ctx->forced_tokens.size()) {
                  ctx->state = REASONING_BUDGET_DONE;
                  ctx->end_match = match;
 -                COM_TRC("%s", "forced sequence complete, done\n");
              }
              break;
          }
-@@ -151,12 +175,9 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
+@@ -152,12 +176,9 @@ static void common_reasoning_budget_accept(struct llama_sampler * smpl, llama_to
                  ctx->remaining = ctx->budget;
                  ctx->end_matcher.reset();
                  ctx->end_match = -1;
@@ -1326,7 +1328,7 @@ index 4884299f3..8fd446e67 100644
                  }
              }
              break;
-@@ -196,8 +217,8 @@ static void common_reasoning_budget_reset(struct llama_sampler * smpl) {
+@@ -197,8 +218,8 @@ static void common_reasoning_budget_reset(struct llama_sampler * smpl) {
  }
  
  static struct llama_sampler * common_reasoning_budget_init_state(
@@ -1337,7 +1339,7 @@ index 4884299f3..8fd446e67 100644
          int32_t budget, common_reasoning_budget_state initial_state);
  
  static struct llama_sampler * common_reasoning_budget_clone(const struct llama_sampler * smpl);
-@@ -232,9 +253,9 @@ static struct llama_sampler * common_reasoning_budget_clone(const struct llama_s
+@@ -233,9 +254,9 @@ static struct llama_sampler * common_reasoning_budget_clone(const struct llama_s
  
  static struct llama_sampler * common_reasoning_budget_init_state(
          const struct llama_vocab        * vocab,
@@ -1350,7 +1352,7 @@ index 4884299f3..8fd446e67 100644
          int32_t                           budget,
          common_reasoning_budget_state     initial_state) {
      // promote COUNTING with budget <= 0 to FORCING
-@@ -260,9 +281,9 @@ static struct llama_sampler * common_reasoning_budget_init_state(
+@@ -261,9 +282,9 @@ static struct llama_sampler * common_reasoning_budget_init_state(
  
  struct llama_sampler * common_reasoning_budget_init(
          const struct llama_vocab        * vocab,
@@ -1363,7 +1365,7 @@ index 4884299f3..8fd446e67 100644
          int32_t                           budget,
          common_reasoning_budget_state     initial_state) {
      return common_reasoning_budget_init_state(vocab, start_seqs, end_seqs, forced_tokens, budget, initial_state);
-@@ -275,7 +296,7 @@ common_reasoning_budget_state common_reasoning_budget_get_state(const struct lla
+@@ -276,7 +297,7 @@ common_reasoning_budget_state common_reasoning_budget_get_state(const struct lla
      return ((const common_reasoning_budget_ctx *)smpl->ctx)->state;
  }
  
@@ -1372,7 +1374,7 @@ index 4884299f3..8fd446e67 100644
      if (!smpl) {
          return nullptr;
      }
-@@ -304,7 +325,5 @@ bool common_reasoning_budget_force(struct llama_sampler * smpl) {
+@@ -305,7 +326,5 @@ bool common_reasoning_budget_force(struct llama_sampler * smpl) {
      ctx->state = REASONING_BUDGET_FORCING;
      ctx->force_pos = 0;
      ctx->end_matcher.reset();
@@ -1791,10 +1793,10 @@ index 000000000..c3362e2a7
 +    return skippy_common_success(out_error);
 +}
 diff --git a/ggml/cmake/common.cmake b/ggml/cmake/common.cmake
-index f3610298f..fdf4ac7b6 100644
+index 42b65a580..956d453a7 100644
 --- a/ggml/cmake/common.cmake
 +++ b/ggml/cmake/common.cmake
-@@ -93,8 +93,13 @@ function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
+@@ -99,8 +99,13 @@ function(ggml_cuda_fattn_vec_instances DIR OUT_SRCS)
      endif()
      list(REMOVE_DUPLICATES FA_COMBINATIONS)
  
@@ -1811,10 +1813,10 @@ index f3610298f..fdf4ac7b6 100644
          foreach (TYPE_K IN LISTS FA_TYPES)
              if ("${TYPE_K}-${TYPE_V}" IN_LIST FA_COMBINATIONS)
 diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
-index 7a65d8121..fbc940129 100644
+index 735ed2c2b..f6f8d7834 100644
 --- a/ggml/include/ggml-backend.h
 +++ b/ggml/include/ggml-backend.h
-@@ -226,6 +226,33 @@ extern "C" {
+@@ -229,6 +229,33 @@ extern "C" {
      };
      typedef struct ggml_backend_feature * (*ggml_backend_get_features_t)(ggml_backend_reg_t reg);
  
@@ -1849,10 +1851,10 @@ index 7a65d8121..fbc940129 100644
      // Backend registry
      //
 diff --git a/ggml/src/ggml-backend.cpp b/ggml/src/ggml-backend.cpp
-index ffbcba366..2afd1b8ec 100644
+index 3520b4349..80b688d23 100644
 --- a/ggml/src/ggml-backend.cpp
 +++ b/ggml/src/ggml-backend.cpp
-@@ -1217,14 +1217,30 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
+@@ -1477,14 +1477,30 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
      sched->n_graph_inputs = 0;
      sched->is_reset = false;
  
@@ -1885,7 +1887,7 @@ index ffbcba366..2afd1b8ec 100644
      sched->ctx = ggml_init(params);
      if (sched->ctx == NULL) {
          GGML_ABORT("%s: failed to initialize context\n", __func__);
-@@ -1988,8 +2004,9 @@ ggml_backend_sched_t ggml_backend_sched_new(
+@@ -2248,8 +2264,9 @@ ggml_backend_sched_t ggml_backend_sched_new(
      sched->graph_size      = 0;
      sched->prev_graph_size = 0;
  
@@ -2160,7 +2162,7 @@ index 000000000..7118c9aa9
 +
 +#endif // !defined(GGML_USE_MUSA)
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 7c45d0d1f..f860e8035 100644
+index 06956ce7a..5a92f977c 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
 @@ -10,6 +10,7 @@
@@ -2171,7 +2173,7 @@ index 7c45d0d1f..f860e8035 100644
  #include "ggml-cuda/clamp.cuh"
  #include "ggml-cuda/col2im-1d.cuh"
  #include "ggml-cuda/concat.cuh"
-@@ -86,6 +87,7 @@
+@@ -87,6 +88,7 @@
  #include <map>
  #include <memory>
  #include <mutex>
@@ -2179,7 +2181,7 @@ index 7c45d0d1f..f860e8035 100644
  #include <cstdarg>
  #include <cstdio>
  #include <cstdlib>
-@@ -5660,7 +5662,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
+@@ -5988,7 +5990,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                  return false;
              }
          case GGML_OP_DUP:
@@ -2193,7 +2195,7 @@ index 7c45d0d1f..f860e8035 100644
          case GGML_OP_ARGMAX:
          case GGML_OP_COUNT_EQUAL:
              return true;
-@@ -6016,7 +6023,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -6347,7 +6354,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      #endif
  
      #ifdef GGML_CUDA_FA_QUANTS
@@ -2207,7 +2209,7 @@ index 7c45d0d1f..f860e8035 100644
      #endif
  
      {
-@@ -6042,6 +6054,329 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -6373,6 +6385,329 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      GGML_UNUSED(reg);
  }
  
@@ -2537,7 +2539,7 @@ index 7c45d0d1f..f860e8035 100644
  static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
      GGML_UNUSED(reg);
      if (strcmp(name, "ggml_backend_comm_init") == 0) {
-@@ -6062,6 +6397,11 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+@@ -6393,6 +6728,11 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_cuda_get_features;
      }
@@ -2550,7 +2552,7 @@ index 7c45d0d1f..f860e8035 100644
  }
  
 diff --git a/ggml/src/ggml-cuda/vendors/hip.h b/ggml/src/ggml-cuda/vendors/hip.h
-index da7e3da0b..a867531b6 100644
+index 0db8e97c9..82f05b88b 100644
 --- a/ggml/src/ggml-cuda/vendors/hip.h
 +++ b/ggml/src/ggml-cuda/vendors/hip.h
 @@ -30,6 +30,7 @@
@@ -2574,7 +2576,7 @@ index 91691b223..a6d145e69 100644
      kernels/fa_f16.metal
      kernels/fa_f32.metal
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.h b/ggml/src/ggml-metal/ggml-metal-device.h
-index 4012b9d5f..e51558652 100644
+index 1858e7fc5..d34545af8 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.h
 +++ b/ggml/src/ggml-metal/ggml-metal-device.h
 @@ -1,6 +1,7 @@
@@ -2585,7 +2587,7 @@ index 4012b9d5f..e51558652 100644
  
  #ifdef __cplusplus
  extern "C" {
-@@ -369,6 +370,12 @@ void   ggml_metal_buffer_clear        (ggml_metal_buffer_t buf, uint8_t value);
+@@ -374,6 +375,12 @@ void   ggml_metal_buffer_clear        (ggml_metal_buffer_t buf, uint8_t value);
  //
  struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, const struct ggml_tensor * t);
  
@@ -2599,7 +2601,7 @@ index 4012b9d5f..e51558652 100644
  }
  #endif
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index d1bce8bad..5b23ddf7f 100644
+index 3d4ebf86f..ababccd8e 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
 @@ -11,6 +11,8 @@
@@ -2619,7 +2621,7 @@ index d1bce8bad..5b23ddf7f 100644
      X(FA_AUX,          fa_aux)         \
      X(FA_F16,          fa_f16)         \
      X(FA_F32,          fa_f32)         \
-@@ -180,6 +183,11 @@ struct ggml_metal_library {
+@@ -180,6 +183,11 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
      ggml_metal_device_t dev;
      ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
  
@@ -2883,7 +2885,7 @@ index d1bce8bad..5b23ddf7f 100644
  
          [mtl_function release];
  
-@@ -1754,6 +1916,29 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+@@ -1756,6 +1918,29 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
              if (op->src[1]->type != op->src[2]->type) {
                  return false;
              }
@@ -2913,7 +2915,7 @@ index d1bce8bad..5b23ddf7f 100644
              switch (op->src[1]->type) {
                  case GGML_TYPE_F32:
                  case GGML_TYPE_F16:
-@@ -2515,3 +2700,262 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
+@@ -2737,3 +2922,262 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
  
      return res;
  }
@@ -3176,63 +3178,11 @@ index d1bce8bad..5b23ddf7f 100644
 +    }
 +    return true;
 +}
-diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
-index 4ffb5a77d..d151a600d 100644
---- a/ggml/src/ggml-metal/ggml-metal-impl.h
-+++ b/ggml/src/ggml-metal/ggml-metal-impl.h
-@@ -1036,6 +1036,23 @@ typedef struct {
-     uint64_t nb3;
- } ggml_metal_kargs_solve_tri;
- 
-+typedef struct {
-+    int32_t  n_kv;
-+    int32_t  n_batch;
-+    int32_t  mask_ne3;
-+    uint64_t nb1;
-+    uint64_t nb3;
-+    uint64_t nbq1;
-+    uint64_t nbq2;
-+    uint64_t nbq3;
-+    uint64_t nbk2;
-+    uint64_t nbk3;
-+    uint64_t nbw1;
-+    uint64_t nbw3;
-+    uint64_t nbm1;
-+    uint64_t nbm3;
-+} ggml_metal_kargs_lightning_indexer;
-+
- typedef struct {
-     int32_t  ne00t;
-     int32_t  ne00;
-@@ -1278,23 +1295,6 @@ typedef struct {
-     int64_t val;
- } ggml_metal_kargs_memset;
- 
--typedef struct {
--    int32_t  n_kv;
--    int32_t  n_batch;
--    int32_t  mask_ne3;
--    uint64_t nb1;
--    uint64_t nb3;
--    uint64_t nbq1;
--    uint64_t nbq2;
--    uint64_t nbq3;
--    uint64_t nbk2;
--    uint64_t nbk3;
--    uint64_t nbw1;
--    uint64_t nbw3;
--    uint64_t nbm1;
--    uint64_t nbm3;
--} ggml_metal_kargs_lightning_indexer;
--
- typedef struct {
-     int32_t  n_tokens;
-     int32_t  n_iter;
 diff --git a/ggml/src/ggml-metal/ggml-metal.cpp b/ggml/src/ggml-metal/ggml-metal.cpp
-index 344882e04..f8732fbca 100644
+index 1699a7131..8e6853234 100644
 --- a/ggml/src/ggml-metal/ggml-metal.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal.cpp
-@@ -946,6 +946,9 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const
+@@ -1015,6 +1015,9 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_metal_get_features;
      }
@@ -4157,7 +4107,7 @@ index 97250c2e8..5e02baa49 100644
 +    target_link_libraries(llama PRIVATE ${SKIPPY_ACCELERATE_FRAMEWORK})
 +endif()
 diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
-index 1b4ea60bf..2eebb90bd 100644
+index 14b5a7213..d2521f24b 100644
 --- a/tools/mtmd/mtmd-audio.cpp
 +++ b/tools/mtmd/mtmd-audio.cpp
 @@ -285,6 +285,7 @@ struct filter_params {
@@ -4177,10 +4127,10 @@ index 1b4ea60bf..2eebb90bd 100644
          }
  
 diff --git a/tools/mtmd/mtmd-helper.cpp b/tools/mtmd/mtmd-helper.cpp
-index eba034f79..e1373d4cc 100644
+index 29812219c..04382079d 100644
 --- a/tools/mtmd/mtmd-helper.cpp
 +++ b/tools/mtmd/mtmd-helper.cpp
-@@ -207,6 +207,25 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+@@ -209,6 +209,25 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
          int32_t n_batch,
          bool logits_last,
          llama_pos * new_n_past) {
@@ -4206,7 +4156,7 @@ index eba034f79..e1373d4cc 100644
      GGML_ASSERT(n_batch > 0);
      int32_t ret;
      auto chunk_type = mtmd_input_chunk_get_type(chunk);
-@@ -237,6 +256,9 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+@@ -239,6 +258,9 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
                  LOG_ERR("failed to decode text\n");
                  return ret;
              }
@@ -4216,7 +4166,7 @@ index eba034f79..e1373d4cc 100644
              *new_n_past += n_added;
          }
  
-@@ -255,7 +277,18 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+@@ -257,7 +279,18 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
          LOG_INF("%s slice encoded in %" PRId64 " ms\n", name, ggml_time_ms() - t0);
  
          float * embd = mtmd_get_output_embd(ctx);
@@ -4237,10 +4187,10 @@ index eba034f79..e1373d4cc 100644
              LOG_ERR("failed to decode %s\n", name);
              return ret;
 diff --git a/tools/mtmd/mtmd-helper.h b/tools/mtmd/mtmd-helper.h
-index 7436230f0..f9fe048ff 100644
+index 99ae1738d..9d6b0b25a 100644
 --- a/tools/mtmd/mtmd-helper.h
 +++ b/tools/mtmd/mtmd-helper.h
-@@ -117,6 +117,22 @@ MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
+@@ -115,6 +115,22 @@ MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
                                                 bool logits_last,
                                                 llama_pos * new_n_past);
  
@@ -4264,5 +4214,5 @@ index 7436230f0..f9fe048ff 100644
  struct mtmd_helper_embd_batch {
      int32_t n_tokens;
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

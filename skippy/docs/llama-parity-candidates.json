@@ -1501,6 +1501,66 @@
       "family": "vllm-decision2",
       "status": "needs_boundary_registration",
       "notes": "new upstream llama.cpp source; the decision-head builder derives from the qwen3 graph and reuses the inherited backbone layer loop, so this source owns no begin_block/end_block decoder boundaries and cannot be admitted to split serving yet"
+    },
+    {
+      "llama_model": "beam",
+      "family": "beam",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "deepseek41",
+      "family": "deepseek41",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "flint",
+      "family": "flint",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "kolibri1",
+      "family": "kolibri1",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "lfm-base",
+      "family": "lfm_base",
+      "status": "implementation_base",
+      "notes": "shared llama.cpp implementation helper, not a standalone GGUF architecture row; certify the concrete derived families instead"
+    },
+    {
+      "llama_model": "lfm3",
+      "family": "lfm3",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "limite",
+      "family": "limite",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "mistral-large4",
+      "family": "mistral-large4",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "muse-spark",
+      "family": "muse-spark",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "sensenova-u1",
+      "family": "sensenova-u1",
+      "status": "candidate",
+      "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
     }
   ]
 }

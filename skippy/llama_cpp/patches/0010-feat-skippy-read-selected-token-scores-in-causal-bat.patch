@@ -1,7 +1,8 @@
-From 5fb5632cf2145daeb536a2eb7f25ab29746af66b Mon Sep 17 00:00:00 2001
+From ef9087ce421b9b6866761e3d22344267e6fed960 Mon Sep 17 00:00:00 2001
 From: IvGolovach <20299097+IvGolovach@users.noreply.github.com>
 Date: Fri, 23 Oct 2026 12:00:00 -0700
-Subject: [PATCH] feat(skippy): read selected token scores in causal batches
+Subject: [PATCH 10/11] feat(skippy): read selected token scores in causal
+ batches
 
 Keep full vocabulary logits on the terminal worker and read bounded
 conditional log probabilities before another iteration can replace them.
@@ -247,5 +248,5 @@ index 000000000..d33237d1a
 +    return 0;
 +}
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

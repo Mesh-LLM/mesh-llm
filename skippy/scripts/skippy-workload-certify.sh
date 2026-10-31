@@ -433,6 +433,9 @@ if [[ -n "$ORACLE_TTS" ]]; then
 fi
 
 if [[ "$MODEL_CLASS" == "embedding" ]]; then
+  # Battery retries reuse the same per-family work dir. Admission refuses any
+  # pre-existing receipt so each run publishes its own; drop the stale one.
+  rm -f "$WORK_DIR/embedding-sdk.json"
   "${workload_automation[@]}" automation smoke-observation sdk-client \
     --client embeddings --python "$SDK_PYTHON" \
     --base-url "http://127.0.0.1:$PORT/v1" --model "$MODEL_ID" \

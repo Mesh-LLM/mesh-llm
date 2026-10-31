@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/gemma3n.cpp b/src/models/gemma3n.cpp
-index f2e5ae6c85b6cfd3a6474df1fe01306b4912bae8..b55ac8270c45c519082ae929fe7d9c034866148c 100644
+index 7848f9f59c887d0b62ead74f0185f0a17b876c66..c1acd26bba1d37b30b1984d9f0c880d8064888f2 100644
 --- a/src/models/gemma3n.cpp
 +++ b/src/models/gemma3n.cpp
 @@ -127,6 +127,8 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par

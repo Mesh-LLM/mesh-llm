@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/granite-hybrid.cpp b/src/models/granite-hybrid.cpp
-index fb3bf7024be3d9deead8a1fa546c9b7fc920e012..f5e54d4230ea0c0ae77602465b5e5fc8246edb47 100644
+index a752a365cfd188b3386e171db02503f9306fcb17..08a860a77619d73712ac6edcbfc581927d5e80ac 100644
 --- a/src/models/granite-hybrid.cpp
 +++ b/src/models/granite-hybrid.cpp
 @@ -153,6 +153,8 @@ llama_model_granite_hybrid::graph::graph(const llama_model & model, const llm_gr
@@ -18,10 +18,10 @@ index fb3bf7024be3d9deead8a1fa546c9b7fc920e012..f5e54d4230ea0c0ae77602465b5e5fc8
      for (int il = 0; il < n_layer; ++il) {
 +        begin_block(inpL, il);
 +
-         struct ggml_tensor * inpSA = inpL;
+         res->t_layer_inp[il] = inpL;
  
-         // norm
-@@ -177,6 +179,7 @@ llama_model_granite_hybrid::graph::graph(const llama_model & model, const llm_gr
+         struct ggml_tensor * inpSA = inpL;
+@@ -179,6 +181,7 @@ llama_model_granite_hybrid::graph::graph(const llama_model & model, const llm_gr
  
          // input for next layer
          inpL = cur;
