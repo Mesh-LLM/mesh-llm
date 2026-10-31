@@ -27,6 +27,13 @@ runtime, tokenizer snapshot and corpus. External directory links/editable
 environments are refused; internal aliases such as `lib64 -> lib` are pinned
 without traversal, and regular-file interpreter links are hashed by content.
 
+Place the tokenizer snapshot in its pinned Hugging Face cache layout and set
+`HF_HUB_CACHE` (or `HF_HOME`) to that cache before pinning and running. The
+offline client receives the catalog's repository ID and exact revision; pinning
+requires that its resolved snapshot is the same canonical directory as
+`tools.tokenizer.path`. The child receives that cache path explicitly, so it
+cannot silently consume a different snapshot from the operator's home cache.
+
 Create `/abs/request.paths.json` with:
 
 ```json

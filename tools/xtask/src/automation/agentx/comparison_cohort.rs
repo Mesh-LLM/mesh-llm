@@ -139,6 +139,10 @@ mod tests {
         for concurrency in [1, 2, 4] {
             let config = configuration(&input, 8080, concurrency).unwrap();
             let benchmark = &config["benchmark"];
+            assert_eq!(
+                benchmark["tokenizer"],
+                json!({"name": input.model.tokenizer, "revision": input.model.tokenizer_revision})
+            );
             assert_eq!(benchmark["dataset"]["cache_bust"]["namespace"], namespace);
             assert!(benchmark["scenario"].is_null());
             assert_eq!(

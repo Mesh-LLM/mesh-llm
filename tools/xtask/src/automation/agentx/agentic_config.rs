@@ -2,6 +2,37 @@
 use super::{Prepared, trace_context};
 use crate::command::DynResult;
 use serde_json::{Value, json};
+use std::path::{Path, PathBuf};
+
+pub(super) fn tokenizer_hub_cache(root: &Path) -> PathBuf {
+    let cache = std::env::var_os("HF_HUB_CACHE").map_or_else(
+        || {
+            std::env::var_os("HF_HOME")
+                .map_or_else(|| root.join(".cache/huggingface"), PathBuf::from)
+                .join("hub")
+        },
+        PathBuf::from,
+    );
+    if cache.is_absolute() {
+        cache
+    } else {
+        root.join(cache)
+    }
+}
+
+pub(super) fn tokenizer_snapshot(root: &Path, model: &super::Model) -> PathBuf {
+    tokenizer_hub_cache(root)
+        .join(format!("models--{}", model.tokenizer.replace('/', "--")))
+        .join("snapshots")
+        .join(&model.tokenizer_revision)
+}
+
+pub(super) fn verify_tokenizer_snapshot(pinned: &Path, resolved: &Path) -> DynResult<()> {
+    if pinned.canonicalize()? != resolved.canonicalize()? {
+        return Err("offline tokenizer cache must resolve to the exact pinned snapshot".into());
+    }
+    Ok(())
+}
 
 pub(super) fn configuration(
     input: &Prepared,
@@ -10,21 +41,12 @@ pub(super) fn configuration(
     sessions: usize,
     namespace_label: &str,
 ) -> DynResult<Value> {
-    let cache = std::env::var_os("HF_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| input.root.join(".cache/huggingface"));
-    let tokenizer = cache
-        .join("hub")
-        .join(format!(
-            "models--{}",
-            input.model.tokenizer.replace('/', "--")
-        ))
-        .join("snapshots")
-        .join(&input.model.tokenizer_revision);
-    let tokenizer = input
-        .tools
-        .as_ref()
-        .map_or(tokenizer, |tools| tools.tokenizer.path.clone());
+    if let Some(tools) = &input.tools {
+        verify_tokenizer_snapshot(
+            &tools.tokenizer.path,
+            &tokenizer_snapshot(&input.root, &input.model),
+        )?;
+    }
     let cohort = input
         .dataset
         .parent()
@@ -40,7 +62,9 @@ pub(super) fn configuration(
         "endpoint":{"url":format!("http://127.0.0.1:{port}/v1/chat/completions"),
             "type":"chat","streaming":true,"timeout":1800,
             "use_server_token_count":true,"session_header":"X-Session-ID","extra":{"ignore_eos":true}},
-        "tokenizer":{"name":tokenizer,"revision":input.model.tokenizer_revision},
+        // The locked offline client resolves repository IDs through the HF cache;
+        // passing an absolute snapshot path triggers its repo-ID validation.
+        "tokenizer":{"name":input.model.tokenizer,"revision":input.model.tokenizer_revision},
         "dataset":{"type":"file","path":input.dataset,"format":"weka_trace",
             "sampling":"sequential","entries":sessions,"max_context_length":trace_context::LIMIT,
             "ignore_trace_delays":false,"use_think_time_only":true,
@@ -53,4 +77,31 @@ pub(super) fn configuration(
         "artifacts":{"dir":input.output.join("upstream"),"summary":["json"],
             "records":["jsonl"],"trace":true},"gpu_telemetry":{"enabled":false}
     }}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn offline_resolution_rejects_a_different_or_missing_pinned_snapshot() {
+        let root = tempfile::tempdir().unwrap();
+        let pinned = root.path().join("pinned");
+        let other = root.path().join("other");
+        std::fs::create_dir(&pinned).unwrap();
+        std::fs::create_dir(&other).unwrap();
+        verify_tokenizer_snapshot(&pinned, &pinned).unwrap();
+        assert!(verify_tokenizer_snapshot(&pinned, &other).is_err());
+        assert!(verify_tokenizer_snapshot(&pinned, &root.path().join("missing")).is_err());
+    }
+
+    #[test]
+    fn child_uses_the_same_explicit_cache_as_snapshot_admission() {
+        let root = tempfile::tempdir().unwrap();
+        let spec = super::super::command::spec(root.path(), "true", &[]).unwrap();
+        assert!(
+            matches!(spec.environment.get(std::ffi::OsStr::new("HF_HUB_CACHE")),
+            Some(crate::process::Value::Public(path)) if path == tokenizer_hub_cache(root.path()).as_os_str())
+        );
+    }
 }

@@ -28,22 +28,8 @@ pub(super) fn arguments(input: &Prepared, port: u16, concurrency: u32) -> Vec<St
         &input.model.key,
         "--tokenizer",
     ]);
-    // Use the pinned host-cache tokenizer without contacting HF.
-    let cache = std::env::var_os("HF_HOME")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| input.root.join(".cache/huggingface"));
-    args.push(
-        cache
-            .join("hub")
-            .join(format!(
-                "models--{}",
-                input.model.tokenizer.replace('/', "--")
-            ))
-            .join("snapshots")
-            .join(&input.model.tokenizer_revision)
-            .to_string_lossy()
-            .into_owned(),
-    );
+    // The locked client's offline resolver accepts repository IDs, not paths.
+    args.push(input.model.tokenizer.clone());
     args.extend(command::strings(&[
         "--tokenizer-revision",
         &input.model.tokenizer_revision,

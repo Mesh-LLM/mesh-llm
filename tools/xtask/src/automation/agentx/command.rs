@@ -38,6 +38,10 @@ pub(super) fn spec(root: &Path, executable: &str, args: &[String]) -> DynResult<
         .collect();
     environment.insert("PYTHONDONTWRITEBYTECODE".into(), Value::Public("1".into()));
     environment.insert("HF_HUB_OFFLINE".into(), Value::Public("1".into()));
+    environment.insert(
+        "HF_HUB_CACHE".into(),
+        Value::Public(super::agentic_config::tokenizer_hub_cache(root).into_os_string()),
+    );
     Ok(ProcessSpec {
         executable: self::executable(executable)?,
         arguments: args.iter().map(|arg| Value::Public(arg.into())).collect(),
