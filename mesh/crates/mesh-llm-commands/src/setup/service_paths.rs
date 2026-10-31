@@ -1,4 +1,5 @@
 use super::SetupPlatform;
+use super::service_binary::{service_binary_path, working_directory};
 use super::service_templates::{SERVICE_LABEL, SERVICE_NAME};
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
@@ -25,8 +26,18 @@ impl ServiceInstallContext {
         let config_root = dirs::config_dir().unwrap_or_else(|| home_dir.join(".config"));
         let local_data_root =
             dirs::data_local_dir().unwrap_or_else(|| home_dir.join(".local/share"));
-        let binary_path = std::env::current_exe()
+        let current_exe = std::env::current_exe()
             .context("could not determine the installed mesh-llm binary path")?;
+        let binary_path = service_binary_path(
+            std::env::args_os().next().as_deref(),
+            std::env::var_os("PATH").as_deref(),
+            working_directory(
+                std::env::var_os("PWD").as_deref(),
+                std::env::current_dir().ok(),
+            )
+            .as_deref(),
+            current_exe,
+        );
         let user_id = match platform {
             SetupPlatform::MacOs => detect_user_id()?,
             SetupPlatform::Windows => detect_windows_user_sid()?,
