@@ -2,6 +2,7 @@
 
 mod crate_coverage;
 mod documentation;
+pub(crate) mod entrypoint_graph;
 mod entrypoints;
 pub(crate) mod lane_results;
 mod producers;

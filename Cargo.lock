@@ -1233,6 +1233,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ci-controller"
+version = "0.78.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+]
+
+[[package]]
 name = "ciborium"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11829,6 +11840,7 @@ name = "xtask"
 version = "0.78.0"
 dependencies = [
  "caseless",
+ "ci-controller",
  "ed25519-dalek",
  "flate2",
  "getrandom 0.3.4",
