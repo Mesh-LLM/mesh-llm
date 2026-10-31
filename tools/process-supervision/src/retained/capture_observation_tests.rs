@@ -1,6 +1,6 @@
 //! Retained callbacks classify only fixed test markers and never retain raw lines.
 use super::*;
-use crate::process::{Completion, Limits, Readiness, Value};
+use crate::{Completion, Limits, Readiness, Value};
 use std::{collections::BTreeMap, time::Duration};
 #[derive(Clone, Copy, Debug)]
 enum End {
@@ -103,12 +103,7 @@ fn retained_observer_receives_each_line_once_in_expected_stop_cleanup_and_reject
             readiness: Readiness::None,
             completion: Completion::Exit,
         };
-        let report = run(
-            &mut counter,
-            &limits,
-            &crate::process::Cancellation::default(),
-        )
-        .unwrap();
+        let report = run(&mut counter, &limits, &crate::Cancellation::default()).unwrap();
         assert_eq!(
             (counter.early, counter.tail),
             (1, 1),
@@ -148,7 +143,7 @@ enum PairEnd {
 struct PairCounter {
     launches: std::collections::VecDeque<Launch>,
     end: PairEnd,
-    cancellation: crate::process::Cancellation,
+    cancellation: crate::Cancellation,
     ready: [bool; 2],
     health: [usize; 2],
     stopped: bool,
@@ -239,7 +234,7 @@ fn pair_fixture(end: PairEnd) {
             readiness_deadline: execution,
         })
         .collect();
-    let cancellation = crate::process::Cancellation::default();
+    let cancellation = crate::Cancellation::default();
     let mut counter = PairCounter {
         launches,
         end,
@@ -263,9 +258,9 @@ fn pair_fixture(end: PairEnd) {
     assert_eq!(
         report.outcome,
         match end {
-            PairEnd::Stop => crate::process::Outcome::Ready,
-            PairEnd::Cancel => crate::process::Outcome::Cancelled,
-            PairEnd::Deadline => crate::process::Outcome::Deadline,
+            PairEnd::Stop => crate::Outcome::Ready,
+            PairEnd::Cancel => crate::Outcome::Cancelled,
+            PairEnd::Deadline => crate::Outcome::Deadline,
         }
     );
     for member in &report.members {

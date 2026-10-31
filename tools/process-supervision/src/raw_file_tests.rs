@@ -1,5 +1,5 @@
 use super::*;
-use crate::process::{RawCaptureOptions, RawProcessReport, Value};
+use crate::{RawCaptureOptions, RawProcessReport, Value};
 use std::{collections::BTreeMap, fs, num::NonZeroUsize, path::Path, time::Duration};
 
 fn spec(root: &Path, script: &str) -> ProcessSpec {

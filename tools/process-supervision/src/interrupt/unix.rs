@@ -2,10 +2,6 @@ use super::{INTERRUPTED, RECEIVED_SIGNAL, Reason};
 use std::io;
 use std::sync::atomic::Ordering;
 
-#[cfg(test)]
-#[path = "../../../tests/migration_lifecycle/blocked_scope.rs"]
-mod tests;
-
 extern "C" fn interrupt(signal: libc::c_int) {
     let _ = RECEIVED_SIGNAL.compare_exchange(0, signal, Ordering::SeqCst, Ordering::SeqCst);
     INTERRUPTED.store(true, Ordering::SeqCst);

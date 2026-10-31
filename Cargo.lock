@@ -7138,6 +7138,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "process-supervision"
+version = "0.78.0"
+dependencies = [
+ "libc",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "process-wrap"
 version = "10.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10369,17 +10380,15 @@ dependencies = [
 name = "trajectory-reader"
 version = "0.78.0"
 dependencies = [
- "hyper",
  "libc",
  "md5",
  "parquet",
+ "process-supervision",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "skippy-hf-hub",
  "tempfile",
- "thiserror 2.0.21",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11854,6 +11863,7 @@ dependencies = [
  "num-bigint 0.4.8",
  "plist",
  "proc-macro2",
+ "process-supervision",
  "rcgen",
  "regex",
  "rustls",

@@ -1,5 +1,5 @@
 use super::{Coordinator, Disposition, member::Member, owner::expired};
-use crate::process::{Cancellation, Failure, Limits, Outcome, ProbeDecision};
+use crate::{Cancellation, Failure, Limits, Outcome, ProbeDecision};
 use std::time::Instant;
 
 pub(super) fn observe<Observer: Coordinator>(
@@ -27,7 +27,7 @@ pub(super) fn observe<Observer: Coordinator>(
         output.poll_captured(&mut |line, readiness_allowed| {
             observer.captured_line(
                 member.id,
-                crate::process::ObservedLine {
+                crate::ObservedLine {
                     stream: line.stream,
                     bytes: line.bytes,
                     ending: line.ending,

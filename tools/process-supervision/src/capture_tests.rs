@@ -63,8 +63,7 @@ fn migration_process_readiness_snapshot_excludes_new_marker_suffix() {
 fn migration_process_readiness_snapshot_flushes_observed_eof() {
     #[cfg(target_os = "macos")]
     if std::env::var_os("MIGRATION_PROCESS_EOF_CHILD").is_none() {
-        let test_name =
-            "process::capture::tests::migration_process_readiness_snapshot_flushes_observed_eof";
+        let test_name = "capture::tests::migration_process_readiness_snapshot_flushes_observed_eof";
         let output_dir = tempfile::tempdir().unwrap();
         let stdout_path = output_dir.path().join("stdout");
         let stderr_path = output_dir.path().join("stderr");

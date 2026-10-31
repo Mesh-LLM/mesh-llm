@@ -252,21 +252,26 @@ fn quality_native_tooling_rejects_reintroduced_python_setup_and_installs() {
 }
 
 #[test]
-fn controller_contracts_cannot_be_omitted_filtered_or_moved() {
+fn component_contracts_cannot_be_omitted_filtered_or_moved() {
     let (source, targets) = inputs();
-    let line = "    just with-lld cargo test --locked -p ci-controller\n";
-    for changed in [
-        source.replace(line, ""),
-        source.replace(
-            line,
+    for (line, filtered) in [
+        (
+            "    just with-lld cargo test --locked -p ci-controller\n",
             "    just with-lld cargo test --locked -p ci-controller --lib\n",
         ),
-        source.replace(
-            line,
-            "    just with-lld cargo test --locked -p ci-controller || true\n",
+        (
+            "    just with-lld cargo test --locked -p process-supervision -- --test-threads=1\n",
+            "    just with-lld cargo test --locked -p process-supervision --lib -- --test-threads=1\n",
         ),
-        source.replace(line, &format!("{line}{line}")),
     ] {
-        assert!(recipe(&changed, &targets).is_err());
+        assert!(source.contains(line), "{line}");
+        for changed in [
+            source.replace(line, ""),
+            source.replace(line, filtered),
+            source.replace(line, &format!("{} || true\n", line.trim_end())),
+            source.replace(line, &format!("{line}{line}")),
+        ] {
+            assert!(recipe(&changed, &targets).is_err(), "{line}");
+        }
     }
 }

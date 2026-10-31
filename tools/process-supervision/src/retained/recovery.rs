@@ -1,5 +1,5 @@
 use super::{MAX_CONCURRENT_MEMBERS, MemberId};
-use crate::process::Failure;
+use crate::Failure;
 use std::collections::BTreeSet;
 use std::num::NonZeroUsize;
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,5 +1,5 @@
 use super::{Disposition, MemberId, member::Member, owner::expired};
-use crate::process::{Cancellation, Failure, Limits, Outcome};
+use crate::{Cancellation, Failure, Limits, Outcome};
 use std::time::Instant;
 
 pub(super) fn stop<Observer: super::Coordinator>(

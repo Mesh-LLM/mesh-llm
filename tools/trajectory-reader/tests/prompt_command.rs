@@ -1,8 +1,6 @@
 //! Actual frontend/reader process contract, selected after automation bootstrap.
 mod parquet_fixture;
-#[path = "../../xtask/src/process/mod.rs"]
-#[allow(dead_code)]
-pub mod process;
+pub use process_supervision as process;
 
 use process::{Cancellation, Completion, Limits, OutputFiles, ProcessSpec, Readiness, Value};
 use std::{
