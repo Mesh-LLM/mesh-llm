@@ -17,8 +17,16 @@ loader variables. It restores the
 existing protected Linux automation artifact for model resolution and publishes
 only one-day CTest diagnostics. No new producer, remote model-cache publisher,
 runner authority, required entrypoint or production ABI dependency is added.
-The CPU image binding is recorded as consumer role `skippy-cpp-api`.
-Hosted C++23/compiler and real-model qualification remains pending execution.
+The CPU image binding is recorded as consumer role `skippy-cpp-api`, using only
+the dedicated `public-cpp-api` image ID. Its new immutable CPU index
+`sha256:656e4874af027e0b437427f4415fdaab51ff8b1cda444dcdd4bc331794f703c5`
+was staged and verified on AMD64/ARM64 in runner-images main run `41127631709`,
+attempt 1, producer `2ca51592535c29ddbed768b75481451d3fa5a49e`. Trusted producer
+admission and native binding retain the complete cohort as evidence hash
+`189f0408681bf999868a5a01cae3e5260c63d5aca0bbe613714cbb97b78ed2e8`.
+Existing CPU consumer, runtime and compiler-seed identities are unchanged.
+The producer's CPU C++23/sanitizer/tooling probes passed; source-present API
+and real-model CI qualification remains pending protected-main execution.
 The matching clang-tidy plugin build/fixtures and configured C++/bridge lints
 are required after Rust header generation; missing lint tools fail preflight.
 The new job raises the retained pre-checkout audit caller census from 27 to 28,
@@ -1274,19 +1282,20 @@ gh api orgs/Mesh-LLM/actions/runner-groups
 Organization runner-group responses of `403` are unverified administrative
 state, not proof that a restriction is absent.
 
-### Proposed retained-cohort identity evidence
+### Retained-cohort identity evidence
 
-Runner-images PR #23 is pending; its retained exact-attempt admission flow is
-not yet the producer's merged-main behavior. After that producer flow lands,
-`cargo xtool ci-ops runner-identity bind` can prepare offline catalog proposals
-from maintainer-reviewed admission anchors. The exact cohort bytes are retained
+The merged producer's retained exact-attempt admission flow validates a
+successful main staging attempt before `cargo xtool ci-ops runner-identity bind`
+prepares an offline catalog proposal from the reviewed admission anchor.
+The exact cohort bytes are retained
 under `ci/runner-image-evidence/<sha256>.json`; ordinary commands validate hashes
 and consumer relationships without executing producer code or authenticating
 GitHub provenance again. See `ci/ci.md` for the explicit trust boundary and CLI.
-Current image references and historical null evidence remain unchanged.
+The standalone API adds only its dedicated CPU identity; existing image
+references and evidence bindings remain unchanged.
 
 The `product-smoke` catalog role covers `smoke.yml`; accelerator and macOS paths
-retain their existing container opt-outs. The inventory has 9 images, 37 roles
+retain their existing container opt-outs. The inventory has 10 images, 37 roles
 and 37 literal workflow image bindings.
 
 ### Qualified lean UI consumers
