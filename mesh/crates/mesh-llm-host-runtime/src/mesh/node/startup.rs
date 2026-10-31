@@ -284,3 +284,12 @@ pub(crate) fn stamp_plugin_event_source(endpoint_id: EndpointId, source_peer_id:
     // here; the plugin SDK leaves the field empty on the normal path.
     *source_peer_id = endpoint_id_hex(endpoint_id);
 }
+
+/// Load the configuration bound to this node before publishing its state.
+pub(super) fn load_config_state(
+    config_path: Option<&std::path::Path>,
+) -> Result<crate::runtime::config_state::ConfigState> {
+    let path = crate::plugin::config_path(config_path)
+        .unwrap_or_else(|_| std::path::PathBuf::from("config.toml"));
+    crate::runtime::config_state::ConfigState::load(&path)
+}

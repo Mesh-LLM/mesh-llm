@@ -963,6 +963,7 @@ fn format_huggingface_display_ref_uses_selector_for_split_gguf() {
 #[tokio::test]
 #[serial]
 async fn download_exact_ref_bf16_shorthand_downloads_full_split_model() {
+    let _catalog_guard = empty_catalog_guard();
     let fixture = load_gemma_live_fixture();
     let cache = tempfile::tempdir().unwrap();
     let bf16_dir = cache.path().join("BF16");
@@ -976,7 +977,13 @@ async fn download_exact_ref_bf16_shorthand_downloads_full_split_model() {
         let siblings = fixture
             .siblings
             .iter()
-            .map(|file| (file.clone(), fixture.size_bytes.get(file).copied()))
+            // Keep the mocked download plan independent of live HEAD requests.
+            .map(|file| {
+                (
+                    file.clone(),
+                    Some(fixture.size_bytes.get(file).copied().unwrap_or(1)),
+                )
+            })
             .collect::<Vec<_>>();
         move |requested_repo, requested_revision| {
             if requested_repo == repo && requested_revision == "main" {

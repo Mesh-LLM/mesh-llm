@@ -184,12 +184,14 @@ normal warnings in every mode.
 
 | Key path | Type | Allowed values / default (`auto`) | `[defaults]` / `[[models]]` | Restart | Status | CLI equivalent |
 |---|---|---|---|---|---|---|
+| `lifecycle.load` | enum | `startup` (default), `on_demand` | `[[models]]` only | process restart | wired | none |
+| `lifecycle.idle_timeout_secs` | integer | `0` disables idle eviction; native instances or provider sessions | `[[models]]` only | process restart | wired | none |
+| `lifecycle.prefetch` | boolean | `true` (default) prepares disk assets without constructing on-demand sessions | `[[models]]` only | process restart | wired | none |
 | `model` | string | required; catalog id, Hugging Face reference, URL, or local path | `[[models]]` only | model reload | wired | positional `--model` / `--gguf` on the ad-hoc single-model path |
 | `provider` | string | unset for built-in models; installed plugin name for provider models | `[[models]]` only | model reload | wired | none |
 | `variant` | string | provider-defined; defaults to fp32 | `[[models]]` only | model reload | wired | none |
 | `options` | object | empty; typed and validated by the selected provider | `[[models]]` only | model reload | wired | none |
 | `request_defaults` | object | empty provider-specific request defaults | `[[models]]` only | model reload | wired | none |
-| `lifecycle` | object | startup loading, idle eviction disabled, prefetch enabled | `[[models]]` only | model reload | wired | none |
 | `source` | object | model reference; optional local_dir or repo/revision override | `[[models]]` only | model reload | wired | none |
 | `hardware.model_path` | path | unset | both | model reload | wired | `--gguf` sets it for the ad-hoc single-model path |
 | `hardware.hf_repo`<br>`hardware.hf_file` | string | unset | both | model reload | wired | none |
@@ -221,6 +223,8 @@ one.
 
 See [KV Caching](/docs/pages/kv-caching/) for the default behavior and common
 configuration recipes.
+
+Lifecycle settings apply to native and provider model entries. Native policy changes require a process restart; providers interpret the same settings when initialized or reloaded. See [managed providers](https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/docs/plugins/managed-models.md).
 
 ## Group 4: device selection, GPU offload, multi-GPU, CPU MoE, and loading behavior
 

@@ -1,3 +1,5 @@
+mod native_residency;
+use native_residency::route_request;
 mod buffered_exchange;
 mod exchange_events;
 mod execution;
@@ -20,6 +22,7 @@ mod lifecycle_prepared_dispatch_live_tests;
 #[path = "ingress/typed_frontend_live_tests.rs"]
 mod lifecycle_typed_frontend_live_tests;
 mod realtime_relay;
+mod rejection_telemetry;
 use buffered_exchange::handle_buffered_api_request;
 pub(super) use exchange_events::{RawProxyTerminalFacts, publish_raw_proxy_terminal};
 use exchange_events::{
@@ -32,6 +35,7 @@ use exchange_events::{
     exchange_output_digests_from_outcome, exchange_usage_from_outcome, plugin_route_status,
     serving_provenance_for_model, serving_provenance_for_remote_mesh,
 };
+use rejection_telemetry::record_pre_routing_rejection;
 
 use crate::inference::{election, pipeline};
 use crate::logging::{CallerPathType, OpenAiLifecycleAttachment, OpenAiRouteObserver};
@@ -306,7 +310,7 @@ async fn resolve_auto_routed_model(
     if let Some(model) = request.model_name.as_deref()
         && !automatic::is_directive(model)
     {
-        return explicit_model_route(request, model, descriptors);
+        return native_residency::named_model_route(node, request, model, descriptors);
     }
 
     request.ensure_body_json();
@@ -750,15 +754,7 @@ async fn route_missing_local_model(
             // header exists for. When the operator's own block is the reason
             // the peer is absent, say so rather than implying it never served
             // the model.
-            let message = if blocked {
-                format!(
-                    "x-mesh-target '{target_hex}' is blocked by this operator -- refusing to fall back to another peer"
-                )
-            } else {
-                format!(
-                    "x-mesh-target '{target_hex}' does not serve model '{model_name}' -- refusing to fall back to another peer"
-                )
-            };
+            let message = unavailable_target_message(&target_hex, model_name, blocked);
             return response_outcome(
                 409,
                 proxy::send_error_observed(tcp_stream, 409, &message, route_observer).await,
@@ -865,6 +861,7 @@ async fn route_missing_local_model(
     // (e.g., loading/draining/failed with all-None candidates). Return 503 for these cases so
     // clients can retry; return 404 only when the model truly doesn't exist anywhere.
     if has_local_unavailable_candidates(ctx.targets, model_name) {
+        record_pre_routing_rejection(ctx, Some(model_name), 503).await;
         return response_outcome(
             503,
             proxy::send_503_observed(
@@ -907,6 +904,7 @@ async fn route_missing_local_model(
 
     // Model not found anywhere — return 404. This replaces the old fallback behavior that would
     // route to an arbitrary target, which was confusing when no host served this model.
+    record_pre_routing_rejection(ctx, Some(model_name), 404).await;
     response_outcome(
         404,
         proxy::send_error_observed(
@@ -917,6 +915,18 @@ async fn route_missing_local_model(
         )
         .await,
     )
+}
+
+fn unavailable_target_message(target_hex: &str, model_name: &str, blocked: bool) -> String {
+    if blocked {
+        format!(
+            "x-mesh-target '{target_hex}' is blocked by this operator -- refusing to fall back to another peer"
+        )
+    } else {
+        format!(
+            "x-mesh-target '{target_hex}' does not serve model '{model_name}' -- refusing to fall back to another peer"
+        )
+    }
 }
 
 /// Resolve an explicit `x-mesh-target` naming THIS node against local
@@ -952,6 +962,7 @@ async fn route_self_targeted_model(
                     %error,
                     "route_self_targeted_model: failed to resolve plugin endpoint for '{model_name}'"
                 );
+                record_pre_routing_rejection(ctx, Some(model_name), 503).await;
                 return response_outcome(
                     503,
                     proxy::send_503_observed(
@@ -1217,6 +1228,7 @@ async fn try_route_plugin_model(
     {
         Ok(stream) => tcp_stream = stream,
         Err(outcome) => {
+            record_pre_routing_rejection(ctx, Some(model_name), 503).await;
             route_observer.route_selected_with_metadata(
                 Some(model_name),
                 Some("plugin"),
@@ -1249,21 +1261,8 @@ async fn try_route_plugin_model(
                 route_observer,
             )
             .await;
-            let final_outcome = if !outcome.response_written()
-                && !matches!(outcome, proxy::RouteDispatchOutcome::Dropped(_))
-            {
-                response_outcome(
-                    503,
-                    proxy::send_503_observed(
-                        tcp_stream,
-                        &format!("plugin endpoint for model '{model_name}' failed"),
-                        route_observer,
-                    )
-                    .await,
-                )
-            } else {
-                outcome
-            };
+            let (final_outcome, _retained_stream) =
+                finish_plugin_response(tcp_stream, model_name, route_observer, outcome).await;
             let Some(exchange_id) = exchange_id else {
                 return final_outcome;
             };
@@ -1299,6 +1298,7 @@ async fn try_route_plugin_model(
                 Some("inference_endpoint"),
             );
             // Plugin manager exists but doesn't serve this model — send 404.
+            record_pre_routing_rejection(ctx, Some(model_name), 404).await;
             response_outcome(
                 404,
                 proxy::send_error_observed(
@@ -1324,6 +1324,7 @@ async fn try_route_plugin_model(
                 Some("inference_endpoint"),
             );
             // Plugin resolution failure — degrade gracefully with 503. The daemon stays alive; only the affected capability is degraded.
+            record_pre_routing_rejection(ctx, Some(model_name), 503).await;
             response_outcome(
                 503,
                 proxy::send_503_observed(
@@ -1337,9 +1338,33 @@ async fn try_route_plugin_model(
     }
 }
 
+async fn finish_plugin_response(
+    stream: ClientStream,
+    model_name: &str,
+    observer: OpenAiRouteObserver<'_>,
+    outcome: proxy::RouteDispatchOutcome,
+) -> (proxy::RouteDispatchOutcome, Option<ClientStream>) {
+    if !outcome.response_written() && !matches!(outcome, proxy::RouteDispatchOutcome::Dropped(_)) {
+        (
+            response_outcome(
+                503,
+                proxy::send_503_observed(
+                    stream,
+                    &format!("plugin endpoint for model '{model_name}' failed"),
+                    observer,
+                )
+                .await,
+            ),
+            None,
+        )
+    } else {
+        (outcome, Some(stream))
+    }
+}
+
 /// Route a model-bearing or model-less request: local candidates unless
 /// `x-mesh-target`/`x-mesh-exclude` force this node out of consideration.
-async fn route_request(
+async fn route_prepared_request(
     local_execution_only: bool,
     tcp_stream: ClientStream,
     request: &mut proxy::BufferedHttpRequest,
@@ -1369,6 +1394,7 @@ async fn route_request(
         let forced_remote = mesh_headers_force_remote(self_id, target, &excluded);
 
         if local_execution_only && forced_remote {
+            record_pre_routing_rejection(ctx, Some(model_name), 409).await;
             return response_outcome(
                 409,
                 proxy::send_409_observed(
@@ -1999,7 +2025,27 @@ async fn try_handle_virtual_model_intercept(
     }
 }
 
-async fn handle_api_proxy_connection(
+// Keep the large per-connection state out of each caller's async frame. Boxing
+// inside an async fn is too late: that fn's callers already reserve its state.
+fn handle_api_proxy_connection(
+    node: mesh::Node,
+    tcp_stream: ClientStream,
+    targets: election::ModelTargets,
+    affinity: affinity::AffinityRouter,
+    ingress_type: crate::runtime::IngressType,
+    requested_by: Option<iroh::EndpointId>,
+) -> impl std::future::Future<Output = ()> + Send {
+    Box::pin(handle_api_proxy_connection_inner(
+        node,
+        tcp_stream,
+        targets,
+        affinity,
+        ingress_type,
+        requested_by,
+    ))
+}
+
+async fn handle_api_proxy_connection_inner(
     node: mesh::Node,
     mut tcp_stream: ClientStream,
     targets: election::ModelTargets,
@@ -2253,3 +2299,7 @@ mod served_terminal_nonce;
 #[cfg(test)]
 #[path = "ingress_tests/tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "ingress_tests/telemetry_rejection.rs"]
+mod telemetry_rejection;

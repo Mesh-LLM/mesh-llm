@@ -130,7 +130,7 @@ printf '%s\n' "$4" > planner-manifest-root
             .env("RUNNER_TEMP", f.path())
             .env("GITHUB_OUTPUT", f.path().join("outputs"))
             .env("GITHUB_STEP_SUMMARY", f.path().join("summary"))
-            .env("MESH_LLM_AUTOMATION_BIN", f.path().join("bin/automation"))
+            .env("MESH_CI_CONTROLLER_BIN", f.path().join("bin/automation"))
             .args(["-c", &run]);
         let output = f.run(command);
         if matches!(mode, "matching" | "draft") {

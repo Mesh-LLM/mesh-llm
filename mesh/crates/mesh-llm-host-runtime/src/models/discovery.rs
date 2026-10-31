@@ -66,6 +66,15 @@ async fn collect_local(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
         .withdraw_model_availability;
     let mut names: BTreeSet<_> = node.serving_models().await.into_iter().collect();
     names.extend(hosted.iter().cloned());
+    // Native models loaded on demand stay listed while their instance is
+    // loaded (parity with the chat-compatible listing), not merely while the
+    // host keeps them in its persistent hosted set.
+    let lifecycle_names: BTreeSet<String> = node
+        .native_model_lifecycle
+        .get()
+        .map(|lifecycle| lifecycle.model_names().cloned().collect())
+        .unwrap_or_default();
+    names.extend(lifecycle_names.iter().cloned());
     names.extend(
         descriptors
             .iter()
@@ -90,7 +99,8 @@ async fn collect_local(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
             &ProviderContext {
                 provider_id: &node.id().to_string(),
                 local: true,
-                available: local_available && hosted.contains(&name),
+                available: local_available
+                    && (hosted.contains(&name) || lifecycle_names.contains(&name)),
                 endpoint: None,
             },
         );

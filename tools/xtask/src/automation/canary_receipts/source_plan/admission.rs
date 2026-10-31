@@ -1,5 +1,6 @@
 use super::contract::{CacheAdmission, CachePolicy};
 use super::gguf::{self, Expected};
+use super::payload_identity;
 use crate::automation::canary_receipts::Digest;
 use crate::automation::replay_matrix::model_preflight::dimensions::Dimensions;
 use crate::automation::replay_matrix::model_preflight::{
@@ -52,14 +53,12 @@ enum CacheError {
     Revision,
     #[error("unsafe artifact repository coordinate")]
     Repository,
-    #[error("artifact blob directory escapes cache root")]
-    BlobDirectory,
+    #[error("artifact file escapes cache root or is not a regular file")]
+    CachePath,
     #[error("unsafe snapshot relative path")]
     RelativePath,
     #[error("missing artifact integrity")]
     Integrity,
-    #[error("snapshot entry is not a content-addressed symlink")]
-    Symlink,
     #[error("snapshot entry differs from pinned blob identity or size")]
     Identity,
 }
@@ -148,10 +147,7 @@ fn verify_artifact(hub: &Path, artifact: &Artifact) -> DynResult<Vec<PathBuf>> {
         return Err(CacheError::Repository.into());
     }
     let repository = hub.join(format!("models--{}", artifact.repo.replace('/', "--")));
-    let blobs = repository.join("blobs").canonicalize()?;
-    if !blobs.starts_with(hub) {
-        return Err(CacheError::BlobDirectory.into());
-    }
+    let blobs = repository.join("blobs").canonicalize().ok();
     let snapshot = repository.join("snapshots").join(&artifact.revision);
     let mut paths = Vec::new();
     for relative in &artifact.files {
@@ -167,21 +163,24 @@ fn verify_artifact(hub: &Path, artifact: &Artifact) -> DynResult<Vec<PathBuf>> {
             .file_integrity
             .get(relative)
             .ok_or(CacheError::Integrity)?;
-        if !fs::symlink_metadata(&path)?.file_type().is_symlink() {
-            return Err(CacheError::Symlink.into());
-        }
         let resolved = path.canonicalize()?;
-        if resolved.parent() != Some(blobs.as_path())
-            || resolved.file_name().and_then(|name| name.to_str())
-                != Some(expected.blob_id.as_str())
-            || fs::metadata(&resolved)?.len() != expected.size_bytes
-        {
+        let metadata = fs::metadata(&resolved)?;
+        if !resolved.starts_with(hub) || !metadata.is_file() {
+            return Err(CacheError::CachePath.into());
+        }
+        if metadata.len() != expected.size_bytes {
             return Err(CacheError::Identity.into());
         }
-        // The immutable model cache lives on a NAS. Hashing every model payload
-        // on each admission is too expensive; retain pinned blob identity, size
-        // and the caller's GGUF metadata checks. Full content verification belongs
-        // to cache population or a separate audit, not routine certification.
+        let pinned_blob = blobs.as_ref().is_some_and(|blobs| {
+            blobs.starts_with(hub)
+                && resolved.parent() == Some(blobs.as_path())
+                && resolved.file_name().and_then(|name| name.to_str())
+                    == Some(expected.blob_id.as_str())
+        });
+        // Blob names remain cache-population authority; copies need content evidence.
+        if !pinned_blob {
+            payload_identity::verify(&resolved, &expected.blob_id, expected.size_bytes)?;
+        }
         paths.push(resolved);
     }
     Ok(paths)

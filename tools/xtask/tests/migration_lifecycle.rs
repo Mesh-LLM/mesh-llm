@@ -153,8 +153,7 @@ mod local_repair_inspection;
 #[path = "migration_lifecycle/package_input_admission.rs"]
 mod package_input_admission;
 
-#[path = "../src/ci_validation/lane_results/workflow_yaml.rs"]
-mod workflow_yaml;
+use ci_controller::lane_results::workflow_yaml;
 
 #[path = "migration_lifecycle/verification_source_cli.rs"]
 mod verification_source_cli;
