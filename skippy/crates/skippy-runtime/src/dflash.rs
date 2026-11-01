@@ -532,6 +532,7 @@ fn load_draft(
         device_name,
         model_params.n_gpu_layers
     ));
+    let context_params = draft_context_params(api, target_ctx, config, lanes)?;
     let model = unsafe { (api.model_load_from_file)(path.as_ptr(), model_params) };
     if model.is_null() {
         bail!(
@@ -539,7 +540,6 @@ fn load_draft(
             path.to_string_lossy()
         );
     }
-    let context_params = draft_context_params(api, target_ctx, config, lanes)?;
     let ctx = unsafe { (api.init_from_model)(model, context_params) };
     if ctx.is_null() {
         unsafe { (api.model_free)(model) };
