@@ -24,6 +24,7 @@ fn main() {
 fn bindings_main() {
     println!("cargo:rerun-if-env-changed=SKIPPY_FFI_BINDGEN");
     println!("cargo:rerun-if-env-changed=SKIPPY_FFI_BINDGEN_SELFTEST");
+    println!("cargo:rerun-if-env-changed=LLAMA_WORKDIR");
 
     let manifest_dir = std::path::PathBuf::from(
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set"),
@@ -43,6 +44,11 @@ fn bindings_main() {
         workspace_root.join("skippy/llama_cpp/upstream.txt"),
         workspace_root.join("skippy/llama_cpp/patches/model_support/series"),
         workspace_root.join("skippy/llama_cpp/patches/generated/series"),
+        // Check mode reads the committed bindings; a hand edit must rerun the
+        // script or a warm target directory false-passes the freshness gate.
+        bindings_dir.join("skippy.rs"),
+        bindings_dir.join("llama.rs"),
+        bindings_dir.join("mtmd.rs"),
     ] {
         println!("cargo:rerun-if-changed={}", input.display());
     }
