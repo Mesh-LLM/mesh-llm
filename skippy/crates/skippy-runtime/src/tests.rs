@@ -513,6 +513,81 @@ mod tests {
         Ok(())
     }
 
+    /// A seeded request draws the same tokens whether it decodes one token at
+    /// a time or verifies speculative windows the target keeps rejecting:
+    /// verification samples each confirmed row once and stops at the first
+    /// rejection, and trimming the rejected rows keeps the sampler and its
+    /// RNG where verification left them.
+    #[test]
+    fn seeded_sampled_verification_matches_serial_across_rejected_windows() -> anyhow::Result<()> {
+        const GENERATED: usize = 24;
+        let Some(model_path) = correctness_model() else {
+            eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
+            return Ok(());
+        };
+        let model = open_correctness_model(&model_path)?;
+        let prompt = model.tokenize("Write a short story about a lighthouse keeper.", true)?;
+        assert!(prompt.len() > 1);
+        let sampling = SamplingConfig {
+            enabled: true,
+            seed: 1234,
+            temperature: 0.8,
+            top_p: 0.95,
+            top_k: 40,
+            min_p: 0.05,
+            ..SamplingConfig::default()
+        };
+        let prefix = &prompt[..prompt.len() - 1];
+        let prompt_token_count = u64::try_from(prompt.len())?;
+        let start = |model: &StageModel| -> anyhow::Result<StageSession> {
+            let mut session = model.create_session()?;
+            session.prefill_chunked(prefix)?;
+            session.configure_chat_sampling(
+                r#"{"grammar":""}"#,
+                prompt_token_count,
+                Some(&sampling),
+            )?;
+            Ok(session)
+        };
+
+        let mut serial_session = start(&model)?;
+        let mut serial = Vec::with_capacity(GENERATED);
+        let mut current = *prompt.last().expect("checked nonempty prompt");
+        for _ in 0..GENERATED {
+            current = serial_session.decode_step_sampled(current, Some(&sampling))?;
+            serial.push(current);
+        }
+        drop(serial_session);
+
+        let mut session = start(&model)?;
+        let mut speculated = Vec::with_capacity(GENERATED);
+        let mut current = *prompt.last().expect("checked nonempty prompt");
+        let mut rejected_windows = 0;
+        while speculated.len() < GENERATED {
+            // Propose the serial continuation for 0, 1 or 2 tokens, then a
+            // token it did not draw, so every window is rejected.
+            let next = speculated.len();
+            let accepted = (rejected_windows % 3).min(GENERATED - next - 1);
+            let mut window = vec![current];
+            window.extend_from_slice(&serial[next..next + accepted]);
+            window.push(serial[next + accepted].wrapping_add(1));
+            let base = session.token_count();
+            let predictions = session.verify_tokens_sampled(&window, Some(&sampling))?;
+            assert_eq!(
+                predictions,
+                serial[next..next + accepted + 1],
+                "window {rejected_windows} must stop at the rejected row"
+            );
+            session.trim_session(base + u64::try_from(predictions.len())?)?;
+            current = *predictions.last().expect("a window commits a token");
+            speculated.extend_from_slice(&predictions);
+            rejected_windows += 1;
+        }
+        assert!(rejected_windows > 4);
+        assert_eq!(speculated, serial);
+        Ok(())
+    }
+
     #[test]
     fn batched_sampled_verification_matches_serial_across_lazy_grammar_trigger()
     -> anyhow::Result<()> {
