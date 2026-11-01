@@ -17,7 +17,6 @@ const UNVERIFIED: &[&str] = &[
     "skippy-hf-hub",
     // Native HF publication input custody and model FIFO fixtures need Windows qualification.
     "skippy-model-package",
-    "mesh-llm-routing",
     "skippy-model",
     "skippy-package-builder",
     "skippy-quantize",
@@ -27,8 +26,6 @@ const UNVERIFIED: &[&str] = &[
     "skippy-api",
     "skippy-cli",
     "xtask",
-    // Supervision and interruption extracted from xtask keep its pending Windows runtime proof.
-    "process-supervision",
     // Extracted native reader has Unix regular-file admission branches; Windows runtime proof is pending.
     "trajectory-reader",
 ];
