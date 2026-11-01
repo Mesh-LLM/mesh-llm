@@ -982,6 +982,9 @@ pub enum ConfigCommand {
         /// Config TOML path to validate. Defaults to --config, MESH_LLM_CONFIG, or ~/.mesh-llm/config.toml.
         #[arg(long = "config-path")]
         config_path: Option<PathBuf>,
+        /// Validate a local memberships TOML instead of the synchronized mesh config.
+        #[arg(long, conflicts_with = "config_path")]
+        memberships_config: Option<PathBuf>,
         /// Print machine-readable JSON output.
         #[arg(long)]
         json: bool,
@@ -1606,7 +1609,9 @@ mod tests {
         ]);
 
         let Some(Command::Config {
-            command: ConfigCommand::Validate { config_path, json },
+            command: ConfigCommand::Validate {
+                config_path, json, ..
+            },
         }) = cli.command
         else {
             panic!("expected config validate command");

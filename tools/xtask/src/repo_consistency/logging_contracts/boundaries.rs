@@ -293,6 +293,12 @@ fn logging_boundaries_mesh_connection_responsibilities_have_semantic_owners() {
         &format!("{HOST}/mesh/connections/inbound/stage.rs"),
         &["handle_stage_alpn"],
     );
+    semantic_owner(
+        &inbound,
+        "control",
+        &format!("{HOST}/mesh/connections/inbound/control.rs"),
+        &["dispatch_control_streams"],
+    );
 }
 
 fn test_children(parent: &str, directory: &str, names: &[&str]) {

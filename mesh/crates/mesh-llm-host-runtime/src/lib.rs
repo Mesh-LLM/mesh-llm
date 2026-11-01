@@ -198,6 +198,10 @@ pub async fn shutdown_logging_for_one_shot_cli() -> bool {
 }
 
 pub async fn initialize_host_runtime_for_options(options: &RuntimeOptions) -> Result<()> {
+    if options.memberships_config.is_some() {
+        runtime::shared_serving::configured::load(options)?;
+        return initialize_logging_for_cli(options.config.as_deref()).await;
+    }
     configure_hf_tls_provider();
     if options.plugin.is_some() {
         return Ok(());

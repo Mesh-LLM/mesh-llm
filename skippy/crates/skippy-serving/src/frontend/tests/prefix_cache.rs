@@ -254,6 +254,45 @@ fn cache_identity_namespaces_explicit_prompt_cache_keys() {
 }
 
 #[test]
+/// Verify that trusted scopes separate resident lookups and content-addressed L3 page IDs.
+fn shared_execution_scopes_isolate_resident_and_content_addressed_cache() {
+    let config = prefix_cache_test_config();
+    let kv = KvStageIntegration::from_test_state(&config, skippy_runtime::ModelStateKind::Dense)
+        .unwrap()
+        .expect("resident prefix cache enabled");
+    let scope_a = skippy_inference_api::InferenceExecutionScope::new();
+    let scope_b = skippy_inference_api::InferenceExecutionScope::new();
+    let ids = |scope| {
+        InferenceGenerationIds::new_with_trust(
+            InferenceCacheHints::default(),
+            Some("same-client-session"),
+            true,
+            None,
+        )
+        .with_execution_scope(Some(scope))
+    };
+    let base = |ids: InferenceGenerationIds| {
+        let mut base = prefix_cache_test_base();
+        base.session_id = ids.session_id_string();
+        base.chat_template_id = ids.cache.namespace();
+        base
+    };
+    let tokens = (0..1024).collect::<Vec<_>>();
+    let a = kv.prefill_identity(&config, &base(ids(scope_a)), 0, &tokens);
+    let a_retry = kv.prefill_identity(&config, &base(ids(scope_a)), 0, &tokens);
+    let b = kv.prefill_identity(&config, &base(ids(scope_b)), 0, &tokens);
+    assert_ne!(a.identity.session_id, b.identity.session_id);
+    assert_ne!(a.identity.prefix_hash, b.identity.prefix_hash);
+    assert_ne!(
+        a.page_id, b.page_id,
+        "L3 content-addressed page IDs must differ"
+    );
+    seed_resident_prefix(&kv, &a);
+    assert!(kv.probe_resident_prefix(&a_retry).is_some());
+    assert!(kv.probe_resident_prefix(&b).is_none());
+}
+
+#[test]
 fn disabled_cache_config_has_no_stage_integration() {
     let config = StageConfig {
         kv_cache: Some(StageKvCacheConfig {

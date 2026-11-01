@@ -338,6 +338,7 @@ async fn make_test_node(role: super::NodeRole) -> Result<Node> {
     make_test_node_with_requirements(role, crate::MeshRequirements::unrestricted()).await
 }
 
+/// Construct an isolated test endpoint with explicit role, trust and mesh requirements.
 async fn make_test_node_with_requirements(
     role: super::NodeRole,
     local_mesh_requirements: crate::MeshRequirements,
@@ -378,6 +379,8 @@ async fn make_test_node_with_requirements(
         gossip_verification: Arc::default(),
         gossip_encoder: Arc::default(),
         adopted_membership_file: None,
+        identity_state_dir: None,
+        full_model_only: false,
         endpoint,
         endpoint_secret_key,
         public_addr: None,

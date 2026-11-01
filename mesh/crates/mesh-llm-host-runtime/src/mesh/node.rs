@@ -4,11 +4,14 @@ use mesh_llm_types::mesh::{DEMAND_TTL_SECS, merge_demand};
 use serde_json::json;
 use std::net::SocketAddr;
 
+mod construction;
 mod demand;
 mod membership;
+mod ownership;
 mod routing_telemetry;
 mod startup;
 
+pub(crate) use construction::{NodeStartupSpec, ScopedNodeIdentity};
 pub(crate) use membership::{
     LocalEndpoints, MembershipEntry, MembershipNodeConfig, MeshMemberships,
     membership_token_endpoint,
@@ -18,10 +21,6 @@ pub use startup::detect_local_fit_bytes;
 #[cfg(test)]
 pub(crate) use startup::hardware_snapshot_for_start;
 pub(crate) use startup::{StartupResolution, stamp_plugin_event_source, startup_transport_config};
-use startup::{
-    advertised_hardware_for_start, bind_mesh_endpoint, init_owner_runtime,
-    saved_owner_attestation_path, startup_secret_key, wait_for_endpoint_online,
-};
 
 /// Upper bound on how long shutdown waits for one iroh endpoint to close.
 ///
@@ -115,8 +114,10 @@ pub struct Node {
     pub(crate) model_demand: Arc<std::sync::Mutex<HashMap<String, ModelDemand>>>,
     pub(crate) requirement_mesh_state: Arc<Mutex<Option<RequirementAwareMeshState>>>,
     /// Tests opt into membership persistence with an explicit temporary file.
-    #[cfg(test)]
     pub(crate) adopted_membership_file: Option<std::path::PathBuf>,
+    pub(crate) identity_state_dir: Option<std::path::PathBuf>,
+    /// An attachment to a host-owned full-model backend, never a GPU participant.
+    pub(crate) full_model_only: bool,
     pub(crate) mesh_id: Arc<Mutex<Option<String>>>,
     pub(crate) mesh_policy_hash: Arc<Mutex<Option<String>>>,
     pub(crate) signed_genesis_policy: Arc<Mutex<Option<crate::SignedMeshGenesisPolicy>>>,
@@ -756,236 +757,6 @@ impl Node {
         close_endpoint_gracefully(&self.endpoint, "mesh").await;
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "startup wires independent node/runtime subsystems; changing the public constructor shape is outside this rebase repair"
-    )]
-    pub async fn start(
-        role: NodeRole,
-        relay: RelayConfig<'_>,
-        quic_bind: QuicBindSelection,
-        max_vram_gb: Option<f64>,
-        enumerate_host: bool,
-        owner_config: Option<OwnerRuntimeConfig>,
-        config_path: Option<&std::path::Path>,
-        local_mesh_requirements: crate::MeshRequirements,
-    ) -> Result<(Self, TunnelChannels)> {
-        let secret_key = startup_secret_key(&role).await?;
-        let endpoint = bind_mesh_endpoint(secret_key.clone(), relay, quic_bind).await?;
-        if relay.policy.uses_relay() {
-            // Wait briefly for relay connection so the invite token includes the relay URL.
-            // On sinkholed networks this times out and we proceed without relay (direct UDP only).
-            wait_for_endpoint_online(
-                &endpoint,
-                "Relay connected",
-                "Relay connection timed out (5s) — proceeding without relay",
-            )
-            .await;
-        }
-
-        // Use iroh's net report because it probes through the endpoint's actual QUIC sockets.
-        // Its observed address includes the NAT-mapped port; substituting the configured
-        // bind port would advertise an address that was never verified externally.
-        let public_addr = if relay.policy.uses_raw_stun() {
-            stun_public_addr(&endpoint, relay.policy.uses_relay()).await
-        } else {
-            tracing::info!("Raw STUN: disabled by LAN-only discovery mode");
-            None
-        };
-
-        let (peer_change_tx, peer_change_rx) = watch::channel(0usize);
-        let (inflight_change_tx, _inflight_change_rx) = watch::channel(0u64);
-        let (tunnel_tx, tunnel_rx) = tokio::sync::mpsc::channel(256);
-        let (tunnel_http_tx, tunnel_http_rx) = tokio::sync::mpsc::channel(256);
-        let (stage_transport_tx, stage_transport_rx) = tokio::sync::mpsc::channel(256);
-
-        let config_state_init = startup::load_config_state(config_path)?;
-        let hardware =
-            advertised_hardware_for_start(config_state_init.config(), &role, max_vram_gb);
-        let owner_runtime = init_owner_runtime(
-            owner_config.as_ref(),
-            endpoint.id(),
-            hardware.hostname.clone(),
-        )?;
-        let owner_summary = verify_node_ownership(
-            owner_runtime.owner_attestation.as_ref(),
-            endpoint.id().as_bytes(),
-            &owner_runtime.trust_store,
-            TrustPolicy::Off,
-            current_time_unix_ms(),
-        );
-        let config_revision_init = config_state_init.revision();
-        let live_request_defaults = config_state_init.live_request_defaults();
-        let runtime_data_collector = crate::runtime_data::RuntimeDataCollector::new();
-        let runtime_data_producer =
-            runtime_data_collector.producer(crate::runtime_data::RuntimeDataSource {
-                scope: "routing",
-                plugin_data_key: None,
-                plugin_endpoint_key: None,
-            });
-
-        let owner_keypair = owner_config
-            .as_ref()
-            .and_then(|config| config.keypair.clone());
-        let activity_policy_config = owner_config
-            .as_ref()
-            .map(|config| config.activity.clone())
-            .unwrap_or_default();
-        let public_mesh = owner_config
-            .as_ref()
-            .is_some_and(|config| config.public_mesh);
-        let drain_timeout_secs = owner_config
-            .as_ref()
-            .map_or(mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_SECS, |config| {
-                config.drain_timeout_secs
-            });
-        let drain_timeout_max_secs = owner_config
-            .as_ref()
-            .map_or(mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_MAX_SECS, |config| {
-                config.drain_timeout_max_secs
-            });
-
-        let node = Node {
-            endpoint,
-            endpoint_secret_key: secret_key.clone(),
-            public_addr,
-            quic_bind,
-            relay_policy: relay.policy,
-            owner_keypair,
-            local_mesh_requirements,
-            state: Arc::new(Mutex::new(MembershipState::default())),
-            plugin_message_history: Default::default(),
-            direct_rescue_endpoints: super::direct_rescue::DirectRescueEndpoints::default(),
-            role: Arc::new(Mutex::new(role)),
-            host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
-            models: Arc::new(Mutex::new(Vec::new())),
-            model_source: Arc::new(Mutex::new(None)),
-            serving_models: Arc::new(Mutex::new(Vec::new())),
-            served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
-            served_model_generations: Arc::new(Mutex::new(HashMap::new())),
-            served_model_weights_ports: Arc::new(Mutex::new(HashMap::new())),
-            model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
-            hosted_models: Arc::new(Mutex::new(Vec::new())),
-            llama_ready: Arc::new(Mutex::new(false)),
-            available_models: Arc::new(Mutex::new(Vec::new())),
-            requested_models: Arc::new(Mutex::new(Vec::new())),
-            startup_models_resolving: Arc::default(),
-            explicit_model_interests: Arc::new(Mutex::new(Vec::new())),
-            model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            requirement_mesh_state: Arc::new(Mutex::new(None)),
-            #[cfg(test)]
-            adopted_membership_file: None,
-            mesh_id: Arc::new(Mutex::new(None)),
-            mesh_policy_hash: Arc::new(Mutex::new(None)),
-            signed_genesis_policy: Arc::new(Mutex::new(None)),
-            gossip_verification: Arc::default(),
-            gossip_encoder: Arc::default(),
-            bootstrap_token: Arc::new(Mutex::new(None)),
-            join_targets: Arc::new(Mutex::new(Vec::new())),
-            first_joined_mesh_ts: Arc::new(Mutex::new(None)),
-            accepting: Arc::new((
-                tokio::sync::Notify::new(),
-                std::sync::atomic::AtomicBool::new(false),
-            )),
-            vram_bytes: hardware.vram_bytes,
-            local_runtime_capacity_bytes: hardware.local_runtime_capacity_bytes,
-            host_ram_capacity_bytes: hardware.host_ram_capacity_bytes,
-            host_ram_offload_gain_bytes: hardware.host_ram_offload_gain_bytes,
-            peer_change_tx,
-            peer_change_rx,
-            inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            inflight_change_tx,
-            routing_metrics: crate::network::metrics::RoutingMetrics::default(),
-            routing_telemetry: Arc::new(std::sync::Mutex::new(None)),
-            cache_affinity_inventory: Arc::new(std::sync::Mutex::new(
-                mesh_llm_routing::cache_inventory::CacheInventory::default(),
-            )),
-            swarm_capture: Arc::new(std::sync::Mutex::new(None)),
-            local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
-            plugin_frame_telemetry: Arc::new(PluginFrameTelemetry::default()),
-            runtime_data_producer,
-            tunnel_tx,
-            tunnel_http_tx,
-            stage_transport_tx,
-            stage_control_tx: Arc::new(Mutex::new(None)),
-            stage_control_lifecycle: Arc::new(Mutex::new(None)),
-            stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),
-            stage_transport_aliases: Arc::new(Mutex::new(HashMap::new())),
-            stage_topologies: Arc::new(Mutex::new(StageTopologyState::default())),
-            plugin_manager: Arc::new(Mutex::new(None)),
-            display_name: Arc::new(Mutex::new(None)),
-            owner_attestation: Arc::new(Mutex::new(owner_runtime.owner_attestation)),
-            plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
-            release_attestation: Arc::new(Mutex::new(None)),
-            release_attestation_summary: Arc::new(Mutex::new(
-                crate::ReleaseAttestationSummary::default(),
-            )),
-            owner_summary: Arc::new(Mutex::new(owner_summary)),
-            control_listener: Arc::new(Mutex::new(None)),
-            trust_store: Arc::new(Mutex::new(owner_runtime.trust_store)),
-            trust_policy: owner_runtime.trust_policy,
-            enumerate_host,
-            gpu_name: hardware.gpu_name,
-            hostname: hardware.hostname,
-            is_soc: hardware.is_soc,
-            gpu_vram: hardware.gpu_vram,
-            gpu_reserved_bytes: hardware.gpu_reserved_bytes,
-            advertised_memory: hardware.memory,
-            gpu_mem_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
-            gpu_compute_tflops_fp32: Arc::new(tokio::sync::Mutex::new(None)),
-            gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
-            config_state: Arc::new(tokio::sync::Mutex::new(config_state_init)),
-            live_request_defaults,
-            peer_blocks: crate::network::peer_blocks::PeerBlocks::for_this_node(),
-            config_revision_tx: {
-                let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);
-                Arc::new(tx)
-            },
-            #[cfg(feature = "payments")]
-            payments: Arc::new(tokio::sync::OnceCell::new()),
-            #[cfg(feature = "payments")]
-            payment_recovery: Arc::new(Mutex::new(None)),
-            activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
-                &activity_policy_config,
-            ),
-            public_mesh,
-            drain_timeout_secs,
-            drain_timeout_max_secs,
-            runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
-            runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
-            native_model_lifecycle: Arc::default(),
-            model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
-            memberships: MeshMemberships::default(),
-            owner_attestation_path: saved_owner_attestation_path(),
-            unsaved_owner_attestation: Arc::default(),
-            local_endpoints: LocalEndpoints::default(),
-            is_membership: false,
-        };
-
-        node.maybe_start_control_listener(
-            secret_key,
-            owner_config.as_ref().and_then(|config| config.control_bind),
-            owner_config
-                .as_ref()
-                .and_then(|config| config.control_advertise_addr),
-        )
-        .await?;
-
-        // Accept loop starts but waits for start_accepting() before processing connections.
-        // This lets a node exist before it is ready to accept mesh traffic.
-        node.spawn_accept_loop();
-
-        Ok((
-            node,
-            TunnelChannels {
-                rpc: tunnel_rx,
-                http: tunnel_http_rx,
-                stage: stage_transport_rx,
-            },
-        ))
-    }
-
     fn spawn_accept_loop(&self) {
         let node = self.clone();
         tokio::spawn(async move {
@@ -1023,6 +794,7 @@ impl Node {
     }
 
     #[cfg(test)]
+    /// Construct a test node around an already bound endpoint and isolated state.
     pub(crate) fn new_test_node_from_endpoint(
         role: NodeRole,
         endpoint: Endpoint,
@@ -1073,6 +845,8 @@ impl Node {
             requirement_mesh_state: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             adopted_membership_file: None,
+            identity_state_dir: None,
+            full_model_only: false,
             mesh_id: Arc::new(Mutex::new(None)),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
@@ -1162,13 +936,19 @@ impl Node {
         }
     }
 
+    /// Start direct owner control only for a verified owner on an ordinary node.
+    /// Full-model attachments have no mesh control authority; the separate control
+    /// endpoint never registers a duplicate identity with the relay.
     pub(crate) async fn maybe_start_control_listener(
         &self,
         secret_key: SecretKey,
         bind_addr: Option<std::net::SocketAddr>,
         advertise_addr: Option<std::net::SocketAddr>,
     ) -> Result<()> {
-        if self.local_verified_owner_id().await.is_none() {
+        // An attachment has no model/control authority, even when its identity
+        // is attested by an owner trusted by this mesh. Only the shared host's
+        // separately authenticated local operator can change its lifecycle.
+        if self.full_model_only || self.local_verified_owner_id().await.is_none() {
             return Ok(());
         }
 

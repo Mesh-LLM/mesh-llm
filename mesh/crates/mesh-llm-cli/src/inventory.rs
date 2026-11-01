@@ -486,6 +486,7 @@ fn client_excluded_arg(id: &str) -> bool {
         id,
         "model"
             | "gguf"
+            | "memberships_config"
             | "mmproj"
             | "checkpoint_quantization"
             | "checkpoint_imatrix"
@@ -852,5 +853,24 @@ mod tests {
 
         assert_eq!(serve_count, 1, "serve should appear exactly once");
         assert_eq!(client_count, 1, "client should appear exactly once");
+    }
+
+    #[test]
+    fn memberships_are_documented_on_serve_and_not_client() {
+        let inventory = build_cli_inventory();
+        let serve = find_child(&inventory.root, "serve");
+        assert!(
+            serve
+                .children
+                .iter()
+                .any(|arg| arg.name == "--memberships-config")
+        );
+        let client = find_child(&inventory.root, "client");
+        assert!(
+            client
+                .children
+                .iter()
+                .all(|arg| arg.name != "--memberships-config")
+        );
     }
 }

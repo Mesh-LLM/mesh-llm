@@ -59,6 +59,7 @@ pub(crate) fn placement_policy_for(
     )
 }
 mod serving_surface;
+pub mod shared_serving;
 mod shutdown_signal;
 mod split_participant_settle;
 mod split_planning;

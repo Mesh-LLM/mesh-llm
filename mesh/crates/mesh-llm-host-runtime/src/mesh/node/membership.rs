@@ -19,6 +19,7 @@
 //! no owner control listener, and no split-stage transport, and it does not
 //! advertise them.
 
+use super::startup::{bind_mesh_endpoint, wait_for_endpoint_online};
 use super::*;
 use std::collections::{BTreeMap, HashSet};
 
@@ -337,8 +338,9 @@ impl Node {
             requested_models: Arc::new(Mutex::new(Vec::new())),
             explicit_model_interests: Arc::new(Mutex::new(Vec::new())),
             requirement_mesh_state: Arc::new(Mutex::new(None)),
-            #[cfg(test)]
             adopted_membership_file: None,
+            identity_state_dir: None,
+            full_model_only: false,
             mesh_id: Arc::new(Mutex::new(None)),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),

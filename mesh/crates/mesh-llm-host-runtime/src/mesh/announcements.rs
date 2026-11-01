@@ -289,13 +289,13 @@ impl Node {
             genesis_policy: data.signed_genesis_policy,
             release_attestation: data.release_attestation,
             direct_admission_proof: data.direct_admission_proof,
-            artifact_transfer_supported: data.artifact_transfer_supported,
-            stage_protocol_generation_supported: !self.is_membership,
-            stage_status_list_supported: !self.is_membership,
-            local_gguf_content_id_supported: true,
-            // Advertised unconditionally: there is no build-time variability
-            // behind it, unlike artifact transfer.
-            decode_batch_policy_supported: true,
+            artifact_transfer_supported: !self.full_model_only && data.artifact_transfer_supported,
+            stage_protocol_generation_supported: !self.full_model_only && !self.is_membership,
+            stage_status_list_supported: !self.full_model_only && !self.is_membership,
+            local_gguf_content_id_supported: !self.full_model_only,
+            // Full-model attachments cannot participate in stage scheduling.
+            // Ordinary nodes support this independently of build features.
+            decode_batch_policy_supported: !self.full_model_only,
             plugin_origin_signature_supported: true,
             persistent_lane_marker_supported: true,
             advertised_model_throughput: data.advertised_model_throughput,

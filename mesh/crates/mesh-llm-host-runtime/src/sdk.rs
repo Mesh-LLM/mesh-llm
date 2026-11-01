@@ -33,6 +33,9 @@ pub use crate::runtime::{MeshMembershipConfig, MeshMembershipStatus};
 pub use embedded_config::*;
 pub use embedded_openai::{EmbeddedOpenAiResponse, EmbeddedOpenAiStream, EmbeddedSseEvent};
 
+/// Independent mesh attachments backed by one host-owned local model.
+pub use crate::runtime::shared_serving;
+
 pub mod config {
     pub use mesh_llm_config::{
         AdvancedConfig, AdvancedServerConfig, BoolOrAuto, BoolOrString, ConfigEditor, ConfigStore,

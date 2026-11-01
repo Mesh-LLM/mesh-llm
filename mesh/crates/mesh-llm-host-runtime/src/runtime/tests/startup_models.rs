@@ -693,6 +693,7 @@ async fn resolve_model_accepts_short_catalog_name_from_hf_cache() {
 #[tokio::test]
 #[serial_test::serial]
 async fn resolve_model_accepts_non_catalog_name_from_hf_cache() {
+    let _catalog_guard = models::remote_catalog::set_catalog_entries_for_test(Vec::new());
     let cache_root = std::env::temp_dir().join(format!(
         "mesh-llm-non-catalog-cache-{}",
         std::time::SystemTime::now()
@@ -731,6 +732,7 @@ async fn resolve_model_accepts_non_catalog_name_from_hf_cache() {
 #[tokio::test]
 #[serial_test::serial]
 async fn cached_hf_gguf_is_preindexed_for_split_standby_inventory() {
+    let _catalog_guard = models::remote_catalog::set_catalog_entries_for_test(Vec::new());
     let cache_root = std::env::temp_dir().join(format!(
         "mesh-llm-preindex-hf-cache-{}",
         std::time::SystemTime::now()
@@ -792,6 +794,7 @@ async fn cached_hf_gguf_is_preindexed_for_split_standby_inventory() {
 #[tokio::test]
 #[serial_test::serial]
 async fn cached_hf_multipart_gguf_uses_ordered_blob_identities() {
+    let _catalog_guard = models::remote_catalog::set_catalog_entries_for_test(Vec::new());
     let cache_root = std::env::temp_dir().join(format!(
         "mesh-llm-preindex-hf-multipart-cache-{}",
         std::time::SystemTime::now()
@@ -860,6 +863,7 @@ async fn cached_hf_multipart_gguf_uses_ordered_blob_identities() {
 #[tokio::test]
 #[serial_test::serial]
 async fn cached_hf_safetensors_is_not_indexed_as_gguf() {
+    let _catalog_guard = models::remote_catalog::set_catalog_entries_for_test(Vec::new());
     let cache_root = std::env::temp_dir().join(format!(
         "mesh-llm-preindex-hf-safetensors-cache-{}",
         std::time::SystemTime::now()

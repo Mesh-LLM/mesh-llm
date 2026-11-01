@@ -5,6 +5,8 @@ use super::{
     auth, benchmark, kv_cache, models, runtime,
 };
 
+/// Append the command's diagnostic summary using the assembly's redaction policy.
+/// Shared-serving arguments are omitted so token and trust paths are not logged.
 pub(super) fn format_command(command: &Command, assembly: &mut SummaryAssembly) {
     match command {
         Command::Wallet { .. } => assembly.command.push_str(" wallet"),

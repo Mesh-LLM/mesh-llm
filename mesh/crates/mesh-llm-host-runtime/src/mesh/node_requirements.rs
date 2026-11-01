@@ -73,7 +73,12 @@ pub(crate) fn preflight_pushed_config_for_current_node_with_gpus(
 }
 
 impl Node {
+    /// Resolve the attachment-specific membership file before the process default.
+    /// Tests without an explicit file avoid accessing the user's persisted membership.
     fn membership_file(&self) -> Result<Option<std::path::PathBuf>> {
+        if let Some(path) = &self.adopted_membership_file {
+            return Ok(Some(path.clone()));
+        }
         #[cfg(test)]
         {
             Ok(self.adopted_membership_file.clone())
@@ -184,7 +189,10 @@ impl Node {
     pub(crate) fn load_persisted_signed_genesis_policy(
         &self,
     ) -> Result<Option<crate::SignedMeshGenesisPolicy>> {
-        let path = mesh_genesis_policy_path()?;
+        let path = match &self.identity_state_dir {
+            Some(directory) => directory.join("mesh_genesis_policy.json"),
+            None => mesh_genesis_policy_path()?,
+        };
         match std::fs::read(&path) {
             Ok(serialized) => {
                 let existing =
@@ -220,7 +228,10 @@ impl Node {
             return Ok(existing);
         }
 
-        let path = mesh_genesis_policy_path()?;
+        let path = match &self.identity_state_dir {
+            Some(directory) => directory.join("mesh_genesis_policy.json"),
+            None => mesh_genesis_policy_path()?,
+        };
         let signed = crate::SignedMeshGenesisPolicy::sign(
             crate::MeshGenesisPolicy::new(
                 owner.owner_id(),

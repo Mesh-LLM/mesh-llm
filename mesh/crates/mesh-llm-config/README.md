@@ -18,6 +18,11 @@ This crate includes:
 - atomic typed saves through `ConfigStore::save`
 - typed load/edit/save through `ConfigStore::update`
 - TOML parse/serialize helpers used by MeshLLM control-plane payloads
+- `memberships::MembershipsConfig`: the separate local-only manifest for
+  [sharing one model across meshes](../../docs/SHARED_SERVING.md). Its schema,
+  bounded reader, validation and file-relative paths belong here; credentials,
+  model loading and networking belong to the host runtime. It is not a field
+  of `MeshConfig` and is never included in mesh config synchronization.
 
 ## Examples
 

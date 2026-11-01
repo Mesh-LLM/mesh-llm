@@ -14,6 +14,8 @@ use tokio::net::TcpStream;
 
 mod admission;
 mod inbound_http;
+mod serving_attachment;
+pub(crate) use serving_attachment::start_serving_attachment;
 
 #[cfg(test)]
 #[path = "tunnel/admission_tests.rs"]
