@@ -7,7 +7,7 @@ use crate::{Cli, NormalizedRuntimeArgs, RuntimeSurface};
 /// Memberships own their topology and host limits. Reject options the shared
 /// host cannot honor instead of silently accepting single-mesh settings.
 pub fn validate_launch(cli: &Cli, args: &NormalizedRuntimeArgs) -> Result<(), clap::Error> {
-    if cli.memberships_config.is_none() {
+    if cli.serving.memberships_config.is_none() {
         return Ok(());
     }
     if args.explicit_surface != Some(RuntimeSurface::Serve) || cli.command.is_some() {
@@ -16,7 +16,7 @@ pub fn validate_launch(cli: &Cli, args: &NormalizedRuntimeArgs) -> Result<(), cl
             "--memberships-config requires the explicit `serve` command",
         ));
     }
-    if cli.gguf.len() != 1 {
+    if cli.serving.gguf.len() != 1 {
         return Err(clap::Error::raw(
             ErrorKind::ArgumentConflict,
             "--memberships-config requires exactly one --gguf local model",
@@ -84,11 +84,11 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(
-            cli.memberships_config.unwrap().to_str(),
+            cli.serving.memberships_config.unwrap().to_str(),
             Some("memberships.toml")
         );
-        assert_eq!(cli.parallel.unwrap().get(), 2);
-        assert_eq!(cli.ctx_size, Some(1024));
+        assert_eq!(cli.placement.parallel.unwrap().get(), 2);
+        assert_eq!(cli.placement.ctx_size, Some(1024));
     }
 
     #[test]
@@ -164,8 +164,8 @@ mod tests {
             "two",
         ])
         .unwrap();
-        assert_eq!(cli.join, ["one", "two"]);
-        assert!(cli.memberships_config.is_none());
+        assert_eq!(cli.joining.join, ["one", "two"]);
+        assert!(cli.serving.memberships_config.is_none());
     }
 
     #[test]

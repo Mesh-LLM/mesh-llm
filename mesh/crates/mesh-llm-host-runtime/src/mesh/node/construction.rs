@@ -83,14 +83,8 @@ impl Node {
         let (stage_transport_tx, stage_transport_rx) = tokio::sync::mpsc::channel(256);
 
         let config_state_init = super::startup::load_config_state(config_path)?;
-        let mut hardware =
-            advertised_hardware_for_start(config_state_init.config(), &role, max_vram_gb);
-        if identity.is_some() {
-            hardware.vram_bytes = 0;
-            hardware.local_runtime_capacity_bytes = 0;
-            hardware.host_ram_capacity_bytes = 0;
-            hardware.host_ram_offload_gain_bytes = 0;
-        }
+        let config = config_state_init.config();
+        let hardware = hardware_for_identity(config, &role, max_vram_gb, identity.as_ref());
         let owner_runtime = init_owner_runtime(
             owner_config.as_ref(),
             endpoint.id(),
@@ -269,6 +263,23 @@ impl Node {
             },
         ))
     }
+}
+
+/// Scoped full-model attachments must not offer capacity to split scheduling.
+fn hardware_for_identity(
+    config: &crate::plugin::MeshConfig,
+    role: &NodeRole,
+    max_vram_gb: Option<f64>,
+    identity: Option<&ScopedNodeIdentity>,
+) -> NodeHardwareSnapshot {
+    let mut hardware = advertised_hardware_for_start(config, role, max_vram_gb);
+    if identity.is_some() {
+        hardware.vram_bytes = 0;
+        hardware.local_runtime_capacity_bytes = 0;
+        hardware.host_ram_capacity_bytes = 0;
+        hardware.host_ram_offload_gain_bytes = 0;
+    }
+    hardware
 }
 
 struct StartupPolicies {

@@ -56,6 +56,10 @@ impl CertifiedMesh {
                     source_kind: ModelSourceKind::LocalGguf,
                     ..Default::default()
                 },
+                metadata: Some(ServedModelMetadata {
+                    workload_class: Some(crate::mesh::ModelWorkloadClass::CausalGeneration),
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
             admission: Admission::new(1, 2).unwrap(),
