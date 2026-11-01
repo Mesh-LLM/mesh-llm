@@ -669,6 +669,29 @@ fn read_token_type_array(f: &mut GgufReader, typ: GgufType) -> std::io::Result<V
     Ok(types)
 }
 
+/// The number of tokens in a GGUF's tokenizer vocabulary
+/// (`tokenizer.ggml.tokens`), read from the array header without reading the
+/// tokens. `None` when the file has no readable vocabulary.
+pub fn scan_gguf_vocab_token_count(path: &Path) -> Option<u64> {
+    let GgufHeader {
+        file: mut f, n_kv, ..
+    } = open_gguf_header(path)?;
+    for _ in 0..n_kv {
+        let key = read_gguf_string(&mut f).ok()?;
+        let typ = GgufType::from_u32(read_u32(&mut f).ok()?)?;
+        if key == "tokenizer.ggml.tokens" {
+            if typ != GgufType::Array
+                || GgufType::from_u32(read_u32(&mut f).ok()?) != Some(GgufType::String)
+            {
+                return None;
+            }
+            return read_u64(&mut f).ok().filter(|&count| count > 0);
+        }
+        skip_gguf_value(&mut f, typ).ok()?;
+    }
+    None
+}
+
 /// Reads a source GGUF's tokenizer vocabulary and its control-token markers.
 /// This scans metadata only and rejects malformed or incomplete inventories.
 pub fn scan_gguf_tokenizer_inventory(path: &Path) -> Option<GgufTokenizerInventory> {
@@ -1194,6 +1217,7 @@ mod tests {
         assert!(!inventory.tokens[0].is_control);
         assert_eq!(inventory.tokens[1].raw, b"<eos>");
         assert!(inventory.tokens[1].is_control);
+        assert_eq!(scan_gguf_vocab_token_count(&path), Some(2));
         let _ = std::fs::remove_file(path);
     }
 

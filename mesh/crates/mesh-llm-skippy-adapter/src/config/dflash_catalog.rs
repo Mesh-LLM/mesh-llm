@@ -11,6 +11,7 @@ use anyhow::{Result, bail, ensure};
 use hf_hub::RepoTypeModel;
 use skippy_model_artifact::gguf::{
     GgufCompactMeta, scan_gguf_compact_meta, scan_gguf_dflash_target_layers,
+    scan_gguf_vocab_token_count,
 };
 use skippy_model_hf::store::local::huggingface_snapshot_path;
 
@@ -294,6 +295,23 @@ impl DFlashPairing {
         }
         Ok(())
     }
+
+    /// Refuses a draft whose vocabulary is not the target's: the draft
+    /// proposes target token ids, and the runtime refuses the pair when it
+    /// attaches. A vocabulary that cannot be read is left to that check.
+    pub fn check_draft_vocabulary(&self, draft: &Path, target: &Path) -> Result<()> {
+        let (Some(draft_tokens), Some(target_tokens)) = (
+            scan_gguf_vocab_token_count(draft),
+            scan_gguf_vocab_token_count(target),
+        ) else {
+            return Ok(());
+        };
+        ensure!(
+            draft_tokens == target_tokens,
+            "draft vocabulary has {draft_tokens} tokens but the target has {target_tokens}"
+        );
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -303,6 +321,46 @@ mod tests {
     };
     use super::*;
     use std::io::Write;
+
+    fn vocabulary_file(tokens: u64) -> tempfile::NamedTempFile {
+        let mut bytes = b"GGUF".to_vec();
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        bytes.extend_from_slice(&1u64.to_le_bytes());
+        push_gguf_string(&mut bytes, "tokenizer.ggml.tokens");
+        bytes.extend_from_slice(&9u32.to_le_bytes());
+        bytes.extend_from_slice(&8u32.to_le_bytes());
+        bytes.extend_from_slice(&tokens.to_le_bytes());
+        for token in 0..tokens {
+            push_gguf_string(&mut bytes, &format!("t{token}"));
+        }
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(&bytes).unwrap();
+        file
+    }
+
+    #[test]
+    fn a_draft_with_another_vocabulary_is_refused() {
+        let pairing = &DFLASH_PAIRINGS[0];
+        let target = vocabulary_file(5);
+        let same = vocabulary_file(5);
+        let other = vocabulary_file(6);
+        let unreadable = tempfile::NamedTempFile::new().unwrap();
+
+        pairing
+            .check_draft_vocabulary(same.path(), target.path())
+            .unwrap();
+        let error = pairing
+            .check_draft_vocabulary(other.path(), target.path())
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("6 tokens but the target has 5"),
+            "{error}"
+        );
+        pairing
+            .check_draft_vocabulary(unreadable.path(), target.path())
+            .unwrap();
+    }
 
     fn draft_file(architecture: &str, embedding: u32, layers: &[u32]) -> tempfile::NamedTempFile {
         let mut bytes = b"GGUF".to_vec();

@@ -23,17 +23,22 @@ pub(crate) fn default_dflash_draft_cached(pairing: &'static DFlashPairing) -> bo
 }
 
 /// Checks the cached default DFlash draft before it is attached. A draft that
-/// fails its size, digest or pairing check leaves the model serving without
-/// speculation; it never fails the load.
+/// fails its size, digest, pairing or vocabulary check leaves the model
+/// serving without speculation; it never fails the load.
 pub(crate) async fn materialize_default_dflash_draft(resolved: &mut super::ResolvedSkippyConfig) {
     let Some(pairing) = resolved.speculative.default_dflash else {
         return;
     };
     let path = pairing.draft.cache_path();
-    let checked = tokio::task::spawn_blocking(move || verify_dflash_draft(pairing, path))
-        .await
-        .context("join DFlash draft check")
-        .and_then(|checked| checked);
+    let target = resolved.model_path.clone();
+    let checked = tokio::task::spawn_blocking(move || {
+        let path = verify_dflash_draft(pairing, path)?;
+        pairing.check_draft_vocabulary(&path, &target)?;
+        Ok(path)
+    })
+    .await
+    .context("join DFlash draft check")
+    .and_then(|checked| checked);
     match checked {
         Ok(path) => {
             tracing::info!(
