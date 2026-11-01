@@ -788,7 +788,7 @@ fn skippy_multimodal_presentation(rendered: &str) -> Option<SettingPresentation>
         .hint("text")),
         "defaults.skippy.activation_codec" => Some(sp(
             "Split activation codec",
-            "Choose how activations travel between split stages. f16, the default, halves the bytes by rounding activations to half precision, which matched single-node top-1 tokens in testing; lossless sends exact values; bf16 also halves them; s8-row and the fp8 codecs quarter them at some cost in accuracy (fp8-e4m3-block32 keeps the most).",
+            "Choose how activations travel between split stages. f16, the default, halves the bytes by rounding activations to half precision, which matched single-node top-1 tokens in testing; lossless sends exact values; bf16 also halves them; s8-row and the fp8 codecs quarter them at some cost in accuracy (fp8-e4m3-block32 scales each 32 values separately, so an outlier costs precision only in its own block).",
             SKIPPY_CATEGORY,
             75,
         )
