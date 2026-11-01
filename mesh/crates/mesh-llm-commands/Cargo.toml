@@ -58,6 +58,8 @@ libc = "0.2"
 
 [dev-dependencies]
 skippy-coordinator = { path = "../../../skippy/crates/skippy-coordinator", version = "0.78.0" }
+# rerun_without_bundle_env! for the runtime discovery tests.
+skippy-runtime-install = { path = "../../../skippy/crates/skippy-runtime-install", version = "0.78.0", features = ["test-support"] }
 clap.workspace = true
 rand = "0.10"
 serial_test = "4"
