@@ -284,14 +284,24 @@ impl DFlashFeatureRows {
         );
         let existing = frame.desc.parts()?.to_vec();
         let mut count = existing.len();
-        for (layer, values) in &self.layers {
+        let new_layers: Vec<_> = self
+            .layers
+            .iter()
+            .filter(|(layer, _)| {
+                let identity = dflash_feature_identity(*layer);
+                !existing.iter().any(|part| part.identity == identity)
+            })
+            .collect();
+        // Check capacity before touching the frame, so a full part directory
+        // leaves the frame exactly as it was rather than half-extended.
+        if count + new_layers.len() > ACTIVATION_MAX_PARTS {
+            bail!(
+                "no activation parts left for {} DFlash feature layers ({count} of {ACTIVATION_MAX_PARTS} used)",
+                new_layers.len()
+            );
+        }
+        for (layer, values) in new_layers {
             let identity = dflash_feature_identity(*layer);
-            if existing.iter().any(|part| part.identity == identity) {
-                continue;
-            }
-            if count >= ACTIVATION_MAX_PARTS {
-                bail!("no activation part left for DFlash layer {layer}");
-            }
             let offset = frame.payload.len();
             encode_bf16(values, &mut frame.payload);
             let mut part = ActivationPartDesc {
@@ -681,6 +691,28 @@ mod tests {
         second.append_to_frame(&mut frame).unwrap();
 
         assert_eq!(frame.desc.part_count, 2);
+        assert_eq!(DFlashFeatureRows::from_frame(&frame).unwrap(), Some(first));
+    }
+
+    #[test]
+    fn a_full_part_directory_leaves_the_frame_unchanged() {
+        let mut first = DFlashFeatureRows::new(2, 1);
+        for layer in 0..u32::try_from(ACTIVATION_MAX_PARTS - 2).unwrap() {
+            first.insert(layer, vec![1.0, 2.0]).unwrap();
+        }
+        let mut frame = frame(1);
+        first.append_to_frame(&mut frame).unwrap();
+        assert_eq!(frame.desc.part_count as usize, ACTIVATION_MAX_PARTS - 1);
+        let before = frame.clone();
+
+        let mut second = DFlashFeatureRows::new(2, 1);
+        second.insert(100, vec![3.0, 4.0]).unwrap();
+        second.insert(101, vec![5.0, 6.0]).unwrap();
+        assert!(second.append_to_frame(&mut frame).is_err());
+
+        assert_eq!(frame.payload, before.payload);
+        assert_eq!(frame.desc.part_count, before.desc.part_count);
+        assert_eq!(frame.desc.payload_bytes, before.desc.payload_bytes);
         assert_eq!(DFlashFeatureRows::from_frame(&frame).unwrap(), Some(first));
     }
 
