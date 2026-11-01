@@ -5,6 +5,7 @@ pub(super) use message_history::PluginMessageHistory;
 
 use super::*;
 use crate::mesh::node::stamp_plugin_event_source;
+use crate::plugin::ChannelRoute;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const PLUGIN_FRAME_PREFIX_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -542,21 +543,21 @@ impl Node {
         plugin_id: String,
         mut message: crate::plugin::proto::ChannelMessage,
     ) -> Result<()> {
-        // A channel the plugin publishes on locally never reaches the
-        // mesh: its messages go to the other plugins on this node.
-        if let Some(plugin_manager) = self
-            .local_channel_manager(&plugin_id, &message.channel)
+        // One classification decides the route, so a manifest that changes
+        // mid-call cannot turn a local message into a mesh one.
+        match self
+            .plugin_channel_route(&plugin_id, &message.channel, "message")
             .await
         {
-            return plugin_manager
-                .relay_local_channel_message(&plugin_id, message)
-                .await;
-        }
-        if !self
-            .plugin_event_channel_declared(&plugin_id, &message.channel, "message")
-            .await
-        {
-            return Ok(());
+            (ChannelRoute::Local, Some(plugin_manager)) => {
+                // A local channel never reaches the mesh: its messages go to
+                // the other plugins on this node.
+                return plugin_manager
+                    .relay_local_channel_message(&plugin_id, message)
+                    .await;
+            }
+            (ChannelRoute::Mesh, _) => {}
+            _ => return Ok(()),
         }
         stamp_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
         let mut frame = crate::plugin::proto::MeshChannelFrame {
@@ -581,23 +582,20 @@ impl Node {
     ) -> Result<()> {
         // Bulk transfers are peer-to-peer only; a local channel has no
         // peer to send one to.
-        if self
-            .local_channel_manager(&plugin_id, &message.channel)
-            .await
-            .is_some()
-        {
-            tracing::warn!(
-                plugin = %plugin_id,
-                channel = %message.channel,
-                "dropping bulk transfer on a local channel: local channels never reach the mesh"
-            );
-            return Ok(());
-        }
-        if !self
-            .plugin_event_channel_declared(&plugin_id, &message.channel, "bulk transfer")
+        match self
+            .plugin_channel_route(&plugin_id, &message.channel, "bulk transfer")
             .await
         {
-            return Ok(());
+            (ChannelRoute::Mesh, _) => {}
+            (ChannelRoute::Local, _) => {
+                tracing::warn!(
+                    plugin = %plugin_id,
+                    channel = %message.channel,
+                    "dropping bulk transfer on a local channel: local channels never reach the mesh"
+                );
+                return Ok(());
+            }
+            _ => return Ok(()),
         }
         stamp_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
         let mut frame = crate::plugin::proto::MeshBulkFrame {
@@ -613,40 +611,32 @@ impl Node {
         self.broadcast_plugin_bulk_frame(&frame, None).await
     }
 
-    /// The plugin manager, when `plugin_id` declares `channel` local
-    /// (`MeshChannelManifest.local`): nothing on it may reach a peer.
-    pub(crate) async fn local_channel_manager(
-        &self,
-        plugin_id: &str,
-        channel: &str,
-    ) -> Option<crate::plugin::PluginManager> {
-        let plugin_manager = self.plugin_manager().await?;
-        plugin_manager
-            .plugin_declares_local_channel(plugin_id, channel)
-            .await
-            .then_some(plugin_manager)
-    }
-
-    pub(crate) async fn plugin_event_channel_declared(
+    /// How `plugin_id`'s traffic on `channel` may travel, with the plugin
+    /// manager that answered. Without a manager (shutdown) or a cached
+    /// manifest (restart) nothing is declared, so the route fails closed.
+    pub(crate) async fn plugin_channel_route(
         &self,
         plugin_id: &str,
         channel: &str,
         noun: &str,
-    ) -> bool {
-        let plugin_manager = self.plugin_manager.lock().await.clone();
-        if let Some(plugin_manager) = plugin_manager
-            && !plugin_manager
-                .plugin_declares_mesh_channel(plugin_id, channel)
-                .await
-        {
+    ) -> (ChannelRoute, Option<crate::plugin::PluginManager>) {
+        let Some(plugin_manager) = self.plugin_manager().await else {
+            tracing::debug!(
+                plugin = %plugin_id,
+                channel = %channel,
+                "Dropping outbound {noun}: no plugin manager"
+            );
+            return (ChannelRoute::Undeclared, None);
+        };
+        let route = plugin_manager.channel_route(plugin_id, channel).await;
+        if route == ChannelRoute::Undeclared {
             tracing::debug!(
                 plugin = %plugin_id,
                 channel = %channel,
                 "Dropping outbound {noun} for undeclared mesh channel"
             );
-            return false;
         }
-        true
+        (route, Some(plugin_manager))
     }
 
     /// Record a plugin-frame source mismatch from `remote` and decide the warning.
@@ -868,11 +858,6 @@ impl Node {
         if message.source_peer_id.is_empty() {
             message.source_peer_id = endpoint_id_hex(remote);
         }
-        // `source_plugin` is the host's claim about a local publisher; a peer
-        // must not be able to set it. The signed frame itself is forwarded
-        // unchanged below.
-        message.metadata_json =
-            crate::plugin::channel_broadcast::without_source_plugin(&message.metadata_json);
         // A rejected frame never enters deduplication, so a relay cannot spend
         // the origin's message ID with an unauthenticated claim.
         if !self.remember_plugin_message(frame.message_id.clone()).await {

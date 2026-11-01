@@ -30,21 +30,20 @@ impl PluginManager {
     }
 
     /// Deliver `plugin_id`'s own message on a channel its manifest declares
-    /// `local` to every other loaded plugin that declares the channel, the
-    /// same way the host delivers its own broadcasts: empty `source_peer_id`,
-    /// so a receiver tells it from a mesh peer's frame. Nothing goes to the
-    /// mesh. The sender's id rides in `metadata_json` as `source_plugin`.
+    /// `local` to every other loaded plugin that declares the channel.
+    /// Nothing goes to the mesh. The message carries a plugin origin
+    /// ([`local_plugin_origin`]) in `source_peer_id`, so a receiver tells it
+    /// from the host's own broadcasts (empty `source_peer_id`) and from a mesh
+    /// peer's frame (a peer id); `metadata_json` is left as published.
     pub async fn relay_local_channel_message(
         &self,
         plugin_id: &str,
         message: proto::ChannelMessage,
     ) -> Result<()> {
-        let metadata_json = local_metadata(&message.metadata_json, plugin_id);
         self.deliver_locally(
             Some(plugin_id),
             proto::ChannelMessage {
-                source_peer_id: String::new(),
-                metadata_json,
+                source_peer_id: local_plugin_origin(plugin_id),
                 ..message
             },
         )
@@ -78,12 +77,15 @@ impl PluginManager {
         aggregate_broadcast_results(results)
     }
 
-    /// Whether an already-running `plugin_name` declares `channel` as one it
-    /// publishes on locally ([`proto::MeshChannelManifest::local`]).
-    pub async fn plugin_declares_local_channel(&self, plugin_name: &str, channel: &str) -> bool {
-        self.manifest_snapshot(plugin_name)
-            .await
-            .is_some_and(|manifest| manifest_declares_local_channel(&manifest, channel))
+    /// How `plugin_name`'s messages on `channel` may travel, from one manifest
+    /// snapshot so a restart cannot change the answer between two lookups. A
+    /// plugin without a cached manifest (not yet initialized, or shut down)
+    /// declares nothing, so the answer fails closed.
+    pub async fn channel_route(&self, plugin_name: &str, channel: &str) -> ChannelRoute {
+        match self.manifest_snapshot(plugin_name).await {
+            Some(manifest) => manifest_channel_route(&manifest, channel),
+            None => ChannelRoute::Undeclared,
+        }
     }
 
     /// Whether an already-running `plugin_name` declares `channel` in its
@@ -141,34 +143,39 @@ fn aggregate_broadcast_results(results: Vec<(String, Result<()>)>) -> Result<()>
     }
 }
 
-/// The publisher's `metadata_json` with `source_plugin` set by the host: a
-/// JSON object keeps its other members, anything else is replaced.
-fn local_metadata(published: &str, plugin_id: &str) -> String {
-    let mut object = serde_json::from_str::<serde_json::Value>(published)
-        .ok()
-        .and_then(|value| match value {
-            serde_json::Value::Object(object) => Some(object),
-            _ => None,
-        })
-        .unwrap_or_default();
-    object.insert("source_plugin".into(), plugin_id.into());
-    serde_json::Value::Object(object).to_string()
+/// Where a plugin's message on a channel may go, per its manifest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelRoute {
+    /// Declared `local`: only the other plugins on this node.
+    Local,
+    /// Declared as an ordinary mesh channel.
+    Mesh,
+    /// Not declared: nowhere.
+    Undeclared,
 }
 
-/// A mesh peer's `metadata_json` without `source_plugin`: only
-/// [`local_metadata`] names the publisher, so a frame from the mesh must not
-/// be able to claim a local plugin's identity.
-pub(crate) fn without_source_plugin(metadata_json: &str) -> String {
-    let Ok(serde_json::Value::Object(mut object)) =
-        serde_json::from_str::<serde_json::Value>(metadata_json)
-    else {
-        return metadata_json.to_string();
-    };
-    if object.remove("source_plugin").is_none() {
-        return metadata_json.to_string();
+fn manifest_channel_route(manifest: &proto::PluginManifest, channel: &str) -> ChannelRoute {
+    // A name declared both ways is local: isolation wins over reach.
+    if manifest_declares_local_channel(manifest, channel) {
+        ChannelRoute::Local
+    } else if manifest_declares_mesh_channel(manifest, channel) {
+        ChannelRoute::Mesh
+    } else {
+        ChannelRoute::Undeclared
     }
-    serde_json::Value::Object(object).to_string()
 }
+
+/// The `source_peer_id` of a message one local plugin published to the
+/// others. A mesh frame's `source_peer_id` must equal its authenticated
+/// sender's endpoint id (hex), so no peer can produce this value, and it is
+/// not the empty id of the host's own broadcasts. A receiver must authorize
+/// the named plugin before treating the message as more than that plugin's
+/// claim.
+pub(crate) fn local_plugin_origin(plugin_id: &str) -> String {
+    format!("{LOCAL_PLUGIN_ORIGIN_PREFIX}{plugin_id}")
+}
+
+const LOCAL_PLUGIN_ORIGIN_PREFIX: &str = "plugin:";
 
 fn manifest_declares_local_channel(manifest: &proto::PluginManifest, channel: &str) -> bool {
     manifest
@@ -215,18 +222,6 @@ mod tests {
     }
 
     #[test]
-    fn a_mesh_frame_cannot_claim_a_source_plugin() {
-        let stripped: serde_json::Value = serde_json::from_str(&without_source_plugin(
-            r#"{"trace":"t-1","source_plugin":"pay-lightning"}"#,
-        ))
-        .unwrap();
-        assert_eq!(stripped, serde_json::json!({"trace": "t-1"}));
-        for untouched in ["", "[1]", "not json", r#"{"trace":"t-1"}"#] {
-            assert_eq!(without_source_plugin(untouched), untouched);
-        }
-    }
-
-    #[test]
     fn a_channel_is_local_only_when_its_declaration_says_so() {
         let manifest = proto::PluginManifest {
             mesh_channels: vec![
@@ -255,22 +250,52 @@ mod tests {
     }
 
     #[test]
-    fn local_metadata_keeps_the_publishers_members_and_names_the_publisher() {
-        let merged: serde_json::Value = serde_json::from_str(&local_metadata(
-            r#"{"trace":"t-1","source_plugin":"forged"}"#,
-            "pay-lightning",
-        ))
-        .unwrap();
+    fn a_channel_routes_by_how_it_is_declared() {
+        let manifest = proto::PluginManifest {
+            mesh_channels: vec![
+                proto::MeshChannelManifest {
+                    name: "local.v1".into(),
+                    local: true,
+                },
+                proto::MeshChannelManifest {
+                    name: "mesh.v1".into(),
+                    local: false,
+                },
+                proto::MeshChannelManifest {
+                    name: "both.v1".into(),
+                    local: false,
+                },
+                proto::MeshChannelManifest {
+                    name: "both.v1".into(),
+                    local: true,
+                },
+            ],
+            ..proto::PluginManifest::default()
+        };
         assert_eq!(
-            merged,
-            serde_json::json!({"trace": "t-1", "source_plugin": "pay-lightning"})
+            manifest_channel_route(&manifest, "local.v1"),
+            ChannelRoute::Local
         );
-        for not_an_object in ["", "[1]", "not json"] {
-            assert_eq!(
-                local_metadata(not_an_object, "pay-lightning"),
-                r#"{"source_plugin":"pay-lightning"}"#
-            );
-        }
+        assert_eq!(
+            manifest_channel_route(&manifest, "mesh.v1"),
+            ChannelRoute::Mesh
+        );
+        assert_eq!(
+            manifest_channel_route(&manifest, "both.v1"),
+            ChannelRoute::Local
+        );
+        assert_eq!(
+            manifest_channel_route(&manifest, "other.v1"),
+            ChannelRoute::Undeclared
+        );
+    }
+
+    #[test]
+    fn a_plugin_origin_is_never_a_peer_id_or_empty() {
+        let origin = local_plugin_origin("pay-lightning");
+        assert_eq!(origin, "plugin:pay-lightning");
+        // Peer ids are hex endpoint ids, which never contain ':'.
+        assert!(origin.contains(':'));
     }
 
     /// One declaring plugin failing must not stop delivery to the rest —
@@ -328,6 +353,25 @@ mod tests {
             )
             .await
             .expect("broadcasting with no plugins loaded is a no-op, not an error");
+
+        manager.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn an_unknown_plugin_has_no_route_on_any_channel() {
+        let specs = ResolvedPlugins {
+            externals: Vec::new(),
+            inactive: Vec::new(),
+        };
+        let (mesh_tx, _mesh_rx) = mpsc::channel(1);
+        let manager = PluginManager::start(&specs, private_host_mode(), mesh_tx)
+            .await
+            .expect("empty plugin set starts cleanly");
+
+        assert_eq!(
+            manager.channel_route("pay-lightning", "pay.ln.v1").await,
+            ChannelRoute::Undeclared
+        );
 
         manager.shutdown().await;
     }

@@ -1320,23 +1320,27 @@ declaring it local (`mesh_llm_plugin::mesh::local_channel(name)`, which sets
 `MeshChannelManifest.local`). The host then delivers that plugin's messages on
 the channel to every other loaded plugin that declares the same channel, and
 sends none to a peer: a bulk transfer on it is dropped and a mesh stream on it
-is refused. The delivery has the shape of the host's own local broadcast
-(`PluginManager::broadcast_channel_message`): an empty `source_peer_id` and
-`target_peer_id` set to the receiving plugin. The host sets `source_plugin` in
-`metadata_json` to the plugin the connection belongs to, keeping the
-publisher's other members when `metadata_json` is a JSON object. A plugin
+is refused. A name a plugin declares both ways counts as local. A plugin that
+has not finished initializing (the host has no manifest for it yet) or is
+shutting down has no declared channels, so its messages are dropped, never
+sent to peers.
+
+A delivery's `source_peer_id` is `plugin:<plugin id>`, the plugin the host's
+connection belongs to; `metadata_json` is delivered as published. The value is
+neither the empty `source_peer_id` of the host's own broadcasts nor a peer id
+(a mesh frame's `source_peer_id` must equal its authenticated sender), so a
+peer cannot produce it. It is only the named plugin's claim: a receiver must
+decide whether that plugin may publish on the channel before treating the
+message as anything more, and must not accept it as a host event. A plugin
 cannot publish as another: the host takes a message's plugin from its
 connection, never from the envelope. A receiver declares the channel as usual
-(`mesh::channel(name)`).
+(`mesh::channel(name)`); a plugin that declares a channel local receives no
+mesh stream on it.
 
 The host advertises the `local_channels.v1` host capability. A host without it
 would read the declaration as an ordinary mesh channel and send the messages to
-peers, so the plugin runtime refuses to initialize a plugin whose manifest
-declares a local channel on such a host.
-
-`source_plugin` names a local publisher only when `source_peer_id` is empty.
-The host removes `source_plugin` from the `metadata_json` of every frame that
-arrives from the mesh, so a peer cannot claim it.
+peers, so the plugin runtime refuses to initialize a plugin whose manifest, as
+returned from `initialize`, declares a local channel on such a host.
 
 ## Plugin Keys
 
