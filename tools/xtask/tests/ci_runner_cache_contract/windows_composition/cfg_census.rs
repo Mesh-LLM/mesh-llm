@@ -17,7 +17,6 @@ const UNVERIFIED: &[&str] = &[
     "skippy-hf-hub",
     // Native HF publication input custody and model FIFO fixtures need Windows qualification.
     "skippy-model-package",
-    "mesh-llm-routing",
     "skippy-model",
     "skippy-package-builder",
     "skippy-quantize",
