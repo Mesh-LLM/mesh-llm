@@ -95,6 +95,7 @@ fn command_summary_retains_static_prefix_nested_names_and_redacts_plugin_values(
         "plugins",
         "install",
         "https://user:secret@example.test/plugin?token=query-secret",
+        "private-owner/private-plugin",
     ]);
     assert_eq!(summary, "mesh-llm plugins install reference [REDACTED]");
     assert!(!summary.contains("secret"));

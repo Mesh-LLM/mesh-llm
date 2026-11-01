@@ -300,6 +300,19 @@ handlers for pages and config sections.
 - use the exemplar's self-contained `bundle/host-contract.d.ts` for author
   types; do not import private types from `mesh/crates/mesh-llm-ui`
 
+Install multiple independent plugins in one command using catalog names,
+GitHub `owner/repo` references, or GitHub URLs:
+
+```bash
+mesh-llm plugins install blackboard Mesh-LLM/metrics-plugin
+```
+
+Each reference uses the existing installer in order, including its permission
+disclosures and existing-install handling. On the first failure, the command
+exits unsuccessfully and names the failed reference; earlier successful installs
+remain and later references are not attempted. This does not introduce plugin
+dependencies or bundles. Each plugin keeps its own setup instructions.
+
 For a pre-release or local package, exercise the real installer without a
 GitHub release:
 
