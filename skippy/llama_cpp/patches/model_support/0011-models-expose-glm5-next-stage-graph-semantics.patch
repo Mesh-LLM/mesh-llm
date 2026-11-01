@@ -40,10 +40,10 @@ per-layer KV head counts over the NextN block.
  5 files changed, 220 insertions(+), 17 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 52ef6ae4b..a4bf34728 100644
+index 94f1fc871..e0f14f76f 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -300,6 +300,17 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -301,6 +301,17 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_test(NAME skippy_qwen3moe_mtp COMMAND skippy-profile-residency
          "${QWEN3MOE_MTP_FIXTURE_DIR}/dense-mtp.gguf")
      set_tests_properties(skippy_qwen3moe_mtp PROPERTIES FIXTURES_REQUIRED qwen3moe-mtp-model)
@@ -61,10 +61,10 @@ index 52ef6ae4b..a4bf34728 100644
      set(MULTIDEPTH_MTP_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/multidepth-mtp-models")
      file(MAKE_DIRECTORY "${MULTIDEPTH_MTP_FIXTURE_DIR}")
      add_test(NAME skippy_generate_multidepth_mtp COMMAND skippy-model-fixture-generator
-@@ -479,6 +490,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
-             FIXTURES_REQUIRED verify-rollback-${arch})
-     endfunction()
+@@ -482,6 +493,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_skippy_verify_rollback_test(qwen4exp qwen4exp-moe.gguf)
+     # lfm2's fixture slides its attention window, so it checkpoints every window.
+     add_skippy_verify_rollback_test(lfm2 lfm2-dense.gguf sliding-window)
 +    add_skippy_verify_rollback_test(glm5-next glm5-next-moe.gguf)
      add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
      target_include_directories(skippy-sampling-history PRIVATE .)
