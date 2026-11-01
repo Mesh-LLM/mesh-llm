@@ -409,7 +409,7 @@ async fn real_multimodal_local_smoke_when_fixture_is_set() -> Result<()> {
     let probe = crate::thinking_probe::probe_loaded_model(
         &backend.runtime,
         &crate::thinking_probe::ThinkingProbeInputs {
-            defaults: &backend.request_defaults,
+            defaults: &backend.request_defaults.snapshot(),
             model_id: "mm-smoke",
             artifact: None,
             template_override: None,
@@ -652,7 +652,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
         config: stage0_config.clone(),
         model_id: "mm-smoke".to_string(),
         default_max_tokens: 16,
-        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        request_defaults: EmbeddedOpenAiRequestDefaults::default().into(),
         thinking: None,
         ctx_size,
         mode: InferenceBackendMode::EmbeddedStageZero {

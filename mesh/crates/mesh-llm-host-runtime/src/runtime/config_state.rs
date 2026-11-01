@@ -15,6 +15,7 @@ use crate::plugin::{
 };
 use crate::protocol::convert::{canonical_config_hash, mesh_config_to_proto};
 
+use super::live_request_defaults;
 use super::operational_logging::{
     ConfigDiagnosticsOutcome, ConfigOperationalEvent, record_config_operational_event,
 };
@@ -87,6 +88,9 @@ pub(crate) struct PendingConfigApply {
     old_logging: LoggingConfig,
     kv_disk_requires_restart: bool,
     dynamic_kv_disk_changed: bool,
+    /// The config in force before this apply, kept only when request defaults
+    /// change so a failed persist can put the running models back.
+    previous_request_defaults_config: Option<Box<MeshConfig>>,
 }
 
 impl PendingConfigApply {
@@ -132,6 +136,25 @@ impl PendingConfigApply {
                 tracing::warn!(%error, "disk prompt-cache runtime unavailable; retaining limits as staged configuration");
                 None
             }
+        }
+    }
+
+    pub(crate) fn apply_live_request_defaults(&self) -> bool {
+        if self.previous_request_defaults_config.is_none() {
+            return false;
+        }
+        if live_request_defaults::apply_to_loaded_models(&self.config) {
+            return true;
+        }
+        tracing::warn!(
+            "request defaults could not be applied to every loaded model; retaining them as staged configuration"
+        );
+        false
+    }
+
+    pub(crate) fn restore_live_request_defaults(&self) {
+        if let Some(previous) = &self.previous_request_defaults_config {
+            live_request_defaults::apply_to_loaded_models(previous);
         }
     }
 
@@ -465,6 +488,10 @@ impl ConfigState {
         let kv_disk_requires_restart = kv_disk_changes_require_restart(old_kv_disk, new_kv_disk);
         let dynamic_kv_disk_changed = kv_disk_dynamic_limits_changed(old_kv_disk, new_kv_disk);
 
+        let previous_request_defaults_config =
+            live_request_defaults::request_defaults_changed(&self.config, &new_config)
+                .then(|| Box::new(self.config.clone()));
+
         ConfigApplyPreparation::Pending(Box::new(PendingConfigApply {
             config: new_config,
             config_path: self.config_path.clone(),
@@ -477,6 +504,7 @@ impl ConfigState {
             old_logging,
             kv_disk_requires_restart,
             dynamic_kv_disk_changed,
+            previous_request_defaults_config,
         }))
     }
 
@@ -559,6 +587,7 @@ where
     let live_logging_applied = pending.apply_live_logging();
     let live_kv_disk_rollback = pending.apply_live_kv_disk();
     let live_kv_disk_applied = live_kv_disk_rollback.is_some();
+    let live_request_defaults_applied = pending.apply_live_request_defaults();
     let persistence = persist(&pending);
     if live_logging_applied && matches!(&persistence, ConfigPersistence::PersistError(_)) {
         // A persistence failure after a live apply is rare, but restore the
@@ -571,6 +600,9 @@ where
     {
         super::kv_disk_config::restore_live_kv_disk_limits(rollback);
     }
+    if live_request_defaults_applied && matches!(&persistence, ConfigPersistence::PersistError(_)) {
+        pending.restore_live_request_defaults();
+    }
     let result = finish(pending, persistence);
 
     match result {
@@ -579,12 +611,14 @@ where
             hash,
             diagnostics,
             ..
-        } if live_logging_applied || live_kv_disk_applied => ApplyResult::Applied {
-            revision,
-            hash,
-            apply_mode: ConfigApplyMode::Live,
-            diagnostics,
-        },
+        } if live_logging_applied || live_kv_disk_applied || live_request_defaults_applied => {
+            ApplyResult::Applied {
+                revision,
+                hash,
+                apply_mode: ConfigApplyMode::Live,
+                diagnostics,
+            }
+        }
         result @ ApplyResult::PersistedWithRevisionTrackingError { .. } => {
             // The primary config write succeeded and `ConfigState` has
             // already adopted the new revision. Keep the live pair in place;

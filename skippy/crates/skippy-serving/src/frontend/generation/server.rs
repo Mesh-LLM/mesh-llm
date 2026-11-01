@@ -371,7 +371,10 @@ fn embedded_openai_backend_with_scheduler(
         telemetry: args.telemetry.clone(),
         model_id: model_id.clone(),
         default_max_tokens: args.default_max_tokens,
-        request_defaults: args.request_defaults,
+        request_defaults: super::LiveRequestDefaults::register(
+            model_id.as_str(),
+            args.request_defaults,
+        ),
         thinking: thinking.clone(),
         ctx_size,
         mode,

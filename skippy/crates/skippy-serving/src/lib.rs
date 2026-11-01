@@ -60,7 +60,7 @@ pub use frontend::{
     LinearProposalSourceOutcome, LinearProposalSourceResponse, LinearProposalSourceTelemetry,
     NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,
     OpaqueProposalDecisionId, SpeculativeDecodeConfig, SpeechRecognitionBackend, SpeechTranscriber,
-    VerifyWindowConfig, embedded_openai_backend,
+    VerifyWindowConfig, embedded_openai_backend, replace_live_request_defaults,
 };
 pub use skippy_protocol::StageConfig;
 pub use tokenizer::{MAX_TOKENIZE_TOKENS, TokenizerCapability, TokenizerCapabilityError};

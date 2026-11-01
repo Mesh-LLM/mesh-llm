@@ -10,6 +10,7 @@ use crate::inference::skippy;
 use crate::mesh;
 use crate::models;
 use crate::plugin;
+use crate::runtime::live_request_defaults;
 use crate::runtime::local::skippy_native_model_open_events;
 use crate::runtime::local_package::{
     split_node_labels, split_participant_set_hash, split_topology_hash,
@@ -889,6 +890,11 @@ pub(super) async fn split_generation_load_settings<'a>(
     // Stage zero replaces this placeholder with its graph-observed output
     // boundary after the native runtime has been constructed.
     let embedded_openai = resolved.to_embedded_openai_args(0, true)?;
+    live_request_defaults::track_model(
+        &resolved.model_id,
+        spec.config_model_id,
+        spec.package.generation.as_ref(),
+    );
     let lifecycle = configured_stage_lifecycle_intervals(spec.mesh_config, spec.config_model_id);
     let runtime_options = resolved.to_embedded_runtime_options(
         &spec.skippy_telemetry,

@@ -20,8 +20,8 @@ use super::request_defaults::{
 use super::support::resolve_prefill_chunk_policy;
 use super::types::{
     BUILTIN_PREFILL_ADAPTIVE_MAX, BUILTIN_PREFILL_ADAPTIVE_START, BUILTIN_PREFILL_ADAPTIVE_STEP,
-    BUILTIN_PREFILL_ADAPTIVE_TARGET_MS, ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig,
-    ResolvedStageKvCache,
+    BUILTIN_PREFILL_ADAPTIVE_TARGET_MS, ResolvedEmbeddedOpenAiArgs, ResolvedRequestDefaultsConfig,
+    ResolvedSkippyConfig, ResolvedStageKvCache,
 };
 
 const MAX_CHAT_TEMPLATE_BYTES: u64 = 1024 * 1024;
@@ -66,6 +66,104 @@ fn read_chat_template(path: &str) -> Result<String> {
     }
     String::from_utf8(bytes)
         .with_context(|| format!("request_defaults.chat_template_file {path} is not UTF-8"))
+}
+
+impl ResolvedRequestDefaultsConfig {
+    /// Convert resolved config into the defaults a loaded backend serves with.
+    /// Reads `chat_template_file` from disk, so callers on a request path must
+    /// not use it.
+    pub fn to_embedded(&self) -> Result<EmbeddedOpenAiRequestDefaults> {
+        let chat_template = match (
+            self.chat_template.as_ref(),
+            self.chat_template_file.as_ref(),
+        ) {
+            (Some(template), _) => Some(template.clone()),
+            (None, Some(path)) => Some(read_chat_template(path)?),
+            (None, None) => None,
+        };
+        let chat_template_kwargs = self
+            .chat_template_kwargs
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .context("serialize request_defaults.chat_template_kwargs")?;
+        let prefill_assistant = self
+            .prefill_assistant
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .context("serialize request_defaults.prefill_assistant")?;
+        let grammar = self
+            .grammar
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .context("serialize request_defaults.grammar")?;
+        let json_schema = self
+            .json_schema
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .context("serialize request_defaults.json_schema")?;
+        Ok(EmbeddedOpenAiRequestDefaults {
+            max_tokens: self.max_tokens,
+            package_request_defaults: self.package_request_defaults.clone(),
+            stop: self.stop.clone(),
+            temperature: self.temperature.map(|value| value as f32),
+            top_p: self.top_p.map(|value| value as f32),
+            presence_penalty: self.presence_penalty.map(|value| value as f32),
+            frequency_penalty: self.frequency_penalty.map(|value| value as f32),
+            seed: self.seed.map(resolve_request_seed).transpose()?,
+            logit_bias: self
+                .logit_bias
+                .as_ref()
+                .map(resolve_request_logit_bias)
+                .transpose()?,
+            top_k: self.top_k.map(resolve_request_top_k).transpose()?,
+            min_p: self.min_p.map(|value| value as f32),
+            typical_p: self.typical_p.map(|value| value as f32),
+            top_nsigma: self.top_nsigma.map(|value| value as f32),
+            dynatemp_range: self.dynatemp_range.map(|value| value as f32),
+            dynatemp_exponent: self.dynatemp_exponent.map(|value| value as f32),
+            dry: self.dry.as_ref().map(resolve_dry_sampling),
+            xtc: self.xtc.as_ref().map(resolve_xtc_sampling),
+            mirostat_mode: self.mirostat_mode.as_ref().and_then(|mode| match mode {
+                mesh_llm_config::IntegerOrString::Integer(value) => i32::try_from(*value).ok(),
+                mesh_llm_config::IntegerOrString::String(value) => value.parse().ok(),
+            }),
+            mirostat_entropy: self.mirostat_entropy.map(|value| value as f32),
+            mirostat_learning_rate: self.mirostat_learning_rate.map(|value| value as f32),
+            samplers: self.samplers.clone(),
+            sampler_sequence: self.sampler_sequence.clone(),
+            ignore_eos: self.ignore_eos,
+            repeat_penalty: self.repeat_penalty.map(|value| value as f32),
+            repeat_last_n: self
+                .repeat_last_n
+                .map(resolve_request_repeat_last_n)
+                .transpose()?,
+            reasoning_format: self
+                .reasoning_format
+                .as_deref()
+                .and_then(resolve_reasoning_format),
+            reasoning_enabled: self
+                .reasoning_enabled
+                .as_ref()
+                .and_then(resolve_reasoning_enabled),
+            reasoning_budget: self
+                .reasoning_budget
+                .as_ref()
+                .and_then(resolve_reasoning_budget),
+            chat_template,
+            allow_request_chat_template: self.allow_request_chat_template,
+            jinja: self.jinja,
+            chat_template_kwargs,
+            skip_chat_parsing: self.skip_chat_parsing,
+            prefill_assistant,
+            system_prompt: self.system_prompt.clone(),
+            grammar,
+            json_schema,
+        })
+    }
 }
 
 impl ResolvedSkippyConfig {
@@ -238,146 +336,13 @@ impl ResolvedSkippyConfig {
     ) -> Result<ResolvedEmbeddedOpenAiArgs> {
         self.ensure_embedded_openai_safe(staged)?;
         let mode = self.speculative_mode_for_embedded(staged);
-        let chat_template = match (
-            self.request_defaults.chat_template.as_ref(),
-            self.request_defaults.chat_template_file.as_ref(),
-        ) {
-            (Some(template), _) => Some(template.clone()),
-            (None, Some(path)) => Some(read_chat_template(path)?),
-            (None, None) => None,
-        };
-        let chat_template_kwargs = self
-            .request_defaults
-            .chat_template_kwargs
-            .as_ref()
-            .map(serde_json::to_value)
-            .transpose()
-            .context("serialize request_defaults.chat_template_kwargs")?;
-        let prefill_assistant = self
-            .request_defaults
-            .prefill_assistant
-            .as_ref()
-            .map(serde_json::to_value)
-            .transpose()
-            .context("serialize request_defaults.prefill_assistant")?;
-        let grammar = self
-            .request_defaults
-            .grammar
-            .as_ref()
-            .map(serde_json::to_value)
-            .transpose()
-            .context("serialize request_defaults.grammar")?;
-        let json_schema = self
-            .request_defaults
-            .json_schema
-            .as_ref()
-            .map(serde_json::to_value)
-            .transpose()
-            .context("serialize request_defaults.json_schema")?;
         Ok(ResolvedEmbeddedOpenAiArgs {
             model_id: Some(self.model_id.clone()),
             default_max_tokens: self
                 .request_defaults
                 .max_tokens
                 .unwrap_or(DEFAULT_EMBEDDED_MAX_TOKENS),
-            request_defaults: EmbeddedOpenAiRequestDefaults {
-                max_tokens: self.request_defaults.max_tokens,
-                package_request_defaults: self.request_defaults.package_request_defaults.clone(),
-                stop: self.request_defaults.stop.clone(),
-                temperature: self.request_defaults.temperature.map(|value| value as f32),
-                top_p: self.request_defaults.top_p.map(|value| value as f32),
-                presence_penalty: self
-                    .request_defaults
-                    .presence_penalty
-                    .map(|value| value as f32),
-                frequency_penalty: self
-                    .request_defaults
-                    .frequency_penalty
-                    .map(|value| value as f32),
-                seed: self
-                    .request_defaults
-                    .seed
-                    .map(resolve_request_seed)
-                    .transpose()?,
-                logit_bias: self
-                    .request_defaults
-                    .logit_bias
-                    .as_ref()
-                    .map(resolve_request_logit_bias)
-                    .transpose()?,
-                top_k: self
-                    .request_defaults
-                    .top_k
-                    .map(resolve_request_top_k)
-                    .transpose()?,
-                min_p: self.request_defaults.min_p.map(|value| value as f32),
-                typical_p: self.request_defaults.typical_p.map(|value| value as f32),
-                top_nsigma: self.request_defaults.top_nsigma.map(|value| value as f32),
-                dynatemp_range: self
-                    .request_defaults
-                    .dynatemp_range
-                    .map(|value| value as f32),
-                dynatemp_exponent: self
-                    .request_defaults
-                    .dynatemp_exponent
-                    .map(|value| value as f32),
-                dry: self.request_defaults.dry.as_ref().map(resolve_dry_sampling),
-                xtc: self.request_defaults.xtc.as_ref().map(resolve_xtc_sampling),
-                mirostat_mode: self
-                    .request_defaults
-                    .mirostat_mode
-                    .as_ref()
-                    .and_then(|mode| match mode {
-                        mesh_llm_config::IntegerOrString::Integer(value) => {
-                            i32::try_from(*value).ok()
-                        }
-                        mesh_llm_config::IntegerOrString::String(value) => value.parse().ok(),
-                    }),
-                mirostat_entropy: self
-                    .request_defaults
-                    .mirostat_entropy
-                    .map(|value| value as f32),
-                mirostat_learning_rate: self
-                    .request_defaults
-                    .mirostat_learning_rate
-                    .map(|value| value as f32),
-                samplers: self.request_defaults.samplers.clone(),
-                sampler_sequence: self.request_defaults.sampler_sequence.clone(),
-                ignore_eos: self.request_defaults.ignore_eos,
-                repeat_penalty: self
-                    .request_defaults
-                    .repeat_penalty
-                    .map(|value| value as f32),
-                repeat_last_n: self
-                    .request_defaults
-                    .repeat_last_n
-                    .map(resolve_request_repeat_last_n)
-                    .transpose()?,
-                reasoning_format: self
-                    .request_defaults
-                    .reasoning_format
-                    .as_deref()
-                    .and_then(resolve_reasoning_format),
-                reasoning_enabled: self
-                    .request_defaults
-                    .reasoning_enabled
-                    .as_ref()
-                    .and_then(resolve_reasoning_enabled),
-                reasoning_budget: self
-                    .request_defaults
-                    .reasoning_budget
-                    .as_ref()
-                    .and_then(resolve_reasoning_budget),
-                chat_template,
-                allow_request_chat_template: self.request_defaults.allow_request_chat_template,
-                jinja: self.request_defaults.jinja,
-                chat_template_kwargs,
-                skip_chat_parsing: self.request_defaults.skip_chat_parsing,
-                prefill_assistant,
-                system_prompt: self.request_defaults.system_prompt.clone(),
-                grammar,
-                json_schema,
-            },
+            request_defaults: self.request_defaults.to_embedded()?,
             generation_concurrency: self.throughput.parallel,
             continuous_batching: self.throughput.continuous_batching != "false",
             pipeline_decode_groups: self

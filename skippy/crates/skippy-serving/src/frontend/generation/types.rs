@@ -1,7 +1,6 @@
 use crate::binary_transport::PredictionReturnHub;
 use crate::binary_transport::PredictionReturnReceiver;
 use crate::binary_transport::WireCondition;
-use crate::frontend::EmbeddedOpenAiRequestDefaults;
 use crate::frontend::GenerationLifecycleConfig;
 use crate::frontend::GenerationReceiptConfig;
 use crate::frontend::LinearProposalIngressConfig;
@@ -55,7 +54,9 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) telemetry: Telemetry,
     pub(in crate::frontend) model_id: String,
     pub(in crate::frontend) default_max_tokens: u32,
-    pub(in crate::frontend) request_defaults: EmbeddedOpenAiRequestDefaults,
+    /// Read through [`LiveRequestDefaults::snapshot`] once per request so a
+    /// config change applies to the next request without a model reload.
+    pub(in crate::frontend) request_defaults: super::LiveRequestDefaults,
     /// Render-only reasoning-control observations for this loaded model.
     pub(in crate::frontend) thinking: Option<skippy_inference_api::thinking::ThinkingControls>,
     pub(in crate::frontend) ctx_size: usize,

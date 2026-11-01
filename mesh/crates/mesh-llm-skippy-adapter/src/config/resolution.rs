@@ -51,6 +51,35 @@ pub fn resolve_skippy_config_for_selector_with_publisher_defaults(
     ))
 }
 
+fn model_entry_for_selector<'a>(
+    mesh_config: &'a mesh_llm_config::MeshConfig,
+    selector: &str,
+) -> Option<&'a ModelConfigEntry> {
+    mesh_config
+        .models
+        .iter()
+        .find(|entry| entry.model == selector)
+}
+
+/// Re-resolve the request defaults of an already loaded model against a newer
+/// `mesh_config`, so a config apply can reach running backends. The model's
+/// package profiles are kept from load time; everything else follows the config.
+pub fn resolve_embedded_request_defaults(
+    mesh_config: &mesh_llm_config::MeshConfig,
+    config_model_id: Option<&str>,
+    package_generation: Option<&skippy_runtime::package::PackageGenerationInfo>,
+) -> Result<skippy_serving::EmbeddedOpenAiRequestDefaults> {
+    let model_entry =
+        config_model_id.and_then(|selector| model_entry_for_selector(mesh_config, selector));
+    resolve_request_defaults(
+        mesh_config.defaults.as_ref(),
+        model_entry,
+        None,
+        package_generation,
+    )?
+    .to_embedded()
+}
+
 fn resolve_skippy_config_with_context(
     context: ResolverContext<'_>,
 ) -> Result<ResolvedSkippyConfig> {
@@ -163,13 +192,8 @@ impl<'a> ResolverContext<'a> {
         config_model_id: Option<&str>,
         publisher_defaults: Option<&'a skippy_package_format::PublisherModelDefaults>,
     ) -> Self {
-        let model_entry = config_model_id.and_then(|selector| {
-            request
-                .mesh_config
-                .models
-                .iter()
-                .find(|entry| entry.model == selector)
-        });
+        let model_entry = config_model_id
+            .and_then(|selector| model_entry_for_selector(request.mesh_config, selector));
         Self::with_model_entry(request, model_entry, publisher_defaults)
     }
 

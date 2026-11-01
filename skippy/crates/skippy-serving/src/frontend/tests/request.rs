@@ -1399,3 +1399,51 @@ fn operator_chat_template_still_reaches_the_renderer() {
         Some("{{ messages[0].content }}")
     );
 }
+
+/// Resolve a chat request against the backend's current defaults, the way the
+/// chat handlers do, and return the sampling the generation would use.
+fn sampling_under_live_defaults(
+    live: &LiveRequestDefaults,
+    extra: &serde_json::Value,
+) -> skippy_runtime::SamplingConfig {
+    let mut request = chat_request_with(extra);
+    let (resolved, _) = resolve_chat_request_defaults(&request, &live.snapshot()).unwrap();
+    apply_chat_request_defaults(&mut request, &resolved).unwrap();
+    chat_sampling_config(&request, &resolved).unwrap()
+}
+
+#[test]
+fn live_request_default_temperature_applies_to_the_next_request_and_loses_to_the_request() {
+    let live = LiveRequestDefaults::register(
+        "live-temperature-chat",
+        EmbeddedOpenAiRequestDefaults::default(),
+    );
+    let omitted = json!({});
+    let explicit = json!({"temperature": 0.5});
+
+    assert_eq!(
+        sampling_under_live_defaults(&live, &omitted).temperature,
+        0.8,
+        "built-in fallback applies until a default is configured"
+    );
+
+    let updated = replace_live_request_defaults(
+        "live-temperature-chat",
+        EmbeddedOpenAiRequestDefaults {
+            temperature: Some(0.0),
+            ..EmbeddedOpenAiRequestDefaults::default()
+        },
+    );
+
+    assert_eq!(updated, 1);
+    assert_eq!(
+        sampling_under_live_defaults(&live, &omitted).temperature,
+        0.0,
+        "a request without temperature picks up the configured default live"
+    );
+    assert_eq!(
+        sampling_under_live_defaults(&live, &explicit).temperature,
+        0.5,
+        "the request's own temperature still wins"
+    );
+}

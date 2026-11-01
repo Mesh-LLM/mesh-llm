@@ -2,6 +2,7 @@ mod cache_hints;
 mod concurrency;
 mod draft_runner;
 mod incremental_text;
+mod live_request_defaults;
 mod parsing;
 mod persistent_lanes;
 mod queue;
@@ -15,6 +16,8 @@ mod types;
 mod workload;
 
 pub use cache_hints::{CONTEXT_BUDGET_MAX_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS};
+pub(in crate::frontend) use live_request_defaults::LiveRequestDefaults;
+pub use live_request_defaults::replace_live_request_defaults;
 pub use request_defaults::{
     EmbeddedOpenAiRequestDefaults, EmbeddedReasoningBudget, EmbeddedReasoningEnabled,
     EmbeddedReasoningFormat,

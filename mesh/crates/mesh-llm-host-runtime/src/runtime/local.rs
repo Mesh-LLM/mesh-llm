@@ -3,6 +3,7 @@ use super::context_planning::{
     RuntimeResourcePlan, RuntimeResourcePlanInput, RuntimeResourcePlanningProfile,
     plan_runtime_resources,
 };
+use super::live_request_defaults;
 use super::local_memory_plan::{
     MemoryPlanMeasurementKey, MemoryPlanStartPath, emit_measured_memory_reconciliation,
     emit_memory_plan_resolved, measured_buffers_footprint,
@@ -1187,6 +1188,7 @@ async fn start_local_skippy_model(
         .await,
     );
     let embedded_openai = resolved.to_embedded_openai_args(0, false)?;
+    live_request_defaults::track_model(&resolved.model_id, spec.config_model_id, None);
     let mut options = resolved
         .to_model_load_options(spec.skippy_telemetry.clone())?
         .with_embedded_openai(embedded_openai)
@@ -1338,6 +1340,7 @@ async fn start_local_package_v2_model(
     );
     let run_id = format!("mesh-skippy-{}", now_unix_nanos());
     let embedded_openai = resolved.to_embedded_openai_args(0, true)?;
+    live_request_defaults::track_model(&resolved.model_id, spec.config_model_id, None);
     let mut runtime_options = resolved.to_embedded_runtime_options(
         &spec.skippy_telemetry,
         Some(package.clone()),
