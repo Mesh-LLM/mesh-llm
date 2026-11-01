@@ -27,12 +27,19 @@ struct TrackedModel {
     /// A swap has reached the model's backend. Until then a swap that finds no
     /// backend means the model is still loading, not that it is gone.
     registered: bool,
+    /// Distinguishes a reload of the same model id from the entry an in-flight
+    /// apply or sync snapshotted.
+    generation: u64,
 }
 
 /// Tracked models plus the last config applied to them.
 pub(crate) struct LiveRequestDefaults {
     tracked: Mutex<Vec<TrackedModel>>,
     latest: Mutex<Option<MeshConfig>>,
+    /// Held across an apply or a post-load sync, so a sync that resolved an
+    /// older config cannot overwrite what a later apply just swapped in.
+    swap: Mutex<()>,
+    next_generation: std::sync::atomic::AtomicU64,
 }
 
 static LIVE: LiveRequestDefaults = LiveRequestDefaults::new();
@@ -86,6 +93,8 @@ impl LiveRequestDefaults {
         Self {
             tracked: Mutex::new(Vec::new()),
             latest: Mutex::new(None),
+            swap: Mutex::new(()),
+            next_generation: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -102,6 +111,9 @@ impl LiveRequestDefaults {
             config_model_id: config_model_id.map(str::to_string),
             package_generation: package_generation.cloned(),
             registered: false,
+            generation: self
+                .next_generation
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         });
     }
 
@@ -110,6 +122,7 @@ impl LiveRequestDefaults {
         backend_model_id: &str,
         replace: impl Fn(&str, EmbeddedOpenAiRequestDefaults) -> usize,
     ) {
+        let _swap = lock(&self.swap);
         let Some(latest) = lock(&self.latest).clone() else {
             return;
         };
@@ -120,10 +133,8 @@ impl LiveRequestDefaults {
             return;
         };
         if let Some(defaults) = resolve(&entry, &latest) {
-            self.mark_registered(
-                &entry.backend_model_id,
-                replace(&entry.backend_model_id, defaults),
-            );
+            let updated = replace(&entry.backend_model_id, defaults);
+            self.mark_registered(&entry, updated);
         }
     }
 
@@ -132,6 +143,7 @@ impl LiveRequestDefaults {
         config: &MeshConfig,
         replace: impl Fn(&str, EmbeddedOpenAiRequestDefaults) -> usize,
     ) -> bool {
+        let _swap = lock(&self.swap);
         *lock(&self.latest) = Some(config.clone());
         // Resolving can read a template file from disk, so keep it off the lock
         // that every model load takes.
@@ -145,12 +157,13 @@ impl LiveRequestDefaults {
             };
             let updated = replace(&entry.backend_model_id, defaults);
             if updated > 0 {
-                self.mark_registered(&entry.backend_model_id, updated);
+                self.mark_registered(entry, updated);
             } else if entry.registered {
-                gone.push(entry.backend_model_id.clone());
+                gone.push((entry.backend_model_id.clone(), entry.generation));
             }
         }
-        lock(&self.tracked).retain(|entry| !gone.contains(&entry.backend_model_id));
+        lock(&self.tracked)
+            .retain(|entry| !gone.contains(&(entry.backend_model_id.clone(), entry.generation)));
         all_applied
     }
 
@@ -163,18 +176,19 @@ impl LiveRequestDefaults {
                 config_model_id: entry.config_model_id.clone(),
                 package_generation: entry.package_generation.clone(),
                 registered: entry.registered,
+                generation: entry.generation,
             })
             .collect()
     }
 
-    fn mark_registered(&self, backend_model_id: &str, updated: usize) {
+    fn mark_registered(&self, snapshotted: &TrackedModel, updated: usize) {
         if updated == 0 {
             return;
         }
-        if let Some(entry) = lock(&self.tracked)
-            .iter_mut()
-            .find(|entry| entry.backend_model_id == backend_model_id)
-        {
+        if let Some(entry) = lock(&self.tracked).iter_mut().find(|entry| {
+            entry.backend_model_id == snapshotted.backend_model_id
+                && entry.generation == snapshotted.generation
+        }) {
             entry.registered = true;
         }
     }

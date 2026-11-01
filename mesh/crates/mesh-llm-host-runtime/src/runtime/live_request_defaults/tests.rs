@@ -213,3 +213,23 @@ fn adding_a_model_entry_without_request_defaults_is_not_a_change() {
 
     assert!(!request_defaults_changed(&base, &with_model));
 }
+
+#[test]
+fn a_reload_tracked_during_an_apply_is_not_pruned_with_the_old_backend() {
+    let live = LiveRequestDefaults::new();
+    live.track_model("a", None, None);
+    let serving = FakeBackends::new(&["a"]);
+    live.apply(&temperature("0.0"), |m, d| serving.replace(m, d));
+
+    // The model reloads while an apply is mid-flight: its old backend is gone
+    // and the reload tracks a fresh entry before the apply prunes.
+    let reloaded = FakeBackends::new(&[]);
+    live.apply(&temperature("0.5"), |m, d| {
+        live.track_model("a", None, None);
+        reloaded.replace(m, d)
+    });
+    let after_load = FakeBackends::new(&["a"]);
+    live.sync_after_load("a", |m, d| after_load.replace(m, d));
+
+    assert_eq!(after_load.last_for("a"), Some(Some(0.5)));
+}
