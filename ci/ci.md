@@ -1,5 +1,13 @@
 # MeshLLM CI topology
 
+Linux Rust-test jobs disable test-profile debug information with
+`CARGO_PROFILE_TEST_DEBUG=0`, preserving complete package tests, debug
+assertions and overflow checks. This reduces the dependency variants and
+linked test executables retained across feature-isolated package invocations.
+The shared compiler seed warmer uses the same test setting. Cache epoch `v4`
+starts a fresh namespace. Batch jobs record filesystem space before each
+package and retained target/compiler-cache sizes even when tests fail.
+
 ## Standalone C++ API qualification
 
 The protected catalog admits `skippy/skippy_api/**` and
