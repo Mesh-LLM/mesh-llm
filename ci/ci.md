@@ -268,10 +268,26 @@ Release selection does not waive our candidate or independent verification.
 Unchanged
 scheduled/forced runs build once and certify the complete roster. Every
 certification first runs a deterministic immutable-plan and pinned-cache
-preflight. It validates model revision/blob paths, byte sizes and GGUF metadata.
-It does not rehash full model payloads: repeatedly reading the complete roster
-is too expensive for the NAS-backed immutable cache. Same-size payload corruption
-requires cache-population verification or a separate audit; plan, executable
+preflight. It validates pinned model revisions, byte sizes, cache containment and
+GGUF metadata for both regular snapshot files and symlinks. Content-addressed blob
+paths retain the immutable-cache identity check. Other files require SHA-256
+verification; private Unix job-account receipts avoid rereading unchanged payloads
+by binding the canonical path, digest, device/inode, size, mtime and ctime. Missing,
+invalid or stale receipts trigger verification again. Receipts live in the account's
+local cache and do not modify the read-only model store; they are account-trusted
+accelerators, not portable attestations.
+On macOS they live under
+`~/Library/Caches/mesh-llm/canary-payload-integrity-v1`; Linux uses
+`$XDG_CACHE_HOME/mesh-llm/canary-payload-integrity-v1` or `~/.cache` when unset.
+The first admission of a copied file reads its full contents once per account
+and machine. The preflight job allows 180 minutes for this cold verification of
+the full roster. Removing receipts forces verification again. Without usable private
+local state, including on Windows, regular files are verified on every admission.
+Silent storage corruption that preserves file identity and timestamps still
+requires a separate content audit.
+It does not rehash admitted content-addressed blobs: repeatedly reading the complete
+roster is too expensive for the NAS-backed immutable cache. Same-size corruption
+of those blobs requires cache-population verification or a separate audit; plan, executable
 handoff and evidence hashes remain checked.
 Changed pins use up to three distributed repair attempts. Each
 attempt runs one complete candidate family pass followed (only when all
@@ -871,8 +887,9 @@ closed.
 The Rust CI planner is the sole production Clippy and Rust-test batch allocator;
 `ci-crate-lists` validates that the main `matrices.rust_tests` covers every
 workspace crate exactly once, except the `CONTRACT_TESTED_CRATES`
-(`ci-controller` and `xtask`). `just ci-automation-contracts` runs their tests
-in the Quality slice, so each runs exactly once.
+(`ci-controller`, `process-supervision`, and `xtask`). `just
+ci-automation-contracts` runs their tests in the Quality slice, so each runs
+exactly once.
 
 Control-plane changes fail open through the selected profile. When they
 require the `web` slice, both console and website rows execute even without a
@@ -1012,7 +1029,12 @@ model cadence, device gates and protected action references remain unchanged.
 - `ci-platform-checks-slice.yml` — macOS portable/unit, Windows portable/unit,
   focused Windows log-store privacy ACL checks, and the Windows CPU native
   Skippy probes (`windows-skippy-probes`, #2222 item 2). That row is selected
-  by the `native-abi` platform domain and on every main run. The `native-abi`
+  by the `native-abi` platform domain and on every main run. The macOS and
+  Windows unit rows filter their resolved package lists against the checked-out
+  workspace's `cargo metadata` members before the test loops consume them, so a
+  crate removed from the workspace is skipped with a `::warning::` instead of
+  aborting with a missing-package failure; that filter cannot distinguish an
+  intentional removal from an accidental one. The `native-abi`
   domain selects `static-abi`, `runtime-product`, `product-smoke`,
   `rust-tests`, and `platform-checks`; its `domain_rows` are `linux-cpu`,
   `windows-cpu`, and `windows-vulkan` for changes to the patch queue and llama
@@ -2177,10 +2199,11 @@ workflows. The `hosted-bare` profile now restores a release executable from an
 exact-key `actions/cache` entry (`xtask-hosted-bare-<os>-<arch>-<hash>` over
 `Cargo.lock`, `Cargo.toml`, `.cargo/config.toml`, the action file,
 `.github/cache-version.txt`, `tools/xtask/**`, `tools/ci-controller/**`,
-`tools/trajectory-reader/**`,
+`tools/process-supervision/**`, `tools/trajectory-reader/**`,
 `mesh/crates/mesh-llm-release-footer/**`, the compiled-in JSON/script inputs and
 the Linux linker drivers), compiles only on a miss and saves on a miss. It hashes
-`tools/ci-controller/**` because xtask compiles the controller library. The image
+`tools/ci-controller/**` and `tools/process-supervision/**` because xtask
+compiles both libraries. The image
 profile never restores or saves an executable. The protected authority producers
 pass `reuse-hosted-binary: false`, so their bytes are always compiled in the
 run from the frozen protected source. A first run after any hashed input changes
@@ -2188,6 +2211,18 @@ is a cold miss. Pull requests execute main's reusable workflows, so none of this
 applies to a PR until it is merged. No hosted execution is recorded here.
 
 ## External Python SDK source preparation
+
+The checkout action, admission descriptor and Python-tooling policy use SDK
+commit `85226c50a68a13b48f40fe25e70eb85814e67457`; update all three together.
+Laya product readiness and Decisions smoke discovery query
+`/mesh/v1/models?workload_class=decision&available=true`, since compatibility
+model lists contain only LLMs. The golden and response checks remain required.
+
+The current checkpoint includes typed Mesh model discovery, OCR uploads,
+membership/live-session controls, full node configuration and native-runtime
+management. Its generated bindings were produced from the coordinated Mesh
+implementation recorded in the SDK's `sdk-inputs.json`; keep that source
+checkpoint synchronized with native API changes.
 
 The Python SDK package, generated Python bindings and four genuine compatibility
 and embedding clients are owned by `Mesh-LLM/mesh-llm-python-sdk`. Mesh admits the
@@ -2232,8 +2267,7 @@ on immediate repeated requests without publication sleeps or retries.
 
 ## Rolling preview distribution
 
-`rolling-preview.yml` is a main-only scheduled (Tuesday/Friday 03:23 UTC) and
-manual dispatcher of `release.yml` with `preview=true`, the full GPU matrix and
+`rolling-preview.yml` is a main-only manual dispatcher (schedule commented out) of `release.yml` with `preview=true`, the full GPU matrix and
 hosted runners. Unique run/attempt preview versions leave main unchanged. Release
 producers check out the metadata source SHA; publication stages a draft before
 exposing the complete immutable prerelease, never marking it latest. Stable

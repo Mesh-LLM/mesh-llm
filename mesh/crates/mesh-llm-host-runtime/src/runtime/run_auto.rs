@@ -1,4 +1,5 @@
 use super::daemon_startup::{check_mode_conflicts, resolve_effective_mode};
+use super::embedded_readiness::EmbeddedReadinessTx;
 use super::failed_node_start::cleanup_failed_node_start;
 use super::join_sources;
 use super::plugin_host_role;
@@ -113,6 +114,7 @@ pub(crate) struct EmbeddedRuntimeOptions {
     pub(crate) log_format: LogFormat,
     pub(crate) headless: bool,
     pub(crate) control_rx: Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
+    pub(crate) embedded_readiness_tx: Option<EmbeddedReadinessTx>,
 }
 
 impl EmbeddedRuntimeOptions {
@@ -167,7 +169,7 @@ pub(super) fn write_runtime_owner_metadata(
 
 pub(crate) async fn run() -> Result<()> {
     initialize_runtime_entrypoint()?;
-    run_runtime_cli(RuntimeOptions::default(), None, None, None).await
+    run_runtime_cli(RuntimeOptions::default(), None, None, None, None).await
 }
 
 pub(crate) async fn run_cli(
@@ -176,7 +178,7 @@ pub(crate) async fn run_cli(
     legacy_warning: Option<String>,
 ) -> Result<()> {
     initialize_runtime_entrypoint()?;
-    run_runtime_cli(options, explicit_surface, legacy_warning, None).await
+    run_runtime_cli(options, explicit_surface, legacy_warning, None, None).await
 }
 
 pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) -> Result<()> {
@@ -186,8 +188,16 @@ pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) ->
 
     let surface = options.runtime_surface();
     let control_rx = options.control_rx.take();
+    let embedded_readiness_tx = options.embedded_readiness_tx.take();
     let options = options_from_embedded_options(options);
-    run_runtime_cli(options, Some(surface), None, control_rx).await
+    run_runtime_cli(
+        options,
+        Some(surface),
+        None,
+        control_rx,
+        embedded_readiness_tx,
+    )
+    .await
 }
 
 pub(super) fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) -> RuntimeOptions {
@@ -270,6 +280,7 @@ pub(super) async fn run_runtime_cli(
     explicit_surface: Option<RuntimeSurface>,
     legacy_warning: Option<String>,
     embedded_control_rx: Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
+    embedded_readiness_tx: Option<EmbeddedReadinessTx>,
 ) -> Result<()> {
     // Register termination-signal handling before any startup work. Startup
     // publishes readiness well before the serving loops await the signal, so a
@@ -426,6 +437,7 @@ pub(super) async fn run_runtime_cli(
         runtime,
         auto_join_candidates,
         embedded_control_rx,
+        embedded_readiness_tx,
     })
     .await
 }
@@ -1309,6 +1321,30 @@ fn initial_run_auto_requested_models(
         .collect()
 }
 
+/// The names a request may use for a startup model before it resolves: its
+/// declared or path reference and its configured id. A bare local GGUF has
+/// neither until it is hashed, so while one resolves any name may be coming.
+pub(super) fn startup_resolution(
+    startup_specs: &[StartupModelSpec],
+    requested_model_names: &[String],
+) -> mesh::StartupResolution {
+    if startup_specs.is_empty() {
+        return mesh::StartupResolution::Done;
+    }
+    let mut names = Vec::new();
+    for (spec, requested) in startup_specs.iter().zip(requested_model_names) {
+        if spec.declared_ref.is_none()
+            && spec.config_model_id.is_none()
+            && super::startup_models::is_direct_local_gguf_source(&spec.model_ref)
+        {
+            return mesh::StartupResolution::AnyName;
+        }
+        names.push(requested.clone());
+        names.extend(spec.config_model_id.clone());
+    }
+    mesh::StartupResolution::Names(names)
+}
+
 pub(super) struct RunAutoRuntimeLoopContext<'a> {
     pub(super) options: &'a RuntimeOptions,
     pub(super) config: &'a plugin::MeshConfig,
@@ -1590,6 +1626,7 @@ pub(super) struct RunAutoContext {
     pub(super) auto_join_candidates: Vec<(String, Option<String>)>,
     pub(super) embedded_control_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<api::RuntimeControlRequest>>,
+    pub(super) embedded_readiness_tx: Option<EmbeddedReadinessTx>,
 }
 
 /// Installs the mesh-serve path's runtime-event stack -- engine,
@@ -1744,6 +1781,7 @@ async fn run_auto_inner(
         runtime,
         auto_join_candidates,
         mut embedded_control_rx,
+        embedded_readiness_tx,
     } = ctx;
     // Do not create the mesh node or detached role watchers until a slow
     // termination-signal observer has either registered every required stream
@@ -1796,6 +1834,10 @@ async fn run_auto_inner(
     let initial_requested_models =
         initial_run_auto_requested_models(&startup_specs, &requested_model_names);
     node.set_requested_models(initial_requested_models).await;
+    // Until they resolve, a request naming one of them gets a retryable 503
+    // rather than a 404.
+    node.set_startup_resolution(startup_resolution(&startup_specs, &requested_model_names))
+        .await;
 
     // On cancellation, continue to the lifecycle owner below so it can run
     // the existing ordered cleanup for the node we have already created.
@@ -1850,6 +1892,9 @@ async fn run_auto_inner(
 
     // Model intent channel: owner-control commands send intents here, control loop polls.
     let mut model_intent_rx = install_run_auto_model_intent_channel(node.clone()).await;
+    if !is_client && !super::startup_models::cli_has_explicit_models(&options) {
+        super::native_model_lifecycle::install(&node, &config, target_tx.subscribe()).await?;
+    }
 
     let model_name_for_console = String::new();
     let runtime_owner_key_path = resolve_runtime_owner_key_path(&options)?;
@@ -1908,6 +1953,7 @@ async fn run_auto_inner(
         interactive_started: &interactive_started,
         console_state: console_state.as_ref(),
         model_name_for_console: &model_name_for_console,
+        embedded_readiness_tx,
     })
     .await?;
 
@@ -2138,6 +2184,7 @@ mod tests {
             runtime: None,
             auto_join_candidates: Vec::new(),
             embedded_control_rx: None,
+            embedded_readiness_tx: None,
         })
         .await;
 

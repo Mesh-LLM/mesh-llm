@@ -2,10 +2,11 @@
 
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ReactNode } from 'react'
 
 import { useConfigQuery } from '@/features/configuration/api/use-config-query'
+import { setOwnerControlCredential } from '@/features/configuration/api/owner-control-credential'
 import type {
   RuntimeConfigControlStatePayload,
   RuntimeConfigSchemaEntry,
@@ -72,7 +73,10 @@ const CONFIG_SCHEMA_REFERENCE: RuntimeConfigSchemaReference = {
   ]
 }
 
+beforeEach(() => setOwnerControlCredential('unit-owner-token'))
+
 afterEach(() => {
+  setOwnerControlCredential(null)
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -105,6 +109,9 @@ describe('useConfigQuery', () => {
           requires_explicit_remote_endpoint: false,
           endpoint: 'control://owner'
         })
+      }
+      if (url.endsWith('/api/runtime/control/owner-control-token')) {
+        return jsonResponse({ token: 'unit-owner-token' })
       }
       if (url.endsWith('/api/runtime/config-schema')) return jsonResponse(CONFIG_SCHEMA_REFERENCE)
       if (url.endsWith('/api/runtime/config-control-state')) return jsonResponse({ settings: {} })
@@ -279,6 +286,9 @@ describe('useConfigQuery', () => {
           endpoint: 'control://owner'
         })
       }
+      if (url.endsWith('/api/runtime/control/owner-control-token')) {
+        return jsonResponse({ token: 'unit-owner-token' })
+      }
       if (url.endsWith('/api/runtime/config-schema')) return jsonResponse(CONFIG_SCHEMA_REFERENCE)
       if (url.endsWith('/api/runtime/config-control-state')) return jsonResponse({ settings: {} })
       if (url.endsWith('/api/runtime/control/get-config')) {
@@ -425,6 +435,9 @@ describe('useConfigQuery', () => {
           endpoint: 'control://owner'
         })
       }
+      if (url.endsWith('/api/runtime/control/owner-control-token')) {
+        return jsonResponse({ token: 'unit-owner-token' })
+      }
       if (url.endsWith('/api/runtime/config-schema')) return jsonResponse(CONFIG_SCHEMA_REFERENCE)
       if (url.endsWith('/api/runtime/config-control-state')) {
         controlStateFetches += 1
@@ -518,6 +531,9 @@ describe('useConfigQuery', () => {
           requires_explicit_remote_endpoint: false,
           endpoint: 'control://owner'
         })
+      }
+      if (url.endsWith('/api/runtime/control/owner-control-token')) {
+        return jsonResponse({ token: 'unit-owner-token' })
       }
       if (url.endsWith('/api/runtime/config-schema')) return jsonResponse(CONFIG_SCHEMA_REFERENCE)
       if (url.endsWith('/api/runtime/config-control-state')) return jsonResponse({ settings: {} })

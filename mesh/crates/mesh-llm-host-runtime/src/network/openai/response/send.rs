@@ -74,6 +74,7 @@ async fn send_json_with_status_and_headers_inner(
         402 => "Payment Required",
         403 => "Forbidden",
         404 => "Not Found",
+        405 => "Method Not Allowed",
         410 => "Gone",
         409 => "Conflict",
         422 => "Unprocessable Content",

@@ -15,17 +15,6 @@ mod stream_adapters;
 #[cfg(test)]
 mod workload_admission_tests;
 
-pub(crate) fn advertisable_routes(
-    routes: Vec<crate::plugin::VirtualModelRoute>,
-    concrete_models: &[String],
-) -> Vec<crate::plugin::VirtualModelRoute> {
-    let has_candidates = !concrete_models.is_empty();
-    routes
-        .into_iter()
-        .filter(|route| !route.requires_candidates || has_candidates)
-        .collect()
-}
-
 #[derive(Clone)]
 pub(crate) struct InferenceRpcBridge {
     api_port: u16,
@@ -738,34 +727,6 @@ fn translated_json_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn route(model_id: &str, requires_candidates: bool) -> crate::plugin::VirtualModelRoute {
-        crate::plugin::VirtualModelRoute {
-            plugin_name: "test-plugin".into(),
-            model_id: model_id.into(),
-            handler: "handle".into(),
-            input_modalities: vec!["text".into()],
-            output_modalities: vec!["text".into()],
-            supports_tools: false,
-            supports_streaming: false,
-            requires_candidates,
-            progress_lines: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn candidate_dependent_routes_are_advertised_only_when_candidates_exist() {
-        let routes = vec![route("standalone", false), route("dependent", true)];
-
-        assert_eq!(
-            advertisable_routes(routes.clone(), &[]),
-            vec![route("standalone", false)]
-        );
-        assert_eq!(
-            advertisable_routes(routes.clone(), &["concrete".into()]),
-            routes
-        );
-    }
 
     #[test]
     fn virtual_response_headers_cannot_override_http_framing() {

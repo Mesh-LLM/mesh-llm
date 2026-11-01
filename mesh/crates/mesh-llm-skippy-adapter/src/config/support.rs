@@ -82,12 +82,6 @@ pub(super) fn reject_unsupported_hardware_controls(
     if config.tensor_split.is_some() {
         bail!("skippy {base_path}.tensor_split is not supported by the pinned runtime");
     }
-    if config.cpu_moe.is_some() {
-        bail!("skippy {base_path}.cpu_moe is not supported by the pinned runtime");
-    }
-    if config.n_cpu_moe.is_some() {
-        bail!("skippy {base_path}.n_cpu_moe is not supported by the pinned runtime");
-    }
     Ok(())
 }
 

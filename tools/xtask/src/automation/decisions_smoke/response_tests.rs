@@ -53,17 +53,30 @@ fn response_refuses_typed_value_identity_and_order_corruption() {
     assert!(validate(&body, "actual").is_err());
 }
 #[test]
-fn discovery_excludes_aliases_and_requires_advertised_exact_capability() {
+fn discovery_matches_system_one_on_the_same_available_provider() {
+    let provider = |class: &str, available: bool, operations: &[&str]| {
+        serde_json::json!({"workload_class": class, "available": available,
+            "operations": operations})
+    };
     let models = serde_json::json!({"data":[
-        {"id":"mesh","capabilities":["system_one"]},
-        {"id":"auto","capabilities":["system_one"]},
-        {"id":"ordinary","capabilities":[]},
-        {"id":"first","capabilities":["system_one"]},
-        {"id":"second","capabilities":["system_one"]}]});
-    assert_eq!(select_model(&models, None).unwrap(), "first");
+        {"id":"mesh","providers":[provider("decision", true, &["system_one"])]},
+        {"id":"auto","providers":[provider("decision", true, &["system_one"])]},
+        // A decision-class provider without the runtime capability is the
+        // false positive the class-only rule admitted.
+        {"id":"nocap","providers":[provider("decision", true, &[])]},
+        // System One is a capability, not a primary class: a generation model
+        // that probes system_one is eligible, mirroring `/v1/decisions`.
+        {"id":"generation","providers":[provider("causal_generation", true, &["chat", "system_one"])]},
+        {"id":"offline","providers":[provider("decision", false, &["system_one"])]},
+        {"id":"first","providers":[provider("decision", true, &["system_one"])]},
+        {"id":"second","providers":[provider("decision", true, &["system_one"])]}]});
+    assert_eq!(select_model(&models, None).unwrap(), "generation");
     assert_eq!(select_model(&models, Some("second")).unwrap(), "second");
-    for requested in ["mesh", "auto", "ordinary", "absent"] {
-        assert!(select_model(&models, Some(requested)).is_err());
+    for requested in ["mesh", "auto", "nocap", "offline", "absent"] {
+        assert!(
+            select_model(&models, Some(requested)).is_err(),
+            "{requested}"
+        );
     }
     assert!(select_model(&serde_json::json!({"data":[]}), None).is_err());
     assert!(select_model(&serde_json::json!({"data":null}), None).is_err());

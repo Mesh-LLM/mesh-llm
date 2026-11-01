@@ -301,16 +301,13 @@ impl LiveSession {
                     });
                     stream.commit(&mut |samples, options| self.transcribe(samples, options))
                 }
-                RealtimeInput::Clear => {
-                    stream.clear();
-                    Ok(Vec::new())
-                }
+                RealtimeInput::Clear => Ok(stream.clear()),
                 RealtimeInput::Configure(config) => {
-                    stream.set_config(stream_config(&config));
+                    let events = stream.set_config(stream_config(&config));
                     if resampler.input_rate() != config.input_sample_rate {
                         resampler = PcmResampler::new(config.input_sample_rate);
                     }
-                    Ok(Vec::new())
+                    Ok(events)
                 }
             };
             match events {
@@ -391,6 +388,9 @@ impl LiveSession {
             SpeechStreamEvent::Completed { turn, transcript } => {
                 self.send(RealtimeOutput::Completed { turn, transcript })
             }
+            SpeechStreamEvent::Tentative { turn, text } => {
+                self.send(RealtimeOutput::Tentative { turn, text })
+            }
         }
     }
 
@@ -401,6 +401,7 @@ impl LiveSession {
 }
 
 fn stream_config(config: &RealtimeTranscriptionConfig) -> SpeechStreamConfig {
+    let defaults = SpeechStreamConfig::default();
     SpeechStreamConfig {
         turn_detection: config.turn_detection.map(|detection| TurnDetection {
             threshold: detection.threshold,
@@ -409,7 +410,9 @@ fn stream_config(config: &RealtimeTranscriptionConfig) -> SpeechStreamConfig {
         }),
         language: config.language.clone(),
         prompt: config.prompt.clone(),
-        ..Default::default()
+        step_ms: config.step_ms.unwrap_or(defaults.step_ms),
+        tentative: config.tentative,
+        ..defaults
     }
 }
 
@@ -608,6 +611,36 @@ mod tests {
             .await
             .expect("live session answers in time")
             .expect("live session stays open")
+    }
+
+    #[tokio::test]
+    async fn live_sessions_report_tentative_text_when_asked() {
+        let backend =
+            SpeechRecognitionBackend::new("whisper-test", Arc::new(FakeModel::default()), 1);
+        let config = RealtimeTranscriptionConfig {
+            turn_detection: None,
+            input_sample_rate: 16_000,
+            step_ms: Some(500),
+            tentative: true,
+            ..RealtimeTranscriptionConfig::new("whisper-test")
+        };
+        let mut session = backend
+            .realtime_transcription(config, InferenceRequestContext::new())
+            .await
+            .unwrap();
+        session
+            .input
+            .send(RealtimeInput::Audio(vec![8_000; 8_000]))
+            .await
+            .unwrap();
+        // One pass has heard the words; none is confirmed until a second agrees.
+        assert_eq!(
+            next_output(&mut session).await,
+            RealtimeOutput::Tentative {
+                turn: 0,
+                text: "Hello there.".into()
+            }
+        );
     }
 
     #[tokio::test]

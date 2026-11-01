@@ -575,3 +575,57 @@ fn hardware_split_mode_rejects_invalid_value() {
     .expect_err("an unrecognized hardware.split_mode value should be rejected");
     assert!(error.to_string().contains("split_mode"));
 }
+
+#[test]
+fn hardware_cpu_moe_policy_reaches_stage_config() {
+    let model_file = temp_model_file();
+    let all_blocks = hardware_stage_json(
+        "[defaults.hardware]\ncpu_moe = true\n",
+        HARDWARE_TEST_MODEL_ID,
+        model_file.path(),
+    );
+    assert_eq!(
+        all_blocks["host_expert_layers"],
+        serde_json::json!({ "start": 0, "end": 28 }),
+        "cpu_moe = true moves every block's routed experts into host memory"
+    );
+
+    let first_four = hardware_stage_json(
+        "[defaults.hardware]\nn_cpu_moe = 4\n",
+        HARDWARE_TEST_MODEL_ID,
+        model_file.path(),
+    );
+    assert_eq!(
+        first_four["host_expert_layers"],
+        serde_json::json!({ "start": 0, "end": 4 }),
+        "n_cpu_moe counts blocks from block 0, like llama.cpp --n-cpu-moe"
+    );
+
+    for toml in [
+        "[defaults.hardware]\ncpu_moe = false\nn_cpu_moe = 4\n",
+        "[defaults.hardware]\ncpu_moe = \"auto\"\n",
+        "",
+    ] {
+        let stage = hardware_stage_json(toml, HARDWARE_TEST_MODEL_ID, model_file.path());
+        assert!(
+            stage["host_expert_layers"].is_null(),
+            "{toml:?} must keep routed experts on the accelerator"
+        );
+    }
+}
+
+#[test]
+fn hardware_n_cpu_moe_per_model_override_beats_default() {
+    let model_file = temp_model_file();
+    let stage = hardware_stage_json(
+        &format!(
+            "[defaults.hardware]\nn_cpu_moe = 2\n\n[[models]]\nmodel = \"{HARDWARE_TEST_MODEL_ID}\"\n\n[models.hardware]\nn_cpu_moe = 6\n"
+        ),
+        HARDWARE_TEST_MODEL_ID,
+        model_file.path(),
+    );
+    assert_eq!(
+        stage["host_expert_layers"],
+        serde_json::json!({ "start": 0, "end": 6 })
+    );
+}

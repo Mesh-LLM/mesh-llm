@@ -4,7 +4,13 @@
 pub mod embedded_node;
 
 #[cfg(feature = "serving")]
+pub mod documents;
+
+#[cfg(feature = "serving")]
 pub mod live_transcription;
+
+#[cfg(feature = "serving")]
+pub mod models;
 
 #[cfg(feature = "serving")]
 pub use embedded_node::{

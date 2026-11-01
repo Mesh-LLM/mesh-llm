@@ -40,6 +40,116 @@ pub enum SplitMode {
     Tensor,
 }
 
+/// Half-open absolute block range `[start, end)` whose routed-expert tensors
+/// (`ffn_{up,down,gate}_exps`) load into host memory instead of accelerator
+/// memory. Placement changes where the weights live and which kernels run
+/// them; expert routing and precision are unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+pub struct HostExpertLayers {
+    pub start: u32,
+    pub end: u32,
+}
+
+/// Operator settings that decide a stage's [`HostExpertLayers`].
+///
+/// `cpu_moe = true` moves every block's routed experts in the stage, and
+/// `n_cpu_moe = N` mirrors llama.cpp's `--n-cpu-moe N`: the first `N` model
+/// blocks, counted from block 0, so a later split stage may hold none of
+/// them. `cpu_moe = false` wins over `n_cpu_moe`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HostExpertPolicy {
+    pub cpu_moe: Option<bool>,
+    pub n_cpu_moe: Option<u32>,
+}
+
+impl HostExpertLayers {
+    /// Build a range, returning `None` when it is empty.
+    pub fn new(start: u32, end: u32) -> Option<Self> {
+        (start < end).then_some(Self { start, end })
+    }
+
+    pub fn layer_count(self) -> u32 {
+        self.end.saturating_sub(self.start)
+    }
+
+    /// Resolve the host-resident expert range for a stage holding
+    /// `[layer_start, layer_end)`. Returns `None` when every routed expert
+    /// stays on the accelerator.
+    pub fn for_stage(layer_start: u32, layer_end: u32, policy: HostExpertPolicy) -> Option<Self> {
+        let host_end = match (policy.cpu_moe, policy.n_cpu_moe) {
+            (Some(false), _) | (None, None) => return None,
+            (Some(true), _) => layer_end,
+            (None, Some(count)) => count,
+        };
+        Self::new(layer_start, host_end.min(layer_end))
+    }
+}
+
+#[cfg(test)]
+mod host_expert_layer_tests {
+    use super::{HostExpertLayers, HostExpertPolicy};
+
+    fn layers(start: u32, end: u32) -> Option<HostExpertLayers> {
+        HostExpertLayers::new(start, end)
+    }
+
+    #[test]
+    fn n_cpu_moe_counts_blocks_from_block_zero() {
+        // A later split stage may hold none of the first N blocks.
+        let policy = HostExpertPolicy {
+            cpu_moe: None,
+            n_cpu_moe: Some(12),
+        };
+        assert_eq!(HostExpertLayers::for_stage(0, 64, policy), layers(0, 12));
+        assert_eq!(HostExpertLayers::for_stage(32, 64, policy), None);
+    }
+
+    #[test]
+    fn n_cpu_moe_is_clamped_to_the_stage_end() {
+        let policy = HostExpertPolicy {
+            cpu_moe: None,
+            n_cpu_moe: Some(50),
+        };
+        assert_eq!(HostExpertLayers::for_stage(0, 32, policy), layers(0, 32));
+        assert_eq!(HostExpertLayers::for_stage(32, 64, policy), layers(32, 50));
+    }
+
+    #[test]
+    fn zero_n_cpu_moe_keeps_every_expert_on_the_accelerator() {
+        let policy = HostExpertPolicy {
+            cpu_moe: None,
+            n_cpu_moe: Some(0),
+        };
+        assert_eq!(HostExpertLayers::for_stage(0, 64, policy), None);
+    }
+
+    #[test]
+    fn cpu_moe_true_hosts_the_whole_stage() {
+        let policy = HostExpertPolicy {
+            cpu_moe: Some(true),
+            n_cpu_moe: None,
+        };
+        assert_eq!(HostExpertLayers::for_stage(32, 64, policy), layers(32, 64));
+    }
+
+    #[test]
+    fn cpu_moe_false_wins_over_n_cpu_moe() {
+        let policy = HostExpertPolicy {
+            cpu_moe: Some(false),
+            n_cpu_moe: Some(32),
+        };
+        assert_eq!(HostExpertLayers::for_stage(0, 64, policy), None);
+    }
+
+    #[test]
+    fn no_policy_keeps_every_expert_on_the_accelerator() {
+        assert_eq!(
+            HostExpertLayers::for_stage(0, 64, HostExpertPolicy::default()),
+            None
+        );
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GlmDsaPolicy {
@@ -267,6 +377,9 @@ pub struct StageConfig {
     pub main_gpu: Option<u32>,
     #[serde(default)]
     pub split_mode: SplitMode,
+    /// Routed-expert tensors of these absolute blocks load into host memory.
+    #[serde(default)]
+    pub host_expert_layers: Option<HostExpertLayers>,
     #[serde(default = "default_cache_type")]
     pub cache_type_k: String,
     #[serde(default = "default_cache_type")]

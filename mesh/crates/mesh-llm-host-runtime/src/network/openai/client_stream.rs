@@ -149,6 +149,17 @@ impl ClientStream {
         }
     }
 
+    /// Whether a mesh peer sent this request over its authenticated QUIC
+    /// tunnel, rather than a local client over TCP.
+    pub(crate) fn is_mesh_peer(&self) -> bool {
+        match self {
+            Self::Metadata { stream, .. } => stream.is_mesh_peer(),
+            Self::Observed { stream, .. } => stream.is_mesh_peer(),
+            Self::Quic { .. } => true,
+            Self::Tcp { .. } | Self::Null => false,
+        }
+    }
+
     pub(crate) fn from_quic_with_prefix(
         recv: iroh::endpoint::RecvStream,
         send: iroh::endpoint::SendStream,

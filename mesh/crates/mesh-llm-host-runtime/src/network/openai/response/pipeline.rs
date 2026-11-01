@@ -77,6 +77,12 @@ pub(crate) async fn pipeline_proxy_local(
         return PipelineProxyResult::FallbackToDirect;
     }
 
+    let Ok(_planner_instance) = node.begin_runtime_instance_request(planner_port).await else {
+        return PipelineProxyResult::FallbackToDirect;
+    };
+    let Ok(_strong_instance) = node.begin_runtime_instance_request(strong_port).await else {
+        return PipelineProxyResult::FallbackToDirect;
+    };
     let http_client = crate::network::local_http::local_http_client();
     let planner_url = format!("http://127.0.0.1:{planner_port}");
     match pipeline_preplan_request(

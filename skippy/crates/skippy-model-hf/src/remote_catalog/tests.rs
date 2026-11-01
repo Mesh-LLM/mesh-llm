@@ -318,6 +318,54 @@ fn hf_layer_package_probe_requires_manifest_not_repo_name() {
 }
 
 #[test]
+fn cached_package_snapshot_needs_the_package_manifest() {
+    // A local-only revision is unknown to the Hub, so only the cache can say
+    // it is a package; a snapshot without the manifest is not one.
+    let hub = tempfile::tempdir().unwrap();
+    let revision = "1341078ef859d8ddf5cad491c619c463491fac82";
+    let snapshot = hub
+        .path()
+        .join("models--meshllm--local-package-layers")
+        .join("snapshots")
+        .join(revision);
+    fs::create_dir_all(snapshot.join("shared")).unwrap();
+    fs::write(snapshot.join("shared").join("output.gguf"), b"GGUF").unwrap();
+    let lookup =
+        || cached_layer_package_snapshot(hub.path(), "meshllm/local-package-layers", revision);
+
+    assert_eq!(lookup(), None);
+    fs::write(snapshot.join("model-package.json"), b"{}").unwrap();
+    assert_eq!(lookup(), Some(snapshot));
+}
+
+#[test]
+fn cached_package_snapshot_resolves_named_revisions_through_their_refs() {
+    let hub = tempfile::tempdir().unwrap();
+    let commit = "1341078ef859d8ddf5cad491c619c463491fac82";
+    let repo_cache = hub.path().join("models--meshllm--named-package-layers");
+    let snapshot = repo_cache.join("snapshots").join(commit);
+    fs::create_dir_all(&snapshot).unwrap();
+    fs::write(snapshot.join("model-package.json"), b"{}").unwrap();
+    fs::create_dir_all(repo_cache.join("refs").join("refs").join("pr")).unwrap();
+    fs::write(repo_cache.join("refs").join("v1"), format!("{commit}\n")).unwrap();
+    fs::write(
+        repo_cache.join("refs").join("refs").join("pr").join("1"),
+        commit,
+    )
+    .unwrap();
+    let lookup = |revision| {
+        cached_layer_package_snapshot(hub.path(), "meshllm/named-package-layers", revision)
+    };
+
+    assert_eq!(lookup(commit), Some(snapshot.clone()));
+    assert_eq!(lookup("v1"), Some(snapshot.clone()));
+    assert_eq!(lookup("refs/pr/1"), Some(snapshot));
+    assert_eq!(lookup("v2"), None);
+    assert_eq!(lookup("refs/../v1"), None);
+    assert_eq!(lookup("../snapshots"), None);
+}
+
+#[test]
 #[serial]
 fn hf_layer_package_probe_preserves_explicit_revision() {
     let _probe_guard = set_hf_model_file_probe_for_test(|repo, revision, file| {
@@ -483,4 +531,20 @@ fn stale_check_uses_last_refresh_marker() {
         // environment mutation cannot race another test.
         None => unsafe { std::env::remove_var("HF_HOME") },
     }
+}
+
+#[test]
+fn an_empty_hf_home_or_home_counts_as_unset() {
+    assert_eq!(
+        catalog_cache_dir_from(Some("".into()), Some("/home/node".into())),
+        PathBuf::from("/home/node/.cache/meshllm/catalog")
+    );
+    assert_eq!(
+        catalog_cache_dir_from(Some("".into()), Some("".into())),
+        std::env::temp_dir().join("meshllm/catalog")
+    );
+    assert_eq!(
+        catalog_cache_dir_from(Some("/srv/hf".into()), Some("/home/node".into())),
+        PathBuf::from("/srv/hf/meshllm-catalog")
+    );
 }

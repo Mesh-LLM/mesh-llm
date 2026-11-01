@@ -22,14 +22,14 @@ use std::time::{Duration, Instant};
 pub use super::request_normalize::{ResponseAdapter, release_request_objects};
 pub(crate) use super::request_parse::read_http_request_with_plugin_manager_with_context;
 pub use super::request_parse::{
-    BufferedHttpRequest, inject_skippy_hooks_flag, is_legacy_lifecycle_path,
-    is_models_list_request, read_http_request, rewrite_model_field, rewrite_public_model_alias,
+    BufferedHttpRequest, inject_skippy_hooks_flag, is_legacy_lifecycle_path, read_http_request,
+    rewrite_model_field, rewrite_public_model_alias,
 };
 pub(crate) use super::response::{
     PeerCapsuleIdSink, PipelineCapsuleNonce, PipelineProxyResult, ServedByNodeIdSink,
     append_safe_header, is_valid_header_name, pipeline_proxy_local, send_400_observed,
     send_409_observed, send_503_observed, send_error_observed,
-    send_json_with_status_and_headers_observed, send_models_list_with_descriptors,
+    send_json_with_status_and_headers_observed,
 };
 pub(crate) use super::routing_rank::request_budget_tokens_from_parts;
 
@@ -378,39 +378,10 @@ async fn handle_mesh_control_request(
         return None;
     }
 
-    if is_models_list_request(&request.method, &request.path) {
-        let descriptors = node.all_served_model_descriptors().await;
-        let mut served = node.models_being_served().await;
-        let virtual_models = match node.plugin_manager().await {
-            Some(manager) => {
-                if let Ok(mut inference_models) = manager.chat_inference_models().await {
-                    served.append(&mut inference_models);
-                }
-                manager.virtual_models().await.unwrap_or_default()
-            }
-            None => Vec::new(),
-        };
-        // Keep the chat-compatible listing free of models only document OCR serves.
-        served.retain(|model| {
-            !super::workload_routing::serves_only_document_ocr(model, &descriptors)
-        });
-        let virtual_models = super::virtual_model::advertisable_routes(virtual_models, &served);
-        served.extend(virtual_models.iter().map(|route| route.model_id.clone()));
-        served.sort();
-        served.dedup();
-        let runtimes = node.all_model_runtime_descriptors().await;
-        let outcome = response_outcome(
-            200,
-            send_models_list_with_descriptors(
-                tcp_stream,
-                &served,
-                &descriptors,
-                &runtimes,
-                &virtual_models,
-                Some(node),
-            )
-            .await,
-        );
+    if super::model_discovery::is_request(&request.method, &request.path) {
+        let outcome =
+            super::model_discovery::respond(tcp_stream, node, request, lifecycle.route_observer())
+                .await;
         lifecycle.terminal(outcome.terminal_outcome());
         return None;
     }

@@ -480,10 +480,23 @@ impl PluginStore {
 }
 
 pub fn default_store_root() -> Result<PathBuf> {
-    if let Ok(path) = std::env::var("MESH_LLM_PLUGIN_DIR") {
+    // A non-UTF-8 value stays unset: the path is saved in JSON metadata.
+    store_root_from(
+        std::env::var("MESH_LLM_PLUGIN_DIR").ok().map(Into::into),
+        dirs::home_dir(),
+    )
+}
+
+/// An empty `MESH_LLM_PLUGIN_DIR` (what a systemd `Environment=` line that
+/// clears it sets) counts as unset, not as the working directory.
+fn store_root_from(
+    plugin_dir: Option<std::ffi::OsString>,
+    home: Option<PathBuf>,
+) -> Result<PathBuf> {
+    if let Some(path) = plugin_dir.filter(|path| !path.is_empty()) {
         return Ok(PathBuf::from(path));
     }
-    let home = dirs::home_dir().context("Cannot determine home directory")?;
+    let home = home.context("Cannot determine home directory")?;
     Ok(home.join(".mesh-llm").join("plugins"))
 }
 
@@ -500,6 +513,19 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn an_empty_plugin_dir_falls_back_to_home() {
+        let home = PathBuf::from("/home/node");
+        assert_eq!(
+            store_root_from(Some("".into()), Some(home.clone())).unwrap(),
+            home.join(".mesh-llm").join("plugins")
+        );
+        assert_eq!(
+            store_root_from(Some("/srv/plugins".into()), Some(home)).unwrap(),
+            PathBuf::from("/srv/plugins")
+        );
+    }
 
     #[test]
     fn executable_path_follows_the_stored_target_on_any_host() {

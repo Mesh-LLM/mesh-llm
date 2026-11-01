@@ -1,3 +1,4 @@
+mod dflash;
 mod request_defaults;
 mod resolution;
 mod speculative;
@@ -32,7 +33,8 @@ mod hardware_translation_tests;
 #[cfg(test)]
 pub(crate) use resolution::resolve_skippy_config;
 pub use resolution::{
-    resolve_skippy_config_for_selector, resolve_skippy_config_for_selector_with_publisher_defaults,
+    resolve_embedded_request_defaults, resolve_skippy_config_for_selector,
+    resolve_skippy_config_for_selector_with_publisher_defaults,
 };
 pub use support::effective_safety_margin_bytes;
 pub use types::{ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest};

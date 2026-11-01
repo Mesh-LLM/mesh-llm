@@ -134,6 +134,8 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
+# rerun_without_bundle_env! for the runtime discovery tests.
+skippy-runtime-install = { path = "../../../skippy/crates/skippy-runtime-install", version = "0.78.0", features = ["test-support"] }
 mesh-llm-skippy-adapter = { path = "../mesh-llm-skippy-adapter", version = "0.78.0", features = ["test-support"] }
 # start_paused test clocks for the probe cooldown regression tests.
 tokio = { version = "1", features = ["full", "test-util"] }

@@ -1149,6 +1149,25 @@ pub struct OwnerControlApplyConfigRequest {
     pub expected_revision: u64,
     #[prost(message, optional, tag = "4")]
     pub config: ::core::option::Option<NodeConfigSnapshot>,
+    /// separate approval for each plugin whose command executable changes
+    #[prost(message, repeated, tag = "5")]
+    pub plugin_command_approvals: ::prost::alloc::vec::Vec<OwnerControlPluginCommandApproval>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlPluginCommandApproval {
+    #[prost(string, tag = "1")]
+    pub plugin: ::prost::alloc::string::String,
+    /// exact new command executable
+    #[prost(string, tag = "2")]
+    pub command: ::prost::alloc::string::String,
+    /// exact approved arguments; required for changes
+    #[prost(message, optional, tag = "3")]
+    pub invocation: ::core::option::Option<OwnerControlPluginArguments>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlPluginArguments {
+    #[prost(string, repeated, tag = "1")]
+    pub args: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnerControlApplyConfigResponse {

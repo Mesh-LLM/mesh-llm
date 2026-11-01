@@ -24,6 +24,8 @@ the hardware limitation or ownership boundary that prevents a final consumer.
 
 ## Reverse audit
 
+Native residency extension: `lifecycle.load`, `lifecycle.idle_timeout_secs`, and `lifecycle.prefetch` are consumed by `runtime/native_model_lifecycle.rs`; request leases and exact-instance eviction are tested in that module.
+
 The reverse audit covers every canonical manifest origin. The tables below
 call out changed sinks in detail; this inventory prevents an undocumented
 schema row or stale manifest row from passing review:

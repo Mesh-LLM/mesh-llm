@@ -807,6 +807,46 @@ fn public_model_id_from_identity_preserves_huggingface_revision() {
 }
 
 #[test]
+fn routable_descriptor_prefers_an_exact_model_name_over_a_public_alias() {
+    use crate::mesh::model_identity::routable_descriptor_for_name;
+
+    let public_id = "Qwen/Qwen3-8B-GGUF@revabc:Q4_K_M";
+    let aliased = ServedModelDescriptor {
+        identity: ServedModelIdentity {
+            model_name: "Qwen3-8B-Q4_K_M".to_string(),
+            source_kind: ModelSourceKind::HuggingFace,
+            repository: Some("Qwen/Qwen3-8B-GGUF".to_string()),
+            revision: Some("revabc".to_string()),
+            artifact: Some("Qwen3-8B-Q4_K_M.gguf".to_string()),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let exact = ServedModelDescriptor {
+        identity: ServedModelIdentity {
+            model_name: public_id.to_string(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let descriptors = vec![aliased.clone(), exact.clone()];
+
+    assert_eq!(
+        routable_descriptor_for_name(&descriptors, public_id),
+        Some(&exact)
+    );
+    assert_eq!(
+        routable_descriptor_for_name(&descriptors[..1], public_id),
+        Some(&aliased)
+    );
+    assert_eq!(
+        routable_descriptor_for_name(&descriptors, "Qwen3-8B-Q4_K_M"),
+        Some(&aliased)
+    );
+    assert_eq!(routable_descriptor_for_name(&descriptors, "other"), None);
+}
+
+#[test]
 fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
     use prost::Message as _;
 

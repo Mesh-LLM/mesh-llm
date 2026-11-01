@@ -92,6 +92,7 @@ const WORKSPACE_MEMBERS: &[&str] = &[
     "skippy-correctness",
     "llama-spec-bench",
     "ci-controller",
+    "process-supervision",
     "trajectory-reader",
     "xtask",
 ];

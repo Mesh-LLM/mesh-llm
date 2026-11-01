@@ -14,7 +14,14 @@ pub async fn dispatch_kv_cache_command(command: &KvCacheCommand) -> Result<()> {
             json,
         } => {
             let value = if endpoints.is_empty() {
-                request(*port, reqwest::Method::GET, "/api/runtime/kv-cache", None).await?
+                request(
+                    *port,
+                    reqwest::Method::GET,
+                    "/api/runtime/kv-cache",
+                    None,
+                    false,
+                )
+                .await?
             } else {
                 remote_request(*port, endpoints, "status", None, None).await?
             };
@@ -44,6 +51,7 @@ pub async fn dispatch_kv_cache_command(command: &KvCacheCommand) -> Result<()> {
                     reqwest::Method::POST,
                     "/api/runtime/kv-cache/prune",
                     Some(body),
+                    true,
                 )
                 .await?
             } else {
@@ -72,6 +80,7 @@ pub async fn dispatch_kv_cache_command(command: &KvCacheCommand) -> Result<()> {
                     reqwest::Method::DELETE,
                     "/api/runtime/kv-cache",
                     Some(json!({ "model_identity": model_identity })),
+                    true,
                 )
                 .await?
             } else {
@@ -99,15 +108,19 @@ async fn remote_request(
             "target_bytes": target_bytes,
             "model_identity": model_identity,
         })),
+        true,
     )
     .await
 }
 
+/// Issues a loopback management request. Owner-control routes additionally
+/// require the host's owner-control credential from the private token file.
 async fn request(
     port: u16,
     method: reqwest::Method,
     path: &str,
     body: Option<Value>,
+    owner_control: bool,
 ) -> Result<Value> {
     let client = reqwest::Client::builder()
         // The runtime bounds a remote batch at 45 seconds and returns one
@@ -117,6 +130,10 @@ async fn request(
         .build()?;
     let url = format!("http://127.0.0.1:{port}{path}");
     let mut request = client.request(method, &url);
+    if owner_control {
+        let token = super::owner_control::owner_control_token(port).await?;
+        request = request.header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"));
+    }
     if let Some(body) = body {
         request = request.json(&body);
     }
@@ -221,4 +238,89 @@ fn print_response(value: &Value, json_output: bool) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::owner_control::tests::serve_in_order;
+
+    fn authorization(head: &[String]) -> Option<String> {
+        head.iter().find_map(|line| {
+            line.split_once(':')
+                .filter(|(name, _)| name.trim().eq_ignore_ascii_case("authorization"))
+                .map(|(_, value)| value.trim().to_string())
+        })
+    }
+
+    #[tokio::test]
+    async fn prune_presents_owner_control_credential() {
+        let stub = serve_in_order(vec![(200, r#"{"activity":{}}"#.to_string())]);
+        let command = KvCacheCommand::Prune {
+            target: None,
+            model_identity: None,
+            yes: true,
+            endpoints: Vec::new(),
+            port: stub.port,
+            json: true,
+        };
+        crate::owner_control::tests::TEST_TOKEN
+            .scope("kv-secret".to_owned(), dispatch_kv_cache_command(&command))
+            .await
+            .expect("prune with the local credential");
+        let heads = stub.request_heads();
+        assert_eq!(heads.len(), 1, "one prune request: {heads:?}");
+        assert!(heads[0][0].starts_with("POST /api/runtime/kv-cache/prune"));
+        assert_eq!(
+            authorization(&heads[0]).as_deref(),
+            Some("Bearer kv-secret")
+        );
+    }
+
+    #[tokio::test]
+    async fn clear_presents_owner_control_credential() {
+        let stub = serve_in_order(vec![(200, r#"{"activity":{}}"#.to_string())]);
+        let command = KvCacheCommand::Clear {
+            model_identity: None,
+            yes: true,
+            endpoints: Vec::new(),
+            port: stub.port,
+            json: true,
+        };
+        crate::owner_control::tests::TEST_TOKEN
+            .scope("kv-secret".to_owned(), dispatch_kv_cache_command(&command))
+            .await
+            .expect("clear with the local credential");
+        let heads = stub.request_heads();
+        assert_eq!(heads.len(), 1, "one clear request: {heads:?}");
+        assert!(heads[0][0].starts_with("DELETE /api/runtime/kv-cache"));
+        assert_eq!(
+            authorization(&heads[0]).as_deref(),
+            Some("Bearer kv-secret")
+        );
+    }
+
+    #[tokio::test]
+    async fn status_does_not_present_owner_control_credential() {
+        let stub = serve_in_order(vec![(200, r#"{"activity":{}}"#.to_string())]);
+        let command = KvCacheCommand::Status {
+            endpoints: Vec::new(),
+            port: stub.port,
+            json: true,
+        };
+        dispatch_kv_cache_command(&command)
+            .await
+            .expect("loopback status read");
+        let heads = stub.request_heads();
+        assert_eq!(
+            heads.len(),
+            1,
+            "status must not fetch the credential: {heads:?}"
+        );
+        assert!(heads[0][0].starts_with("GET /api/runtime/kv-cache"));
+        assert!(
+            authorization(&heads[0]).is_none(),
+            "no credential on the status read"
+        );
+    }
 }

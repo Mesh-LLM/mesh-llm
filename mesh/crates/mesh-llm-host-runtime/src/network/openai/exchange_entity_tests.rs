@@ -33,6 +33,7 @@ fn event(request: &transport::BufferedHttpRequest) -> serde_json::Value {
         Some("m"),
         "external",
         SelectedRouteTarget::Url("https://example.com"),
+        None,
         1,
     )
     .unwrap()
@@ -131,6 +132,7 @@ async fn incomplete_effective_chunked_entity_cannot_silently_skip_admission() {
             Some("m"),
             "external",
             SelectedRouteTarget::Mesh(&crate::inference::election::InferenceTarget::Local(1)),
+            None,
             1,
         )
         .is_err()
