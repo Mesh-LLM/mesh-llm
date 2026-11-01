@@ -46,6 +46,26 @@ pub fn scan_gguf_compact_meta(path: &Path) -> Option<GgufCompactMeta> {
     Some(meta)
 }
 
+/// Target layers whose hidden states a DFlash draft reads
+/// (`dflash.target_layers`). `None` when the header cannot be read or does
+/// not carry them.
+pub fn scan_gguf_dflash_target_layers(path: &Path) -> Option<Vec<u32>> {
+    let GgufHeader {
+        file: mut reader,
+        n_kv,
+        ..
+    } = open_gguf_header(path)?;
+    for _ in 0..n_kv {
+        let key = read_gguf_string(&mut reader).ok()?;
+        let value_type = GgufType::from_u32(read_u32(&mut reader).ok()?)?;
+        if key == "dflash.target_layers" {
+            return read_gguf_value_as_u32_list(&mut reader, value_type).ok()?;
+        }
+        skip_gguf_value(&mut reader, value_type).ok()?;
+    }
+    None
+}
+
 fn read_architecture(reader: &mut GgufReader, n_kv: usize) -> Option<String> {
     for _ in 0..n_kv {
         let key = read_gguf_string(reader).ok()?;
@@ -180,6 +200,32 @@ mod tests {
         let result = scan_gguf_compact_meta(&path);
         std::fs::remove_file(path).unwrap();
         result
+    }
+
+    #[test]
+    fn dflash_target_layers_are_read_from_the_draft_header() {
+        let mut bytes = b"GGUF".to_vec();
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        bytes.extend_from_slice(&2u64.to_le_bytes());
+        architecture(&mut bytes);
+        string(&mut bytes, "dflash.target_layers");
+        bytes.extend_from_slice(&(GgufType::Array as u32).to_le_bytes());
+        bytes.extend_from_slice(&(GgufType::Int32 as u32).to_le_bytes());
+        bytes.extend_from_slice(&3u64.to_le_bytes());
+        for layer in [2i32, 6, 30] {
+            bytes.extend_from_slice(&layer.to_le_bytes());
+        }
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("gguf-dflash-layers-{unique}.gguf"));
+        std::fs::write(&path, bytes).unwrap();
+        let layers = scan_gguf_dflash_target_layers(&path);
+        std::fs::remove_file(path).unwrap();
+
+        assert_eq!(layers, Some(vec![2, 6, 30]));
     }
 
     #[test]

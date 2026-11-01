@@ -10,6 +10,10 @@ use super::SpeculativeDecodeConfig;
 /// Effective strategy name for a DFlash or DFlash2 draft.
 pub const DFLASH_STRATEGY: &str = "dflash";
 
+/// Draft tokens in a trained 16-token block, the most a plan without a cap
+/// can propose.
+const UNCAPPED_DRAFT_TOKENS: usize = 15;
+
 /// A DFlash or DFlash2 draft attached to a single-stage target. The draft
 /// reads target hidden states, so it never runs on its own session.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -19,6 +23,15 @@ pub struct DFlashProposalConfig {
     /// Upper bound on draft tokens per block. `None` uses the trained block.
     #[serde(default)]
     pub max_draft_tokens: Option<usize>,
+}
+
+impl DFlashProposalConfig {
+    /// Recurrent rollback depth the target needs to verify the longest
+    /// window in place: every drafted token plus the anchor.
+    pub fn recurrent_rollback_tokens(&self) -> u32 {
+        let drafted = self.max_draft_tokens.unwrap_or(UNCAPPED_DRAFT_TOKENS);
+        u32::try_from(drafted.saturating_add(1)).unwrap_or(u32::MAX)
+    }
 }
 
 pub(super) fn validate_dflash_plan(plan: &SpeculativeDecodeConfig) -> Result<()> {
@@ -79,6 +92,16 @@ mod tests {
         let mut plan = dflash_plan();
         plan.dflash.as_mut().unwrap().max_draft_tokens = Some(0);
         assert!(plan.validate().is_err());
+    }
+
+    #[test]
+    fn rollback_depth_covers_the_draft_cap_and_the_anchor() {
+        let mut plan = dflash_plan();
+        let dflash = plan.dflash.as_mut().unwrap();
+        for (cap, depth) in [(Some(15), 16), (Some(6), 7), (None, 16)] {
+            dflash.max_draft_tokens = cap;
+            assert_eq!(dflash.recurrent_rollback_tokens(), depth, "{cap:?}");
+        }
     }
 
     #[test]

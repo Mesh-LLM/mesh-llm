@@ -102,6 +102,7 @@ fn resolve_skippy_config_with_context(
         context.request.model_id,
         &hardware.resolved_model_path,
         context.request.package_generation,
+        context.request.compact_meta,
     )?;
     let resolved_request = resolve_request_defaults(
         context.defaults,
