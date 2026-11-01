@@ -532,3 +532,19 @@ fn stale_check_uses_last_refresh_marker() {
         None => unsafe { std::env::remove_var("HF_HOME") },
     }
 }
+
+#[test]
+fn an_empty_hf_home_or_home_counts_as_unset() {
+    assert_eq!(
+        catalog_cache_dir_from(Some("".into()), Some("/home/node".into())),
+        PathBuf::from("/home/node/.cache/meshllm/catalog")
+    );
+    assert_eq!(
+        catalog_cache_dir_from(Some("".into()), Some("".into())),
+        std::env::temp_dir().join("meshllm/catalog")
+    );
+    assert_eq!(
+        catalog_cache_dir_from(Some("/srv/hf".into()), Some("/home/node".into())),
+        PathBuf::from("/srv/hf/meshllm-catalog")
+    );
+}
