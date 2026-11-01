@@ -167,7 +167,7 @@ fn actual_current_planner_filters_one_shard_and_cache_uses_explicit_selected_roo
     assert_eq!(fs::read(&f.plan).unwrap(), bytes);
 }
 #[test]
-fn actual_cache_rejects_same_size_corruption_regular_snapshot_and_metadata_mismatch() {
+fn actual_cache_admits_verified_regular_snapshots_and_rejects_corruption_and_metadata_mismatch() {
     let f = Fixture::new(16);
     let original = fs::read(&f.blob).unwrap();
     let mut corrupt = original.clone();
@@ -177,6 +177,8 @@ fn actual_cache_rejects_same_size_corruption_regular_snapshot_and_metadata_misma
     fs::write(&f.blob, &original).unwrap();
     fs::remove_file(&f.snapshot).unwrap();
     fs::write(&f.snapshot, &original).unwrap();
+    assert!(f.cache(&f.hub).success());
+    fs::write(&f.snapshot, &corrupt).unwrap();
     assert!(!f.cache(&f.hub).success());
     let mismatch = Fixture::new(15);
     assert!(!mismatch.cache(&mismatch.hub).success());

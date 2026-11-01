@@ -8,6 +8,7 @@ mod daemon_startup;
 mod dashboard;
 mod default_plugins;
 mod discovery;
+mod embedded_readiness;
 mod failed_node_start;
 pub mod instance;
 mod instance_lifecycle;
@@ -25,6 +26,7 @@ mod memberships;
 mod model_lifecycle;
 mod model_presentation;
 pub(crate) mod model_reconciliation;
+pub(crate) mod native_model_lifecycle;
 mod node_lifecycle_events;
 mod operational_logging;
 mod options;
@@ -120,6 +122,7 @@ use self::auto_join::*;
 use self::control_loop::*;
 use self::dashboard::*;
 pub use self::discovery::nostr_relays;
+pub(crate) use self::embedded_readiness::EmbeddedRuntimeReadiness;
 use self::model_lifecycle::*;
 pub(crate) use self::operational_logging::{
     NativeSkippyOperationalEvent, RuntimeOperationalEvent, record_native_skippy_operational_event,

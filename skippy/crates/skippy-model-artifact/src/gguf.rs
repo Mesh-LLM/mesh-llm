@@ -494,6 +494,12 @@ pub struct GgufTensorByteProfile {
     pub base_resident_bytes: u64,
     pub expert_tensor_bytes: u64,
     pub file_overhead_bytes: u64,
+    /// Routed-expert bytes indexed by model block, when every expert
+    /// tensor's block could be determined from its `blk.N.` name. `None`
+    /// when attribution is not possible: callers must not assume an even
+    /// spread, because models with dense leading blocks put no expert
+    /// bytes in their first blocks.
+    pub expert_block_bytes: Option<Vec<u64>>,
 }
 
 /// The tokenizer vocabulary exposed by a source GGUF header. Non-control
@@ -800,6 +806,21 @@ fn is_expert_partitioned_tensor(name: &str) -> bool {
         || lower.contains("_expert")
 }
 
+/// The model block an expert tensor belongs to, from its `blk.N.` prefix.
+fn expert_block_index(name: &str) -> Option<usize> {
+    let lowered = name.to_ascii_lowercase();
+    let rest = lowered.strip_prefix("blk.")?;
+    let digits = rest.split('.').next()?;
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    // A model cannot hold more blocks than tensors, so a wider index comes
+    // from a malformed or hostile name: treat it as unattributable rather
+    // than sizing the per-block vector from it.
+    let block = digits.parse::<usize>().ok()?;
+    (block <= MAX_GGUF_TENSOR_COUNT).then_some(block)
+}
+
 /// Scan GGUF tensor metadata and estimate which bytes are always resident versus
 /// expert-partitioned. Reads only the header and tensor-info tables.
 pub fn scan_gguf_tensor_byte_profile(path: &Path) -> Option<GgufTensorByteProfile> {
@@ -844,6 +865,7 @@ pub fn scan_gguf_tensor_byte_profile(path: &Path) -> Option<GgufTensorByteProfil
             base_resident_bytes: 0,
             expert_tensor_bytes: 0,
             file_overhead_bytes: file_len,
+            expert_block_bytes: Some(Vec::new()),
         });
     }
 
@@ -861,6 +883,8 @@ pub fn scan_gguf_tensor_byte_profile(path: &Path) -> Option<GgufTensorByteProfil
 
     let mut base_resident_bytes = 0u64;
     let mut expert_tensor_bytes = 0u64;
+    let mut expert_block_bytes: Vec<u64> = Vec::new();
+    let mut expert_blocks_attributed = true;
     for (index, tensor) in tensors.iter().enumerate() {
         let next_offset = tensors
             .get(index + 1)
@@ -872,6 +896,16 @@ pub fn scan_gguf_tensor_byte_profile(path: &Path) -> Option<GgufTensorByteProfil
         let tensor_bytes = next_offset - tensor.offset;
         if is_expert_partitioned_tensor(&tensor.name) {
             expert_tensor_bytes = expert_tensor_bytes.saturating_add(tensor_bytes);
+            match expert_block_index(&tensor.name) {
+                Some(block) => {
+                    if block >= expert_block_bytes.len() {
+                        expert_block_bytes.resize(block + 1, 0);
+                    }
+                    expert_block_bytes[block] =
+                        expert_block_bytes[block].saturating_add(tensor_bytes);
+                }
+                None => expert_blocks_attributed = false,
+            }
         } else {
             base_resident_bytes = base_resident_bytes.saturating_add(tensor_bytes);
         }
@@ -885,6 +919,7 @@ pub fn scan_gguf_tensor_byte_profile(path: &Path) -> Option<GgufTensorByteProfil
         base_resident_bytes,
         expert_tensor_bytes,
         file_overhead_bytes,
+        expert_block_bytes: expert_blocks_attributed.then_some(expert_block_bytes),
     })
 }
 
@@ -1477,6 +1512,83 @@ mod tests {
             profile.full_model_bytes,
             profile.base_resident_bytes + profile.expert_tensor_bytes + profile.file_overhead_bytes
         );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn scan_gguf_tensor_byte_profile_attributes_expert_bytes_to_blocks() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&3i64.to_le_bytes());
+        bytes.extend_from_slice(&0i64.to_le_bytes());
+
+        push_tensor_info(&mut bytes, "blk.0.attn_q.weight", 0);
+        push_tensor_info(&mut bytes, "blk.1.ffn_up_exps.weight", 32);
+        push_tensor_info(&mut bytes, "blk.1.ffn_down_exps.weight", 64);
+
+        let data_start = align_offset(bytes.len() as u64, 32) as usize;
+        bytes.resize(data_start, 0);
+        bytes.resize(data_start + 96, 0);
+
+        let path = write_bytes("skippy-model-artifact-gguf-block-attribution", &bytes);
+        let profile = scan_gguf_tensor_byte_profile(&path).unwrap();
+        // The dense leading block holds no routed-expert bytes, so callers
+        // must not assume an even spread across blocks.
+        assert_eq!(profile.expert_block_bytes, Some(vec![0, 64]));
+        assert_eq!(profile.expert_tensor_bytes, 64);
+        assert_eq!(profile.base_resident_bytes, 32);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn scan_gguf_tensor_byte_profile_drops_block_attribution_when_unplaced() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&2i64.to_le_bytes());
+        bytes.extend_from_slice(&0i64.to_le_bytes());
+
+        push_tensor_info(&mut bytes, "blk.0.attn_q.weight", 0);
+        push_tensor_info(&mut bytes, "ffn_up_exps.weight", 32);
+
+        let data_start = align_offset(bytes.len() as u64, 32) as usize;
+        bytes.resize(data_start, 0);
+        bytes.resize(data_start + 96, 0);
+
+        let path = write_bytes(
+            "skippy-model-artifact-gguf-block-attribution-unplaced",
+            &bytes,
+        );
+        let profile = scan_gguf_tensor_byte_profile(&path).unwrap();
+        assert_eq!(profile.expert_tensor_bytes, 64);
+        // An expert tensor with no blk.N prefix cannot be attributed to a
+        // block, so the per-block view is withdrawn entirely.
+        assert_eq!(profile.expert_block_bytes, None);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn scan_gguf_tensor_byte_profile_ignores_implausible_block_indices() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&2i64.to_le_bytes());
+        bytes.extend_from_slice(&0i64.to_le_bytes());
+
+        push_tensor_info(&mut bytes, "blk.0.attn_q.weight", 0);
+        push_tensor_info(&mut bytes, "blk.4000000000000.ffn_up_exps.weight", 32);
+
+        let data_start = align_offset(bytes.len() as u64, 32) as usize;
+        bytes.resize(data_start, 0);
+        bytes.resize(data_start + 96, 0);
+
+        let path = write_bytes("skippy-model-artifact-gguf-block-attribution-huge", &bytes);
+        // A block index no tensor count could justify must not size the
+        // per-block vector; attribution is withdrawn instead of allocating.
+        let profile = scan_gguf_tensor_byte_profile(&path).unwrap();
+        assert_eq!(profile.expert_tensor_bytes, 64);
+        assert_eq!(profile.expert_block_bytes, None);
         let _ = std::fs::remove_file(path);
     }
 }

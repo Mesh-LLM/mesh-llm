@@ -11,8 +11,15 @@ pub(super) fn select_model(models: &Value, requested: Option<&str>) -> DynResult
             let id = row["id"].as_str()?;
             (valid_id(id)
                 && !matches!(id, "mesh" | "auto")
-                && row["capabilities"].as_array().is_some_and(|items| {
-                    items.iter().any(|item| item.as_str() == Some("system_one"))
+                && row["providers"].as_array().is_some_and(|items| {
+                    items.iter().any(|item| {
+                        // `/v1/decisions` admission follows the system_one
+                        // operation of an available provider, not a class.
+                        item["available"] == true
+                            && item["operations"].as_array().is_some_and(|operations| {
+                                operations.iter().any(|operation| operation == "system_one")
+                            })
+                    })
                 }))
             .then_some(id)
         })

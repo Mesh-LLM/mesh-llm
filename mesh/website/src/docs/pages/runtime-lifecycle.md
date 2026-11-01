@@ -90,6 +90,10 @@ curl -s -X POST localhost:3131/api/runtime/models \
   -H 'Content-Type: application/json' \
   -d '{"model":"Qwen3-8B-Q4_K_M"}'
 
+curl -s -X POST localhost:3131/api/runtime/models \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"Qwen3-8B-Q4_K_M","ctx_size":8192,"parallel":1}'
+
 curl -s -X DELETE \
   localhost:3131/api/runtime/models/Qwen3-8B-Q4_K_M
 
@@ -161,7 +165,7 @@ edit `config.toml`. Use owner-control config apply when a change must persist.
 Responses acknowledge queueing within the command deadline, not completion;
 observe the target's local intent and runtime status surfaces.
 
-Owner commands travel over the private `mesh-llm-control/1` ALPN. They do not
+Owner commands travel over the private `mesh-llm-control/2` ALPN. They do not
 use public mesh gossip or request streams, and never silently fall back to
 those surfaces.
 

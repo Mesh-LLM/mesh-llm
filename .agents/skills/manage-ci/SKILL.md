@@ -46,6 +46,15 @@ product, native, canary, and release automation stay in xtask. Put new
 repository automation in xtask unless it belongs to the controller's planning
 and validation scope.
 
+`tools/process-supervision` owns bounded child-process supervision
+(`supervise*`, `retained`) and the command interruption scope (`interrupt`).
+Its normal dependencies are limited to thiserror, libc on Unix, and windows-sys
+on Windows; it never takes HTTP, async runtime, or archive crates. xtask
+imports it as `crate::process` and `crate::command_interrupt`, and keeps
+`curl_https`. The controller does not link it yet; a command that moves to the
+controller and spawns a child must use it rather than a raw `std::process`
+runner.
+
 The explicit `prepare-automation` `hosted-bare` profile is an automation-only
 exception for GitHub-hosted Linux. It uses the existing stable Rust selection
 and locked Cargo without Just or compiler wrappers; default image preparation
@@ -531,8 +540,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   cache namespace) never restores an executable. `prepare-ci-controller` keeps
   a separate exact-key identity (`ci-controller-hosted-...`) over the
   controller's compiled inputs and never shares an entry with the full xtask
-  executable, whose key also hashes `tools/ci-controller/**` because xtask
-  compiles the controller library.
+  executable, whose key also hashes `tools/ci-controller/**` and
+  `tools/process-supervision/**` because xtask compiles both libraries. A
+  library crate that xtask or the controller starts compiling joins the
+  matching key in the same change.
 - PR and smoke-only artifacts default to one-day retention. Release evidence
   follows the release policy.
 
@@ -718,11 +729,19 @@ Changed pins use up to three distributed repair attempts. Each attempt consists
 of one candidate pass followed by one independent verification pass when the
 candidate is green. Before the first candidate begins, a separate deterministic
 preflight verifies the immutable family plan and every pinned cache artifact.
-For the NAS-backed immutable model cache, validate pinned revision, blob path,
-byte size and GGUF metadata without hashing full model payloads. Re-reading
-the complete model roster over the NAS on every admission is too expensive.
-This gate does not detect same-size payload corruption; content verification
-belongs to cache population or a separate cache audit. Continue hashing
+For the NAS-backed immutable model cache, accept regular snapshot files and
+symlinks while retaining pinned revision, byte size, cache containment and GGUF
+metadata checks. Content-addressed blob paths retain their existing immutable-cache
+identity check. Other files require SHA-256 verification; on Unix, reuse a private
+job-account receipt only while the canonical path, expected digest, device/inode,
+size, modification time and change time match. Missing or stale receipts require
+rehashing. Receipts live in the account's local cache, never the read-only model
+cache, and are trusted state of that account rather than portable attestations.
+Allow 180 minutes for the preflight job so cold verification can read the full
+copied model roster over the NAS before later admissions reuse the receipts.
+Re-reading the complete model roster over the NAS on every admission is too
+expensive. Content-addressed blobs still rely on cache population or a separate
+audit for same-size corruption detection. Continue hashing
 controller plans, executable handoffs and certification evidence.
 Environment or process-supervision failures stop without asking Goose to repair
 source. Within a candidate build, prepare/build failures return to the same

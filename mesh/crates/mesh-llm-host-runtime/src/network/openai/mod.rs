@@ -5,7 +5,8 @@ pub(crate) mod client_stream;
 mod exchange_admission;
 mod forwarded_request;
 pub(crate) mod ingress;
-mod model_names;
+pub(crate) mod model_discovery;
+pub(crate) mod model_names;
 mod parse_failure;
 mod request_normalize;
 pub(crate) mod request_parse;
@@ -32,4 +33,4 @@ pub(crate) use response::payment_recovery;
 
 #[cfg(all(test, feature = "payments"))]
 pub(crate) use response::paid::start as test_metered_start;
-mod workload_routing;
+pub(crate) mod workload_routing;

@@ -8,7 +8,7 @@ use skippy_ffi::Model as RawModel;
 
 use crate::dflash::SharedDFlashDraft;
 use crate::error::{ensure_ok, free_error};
-use crate::logging::write_native_log_note;
+use crate::logging::{clear_last_native_error, with_last_native_error, write_native_log_note};
 use crate::media::MediaProjector;
 use crate::path_cstring::path_to_cstring;
 use crate::runtime_events;
@@ -273,6 +273,7 @@ impl StageModel {
             path.display(),
             config.native_log_summary()
         ));
+        clear_last_native_error();
         let path = path_to_cstring(path, "model path")?;
         let raw_config = config.as_raw()?;
         #[cfg(not(test))]
@@ -313,7 +314,7 @@ impl StageModel {
                 false,
             )
         };
-        let open_result = ensure_ok(status, error);
+        let open_result = ensure_ok(status, error).map_err(with_last_native_error);
         match &open_result {
             Ok(()) => write_native_log_note(format!("{end_label} status={status:?}")),
             Err(cause) => {
@@ -364,6 +365,7 @@ impl StageModel {
             .collect::<Result<Vec<_>>>()?;
         let path_ptrs = paths.iter().map(|path| path.as_ptr()).collect::<Vec<_>>();
         let raw_config = config.as_raw()?;
+        clear_last_native_error();
         #[cfg(not(test))]
         let (raw, status, error) = runtime_events::run_model_open(
             |out_model, out_error| unsafe {
@@ -413,7 +415,7 @@ impl StageModel {
                 false,
             )
         };
-        let open_result = ensure_ok(status, error);
+        let open_result = ensure_ok(status, error).map_err(with_last_native_error);
         match &open_result {
             Ok(()) => write_native_log_note(format!("{end_label} status={status:?}")),
             Err(cause) => {

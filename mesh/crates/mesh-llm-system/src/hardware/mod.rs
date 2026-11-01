@@ -301,8 +301,31 @@ fn read_system_ram_bytes() -> u64 {
     read_windows_total_ram_bytes().unwrap_or(0)
 }
 
+// Read only by `survey_system_ram`.
+#[cfg(all(target_os = "macos", any(feature = "skippy-devices", test)))]
+fn read_system_ram_bytes() -> u64 {
+    let mut bytes: u64 = 0;
+    let mut len = std::mem::size_of::<u64>();
+    // SAFETY: `hw.memsize` is a 64-bit integer; the output buffer and its
+    // length describe `bytes`, and no new value is passed.
+    let status = unsafe {
+        libc::sysctlbyname(
+            c"hw.memsize".as_ptr(),
+            (&raw mut bytes).cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if status == 0 && len == std::mem::size_of::<u64>() {
+        bytes
+    } else {
+        0
+    }
+}
+
 #[cfg(all(
-    any(target_os = "linux", target_os = "windows"),
+    any(target_os = "linux", target_os = "windows", target_os = "macos"),
     any(feature = "skippy-devices", test)
 ))]
 fn apply_cpu_only_runtime_budget(
@@ -556,17 +579,17 @@ fn apply_skippy_backend_devices_to_survey(survey: &mut HardwareSurvey, metrics: 
 }
 
 /// System RAM the survey may credit (CPU-only budgets and the discrete-GPU
-/// RAM-offload credit). Real read on Linux and Windows; zero elsewhere, which
-/// leaves those platforms' VRAM budgets untouched.
+/// RAM-offload credit). Real read on Linux, Windows and macOS; zero
+/// elsewhere, which leaves those platforms' VRAM budgets untouched.
 #[cfg(any(feature = "skippy-devices", test))]
 // Its only caller is the feature-gated `skippy_devices` probe.
 #[cfg_attr(all(test, not(feature = "skippy-devices")), allow(dead_code))]
 fn survey_system_ram() -> u64 {
-    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     {
         read_system_ram_bytes()
     }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         0
     }
@@ -592,13 +615,13 @@ fn apply_gpu_probe_outcome_to_survey<E>(
     let gpus = match probe {
         Ok(gpus) => gpus,
         Err(_) => {
-            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
             apply_cpu_only_runtime_budget(survey, metrics, system_ram);
             return true;
         }
     };
     if gpus.is_empty() {
-        #[cfg(any(target_os = "linux", target_os = "windows"))]
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
         apply_cpu_only_runtime_budget(survey, metrics, system_ram);
         return true;
     }

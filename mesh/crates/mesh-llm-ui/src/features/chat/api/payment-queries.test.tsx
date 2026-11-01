@@ -22,41 +22,86 @@ function wrapper() {
 }
 
 describe('payment query refresh', () => {
-  it('refreshes model availability and prices without remounting', async () => {
+  it('refreshes model availability and prices across discovery pages without remounting', async () => {
+    const paidOnly = (outputMsatPerMillion: number, next?: string) =>
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: 'model',
+              providers: [
+                {
+                  provider_id: 'peer-a',
+                  local: false,
+                  available: true,
+                  payment: {
+                    binding_quote: false,
+                    paid: true,
+                    pricing: { input_msat_per_million: 1000, output_msat_per_million: outputMsatPerMillion },
+                    rate_unit: 'msat_per_million_tokens'
+                  }
+                }
+              ]
+            }
+          ],
+          ...(next ? { next_cursor: next } : {})
+        })
+      )
+    const mixedPage = (next?: string) =>
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: 'model',
+              providers: [
+                {
+                  provider_id: 'peer-a',
+                  local: false,
+                  available: true,
+                  payment: {
+                    binding_quote: false,
+                    paid: true,
+                    pricing: { input_msat_per_million: 1000, output_msat_per_million: 2000 },
+                    rate_unit: 'msat_per_million_tokens'
+                  }
+                },
+                {
+                  provider_id: 'peer-b',
+                  local: false,
+                  available: true,
+                  payment: { binding_quote: false, paid: false, pricing: null, rate_unit: 'msat_per_million_tokens' }
+                }
+              ]
+            }
+          ],
+          ...(next ? { next_cursor: next } : {})
+        })
+      )
+    const secondPage = new Response(
+      JSON.stringify({
+        data: [
+          {
+            id: 'other',
+            providers: [
+              {
+                provider_id: 'peer-c',
+                local: false,
+                available: true,
+                payment: { binding_quote: false, paid: false, pricing: null, rate_unit: 'msat_per_million_tokens' }
+              }
+            ]
+          }
+        ]
+      })
+    )
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            data: [
-              {
-                id: 'model',
-                payment: {
-                  free_available: false,
-                  paid_available: true,
-                  offers: [{ paid: true, pricing: { output_msat_per_million: 1500 } }]
-                }
-              }
-            ]
-          })
-        )
-      )
-      .mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            data: [
-              {
-                id: 'model',
-                payment: {
-                  free_available: true,
-                  paid_available: true,
-                  offers: [{ paid: true, pricing: { output_msat_per_million: 2000 } }]
-                }
-              }
-            ]
-          })
-        )
-      )
+      // Initial refresh: a single page listing the model as paid-only.
+      .mockResolvedValueOnce(paidOnly(1500))
+      // Interval refresh: the model gains a free provider, and a second model
+      // moves onto page two of the listing.
+      .mockResolvedValueOnce(mixedPage('snap:1'))
+      .mockResolvedValueOnce(secondPage)
     vi.stubGlobal('fetch', fetchMock)
     const interval = vi.spyOn(globalThis, 'setInterval')
     const { result } = renderHook(() => useModelPaymentsQuery(), { wrapper: wrapper() })
@@ -69,6 +114,9 @@ describe('payment query refresh', () => {
     await waitFor(() =>
       expect(result.current.data?.get('model')).toMatchObject({ freeAvailable: true, outputMsatPerMillion: 2000 })
     )
+    // The second page is requested through the advertised cursor and merged in.
+    expect(fetchMock.mock.calls[2][0]).toContain('cursor=snap%3A1')
+    expect(result.current.data?.has('other')).toBe(true)
   })
 
   it('refreshes free-only policy to automatic without remounting', async () => {

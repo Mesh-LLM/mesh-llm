@@ -72,6 +72,7 @@ async fn send_json_with_status_and_headers_inner(
         200 => "OK",
         400 => "Bad Request",
         404 => "Not Found",
+        405 => "Method Not Allowed",
         410 => "Gone",
         409 => "Conflict",
         422 => "Unprocessable Content",

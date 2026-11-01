@@ -195,15 +195,61 @@ impl Coordinator for Owner {
     }
 }
 
-pub(super) fn worker(root: &Path, args: &[String]) -> DynResult<()> {
+/// Bound the discovery walk per poll so startup stays responsive.
+const DISCOVERY_PAGE_CAP: usize = 20;
+
+/// Follow bounded discovery pages for a model with an available System One
+/// provider, mirroring `/systemone` capability admission instead of a class.
+fn discover_system_one_model(base_url: &str) -> Option<String> {
     #[derive(serde::Deserialize)]
-    struct Models {
+    struct Page {
         data: Vec<Model>,
+        next_cursor: Option<String>,
     }
     #[derive(serde::Deserialize)]
     struct Model {
         id: String,
+        #[serde(default)]
+        providers: Vec<Provider>,
     }
+    #[derive(serde::Deserialize)]
+    struct Provider {
+        available: bool,
+        #[serde(default)]
+        operations: Vec<String>,
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    let mut cursor = String::new();
+    for _ in 0..DISCOVERY_PAGE_CAP {
+        let mut url = format!("{base_url}/mesh/v1/models?available=true");
+        if !cursor.is_empty() {
+            url.push_str("&cursor=");
+            url.push_str(&cursor);
+        }
+        let bytes = http::request(&url, None, Duration::from_secs(2)).ok()?;
+        let page: Page = serde_json::from_slice(&bytes).ok()?;
+        if let Some(model) = page.data.into_iter().find(|model| {
+            !model.id.is_empty()
+                && model.providers.iter().any(|provider| {
+                    provider.available
+                        && provider
+                            .operations
+                            .iter()
+                            .any(|operation| operation == "system_one")
+                })
+        }) {
+            return Some(model.id);
+        }
+        let next = page.next_cursor.filter(|next| !next.is_empty())?;
+        if !seen.insert(next.clone()) {
+            return None;
+        }
+        cursor = next;
+    }
+    None
+}
+
+pub(super) fn worker(root: &Path, args: &[String]) -> DynResult<()> {
     let [port, startup, read, output @ ..] = args else {
         return Err("invalid product worker arguments".into());
     };
@@ -214,15 +260,8 @@ pub(super) fn worker(root: &Path, args: &[String]) -> DynResult<()> {
         if Instant::now() >= deadline {
             return Err("model startup deadline exceeded".into());
         }
-        if let Ok(bytes) = http::request(
-            &format!("{base_url}/v1/models"),
-            None,
-            Duration::from_secs(2),
-        ) && let Ok(models) = serde_json::from_slice::<Models>(&bytes)
-            && let Some(model) = models.data.into_iter().next()
-            && !model.id.is_empty()
-        {
-            break model.id;
+        if let Some(model) = discover_system_one_model(&base_url) {
+            break model;
         }
         std::thread::sleep(Duration::from_millis(100));
     };

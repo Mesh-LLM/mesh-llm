@@ -4682,6 +4682,7 @@ dependencies = [
  "mesh-llm-cli",
  "mesh-llm-client",
  "mesh-llm-commands",
+ "mesh-llm-config",
  "mesh-llm-events",
  "mesh-llm-host-runtime",
  "mesh-llm-payments",
@@ -4763,6 +4764,7 @@ dependencies = [
  "hex",
  "httparse",
  "iroh",
+ "libc",
  "mesh-llm-identity",
  "mesh-llm-membership",
  "mesh-llm-protocol",
@@ -4836,6 +4838,7 @@ version = "0.78.0"
 dependencies = [
  "anyhow",
  "dirs",
+ "libc",
  "mesh-llm-types",
  "semver",
  "serde",
@@ -4998,6 +5001,7 @@ dependencies = [
  "skippy-package-format",
  "skippy-protocol",
  "skippy-runtime",
+ "skippy-runtime-install",
  "skippy-serving",
  "skippy-topology",
  "socket2",
@@ -7138,6 +7142,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "process-supervision"
+version = "0.78.0"
+dependencies = [
+ "libc",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.21",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "process-wrap"
 version = "10.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9202,6 +9217,7 @@ dependencies = [
  "skippy-cache",
  "skippy-config",
  "skippy-events",
+ "skippy-hardware-profile",
  "skippy-inference-api",
  "skippy-metrics",
  "skippy-model-artifact",
@@ -10369,17 +10385,15 @@ dependencies = [
 name = "trajectory-reader"
 version = "0.78.0"
 dependencies = [
- "hyper",
  "libc",
  "md5",
  "parquet",
+ "process-supervision",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "skippy-hf-hub",
  "tempfile",
- "thiserror 2.0.21",
- "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11854,6 +11868,7 @@ dependencies = [
  "num-bigint 0.4.8",
  "plist",
  "proc-macro2",
+ "process-supervision",
  "rcgen",
  "regex",
  "rustls",

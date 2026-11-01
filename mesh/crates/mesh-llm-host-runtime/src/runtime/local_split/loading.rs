@@ -105,6 +105,9 @@ pub(super) struct SplitGenerationLoadSettings<'a> {
     /// Planned final-stage decode batching. A stage policy rather than a
     /// frontend one, so it rides here instead of on the OpenAI args.
     pub(super) last_stage_decode_batch: Option<bool>,
+    /// Operator policy for host-resident routed experts, applied to every
+    /// stage.
+    pub(super) host_experts: skippy_protocol::HostExpertPolicy,
     pub(super) load_mode: LoadMode,
     pub(super) startup_timeout: Duration,
 }
@@ -251,6 +254,18 @@ pub(super) async fn load_split_runtime_generation_inner(
             .await?
     };
     let first_downstream_stage_id = downstream.stage_id.clone();
+    // Downstream loads take minutes on a large model, long enough for a peer
+    // that joined meanwhile to win the election and place one of its stages
+    // here. Loading stage 0 on top of that stage would hold both topologies'
+    // weights on this node; stand down instead and free the stages we placed.
+    if let Some(reason) =
+        split_coordinator_superseded(spec.node, spec.model_ref, spec.package, spec.generation).await
+    {
+        anyhow::bail!(
+            "split coordinator lease was superseded before stage 0 of {} loaded: {reason}",
+            spec.model_ref
+        );
+    }
     let stage0_status_load = split_runtime_stage_load_request(
         spec,
         &settings,
@@ -794,6 +809,7 @@ pub(super) fn split_runtime_stage_load_request(
             kv_unified: resolved_config.kv_unified,
             swa_full: resolved_config.swa_full,
             cache_idle_slots: resolved_config.cache_idle_slots,
+            host_experts: settings.host_experts,
             activation_codec_policy: resolved_config.activation_codec_policy,
         },
         native_mtp_enabled: resolved_config.native_mtp_enabled,
@@ -894,6 +910,7 @@ pub(super) async fn split_generation_load_settings<'a>(
         runtime_options,
         embedded_openai,
         last_stage_decode_batch: resolved.throughput.last_stage_decode_batch,
+        host_experts: resolved.hardware.host_experts,
         load_mode,
         startup_timeout: lifecycle.startup_timeout,
     })
@@ -976,6 +993,75 @@ pub(super) async fn claim_split_coordinator_lease(
         "split topology coordinator lease quorum reached"
     );
     Ok(())
+}
+
+/// Why this node no longer holds the coordinator lease for `generation`, or
+/// `None` while it still does.
+///
+/// The canonical coordinator is the smallest eligible node, so a peer that
+/// joins after a split was planned can elect itself and claim the same model.
+/// Every stage it plans accepts the newer term, this node's stage control
+/// included, but that only fences stages stage control runs: this node's own
+/// stage 0 runs in the host runtime, so its generation carries on and the node
+/// ends up holding a stage of each topology. Re-sending our own claim to the
+/// local stage control asks the fence directly — the same claim is accepted
+/// again unchanged, and a newer term rejects it as stale.
+///
+/// Only a rejection by another coordinator's claim counts: a transient
+/// stage-control failure must not tear down a healthy split.
+pub(super) async fn split_coordinator_superseded(
+    node: &mesh::Node,
+    model_ref: &str,
+    package: &skippy::SkippyPackageIdentity,
+    generation: &SplitTopologyGeneration,
+) -> Option<String> {
+    let claim = renewed_claim(split_coordinator_claim(
+        node.id(),
+        model_ref,
+        package,
+        generation,
+    ));
+    let response = node
+        .send_local_stage_control(skippy::StageControlRequest::Claim(claim))
+        .await;
+    match response {
+        Ok(skippy::StageControlResponse::ClaimAccepted(ack)) => {
+            superseded_claim_reason(&node.id().to_string(), &ack)
+        }
+        Ok(_) | Err(_) => None,
+    }
+}
+
+/// `claim` with its lease extended from now. The generation keeps the lease it
+/// was planned with, and the fence rejects an expired claim before it looks up
+/// the holder, so a generation serving past its lease could no longer see a
+/// takeover. The lease is not part of a claim's epoch, so the fence accepts a
+/// renewal of the claim it holds.
+pub(super) fn renewed_claim(
+    mut claim: skippy::StageCoordinatorClaim,
+) -> skippy::StageCoordinatorClaim {
+    claim.lease_until_unix_ms = claim
+        .lease_until_unix_ms
+        .max(super::split_coordinator_lease_until_unix_ms());
+    claim
+}
+
+/// The rejection of our re-sent claim, when the claim that holds the model
+/// belongs to another coordinator. A newer generation of our own — a cutover
+/// that claimed the stages and then failed to load — is not a takeover.
+pub(super) fn superseded_claim_reason(
+    local_coordinator_id: &str,
+    ack: &skippy::StageCoordinatorClaimAck,
+) -> Option<String> {
+    if ack.accepted || ack.claim.coordinator_id == local_coordinator_id {
+        return None;
+    }
+    Some(format!(
+        "coordinator {} holds term {}: {}",
+        ack.claim.coordinator_id,
+        ack.claim.coordinator_term,
+        ack.error.as_deref().unwrap_or("claim rejected")
+    ))
 }
 
 pub(super) enum SplitCoordinatorClaimResult {
