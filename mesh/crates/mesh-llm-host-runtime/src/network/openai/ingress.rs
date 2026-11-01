@@ -203,49 +203,6 @@ pub(super) fn parse_model_with_profile(model: &str) -> (&str, &str) {
     }
 }
 
-async fn handle_models_list_request(
-    tcp_stream: ClientStream,
-    node: &mesh::Node,
-    targets: &election::ModelTargets,
-    plugin_manager: Option<&crate::plugin::PluginManager>,
-) -> proxy::RouteDispatchOutcome {
-    let descriptors = node.all_served_model_descriptors().await;
-    let mut models = callable_models(targets);
-    models.extend(node.models_being_served().await);
-    if let Some(lifecycle) = node.native_model_lifecycle.get() {
-        models.extend(lifecycle.model_names().cloned());
-    }
-    if let Some(plugin_manager) = plugin_manager
-        && let Ok(mut external_models) = plugin_manager.chat_inference_models().await
-    {
-        models.append(&mut external_models);
-    }
-    // Keep the chat-compatible listing free of models the mesh only advertises
-    // for document OCR, whichever node hosts them.
-    models.retain(|model| !workload_routing::serves_only_document_ocr(model, &descriptors));
-    let virtual_models = match plugin_manager {
-        Some(plugin_manager) => plugin_manager.virtual_models().await.unwrap_or_default(),
-        None => Vec::new(),
-    };
-    let virtual_models = super::virtual_model::advertisable_routes(virtual_models, &models);
-    models.extend(virtual_models.iter().map(|route| route.model_id.clone()));
-    models.sort();
-    models.dedup();
-    let runtimes = node.all_model_runtime_descriptors().await;
-    response_outcome(
-        200,
-        proxy::send_models_list_with_descriptors(
-            tcp_stream,
-            &models,
-            &descriptors,
-            &runtimes,
-            &virtual_models,
-            Some(node),
-        )
-        .await,
-    )
-}
-
 async fn collect_available_models_for_auto_route(
     node: &mesh::Node,
     targets: &election::ModelTargets,
@@ -1485,15 +1442,14 @@ async fn maybe_handle_control_request(
         return Ok(proxy::reject_legacy_lifecycle_request(tcp_stream, route_observer).await);
     }
 
-    if proxy::is_models_list_request(&request.method, &request.path) {
-        let outcome = handle_models_list_request(
+    if super::model_discovery::is_request(&request.method, &request.path) {
+        return Ok(super::model_discovery::respond(
             tcp_stream,
             ctx.route.node,
-            ctx.route.targets,
-            ctx.route.plugin_manager,
+            request,
+            route_observer,
         )
-        .await;
-        return Ok(outcome);
+        .await);
     }
 
     Err(tcp_stream)

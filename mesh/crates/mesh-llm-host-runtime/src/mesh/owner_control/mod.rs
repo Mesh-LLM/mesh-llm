@@ -18,6 +18,8 @@ mod exchange_grants;
 
 use commands::{OwnedNodeCommand, OwnedNodeCommandDeadline, OwnedNodeCommandExecutionShape};
 
+pub(crate) mod plugin_command_approval;
+
 const OWNER_CONTROL_SERVER_HANDSHAKE_TIMEOUT_SECS: u64 = 2;
 /// Largest handshake frame accepted. The handshake carries one ownership
 /// certificate and is read before the peer is authenticated, so it gets a
@@ -786,7 +788,7 @@ impl Node {
                 .await;
         };
 
-        let mesh_config =
+        let mut mesh_config =
             match crate::protocol::convert::proto_config_to_mesh_strict(&config_snapshot) {
                 Ok(config) => config,
                 Err(error) => {
@@ -803,6 +805,36 @@ impl Node {
                         .await;
                 }
             };
+        let current_headers = self
+            .config_state
+            .lock()
+            .await
+            .config()
+            .telemetry
+            .headers
+            .clone();
+        crate::protocol::config_redaction::restore_redacted_telemetry_headers(
+            &mut mesh_config,
+            &current_headers,
+        );
+        let current_plugins = self.config_state.lock().await.config().plugins.clone();
+        if let Some(error) = plugin_command_approval::plugin_command_approval_error(
+            &current_plugins,
+            &mesh_config,
+            &apply.plugin_command_approvals,
+        ) {
+            return self
+                .send_owner_control_envelope(
+                    send,
+                    owner_control_error_envelope(
+                        crate::proto::node::OwnerControlErrorCode::BadRequest,
+                        Some(request_id),
+                        None,
+                        error,
+                    ),
+                )
+                .await;
+        }
         let config_state = Arc::clone(&self.config_state);
         let node = self.clone();
         let runtime = tokio::runtime::Handle::current();

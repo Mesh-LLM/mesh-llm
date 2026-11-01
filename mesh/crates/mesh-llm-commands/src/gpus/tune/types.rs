@@ -101,6 +101,9 @@ pub enum TuneRecommendedValue {
     Device(String),
     Bool(bool),
     BoolOrAuto(TuneBoolOrAutoValue),
+    /// Model blocks, counted from block 0, whose routed experts load into
+    /// host memory (`hardware.n_cpu_moe`).
+    HostExpertBlocks(u32),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -123,6 +126,7 @@ pub enum TuneConfigEdit {
     SetHardwareFitTargetMib(u64),
     SetHardwareMmap(TuneBoolOrAutoValue),
     SetHardwareMlock(bool),
+    SetHardwareNCpuMoe(u32),
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]

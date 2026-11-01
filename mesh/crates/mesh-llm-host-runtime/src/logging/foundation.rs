@@ -233,9 +233,10 @@ where
     }
 
     // Follow existing mesh-llm conventions for app data directories:
-    // 1. MESH_LLM_DATA_DIR env var (highest priority, used by skippy-model-hf crate)
+    // 1. MESH_LLM_DATA_DIR env var (highest priority, used by skippy-model-hf crate,
+    //    which also treats an empty value as unset)
     // 2. platform default
-    if let Some(env_path) = data_dir {
+    if let Some(env_path) = data_dir.filter(|path| !path.is_empty()) {
         return Ok(PathBuf::from(env_path).join("logging"));
     }
 
@@ -418,6 +419,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(resolved, explicit);
+    }
+
+    #[test]
+    fn root_resolution_ignores_an_empty_environment_override() {
+        let resolved =
+            resolve_app_state_root_with(None, Some(OsString::new()), RootPlatform::Windows, || {
+                Some(PathBuf::from("/local-app-data"))
+            })
+            .unwrap();
+
+        assert_eq!(resolved, PathBuf::from("/local-app-data/mesh-llm/logging"));
     }
 
     #[test]

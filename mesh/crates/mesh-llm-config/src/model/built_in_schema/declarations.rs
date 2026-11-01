@@ -516,8 +516,8 @@ fn hardware_settings(
             string_enum(["auto", "none", "layer", "row", "tensor"]),
         ),
         experimental_setting(&format!("{prefix}.main_gpu"), ConfigValueSchema::Integer),
-        unwired_setting(&format!("{prefix}.cpu_moe"), bool_or_auto_schema()),
-        unwired_setting(&format!("{prefix}.n_cpu_moe"), ConfigValueSchema::Integer),
+        basic_setting(&format!("{prefix}.cpu_moe"), bool_or_auto_schema()),
+        basic_setting(&format!("{prefix}.n_cpu_moe"), ConfigValueSchema::Integer),
         rejected_setting(
             &format!("{prefix}.rpc_backend"),
             ConfigValueSchema::object(),
