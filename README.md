@@ -283,30 +283,17 @@ binary to `invalid`, but default startup still allows it.
 
 Native Windows CUDA works, including on CUDA 13.x drivers: GPU detection (`mesh-llm gpus`) and full-speed CUDA inference have been verified on driver 610.74 (CUDA UMD 13.3) with an RTX 4070 Ti. The earlier advice to switch to WSL2 when `mesh-llm` reported `0 GPUs` on CUDA 13 drivers predates the cuda12-runtime compatibility fix ([#1127](https://github.com/Mesh-LLM/mesh-llm/issues/1127)) and no longer applies to current releases.
 
-As of v0.76.0-rc8, three distribution/loading bugs still block the out-of-the-box native path. Until the fixes ship, this sequence works end to end:
+The stable release works natively: the installer puts the product bundle and its CPU runtime in place, then add the CUDA runtime for your release and serve. No prerelease is needed, and no manual `PATH` edit for the runtime's DLLs:
 
-1. **Install the prerelease** — the stable v0.75.1 Windows bundles fail `install.ps1` verification ([#1510](https://github.com/Mesh-LLM/mesh-llm/issues/1510)):
-
-   ```powershell
-   irm https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.ps1 -OutFile install.ps1
-   .\install.ps1 -PreRelease
-   ```
-
-2. **Install the CUDA runtime from the product bundle** — `mesh-llm runtime install cuda` finds no windows/x86_64 runtimes in the release manifest ([#1511](https://github.com/Mesh-LLM/mesh-llm/issues/1511)). Download `mesh-llm-x86_64-pc-windows-msvc-cuda-12.zip` (or `-cuda-13.zip` for RTX 50-series and other Blackwell GPUs, which needs a CUDA 13 driver) for your installed version from the [releases page](https://github.com/Mesh-LLM/mesh-llm/releases), extract it, then:
-
-   ```powershell
-   mesh-llm runtime install --bundle-dir "<extracted>\mesh-bundle" cuda
-   ```
-
-3. **Put the runtime's `lib` directory on `PATH` before serving** — runtime DLLs currently fail to load with `LoadLibraryExW` error 126 ([#1512](https://github.com/Mesh-LLM/mesh-llm/issues/1512)). Replace `<cuda>` with `cuda12` or `cuda13`, matching the bundle from step 2:
-
-   ```powershell
-   $env:PATH = "$env:LOCALAPPDATA\mesh-llm\native-runtimes\<version>\meshllm-native-runtime-windows-x86_64-<cuda>\lib;" + $env:PATH
-   mesh-llm serve --local-model-only --model "C:\path\to\model.gguf"
-   ```
+```powershell
+irm https://raw.githubusercontent.com/Mesh-LLM/mesh-llm/main/install.ps1 | iex
+mesh-llm runtime install cuda
+mesh-llm serve --local-model-only --model "C:\path\to\model.gguf"
+```
 
 Good to know on native Windows:
 
+- RTX 50-series and other Blackwell (SM 120) cards aren't covered by the stable release on native Windows yet: its only Windows CUDA runtime is CUDA 12, built for architectures up to SM 90, so `mesh-llm runtime install cuda` finds no compatible runtime for them. Use [WSL2](#running-under-wsl2-alternative) with the Linux CUDA 13 runtime until a Windows CUDA 13 runtime ships.
 - `--local-model-only` requires an absolute path to a local `.gguf` file; catalog and Hugging Face refs are rejected in this mode.
 - Models download to `%LOCALAPPDATA%\huggingface\hub` (the Rust `hf-hub` convention) — a separate cache from the Python tools' `~\.cache\huggingface`.
 - `mesh-llm.exe` is not code-signed yet, so SmartScreen may prompt when launching it manually.

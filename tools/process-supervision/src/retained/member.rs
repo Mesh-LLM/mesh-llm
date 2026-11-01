@@ -1,7 +1,7 @@
 use super::{Disposition, Launch, MemberId, MemberReport, MemberState, Snapshot};
-use crate::process::capture::Capture;
-use crate::process::output::{Output, output_file};
-use crate::process::{
+use crate::capture::Capture;
+use crate::output::{Output, output_file};
+use crate::{
     Failure, GracefulRequest, Limits, Outcome, ProcessReport, ReadinessStop, Stream, control,
     platform,
 };

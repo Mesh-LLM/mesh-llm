@@ -2,10 +2,8 @@
 use super::transport::Response;
 use crate::{
     command::DynResult,
-    process::{
-        self, Cancellation,
-        curl_https::{Curl, Files, Request},
-    },
+    curl_https::{Curl, Files, Request},
+    process::{self, Cancellation},
 };
 use serde_json::Value;
 use std::{
@@ -98,7 +96,7 @@ fn exchange_mode(
         file.write_all(&bytes)?;
         file.flush()?;
     }
-    let execution = process::curl_https::execution_budget(remaining(deadline, cancellation)?)?;
+    let execution = crate::curl_https::execution_budget(remaining(deadline, cancellation)?)?;
     let method = if private {
         Curl::json_private_specification
     } else {
@@ -126,7 +124,7 @@ fn exchange_mode(
     )?;
     let raw = process::supervise_raw(
         &spec,
-        &process::curl_https::limits(execution),
+        &crate::curl_https::limits(execution),
         cancellation,
         process::RawCaptureOptions {
             stdout: std::num::NonZeroUsize::new(16),

@@ -27,6 +27,8 @@ const UNVERIFIED: &[&str] = &[
     "skippy-api",
     "skippy-cli",
     "xtask",
+    // Supervision and interruption extracted from xtask keep its pending Windows runtime proof.
+    "process-supervision",
     // Extracted native reader has Unix regular-file admission branches; Windows runtime proof is pending.
     "trajectory-reader",
 ];

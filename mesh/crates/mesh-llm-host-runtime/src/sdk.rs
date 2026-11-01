@@ -156,7 +156,13 @@ pub async fn start_embedded_node(
     drop(isolated_config);
     let (control_tx, control_rx) = tokio::sync::mpsc::unbounded_channel();
     let (shutdown, shutdown_rx) = tokio::sync::watch::channel(false);
-    let runtime_options = embedded_runtime_options(&config, Some(control_rx));
+    // Readiness is reported only by the worker itself, after it has bound its
+    // listeners, so a foreign HTTP service on the console port cannot make
+    // startup report ready (#2147).
+    let (readiness_tx, readiness_rx) = std::sync::mpsc::channel();
+    let worker_readiness_tx = readiness_tx.clone();
+    let mut runtime_options = embedded_runtime_options(&config, Some(control_rx));
+    runtime_options.embedded_readiness_tx = Some(readiness_tx);
     let api_base_url = format!("http://127.0.0.1:{}/v1", config.http.api_port);
     let console_url = format!("http://127.0.0.1:{}", config.http.console_port);
     let startup_timeout = config.startup_timeout;
@@ -174,10 +180,14 @@ pub async fn start_embedded_node(
                 .thread_stack_size(stack_size)
                 .build()
                 .context("build embedded mesh runtime")?;
-            runtime.block_on(embedded_shutdown::SHUTDOWN.scope(
+            let result = runtime.block_on(embedded_shutdown::SHUTDOWN.scope(
                 shutdown_rx,
                 crate::runtime::run_embedded_runtime(runtime_options),
-            ))
+            ));
+            if let Err(error) = &result {
+                let _ = worker_readiness_tx.send(Err(error.to_string()));
+            }
+            result
         })
         .context("spawn embedded mesh runtime thread")?;
     // Install Drop's cancellation guard before the first await after spawning.
@@ -190,25 +200,7 @@ pub async fn start_embedded_node(
         shutdown,
         native_node: None,
     };
-    let node = match native::wait_for_embedded_node(&handle, startup_timeout).await {
-        Ok(node) => node,
-        Err(error) => {
-            handle.request_shutdown("sdk-startup-error");
-            if let Err(shutdown_error) = join_embedded_runtime_thread_with_timeout(
-                handle.task.take().expect("runtime task"),
-                EMBEDDED_STARTUP_SHUTDOWN_TIMEOUT,
-            )
-            .await
-            {
-                return Err(error).with_context(|| {
-                    format!(
-                        "failed to shut down embedded mesh runtime after startup error: {shutdown_error}"
-                    )
-                });
-            }
-            return Err(error);
-        }
-    };
+    let node = wait_for_embedded_startup(&mut handle, readiness_rx, startup_timeout).await?;
     handle.invite_token = Some(node.invite_token().await);
     handle.native_node = Some(node);
     Ok(handle)
@@ -294,6 +286,7 @@ fn embedded_runtime_options(
         log_format: config.log_format.into(),
         headless: !config.http.console_ui,
         control_rx,
+        embedded_readiness_tx: None,
     }
 }
 
@@ -329,6 +322,71 @@ async fn join_embedded_runtime_thread_with_timeout(
 fn join_embedded_runtime_thread_blocking(task: std::thread::JoinHandle<Result<()>>) -> Result<()> {
     task.join()
         .map_err(|_| anyhow::anyhow!("embedded mesh runtime thread panicked"))?
+}
+
+/// Wait for the embedded worker's own bind evidence, then acquire the native
+/// node over the control channel. The readiness wait gives fast failure
+/// reporting and the worker-only bind proof (#2147) before the node wait
+/// turns the handoff into the handle's live `native_node` for direct
+/// execution. Any startup failure shuts the runtime down and joins it before
+/// returning.
+async fn wait_for_embedded_startup(
+    handle: &mut EmbeddedServeHandle,
+    readiness_rx: std::sync::mpsc::Receiver<
+        Result<crate::runtime::EmbeddedRuntimeReadiness, String>,
+    >,
+    timeout: Duration,
+) -> Result<crate::mesh::Node> {
+    if let Err(error) = wait_for_embedded_readiness(readiness_rx, timeout).await {
+        return Err(shutdown_after_startup_error(handle, error).await);
+    }
+    match native::wait_for_embedded_node(handle, timeout).await {
+        Ok(node) => Ok(node),
+        Err(error) => Err(shutdown_after_startup_error(handle, error).await),
+    }
+}
+
+/// Shut the embedded runtime down after a failed startup, joining it with a
+/// bounded timeout, and return `error` annotated when the join itself failed.
+async fn shutdown_after_startup_error(
+    handle: &mut EmbeddedServeHandle,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    handle.request_shutdown("sdk-startup-error");
+    if let Err(shutdown_error) = join_embedded_runtime_thread_with_timeout(
+        handle.task.take().expect("runtime task"),
+        EMBEDDED_STARTUP_SHUTDOWN_TIMEOUT,
+    )
+    .await
+    {
+        return error.context(format!(
+            "failed to shut down embedded mesh runtime after startup error: {shutdown_error}"
+        ));
+    }
+    error
+}
+
+async fn wait_for_embedded_readiness(
+    readiness_rx: std::sync::mpsc::Receiver<
+        Result<crate::runtime::EmbeddedRuntimeReadiness, String>,
+    >,
+    timeout: Duration,
+) -> Result<crate::runtime::EmbeddedRuntimeReadiness> {
+    let outcome = tokio::task::spawn_blocking(move || readiness_rx.recv_timeout(timeout))
+        .await
+        .context("wait for embedded mesh runtime readiness")?;
+    match outcome {
+        Ok(Ok(readiness)) => Ok(readiness),
+        Ok(Err(error)) => {
+            anyhow::bail!("embedded mesh runtime failed before the console became ready: {error}")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            anyhow::bail!("timed out waiting for the embedded mesh runtime to become ready")
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            anyhow::bail!("embedded mesh runtime exited before the console became ready")
+        }
+    }
 }
 
 async fn fetch_json(url: &str) -> Result<serde_json::Value> {
@@ -949,6 +1007,158 @@ mod tests {
         assert!(status.payload.is_object());
 
         handle.stop().await.expect("stop embedded mesh client");
+    }
+
+    /// Regression test for issue #2147: embedded startup must not report
+    /// readiness from a console served by a foreign process on the requested
+    /// console port. A stub HTTP server answering `/api/status` with a token
+    /// must not make `start_embedded_serve` return a successful handle whose
+    /// advertised `invite_token` belongs to that foreign instance.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial_test::serial]
+    async fn embedded_startup_rejects_foreign_console_on_requested_port() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let stub_body = r#"{"token":"foreign-stub-token"}"#;
+        let stub = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind foreign stub console");
+        let console_port = stub.local_addr().expect("foreign stub local addr").port();
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut socket, _)) = stub.accept().await else {
+                    break;
+                };
+                tokio::spawn(async move {
+                    // Drain the request head, then answer with the foreign token.
+                    let mut request = [0u8; 1024];
+                    let _ = socket.read(&mut request).await;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        stub_body.len(),
+                        stub_body
+                    );
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                });
+            }
+        });
+
+        let api_port = free_local_port();
+        let startup = start_embedded_serve(EmbeddedServeConfig {
+            mode: EmbeddedMeshNodeMode::Client,
+            api_port,
+            console_port,
+            startup_timeout: Duration::from_secs(5),
+            ..EmbeddedServeConfig::default()
+        })
+        .await;
+
+        if let Ok(handle) = startup {
+            let observed_token = handle.invite_token().unwrap_or("<none>").to_string();
+            let observed_console = handle.console_url().to_string();
+            // Clean up before failing so the test process does not hang.
+            let _ = handle.stop().await;
+            panic!(
+                "embedded startup reported ready from a foreign console at {observed_console} with invite_token = {observed_token:?} (issue #2147)"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial_test::serial]
+    async fn embedded_startup_fails_when_api_port_is_occupied() {
+        let api_stub = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind api port occupier");
+        let api_port = api_stub.local_addr().expect("occupier local addr").port();
+        let console_port = free_local_port();
+
+        let startup = start_embedded_serve(EmbeddedServeConfig {
+            mode: EmbeddedMeshNodeMode::Client,
+            api_port,
+            console_port,
+            startup_timeout: Duration::from_secs(30),
+            ..EmbeddedServeConfig::default()
+        })
+        .await;
+
+        drop(api_stub);
+        let error = match startup {
+            Ok(handle) => {
+                let _ = handle.stop().await;
+                panic!("embedded startup must fail when the API port is already occupied");
+            }
+            Err(error) => error,
+        };
+        let message = format!("{error:#}");
+        assert!(
+            !message.contains("waiting for embedded mesh runtime thread to exit"),
+            "startup failure must stop and join the worker thread, not time out: {message}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial_test::serial]
+    async fn embedded_startup_reports_ready_from_in_process_worker() {
+        let api_port = free_local_port();
+        let console_port = free_local_port();
+        let handle = start_embedded_serve(EmbeddedServeConfig {
+            mode: EmbeddedMeshNodeMode::Client,
+            api_port,
+            console_port,
+            startup_timeout: Duration::from_secs(30),
+            ..EmbeddedServeConfig::default()
+        })
+        .await
+        .expect("start embedded mesh client");
+
+        assert!(
+            handle.invite_token().is_some_and(|token| !token.is_empty()),
+            "invite token must come from the in-process worker readiness signal"
+        );
+        assert_eq!(
+            handle.api_base_url(),
+            format!("http://127.0.0.1:{api_port}/v1")
+        );
+        assert_eq!(
+            handle.console_url(),
+            format!("http://127.0.0.1:{console_port}")
+        );
+        let status = handle.status().await.expect("embedded status");
+        assert!(status.payload.is_object());
+
+        handle.stop().await.expect("stop embedded mesh client");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial_test::serial]
+    async fn embedded_startup_times_out_and_cleans_up_worker() {
+        let api_port = free_local_port();
+        let console_port = free_local_port();
+        let startup = start_embedded_serve(EmbeddedServeConfig {
+            mode: EmbeddedMeshNodeMode::Client,
+            api_port,
+            console_port,
+            startup_timeout: Duration::from_millis(1),
+            ..EmbeddedServeConfig::default()
+        })
+        .await;
+
+        let error = match startup {
+            Ok(handle) => {
+                let _ = handle.stop().await;
+                panic!(
+                    "embedded startup must not report ready before its worker signals readiness"
+                );
+            }
+            Err(error) => error,
+        };
+        let message = format!("{error:#}");
+        assert!(
+            !message.contains("waiting for embedded mesh runtime thread to exit"),
+            "startup timeout must still stop and join the worker thread, not time out: {message}"
+        );
     }
 
     fn make_served_model(

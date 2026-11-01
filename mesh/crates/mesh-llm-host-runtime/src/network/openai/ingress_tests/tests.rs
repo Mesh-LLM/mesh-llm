@@ -1934,7 +1934,7 @@ async fn resolve_remote_mesh_route_with_no_headers_pools_every_serving_peer() {
     }
 }
 
-fn plugin_only_request(model: &str) -> proxy::BufferedHttpRequest {
+pub(super) fn plugin_only_request(model: &str) -> proxy::BufferedHttpRequest {
     let body = b"{}";
     let raw = format!(
         "POST /v1/chat/completions HTTP/1.1\r\nHost: t\r\nContent-Length: {}\r\n\r\n",
@@ -1973,7 +1973,7 @@ fn plugin_only_request_for(model: &str, path: &str) -> proxy::BufferedHttpReques
     request
 }
 
-fn empty_test_plugin_manager() -> crate::plugin::PluginManager {
+pub(super) fn empty_test_plugin_manager() -> crate::plugin::PluginManager {
     crate::plugin::PluginManager::for_test_summaries(Vec::new())
 }
 
@@ -2869,7 +2869,7 @@ async fn chat_still_rejected_for_model_served_only_by_an_ocr_endpoint() {
 
 /// A loopback backend that answers one chat completion identifying which route
 /// served it, so a test can tell the plugin path from the mesh path.
-async fn spawn_answering_chat_backend(answer: &'static str) -> u16 {
+pub(super) async fn spawn_answering_chat_backend(answer: &'static str) -> u16 {
     use tokio::io::AsyncWriteExt;
 
     let backend = tokio::net::TcpListener::bind("127.0.0.1:0")

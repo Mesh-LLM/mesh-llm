@@ -391,6 +391,7 @@ impl Node {
             models: self.models.clone(),
             model_source: self.model_source.clone(),
             serving_models: self.serving_models.clone(),
+            startup_models_resolving: self.startup_models_resolving.clone(),
             served_model_descriptors: self.served_model_descriptors.clone(),
             served_model_generations: self.served_model_generations.clone(),
             model_runtime_descriptors: self.model_runtime_descriptors.clone(),

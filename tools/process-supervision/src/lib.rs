@@ -1,4 +1,5 @@
-//! Bounded supervision of cooperative child trees. No existing caller is switched.
+//! Bounded supervision of cooperative child trees, and the process-wide command
+//! interruption scope in [`interrupt`].
 //!
 //! Unix children must retain their inherited process group: this is lifecycle
 //! ownership, not a sandbox for programs that call setsid/setpgid. The leader is
@@ -18,8 +19,8 @@
 
 mod capture;
 mod control;
-pub(crate) mod curl_https;
 mod inherited;
+pub mod interrupt;
 mod line;
 mod observed;
 mod output;
