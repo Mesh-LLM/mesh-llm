@@ -1,5 +1,12 @@
 # MeshLLM CI inventory
 
+Linux Rust-test batches and the SafeTensors smoke set
+`CARGO_PROFILE_TEST_DEBUG=0` at reusable-workflow scope; the trusted sccache
+warmer uses the same setting for its test graph. Complete package tests,
+assertions and overflow checks remain enabled. Cache epoch `v4` invalidates
+the previous namespace. Batch jobs report filesystem space before each package
+and target/compiler-cache sizes after the test step, including failures.
+
 The standalone C++ facade paths `skippy/skippy_api/**` and
 `skippy/skippy-api-rs/**` have additive tooling ownership. Their catalog-only
 admission is a protected-main prerequisite before dependent branches adopt the

@@ -72,6 +72,10 @@ permissions:
 env:
   CACHE_NAMESPACE: mesh-llm
   CARGO_INCREMENTAL: "0"
+  # Retained dependency variants and integration-test executables must fit
+  # alongside the runner image and compiler seed on the hosted disk.
+  # This leaves debug assertions, overflow checks and all test targets enabled.
+  CARGO_PROFILE_TEST_DEBUG: "0"
   SCCACHE_GHA_ENABLED: "false"
   # libtest gives every test thread the std default of 2 MiB. The Mesh daemon
   # reserves 8 MiB for its application and Tokio threads
@@ -297,6 +301,7 @@ jobs:
           mapfile -t crates < <(jq -r '.[]' <<<"$TEST_CRATES")
           for crate in ${crates[@]+"${crates[@]}"}; do
             [[ "$crate" == "skippy-ffi" ]] && continue
+            df -h . "$RUNNER_TEMP"
             echo "::group::cargo test -p $crate"
             cargo test --locked -p "$crate"
             if [[ "$crate" == "mesh-llm-host-runtime" ]]; then
@@ -308,6 +313,12 @@ jobs:
             fi
             echo "::endgroup::"
           done
+      - name: Report test disk usage
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          df -h . "$RUNNER_TEMP"
+          du -sh target "${SCCACHE_DIR:-$RUNNER_TEMP/mesh-llm-sccache}"
       - name: Capture Rust test cache evidence
         if: ${{ !cancelled() }}
         uses: ./.github/actions/capture-sccache-stats

@@ -488,6 +488,12 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Cache contract
 
+- Linux Rust-test jobs and the trusted compiler seed's test build disable
+  Cargo test-profile debug information (`CARGO_PROFILE_TEST_DEBUG=0`). Keep
+  debug assertions, overflow checks and complete package test coverage. The
+  per-package feature-isolated builds otherwise retain large DWARF-bearing
+  dependency variants and test executables on the same hosted disk. Keep the
+  warmer and consumers aligned, and change the cache epoch with this policy.
 - macOS compiler-cache bootstrap must use a job-owned Unix socket before any
   compiler probe. Eagerly start its server in every cache mode; parallel compiler
   clients must not race to initialize a newly allocated socket. Never stop or
