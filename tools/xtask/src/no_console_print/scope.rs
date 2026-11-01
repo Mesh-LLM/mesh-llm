@@ -72,6 +72,10 @@ pub(super) fn is_product_source(path: &str) -> bool {
         && *name != "tests.rs"
         && !name.ends_with("_tests.rs")
         && *name != "build.rs"
+        // Build-script support modules (e.g. skippy-ffi's build/native_link.rs)
+        // ship build.rs policy split into includable units; like build.rs they
+        // legitimately emit cargo directives with println!.
+        && parts.get(2) != Some(&"build")
         && name.ends_with(".rs")
         // release_targets.rs ships only mesh-llm's src/main.rs. Other src/bin
         // targets are auxiliary tools; src/main.rs remains checked everywhere.

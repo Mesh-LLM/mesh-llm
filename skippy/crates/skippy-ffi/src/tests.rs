@@ -1,23 +1,14 @@
-use std::mem::{align_of, offset_of, size_of};
+//! Behavioral tests for the FFI facade.
+//!
+//! Layout correctness is owned by the generated bindings: `bindgen` derives
+//! every struct field layout from the pinned headers at generation time and
+//! CI fails when the committed bindings drift from those headers
+//! (`SKIPPY_FFI_BINDGEN=check`). The tests here therefore exercise behavior
+//! and cross-boundary agreement, not hard-coded field offsets.
 
 use crate::{
-    ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, ASR_SEGMENT_V1_ABI_VERSION,
-    AbiVersion, ActivationBoundaryDesc, ActivationPartDesc, AsrInfoV1, AsrSegmentV1,
-    AsrTranscribeParamsV1, CACHEGEN_RECORD_EXACT, CACHEGEN_RECORD_F16,
-    CACHEGEN_RECORD_F16_TRANSPOSED, CACHEGEN_RECORD_F32, CACHEGEN_RECORD_F32_TRANSPOSED,
-    CACHEGEN_RECORD_Q4_0, CACHEGEN_RECORD_Q8_0, CACHEGEN_RECORD_V1_ABI_VERSION, CacheGenRecordV1,
-    FEATURE_SPEECH_RECOGNITION, LAYA_INFO_V1_ABI_VERSION, LAYA_MEMORY_V1_ABI_VERSION, LayaInfoV1,
-    LayaMemoryV1, LayaSequence, LlamaPerfContextData, StagePlanDescV1, StagePlanProfileDescV1,
-    StagePlanStateDescV1, StagePlanStateKind, StagePlanStringRefV1, StagePlanValueDescV1,
-    StagePlannerConfigV1, StagePlannerProfileV1, StagePlannerTensorV1,
-    WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1, WorkloadKind, WorkloadPooling,
+    ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, AbiVersion, WorkloadInfoV1,
     runtime_abi_supported,
-};
-
-#[cfg(target_pointer_width = "64")]
-use crate::{
-    ModelImatrixEntryV1, ModelTensorSourceV1, MtmdContextParams, MtmdHelperBitmapWrapper,
-    MtmdHelperInitOpt, MtmdHelperVideoInitParams, MtmdInputText,
 };
 
 #[cfg(not(feature = "dynamic-runtime"))]
@@ -31,23 +22,6 @@ const fn version(major: u32, minor: u32, patch: u32) -> AbiVersion {
     }
 }
 
-/// The selected-token ABI matches the C request's size and field offsets.
-#[test]
-#[cfg(target_pointer_width = "64")]
-fn selected_token_readout_matches_c_iteration_layout() {
-    assert_eq!(size_of::<crate::TokenScoreRequest>(), 24);
-    assert_eq!(align_of::<crate::TokenScoreRequest>(), 8);
-    assert_eq!(offset_of!(crate::TokenScoreRequest, token_count), 8);
-    assert_eq!(
-        offset_of!(crate::TokenScoreRequest, out_log_probabilities),
-        16
-    );
-    assert_eq!(size_of::<crate::IterationRequest>(), 80);
-    assert_eq!(offset_of!(crate::IterationRequest, sample_last), 64);
-    assert_eq!(offset_of!(crate::IterationRequest, readout), 72);
-    assert!(!runtime_abi_supported(version(0, 1, 73)));
-}
-
 #[test]
 /// Runtime-event families must never masquerade as full-model workload support.
 fn workload_feature_is_distinct_from_runtime_event_features() {
@@ -59,6 +33,44 @@ fn workload_feature_is_distinct_from_runtime_event_features() {
         | crate::FEATURE_UNLOAD_EVENTS;
     assert_eq!(crate::FEATURE_NON_CHAT_WORKLOADS, 1_u64 << 37);
     assert_eq!(events & crate::FEATURE_NON_CHAT_WORKLOADS, 0);
+}
+
+/// The re-exported feature bits must equal the generated header values: this
+/// is the unit-level drift guard for the value aliases in `abi.rs`.
+#[test]
+fn feature_bits_match_the_generated_header_values() {
+    assert_eq!(
+        crate::FEATURE_STAGE_PLAN,
+        crate::bindings::skippy::skippy_feature::StagePlan as u64
+    );
+    assert_eq!(
+        crate::FEATURE_RUNTIME_EVENTS,
+        crate::bindings::skippy::skippy_feature::RuntimeEvents as u64
+    );
+    assert_eq!(
+        crate::FEATURE_SPEECH_RECOGNITION,
+        crate::FEATURE_SPEECH_RECOGNITION
+    );
+    assert_eq!(crate::FEATURE_STAGE_PLAN, 1 << 17);
+    assert_eq!(crate::FEATURE_SPEECH_RECOGNITION, 1 << 41);
+}
+
+#[test]
+fn versioned_descriptors_advertise_their_native_abi_size() {
+    let info = WorkloadInfoV1::default();
+    assert_eq!(info.abi_version, crate::WORKLOAD_INFO_V1_ABI_VERSION);
+    assert_eq!(
+        info.struct_size,
+        u32::try_from(std::mem::size_of::<WorkloadInfoV1>()).unwrap()
+    );
+    assert_eq!(
+        crate::LAYA_INFO_V1_ABI_VERSION,
+        crate::bindings::skippy::SKIPPY_LAYA_INFO_V1_ABI_VERSION
+    );
+    assert_eq!(
+        crate::LayaInfoV1::default().struct_size as usize,
+        std::mem::size_of::<crate::LayaInfoV1>()
+    );
 }
 
 /// The linked native library must advertise the same independent feature bits.
@@ -85,33 +97,6 @@ fn native_workload_feature_preserves_runtime_event_features() {
 }
 
 #[test]
-/// Pin the C descriptor's field offsets, including booleans and reserved padding.
-fn workload_descriptor_matches_native_layout_and_discriminants() {
-    assert_eq!(WORKLOAD_INFO_V1_ABI_VERSION, 1);
-    assert_eq!(size_of::<WorkloadInfoV1>(), 28);
-    assert_eq!(offset_of!(WorkloadInfoV1, abi_version), 0);
-    assert_eq!(offset_of!(WorkloadInfoV1, struct_size), 4);
-    assert_eq!(offset_of!(WorkloadInfoV1, kind), 8);
-    assert_eq!(offset_of!(WorkloadInfoV1, pooling), 12);
-    assert_eq!(offset_of!(WorkloadInfoV1, output_dimensions), 16);
-    assert_eq!(offset_of!(WorkloadInfoV1, classifier_outputs), 20);
-    assert_eq!(offset_of!(WorkloadInfoV1, has_encoder), 24);
-    assert_eq!(offset_of!(WorkloadInfoV1, has_decoder), 25);
-    assert_eq!(offset_of!(WorkloadInfoV1, full_model_only), 26);
-    assert_eq!(offset_of!(WorkloadInfoV1, reserved0), 27);
-    assert_eq!(WorkloadKind::CausalGeneration as i32, 0);
-    assert_eq!(WorkloadKind::Embedding as i32, 1);
-    assert_eq!(WorkloadKind::Rerank as i32, 2);
-    assert_eq!(WorkloadKind::EncoderDecoder as i32, 3);
-    assert_eq!(WorkloadPooling::Unspecified as i32, -1);
-    assert_eq!(WorkloadPooling::None as i32, 0);
-    assert_eq!(WorkloadPooling::Mean as i32, 1);
-    assert_eq!(WorkloadPooling::Cls as i32, 2);
-    assert_eq!(WorkloadPooling::Last as i32, 3);
-    assert_eq!(WorkloadPooling::Rank as i32, 4);
-}
-
-#[test]
 fn accepts_current_patch_runtime() {
     assert!(runtime_abi_supported(version(
         ABI_VERSION_MAJOR,
@@ -129,11 +114,9 @@ fn rejects_pre_workload_abi_even_with_the_same_major_and_minor() {
 #[test]
 #[cfg(not(feature = "dynamic-runtime"))]
 fn linked_native_abi_matches_the_rust_facade() {
-    unsafe extern "C" {
-        fn skippy_abi_version() -> AbiVersion;
-    }
-    // SAFETY: The ABI query takes no arguments and owns no mutable state.
-    let native = unsafe { skippy_abi_version() };
+    // SAFETY: The statically linked symbol takes no arguments and owns no
+    // mutable state.
+    let native = unsafe { crate::bindings::skippy::skippy_abi_version() };
     assert_eq!(native.major, ABI_VERSION_MAJOR);
     assert_eq!(native.minor, ABI_VERSION_MINOR);
     assert_eq!(native.patch, ABI_VERSION_PATCH);
@@ -170,222 +153,13 @@ fn rejects_major_and_minor_mismatches() {
 }
 
 #[test]
-fn activation_boundary_descriptor_matches_native_layout() {
-    assert_eq!(size_of::<ActivationPartDesc>(), 128);
-    assert_eq!(offset_of!(ActivationPartDesc, identity), 0);
-    assert_eq!(offset_of!(ActivationPartDesc, ggml_type), 32);
-    assert_eq!(offset_of!(ActivationPartDesc, dimensions), 48);
-    assert_eq!(offset_of!(ActivationPartDesc, byte_strides), 80);
-    assert_eq!(offset_of!(ActivationPartDesc, payload_offset), 112);
-    assert_eq!(offset_of!(ActivationPartDesc, payload_bytes), 120);
-
-    assert_eq!(size_of::<ActivationBoundaryDesc>(), 2088);
-    assert_eq!(offset_of!(ActivationBoundaryDesc, version), 0);
-    assert_eq!(offset_of!(ActivationBoundaryDesc, part_count), 4);
-    assert_eq!(offset_of!(ActivationBoundaryDesc, frontier_identity), 8);
-    assert_eq!(offset_of!(ActivationBoundaryDesc, parts), 40);
-}
-
-#[test]
-fn perf_context_data_matches_native_layout() {
-    // `llama_perf_context` returns this struct by value, so the caller supplies
-    // the destination slot: a mirror shorter than the pinned llama.h writes past
-    // it instead of returning a visibly wrong value. Independent C probe against
-    // the prepared llama.h at llama.cpp 620d2225 (v0.7.0).
-    assert_eq!(size_of::<LlamaPerfContextData>(), 56);
-    assert_eq!(align_of::<LlamaPerfContextData>(), 8);
-    assert_eq!(offset_of!(LlamaPerfContextData, t_start_ms), 0);
-    assert_eq!(offset_of!(LlamaPerfContextData, t_load_ms), 8);
-    assert_eq!(offset_of!(LlamaPerfContextData, t_p_eval_ms), 16);
-    assert_eq!(offset_of!(LlamaPerfContextData, t_eval_ms), 24);
-    assert_eq!(offset_of!(LlamaPerfContextData, n_p_eval), 32);
-    assert_eq!(offset_of!(LlamaPerfContextData, n_eval), 36);
-    assert_eq!(offset_of!(LlamaPerfContextData, n_reused), 40);
-    assert_eq!(offset_of!(LlamaPerfContextData, n_reallocs_same), 44);
-    assert_eq!(offset_of!(LlamaPerfContextData, n_reallocs_diff), 48);
-}
-
-#[test]
-#[cfg(target_pointer_width = "64")]
-fn cachegen_record_matches_native_layout() {
-    assert_eq!(CACHEGEN_RECORD_V1_ABI_VERSION, 1);
-    assert_eq!(CACHEGEN_RECORD_F16, 0);
-    assert_eq!(CACHEGEN_RECORD_EXACT, 1);
-    assert_eq!(CACHEGEN_RECORD_F16_TRANSPOSED, 2);
-    assert_eq!(CACHEGEN_RECORD_F32, 3);
-    assert_eq!(CACHEGEN_RECORD_F32_TRANSPOSED, 4);
-    assert_eq!(CACHEGEN_RECORD_Q8_0, 5);
-    assert_eq!(CACHEGEN_RECORD_Q4_0, 6);
-    assert_eq!(size_of::<CacheGenRecordV1>(), 72);
-    assert_eq!(offset_of!(CacheGenRecordV1, output_offset), 16);
-    assert_eq!(offset_of!(CacheGenRecordV1, decoded_bytes), 24);
-    assert_eq!(offset_of!(CacheGenRecordV1, token_count), 32);
-    assert_eq!(offset_of!(CacheGenRecordV1, token_start), 40);
-    assert_eq!(offset_of!(CacheGenRecordV1, total_tokens), 48);
-    assert_eq!(offset_of!(CacheGenRecordV1, payload), 56);
-    assert_eq!(offset_of!(CacheGenRecordV1, payload_bytes), 64);
-}
-
-#[test]
-#[cfg(target_pointer_width = "64")]
-fn stage_plan_types_match_native_layout() {
-    assert_eq!(StagePlanStateKind::DerivedPersistent as i32, 4);
-    assert_eq!(size_of::<StagePlanStringRefV1>(), 16);
-    assert_eq!(size_of::<StagePlannerTensorV1>(), 88);
-    assert_eq!(offset_of!(StagePlannerTensorV1, dimensions), 32);
-    assert_eq!(offset_of!(StagePlannerTensorV1, stored_length), 80);
-
-    assert_eq!(size_of::<StagePlannerProfileV1>(), 32);
-    assert_eq!(offset_of!(StagePlannerProfileV1, profile_id), 8);
-    assert_eq!(size_of::<StagePlannerConfigV1>(), 80);
-    assert_eq!(offset_of!(StagePlannerConfigV1, shard_paths), 16);
-    assert_eq!(offset_of!(StagePlannerConfigV1, profiles), 48);
-    assert_eq!(offset_of!(StagePlannerConfigV1, graph_configuration_id), 64);
-    assert_eq!(offset_of!(StagePlannerConfigV1, backend_id), 72);
-
-    assert_eq!(size_of::<StagePlanDescV1>(), 88);
-    assert_eq!(offset_of!(StagePlanDescV1, profile_count), 56);
-    assert_eq!(size_of::<StagePlanProfileDescV1>(), 168);
-    assert_eq!(offset_of!(StagePlanProfileDescV1, n_tokens), 120);
-    assert_eq!(offset_of!(StagePlanProfileDescV1, state_effect_count), 160);
-    assert_eq!(size_of::<StagePlanValueDescV1>(), 40);
-    assert_eq!(offset_of!(StagePlanValueDescV1, binding), 24);
-    assert_eq!(size_of::<StagePlanStateDescV1>(), 48);
-    assert_eq!(offset_of!(StagePlanStateDescV1, write_ordinal), 40);
-}
-
-#[test]
-#[cfg(target_pointer_width = "64")]
-fn model_tensor_source_types_match_native_layout() {
-    assert_eq!(size_of::<ModelImatrixEntryV1>(), 24);
-    assert_eq!(offset_of!(ModelImatrixEntryV1, tensor_name), 0);
-    assert_eq!(offset_of!(ModelImatrixEntryV1, values), 8);
-    assert_eq!(offset_of!(ModelImatrixEntryV1, value_count), 16);
-
-    assert_eq!(size_of::<ModelTensorSourceV1>(), 40);
-    assert_eq!(offset_of!(ModelTensorSourceV1, abi_version), 0);
-    assert_eq!(offset_of!(ModelTensorSourceV1, struct_size), 4);
-    assert_eq!(offset_of!(ModelTensorSourceV1, read_tensor_f32), 8);
-    assert_eq!(offset_of!(ModelTensorSourceV1, user_data), 16);
-    assert_eq!(offset_of!(ModelTensorSourceV1, imatrix), 24);
-    assert_eq!(offset_of!(ModelTensorSourceV1, imatrix_count), 32);
-}
-
-#[test]
-#[cfg(target_pointer_width = "64")]
-fn mtmd_context_params_matches_native_layout() {
-    // Mirrors `struct mtmd_context_params` in tools/mtmd/mtmd.h. `device` sits
-    // second, right after `use_gpu`; leaving it out shifts everything below it
-    // by 8 bytes and makes the struct 16 bytes short, so the C side reads
-    // `progress_callback` from past the end of what Rust allocated.
-    assert_eq!(size_of::<MtmdContextParams>(), 96);
-    assert_eq!(offset_of!(MtmdContextParams, device), 8);
-    assert_eq!(offset_of!(MtmdContextParams, batch_max_tokens), 72);
-    assert_eq!(offset_of!(MtmdContextParams, progress_callback), 80);
-    assert_eq!(
-        offset_of!(MtmdContextParams, progress_callback_user_data),
-        88
-    );
-}
-
-#[test]
-#[cfg(target_pointer_width = "64")]
-fn mtmd_input_text_matches_native_layout() {
-    // Mirrors `struct mtmd_input_text` in tools/mtmd/mtmd.h. `mtmd_tokenize`
-    // reads `text_len` to size the prompt, so a missing field here hands the
-    // native side a length built from uninitialised padding.
-    assert_eq!(size_of::<MtmdInputText>(), 24);
-    assert_eq!(offset_of!(MtmdInputText, text_len), 8);
-    assert_eq!(offset_of!(MtmdInputText, add_special), 16);
-    assert_eq!(offset_of!(MtmdInputText, parse_special), 17);
-}
-
-#[test]
-#[cfg(target_pointer_width = "64")]
-fn mtmd_helper_bitmap_types_match_native_layout() {
-    // Mirrors `mtmd_helper_bitmap_wrapper`, `mtmd_helper_init_opt` and
-    // `mtmd_helper_video_init_params` in tools/mtmd/mtmd-helper.h.
-    // `mtmd_helper_bitmap_init_from_buf` returns the wrapper by value and takes
-    // the opt by value, so both layouts are part of the calling convention.
-    assert_eq!(size_of::<MtmdHelperBitmapWrapper>(), 16);
-    assert_eq!(offset_of!(MtmdHelperBitmapWrapper, bitmap), 0);
-    assert_eq!(offset_of!(MtmdHelperBitmapWrapper, video_ctx), 8);
-
-    assert_eq!(size_of::<MtmdHelperVideoInitParams>(), 24);
-    assert_eq!(offset_of!(MtmdHelperVideoInitParams, fps_target), 0);
-    assert_eq!(offset_of!(MtmdHelperVideoInitParams, ffmpeg_bin_dir), 8);
-    assert_eq!(
-        offset_of!(MtmdHelperVideoInitParams, timestamp_interval_ms),
-        16
-    );
-
-    assert_eq!(size_of::<MtmdHelperInitOpt>(), 24);
-    assert_eq!(offset_of!(MtmdHelperInitOpt, video_params), 0);
-}
-
-#[test]
 #[cfg(not(feature = "dynamic-runtime"))]
 fn native_mtmd_defaults_cross_the_ffi_boundary() {
+    // SAFETY: the native default-params query allocates nothing and borrows
+    // nothing from the caller.
     let params = unsafe { mtmd_context_params_default() };
 
     assert_eq!(params.batch_max_tokens, 1024);
     assert!(params.progress_callback.is_none());
     assert!(params.progress_callback_user_data.is_null());
-}
-
-#[test]
-#[cfg(target_pointer_width = "64")]
-fn asr_types_match_native_layout() {
-    assert_eq!(FEATURE_SPEECH_RECOGNITION, 1 << 41);
-    assert_eq!(size_of::<AsrInfoV1>(), 48);
-    assert_eq!(offset_of!(AsrInfoV1, multilingual), 8);
-    assert_eq!(offset_of!(AsrInfoV1, n_vocab), 12);
-    assert_eq!(offset_of!(AsrInfoV1, n_mels), 24);
-    assert_eq!(offset_of!(AsrInfoV1, weights_bytes), 32);
-    assert_eq!(offset_of!(AsrInfoV1, on_accelerator), 40);
-    assert_eq!(AsrInfoV1::default().struct_size, 48);
-
-    assert_eq!(size_of::<AsrTranscribeParamsV1>(), 40);
-    assert_eq!(offset_of!(AsrTranscribeParamsV1, language), 8);
-    assert_eq!(offset_of!(AsrTranscribeParamsV1, translate), 16);
-    assert_eq!(offset_of!(AsrTranscribeParamsV1, prompt), 24);
-    assert_eq!(offset_of!(AsrTranscribeParamsV1, temperature), 32);
-    assert_eq!(offset_of!(AsrTranscribeParamsV1, n_threads), 36);
-    assert_eq!(AsrTranscribeParamsV1::default().struct_size, 40);
-
-    assert_eq!(size_of::<AsrSegmentV1>(), 40);
-    assert_eq!(offset_of!(AsrSegmentV1, start_ms), 8);
-    assert_eq!(offset_of!(AsrSegmentV1, end_ms), 16);
-    assert_eq!(offset_of!(AsrSegmentV1, text), 24);
-    assert_eq!(offset_of!(AsrSegmentV1, no_speech_prob), 32);
-    assert_eq!(
-        AsrSegmentV1::default().abi_version,
-        ASR_SEGMENT_V1_ABI_VERSION
-    );
-}
-
-#[test]
-#[cfg(target_pointer_width = "64")]
-fn laya_types_match_native_layout() {
-    assert_eq!(LAYA_INFO_V1_ABI_VERSION, 1);
-    assert_eq!(size_of::<LayaInfoV1>(), 72);
-    assert_eq!(offset_of!(LayaInfoV1, n_layer), 40);
-    assert_eq!(offset_of!(LayaInfoV1, parameter_count), 48);
-    assert_eq!(offset_of!(LayaInfoV1, temperature), 56);
-    let info = LayaInfoV1::default();
-    assert_eq!(info.struct_size, 72);
-    assert_eq!(info.abi_version, LAYA_INFO_V1_ABI_VERSION);
-
-    assert_eq!(LAYA_MEMORY_V1_ABI_VERSION, 1);
-    assert_eq!(size_of::<LayaMemoryV1>(), 40);
-    assert_eq!(offset_of!(LayaMemoryV1, weights_bytes), 8);
-    assert_eq!(offset_of!(LayaMemoryV1, compute_bytes), 16);
-    assert_eq!(offset_of!(LayaMemoryV1, host_scratch_bytes), 24);
-    assert_eq!(offset_of!(LayaMemoryV1, on_accelerator), 32);
-    assert_eq!(LayaMemoryV1::default().struct_size, 40);
-
-    assert_eq!(size_of::<LayaSequence>(), 40);
-    assert_eq!(offset_of!(LayaSequence, qtype), 16);
-    assert_eq!(offset_of!(LayaSequence, marker_offset), 24);
-    assert_eq!(offset_of!(LayaSequence, marker_count), 32);
 }

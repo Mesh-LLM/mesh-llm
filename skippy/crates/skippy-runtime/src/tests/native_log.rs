@@ -20,11 +20,11 @@ fn write_native_log_respects_forwarding_flag() {
         CString::new("init_tokenizer: initializing tokenizer for type 2\n").expect("cstring");
 
     set_filtered_native_logs_enabled(false);
-    unsafe { write_native_log(0, line.as_ptr(), ptr::null_mut()) };
+    unsafe { write_native_log(log_level(0), line.as_ptr(), ptr::null_mut()) };
     assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));
 
     set_filtered_native_logs_enabled(true);
-    unsafe { write_native_log(0, line.as_ptr(), ptr::null_mut()) };
+    unsafe { write_native_log(log_level(0), line.as_ptr(), ptr::null_mut()) };
     assert_eq!(
         rx.blocking_recv(),
         Some(NativeLogEvent {
@@ -76,7 +76,7 @@ fn register_filtered_native_logs_replaces_receiver_cleanly() {
 
     let line =
         CString::new("init_tokenizer: initializing tokenizer for type 2\n").expect("cstring");
-    unsafe { write_native_log(0, line.as_ptr(), ptr::null_mut()) };
+    unsafe { write_native_log(log_level(0), line.as_ptr(), ptr::null_mut()) };
 
     assert_eq!(
         second.blocking_recv(),
@@ -86,4 +86,10 @@ fn register_filtered_native_logs_replaces_receiver_cleanly() {
             params: Vec::new(),
         })
     );
+}
+
+#[cfg(test)]
+fn log_level(level: i32) -> skippy_ffi::bindings::llama::ggml_log_level {
+    // Test helper: the generated enum mirrors the C values verbatim.
+    unsafe { std::mem::transmute(level) }
 }

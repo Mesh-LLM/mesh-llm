@@ -2,26 +2,27 @@ use std::sync::{Arc, Barrier};
 use std::thread;
 
 use skippy_ffi::{
-    SkippyRuntimeEventCategory as RawRuntimeEventCategory,
-    SkippyRuntimeEventEmitterKind as RawRuntimeEventEmitterKind,
-    SkippyRuntimeEventFailureCode as RawRuntimeEventFailureCode,
-    SkippyRuntimeEventKind as RawRuntimeEventKind,
-    SkippyRuntimeEventProgressUnit as RawRuntimeEventProgressUnit,
-    SkippyRuntimeEventV1 as RawRuntimeEvent, Status,
+    RUNTIME_EVENT_CATEGORY_MODEL_OPEN, RUNTIME_EVENT_EMITTER_WORKER_THREAD,
+    RUNTIME_EVENT_FAILURE_NONE, RUNTIME_EVENT_KIND_MODEL_LOAD_AUX_COMPONENT_READY,
+    RUNTIME_EVENT_KIND_MODEL_LOAD_MEMORY_ALLOCATED, RUNTIME_EVENT_KIND_MODEL_LOAD_PHASE_CHANGED,
+    RUNTIME_EVENT_KIND_MODEL_LOAD_TENSORS_OFFLOADED, RUNTIME_EVENT_KIND_MODEL_LOAD_TOKENIZER_READY,
+    RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED, RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS,
+    RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED, RUNTIME_EVENT_PROGRESS_UNIT_NONE,
 };
+use skippy_ffi::{SkippyRuntimeEventV1 as RawRuntimeEvent, Status};
 
 use super::{
     ModelOpenEventQueue, ModelOpenEventReporterRegistration, NATIVE_PROGRESS_STEPS, OperationId,
 };
 use crate::runtime_events::{NativeEventRecord, RUNTIME_EVENT_V1_ABI_VERSION, RuntimeEventKind};
 
-fn raw_event(kind: RawRuntimeEventKind, sequence: u64) -> RawRuntimeEvent {
+fn raw_event(kind: u32, sequence: u64) -> RawRuntimeEvent {
     RawRuntimeEvent {
         abi_version: 1,
         struct_size: std::mem::size_of::<RawRuntimeEvent>() as u32,
-        category: RawRuntimeEventCategory::MODEL_OPEN,
+        category: RUNTIME_EVENT_CATEGORY_MODEL_OPEN,
         kind,
-        emitter: RawRuntimeEventEmitterKind::WORKER_THREAD,
+        emitter: RUNTIME_EVENT_EMITTER_WORKER_THREAD,
         reserved0: 0,
         sequence,
         timestamp_mono_ns: sequence,
@@ -30,9 +31,9 @@ fn raw_event(kind: RawRuntimeEventKind, sequence: u64) -> RawRuntimeEvent {
         session_id: 0,
         progress_current: 0,
         progress_total: 0,
-        progress_unit: RawRuntimeEventProgressUnit::NONE,
-        failure_code: RawRuntimeEventFailureCode::NONE,
-        status: Status::Ok,
+        progress_unit: RUNTIME_EVENT_PROGRESS_UNIT_NONE,
+        failure_code: RUNTIME_EVENT_FAILURE_NONE,
+        status: Status::Ok as i32,
         reserved1: 0,
         detail_ptr: std::ptr::null(),
         detail_len: 0,
@@ -44,7 +45,7 @@ fn raw_event(kind: RawRuntimeEventKind, sequence: u64) -> RawRuntimeEvent {
 }
 
 fn progress(sequence: u64) -> RawRuntimeEvent {
-    raw_event(RawRuntimeEventKind::MODEL_OPEN_PROGRESS, sequence)
+    raw_event(RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS, sequence)
 }
 
 fn drain_all(queue: &ModelOpenEventQueue) -> Vec<NativeEventRecord> {
@@ -146,7 +147,7 @@ fn concurrent_native_threads_enqueue_all_records() {
 #[test]
 fn unknown_kind_survives_to_consumer() {
     let queue = ModelOpenEventQueue::new(OperationId(1));
-    unsafe { queue.deliver_for_test(&raw_event(RawRuntimeEventKind(9999), 1)) };
+    unsafe { queue.deliver_for_test(&raw_event(9999, 1)) };
 
     let records = drain_all(&queue);
     assert_eq!(records.len(), 1);
@@ -179,20 +180,20 @@ fn default_capacity_holds_a_worst_case_open_without_draining() {
     // lifecycle facts of an open, with nothing draining until it returns.
     let queue = ModelOpenEventQueue::new(OperationId(1));
     let mut sequence = 0;
-    let mut deliver = |kind: RawRuntimeEventKind| {
+    let mut deliver = |kind: skippy_ffi::SkippyRuntimeEventKind| {
         sequence += 1;
         unsafe { queue.deliver_for_test(&raw_event(kind, sequence)) };
     };
-    deliver(RawRuntimeEventKind::MODEL_OPEN_STARTED);
-    deliver(RawRuntimeEventKind::MODEL_LOAD_PHASE_CHANGED);
-    deliver(RawRuntimeEventKind::MODEL_LOAD_MEMORY_ALLOCATED);
+    deliver(RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED);
+    deliver(RUNTIME_EVENT_KIND_MODEL_LOAD_PHASE_CHANGED);
+    deliver(RUNTIME_EVENT_KIND_MODEL_LOAD_MEMORY_ALLOCATED);
     for _ in 0..NATIVE_PROGRESS_STEPS {
-        deliver(RawRuntimeEventKind::MODEL_OPEN_PROGRESS);
+        deliver(RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS);
     }
-    deliver(RawRuntimeEventKind::MODEL_LOAD_TENSORS_OFFLOADED);
-    deliver(RawRuntimeEventKind::MODEL_LOAD_TOKENIZER_READY);
-    deliver(RawRuntimeEventKind::MODEL_LOAD_AUX_COMPONENT_READY);
-    deliver(RawRuntimeEventKind::MODEL_OPEN_FINISHED);
+    deliver(RUNTIME_EVENT_KIND_MODEL_LOAD_TENSORS_OFFLOADED);
+    deliver(RUNTIME_EVENT_KIND_MODEL_LOAD_TOKENIZER_READY);
+    deliver(RUNTIME_EVENT_KIND_MODEL_LOAD_AUX_COMPONENT_READY);
+    deliver(RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED);
 
     assert_eq!(queue.dropped(), 0);
     let records = drain_all(&queue);

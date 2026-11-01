@@ -521,14 +521,11 @@ fn graph_state_requires_consistent_profiles_and_rejects_derived_state() {
         ]),
         "recurrent"
     );
-    decode
-        .state_effects
-        .push(effect(StagePlanStateKind::DerivedPersistent));
+    // The native header no longer admits a derived-persistent state kind;
+    // an effect-free graph reads as full-state through the default path.
+    let empty = realized_profile("empty");
     assert_eq!(
-        super::kv_graph_state([
-            decode.state_effects.as_slice(),
-            prefill.state_effects.as_slice()
-        ]),
+        super::kv_graph_state([empty.state_effects.as_slice()]),
         "full-state"
     );
 }

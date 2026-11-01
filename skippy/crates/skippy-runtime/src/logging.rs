@@ -893,13 +893,17 @@ pub fn disable_verbose_native_logs() {
     unsafe { std::env::remove_var("GGML_LLAMA_LOG_LEVEL") };
 }
 
-unsafe extern "C" fn write_native_log(level: c_int, text: *const c_char, _user_data: *mut c_void) {
+unsafe extern "C" fn write_native_log(
+    level: skippy_ffi::bindings::llama::ggml_log_level,
+    text: *const c_char,
+    _user_data: *mut c_void,
+) {
     if text.is_null() {
         return;
     }
 
     let bytes = unsafe { CStr::from_ptr(text) }.to_bytes();
-    output::forward_raw_native_log(level, bytes);
+    output::forward_raw_native_log(level as c_int, bytes);
     if let Ok(mut guard) = native_log_file().lock()
         && let Some(writer) = guard.as_mut()
     {
@@ -931,7 +935,7 @@ unsafe extern "C" fn write_native_log(level: c_int, text: *const c_char, _user_d
 }
 
 unsafe extern "C" fn discard_native_log(
-    _level: c_int,
+    _level: skippy_ffi::bindings::llama::ggml_log_level,
     _text: *const c_char,
     _user_data: *mut c_void,
 ) {

@@ -1,83 +1,62 @@
-use std::ffi::{c_char, c_int, c_void};
+//! Ergonomic Rust aliases over the generated Skippy native ABI bindings.
+//!
+//! Every struct, enum, and constant here is a thin re-export or value alias
+//! of [`crate::bindings`]; the generated declarations are the single source
+//! of truth for the native layout. Only initialization ergonomics (`Default`
+//! impls that stamp `struct_size`/`abi_version`), the ABI compatibility
+//! predicate, and callback aliases remain hand-written.
 
-use crate::{
-    ABI_VERSION_MAJOR, ABI_VERSION_MINOR, ABI_VERSION_PATCH, NativeMtpDraft, SamplingConfig,
-};
+use std::ffi::{c_char, c_void};
 
-pub const FEATURE_STAGE_PLAN: u64 = 1 << 17;
-pub const FEATURE_BACKEND_DEVICES: u64 = 1 << 23;
-pub const FEATURE_RUNTIME_EVENTS: u64 = 1 << 24;
-pub const FEATURE_NATIVE_MTP_N1: u64 = 1 << 25;
-pub const FEATURE_NGRAM_CACHE_DRAFT: u64 = 1 << 26;
-pub const FEATURE_MTP_MULTIMODAL: u64 = 1 << 27;
-pub const FEATURE_ITERATION_BATCH: u64 = 1 << 28;
-pub const FEATURE_ACTIVATION_BOUNDARY: u64 = 1 << 29;
-pub const FEATURE_MODEL_SOURCE: u64 = 1 << 30;
-pub const FEATURE_RUNTIME_EVENT_REPORTER: u64 = 1 << 31;
-pub const FEATURE_MODEL_LOAD_EVENTS_V2: u64 = 1 << 32;
-pub const FEATURE_KV_EVENTS: u64 = 1 << 33;
-pub const FEATURE_DEVICE_EVENTS: u64 = 1 << 34;
-pub const FEATURE_DIAGNOSTIC_EVENTS: u64 = 1 << 35;
-pub const FEATURE_UNLOAD_EVENTS: u64 = 1 << 36;
-/// Full-model workloads use a separate bit from all runtime-event families.
-pub const FEATURE_NON_CHAT_WORKLOADS: u64 = 1 << 37;
-pub const FEATURE_SYSTEM_ONE: u64 = 1 << 38;
-pub const FEATURE_CACHEGEN_KV_PAGE: u64 = 1 << 39;
-/// Full-model Laya decision reads (`skippy/laya.h`).
-pub const FEATURE_LAYA_DECISIONS: u64 = 1 << 40;
-/// Full-model speech recognition (`skippy/asr.h`); clear in runtimes built
-/// without whisper.cpp.
-pub const FEATURE_SPEECH_RECOGNITION: u64 = 1 << 41;
-pub const MODEL_TENSOR_SOURCE_V1_ABI_VERSION: u32 = 1;
-pub const WORKLOAD_INFO_V1_ABI_VERSION: u32 = 1;
-pub const LAYA_INFO_V1_ABI_VERSION: u32 = 1;
-pub const LAYA_MEMORY_V1_ABI_VERSION: u32 = 1;
-pub const ASR_INFO_V1_ABI_VERSION: u32 = 1;
-pub const ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION: u32 = 1;
-pub const ASR_SEGMENT_V1_ABI_VERSION: u32 = 1;
-/// Sample rate of the PCM `skippy_asr_decode_audio` returns.
-pub const ASR_SAMPLE_RATE: u32 = 16_000;
-/// Longest audio the ASR ABI decodes or transcribes: 30 minutes at 16 kHz.
-pub const ASR_MAX_SAMPLES: usize = 16_000 * 60 * 30;
-/// Question types the Laya decision head distinguishes, in native order.
-pub const LAYA_QTYPE_COUNT: usize = 3;
+use crate::{NativeMtpDraft, SamplingConfig, bindings};
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[repr(i32)]
-pub enum WorkloadKind {
-    #[default]
-    CausalGeneration = 0,
-    Embedding = 1,
-    Rerank = 2,
-    EncoderDecoder = 3,
-}
+// Feature bits. Enum members come from `enum skippy_feature`; bits 31+ are
+// `uint64_t` constants in the header. Keep the historical short names: the
+// capability probe and family gating consume them by name.
+pub const FEATURE_STAGE_PLAN: u64 = bindings::skippy::skippy_feature::StagePlan as u64;
+pub const FEATURE_BACKEND_DEVICES: u64 = bindings::skippy::skippy_feature::BackendDevices as u64;
+pub const FEATURE_RUNTIME_EVENTS: u64 = bindings::skippy::skippy_feature::RuntimeEvents as u64;
+pub const FEATURE_NATIVE_MTP_N1: u64 = bindings::skippy::skippy_feature::NativeMtpN1 as u64;
+pub const FEATURE_NGRAM_CACHE_DRAFT: u64 = bindings::skippy::skippy_feature::NgramCacheDraft as u64;
+pub const FEATURE_MTP_MULTIMODAL: u64 = bindings::skippy::skippy_feature::MtpMultimodal as u64;
+pub const FEATURE_ITERATION_BATCH: u64 = bindings::skippy::skippy_feature::IterationBatch as u64;
+pub const FEATURE_ACTIVATION_BOUNDARY: u64 =
+    bindings::skippy::skippy_feature::ActivationBoundary as u64;
+pub const FEATURE_MODEL_SOURCE: u64 = bindings::skippy::skippy_feature::ModelSource as u64;
+pub const FEATURE_RUNTIME_EVENT_REPORTER: u64 =
+    bindings::skippy::skippy_ffi_bridge_feature_runtime_event_reporter;
+pub const FEATURE_MODEL_LOAD_EVENTS_V2: u64 =
+    bindings::skippy::skippy_ffi_bridge_feature_model_load_events_v2;
+pub const FEATURE_KV_EVENTS: u64 = bindings::skippy::skippy_ffi_bridge_feature_kv_events;
+pub const FEATURE_DEVICE_EVENTS: u64 = bindings::skippy::skippy_ffi_bridge_feature_device_events;
+pub const FEATURE_DIAGNOSTIC_EVENTS: u64 =
+    bindings::skippy::skippy_ffi_bridge_feature_diagnostic_events;
+pub const FEATURE_UNLOAD_EVENTS: u64 = bindings::skippy::skippy_ffi_bridge_feature_unload_events;
+pub const FEATURE_NON_CHAT_WORKLOADS: u64 =
+    bindings::skippy::skippy_ffi_bridge_feature_non_chat_workloads;
+pub const FEATURE_SYSTEM_ONE: u64 = bindings::skippy::skippy_ffi_bridge_feature_system_one;
+pub const FEATURE_CACHEGEN_KV_PAGE: u64 =
+    bindings::skippy::skippy_ffi_bridge_feature_cachegen_kv_page;
+pub const FEATURE_LAYA_DECISIONS: u64 = bindings::skippy::skippy_ffi_bridge_feature_laya_decisions;
+pub const FEATURE_SPEECH_RECOGNITION: u64 =
+    bindings::skippy::skippy_ffi_bridge_feature_speech_recognition;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[repr(i32)]
-pub enum WorkloadPooling {
-    Unspecified = -1,
-    #[default]
-    None = 0,
-    Mean = 1,
-    Cls = 2,
-    Last = 3,
-    Rank = 4,
-}
+pub const MODEL_TENSOR_SOURCE_V1_ABI_VERSION: u32 =
+    bindings::skippy::SKIPPY_MODEL_TENSOR_SOURCE_V1_ABI_VERSION;
+pub const WORKLOAD_INFO_V1_ABI_VERSION: u32 = bindings::skippy::SKIPPY_WORKLOAD_INFO_V1_ABI_VERSION;
+pub const LAYA_INFO_V1_ABI_VERSION: u32 = bindings::skippy::SKIPPY_LAYA_INFO_V1_ABI_VERSION;
+pub const LAYA_MEMORY_V1_ABI_VERSION: u32 = bindings::skippy::SKIPPY_LAYA_MEMORY_V1_ABI_VERSION;
+pub const ASR_INFO_V1_ABI_VERSION: u32 = bindings::skippy::SKIPPY_ASR_INFO_V1_ABI_VERSION;
+pub const ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION: u32 =
+    bindings::skippy::SKIPPY_ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION;
+pub const ASR_SEGMENT_V1_ABI_VERSION: u32 = bindings::skippy::SKIPPY_ASR_SEGMENT_V1_ABI_VERSION;
+pub const ASR_SAMPLE_RATE: u32 = bindings::skippy::SKIPPY_ASR_SAMPLE_RATE;
+pub const ASR_MAX_SAMPLES: usize = bindings::skippy::SKIPPY_ASR_MAX_SAMPLES as usize;
+pub const LAYA_QTYPE_COUNT: usize = bindings::skippy::SKIPPY_LAYA_QTYPE_COUNT as usize;
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct WorkloadInfoV1 {
-    pub abi_version: u32,
-    pub struct_size: u32,
-    pub kind: WorkloadKind,
-    pub pooling: WorkloadPooling,
-    pub output_dimensions: u32,
-    pub classifier_outputs: u32,
-    pub has_encoder: bool,
-    pub has_decoder: bool,
-    pub full_model_only: bool,
-    pub reserved0: u8,
-}
+pub type WorkloadKind = bindings::skippy::skippy_workload_kind;
+pub type WorkloadPooling = bindings::skippy::skippy_workload_pooling;
+pub type WorkloadInfoV1 = bindings::skippy::skippy_workload_info_v1;
 
 impl Default for WorkloadInfoV1 {
     /// Initialize the workload descriptor with its ABI size and version.
@@ -85,8 +64,8 @@ impl Default for WorkloadInfoV1 {
         Self {
             abi_version: WORKLOAD_INFO_V1_ABI_VERSION,
             struct_size: std::mem::size_of::<Self>() as u32,
-            kind: WorkloadKind::default(),
-            pooling: WorkloadPooling::default(),
+            kind: WorkloadKind::CausalGeneration,
+            pooling: WorkloadPooling::None,
             output_dimensions: 0,
             classifier_outputs: 0,
             has_encoder: false,
@@ -97,84 +76,13 @@ impl Default for WorkloadInfoV1 {
     }
 }
 
-pub type ModelReadTensorF32Callback = Option<
-    unsafe extern "C" fn(
-        tensor_name: *const c_char,
-        destination: *mut f32,
-        element_count: usize,
-        out_message: *mut *const c_char,
-        user_data: *mut c_void,
-    ) -> Status,
->;
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct ModelImatrixEntryV1 {
-    pub tensor_name: *const c_char,
-    pub values: *const f32,
-    pub value_count: usize,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct ModelTensorSourceV1 {
-    pub abi_version: u32,
-    pub struct_size: u32,
-    pub read_tensor_f32: ModelReadTensorF32Callback,
-    pub user_data: *mut c_void,
-    pub imatrix: *const ModelImatrixEntryV1,
-    pub imatrix_count: usize,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct IterationRequest {
-    pub session: *mut Session,
-    pub token_ids: *const i32,
-    pub token_count: usize,
-    pub positions: *const i32,
-    pub position_count: usize,
-    pub sampling: *const SamplingConfig,
-    pub input_desc: *const crate::ActivationDesc,
-    pub input_payload: *const c_void,
-    pub sample_last: bool,
-    pub readout: *const TokenScoreRequest,
-}
-
-/// Caller-owned buffers for an unsampled, final-row readout.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct TokenScoreRequest {
-    pub token_ids: *const i32,
-    pub token_count: usize,
-    pub out_log_probabilities: *mut f32,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SystemOneSlot {
-    pub canvas_position: u32,
-    pub label_token_offset: usize,
-    pub label_token_count: usize,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct LayaInfoV1 {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub max_len: i32,
-    pub head_max_len: i32,
-    pub max_markers: i32,
-    pub n_act: i32,
-    pub cls_token_id: i32,
-    pub sep_token_id: i32,
-    pub mask_token_id: i32,
-    pub n_embd: i32,
-    pub n_layer: i32,
-    pub parameter_count: i64,
-    pub temperature: [f32; LAYA_QTYPE_COUNT],
-}
+pub type ModelReadTensorF32Callback = bindings::skippy::skippy_model_read_tensor_f32_callback;
+pub type ModelImatrixEntryV1 = bindings::skippy::skippy_model_imatrix_entry_v1;
+pub type ModelTensorSourceV1 = bindings::skippy::skippy_model_tensor_source_v1;
+pub type IterationRequest = bindings::skippy::skippy_iteration_request;
+pub type TokenScoreRequest = bindings::skippy::skippy_token_score_request;
+pub type SystemOneSlot = bindings::skippy::skippy_system_one_slot;
+pub type LayaInfoV1 = bindings::skippy::skippy_laya_info_v1;
 
 impl Default for LayaInfoV1 {
     /// Initialize the Laya descriptor with its ABI size and version.
@@ -198,16 +106,7 @@ impl Default for LayaInfoV1 {
 }
 
 /// Measured memory of an opened Laya model.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LayaMemoryV1 {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub weights_bytes: u64,
-    pub compute_bytes: u64,
-    pub host_scratch_bytes: u64,
-    pub on_accelerator: bool,
-}
+pub type LayaMemoryV1 = bindings::skippy::skippy_laya_memory_v1;
 
 impl Default for LayaMemoryV1 {
     /// Initialize the memory descriptor with its ABI size and version.
@@ -224,33 +123,11 @@ impl Default for LayaMemoryV1 {
 }
 
 /// One question sequence inside a packed Laya read.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LayaSequence {
-    pub token_offset: usize,
-    pub token_count: usize,
-    pub qtype: i32,
-    pub marker_offset: usize,
-    pub marker_count: usize,
-}
-
+pub type LayaSequence = bindings::skippy::skippy_laya_sequence;
 /// Shape and memory of an opened speech-recognition model.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AsrInfoV1 {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub multilingual: bool,
-    pub n_vocab: i32,
-    pub n_audio_layer: i32,
-    pub n_text_layer: i32,
-    pub n_mels: i32,
-    pub weights_bytes: u64,
-    pub on_accelerator: bool,
-}
+pub type AsrInfoV1 = bindings::skippy::skippy_asr_info_v1;
 
 impl Default for AsrInfoV1 {
-    /// Initialize the ASR descriptor with its ABI size and version.
     fn default() -> Self {
         Self {
             struct_size: std::mem::size_of::<Self>() as u32,
@@ -265,19 +142,8 @@ impl Default for AsrInfoV1 {
         }
     }
 }
-
-/// Options for one transcription; null strings and zeros select defaults.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct AsrTranscribeParamsV1 {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub language: *const c_char,
-    pub translate: bool,
-    pub prompt: *const c_char,
-    pub temperature: f32,
-    pub n_threads: i32,
-}
+/// Options for one transcription. Zero values select the defaults.
+pub type AsrTranscribeParamsV1 = bindings::skippy::skippy_asr_transcribe_params_v1;
 
 impl Default for AsrTranscribeParamsV1 {
     /// Initialize the transcription options with their ABI size and version.
@@ -295,16 +161,7 @@ impl Default for AsrTranscribeParamsV1 {
 }
 
 /// One timed segment; `text` is owned by the native result.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct AsrSegmentV1 {
-    pub struct_size: u32,
-    pub abi_version: u32,
-    pub start_ms: i64,
-    pub end_ms: i64,
-    pub text: *const c_char,
-    pub no_speech_prob: f32,
-}
+pub type AsrSegmentV1 = bindings::skippy::skippy_asr_segment_v1;
 
 impl Default for AsrSegmentV1 {
     /// Initialize the segment descriptor with its ABI size and version.
@@ -321,355 +178,141 @@ impl Default for AsrSegmentV1 {
 }
 
 /// Polled between decoder steps; returning true cancels the transcription.
-pub type AsrAbortCallback = Option<unsafe extern "C" fn(user_data: *mut c_void) -> bool>;
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AbiVersion {
-    pub major: u32,
-    pub minor: u32,
-    pub patch: u32,
-}
+pub type AsrAbortCallback = bindings::skippy::skippy_asr_abort_callback;
+pub type AbiVersion = bindings::skippy::skippy_abi_version;
 
 /// Whether a native runtime reporting `version` can back this binary's ABI
 /// bindings. Required symbol signatures and by-value struct layouts may change
 /// between patches, so the loader requires an exact ABI match.
 pub const fn runtime_abi_supported(version: AbiVersion) -> bool {
-    version.major == ABI_VERSION_MAJOR
-        && version.minor == ABI_VERSION_MINOR
-        && version.patch == ABI_VERSION_PATCH
+    version.major == crate::ABI_VERSION_MAJOR
+        && version.minor == crate::ABI_VERSION_MINOR
+        && version.patch == crate::ABI_VERSION_PATCH
 }
 
-pub type LlamaLogCallback =
-    Option<unsafe extern "C" fn(level: c_int, text: *const c_char, user_data: *mut c_void)>;
-pub type MtmdProgressCallback =
-    Option<unsafe extern "C" fn(progress: f32, user_data: *mut c_void) -> bool>;
-pub type SkippyRuntimeEventCallback =
-    Option<unsafe extern "C" fn(event: *const SkippyRuntimeEventV1, user_data: *mut c_void)>;
+/// Log callback shared by llama.cpp, ggml, and mtmd logging entrypoints.
+pub type LlamaLogCallback = bindings::llama::ggml_log_callback;
+pub type MtmdProgressCallback = bindings::mtmd::mtmd_progress_callback;
+pub type SkippyRuntimeEventCallback = bindings::skippy::skippy_runtime_event_callback;
 
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct SkippyRuntimeEventCategory(pub u32);
+// Runtime-event family discriminants. The native headers model these as
+// anonymous `uint32_t` enumerations; the generated constants are re-exported
+// under their C names so event construction reads exactly like the header.
+pub use bindings::skippy::{
+    SKIPPY_RUNTIME_EVENT_CATEGORY_BACKEND as RUNTIME_EVENT_CATEGORY_BACKEND,
+    SKIPPY_RUNTIME_EVENT_CATEGORY_DEVICE as RUNTIME_EVENT_CATEGORY_DEVICE,
+    SKIPPY_RUNTIME_EVENT_CATEGORY_DIAGNOSTIC as RUNTIME_EVENT_CATEGORY_DIAGNOSTIC,
+    SKIPPY_RUNTIME_EVENT_CATEGORY_KV as RUNTIME_EVENT_CATEGORY_KV,
+    SKIPPY_RUNTIME_EVENT_CATEGORY_MODEL_OPEN as RUNTIME_EVENT_CATEGORY_MODEL_OPEN,
+    SKIPPY_RUNTIME_EVENT_CATEGORY_SESSION as RUNTIME_EVENT_CATEGORY_SESSION,
+    SKIPPY_RUNTIME_EVENT_CATEGORY_UNLOAD as RUNTIME_EVENT_CATEGORY_UNLOAD,
+    SKIPPY_RUNTIME_EVENT_CATEGORY_WARNING as RUNTIME_EVENT_CATEGORY_WARNING,
+    SKIPPY_RUNTIME_EVENT_EMITTER_OPEN_THREAD as RUNTIME_EVENT_EMITTER_OPEN_THREAD,
+    SKIPPY_RUNTIME_EVENT_EMITTER_UNKNOWN as RUNTIME_EVENT_EMITTER_UNKNOWN,
+    SKIPPY_RUNTIME_EVENT_EMITTER_WORKER_THREAD as RUNTIME_EVENT_EMITTER_WORKER_THREAD,
+    SKIPPY_RUNTIME_EVENT_FAILURE_BACKEND_ERROR as RUNTIME_EVENT_FAILURE_BACKEND_ERROR,
+    SKIPPY_RUNTIME_EVENT_FAILURE_CANCELLED as RUNTIME_EVENT_FAILURE_CANCELLED,
+    SKIPPY_RUNTIME_EVENT_FAILURE_INTERNAL_ERROR as RUNTIME_EVENT_FAILURE_INTERNAL_ERROR,
+    SKIPPY_RUNTIME_EVENT_FAILURE_INVALID_ARGUMENT as RUNTIME_EVENT_FAILURE_INVALID_ARGUMENT,
+    SKIPPY_RUNTIME_EVENT_FAILURE_IO_ERROR as RUNTIME_EVENT_FAILURE_IO_ERROR,
+    SKIPPY_RUNTIME_EVENT_FAILURE_MODEL_ERROR as RUNTIME_EVENT_FAILURE_MODEL_ERROR,
+    SKIPPY_RUNTIME_EVENT_FAILURE_NONE as RUNTIME_EVENT_FAILURE_NONE,
+    SKIPPY_RUNTIME_EVENT_FAILURE_RUNTIME_ERROR as RUNTIME_EVENT_FAILURE_RUNTIME_ERROR,
+    SKIPPY_RUNTIME_EVENT_KIND_BACKEND_DEVICE_SELECTED as RUNTIME_EVENT_KIND_BACKEND_DEVICE_SELECTED,
+    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_BACKEND_INITIALIZED as RUNTIME_EVENT_KIND_DEVICE_BACKEND_INITIALIZED,
+    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_DEGRADED as RUNTIME_EVENT_KIND_DEVICE_DEGRADED,
+    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_FALLBACK_ACTIVATED as RUNTIME_EVENT_KIND_DEVICE_FALLBACK_ACTIVATED,
+    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_LOST as RUNTIME_EVENT_KIND_DEVICE_LOST,
+    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_OUT_OF_MEMORY as RUNTIME_EVENT_KIND_DEVICE_OUT_OF_MEMORY,
+    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_READY as RUNTIME_EVENT_KIND_DEVICE_READY,
+    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_RECOVERED as RUNTIME_EVENT_KIND_DEVICE_RECOVERED,
+    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_RESOURCE_ALLOCATED as RUNTIME_EVENT_KIND_DEVICE_RESOURCE_ALLOCATED,
+    SKIPPY_RUNTIME_EVENT_KIND_DEVICE_UNAVAILABLE as RUNTIME_EVENT_KIND_DEVICE_UNAVAILABLE,
+    SKIPPY_RUNTIME_EVENT_KIND_DIAGNOSTIC_FATAL_FAILURE as RUNTIME_EVENT_KIND_DIAGNOSTIC_FATAL_FAILURE,
+    SKIPPY_RUNTIME_EVENT_KIND_DIAGNOSTIC_INVARIANT_VIOLATION as RUNTIME_EVENT_KIND_DIAGNOSTIC_INVARIANT_VIOLATION,
+    SKIPPY_RUNTIME_EVENT_KIND_DIAGNOSTIC_RECOVERABLE_FAILURE as RUNTIME_EVENT_KIND_DIAGNOSTIC_RECOVERABLE_FAILURE,
+    SKIPPY_RUNTIME_EVENT_KIND_DIAGNOSTIC_WARNING_CLEARED as RUNTIME_EVENT_KIND_DIAGNOSTIC_WARNING_CLEARED,
+    SKIPPY_RUNTIME_EVENT_KIND_DIAGNOSTIC_WARNING_RAISED as RUNTIME_EVENT_KIND_DIAGNOSTIC_WARNING_RAISED,
+    SKIPPY_RUNTIME_EVENT_KIND_KV_CONTEXT_APPROACHING_CAPACITY as RUNTIME_EVENT_KIND_KV_CONTEXT_APPROACHING_CAPACITY,
+    SKIPPY_RUNTIME_EVENT_KIND_KV_CONTEXT_CAPACITY_EXHAUSTED as RUNTIME_EVENT_KIND_KV_CONTEXT_CAPACITY_EXHAUSTED,
+    SKIPPY_RUNTIME_EVENT_KIND_KV_INITIALIZED as RUNTIME_EVENT_KIND_KV_INITIALIZED,
+    SKIPPY_RUNTIME_EVENT_KIND_KV_PRESSURE_CLEARED as RUNTIME_EVENT_KIND_KV_PRESSURE_CLEARED,
+    SKIPPY_RUNTIME_EVENT_KIND_KV_PRESSURE_CROSSED as RUNTIME_EVENT_KIND_KV_PRESSURE_CROSSED,
+    SKIPPY_RUNTIME_EVENT_KIND_MODEL_LOAD_AUX_COMPONENT_READY as RUNTIME_EVENT_KIND_MODEL_LOAD_AUX_COMPONENT_READY,
+    SKIPPY_RUNTIME_EVENT_KIND_MODEL_LOAD_MEMORY_ALLOCATED as RUNTIME_EVENT_KIND_MODEL_LOAD_MEMORY_ALLOCATED,
+    SKIPPY_RUNTIME_EVENT_KIND_MODEL_LOAD_PHASE_CHANGED as RUNTIME_EVENT_KIND_MODEL_LOAD_PHASE_CHANGED,
+    SKIPPY_RUNTIME_EVENT_KIND_MODEL_LOAD_TENSORS_OFFLOADED as RUNTIME_EVENT_KIND_MODEL_LOAD_TENSORS_OFFLOADED,
+    SKIPPY_RUNTIME_EVENT_KIND_MODEL_LOAD_TOKENIZER_READY as RUNTIME_EVENT_KIND_MODEL_LOAD_TOKENIZER_READY,
+    SKIPPY_RUNTIME_EVENT_KIND_MODEL_OPEN_FAILED_HANDLED as RUNTIME_EVENT_KIND_MODEL_OPEN_FAILED_HANDLED,
+    SKIPPY_RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED as RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED,
+    SKIPPY_RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS as RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS,
+    SKIPPY_RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED as RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED,
+    SKIPPY_RUNTIME_EVENT_KIND_UNLOAD_COMPLETED as RUNTIME_EVENT_KIND_UNLOAD_COMPLETED,
+    SKIPPY_RUNTIME_EVENT_KIND_UNLOAD_FAILED as RUNTIME_EVENT_KIND_UNLOAD_FAILED,
+    SKIPPY_RUNTIME_EVENT_KIND_UNLOAD_FORCED as RUNTIME_EVENT_KIND_UNLOAD_FORCED,
+    SKIPPY_RUNTIME_EVENT_KIND_UNLOAD_SESSION_DRAINING as RUNTIME_EVENT_KIND_UNLOAD_SESSION_DRAINING,
+    SKIPPY_RUNTIME_EVENT_KIND_UNLOAD_STARTED as RUNTIME_EVENT_KIND_UNLOAD_STARTED,
+    SKIPPY_RUNTIME_EVENT_PROGRESS_UNIT_BYTES as RUNTIME_EVENT_PROGRESS_UNIT_BYTES,
+    SKIPPY_RUNTIME_EVENT_PROGRESS_UNIT_ITEMS as RUNTIME_EVENT_PROGRESS_UNIT_ITEMS,
+    SKIPPY_RUNTIME_EVENT_PROGRESS_UNIT_NONE as RUNTIME_EVENT_PROGRESS_UNIT_NONE,
+    SKIPPY_RUNTIME_EVENT_PROGRESS_UNIT_STEPS as RUNTIME_EVENT_PROGRESS_UNIT_STEPS,
+    SKIPPY_RUNTIME_EVENT_PROGRESS_UNIT_TENSORS as RUNTIME_EVENT_PROGRESS_UNIT_TENSORS,
+};
 
-impl SkippyRuntimeEventCategory {
-    pub const MODEL_OPEN: Self = Self(1);
-    pub const BACKEND: Self = Self(2);
-    pub const SESSION: Self = Self(3);
-    pub const KV: Self = Self(4);
-    pub const WARNING: Self = Self(5);
-    // Numeric values already emitted by `skippy/llama_cpp/patches/
-    // 0060-0062-*`; naming them here changes no layout or ABI surface.
-    pub const DEVICE: Self = Self(6);
-    pub const DIAGNOSTIC: Self = Self(7);
-    pub const UNLOAD: Self = Self(8);
+/// Numeric aliases for the runtime-event family discriminants above.
+pub type SkippyRuntimeEventCategory = bindings::skippy::skippy_runtime_event_category;
+pub type SkippyRuntimeEventKind = bindings::skippy::skippy_runtime_event_kind;
+pub type SkippyRuntimeEventEmitterKind = bindings::skippy::skippy_runtime_event_emitter_kind;
+pub type SkippyRuntimeEventProgressUnit = bindings::skippy::skippy_runtime_event_progress_unit;
+pub type SkippyRuntimeEventFailureCode = bindings::skippy::skippy_runtime_event_failure_code;
+
+/// Versioned event payload delivered to a runtime event callback. The
+/// append-only `numeric_summary_*` extension is advertised by `struct_size`;
+/// callers read it only when `struct_size` covers it.
+pub type SkippyRuntimeEventV1 = bindings::skippy::skippy_runtime_event_v1;
+pub type SkippyRuntimeEventReporterV1 = bindings::skippy::skippy_runtime_event_reporter_v1;
+
+pub type Status = bindings::skippy::skippy_status;
+pub type LoadMode = bindings::skippy::skippy_load_mode;
+
+#[allow(clippy::derivable_impls)]
+impl Default for LoadMode {
+    fn default() -> Self {
+        Self::RuntimeSlice
+    }
 }
 
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct SkippyRuntimeEventKind(pub u32);
+pub type MtpSource = bindings::skippy::skippy_mtp_source;
 
-impl SkippyRuntimeEventKind {
-    pub const MODEL_OPEN_STARTED: Self = Self(1);
-    pub const MODEL_OPEN_PROGRESS: Self = Self(2);
-    pub const BACKEND_DEVICE_SELECTED: Self = Self(3);
-    pub const MODEL_OPEN_FINISHED: Self = Self(4);
-    pub const MODEL_OPEN_FAILED_HANDLED: Self = Self(5);
-    // Named mirrors of the `SKIPPY_RUNTIME_EVENT_KIND_*` literals already
-    // emitted by `skippy/llama_cpp/patches/0058-0062-*`.
-    pub const MODEL_LOAD_PHASE_CHANGED: Self = Self(100);
-    pub const MODEL_LOAD_MEMORY_ALLOCATED: Self = Self(101);
-    pub const MODEL_LOAD_TENSORS_OFFLOADED: Self = Self(102);
-    pub const MODEL_LOAD_TOKENIZER_READY: Self = Self(103);
-    pub const MODEL_LOAD_AUX_COMPONENT_READY: Self = Self(104);
-    pub const KV_INITIALIZED: Self = Self(200);
-    pub const KV_PRESSURE_CROSSED: Self = Self(201);
-    pub const KV_PRESSURE_CLEARED: Self = Self(202);
-    pub const KV_CONTEXT_APPROACHING_CAPACITY: Self = Self(203);
-    pub const KV_CONTEXT_CAPACITY_EXHAUSTED: Self = Self(204);
-    pub const DEVICE_BACKEND_INITIALIZED: Self = Self(300);
-    pub const DEVICE_READY: Self = Self(301);
-    pub const DEVICE_DEGRADED: Self = Self(302);
-    pub const DEVICE_UNAVAILABLE: Self = Self(303);
-    pub const DEVICE_RECOVERED: Self = Self(304);
-    pub const DEVICE_LOST: Self = Self(305);
-    pub const DEVICE_RESOURCE_ALLOCATED: Self = Self(306);
-    pub const DEVICE_OUT_OF_MEMORY: Self = Self(307);
-    pub const DEVICE_FALLBACK_ACTIVATED: Self = Self(308);
-    pub const DIAGNOSTIC_WARNING_RAISED: Self = Self(400);
-    pub const DIAGNOSTIC_WARNING_CLEARED: Self = Self(401);
-    pub const DIAGNOSTIC_RECOVERABLE_FAILURE: Self = Self(402);
-    pub const DIAGNOSTIC_FATAL_FAILURE: Self = Self(403);
-    pub const DIAGNOSTIC_INVARIANT_VIOLATION: Self = Self(404);
-    pub const UNLOAD_STARTED: Self = Self(500);
-    pub const UNLOAD_COMPLETED: Self = Self(501);
-    pub const UNLOAD_FAILED: Self = Self(502);
-    pub const UNLOAD_FORCED: Self = Self(503);
-    pub const UNLOAD_SESSION_DRAINING: Self = Self(504);
+#[allow(clippy::derivable_impls)]
+impl Default for MtpSource {
+    fn default() -> Self {
+        Self::Disabled
+    }
 }
 
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct SkippyRuntimeEventEmitterKind(pub u32);
+pub type TensorRole = bindings::skippy::skippy_tensor_role;
+pub type BackendDeviceType = bindings::skippy::skippy_backend_device_type;
 
-impl SkippyRuntimeEventEmitterKind {
-    pub const UNKNOWN: Self = Self(0);
-    pub const OPEN_THREAD: Self = Self(1);
-    pub const WORKER_THREAD: Self = Self(2);
-}
+pub const BACKEND_DEVICE_CAP_ASYNC: u64 = bindings::skippy::skippy_backend_device_cap::Async as u64;
+pub const BACKEND_DEVICE_CAP_HOST_BUFFER: u64 =
+    bindings::skippy::skippy_backend_device_cap::HostBuffer as u64;
+pub const BACKEND_DEVICE_CAP_BUFFER_FROM_HOST_PTR: u64 =
+    bindings::skippy::skippy_backend_device_cap::BufferFromHostPtr as u64;
+pub const BACKEND_DEVICE_CAP_EVENTS: u64 =
+    bindings::skippy::skippy_backend_device_cap::Events as u64;
 
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct SkippyRuntimeEventProgressUnit(pub u32);
+pub type Error = bindings::skippy::skippy_error;
+pub type RuntimeConfig = bindings::skippy::skippy_runtime_config;
+pub type BackendDevice = bindings::skippy::skippy_backend_device;
 
-impl SkippyRuntimeEventProgressUnit {
-    pub const NONE: Self = Self(0);
-    pub const BYTES: Self = Self(1);
-    pub const ITEMS: Self = Self(2);
-    pub const TENSORS: Self = Self(3);
-    pub const STEPS: Self = Self(4);
-}
-
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct SkippyRuntimeEventFailureCode(pub u32);
-
-impl SkippyRuntimeEventFailureCode {
-    pub const NONE: Self = Self(0);
-    pub const INVALID_ARGUMENT: Self = Self(1);
-    pub const IO_ERROR: Self = Self(2);
-    pub const MODEL_ERROR: Self = Self(3);
-    pub const RUNTIME_ERROR: Self = Self(4);
-    pub const BACKEND_ERROR: Self = Self(5);
-    pub const CANCELLED: Self = Self(6);
-    pub const INTERNAL_ERROR: Self = Self(7);
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct SkippyRuntimeEventV1 {
-    pub abi_version: u32,
-    pub struct_size: u32,
-    pub category: SkippyRuntimeEventCategory,
-    pub kind: SkippyRuntimeEventKind,
-    pub emitter: SkippyRuntimeEventEmitterKind,
-    pub reserved0: u32,
-    pub sequence: u64,
-    pub timestamp_mono_ns: u64,
-    pub model_id: u64,
-    pub stage_id: u64,
-    pub session_id: u64,
-    pub progress_current: u64,
-    pub progress_total: u64,
-    pub progress_unit: SkippyRuntimeEventProgressUnit,
-    pub failure_code: SkippyRuntimeEventFailureCode,
-    pub status: Status,
-    pub reserved1: u32,
-    pub detail_ptr: *const c_char,
-    pub detail_len: u64,
-    // Append-only extension (native ABI 0.1.45+, `SKIPPY_FEATURE_RUNTIME_EVENT_REPORTER`).
-    // Advertised by `struct_size` under the unchanged
-    // `SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION`; a caller reads these only when
-    // `struct_size` covers them (see `skippy-runtime`'s `wire_types::from_raw_ptr`).
-    pub numeric_summary_0: u64,
-    pub numeric_summary_1: u64,
-    pub numeric_summary_2: u64,
-    pub numeric_summary_3: u64,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct SkippyRuntimeEventReporterV1 {
-    pub abi_version: u32,
-    pub struct_size: u32,
-    pub callback: SkippyRuntimeEventCallback,
-    pub user_data: *mut c_void,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(i32)]
-pub enum Status {
-    Ok = 0,
-    Error = 1,
-    InvalidArgument = 2,
-    Unsupported = 3,
-    BufferTooSmall = 4,
-    IoError = 5,
-    ModelError = 6,
-    RuntimeError = 7,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(i32)]
-pub enum LoadMode {
-    RuntimeSlice = 0,
-    LayerPackage = 1,
-    ArtifactSlice = 2,
-}
-
-#[repr(i32)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum MtpSource {
-    #[default]
-    Disabled = 0,
-    Integrated = 1,
-    External = 2,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(i32)]
-pub enum TensorRole {
-    Unknown = 0,
-    Metadata = 1,
-    Tokenizer = 2,
-    Embedding = 3,
-    Layer = 4,
-    FinalNorm = 5,
-    Output = 6,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(i32)]
-pub enum ActivationDType {
-    Unknown = 0,
-    F32 = 1,
-    F16 = 2,
-    Bf16 = 3,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(i32)]
-pub enum ActivationLayout {
-    Opaque = 0,
-    TokenMajor = 1,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(i32)]
-pub enum BackendDeviceType {
-    Cpu = 0,
-    Gpu = 1,
-    IGpu = 2,
-    Accel = 3,
-    Meta = 4,
-}
-
-pub const BACKEND_DEVICE_CAP_ASYNC: u64 = 1 << 0;
-pub const BACKEND_DEVICE_CAP_HOST_BUFFER: u64 = 1 << 1;
-pub const BACKEND_DEVICE_CAP_BUFFER_FROM_HOST_PTR: u64 = 1 << 2;
-pub const BACKEND_DEVICE_CAP_EVENTS: u64 = 1 << 3;
-
-#[repr(C)]
-pub struct Error {
-    pub status: Status,
-    pub message: *const c_char,
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct RuntimeConfig {
-    pub stage_index: i32,
-    pub layer_start: i32,
-    pub layer_end: i32,
-    pub ctx_size: i32,
-    pub lane_count: i32,
-    pub n_batch: i32,
-    pub n_ubatch: i32,
-    pub n_threads: i32,
-    pub n_threads_batch: i32,
-    pub n_gpu_layers: i32,
-    pub has_mmap_override: bool,
-    pub use_mmap: bool,
-    pub use_mlock: bool,
-    pub cache_type_k: i32,
-    pub cache_type_v: i32,
-    pub flash_attn_type: i32,
-    pub load_mode: LoadMode,
-    pub disable_repack: bool,
-    pub use_mmap_prefetch: bool,
-    pub use_mmap_buffer: bool,
-    pub resident_tensor_names: *const *const c_char,
-    pub resident_tensor_name_count: usize,
-    pub execution_contract: *const c_char,
-    pub activation_import_identities: *const *const c_char,
-    pub activation_import_identity_count: usize,
-    pub activation_import_bindings: *const *const c_char,
-    pub activation_export_identities: *const *const c_char,
-    pub activation_export_identity_count: usize,
-    pub activation_export_bindings: *const *const c_char,
-    pub mtp_source: MtpSource,
-    pub selected_backend_device: *const c_char,
-    pub glm_dsa_policy_profile: i32,
-    pub glm_dsa_policy_flags: u32,
-    pub glm_dsa_short_prefill_max_tokens: i32,
-    pub glm_dsa_direct_sparse_decode_max_top_k: i32,
-    pub glm_dsa_dense_sparse_mask_max_bytes: u64,
-    pub glm_dsa_compact_flash_min_kv: i32,
-    pub kv_offload: i32,
-    pub kv_unified: i32,
-    pub swa_full: i32,
-    pub op_offload: i32,
-    pub no_host_buffer: bool,
-    pub check_tensors: bool,
-    pub use_direct_io: bool,
-    pub has_main_gpu_override: bool,
-    pub main_gpu: i32,
-    pub split_mode: i32,
-}
-
-/// Sentinel for `RuntimeConfig` tri-state fields: keep the native derived default.
-pub const TRISTATE_AUTO: i32 = -1;
-/// Sentinel for `RuntimeConfig` tri-state fields: force false.
-pub const TRISTATE_FALSE: i32 = 0;
-/// Sentinel for `RuntimeConfig` tri-state fields: force true.
-pub const TRISTATE_TRUE: i32 = 1;
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct BackendDevice {
-    pub version: u32,
-    pub name: *const c_char,
-    pub description: *const c_char,
-    pub device_id: *const c_char,
-    pub memory_free: u64,
-    pub memory_total: u64,
-    pub device_type: BackendDeviceType,
-    pub caps: u64,
-}
-
-#[repr(C)]
-pub struct Model {
-    _private: [u8; 0],
-}
-
-#[repr(C)]
-pub struct LayaModel {
-    _private: [u8; 0],
-}
-
-#[repr(C)]
-pub struct AsrModel {
-    _private: [u8; 0],
-}
-
-#[repr(C)]
-pub struct AsrResult {
-    _private: [u8; 0],
-}
-
-#[repr(C)]
-pub struct NgramCache {
-    _private: [u8; 0],
-}
-
-#[repr(C)]
-pub struct Session {
-    _private: [u8; 0],
-}
-
-#[repr(C)]
-pub struct ModelInfo {
-    _private: [u8; 0],
-}
+pub type Model = bindings::skippy::skippy_model;
+pub type LayaModel = bindings::skippy::skippy_laya_model;
+pub type AsrModel = bindings::skippy::skippy_asr_model;
+pub type AsrResult = bindings::skippy::skippy_asr_result;
+pub type NgramCache = bindings::skippy::skippy_ngram_cache;
+pub type Session = bindings::skippy::skippy_session;
+pub type ModelInfo = bindings::skippy::skippy_model_info;
 
 pub type SkippyModelAttachMtpDraftModelFn = unsafe extern "C" fn(
     target_model: *mut Model,
@@ -688,13 +331,23 @@ pub type SkippyDecodeStepSampledMtpFn = unsafe extern "C" fn(
     out_error: *mut *mut Error,
 ) -> Status;
 
+/// Untyped native pointers borrowed across the ABI boundary.
+/// Sentinel for `RuntimeConfig` tri-state fields: keep the native derived default.
+pub const TRISTATE_AUTO: i32 = bindings::skippy::SKIPPY_TRISTATE_AUTO;
+/// Sentinel for `RuntimeConfig` tri-state fields: force false.
+pub const TRISTATE_FALSE: i32 = bindings::skippy::SKIPPY_TRISTATE_FALSE as i32;
+/// Sentinel for `RuntimeConfig` tri-state fields: force true.
+pub const TRISTATE_TRUE: i32 = bindings::skippy::SKIPPY_TRISTATE_TRUE as i32;
+
+/// Untyped native pointers borrowed across the ABI boundary.
 pub type Opaque = c_void;
 
 /// `llama_perf_context`, resolved dynamically when the runtime exports it and
 /// called directly when the runtime is linked statically.
 pub type LlamaPerfContextFn = unsafe extern "C" fn(ctx: *mut Opaque) -> LlamaPerfContextData;
 
-/// Mirrors `llama_perf_context_data` from llama.h.
+/// Graph-reuse and realloc counters returned by value from
+/// `llama_perf_context`.
 ///
 /// `n_reused` is the number of times a compute graph was reused instead of
 /// rebuilt. It is the only direct read on whether graph reuse is firing under
@@ -702,27 +355,29 @@ pub type LlamaPerfContextFn = unsafe extern "C" fn(ctx: *mut Opaque) -> LlamaPer
 /// at the C++ boundary, so the reuse hit rate had to be inferred from
 /// throughput deltas.
 ///
-/// The layout must track the pinned upstream header exactly. `llama_perf_context`
-/// returns this struct by value, so the caller supplies the destination slot: a
-/// mirror that is *smaller* than the upstream struct does not fail to link or
-/// return obviously wrong numbers, it makes native code write past the
-/// destination. That is exactly what the v0.7.0 pin did — upstream added
-/// `n_reallocs_same`/`n_reallocs_diff` (52 payload bytes, 56 with tail padding,
-/// against this mirror's previous 48), and the resulting eight-byte stack
-/// overwrite surfaced as a SIGSEGV in the status reader that happens to call
-/// `llama_perf_context`, not as a wrong counter value.
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct LlamaPerfContextData {
-    pub t_start_ms: f64,
-    pub t_load_ms: f64,
-    pub t_p_eval_ms: f64,
-    pub t_eval_ms: f64,
-    pub n_p_eval: i32,
-    pub n_eval: i32,
-    pub n_reused: i32,
-    /// Graph reallocations during inference with an unchanged graph size.
-    pub n_reallocs_same: i32,
-    /// Graph reallocations during inference with a changed graph size.
-    pub n_reallocs_diff: i32,
+/// This type is generated from the pinned upstream header because the layout
+/// must track upstream exactly: `llama_perf_context` returns the struct by
+/// value, so a mirror that is *smaller* than the upstream struct does not fail
+/// to link or return obviously wrong numbers — native code writes past the
+/// destination. That is exactly what happened with the v0.7.0 pin: upstream
+/// added `n_reallocs_same`/`n_reallocs_diff` and the resulting eight-byte
+/// stack overwrite surfaced as a SIGSEGV in an unrelated status reader, not as
+/// a wrong counter value. Bindgen generation removes the handwritten-mirror
+/// failure mode entirely.
+pub type LlamaPerfContextData = bindings::llama::llama_perf_context_data;
+
+impl Default for LlamaPerfContextData {
+    fn default() -> Self {
+        Self {
+            t_start_ms: 0.0,
+            t_load_ms: 0.0,
+            t_p_eval_ms: 0.0,
+            t_eval_ms: 0.0,
+            n_p_eval: 0,
+            n_eval: 0,
+            n_reused: 0,
+            n_reallocs_same: 0,
+            n_reallocs_diff: 0,
+        }
+    }
 }

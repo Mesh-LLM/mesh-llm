@@ -272,32 +272,55 @@ mod tests {
 
     #[test]
     fn max_known_feature_bit_is_the_highest_bit_skippy_ffi_defines() {
-        let abi = std::fs::read_to_string(concat!(
+        // The generated bindings are the source of truth for feature bits:
+        // enum members appear as `skippy_feature` discriminants and bits 31+
+        // as `skippy_ffi_bridge_feature_*` u64 constants. Every spelling must
+        // be read, not skipped: a guard that drops a form it does not
+        // recognise stops guarding exactly when a new bit is written
+        // differently.
+        let bindings = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../skippy-ffi/src/abi.rs"
+            "/../skippy-ffi/src/bindings/skippy.rs"
         ))
-        .expect("skippy-ffi's abi.rs is in the workspace");
-        // Every FEATURE_* constant must be read, not skipped: a guard that
-        // drops a spelling it does not recognise stops guarding exactly when a
-        // new bit is written differently.
-        let highest = abi
-            .lines()
-            .map(str::trim)
-            .filter(|line| line.starts_with("pub const FEATURE_"))
-            .map(|line| {
-                line.split_once(": u64 = ")
-                    .and_then(|(_, initializer)| initializer.strip_suffix(';'))
-                    .and_then(|initializer| initializer.strip_prefix("1 << "))
-                    .and_then(|shift| shift.parse::<u32>().ok())
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "cannot read a feature bit from `{line}`: keep FEATURE_* \
-                             constants as `u64 = 1 << N;` or teach this guard the new form"
-                        )
-                    })
-            })
-            .max()
-            .expect("skippy-ffi defines feature bits");
+        .expect("skippy-ffi's generated bindings are in the workspace");
+        let mut highest_bit: Option<u64> = None;
+        let mut in_feature_enum = false;
+        for line in bindings.lines().map(str::trim) {
+            if line.starts_with("pub enum skippy_feature") {
+                in_feature_enum = true;
+                continue;
+            }
+            if in_feature_enum {
+                if line.starts_with('}') {
+                    in_feature_enum = false;
+                    continue;
+                }
+                let value = line
+                    .strip_suffix(',')
+                    .and_then(|variant| variant.split_once(" = "))
+                    .map(|(_, value)| value);
+                let Some(value) = value else {
+                    panic!("cannot read feature enum discriminant from `{line}`");
+                };
+                let value = value.parse::<u64>().unwrap_or_else(|_| {
+                    panic!("cannot read feature enum discriminant from `{line}`")
+                });
+                let bit = 63_u64 - u64::from(value.leading_zeros());
+                highest_bit = Some(highest_bit.unwrap_or(0).max(bit));
+            } else if let Some((_, value)) = line
+                .strip_prefix("pub const skippy_ffi_bridge_feature_")
+                .and_then(|rest| rest.split_once(": u64 = "))
+            {
+                let value = value.strip_suffix(';').unwrap_or(value);
+                let value = value
+                    .parse::<u64>()
+                    .unwrap_or_else(|_| panic!("cannot read bridged feature bit from `{line}`"));
+                let bit = 63_u64 - u64::from(value.leading_zeros());
+                highest_bit = Some(highest_bit.unwrap_or(0).max(bit));
+            }
+        }
+        let highest = u32::try_from(highest_bit.expect("skippy-ffi defines feature bits"))
+            .expect("feature bits fit in u32");
         assert_eq!(
             highest, MAX_KNOWN_FEATURE_BIT,
             "a new FEATURE_* bit in skippy-ffi must raise MAX_KNOWN_FEATURE_BIT, \
