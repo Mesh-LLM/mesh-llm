@@ -43,7 +43,7 @@ pub enum PaymentStatus {
     Failed,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Transaction {
     pub id: String,
     pub payment_hash: Option<String>,
@@ -65,6 +65,34 @@ pub struct Transaction {
     pub status_msg: Option<String>,
     pub created_at_ms: u64,
     pub settled_at_ms: Option<u64>,
+    /// The payment's preimage as 64 hex digits, for a `Succeeded` payment
+    /// whose provider reports one. A payer holds it only once the payee
+    /// released it, so it proves the payment completed. Providers leave it
+    /// `None` for pending and failed payments, and when their API has none.
+    /// Besides the host's settlement events, the operator sees it through the
+    /// wallet's local control API.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preimage: Option<String>,
+}
+
+/// Like a derived `Debug`, but `preimage` prints as `<redacted>`: it is bearer
+/// proof of payment and must not reach logs.
+impl std::fmt::Debug for Transaction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Transaction")
+            .field("id", &self.id)
+            .field("payment_hash", &self.payment_hash)
+            .field("inbound", &self.inbound)
+            .field("amount_msat", &self.amount_msat)
+            .field("fee_msat", &self.fee_msat)
+            .field("status", &self.status)
+            .field("claiming", &self.claiming)
+            .field("status_msg", &self.status_msg)
+            .field("created_at_ms", &self.created_at_ms)
+            .field("settled_at_ms", &self.settled_at_ms)
+            .field("preimage", &self.preimage.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 impl Transaction {
@@ -135,5 +163,29 @@ pub trait WalletProvider: Send + Sync {
     /// status, which is always a correct (if slower) answer.
     async fn wait_for_arrival(&self, payment_hash: &str) -> Result<Transaction> {
         self.wait_for_payment(payment_hash).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A wallet plugin built before `preimage` existed still decodes, and a
+    /// transaction without one encodes exactly as before.
+    #[test]
+    fn a_transaction_without_a_preimage_is_unchanged_on_the_wire() {
+        let json = r#"{"id":"t","payment_hash":"h","inbound":false,"amount_msat":1,"fee_msat":0,"status":"succeeded","created_at_ms":0,"settled_at_ms":1}"#;
+        let transaction: Transaction = serde_json::from_str(json).unwrap();
+        assert_eq!(transaction.preimage, None);
+        assert_eq!(serde_json::to_string(&transaction).unwrap(), json);
+    }
+
+    #[test]
+    fn debug_never_prints_a_preimage() {
+        let json = r#"{"id":"t","payment_hash":"h","inbound":false,"amount_msat":1,"fee_msat":0,"status":"succeeded","created_at_ms":0,"settled_at_ms":1,"preimage":"secret-preimage"}"#;
+        let transaction: Transaction = serde_json::from_str(json).unwrap();
+        let debug = format!("{transaction:?}");
+        assert!(!debug.contains("secret-preimage"));
+        assert!(debug.contains("<redacted>") && debug.contains("payment_hash"));
     }
 }

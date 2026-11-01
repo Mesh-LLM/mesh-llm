@@ -901,7 +901,15 @@ A settlement event also carries the wallet's own numbers when it reported them:
 the fee the receiving wallet deducted) and, on the provider side,
 `credited_msat` (what the receiving wallet reports it credited; Lexe reports
 it net of the fee). Both are omitted when the wallet or the `payments.v1`
-provider did not report them, and both are covered by `event_ref`.
+provider did not report them, and both are covered by `event_ref`. A
+settlement event also carries `preimage`, the payment's preimage as lowercase
+hex, on both sides, when the wallet reported one and it is 32 bytes whose
+SHA-256 equals `payment_hash`; any other value is dropped. On a payer event it
+proves the payment completed: the payer holds it only once the payee released
+it. On a provider event it is the receiving wallet's own value, which the
+payee had before anyone paid, so it proves nothing beyond the wallet's report.
+It is omitted when the wallet or the `payments.v1`
+provider did not report one, and is covered by `event_ref`.
 Terms acceptance is `payer_asserted` (amount retains the legacy local
 `max_total_msat` metadata; it is not an enforced request spending cap);
 invoice issuance is `provider_asserted` as observed by the payer, not
@@ -926,9 +934,15 @@ best-effort delivery. No plugin delivery is awaited by settlement; terms hashing
 is skipped without a subscriber. No per-token observation is added. Missing
 correlation, disconnects, queue drops, process exits and restart recovery can
 leave incomplete evidence; there is no replay or complete audit-log guarantee.
-No raw invoice, preimage, wallet transaction ID, prompt or response text is
-published. Payment hashes are linkable metadata, and fee amounts can hint at
-which wallet a node uses.
+No raw invoice, wallet transaction ID, prompt or response text is
+published. A settled payment's preimage is published to these trusted local
+subscribers on both payer and provider settlements, and only the payer's copy
+proves the invoice was paid. It can't move funds, but it is bearer evidence: it
+doesn't identify the payer, so anything that accepts a preimage alone as proof
+of purchase accepts it from whoever holds it. A subscriber should not disclose
+it beyond the exchange's counterparty, which already has it. The wallet's local control API
+(`mesh-llm wallet transactions`) also shows it to the operator. Payment hashes
+are linkable metadata, and fee amounts can hint at which wallet a node uses.
 
 ## Provider-side evidence hooks
 
@@ -955,7 +969,8 @@ when `serve_settle` succeeds, whatever happened to the transport; an abandoned
 request emits no `delivered` or `final_accounted`. Settlement is the receiving
 wallet's report that `settle_received` recorded; `amount_msat` is the invoice
 amount, and `credited_msat` / `fee_msat` are what the receiving wallet reported
-(`settle_received` answers them; a provider that answers `{}` leaves them out).
+(`settle_received` answers them, with the wallet's `preimage` when it
+reported one; a provider that answers `{}` leaves them out).
 Since the payments engine is a plugin, nothing here claims that payment
 preceded wallet access: `source` says who asserted, which is all it can say.
 

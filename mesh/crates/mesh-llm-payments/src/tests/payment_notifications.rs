@@ -20,6 +20,7 @@ pub(super) fn publish(
             status_msg: None,
             created_at_ms: crate::now_ms(),
             settled_at_ms: (status != PaymentStatus::Pending).then(crate::now_ms),
+            preimage: None,
         },
     );
     wallet.updates.notify_waiters();
@@ -67,10 +68,19 @@ async fn received_payment_reports_what_the_wallet_credited_and_deducted() -> Res
             status_msg: None,
             created_at_ms: crate::now_ms(),
             settled_at_ms: Some(crate::now_ms()),
+            preimage: Some("cd".repeat(32)),
         },
     );
     let payment = service.wait_received(&invoice).await?;
     assert_eq!((payment.amount_msat, payment.fee_msat), (995, 5));
+    // Both seller paths (`serve_deposit_confirmed` and `settle_received`)
+    // answer through this one mapping.
+    let settled = crate::serving::settled(&payment);
+    assert_eq!(
+        (settled.credited_msat, settled.fee_msat),
+        (Some(995), Some(5))
+    );
+    assert_eq!(settled.preimage, Some("cd".repeat(32)));
     Ok(())
 }
 
@@ -273,6 +283,7 @@ fn publish_claiming(wallet: &MockWallet, invoice: &Invoice) {
             status_msg: Some("Claiming inbound HTLC".into()),
             created_at_ms: crate::now_ms(),
             settled_at_ms: None,
+            preimage: None,
         },
     );
     wallet.updates.notify_waiters();
