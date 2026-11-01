@@ -1,9 +1,12 @@
 use std::{
     cell::Cell,
     io,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Result, bail};
@@ -18,6 +21,31 @@ pub struct WireCondition {
     jitter_ms: f64,
     stall_ms: f64,
     stall_p: f64,
+    /// The simulated link a bandwidth limit applies to. Every copy of this
+    /// condition shares it, so concurrent lanes writing over one hop queue
+    /// behind each other instead of each getting the full rate.
+    link: Option<&'static SimulatedLink>,
+}
+
+/// When a simulated link finishes sending what has been queued on it.
+#[derive(Debug, Default)]
+struct SimulatedLink {
+    busy_until: Mutex<Option<Instant>>,
+}
+
+impl SimulatedLink {
+    /// Queue `delay` of serialization behind what the link is already
+    /// sending, and return when this send finishes.
+    fn reserve(&self, now: Instant, delay: Duration) -> Instant {
+        let mut busy_until = self
+            .busy_until
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let start = busy_until.map_or(now, |busy_until| busy_until.max(now));
+        let end = start + delay;
+        *busy_until = Some(end);
+        end
+    }
 }
 
 /// Upper bound for each simulated delay component. An hour-long simulated
@@ -76,12 +104,17 @@ impl WireCondition {
                 bail!("downstream wire {name} must not exceed {MAX_SIMULATED_DELAY_MS} ms");
             }
         }
+        // One link per configured condition, kept for the process lifetime:
+        // conditions are built once per stage load, and only a benchmark sets
+        // a bandwidth limit.
+        let link = mbps.map(|_| &*Box::leak(Box::new(SimulatedLink::default())));
         Ok(Self {
             delay_ms,
             mbps,
             jitter_ms,
             stall_ms,
             stall_p,
+            link,
         })
     }
 
@@ -132,10 +165,29 @@ impl WireCondition {
     }
 
     fn sleep_for_bandwidth(&self, message: &StageWireMessage) {
-        let delay = self.bandwidth_delay(message.estimated_wire_bytes());
-        if !delay.is_zero() {
-            thread::sleep(delay);
+        self.wait_for_bandwidth(message.estimated_wire_bytes());
+    }
+
+    /// Wait until `bytes` have been serialized onto the link, queued behind
+    /// everything the link's other lanes are sending.
+    fn wait_for_bandwidth(&self, bytes: usize) {
+        let Some(done) = self.reserve_bandwidth(Instant::now(), bytes) else {
+            return;
+        };
+        let wait = done.saturating_duration_since(Instant::now());
+        if !wait.is_zero() {
+            thread::sleep(wait);
         }
+    }
+
+    /// When a send of `bytes` starting at `now` finishes on the shared link,
+    /// or `None` when the link is unlimited.
+    fn reserve_bandwidth(&self, now: Instant, bytes: usize) -> Option<Instant> {
+        let delay = self.bandwidth_delay(bytes);
+        if delay.is_zero() {
+            return None;
+        }
+        Some(self.link?.reserve(now, delay))
     }
 }
 
@@ -341,6 +393,52 @@ mod tests {
         );
         // A zero-length frame still costs nothing: 0/inf is not a delay.
         assert_eq!(condition.bandwidth_delay(0), Duration::ZERO);
+    }
+
+    #[test]
+    fn lanes_sharing_a_condition_share_its_link_bandwidth() {
+        // 125,000 bytes at 10 Mbps take 100 ms to serialize.
+        let condition = WireCondition::new(0.0, Some(10.0)).unwrap();
+        let lane_copy = condition;
+        let send = Duration::from_millis(100);
+        let now = Instant::now();
+
+        assert_eq!(condition.reserve_bandwidth(now, 125_000), Some(now + send));
+        assert_eq!(
+            lane_copy.reserve_bandwidth(now, 125_000),
+            Some(now + 2 * send),
+            "a second lane on the same hop queues behind the first"
+        );
+        // Once the link has drained, a send starts when it is issued.
+        let later = now + 5 * send;
+        assert_eq!(
+            lane_copy.reserve_bandwidth(later, 125_000),
+            Some(later + send)
+        );
+
+        // Another hop is another link.
+        let other_hop = WireCondition::new(0.0, Some(10.0)).unwrap();
+        assert_eq!(other_hop.reserve_bandwidth(now, 125_000), Some(now + send));
+        assert_eq!(
+            WireCondition::new(0.0, None)
+                .unwrap()
+                .reserve_bandwidth(now, 125_000),
+            None
+        );
+    }
+
+    #[test]
+    fn concurrent_lanes_take_the_combined_serialization_time() {
+        // Two 100 ms sends over one 10 Mbps hop need 200 ms, not 100 ms.
+        let condition = WireCondition::new(0.0, Some(10.0)).unwrap();
+        let started = Instant::now();
+        let lanes = (0..2)
+            .map(|_| thread::spawn(move || condition.wait_for_bandwidth(125_000)))
+            .collect::<Vec<_>>();
+        for lane in lanes {
+            lane.join().unwrap();
+        }
+        assert!(started.elapsed() >= Duration::from_millis(200));
     }
 
     #[test]

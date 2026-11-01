@@ -127,7 +127,8 @@ const BENCH_DOWNSTREAM_WIRE_DELAY_MS_ENV: &str = "MESH_LLM_BENCH_DOWNSTREAM_WIRE
 const BENCH_DOWNSTREAM_WIRE_JITTER_MS_ENV: &str = "MESH_LLM_BENCH_DOWNSTREAM_WIRE_JITTER_MS";
 const BENCH_DOWNSTREAM_WIRE_STALL_MS_ENV: &str = "MESH_LLM_BENCH_DOWNSTREAM_WIRE_STALL_MS";
 const BENCH_DOWNSTREAM_WIRE_STALL_P_ENV: &str = "MESH_LLM_BENCH_DOWNSTREAM_WIRE_STALL_P";
-/// Simulated link bandwidth in megabits per second; unset or `0` is unlimited.
+/// Simulated link bandwidth in megabits per second, shared by every lane that
+/// writes over the stage's downstream hop; unset or `0` is unlimited.
 const BENCH_DOWNSTREAM_WIRE_MBPS_ENV: &str = "MESH_LLM_BENCH_DOWNSTREAM_WIRE_MBPS";
 
 fn benchmark_downstream_wire_condition() -> Result<WireCondition> {
