@@ -8,7 +8,7 @@
 
 use crate::{
     CandidateEvaluation, HostRuntimeProfile, NativeRuntimeArtifact, NativeRuntimeBackendKind,
-    RuntimeSelection,
+    RuntimeSelection, evaluate_native_runtime_artifact, has_startup_compatibility_metadata,
 };
 use std::fmt;
 
@@ -33,6 +33,11 @@ pub struct UnusedGpuBackend {
 /// considered and `missing_metadata` the local runtimes it skipped for lack of
 /// startup compatibility metadata; those built for another OS or architecture
 /// are left out of the reasons.
+///
+/// Vulkan runs on the same cards as CUDA and ROCm. When either of those is
+/// detected, Vulkan counts only if a Vulkan runtime for this host was
+/// considered: a Vulkan ICD alone would otherwise read as a second GPU and point
+/// at a runtime this platform may not publish.
 pub fn unused_gpu_backends(
     evaluated: &[CandidateEvaluation],
     missing_metadata: &[NativeRuntimeArtifact],
@@ -49,11 +54,28 @@ pub fn unused_gpu_backends(
             && artifact.platform.os == profile.os
             && artifact.platform.arch == profile.arch
     };
+    let considered = |kind: &NativeRuntimeBackendKind| {
+        evaluated
+            .iter()
+            .any(|candidate| for_this_host(&candidate.artifact, kind))
+            || missing_metadata
+                .iter()
+                .any(|artifact| for_this_host(artifact, kind))
+    };
+    let dedicated_gpu = profile.available_flavors.iter().any(|kind| {
+        matches!(
+            kind,
+            NativeRuntimeBackendKind::Cuda | NativeRuntimeBackendKind::Rocm
+        )
+    });
     profile
         .available_flavors
         .iter()
         .filter(|kind| **kind != NativeRuntimeBackendKind::Cpu)
         .filter(|kind| kind.default_rank() > selected_rank)
+        .filter(|kind| {
+            **kind != NativeRuntimeBackendKind::Vulkan || !dedicated_gpu || considered(kind)
+        })
         .filter(|kind| {
             !evaluated
                 .iter()
@@ -80,7 +102,7 @@ impl UnusedGpuBackend {
     /// several backends.
     fn reason(&self) -> String {
         if self.rejected.is_empty() && self.missing_metadata.is_empty() {
-            return format!("no {} runtime is available", self.backend);
+            return format!("no {} runtime is installed", self.backend);
         }
         format!(
             "{} runtimes don't fit:{}",
@@ -108,6 +130,32 @@ impl UnusedGpuBackend {
         }
         text
     }
+}
+
+/// The warning for the detected GPU backends that `selected` leaves unused,
+/// judging the `artifacts` of one release the way startup does: those without
+/// startup compatibility metadata are named with that reason, the others are
+/// evaluated against `profile`. Startup and `mesh-llm runtime doctor` share it.
+pub fn describe_unused_gpus(
+    artifacts: &[NativeRuntimeArtifact],
+    profile: &HostRuntimeProfile,
+    release: &str,
+    skippy_abi: Option<&str>,
+    selection: &RuntimeSelection,
+    selected: &NativeRuntimeArtifact,
+) -> Option<String> {
+    let (usable, missing_metadata): (Vec<_>, Vec<_>) = artifacts
+        .iter()
+        .cloned()
+        .partition(|artifact| has_startup_compatibility_metadata(artifact, profile));
+    let evaluated = usable
+        .iter()
+        .map(|artifact| {
+            evaluate_native_runtime_artifact(artifact, profile, release, skippy_abi, selection)
+        })
+        .collect::<Vec<_>>();
+    let unused = unused_gpu_backends(&evaluated, &missing_metadata, profile, selection, selected);
+    describe_unused_gpu_backends(&unused)
 }
 
 /// One line for all unused `backends`. A single GPU often offers several
@@ -140,7 +188,7 @@ impl fmt::Display for UnusedGpuBackend {
         if self.rejected.is_empty() && self.missing_metadata.is_empty() {
             return write!(
                 f,
-                "{} GPU detected, but no {} runtime is available",
+                "{} GPU detected, but no {} runtime is installed",
                 self.backend, self.backend
             );
         }
@@ -284,14 +332,23 @@ mod tests {
 
         assert_eq!(
             unused.iter().map(ToString::to_string).collect::<Vec<_>>(),
-            ["cuda GPU detected, but no cuda runtime is available"]
+            ["cuda GPU detected, but no cuda runtime is installed"]
         );
+    }
+
+    fn vulkan() -> NativeRuntimeBackend {
+        NativeRuntimeBackend {
+            kind: NativeRuntimeBackendKind::Vulkan,
+            cuda: None,
+            rocm: None,
+            vulkan: None,
+        }
     }
 
     #[test]
     fn one_gpu_with_two_unused_backends_gets_one_line() {
-        // An AMD card on Windows offers ROCm and Vulkan; with only the CPU
-        // runtime that is one GPU, not two.
+        // An AMD card on Windows offers ROCm and Vulkan; with a Vulkan runtime
+        // that doesn't fit and no ROCm runtime, that is one GPU, not two.
         let profile = HostRuntimeProfile {
             os: "windows".to_string(),
             arch: "x86_64".to_string(),
@@ -309,7 +366,10 @@ mod tests {
         };
         let mut cpu = artifact("cpu", NativeRuntimeBackend::cpu(), "x86_64");
         cpu.platform.os = "windows".to_string();
-        let evaluated = evaluate(std::slice::from_ref(&cpu), &profile);
+        let mut old_vulkan = artifact("vulkan-old", vulkan(), "x86_64");
+        old_vulkan.platform.os = "windows".to_string();
+        old_vulkan.skippy_abi = "0.1.60".to_string();
+        let evaluated = evaluate(&[cpu.clone(), old_vulkan], &profile);
 
         let unused = unused_gpu_backends(
             &evaluated,
@@ -320,12 +380,94 @@ mod tests {
         );
 
         assert_eq!(unused.len(), 2);
+        let line = describe_unused_gpu_backends(&unused).unwrap();
+        assert!(
+            line.starts_with(
+                "GPU detected (rocm, vulkan), but no runtime for it fits: \
+                 no rocm runtime is installed; vulkan runtimes don't fit: vulkan-old ("
+            ),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn a_vulkan_icd_beside_cuda_without_a_vulkan_runtime_is_not_a_second_gpu() {
+        // A Jetson with vulkan-tools: Vulkan is detected, but no linux/aarch64
+        // Vulkan runtime exists, so only the CUDA side is worth naming.
+        let mut profile = cuda12_host();
+        profile
+            .available_flavors
+            .insert(NativeRuntimeBackendKind::Vulkan);
+        let cpu = artifact("cpu", NativeRuntimeBackend::cpu(), "aarch64");
+        let artifacts = [cpu.clone(), artifact("cuda13", cuda(13), "aarch64")];
+        let evaluated = evaluate(&artifacts, &profile);
+
+        let unused = unused_gpu_backends(
+            &evaluated,
+            &[],
+            &profile,
+            &RuntimeSelection::Recommended,
+            &cpu,
+        );
+
+        let line = describe_unused_gpu_backends(&unused).unwrap();
+        assert!(
+            line.starts_with("cuda GPU detected, but its runtimes don't fit: cuda13 ("),
+            "{line}"
+        );
+    }
+
+    #[test]
+    fn a_vulkan_only_gpu_is_still_reported_without_a_vulkan_runtime() {
+        // An Intel or AMD GPU on Linux without ROCm: Vulkan is the GPU path.
+        let mut profile = cuda12_host();
+        profile.arch = "x86_64".to_string();
+        profile.cuda = None;
+        profile.available_flavors = BTreeSet::from([
+            NativeRuntimeBackendKind::Cpu,
+            NativeRuntimeBackendKind::Vulkan,
+        ]);
+        let cpu = artifact("cpu", NativeRuntimeBackend::cpu(), "x86_64");
+        let evaluated = evaluate(std::slice::from_ref(&cpu), &profile);
+
+        let unused = unused_gpu_backends(
+            &evaluated,
+            &[],
+            &profile,
+            &RuntimeSelection::Recommended,
+            &cpu,
+        );
+
         assert_eq!(
             describe_unused_gpu_backends(&unused).as_deref(),
-            Some(
-                "GPU detected (rocm, vulkan), but no runtime for it fits: \
-                 no rocm runtime is available; no vulkan runtime is available"
-            )
+            Some("vulkan GPU detected, but no vulkan runtime is installed")
+        );
+    }
+
+    #[test]
+    fn describe_unused_gpus_names_runtimes_without_startup_metadata() {
+        let mut profile = cuda12_host();
+        profile.glibc_version = Some("2.39".to_string());
+        let mut cpu = artifact("cpu", NativeRuntimeBackend::cpu(), "aarch64");
+        cpu.platform.min_glibc = Some("2.17".to_string());
+        let mut cuda13 = artifact("cuda13", cuda(13), "aarch64");
+        cuda13.platform.min_glibc = Some("2.17".to_string());
+        let legacy = artifact("cuda12-legacy", cuda(12), "aarch64");
+
+        let line = describe_unused_gpus(
+            &[cpu.clone(), cuda13, legacy],
+            &profile,
+            "0.76.1",
+            Some("0.1.71"),
+            &RuntimeSelection::Recommended,
+            &cpu,
+        )
+        .unwrap();
+
+        assert!(line.contains("cuda13 (CUDA driver too old"), "{line}");
+        assert!(
+            line.contains("cuda12-legacy (no minimum glibc in its manifest"),
+            "{line}"
         );
     }
 
@@ -344,7 +486,7 @@ mod tests {
 
         assert_eq!(
             describe_unused_gpu_backends(&unused).as_deref(),
-            Some("cuda GPU detected, but no cuda runtime is available")
+            Some("cuda GPU detected, but no cuda runtime is installed")
         );
         assert_eq!(describe_unused_gpu_backends(&[]), None);
     }

@@ -487,33 +487,21 @@ fn unused_gpu_warnings(
     selection: &RuntimeSelection,
     selected: &skippy_native_runtime::NativeRuntimeArtifact,
 ) -> Vec<String> {
-    let (usable, missing_metadata): (Vec<_>, Vec<_>) = installed
+    let artifacts = installed
         .iter()
         .filter(|runtime| runtime.release_version == mesh_version)
         .map(|runtime| runtime.manifest.runtime.clone())
-        .partition(|artifact| has_startup_compatibility_metadata(artifact, profile));
-    let evaluated = usable
-        .iter()
-        .map(|artifact| {
-            skippy_native_runtime::evaluate_native_runtime_artifact(
-                artifact,
-                profile,
-                mesh_version,
-                skippy_abi_version,
-                selection,
-            )
-        })
         .collect::<Vec<_>>();
-    let unused = skippy_native_runtime::unused_gpu_backends(
-        &evaluated,
-        &missing_metadata,
+    skippy_native_runtime::describe_unused_gpus(
+        &artifacts,
         profile,
+        mesh_version,
+        skippy_abi_version,
         selection,
         selected,
-    );
-    skippy_native_runtime::describe_unused_gpu_backends(&unused)
-        .into_iter()
-        .collect()
+    )
+    .into_iter()
+    .collect()
 }
 
 pub fn native_runtime_selection(
@@ -583,6 +571,76 @@ mod tests {
             sha256: None,
             signature: None,
         }
+    }
+
+    #[test]
+    fn doctor_names_the_rejected_cuda_runtime_beside_the_cpu_fallback() {
+        let profile = skippy_native_runtime::HostRuntimeProfile {
+            os: "linux".to_string(),
+            arch: "aarch64".to_string(),
+            target_triple: None,
+            glibc_version: Some("2.39".to_string()),
+            available_flavors: std::collections::BTreeSet::from([
+                skippy_native_runtime::NativeRuntimeBackendKind::Cpu,
+                skippy_native_runtime::NativeRuntimeBackendKind::Cuda,
+            ]),
+            gpus: Vec::new(),
+            cuda: Some(skippy_native_runtime::HostCudaProfile {
+                driver_max_major: Some(12),
+                ..Default::default()
+            }),
+            rocm: None,
+            vulkan: None,
+        };
+        let installed = |id: &str, backend: NativeRuntimeBackend| {
+            let mut runtime = available_runtime_artifact(id, Some("0.76.1"), "0.1.71");
+            runtime.platform.os = "linux".to_string();
+            runtime.platform.arch = "aarch64".to_string();
+            runtime.platform.min_glibc = Some("2.17".to_string());
+            runtime.backend = backend;
+            skippy_native_runtime::InstalledNativeRuntime {
+                release_version: "0.76.1".to_string(),
+                native_runtime_id: id.to_string(),
+                flavor: runtime.backend.kind.to_string(),
+                path: format!("/cache/0.76.1/{id}").into(),
+                manifest: NativeRuntimeManifest { runtime },
+            }
+        };
+        let cuda13 = NativeRuntimeBackend {
+            kind: skippy_native_runtime::NativeRuntimeBackendKind::Cuda,
+            cuda: Some(skippy_native_runtime::CudaRuntimeRequirements {
+                toolkit_major: 13,
+                min_driver: None,
+                gpu_arches: Vec::new(),
+            }),
+            rocm: None,
+            vulkan: None,
+        };
+        let runtimes = [
+            installed("cpu", NativeRuntimeBackend::cpu()),
+            installed("cuda13", cuda13),
+        ];
+
+        let warnings = unused_gpu_warnings(
+            &runtimes,
+            &profile,
+            "0.76.1",
+            Some("0.1.71"),
+            &RuntimeSelection::Recommended,
+            &runtimes[0].manifest.runtime,
+        );
+
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(
+            warnings[0].starts_with("cuda GPU detected, but its runtimes don't fit: cuda13 ("),
+            "{}",
+            warnings[0]
+        );
+        assert!(
+            warnings[0].contains("CUDA driver too old"),
+            "{}",
+            warnings[0]
+        );
     }
 
     fn write_test_runtime(path: &Path, runtime_id: &str) {
