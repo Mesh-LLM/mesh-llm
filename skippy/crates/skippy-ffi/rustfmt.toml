@@ -1,0 +1,5 @@
+# Bindgen invokes plain `rustfmt` (default edition 2015) on generated
+# bindings from build.rs. Pin the edition so bindgen-formatted output and
+# `cargo fmt` agree byte-for-byte; otherwise the CI freshness check and the
+# formatter fight over return-type indentation.
+edition = "2024"

@@ -937,14 +937,18 @@ pub(crate) fn with_last_native_error(error: anyhow::Error) -> anyhow::Error {
     anyhow::anyhow!(lines.join("; ")).context(error.to_string())
 }
 
-unsafe extern "C" fn write_native_log(level: c_int, text: *const c_char, _user_data: *mut c_void) {
+unsafe extern "C" fn write_native_log(
+    level: skippy_ffi::bindings::llama::ggml_log_level,
+    text: *const c_char,
+    _user_data: *mut c_void,
+) {
     if text.is_null() {
         return;
     }
 
     let bytes = unsafe { CStr::from_ptr(text) }.to_bytes();
-    record_native_error_line(level, bytes);
-    output::forward_raw_native_log(level, bytes);
+    record_native_error_line(level as c_int, bytes);
+    output::forward_raw_native_log(level as c_int, bytes);
     if let Ok(mut guard) = native_log_file().lock()
         && let Some(writer) = guard.as_mut()
     {
@@ -976,7 +980,7 @@ unsafe extern "C" fn write_native_log(level: c_int, text: *const c_char, _user_d
 }
 
 unsafe extern "C" fn discard_native_log(
-    _level: c_int,
+    _level: skippy_ffi::bindings::llama::ggml_log_level,
     _text: *const c_char,
     _user_data: *mut c_void,
 ) {

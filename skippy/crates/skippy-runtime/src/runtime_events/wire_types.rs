@@ -1,13 +1,39 @@
 use std::mem;
 
 use skippy_ffi::{
-    SkippyRuntimeEventCategory as RawRuntimeEventCategory,
-    SkippyRuntimeEventEmitterKind as RawRuntimeEventEmitterKind,
-    SkippyRuntimeEventFailureCode as RawRuntimeEventFailureCode,
-    SkippyRuntimeEventKind as RawRuntimeEventKind,
-    SkippyRuntimeEventProgressUnit as RawRuntimeEventProgressUnit,
-    SkippyRuntimeEventV1 as RawRuntimeEvent, Status,
+    RUNTIME_EVENT_CATEGORY_BACKEND, RUNTIME_EVENT_CATEGORY_DEVICE,
+    RUNTIME_EVENT_CATEGORY_DIAGNOSTIC, RUNTIME_EVENT_CATEGORY_KV,
+    RUNTIME_EVENT_CATEGORY_MODEL_OPEN, RUNTIME_EVENT_CATEGORY_SESSION,
+    RUNTIME_EVENT_CATEGORY_UNLOAD, RUNTIME_EVENT_CATEGORY_WARNING,
+    RUNTIME_EVENT_EMITTER_OPEN_THREAD, RUNTIME_EVENT_EMITTER_UNKNOWN,
+    RUNTIME_EVENT_EMITTER_WORKER_THREAD, RUNTIME_EVENT_FAILURE_BACKEND_ERROR,
+    RUNTIME_EVENT_FAILURE_CANCELLED, RUNTIME_EVENT_FAILURE_INTERNAL_ERROR,
+    RUNTIME_EVENT_FAILURE_INVALID_ARGUMENT, RUNTIME_EVENT_FAILURE_IO_ERROR,
+    RUNTIME_EVENT_FAILURE_MODEL_ERROR, RUNTIME_EVENT_FAILURE_NONE,
+    RUNTIME_EVENT_FAILURE_RUNTIME_ERROR, RUNTIME_EVENT_KIND_BACKEND_DEVICE_SELECTED,
+    RUNTIME_EVENT_KIND_DEVICE_BACKEND_INITIALIZED, RUNTIME_EVENT_KIND_DEVICE_DEGRADED,
+    RUNTIME_EVENT_KIND_DEVICE_FALLBACK_ACTIVATED, RUNTIME_EVENT_KIND_DEVICE_LOST,
+    RUNTIME_EVENT_KIND_DEVICE_OUT_OF_MEMORY, RUNTIME_EVENT_KIND_DEVICE_READY,
+    RUNTIME_EVENT_KIND_DEVICE_RECOVERED, RUNTIME_EVENT_KIND_DEVICE_RESOURCE_ALLOCATED,
+    RUNTIME_EVENT_KIND_DEVICE_UNAVAILABLE, RUNTIME_EVENT_KIND_DIAGNOSTIC_FATAL_FAILURE,
+    RUNTIME_EVENT_KIND_DIAGNOSTIC_INVARIANT_VIOLATION,
+    RUNTIME_EVENT_KIND_DIAGNOSTIC_RECOVERABLE_FAILURE,
+    RUNTIME_EVENT_KIND_DIAGNOSTIC_WARNING_CLEARED, RUNTIME_EVENT_KIND_DIAGNOSTIC_WARNING_RAISED,
+    RUNTIME_EVENT_KIND_KV_CONTEXT_APPROACHING_CAPACITY,
+    RUNTIME_EVENT_KIND_KV_CONTEXT_CAPACITY_EXHAUSTED, RUNTIME_EVENT_KIND_KV_INITIALIZED,
+    RUNTIME_EVENT_KIND_KV_PRESSURE_CLEARED, RUNTIME_EVENT_KIND_KV_PRESSURE_CROSSED,
+    RUNTIME_EVENT_KIND_MODEL_LOAD_AUX_COMPONENT_READY,
+    RUNTIME_EVENT_KIND_MODEL_LOAD_MEMORY_ALLOCATED, RUNTIME_EVENT_KIND_MODEL_LOAD_PHASE_CHANGED,
+    RUNTIME_EVENT_KIND_MODEL_LOAD_TENSORS_OFFLOADED, RUNTIME_EVENT_KIND_MODEL_LOAD_TOKENIZER_READY,
+    RUNTIME_EVENT_KIND_MODEL_OPEN_FAILED_HANDLED, RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED,
+    RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS, RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED,
+    RUNTIME_EVENT_KIND_UNLOAD_COMPLETED, RUNTIME_EVENT_KIND_UNLOAD_FAILED,
+    RUNTIME_EVENT_KIND_UNLOAD_FORCED, RUNTIME_EVENT_KIND_UNLOAD_SESSION_DRAINING,
+    RUNTIME_EVENT_KIND_UNLOAD_STARTED, RUNTIME_EVENT_PROGRESS_UNIT_BYTES,
+    RUNTIME_EVENT_PROGRESS_UNIT_ITEMS, RUNTIME_EVENT_PROGRESS_UNIT_NONE,
+    RUNTIME_EVENT_PROGRESS_UNIT_STEPS, RUNTIME_EVENT_PROGRESS_UNIT_TENSORS,
 };
+use skippy_ffi::{SkippyRuntimeEventV1 as RawRuntimeEvent, Status};
 
 #[cfg(test)]
 use super::NativeEventRecord;
@@ -30,18 +56,18 @@ pub enum RuntimeEventCategory {
     Unknown(u32),
 }
 
-impl From<RawRuntimeEventCategory> for RuntimeEventCategory {
-    fn from(value: RawRuntimeEventCategory) -> Self {
+impl From<skippy_ffi::SkippyRuntimeEventCategory> for RuntimeEventCategory {
+    fn from(value: skippy_ffi::SkippyRuntimeEventCategory) -> Self {
         match value {
-            RawRuntimeEventCategory::MODEL_OPEN => Self::ModelOpen,
-            RawRuntimeEventCategory::BACKEND => Self::Backend,
-            RawRuntimeEventCategory::SESSION => Self::Session,
-            RawRuntimeEventCategory::KV => Self::Kv,
-            RawRuntimeEventCategory::WARNING => Self::Warning,
-            RawRuntimeEventCategory::DEVICE => Self::Device,
-            RawRuntimeEventCategory::DIAGNOSTIC => Self::Diagnostic,
-            RawRuntimeEventCategory::UNLOAD => Self::Unload,
-            RawRuntimeEventCategory(raw) => Self::Unknown(raw),
+            RUNTIME_EVENT_CATEGORY_MODEL_OPEN => Self::ModelOpen,
+            RUNTIME_EVENT_CATEGORY_BACKEND => Self::Backend,
+            RUNTIME_EVENT_CATEGORY_SESSION => Self::Session,
+            RUNTIME_EVENT_CATEGORY_KV => Self::Kv,
+            RUNTIME_EVENT_CATEGORY_WARNING => Self::Warning,
+            RUNTIME_EVENT_CATEGORY_DEVICE => Self::Device,
+            RUNTIME_EVENT_CATEGORY_DIAGNOSTIC => Self::Diagnostic,
+            RUNTIME_EVENT_CATEGORY_UNLOAD => Self::Unload,
+            raw => Self::Unknown(raw),
         }
     }
 }
@@ -50,14 +76,14 @@ impl RuntimeEventCategory {
     #[must_use]
     pub const fn raw(self) -> u32 {
         match self {
-            Self::ModelOpen => RawRuntimeEventCategory::MODEL_OPEN.0,
-            Self::Backend => RawRuntimeEventCategory::BACKEND.0,
-            Self::Session => RawRuntimeEventCategory::SESSION.0,
-            Self::Kv => RawRuntimeEventCategory::KV.0,
-            Self::Warning => RawRuntimeEventCategory::WARNING.0,
-            Self::Device => RawRuntimeEventCategory::DEVICE.0,
-            Self::Diagnostic => RawRuntimeEventCategory::DIAGNOSTIC.0,
-            Self::Unload => RawRuntimeEventCategory::UNLOAD.0,
+            Self::ModelOpen => RUNTIME_EVENT_CATEGORY_MODEL_OPEN,
+            Self::Backend => RUNTIME_EVENT_CATEGORY_BACKEND,
+            Self::Session => RUNTIME_EVENT_CATEGORY_SESSION,
+            Self::Kv => RUNTIME_EVENT_CATEGORY_KV,
+            Self::Warning => RUNTIME_EVENT_CATEGORY_WARNING,
+            Self::Device => RUNTIME_EVENT_CATEGORY_DEVICE,
+            Self::Diagnostic => RUNTIME_EVENT_CATEGORY_DIAGNOSTIC,
+            Self::Unload => RUNTIME_EVENT_CATEGORY_UNLOAD,
             Self::Unknown(raw) => raw,
         }
     }
@@ -102,50 +128,46 @@ pub enum RuntimeEventKind {
     Unknown(u32),
 }
 
-impl From<RawRuntimeEventKind> for RuntimeEventKind {
-    fn from(value: RawRuntimeEventKind) -> Self {
+impl From<skippy_ffi::SkippyRuntimeEventKind> for RuntimeEventKind {
+    fn from(value: skippy_ffi::SkippyRuntimeEventKind) -> Self {
         match value {
-            RawRuntimeEventKind::MODEL_OPEN_STARTED => Self::ModelOpenStarted,
-            RawRuntimeEventKind::MODEL_OPEN_PROGRESS => Self::ModelOpenProgress,
-            RawRuntimeEventKind::BACKEND_DEVICE_SELECTED => Self::BackendDeviceSelected,
-            RawRuntimeEventKind::MODEL_OPEN_FINISHED => Self::ModelOpenFinished,
-            RawRuntimeEventKind::MODEL_OPEN_FAILED_HANDLED => Self::ModelOpenFailedHandled,
-            RawRuntimeEventKind::MODEL_LOAD_PHASE_CHANGED => Self::ModelLoadPhaseChanged,
-            RawRuntimeEventKind::MODEL_LOAD_MEMORY_ALLOCATED => Self::ModelLoadMemoryAllocated,
-            RawRuntimeEventKind::MODEL_LOAD_TENSORS_OFFLOADED => Self::ModelLoadTensorsOffloaded,
-            RawRuntimeEventKind::MODEL_LOAD_TOKENIZER_READY => Self::ModelLoadTokenizerReady,
-            RawRuntimeEventKind::MODEL_LOAD_AUX_COMPONENT_READY => Self::ModelLoadAuxComponentReady,
-            RawRuntimeEventKind::KV_INITIALIZED => Self::KvInitialized,
-            RawRuntimeEventKind::KV_PRESSURE_CROSSED => Self::KvPressureCrossed,
-            RawRuntimeEventKind::KV_PRESSURE_CLEARED => Self::KvPressureCleared,
-            RawRuntimeEventKind::KV_CONTEXT_APPROACHING_CAPACITY => {
+            RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED => Self::ModelOpenStarted,
+            RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS => Self::ModelOpenProgress,
+            RUNTIME_EVENT_KIND_BACKEND_DEVICE_SELECTED => Self::BackendDeviceSelected,
+            RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED => Self::ModelOpenFinished,
+            RUNTIME_EVENT_KIND_MODEL_OPEN_FAILED_HANDLED => Self::ModelOpenFailedHandled,
+            RUNTIME_EVENT_KIND_MODEL_LOAD_PHASE_CHANGED => Self::ModelLoadPhaseChanged,
+            RUNTIME_EVENT_KIND_MODEL_LOAD_MEMORY_ALLOCATED => Self::ModelLoadMemoryAllocated,
+            RUNTIME_EVENT_KIND_MODEL_LOAD_TENSORS_OFFLOADED => Self::ModelLoadTensorsOffloaded,
+            RUNTIME_EVENT_KIND_MODEL_LOAD_TOKENIZER_READY => Self::ModelLoadTokenizerReady,
+            RUNTIME_EVENT_KIND_MODEL_LOAD_AUX_COMPONENT_READY => Self::ModelLoadAuxComponentReady,
+            RUNTIME_EVENT_KIND_KV_INITIALIZED => Self::KvInitialized,
+            RUNTIME_EVENT_KIND_KV_PRESSURE_CROSSED => Self::KvPressureCrossed,
+            RUNTIME_EVENT_KIND_KV_PRESSURE_CLEARED => Self::KvPressureCleared,
+            RUNTIME_EVENT_KIND_KV_CONTEXT_APPROACHING_CAPACITY => {
                 Self::KvContextApproachingCapacity
             }
-            RawRuntimeEventKind::KV_CONTEXT_CAPACITY_EXHAUSTED => Self::KvContextCapacityExhausted,
-            RawRuntimeEventKind::DEVICE_BACKEND_INITIALIZED => Self::DeviceBackendInitialized,
-            RawRuntimeEventKind::DEVICE_READY => Self::DeviceReady,
-            RawRuntimeEventKind::DEVICE_DEGRADED => Self::DeviceDegraded,
-            RawRuntimeEventKind::DEVICE_UNAVAILABLE => Self::DeviceUnavailable,
-            RawRuntimeEventKind::DEVICE_RECOVERED => Self::DeviceRecovered,
-            RawRuntimeEventKind::DEVICE_LOST => Self::DeviceLost,
-            RawRuntimeEventKind::DEVICE_RESOURCE_ALLOCATED => Self::DeviceResourceAllocated,
-            RawRuntimeEventKind::DEVICE_OUT_OF_MEMORY => Self::DeviceOutOfMemory,
-            RawRuntimeEventKind::DEVICE_FALLBACK_ACTIVATED => Self::DeviceFallbackActivated,
-            RawRuntimeEventKind::DIAGNOSTIC_WARNING_RAISED => Self::DiagnosticWarningRaised,
-            RawRuntimeEventKind::DIAGNOSTIC_WARNING_CLEARED => Self::DiagnosticWarningCleared,
-            RawRuntimeEventKind::DIAGNOSTIC_RECOVERABLE_FAILURE => {
-                Self::DiagnosticRecoverableFailure
-            }
-            RawRuntimeEventKind::DIAGNOSTIC_FATAL_FAILURE => Self::DiagnosticFatalFailure,
-            RawRuntimeEventKind::DIAGNOSTIC_INVARIANT_VIOLATION => {
-                Self::DiagnosticInvariantViolation
-            }
-            RawRuntimeEventKind::UNLOAD_STARTED => Self::UnloadStarted,
-            RawRuntimeEventKind::UNLOAD_COMPLETED => Self::UnloadCompleted,
-            RawRuntimeEventKind::UNLOAD_FAILED => Self::UnloadFailed,
-            RawRuntimeEventKind::UNLOAD_FORCED => Self::UnloadForced,
-            RawRuntimeEventKind::UNLOAD_SESSION_DRAINING => Self::UnloadSessionDraining,
-            RawRuntimeEventKind(raw) => Self::Unknown(raw),
+            RUNTIME_EVENT_KIND_KV_CONTEXT_CAPACITY_EXHAUSTED => Self::KvContextCapacityExhausted,
+            RUNTIME_EVENT_KIND_DEVICE_BACKEND_INITIALIZED => Self::DeviceBackendInitialized,
+            RUNTIME_EVENT_KIND_DEVICE_READY => Self::DeviceReady,
+            RUNTIME_EVENT_KIND_DEVICE_DEGRADED => Self::DeviceDegraded,
+            RUNTIME_EVENT_KIND_DEVICE_UNAVAILABLE => Self::DeviceUnavailable,
+            RUNTIME_EVENT_KIND_DEVICE_RECOVERED => Self::DeviceRecovered,
+            RUNTIME_EVENT_KIND_DEVICE_LOST => Self::DeviceLost,
+            RUNTIME_EVENT_KIND_DEVICE_RESOURCE_ALLOCATED => Self::DeviceResourceAllocated,
+            RUNTIME_EVENT_KIND_DEVICE_OUT_OF_MEMORY => Self::DeviceOutOfMemory,
+            RUNTIME_EVENT_KIND_DEVICE_FALLBACK_ACTIVATED => Self::DeviceFallbackActivated,
+            RUNTIME_EVENT_KIND_DIAGNOSTIC_WARNING_RAISED => Self::DiagnosticWarningRaised,
+            RUNTIME_EVENT_KIND_DIAGNOSTIC_WARNING_CLEARED => Self::DiagnosticWarningCleared,
+            RUNTIME_EVENT_KIND_DIAGNOSTIC_RECOVERABLE_FAILURE => Self::DiagnosticRecoverableFailure,
+            RUNTIME_EVENT_KIND_DIAGNOSTIC_FATAL_FAILURE => Self::DiagnosticFatalFailure,
+            RUNTIME_EVENT_KIND_DIAGNOSTIC_INVARIANT_VIOLATION => Self::DiagnosticInvariantViolation,
+            RUNTIME_EVENT_KIND_UNLOAD_STARTED => Self::UnloadStarted,
+            RUNTIME_EVENT_KIND_UNLOAD_COMPLETED => Self::UnloadCompleted,
+            RUNTIME_EVENT_KIND_UNLOAD_FAILED => Self::UnloadFailed,
+            RUNTIME_EVENT_KIND_UNLOAD_FORCED => Self::UnloadForced,
+            RUNTIME_EVENT_KIND_UNLOAD_SESSION_DRAINING => Self::UnloadSessionDraining,
+            raw => Self::Unknown(raw),
         }
     }
 }
@@ -154,50 +176,42 @@ impl RuntimeEventKind {
     #[must_use]
     pub const fn raw(self) -> u32 {
         match self {
-            Self::ModelOpenStarted => RawRuntimeEventKind::MODEL_OPEN_STARTED.0,
-            Self::ModelOpenProgress => RawRuntimeEventKind::MODEL_OPEN_PROGRESS.0,
-            Self::BackendDeviceSelected => RawRuntimeEventKind::BACKEND_DEVICE_SELECTED.0,
-            Self::ModelOpenFinished => RawRuntimeEventKind::MODEL_OPEN_FINISHED.0,
-            Self::ModelOpenFailedHandled => RawRuntimeEventKind::MODEL_OPEN_FAILED_HANDLED.0,
-            Self::ModelLoadPhaseChanged => RawRuntimeEventKind::MODEL_LOAD_PHASE_CHANGED.0,
-            Self::ModelLoadMemoryAllocated => RawRuntimeEventKind::MODEL_LOAD_MEMORY_ALLOCATED.0,
-            Self::ModelLoadTensorsOffloaded => RawRuntimeEventKind::MODEL_LOAD_TENSORS_OFFLOADED.0,
-            Self::ModelLoadTokenizerReady => RawRuntimeEventKind::MODEL_LOAD_TOKENIZER_READY.0,
-            Self::ModelLoadAuxComponentReady => {
-                RawRuntimeEventKind::MODEL_LOAD_AUX_COMPONENT_READY.0
-            }
-            Self::KvInitialized => RawRuntimeEventKind::KV_INITIALIZED.0,
-            Self::KvPressureCrossed => RawRuntimeEventKind::KV_PRESSURE_CROSSED.0,
-            Self::KvPressureCleared => RawRuntimeEventKind::KV_PRESSURE_CLEARED.0,
+            Self::ModelOpenStarted => RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED,
+            Self::ModelOpenProgress => RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS,
+            Self::BackendDeviceSelected => RUNTIME_EVENT_KIND_BACKEND_DEVICE_SELECTED,
+            Self::ModelOpenFinished => RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED,
+            Self::ModelOpenFailedHandled => RUNTIME_EVENT_KIND_MODEL_OPEN_FAILED_HANDLED,
+            Self::ModelLoadPhaseChanged => RUNTIME_EVENT_KIND_MODEL_LOAD_PHASE_CHANGED,
+            Self::ModelLoadMemoryAllocated => RUNTIME_EVENT_KIND_MODEL_LOAD_MEMORY_ALLOCATED,
+            Self::ModelLoadTensorsOffloaded => RUNTIME_EVENT_KIND_MODEL_LOAD_TENSORS_OFFLOADED,
+            Self::ModelLoadTokenizerReady => RUNTIME_EVENT_KIND_MODEL_LOAD_TOKENIZER_READY,
+            Self::ModelLoadAuxComponentReady => RUNTIME_EVENT_KIND_MODEL_LOAD_AUX_COMPONENT_READY,
+            Self::KvInitialized => RUNTIME_EVENT_KIND_KV_INITIALIZED,
+            Self::KvPressureCrossed => RUNTIME_EVENT_KIND_KV_PRESSURE_CROSSED,
+            Self::KvPressureCleared => RUNTIME_EVENT_KIND_KV_PRESSURE_CLEARED,
             Self::KvContextApproachingCapacity => {
-                RawRuntimeEventKind::KV_CONTEXT_APPROACHING_CAPACITY.0
+                RUNTIME_EVENT_KIND_KV_CONTEXT_APPROACHING_CAPACITY
             }
-            Self::KvContextCapacityExhausted => {
-                RawRuntimeEventKind::KV_CONTEXT_CAPACITY_EXHAUSTED.0
-            }
-            Self::DeviceBackendInitialized => RawRuntimeEventKind::DEVICE_BACKEND_INITIALIZED.0,
-            Self::DeviceReady => RawRuntimeEventKind::DEVICE_READY.0,
-            Self::DeviceDegraded => RawRuntimeEventKind::DEVICE_DEGRADED.0,
-            Self::DeviceUnavailable => RawRuntimeEventKind::DEVICE_UNAVAILABLE.0,
-            Self::DeviceRecovered => RawRuntimeEventKind::DEVICE_RECOVERED.0,
-            Self::DeviceLost => RawRuntimeEventKind::DEVICE_LOST.0,
-            Self::DeviceResourceAllocated => RawRuntimeEventKind::DEVICE_RESOURCE_ALLOCATED.0,
-            Self::DeviceOutOfMemory => RawRuntimeEventKind::DEVICE_OUT_OF_MEMORY.0,
-            Self::DeviceFallbackActivated => RawRuntimeEventKind::DEVICE_FALLBACK_ACTIVATED.0,
-            Self::DiagnosticWarningRaised => RawRuntimeEventKind::DIAGNOSTIC_WARNING_RAISED.0,
-            Self::DiagnosticWarningCleared => RawRuntimeEventKind::DIAGNOSTIC_WARNING_CLEARED.0,
-            Self::DiagnosticRecoverableFailure => {
-                RawRuntimeEventKind::DIAGNOSTIC_RECOVERABLE_FAILURE.0
-            }
-            Self::DiagnosticFatalFailure => RawRuntimeEventKind::DIAGNOSTIC_FATAL_FAILURE.0,
-            Self::DiagnosticInvariantViolation => {
-                RawRuntimeEventKind::DIAGNOSTIC_INVARIANT_VIOLATION.0
-            }
-            Self::UnloadStarted => RawRuntimeEventKind::UNLOAD_STARTED.0,
-            Self::UnloadCompleted => RawRuntimeEventKind::UNLOAD_COMPLETED.0,
-            Self::UnloadFailed => RawRuntimeEventKind::UNLOAD_FAILED.0,
-            Self::UnloadForced => RawRuntimeEventKind::UNLOAD_FORCED.0,
-            Self::UnloadSessionDraining => RawRuntimeEventKind::UNLOAD_SESSION_DRAINING.0,
+            Self::KvContextCapacityExhausted => RUNTIME_EVENT_KIND_KV_CONTEXT_CAPACITY_EXHAUSTED,
+            Self::DeviceBackendInitialized => RUNTIME_EVENT_KIND_DEVICE_BACKEND_INITIALIZED,
+            Self::DeviceReady => RUNTIME_EVENT_KIND_DEVICE_READY,
+            Self::DeviceDegraded => RUNTIME_EVENT_KIND_DEVICE_DEGRADED,
+            Self::DeviceUnavailable => RUNTIME_EVENT_KIND_DEVICE_UNAVAILABLE,
+            Self::DeviceRecovered => RUNTIME_EVENT_KIND_DEVICE_RECOVERED,
+            Self::DeviceLost => RUNTIME_EVENT_KIND_DEVICE_LOST,
+            Self::DeviceResourceAllocated => RUNTIME_EVENT_KIND_DEVICE_RESOURCE_ALLOCATED,
+            Self::DeviceOutOfMemory => RUNTIME_EVENT_KIND_DEVICE_OUT_OF_MEMORY,
+            Self::DeviceFallbackActivated => RUNTIME_EVENT_KIND_DEVICE_FALLBACK_ACTIVATED,
+            Self::DiagnosticWarningRaised => RUNTIME_EVENT_KIND_DIAGNOSTIC_WARNING_RAISED,
+            Self::DiagnosticWarningCleared => RUNTIME_EVENT_KIND_DIAGNOSTIC_WARNING_CLEARED,
+            Self::DiagnosticRecoverableFailure => RUNTIME_EVENT_KIND_DIAGNOSTIC_RECOVERABLE_FAILURE,
+            Self::DiagnosticFatalFailure => RUNTIME_EVENT_KIND_DIAGNOSTIC_FATAL_FAILURE,
+            Self::DiagnosticInvariantViolation => RUNTIME_EVENT_KIND_DIAGNOSTIC_INVARIANT_VIOLATION,
+            Self::UnloadStarted => RUNTIME_EVENT_KIND_UNLOAD_STARTED,
+            Self::UnloadCompleted => RUNTIME_EVENT_KIND_UNLOAD_COMPLETED,
+            Self::UnloadFailed => RUNTIME_EVENT_KIND_UNLOAD_FAILED,
+            Self::UnloadForced => RUNTIME_EVENT_KIND_UNLOAD_FORCED,
+            Self::UnloadSessionDraining => RUNTIME_EVENT_KIND_UNLOAD_SESSION_DRAINING,
             Self::Unknown(raw) => raw,
         }
     }
@@ -211,13 +225,13 @@ pub enum RuntimeEventEmitterKind {
     Other(u32),
 }
 
-impl From<RawRuntimeEventEmitterKind> for RuntimeEventEmitterKind {
-    fn from(value: RawRuntimeEventEmitterKind) -> Self {
+impl From<skippy_ffi::SkippyRuntimeEventEmitterKind> for RuntimeEventEmitterKind {
+    fn from(value: skippy_ffi::SkippyRuntimeEventEmitterKind) -> Self {
         match value {
-            RawRuntimeEventEmitterKind::UNKNOWN => Self::Unknown,
-            RawRuntimeEventEmitterKind::OPEN_THREAD => Self::OpenThread,
-            RawRuntimeEventEmitterKind::WORKER_THREAD => Self::WorkerThread,
-            RawRuntimeEventEmitterKind(raw) => Self::Other(raw),
+            RUNTIME_EVENT_EMITTER_UNKNOWN => Self::Unknown,
+            RUNTIME_EVENT_EMITTER_OPEN_THREAD => Self::OpenThread,
+            RUNTIME_EVENT_EMITTER_WORKER_THREAD => Self::WorkerThread,
+            raw => Self::Other(raw),
         }
     }
 }
@@ -226,9 +240,9 @@ impl RuntimeEventEmitterKind {
     #[must_use]
     pub const fn raw(self) -> u32 {
         match self {
-            Self::Unknown => RawRuntimeEventEmitterKind::UNKNOWN.0,
-            Self::OpenThread => RawRuntimeEventEmitterKind::OPEN_THREAD.0,
-            Self::WorkerThread => RawRuntimeEventEmitterKind::WORKER_THREAD.0,
+            Self::Unknown => RUNTIME_EVENT_EMITTER_UNKNOWN,
+            Self::OpenThread => RUNTIME_EVENT_EMITTER_OPEN_THREAD,
+            Self::WorkerThread => RUNTIME_EVENT_EMITTER_WORKER_THREAD,
             Self::Other(raw) => raw,
         }
     }
@@ -244,15 +258,15 @@ pub enum RuntimeEventProgressUnit {
     Unknown(u32),
 }
 
-impl From<RawRuntimeEventProgressUnit> for RuntimeEventProgressUnit {
-    fn from(value: RawRuntimeEventProgressUnit) -> Self {
+impl From<skippy_ffi::SkippyRuntimeEventProgressUnit> for RuntimeEventProgressUnit {
+    fn from(value: skippy_ffi::SkippyRuntimeEventProgressUnit) -> Self {
         match value {
-            RawRuntimeEventProgressUnit::NONE => Self::None,
-            RawRuntimeEventProgressUnit::BYTES => Self::Bytes,
-            RawRuntimeEventProgressUnit::ITEMS => Self::Items,
-            RawRuntimeEventProgressUnit::TENSORS => Self::Tensors,
-            RawRuntimeEventProgressUnit::STEPS => Self::Steps,
-            RawRuntimeEventProgressUnit(raw) => Self::Unknown(raw),
+            RUNTIME_EVENT_PROGRESS_UNIT_NONE => Self::None,
+            RUNTIME_EVENT_PROGRESS_UNIT_BYTES => Self::Bytes,
+            RUNTIME_EVENT_PROGRESS_UNIT_ITEMS => Self::Items,
+            RUNTIME_EVENT_PROGRESS_UNIT_TENSORS => Self::Tensors,
+            RUNTIME_EVENT_PROGRESS_UNIT_STEPS => Self::Steps,
+            raw => Self::Unknown(raw),
         }
     }
 }
@@ -261,11 +275,11 @@ impl RuntimeEventProgressUnit {
     #[must_use]
     pub const fn raw(self) -> u32 {
         match self {
-            Self::None => RawRuntimeEventProgressUnit::NONE.0,
-            Self::Bytes => RawRuntimeEventProgressUnit::BYTES.0,
-            Self::Items => RawRuntimeEventProgressUnit::ITEMS.0,
-            Self::Tensors => RawRuntimeEventProgressUnit::TENSORS.0,
-            Self::Steps => RawRuntimeEventProgressUnit::STEPS.0,
+            Self::None => RUNTIME_EVENT_PROGRESS_UNIT_NONE,
+            Self::Bytes => RUNTIME_EVENT_PROGRESS_UNIT_BYTES,
+            Self::Items => RUNTIME_EVENT_PROGRESS_UNIT_ITEMS,
+            Self::Tensors => RUNTIME_EVENT_PROGRESS_UNIT_TENSORS,
+            Self::Steps => RUNTIME_EVENT_PROGRESS_UNIT_STEPS,
             Self::Unknown(raw) => raw,
         }
     }
@@ -284,18 +298,18 @@ pub enum RuntimeEventFailureCode {
     Unknown(u32),
 }
 
-impl From<RawRuntimeEventFailureCode> for RuntimeEventFailureCode {
-    fn from(value: RawRuntimeEventFailureCode) -> Self {
+impl From<skippy_ffi::SkippyRuntimeEventFailureCode> for RuntimeEventFailureCode {
+    fn from(value: skippy_ffi::SkippyRuntimeEventFailureCode) -> Self {
         match value {
-            RawRuntimeEventFailureCode::NONE => Self::None,
-            RawRuntimeEventFailureCode::INVALID_ARGUMENT => Self::InvalidArgument,
-            RawRuntimeEventFailureCode::IO_ERROR => Self::IoError,
-            RawRuntimeEventFailureCode::MODEL_ERROR => Self::ModelError,
-            RawRuntimeEventFailureCode::RUNTIME_ERROR => Self::RuntimeError,
-            RawRuntimeEventFailureCode::BACKEND_ERROR => Self::BackendError,
-            RawRuntimeEventFailureCode::CANCELLED => Self::Cancelled,
-            RawRuntimeEventFailureCode::INTERNAL_ERROR => Self::InternalError,
-            RawRuntimeEventFailureCode(raw) => Self::Unknown(raw),
+            RUNTIME_EVENT_FAILURE_NONE => Self::None,
+            RUNTIME_EVENT_FAILURE_INVALID_ARGUMENT => Self::InvalidArgument,
+            RUNTIME_EVENT_FAILURE_IO_ERROR => Self::IoError,
+            RUNTIME_EVENT_FAILURE_MODEL_ERROR => Self::ModelError,
+            RUNTIME_EVENT_FAILURE_RUNTIME_ERROR => Self::RuntimeError,
+            RUNTIME_EVENT_FAILURE_BACKEND_ERROR => Self::BackendError,
+            RUNTIME_EVENT_FAILURE_CANCELLED => Self::Cancelled,
+            RUNTIME_EVENT_FAILURE_INTERNAL_ERROR => Self::InternalError,
+            raw => Self::Unknown(raw),
         }
     }
 }
@@ -304,14 +318,14 @@ impl RuntimeEventFailureCode {
     #[must_use]
     pub const fn raw(self) -> u32 {
         match self {
-            Self::None => RawRuntimeEventFailureCode::NONE.0,
-            Self::InvalidArgument => RawRuntimeEventFailureCode::INVALID_ARGUMENT.0,
-            Self::IoError => RawRuntimeEventFailureCode::IO_ERROR.0,
-            Self::ModelError => RawRuntimeEventFailureCode::MODEL_ERROR.0,
-            Self::RuntimeError => RawRuntimeEventFailureCode::RUNTIME_ERROR.0,
-            Self::BackendError => RawRuntimeEventFailureCode::BACKEND_ERROR.0,
-            Self::Cancelled => RawRuntimeEventFailureCode::CANCELLED.0,
-            Self::InternalError => RawRuntimeEventFailureCode::INTERNAL_ERROR.0,
+            Self::None => RUNTIME_EVENT_FAILURE_NONE,
+            Self::InvalidArgument => RUNTIME_EVENT_FAILURE_INVALID_ARGUMENT,
+            Self::IoError => RUNTIME_EVENT_FAILURE_IO_ERROR,
+            Self::ModelError => RUNTIME_EVENT_FAILURE_MODEL_ERROR,
+            Self::RuntimeError => RUNTIME_EVENT_FAILURE_RUNTIME_ERROR,
+            Self::BackendError => RUNTIME_EVENT_FAILURE_BACKEND_ERROR,
+            Self::Cancelled => RUNTIME_EVENT_FAILURE_CANCELLED,
+            Self::InternalError => RUNTIME_EVENT_FAILURE_INTERNAL_ERROR,
             Self::Unknown(raw) => raw,
         }
     }
@@ -356,9 +370,9 @@ pub struct RuntimeEvent {
 pub(super) struct BaseRawRuntimeEvent {
     pub(super) abi_version: u32,
     pub(super) struct_size: u32,
-    pub(super) category: RawRuntimeEventCategory,
-    pub(super) kind: RawRuntimeEventKind,
-    pub(super) emitter: RawRuntimeEventEmitterKind,
+    pub(super) category: skippy_ffi::SkippyRuntimeEventCategory,
+    pub(super) kind: skippy_ffi::SkippyRuntimeEventKind,
+    pub(super) emitter: skippy_ffi::SkippyRuntimeEventEmitterKind,
     pub(super) reserved0: u32,
     pub(super) sequence: u64,
     pub(super) timestamp_mono_ns: u64,
@@ -367,9 +381,12 @@ pub(super) struct BaseRawRuntimeEvent {
     pub(super) session_id: u64,
     pub(super) progress_current: u64,
     pub(super) progress_total: u64,
-    pub(super) progress_unit: RawRuntimeEventProgressUnit,
-    pub(super) failure_code: RawRuntimeEventFailureCode,
-    pub(super) status: Status,
+    pub(super) progress_unit: skippy_ffi::SkippyRuntimeEventProgressUnit,
+    pub(super) failure_code: skippy_ffi::SkippyRuntimeEventFailureCode,
+    /// The C ABI stores status as a plain `int32_t`; decode with
+    /// `skippy_ffi::status_from_raw` before use so an out-of-range value
+    /// never materializes as an invalid `Status`.
+    pub(super) status: i32,
     pub(super) reserved1: u32,
     pub(super) detail_ptr: *const std::ffi::c_char,
     pub(super) detail_len: u64,

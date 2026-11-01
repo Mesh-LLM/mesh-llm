@@ -3,6 +3,21 @@
 skippy backend="" cuda_arch="" rocm_arch="":
     @skippy/scripts/build-development-product.sh --backend "{{ backend }}" --cuda-arch "{{ cuda_arch }}" --rocm-arch "{{ rocm_arch }}"
 
+# Regenerate the committed bindgen bindings from the pinned llama.cpp
+# headers. Run scripts/prepare-llama.sh pinned first when .deps/llama.cpp is
+# missing or stale.
+[unix]
+skippy-ffi-bindgen-regen:
+    SKIPPY_FFI_BINDGEN=regen cargo check -p skippy-ffi
+
+# CI freshness gate: regenerate the committed bindgen bindings in memory and
+# fail when they drift from the pinned headers. Requires libclang (Xcode CLT
+# on macOS; llvm-dev/libclang-dev on Linux, LIBCLANG_PATH for non-standard
+# installs) and the prepared llama.cpp checkout.
+[unix]
+skippy-ffi-bindgen-check:
+    SKIPPY_FFI_BINDGEN=check SKIPPY_FFI_BINDGEN_SELFTEST=1 cargo check -p skippy-ffi
+
 [windows]
 skippy backend="" cuda_arch="" rocm_arch="":
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend "{{ backend }}" -CudaArch "{{ cuda_arch }}" -RocmArch "{{ rocm_arch }}" -SkippyOnly

@@ -286,13 +286,11 @@ mod tests {
     use super::*;
     use crate::runtime_events::INLINE_DETAIL_BYTES;
 
+    use skippy_ffi::SkippyRuntimeEventV1 as RawRuntimeEvent;
     use skippy_ffi::{
-        SkippyRuntimeEventCategory as RawRuntimeEventCategory,
-        SkippyRuntimeEventEmitterKind as RawRuntimeEventEmitterKind,
-        SkippyRuntimeEventFailureCode as RawRuntimeEventFailureCode,
-        SkippyRuntimeEventKind as RawRuntimeEventKind,
-        SkippyRuntimeEventProgressUnit as RawRuntimeEventProgressUnit,
-        SkippyRuntimeEventV1 as RawRuntimeEvent,
+        RUNTIME_EVENT_CATEGORY_MODEL_OPEN, RUNTIME_EVENT_EMITTER_WORKER_THREAD,
+        RUNTIME_EVENT_FAILURE_NONE, RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED,
+        RUNTIME_EVENT_PROGRESS_UNIT_NONE,
     };
 
     static TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -305,9 +303,9 @@ mod tests {
         RawRuntimeEvent {
             abi_version: 1,
             struct_size: mem::size_of::<RawRuntimeEvent>() as u32,
-            category: RawRuntimeEventCategory::MODEL_OPEN,
-            kind: RawRuntimeEventKind::MODEL_OPEN_STARTED,
-            emitter: RawRuntimeEventEmitterKind::WORKER_THREAD,
+            category: RUNTIME_EVENT_CATEGORY_MODEL_OPEN,
+            kind: RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED,
+            emitter: RUNTIME_EVENT_EMITTER_WORKER_THREAD,
             reserved0: 0,
             sequence: 1,
             timestamp_mono_ns: 1,
@@ -316,9 +314,9 @@ mod tests {
             session_id: 0,
             progress_current: 0,
             progress_total: 0,
-            progress_unit: RawRuntimeEventProgressUnit::NONE,
-            failure_code: RawRuntimeEventFailureCode::NONE,
-            status: skippy_ffi::Status::Ok,
+            progress_unit: RUNTIME_EVENT_PROGRESS_UNIT_NONE,
+            failure_code: RUNTIME_EVENT_FAILURE_NONE,
+            status: skippy_ffi::Status::Ok as i32,
             reserved1: 0,
             detail_ptr: std::ptr::null(),
             detail_len: 0,
@@ -386,9 +384,9 @@ mod tests {
         assert_eq!(record.sequence, event.sequence);
         assert_eq!(record.model_id, event.model_id);
         assert_eq!(record.session_id, event.session_id);
-        assert_eq!(record.kind, event.kind.0);
-        assert_eq!(record.category, event.category.0);
-        assert_eq!(record.status, event.status);
+        assert_eq!(record.kind, event.kind);
+        assert_eq!(record.category, event.category);
+        assert_eq!(record.status as i32, event.status);
         assert!(!record.detail_truncated);
     }
 

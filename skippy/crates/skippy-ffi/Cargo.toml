@@ -14,3 +14,9 @@ dynamic-runtime = ["dep:libloading"]
 
 [dependencies]
 libloading = { version = "0.9", optional = true }
+
+[build-dependencies]
+# Bindings generator for the committed `src/bindings/` files. Compilation does
+# not require libclang; generation does (see bindgen/README.md and the
+# SKIPPY_FFI_BINDGEN modes in build.rs).
+bindgen = "0.71"

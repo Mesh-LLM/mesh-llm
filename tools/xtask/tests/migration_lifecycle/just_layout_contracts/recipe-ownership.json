@@ -61,6 +61,8 @@
       "skippy",
       "skippy-cli-build",
       "skippy-cli-release-build",
+      "skippy-ffi-bindgen-check",
+      "skippy-ffi-bindgen-regen",
       "skippy-layer-package-cache",
       "skippy-layer-package-fetch",
       "skippy-layer-package-inspect",

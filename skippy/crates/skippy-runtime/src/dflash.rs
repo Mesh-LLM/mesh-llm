@@ -26,7 +26,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use skippy_ffi::Opaque;
 use skippy_ffi::llama_draft::{
     LLAMA_CONTEXT_TYPE_DEFAULT, LLAMA_ROPE_TYPE_MROPE, LlamaContextParams, LlamaDraftApi,
-    LlamaModelParams,
+    LlamaFlashAttnType, LlamaModelParams,
 };
 
 use crate::path_cstring::path_to_cstring;
@@ -455,9 +455,9 @@ fn validate_default_params(api: &LlamaDraftApi) -> Result<()> {
     let context_matches = context.n_ubatch == 512
         && context.n_seq_max == 1
         && context.ctx_type == LLAMA_CONTEXT_TYPE_DEFAULT
-        && context.flash_attn_type == -1
-        && context.type_k == 1
-        && context.type_v == 1
+        && context.flash_attn_type == LlamaFlashAttnType::Auto
+        && context.type_k == skippy_ffi::GgmlType::F16
+        && context.type_v == skippy_ffi::GgmlType::F16
         && context.moe_cache_size == 0
         && !context.embeddings
         && context.offload_kqv
@@ -524,7 +524,7 @@ fn load_draft(
     let mut model_params: LlamaModelParams = unsafe { (api.model_default_params)() };
     model_params.n_gpu_layers = options.n_gpu_layers.unwrap_or(config.n_gpu_layers);
     if !devices.is_empty() {
-        model_params.devices = devices.as_mut_ptr();
+        model_params.devices = devices.as_mut_ptr().cast();
     }
     write_native_log_note(format!(
         "dflash draft load begin path={} device={:?} n_gpu_layers={}",
@@ -532,6 +532,7 @@ fn load_draft(
         device_name,
         model_params.n_gpu_layers
     ));
+    let context_params = draft_context_params(api, target_ctx, config, lanes)?;
     let model = unsafe { (api.model_load_from_file)(path.as_ptr(), model_params) };
     if model.is_null() {
         bail!(
@@ -539,7 +540,6 @@ fn load_draft(
             path.to_string_lossy()
         );
     }
-    let context_params = draft_context_params(api, target_ctx, config, lanes);
     let ctx = unsafe { (api.init_from_model)(model, context_params) };
     if ctx.is_null() {
         unsafe { (api.model_free)(model) };
@@ -558,7 +558,7 @@ fn draft_context_params(
     target_ctx: *mut Opaque,
     config: &RuntimeConfig,
     lanes: i32,
-) -> LlamaContextParams {
+) -> Result<LlamaContextParams> {
     let mut params = unsafe { (api.context_default_params)() };
     let target_n_ctx = unsafe { (api.n_ctx)(target_ctx) };
     let target_n_batch = unsafe { (api.n_batch)(target_ctx) };
@@ -570,11 +570,15 @@ fn draft_context_params(
     params.n_seq_max = lanes as u32;
     // A quantized V cache turns on flash attention under `Auto`; the native
     // context refuses to initialize when the backend cannot provide it.
-    params.type_k = config.cache_type_k as i32;
-    params.type_v = config.cache_type_v as i32;
-    params.flash_attn_type = config.flash_attn_type as i32;
+    params.type_k = cache_ggml_type("cache_k", config.cache_type_k)?;
+    params.type_v = cache_ggml_type("cache_v", config.cache_type_v)?;
+    params.flash_attn_type = match config.flash_attn_type {
+        crate::config::FlashAttentionType::Auto => LlamaFlashAttnType::Auto,
+        crate::config::FlashAttentionType::Disabled => LlamaFlashAttnType::Disabled,
+        crate::config::FlashAttentionType::Enabled => LlamaFlashAttnType::Enabled,
+    };
     params.kv_unified = true;
-    params.ctx_other = target_ctx;
+    params.ctx_other = target_ctx.cast();
     let threads = config
         .n_threads
         .or_else(|| {
@@ -590,7 +594,18 @@ fn draft_context_params(
             .and_then(|threads| i32::try_from(threads).ok())
             .unwrap_or(threads);
     }
-    params
+    Ok(params)
+}
+
+/// Resolve a configured cache-type code to the upstream ggml type the draft
+/// context stores. Publicly constructed configs can carry codes outside the
+/// validated catalog, and the generated `ggml_type` enum has gaps, so an
+/// unchecked conversion would be undefined behavior; refuse instead.
+fn cache_ggml_type(field: &str, code: u32) -> Result<skippy_ffi::llama_draft::GgmlType> {
+    let code = i32::try_from(code)
+        .with_context(|| format!("draft {field} cache type {code} exceeds i32"))?;
+    skippy_ffi::llama_draft::ggml_type_from_cache_code(code)
+        .with_context(|| format!("draft {field} cache type {code} is not a declared ggml type"))
 }
 
 /// Draft `(n_batch, n_ubatch)` for a target's batch sizes. Non-causal
@@ -837,7 +852,8 @@ impl StageModel {
         // Every lane shares one target context; a scratch session exposes it
         // and refreshes any installed stage program for layer capture.
         let probe = self.create_session()?;
-        let target_ctx = unsafe { skippy_ffi::skippy_session_llama_context(probe.raw) };
+        let target_ctx: *mut Opaque =
+            unsafe { skippy_ffi::skippy_session_llama_context(probe.raw) }.cast();
         if target_ctx.is_null() {
             bail!("target session has no llama context");
         }

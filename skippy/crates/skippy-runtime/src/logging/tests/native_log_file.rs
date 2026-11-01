@@ -68,7 +68,7 @@ fn native_log_writer_flushes_newline_and_partial_line() -> anyhow::Result<()> {
 
     let message = CString::new("buffered native log line\n")?;
     unsafe {
-        write_native_log(0, message.as_ptr(), ptr::null_mut());
+        write_native_log(log_level(0), message.as_ptr(), ptr::null_mut());
     }
 
     let contents = fs::read_to_string(&path)?;
@@ -87,7 +87,7 @@ fn native_log_writer_flushes_newline_and_partial_line() -> anyhow::Result<()> {
 
     let message = CString::new("partial native log line")?;
     unsafe {
-        write_native_log(0, message.as_ptr(), ptr::null_mut());
+        write_native_log(log_level(0), message.as_ptr(), ptr::null_mut());
     }
     restore_native_logs();
 
@@ -148,14 +148,20 @@ fn raw_sink_receives_severity_and_text_without_filtered_forwarding() {
     set_native_log_sink(Arc::new(RecordingSink(sender)));
     let message = CString::new("llama_model_loader: loading weights\n").unwrap();
     // SAFETY: The CString stays alive for the synchronous callback invocation.
-    unsafe { write_native_log(2, message.as_ptr(), ptr::null_mut()) };
+    unsafe { write_native_log(log_level(2), message.as_ptr(), ptr::null_mut()) };
     assert_eq!(
         receiver.try_recv().unwrap(),
         (2, message.to_string_lossy().into_owned())
     );
     let invalid = CString::new(vec![0xff]).unwrap();
     // SAFETY: CString guarantees a live, NUL-terminated buffer even for non-UTF8 bytes.
-    unsafe { write_native_log(4, invalid.as_ptr(), ptr::null_mut()) };
+    unsafe { write_native_log(log_level(4), invalid.as_ptr(), ptr::null_mut()) };
     assert_eq!(receiver.try_recv().unwrap(), (4, "�".into()));
     restore_native_logs();
+}
+
+#[cfg(test)]
+fn log_level(level: i32) -> skippy_ffi::bindings::llama::ggml_log_level {
+    // Test helper: the generated enum mirrors the C values verbatim.
+    unsafe { std::mem::transmute(level) }
 }

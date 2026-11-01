@@ -1,3 +1,5 @@
+use std::ffi::c_char;
+
 use anyhow::{Context, Result, anyhow, bail};
 use skippy_ffi::{
     ACTIVATION_MAX_PARTS, ActivationBoundaryDesc as RawActivationBoundaryDesc,
@@ -851,12 +853,12 @@ impl SamplingConfig {
             ));
         }
         let mut logit_bias = [RawLogitBias {
-            token_id: 0,
+            token: 0,
             bias: 0.0,
         }; MAX_LOGIT_BIAS];
         for (target, source) in logit_bias.iter_mut().zip(&self.logit_bias) {
             *target = RawLogitBias {
-                token_id: source.token_id,
+                token: source.token_id,
                 bias: source.bias,
             };
         }
@@ -911,7 +913,7 @@ impl SamplingConfig {
             samplers,
             ignore_eos: u32::from(self.ignore_eos),
             dry_sequence_breaker_count: self.dry.sequence_breakers.len() as u32,
-            dry_sequence_breakers,
+            dry_sequence_breakers: dry_sequence_breakers.map(|row| row.map(|byte| byte as c_char)),
             logit_bias,
             reasoning_budget_tokens: self.reasoning_budget.native_tokens()?,
             top_logprobs: self.top_logprobs.unwrap_or(0),

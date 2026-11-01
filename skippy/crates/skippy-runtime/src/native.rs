@@ -148,7 +148,8 @@ fn capability_from_state_probes(
 }
 
 fn loaded_model_capability(raw: *mut RawModel) -> Option<LoadedModelCapability> {
-    let model = unsafe { skippy_ffi::skippy_model_llama_model(raw) };
+    let model: *const skippy_ffi::Opaque =
+        unsafe { skippy_ffi::skippy_model_llama_model(raw) }.cast();
     if model.is_null() {
         return None;
     }

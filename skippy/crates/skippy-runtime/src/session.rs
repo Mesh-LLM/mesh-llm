@@ -109,7 +109,8 @@ impl StageSession {
     /// deltas between builds -- an inference that cannot separate "reuse is
     /// firing and the residual cost is elsewhere" from "reuse is not firing".
     pub fn graph_reuse_stats(&self) -> Option<GraphReuseStats> {
-        let ctx = unsafe { skippy_ffi::skippy_session_llama_context(self.raw) };
+        let ctx: *mut skippy_ffi::Opaque =
+            unsafe { skippy_ffi::skippy_session_llama_context(self.raw) }.cast();
         if ctx.is_null() {
             return None;
         }
