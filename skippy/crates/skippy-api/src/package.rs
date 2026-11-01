@@ -337,16 +337,39 @@ fn untied_token_embd_bytes<'a>(tensors: impl Iterator<Item = (&'a str, u64)>) ->
     if untied { embd } else { 0 }
 }
 
-/// `(name, stored bytes)` of every tensor, from a package-v2 manifest or the
-/// GGUF files of a direct load.
+/// The local directory of a package-v2 identity: the package reference for a
+/// local package, else the cached snapshot holding its metadata carrier, as
+/// for a Hugging Face package, whose reference is an `hf://` name.
+fn package_v2_dir(identity: &SkippyPackageIdentity) -> Option<PathBuf> {
+    let local = Path::new(&identity.package_ref);
+    if local.join(PACKAGE_V2_MANIFEST).is_file() {
+        return Some(local.to_path_buf());
+    }
+    identity
+        .source_model_path
+        .ancestors()
+        .skip(1)
+        .find(|dir| dir.join(PACKAGE_V2_MANIFEST).is_file())
+        .map(Path::to_path_buf)
+}
+
+/// `(name, stored bytes)` of every tensor, from a package-v2 manifest resolved
+/// through its metadata carrier, or the GGUF files of a direct load.
 fn split_dflash_tensor_sizes(identity: &SkippyPackageIdentity) -> Result<Vec<(String, u64)>> {
-    let manifest_path = Path::new(&identity.package_ref).join(PACKAGE_V2_MANIFEST);
-    if manifest_path.is_file() {
+    if let Some(package_dir) = package_v2_dir(identity) {
+        let manifest_path = package_dir.join(PACKAGE_V2_MANIFEST);
         let manifest: PackageManifestV2 = serde_json::from_slice(
             &std::fs::read(&manifest_path)
                 .with_context(|| format!("read {}", manifest_path.display()))?,
         )
         .context("parse package-v2 manifest")?;
+        // A package root keeps its tensor catalog in the metadata carrier.
+        let manifest = if manifest.tensor_catalog.entries.is_empty() {
+            skippy_model::package_carrier::resolve_package_carrier_from_dir(manifest, &package_dir)
+                .context("resolve package-v2 metadata carrier")?
+        } else {
+            manifest
+        };
         return Ok(manifest
             .tensor_catalog
             .entries
@@ -641,7 +664,49 @@ pub mod certification;
 
 #[cfg(test)]
 mod split_dflash_tests {
-    use super::untied_token_embd_bytes;
+    use super::{
+        PACKAGE_V2_MANIFEST, SkippyPackageIdentity, package_v2_dir, untied_token_embd_bytes,
+    };
+
+    fn identity(package_ref: &str, source_model_path: std::path::PathBuf) -> SkippyPackageIdentity {
+        SkippyPackageIdentity {
+            package_ref: package_ref.to_string(),
+            manifest_sha256: String::new(),
+            source_model_path,
+            source_model_sha256: String::new(),
+            source_model_bytes: 1,
+            source_files: Vec::new(),
+            layer_weight_bytes: Vec::new(),
+            layer_count: 1,
+            activation_width: 1,
+            tensor_count: 0,
+            generation: None,
+            publisher_defaults: None,
+        }
+    }
+
+    #[test]
+    fn a_hugging_face_package_is_read_from_its_cached_snapshot() {
+        let snapshot = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(snapshot.path().join("shared")).unwrap();
+        std::fs::write(snapshot.path().join(PACKAGE_V2_MANIFEST), b"{}").unwrap();
+        let carrier = snapshot.path().join("shared/metadata.gguf");
+        assert_eq!(
+            package_v2_dir(&identity("hf://meshllm/demo@abc123", carrier.clone())),
+            Some(snapshot.path().to_path_buf())
+        );
+        let local = snapshot.path().to_string_lossy().into_owned();
+        assert_eq!(
+            package_v2_dir(&identity(&local, carrier)),
+            Some(snapshot.path().to_path_buf())
+        );
+        // A direct GGUF load has no package directory.
+        let direct = tempfile::tempdir().unwrap();
+        assert_eq!(
+            package_v2_dir(&identity("model.gguf", direct.path().join("model.gguf"))),
+            None
+        );
+    }
 
     #[test]
     fn an_untied_target_charges_its_token_embeddings_to_the_final_stage() {
