@@ -28,6 +28,7 @@ export default [
     links: [
       ["Run your first model", "/docs/pages/quickstart/#3-start-one-private-node"],
       ["Runtime lifecycle", "/docs/pages/runtime-lifecycle/"],
+      ["One model across meshes", "/docs/pages/shared-serving/"],
       ["Choose a model", "/docs/pages/choose-a-model/"],
       ["Running large models", "/docs/pages/running-large-models/"],
       ["Console chat", "/docs/pages/console-chat/"],
@@ -87,6 +88,7 @@ export default [
     links: [
       ["Join the public mesh", "/docs/pages/public-mesh/"],
       ["Your own mesh", "/docs/pages/private-meshes/"],
+      ["One model across meshes", "/docs/pages/shared-serving/"],
       ["Publish mesh", "/docs/pages/publish-mesh/"]
     ]
   },

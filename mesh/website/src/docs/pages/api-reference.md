@@ -28,6 +28,16 @@ The lifecycle, activity, configuration, and owner-control management routes are
 loopback-only. A non-loopback caller is rejected even if it can reach the
 management listener.
 
+## Independent-membership control
+
+`serve --memberships-config` uses a separate loopback management listener,
+whose URL is reported at startup. `GET /api/shared-serving` reports shared host
+and membership status; membership actions support pause, resume, leave, and
+reconnect. Every request requires the per-start management token as a Bearer
+credential. These routes are not served by the ordinary console on port `3131`.
+See [membership control and status](/docs/pages/shared-serving/#observe-and-control-memberships)
+for the routes and lifecycle behavior.
+
 ## OpenAI-compatible endpoint
 
 Use the inference endpoint for clients, SDKs, and agents:
