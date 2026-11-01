@@ -45,6 +45,7 @@ mod tests {
             control_tx: Some(control),
             task: None,
             shutdown,
+            native_node: None,
         };
         let runtime = tokio::spawn(async move {
             match requests.recv().await.expect("discovery request") {
