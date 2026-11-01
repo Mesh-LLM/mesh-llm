@@ -1113,9 +1113,7 @@ pub(super) async fn start_local_openai_model(
     // Only a direct GGUF load keeps a DFlash draft (package loads are staged).
     let default_dflash_draft = package
         .is_none()
-        .then(|| {
-            planned_default_dflash_draft(&spec, &model_name, compact_meta.as_ref(), kv_cache_quant)
-        })
+        .then(|| planned_default_dflash_draft(&spec, &model_name, compact_meta.as_ref()))
         .flatten();
     let (plan, default_dflash_planned) =
         plan_with_default_dflash_draft(plan_input, default_dflash_draft);

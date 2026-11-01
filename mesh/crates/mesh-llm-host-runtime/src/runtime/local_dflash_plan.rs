@@ -51,7 +51,6 @@ pub(super) fn planned_default_dflash_draft(
     spec: &LocalOpenAiModelStartSpec<'_>,
     model_name: &str,
     compact_meta: Option<&models::gguf::GgufCompactMeta>,
-    kv_cache_quant: models::gguf::GgufKvCacheQuant,
 ) -> Option<PlannedDFlashDraft> {
     let resolved = resolve_local_openai_skippy_config(
         spec,
@@ -80,7 +79,14 @@ pub(super) fn planned_default_dflash_draft(
             (path, bytes, false)
         }
     };
-    let (kv_bytes_per_token, compute_bytes) = draft_context_bytes(&path, kv_cache_quant);
+    // The draft context takes its own cache types (`draft_cache_type_k/v`,
+    // F16 by default), not the target's.
+    let draft_kv_cache_quant = models::gguf::GgufKvCacheQuant::from_llama_args(
+        &resolved.speculative.decode.draft_cache_type_k,
+        &resolved.speculative.decode.draft_cache_type_v,
+    )
+    .unwrap_or(models::gguf::GgufKvCacheQuant::F16);
+    let (kv_bytes_per_token, compute_bytes) = draft_context_bytes(&path, draft_kv_cache_quant);
     Some(PlannedDFlashDraft {
         draft: PlannedSpeculativeDraft {
             weight_bytes,
@@ -93,7 +99,8 @@ pub(super) fn planned_default_dflash_draft(
 }
 
 /// KV bytes per token and compute bytes of the draft context at `path`. The
-/// draft context has the target's context size, lanes and cache types, and
+/// draft context has the target's context size and lanes, the draft cache
+/// types, and
 /// reserves logits for a full microbatch. Unreadable metadata charges nothing;
 /// the attach then fails and the load falls back without a default draft.
 fn draft_context_bytes(path: &Path, kv_cache_quant: models::gguf::GgufKvCacheQuant) -> (u64, u64) {
