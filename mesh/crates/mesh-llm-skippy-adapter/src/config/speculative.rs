@@ -13,10 +13,14 @@ use skippy_serving::{
     NgramProposerKind, SpeculativeDecodeConfig, VerifyWindowConfig,
 };
 
-use super::dflash::{DFlashSelection, dflash_decode_config, select_dflash_draft};
+use super::dflash::{
+    DFLASH_DRAFT_CONTEXT_AVAILABLE, DFlashDefaultSelection, DFlashSelection, choose_dflash_draft,
+    dflash_decode_config, dflash_max_draft_tokens,
+};
 use super::support::{pick_owned, pick_string, pick_string_owned, resolve_bool_or_auto};
 use super::types::ResolvedSpeculativeConfig;
 use mesh_llm_config::{BoolOrAuto, SpeculativeConfig};
+use skippy_model_artifact::gguf::GgufCompactMeta;
 
 pub(super) fn resolve_speculative_config(
     model_config: Option<&SpeculativeConfig>,
@@ -24,6 +28,38 @@ pub(super) fn resolve_speculative_config(
     _model_id: &str,
     model_path: &Path,
     package_generation: Option<&PackageGenerationInfo>,
+    target_meta: Option<&GgufCompactMeta>,
+) -> Result<ResolvedSpeculativeConfig> {
+    let resolve = |dflash_over_auto_mtp| {
+        resolve_speculative(
+            model_config,
+            global_config,
+            model_path,
+            package_generation,
+            target_meta,
+            dflash_over_auto_mtp,
+        )
+    };
+    let mut resolved = resolve(true)?;
+    if resolved.default_dflash.is_some() {
+        // The plan this default replaced, if it replaced automatic native MTP.
+        let without = resolve(false)?;
+        if without.default_dflash.is_none() {
+            resolved.native_mtp_fallback = Some(Box::new(without));
+        }
+    }
+    Ok(resolved)
+}
+
+/// `dflash_over_auto_mtp` lets a known DFlash pairing replace native MTP that
+/// is on only by default.
+fn resolve_speculative(
+    model_config: Option<&SpeculativeConfig>,
+    global_config: Option<&SpeculativeConfig>,
+    model_path: &Path,
+    package_generation: Option<&PackageGenerationInfo>,
+    target_meta: Option<&GgufCompactMeta>,
+    dflash_over_auto_mtp: bool,
 ) -> Result<ResolvedSpeculativeConfig> {
     let spec_default = pick_owned(
         model_config.and_then(|config| config.spec_default.as_ref()),
@@ -70,6 +106,7 @@ pub(super) fn resolve_speculative_config(
         package_generation,
         model_path,
     )?;
+    let mtp_yields = mtp_yields(dflash_over_auto_mtp, &strategy, model_config, global_config);
     let mode = pick_string_owned(
         model_config.and_then(|config| config.mode.as_deref()),
         global_config.and_then(|config| config.mode.as_deref()),
@@ -110,11 +147,24 @@ pub(super) fn resolve_speculative_config(
         global_config.and_then(|config| config.pairing_fault.as_deref()),
         Some("warn_disable"),
     ));
-    if let Some(dflash_draft) = select_dflash_draft(&DFlashSelection {
-        strategy: &strategy,
-        mode: &mode,
-        draft_model_path: draft_model_path.as_deref(),
-    })? {
+    if let Some((dflash_draft, default_dflash)) = choose_dflash_draft(
+        &DFlashSelection {
+            strategy: &strategy,
+            mode: &mode,
+            draft_model_path: draft_model_path.as_deref(),
+        },
+        &DFlashDefaultSelection {
+            auto_defaults_enabled,
+            draft_context_available: DFLASH_DRAFT_CONTEXT_AVAILABLE,
+            native_mtp_decides: native_mtp_enabled && !mtp_yields,
+            has_ngram_settings: ngram_min > 0 || ngram_max > 0,
+            package_declares_speculation: package_generation
+                .is_some_and(|generation| generation.speculative_decoding.is_some()),
+            target_meta,
+            model_path,
+        },
+    )? {
+        let draft_max_tokens = dflash_max_draft_tokens(configured_draft_max_tokens, default_dflash);
         let base = resolve_decode_config(DecodeResolutionInput {
             requested_strategy: "disabled",
             native_mtp_enabled: false,
@@ -125,8 +175,7 @@ pub(super) fn resolve_speculative_config(
             package_generation,
             has_draft_model: false,
         })?;
-        let decode =
-            dflash_decode_config(base, &strategy, dflash_draft, configured_draft_max_tokens);
+        let decode = dflash_decode_config(base, &strategy, &dflash_draft, draft_max_tokens);
         decode.validate()?;
         return Ok(ResolvedSpeculativeConfig {
             strategy,
@@ -135,11 +184,13 @@ pub(super) fn resolve_speculative_config(
             mode: "disabled".to_string(),
             draft_model_path: None,
             pairing_fault,
-            draft_max_tokens: configured_draft_max_tokens,
+            draft_max_tokens,
             draft_min_tokens: 0,
-            explicit: true,
+            explicit: default_dflash.is_none(),
             draft_n_gpu_layers,
             decode,
+            default_dflash,
+            native_mtp_fallback: None,
         });
     }
     let explicit = mode != "auto"
@@ -211,7 +262,30 @@ pub(super) fn resolve_speculative_config(
         explicit,
         draft_n_gpu_layers,
         decode,
+        default_dflash: None,
+        native_mtp_fallback: None,
     })
+}
+
+/// Whether native MTP may yield to a known DFlash pairing. Under `auto` it is
+/// on because the model carries NextN layers, not because anyone asked for
+/// it, unless either layer tunes native MTP.
+fn mtp_yields(
+    dflash_over_auto_mtp: bool,
+    strategy: &str,
+    model_config: Option<&SpeculativeConfig>,
+    global_config: Option<&SpeculativeConfig>,
+) -> bool {
+    dflash_over_auto_mtp
+        && strategy == "auto"
+        && ![model_config, global_config]
+            .into_iter()
+            .flatten()
+            .any(|config| {
+                config.native_mtp_reject_cooldown_tokens.is_some()
+                    || config.native_mtp_suppress_cooldown_drafts.is_some()
+                    || config.native_mtp_suppress_cooldown_draft_limit.is_some()
+            })
 }
 
 fn configured_draft_source(config: &SpeculativeConfig) -> Option<String> {

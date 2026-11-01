@@ -176,6 +176,7 @@ impl LocalOpenAiOptions {
                     n_threads: self.tuning.n_threads,
                     n_threads_batch: self.tuning.n_threads_batch,
                     mtp_source,
+                    recurrent_rollback_tokens: 0,
                     metrics_otlp_grpc: self.metrics_otlp_grpc,
                     telemetry_queue_capacity: self.telemetry_queue_capacity,
                     telemetry_level: self.telemetry_level,

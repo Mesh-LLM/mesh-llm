@@ -1852,6 +1852,7 @@ verify_window_runahead_tokens = 0
         "meshllm/test-model",
         std::path::Path::new("/nonexistent/test-model.gguf"),
         None,
+        None,
     )
     .expect("global run-ahead must resolve");
     assert_eq!(inherited.decode.verify_window.runahead_max_tokens, 256);
@@ -1860,6 +1861,7 @@ verify_window_runahead_tokens = 0
         Some(&global),
         "meshllm/test-model",
         std::path::Path::new("/nonexistent/test-model.gguf"),
+        None,
         None,
     )
     .expect("model-level zero must resolve to fixed-depth mode");
@@ -1888,6 +1890,7 @@ ngram_fallback = "draft"
         None,
         "meshllm/test-model",
         std::path::Path::new("/nonexistent/test-model.gguf"),
+        None,
         None,
     )
     .expect_err("a draft fallback with no draft model must not resolve");
@@ -1922,6 +1925,7 @@ pairing_fault = "fail_open"
         None,
         "meshllm/test-model",
         std::path::Path::new("/nonexistent/test-model.gguf"),
+        None,
         None,
     )
     .expect_err("depth 1 keeps the serial draft loop authoritative");

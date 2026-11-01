@@ -5,7 +5,7 @@ mod compact_meta;
 mod kv_cache;
 mod split_bundle;
 
-pub use compact_meta::scan_gguf_compact_meta;
+pub use compact_meta::{scan_gguf_compact_meta, scan_gguf_dflash_target_layers};
 pub use kv_cache::{GgufKvCacheQuant, GgufKvCacheType};
 pub use split_bundle::scan_gguf_bundle_total_parameters;
 
@@ -297,10 +297,18 @@ fn read_gguf_value_as_string_opt(
     }
 }
 
+/// Recurrent-state planes a native sequence holds by default: the current
+/// state plus two rollback snapshots (`n_rs_seq = 2`).
+pub const DEFAULT_RECURRENT_STATE_PLANES: u64 = 3;
+
 #[derive(Clone, Debug, Default)]
 pub struct GgufCompactMeta {
     pub architecture: String,
     pub parameter_size: Option<String>,
+    /// `general.basename`, the model family without fine-tune or quant.
+    pub basename: Option<String>,
+    /// `general.name`, the full model name.
+    pub name: Option<String>,
     pub context_length: u32,
     /// Declared per-sequence token budget (`<arch>.max_len`), for models such
     /// as Laya whose reads are bounded by it rather than by a context window.
@@ -348,6 +356,11 @@ pub struct GgufProjectorMeta {
 }
 
 impl GgufCompactMeta {
+    /// The model's name, preferring `general.basename` over `general.name`.
+    pub fn model_name(&self) -> Option<&str> {
+        self.basename.as_deref().or(self.name.as_deref())
+    }
+
     /// Number of decoder layers executed by the primary model graph.
     ///
     /// GGUF `block_count` includes appended NextN/MTP draft blocks, while
@@ -408,8 +421,22 @@ impl GgufCompactMeta {
     /// each live native sequence owns three state planes (current + two
     /// snapshots). Attention-only layers report zero.
     pub fn recurrent_bytes_per_native_sequence_by_layer(&self) -> Vec<u64> {
+        self.recurrent_plane_bytes_by_layer()
+            .into_iter()
+            .map(|bytes| bytes.saturating_mul(DEFAULT_RECURRENT_STATE_PLANES))
+            .collect()
+    }
+
+    /// F32 bytes of one recurrent-state plane (the state or one rollback
+    /// snapshot) for one native sequence, summed over layers.
+    pub fn recurrent_plane_bytes_per_native_sequence(&self) -> u64 {
+        self.recurrent_plane_bytes_by_layer()
+            .into_iter()
+            .fold(0, u64::saturating_add)
+    }
+
+    fn recurrent_plane_bytes_by_layer(&self) -> Vec<u64> {
         const F32_BYTES: u64 = 4;
-        const RECURRENT_STATE_PLANES: u64 = 3;
 
         let conv_width = u64::from(self.ssm_conv_kernel.saturating_sub(1));
         let inner = u64::from(self.ssm_inner_size);
@@ -418,10 +445,7 @@ impl GgufCompactMeta {
         let rolling = conv_width
             .saturating_mul(inner.saturating_add(groups.saturating_mul(state).saturating_mul(2)));
         let state = state.saturating_mul(inner);
-        let bytes = rolling
-            .saturating_add(state)
-            .saturating_mul(F32_BYTES)
-            .saturating_mul(RECURRENT_STATE_PLANES);
+        let bytes = rolling.saturating_add(state).saturating_mul(F32_BYTES);
 
         self.recurrent_layer_mask()
             .into_iter()
@@ -643,6 +667,29 @@ fn read_token_type_array(f: &mut GgufReader, typ: GgufType) -> std::io::Result<V
         types.push(value);
     }
     Ok(types)
+}
+
+/// The number of tokens in a GGUF's tokenizer vocabulary
+/// (`tokenizer.ggml.tokens`), read from the array header without reading the
+/// tokens. `None` when the file has no readable vocabulary.
+pub fn scan_gguf_vocab_token_count(path: &Path) -> Option<u64> {
+    let GgufHeader {
+        file: mut f, n_kv, ..
+    } = open_gguf_header(path)?;
+    for _ in 0..n_kv {
+        let key = read_gguf_string(&mut f).ok()?;
+        let typ = GgufType::from_u32(read_u32(&mut f).ok()?)?;
+        if key == "tokenizer.ggml.tokens" {
+            if typ != GgufType::Array
+                || GgufType::from_u32(read_u32(&mut f).ok()?) != Some(GgufType::String)
+            {
+                return None;
+            }
+            return read_u64(&mut f).ok().filter(|&count| count > 0);
+        }
+        skip_gguf_value(&mut f, typ).ok()?;
+    }
+    None
 }
 
 /// Reads a source GGUF's tokenizer vocabulary and its control-token markers.
@@ -1020,6 +1067,10 @@ mod tests {
             meta.recurrent_bytes_per_configured_lane_by_layer(),
             vec![expected * 2, expected * 2, expected * 2, 0]
         );
+        assert_eq!(
+            meta.recurrent_plane_bytes_per_native_sequence(),
+            3 * base_elements * 4
+        );
         let _ = std::fs::remove_file(path);
     }
 
@@ -1166,6 +1217,7 @@ mod tests {
         assert!(!inventory.tokens[0].is_control);
         assert_eq!(inventory.tokens[1].raw, b"<eos>");
         assert!(inventory.tokens[1].is_control);
+        assert_eq!(scan_gguf_vocab_token_count(&path), Some(2));
         let _ = std::fs::remove_file(path);
     }
 
@@ -1224,6 +1276,32 @@ mod tests {
 
         let path = write_bytes("skippy-model-artifact-gguf-malicious", &bytes);
         assert!(scan_gguf_compact_meta(&path).is_none());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn scan_gguf_compact_meta_reads_the_model_name() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0i64.to_le_bytes());
+        bytes.extend_from_slice(&3i64.to_le_bytes());
+        for (key, value) in [
+            ("general.name", "Qwen3.8-27B-Instruct"),
+            ("general.architecture", "qwen35"),
+            ("general.basename", "Qwen3.8-27B"),
+        ] {
+            push_gguf_string(&mut bytes, key);
+            bytes.extend_from_slice(&(GgufType::String as u32).to_le_bytes());
+            push_gguf_string(&mut bytes, value);
+        }
+
+        let path = write_bytes("skippy-model-artifact-gguf-name", &bytes);
+        let mut meta = scan_gguf_compact_meta(&path).expect("should parse GGUF");
+        assert_eq!(meta.name.as_deref(), Some("Qwen3.8-27B-Instruct"));
+        assert_eq!(meta.model_name(), Some("Qwen3.8-27B"));
+        meta.basename = None;
+        assert_eq!(meta.model_name(), Some("Qwen3.8-27B-Instruct"));
         let _ = std::fs::remove_file(path);
     }
 
