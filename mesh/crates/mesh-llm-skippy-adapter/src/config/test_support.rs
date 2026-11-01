@@ -71,6 +71,22 @@ pub(super) fn temp_model_file_with_architecture_and_tensor_names(
     file
 }
 
+/// Header metadata of a target model, as the GGUF scanner reports it.
+pub(super) fn target_meta(
+    architecture: &str,
+    block_count: u32,
+    embedding: u32,
+    experts: u32,
+) -> skippy_model_artifact::gguf::GgufCompactMeta {
+    skippy_model_artifact::gguf::GgufCompactMeta {
+        architecture: architecture.to_string(),
+        layer_count: block_count,
+        embedding_size: embedding,
+        expert_count: experts,
+        ..Default::default()
+    }
+}
+
 pub(super) fn parse_config(toml: &str) -> MeshConfig {
     toml::from_str(toml).expect("config should parse")
 }

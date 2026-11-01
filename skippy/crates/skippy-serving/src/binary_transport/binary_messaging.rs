@@ -470,6 +470,7 @@ fn run_binary_stage(
             mtp_source,
             n_threads: tuning.n_threads,
             n_threads_batch: tuning.n_threads_batch,
+            recurrent_rollback_tokens: 0,
         },
         None,
     )?

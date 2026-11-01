@@ -13,10 +13,14 @@ use skippy_serving::{
     NgramProposerKind, SpeculativeDecodeConfig, VerifyWindowConfig,
 };
 
-use super::dflash::{DFlashSelection, dflash_decode_config, select_dflash_draft};
+use super::dflash::{
+    DFlashDefaultSelection, DFlashSelection, choose_dflash_draft, dflash_decode_config,
+    dflash_max_draft_tokens,
+};
 use super::support::{pick_owned, pick_string, pick_string_owned, resolve_bool_or_auto};
 use super::types::ResolvedSpeculativeConfig;
 use mesh_llm_config::{BoolOrAuto, SpeculativeConfig};
+use skippy_model_artifact::gguf::GgufCompactMeta;
 
 pub(super) fn resolve_speculative_config(
     model_config: Option<&SpeculativeConfig>,
@@ -24,6 +28,7 @@ pub(super) fn resolve_speculative_config(
     _model_id: &str,
     model_path: &Path,
     package_generation: Option<&PackageGenerationInfo>,
+    target_meta: Option<&GgufCompactMeta>,
 ) -> Result<ResolvedSpeculativeConfig> {
     let spec_default = pick_owned(
         model_config.and_then(|config| config.spec_default.as_ref()),
@@ -110,11 +115,23 @@ pub(super) fn resolve_speculative_config(
         global_config.and_then(|config| config.pairing_fault.as_deref()),
         Some("warn_disable"),
     ));
-    if let Some(dflash_draft) = select_dflash_draft(&DFlashSelection {
-        strategy: &strategy,
-        mode: &mode,
-        draft_model_path: draft_model_path.as_deref(),
-    })? {
+    if let Some((dflash_draft, default_dflash)) = choose_dflash_draft(
+        &DFlashSelection {
+            strategy: &strategy,
+            mode: &mode,
+            draft_model_path: draft_model_path.as_deref(),
+        },
+        &DFlashDefaultSelection {
+            auto_defaults_enabled,
+            native_mtp_enabled,
+            has_ngram_settings: ngram_min > 0 || ngram_max > 0,
+            package_declares_speculation: package_generation
+                .is_some_and(|generation| generation.speculative_decoding.is_some()),
+            target_meta,
+            model_path,
+        },
+    )? {
+        let draft_max_tokens = dflash_max_draft_tokens(configured_draft_max_tokens);
         let base = resolve_decode_config(DecodeResolutionInput {
             requested_strategy: "disabled",
             native_mtp_enabled: false,
@@ -125,8 +142,7 @@ pub(super) fn resolve_speculative_config(
             package_generation,
             has_draft_model: false,
         })?;
-        let decode =
-            dflash_decode_config(base, &strategy, dflash_draft, configured_draft_max_tokens);
+        let decode = dflash_decode_config(base, &strategy, &dflash_draft, draft_max_tokens);
         decode.validate()?;
         return Ok(ResolvedSpeculativeConfig {
             strategy,
@@ -135,11 +151,12 @@ pub(super) fn resolve_speculative_config(
             mode: "disabled".to_string(),
             draft_model_path: None,
             pairing_fault,
-            draft_max_tokens: configured_draft_max_tokens,
+            draft_max_tokens,
             draft_min_tokens: 0,
-            explicit: true,
+            explicit: default_dflash.is_none(),
             draft_n_gpu_layers,
             decode,
+            default_dflash,
         });
     }
     let explicit = mode != "auto"
@@ -211,6 +228,7 @@ pub(super) fn resolve_speculative_config(
         explicit,
         draft_n_gpu_layers,
         decode,
+        default_dflash: None,
     })
 }
 
