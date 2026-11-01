@@ -27,6 +27,11 @@ pub const LLAMA_TOKEN_NULL: i32 = -1;
 pub const STAGE_STATE_HEADER_BYTES: usize = 10 * 4;
 pub const STAGE_SAMPLING_CONFIG_BASE_BYTES: usize = 28 * 4;
 pub const STAGE_LOGIT_BIAS_WIRE_BYTES: usize = 4 + 4;
+/// Number of `i64` statistics every stage reply carries.
+pub const STAGE_REPLY_STATS_FIELD_COUNT: usize = 29;
+/// Wire bytes of the statistics block every stage reply carries.
+pub const STAGE_REPLY_STATS_WIRE_BYTES: usize =
+    STAGE_REPLY_STATS_FIELD_COUNT * std::mem::size_of::<i64>();
 pub const STAGE_WIRE_FIXED_HEADER_BYTES: usize = 6 * 4 + STAGE_STATE_HEADER_BYTES + 2 * 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -22,8 +22,8 @@ use skippy_protocol::{
 use skippy_protocol::{
     MessageBase, SCHEMA_VERSION, StageConfig, StageTopology,
     binary::{
-        READY_MAGIC, StageNativeMtpDraft, StageWireMessage, WireMessageKind, WireReplyKind,
-        send_ready,
+        READY_MAGIC, STAGE_REPLY_STATS_WIRE_BYTES, StageNativeMtpDraft, StageWireMessage,
+        WireMessageKind, WireReplyKind, send_ready,
     },
 };
 use skippy_runtime::{
@@ -350,14 +350,13 @@ pub(in crate::binary_transport) fn estimated_reply_wire_bytes(
     predicted_token_count: usize,
 ) -> usize {
     const REPLY_HEADER_BYTES: usize = 3 * std::mem::size_of::<i32>();
-    const REPLY_STATS_BYTES: usize = 27 * std::mem::size_of::<i64>();
     let token_count = match reply_kind {
         WireReplyKind::Ack => 0,
         WireReplyKind::PredictedToken => 1,
         WireReplyKind::PredictedTokens => predicted_token_count,
         WireReplyKind::TokenScores => predicted_token_count + 1,
     };
-    REPLY_HEADER_BYTES + token_count * std::mem::size_of::<i32>() + REPLY_STATS_BYTES
+    REPLY_HEADER_BYTES + token_count * std::mem::size_of::<i32>() + STAGE_REPLY_STATS_WIRE_BYTES
 }
 pub(in crate::binary_transport) fn binary_message_attrs(
     config: &StageConfig,

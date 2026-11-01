@@ -7,9 +7,10 @@ use super::{
     MAX_STAGE_DRY_SEQUENCE_BREAKERS, MAX_STAGE_LOGIT_BIAS, MAX_STAGE_PREDICTED_TOKENS,
     MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES, MAX_STAGE_SIDEBAND_VALUES,
     MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC, STAGE_LOGIT_BIAS_WIRE_BYTES,
-    STAGE_SAMPLING_CONFIG_BASE_BYTES, STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES,
-    StageLogitBias, StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow,
-    StageSamplingConfig, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
+    STAGE_REPLY_STATS_FIELD_COUNT, STAGE_REPLY_STATS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES,
+    STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES, StageLogitBias, StageNativeMtpDraft,
+    StageReply, StageReplyStats, StageReplyWindow, StageSamplingConfig, StageStateHeader,
+    StageWireMessage, WireMessageKind, WireReplyKind,
     activation::{decode_activation_frame, encode_raw_activation_frame},
     invalid_data, invalid_input,
 };
@@ -891,12 +892,9 @@ fn read_string_list(
     Ok(values)
 }
 
-const REPLY_STATS_FIELD_COUNT: usize = 29;
-const REPLY_STATS_WIRE_BYTES: usize = REPLY_STATS_FIELD_COUNT * std::mem::size_of::<i64>();
-
 fn write_reply_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Result<()> {
     let fields = reply_stats_fields(stats);
-    let mut bytes = [0_u8; REPLY_STATS_WIRE_BYTES];
+    let mut bytes = [0_u8; STAGE_REPLY_STATS_WIRE_BYTES];
     for (chunk, value) in bytes
         .as_chunks_mut::<{ std::mem::size_of::<i64>() }>()
         .0
@@ -910,9 +908,9 @@ fn write_reply_stats(mut writer: impl Write, stats: StageReplyStats) -> io::Resu
 }
 
 fn read_reply_stats(mut reader: impl Read) -> io::Result<StageReplyStats> {
-    let mut bytes = [0_u8; REPLY_STATS_WIRE_BYTES];
+    let mut bytes = [0_u8; STAGE_REPLY_STATS_WIRE_BYTES];
     reader.read_exact(&mut bytes)?;
-    let mut fields = [0_i64; REPLY_STATS_FIELD_COUNT];
+    let mut fields = [0_i64; STAGE_REPLY_STATS_FIELD_COUNT];
     for (field, chunk) in fields
         .iter_mut()
         .zip(bytes.as_chunks::<{ std::mem::size_of::<i64>() }>().0.iter())
@@ -932,7 +930,7 @@ fn read_reply_window(mut reader: impl Read) -> io::Result<StageReplyWindow> {
     })
 }
 
-fn reply_stats_fields(stats: StageReplyStats) -> [i64; REPLY_STATS_FIELD_COUNT] {
+fn reply_stats_fields(stats: StageReplyStats) -> [i64; STAGE_REPLY_STATS_FIELD_COUNT] {
     [
         stats.kv_lookup_hits,
         stats.kv_lookup_misses,
@@ -966,7 +964,7 @@ fn reply_stats_fields(stats: StageReplyStats) -> [i64; REPLY_STATS_FIELD_COUNT] 
     ]
 }
 
-fn reply_stats_from_fields(fields: [i64; REPLY_STATS_FIELD_COUNT]) -> StageReplyStats {
+fn reply_stats_from_fields(fields: [i64; STAGE_REPLY_STATS_FIELD_COUNT]) -> StageReplyStats {
     StageReplyStats {
         kv_lookup_hits: fields[0],
         kv_lookup_misses: fields[1],
