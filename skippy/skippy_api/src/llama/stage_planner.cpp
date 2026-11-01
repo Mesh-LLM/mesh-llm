@@ -519,7 +519,8 @@ configs_from(const std::vector<std::shared_ptr<const StagePlan>>& plans) {
 } // namespace
 
 std::shared_ptr<const PlanIndex>
-PlanStore::publish(const std::string& key, std::vector<std::shared_ptr<const StagePlan>> plans) {
+PlanStore::publish(const std::string& key,
+                   const std::vector<std::shared_ptr<const StagePlan>>& plans) {
     std::shared_ptr<const PlanIndex> current = index_.load(std::memory_order_acquire);
     for (;;) {
         if (current->by_key.contains(key)) return current; // a racing publisher won
@@ -642,7 +643,7 @@ std::expected<PlanLease, PlanFailure> plan_model_stages(LlamaBackend& backend,
     for (StagePlan& plan : realized) {
         stored.push_back(std::make_shared<const StagePlan>(std::move(plan)));
     }
-    const std::shared_ptr<const PlanIndex> winner = store.publish(key, std::move(stored));
+    const std::shared_ptr<const PlanIndex> winner = store.publish(key, stored);
     auto configs = configs_from(winner->by_key.at(key));
     if (!configs) return std::unexpected(configs.error());
     return PlanLease{.configs = std::move(*configs), .pinned = winner};

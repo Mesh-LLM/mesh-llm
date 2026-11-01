@@ -245,7 +245,7 @@ public:
     /// first; either way returns the index that won, so callers observe the
     /// other thread's work instead of planning twice.
     [[nodiscard]] std::shared_ptr<const PlanIndex>
-    publish(const std::string& key, std::vector<std::shared_ptr<const StagePlan>> plans);
+    publish(const std::string& key, const std::vector<std::shared_ptr<const StagePlan>>& plans);
 
 private:
     skippy::detail::atomic_shared_ptr<const PlanIndex> index_;

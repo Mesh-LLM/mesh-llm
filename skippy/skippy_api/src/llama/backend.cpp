@@ -140,6 +140,15 @@ std::optional<Token> decoder_start_token(const llama_model& model, const llama_v
     return Token{start};
 }
 
+// The session's rerank prompt source, or null when the model ships none. One
+// lookup bound to a reference: a ternary that calls traits() twice reads as
+// two independent optionals to bugprone-unchecked-optional-access, and a
+// member-initializer cannot name a local first.
+const RerankPromptSource* session_rerank_prompt(const LlamaModel& model) {
+    const auto& rerank = model.traits().rerank_prompt;
+    return rerank.has_value() ? &*rerank : nullptr;
+}
+
 } // namespace
 
 LlamaModel::LlamaModel(llama_model_ptr model, Traits traits) noexcept
@@ -155,7 +164,7 @@ LlamaSession::LlamaSession(llama_context_ptr context, LlamaModel& model, const l
                            std::uint32_t max_tokens, std::uint32_t sequences) noexcept
     // NOLINTEND(bugprone-easily-swappable-parameters)
     : context_(std::move(context)), model_(model), vocab_(vocab), workload_(workload),
-      rerank_prompt_(model.traits().rerank_prompt ? &*model.traits().rerank_prompt : nullptr),
+      rerank_prompt_(session_rerank_prompt(model)),
       decoder_start_(decoder_start), batch_limit_(llama_n_ubatch(context_.get())),
       max_tokens_(max_tokens), sequences_(sequences) {
     // Pre-size the tokenize scratch to the session's whole budget: the first
