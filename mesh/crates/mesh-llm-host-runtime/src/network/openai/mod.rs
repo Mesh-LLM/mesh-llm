@@ -11,6 +11,9 @@ mod parse_failure;
 mod request_normalize;
 pub(crate) mod request_parse;
 mod response;
+#[cfg(feature = "payments")]
+pub(crate) use response::ServedModelHeadRewrite;
+pub(crate) use response::ServedModelHeaders;
 pub(crate) use response::send_503;
 #[cfg(feature = "payments")]
 pub(crate) use response::send_error;

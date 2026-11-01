@@ -19,6 +19,7 @@ use mesh_llm_payments_types::response_usage::{ResponseEvidence, ResponseUsage};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite};
 
 use super::{backend::Backend, client::Payments, request::PaidRequest};
+use crate::network::openai::{ServedModelHeadRewrite, ServedModelHeaders};
 use crate::{inference::election::ModelTargets, mesh::Node};
 use exchange_events::DeliveredCapture;
 
@@ -328,12 +329,15 @@ async fn dispatch(
     )
     .await;
     let mut delivered = exchange.as_ref().map(|_| DeliveredCapture::default());
+    let head = ServedModelHeadRewrite::new(
+        served_model_headers(node, &session.backend, &session.request).await,
+    );
     let usage = match session
         .backend
         .connect(&session.request, &session.terms.id)
         .await
     {
-        Ok(backend) => forward_backend(backend, reader, writer, delivered.as_mut()).await,
+        Ok(backend) => forward_backend(backend, reader, writer, delivered.as_mut(), head).await,
         Err(_) => None,
     };
     drop(instance);
@@ -350,15 +354,31 @@ async fn dispatch(
     usage
 }
 
+/// What this node says it ran, for the buyer, who is always a mesh peer
+/// (`response/served_model_headers.rs`). Only a local backend runs this
+/// node's own weights; a plugin backend may answer for a model whose local
+/// descriptor is still listed, so it reports none.
+async fn served_model_headers(
+    node: &Node,
+    backend: &Backend,
+    request: &PaidRequest,
+) -> Option<ServedModelHeaders> {
+    let port = backend.local_port()?;
+    ServedModelHeaders::for_served_model(node, request.backend_model(), Some(port)).await
+}
+
 /// Forward the backend's response to the buyer, observing usage on the way.
 /// The backend is observed independently of buyer transport completion: a
 /// buyer that goes away mid-response still owes nothing (abandoned), and a
-/// complete response is billed even when the last frame did not land.
+/// complete response is billed even when the last frame did not land. Usage
+/// and the delivered capture see the backend's own bytes; only the head the
+/// buyer receives carries the served-model headers `head` sets.
 async fn forward_backend(
     mut backend: impl AsyncRead + Unpin,
     reader: &mut (impl AsyncRead + Unpin),
     writer: &mut (impl AsyncWrite + Unpin),
     mut delivered: Option<&mut DeliveredCapture>,
+    mut head: ServedModelHeadRewrite,
 ) -> Option<MeteredUsage> {
     let mut usage = ResponseUsage::default();
     let mut buffer = [0_u8; 16 * 1024];
@@ -370,7 +390,13 @@ async fn forward_backend(
             _ = &mut cancelled => return reported(usage.interrupted_evidence()),
         };
         let count = match read {
-            Ok(Ok(0)) => break,
+            Ok(Ok(0)) => {
+                let held = head.finish();
+                if !held.is_empty() && write_output(writer, held).await.is_err() {
+                    return reported(usage.interrupted_evidence());
+                }
+                break;
+            }
             Ok(Ok(count)) => count,
             _ => return reported(usage.interrupted_evidence()),
         };
@@ -378,15 +404,21 @@ async fn forward_backend(
         if let Some(capture) = delivered.as_deref_mut() {
             capture.push(&buffer[..count]);
         }
-        let frame = Frame::Output {
-            bytes: buffer[..count].to_vec(),
+        // A head the rewrite cannot use fails the response before any of its
+        // bytes reach the buyer, so a backend never supplies the headers.
+        let Ok(bytes) = head.push(&buffer[..count]) else {
+            return reported(usage.interrupted_evidence());
         };
-        if wire::write(writer, &frame).await.is_err() {
+        if !bytes.is_empty() && write_output(writer, bytes).await.is_err() {
             return reported(usage.interrupted_evidence());
         }
     }
     usage.finish();
     reported(usage.evidence())
+}
+
+async fn write_output(writer: &mut (impl AsyncWrite + Unpin), bytes: Vec<u8>) -> Result<()> {
+    wire::write(writer, &Frame::Output { bytes }).await
 }
 
 fn reported(evidence: ResponseEvidence) -> Option<MeteredUsage> {
@@ -573,7 +605,14 @@ mod tests {
         let (mut buyer_send, mut buyer_recv) = tokio::io::duplex(1 << 16);
         buyer_send.shutdown().await.unwrap();
         let mut sink = Vec::new();
-        let usage = forward_backend(&response[..], &mut buyer_recv, &mut sink, None).await;
+        let usage = forward_backend(
+            &response[..],
+            &mut buyer_recv,
+            &mut sink,
+            None,
+            ServedModelHeadRewrite::new(None),
+        )
+        .await;
         assert_eq!(
             usage,
             Some(MeteredUsage {
@@ -584,13 +623,132 @@ mod tests {
         );
     }
 
+    /// The buyer is told which model the seller says it ran, as a free
+    /// exchange's routing node is, while usage is still read from the
+    /// backend's own bytes.
+    #[tokio::test]
+    async fn a_paid_buyer_receives_the_sellers_served_model_headers() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 44\r\n\r\n{\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}";
+        let (_buyer_send, mut buyer_recv) = tokio::io::duplex(16);
+        let mut sink = Vec::new();
+        let served = ServedModelHeaders {
+            weights_digest: Some("74a4da8c".into()),
+            canonical_ref: Some("org/repo@main:Q4_K_M".into()),
+        };
+        // A one-byte backend reader splits the head across many reads.
+        let backend = tokio::io::BufReader::with_capacity(1, &response[..]);
+        let usage = forward_backend(
+            backend,
+            &mut buyer_recv,
+            &mut sink,
+            None,
+            ServedModelHeadRewrite::new(Some(served)),
+        )
+        .await;
+        assert!(usage.is_some());
+        let mut frames = &sink[..];
+        let mut delivered = Vec::new();
+        while !frames.is_empty() {
+            match wire::read(&mut frames).await.unwrap() {
+                Frame::Output { bytes } => delivered.extend(bytes),
+                other => panic!("unexpected frame {other:?}"),
+            }
+        }
+        let delivered = String::from_utf8(delivered).unwrap();
+        assert!(delivered.contains("x-mesh-weights-digest: 74a4da8c\r\n"));
+        assert!(delivered.contains("x-mesh-model-canonical-ref: org/repo@main:Q4_K_M\r\n"));
+        assert!(delivered.ends_with("\"completion_tokens\":2}}"));
+    }
+
+    /// Only this node's own weights are reported: a plugin backend answering
+    /// while the model's local descriptor is still listed reports none.
+    #[tokio::test]
+    async fn only_a_local_backend_reports_this_nodes_served_model() {
+        let node = Node::new_for_tests(crate::mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        *node.served_model_descriptors.lock().await = vec![crate::mesh::ServedModelDescriptor {
+            identity: crate::mesh::ServedModelIdentity {
+                model_name: "local-gguf/sha256-abc".to_owned(),
+                canonical_ref: Some("org/repo@main:Q4_K_M".to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }];
+        node.load_model_for_tests("local-gguf/sha256-abc", 1, "74a4da8c")
+            .await;
+        let mut request = PaidRequest::parse(
+            b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"model\":\"org/repo:Q4_K_M\"}",
+        )
+        .unwrap();
+        request.use_backend_model("local-gguf/sha256-abc");
+
+        let local = served_model_headers(&node, &Backend::Local(1), &request).await;
+        assert_eq!(
+            local,
+            Some(ServedModelHeaders {
+                weights_digest: Some("74a4da8c".to_owned()),
+                canonical_ref: Some("org/repo@main:Q4_K_M".to_owned()),
+            }),
+            "looked up by the backend name, not the buyer's public ID"
+        );
+        let other_instance = served_model_headers(&node, &Backend::Local(2), &request).await;
+        assert_eq!(
+            other_instance,
+            Some(ServedModelHeaders {
+                weights_digest: None,
+                canonical_ref: Some("org/repo@main:Q4_K_M".to_owned()),
+            }),
+            "another instance of the same name does not get this digest"
+        );
+        let plugin = served_model_headers(
+            &node,
+            &Backend::Plugin("http://127.0.0.1:1".into()),
+            &request,
+        )
+        .await;
+        assert_eq!(plugin, None);
+        node.endpoint.close().await;
+    }
+
+    /// A backend whose response head cannot be rewritten (here: it never ends)
+    /// fails the response before any of its bytes, which may carry forged
+    /// served-model headers, reach the buyer.
+    #[tokio::test]
+    async fn an_oversized_backend_head_is_never_forwarded() {
+        let mut response = b"HTTP/1.1 200 OK\r\nx-mesh-weights-digest: forged\r\n".to_vec();
+        response.resize(
+            crate::network::openai::request_parse::MAX_HEADER_BYTES + 1,
+            b'a',
+        );
+        let (_buyer_send, mut buyer_recv) = tokio::io::duplex(16);
+        let mut sink = Vec::new();
+        let usage = forward_backend(
+            &response[..],
+            &mut buyer_recv,
+            &mut sink,
+            None,
+            ServedModelHeadRewrite::new(None),
+        )
+        .await;
+        assert!(usage.is_none());
+        assert!(sink.is_empty(), "no backend byte reaches the buyer");
+    }
+
     #[tokio::test]
     async fn a_backend_that_reports_no_usage_abandons() {
         let response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}";
         let (_buyer_send, mut buyer_recv) = tokio::io::duplex(16);
         let mut sink = Vec::new();
         assert_eq!(
-            forward_backend(&response[..], &mut buyer_recv, &mut sink, None).await,
+            forward_backend(
+                &response[..],
+                &mut buyer_recv,
+                &mut sink,
+                None,
+                ServedModelHeadRewrite::new(None)
+            )
+            .await,
             None
         );
     }
@@ -604,7 +762,14 @@ mod tests {
             .unwrap();
         let mut sink = Vec::new();
         assert_eq!(
-            forward_backend(backend_recv, &mut buyer_recv, &mut sink, None).await,
+            forward_backend(
+                backend_recv,
+                &mut buyer_recv,
+                &mut sink,
+                None,
+                ServedModelHeadRewrite::new(None)
+            )
+            .await,
             None
         );
     }

@@ -608,19 +608,15 @@ pub(super) async fn set_advertised_model_context(
 /// reference-string hash) -- the two are different facts and neither
 /// replaces the other.
 ///
-/// Nothing in this crate's `openai.exchange.v1` terminal event
-/// (`OpenAiExchangeEnvelope`, `plugin/openai_exchange.rs`) reads this field
-/// yet -- it carries only `exchange_id`/`model`/`status`/capsule-marker
-/// fields today, not a served-model identity block. A `ServingProvenance`
-/// terminal-event block that does thread a served digest through exists, but
-/// only on fork-only demo/ledger-UI lineage (`feat/serving-provenance` and
-/// descendants), never merged to `origin/main` and absent from this branch.
-/// It also deliberately never crosses the mesh gossip wire (see
+/// This node's host-served `openai.exchange.v1` terminal reports it as
+/// `serving_provenance.weights_digest`, and its `backend_selected` event names
+/// it for a local target. A mesh peer that asked this node to serve the model
+/// gets it per response in `x-mesh-weights-digest`
+/// (`network/openai/response/probe.rs`) and records it on its own `RemoteMesh`
+/// terminal. It deliberately never crosses the mesh gossip wire (see
 /// `protocol/convert.rs`'s `descriptor_identity_to_proto`, which drops it on
 /// purpose: a peer could never verify a hash of bytes only this node can
-/// read). So today this is Record-only: the digest lands on this node's own
-/// served-model descriptor and nothing else -- neither an exchange a peer or
-/// plugin observes, nor a peer's gossip view -- reads it.
+/// read), so no peer's gossip view carries it.
 pub(super) async fn set_local_model_weights_digest(
     node: &mesh::Node,
     model_name: &str,
@@ -844,7 +840,8 @@ pub(super) async fn start_runtime_local_model(
         .capacity_budget_bytes
         .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()))
         .unwrap_or_else(|| spec.node.vram_bytes());
-    let http_bind_addr = ([127, 0, 0, 1], alloc_local_port().await?).into();
+    let http_port = alloc_local_port().await?;
+    let http_bind_addr = ([127, 0, 0, 1], http_port).into();
     let hook_policy = Some(crate::plugin::exchange_policy::compose_node_hooks(
         spec.node.clone(),
     ));
@@ -890,6 +887,9 @@ pub(super) async fn start_runtime_local_model(
         let generation = spec
             .node
             .begin_served_model_generation(runtime_model_name)
+            .await;
+        spec.node
+            .bind_served_model_generation_to_port(runtime_model_name, generation, http_port)
             .await;
         let node = spec.node.clone();
         let runtime_model_name = runtime_model_name.to_string();

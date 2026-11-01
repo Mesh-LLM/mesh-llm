@@ -393,6 +393,7 @@ async fn make_test_node_with_requirements(
         serving_models: Arc::new(Mutex::new(Vec::new())),
         served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
         served_model_generations: Arc::new(Mutex::new(HashMap::new())),
+        served_model_weights_ports: Arc::new(Mutex::new(HashMap::new())),
         model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
         hosted_models: Arc::new(Mutex::new(Vec::new())),
         llama_ready: Arc::new(Mutex::new(false)),
