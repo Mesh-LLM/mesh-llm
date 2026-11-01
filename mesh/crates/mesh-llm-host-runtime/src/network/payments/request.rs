@@ -4,6 +4,11 @@ use serde_json::Value;
 /// Output tokens a paid request may produce when the caller set no limit.
 pub(crate) const DEFAULT_OUTPUT_ALLOWANCE: u32 = 16_384;
 
+/// Largest paid request either side accepts. The payer re-serializes the
+/// request (defaults, `stream_options`, forwarded headers) before the seller
+/// parses it again, so both ends measure the rebuilt bytes against this.
+const MAX_PAID_REQUEST_BYTES: usize = 1024 * 1024;
+
 pub(crate) struct PaidRequest {
     pub model: String,
     /// The caller's output limit, or [`DEFAULT_OUTPUT_ALLOWANCE`].
@@ -19,7 +24,10 @@ pub(crate) struct PaidRequest {
 
 impl PaidRequest {
     pub fn parse(raw: &[u8]) -> Result<Self> {
-        ensure!(raw.len() <= 1024 * 1024, "paid request exceeds 1 MiB limit");
+        ensure!(
+            raw.len() <= MAX_PAID_REQUEST_BYTES,
+            "paid request exceeds 1 MiB limit"
+        );
         let mut headers = [httparse::EMPTY_HEADER; 64];
         let mut request = httparse::Request::new(&mut headers);
         let httparse::Status::Complete(offset) = request.parse(raw)? else {
@@ -133,6 +141,12 @@ impl PaidRequest {
         }
         raw.extend(format!("Content-Length: {}\r\n\r\n", bytes.len()).into_bytes());
         raw.extend(bytes);
+        // The seller parses these exact bytes under the same cap, so refuse
+        // here, before any payment, what it would reject.
+        ensure!(
+            raw.len() <= MAX_PAID_REQUEST_BYTES,
+            "paid request exceeds 1 MiB limit once forwarded"
+        );
         Ok(raw)
     }
 }
@@ -271,6 +285,42 @@ mod tests {
             assert!(request.client_nonce.is_none());
             let forwarded = String::from_utf8(request.backend_http("id").unwrap()).unwrap();
             assert!(!forwarded.to_ascii_lowercase().contains("nonce"));
+        }
+    }
+
+    #[test]
+    fn forwarded_request_is_held_to_the_same_cap_the_seller_applies() {
+        let nonce = "123e4567-e89b-42d3-a456-426614174000";
+        let head = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nX-Capsule-Client-Nonce: {nonce}\r\n\r\n"
+        );
+        let body = |pad: usize| {
+            format!(
+                "{{\"model\":\"m\",\"stream\":true,\"max_tokens\":8,\"pad\":\"{}\"}}",
+                "x".repeat(pad)
+            )
+        };
+        let size_for = |pad: usize| head.len() + body(pad).len();
+        // Largest input the payer's parse accepts.
+        let mut pad = MAX_PAID_REQUEST_BYTES - size_for(0);
+        assert_eq!(size_for(pad), MAX_PAID_REQUEST_BYTES);
+        let raw = format!("{head}{}", body(pad));
+        let payer = PaidRequest::parse(raw.as_bytes()).unwrap();
+        // The rebuilt request gains headers and `stream_options`, so it is
+        // over the cap: the payer must refuse it rather than let the seller.
+        let forwarded_err = payer.backend_http("id").unwrap_err();
+        assert!(forwarded_err.to_string().contains("once forwarded"));
+
+        // Shrink until the rebuilt request fits: the seller then accepts it.
+        loop {
+            pad -= 1;
+            let raw = format!("{head}{}", body(pad));
+            let payer = PaidRequest::parse(raw.as_bytes()).unwrap();
+            if let Ok(forwarded) = payer.backend_http("id") {
+                assert!(forwarded.len() <= MAX_PAID_REQUEST_BYTES);
+                PaidRequest::parse(&forwarded).unwrap();
+                break;
+            }
         }
     }
 
