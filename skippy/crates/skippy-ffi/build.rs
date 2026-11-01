@@ -32,23 +32,46 @@ fn bindings_main() {
     let workspace_root = manifest_dir.join("../../..");
     let wrapper_dir = manifest_dir.join("bindgen/wrapper");
     let bindings_dir = manifest_dir.join("src/bindings");
+    // LLAMA_WORKDIR selects the header tree bindgen consumes; it must be
+    // resolved before any rerun input that points into that tree is emitted,
+    // so the tracked marker always matches the tree being checked.
+    let llama_root = std::env::var("LLAMA_WORKDIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| workspace_root.join(".deps/llama.cpp"));
 
-    // Header and pin/patch identity inputs. A patch-queue edit, an upstream
-    // pin move, a wrapper change, or a generator change must all rerun this
-    // script so `regen` refreshes the committed bindings deterministically.
+    // Crate-local inputs: every path below ships inside the published crate
+    // (or a source checkout), so watching them never marks the build dirty.
+    // Check mode reads the committed bindings; a hand edit must rerun the
+    // script or a warm target directory false-passes the freshness gate.
     for input in [
         wrapper_dir.join("skippy_abi.h"),
         wrapper_dir.join("llama_upstream.h"),
         wrapper_dir.join("mtmd_abi.h"),
         manifest_dir.join("bindgen/generator.rs"),
-        workspace_root.join("skippy/llama_cpp/upstream.txt"),
-        workspace_root.join("skippy/llama_cpp/patches/model_support/series"),
-        workspace_root.join("skippy/llama_cpp/patches/generated/series"),
-        // Check mode reads the committed bindings; a hand edit must rerun the
-        // script or a warm target directory false-passes the freshness gate.
         bindings_dir.join("skippy.rs"),
         bindings_dir.join("llama.rs"),
         bindings_dir.join("mtmd.rs"),
+    ] {
+        println!("cargo:rerun-if-changed={}", input.display());
+    }
+
+    let mode = std::env::var("SKIPPY_FFI_BINDGEN").unwrap_or_default();
+    if mode != "regen" && mode != "check" {
+        // Default mode compiles the committed bindings and never reads the
+        // repository pin, patch queue, or prepared checkout. Registering those
+        // paths here would mark every build of a published crate dirty, so
+        // they are watched only in regen/check mode.
+        return;
+    }
+
+    // Repository and checkout inputs, meaningful only when regenerating or
+    // checking. A patch-queue edit, an upstream pin move, or a header edit in
+    // the prepared checkout must rerun this script so regen refreshes the
+    // committed bindings deterministically and check re-compares them.
+    for input in [
+        workspace_root.join("skippy/llama_cpp/upstream.txt"),
+        workspace_root.join("skippy/llama_cpp/patches/model_support/series"),
+        workspace_root.join("skippy/llama_cpp/patches/generated/series"),
     ] {
         println!("cargo:rerun-if-changed={}", input.display());
     }
@@ -65,12 +88,18 @@ fn bindings_main() {
     }
     // The patched-sha marker is written by prepare-llama.sh after the queue
     // is applied; it is the identity of the header tree bindgen consumes.
-    let patched_sha = workspace_root.join(".deps/llama.cpp/.mesh-llm-patched-sha");
+    let patched_sha = llama_root.join(".mesh-llm-patched-sha");
     println!("cargo:rerun-if-changed={}", patched_sha.display());
-
-    let mode = std::env::var("SKIPPY_FFI_BINDGEN").unwrap_or_default();
-    if mode != "regen" && mode != "check" {
-        return;
+    // The marker does not change when a header inside the tree is edited, so
+    // watch the consumed header files themselves as well.
+    for header_dir in [
+        llama_root.join("include"),
+        llama_root.join("ggml/include"),
+        llama_root.join("tools/mtmd"),
+    ] {
+        for header in sorted_headers_under(&header_dir) {
+            println!("cargo:rerun-if-changed={}", header.display());
+        }
     }
 
     let llama_root = std::env::var("LLAMA_WORKDIR")
@@ -135,12 +164,68 @@ fn bindings_main() {
                         .unwrap_or_else(|_| "unknown".to_string()),
                 );
             }
+            check_feature_bridge_coverage(&llama_root, &committed[0].1);
             if std::env::var("SKIPPY_FFI_BINDGEN_SELFTEST").ok().as_deref() == Some("1") {
                 bindings_mutation_probe(&llama_root, &committed);
             }
             println!("cargo:warning=skippy-ffi bindings match the pinned native headers");
         }
         _ => {}
+    }
+}
+
+/// Recursively collects header files under `dir`, sorted for stable output.
+fn sorted_headers_under(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    fn collect(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.filter_map(|entry| entry.ok()) {
+            let path = entry.path();
+            if entry.file_type().map(|ty| ty.is_dir()).unwrap_or(false) {
+                collect(&path, out);
+            } else if path.extension().is_some_and(|ext| ext == "h") {
+                out.push(path);
+            }
+        }
+    }
+    let mut headers = Vec::new();
+    collect(dir, &mut headers);
+    headers.sort();
+    headers
+}
+
+/// Every cast-form `SKIPPY_FEATURE_*` bit in common.h (values bindgen cannot
+/// translate directly) must have a `skippy_ffi_bridge_feature_*` constant in
+/// the generated bindings. A new macro without a bridge would otherwise pass
+/// the freshness check while silently dropping the bit from the Rust surface.
+fn check_feature_bridge_coverage(llama_root: &std::path::Path, generated_skippy: &str) {
+    let common_h = std::fs::read_to_string(llama_root.join("include/skippy/common.h"))
+        .unwrap_or_else(|error| panic!("cannot read common.h for bridge coverage: {error}"));
+    let mut missing = Vec::new();
+    for line in common_h.lines().map(str::trim) {
+        let Some(rest) = line.strip_prefix("#define SKIPPY_FEATURE_") else {
+            continue;
+        };
+        // Cast-form macros ((uint64_t)1 << N / UINT64_C(1) << N) are the ones
+        // bindgen skips; plain integer macros translate without a bridge.
+        if !rest.contains("((uint64_t)1") && !rest.contains("UINT64_C(1)") {
+            continue;
+        }
+        let name = rest.split_whitespace().next().unwrap_or(rest);
+        let bridge = format!(
+            "pub const skippy_ffi_bridge_feature_{}:",
+            name.to_ascii_lowercase()
+        );
+        if !generated_skippy.contains(&bridge) {
+            missing.push(format!("SKIPPY_FEATURE_{name}"));
+        }
+    }
+    if !missing.is_empty() {
+        panic!(
+            "common.h defines feature bits with no skippy_ffi_bridge_* entry              in bindgen/wrapper/skippy_abi.h: {}. Add a bridge constant for              each so the bit reaches the generated bindings.",
+            missing.join(", ")
+        );
     }
 }
 

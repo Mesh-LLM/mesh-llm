@@ -273,6 +273,27 @@ pub type SkippyRuntimeEventV1 = bindings::skippy::skippy_runtime_event_v1;
 pub type SkippyRuntimeEventReporterV1 = bindings::skippy::skippy_runtime_event_reporter_v1;
 
 pub type Status = bindings::skippy::skippy_status;
+
+/// Decode a raw status code from the wire. The runtime-event ABI stores
+/// `status` as a plain `int32_t`, so values outside the declared
+/// discriminants can arrive from a future or mismatched runtime;
+/// materializing one as `Status` behind a reference would be undefined
+/// behavior. Returns `None` for unknown codes. The match is exhaustive over
+/// the generated enum, so a new native discriminant fails to compile here
+/// until this decoder learns it.
+pub fn status_from_raw(raw: i32) -> Option<Status> {
+    match raw {
+        value if value == Status::Ok as i32 => Some(Status::Ok),
+        value if value == Status::Error as i32 => Some(Status::Error),
+        value if value == Status::InvalidArgument as i32 => Some(Status::InvalidArgument),
+        value if value == Status::Unsupported as i32 => Some(Status::Unsupported),
+        value if value == Status::BufferTooSmall as i32 => Some(Status::BufferTooSmall),
+        value if value == Status::IoError as i32 => Some(Status::IoError),
+        value if value == Status::ModelError as i32 => Some(Status::ModelError),
+        value if value == Status::RuntimeError as i32 => Some(Status::RuntimeError),
+        _ => None,
+    }
+}
 pub type LoadMode = bindings::skippy::skippy_load_mode;
 
 #[allow(clippy::derivable_impls)]

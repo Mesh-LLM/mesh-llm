@@ -383,7 +383,10 @@ pub(super) struct BaseRawRuntimeEvent {
     pub(super) progress_total: u64,
     pub(super) progress_unit: skippy_ffi::SkippyRuntimeEventProgressUnit,
     pub(super) failure_code: skippy_ffi::SkippyRuntimeEventFailureCode,
-    pub(super) status: Status,
+    /// The C ABI stores status as a plain `int32_t`; decode with
+    /// `skippy_ffi::status_from_raw` before use so an out-of-range value
+    /// never materializes as an invalid `Status`.
+    pub(super) status: i32,
     pub(super) reserved1: u32,
     pub(super) detail_ptr: *const std::ffi::c_char,
     pub(super) detail_len: u64,

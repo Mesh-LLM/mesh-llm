@@ -13,7 +13,7 @@
 //! and the symbol resolvers. The `llama-ext.h` entry points keep C++ linkage
 //! and are bound by their Itanium-mangled names.
 
-use std::ffi::{c_char, c_void};
+use std::ffi::c_char;
 
 use crate::Opaque;
 use crate::bindings;

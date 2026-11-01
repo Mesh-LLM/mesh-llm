@@ -63,7 +63,7 @@ pub use abi::{
     SkippyRuntimeEventProgressUnit, SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, Status,
     SystemOneSlot, TRISTATE_AUTO, TRISTATE_FALSE, TRISTATE_TRUE, TensorRole, TokenScoreRequest,
     WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1, WorkloadKind, WorkloadPooling,
-    runtime_abi_supported,
+    runtime_abi_supported, status_from_raw,
 };
 pub use abi::{
     RUNTIME_EVENT_CATEGORY_BACKEND, RUNTIME_EVENT_CATEGORY_DEVICE,

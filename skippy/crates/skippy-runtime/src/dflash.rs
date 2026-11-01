@@ -26,8 +26,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use skippy_ffi::Opaque;
 use skippy_ffi::llama_draft::{
     LLAMA_CONTEXT_TYPE_DEFAULT, LLAMA_ROPE_TYPE_MROPE, LlamaContextParams, LlamaDraftApi,
-    LlamaFlashAttnType,
-    LlamaModelParams,
+    LlamaFlashAttnType, LlamaModelParams,
 };
 
 use crate::path_cstring::path_to_cstring;
@@ -571,8 +570,12 @@ fn draft_context_params(
     params.n_seq_max = lanes as u32;
     // A quantized V cache turns on flash attention under `Auto`; the native
     // context refuses to initialize when the backend cannot provide it.
-    params.type_k = skippy_ffi::llama_draft::ggml_type_from_cache_code(i32::try_from(config.cache_type_k).unwrap_or(i32::MAX));
-    params.type_v = skippy_ffi::llama_draft::ggml_type_from_cache_code(i32::try_from(config.cache_type_v).unwrap_or(i32::MAX));
+    params.type_k = skippy_ffi::llama_draft::ggml_type_from_cache_code(
+        i32::try_from(config.cache_type_k).unwrap_or(i32::MAX),
+    );
+    params.type_v = skippy_ffi::llama_draft::ggml_type_from_cache_code(
+        i32::try_from(config.cache_type_v).unwrap_or(i32::MAX),
+    );
     params.flash_attn_type = match config.flash_attn_type {
         crate::config::FlashAttentionType::Auto => LlamaFlashAttnType::Auto,
         crate::config::FlashAttentionType::Disabled => LlamaFlashAttnType::Disabled,

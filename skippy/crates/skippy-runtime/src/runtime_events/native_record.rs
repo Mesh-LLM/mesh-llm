@@ -97,6 +97,10 @@ pub enum RecordRejection {
     AbiVersion(u32),
     /// `detail_len` exceeds the ABI's detail bound.
     OversizedDetail,
+    /// `status` is not a status code this build's ABI declares; decoding it
+    /// into the `Status` enum would be undefined behavior, so the event is
+    /// refused instead.
+    Status(i32),
 }
 
 impl NativeEventRecord {
@@ -176,6 +180,9 @@ impl NativeEventRecord {
             ([0; 4], 0)
         };
 
+        let status =
+            skippy_ffi::status_from_raw(base.status).ok_or(RecordRejection::Status(base.status))?;
+
         Ok(Self {
             abi_version: base.abi_version,
             struct_size,
@@ -192,7 +199,7 @@ impl NativeEventRecord {
             progress_total: base.progress_total,
             progress_unit: base.progress_unit,
             failure_code: base.failure_code,
-            status: base.status,
+            status,
             reserved1: base.reserved1,
             numeric_summary,
             numeric_summary_present,

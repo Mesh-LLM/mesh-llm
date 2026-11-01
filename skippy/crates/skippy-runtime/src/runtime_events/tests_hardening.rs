@@ -154,3 +154,14 @@ fn oversized_detail_is_its_own_rejection() {
     let rejection = unsafe { NativeEventRecord::from_raw_ptr(&event) };
     assert_eq!(rejection, Err(RecordRejection::OversizedDetail));
 }
+
+#[test]
+fn unknown_status_is_refused_instead_of_forming_an_invalid_enum() {
+    // The C ABI stores status as a plain int32_t; a value outside the
+    // declared skippy_status discriminants must never be materialized as a
+    // `Status` behind a reference (undefined behavior). Refuse the event.
+    let mut event = raw_event(RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS, 3);
+    event.status = 8_000;
+    let rejection = unsafe { NativeEventRecord::from_raw_ptr(&event) };
+    assert_eq!(rejection, Err(RecordRejection::Status(8_000)));
+}

@@ -281,7 +281,12 @@ pub unsafe extern "C" fn llama_get_memory(ctx: *const Opaque) -> *mut Opaque {
 
 /// # Safety
 /// `mem` must be a live upstream llama memory owned by this runtime.
-pub unsafe extern "C" fn llama_memory_seq_rm(mem: *mut Opaque, seq_id: i32, p0: i32, p1: i32) -> bool {
+pub unsafe extern "C" fn llama_memory_seq_rm(
+    mem: *mut Opaque,
+    seq_id: i32,
+    p0: i32,
+    p1: i32,
+) -> bool {
     unsafe { llama::llama_memory_seq_rm(mem.cast(), seq_id, p0, p1) }
 }
 

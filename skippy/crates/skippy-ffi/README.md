@@ -105,13 +105,38 @@ same Rust crate.
 
 ## ABI Contract
 
-The staged ABI is versioned as `0.1.74`. The patch header in
+The staged ABI is versioned as `0.1.75`. The patch header in
 `skippy/llama_cpp/patches/` and the Rust constants in
 `skippy/crates/skippy-ffi/src/lib.rs` are the source of truth, so keep this README
 aligned with those files instead of treating it as canonical prose.
 
 Version `0` is still experimental, so callers should treat the ABI as
 feature-probed rather than permanently stable.
+
+### Rust API changes from bindgen generation
+
+The generated bindings made one deliberate Rust-surface break, contained to
+the runtime-event discriminants and two dead exports:
+
+- `SkippyRuntimeEventCategory`, `SkippyRuntimeEventKind`,
+  `SkippyRuntimeEventEmitterKind`, `SkippyRuntimeEventProgressUnit`, and
+  `SkippyRuntimeEventFailureCode` are no longer newtype wrappers with
+  associated constants; they are plain `u32` aliases and the constants moved
+  to `RUNTIME_EVENT_CATEGORY_*`, `RUNTIME_EVENT_KIND_*`,
+  `RUNTIME_EVENT_EMITTER_*`, `RUNTIME_EVENT_PROGRESS_UNIT_*`, and
+  `RUNTIME_EVENT_FAILURE_*` (the C spelling, re-exported from the generated
+  bindings). Migration is mechanical:
+  `SkippyRuntimeEventKind::MODEL_OPEN_STARTED` becomes
+  `RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED`, and constructing
+  `SkippyRuntimeEventV1` uses the same constants for the formerly-wrapped
+  fields.
+- `ActivationDType` and `ActivationLayout` had no backing declarations in the
+  native headers and are removed; `skippy-protocol` defines its own
+  activation descriptor types for its config surface.
+
+Everything else keeps its pre-generation spelling: struct field names are
+the C field names (with `type_`-style keyword escapes where C uses a Rust
+keyword), and enum discriminants keep their historical CamelCase names.
 
 The runtime-event additions are part of that `0.1.26` bump. They add versioned
 `SkippyRuntimeEventV1` and `SkippyRuntimeEventReporterV1` structs, keep
