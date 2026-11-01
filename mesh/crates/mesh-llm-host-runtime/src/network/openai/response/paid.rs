@@ -584,6 +584,7 @@ mod tests {
             path: "/v1/completions".into(),
             body: serde_json::Value::Null,
             intent: None,
+            client_nonce: None,
         };
         let admission = |deposit_msat: u64| Frame::Admission {
             terms: AdmissionTerms {
