@@ -539,7 +539,7 @@ fn load_draft(
             path.to_string_lossy()
         );
     }
-    let context_params = draft_context_params(api, target_ctx, config, lanes);
+    let context_params = draft_context_params(api, target_ctx, config, lanes)?;
     let ctx = unsafe { (api.init_from_model)(model, context_params) };
     if ctx.is_null() {
         unsafe { (api.model_free)(model) };
@@ -558,7 +558,7 @@ fn draft_context_params(
     target_ctx: *mut Opaque,
     config: &RuntimeConfig,
     lanes: i32,
-) -> LlamaContextParams {
+) -> Result<LlamaContextParams> {
     let mut params = unsafe { (api.context_default_params)() };
     let target_n_ctx = unsafe { (api.n_ctx)(target_ctx) };
     let target_n_batch = unsafe { (api.n_batch)(target_ctx) };
@@ -570,12 +570,8 @@ fn draft_context_params(
     params.n_seq_max = lanes as u32;
     // A quantized V cache turns on flash attention under `Auto`; the native
     // context refuses to initialize when the backend cannot provide it.
-    params.type_k = skippy_ffi::llama_draft::ggml_type_from_cache_code(
-        i32::try_from(config.cache_type_k).unwrap_or(i32::MAX),
-    );
-    params.type_v = skippy_ffi::llama_draft::ggml_type_from_cache_code(
-        i32::try_from(config.cache_type_v).unwrap_or(i32::MAX),
-    );
+    params.type_k = cache_ggml_type("cache_k", config.cache_type_k)?;
+    params.type_v = cache_ggml_type("cache_v", config.cache_type_v)?;
     params.flash_attn_type = match config.flash_attn_type {
         crate::config::FlashAttentionType::Auto => LlamaFlashAttnType::Auto,
         crate::config::FlashAttentionType::Disabled => LlamaFlashAttnType::Disabled,
@@ -598,7 +594,18 @@ fn draft_context_params(
             .and_then(|threads| i32::try_from(threads).ok())
             .unwrap_or(threads);
     }
-    params
+    Ok(params)
+}
+
+/// Resolve a configured cache-type code to the upstream ggml type the draft
+/// context stores. Publicly constructed configs can carry codes outside the
+/// validated catalog, and the generated `ggml_type` enum has gaps, so an
+/// unchecked conversion would be undefined behavior; refuse instead.
+fn cache_ggml_type(field: &str, code: u32) -> Result<skippy_ffi::llama_draft::GgmlType> {
+    let code = i32::try_from(code)
+        .with_context(|| format!("draft {field} cache type {code} exceeds i32"))?;
+    skippy_ffi::llama_draft::ggml_type_from_cache_code(code)
+        .with_context(|| format!("draft {field} cache type {code} is not a declared ggml type"))
 }
 
 /// Draft `(n_batch, n_ubatch)` for a target's batch sizes. Non-causal

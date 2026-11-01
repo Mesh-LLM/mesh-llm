@@ -41,15 +41,57 @@ pub const LLAMA_ROPE_TYPE_MROPE: i32 = LlamaRopeType::Mrope as i32;
 /// `LLAMA_SPLIT_MODE_NONE`.
 pub const LLAMA_SPLIT_MODE_NONE: LlamaSplitMode = LlamaSplitMode::None;
 
-/// Convert a validated cache-type code (0 selects F32, a positive value
-/// selects that ggml type ordinal) into the generated `ggml_type`. Codes are
-/// config-validated against the cache-type catalog before they reach here,
-/// matching the C contract that stores them in the enum field directly.
-pub fn ggml_type_from_cache_code(code: i32) -> GgmlType {
-    // SAFETY: cache-type codes are validated against the supported catalog
-    // before draft-context construction; the C header stores the same
-    // ordinal in the enum field.
-    unsafe { std::mem::transmute(code as u32) }
+/// Decode a cache-type code (0 selects F32, a positive value selects that
+/// ggml type ordinal) into the generated `ggml_type`.
+///
+/// Returns `None` for codes that are not declared `ggml_type` variants: the
+/// generated enum is `#[repr(u32)]` with gaps, so an arbitrary code must
+/// never be materialized unchecked. Each arm reads its discriminant from the
+/// generated enum, so a header-side renumber is followed coherently and a
+/// removed variant fails to compile; a newly added variant simply decodes as
+/// `None` here until this table learns it, which callers propagate as an
+/// error instead of undefined behavior.
+pub fn ggml_type_from_cache_code(code: i32) -> Option<GgmlType> {
+    use bindings::llama::ggml_type as raw;
+    let value = match code {
+        value if value == raw::F32 as i32 => raw::F32,
+        value if value == raw::F16 as i32 => raw::F16,
+        value if value == raw::Q4_0 as i32 => raw::Q4_0,
+        value if value == raw::Q4_1 as i32 => raw::Q4_1,
+        value if value == raw::Q5_0 as i32 => raw::Q5_0,
+        value if value == raw::Q5_1 as i32 => raw::Q5_1,
+        value if value == raw::Q8_0 as i32 => raw::Q8_0,
+        value if value == raw::Q8_1 as i32 => raw::Q8_1,
+        value if value == raw::Q2K as i32 => raw::Q2K,
+        value if value == raw::Q3K as i32 => raw::Q3K,
+        value if value == raw::Q4K as i32 => raw::Q4K,
+        value if value == raw::Q5K as i32 => raw::Q5K,
+        value if value == raw::Q6K as i32 => raw::Q6K,
+        value if value == raw::Q8K as i32 => raw::Q8K,
+        value if value == raw::IQ2XXS as i32 => raw::IQ2XXS,
+        value if value == raw::IQ2XS as i32 => raw::IQ2XS,
+        value if value == raw::IQ3XXS as i32 => raw::IQ3XXS,
+        value if value == raw::IQ1S as i32 => raw::IQ1S,
+        value if value == raw::IQ4NL as i32 => raw::IQ4NL,
+        value if value == raw::IQ3S as i32 => raw::IQ3S,
+        value if value == raw::IQ2S as i32 => raw::IQ2S,
+        value if value == raw::IQ4XS as i32 => raw::IQ4XS,
+        value if value == raw::I8 as i32 => raw::I8,
+        value if value == raw::I16 as i32 => raw::I16,
+        value if value == raw::I32 as i32 => raw::I32,
+        value if value == raw::I64 as i32 => raw::I64,
+        value if value == raw::F64 as i32 => raw::F64,
+        value if value == raw::IQ1M as i32 => raw::IQ1M,
+        value if value == raw::Bf16 as i32 => raw::Bf16,
+        value if value == raw::TQ1_0 as i32 => raw::TQ1_0,
+        value if value == raw::TQ2_0 as i32 => raw::TQ2_0,
+        value if value == raw::Mxfp4 as i32 => raw::Mxfp4,
+        value if value == raw::Nvfp4 as i32 => raw::Nvfp4,
+        value if value == raw::Q1_0 as i32 => raw::Q1_0,
+        value if value == raw::Q2_0 as i32 => raw::Q2_0,
+        _ => return None,
+    };
+    Some(value)
 }
 
 /// Upstream llama.cpp entry points for an external draft context.

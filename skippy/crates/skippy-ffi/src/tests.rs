@@ -163,3 +163,67 @@ fn native_mtmd_defaults_cross_the_ffi_boundary() {
     assert!(params.progress_callback.is_none());
     assert!(params.progress_callback_user_data.is_null());
 }
+
+#[test]
+fn cache_type_codes_decode_only_to_declared_ggml_variants() {
+    use crate::bindings::llama::ggml_type as ty;
+
+    assert_eq!(crate::status_from_raw(0), Some(crate::Status::Ok));
+    assert_eq!(
+        crate::llama_draft::ggml_type_from_cache_code(0),
+        Some(ty::F32)
+    );
+    assert_eq!(
+        crate::llama_draft::ggml_type_from_cache_code(1),
+        Some(ty::F16)
+    );
+    assert_eq!(
+        crate::llama_draft::ggml_type_from_cache_code(30),
+        Some(ty::Bf16)
+    );
+    // Gap values, the GGML_TYPE_COUNT sentinel, negatives, and out-of-range
+    // codes must refuse instead of materializing an invalid enum value.
+    for gap in [
+        4,
+        5,
+        31,
+        32,
+        33,
+        36,
+        37,
+        38,
+        43,
+        44,
+        1_000_000,
+        -1,
+        i32::MAX,
+    ] {
+        assert_eq!(
+            crate::llama_draft::ggml_type_from_cache_code(gap),
+            None,
+            "code {gap} must not decode"
+        );
+    }
+    // Exhaustive: every discriminant between 0 and Count decodes, so the
+    // table cannot drift from the generated enum's declared range.
+    for code in 0..=(ty::Count as i32) {
+        let decoded = crate::llama_draft::ggml_type_from_cache_code(code);
+        let declared = code != 4
+            && code != 5
+            && !(31..=33).contains(&code)
+            && !(36..=38).contains(&code)
+            && code != ty::Count as i32;
+        assert_eq!(decoded.is_some(), declared, "code {code}");
+    }
+}
+
+#[test]
+fn status_from_raw_rejects_unknown_codes() {
+    assert_eq!(
+        crate::status_from_raw(crate::Status::RuntimeError as i32),
+        Some(crate::Status::RuntimeError)
+    );
+    assert_eq!(crate::status_from_raw(-1), None);
+    assert_eq!(crate::status_from_raw(8), None);
+    assert_eq!(crate::status_from_raw(i32::MAX), None);
+}
