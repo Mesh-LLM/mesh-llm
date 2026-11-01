@@ -125,6 +125,9 @@ message StageDFlashPlan {
   // verifies its own copy. Unset for a configured draft and from older
   // planners; the stage then loads draft_model_path as sent.
   optional StageDFlashDraftSource draft_source = 5;
+  // The configured draft device, on the final stage only. A stage without
+  // it places the draft with the target.
+  optional string draft_device = 6;
 }
 
 message StageDFlashDraftSource {
@@ -277,6 +280,14 @@ message StageStatus {
   // covers, for auto-balance split placement. Zero when not reported.
   uint64 compute_busy_nanos = 37;
   uint64 compute_operations = 38;
+  // Set by a split final stage that attached its DFlash draft. Unset when the
+  // stage drafts nothing, and from older stages.
+  optional StageDFlashDraftStatus dflash_draft = 39;
+}
+
+message StageDFlashDraftStatus {
+  // The target layers the attached draft reads.
+  repeated uint32 target_layers = 1;
 }
 
 message StageStatusList {

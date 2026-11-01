@@ -700,6 +700,7 @@ fn draft_model_path_overrides_a_configured_dflash_draft() {
         dflash: Some(skippy_serving::DFlashProposalConfig {
             draft_model_path: "draft-dflash.gguf".into(),
             max_draft_tokens: Some(6),
+            target_layers: Vec::new(),
         }),
         ..Default::default()
     };
@@ -755,6 +756,7 @@ fn dflash_strategy_keeps_a_configured_dflash_draft() {
         dflash: Some(skippy_serving::DFlashProposalConfig {
             draft_model_path: "draft-dflash.gguf".into(),
             max_draft_tokens: Some(6),
+            target_layers: Vec::new(),
         }),
         ..Default::default()
     };
@@ -768,6 +770,7 @@ fn dflash_strategy_keeps_a_configured_dflash_draft() {
             skippy_serving::DFlashProposalConfig {
                 draft_model_path: "draft-dflash.gguf".into(),
                 max_draft_tokens: Some(6),
+                target_layers: Vec::new(),
             },
             "{discovered:?}"
         );
@@ -796,6 +799,7 @@ fn cli_strategy_overrides_a_configured_dflash_plan() {
         dflash: Some(skippy_serving::DFlashProposalConfig {
             draft_model_path: "draft-dflash.gguf".into(),
             max_draft_tokens: None,
+            target_layers: Vec::new(),
         }),
         ..Default::default()
     };

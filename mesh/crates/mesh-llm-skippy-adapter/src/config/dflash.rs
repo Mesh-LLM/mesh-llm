@@ -154,6 +154,7 @@ pub(super) fn dflash_decode_config(
     base.dflash = Some(DFlashProposalConfig {
         draft_model_path: path.to_path_buf(),
         max_draft_tokens: (draft_max_tokens > 0).then_some(draft_max_tokens as usize),
+        target_layers: Vec::new(),
     });
     base
 }

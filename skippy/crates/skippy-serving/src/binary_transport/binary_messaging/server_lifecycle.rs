@@ -21,14 +21,17 @@ pub async fn serve_binary_stage_with_shutdown(
     options: BinaryStageOptions,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> Result<()> {
-    serve_binary_stage_with_shutdown_and_boundary_observer(options, shutdown, |_, _| {}).await
+    serve_binary_stage_with_shutdown_and_boundary_observer(options, shutdown, |_, _, _| {}).await
 }
 
 pub(crate) async fn serve_binary_stage_with_shutdown_and_boundary_observer(
     options: BinaryStageOptions,
     shutdown: impl Future<Output = ()> + Send + 'static,
-    boundary_observer: impl FnOnce(Option<ActivationBoundaryDesc>, Option<ActivationBoundaryDesc>)
-    + Send
+    boundary_observer: impl FnOnce(
+        Option<ActivationBoundaryDesc>,
+        Option<ActivationBoundaryDesc>,
+        Option<Vec<u32>>,
+    ) + Send
     + 'static,
 ) -> Result<()> {
     run_blocking_stage_with_shutdown(shutdown, move |stop| {

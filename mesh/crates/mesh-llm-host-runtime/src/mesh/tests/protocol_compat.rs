@@ -369,6 +369,7 @@ fn stage_load_proto_carries_a_split_dflash_plan() {
         draft_model_path: Some("/models/draft-dflash.gguf".into()),
         max_draft_tokens: Some(7),
         draft_n_gpu_layers: Some(-1),
+        draft_device: Some("CUDA1".into()),
         draft_source: Some(skippy_serving::split_dflash::SplitDFlashDraftSource {
             repo: "AtomicChat/Qwen3.6-27B-DFlash-GGUF".into(),
             revision: "a3d4fb1eff6f268cbbdf808042f6902cc17f5458".into(),
@@ -381,6 +382,22 @@ fn stage_load_proto_carries_a_split_dflash_plan() {
     let decoded = stage_load_from_proto(stage_load_to_proto(load)).unwrap();
 
     assert_eq!(decoded.dflash, Some(plan));
+}
+
+#[test]
+fn stage_status_proto_carries_the_final_stage_draft_layers() {
+    let mut status = crate::mesh::stage_status_from_load(
+        &stage_load_request(),
+        crate::inference::skippy::StageRuntimeState::Ready,
+    );
+    status.dflash_target_layers = Some(vec![6, 20, 34]);
+    let decoded = stage_status_from_proto(stage_status_to_proto(status.clone())).unwrap();
+    assert_eq!(decoded.dflash_target_layers, Some(vec![6, 20, 34]));
+
+    // A stage that drafts nothing, or predates the report, reports none.
+    status.dflash_target_layers = None;
+    let decoded = stage_status_from_proto(stage_status_to_proto(status)).unwrap();
+    assert_eq!(decoded.dflash_target_layers, None);
 }
 
 #[test]

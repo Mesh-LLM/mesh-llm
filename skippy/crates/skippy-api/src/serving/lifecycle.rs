@@ -258,6 +258,7 @@ mod tests {
             request.openai.speculative.dflash = Some(skippy_serving::DFlashProposalConfig {
                 draft_model_path: "draft-dflash.gguf".into(),
                 max_draft_tokens: Some(cap),
+                target_layers: Vec::new(),
             });
             request.size_recurrent_rollback();
             assert_eq!(

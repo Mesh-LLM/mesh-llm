@@ -36,6 +36,9 @@ pub struct SplitDFlashStage {
     pub draft_model_path: Option<PathBuf>,
     pub max_draft_tokens: Option<usize>,
     pub draft_n_gpu_layers: Option<i32>,
+    /// The backend device the configured draft runs on, on the final stage
+    /// only. `None` puts it on the target's device.
+    pub draft_device: Option<String>,
     /// Where a catalog default draft comes from, on the final stage only, so
     /// that stage fetches and verifies its own copy. `None` for a configured
     /// draft, which the operator places, and from older planners.
@@ -52,21 +55,31 @@ pub struct SplitDFlashDraftSource {
 }
 
 impl SplitDFlashStage {
-    /// The plan for a stage of a split target served with `dflash`, reading
-    /// the draft's target layers from its header.
+    /// The plan for a stage of a split target served with `dflash`: the
+    /// draft's target layers as the plan names them, else from its header.
     pub fn from_draft(
         dflash: &DFlashProposalConfig,
         final_stage: bool,
         draft_n_gpu_layers: Option<i32>,
     ) -> Result<Self> {
-        let target_layers = draft_target_layers(&dflash.draft_model_path)?;
+        let target_layers = if dflash.target_layers.is_empty() {
+            draft_target_layers(&dflash.draft_model_path)?
+        } else {
+            dflash.target_layers.clone()
+        };
         Ok(Self {
             target_layers,
             draft_model_path: final_stage.then(|| dflash.draft_model_path.clone()),
             max_draft_tokens: dflash.max_draft_tokens,
             draft_n_gpu_layers,
+            draft_device: None,
             draft_source: None,
         })
+    }
+
+    /// Whether this stage drafts: the final stage with a draft to load.
+    pub fn drafts(&self) -> bool {
+        self.draft_model_path.is_some()
     }
 
     /// Recurrent rollback depth every stage needs to verify the longest block
@@ -87,78 +100,114 @@ pub fn draft_target_layers(path: &Path) -> Result<Vec<u32>> {
     Ok(layers)
 }
 
+/// The output head of an untied target, a separate tensor from its token
+/// embeddings.
+const UNTIED_OUTPUT_TENSOR: &str = "output.weight";
+
 /// Adds the target tensors the final stage's draft borrows to the tensors the
 /// stage loads, and declares them in its execution contract as borrowed:
 /// resident, though no stage graph reads them. A stage slice loads only what
 /// its own layers read, and the token embeddings of an untied target live
 /// with stage 0: without this the draft embeds every block from memory
-/// nothing loaded and drafts noise. Other stages, and stages that load every
-/// tensor, are left alone. Returns whether the config changed.
+/// nothing loaded and drafts noise. A tied target's final stage already reads
+/// them for its output head. Other stages, and stages that load every tensor,
+/// are left alone. Returns whether the config changed.
 pub(crate) fn load_borrowed_target_tensors(
     config: &mut StageConfig,
     plan: &SplitDFlashStage,
 ) -> Result<bool> {
     if config.downstream.is_some()
-        || plan.draft_model_path.is_none()
-        || config.resident_tensor_names.is_empty()
+        || !plan.drafts()
+        || !config
+            .resident_tensor_names
+            .iter()
+            .any(|name| name == UNTIED_OUTPUT_TENSOR)
     {
         return Ok(false);
     }
     let tensor = skippy_runtime::DFLASH_BORROWED_TARGET_TENSOR;
-    let Err(index) = config
+    let mut changed = false;
+    if let Err(index) = config
         .resident_tensor_names
         .binary_search_by(|name| name.as_str().cmp(tensor))
-    else {
-        // A tied target's final stage already loads it for its output head.
-        return Ok(false);
-    };
+    {
+        config
+            .resident_tensor_names
+            .insert(index, tensor.to_string());
+        changed = true;
+    }
     let mut contract: serde_json::Value = serde_json::from_str(&config.execution_contract)
         .context("parse the stage execution contract")?;
-    let borrowed = contract
+    let names = contract
         .as_object_mut()
         .context("the stage execution contract is not an object")?
         .entry("borrowed")
-        .or_insert_with(|| serde_json::Value::Array(Vec::new()));
-    let names = borrowed
+        .or_insert_with(|| serde_json::Value::Array(Vec::new()))
         .as_array_mut()
         .context("the contract's borrowed tensors are not an array")?;
-    names.push(serde_json::Value::String(tensor.to_string()));
-    names.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
-    names.dedup();
-    config.execution_contract = contract.to_string();
-    config
-        .resident_tensor_names
-        .insert(index, tensor.to_string());
-    Ok(true)
+    if !names.iter().any(|name| name.as_str() == Some(tensor)) {
+        names.push(serde_json::Value::String(tensor.to_string()));
+        names.sort_by(|left, right| left.as_str().cmp(&right.as_str()));
+        config.execution_contract = contract.to_string();
+        changed = true;
+    }
+    Ok(changed)
+}
+
+/// The package tensor ids a drafting final stage admits: `resident` plus the
+/// target tensors its draft borrows, so the stage fetches the artifacts that
+/// hold them. Package-v2 tensor ids are the tensors' GGUF names. `None` when
+/// nothing is added: another stage, a draft-less plan, a stage that loads
+/// every tensor, or a tied target whose output head already reads them.
+pub fn borrowed_resident_tensor_ids(
+    plan: &SplitDFlashStage,
+    final_stage: bool,
+    resident: &[String],
+) -> Option<Vec<String>> {
+    let tensor = skippy_runtime::DFLASH_BORROWED_TARGET_TENSOR;
+    if !final_stage
+        || !plan.drafts()
+        || !resident.iter().any(|id| id == UNTIED_OUTPUT_TENSOR)
+        || resident.iter().any(|id| id == tensor)
+    {
+        return None;
+    }
+    let mut ids = resident.to_vec();
+    ids.push(tensor.to_string());
+    ids.sort();
+    Some(ids)
 }
 
 /// Attaches this stage's part of a split DFlash plan before any serving
 /// session exists: the draft on the final stage, target-layer capture on the
 /// others. A final stage without a usable draft serves without one; stage 0
 /// then receives no drafts and decodes serially.
+///
+/// Returns the draft's target layers once a final stage has attached it, so
+/// the planner can tell stage 0 the draft is there; `None` otherwise.
 pub(crate) fn attach_split_dflash(
     runtime: &mut RuntimeState,
     config: &StageConfig,
     overrides: &RuntimeLaunchOverrides,
     plan: &SplitDFlashStage,
-) -> Result<()> {
+) -> Result<Option<Vec<u32>>> {
     if config.downstream.is_none() {
         let Some(path) = plan.draft_model_path.as_deref() else {
-            return Ok(());
+            return Ok(None);
         };
         if !path.is_file() {
             tracing::warn!(
                 draft = %path.display(),
                 "split DFlash draft is not on this node; serving without speculation"
             );
-            return Ok(());
+            return Ok(None);
         }
         let target_config =
             crate::runtime_state::runtime_config_from_stage_config(config, overrides)?;
         let options = DFlashDraftOptions {
             max_draft_tokens: plan.max_draft_tokens,
             n_gpu_layers: plan.draft_n_gpu_layers,
-            device: None,
+            device: draft_device_on_this_node(plan.draft_device.as_deref()),
         };
         let info = runtime
             .model
@@ -171,7 +220,7 @@ pub(crate) fn attach_split_dflash(
             target_layers = ?info.target_layer_ids,
             "split DFlash draft attached on the final stage"
         );
-        return Ok(());
+        return Ok(Some(info.target_layer_ids.clone()));
     }
     let layers = runtime.model.attach_dflash_capture(
         &plan.target_layers,
@@ -183,7 +232,33 @@ pub(crate) fn attach_split_dflash(
         layers = ?layers,
         "split DFlash target-layer capture attached"
     );
-    Ok(())
+    Ok(None)
+}
+
+/// The configured draft device when this node has it. The device is named on
+/// the planning node; a final stage on another node may not have it, and then
+/// puts the draft on the target's device rather than failing to attach.
+fn draft_device_on_this_node(device: Option<&str>) -> Option<String> {
+    let device = device?;
+    match skippy_runtime::backend_devices() {
+        Ok(devices) if devices.iter().any(|known| known.name == device) => Some(device.to_string()),
+        Ok(devices) => {
+            tracing::warn!(
+                device,
+                available = ?devices.iter().map(|known| known.name.as_str()).collect::<Vec<_>>(),
+                "split DFlash draft device is not on this node; placing the draft with the target"
+            );
+            None
+        }
+        Err(error) => {
+            tracing::warn!(
+                device,
+                error = format!("{error:#}"),
+                "cannot list this node's devices; placing the split DFlash draft with the target"
+            );
+            None
+        }
+    }
 }
 
 /// Stage 0's decode plan for a split DFlash target: the final stage's DFlash
@@ -221,6 +296,7 @@ mod tests {
             dflash: Some(DFlashProposalConfig {
                 draft_model_path: PathBuf::from("/models/draft-dflash.gguf"),
                 max_draft_tokens: cap,
+                target_layers: Vec::new(),
             }),
             ..SpeculativeDecodeConfig::default()
         }
@@ -331,6 +407,96 @@ mod tests {
         let mut whole = stage_config(true, &[]);
         assert!(!load_borrowed_target_tensors(&mut whole, &draft_plan()).unwrap());
         assert!(whole.resident_tensor_names.is_empty());
+    }
+
+    #[test]
+    fn a_tied_target_loads_nothing_extra() {
+        // No separate output head: the final stage reads the embeddings for it.
+        let mut tied = stage_config(true, &["blk.32.attn_norm.weight", "token_embd.weight"]);
+        let before = tied.clone();
+        assert!(!load_borrowed_target_tensors(&mut tied, &draft_plan()).unwrap());
+        assert_eq!(tied, before);
+    }
+
+    #[test]
+    fn admitted_embeddings_of_an_untied_target_are_still_declared_borrowed() {
+        // The package closure admitted the embeddings so the stage fetched
+        // them; no stage graph reads them, so the contract must say so.
+        let mut config = stage_config(
+            true,
+            &[
+                "blk.32.attn_norm.weight",
+                "output.weight",
+                "token_embd.weight",
+            ],
+        );
+        assert!(load_borrowed_target_tensors(&mut config, &draft_plan()).unwrap());
+        let contract: serde_json::Value = serde_json::from_str(&config.execution_contract).unwrap();
+        assert_eq!(
+            contract["borrowed"],
+            serde_json::json!(["token_embd.weight"])
+        );
+        assert_eq!(config.resident_tensor_names.len(), 3);
+    }
+
+    #[test]
+    fn a_drafting_final_stage_fetches_the_artifacts_of_borrowed_tensors() {
+        let resident = ["blk.32.attn_norm.weight", "output.weight"].map(String::from);
+        assert_eq!(
+            borrowed_resident_tensor_ids(&draft_plan(), true, &resident),
+            Some(
+                [
+                    "blk.32.attn_norm.weight",
+                    "output.weight",
+                    "token_embd.weight"
+                ]
+                .map(String::from)
+                .to_vec()
+            )
+        );
+        // Not a drafting final stage, or already admitted, or tied.
+        assert_eq!(
+            borrowed_resident_tensor_ids(&draft_plan(), false, &resident),
+            None
+        );
+        let no_draft = SplitDFlashStage {
+            draft_model_path: None,
+            ..draft_plan()
+        };
+        assert_eq!(
+            borrowed_resident_tensor_ids(&no_draft, true, &resident),
+            None
+        );
+        let admitted = ["output.weight", "token_embd.weight"].map(String::from);
+        assert_eq!(
+            borrowed_resident_tensor_ids(&draft_plan(), true, &admitted),
+            None
+        );
+        let tied = ["blk.32.attn_norm.weight"].map(String::from);
+        assert_eq!(
+            borrowed_resident_tensor_ids(&draft_plan(), true, &tied),
+            None
+        );
+    }
+
+    #[test]
+    fn a_plan_names_its_target_layers_without_the_draft_file() {
+        let mut dflash = DFlashProposalConfig {
+            draft_model_path: PathBuf::from("/not/on/this/node.gguf"),
+            max_draft_tokens: Some(4),
+            target_layers: vec![2, 17, 32],
+        };
+        let plan = SplitDFlashStage::from_draft(&dflash, false, None).unwrap();
+        assert_eq!(plan.target_layers, vec![2, 17, 32]);
+        assert_eq!(plan.draft_model_path, None);
+        dflash.target_layers.clear();
+        assert!(SplitDFlashStage::from_draft(&dflash, false, None).is_err());
+    }
+
+    #[test]
+    fn a_draft_device_this_node_lacks_falls_back_to_the_target_device() {
+        assert_eq!(draft_device_on_this_node(None), None);
+        assert_eq!(draft_device_on_this_node(Some("NoSuchDevice9")), None);
     }
 
     #[test]

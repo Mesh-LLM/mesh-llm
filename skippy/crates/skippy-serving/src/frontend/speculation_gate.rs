@@ -608,6 +608,7 @@ mod tests {
         plan.dflash = Some(crate::frontend::DFlashProposalConfig {
             draft_model_path: "/models/draft-dflash.gguf".into(),
             max_draft_tokens: None,
+            target_layers: Vec::new(),
         });
         assert!(speculation_plan_is_active(&plan));
     }

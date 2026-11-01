@@ -422,7 +422,11 @@ fn finish_connection_workers(
 fn run_binary_stage(
     options: BinaryStageOptions,
     shutdown: Arc<AtomicBool>,
-    boundary_observer: impl FnOnce(Option<ActivationBoundaryDesc>, Option<ActivationBoundaryDesc>),
+    boundary_observer: impl FnOnce(
+        Option<ActivationBoundaryDesc>,
+        Option<ActivationBoundaryDesc>,
+        Option<Vec<u32>>,
+    ),
 ) -> Result<Option<EmbeddedFrontendTask>> {
     options.tuning.validate()?;
     let mtp_source = options.resolved_mtp_source();
@@ -505,21 +509,24 @@ fn run_binary_stage(
         loaded => loaded?,
     }
     .context("binary stage server requires model_path")?;
-    if let Some(plan) = split_dflash.as_ref()
-        && let Err(error) = crate::split_dflash::attach_split_dflash(
+    // The draft's target layers once this final stage has attached it, which
+    // the stage reports so stage 0 knows whether it can drive DFlash.
+    let split_dflash_target_layers = split_dflash.as_ref().and_then(|plan| {
+        crate::split_dflash::attach_split_dflash(
             &mut lock_runtime(&runtime),
             &config,
             &overrides,
             plan,
         )
-    {
-        // Stage 0 receives no drafts and decodes serially.
-        tracing::warn!(
-            stage = config.stage_id,
-            error = format!("{error:#}"),
-            "split DFlash did not attach; serving without speculation"
-        );
-    }
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                stage = config.stage_id,
+                error = format!("{error:#}"),
+                "split DFlash did not attach; serving without speculation"
+            );
+            None
+        })
+    });
     // In-flight admission is bounded by the lanes the runtime actually serves.
     // The native encoder-decoder clamp can hold that below `config.lane_count`
     // (#1954).
@@ -600,7 +607,7 @@ fn run_binary_stage(
     let mut connection_workers = ConnectionWorkers::default();
     let listener = TcpListener::bind(bind_addr)?;
     listener.set_nonblocking(true)?;
-    boundary_observer(input_boundary, output_boundary);
+    boundary_observer(input_boundary, output_boundary, split_dflash_target_layers);
     let frontend_task = public_frontend::start(public_frontend::PublicFrontendLaunch {
         config: config.clone(),
         runtime: runtime.clone(),
