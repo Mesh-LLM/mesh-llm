@@ -15,8 +15,10 @@
 //! step, with single-token decodes between windows, so every stage rebuilds
 //! and re-realizes its graph slice on each step.
 //!
-//! Needs `SKIPPY_CORRECTNESS_MODEL` set to a GGUF of a model with recurrent
-//! layers that support rollback (for example Qwen3.5-4B); skipped otherwise.
+//! Needs `SKIPPY_ROLLBACK_MODEL` set to a GGUF of a model with recurrent
+//! layers that support rollback (CI uses Qwen3.5-0.8B); skipped when unset.
+//! The dense `SKIPPY_CORRECTNESS_MODEL` fixture cannot exercise rollback, so
+//! this test has its own variable.
 
 use std::{env, path::PathBuf};
 
@@ -52,8 +54,12 @@ const PIPELINED_REJECTIONS: [(Option<usize>, Option<usize>); 5] = [
     (Some(0), Some(1)),
 ];
 
-fn correctness_model() -> Option<PathBuf> {
-    env::var_os("SKIPPY_CORRECTNESS_MODEL").map(PathBuf::from)
+const ROLLBACK_MODEL_ENV: &str = "SKIPPY_ROLLBACK_MODEL";
+
+fn rollback_model() -> Option<PathBuf> {
+    env::var_os(ROLLBACK_MODEL_ENV)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
 }
 
 fn n_gpu_layers() -> i32 {
@@ -602,8 +608,8 @@ fn check_split(
 
 #[test]
 fn split_verify_rollback_matches_full_model_and_checkpoint_path() -> Result<()> {
-    let Some(path) = correctness_model() else {
-        eprintln!("skipping: SKIPPY_CORRECTNESS_MODEL is not set");
+    let Some(path) = rollback_model() else {
+        eprintln!("skipping: {ROLLBACK_MODEL_ENV} is not set");
         return Ok(());
     };
     let layers = layer_count(&path)?;
