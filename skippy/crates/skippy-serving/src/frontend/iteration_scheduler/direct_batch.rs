@@ -19,10 +19,19 @@ pub(super) fn direct_coalesce_target(
     queued_direct_iterations: usize,
     max_direct_batch_size: usize,
 ) -> usize {
+    // Active sessions may belong to the planned scheduler. There is no
+    // direct batch to coalesce until its first request is actually queued;
+    // waiting here would delay every planned decode by the coalesce window.
+    if queued_direct_iterations == 0 {
+        return 0;
+    }
     active_runtime_sessions
         .max(queued_direct_iterations)
         .min(max_direct_batch_size)
 }
+
+#[cfg(test)]
+mod coalescing_tests;
 
 /// Environment switch: split each coalesced decode wave into this many
 /// pipeline groups, so a pipelined split keeps more than one batch in flight
