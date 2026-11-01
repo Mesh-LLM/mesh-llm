@@ -214,7 +214,9 @@ pub(in crate::frontend) struct SplitDFlashCounts {
     pub(in crate::frontend) feature_rows_missing: i64,
     pub(in crate::frontend) draft_context_resets: i64,
     /// Largest per-stage count of verify windows a downstream stage rolled
-    /// back in place, and held in a host checkpoint.
+    /// back in place, and held in a host checkpoint. A stage counts a window
+    /// once its storage is final, so both only grow and the running maximum
+    /// is the latest count.
     pub(in crate::frontend) downstream_rollbacks_in_place: i64,
     pub(in crate::frontend) downstream_rollbacks_checkpointed: i64,
     /// The same on stage 0, when it could be read.
