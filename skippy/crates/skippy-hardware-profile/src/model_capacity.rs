@@ -1,5 +1,8 @@
 //! OS-reported local capacity for model discovery, without loading a native runtime.
 
+#[cfg(target_os = "linux")]
+mod cgroup;
+
 /// Budget used by both model CLIs for fit labels and default variant selection.
 /// Accelerator hosts use usable device memory; CPU-only hosts use 90% of RAM.
 pub fn local_model_fit_budget_bytes() -> u64 {
@@ -18,6 +21,29 @@ pub fn local_model_fit_budget_bytes() -> u64 {
             .or_else(platform_adapter_capacity)
             .filter(|bytes| *bytes > 0)
             .unwrap_or_else(|| ram.saturating_mul(9) / 10)
+    }
+}
+
+/// Host RAM `(total, available)` in bytes, bounded by any cgroup memory limit.
+/// Returns `None` when the OS reports no total memory.
+pub fn host_memory_bytes() -> Option<(u64, u64)> {
+    let mut system = sysinfo::System::new();
+    system.refresh_memory();
+    let total = system.total_memory();
+    (total > 0).then(|| {
+        let host = (total, system.available_memory());
+        #[cfg(target_os = "linux")]
+        let cgroup = cgroup::limits(host);
+        #[cfg(not(target_os = "linux"))]
+        let cgroup = None;
+        constrain_host_memory(host, cgroup)
+    })
+}
+
+fn constrain_host_memory(host: (u64, u64), cgroup: Option<(u64, u64)>) -> (u64, u64) {
+    match cgroup {
+        Some((total, available)) if total <= host.0 => (total, host.1.min(available)),
+        _ => host,
     }
 }
 
@@ -166,6 +192,14 @@ mod metal;
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn host_memory_respects_cgroup_limits() {
+        assert_eq!(constrain_host_memory((100, 80), Some((40, 10))), (40, 10));
+        assert_eq!(constrain_host_memory((100, 30), Some((200, 80))), (100, 30));
+        assert_eq!(constrain_host_memory((100, 80), None), (100, 80));
+        assert_eq!(constrain_host_memory((100, 80), Some((0, 0))), (0, 0));
+        assert_eq!(constrain_host_memory((100, 80), Some((100, 5))), (100, 5));
+    }
     #[test]
     fn nvidia_budget_subtracts_reserved_memory_per_device() {
         assert_eq!(

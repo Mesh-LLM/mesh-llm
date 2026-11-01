@@ -32,6 +32,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+pub mod session;
+
 use anyhow::{Context, Result, anyhow, bail};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
@@ -48,7 +50,8 @@ const START_TIMEOUT: Duration = Duration::from_secs(30);
 const QUEUE: usize = 256;
 
 /// How a live transcription session transcribes.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct LiveTranscriptionOptions {
     /// Model to use; `None` picks the first model on the mesh that supports
     /// live transcription.
@@ -78,7 +81,8 @@ impl Default for LiveTranscriptionOptions {
 }
 
 /// When the server ends a turn on its own.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct LiveTurnDetection {
     /// 0.0 to 1.0; higher needs louder audio to count as speech.
     pub threshold: f32,
@@ -99,7 +103,8 @@ impl Default for LiveTurnDetection {
 }
 
 /// What a session reports. `item_id` names one turn (one utterance).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum LiveTranscriptionEvent {
     SpeechStarted {
         item_id: String,

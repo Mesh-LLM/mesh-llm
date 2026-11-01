@@ -285,6 +285,7 @@ impl NativeModelLifecycle {
                 config_model_id: Some(model.to_owned()),
                 profile: String::new(),
                 source: IntentSource::NativeLifecycle,
+                sizing: crate::api::RuntimeLoadSizing::default(),
                 completion: Some(completion),
             })
             .await

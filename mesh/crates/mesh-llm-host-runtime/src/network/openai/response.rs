@@ -6,8 +6,6 @@ mod common;
 mod dispatch;
 mod external_endpoint;
 mod json_adaptation;
-#[cfg(feature = "payments")]
-mod model_prices;
 mod models;
 #[cfg(feature = "payments")]
 mod payment_admission;
@@ -31,7 +29,7 @@ pub(super) use common::{
     target_health_outcome_for_attempt,
 };
 pub(super) use external_endpoint::route_http_endpoint_attempt;
-pub(crate) use models::send_models_list_with_descriptors;
+pub(crate) use models::{error_response as model_error_response, models_response};
 pub(crate) use pipeline::{PipelineCapsuleNonce, PipelineProxyResult, pipeline_proxy_local};
 #[cfg(feature = "payments")]
 pub(crate) use replay::served_outcome_of_raw_response;
