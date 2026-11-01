@@ -240,6 +240,20 @@ fn proposals(reference: &[i32], from: usize, count: usize, reject: Option<usize>
 
 /// Rows accepted before the first prediction that disagrees with the next
 /// window row.
+/// Verification returns a row per window token, except that a staged
+/// verification stops at the first row that rejects its proposal: later rows
+/// are conditioned on a rejected token and are not returned.
+fn check_verified_rows(window: &[i32], predicted: &[i32], label: &str) -> Result<()> {
+    let through_rejection = (accepted_rows(window, predicted) + 1).min(window.len());
+    ensure!(
+        predicted.len() == window.len() || predicted.len() == through_rejection,
+        "{label}: verify returned {} rows for a {}-row window",
+        predicted.len(),
+        window.len()
+    );
+    Ok(())
+}
+
 fn accepted_rows(window: &[i32], predicted: &[i32]) -> usize {
     predicted
         .iter()
@@ -320,11 +334,7 @@ fn run_serial(mut target: Target, prompt: &[i32], reference: &[i32], label: &str
         let mut window = vec![current];
         window.extend(proposals(reference, committed.len(), WINDOW - 1, reject));
         let predicted = target.verify(&window)?;
-        ensure!(
-            predicted.len() == window.len(),
-            "{label}: verify returned {} rows",
-            predicted.len()
-        );
+        check_verified_rows(&window, &predicted, label)?;
         let accepted = accepted_rows(&window, &predicted);
         commit(&mut committed, reference, &predicted, accepted, label)?;
         if accepted + 1 == window.len() {
@@ -367,11 +377,7 @@ fn run_changing_widths(
             let mut window = vec![current];
             window.extend(proposals(reference, committed.len(), width - 1, reject));
             let predicted = target.verify(&window)?;
-            ensure!(
-                predicted.len() == window.len(),
-                "{label}: verify returned {} rows",
-                predicted.len()
-            );
+            check_verified_rows(&window, &predicted, label)?;
             let accepted = accepted_rows(&window, &predicted);
             commit(&mut committed, reference, &predicted, accepted, label)?;
             if accepted + 1 == window.len() {
