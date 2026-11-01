@@ -370,11 +370,18 @@ pub fn find_huggingface_layer_package(model_query: &str) -> Option<String> {
 }
 
 /// Probe a Hugging Face repo directly and treat it as a layer package only
-/// when the manifest exists at the requested revision.
+/// when the manifest exists at the requested revision. A pinned revision whose
+/// package snapshot is already cached resolves without asking the Hub.
 pub fn find_huggingface_layer_package_at_revision(
     repo: &str,
     revision: Option<&str>,
 ) -> Option<String> {
+    if let Some(revision) = revision
+        && cached_layer_package_snapshot(&crate::huggingface_hub_cache_dir(), repo, revision)
+            .is_some()
+    {
+        return Some(format_hf_package_ref(repo, Some(revision)));
+    }
     let revision_ref = revision.unwrap_or("main");
     match hf_model_repo_has_file(repo, revision_ref, "model-package.json") {
         Ok(true) => Some(format_hf_package_ref(repo, revision)),
@@ -411,6 +418,46 @@ fn parse_exact_huggingface_repo(input: &str) -> Option<(String, Option<String>)>
     let (repo, revision, selector) = skippy_model_resolver::parse_huggingface_repo_ref(input)
         .or_else(|| skippy_model_resolver::parse_huggingface_repo_url(input))?;
     selector.is_none().then_some((repo, revision))
+}
+
+/// A pinned revision whose snapshot is already in the local Hugging Face cache
+/// with a package manifest is a layer package without asking the Hub. Revisions
+/// that exist only locally, or offline nodes, would otherwise fall through to
+/// GGUF file resolution and serve one package artifact as a whole model. A
+/// named revision (a branch or tag) resolves through the cache's
+/// `refs/<revision>` to the commit whose snapshot holds the files.
+fn cached_layer_package_snapshot(hub_cache: &Path, repo: &str, revision: &str) -> Option<PathBuf> {
+    let repo_cache = hub_cache.join(format!("models--{}", repo.replace('/', "--")));
+    let snapshots = repo_cache.join("snapshots");
+    let commit =
+        if single_path_component(revision).is_some_and(|name| snapshots.join(name).is_dir()) {
+            revision.to_string()
+        } else {
+            // Named refs may nest (`refs/pr/1`); every component must stay inside
+            // `refs/`.
+            let mut ref_path = repo_cache.join("refs");
+            for component in revision.split('/') {
+                ref_path.push(single_path_component(component)?);
+            }
+            let commit = std::fs::read_to_string(ref_path).ok()?;
+            single_path_component(commit.trim())?.to_string()
+        };
+    let snapshot = snapshots.join(commit);
+    snapshot
+        .join("model-package.json")
+        .is_file()
+        .then_some(snapshot)
+}
+
+/// `value` when it is one normal path component, so it cannot leave the
+/// directory it is joined to.
+fn single_path_component(value: &str) -> Option<&str> {
+    let mut components = Path::new(value).components();
+    matches!(
+        (components.next(), components.next()),
+        (Some(Component::Normal(_)), None)
+    )
+    .then_some(value)
 }
 
 fn format_hf_package_ref(repo: &str, revision: Option<&str>) -> String {

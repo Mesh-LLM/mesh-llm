@@ -1,4 +1,4 @@
-use crate::process::{Failure, ProcessReport};
+use crate::{Failure, ProcessReport};
 use std::time::Duration;
 
 #[derive(Debug, Clone)]

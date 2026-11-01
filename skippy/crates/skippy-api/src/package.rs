@@ -144,6 +144,7 @@ pub fn identity_from_package_v2(
         "package-v2 source model byte count must be positive"
     );
     let mut source_files = package_v2_source_files(&package_dir, &manifest, digest_cache)?;
+    let layer_count = package_v2_executable_layer_count(&manifest)?;
     let layer_weight_bytes = package_v2_layer_weight_bytes(&manifest)?;
     let tensor_count = u64::try_from(manifest.tensor_catalog.entries.len())
         .context("package-v2 tensor count exceeds u64")?;
@@ -165,7 +166,7 @@ pub fn identity_from_package_v2(
         source_model_bytes,
         source_files,
         layer_weight_bytes,
-        layer_count: manifest.layer_count,
+        layer_count,
         activation_width,
         tensor_count,
         generation,
@@ -237,6 +238,34 @@ fn package_v2_source_files(
         .collect()
 }
 
+/// The manifest `layer_count` mirrors GGUF `block_count`, which includes
+/// appended NextN/MTP blocks, while llama.cpp's `n_layer()` excludes them.
+/// Stage ranges must use the same executable trunk count; native planning
+/// keeps the MTP block resident on the stage that ends the trunk.
+pub fn package_v2_executable_layer_count(manifest: &PackageManifestV2) -> Result<u32> {
+    let nextn_predict_layers = manifest
+        .model_metadata
+        .get("general.architecture")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|architecture| {
+            manifest
+                .model_metadata
+                .get(&format!("{architecture}.nextn_predict_layers"))
+        })
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    u32::try_from(nextn_predict_layers)
+        .ok()
+        .and_then(|nextn| manifest.layer_count.checked_sub(nextn))
+        .filter(|layer_count| *layer_count > 0)
+        .with_context(|| {
+            format!(
+                "package-v2 has no executable layers (layer_count={}, nextn_predict_layers={nextn_predict_layers})",
+                manifest.layer_count
+            )
+        })
+}
+
 pub fn package_v2_layer_weight_bytes(manifest: &PackageManifestV2) -> Result<Vec<u64>> {
     if !manifest
         .tensor_catalog
@@ -263,6 +292,12 @@ pub fn package_v2_layer_weight_bytes(manifest: &PackageManifestV2) -> Result<Vec
     }
     if layer_bytes.contains(&0) {
         return Ok(Vec::new());
+    }
+    // MTP blocks stay with the final stage that owns logits.
+    let executable = package_v2_executable_layer_count(manifest)? as usize;
+    let mtp_bytes = layer_bytes.split_off(executable).into_iter().sum::<u64>();
+    if let Some(last) = layer_bytes.last_mut() {
+        *last = last.saturating_add(mtp_bytes);
     }
     Ok(layer_bytes)
 }

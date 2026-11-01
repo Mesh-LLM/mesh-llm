@@ -25,6 +25,18 @@ pub(crate) fn write_test_package_v2_fixture(
     model_id: &str,
     payloads: &[(&str, &str, &str)],
 ) -> Result<PackageManifestV2> {
+    write_test_package_v2_fixture_with_layers(package_dir, model_id, payloads, 2, 0)
+}
+
+/// `layer_count` is the GGUF block count, including `nextn_predict_layers`.
+#[cfg(test)]
+pub(crate) fn write_test_package_v2_fixture_with_layers(
+    package_dir: &Path,
+    model_id: &str,
+    payloads: &[(&str, &str, &str)],
+    layer_count: u32,
+    nextn_predict_layers: u32,
+) -> Result<PackageManifestV2> {
     anyhow::ensure!(!payloads.is_empty(), "test package needs payloads");
     let mut payloads = payloads.to_vec();
     payloads.sort_by_key(|(artifact_id, _, _)| *artifact_id);
@@ -51,7 +63,12 @@ pub(crate) fn write_test_package_v2_fixture(
     }
     let metadata_relative = "shared/metadata.gguf";
     let metadata_path = package_dir.join(metadata_relative);
-    write_test_metadata_carrier(&metadata_path, &payload_locators)?;
+    write_test_metadata_carrier(
+        &metadata_path,
+        &payload_locators,
+        layer_count,
+        nextn_predict_layers,
+    )?;
     let metadata_bytes = std::fs::read(&metadata_path)?;
     artifacts.insert(
         0,
@@ -82,7 +99,7 @@ pub(crate) fn write_test_package_v2_fixture(
             }],
         },
         format: "gguf".to_string(),
-        layer_count: 2,
+        layer_count,
         model_metadata: Default::default(),
         artifact_catalog: ArtifactCatalog { entries: artifacts },
         tensor_catalog: TensorCatalog {
@@ -109,7 +126,12 @@ pub(crate) fn write_test_package_v2_fixture(
 }
 
 #[cfg(test)]
-fn write_test_metadata_carrier(path: &Path, tensors: &[(&str, u32, u64, u64, u32)]) -> Result<()> {
+fn write_test_metadata_carrier(
+    path: &Path,
+    tensors: &[(&str, u32, u64, u64, u32)],
+    block_count: u32,
+    nextn_predict_layers: u32,
+) -> Result<()> {
     fn push_string(bytes: &mut Vec<u8>, value: &str) {
         bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
         bytes.extend_from_slice(value.as_bytes());
@@ -147,11 +169,18 @@ fn write_test_metadata_carrier(path: &Path, tensors: &[(&str, u32, u64, u64, u32
     bytes.extend_from_slice(b"GGUF");
     bytes.extend_from_slice(&3_u32.to_le_bytes());
     bytes.extend_from_slice(&(tensors.len() as u64).to_le_bytes());
-    bytes.extend_from_slice(&10_u64.to_le_bytes());
+    bytes.extend_from_slice(&(10 + u64::from(nextn_predict_layers > 0)).to_le_bytes());
     push_string(&mut bytes, "general.architecture");
     bytes.extend_from_slice(&8_u32.to_le_bytes());
     push_string(&mut bytes, "llama");
-    push_u32(&mut bytes, "llama.block_count", 2);
+    push_u32(&mut bytes, "llama.block_count", block_count);
+    if nextn_predict_layers > 0 {
+        push_u32(
+            &mut bytes,
+            "llama.nextn_predict_layers",
+            nextn_predict_layers,
+        );
+    }
     push_u32(&mut bytes, "llama.embedding_length", 4);
     push_string(&mut bytes, "skippy.package.metadata_only");
     bytes.extend_from_slice(&7_u32.to_le_bytes());

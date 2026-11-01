@@ -1,5 +1,5 @@
 use super::*;
-use crate::process::{Completion, LineEnding};
+use crate::{Completion, LineEnding};
 use std::cell::Cell;
 
 struct Script<'a> {
