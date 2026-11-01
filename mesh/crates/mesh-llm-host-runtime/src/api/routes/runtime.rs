@@ -10,6 +10,7 @@ use super::control_apply_diagnostics::{
 use super::runtime_control_state::collect_runtime_config_control_state_payload;
 mod owner_control_credential;
 mod plugin_approval;
+use super::runtime_load_request::parse_runtime_load_request;
 use crate::config_schema::{EngineConfigSchemaDescriptor, export_runtime_config_schema_reference};
 use crate::crypto::{
     OwnerKeychainLoadError, keystore_metadata, load_keystore, load_owner_keypair_from_keychain,
@@ -1614,23 +1615,17 @@ async fn handle_load_model(
         return respond_error(stream, 503, "Runtime control unavailable").await;
     };
 
-    let (spec, profile) = match parse_runtime_load_request(body) {
-        Ok((spec, profile)) => (spec, profile),
-        Err(RuntimeLoadRequestParseError::InvalidJson) => {
-            respond_error(stream, 400, "Invalid JSON body").await?;
-            return Ok(());
-        }
-        Err(RuntimeLoadRequestParseError::MissingModel) => {
-            respond_error(stream, 400, "Missing 'model' field").await?;
-            return Ok(());
-        }
+    let request = match parse_runtime_load_request(body) {
+        Ok(request) => request,
+        Err(error) => return respond_error(stream, 400, error.message()).await,
     };
 
     let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
     let _ = control_tx.send(RuntimeControlRequest::Load {
-        spec,
+        spec: request.spec,
         config_model_id: None,
-        profile,
+        profile: request.profile,
+        sizing: request.sizing,
         resp: resp_tx,
     });
     match resp_rx.await {
@@ -1646,7 +1641,7 @@ async fn handle_load_model(
             .await?;
         }
         Ok(Err(e)) => {
-            respond_runtime_error(stream, &e.to_string()).await?;
+            respond_runtime_error(stream, &format!("{e:#}")).await?;
         }
         Err(_) => {
             respond_error(stream, 503, "Runtime control unavailable").await?;
@@ -1654,40 +1649,6 @@ async fn handle_load_model(
     }
 
     Ok(())
-}
-
-#[derive(Clone, Copy, Debug)]
-enum RuntimeLoadRequestParseError {
-    InvalidJson,
-    MissingModel,
-}
-
-fn parse_runtime_load_request(
-    body: &str,
-) -> Result<(String, String), RuntimeLoadRequestParseError> {
-    let value: serde_json::Value =
-        serde_json::from_str(body).map_err(|_| RuntimeLoadRequestParseError::InvalidJson)?;
-    let model = value
-        .get("model")
-        .and_then(|value| value.as_str())
-        .filter(|value| !value.is_empty())
-        .ok_or(RuntimeLoadRequestParseError::MissingModel)?;
-    let (model_ref, profile) = parse_model_with_profile(model);
-    Ok((model_ref.to_string(), profile.to_string()))
-}
-
-fn parse_model_with_profile(model: &str) -> (&str, &str) {
-    if let Some(hash_pos) = model.rfind('#') {
-        let model_ref = &model[..hash_pos];
-        let profile = &model[hash_pos + 1..];
-        if profile.is_empty() {
-            (model_ref, "")
-        } else {
-            (model_ref, profile)
-        }
-    } else {
-        (model, "")
-    }
 }
 
 async fn handle_unload_model(
@@ -1910,9 +1871,8 @@ async fn handle_get_intents_inner(stream: &mut TcpStream, state: &MeshApi) -> an
 #[cfg(test)]
 mod tests {
     use super::{
-        GuardrailMode, RuntimeLoadRequestParseError, is_loopback_control_caller,
-        local_control_scan_refresh_payload, parse_guardrail_mode, parse_model_with_profile,
-        parse_runtime_load_request,
+        GuardrailMode, is_loopback_control_caller, local_control_scan_refresh_payload,
+        parse_guardrail_mode,
     };
     use mesh_client::client::control_plane::OwnerControlScanRefreshResult;
 
@@ -1951,41 +1911,6 @@ mod tests {
     fn parse_guardrail_mode_rejects_unknown_labels() {
         assert_eq!(parse_guardrail_mode(""), None);
         assert_eq!(parse_guardrail_mode("strict"), None);
-    }
-
-    #[test]
-    fn parse_runtime_load_request_with_profile() {
-        assert_eq!(
-            parse_runtime_load_request(r#"{"model": "Qwen3-8B#low-ctx"}"#).unwrap(),
-            ("Qwen3-8B".to_string(), "low-ctx".to_string()),
-        );
-        assert_eq!(
-            parse_runtime_load_request(r#"{"model": "Qwen3-8B"}"#).unwrap(),
-            ("Qwen3-8B".to_string(), String::new()),
-        );
-    }
-
-    #[test]
-    fn parse_runtime_load_request_missing_model() {
-        assert!(matches!(
-            parse_runtime_load_request(r#"{"foo": "bar"}"#),
-            Err(RuntimeLoadRequestParseError::MissingModel)
-        ));
-    }
-
-    #[test]
-    fn parse_runtime_load_request_rejects_invalid_json() {
-        assert!(matches!(
-            parse_runtime_load_request("invalid"),
-            Err(RuntimeLoadRequestParseError::InvalidJson)
-        ));
-    }
-
-    #[test]
-    fn parse_model_with_profile_from_runtime_route() {
-        let (model_ref, profile) = parse_model_with_profile("Qwen3-8B#low-ctx");
-        assert_eq!(model_ref, "Qwen3-8B");
-        assert_eq!(profile, "low-ctx");
     }
 
     #[test]

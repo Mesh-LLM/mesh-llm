@@ -189,6 +189,7 @@ pub(crate) async fn run_model_target_reconciliation_load(
             spec: load_spec.clone(),
             config_model_id: Some(config_model_id),
             profile: profile.clone(),
+            sizing: api::RuntimeLoadSizing::default(),
             resp,
         })
         .map_err(|_| format!("runtime load queue closed for '{load_spec}'"))?;

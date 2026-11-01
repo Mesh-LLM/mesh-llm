@@ -42,6 +42,14 @@ impl Serialize for PublicationState {
     }
 }
 
+/// Per-load sizing requested by the caller; `None` keeps the configured or
+/// planned value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RuntimeLoadSizing {
+    pub ctx_size: Option<u32>,
+    pub parallel: Option<usize>,
+}
+
 pub enum RuntimeControlRequest {
     DiscoverModels {
         resp:
@@ -55,6 +63,7 @@ pub enum RuntimeControlRequest {
         spec: String,
         config_model_id: Option<String>,
         profile: String,
+        sizing: RuntimeLoadSizing,
         resp: tokio::sync::oneshot::Sender<anyhow::Result<RuntimeLoadResponse>>,
     },
     Unload {

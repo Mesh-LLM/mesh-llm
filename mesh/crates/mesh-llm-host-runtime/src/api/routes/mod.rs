@@ -19,6 +19,7 @@ mod runtime_activity;
 pub(crate) mod runtime_control_state;
 mod runtime_control_state_sources;
 pub(crate) mod runtime_events;
+mod runtime_load_request;
 mod search;
 #[cfg(feature = "payments")]
 mod wallet;

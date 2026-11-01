@@ -444,6 +444,7 @@ pub(super) async fn run_auto_handle_control_request(
             spec,
             config_model_id,
             profile,
+            sizing,
             resp,
         } => {
             let intent = ModelIntent::Load {
@@ -451,6 +452,7 @@ pub(super) async fn run_auto_handle_control_request(
                 spec,
                 config_model_id,
                 profile,
+                sizing,
                 source: IntentSource::ApiLoad,
                 completion: Some(resp),
             };
@@ -525,6 +527,7 @@ pub(super) async fn run_auto_handle_model_intent(
             spec,
             config_model_id,
             profile,
+            sizing,
             source,
             completion,
         } => {
@@ -556,7 +559,7 @@ pub(super) async fn run_auto_handle_model_intent(
             {
                 if let Some(tx) = completion {
                     ctx.model_target_reconciliation_state
-                        .stack_load_completion(&spec, &profile, tx);
+                        .stack_pending_load_completion(&spec, &profile, sizing, tx);
                 }
                 return;
             }
@@ -588,6 +591,7 @@ pub(super) async fn run_auto_handle_model_intent(
                 config_model_id,
                 profile.clone(),
                 source == IntentSource::NativeLifecycle,
+                sizing,
             )
             .await;
             match &result {
