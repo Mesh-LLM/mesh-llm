@@ -62,15 +62,15 @@ checkpoint, buffer reuse) and its rollback-count ABI.
  create mode 100644 src/skippy/verify_window.h
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 3f6aab137..b9b5259af 100644
+index b9b5259af..df831c43e 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 67
-+#define SKIPPY_ABI_VERSION_PATCH 68
+-#define SKIPPY_ABI_VERSION_PATCH 68
++#define SKIPPY_ABI_VERSION_PATCH 69
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -101,10 +101,10 @@ index 1cfaaa5c6..e8d0874a1 100644
  LLAMA_API enum skippy_status skippy_export_kv_page(
          struct skippy_session * session,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 48f8964a9..ebfe058d1 100644
+index 93b538b0e..c505659cd 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -58,6 +58,7 @@ add_library(llama
+@@ -59,6 +59,7 @@ add_library(llama
              skippy/model_source.cpp
              skippy/session.cpp
              skippy/verification.cpp
@@ -112,7 +112,7 @@ index 48f8964a9..ebfe058d1 100644
              skippy/workloads.cpp
              skippy/abi.cpp
              skippy/block_boundaries.cpp
-@@ -411,6 +412,26 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -412,6 +413,26 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_generate_gemma_fixture PROPERTIES
          FIXTURES_SETUP skippy-model-loader-fixtures)
  
@@ -484,10 +484,10 @@ index 8ba595623..bbba808a3 100644
          skippy_session * session,
          uint64_t token_count,
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
-index f44e874d9..68c75fa9c 100644
+index 7d34b34bf..a959a7c81 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
-@@ -120,6 +120,11 @@ struct skippy_verify_checkpoint {
+@@ -121,6 +121,11 @@ struct skippy_verify_checkpoint {
      bool valid = false;
      int32_t token_start = 0;
      size_t token_count = 0;
@@ -499,7 +499,7 @@ index f44e874d9..68c75fa9c 100644
      std::vector<uint8_t> state;
      std::vector<llama_token> token_ids;
      bool has_activation_input = false;
-@@ -190,4 +195,16 @@ struct skippy_session {
+@@ -194,4 +199,16 @@ struct skippy_session {
      std::vector<skippy_pending_activation_part> pending_activation_exports;
      bool reset_required = false;
      std::vector<skippy_verify_checkpoint> verify_checkpoints;

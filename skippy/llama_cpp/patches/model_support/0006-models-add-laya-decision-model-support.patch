@@ -70,15 +70,15 @@ index 571841a60..ac091dd24 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 507a762fe..5180a2531 100644
+index 2902b7279..4da8a4664 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 69
-+#define SKIPPY_ABI_VERSION_PATCH 71
+-#define SKIPPY_ABI_VERSION_PATCH 70
++#define SKIPPY_ABI_VERSION_PATCH 72
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -265,10 +265,10 @@ index 000000000..002fac598
 +
 +#endif // SKIPPY_LAYA_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 3edf17e64..fa6857599 100644
+index 4276b95e3..91c7aad92 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -81,6 +81,8 @@ add_library(llama
+@@ -95,6 +95,8 @@ add_library(llama
              skippy/tokenization.cpp
              skippy/events.cpp
              skippy/system_one.cpp
@@ -277,7 +277,7 @@ index 3edf17e64..fa6857599 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -105,7 +107,7 @@ set_source_files_properties(${LLAMA_MODELS_SOURCES}
+@@ -123,7 +125,7 @@ set_source_files_properties(${LLAMA_MODELS_SOURCES}
  
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  

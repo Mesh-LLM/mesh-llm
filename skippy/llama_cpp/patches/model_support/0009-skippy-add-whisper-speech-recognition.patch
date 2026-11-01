@@ -19,7 +19,7 @@ Bumps the Skippy ABI to 0.1.72.
  include/skippy.h        |   1 +
  include/skippy/asr.h    | 172 +++++++++++++++
  include/skippy/common.h |   4 +-
- src/CMakeLists.txt      |  37 +++
+ src/CMakeLists.txt      |  37 ++++
  src/skippy/abi.cpp      |   6 +-
  src/skippy/asr.cpp      | 465 ++++++++++++++++++++++++++++++++++++++++
  6 files changed, 683 insertions(+), 2 deletions(-)
@@ -216,15 +216,15 @@ index 000000000..99d4a1094
 +
 +#endif // SKIPPY_ASR_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 4da8a4664..f233bb47f 100644
+index 54c87b6f2..4214d0b89 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 72
-+#define SKIPPY_ABI_VERSION_PATCH 73
+-#define SKIPPY_ABI_VERSION_PATCH 73
++#define SKIPPY_ABI_VERSION_PATCH 74
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -238,10 +238,10 @@ index 4da8a4664..f233bb47f 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 93803e031..78e2c01f3 100644
+index c4712cad1..62694667f 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -95,6 +95,7 @@ add_library(llama
+@@ -97,6 +97,7 @@ add_library(llama
              skippy/system_one.cpp
              skippy/laya.cpp
              ../tools/laya/laya.cpp
@@ -249,7 +249,7 @@ index 93803e031..78e2c01f3 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -121,6 +122,10 @@ set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h .
+@@ -123,6 +124,10 @@ set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h .
  set_source_files_properties(${LLAMA_MODELS_SOURCES}
      PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
  
@@ -260,7 +260,7 @@ index 93803e031..78e2c01f3 100644
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  
  target_include_directories(llama PRIVATE . ../common ../tools/laya ${CMAKE_CURRENT_BINARY_DIR})
-@@ -167,6 +172,38 @@ if (LLAMA_LLGUIDANCE)
+@@ -169,6 +174,38 @@ if (LLAMA_LLGUIDANCE)
  endif()
  
  
