@@ -8,13 +8,16 @@ fn windows_rocm_sdk(fixture: &Fixture) {
             "rocblas",
             &[
                 "TensileLibrary_lazy_gfx1100.dat",
+                "TensileLibrary_Type_HH_Contraction_l_Ailk_Bjlk_Cijk_Dijk_gfx1100.co",
                 "Kernels.so-000-gfx1201.hsaco",
+                // A catalog without code objects is not a kernel.
+                "TensileLibrary_lazy_gfx1102.dat",
                 "TensileLibrary_Type_HH_Contraction_l_Ailk_Bjlk_Cijk_Dijk_fallback.dat",
             ][..],
         ),
         // hipBLASLt has gfx1103 kernels in the HIP SDK; they do not count,
         // since the failure on such a GPU is rocBLAS's.
-        ("hipblaslt", &["TensileLibrary_lazy_gfx1103.dat"][..]),
+        ("hipblaslt", &["Kernels.so-000-gfx1103.hsaco"][..]),
     ] {
         let dir = fixture.path().join("sdk/bin").join(library).join("library");
         fs::create_dir_all(&dir).unwrap();
@@ -49,11 +52,12 @@ fn package_kernels(targets: &str) -> (bool, String, String) {
 
 #[test]
 fn windows_rocm_package_drops_targets_without_rocblas_kernels_from_the_manifest_targets() {
-    let (ok, out, error) = package_kernels("gfx90a;gfx1100, gfx1103;gfx1201");
+    let (ok, out, error) = package_kernels("gfx90a;gfx1100, gfx1102;gfx1103;gfx1201");
     assert!(ok, "{error}");
     assert_eq!(out, "gfx1100;gfx1201\n");
     assert!(
-        error.contains("not advertising gfx90a gfx1103: the HIP SDK has no rocBLAS kernels"),
+        error
+            .contains("not advertising gfx90a gfx1102 gfx1103: the HIP SDK has no rocBLAS kernels"),
         "{error}"
     );
 }

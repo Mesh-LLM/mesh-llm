@@ -310,8 +310,9 @@ copy_windows_rocm_kernel_libraries() {
 # some of them (gfx1103 in 6.4 and 7.1.1, gfx90a, gfx942), and rocBLAS fails
 # to initialize on its first call there (#2768). Advertise only the targets
 # whose rocBLAS kernels were packaged, so those GPUs fall to another runtime.
+# A `.dat` file is a kernel catalog, not code, so it alone does not count.
 advertise_windows_rocm_targets_with_kernels() {
-    local library="$1/rocblas/library" raw arch file
+    local library="$1/rocblas/library" raw arch file base
     local -a targets=() kept=() dropped=()
     [[ -d "$library" ]] || return 0
     raw="${LLAMA_STAGE_AMDGPU_TARGETS:-${SKIPPY_AMDGPU_TARGETS:-}}"
@@ -321,7 +322,8 @@ advertise_windows_rocm_targets_with_kernels() {
     [[ "${#targets[@]}" -gt 0 ]] || return 0
     for arch in "${targets[@]}"; do
         for file in "$library"/*; do
-            if [[ "$(basename "$file")" =~ (^|[^0-9a-z])${arch}([^0-9a-z]|$) ]]; then
+            base="$(basename "$file")"
+            if [[ "$base" != *.dat && "$base" =~ (^|[^0-9a-z])${arch}([^0-9a-z]|$) ]]; then
                 kept+=("$arch")
                 continue 2
             fi
