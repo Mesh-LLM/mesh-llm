@@ -357,8 +357,9 @@ pub(in crate::frontend) struct GeneratedText {
 }
 
 /// Encoded activation bytes stage 0 wrote to the next stage for one response:
-/// the first hop only, payload bytes without frame headers. Decode includes
-/// speculative verify windows.
+/// the first hop only, counting whole encoded activation frames (the frame
+/// descriptor and part headers as well as the encoded values), which is what
+/// the link carries. Decode includes speculative verify windows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::frontend) struct ActivationWireStats {
     /// The configured codec, or `auto-lossless-v1` when the producer picks an
