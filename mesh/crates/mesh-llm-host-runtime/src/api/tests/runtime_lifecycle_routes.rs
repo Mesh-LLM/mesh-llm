@@ -1,4 +1,5 @@
 async fn send_runtime_lifecycle_request(state: MeshApi, request: String) -> String {
+    seed_owner_control_token(&state).await;
     let (addr, handle) = spawn_management_test_server(state).await;
     let response = send_management_request(addr, request).await;
     handle.await.unwrap().unwrap();
@@ -7,7 +8,7 @@ async fn send_runtime_lifecycle_request(state: MeshApi, request: String) -> Stri
 
 fn lifecycle_post(path: &str, body: &str) -> String {
     format!(
-        "POST {path} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        "POST {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TEST_OWNER_CONTROL_TOKEN}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
     )
 }
@@ -103,8 +104,9 @@ async fn local_runtime_model_routes_remain_the_lifecycle_api() {
 
     let unloaded = send_runtime_lifecycle_request(
         state,
-        "DELETE /api/runtime/models/org%2Fmodel%3AQ4_K_M HTTP/1.1\r\nHost: localhost\r\n\r\n"
-            .into(),
+        format!(
+            "DELETE /api/runtime/models/org%2Fmodel%3AQ4_K_M HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TEST_OWNER_CONTROL_TOKEN}\r\n\r\n"
+        ),
     )
     .await;
     unload_task.await.unwrap();

@@ -80,6 +80,7 @@ async fn control_plane_api_apply_config_serializes_structured_diagnostics() {
     .await;
     let state = build_test_mesh_api().await;
     state.set_owner_key_path(Some(keystore_path)).await;
+    seed_owner_control_token(&state).await;
     let (addr, handle) = spawn_management_test_server(state).await;
 
     let apply_request_body = json!({
@@ -90,7 +91,10 @@ async fn control_plane_api_apply_config_serializes_structured_diagnostics() {
     .to_string();
     let apply_response = send_management_request(
         addr,
-        management_post_request("/api/runtime/control/apply-config", &apply_request_body),
+        management_post_request_with_owner_control(
+            "/api/runtime/control/apply-config",
+            &apply_request_body,
+        ),
     )
     .await;
     let apply_body = json_body(&apply_response);
@@ -159,6 +163,7 @@ async fn control_plane_api_apply_config_serializes_success_warning_diagnostics()
     .await;
     let state = build_test_mesh_api().await;
     state.set_owner_key_path(Some(keystore_path)).await;
+    seed_owner_control_token(&state).await;
     let (addr, handle) = spawn_management_test_server(state).await;
 
     let apply_request_body = json!({
@@ -169,7 +174,10 @@ async fn control_plane_api_apply_config_serializes_success_warning_diagnostics()
     .to_string();
     let apply_response = send_management_request(
         addr,
-        management_post_request("/api/runtime/control/apply-config", &apply_request_body),
+        management_post_request_with_owner_control(
+            "/api/runtime/control/apply-config",
+            &apply_request_body,
+        ),
     )
     .await;
     let apply_body = json_body(&apply_response);
@@ -198,6 +206,7 @@ async fn control_plane_api_apply_config_serializes_success_warning_diagnostics()
 #[serial]
 async fn control_plane_api_apply_config_preserves_misplaced_plugin_key_diagnostics() {
     let state = build_test_mesh_api().await;
+    seed_owner_control_token(&state).await;
     let (addr, handle) = spawn_management_test_server(state).await;
 
     let apply_request_body = json!({
@@ -219,7 +228,10 @@ async fn control_plane_api_apply_config_preserves_misplaced_plugin_key_diagnosti
     .to_string();
     let apply_response = send_management_request(
         addr,
-        management_post_request("/api/runtime/control/apply-config", &apply_request_body),
+        management_post_request_with_owner_control(
+            "/api/runtime/control/apply-config",
+            &apply_request_body,
+        ),
     )
     .await;
     let apply_body = json_body(&apply_response);

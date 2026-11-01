@@ -8,6 +8,8 @@ use super::control_apply_diagnostics::{
     local_control_apply_diagnostic_payload_from_local,
 };
 use super::runtime_control_state::collect_runtime_config_control_state_payload;
+mod owner_control_credential;
+mod plugin_approval;
 use crate::config_schema::{EngineConfigSchemaDescriptor, export_runtime_config_schema_reference};
 use crate::crypto::{
     OwnerKeychainLoadError, keystore_metadata, load_keystore, load_owner_keypair_from_keychain,
@@ -24,6 +26,7 @@ use mesh_llm_config::{
 };
 use mesh_llm_config::{ConfigDiagnosticSeverity, legacy_validation_error_text};
 use mesh_llm_node::serving::{UnloadOptions, UnloadTarget};
+use plugin_approval::RawPluginCommandApproval;
 use serde::{Deserialize, Serialize};
 use skippy_inference_api::GuardrailMode;
 use std::collections::BTreeMap;
@@ -54,7 +57,13 @@ pub(super) async fn handle(
     method: &str,
     path_only: &str,
     body: &str,
+    raw_request: &[u8],
 ) -> anyhow::Result<()> {
+    if requires_owner_control_credential(method, path_only)
+        && !ensure_owner_control_caller(stream, state, raw_request).await?
+    {
+        return Ok(());
+    }
     match method {
         "GET" => handle_get(stream, state, path_only).await,
         "POST" => handle_post(stream, state, path_only, body).await,
@@ -62,6 +71,31 @@ pub(super) async fn handle(
         "DELETE" => handle_delete(stream, state, path_only, body).await,
         _ => Ok(()),
     }
+}
+
+/// Owner-control routes make the host act as the owner on the caller's
+/// behalf, so they require the owner-control bearer credential on top of
+/// loopback reachability. Reads that expose no secret material (bootstrap,
+/// schema, control-state, validate, kv-cache status) stay loopback-only.
+fn requires_owner_control_credential(method: &str, path_only: &str) -> bool {
+    matches!(
+        (method, path_only),
+        ("POST", "/api/runtime/control/get-config")
+            | ("POST", "/api/runtime/control/scan-refresh")
+            | ("POST", "/api/runtime/control/refresh-inventory")
+            | ("POST", "/api/runtime/control/apply-config")
+            | ("POST", "/api/runtime/control/kv-cache")
+            | ("POST", "/api/runtime/control/load-model")
+            | ("POST", "/api/runtime/control/unload-model")
+            | ("POST", "/api/runtime/control/ensure-model")
+            | ("POST", "/api/runtime/control/drain-model")
+            | ("POST", "/api/runtime/models")
+            | ("POST", "/api/runtime/kv-cache/prune")
+            | ("POST", "/api/runtime/mesh-guardrails")
+            | ("DELETE", "/api/runtime/kv-cache")
+    ) || (method == "DELETE"
+        && (path_only.starts_with("/api/runtime/models/")
+            || path_only.starts_with("/api/runtime/instances/")))
 }
 
 async fn handle_get(
@@ -84,6 +118,9 @@ async fn handle_get(
         }
         "/api/runtime/kv-cache" => super::kv_cache::handle_status(stream).await,
         "/api/runtime/control-bootstrap" => handle_control_bootstrap(stream, state).await,
+        "/api/runtime/control/owner-control-token" => {
+            owner_control_credential::reject_token_disclosure(stream).await
+        }
         "/api/runtime/intents" => handle_get_intents(stream, state).await,
         "/api/runtime/activity" => super::runtime_activity::handle_get(stream, state).await,
         "/api/events" => handle_events(stream, state).await,
@@ -224,6 +261,7 @@ struct ApplyConfigRequest {
     endpoint: Option<String>,
     expected_revision: u64,
     config: crate::plugin::MeshConfig,
+    plugin_command_approvals: Vec<RawPluginCommandApproval>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -231,6 +269,8 @@ struct RawApplyConfigRequest {
     endpoint: Option<String>,
     expected_revision: u64,
     config: serde_json::Value,
+    #[serde(default)]
+    plugin_command_approvals: Vec<RawPluginCommandApproval>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -533,6 +573,7 @@ async fn handle_control_apply_config(
             Ok(config) => config,
             Err(_) => return respond_error(stream, 400, "Invalid JSON body").await,
         },
+        plugin_command_approvals: raw_request.plugin_command_approvals,
     };
     let endpoint = match required_control_endpoint(request.endpoint) {
         Ok(endpoint) => endpoint,
@@ -571,6 +612,11 @@ async fn handle_control_apply_config(
                 .apply_config(
                     request.expected_revision,
                     crate::protocol::convert::mesh_config_to_proto(&request.config),
+                    request
+                        .plugin_command_approvals
+                        .iter()
+                        .map(RawPluginCommandApproval::to_proto)
+                        .collect(),
                 )
                 .await;
             client.close().await;
@@ -1019,14 +1065,70 @@ fn is_loopback_control_caller(addr: SocketAddr) -> bool {
     addr.ip().is_loopback()
 }
 
+/// Loopback reachability is not owner identity: an owner-control route also
+/// requires the host's owner-control bearer credential. A caller without it
+/// is rejected before the host signs any owner-control traffic on its
+/// behalf, and the host fails closed when no token is configured.
+async fn ensure_owner_control_caller(
+    stream: &mut TcpStream,
+    state: &MeshApi,
+    raw_request: &[u8],
+) -> anyhow::Result<bool> {
+    if !ensure_loopback_control_caller(stream).await? {
+        return Ok(false);
+    }
+    if !ensure_owner_control_local_user(stream).await? {
+        return Ok(false);
+    }
+    let presented = mesh_llm_control_api::access::request_authorization_bearer(raw_request)
+        .map_err(|_| anyhow::anyhow!("invalid owner-control credential header"))?
+        .unwrap_or_default();
+    if let Some(expected) = state.owner_control_token().await
+        && crate::api::owner_control_token::owner_control_tokens_match(&expected, presented)
+    {
+        return Ok(true);
+    }
+    tracing::warn!("owner control: rejected loopback caller without owner-control credential");
+    respond_json(
+        stream,
+        401,
+        &serde_json::json!({"error": "owner control credential required"}),
+    )
+    .await?;
+    Ok(false)
+}
+
+/// Owner-control surfaces the host's owner key material, so loopback
+/// reachability is not enough: where the platform exposes the peer process's
+/// credentials (Unix-domain sockets), the caller must also run as the OS
+/// user that runs the host. Loopback TCP never exposes peer credentials on
+/// the supported platforms, so there the bearer credential alone remains the
+/// owner-control requirement (see `crate::api::peer_identity`).
+async fn ensure_owner_control_local_user(stream: &mut TcpStream) -> anyhow::Result<bool> {
+    match crate::api::peer_identity::peer_runs_as_current_user(&*stream) {
+        Some(false) => {
+            tracing::warn!("owner control: rejected caller running as another OS user");
+            respond_json(
+                stream,
+                403,
+                &serde_json::json!({"error": "owner control is only available to the host service user"}),
+            )
+            .await?;
+            Ok(false)
+        }
+        Some(true) | None => Ok(true),
+    }
+}
+
 fn local_control_snapshot_payload(
     snapshot: mesh_client::proto::node::OwnerControlConfigSnapshot,
 ) -> LocalControlSnapshotPayload {
-    let config = snapshot
+    let mut config = snapshot
         .config
         .as_ref()
         .map(crate::protocol::convert::proto_config_to_mesh)
         .unwrap_or_default();
+    crate::protocol::config_redaction::redact_telemetry_headers(&mut config);
     LocalControlSnapshotPayload {
         node_id: hex::encode(snapshot.node_id),
         revision: snapshot.revision,
