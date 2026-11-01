@@ -41,6 +41,8 @@ message Envelope {
     InferenceObservationBatch inference_observation_batch = 40;
     PrepareModelAssetsRequest prepare_model_assets_request = 41;
     PrepareModelAssetsResponse prepare_model_assets_response = 42;
+    ModelRequirementRequest model_requirement_request = 43;
+    ModelRequirementResponse model_requirement_response = 44;
   }
 }
 
@@ -235,6 +237,10 @@ message PluginManifest {
   // `SubscribeInferenceObservationRequest`. Declarations are not grants: the
   // operator also sets `allow_inference_observation = true` for the plugin.
   optional InferenceObservationManifest inference_observation = 16;
+  // Local provider connections this plugin needs, chosen by capability. An
+  // installed package's requests are granted at install; a `[[plugin]]`
+  // `operation_bindings` entry in the operator config replaces them.
+  optional PluginGrantRequests grant_requests = 17;
 }
 
 message InferenceObservationManifest {
@@ -546,6 +552,15 @@ message PluginConfigRequiresConstraint {
 
 message MeshChannelManifest {
   string name = 1;
+  // This plugin publishes on the channel to the other plugins on its own
+  // node, never to the mesh: the host delivers its channel messages on it to
+  // every other local plugin that declares the channel, as it delivers its
+  // own local broadcasts (empty `source_peer_id`), and sends none to a peer.
+  // Bulk transfers on it are dropped and mesh streams on it are refused.
+  // Handled only by a host listing the `local_channels.v1` capability; a
+  // host without it would send the messages to the mesh, so a plugin checks
+  // the capability before publishing.
+  bool local = 2;
 }
 
 message MeshEventSubscriptionManifest {
@@ -851,6 +866,43 @@ message OpenAiExchangeHookManifest {
   bool delegate_signing_key = 17;
   repeated string signing_scopes = 18;
   uint64 max_delegation_ttl_secs = 19;
+}
+
+// What an installed package asks the host for. Granted at install; the
+// operator's `[[plugin]]` entry replaces or removes each grant.
+message PluginGrantRequests {
+  // Provider connections this plugin needs, chosen by capability.
+  repeated OperationBindingManifest operation_bindings = 1;
+  // This plugin asks to block/unblock routing to peers.
+  bool peer_blocks = 2;
+}
+
+// A provider connection requested by capability (for example `storage.v1`).
+// The host resolves it to the single running plugin serving that capability.
+message OperationBindingManifest {
+  string name = 1;
+  string capability = 2;
+  string setup_operation = 3;
+  repeated string operations = 4;
+  // Setup takes `{"directory": <absolute base the caller owns>}` from the
+  // caller; the host dispatches `{"directory": "<base>/<provider plugin name>"}`
+  // (created owner-only), so each provider keeps separate state and the
+  // caller never learns which provider it was bound to.
+  bool setup_directory = 5;
+}
+
+// Replaces this plugin's requirements for one exact advertised model id.
+// Empty requires withdraws. The host authenticates the plugin name
+// and accepts only channels declared by that plugin's initialized manifest.
+message ModelRequirementRequest {
+  string model = 1;
+  repeated ChannelRequirement requires = 2;
+}
+message ModelRequirementResponse {}
+
+message ChannelRequirement {
+  string channel = 1;
+  bytes terms = 2;
 }
 
 // A plugin asks for the local inference observation feed: what this node's

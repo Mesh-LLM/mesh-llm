@@ -1043,23 +1043,27 @@ impl PluginRuntime {
             Arc::from(request.host_capabilities.clone());
         let mut plugin = state.plugin.clone().write_owned().await;
         let mut context = Self::context(&state);
-        if let Some(message) = crate::host_capabilities::unsupported_requirement(
+        let mut init_result = match crate::host_capabilities::unsupported_requirement(
             plugin.manifest().as_ref(),
             |capability| context.host_supports(capability),
         ) {
-            Self::write_payload(
-                &state,
-                request_id,
-                proto::envelope::Payload::ErrorResponse(
-                    PluginError::invalid_request(message).into_error_response(),
-                ),
+            Some(message) => Err(PluginError::invalid_request(message)),
+            None => {
+                plugin
+                    .initialize(PluginInitializeRequest::from(request), &mut context)
+                    .await
+            }
+        };
+        // `initialize` may change the manifest, and the manifest sent in the
+        // response is the one the host acts on, so check that one too.
+        if init_result.is_ok()
+            && let Some(message) = crate::host_capabilities::unsupported_requirement(
+                plugin.manifest().as_ref(),
+                |capability| context.host_supports(capability),
             )
-            .await?;
-            return Ok(false);
+        {
+            init_result = Err(PluginError::invalid_request(message));
         }
-        let init_result = plugin
-            .initialize(PluginInitializeRequest::from(request), &mut context)
-            .await;
         if let Err(err) = init_result {
             Self::write_payload(
                 &state,
@@ -1998,6 +2002,77 @@ mod tests {
         assert_eq!(response.node_id, "a".repeat(64));
         assert_eq!(response.binding_signature, vec![9; 64]);
 
+        runtime.abort();
+    }
+
+    /// A plugin whose manifest gains a local channel only while it initializes.
+    #[derive(Clone)]
+    struct LateLocalChannel {
+        declared: bool,
+    }
+
+    #[crate::async_trait]
+    impl Plugin for LateLocalChannel {
+        fn plugin_id(&self) -> &str {
+            "demo"
+        }
+        fn plugin_version(&self) -> String {
+            "1.0.0".into()
+        }
+        fn server_info(&self) -> ServerConfig {
+            plugin_server_info("demo", "1.0.0", "Demo", "Demo plugin", None::<String>)
+        }
+        fn manifest(&self) -> Option<proto::PluginManifest> {
+            self.declared.then(|| {
+                crate::plugin_manifest()
+                    .item(crate::local_channel("payment.lifecycle.v1"))
+                    .build()
+            })
+        }
+        async fn initialize(
+            &mut self,
+            _request: PluginInitializeRequest,
+            _context: &mut PluginContext<'_>,
+        ) -> crate::PluginResult<()> {
+            self.declared = true;
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_local_channel_declared_during_initialize_is_refused_without_host_support() {
+        let (plugin_stream, host_stream) = tokio::net::UnixStream::pair().unwrap();
+        let runtime = tokio::spawn(PluginRuntime::run_with_stream(
+            LateLocalChannel { declared: false },
+            LocalStream::Unix(plugin_stream),
+        ));
+        let mut host_stream = LocalStream::Unix(host_stream);
+        write_envelope(
+            &mut host_stream,
+            &proto::Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                plugin_id: "demo".into(),
+                request_id: 1,
+                payload: Some(proto::envelope::Payload::InitializeRequest(
+                    proto::InitializeRequest {
+                        host_protocol_version: PROTOCOL_VERSION,
+                        host_capabilities: Vec::new(),
+                        ..Default::default()
+                    },
+                )),
+            },
+        )
+        .await
+        .unwrap();
+        let response = timeout(Duration::from_secs(1), read_envelope(&mut host_stream))
+            .await
+            .expect("initialize response")
+            .unwrap();
+        let Some(proto::envelope::Payload::ErrorResponse(error)) = response.payload else {
+            panic!("expected a refusal, got {:?}", response.payload);
+        };
+        assert!(error.message.contains("local_channels.v1"), "{error:?}");
         runtime.abort();
     }
 

@@ -250,7 +250,7 @@ export type MeshModelProvider = {
   metadata?: MeshModelMetadata
   runtime?: MeshModelRuntime
   thinking?: unknown
-  payment?: unknown
+  requires?: unknown
 }
 
 /** Catalog results retain the Mesh HTTP API's snake_case field names. */

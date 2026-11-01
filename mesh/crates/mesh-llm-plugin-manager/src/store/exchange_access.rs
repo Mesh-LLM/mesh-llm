@@ -19,11 +19,19 @@ pub struct InstalledOpenAiExchangeAccess {
     pub read_identity_bundle: bool,
     pub delegate_signing_key: bool,
     pub signing_scopes: Vec<String>,
+    /// Limits the package asks for; the grant made at install uses them.
+    pub deadline_ms: u64,
+    pub max_body_bytes: u64,
+    pub max_queue_bytes: u64,
+    pub max_in_flight: u32,
+    pub max_delegation_ttl_secs: u64,
 }
 
 impl InstalledOpenAiExchangeAccess {
-    /// Explicit installation warning; requests confer no permissions.
-    pub fn access_summary(&self) -> String {
+    /// Installation notice: installing the package grants exactly these
+    /// requests (a `[[plugin]]` entry can narrow or replace them).
+    /// The permission labels this request turns on, in disclosure order.
+    fn granted_labels(&self) -> Vec<&'static str> {
         let mut permissions = Vec::new();
         for (enabled, label) in [
             (self.request_body, "original prompts"),
@@ -41,8 +49,49 @@ impl InstalledOpenAiExchangeAccess {
         if !self.headers.is_empty() {
             permissions.push("allowlisted headers");
         }
+        permissions
+    }
+
+    /// Permissions this request has that `previous` (the access the operator
+    /// accepted when the earlier version was installed) did not. An update
+    /// is accepted by running it, so anything new is called out rather than
+    /// silently widened. Endpoints and phases that were not hooked before
+    /// count as new access too.
+    pub fn increases_over(&self, previous: &Self) -> Vec<String> {
+        let before = previous.granted_labels();
+        let mut increases: Vec<String> = self
+            .granted_labels()
+            .into_iter()
+            .filter(|label| !before.contains(label))
+            .map(str::to_owned)
+            .collect();
+        for endpoint in &self.endpoints {
+            if !previous.endpoints.contains(endpoint) {
+                increases.push(format!("endpoint {endpoint}"));
+            }
+        }
+        for phase in &self.phases {
+            if !previous.phases.contains(phase) {
+                increases.push(format!("phase {phase}"));
+            }
+        }
+        for header in &self.headers {
+            if !previous.headers.contains(header) {
+                increases.push(format!("header {header}"));
+            }
+        }
+        for scope in &self.signing_scopes {
+            if !previous.signing_scopes.contains(scope) {
+                increases.push(format!("signing scope {scope}"));
+            }
+        }
+        increases
+    }
+
+    pub fn access_summary(&self) -> String {
+        let permissions = self.granted_labels();
         format!(
-            "OpenAI lifecycle v{} requests: {}. Explicit operator grants are required; installation grants no access. Prompt/content grants disclose that data to this plugin process.",
+            "OpenAI lifecycle v{} access: {}. Installing grants these requests; a [[plugin]] entry in config.toml can narrow or replace them. Prompt/content access discloses that data to this plugin process.",
             self.contract_version,
             if permissions.is_empty() {
                 "lifecycle metadata".into()
@@ -67,7 +116,7 @@ mod tests {
             "original prompts",
             "generated content",
             "signing delegation",
-            "installation grants no access",
+            "Installing grants these requests",
         ] {
             assert!(summary.contains(text));
         }
@@ -86,5 +135,37 @@ mod tests {
         assert_eq!(requested, restored);
         let access = restored.openai_exchange_hook.unwrap();
         assert!(access.request_body && access.response_body && access.admission);
+    }
+
+    #[test]
+    fn increases_name_only_what_the_previous_version_lacked() {
+        let before = InstalledOpenAiExchangeAccess {
+            endpoints: vec!["responses".into()],
+            phases: vec!["exchange_finished".into()],
+            metadata: true,
+            ..Default::default()
+        };
+        let mut now = before.clone();
+        assert!(now.increases_over(&before).is_empty());
+        now.request_body = true;
+        now.delegate_signing_key = true;
+        now.endpoints.push("chat_completions".into());
+        now.headers.push("x-example".into());
+        let listed = now.increases_over(&before);
+        for expected in [
+            "original prompts",
+            "owner-scoped signing delegation",
+            "allowlisted headers",
+            "endpoint chat_completions",
+            "header x-example",
+        ] {
+            assert!(
+                listed.iter().any(|item| item == expected),
+                "{expected} missing from {listed:?}"
+            );
+        }
+        assert_eq!(listed.len(), 5);
+        // Dropping access is not an increase.
+        assert!(before.increases_over(&now).is_empty());
     }
 }

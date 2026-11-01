@@ -49,6 +49,7 @@ async fn record_initialize(mut stream: LocalStream, seen: Arc<Mutex<String>>) ->
 
 fn settings_spec(settings: &[(&str, serde_json::Value)]) -> ExternalPluginSpec {
     ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         openai_exchange_grant: None,
         name: "settings-fixture".into(),
         command: String::new(),

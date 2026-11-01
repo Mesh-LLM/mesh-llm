@@ -6,6 +6,8 @@ mod catalog_pin;
 pub mod defaults;
 pub mod github;
 pub mod install;
+mod package_identity;
+pub mod plugin_toml;
 pub mod skills;
 pub mod source_ref;
 pub mod store;

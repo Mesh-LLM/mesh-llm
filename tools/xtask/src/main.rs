@@ -118,9 +118,6 @@ fn run() -> DynResult<()> {
         cli::CliCommand::RemoteHandoffSummary(rest) => {
             automation::remote_handoff_summary::run(rest)
         }
-        cli::CliCommand::LightningCompatibility(rest) => {
-            automation::lightning_compatibility::run(rest)
-        }
         cli::CliCommand::ControlPlaneQa(rest) => {
             let root = match explicit_root {
                 Some(root) => root,

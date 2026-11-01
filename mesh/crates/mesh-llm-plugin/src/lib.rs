@@ -13,6 +13,7 @@ mod io;
 mod manifest;
 pub mod models;
 pub mod openai_exchange;
+pub mod operation_binding;
 pub mod plugin_status;
 mod runtime;
 mod simple_plugin;
@@ -47,6 +48,7 @@ pub mod inference {
     pub use crate::dsl::inference::{openai_http, provider};
 }
 pub mod mesh {
+    pub use crate::manifest::local_channel;
     pub use crate::manifest::mesh_channel as channel;
 }
 pub mod events {
@@ -66,12 +68,13 @@ pub use manifest::{
     config_float, config_integer, config_object, config_object_property, config_path,
     config_schema, config_setting, config_string, config_url, constraint_allowed_values,
     constraint_non_empty, constraint_positive, constraint_range, constraint_requires, http_binding,
-    http_delete, http_get, http_patch, http_post, http_put, mcp_http_endpoint, mcp_stdio_endpoint,
-    mcp_tcp_endpoint, mcp_unix_socket_endpoint, mesh_channel, mesh_event_local_accepting,
-    mesh_event_local_standby, mesh_event_mesh_id_updated, mesh_event_peer_down, mesh_event_peer_up,
-    mesh_event_peer_updated, mesh_event_subscription, openai_http_inference_endpoint, operation,
-    package_manifest_json, plugin_manifest, prompt_service, resource, resource_template_service,
-    virtual_model, web_ui, web_ui_bundle, web_ui_config_section, web_ui_contribution, web_ui_page,
+    http_delete, http_get, http_patch, http_post, http_put, local_channel, mcp_http_endpoint,
+    mcp_stdio_endpoint, mcp_tcp_endpoint, mcp_unix_socket_endpoint, mesh_channel,
+    mesh_event_local_accepting, mesh_event_local_standby, mesh_event_mesh_id_updated,
+    mesh_event_peer_down, mesh_event_peer_up, mesh_event_peer_updated, mesh_event_subscription,
+    openai_http_inference_endpoint, operation, operation_binding, package_manifest_json,
+    plugin_manifest, prompt_service, resource, resource_template_service, virtual_model, web_ui,
+    web_ui_bundle, web_ui_config_section, web_ui_contribution, web_ui_page,
 };
 pub use virtual_model::{
     HostInferenceRequest, HostInferenceResponse, VirtualModelCandidate, VirtualModelInvocation,
@@ -105,6 +108,8 @@ pub const PROTOCOL_VERSION: u32 = 3;
 pub mod host_capabilities {
     /// Invocation-scoped RPC callbacks carry the host-assigned parent call ID.
     pub const INVOCATION_CALLBACKS: &str = "invocation_callbacks.v1";
+    /// The host accepts model channel requirements.
+    pub const MODEL_REQUIREMENTS: &str = "model_requirements.v1";
     /// The host supports permissioned OpenAI exchange lifecycle services.
     pub const OPENAI_EXCHANGE: &str = crate::openai_exchange::OPENAI_EXCHANGE_CAPABILITY;
     /// The host accepts `PeerBlockRequest`.
@@ -117,6 +122,10 @@ pub mod host_capabilities {
     /// The host accepts `SubscribeInferenceObservationRequest` and sends the
     /// local inference observation feed (see [`crate::inference_observation`]).
     pub const LOCAL_INFERENCE_OBSERVATION: &str = "local_inference_observation.v1";
+    /// The host delivers a plugin's messages on a channel it declares
+    /// `local` to the other local plugins declaring that channel, and to no
+    /// peer (see [`crate::manifest::local_channel`]).
+    pub const LOCAL_CHANNELS: &str = "local_channels.v1";
 
     /// Why a plugin with `manifest` cannot run on this host: a capability its
     /// manifest requires that the host does not list.
@@ -150,6 +159,11 @@ pub mod host_capabilities {
             return Some(
                 "host does not support required local_inference_observation.v1 observation",
             );
+        }
+        if manifest.mesh_channels.iter().any(|channel| channel.local)
+            && !host_supports(LOCAL_CHANNELS)
+        {
+            return Some("host does not support required local_channels.v1 channels");
         }
         None
     }

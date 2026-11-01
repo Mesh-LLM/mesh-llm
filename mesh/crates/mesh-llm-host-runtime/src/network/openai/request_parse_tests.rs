@@ -459,8 +459,8 @@ async fn large_tokenize_request_routes_by_expected_identity_without_parsing_chat
     assert_eq!(&request.raw[forwarded_body_start..], body.as_slice());
 }
 
-// The paid path resolves the backend by this mapping: a catalog/HF-ref model
-// is priced under its public ID but registered under an internal one.
+// Gate plugins key their terms by this mapping: a catalog/HF-ref model is
+// advertised under its public ID but registered under an internal one.
 #[test]
 fn public_catalog_ref_resolves_to_internal_served_name() {
     let internal = "local-gguf/sha256-abc".to_owned();

@@ -45,17 +45,11 @@ bind           = "[::]:7447"   # Mesh owner-control listen address
 
 ## Payments
 
-Which wallet plugin backs paid inference. Spending policy and prices are set
-with `mesh-llm wallet` and stored in the payment ledger, not here.
-
-```toml
-[payments]
-wallet = "wallet-nwc" # Plugin name of the wallet to use
-```
-
-- `wallet` — plugin name of the `wallet.v1` provider. When unset, mesh-llm uses
-  the only running wallet plugin (for example the external `lexe-wallet`). Once a wallet has been used, the payment ledger is pinned to it;
-  switching requires `mesh-llm wallet unpin` while the node is stopped.
+Paid inference is not part of the node and has no `config.toml` section. Payment
+rails are ordinary plugins that use the generic seams described above (operation
+bindings, the OpenAI-exchange hook, model `requires`). The Lightning rail lives in
+[Mesh-LLM/ln-payments-plugin](https://github.com/Mesh-LLM/ln-payments-plugin);
+its README covers installation, pricing and spending policy.
 
 ## Telemetry
 

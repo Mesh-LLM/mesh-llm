@@ -101,7 +101,7 @@ pub(crate) fn write_private_file(target: &Path, contents: &[u8]) -> io::Result<(
 }
 
 /// Restricts an existing directory the caller owns outright, such as the
-/// payments directory beside the config, to the current user: mode 0700 on
+/// a state directory beside the config, to the current user: mode 0700 on
 /// Unix, and on Windows the protected DACL below, whose single ACE is
 /// inherited by the files and folders inside it, including those already
 /// there. Unlike the parents `write_private_file` leaves alone, this directory
@@ -753,7 +753,7 @@ mod tests {
     fn an_existing_directory_is_restricted_owner_only_on_unix() {
         use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::TempDir::new().unwrap();
-        let directory = temp.path().join("payments");
+        let directory = temp.path().join("state");
         fs::create_dir(&directory).unwrap();
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
         restrict_private_directory(&directory).unwrap();
@@ -764,10 +764,10 @@ mod tests {
     #[test]
     fn an_existing_directory_and_its_contents_become_current_user_only_on_windows() {
         let temp = tempfile::TempDir::new().unwrap();
-        let directory = temp.path().join("payments");
-        let wallet = directory.join("wallets").join("wallet-test");
-        fs::create_dir_all(&wallet).unwrap();
-        fs::write(wallet.join("seed"), b"seed").unwrap();
+        let directory = temp.path().join("state");
+        let vault = directory.join("vaults").join("vault-test");
+        fs::create_dir_all(&vault).unwrap();
+        fs::write(vault.join("secret"), b"secret").unwrap();
         // What a directory under C:\ProgramData inherits: read access for
         // other accounts, passed down to what is already inside it. S-1-1-0 is
         // Everyone, named by SID so the grant does not depend on the locale.
@@ -777,14 +777,14 @@ mod tests {
             .status()
             .unwrap();
         assert!(granted.success());
-        assert!(!platform::only_current_user_allowed(&wallet.join("seed")).unwrap());
+        assert!(!platform::only_current_user_allowed(&vault.join("secret")).unwrap());
 
         restrict_private_directory(&directory).unwrap();
         platform::verify_current_user_only(&directory, true).unwrap();
-        assert!(platform::only_current_user_allowed(&wallet).unwrap());
-        assert!(platform::only_current_user_allowed(&wallet.join("seed")).unwrap());
+        assert!(platform::only_current_user_allowed(&vault).unwrap());
+        assert!(platform::only_current_user_allowed(&vault.join("secret")).unwrap());
         // What is created there afterwards inherits the same single ACE.
-        fs::write(directory.join("payments.sqlite3"), b"").unwrap();
-        assert!(platform::only_current_user_allowed(&directory.join("payments.sqlite3")).unwrap());
+        fs::write(directory.join("state.sqlite3"), b"").unwrap();
+        assert!(platform::only_current_user_allowed(&directory.join("state.sqlite3")).unwrap());
     }
 }

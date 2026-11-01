@@ -139,28 +139,6 @@ async fn collect_local(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
             }
         }
     }
-    #[cfg(feature = "payments")]
-    if let Ok(prices) = node.advertised_payment_offers().await {
-        for model in catalog.values_mut() {
-            let source = descriptors
-                .iter()
-                .find(|descriptor| {
-                    normalized_id(&descriptor.identity.model_name, Some(descriptor)) == model.id
-                })
-                .map_or(model.id.as_str(), |descriptor| {
-                    descriptor.identity.model_name.as_str()
-                });
-            let source = source.rsplit_once('#').map_or(source, |(base, _)| base);
-            for provider in &mut model.providers {
-                provider.payment = Some(serde_json::json!({
-                    "binding_quote": false,
-                    "paid": prices.contains_key(source),
-                    "pricing": prices.get(source),
-                    "rate_unit": "msat_per_million_tokens",
-                }));
-            }
-        }
-    }
     Ok(())
 }
 
@@ -203,27 +181,6 @@ async fn collect_peers(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
                     endpoint: None,
                 },
             );
-            #[cfg(feature = "payments")]
-            {
-                let descriptor = peer
-                    .served_model_descriptors
-                    .iter()
-                    .find(|d| d.identity.model_name == name);
-                let id = normalized_id(&name, descriptor);
-                if let Some(model) = catalog.get_mut(&id) {
-                    for provider in model
-                        .providers
-                        .iter_mut()
-                        .filter(|p| p.provider_id == peer.id.to_string())
-                    {
-                        let pricing = mesh::payments::peer_offer_for_model(&peer, &name);
-                        provider.payment = Some(serde_json::json!({
-                            "binding_quote": false, "paid": pricing.is_some(), "pricing": pricing,
-                            "rate_unit": "msat_per_million_tokens",
-                        }));
-                    }
-                }
-            }
         }
     }
 }
@@ -255,7 +212,7 @@ async fn collect_virtual(
             metadata: None,
             runtime: None,
             thinking: None,
-            payment: None,
+            requires: None,
         };
         catalog.insert(route.model_id.clone(), MeshModel {
             id: route.model_id.clone(), display_name: route.model_id, kind: MeshModelKind::Virtual,
@@ -356,7 +313,7 @@ fn insert_provider(
         } else {
             None
         },
-        payment: None,
+        requires: descriptor.and_then(|descriptor| model_requirements_json(&descriptor.requires)),
     };
     let model = catalog.entry(id.clone()).or_insert_with(|| MeshModel {
         display_name: id.clone(),
@@ -453,3 +410,73 @@ fn descriptor_operations(descriptor: Option<&ServedModelDescriptor>) -> Vec<Stri
 
 #[cfg(test)]
 mod tests;
+
+/// The plugin channels a model requires, with the terms its provider's plugin
+/// attached, republished verbatim so clients and plugins can list and compare
+/// what the mesh is offering. The host does not interpret the terms: they are
+/// UTF-8 text when the plugin wrote text, otherwise base64 with
+/// `terms_encoding: "base64"`. Absent when the model is ungated.
+fn model_requirements_json(
+    requires: &[mesh_llm_types::mesh::ChannelRequirement],
+) -> Option<serde_json::Value> {
+    use base64::Engine as _;
+    if requires.is_empty() {
+        return None;
+    }
+    let entries: Vec<serde_json::Value> = requires
+        .iter()
+        .map(|requirement| {
+            let mut entry = serde_json::Map::new();
+            entry.insert("channel".into(), requirement.channel.clone().into());
+            if !requirement.terms.is_empty() {
+                match std::str::from_utf8(&requirement.terms) {
+                    Ok(text) => {
+                        entry.insert("terms".into(), text.into());
+                    }
+                    Err(_) => {
+                        entry.insert(
+                            "terms".into(),
+                            base64::engine::general_purpose::STANDARD
+                                .encode(&requirement.terms)
+                                .into(),
+                        );
+                        entry.insert("terms_encoding".into(), "base64".into());
+                    }
+                }
+            }
+            serde_json::Value::Object(entry)
+        })
+        .collect();
+    Some(serde_json::Value::Array(entries))
+}
+
+#[cfg(test)]
+mod requirement_tests {
+    use super::model_requirements_json;
+    use mesh_llm_types::mesh::ChannelRequirement;
+
+    /// Channel requirements and the terms a plugin attached are republished
+    /// verbatim per provider, so a client or plugin can list and compare offers
+    /// without the host knowing what the terms mean. Ungated models carry none.
+    #[test]
+    fn requirements_are_republished_verbatim_and_absent_when_ungated() {
+        let requires = model_requirements_json(&[
+            ChannelRequirement {
+                channel: "example.offer.v1".into(),
+                terms: br#"{"unit":"token","rate":3}"#.to_vec(),
+            },
+            ChannelRequirement {
+                channel: "example.binary.v1".into(),
+                terms: vec![0xff, 0x00, 0x01],
+            },
+        ])
+        .unwrap();
+        assert_eq!(requires[0]["channel"], "example.offer.v1");
+        assert_eq!(requires[0]["terms"], r#"{"unit":"token","rate":3}"#);
+        assert!(requires[0].get("terms_encoding").is_none());
+        assert_eq!(requires[1]["channel"], "example.binary.v1");
+        assert_eq!(requires[1]["terms"], "/wAB");
+        assert_eq!(requires[1]["terms_encoding"], "base64");
+        assert!(model_requirements_json(&[]).is_none());
+    }
+}

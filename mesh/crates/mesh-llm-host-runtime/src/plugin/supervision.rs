@@ -18,7 +18,7 @@ impl PluginManager {
                     break;
                 }
                 // Release this strong reference before waiting for the next tick.
-                // In-process runners can retain a Node and its payment ledger.
+                // In-process runners can retain a Node.
                 let manager = PluginManager { inner };
                 manager.supervise_plugins().await;
             }

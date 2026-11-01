@@ -39,7 +39,6 @@ fn build_built_in_config_schema() -> ConfigSchema {
             "owner_control.advertise_addr",
             ConfigValueSchema::SocketAddr,
         ),
-        top_level_setting("payments.wallet", ConfigValueSchema::String),
         telemetry_setting("telemetry.enabled", ConfigValueSchema::Boolean),
         telemetry_setting("telemetry.service_name", ConfigValueSchema::String),
         telemetry_setting("telemetry.endpoint", ConfigValueSchema::Url),
@@ -372,6 +371,19 @@ fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
             ConfigValueSchema::Boolean,
         ),
     ];
+    let mut binding = plugin_setting(
+        &format!("{plugin_prefix}.operation_bindings"),
+        ConfigValueSchema::Array { items: Box::new(ConfigValueSchema::Object {
+            properties: ["name", "provider", "profile", "setup_operation", "setup_input_json", "operations"]
+                .into_iter().map(|name| ConfigObjectPropertySchema {
+                    name: name.into(), label: name.into(), required: true,
+                    value_schema: if name == "operations" { ConfigValueSchema::Array { items: Box::new(ConfigValueSchema::String) } } else { ConfigValueSchema::String },
+                }).collect(),
+        }) },
+    );
+    binding.control_surfaces = vec![ConfigControlSurface::ConfigFile, ConfigControlSurface::OwnerControl];
+    binding.description = Some("Operator-approved exclusive local provider/profile, fixed setup payload and operation allowlist. Changes revoke existing handles; restart applies new bindings.".into());
+    settings.push(binding);
     settings.extend(exchange_grants::exchange_grant_settings(&plugin_prefix));
     settings
 }

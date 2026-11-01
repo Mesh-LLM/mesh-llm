@@ -275,7 +275,7 @@ async fn start(
         },
     };
     let join_error = Arc::new(Mutex::new(None));
-    let affinity = AffinityRouter::new();
+    let affinity = AffinityRouter::for_node(&node);
     let tasks = vec![
         tokio::spawn(crate::network::tunnel::serve_membership_http_ingress(
             node.clone(),

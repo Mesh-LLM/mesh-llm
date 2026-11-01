@@ -320,8 +320,6 @@ async fn transitive_peer_update_refreshes_last_mentioned() {
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
         cache_affinity: None,
         latency_ms: None,
         latency_source: None,
@@ -919,8 +917,6 @@ fn stale_serving_announcement(
         // The fixture models a bridge rebroadcast, which carries no opinion on
         // the departed peer's claimed log head.
         claimed_log_head: None,
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
     };
     (addr, ann)
 }

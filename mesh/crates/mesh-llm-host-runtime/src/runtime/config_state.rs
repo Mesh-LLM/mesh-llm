@@ -539,14 +539,6 @@ impl ConfigState {
         &self.config_hash
     }
 
-    #[cfg(feature = "payments")]
-    pub(crate) fn payment_directory(&self) -> PathBuf {
-        self.config_path
-            .parent()
-            .unwrap_or(Path::new("."))
-            .join("payments")
-    }
-
     pub(crate) fn config(&self) -> &MeshConfig {
         &self.config
     }

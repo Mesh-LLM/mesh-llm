@@ -84,7 +84,7 @@ async fn exercise(operation: &str, replay: bool) {
     if !replay {
         // A later caller-owned operation can restart the plugin; no permanent
         // disablement or change to ledger-owned recovery is introduced.
-        plugin.call_tool("wallet_lookup", "{}").await.unwrap();
+        plugin.call_tool("vault_lookup", "{}").await.unwrap();
         assert_eq!(starts.load(Ordering::SeqCst), 2);
         assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
@@ -92,20 +92,20 @@ async fn exercise(operation: &str, replay: bool) {
 }
 
 #[tokio::test]
-async fn lost_wallet_pay_reply_is_not_replayed() {
+async fn lost_vault_write_reply_is_not_replayed() {
     tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        exercise("wallet_pay", false),
+        exercise("vault_write", false),
     )
     .await
     .unwrap();
 }
 
 #[tokio::test]
-async fn lost_wallet_lookup_reply_keeps_existing_retry_behavior() {
+async fn lost_vault_lookup_reply_keeps_existing_retry_behavior() {
     tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        exercise("wallet_lookup", true),
+        exercise("vault_lookup", true),
     )
     .await
     .unwrap();
@@ -135,7 +135,7 @@ async fn shutdown_does_not_restart_an_outstanding_replayable_request() {
     let request = tokio::spawn(async move {
         caller
             .call_tool_with_replay(
-                "wallet_lookup",
+                "vault_lookup",
                 "{}",
                 Some(std::time::Duration::from_secs(1)),
                 TransportReplay::Allow,
@@ -153,7 +153,7 @@ async fn shutdown_does_not_restart_an_outstanding_replayable_request() {
             .unwrap()
             .is_err()
     );
-    assert!(plugin.call_tool("wallet_lookup", "{}").await.is_err());
+    assert!(plugin.call_tool("vault_lookup", "{}").await.is_err());
     let count = starts.load(Ordering::SeqCst);
     assert!(plugin.runtime.lock().await.is_none());
     plugin.shutdown().await;

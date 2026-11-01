@@ -184,8 +184,6 @@ pub(super) fn split_test_peer(
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
         cache_affinity: None,
 
         display_rtt: None,
@@ -826,6 +824,7 @@ max_tokens = 222
 #[test]
 fn runtime_verified_served_model_descriptor_preserves_identity_and_updates_capabilities() {
     let existing = mesh::ServedModelDescriptor {
+        requires: Vec::new(),
         identity: mesh::ServedModelIdentity {
             model_name: "Qwen3VL-2B-Instruct-Q4_K_M".into(),
             is_primary: false,

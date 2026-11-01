@@ -57,26 +57,8 @@ pub struct MeshConfig {
     pub models: Vec<ModelConfigEntry>,
     #[serde(rename = "plugin", default)]
     pub plugins: Vec<PluginConfigEntry>,
-    #[serde(default, skip_serializing_if = "PaymentsConfig::is_default")]
-    pub payments: PaymentsConfig,
     #[serde(flatten, default)]
     pub extra: BTreeMap<String, toml::Value>,
-}
-
-/// `[payments]`: which wallet backs paid inference. Spending policy and
-/// prices live in the payment ledger, not here.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct PaymentsConfig {
-    /// Plugin name of the `wallet.v1` provider to use. When unset the host
-    /// uses the only running wallet plugin.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wallet: Option<String>,
-}
-
-impl PaymentsConfig {
-    pub fn is_default(&self) -> bool {
-        *self == Self::default()
-    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -1239,8 +1221,6 @@ struct RawMeshConfig {
     models: Vec<ModelConfigEntry>,
     #[serde(rename = "plugin", default)]
     plugins: Vec<PluginConfigEntry>,
-    #[serde(default)]
-    payments: PaymentsConfig,
     #[serde(flatten, default)]
     extra: BTreeMap<String, toml::Value>,
 }
@@ -1361,7 +1341,6 @@ impl<'de> Deserialize<'de> for MeshConfig {
             runtime: raw.runtime,
             models: raw.models,
             plugins: raw.plugins,
-            payments: raw.payments,
             extra: raw.extra,
         })
     }
@@ -1831,6 +1810,9 @@ impl Default for LoggingConfig {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PluginConfigEntry {
+    /// Explicit local-service permissions. Installing a plugin grants nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operation_bindings: Vec<crate::PluginOperationBinding>,
     pub name: String,
     #[serde(default)]
     pub enabled: Option<bool>,

@@ -8,7 +8,10 @@ use tokio::io::AsyncWriteExt;
 
 pub(super) enum SelectedRouteTarget<'a> {
     Url(&'a str),
-    /// A mesh routing target, labelled by its debug form.
+    /// A mesh election target. A remote peer additionally publishes its
+    /// endpoint id as `target_peer_id`, the gateway-side counterpart of the
+    /// serving-side `requested_by_node_id` (same lowercase-hex encoding), so a
+    /// plugin can address the selected peer without parsing the `target` label.
     Mesh(&'a InferenceTarget),
 }
 
@@ -127,7 +130,10 @@ fn selected_route_event(
     event["observation_point"] = json!("backend_dispatch");
     event["model"] = json!(model);
     event["provider"] = json!(provider);
-    event["target"] = json!(public_target(target));
+    event["target"] = json!(public_target(&target));
+    if let Some(peer) = target_peer_id(&target) {
+        event["target_peer_id"] = json!(peer);
+    }
     if let Some(identity) = model_identity {
         if let Some(canonical_ref) = &identity.canonical_ref {
             event["model_canonical_ref"] = json!(canonical_ref);
@@ -146,30 +152,41 @@ async fn send_selected_route_denial(
     stream: &mut ClientStream,
     status: u16,
 ) -> transport::RouteDispatchOutcome {
+    let denied = matches!(status, 402 | 403);
     let body = json!({"error":{"message":"OpenAI plugin admission rejected the selected route",
-        "type": if status == 403 { "permission_error" } else { "service_unavailable" },
-        "code": if status == 403 { "plugin_policy_denied" } else { "plugin_hook_unavailable" }}})
+        "type": if denied { "permission_error" } else { "service_unavailable" },
+        "code": if denied { "plugin_policy_denied" } else { "plugin_hook_unavailable" }}})
     .to_string();
     let bytes = format!(
         "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        if status == 403 {
-            "Forbidden"
-        } else {
-            "Service Unavailable"
+        match status {
+            402 => "Payment Required",
+            403 => "Forbidden",
+            _ => "Service Unavailable",
         },
         body.len()
     );
     match stream.write_all(bytes.as_bytes()).await {
-        Ok(()) if status == 403 => transport::RouteDispatchOutcome::PolicyDenied,
-        Ok(()) => transport::RouteDispatchOutcome::RequiredHookFailed,
+        Ok(()) => transport::RouteDispatchOutcome::admission_rejected(status),
         Err(_) => transport::RouteDispatchOutcome::Dropped("response_write_failed"),
     }
 }
 
-fn public_target(target: SelectedRouteTarget<'_>) -> String {
+/// Lowercase hex of the selected remote peer's endpoint id; absent for a local
+/// backend, a URL backend, or a bare label.
+fn target_peer_id(target: &SelectedRouteTarget<'_>) -> Option<String> {
+    match target {
+        SelectedRouteTarget::Mesh(InferenceTarget::Remote(peer)) => {
+            Some(hex::encode(peer.as_bytes()))
+        }
+        _ => None,
+    }
+}
+
+fn public_target(target: &SelectedRouteTarget<'_>) -> String {
     let target = match target {
         SelectedRouteTarget::Mesh(target) => return format!("{target:?}"),
-        SelectedRouteTarget::Url(url) => url,
+        SelectedRouteTarget::Url(url) => *url,
     };
     let Ok(url) = reqwest::Url::parse(target) else {
         return "<invalid-url>".to_owned();
@@ -193,19 +210,19 @@ mod tests {
     #[test]
     fn route_metadata_never_exposes_url_credentials() {
         assert_eq!(
-            public_target(SelectedRouteTarget::Url(
+            public_target(&SelectedRouteTarget::Url(
                 "https://operator:secret@example.com/v1?api_key=secret#private"
             )),
             "https://example.com"
         );
         assert_eq!(
-            public_target(SelectedRouteTarget::Mesh(&InferenceTarget::Local(3131))),
+            public_target(&SelectedRouteTarget::Mesh(&InferenceTarget::Local(3131))),
             "Local(3131)"
         );
     }
 
     #[tokio::test]
-    async fn selected_event_redacts_malformed_urls_and_preserves_trusted_mesh_labels() {
+    async fn selected_event_redacts_malformed_urls_and_labels_mesh_targets() {
         let (mut reader, mut writer) = tokio::io::duplex(1024);
         writer.write_all(b"POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Length: 2\r\n\r\n{}").await.unwrap();
         let request = transport::read_http_request(&mut reader).await.unwrap();
@@ -250,6 +267,14 @@ mod tests {
             assert_eq!(event["target"], format!("{target:?}"));
             assert!(event.get("model_canonical_ref").is_none());
             assert!(event.get("weights_digest").is_none());
+            // Same encoding as the serving side's `requested_by_node_id`, so one
+            // buyer-side key pairs with one seller-side key for the same exchange.
+            match target {
+                InferenceTarget::Remote(peer) => {
+                    assert_eq!(event["target_peer_id"], hex::encode(peer.as_bytes()))
+                }
+                _ => assert!(event.get("target_peer_id").is_none()),
+            }
         }
     }
 

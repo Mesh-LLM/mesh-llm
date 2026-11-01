@@ -7,6 +7,8 @@ pub mod managed_models;
 mod model;
 mod model_validation;
 mod openai_exchange;
+mod operation_binding;
+pub use operation_binding::PluginOperationBinding;
 mod plugin_validation;
 mod private_file;
 mod size;
@@ -987,6 +989,10 @@ gpu_id = "pci:0000:65:00.0"
                 vec!["plugin.<plugin-name>.web_ui_primary_tab"],
             ),
             (
+                "PluginConfigEditor::operation_bindings",
+                vec!["plugin.<plugin-name>.operation_bindings"],
+            ),
+            (
                 "PluginConfigEditor::allow_peer_blocks",
                 vec!["plugin.<plugin-name>.allow_peer_blocks"],
             ),
@@ -1083,7 +1089,6 @@ gpu_id = "pci:0000:65:00.0"
         let occurrences = [
             ("MeshConfig", 1usize),
             ("OwnerControlConfig", 1),
-            ("PaymentsConfig", 1),
             ("GpuConfig", 1),
             ("RuntimeConfig", 1),
             ("NativeRuntimeConfig", 1),
@@ -1117,7 +1122,6 @@ gpu_id = "pci:0000:65:00.0"
             "GpuConfig",
             "MeshRequirementsConfig",
             "OwnerControlConfig",
-            "PaymentsConfig",
             "RuntimeConfig",
             "NativeRuntimeConfig",
             "RuntimeKvCacheConfig",

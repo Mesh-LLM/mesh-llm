@@ -750,6 +750,7 @@ pub(super) fn runtime_verified_served_model_descriptor(
             local_file_name: Some(format!("{model_name}.gguf")),
             ..Default::default()
         },
+        requires: Vec::new(),
         capabilities_known: false,
         capabilities: models::ModelCapabilities::default(),
         topology: None,
@@ -1609,6 +1610,7 @@ mod tests {
 
         // Pre-seed a descriptor so the function takes the overwrite branch.
         node.upsert_served_model_descriptor(mesh::ServedModelDescriptor {
+            requires: Vec::new(),
             identity: mesh::ServedModelIdentity {
                 model_name: model_name.to_string(),
                 source_kind: mesh::ModelSourceKind::LocalGguf,

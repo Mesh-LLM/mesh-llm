@@ -2,6 +2,7 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Result, bail};
+use mesh_llm_plugin_manager::InstalledPluginMetadata;
 use mesh_llm_plugin_manager::defaults::{
     DEFAULT_PLUGINS, DefaultPluginOutcome, NO_DEFAULT_PLUGINS_ENV, default_plugin,
     default_plugins_opted_out, provision_bundled_defaults, turn_off_defaults,
@@ -23,6 +24,83 @@ use mesh_llm_tui::terminal_progress::{
 pub struct PluginListRows {
     pub externals: Vec<RuntimePluginRow>,
     pub inactive: Vec<InactivePluginRow>,
+    /// Capability providers reported by the running node
+    /// (`GET /api/plugins/providers`); `None` when no node answered, in which
+    /// case binding readiness cannot be judged and is not reported.
+    pub providers: Option<Vec<CapabilityProviderRow>>,
+}
+
+/// One row of `GET /api/plugins/providers`.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize)]
+pub struct CapabilityProviderRow {
+    pub capability: String,
+    pub plugin_name: String,
+    pub available: bool,
+}
+
+/// Fetch the running node's capability providers; `None` when it is not
+/// running or does not answer.
+pub async fn fetch_capability_providers(port: u16) -> Option<Vec<CapabilityProviderRow>> {
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build()
+        .ok()?;
+    let response = client
+        .get(format!("http://127.0.0.1:{port}/api/plugins/providers"))
+        .send()
+        .await
+        .ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    response.json().await.ok()
+}
+
+/// Installed, enabled plugins whose manifest asks for a provider by capability
+/// but for which the running node has no provider, or more than one. Such a
+/// binding is refused on every call, so the plugin is not ready; the node says
+/// the same once at start, this is the persistent view.
+fn unresolvable_capability_grants(
+    installed: &[InstalledPluginMetadata],
+    providers: Option<&[CapabilityProviderRow]>,
+) -> Vec<String> {
+    let Some(providers) = providers else {
+        return Vec::new();
+    };
+    let mut warnings = Vec::new();
+    for plugin in installed.iter().filter(|plugin| plugin.enabled) {
+        let Some(manifest) = plugin.manifest.as_ref() else {
+            continue;
+        };
+        for binding in &manifest.operation_bindings {
+            let mut candidates: Vec<&str> = providers
+                .iter()
+                .filter(|provider| {
+                    provider.capability == binding.capability
+                        && provider.available
+                        && provider.plugin_name != plugin.name
+                })
+                .map(|provider| provider.plugin_name.as_str())
+                .collect();
+            candidates.sort_unstable();
+            candidates.dedup();
+            match candidates.as_slice() {
+                [_] => {}
+                [] => warnings.push(format!(
+                    "{} binding {} is not ready: no running plugin serves {}",
+                    plugin.name, binding.name, binding.capability
+                )),
+                several => warnings.push(format!(
+                    "{} binding {} is not ready: several plugins serve {} ({}); name one with [[plugin.operation_bindings]]",
+                    plugin.name,
+                    binding.name,
+                    binding.capability,
+                    several.join(", ")
+                )),
+            }
+        }
+    }
+    warnings
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -38,6 +116,50 @@ pub struct InactivePluginRow {
     pub kind: String,
     pub status: String,
     pub error: Option<String>,
+}
+
+/// Forward one published operation call to the running node, which dispatches
+/// it to the plugin and returns the plugin's answer unchanged. The node links
+/// nothing plugin-specific: the operation name and input are the plugin's own.
+async fn call(plugin: &str, operation: &str, input: &str, port: u16) -> Result<()> {
+    let input = if input.trim() == "-" {
+        let mut buffer = String::new();
+        std::io::Read::read_to_string(&mut std::io::stdin(), &mut buffer)?;
+        buffer
+    } else {
+        input.to_owned()
+    };
+    let input: serde_json::Value = serde_json::from_str(&input)
+        .map_err(|error| anyhow::anyhow!("--input is not JSON: {error}"))?;
+    let client = Client::builder().no_proxy().build()?;
+    let url = format!("http://127.0.0.1:{port}/api/plugins/{plugin}/tools/{operation}");
+    let response = match client.post(&url).json(&input).send().await {
+        Ok(response) => response,
+        // Never repeat a request after it may have reached the node.
+        Err(error) if error.is_connect() => bail!(
+            "mesh-llm is not running on port {port}; plugin operations are served by the              running node. Start `mesh-llm` and retry."
+        ),
+        Err(error) => return Err(error.into()),
+    };
+    let status = response.status();
+    let body = response.text().await?;
+    if status.as_u16() == 404 {
+        bail!(
+            "the node on port {port} has no running plugin '{plugin}' publishing '{operation}': {}",
+            body.trim()
+        );
+    }
+    if !status.is_success() {
+        bail!("plugin '{plugin}' rejected '{operation}': {}", body.trim());
+    }
+    let value: serde_json::Value =
+        serde_json::from_str(&body).unwrap_or(serde_json::Value::String(body));
+    writeln!(
+        mesh_llm_events::machine_out(),
+        "{}",
+        serde_json::to_string_pretty(&value)?
+    )?;
+    Ok(())
 }
 
 pub async fn run_plugin_command(
@@ -68,6 +190,12 @@ pub async fn run_plugin_command(
         PluginCommand::Delete { name } => delete(name)?,
         PluginCommand::Info { name } => return info(name, runtime_rows),
         PluginCommand::Search { query } => search(query.as_deref()).await?,
+        PluginCommand::Call {
+            plugin,
+            operation,
+            input,
+            port,
+        } => call(plugin, operation, input, *port).await?,
         PluginCommand::List => {
             let Some(runtime_rows) = runtime_rows else {
                 return Ok(false);
@@ -183,8 +311,9 @@ async fn install(
         }
         _ => bail!("provide either a plugin reference or --archive with --name"),
     };
+    // The package's granted access was disclosed as it landed
+    // (`CliPluginProgress`).
     progress.finish();
-    report_exchange_access(&outcome.metadata)?;
     if outcome.changed {
         let mut err = mesh_llm_events::console_err();
         writeln!(
@@ -201,7 +330,6 @@ async fn update(name: &str) -> Result<()> {
     let mut progress = CliPluginProgress::default();
     let outcome = update_plugin(name, &options, &mut progress).await?;
     progress.finish();
-    report_exchange_access(&outcome.metadata)?;
     if outcome.changed {
         let mut err = mesh_llm_events::console_err();
         writeln!(
@@ -209,6 +337,10 @@ async fn update(name: &str) -> Result<()> {
             "✅ Updated {} to {}",
             outcome.metadata.name, outcome.metadata.installed_version
         )?;
+    } else {
+        // Nothing landed, so nothing was disclosed on the way: say what the
+        // installed version has.
+        report_exchange_access(&outcome.metadata)?;
     }
     Ok(())
 }
@@ -278,18 +410,93 @@ fn set_enabled_in(
 fn report_exchange_access(
     metadata: &mesh_llm_plugin_manager::InstalledPluginMetadata,
 ) -> Result<()> {
-    if let Some(access) = metadata
-        .manifest
-        .as_ref()
-        .and_then(|m| m.openai_exchange_hook.as_ref())
-    {
-        writeln!(
-            mesh_llm_events::console_err(),
-            "{}",
-            access.access_summary()
-        )?;
+    if let Some(summary) = exchange_access_summary(metadata) {
+        writeln!(mesh_llm_events::console_err(), "{summary}")?;
     }
     Ok(())
+}
+
+/// The installation notice for what `metadata`'s package was granted; none
+/// for a package that requests no OpenAI lifecycle access.
+fn exchange_access_summary(
+    metadata: &mesh_llm_plugin_manager::InstalledPluginMetadata,
+) -> Option<String> {
+    metadata
+        .manifest
+        .as_ref()
+        .and_then(|manifest| manifest.openai_exchange_hook.as_ref())
+        .map(|access| access.access_summary())
+}
+
+/// What an update asks for that the version it replaces did not. The store
+/// keeps the manifest each version was installed with, which is the record
+/// of what the operator accepted; an update that widens it is called out,
+/// including for a dependency pulled in by `requires`, instead of being
+/// granted quietly because the earlier install was.
+fn access_increase_lines(
+    previous: &mesh_llm_plugin_manager::InstalledPluginMetadata,
+    installed: &mesh_llm_plugin_manager::InstalledPluginMetadata,
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let hook = |metadata: &mesh_llm_plugin_manager::InstalledPluginMetadata| {
+        metadata
+            .manifest
+            .as_ref()
+            .and_then(|manifest| manifest.openai_exchange_hook.clone())
+    };
+    let increases = match (hook(previous), hook(installed)) {
+        (Some(before), Some(now)) => now.increases_over(&before),
+        (None, Some(now)) => now.increases_over(
+            &mesh_llm_plugin_manager::store::InstalledOpenAiExchangeAccess::default(),
+        ),
+        _ => Vec::new(),
+    };
+    if !increases.is_empty() {
+        lines.push(format!(
+            "⚠️  {} now asks for OpenAI lifecycle access it did not have at version {}: {}. Narrow or replace it with a [[plugin]] entry if that is not wanted.",
+            installed.name,
+            previous.installed_version,
+            increases.join(", ")
+        ));
+    }
+    let bindings = |metadata: &mesh_llm_plugin_manager::InstalledPluginMetadata| {
+        metadata
+            .manifest
+            .as_ref()
+            .map(|manifest| manifest.operation_bindings.clone())
+            .unwrap_or_default()
+    };
+    let before = bindings(previous);
+    let new_bindings: Vec<String> = bindings(installed)
+        .into_iter()
+        .filter(|binding| {
+            !before
+                .iter()
+                .any(|b| b.capability == binding.capability && b.operations == binding.operations)
+        })
+        .map(|binding| format!("{} ({})", binding.capability, binding.operations.join(", ")))
+        .collect();
+    if !new_bindings.is_empty() {
+        lines.push(format!(
+            "⚠️  {} now asks for provider bindings it did not have at version {}: {}.",
+            installed.name,
+            previous.installed_version,
+            new_bindings.join("; ")
+        ));
+    }
+    lines
+}
+
+/// What is said when a package lands (`PluginProgressEvent::Installed` /
+/// `Updated`): the landing line, then the disclosure of what it was granted.
+/// Printed as the package lands, before anything else is attempted.
+fn landed_lines(
+    landing: String,
+    metadata: &mesh_llm_plugin_manager::InstalledPluginMetadata,
+) -> Vec<String> {
+    let mut lines = vec![landing];
+    lines.extend(exchange_access_summary(metadata));
+    lines
 }
 
 fn delete(name: &str) -> Result<()> {
@@ -432,7 +639,8 @@ async fn search(query: Option<&str>) -> Result<()> {
 fn list(runtime_rows: &PluginListRows) -> Result<()> {
     let store = PluginStore::new(default_store_root()?);
     let mut out = mesh_llm_events::console_out();
-    for metadata in store.list()? {
+    let installed = store.list()?;
+    for metadata in &installed {
         let state = if metadata.enabled {
             "enabled"
         } else {
@@ -443,6 +651,10 @@ fn list(runtime_rows: &PluginListRows) -> Result<()> {
             "{}\tversion={}\tstate={}\tsource={}",
             metadata.name, metadata.installed_version, state, metadata.source_repository
         )?;
+    }
+    let mut err = mesh_llm_events::console_err();
+    for warning in unresolvable_capability_grants(&installed, runtime_rows.providers.as_deref()) {
+        writeln!(err, "⚠️  {warning}")?;
     }
 
     for spec in &runtime_rows.externals {
@@ -487,6 +699,19 @@ impl CliPluginProgress {
     fn spinner(&mut self, message: String) {
         self.finish();
         self.spinner = Some(start_spinner(&message));
+    }
+
+    /// A package landed: print `landing` and disclose what it was granted.
+    fn landed(
+        &mut self,
+        landing: String,
+        metadata: &mesh_llm_plugin_manager::InstalledPluginMetadata,
+    ) {
+        self.finish();
+        let mut err = mesh_llm_events::console_err();
+        for line in landed_lines(landing, metadata) {
+            let _ = writeln!(err, "{line}");
+        }
     }
 
     fn started_download(&mut self, asset: String, total_bytes: Option<u64>) {
@@ -554,15 +779,31 @@ impl PluginProgressReporter for CliPluginProgress {
             PluginProgressEvent::Extracting { asset } => {
                 self.spinner(format!("Installing {asset}"));
             }
-            PluginProgressEvent::Installed { name, version } => {
-                self.finish();
-                let mut err = mesh_llm_events::console_err();
-                let _ = writeln!(err, "📦 Installed {name} {version}");
+            PluginProgressEvent::Installed { installed } => {
+                self.landed(
+                    format!(
+                        "📦 Installed {} {}",
+                        installed.name, installed.installed_version
+                    ),
+                    &installed,
+                );
             }
-            PluginProgressEvent::Updated { name, from, to } => {
-                self.finish();
+            PluginProgressEvent::Updated {
+                installed,
+                from,
+                previous,
+            } => {
+                self.landed(
+                    format!(
+                        "⬆️  Updated {} {from} -> {}",
+                        installed.name, installed.installed_version
+                    ),
+                    &installed,
+                );
                 let mut err = mesh_llm_events::console_err();
-                let _ = writeln!(err, "⬆️  Updated {name} {from} -> {to}");
+                for line in access_increase_lines(&previous, &installed) {
+                    let _ = writeln!(err, "{line}");
+                }
             }
             PluginProgressEvent::AlreadyCurrent { name, version } => {
                 self.finish();
@@ -819,6 +1060,68 @@ url = "unix:///run/remote.sock"
         delete_in(&store, "mine", &mut err).unwrap();
         assert!(!store.default_turned_off("mine"));
         assert!(!String::from_utf8(err).unwrap().contains("default plugin"));
+    }
+
+    fn installed_plugin(
+        store: &PluginStore,
+        name: &str,
+    ) -> mesh_llm_plugin_manager::InstalledPluginMetadata {
+        let metadata = mesh_llm_plugin_manager::InstalledPluginMetadata {
+            name: name.into(),
+            source_repository: format!("https://github.com/Mesh-LLM/{name}"),
+            installed_version: "v0.1.0".into(),
+            target_triple: "x86_64-unknown-linux-gnu".into(),
+            downloaded_asset_name: format!("{name}-0.1.0-x86_64-unknown-linux-gnu.tar.gz"),
+            install_path: store.root().join("installed").join(name),
+            enabled: true,
+            default_managed: false,
+            verified_sha256: None,
+            manifest: None,
+            last_protocol_version: None,
+            last_status: None,
+            last_error: None,
+        };
+        store.save(&metadata).unwrap();
+        metadata
+    }
+
+    #[test]
+    fn a_landing_discloses_what_the_package_was_granted() {
+        // The lines printed on `Installed`/`Updated`, i.e. when a package
+        // lands and before anything else is attempted, carry the access
+        // disclosure.
+        let temp = tempfile::tempdir().unwrap();
+        let store = PluginStore::new(temp.path());
+        let mut root = installed_plugin(&store, "root");
+        root.manifest = Some(mesh_llm_plugin_manager::InstalledPluginManifestMetadata {
+            openai_exchange_hook: Some(
+                mesh_llm_plugin_manager::store::InstalledOpenAiExchangeAccess {
+                    contract_version: 1,
+                    request_body: true,
+                    ..Default::default()
+                },
+            ),
+            operation_bindings: Vec::new(),
+            peer_blocks: false,
+            config_schema: None,
+            web_ui: None,
+        });
+        let lines = landed_lines("📦 Installed root v0.1.0".to_string(), &root);
+        assert_eq!(lines.len(), 2, "{lines:?}");
+        assert_eq!(lines[0], "📦 Installed root v0.1.0");
+        assert!(
+            lines[1].starts_with("OpenAI lifecycle v1 access: original prompts."),
+            "{}",
+            lines[1]
+        );
+        assert!(lines[1].contains("Installing grants these requests"));
+
+        // A package requesting nothing gets the landing line only.
+        let plain = installed_plugin(&store, "needed");
+        assert_eq!(
+            landed_lines("📦 Installed needed v0.1.0".to_string(), &plain),
+            vec!["📦 Installed needed v0.1.0".to_string()]
+        );
     }
 
     #[test]
