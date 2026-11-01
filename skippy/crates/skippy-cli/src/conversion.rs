@@ -69,8 +69,12 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
         .unwrap_or(defaults.speculative);
     let openai_speculative = args.settings.speculative(
         openai_speculative,
-        args.openai_draft_model_path.is_some() || defaults.draft_model_path.is_some(),
+        args.openai_draft_model_path
+            .as_deref()
+            .or(defaults.draft_model_path.as_deref()),
     )?;
+    // A DFlash plan carries its own draft; the separate draft runner stays off.
+    let draft_runner_enabled = openai_speculative.dflash.is_none();
     openai_speculative.validate()?;
     let speculation_disabled = args.settings.has_speculative_overrides()
         && openai_speculative.effective_strategy == "disabled";
@@ -112,7 +116,7 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
         draft_model_path: args
             .openai_draft_model_path
             .or(defaults.draft_model_path)
-            .filter(|_| !speculation_disabled),
+            .filter(|_| !speculation_disabled && draft_runner_enabled),
         speculative_window: args.openai_speculative_window,
         adaptive_speculative_window,
         draft_n_gpu_layers: args.openai_draft_n_gpu_layers,
@@ -217,7 +221,12 @@ pub fn local_openai_options(
                 std::path::Path::new(path),
             );
         }
-        let has_draft = tuning.draft_model_path.is_some() || defaults.draft_model_path.is_some();
+        let draft_model_path = args
+            .settings
+            .text("draft-model-path")
+            .map(std::path::PathBuf::from)
+            .or_else(|| tuning.draft_model_path.clone())
+            .or_else(|| defaults.draft_model_path.clone());
         if tuning.draft_model_path.is_some() {
             defaults.speculative_window = skippy_config::local_serving::DRAFT_MODEL_TOKENS;
         }
@@ -234,10 +243,10 @@ pub fn local_openai_options(
         tuning.adaptive_speculative_window = tuning
             .adaptive_speculative_window
             .or(Some(defaults.adaptive_speculative_window));
-        Some(
-            args.settings
-                .speculative(speculative.unwrap_or(defaults.speculative), has_draft)?,
-        )
+        Some(args.settings.speculative(
+            speculative.unwrap_or(defaults.speculative),
+            draft_model_path.as_deref(),
+        )?)
     } else {
         speculative
     };
@@ -246,6 +255,10 @@ pub fn local_openai_options(
         if args.settings.has_speculative_overrides() && plan.effective_strategy == "disabled" {
             tuning.draft_model_path = None;
             tuning.native_mtp_draft_model_path = None;
+        }
+        // A DFlash plan carries its own draft; the separate draft runner stays off.
+        if plan.dflash.is_some() {
+            tuning.draft_model_path = None;
         }
     }
 
