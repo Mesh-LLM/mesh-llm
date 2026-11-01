@@ -1857,6 +1857,8 @@ mod tests {
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
                 placement: Default::default(),
+                final_stage_reserve_bytes: 0,
+                final_stage_kv_bytes_per_token: 0,
             },
         )
         .expect("package-v2 split topology");
