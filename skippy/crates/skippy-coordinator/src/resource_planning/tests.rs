@@ -872,7 +872,38 @@ fn dflash_draft(cap: u32) -> PlannedSpeculativeDraft {
     PlannedSpeculativeDraft {
         weight_bytes: 1_383_768_224,
         recurrent_rollback_tokens: cap + 1,
+        kv_bytes_per_token: 0,
+        compute_bytes: 0,
     }
+}
+
+#[test]
+fn a_planned_draft_charges_its_context_kv_and_compute() {
+    let vram = 24 * 1024 * 1024 * 1024;
+    let weights_only = plan_qwen35_9b(vram, Some(dflash_draft(15)))
+        .breakdown
+        .unwrap();
+    let with_context = PlannedSpeculativeDraft {
+        kv_bytes_per_token: 4 * 1024,
+        compute_bytes: 256 * 1024 * 1024,
+        ..dflash_draft(15)
+    };
+    let charged = plan_qwen35_9b(vram, Some(with_context)).breakdown.unwrap();
+
+    assert_eq!(
+        charged.speculative_bytes,
+        weights_only.speculative_bytes + 256 * 1024 * 1024
+    );
+    assert_eq!(
+        charged.kv_bytes_per_token,
+        weights_only.kv_bytes_per_token + 4 * 1024
+    );
+    assert_eq!(
+        charged.planned_kv_bytes,
+        charged.kv_bytes_per_token * u64::from(charged.context_length) * charged.slots as u64
+    );
+    assert!(charged.planned_kv_bytes <= charged.kv_budget_bytes);
+    assert!(charged.context_length <= weights_only.context_length);
 }
 
 #[test]
