@@ -51,6 +51,24 @@ pub(super) fn resolve_speculative_config(
     Ok(resolved)
 }
 
+/// The configured N-gram `(min, max)` lengths, model settings over global ones.
+fn pick_ngram_range(
+    model_config: Option<&SpeculativeConfig>,
+    global_config: Option<&SpeculativeConfig>,
+) -> (u32, u32) {
+    let ngram_min = super::support::pick_value(
+        model_config.and_then(|config| config.ngram_min),
+        global_config.and_then(|config| config.ngram_min),
+        0,
+    );
+    let ngram_max = super::support::pick_value(
+        model_config.and_then(|config| config.ngram_max),
+        global_config.and_then(|config| config.ngram_max),
+        0,
+    );
+    (ngram_min, ngram_max)
+}
+
 /// `dflash_over_auto_mtp` lets a known DFlash pairing replace native MTP that
 /// is on only by default.
 fn resolve_speculative(
@@ -131,16 +149,7 @@ fn resolve_speculative(
         model_config.and_then(|config| config.draft_gpu_layers),
         global_config.and_then(|config| config.draft_gpu_layers),
     );
-    let ngram_min = super::support::pick_value(
-        model_config.and_then(|config| config.ngram_min),
-        global_config.and_then(|config| config.ngram_min),
-        0,
-    );
-    let ngram_max = super::support::pick_value(
-        model_config.and_then(|config| config.ngram_max),
-        global_config.and_then(|config| config.ngram_max),
-        0,
-    );
+    let (ngram_min, ngram_max) = pick_ngram_range(model_config, global_config);
     let pairing_fault = normalize_pairing_fault(pick_string(
         model_config.and_then(|config| config.pairing_fault.as_deref()),
         global_config.and_then(|config| config.pairing_fault.as_deref()),
