@@ -10,7 +10,6 @@ use crate::inference::skippy;
 use crate::mesh;
 use crate::models;
 use crate::plugin;
-use crate::runtime::live_request_defaults;
 use crate::runtime::local::skippy_native_model_open_events;
 use crate::runtime::local_package::{
     split_node_labels, split_participant_set_hash, split_topology_hash,
@@ -322,7 +321,11 @@ pub(super) async fn load_split_runtime_generation_inner(
     })
     .await
     .context("join load skippy stage0 config task")??;
-    live_request_defaults::sync_after_load(&model_ref, live_defaults_generation);
+    spec.node.live_request_defaults.sync_after_load(
+        &model_ref,
+        live_defaults_generation,
+        &spec.node.live_request_defaults.serving_backends(),
+    );
     let stage0_output = handle
         .output_activation_boundary()
         .context("stage 0 graph did not expose its output activation boundary")?;
@@ -893,8 +896,10 @@ pub(super) async fn split_generation_load_settings<'a>(
     }
     // Stage zero replaces this placeholder with its graph-observed output
     // boundary after the native runtime has been constructed.
-    let embedded_openai = resolved.to_embedded_openai_args(0, true)?;
-    let live_defaults_generation = live_request_defaults::track_model(
+    let mut embedded_openai = resolved.to_embedded_openai_args(0, true)?;
+    let live_request_defaults = spec.node.live_request_defaults.clone();
+    embedded_openai.live_defaults_scope = live_request_defaults.scope();
+    let live_defaults_generation = live_request_defaults.track_model(
         &resolved.model_id,
         spec.config_model_id,
         spec.package.generation.as_ref(),

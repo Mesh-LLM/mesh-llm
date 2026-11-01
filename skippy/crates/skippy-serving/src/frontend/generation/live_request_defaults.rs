@@ -78,6 +78,7 @@ fn live_cells(scope: u64, model_id: &str) -> Vec<Arc<DefaultsCell>> {
 
 /// What each live backend of a model was serving with, taken before a swap so
 /// a failed save can put exactly those values back.
+#[derive(Debug)]
 pub struct PreviousRequestDefaults(Vec<(Weak<DefaultsCell>, Arc<EmbeddedOpenAiRequestDefaults>)>);
 
 /// Capture the defaults every live backend of `model_id` under `scope` is

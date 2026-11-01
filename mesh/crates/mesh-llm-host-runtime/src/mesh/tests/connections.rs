@@ -372,6 +372,8 @@ async fn make_test_node_with_requirements(
         },
     );
 
+    let config_state = crate::runtime::config_state::ConfigState::default();
+    let live_request_defaults = config_state.live_request_defaults();
     let node = Node {
         gossip_verification: Arc::default(),
         gossip_encoder: Arc::default(),
@@ -458,9 +460,8 @@ async fn make_test_node_with_requirements(
         gpu_mem_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
         gpu_compute_tflops_fp32: Arc::new(tokio::sync::Mutex::new(None)),
         gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
-        config_state: Arc::new(tokio::sync::Mutex::new(
-            crate::runtime::config_state::ConfigState::default(),
-        )),
+        config_state: Arc::new(tokio::sync::Mutex::new(config_state)),
+        live_request_defaults,
         peer_blocks: crate::network::peer_blocks::PeerBlocks::in_memory(),
         plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
         config_revision_tx: {

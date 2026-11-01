@@ -15,7 +15,7 @@ mod instance_lifecycle;
 mod interactive;
 mod join_sources;
 pub(crate) mod kv_disk_config;
-mod live_request_defaults;
+pub(crate) mod live_request_defaults;
 mod local;
 mod local_laya;
 mod local_memory_plan;

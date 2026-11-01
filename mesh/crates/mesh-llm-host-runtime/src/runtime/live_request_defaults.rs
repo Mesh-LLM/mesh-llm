@@ -18,6 +18,7 @@ use skippy_serving::EmbeddedOpenAiRequestDefaults;
 
 use crate::inference::skippy;
 
+#[derive(Debug)]
 struct TrackedModel {
     /// Model id the serving backend registered its defaults under.
     backend_model_id: String,
@@ -32,8 +33,51 @@ struct TrackedModel {
     generation: u64,
 }
 
-/// Tracked models plus the last config applied to them.
+/// Where the swapped defaults land: the running backends of one owner.
+pub(crate) trait RequestDefaultsBackends {
+    /// What a backend was serving with before a swap, to put back on rollback.
+    type Previous;
+
+    /// Swap `defaults` into every backend of `backend_model_id`; returns how
+    /// many were updated.
+    fn replace(&self, backend_model_id: &str, defaults: EmbeddedOpenAiRequestDefaults) -> usize;
+    fn capture(&self, backend_model_id: &str) -> Self::Previous;
+    fn restore(&self, previous: Self::Previous);
+}
+
+/// The backends this owner loaded, reached through the serving registry under
+/// the owner's scope.
+pub(crate) struct ScopedServingBackends {
+    scope: u64,
+}
+
+impl RequestDefaultsBackends for ScopedServingBackends {
+    type Previous = skippy_serving::PreviousRequestDefaults;
+
+    fn replace(&self, backend_model_id: &str, defaults: EmbeddedOpenAiRequestDefaults) -> usize {
+        skippy_serving::replace_live_request_defaults(self.scope, backend_model_id, defaults)
+    }
+
+    fn capture(&self, backend_model_id: &str) -> Self::Previous {
+        skippy_serving::capture_live_request_defaults(self.scope, backend_model_id)
+    }
+
+    fn restore(&self, previous: Self::Previous) {
+        skippy_serving::restore_live_request_defaults(previous);
+    }
+}
+
+/// Scope `0` belongs to backends nobody swaps live, so owners start at 1.
+static NEXT_SCOPE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// One owner's tracked models plus the last config applied to them. Each
+/// embedded node has its own, so a config apply on one node never reaches the
+/// models of another node in the same process, and a node that starts later
+/// never inherits the config an earlier node applied.
+#[derive(Debug)]
 pub(crate) struct LiveRequestDefaults {
+    /// The serving-registry scope this owner's backends register under.
+    scope: u64,
     tracked: Mutex<Vec<TrackedModel>>,
     latest: Mutex<Option<MeshConfig>>,
     /// Held across an apply or a post-load sync, so a sync that resolved an
@@ -42,58 +86,33 @@ pub(crate) struct LiveRequestDefaults {
     next_generation: std::sync::atomic::AtomicU64,
 }
 
-static LIVE: LiveRequestDefaults = LiveRequestDefaults::new();
-
-/// Remember how to re-resolve the request defaults of the model about to load.
-pub(crate) fn track_model(
-    backend_model_id: &str,
-    config_model_id: Option<&str>,
-    package_generation: Option<&PackageGenerationInfo>,
-) -> u64 {
-    LIVE.track_model(backend_model_id, config_model_id, package_generation)
+/// What an apply left behind, so a failed save can undo exactly that.
+#[derive(Debug)]
+pub(crate) struct AppliedRequestDefaults<P> {
+    /// Every tracked model took the new defaults.
+    pub(crate) all_applied: bool,
+    undo: Option<RequestDefaultsUndo<P>>,
 }
 
-/// Bring a model whose backend just came up in line with the last applied
-/// config. Call it once the load has finished, with the generation
-/// `track_model` returned for that load so an older load never syncs a newer
-/// one's entry.
-pub(crate) fn sync_after_load(backend_model_id: &str, generation: u64) {
-    LIVE.sync_after_load(
-        backend_model_id,
-        generation,
-        skippy_serving::replace_live_request_defaults,
-    );
+#[derive(Debug)]
+struct RequestDefaultsUndo<P> {
+    previous_latest: Option<MeshConfig>,
+    previous: Vec<P>,
 }
 
-/// Swap the request defaults `config` resolves to into every loaded model.
-/// Returns whether every tracked model was updated; a model whose defaults no
-/// longer resolve keeps the ones it is serving with.
-pub(crate) fn apply_to_loaded_models(config: &MeshConfig) -> bool {
-    LIVE.apply(config, skippy_serving::replace_live_request_defaults)
-}
-
-/// Whether any request default differs between two configs.
-pub(crate) fn request_defaults_changed(old: &MeshConfig, new: &MeshConfig) -> bool {
-    let global = |config: &MeshConfig| {
-        config
-            .defaults
-            .as_ref()
-            .and_then(|defaults| defaults.request_defaults.as_ref())
-            .cloned()
-    };
-    let per_model = |config: &MeshConfig| {
-        config
-            .models
-            .iter()
-            .filter_map(|entry| Some((entry.model.clone(), entry.request_defaults.clone()?)))
-            .collect::<Vec<_>>()
-    };
-    global(old) != global(new) || per_model(old) != per_model(new)
+impl<P> AppliedRequestDefaults<P> {
+    fn nothing_changed() -> Self {
+        Self {
+            all_applied: false,
+            undo: None,
+        }
+    }
 }
 
 impl LiveRequestDefaults {
-    const fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
+            scope: NEXT_SCOPE.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             tracked: Mutex::new(Vec::new()),
             latest: Mutex::new(None),
             swap: Mutex::new(()),
@@ -101,7 +120,18 @@ impl LiveRequestDefaults {
         }
     }
 
-    fn track_model(
+    /// The scope this owner's backends must register their defaults under.
+    pub(crate) fn scope(&self) -> u64 {
+        self.scope
+    }
+
+    pub(crate) fn serving_backends(&self) -> ScopedServingBackends {
+        ScopedServingBackends { scope: self.scope }
+    }
+
+    /// Remember how to re-resolve the request defaults of the model about to
+    /// load; returns the generation of that load.
+    pub(crate) fn track_model(
         &self,
         backend_model_id: &str,
         config_model_id: Option<&str>,
@@ -122,11 +152,15 @@ impl LiveRequestDefaults {
         generation
     }
 
-    fn sync_after_load(
+    /// Bring a model whose backend just came up in line with the last applied
+    /// config. Call it once the load has finished, with the generation
+    /// `track_model` returned for that load so an older load never syncs a
+    /// newer one's entry.
+    pub(crate) fn sync_after_load(
         &self,
         backend_model_id: &str,
         generation: u64,
-        replace: impl Fn(&str, EmbeddedOpenAiRequestDefaults) -> usize,
+        backends: &impl RequestDefaultsBackends,
     ) {
         let _swap = lock(&self.swap);
         let Some(latest) = lock(&self.latest).clone() else {
@@ -141,29 +175,37 @@ impl LiveRequestDefaults {
             return;
         };
         if let Some(defaults) = resolve(&entry, &latest) {
-            let updated = replace(&entry.backend_model_id, defaults);
+            let updated = backends.replace(&entry.backend_model_id, defaults);
             self.mark_registered(&entry, updated);
         }
     }
 
-    fn apply(
+    /// Swap the request defaults `config` resolves to into every tracked
+    /// model, all or nothing: every model is resolved and validated before the
+    /// first swap, so one model whose defaults do not resolve leaves every
+    /// backend, and the last applied config, as they were.
+    pub(crate) fn apply<B: RequestDefaultsBackends>(
         &self,
         config: &MeshConfig,
-        replace: impl Fn(&str, EmbeddedOpenAiRequestDefaults) -> usize,
-    ) -> bool {
+        backends: &B,
+    ) -> AppliedRequestDefaults<B::Previous> {
         let _swap = lock(&self.swap);
-        *lock(&self.latest) = Some(config.clone());
         // Resolving can read a template file from disk, so keep it off the lock
         // that every model load takes.
         let entries = self.snapshot(|_| true);
-        let mut all_applied = true;
-        let mut gone = Vec::new();
+        let mut resolved = Vec::with_capacity(entries.len());
         for entry in &entries {
-            let Some(defaults) = resolve(entry, config) else {
-                all_applied = false;
-                continue;
-            };
-            let updated = replace(&entry.backend_model_id, defaults);
+            match resolve(entry, config) {
+                Some(defaults) => resolved.push(defaults),
+                None => return AppliedRequestDefaults::nothing_changed(),
+            }
+        }
+        let previous_latest = lock(&self.latest).replace(config.clone());
+        let mut previous = Vec::with_capacity(entries.len());
+        let mut gone = Vec::new();
+        for (entry, defaults) in entries.iter().zip(resolved) {
+            previous.push(backends.capture(&entry.backend_model_id));
+            let updated = backends.replace(&entry.backend_model_id, defaults);
             if updated > 0 {
                 self.mark_registered(entry, updated);
             } else if entry.registered {
@@ -172,7 +214,31 @@ impl LiveRequestDefaults {
         }
         lock(&self.tracked)
             .retain(|entry| !gone.contains(&(entry.backend_model_id.clone(), entry.generation)));
-        all_applied
+        AppliedRequestDefaults {
+            all_applied: true,
+            undo: Some(RequestDefaultsUndo {
+                previous_latest,
+                previous,
+            }),
+        }
+    }
+
+    /// Put back what `applied` replaced: the backends' own previous defaults,
+    /// not a re-resolution of the previous config, and the previous last
+    /// applied config.
+    pub(crate) fn undo<B: RequestDefaultsBackends>(
+        &self,
+        applied: AppliedRequestDefaults<B::Previous>,
+        backends: &B,
+    ) {
+        let Some(undo) = applied.undo else {
+            return;
+        };
+        let _swap = lock(&self.swap);
+        *lock(&self.latest) = undo.previous_latest;
+        for previous in undo.previous {
+            backends.restore(previous);
+        }
     }
 
     fn snapshot(&self, keep: impl Fn(&TrackedModel) -> bool) -> Vec<TrackedModel> {
@@ -200,6 +266,25 @@ impl LiveRequestDefaults {
             entry.registered = true;
         }
     }
+}
+
+/// Whether any request default differs between two configs.
+pub(crate) fn request_defaults_changed(old: &MeshConfig, new: &MeshConfig) -> bool {
+    let global = |config: &MeshConfig| {
+        config
+            .defaults
+            .as_ref()
+            .and_then(|defaults| defaults.request_defaults.as_ref())
+            .cloned()
+    };
+    let per_model = |config: &MeshConfig| {
+        config
+            .models
+            .iter()
+            .filter_map(|entry| Some((entry.model.clone(), entry.request_defaults.clone()?)))
+            .collect::<Vec<_>>()
+    };
+    global(old) != global(new) || per_model(old) != per_model(new)
 }
 
 /// Resolve and validate a tracked model's defaults, or warn and return `None`
