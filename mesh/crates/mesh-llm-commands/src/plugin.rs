@@ -1,7 +1,7 @@
 use std::io::Write;
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use mesh_llm_plugin_manager::defaults::{
     DEFAULT_PLUGINS, DefaultPluginOutcome, NO_DEFAULT_PLUGINS_ENV, default_plugin,
     default_plugins_opted_out, provision_bundled_defaults, turn_off_defaults,
@@ -54,13 +54,23 @@ pub async fn run_plugin_command(
             name,
             version,
         } => {
-            install(
-                reference.as_deref(),
-                archive.as_deref(),
-                name.as_deref(),
-                version.as_deref().unwrap_or("dev"),
-            )
-            .await?
+            if reference.is_empty() {
+                install(
+                    None,
+                    archive.as_deref(),
+                    name.as_deref(),
+                    version.as_deref().unwrap_or("dev"),
+                )
+                .await?;
+            } else {
+                if archive.is_some() || name.is_some() || version.is_some() {
+                    bail!("plugin references cannot be combined with archive options");
+                }
+                install_references(reference, |reference| {
+                    install(Some(reference), None, None, "dev")
+                })
+                .await?;
+            }
         }
         PluginCommand::Update { name } => update(name).await?,
         PluginCommand::Enable { name } => set_enabled(name, true)?,
@@ -164,6 +174,19 @@ pub fn turn_off_default_plugins() -> Result<()> {
             "⏸️  Default {name} turned off: it is not installed or loaded until \
              `mesh-llm plugins enable {name}`"
         )?;
+    }
+    Ok(())
+}
+
+async fn install_references<'a, F, Fut>(references: &'a [String], mut install_one: F) -> Result<()>
+where
+    F: FnMut(&'a str) -> Fut,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    for reference in references {
+        install_one(reference)
+            .await
+            .with_context(|| format!("failed to install plugin {reference}"))?;
     }
     Ok(())
 }
@@ -594,6 +617,42 @@ fn format_bytes(bytes: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn reference_installs_run_in_order_and_keep_duplicates() {
+        let references = vec!["first".into(), "second".into(), "first".into()];
+        let mut installed = Vec::new();
+        install_references(&references, |reference| {
+            installed.push(reference.to_owned());
+            std::future::ready(Ok(()))
+        })
+        .await
+        .expect("all installs succeed");
+        assert_eq!(installed, references);
+    }
+
+    #[tokio::test]
+    async fn reference_installs_stop_at_failure_and_keep_prior_successes() {
+        let references = vec!["first".into(), "broken".into(), "later".into()];
+        let mut attempted = Vec::new();
+        let mut installed = Vec::new();
+        let error = install_references(&references, |reference| {
+            attempted.push(reference.to_owned());
+            let result = if reference == "broken" {
+                Err(anyhow::anyhow!("fixture failure"))
+            } else {
+                installed.push(reference.to_owned());
+                Ok(())
+            };
+            std::future::ready(result)
+        })
+        .await
+        .expect_err("stop on failure");
+        assert_eq!(attempted, ["first", "broken"]);
+        assert_eq!(installed, ["first"]);
+        assert_eq!(error.to_string(), "failed to install plugin broken");
+        assert_eq!(error.root_cause().to_string(), "fixture failure");
+    }
 
     #[test]
     fn runtime_plugin_info_lines_describe_builtin_runtime_plugin() {
