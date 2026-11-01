@@ -809,6 +809,23 @@ mod tests {
     }
 
     #[test]
+    fn dropping_a_session_forgets_the_draft_it_was_owed() {
+        let mut runtime = RuntimeState::new_modelless_for_test(1);
+        runtime.dflash_defer_draft(
+            "s",
+            super::DeferredDFlashDraft {
+                window: vec![1, 2],
+                predicted_tokens: vec![3],
+                max_tokens: 4,
+                accepts_after_correction: false,
+            },
+        );
+        assert!(runtime.dflash_draft_deferred("s"));
+        runtime.drop_session_timed("s").unwrap();
+        assert!(!runtime.dflash_draft_deferred("s"));
+    }
+
+    #[test]
     fn modelless_runtime_reports_zero_kv_pool_so_scheduler_uses_fallback() {
         // The scheduler derives its admission budget from `kv_pool_tokens()` and
         // keeps its configured default when the runtime reports 0. The modelless
