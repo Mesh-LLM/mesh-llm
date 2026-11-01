@@ -238,7 +238,7 @@ Lifecycle settings apply to native and provider model entries. Native policy cha
 | `hardware.tensor_split` | comma ratios or string | unset | both | model reload | unwired (passes validation, then fails at model load; the separate `--tensor-split` CLI flag has its own plumbing) | `--tensor-split` (separate code path, does not read this field) |
 | `hardware.split_mode` | enum | `auto` (default), `none`, `layer`, `row`, `tensor` | both | model reload | partial (single-node resolution only; multi-node stages use auto) | none |
 | `hardware.main_gpu` | integer | unset (auto); overrides the derived GPU index when `split_mode` resolves to `none` | both | model reload | partial (single-node resolution only; multi-node stages use auto) | none |
-| `hardware.cpu_moe`<br>`hardware.n_cpu_moe` | bool-or-`auto` / integer | family or planner default | both | model reload | unwired | none |
+| `hardware.cpu_moe`<br>`hardware.n_cpu_moe` | bool-or-`auto` / integer | routed experts stay on the accelerator (`auto`) | both | model reload | wired (routed experts of the selected blocks load into host memory; `n_cpu_moe` counts blocks from block 0 like llama.cpp `--n-cpu-moe`; `cpu_moe = false` wins over `n_cpu_moe`) | none |
 | `hardware.fit_target_mib` | integer | optional | both | model reload | wired (GPU tuner authors it and Skippy fit planning consumes it) | derived from allocatable memory when unset |
 | `hardware.safety_margin_gb` | float | not a saved key; documented mapping only | both | model reload | wired (feeds `fit_target_mib` derivation) | none |
 | `hardware.fit_context` | bool-or-`auto` | unsupported | both | not applicable | rejected | none |

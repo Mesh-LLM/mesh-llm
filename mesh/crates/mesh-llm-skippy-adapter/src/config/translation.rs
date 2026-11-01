@@ -140,6 +140,7 @@ impl ResolvedSkippyConfig {
         options.direct_io = self.hardware.direct_io;
         options.main_gpu = self.hardware.main_gpu;
         options.split_mode = self.hardware.split_mode;
+        options.host_experts = self.hardware.host_experts;
         options.projector_use_gpu = self.multimodal.projector_use_gpu;
         options
             .media_marker

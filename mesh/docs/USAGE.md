@@ -528,9 +528,10 @@ check_tensors    = false         # tensor-validation at load time (debug)
 # lora_adapters   = ["/adapters/adapter-1.gguf"]
 # control_vectors = ["/vectors/cv-1.gguf"]
 
-# MoE (Mixture-of-Experts) routing
-# cpu_moe   = "auto"   # bool or "auto"
-# n_cpu_moe = 0        # number of experts to route to CPU
+# MoE (Mixture-of-Experts) expert placement
+# cpu_moe   = "auto"   # true: every block's routed experts in host memory;
+#                      # false or "auto": keep them on the GPU
+# n_cpu_moe = 0        # routed experts of the first N blocks in host memory
 
 # --- Throughput, scheduling, and CPU -------------------------------------
 [defaults.throughput]
@@ -836,8 +837,7 @@ model = "bartowski/Mixtral-8x7B-Instruct-v0.1-GGUF/Mixtral-8x7B-Instruct-v0.1-Q4
 [models.hardware]
 device         = "cuda:0"
 gpu_layers     = 32
-cpu_moe        = true
-n_cpu_moe      = 4             # route 4 experts to CPU
+n_cpu_moe      = 4             # routed experts of blocks 0-3 in host memory
 split_mode     = "row"
 placement      = "auto"
 fit_target_mib = 20480
