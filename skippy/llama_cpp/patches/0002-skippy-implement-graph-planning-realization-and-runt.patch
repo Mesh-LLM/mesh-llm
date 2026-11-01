@@ -20,7 +20,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/llama-memory-hybrid-idx.cpp         |   10 +
  src/llama-memory-hybrid-idx.h           |    4 +
  src/skippy/abi.cpp                      |   59 ++
- src/skippy/activation.cpp               | 1021 +++++++++++++++++++
+ src/skippy/activation.cpp               | 1028 ++++++++++++++++++++
  src/skippy/activation_internal.h        |   88 ++
  src/skippy/activation_layout.cpp        |  156 +++
  src/skippy/block_boundaries.cpp         |   64 ++
@@ -70,7 +70,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/stage_realization.h          |   21 +
  src/skippy/stage_slice_plan.cpp         |  907 +++++++++++++++++
  src/skippy/stage_slice_plan.h           |  136 +++
- src/skippy/state.cpp                    | 1185 ++++++++++++++++++++++
+ src/skippy/state.cpp                    | 1189 +++++++++++++++++++++++
  src/skippy/state_effects.cpp            |  450 +++++++++
  src/skippy/state_effects.h              |   74 ++
  src/skippy/state_memory.cpp             |  116 +++
@@ -79,7 +79,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  256 +++++
  src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 75 files changed, 16320 insertions(+), 395 deletions(-)
+ 75 files changed, 16331 insertions(+), 395 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -1528,10 +1528,10 @@ index 000000000..ceed6e5d3
 +}
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
 new file mode 100644
-index 000000000..71323d934
+index 000000000..d1c094548
 --- /dev/null
 +++ b/src/skippy/activation.cpp
-@@ -0,0 +1,1021 @@
+@@ -0,0 +1,1028 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/graph_build_inputs.h"

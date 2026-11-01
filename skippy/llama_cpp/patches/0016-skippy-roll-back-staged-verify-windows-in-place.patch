@@ -45,7 +45,7 @@ checkpoint, buffer reuse) and its rollback-count ABI.
  include/skippy/state.h                        |  15 +
  src/CMakeLists.txt                            |  21 ++
  src/skippy-verify-checkpoint.h                |   9 +-
- src/skippy/activation.cpp                     | 150 ++++----
+ src/skippy/activation.cpp                     | 154 +++++----
  src/skippy/execution-batch.cpp                |   7 +
  src/skippy/execution-single.cpp               |   5 +
  src/skippy/runtime_support.h                  |   7 +
@@ -56,21 +56,21 @@ checkpoint, buffer reuse) and its rollback-count ABI.
  src/skippy/verify_window.cpp                  | 214 ++++++++++++
  src/skippy/verify_window.h                    |  38 +++
  ...st-skippy-verify-checkpoint-retirement.cpp |   9 +
- 15 files changed, 802 insertions(+), 74 deletions(-)
+ 15 files changed, 804 insertions(+), 76 deletions(-)
  create mode 100644 src/skippy/tests/verify_rollback.cpp
  create mode 100644 src/skippy/verify_window.cpp
  create mode 100644 src/skippy/verify_window.h
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 3f6aab137..b9b5259af 100644
+index b9b5259af..df831c43e 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 67
-+#define SKIPPY_ABI_VERSION_PATCH 68
+-#define SKIPPY_ABI_VERSION_PATCH 68
++#define SKIPPY_ABI_VERSION_PATCH 69
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -101,10 +101,10 @@ index 1cfaaa5c6..e8d0874a1 100644
  LLAMA_API enum skippy_status skippy_export_kv_page(
          struct skippy_session * session,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 48f8964a9..ebfe058d1 100644
+index 93b538b0e..c505659cd 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -58,6 +58,7 @@ add_library(llama
+@@ -59,6 +59,7 @@ add_library(llama
              skippy/model_source.cpp
              skippy/session.cpp
              skippy/verification.cpp
@@ -112,7 +112,7 @@ index 48f8964a9..ebfe058d1 100644
              skippy/workloads.cpp
              skippy/abi.cpp
              skippy/block_boundaries.cpp
-@@ -411,6 +412,26 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -412,6 +413,26 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_generate_gemma_fixture PROPERTIES
          FIXTURES_SETUP skippy-model-loader-fixtures)
  
@@ -173,7 +173,7 @@ index 8793000c1..f6ce0295e 100644
      return true;
  }
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
-index 71323d934..b428c26db 100644
+index d1c094548..7167e5f7a 100644
 --- a/src/skippy/activation.cpp
 +++ b/src/skippy/activation.cpp
 @@ -6,6 +6,7 @@
@@ -279,15 +279,15 @@ index 71323d934..b428c26db 100644
 -    checkpoint.token_count = token_count;
 -    if (token_ids != nullptr) {
 -        checkpoint.token_ids.assign(token_ids, token_ids + token_count);
-+    if (session->verify_checkpoints.size() >= skippy_max_verify_checkpoints) {
-+        return skippy_reject_verify_checkpoint_depth(out_error);
-     }
+-    }
 -    checkpoint.has_activation_input = skippy_has_activation_payload(input_desc, input_payload);
 -    if (checkpoint.has_activation_input) {
 -        checkpoint.input_desc = *input_desc;
 -        const uint8_t * bytes = static_cast<const uint8_t *>(input_payload);
 -        checkpoint.input_payload.assign(bytes, bytes + input_desc->payload_bytes);
--    }
++    if (session->verify_checkpoints.size() >= skippy_max_verify_checkpoints) {
++        return skippy_reject_verify_checkpoint_depth(out_error);
+     }
 -
 -    constexpr size_t max_verify_checkpoints = 64;
 -    if (session->verify_checkpoints.size() >= max_verify_checkpoints) {
@@ -391,21 +391,30 @@ index 71323d934..b428c26db 100644
          return skippy_fail_verify_restore(
                  session,
                  SKIPPY_STATUS_RUNTIME_ERROR,
-@@ -967,10 +1003,9 @@ enum skippy_status skippy_restore_verify_prefix(
+@@ -967,17 +1003,16 @@ enum skippy_status skippy_restore_verify_prefix(
                  out_error);
      }
  
 -    const uint64_t token_start = static_cast<uint64_t>(checkpoint->token_start);
 -    session->n_past = checkpoint->token_start;
++    session->n_past = state_start;
+     // The replay below records the accepted tokens again. Drop the copies
+     // sampled verification already recorded so the history ends at
+     // token_count and skippy_trim_session keeps the sampler, with its grammar
+     // and RNG state, instead of clearing it as a rewind into sampled tokens.
+-    if (session->token_history.size() > static_cast<size_t>(token_start)) {
+-        session->token_history.resize(static_cast<size_t>(token_start));
++    if (session->token_history.size() > static_cast<size_t>(state_start)) {
++        session->token_history.resize(static_cast<size_t>(state_start));
+     }
 -    const size_t accepted_count = static_cast<size_t>(token_count - token_start);
 -    if (accepted_count > 0 && checkpoint->token_ids.empty()) {
-+    session->n_past = state_start;
 +    const size_t accepted_count = static_cast<size_t>(token_count - static_cast<uint64_t>(state_start));
 +    if (accepted_count > 0 && checkpoint->token_ids.size() < state_offset + accepted_count) {
          return skippy_fail_verify_restore(
                  session,
                  SKIPPY_STATUS_RUNTIME_ERROR,
-@@ -983,6 +1018,7 @@ enum skippy_status skippy_restore_verify_prefix(
+@@ -990,6 +1025,7 @@ enum skippy_status skippy_restore_verify_prefix(
          skippy_activation_desc input_desc = {};
          std::vector<uint8_t> input_payload = skippy_verify_prefix_activation_payload(
                  *checkpoint,
@@ -413,7 +422,7 @@ index 71323d934..b428c26db 100644
                  accepted_count,
                  input_desc);
          if (input_payload.empty()) {
-@@ -996,7 +1032,7 @@ enum skippy_status skippy_restore_verify_prefix(
+@@ -1003,7 +1039,7 @@ enum skippy_status skippy_restore_verify_prefix(
                  session,
                  &input_desc,
                  input_payload.data(),
@@ -422,7 +431,7 @@ index 71323d934..b428c26db 100644
                  nullptr,
                  0,
                  accepted_count,
-@@ -1006,7 +1042,7 @@ enum skippy_status skippy_restore_verify_prefix(
+@@ -1013,7 +1049,7 @@ enum skippy_status skippy_restore_verify_prefix(
      } else if (accepted_count > 0) {
          status = skippy_decode_tokens(
                  session,
@@ -484,10 +493,10 @@ index 8ba595623..bbba808a3 100644
          skippy_session * session,
          uint64_t token_count,
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
-index f44e874d9..68c75fa9c 100644
+index 7d34b34bf..a959a7c81 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
-@@ -120,6 +120,11 @@ struct skippy_verify_checkpoint {
+@@ -121,6 +121,11 @@ struct skippy_verify_checkpoint {
      bool valid = false;
      int32_t token_start = 0;
      size_t token_count = 0;
@@ -499,7 +508,7 @@ index f44e874d9..68c75fa9c 100644
      std::vector<uint8_t> state;
      std::vector<llama_token> token_ids;
      bool has_activation_input = false;
-@@ -190,4 +195,16 @@ struct skippy_session {
+@@ -194,4 +199,16 @@ struct skippy_session {
      std::vector<skippy_pending_activation_part> pending_activation_exports;
      bool reset_required = false;
      std::vector<skippy_verify_checkpoint> verify_checkpoints;
@@ -541,7 +550,7 @@ index 4741f55cb..a9251d2c9 100644
              SKIPPY_RUNTIME_EVENT_KIND_KV_PRESSURE_CLEARED,
              static_cast<uint64_t>(session->seq_id),
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
-index 0f9b3a27c..0ab3bbace 100644
+index 15c48419d..45a53c4ba 100644
 --- a/src/skippy/state.cpp
 +++ b/src/skippy/state.cpp
 @@ -74,7 +74,7 @@ static void skippy_update_session_state_after_import(
@@ -634,7 +643,7 @@ index 0f9b3a27c..0ab3bbace 100644
      bool restored_verify_prefix = false;
      enum skippy_status status = skippy_restore_verify_prefix(
              session,
-@@ -849,7 +879,7 @@ enum skippy_status skippy_trim_session(
+@@ -853,7 +883,7 @@ enum skippy_status skippy_trim_session(
          session->signal_history.resize(static_cast<size_t>(token_count));
      }
      skippy_mtp_trim_session_state(session, static_cast<llama_pos>(token_count));
@@ -643,7 +652,7 @@ index 0f9b3a27c..0ab3bbace 100644
      session->ctx->synchronize();
  
      return skippy_success(out_error);
-@@ -1004,7 +1034,7 @@ enum skippy_status skippy_session_restore_prefix(
+@@ -1008,7 +1038,7 @@ enum skippy_status skippy_session_restore_prefix(
      }
      session->signal_history.clear();
      skippy_mtp_clear_session_state(session);
