@@ -1,4 +1,4 @@
-use crate::process::Cancellation;
+use crate::Cancellation;
 use std::io;
 #[cfg(unix)]
 use std::sync::atomic::AtomicI32;
@@ -16,12 +16,8 @@ static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 #[cfg(unix)]
 static RECEIVED_SIGNAL: AtomicI32 = AtomicI32::new(0);
 
-#[cfg(all(test, unix))]
-#[path = "../../../tests/migration_lifecycle/interrupt_scope.rs"]
-mod tests;
-
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum Reason {
+pub enum Reason {
     #[error("signal scope already active")]
     ScopeBusy,
     #[error("cancelled by command interruption")]
@@ -53,12 +49,12 @@ impl Reason {
     }
 }
 
-pub(crate) struct Interrupt {
+pub struct Interrupt {
     registration: Option<platform::Registration>,
 }
 
 impl Interrupt {
-    pub(crate) fn install() -> Result<Self, Reason> {
+    pub fn install() -> Result<Self, Reason> {
         OWNED
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .map_err(|_| Reason::ScopeBusy)?;
@@ -71,7 +67,7 @@ impl Interrupt {
     }
 
     #[cfg(unix)]
-    pub(crate) fn received_signal(&self) -> Option<i32> {
+    pub fn received_signal(&self) -> Option<i32> {
         let signal = RECEIVED_SIGNAL.load(Ordering::SeqCst);
         (signal != 0).then_some(signal)
     }
@@ -79,17 +75,17 @@ impl Interrupt {
     /// Freeze the observed first signal after restoring handlers, closing the
     /// read-before-unregister race for status-preserving command owners.
     #[cfg(unix)]
-    pub(crate) fn finish_signal(mut self) -> Result<Option<i32>, Reason> {
+    pub fn finish_signal(mut self) -> Result<Option<i32>, Reason> {
         self.unregister()?;
         Ok(self.received_signal())
     }
 
-    pub(crate) fn cancellation(&self) -> Cancellation {
+    pub fn cancellation(&self) -> Cancellation {
         Cancellation::from_static(&INTERRUPTED)
     }
 
     #[cfg(unix)]
-    pub(crate) fn finish(self) -> Result<(), Reason> {
+    pub fn finish(self) -> Result<(), Reason> {
         self.finish_signal()?;
         if INTERRUPTED.load(Ordering::SeqCst) {
             Err(Reason::Interrupted)
@@ -99,12 +95,12 @@ impl Interrupt {
     }
 
     #[cfg(windows)]
-    pub(crate) fn finish(mut self) -> Result<(), Reason> {
+    pub fn finish(mut self) -> Result<(), Reason> {
         self.unregister()?;
         self.check()
     }
 
-    pub(crate) fn check(&self) -> Result<(), Reason> {
+    pub fn check(&self) -> Result<(), Reason> {
         if INTERRUPTED.load(Ordering::SeqCst) {
             Err(Reason::Interrupted)
         } else {

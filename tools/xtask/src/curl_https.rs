@@ -803,7 +803,9 @@ mod suffix_json_tests {
                 let args: Vec<_> = spec
                     .arguments
                     .iter()
-                    .map(|v| v.value().to_string_lossy().into_owned())
+                    .map(|v| match v {
+                        Value::Public(v) | Value::Secret(v) => v.to_string_lossy().into_owned(),
+                    })
                     .collect();
                 assert_eq!(
                     args.iter()

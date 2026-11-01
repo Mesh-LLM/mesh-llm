@@ -1,9 +1,8 @@
 //! Actual local action decisions with finite external tool boundaries.
 #![cfg(feature = "automation-contracts")]
 #![cfg(unix)]
-#[allow(dead_code, unused_imports)]
-#[path = "../src/process/mod.rs"]
-mod process;
+#[allow(unused_imports)]
+use process_supervision as process;
 #[path = "ci_runner_cache_contract/runtime.rs"]
 mod runtime;
 #[path = "ci_runner_cache_contract/support.rs"]

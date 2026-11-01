@@ -46,7 +46,7 @@ pub(super) fn run(
         return Err(failure("stability request deadline exceeded", None));
     }
     let spec = curl.specification(
-        &crate::process::curl_https::Request {
+        &crate::curl_https::Request {
             endpoint: request.endpoint.clone(),
             method: request.method.clone(),
             token: request.token,

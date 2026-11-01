@@ -1,5 +1,5 @@
 use super::*;
-use crate::process::Value;
+use crate::Value;
 use std::{collections::BTreeMap, fs, process::Command};
 
 fn spec(script: &str, cwd: &std::path::Path) -> ProcessSpec {
@@ -40,7 +40,7 @@ fn inherited_streams_are_visible_before_completion() {
     let mut child = Command::new(std::env::current_exe().unwrap())
         .args([
             "--exact",
-            "process::inherited::tests::inherited_streams_are_visible_before_completion",
+            "inherited::tests::inherited_streams_are_visible_before_completion",
             "--nocapture",
         ])
         .env(CHILD, directory.path())

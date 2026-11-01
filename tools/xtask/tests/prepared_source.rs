@@ -6,9 +6,8 @@ use std::{
     process::{Command, Output},
 };
 
-#[allow(dead_code, unused_imports)]
-#[path = "../src/process/mod.rs"]
-mod process;
+#[allow(unused_imports)]
+use process_supervision as process;
 
 const PATCH_DIGEST: &str = "3800406abecfae8bd783a773345793e24506e649d42731e3c1da6c6d2d113d31";
 const UPSTREAM: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";

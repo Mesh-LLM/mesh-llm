@@ -1,4 +1,4 @@
-use crate::process::Failure;
+use crate::Failure;
 
 const MAX_NAME_BYTES: usize = 64;
 

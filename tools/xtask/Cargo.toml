@@ -7,6 +7,7 @@ default-run = "xtask"
 
 [dependencies]
 ci-controller = { path = "../ci-controller" }
+process-supervision = { path = "../process-supervision" }
 trajectory-reader = { path = "../trajectory-reader", default-features = false }
 caseless = "=0.2.2"
 unicode-normalization = "=0.1.25"
