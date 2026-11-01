@@ -8,8 +8,8 @@ mod ci_validation;
 mod cli;
 mod cli_output;
 mod command;
-#[path = "automation/command_interrupt/mod.rs"]
 pub(crate) mod command_interrupt;
+mod curl_https;
 #[cfg(test)]
 mod fixture_paths;
 mod installer_fixtures;
@@ -17,7 +17,6 @@ mod model_registry;
 mod native_policy;
 mod no_console_print;
 mod prepared_input;
-pub mod process;
 mod product;
 mod publish_consistency;
 mod release;
@@ -27,6 +26,8 @@ mod repository;
 mod split_payloads;
 
 use command::DynResult;
+// Transitional: call sites still import supervision as `crate::process`.
+use process_supervision as process;
 
 #[cfg(test)]
 mod tests;
@@ -191,9 +192,12 @@ fn run() -> DynResult<()> {
                 Some(root) => root,
                 None => repository::RepositoryRoot::resolve(None)?,
             };
-            ci_plan::run(root.as_path(), rest)
+            ci_controller::plan::run(root.as_path(), rest)
         }
-        cli::CliCommand::CiValidate(verb, rest) => ci_validation::lane_results::run(verb, rest),
+        cli::CliCommand::CiValidate(verb, rest) => match verb {
+            "validate-graph" => ci_validation::entrypoint_graph::run(rest),
+            _ => ci_controller::lane_results::run(rest),
+        },
         cli::CliCommand::CiFamilyPlan(rest) => {
             let root = match explicit_root {
                 Some(root) => root,
@@ -270,7 +274,7 @@ fn run() -> DynResult<()> {
                     Ok(automation::daemon_readiness::run(root, rest)?)
                 }
                 cli::RepositoryCommand::AutomationBootstrap(rest) => {
-                    automation_bootstrap::run(root, rest)
+                    ci_controller::bootstrap::run(root, rest, &automation_bootstrap::XTASK)
                 }
                 cli::RepositoryCommand::ReleaseTargets => {
                     repo_consistency::check_release_targets_command(root)

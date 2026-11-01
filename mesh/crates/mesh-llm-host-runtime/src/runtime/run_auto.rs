@@ -1314,6 +1314,30 @@ fn initial_run_auto_requested_models(
         .collect()
 }
 
+/// The names a request may use for a startup model before it resolves: its
+/// declared or path reference and its configured id. A bare local GGUF has
+/// neither until it is hashed, so while one resolves any name may be coming.
+pub(super) fn startup_resolution(
+    startup_specs: &[StartupModelSpec],
+    requested_model_names: &[String],
+) -> mesh::StartupResolution {
+    if startup_specs.is_empty() {
+        return mesh::StartupResolution::Done;
+    }
+    let mut names = Vec::new();
+    for (spec, requested) in startup_specs.iter().zip(requested_model_names) {
+        if spec.declared_ref.is_none()
+            && spec.config_model_id.is_none()
+            && super::startup_models::is_direct_local_gguf_source(&spec.model_ref)
+        {
+            return mesh::StartupResolution::AnyName;
+        }
+        names.push(requested.clone());
+        names.extend(spec.config_model_id.clone());
+    }
+    mesh::StartupResolution::Names(names)
+}
+
 pub(super) struct RunAutoRuntimeLoopContext<'a> {
     pub(super) options: &'a RuntimeOptions,
     pub(super) config: &'a plugin::MeshConfig,
@@ -1801,6 +1825,10 @@ async fn run_auto_inner(
     let initial_requested_models =
         initial_run_auto_requested_models(&startup_specs, &requested_model_names);
     node.set_requested_models(initial_requested_models).await;
+    // Until they resolve, a request naming one of them gets a retryable 503
+    // rather than a 404.
+    node.set_startup_resolution(startup_resolution(&startup_specs, &requested_model_names))
+        .await;
 
     // On cancellation, continue to the lifecycle owner below so it can run
     // the existing ordered cleanup for the node we have already created.
@@ -1855,6 +1883,9 @@ async fn run_auto_inner(
 
     // Model intent channel: owner-control commands send intents here, control loop polls.
     let mut model_intent_rx = install_run_auto_model_intent_channel(node.clone()).await;
+    if !is_client && !super::startup_models::cli_has_explicit_models(&options) {
+        super::native_model_lifecycle::install(&node, &config, target_tx.subscribe()).await?;
+    }
 
     let model_name_for_console = String::new();
     let runtime_owner_key_path = resolve_runtime_owner_key_path(&options)?;

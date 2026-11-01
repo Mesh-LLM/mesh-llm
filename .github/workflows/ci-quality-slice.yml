@@ -96,9 +96,7 @@ jobs:
         with:
           ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
-      - uses: ./.github/actions/prepare-automation
-        with:
-          runner-profile: hosted-bare
+      - uses: ./.github/actions/prepare-ci-controller
       - name: Check commit convention
         env:
           # Pull-request-authored text reaches the script through the
@@ -111,13 +109,13 @@ jobs:
           set -euo pipefail
           # The repository squash-merges, so the pull request title becomes the
           # commit subject on main and has to satisfy Conventional Commits.
-          "$MESH_LLM_AUTOMATION_BIN" repository conventional-commits --message "$PR_TITLE"
+          "$MESH_CI_CONTROLLER_BIN" repository conventional-commits --message "$PR_TITLE"
           # The squash body aggregates the branch commit messages, so their
           # attribution trailers land on main even when their subjects do not.
           gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits" --paginate \
             --jq '.[].commit.message' > "$RUNNER_TEMP/pr-commit-messages.txt"
           printf '%s\n' "$PR_BODY" >> "$RUNNER_TEMP/pr-commit-messages.txt"
-          "$MESH_LLM_AUTOMATION_BIN" repository conventional-commits \
+          "$MESH_CI_CONTROLLER_BIN" repository conventional-commits \
             --trailers-only "$RUNNER_TEMP/pr-commit-messages.txt"
 
   runner_policy:
@@ -276,6 +274,188 @@ jobs:
         run: just no-console-print
       - name: Check process environment mutation ownership
         run: cargo xtool repository env-mutation-census
+
+  skippy_cpp_api:
+    name: Standalone Skippy C++ API and Rust bridge
+    # Reuse the completed contracts worker's place in Quality's fan-out.
+    needs: [runner_policy, quality_contracts]
+    runs-on: ${{ needs.runner_policy.outputs.runner_8 }}
+    timeout-minutes: 120
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:656e4874af027e0b437427f4415fdaab51ff8b1cda444dcdd4bc331794f703c5
+    defaults:
+      run:
+        shell: bash
+    env:
+      RUSTC_WRAPPER: sccache
+    steps:
+      - uses: Mesh-LLM/mesh-llm/.github/actions/audit-depot-pr-isolation@ed07043b84d720aab30e75ed2f038f7042576f16
+        with:
+          original_event_name: ${{ inputs.original_event_name }}
+          depot_selected: ${{ startsWith(needs.runner_policy.outputs.runner_8, 'depot-') }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source_sha || github.sha }}
+          persist-credentials: false
+      - name: Admit standalone API source
+        id: api_source
+        run: |
+          set -euo pipefail
+          api=skippy/skippy_api
+          bindings=skippy/skippy-api-rs
+          if [[ ! -e "$api" && ! -L "$api" && ! -e "$bindings" && ! -L "$bindings" ]]; then
+            echo 'present=false' >> "$GITHUB_OUTPUT"
+            echo 'Standalone C++ API source is absent at this revision; validation is not applicable.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          for directory in "$api" "$bindings"; do
+            [[ -d "$directory" && ! -L "$directory" ]] || {
+              echo "incomplete or symlinked standalone API source: $directory" >&2
+              exit 1
+            }
+          done
+          for marker in "$api/CMakeLists.txt" "$bindings/Cargo.toml" "$bindings/skippy-sys/Cargo.toml" "$bindings/skippy/Cargo.toml"; do
+            [[ -f "$marker" && ! -L "$marker" ]] || {
+              echo "missing or symlinked standalone API manifest: $marker" >&2
+              exit 1
+            }
+          done
+          echo 'present=true' >> "$GITHUB_OUTPUT"
+      - name: Verify C++ API toolchain
+        if: steps.api_source.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          verify-runner-image public cpu
+          for tool in c++ clang++ clang-format clang-tidy FileCheck cmake ninja just cargo rustc sccache; do
+            command -v "$tool"
+          done
+          c++ --version
+          clang++ --version
+      - uses: ./.github/actions/configure-sccache-gha
+        if: steps.api_source.outputs.present == 'true'
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
+      - name: Restore protected model-resolution automation
+        if: steps.api_source.outputs.present == 'true'
+        uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ fromJson(inputs.authority_linux_x64).source_sha }}
+          artifact_id: ${{ fromJson(inputs.authority_linux_x64).artifact_id }}
+          binary_sha256: ${{ fromJson(inputs.authority_linux_x64).binary_sha256 }}
+          producer_os: ${{ fromJson(inputs.authority_linux_x64).producer_os }}
+          producer_arch: ${{ fromJson(inputs.authority_linux_x64).producer_arch }}
+      - name: Select API fixture cadence
+        if: steps.api_source.outputs.present == 'true'
+        id: api_cadence
+        env:
+          ORIGINAL_EVENT: ${{ inputs.original_event_name || github.event_name }}
+        run: |
+          set -euo pipefail
+          case "$ORIGINAL_EVENT" in
+            pull_request) cadence=pull-request ;;
+            push) cadence=main ;;
+            workflow_dispatch) cadence=manual ;;
+            *) echo 'unsupported API fixture event' >&2; exit 1 ;;
+          esac
+          echo "value=$cadence" >> "$GITHUB_OUTPUT"
+      - name: Restore BERT embedding fixture
+        if: steps.api_source.outputs.present == 'true'
+        id: api_embed
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/skippy-cpp-api.json
+          model_artifact_id: minilm-q8-cpp-api
+          model_cadence: ${{ steps.api_cadence.outputs.value }}
+          model_cache_scope: skippy-cpp-api
+      - name: Restore reranking fixture
+        if: steps.api_source.outputs.present == 'true'
+        id: api_rerank
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/skippy-cpp-api.json
+          model_artifact_id: bge-reranker-q4-cpp-api
+          model_cadence: ${{ steps.api_cadence.outputs.value }}
+          model_cache_scope: skippy-cpp-api
+      - name: Restore causal stage-chain fixture
+        if: steps.api_source.outputs.present == 'true'
+        id: api_causal
+        uses: ./.github/actions/restore-test-model
+        with:
+          model_manifest: ci/model-artifacts/manifests/skippy-cpp-api.json
+          model_artifact_id: smollm2-q8-inference
+          model_cadence: ${{ steps.api_cadence.outputs.value }}
+          model_cache_scope: skippy-cpp-api
+      - name: Prepare branch-local patched native source
+        if: steps.api_source.outputs.present == 'true'
+        timeout-minutes: 20
+        run: just llama-prepare
+      - name: Check C++ API formatting
+        if: steps.api_source.outputs.present == 'true'
+        run: just skippy-llama-api-format-check
+      - name: Compile every C++ API target
+        if: steps.api_source.outputs.present == 'true'
+        timeout-minutes: 30
+        run: just skippy-api-all-targets-build
+      - name: Verify a real three-stage causal pipeline
+        if: steps.api_source.outputs.present == 'true'
+        timeout-minutes: 20
+        env:
+          CAUSAL_MODEL: ${{ steps.api_causal.outputs.model_path }}
+        run: |
+          set -euo pipefail
+          test -s "$CAUSAL_MODEL"
+          target/skippy-api-all/skippy_api_stage_pipeline_probe "$CAUSAL_MODEL" 3 30 'the quick brown fox jumps over the lazy dog' 16
+      - name: Run the complete C++ API suite
+        if: steps.api_source.outputs.present == 'true'
+        timeout-minutes: 20
+        run: just skippy-llama-api-test
+      - name: Run API address and undefined-behavior sanitizers and corpus replay
+        if: steps.api_source.outputs.present == 'true'
+        timeout-minutes: 20
+        run: just skippy-api-asan
+      - name: Check standalone Rust formatting and Clippy
+        if: steps.api_source.outputs.present == 'true'
+        timeout-minutes: 30
+        run: just skippy-api-rs-lint
+      - name: Run every Rust bridge test with required real models
+        if: steps.api_source.outputs.present == 'true'
+        timeout-minutes: 30
+        env:
+          EMBED_MODEL: ${{ steps.api_embed.outputs.model_path }}
+          RERANK_MODEL: ${{ steps.api_rerank.outputs.model_path }}
+          CAUSAL_MODEL: ${{ steps.api_causal.outputs.model_path }}
+          SKIPPY_TEST_REQUIRE_MODELS: '1'
+        run: |
+          set -euo pipefail
+          test -s "$EMBED_MODEL"
+          test -s "$RERANK_MODEL"
+          test -s "$CAUSAL_MODEL"
+          just skippy-api-rs-e2e "$EMBED_MODEL" "$RERANK_MODEL" "$CAUSAL_MODEL"
+      - name: Run an external Rust consumer without Cargo loader paths
+        if: steps.api_source.outputs.present == 'true'
+        timeout-minutes: 30
+        run: just skippy-api-downstream-smoke
+      - name: Build and exercise the C++ boundary lint plugin
+        if: steps.api_source.outputs.present == 'true'
+        timeout-minutes: 20
+        run: just skippy-tidy-plugin-build
+      - name: Run every configured C++ and Rust-bridge boundary lint
+        if: steps.api_source.outputs.present == 'true'
+        timeout-minutes: 30
+        run: just skippy-llama-api-tidy '*'
+      - name: Retain native test diagnostics
+        if: ${{ !cancelled() && steps.api_source.outputs.present == 'true' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: skippy-cpp-api-tests-${{ github.run_attempt }}
+          retention-days: 1
+          if-no-files-found: ignore
+          path: |
+            target/skippy-llama-api-build/Testing/Temporary/
+            target/skippy-api-asan/Testing/Temporary/
 
   rust_fmt:
     name: Rust format

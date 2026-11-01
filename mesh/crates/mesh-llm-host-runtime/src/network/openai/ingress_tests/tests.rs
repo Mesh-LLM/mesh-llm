@@ -1935,7 +1935,7 @@ async fn resolve_remote_mesh_route_with_no_headers_pools_every_serving_peer() {
     }
 }
 
-fn plugin_only_request(model: &str) -> proxy::BufferedHttpRequest {
+pub(super) fn plugin_only_request(model: &str) -> proxy::BufferedHttpRequest {
     let body = b"{}";
     let raw = format!(
         "POST /v1/chat/completions HTTP/1.1\r\nHost: t\r\nContent-Length: {}\r\n\r\n",
@@ -1974,7 +1974,7 @@ fn plugin_only_request_for(model: &str, path: &str) -> proxy::BufferedHttpReques
     request
 }
 
-fn empty_test_plugin_manager() -> crate::plugin::PluginManager {
+pub(super) fn empty_test_plugin_manager() -> crate::plugin::PluginManager {
     crate::plugin::PluginManager::for_test_summaries(Vec::new())
 }
 
@@ -2913,7 +2913,7 @@ async fn chat_still_rejected_for_model_served_only_by_an_ocr_endpoint() {
 
 /// A loopback backend that answers one chat completion identifying which route
 /// served it, so a test can tell the plugin path from the mesh path.
-async fn spawn_answering_chat_backend(answer: &'static str) -> u16 {
+pub(super) async fn spawn_answering_chat_backend(answer: &'static str) -> u16 {
     use tokio::io::AsyncWriteExt;
 
     let backend = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -3421,67 +3421,99 @@ async fn excluded_peer_does_not_suppress_the_local_plugin() {
 /// on "no candidate at all", so all-`None` (loading/draining) candidates
 /// skipped it entirely.
 #[tokio::test]
-async fn peer_ingress_dispatches_to_the_plugin_while_a_native_target_loads() {
-    use tokio::io::AsyncReadExt;
+async fn native_cold_plugin_fallback_works_for_local_peer_and_failed_loads() {
+    for mode in [0, 1, 2] {
+        use tokio::io::AsyncReadExt;
 
-    let model = "acme/shared-model";
-    let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
-        .await
-        .expect("test node should start");
-    // The id is known locally but nothing is serving yet: every candidate is
-    // `None`, the loading/draining shape.
-    let mut targets = election::ModelTargets::default();
-    targets
-        .targets
-        .insert(model.to_string(), vec![election::InferenceTarget::None]);
+        let model = "acme/shared-model";
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+            .await
+            .expect("test node should start");
+        let mut config = crate::plugin::MeshConfig::default();
+        config.models.push(crate::plugin::ModelConfigEntry {
+            model: model.into(),
+            lifecycle: mesh_llm_config::managed_models::ModelLifecycle {
+                load: mesh_llm_config::managed_models::ModelLoadPolicy::OnDemand,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let (service, mut native_intents, _native_targets) =
+            crate::runtime::native_model_lifecycle::NativeModelLifecycle::test_service(&config);
+        assert!(node.native_model_lifecycle.set(service).is_ok());
+        // The id is known locally but nothing is serving yet: every candidate is
+        // `None`, the loading/draining shape.
+        let mut targets = election::ModelTargets::default();
+        targets
+            .targets
+            .insert(model.to_string(), vec![election::InferenceTarget::None]);
 
-    let plugin_port = spawn_answering_chat_backend("from-plugin").await;
-    let plugin_manager = empty_test_plugin_manager();
-    plugin_manager
-        .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
-            plugin_name: "chat-plugin".to_string(),
-            endpoint_id: "chat".to_string(),
-            protocol: Some("openai_compatible".to_string()),
-            address: format!("http://127.0.0.1:{plugin_port}"),
-            models: vec![model.to_string()],
-        }])
-        .await;
+        let plugin_port = spawn_answering_chat_backend("from-plugin").await;
+        let plugin_manager = empty_test_plugin_manager();
+        plugin_manager
+            .set_test_inference_endpoints(vec![crate::plugin::InferenceEndpointRoute {
+                plugin_name: "chat-plugin".to_string(),
+                endpoint_id: "chat".to_string(),
+                protocol: Some("openai_compatible".to_string()),
+                address: format!("http://127.0.0.1:{plugin_port}"),
+                models: vec![model.to_string()],
+            }])
+            .await;
 
-    let affinity = affinity::AffinityRouter::new();
-    let ctx = IngressRouteContext {
-        node: &node,
-        targets: &targets,
-        affinity: &affinity,
-        plugin_manager: Some(&plugin_manager),
-        requested_by_node_id: None,
-        #[cfg(test)]
-        exchange_channel: None,
-    };
-    let mut request = ingress_chat_request(model).await;
-    let (server_side, mut client_side) = ingress_client_socket_pair().await;
-    let outcome = route_request(
-        true,
-        server_side.into(),
-        &mut request,
-        &ctx,
-        Some(model),
-        None,
-        OpenAiRouteObserver::default(),
-    )
-    .await;
-    let mut response = String::new();
-    client_side
-        .read_to_string(&mut response)
-        .await
-        .expect("read response");
+        let affinity = affinity::AffinityRouter::new();
+        let ctx = IngressRouteContext {
+            node: &node,
+            targets: &targets,
+            affinity: &affinity,
+            plugin_manager: Some(&plugin_manager),
+            requested_by_node_id: None,
+            #[cfg(test)]
+            exchange_channel: None,
+        };
+        let mut request = ingress_chat_request(model).await;
+        let (server_side, mut client_side) = ingress_client_socket_pair().await;
+        let outcome = if mode == 2 {
+            native_residency::cold_failure(
+                true,
+                server_side.into(),
+                &mut request,
+                &ctx,
+                model,
+                None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+        } else {
+            route_request(
+                mode == 1,
+                server_side.into(),
+                &mut request,
+                &ctx,
+                Some(model),
+                None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+        };
+        assert!(
+            native_intents.try_recv().is_err(),
+            "an eligible plugin must not be shadowed by a cold native load"
+        );
+        let mut response = String::new();
+        client_side
+            .read_to_string(&mut response)
+            .await
+            .expect("read response");
 
-    assert!(
-        response.starts_with("HTTP/1.1 200"),
-        "a plugin endpoint serving this request must answer while the native \
+        assert!(
+            response.starts_with("HTTP/1.1 200"),
+            "a plugin endpoint serving this request must answer while the native \
          target for the same id loads: {outcome:?}: {response}"
-    );
-    assert!(
-        response.contains("from-plugin"),
-        "expected the local plugin's answer, got: {response}"
-    );
+        );
+        assert!(
+            response.contains("from-plugin"),
+            "expected the local plugin's answer, got: {response}"
+        );
+        node.endpoint.close().await;
+    }
 }

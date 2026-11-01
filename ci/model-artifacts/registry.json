@@ -23,7 +23,8 @@
     "skippy-parity",
     "competitive-benchmark",
     "radix-cache",
-    "skippy-system-one-smoke"
+    "skippy-system-one-smoke",
+    "skippy-cpp-api"
   ],
   "family_policy": {
     "profiles": {
@@ -4041,12 +4042,14 @@
       "suites": [
         "product-smoke",
         "scripted-binary-smoke",
-        "sdk-smoke"
+        "sdk-smoke",
+        "skippy-cpp-api"
       ],
       "cadences": [
         "pull-request",
         "main",
-        "release"
+        "release",
+        "manual"
       ],
       "capability_tags": [
         "dense",
@@ -5159,6 +5162,65 @@
         ]
       },
       "notes": "System One (OpenJEV) smoke: complete single-lane DiffusionGemma read consumed by scripts/skippy-system-one-smoke.sh. The proof of concept certifies a CUDA backend only."
+    },
+    {
+      "id": "minilm-q8-cpp-api",
+      "family": "bert",
+      "suites": [
+        "skippy-cpp-api"
+      ],
+      "cadences": [
+        "pull-request",
+        "main",
+        "manual"
+      ],
+      "capability_tags": [
+        "gguf",
+        "embedding",
+        "small"
+      ],
+      "artifact": {
+        "repo": "second-state/All-MiniLM-L6-v2-Embedding-GGUF",
+        "revision": "544f204f2eaa2d71361ffc74d6df7170285b286a",
+        "selector": "Q8_0",
+        "files": [
+          {
+            "path": "all-MiniLM-L6-v2-Q8_0.gguf",
+            "size_bytes": 25008064,
+            "sha256": "263215c3cadd6e16740741a7624ab4cbb6c8e777688bd5331ecfbf5681c2f8ed"
+          }
+        ]
+      },
+      "notes": "BERT embedding fixture for the standalone C++ facade and Rust bridge contract tests; bytes verified from the immutable source revision."
+    },
+    {
+      "id": "bge-reranker-q4-cpp-api",
+      "family": "xlm-roberta",
+      "suites": [
+        "skippy-cpp-api"
+      ],
+      "cadences": [
+        "pull-request",
+        "main",
+        "manual"
+      ],
+      "capability_tags": [
+        "gguf",
+        "rerank"
+      ],
+      "artifact": {
+        "repo": "gpustack/bge-reranker-v2-m3-GGUF",
+        "revision": "3093af03b1a635e67b084b1d8c03c5f5e020fd05",
+        "selector": "Q4_K_M",
+        "files": [
+          {
+            "path": "bge-reranker-v2-m3-Q4_K_M.gguf",
+            "size_bytes": 438376864,
+            "sha256": "e186a244ed455b4ab66ec64339ce7427a6ae13f5c0b5e544de96e50f0f8b3673"
+          }
+        ]
+      },
+      "notes": "Rank-pooled scalar classifier fixture used by the standalone facade Rust end-to-end suite; immutable file metadata from the source repository."
     }
   ]
 }

@@ -21,8 +21,7 @@ parquet = { version = "=60.0.0", optional = true, default-features = false, feat
 hf_hub = { package = "skippy-hf-hub", path = "../../skippy/crates/skippy-hf-hub", optional = true, features = ["blocking"] }
 
 [dev-dependencies]
-hyper = "=1.11.1"
-thiserror = "2"
+process-supervision = { path = "../process-supervision" }
 
 [[bin]]
 name = "trajectory-reader"
@@ -31,9 +30,6 @@ required-features = ["parquet-input"]
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-
-[target.'cfg(windows)'.dev-dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Console", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading"] }
 
 [[test]]
 name = "prompt_command"

@@ -13,6 +13,44 @@ fn small_registry() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     Ok(std::fs::read(fixture_dir().join("registry-small.json"))?)
 }
 
+#[test]
+fn standalone_cpp_api_projection_is_required_when_its_suite_is_admitted() -> TestResult {
+    let stage = Stage::new("cpp-api-suite")?;
+    let mut registry: Value = serde_json::from_slice(&small_registry()?)?;
+    registry["suites"]
+        .as_array_mut()
+        .ok_or("suites")?
+        .push(Value::from("skippy-cpp-api"));
+    stage.write(REGISTRY, &serde_json::to_vec(&registry)?)?;
+    let missing = xtask(stage.path(), &["models", "generate"])?;
+    assert_eq!(missing.status.code(), Some(2));
+    assert!(
+        crate::support::text(&missing.stderr)
+            .contains("suite skippy-cpp-api has no registered artifacts")
+    );
+
+    registry["artifacts"][0]["suites"]
+        .as_array_mut()
+        .ok_or("artifact suites")?
+        .push(Value::from("skippy-cpp-api"));
+    stage.write(REGISTRY, &serde_json::to_vec(&registry)?)?;
+    assert_streams(
+        "admitted API suite",
+        &xtask(stage.path(), &["models", "generate"])?,
+        0,
+        "",
+        "",
+    );
+    let manifest: Value =
+        serde_json::from_str(&stage.read("ci/model-artifacts/manifests/skippy-cpp-api.json")?)?;
+    assert_eq!(manifest["suite"], "skippy-cpp-api");
+    assert_eq!(
+        manifest["artifacts"][0]["id"],
+        registry["artifacts"][0]["id"]
+    );
+    Ok(())
+}
+
 /// Applies recorded `{set,value}` / `{delete}` path operations.
 fn apply(mut registry: Value, ops: &[Value]) -> Result<Value, Box<dyn std::error::Error>> {
     for op in ops {

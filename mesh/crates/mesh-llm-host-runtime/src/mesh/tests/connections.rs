@@ -398,6 +398,7 @@ async fn make_test_node_with_requirements(
         llama_ready: Arc::new(Mutex::new(false)),
         available_models: Arc::new(Mutex::new(Vec::new())),
         requested_models: Arc::new(Mutex::new(Vec::new())),
+        startup_models_resolving: Arc::default(),
         explicit_model_interests: Arc::new(Mutex::new(Vec::new())),
         model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
         requirement_mesh_state: Arc::new(Mutex::new(None)),
@@ -479,6 +480,7 @@ async fn make_test_node_with_requirements(
         runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
         runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
         owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
+        native_model_lifecycle: Arc::default(),
         model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
         memberships: super::node::MeshMemberships::default(),
         owner_attestation_path: None,
@@ -714,6 +716,7 @@ impl crate::network::metrics::RoutingTelemetrySink for TestRoutingTelemetrySink 
         model: Option<&str>,
         target: &crate::network::metrics::AttemptTarget,
         outcome: crate::network::metrics::AttemptOutcome,
+        _attempt_ms: f64,
     ) {
         let target_kind = match target {
             crate::network::metrics::AttemptTarget::Local(_) => "local",

@@ -27,8 +27,7 @@ mod pipe_fixture;
 #[cfg(unix)]
 #[path = "migration_process/probe.rs"]
 mod probe;
-#[path = "../src/process/mod.rs"]
-pub mod process;
+pub use process_supervision as process;
 #[cfg(unix)]
 #[path = "migration_process/readiness.rs"]
 mod readiness;

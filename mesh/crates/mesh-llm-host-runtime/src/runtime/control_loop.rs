@@ -258,6 +258,10 @@ pub(super) async fn run_auto_runtime_loop_and_shutdown(ctx: RunAutoRuntimeLifecy
         })
         .await;
     }
+    // The startup models are assigned by now, or none will be: a name that
+    // is still unknown gets its 404 again.
+    node.set_startup_resolution(crate::mesh::StartupResolution::Done)
+        .await;
 
     if !shutdown_requested {
         run_auto_runtime_event_loop(&mut loop_ctx, control_rx, runtime_event_rx, model_intent_rx)
@@ -574,9 +578,14 @@ pub(super) async fn run_auto_handle_model_intent(
                     .stack_load_completion(&spec, &profile, tx);
             }
 
-            let result =
-                run_auto_load_runtime_model(ctx, spec.clone(), config_model_id, profile.clone())
-                    .await;
+            let result = run_auto_load_runtime_model(
+                ctx,
+                spec.clone(),
+                config_model_id,
+                profile.clone(),
+                source == IntentSource::NativeLifecycle,
+            )
+            .await;
             match &result {
                 Ok(response) => {
                     ctx.model_target_reconciliation_state
@@ -641,6 +650,20 @@ async fn run_auto_handle_unload_intent(
         runtime_unload_candidates(ctx.runtime_models, ctx.managed_models),
     )
     .ok();
+    if source == IntentSource::NativeLifecycle
+        && !super::native_model_lifecycle::idle_unload_allowed(
+            &ctx.model_target_reconciliation_state,
+            resolved_unload.as_ref(),
+            canonical_model_ref.as_deref(),
+        )
+    {
+        if let Some(tx) = completion {
+            let _ = tx.send(Err(anyhow::anyhow!(
+                "idle eviction requires an unsplit instance without a maintained owner intent"
+            )));
+        }
+        return;
+    }
     let intent_id = if let Some(candidate) = &resolved_unload {
         suppress_desired_for_resolved_unload_candidate(
             &mut ctx.model_target_reconciliation_state,
