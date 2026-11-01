@@ -756,6 +756,20 @@ impl Node {
         close_endpoint_gracefully(&self.endpoint, "mesh").await;
     }
 
+    /// The public address raw STUN observes, or `None` when LAN-only
+    /// discovery disables raw STUN.
+    async fn startup_public_addr(
+        endpoint: &Endpoint,
+        relay: RelayConfig<'_>,
+    ) -> Option<stun::PublicAddr> {
+        if relay.policy.uses_raw_stun() {
+            stun_public_addr(endpoint, relay.policy.uses_relay()).await
+        } else {
+            tracing::info!("Raw STUN: disabled by LAN-only discovery mode");
+            None
+        }
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "startup wires independent node/runtime subsystems; changing the public constructor shape is outside this rebase repair"
@@ -786,12 +800,7 @@ impl Node {
         // Use iroh's net report because it probes through the endpoint's actual QUIC sockets.
         // Its observed address includes the NAT-mapped port; substituting the configured
         // bind port would advertise an address that was never verified externally.
-        let public_addr = if relay.policy.uses_raw_stun() {
-            stun_public_addr(&endpoint, relay.policy.uses_relay()).await
-        } else {
-            tracing::info!("Raw STUN: disabled by LAN-only discovery mode");
-            None
-        };
+        let public_addr = Self::startup_public_addr(&endpoint, relay).await;
 
         let (peer_change_tx, peer_change_rx) = watch::channel(0usize);
         let (inflight_change_tx, _inflight_change_rx) = watch::channel(0u64);
