@@ -1,7 +1,7 @@
 //! Public model names shared by listing, descriptor lookup and request resolution.
 use crate::mesh;
 
-pub(super) fn public_model_id(
+pub(crate) fn public_model_id(
     model_name: &str,
     descriptor: Option<&mesh::ServedModelDescriptor>,
     profile: &str,
@@ -61,3 +61,6 @@ fn public_model_id_from_local_path(model_name: &str) -> Option<String> {
     }
     Some(crate::models::model_ref_for_path(&path))
 }
+
+#[cfg(test)]
+mod tests;

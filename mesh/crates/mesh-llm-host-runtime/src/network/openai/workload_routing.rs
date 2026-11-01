@@ -158,7 +158,7 @@ pub(super) fn model_satisfies_workload_class(
 /// Require verified audio and a known audio-to-text class on the same
 /// descriptor: a generation model with an audio encoder, or a dedicated
 /// speech-recognition model.
-fn descriptor_supports_audio_upload(descriptor: &ServedModelDescriptor) -> bool {
+pub(crate) fn descriptor_supports_audio_upload(descriptor: &ServedModelDescriptor) -> bool {
     descriptor.capabilities_known
         && descriptor.capabilities.supports_audio_runtime()
         && matches!(
@@ -176,7 +176,7 @@ fn descriptor_supports_audio_upload(descriptor: &ServedModelDescriptor) -> bool 
 
 /// System One is a runtime-verified endpoint capability, independent of the
 /// model's primary workload class.
-fn descriptor_supports_system_one(descriptor: &ServedModelDescriptor) -> bool {
+pub(crate) fn descriptor_supports_system_one(descriptor: &ServedModelDescriptor) -> bool {
     descriptor.capabilities_known && descriptor.capabilities.supports_system_one_runtime()
 }
 
@@ -263,37 +263,6 @@ pub(super) fn is_binary_task_path(path: &str) -> bool {
         path.split('?').next(),
         Some("/mesh/v1/documents/ocr" | "/mesh/v1/images/similarity" | "/mesh/v1/images/depth")
     )
-}
-
-/// Whether every advertisement of this model name serves document OCR.
-///
-/// `/v1/models` is the chat-compatible listing, so a local OCR-only plugin
-/// endpoint is deliberately absent from it. A peer advertises its plugin models
-/// by name, which would otherwise put an OCR-only model back on the list just
-/// because a different node hosts it. A name no descriptor claims stays listed:
-/// name-only advertisement is admitted for chat by default, exactly as
-/// `model_satisfies_workload_class` treats it.
-pub(crate) fn serves_only_document_ocr(model: &str, descriptors: &[ServedModelDescriptor]) -> bool {
-    let mut matching = descriptors
-        .iter()
-        .filter(|descriptor| descriptor_matches_routable_name(descriptor, model))
-        .peekable();
-    matching.peek().is_some()
-        && matching.all(|descriptor| {
-            descriptor
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.workload_class)
-                .is_some_and(|class| {
-                    matches!(
-                        class,
-                        ModelWorkloadClass::DocumentOcr
-                            | ModelWorkloadClass::SpeechRecognition
-                            | ModelWorkloadClass::ImageTextSimilarity
-                            | ModelWorkloadClass::DepthEstimation
-                    )
-                })
-        })
 }
 
 /// Pick metadata from a descriptor that supports this request, not whichever
