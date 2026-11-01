@@ -691,3 +691,27 @@ fn a_final_pass_that_hears_nothing_keeps_the_words_already_heard() {
         .expect("completed event");
     assert_eq!(transcript, "Yes");
 }
+
+#[test]
+fn a_final_pass_that_hears_nothing_confirms_only_words_the_passes_agreed_on() {
+    // Passes that disagree leave no stable candidate; the empty-final
+    // fallback must not confirm the latest hypothesis it heard once.
+    let mut script = Script::new(vec![vec![(400, " No")], vec![(800, " Yes")], vec![]]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig {
+        step_ms: 400,
+        ..manual()
+    });
+    stream.push(&loud(400), &mut transcribe).unwrap();
+    stream.push(&loud(400), &mut transcribe).unwrap();
+    let done = stream.commit(&mut transcribe).unwrap();
+    assert!(deltas(&done).is_empty());
+    let transcript = done
+        .iter()
+        .find_map(|event| match event {
+            SpeechStreamEvent::Completed { transcript, .. } => Some(transcript.clone()),
+            _ => None,
+        })
+        .expect("completed event");
+    assert_eq!(transcript, "");
+}

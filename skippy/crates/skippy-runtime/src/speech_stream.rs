@@ -164,6 +164,10 @@ pub struct SpeechStream {
     confirmed_in_buffer: usize,
     /// The previous pass's words after the confirmed ones.
     pending: Vec<String>,
+    /// Words the passes agreed on that the confirmation delay still holds
+    /// back; `finish_turn` confirms these when the final pass hears
+    /// nothing, while a hypothesis no pass repeated stays unconfirmed.
+    held: Vec<String>,
     /// The tentative text last reported, so an unchanged one isn't repeated.
     reported_tentative: String,
     last_pass_at: u64,
@@ -187,6 +191,7 @@ impl SpeechStream {
             confirmed: Vec::new(),
             confirmed_in_buffer: 0,
             pending: Vec::new(),
+            held: Vec::new(),
             reported_tentative: String::new(),
             last_pass_at: 0,
         }
@@ -408,13 +413,23 @@ impl SpeechStream {
             .speech_started_at
             .map_or(0, |first| self.received.saturating_sub(first))
             / SAMPLES_PER_MS;
+        let matches = tail
+            .iter()
+            .zip(&self.pending)
+            .take_while(|(now, before)| same_word(now, before))
+            .count();
         let agreed = if self.confirmed.is_empty() && heard_ms < MIN_CONFIRM_MS {
             0
         } else {
-            tail.iter()
-                .zip(&self.pending)
-                .take_while(|(now, before)| same_word(now, before))
-                .count()
+            matches
+        };
+        // The delay guard held back words the passes agreed on; keep them
+        // for a final pass that hears nothing, but never confirm a word
+        // only the latest pass heard.
+        self.held = if agreed < matches {
+            tail[..matches].to_vec()
+        } else {
+            Vec::new()
         };
         let (newly_confirmed, pending) = tail.split_at(agreed);
         self.pending = pending.to_vec();
@@ -426,6 +441,7 @@ impl SpeechStream {
             // and start a fresh window.
             let pending = std::mem::take(&mut self.pending);
             self.confirm(pending, events);
+            self.held.clear();
             self.buffer_start += self.buffer.len() as u64;
             self.buffer.clear();
             self.buffer_has_speech = false;
@@ -494,10 +510,11 @@ impl SpeechStream {
             if words.is_empty() {
                 // The final pass can judge known speech silent (merged
                 // words, a dropped segment). Keep what earlier passes
-                // heard rather than report an empty transcript for audio
-                // that held speech.
-                let pending = std::mem::take(&mut self.pending);
-                self.confirm(pending, events);
+                // agreed on rather than report an empty transcript for
+                // audio that held speech; an unstable hypothesis heard
+                // once may be a mishearing and stays unconfirmed.
+                let held = std::mem::take(&mut self.held);
+                self.confirm(held, events);
             } else {
                 let rest = words[self.confirmed_in_buffer.min(words.len())..].to_vec();
                 self.confirm(rest, events);
@@ -519,6 +536,7 @@ impl SpeechStream {
         self.confirmed.clear();
         self.confirmed_in_buffer = 0;
         self.pending.clear();
+        self.held.clear();
         self.reported_tentative.clear();
         self.speech_frames = 0;
         self.silence_samples = 0;
