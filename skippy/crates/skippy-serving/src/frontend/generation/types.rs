@@ -212,6 +212,9 @@ pub(in crate::frontend) struct SplitDFlashHealth {
     ingest_us: std::sync::atomic::AtomicI64,
     prefill_feature_bytes: std::sync::atomic::AtomicUsize,
     decode_feature_bytes: std::sync::atomic::AtomicUsize,
+    /// The generation ended on an early verdict whose draft reply is still
+    /// on its way, so the lane must drain it before it is reused.
+    draft_reply_owed: std::sync::atomic::AtomicBool,
 }
 
 /// Split DFlash counters for a generation's response timings.
@@ -263,6 +266,18 @@ impl SplitDFlashHealth {
             &self.decode_feature_bytes
         };
         counter.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// Marks that the final stage still owes this generation a draft reply.
+    pub(in crate::frontend) fn owe_draft_reply(&self) {
+        self.draft_reply_owed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether a draft reply is still owed on the generation's lane.
+    pub(in crate::frontend) fn draft_reply_owed(&self) -> bool {
+        self.draft_reply_owed
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub(in crate::frontend) fn feature_bytes(&self) -> SplitDFlashFeatureBytes {

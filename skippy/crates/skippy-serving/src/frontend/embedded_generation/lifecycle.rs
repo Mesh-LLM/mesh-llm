@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::VecDeque, time::Instant};
+use std::{borrow::Cow, collections::VecDeque, net::TcpStream, sync::Arc, time::Instant};
 
 use serde_json::json;
 use skippy_inference_api::{InferenceError, InferenceResult};
@@ -17,6 +17,66 @@ use crate::frontend::{
     speculative::{InferenceSpeculativeStats, SpeculativeDecodeConfig},
     util::{openai_backend_error, openai_io_error},
 };
+
+/// Stops a lane's session: sends Stop and waits for its ACK. With
+/// `draft_owed`, one draft reply from an early verdict may arrive first and is
+/// discarded.
+fn stop_lane_session(
+    stream: &mut TcpStream,
+    request_id: u64,
+    session_id: u64,
+    draft_owed: bool,
+) -> std::io::Result<()> {
+    write_stage_message(
+        &mut *stream,
+        &StageWireMessage::stop_with_identity(request_id, session_id),
+    )?;
+    let mut kind = recv_reply(&mut *stream)?.kind;
+    if draft_owed && kind == WireReplyKind::PredictedTokens {
+        kind = recv_reply(&mut *stream)?.kind;
+    }
+    if kind == WireReplyKind::Ack {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("expected stop ACK, got {kind:?}"),
+        ))
+    }
+}
+
+/// Drains an owed draft reply and stops the lane's session off the response
+/// path, returning the lane to the pool, or replacing it if the exchange
+/// fails.
+fn settle_lane_in_background(
+    lane_pool: Arc<PersistentStageLanePool>,
+    lane: PersistentStageLane,
+    request_id: u64,
+    session_id: u64,
+) {
+    let lane_id = lane.id;
+    let pool = Arc::clone(&lane_pool);
+    let spawned = std::thread::Builder::new()
+        .name("skippy-lane-settle".to_string())
+        .spawn(move || {
+            let mut lane = lane;
+            match stop_lane_session(&mut lane.stream, request_id, session_id, true) {
+                Ok(()) => pool.return_lane(lane),
+                Err(error) => {
+                    tracing::debug!(
+                        lane_id,
+                        "replacing a lane whose owed DFlash draft did not settle: {error}"
+                    );
+                    drop(lane);
+                    pool.replace_lane(lane_id);
+                }
+            }
+        });
+    if spawned.is_err() {
+        // The closure, and the lane with it, was dropped.
+        lane_pool.replace_lane(lane_id);
+    }
+}
 
 pub(super) fn begin_generation_lifecycle(
     backend: &StageOpenAiBackend,
@@ -492,21 +552,34 @@ impl StageOpenAiBackend {
             return Ok(());
         }
 
-        let stop_result = write_stage_message(
-            &mut lane.stream,
-            &StageWireMessage::stop_with_identity(request.ids.request_id, request.ids.session_id),
-        )
-        .and_then(|_| recv_reply(&mut lane.stream).map(|reply| reply.kind))
-        .and_then(|kind| {
-            if kind == WireReplyKind::Ack {
-                Ok(())
-            } else {
-                Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    format!("expected stop ACK, got {kind:?}"),
-                ))
+        if request.split_dflash_health.draft_reply_owed() {
+            // The answer ended on an early verdict whose draft is still on
+            // its way. The response does not wait for it: the lane drains the
+            // draft and stops the session in the background, and goes back to
+            // the pool only if that exchange completes.
+            self.drop_embedded_runtime_session(request, session_key);
+            match request.lane_pool.clone() {
+                Some(pool) => settle_lane_in_background(
+                    pool,
+                    lane,
+                    request.ids.request_id,
+                    request.ids.session_id,
+                ),
+                None => {
+                    let lane_id = lane.id;
+                    drop(lane);
+                    lane_pool.replace_lane(lane_id);
+                }
             }
-        });
+            return Ok(());
+        }
+
+        let stop_result = stop_lane_session(
+            &mut lane.stream,
+            request.ids.request_id,
+            request.ids.session_id,
+            false,
+        );
         self.drop_embedded_runtime_session(request, session_key);
 
         let lane_id = lane.id;
@@ -585,6 +658,48 @@ mod tests {
         NativeMtpHybridProposal,
         speculative::{NgramProposalConfig, NgramProposerKind},
     };
+
+    /// A peer that answers one Stop with the given replies.
+    fn stop_peer(replies: &'static [WireReplyKind]) -> TcpStream {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut peer, _) = listener.accept().unwrap();
+            skippy_protocol::binary::read_stage_message(&mut peer, 0).unwrap();
+            for reply in replies {
+                match reply {
+                    WireReplyKind::Ack => {
+                        skippy_protocol::binary::send_reply_ack(&mut peer).unwrap()
+                    }
+                    _ => skippy_protocol::binary::send_reply_predicted_tokens_with_stats(
+                        &mut peer,
+                        &[7, 8],
+                        Default::default(),
+                    )
+                    .unwrap(),
+                }
+            }
+        });
+        TcpStream::connect(address).unwrap()
+    }
+
+    #[test]
+    fn stopping_a_lane_drains_an_owed_draft_reply_before_the_ack() {
+        let mut stream = stop_peer(&[WireReplyKind::PredictedTokens, WireReplyKind::Ack]);
+        stop_lane_session(&mut stream, 1, 2, true).unwrap();
+    }
+
+    #[test]
+    fn stopping_a_lane_accepts_an_ack_when_the_draft_went_elsewhere() {
+        let mut stream = stop_peer(&[WireReplyKind::Ack]);
+        stop_lane_session(&mut stream, 1, 2, true).unwrap();
+    }
+
+    #[test]
+    fn stopping_a_lane_with_no_owed_draft_refuses_a_draft_reply() {
+        let mut stream = stop_peer(&[WireReplyKind::PredictedTokens, WireReplyKind::Ack]);
+        assert!(stop_lane_session(&mut stream, 1, 2, false).is_err());
+    }
 
     fn ngram_config() -> SpeculativeDecodeConfig {
         SpeculativeDecodeConfig {

@@ -197,8 +197,8 @@ impl StageOpenAiBackend {
         let mut reached_stop = false;
         // With an early verdict the final stage is drafting the next block
         // now. Its draft reply is read below, after this window's tokens are
-        // committed and streamed, and before any error returns, so that the
-        // reply never lingers on the connection.
+        // committed and streamed, unless the generation ends here; then the
+        // lane settles the owed reply before anything else uses it.
         let mut token_error = None;
         for token in verify
             .reply
@@ -250,15 +250,29 @@ impl StageOpenAiBackend {
             Ok(())
         };
         if verify.reply.window.draft_follows {
-            let draft_wait = PhaseTimer::start();
-            let draft_reply = receive_embedded_stage_reply(
-                downstream,
-                request.prediction_return.as_ref(),
-                WireReplyKind::PredictedTokens,
-            )?;
-            native_mtp_counters.observe_early_verdict_draft_wait(draft_wait.elapsed_ms());
-            request.observe_reply_stats(&draft_reply.stats);
-            verify.reply.native_mtp_draft = draft_reply.native_mtp_draft;
+            let finished = reached_stop || *decoded_tokens >= request.max_tokens as usize;
+            match early_verdict_draft(token_error.is_some(), finished) {
+                // A callback error fails the generation, which replaces this
+                // lane rather than returning it, so the owed draft never meets
+                // a later message, and the callback's error is the one
+                // reported.
+                EarlyVerdictDraft::Abandon => {}
+                // A finished answer has no use for the next block's draft, so
+                // its completion does not wait for it: the lane is settled
+                // (draft drained, then stopped) off the response path.
+                EarlyVerdictDraft::OweToLane => request.split_dflash_health.owe_draft_reply(),
+                EarlyVerdictDraft::Await => {
+                    let draft_wait = PhaseTimer::start();
+                    let draft_reply = receive_embedded_stage_reply(
+                        downstream,
+                        request.prediction_return.as_ref(),
+                        WireReplyKind::PredictedTokens,
+                    )?;
+                    native_mtp_counters.observe_early_verdict_draft_wait(draft_wait.elapsed_ms());
+                    request.observe_reply_stats(&draft_reply.stats);
+                    verify.reply.native_mtp_draft = draft_reply.native_mtp_draft;
+                }
+            }
         }
         if let Some(error) = token_error {
             return Err(error);
@@ -563,11 +577,32 @@ fn next_native_mtp_draft(
         .flatten()
 }
 
+/// What stage 0 does with the draft reply that follows an early verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EarlyVerdictDraft {
+    /// The generation fails here and its lane is replaced; nothing reads it.
+    Abandon,
+    /// The generation is complete; the lane drains it after the response.
+    OweToLane,
+    /// Decoding continues with it.
+    Await,
+}
+
+fn early_verdict_draft(callback_failed: bool, finished: bool) -> EarlyVerdictDraft {
+    if callback_failed {
+        EarlyVerdictDraft::Abandon
+    } else if finished {
+        EarlyVerdictDraft::OweToLane
+    } else {
+        EarlyVerdictDraft::Await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        VerifyNextDraft, native_mtp_verify_window_inputs, next_native_mtp_draft,
-        verify_next_draft_adoptable,
+        EarlyVerdictDraft, VerifyNextDraft, early_verdict_draft, native_mtp_verify_window_inputs,
+        next_native_mtp_draft, verify_next_draft_adoptable,
     };
 
     fn rejected_window() -> VerifyNextDraft {
@@ -676,5 +711,17 @@ mod tests {
 
         assert_eq!(draft.tokens, vec![11]);
         assert_eq!(draft.proposal_compute_us, 12);
+    }
+
+    #[test]
+    fn a_finished_or_failed_generation_never_waits_for_the_next_draft() {
+        assert_eq!(early_verdict_draft(false, false), EarlyVerdictDraft::Await);
+        assert_eq!(
+            early_verdict_draft(false, true),
+            EarlyVerdictDraft::OweToLane
+        );
+        // The callback's error wins, finished or not.
+        assert_eq!(early_verdict_draft(true, false), EarlyVerdictDraft::Abandon);
+        assert_eq!(early_verdict_draft(true, true), EarlyVerdictDraft::Abandon);
     }
 }
