@@ -51,6 +51,9 @@ pub struct RuntimeLoadSizing {
 }
 
 pub enum RuntimeControlRequest {
+    NativeNode {
+        resp: tokio::sync::oneshot::Sender<crate::mesh::Node>,
+    },
     DiscoverModels {
         resp:
             tokio::sync::oneshot::Sender<anyhow::Result<Vec<crate::models::discovery::MeshModel>>>,

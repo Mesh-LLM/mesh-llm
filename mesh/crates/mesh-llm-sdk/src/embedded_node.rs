@@ -70,6 +70,42 @@ impl MeshNode {
         self.handle.status().await
     }
 
+    /// Discover local and peer models, including their advertised effort levels.
+    /// Each entry retains its exact provider and serving ID. This query uses
+    /// in-process mesh state and makes no HTTP request.
+    pub async fn models(&self) -> anyhow::Result<Vec<crate::inference::Model>> {
+        self.handle.models().await
+    }
+
+    /// Execute a non-streaming chat request against a discovered provider.
+    /// Local execution is in process; remote execution uses mesh transport.
+    /// There is no loopback HTTP request or provider substitution.
+    pub async fn chat_completion(
+        &self,
+        target: crate::inference::ModelTarget,
+        request: crate::inference::ChatCompletionRequest,
+    ) -> anyhow::Result<serde_json::Value> {
+        anyhow::ensure!(
+            self.mode.allows_client_inference(),
+            "client inference is disabled for a serve-only node"
+        );
+        self.handle.chat_completion(target, request).await
+    }
+
+    /// Stream chat deltas over the same native local or mesh execution path.
+    /// Dropping the returned stream cancels inference.
+    pub async fn chat_completion_stream(
+        &self,
+        target: crate::inference::ModelTarget,
+        request: crate::inference::ChatCompletionRequest,
+    ) -> anyhow::Result<crate::inference::ChatCompletionStream> {
+        anyhow::ensure!(
+            self.mode.allows_client_inference(),
+            "client inference is disabled for a serve-only node"
+        );
+        self.handle.chat_completion_stream(target, request).await
+    }
+
     pub async fn join_token(&self, token: impl Into<String>) -> anyhow::Result<()> {
         self.handle.join_token(token).await
     }

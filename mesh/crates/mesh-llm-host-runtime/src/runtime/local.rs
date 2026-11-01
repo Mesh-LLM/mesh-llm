@@ -124,6 +124,15 @@ pub(super) struct LocalRuntimeModelHandle {
 }
 
 impl LocalRuntimeModelHandle {
+    pub(super) fn inference_backend(
+        &self,
+    ) -> Option<Arc<dyn skippy_inference_api::InferenceBackend>> {
+        match &self.inner {
+            LocalRuntimeBackendHandle::Skippy { model, .. } => Some(model.backend()),
+            LocalRuntimeBackendHandle::Dedicated { .. } => None,
+        }
+    }
+
     pub(super) fn pid(&self) -> u32 {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { .. }

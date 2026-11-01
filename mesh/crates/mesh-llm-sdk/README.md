@@ -105,6 +105,104 @@ transport, plugins or owner control, and it shares the node's payment
 settings. Its allowlist is its own, but owner and certificate revocations in
 the node's trust store apply to it too.
 
+## Native model discovery and inference
+
+Join a mesh, read the local and remote model catalog, choose an advertised
+thinking effort, and call inference without a loopback HTTP request:
+
+```rust,no_run
+use mesh_llm_sdk::{MeshNode, inference::{
+    ChatCompletionRequest, ChatMessage, MessageContent, ReasoningEffort,
+}};
+
+async fn infer(invite_token: String) -> anyhow::Result<serde_json::Value> {
+    let node = MeshNode::builder()
+        .client()
+        .join_token(invite_token)
+        .start()
+        .await?;
+
+    // Discovery is asynchronous. Give peers time to advertise a suitable model.
+    let model = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let models = node.models().await?;
+            if let Some(model) = models.into_iter().find(|model| {
+                model.thinking_efforts.as_ref().is_some_and(|efforts| {
+                    efforts.iter().any(|effort| effort == "high")
+                })
+            }) {
+                break Ok::<_, anyhow::Error>(model);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+    }).await??;
+
+    let response = node.chat_completion(model.target, ChatCompletionRequest {
+        messages: vec![ChatMessage {
+            role: "user".into(),
+            content: Some(MessageContent::Text(
+                "Explain why a lock-order inversion can deadlock.".into(),
+            )),
+            extra: Default::default(),
+        }],
+        reasoning_effort: Some(ReasoningEffort::High),
+        max_tokens: Some(512),
+        ..Default::default()
+    }).await?;
+    node.shutdown().await?;
+    Ok(response)
+}
+```
+
+Each catalog entry retains its `target.provider_node_id` and exact
+`target.serving_id`, plus the provider's descriptor. Providers of the same model
+are separate entries, so one provider's thinking levels never authorize a request
+to another provider. Local targets execute in process; remote targets use native
+mesh transport. Unsupported native peers return an error rather than falling
+back to HTTP. Startup readiness also uses the runtime's native control channel.
+
+`thinking_efforts` contains only the model-specific strings observed by the
+selected template's render probe, in their reported order. `None` means unknown,
+including an older peer or disagreement between loaded instances; `Some([])`
+means no tested effort visibly changed the template. Neither means thinking is
+disabled. Advertisements update on load and unload. These observations do not
+guarantee that generation obeys the controls.
+
+Pass a `ReasoningEffort` matching an advertised string, or omit it for the
+model's default. The exact target and current advertised controls are checked
+again before execution. An unavailable target or changed controls produces an
+error instead of silently selecting a different provider.
+
+Use `node.chat_completion_stream(target, request).await?` for streaming, then
+read deltas with `stream.next_chunk().await`:
+
+```rust,no_run
+use mesh_llm_sdk::{MeshNode, inference::{ChatCompletionRequest, ModelTarget}};
+
+async fn stream_answer(
+    node: &MeshNode,
+    target: ModelTarget,
+    request: ChatCompletionRequest,
+) -> anyhow::Result<()> {
+    let mut stream = node.chat_completion_stream(target, request).await?;
+    while let Some(chunk) = stream.next_chunk().await {
+        let chunk = chunk?;
+        println!("{chunk}");
+    }
+    Ok(())
+}
+```
+
+The request carries the selected effort exactly as in the unary example.
+Provider, effort, and transport failures can arrive as errors from `next_chunk`.
+Dropping the stream or shutting down the node cancels its producer. A retained
+stream reports shutdown as an error rather than successful truncated output.
+Native remote inference cannot consume a model requiring payment; use a provider
+that permits unpaid inference or a separate supported payment integration.
+
+The legacy `status()`, `openai_client()` and live-transcription APIs still use
+HTTP. They are not used by the native discovery/inference path above.
+
 ## Live transcription
 
 A node serving a speech-recognition model (Whisper) transcribes live audio.

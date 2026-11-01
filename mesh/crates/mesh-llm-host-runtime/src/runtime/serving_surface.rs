@@ -1283,10 +1283,7 @@ pub(super) async fn setup_run_auto_serving_surface(
         ctx.model_name_for_console,
     );
     if let Some(readiness_tx) = ctx.embedded_readiness_tx {
-        let invite_token = ctx.node.invite_token().await;
-        let _ = readiness_tx.send(Ok(EmbeddedRuntimeReadiness {
-            invite_token: Some(invite_token),
-        }));
+        let _ = readiness_tx.send(Ok(EmbeddedRuntimeReadiness));
     }
     spawn_run_auto_local_instance_scanner(ctx.is_client, ctx.console_state).await;
     Ok(RunAutoServingSurface {

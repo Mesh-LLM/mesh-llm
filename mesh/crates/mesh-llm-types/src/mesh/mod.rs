@@ -96,6 +96,10 @@ pub enum ModelWorkloadClass {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ServedModelMetadata {
+    /// Effort strings observed by the loaded chat template, in probe order.
+    /// Absent for legacy or unprobed runtimes; an observed empty list is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_efforts: Option<Vec<String>>,
     /// `None` is the mixed-version representation for nodes that predate
     /// workload advertisement. Callers must not treat it as evidence that a
     /// non-chat endpoint is supported.
@@ -130,7 +134,8 @@ pub struct ServedModelMetadata {
 impl ServedModelMetadata {
     /// Report whether all optional metadata is absent; a workload-only record is nonempty.
     pub fn is_empty(&self) -> bool {
-        self.workload_class.is_none()
+        self.thinking_efforts.is_none()
+            && self.workload_class.is_none()
             && self.architecture.is_none()
             && self.parameter_size.is_none()
             && self.parameter_count_b.is_none()

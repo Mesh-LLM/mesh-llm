@@ -28,6 +28,7 @@ mod embedded_models;
 mod embedded_openai;
 pub(crate) mod embedded_shutdown;
 mod embedded_startup;
+pub mod native;
 
 pub use crate::runtime::{MeshMembershipConfig, MeshMembershipStatus};
 pub use embedded_config::*;
@@ -70,6 +71,7 @@ pub struct EmbeddedServeHandle {
     control_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::api::RuntimeControlRequest>>,
     task: Option<std::thread::JoinHandle<Result<()>>>,
     shutdown: tokio::sync::watch::Sender<bool>,
+    native_node: Option<crate::mesh::Node>,
 }
 
 pub type EmbeddedMeshNodeHandle = EmbeddedServeHandle;
@@ -87,6 +89,8 @@ impl EmbeddedServeHandle {
         self.invite_token.as_deref()
     }
 
+    /// Read the legacy management status over the local HTTP console.
+    /// Native discovery and inference do not call this method.
     pub async fn status(&self) -> Result<EmbeddedServeStatus> {
         let payload = fetch_json(&format!("{}/api/status", self.console_url)).await?;
         Ok(EmbeddedServeStatus {
@@ -195,27 +199,11 @@ pub async fn start_embedded_node(
         control_tx: Some(control_tx),
         task: Some(task),
         shutdown,
+        native_node: None,
     };
-    let readiness = match wait_for_embedded_readiness(readiness_rx, startup_timeout).await {
-        Ok(readiness) => readiness,
-        Err(error) => {
-            handle.request_shutdown("sdk-startup-error");
-            if let Err(shutdown_error) = join_embedded_runtime_thread_with_timeout(
-                handle.task.take().expect("runtime task"),
-                EMBEDDED_STARTUP_SHUTDOWN_TIMEOUT,
-            )
-            .await
-            {
-                return Err(error).with_context(|| {
-                    format!(
-                        "failed to shut down embedded mesh runtime after startup error: {shutdown_error}"
-                    )
-                });
-            }
-            return Err(error);
-        }
-    };
-    handle.invite_token = readiness.invite_token;
+    let node = wait_for_embedded_startup(&mut handle, readiness_rx, startup_timeout).await?;
+    handle.invite_token = Some(node.invite_token().await);
+    handle.native_node = Some(node);
     Ok(handle)
 }
 
@@ -335,6 +323,48 @@ async fn join_embedded_runtime_thread_with_timeout(
 fn join_embedded_runtime_thread_blocking(task: std::thread::JoinHandle<Result<()>>) -> Result<()> {
     task.join()
         .map_err(|_| anyhow::anyhow!("embedded mesh runtime thread panicked"))?
+}
+
+/// Wait for the embedded worker's own bind evidence, then acquire the native
+/// node over the control channel. The readiness wait gives fast failure
+/// reporting and the worker-only bind proof (#2147) before the node wait
+/// turns the handoff into the handle's live `native_node` for direct
+/// execution. Any startup failure shuts the runtime down and joins it before
+/// returning.
+async fn wait_for_embedded_startup(
+    handle: &mut EmbeddedServeHandle,
+    readiness_rx: std::sync::mpsc::Receiver<
+        Result<crate::runtime::EmbeddedRuntimeReadiness, String>,
+    >,
+    timeout: Duration,
+) -> Result<crate::mesh::Node> {
+    if let Err(error) = wait_for_embedded_readiness(readiness_rx, timeout).await {
+        return Err(shutdown_after_startup_error(handle, error).await);
+    }
+    match native::wait_for_embedded_node(handle, timeout).await {
+        Ok(node) => Ok(node),
+        Err(error) => Err(shutdown_after_startup_error(handle, error).await),
+    }
+}
+
+/// Shut the embedded runtime down after a failed startup, joining it with a
+/// bounded timeout, and return `error` annotated when the join itself failed.
+async fn shutdown_after_startup_error(
+    handle: &mut EmbeddedServeHandle,
+    error: anyhow::Error,
+) -> anyhow::Error {
+    handle.request_shutdown("sdk-startup-error");
+    if let Err(shutdown_error) = join_embedded_runtime_thread_with_timeout(
+        handle.task.take().expect("runtime task"),
+        EMBEDDED_STARTUP_SHUTDOWN_TIMEOUT,
+    )
+    .await
+    {
+        return error.context(format!(
+            "failed to shut down embedded mesh runtime after startup error: {shutdown_error}"
+        ));
+    }
+    error
 }
 
 async fn wait_for_embedded_readiness(
