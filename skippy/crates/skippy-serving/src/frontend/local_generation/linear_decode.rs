@@ -390,6 +390,7 @@ mod tests {
             direct_io: false,
             main_gpu: None,
             split_mode: skippy_protocol::SplitMode::Auto,
+            host_expert_layers: None,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: Default::default(),
@@ -426,7 +427,7 @@ mod tests {
             telemetry,
             model_id: "linear-proposal-test".to_string(),
             default_max_tokens: 4,
-            request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+            request_defaults: EmbeddedOpenAiRequestDefaults::default().into(),
             thinking: None,
             ctx_size: 128,
             mode: InferenceBackendMode::LocalRuntime,
@@ -499,6 +500,7 @@ mod tests {
             post_prefill_hook_checked: false,
             last_mid_generation_hook_at: None,
             direct_iteration_channel: None,
+            dflash: None,
         };
         let mut emitted = Vec::new();
 

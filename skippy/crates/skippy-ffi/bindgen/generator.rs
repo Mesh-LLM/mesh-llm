@@ -221,8 +221,15 @@ impl BindingGenerator {
                         "^(llama_model_quantize|llama_model_quantize_default_params|\
                          llama_perf_context|llama_model_is_recurrent|llama_model_is_hybrid|\
                          llama_model_is_diffusion|llama_model_get_vocab|llama_vocab_n_tokens|\
-                         llama_get_embeddings_ith|llama_set_embeddings|\
-                         llama_model_meta_val_str|llama_log_set|ggml_log_set)$",
+                         llama_vocab_mask|llama_get_embeddings_ith|llama_set_embeddings|\
+                         llama_model_meta_val_str|llama_log_set|ggml_log_set|\
+                         llama_model_default_params|llama_context_default_params|\
+                         llama_model_load_from_file|llama_model_free|llama_init_from_model|\
+                         llama_free|llama_decode|llama_get_model|llama_get_memory|\
+                         llama_memory_seq_rm|llama_get_logits_ith|llama_n_ctx|llama_n_batch|\
+                         llama_n_ubatch|llama_model_n_embd|llama_model_n_layer|\
+                         llama_model_rope_type|llama_set_causal_attn|\
+                         ggml_backend_dev_by_name)$",
                     )
                     .allowlist_type(
                         "^(llama_model_quantize_params|llama_model_kv_override|\
@@ -230,7 +237,10 @@ impl BindingGenerator {
                          llama_model_imatrix_data|llama_ftype|llama_log_callback|\
                          llama_perf_context_data|llama_perf_context|llama_token|\
                          llama_logit_bias|llama_vocab|llama_model|llama_context|ggml_type|\
-                         ggml_log_callback|ggml_backend_dev_t|ggml_backend_device)$",
+                         ggml_log_callback|ggml_backend_dev_t|ggml_backend_device|\
+                         llama_batch|llama_model_params|llama_context_params|\
+                         llama_progress_callback|ggml_sched_eval_callback|\
+                         ggml_abort_callback)$",
                     )
                     .allowlist_var("^LLAMA_FTYPE_.*")
             },

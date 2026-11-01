@@ -14,6 +14,8 @@ async fn payer_and_provider_each_observe_the_lifecycle() -> Result<()> {
     tokio::time::timeout(Duration::from_secs(20), streamed_pair(true)).await?
 }
 
+const CLIENT_NONCE: &str = "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f";
+
 async fn streamed_pair(record_lifecycle: bool) -> Result<()> {
     let network = Arc::new(Network::default());
     network
@@ -30,7 +32,10 @@ async fn streamed_pair(record_lifecycle: bool) -> Result<()> {
         crate::network::openai::paid_exchange::record_paid_exchanges_for_test(&pair.seller_node);
     // The caller omits include_usage first, then opts in. The seller always
     // asks the backend for usage, and it reaches the caller either way.
-    let raw = b"POST /v1/completions HTTP/1.1\r\nHost: localhost\r\n\r\n{\"model\":\"test\",\"prompt\":\"Hi\",\"stream\":true,\"max_tokens\":8}";
+    let raw = format!(
+        "POST /v1/completions HTTP/1.1\r\nHost: localhost\r\nx-capsule-client-nonce: {CLIENT_NONCE}\r\n\r\n{{\"model\":\"test\",\"prompt\":\"Hi\",\"stream\":true,\"max_tokens\":8}}"
+    );
+    let raw = raw.as_bytes();
     let opted_in = String::from_utf8(raw.to_vec())?.replace(
         "\"stream\":true",
         "\"stream\":true,\"stream_options\":{\"include_usage\":true}",
@@ -102,6 +107,10 @@ fn assert_seller_published_both_exchanges(
         assert_eq!(terminal["phase"], "terminal");
         assert_eq!(pair[1].status, Some(200));
         assert_ne!(pair[0].exchange_id, "host-evidence-id");
+        // The payer's nonce reaches the seller's terminal, so its sealed half
+        // ties to the payer's.
+        assert_eq!(terminal["nonce"], CLIENT_NONCE);
+        assert_eq!(terminal["nonce_source"], "client_supplied");
     }
     assert_ne!(events[0].exchange_id, events[2].exchange_id);
 }

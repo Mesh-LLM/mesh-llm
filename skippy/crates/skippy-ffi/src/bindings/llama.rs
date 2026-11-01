@@ -4,6 +4,16 @@
 #![allow(non_upper_case_globals)]
 #![allow(unpredictable_function_pointer_comparisons)]
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ggml_context {
+    _unused: [u8; 0],
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct ggml_cgraph {
+    _unused: [u8; 0],
+}
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum ggml_type {
@@ -46,6 +56,112 @@ pub enum ggml_type {
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum ggml_op {
+    None = 0,
+    Dup = 1,
+    Add = 2,
+    AddId = 3,
+    ADD1 = 4,
+    Acc = 5,
+    Sub = 6,
+    Mul = 7,
+    Div = 8,
+    Sqr = 9,
+    Sqrt = 10,
+    Log = 11,
+    Sin = 12,
+    Cos = 13,
+    Sum = 14,
+    SumRows = 15,
+    Cumsum = 16,
+    Mean = 17,
+    Argmax = 18,
+    CountEqual = 19,
+    Repeat = 20,
+    RepeatBack = 21,
+    Concat = 22,
+    SiluBack = 23,
+    Norm = 24,
+    RmsNorm = 25,
+    RmsNormBack = 26,
+    GroupNorm = 27,
+    L2Norm = 28,
+    MulMat = 29,
+    MulMatId = 30,
+    OutProd = 31,
+    Scale = 32,
+    Set = 33,
+    Cpy = 34,
+    Cont = 35,
+    Reshape = 36,
+    View = 37,
+    Permute = 38,
+    Transpose = 39,
+    GetRows = 40,
+    GetRowsBack = 41,
+    SetRows = 42,
+    Diag = 43,
+    DiagMaskInf = 44,
+    DiagMaskZero = 45,
+    SoftMax = 46,
+    SoftMaxBack = 47,
+    Rope = 48,
+    RopeBack = 49,
+    Clamp = 50,
+    ConvTranspose1D = 51,
+    IM2COL = 52,
+    IM2COLBack = 53,
+    IM2COL3D = 54,
+    COL2IM1D = 55,
+    Conv2D = 56,
+    Conv3D = 57,
+    Conv2DDw = 58,
+    ConvTranspose2D = 59,
+    Pool1D = 60,
+    Pool2D = 61,
+    Pool2DBack = 62,
+    Upscale = 63,
+    Pad = 64,
+    PadReflect1D = 65,
+    Roll = 66,
+    Arange = 67,
+    TimestepEmbedding = 68,
+    Argsort = 69,
+    TopK = 70,
+    LeakyRelu = 71,
+    Tri = 72,
+    Fill = 73,
+    FlashAttnExt = 74,
+    FlashAttnBack = 75,
+    SsmConv = 76,
+    SsmScan = 77,
+    WinPart = 78,
+    WinUnpart = 79,
+    GetRelPos = 80,
+    AddRelPos = 81,
+    RwkvWKV6 = 82,
+    GatedLinearAttn = 83,
+    RwkvWKV7 = 84,
+    SolveTri = 85,
+    GatedDeltaNet = 86,
+    LightningIndexer = 87,
+    DSV4HcComb = 88,
+    DSV4HcPre = 89,
+    DSV4HcPost = 90,
+    Unary = 91,
+    MapCUSTOM1 = 92,
+    MapCUSTOM2 = 93,
+    MapCUSTOM3 = 94,
+    Custom = 95,
+    CrossEntropyLoss = 96,
+    CrossEntropyLossBack = 97,
+    OptStepAdamw = 98,
+    OptStepSgd = 99,
+    Glu = 100,
+    Count = 101,
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum ggml_log_level {
     None = 0,
     Debug = 1,
@@ -54,6 +170,26 @@ pub enum ggml_log_level {
     Error = 4,
     Cont = 5,
 }
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct ggml_tensor {
+    pub type_: ggml_type,
+    pub buffer: *mut ggml_backend_buffer,
+    pub ne: [i64; 4usize],
+    pub nb: [usize; 4usize],
+    pub op: ggml_op,
+    pub op_params: [i32; 16usize],
+    pub flags: i32,
+    pub src: [*mut ggml_tensor; 10usize],
+    pub view_src: *mut ggml_tensor,
+    pub view_offs: usize,
+    pub data: *mut ::std::os::raw::c_void,
+    pub name: [::std::os::raw::c_char; 64usize],
+    pub extra: *mut ::std::os::raw::c_void,
+    pub padding: [::std::os::raw::c_char; 8usize],
+}
+pub type ggml_abort_callback =
+    ::std::option::Option<unsafe extern "C" fn(data: *mut ::std::os::raw::c_void) -> bool>;
 pub type ggml_log_callback = ::std::option::Option<
     unsafe extern "C" fn(
         level: ggml_log_level,
@@ -66,10 +202,26 @@ unsafe extern "C" {
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
+pub struct ggml_backend_buffer_type {
+    _unused: [u8; 0],
+}
+pub type ggml_backend_buffer_type_t = *mut ggml_backend_buffer_type;
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub struct ggml_backend_device {
     _unused: [u8; 0],
 }
 pub type ggml_backend_dev_t = *mut ggml_backend_device;
+unsafe extern "C" {
+    pub fn ggml_backend_dev_by_name(name: *const ::std::os::raw::c_char) -> ggml_backend_dev_t;
+}
+pub type ggml_backend_sched_eval_callback = ::std::option::Option<
+    unsafe extern "C" fn(
+        t: *mut ggml_tensor,
+        ask: bool,
+        user_data: *mut ::std::os::raw::c_void,
+    ) -> bool,
+>;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct llama_vocab {
@@ -85,7 +237,25 @@ pub struct llama_model {
 pub struct llama_context {
     _unused: [u8; 0],
 }
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct llama_memory_i {
+    _unused: [u8; 0],
+}
+pub type llama_memory_t = *mut llama_memory_i;
+pub type llama_pos = i32;
 pub type llama_token = i32;
+pub type llama_seq_id = i32;
+#[repr(i32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum llama_rope_type {
+    None = -1,
+    Norm = 0,
+    Neox = 2,
+    Mrope = 8,
+    Imrope = 40,
+    Vision = 24,
+}
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum llama_ftype {
@@ -127,6 +297,102 @@ pub enum llama_ftype {
     MostlyQ2_0 = 41,
     Guessed = 1024,
 }
+impl llama_rope_scaling_type {
+    pub const MaxValue: llama_rope_scaling_type = llama_rope_scaling_type::Longrope;
+}
+#[repr(i32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum llama_rope_scaling_type {
+    Unspecified = -1,
+    None = 0,
+    Linear = 1,
+    Yarn = 2,
+    Longrope = 3,
+}
+#[repr(i32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum llama_pooling_type {
+    Unspecified = -1,
+    None = 0,
+    Mean = 1,
+    Cls = 2,
+    Last = 3,
+    Rank = 4,
+}
+#[repr(i32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum llama_attention_type {
+    Unspecified = -1,
+    Causal = 0,
+    NonCausal = 1,
+}
+#[repr(i32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum llama_flash_attn_type {
+    Auto = -1,
+    Disabled = 0,
+    Enabled = 1,
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum llama_split_mode {
+    None = 0,
+    Layer = 1,
+    Row = 2,
+    Tensor = 3,
+}
+#[repr(i32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum llama_load_mode {
+    Auto = -1,
+    None = 0,
+    Mmap = 1,
+    Mlock = 2,
+    MmapMlock = 3,
+    DirectIo = 4,
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum llama_lazy_mode {
+    Off = 0,
+    Auto = 1,
+    On = 2,
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum llama_context_type {
+    Default = 0,
+    Mtp = 1,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct llama_token_data {
+    pub id: llama_token,
+    pub logit: f32,
+    pub p: f32,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct llama_token_data_array {
+    pub data: *mut llama_token_data,
+    pub size: usize,
+    pub selected: i64,
+    pub sorted: bool,
+}
+pub type llama_progress_callback = ::std::option::Option<
+    unsafe extern "C" fn(progress: f32, user_data: *mut ::std::os::raw::c_void) -> bool,
+>;
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct llama_batch {
+    pub n_tokens: i32,
+    pub token: *mut llama_token,
+    pub embd: *mut f32,
+    pub pos: *mut llama_pos,
+    pub n_seq_id: *mut i32,
+    pub seq_id: *mut *mut llama_seq_id,
+    pub logits: *mut i8,
+}
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum llama_model_kv_override_type {
@@ -149,6 +415,81 @@ pub union llama_model_kv_override__bindgen_ty_1 {
     pub val_f64: f64,
     pub val_bool: bool,
     pub val_str: [::std::os::raw::c_char; 128usize],
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct llama_model_tensor_buft_override {
+    pub pattern: *const ::std::os::raw::c_char,
+    pub buft: ggml_backend_buffer_type_t,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct llama_model_params {
+    pub devices: *mut ggml_backend_dev_t,
+    pub tensor_buft_overrides: *const llama_model_tensor_buft_override,
+    pub n_gpu_layers: i32,
+    pub split_mode: llama_split_mode,
+    pub load_mode: llama_load_mode,
+    pub lazy_mode: llama_lazy_mode,
+    pub main_gpu: i32,
+    pub tensor_split: *const f32,
+    pub progress_callback: llama_progress_callback,
+    pub progress_callback_user_data: *mut ::std::os::raw::c_void,
+    pub kv_overrides: *const llama_model_kv_override,
+    pub vocab_only: bool,
+    pub check_tensors: bool,
+    pub use_extra_bufts: bool,
+    pub no_host: bool,
+    pub no_alloc: bool,
+    pub load_mtp: bool,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct llama_sampler_seq_config {
+    pub seq_id: llama_seq_id,
+    pub sampler: *mut llama_sampler,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct llama_context_params {
+    pub n_ctx: u32,
+    pub n_batch: u32,
+    pub n_ubatch: u32,
+    pub n_seq_max: u32,
+    pub n_rs_seq: u32,
+    pub n_outputs_max: u32,
+    pub n_outputs_max_per_seq: u32,
+    pub n_threads: i32,
+    pub n_threads_batch: i32,
+    pub ctx_type: llama_context_type,
+    pub rope_scaling_type: llama_rope_scaling_type,
+    pub pooling_type: llama_pooling_type,
+    pub attention_type: llama_attention_type,
+    pub flash_attn_type: llama_flash_attn_type,
+    pub rope_freq_base: f32,
+    pub rope_freq_scale: f32,
+    pub yarn_ext_factor: f32,
+    pub yarn_attn_factor: f32,
+    pub yarn_beta_fast: f32,
+    pub yarn_beta_slow: f32,
+    pub yarn_orig_ctx: u32,
+    pub defrag_thold: f32,
+    pub cb_eval: ggml_backend_sched_eval_callback,
+    pub cb_eval_user_data: *mut ::std::os::raw::c_void,
+    pub type_k: ggml_type,
+    pub type_v: ggml_type,
+    pub moe_cache_size: usize,
+    pub abort_callback: ggml_abort_callback,
+    pub abort_callback_data: *mut ::std::os::raw::c_void,
+    pub embeddings: bool,
+    pub offload_kqv: bool,
+    pub no_perf: bool,
+    pub op_offload: bool,
+    pub swa_full: bool,
+    pub kv_unified: bool,
+    pub samplers: *mut llama_sampler_seq_config,
+    pub n_samplers: usize,
+    pub ctx_other: *mut llama_context,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -189,10 +530,58 @@ pub struct llama_logit_bias {
     pub bias: f32,
 }
 unsafe extern "C" {
+    pub fn llama_model_default_params() -> llama_model_params;
+}
+unsafe extern "C" {
+    pub fn llama_context_default_params() -> llama_context_params;
+}
+unsafe extern "C" {
     pub fn llama_model_quantize_default_params() -> llama_model_quantize_params;
 }
 unsafe extern "C" {
+    pub fn llama_model_load_from_file(
+        path_model: *const ::std::os::raw::c_char,
+        params: llama_model_params,
+    ) -> *mut llama_model;
+}
+unsafe extern "C" {
+    pub fn llama_model_free(model: *mut llama_model);
+}
+unsafe extern "C" {
+    pub fn llama_init_from_model(
+        model: *mut llama_model,
+        params: llama_context_params,
+    ) -> *mut llama_context;
+}
+unsafe extern "C" {
+    pub fn llama_free(ctx: *mut llama_context);
+}
+unsafe extern "C" {
+    pub fn llama_n_ctx(ctx: *const llama_context) -> u32;
+}
+unsafe extern "C" {
+    pub fn llama_n_batch(ctx: *const llama_context) -> u32;
+}
+unsafe extern "C" {
+    pub fn llama_n_ubatch(ctx: *const llama_context) -> u32;
+}
+unsafe extern "C" {
+    pub fn llama_get_model(ctx: *const llama_context) -> *const llama_model;
+}
+unsafe extern "C" {
+    pub fn llama_get_memory(ctx: *const llama_context) -> llama_memory_t;
+}
+unsafe extern "C" {
     pub fn llama_model_get_vocab(model: *const llama_model) -> *const llama_vocab;
+}
+unsafe extern "C" {
+    pub fn llama_model_rope_type(model: *const llama_model) -> llama_rope_type;
+}
+unsafe extern "C" {
+    pub fn llama_model_n_embd(model: *const llama_model) -> i32;
+}
+unsafe extern "C" {
+    pub fn llama_model_n_layer(model: *const llama_model) -> i32;
 }
 unsafe extern "C" {
     pub fn llama_vocab_n_tokens(vocab: *const llama_vocab) -> i32;
@@ -222,10 +611,90 @@ unsafe extern "C" {
     ) -> u32;
 }
 unsafe extern "C" {
+    pub fn llama_memory_seq_rm(
+        mem: llama_memory_t,
+        seq_id: llama_seq_id,
+        p0: llama_pos,
+        p1: llama_pos,
+    ) -> bool;
+}
+unsafe extern "C" {
+    pub fn llama_decode(ctx: *mut llama_context, batch: llama_batch) -> i32;
+}
+unsafe extern "C" {
     pub fn llama_set_embeddings(ctx: *mut llama_context, embeddings: bool);
 }
 unsafe extern "C" {
+    pub fn llama_set_causal_attn(ctx: *mut llama_context, causal_attn: bool);
+}
+unsafe extern "C" {
+    pub fn llama_get_logits_ith(ctx: *mut llama_context, i: i32) -> *mut f32;
+}
+unsafe extern "C" {
     pub fn llama_get_embeddings_ith(ctx: *mut llama_context, i: i32) -> *mut f32;
+}
+unsafe extern "C" {
+    pub fn llama_vocab_mask(vocab: *const llama_vocab) -> llama_token;
+}
+pub type llama_sampler_context_t = *mut ::std::os::raw::c_void;
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct llama_sampler_data {
+    pub logits: *mut ggml_tensor,
+    pub probs: *mut ggml_tensor,
+    pub sampled: *mut ggml_tensor,
+    pub candidates: *mut ggml_tensor,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct llama_sampler_i {
+    pub name: ::std::option::Option<
+        unsafe extern "C" fn(smpl: *const llama_sampler) -> *const ::std::os::raw::c_char,
+    >,
+    pub accept:
+        ::std::option::Option<unsafe extern "C" fn(smpl: *mut llama_sampler, token: llama_token)>,
+    pub apply: ::std::option::Option<
+        unsafe extern "C" fn(smpl: *mut llama_sampler, cur_p: *mut llama_token_data_array),
+    >,
+    pub reset: ::std::option::Option<unsafe extern "C" fn(smpl: *mut llama_sampler)>,
+    pub clone: ::std::option::Option<
+        unsafe extern "C" fn(smpl: *const llama_sampler) -> *mut llama_sampler,
+    >,
+    pub free: ::std::option::Option<unsafe extern "C" fn(smpl: *mut llama_sampler)>,
+    pub backend_init: ::std::option::Option<
+        unsafe extern "C" fn(
+            smpl: *mut llama_sampler,
+            buft: ggml_backend_buffer_type_t,
+            n_outputs_max_per_seq: u32,
+        ) -> bool,
+    >,
+    pub backend_accept: ::std::option::Option<
+        unsafe extern "C" fn(
+            smpl: *mut llama_sampler,
+            ctx: *mut ggml_context,
+            gf: *mut ggml_cgraph,
+            selected_token: *mut ggml_tensor,
+        ),
+    >,
+    pub backend_apply: ::std::option::Option<
+        unsafe extern "C" fn(
+            smpl: *mut llama_sampler,
+            ctx: *mut ggml_context,
+            gf: *mut ggml_cgraph,
+            data: *mut llama_sampler_data,
+        ),
+    >,
+    pub backend_set_input: ::std::option::Option<unsafe extern "C" fn(smpl: *mut llama_sampler)>,
+    pub backend_reset: ::std::option::Option<unsafe extern "C" fn(smpl: *mut llama_sampler)>,
+    pub copy_state: ::std::option::Option<
+        unsafe extern "C" fn(src: *const llama_sampler, dst: *mut llama_sampler),
+    >,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct llama_sampler {
+    pub iface: *mut llama_sampler_i,
+    pub ctx: llama_sampler_context_t,
 }
 unsafe extern "C" {
     pub fn llama_log_set(log_callback: ggml_log_callback, user_data: *mut ::std::os::raw::c_void);
@@ -245,4 +714,9 @@ pub struct llama_perf_context_data {
 }
 unsafe extern "C" {
     pub fn llama_perf_context(ctx: *const llama_context) -> llama_perf_context_data;
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct ggml_backend_buffer {
+    pub _address: u8,
 }

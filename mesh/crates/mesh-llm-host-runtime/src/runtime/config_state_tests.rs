@@ -21,5 +21,7 @@ mod kv_disk;
 mod logging;
 #[path = "config_state_tests/persistence.rs"]
 mod persistence;
+#[path = "config_state_tests/request_defaults.rs"]
+mod request_defaults;
 #[path = "config_state_tests/sync.rs"]
 mod sync;

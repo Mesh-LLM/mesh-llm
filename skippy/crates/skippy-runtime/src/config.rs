@@ -147,6 +147,31 @@ pub struct RuntimeConfig {
     pub main_gpu: Option<u32>,
     /// How to split the model across multiple GPUs.
     pub split_mode: SplitMode,
+    /// Absolute block range whose routed-expert tensors load into host memory
+    /// instead of accelerator memory. `None` keeps every expert on the
+    /// accelerator.
+    pub host_expert_layers: Option<HostExpertLayers>,
+}
+
+/// Half-open absolute block range `[start, end)` whose routed-expert tensors
+/// (`ffn_{up,down,gate}_exps`) load into host memory. Placement only changes
+/// where the weights live and which kernels run them; routing and precision
+/// are unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostExpertLayers {
+    pub start: u32,
+    pub end: u32,
+}
+
+impl HostExpertLayers {
+    /// Build a range, returning `None` when it is empty.
+    pub fn new(start: u32, end: u32) -> Option<Self> {
+        (start < end).then_some(Self { start, end })
+    }
+
+    pub fn layer_count(self) -> u32 {
+        self.end.saturating_sub(self.start)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -390,6 +415,18 @@ impl RuntimeConfig {
                     .context("main_gpu exceeds i32")?
                     .unwrap_or(0),
                 split_mode: self.split_mode.as_raw(),
+                host_expert_layer_start: self
+                    .host_expert_layers
+                    .map(|layers| i32::try_from(layers.start))
+                    .transpose()
+                    .context("host_expert_layers.start exceeds i32")?
+                    .unwrap_or(0),
+                host_expert_layer_end: self
+                    .host_expert_layers
+                    .map(|layers| i32::try_from(layers.end))
+                    .transpose()
+                    .context("host_expert_layers.end exceeds i32")?
+                    .unwrap_or(0),
             },
             _selected_backend_device: selected_backend_device,
             _resident_tensor_names: resident_tensor_names,
@@ -412,7 +449,7 @@ impl RuntimeConfig {
             .unwrap_or_else(|| default_n_batch_for_lane_count(self.lane_count));
         let n_ubatch = self.n_ubatch.unwrap_or(LLAMA_SERVER_DEFAULT_N_UBATCH);
         format!(
-            "stage_index={} layers={}..{} ctx={} lanes={} n_batch={} n_ubatch={} n_gpu_layers={} mmap={} mlock={} repack={} backend={} cache_k={} cache_v={} flash_attn={:?} load_mode={:?} source_stage={} terminal_stage={} mtp_source={:?} resident_tensor_count={} checkpoint_quantization={:?}",
+            "stage_index={} layers={}..{} ctx={} lanes={} n_batch={} n_ubatch={} n_gpu_layers={} mmap={} mlock={} repack={} backend={} cache_k={} cache_v={} flash_attn={:?} load_mode={:?} source_stage={} terminal_stage={} mtp_source={:?} resident_tensor_count={} checkpoint_quantization={:?} host_expert_layers={}",
             self.stage_index,
             self.layer_start,
             self.layer_end,
@@ -436,6 +473,9 @@ impl RuntimeConfig {
             self.mtp_source,
             self.resident_tensor_names.len(),
             self.checkpoint_quantization,
+            self.host_expert_layers
+                .map(|layers| format!("{}..{}", layers.start, layers.end))
+                .unwrap_or_else(|| "none".to_string()),
         )
     }
 }
@@ -509,6 +549,7 @@ impl Default for RuntimeConfig {
             direct_io: false,
             main_gpu: None,
             split_mode: SplitMode::Auto,
+            host_expert_layers: None,
         }
     }
 }
@@ -749,6 +790,37 @@ mod tests {
         assert_eq!(disabled.op_offload, skippy_ffi::TRISTATE_FALSE);
         assert_ne!(enabled.op_offload, disabled.op_offload);
         Ok(())
+    }
+
+    #[test]
+    fn runtime_config_raw_defaults_host_expert_layers_to_empty_range() -> anyhow::Result<()> {
+        let raw = RuntimeConfig::default().as_raw()?.raw;
+        assert_eq!(raw.host_expert_layer_start, 0);
+        assert_eq!(raw.host_expert_layer_end, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_config_raw_carries_host_expert_layer_range() -> anyhow::Result<()> {
+        let raw = RuntimeConfig {
+            host_expert_layers: HostExpertLayers::new(25, 48),
+            ..RuntimeConfig::default()
+        }
+        .as_raw()?
+        .raw;
+        assert_eq!(raw.host_expert_layer_start, 25);
+        assert_eq!(raw.host_expert_layer_end, 48);
+        Ok(())
+    }
+
+    #[test]
+    fn host_expert_layers_rejects_empty_ranges() {
+        assert_eq!(HostExpertLayers::new(4, 4), None);
+        assert_eq!(HostExpertLayers::new(5, 4), None);
+        assert_eq!(
+            HostExpertLayers::new(0, 3).map(|layers| layers.layer_count()),
+            Some(3)
+        );
     }
 
     #[test]

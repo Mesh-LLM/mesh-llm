@@ -98,6 +98,10 @@ pub struct Node {
     pub(crate) serving_models: Arc<Mutex<Vec<String>>>,
     pub(crate) served_model_descriptors: Arc<Mutex<Vec<ServedModelDescriptor>>>,
     pub(crate) served_model_generations: Arc<Mutex<HashMap<String, u64>>>,
+    /// The local runtime port each model's current generation (and so its
+    /// `weights_digest`) belongs to. A digest read for any other port is not
+    /// that instance's: the descriptor is node-wide and keeps only the newest.
+    pub(crate) served_model_weights_ports: Arc<Mutex<HashMap<String, (u64, u16)>>>,
     pub(crate) model_runtime_descriptors: Arc<Mutex<Vec<ModelRuntimeDescriptor>>>,
     pub(crate) hosted_models: Arc<Mutex<Vec<String>>>,
     pub(crate) llama_ready: Arc<Mutex<bool>>,
@@ -200,6 +204,10 @@ pub struct Node {
     pub gpu_compute_tflops_fp32: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     pub gpu_compute_tflops_fp16: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     pub(crate) config_state: Arc<tokio::sync::Mutex<crate::runtime::config_state::ConfigState>>,
+    /// This node's request-defaults tracker; the same one `config_state` swaps
+    /// through, so a config apply reaches only this node's models.
+    pub(crate) live_request_defaults:
+        Arc<crate::runtime::live_request_defaults::LiveRequestDefaults>,
     /// Peers this node's operator chose to stop routing to (local only).
     pub(crate) peer_blocks: crate::network::peer_blocks::PeerBlocks,
     /// Plugin public keys this node announces, and the verified ones its
@@ -807,6 +815,7 @@ impl Node {
             current_time_unix_ms(),
         );
         let config_revision_init = config_state_init.revision();
+        let live_request_defaults = config_state_init.live_request_defaults();
         let runtime_data_collector = crate::runtime_data::RuntimeDataCollector::new();
         let runtime_data_producer =
             runtime_data_collector.producer(crate::runtime_data::RuntimeDataSource {
@@ -854,6 +863,7 @@ impl Node {
             serving_models: Arc::new(Mutex::new(Vec::new())),
             served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
             served_model_generations: Arc::new(Mutex::new(HashMap::new())),
+            served_model_weights_ports: Arc::new(Mutex::new(HashMap::new())),
             model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
@@ -925,6 +935,7 @@ impl Node {
             gpu_compute_tflops_fp32: Arc::new(tokio::sync::Mutex::new(None)),
             gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
             config_state: Arc::new(tokio::sync::Mutex::new(config_state_init)),
+            live_request_defaults,
             peer_blocks: crate::network::peer_blocks::PeerBlocks::for_this_node(),
             config_revision_tx: {
                 let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);
@@ -1017,6 +1028,8 @@ impl Node {
         endpoint: Endpoint,
         secret_key: SecretKey,
     ) -> Self {
+        let test_config_state = crate::runtime::config_state::ConfigState::default();
+        let test_live_request_defaults = test_config_state.live_request_defaults();
         let (peer_change_tx, peer_change_rx) = watch::channel(0usize);
         let (inflight_change_tx, _inflight_change_rx) = watch::channel(0u64);
         let (tunnel_tx, _tunnel_rx) = tokio::sync::mpsc::channel(256);
@@ -1048,6 +1061,7 @@ impl Node {
             serving_models: Arc::new(Mutex::new(Vec::new())),
             served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
             served_model_generations: Arc::new(Mutex::new(HashMap::new())),
+            served_model_weights_ports: Arc::new(Mutex::new(HashMap::new())),
             model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
@@ -1118,9 +1132,8 @@ impl Node {
             gpu_mem_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
             gpu_compute_tflops_fp32: Arc::new(tokio::sync::Mutex::new(None)),
             gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
-            config_state: Arc::new(tokio::sync::Mutex::new(
-                crate::runtime::config_state::ConfigState::default(),
-            )),
+            config_state: Arc::new(tokio::sync::Mutex::new(test_config_state)),
+            live_request_defaults: test_live_request_defaults,
             peer_blocks: crate::network::peer_blocks::PeerBlocks::in_memory(),
             config_revision_tx: {
                 let (tx, _rx) = tokio::sync::watch::channel(0);
@@ -1409,6 +1422,71 @@ impl Node {
             });
         }
         generation
+    }
+
+    /// Record the local runtime `port` the generation `begin_served_model_generation`
+    /// returned will serve on. Ignored when a newer generation has begun.
+    pub(crate) async fn bind_served_model_generation_to_port(
+        &self,
+        model_name: &str,
+        generation: u64,
+        port: u16,
+    ) {
+        let generations = self.served_model_generations.lock().await;
+        if generations.get(model_name).copied() == Some(generation) {
+            self.served_model_weights_ports
+                .lock()
+                .await
+                .insert(model_name.to_string(), (generation, port));
+        }
+    }
+
+    /// Load a model on `port` the way the runtime does: a new generation
+    /// bound to that port, carrying `digest`.
+    #[cfg(test)]
+    pub(crate) async fn load_model_for_tests(&self, model_name: &str, port: u16, digest: &str) {
+        let generation = self.begin_served_model_generation(model_name).await;
+        self.bind_served_model_generation_to_port(model_name, generation, port)
+            .await;
+        assert!(
+            self.set_served_model_weights_digest_for_generation(
+                model_name,
+                generation,
+                Some(digest.to_owned()),
+            )
+            .await
+        );
+    }
+
+    /// Drop `identity.weights_digest` unless it was computed for the runtime
+    /// instance on `port`. The node-wide descriptor keeps only the newest
+    /// generation's digest, so a request that reached an older instance of the
+    /// same model name (its file replaced between loads) must not report the
+    /// newer file's bytes as the ones it ran.
+    pub(crate) async fn scope_weights_digest_to_port(
+        &self,
+        identity: &mut ServedModelIdentity,
+        port: u16,
+    ) {
+        if identity.weights_digest.is_none() {
+            return;
+        }
+        let name = &identity.model_name;
+        let current = self
+            .served_model_generations
+            .lock()
+            .await
+            .get(name)
+            .copied();
+        let bound = self
+            .served_model_weights_ports
+            .lock()
+            .await
+            .get(name)
+            .copied();
+        if bound.is_none() || bound != current.map(|generation| (generation, port)) {
+            identity.weights_digest = None;
+        }
     }
 
     pub(crate) async fn set_served_model_weights_digest_for_generation(

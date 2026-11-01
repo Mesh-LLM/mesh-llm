@@ -726,6 +726,9 @@ max_tokens = 222
     .expect("test mesh config should parse");
     let model_bytes = fs::metadata(&model_path).unwrap().len();
     let spec = LocalOpenAiModelStartSpec {
+        live_request_defaults: std::sync::Arc::new(
+            crate::runtime::live_request_defaults::LiveRequestDefaults::new(),
+        ),
         mesh_config: &mesh_config,
         config_model_id: Some("configured/model-ref"),
         model_path: &model_path,
@@ -776,6 +779,9 @@ max_tokens = 222
     write_fake_gguf_model(&cli_model_path);
     let cli_model_bytes = fs::metadata(&cli_model_path).unwrap().len();
     let cli_spec = LocalOpenAiModelStartSpec {
+        live_request_defaults: std::sync::Arc::new(
+            crate::runtime::live_request_defaults::LiveRequestDefaults::new(),
+        ),
         mesh_config: &mesh_config,
         config_model_id: None,
         model_path: &cli_model_path,

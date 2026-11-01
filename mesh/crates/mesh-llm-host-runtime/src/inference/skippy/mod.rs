@@ -98,8 +98,8 @@ pub(crate) use package::{
 };
 pub(crate) use resolver::{
     ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest,
-    effective_safety_margin_bytes, resolve_skippy_config_for_selector,
-    resolve_skippy_config_for_selector_with_publisher_defaults,
+    effective_safety_margin_bytes, resolve_embedded_request_defaults,
+    resolve_skippy_config_for_selector, resolve_skippy_config_for_selector_with_publisher_defaults,
 };
 pub(crate) use skippy_api::family_policy;
 pub(crate) use skippy_api::family_policy::family_policy_for_stage_config;

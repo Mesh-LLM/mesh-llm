@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 74;
+pub const ABI_VERSION_PATCH: u32 = 75;
 
 // The facade constants are parsed without compiling; tie them to the generated
 // bindings' view of the native ABI version at compile time so a common.h bump
@@ -28,6 +28,7 @@ mod abi;
 mod activation;
 #[cfg(feature = "dynamic-runtime")]
 mod dynamic;
+pub mod llama_draft;
 mod model;
 mod multimodal;
 mod runtime;

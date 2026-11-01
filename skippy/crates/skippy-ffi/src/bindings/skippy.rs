@@ -6,7 +6,7 @@
 
 pub const SKIPPY_ABI_VERSION_MAJOR: u32 = 0;
 pub const SKIPPY_ABI_VERSION_MINOR: u32 = 1;
-pub const SKIPPY_ABI_VERSION_PATCH: u32 = 74;
+pub const SKIPPY_ABI_VERSION_PATCH: u32 = 75;
 pub const SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_MAX_LOGIT_BIAS: u32 = 256;
 pub const SKIPPY_MAX_SAMPLERS: u32 = 16;
@@ -488,6 +488,10 @@ pub struct skippy_runtime_config {
     pub main_gpu: i32,
     #[doc = " @brief How to split the model across multiple GPUs (mirrors upstream `llama_split_mode`). SKIPPY_TRISTATE_AUTO (-1) preserves llama.cpp's derived default; 0=none, 1=layer, 2=row, 3=tensor."]
     pub split_mode: i32,
+    #[doc = " @brief First absolute block index whose routed-expert tensors (`ffn_{up,down,gate,gate_up}_exps`) load into host memory (the CPU buffer type) instead of accelerator memory. Mirrors upstream `--n-cpu-moe` for a block range."]
+    pub host_expert_layer_start: i32,
+    #[doc = " @brief One past the last such block index. `host_expert_layer_end <= host_expert_layer_start` keeps every routed expert on the accelerator, and a range wider than 4096 blocks is ignored the same way: no supported model approaches that block count, and the bound keeps override construction proportional to the model. Routing and precision are unchanged; only weight placement differs."]
+    pub host_expert_layer_end: i32,
 }
 unsafe extern "C" {
     #[doc = " @brief Returns a C-safe runtime configuration with all derived-default controls set to auto."]

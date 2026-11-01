@@ -42,6 +42,7 @@ pub(in crate::frontend) fn modelless_stage_openai_args() -> EmbeddedOpenAiArgs {
         model_id: Some("encoder-decoder-fixture".to_string()),
         default_max_tokens: 16,
         request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        live_defaults_scope: 0,
         // The OpenAI default is `config.lane_count`, so an unset
         // `--generation-concurrency` on this stage arrives here as four.
         generation_concurrency: CONFIGURED_LANES as usize,
