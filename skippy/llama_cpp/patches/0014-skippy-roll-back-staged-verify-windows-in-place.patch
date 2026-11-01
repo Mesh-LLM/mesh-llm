@@ -28,6 +28,13 @@ skippy_session_verify_rollback_counts reports how many of a session's
 windows were held in place and how many in a host checkpoint since it was
 reset, so a split can show which path each stage took. ABI 0.1.68.
 
+Memory with sliding-window attention never rolls back in place. Settling
+such a window rewinds the recurrent state through the snapshots, but the
+SWA cache serializes as it stands at the window's end and drops rows that
+are still visible from the rollback point, so these windows take their
+host checkpoint before they decode. The native test runs pipelined windows
+on an SWA fixture and checks the state after every rollback.
+
 This is its own patch rather than part of 0002: 0002 rolls back a
 single-node session's window in place, while this owns the staged-session
 rollback lifecycle (verify_window.cpp: when a window may roll back in
@@ -35,21 +42,21 @@ place, settling a window that a pipelined decode lands on into a host
 checkpoint, buffer reuse) and its rollback-count ABI.
 ---
  include/skippy/common.h                       |   2 +-
- include/skippy/state.h                        |  13 ++
- src/CMakeLists.txt                            |  19 ++
+ include/skippy/state.h                        |  15 +
+ src/CMakeLists.txt                            |  21 ++
  src/skippy-verify-checkpoint.h                |   9 +-
- src/skippy/activation.cpp                     | 139 ++++++-----
+ src/skippy/activation.cpp                     | 150 ++++----
  src/skippy/execution-batch.cpp                |   7 +
  src/skippy/execution-single.cpp               |   5 +
  src/skippy/runtime_support.h                  |   7 +
- src/skippy/runtime_types.h                    |  17 ++
+ src/skippy/runtime_types.h                    |  17 +
  src/skippy/session.cpp                        |   6 +-
- src/skippy/state.cpp                          |  51 +++--
- src/skippy/tests/verify_rollback.cpp          | 149 ++++++++++++
- src/skippy/verify_window.cpp                  | 216 ++++++++++++++++++
+ src/skippy/state.cpp                          |  56 ++-
+ src/skippy/tests/verify_rollback.cpp          | 320 ++++++++++++++++++
+ src/skippy/verify_window.cpp                  | 214 ++++++++++++
  src/skippy/verify_window.h                    |  38 +++
  ...st-skippy-verify-checkpoint-retirement.cpp |   9 +
- 15 files changed, 613 insertions(+), 74 deletions(-)
+ 15 files changed, 802 insertions(+), 74 deletions(-)
  create mode 100644 src/skippy/tests/verify_rollback.cpp
  create mode 100644 src/skippy/verify_window.cpp
  create mode 100644 src/skippy/verify_window.h
@@ -68,19 +75,21 @@ index 3f6aab137..b9b5259af 100644
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 diff --git a/include/skippy/state.h b/include/skippy/state.h
-index 1cfaaa5c6..2d929741d 100644
+index 1cfaaa5c6..e8d0874a1 100644
 --- a/include/skippy/state.h
 +++ b/include/skippy/state.h
-@@ -173,6 +173,19 @@ LLAMA_API enum skippy_status skippy_retire_verify_checkpoint(
+@@ -173,6 +173,21 @@ LLAMA_API enum skippy_status skippy_retire_verify_checkpoint(
          uint64_t token_count,
          struct skippy_error ** out_error);
  
 +/**
 + * @brief Reports how this session's verify windows were held for rollback
 + * since it was created or last reset: in place through the recurrent
-+ * rollback snapshots, or in a host checkpoint. A window first held in place
-+ * and later checkpointed because another decode landed on it counts as
-+ * checkpointed.
++ * rollback snapshots, or in a host checkpoint. A window counts once its
++ * storage is final, so both counts only grow: a checkpointed window when it
++ * opens, an in-place window when it is retired or trimmed. A window first
++ * held in place and later checkpointed because another decode landed on it
++ * counts as checkpointed.
 + */
 +LLAMA_API enum skippy_status skippy_session_verify_rollback_counts(
 +        const struct skippy_session * session,
@@ -92,7 +101,7 @@ index 1cfaaa5c6..2d929741d 100644
  LLAMA_API enum skippy_status skippy_export_kv_page(
          struct skippy_session * session,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 48f8964a9..5ae5d5fea 100644
+index 48f8964a9..ebfe058d1 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -58,6 +58,7 @@ add_library(llama
@@ -103,7 +112,7 @@ index 48f8964a9..5ae5d5fea 100644
              skippy/workloads.cpp
              skippy/abi.cpp
              skippy/block_boundaries.cpp
-@@ -411,6 +412,24 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -411,6 +412,26 @@ if (LLAMA_STAGE_BUILD_TESTS)
      set_tests_properties(skippy_generate_gemma_fixture PROPERTIES
          FIXTURES_SETUP skippy-model-loader-fixtures)
  
@@ -120,11 +129,13 @@ index 48f8964a9..5ae5d5fea 100644
 +            --arch ${arch} --seed 42 --out "${fixture_dir}")
 +        set_tests_properties(skippy_generate_verify_rollback_${arch} PROPERTIES
 +            FIXTURES_SETUP verify-rollback-${arch})
-+        add_test(NAME skippy_verify_rollback_${arch} COMMAND skippy-verify-rollback "${fixture_dir}/${fixture}")
++        add_test(NAME skippy_verify_rollback_${arch} COMMAND skippy-verify-rollback "${fixture_dir}/${fixture}" ${ARGN})
 +        set_tests_properties(skippy_verify_rollback_${arch} PROPERTIES
 +            FIXTURES_REQUIRED verify-rollback-${arch})
 +    endfunction()
 +    add_skippy_verify_rollback_test(qwen4exp qwen4exp-moe.gguf)
++    # lfm2's fixture slides its attention window, so it checkpoints every window.
++    add_skippy_verify_rollback_test(lfm2 lfm2-dense.gguf sliding-window)
      add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
      target_include_directories(skippy-sampling-history PRIVATE .)
      target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
@@ -162,7 +173,7 @@ index 8793000c1..f6ce0295e 100644
      return true;
  }
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
-index 71323d934..00423d6f4 100644
+index 71323d934..b428c26db 100644
 --- a/src/skippy/activation.cpp
 +++ b/src/skippy/activation.cpp
 @@ -6,6 +6,7 @@
@@ -173,7 +184,7 @@ index 71323d934..00423d6f4 100644
  
  #include <mutex>
  #include "gguf.h"
-@@ -72,12 +73,21 @@ bool skippy_memory_needs_verify_checkpoint(llama_memory_t memory) {
+@@ -72,12 +73,31 @@ bool skippy_memory_needs_verify_checkpoint(llama_memory_t memory) {
  // skippy_trim_session restores the accepted prefix exactly - without the
  // serial replay of accepted tokens that the checkpoint restore path performs.
  //
@@ -190,15 +201,25 @@ index 71323d934..00423d6f4 100644
 +// must still be the last thing decoded when it is trimmed. That is not true
 +// of pipelined verification, where the next window decodes before this one is
 +// resolved; see skippy_checkpoint_verify_window.
++//
++// Sliding-window attention rules it out. When a pipelined decode lands on an
++// in-place window, the window is settled into a host checkpoint that rewinds
++// the recurrent state through the snapshots, but the SWA cache can only be
++// serialized as it stands at the window's end, which omits the rows that
++// slid out of the window and are still visible from the rollback point.
++// Such memory takes its host checkpoint before the window decodes instead.
  bool skippy_verify_window_can_roll_back_in_place(
          const skippy_session * session,
          size_t token_count) {
 -    if (session == nullptr || session->ctx == nullptr || skippy_is_filtered(session)) {
 +    if (session == nullptr || session->ctx == nullptr) {
++        return false;
++    }
++    if (dynamic_cast<llama_memory_hybrid_iswa *>(session->ctx->get_memory()) != nullptr) {
          return false;
      }
      const uint32_t n_rs_seq = session->ctx->get_cparams().n_rs_seq;
-@@ -102,55 +112,52 @@ enum skippy_status skippy_checkpoint_verify_window(
+@@ -102,55 +122,53 @@ enum skippy_status skippy_checkpoint_verify_window(
      if (!skippy_memory_needs_verify_checkpoint(memory)) {
          return skippy_success(out_error);
      }
@@ -248,7 +269,8 @@ index 71323d934..00423d6f4 100644
 +                token_count,
 +                input_desc,
 +                input_payload);
-+        ++session->verify_windows_in_place;
++        // Counted once it resolves: a pipelined decode may still move it
++        // into a host checkpoint.
 +        return skippy_success(out_error);
      }
  
@@ -257,15 +279,15 @@ index 71323d934..00423d6f4 100644
 -    checkpoint.token_count = token_count;
 -    if (token_ids != nullptr) {
 -        checkpoint.token_ids.assign(token_ids, token_ids + token_count);
--    }
++    if (session->verify_checkpoints.size() >= skippy_max_verify_checkpoints) {
++        return skippy_reject_verify_checkpoint_depth(out_error);
+     }
 -    checkpoint.has_activation_input = skippy_has_activation_payload(input_desc, input_payload);
 -    if (checkpoint.has_activation_input) {
 -        checkpoint.input_desc = *input_desc;
 -        const uint8_t * bytes = static_cast<const uint8_t *>(input_payload);
 -        checkpoint.input_payload.assign(bytes, bytes + input_desc->payload_bytes);
-+    if (session->verify_checkpoints.size() >= skippy_max_verify_checkpoints) {
-+        return skippy_reject_verify_checkpoint_depth(out_error);
-     }
+-    }
 -
 -    constexpr size_t max_verify_checkpoints = 64;
 -    if (session->verify_checkpoints.size() >= max_verify_checkpoints) {
@@ -293,7 +315,7 @@ index 71323d934..00423d6f4 100644
      return skippy_success(out_error);
  }
  
-@@ -458,6 +465,10 @@ enum skippy_status skippy_decode_batch(
+@@ -458,6 +476,10 @@ enum skippy_status skippy_decode_batch(
      if (usable_status != SKIPPY_STATUS_OK) {
          return usable_status;
      }
@@ -304,7 +326,7 @@ index 71323d934..00423d6f4 100644
      skippy_graph_build_inputs inputs = graph_build_inputs != nullptr ? *graph_build_inputs : skippy_graph_build_inputs{};
      const skippy_graph_build_inputs configured_inputs = skippy_graph_build_inputs_from_config(
              &session->stage_model->config, glm_dsa_phase_hint);
-@@ -851,6 +862,7 @@ enum skippy_status skippy_verify_activation_frame(
+@@ -851,6 +873,7 @@ enum skippy_status skippy_verify_activation_frame(
  
  static std::vector<uint8_t> skippy_verify_prefix_activation_payload(
          const skippy_verify_checkpoint & checkpoint,
@@ -312,7 +334,7 @@ index 71323d934..00423d6f4 100644
          size_t token_count,
          skippy_activation_desc & prefix_desc) {
      prefix_desc = checkpoint.input_desc;
-@@ -872,11 +884,22 @@ static std::vector<uint8_t> skippy_verify_prefix_activation_payload(
+@@ -872,11 +895,22 @@ static std::vector<uint8_t> skippy_verify_prefix_activation_payload(
          const auto * source = static_cast<const uint8_t *>(skippy_activation_part_payload(
                  &checkpoint.input_desc, checkpoint.input_payload.data(), &source_part));
          if (source == nullptr) return {};
@@ -337,7 +359,7 @@ index 71323d934..00423d6f4 100644
                      payload.insert(payload.end(), source + source_offset, source + source_offset + row_bytes);
                  }
              }
-@@ -911,7 +934,7 @@ static bool skippy_trim_verify_attention(
+@@ -911,7 +945,7 @@ static bool skippy_trim_verify_attention(
  
  static void skippy_mark_verify_restore_failed(skippy_session * session) {
      session->reset_required = true;
@@ -346,7 +368,7 @@ index 71323d934..00423d6f4 100644
      skippy_mtp_clear_session_state(session);
  }
  
-@@ -933,8 +956,8 @@ enum skippy_status skippy_restore_verify_prefix(
+@@ -933,8 +967,8 @@ enum skippy_status skippy_restore_verify_prefix(
      *out_restored = false;
      const skippy_verify_checkpoint * checkpoint = nullptr;
      for (auto it = session->verify_checkpoints.rbegin(); it != session->verify_checkpoints.rend(); ++it) {
@@ -357,7 +379,7 @@ index 71323d934..00423d6f4 100644
          if (it->valid && token_count >= token_start && token_count < token_end) {
              checkpoint = &*it;
              break;
-@@ -958,8 +981,10 @@ enum skippy_status skippy_restore_verify_prefix(
+@@ -958,8 +992,10 @@ enum skippy_status skippy_restore_verify_prefix(
                  out_error);
      }
  
@@ -369,7 +391,7 @@ index 71323d934..00423d6f4 100644
          return skippy_fail_verify_restore(
                  session,
                  SKIPPY_STATUS_RUNTIME_ERROR,
-@@ -967,10 +992,9 @@ enum skippy_status skippy_restore_verify_prefix(
+@@ -967,10 +1003,9 @@ enum skippy_status skippy_restore_verify_prefix(
                  out_error);
      }
  
@@ -383,7 +405,7 @@ index 71323d934..00423d6f4 100644
          return skippy_fail_verify_restore(
                  session,
                  SKIPPY_STATUS_RUNTIME_ERROR,
-@@ -983,6 +1007,7 @@ enum skippy_status skippy_restore_verify_prefix(
+@@ -983,6 +1018,7 @@ enum skippy_status skippy_restore_verify_prefix(
          skippy_activation_desc input_desc = {};
          std::vector<uint8_t> input_payload = skippy_verify_prefix_activation_payload(
                  *checkpoint,
@@ -391,7 +413,7 @@ index 71323d934..00423d6f4 100644
                  accepted_count,
                  input_desc);
          if (input_payload.empty()) {
-@@ -996,7 +1021,7 @@ enum skippy_status skippy_restore_verify_prefix(
+@@ -996,7 +1032,7 @@ enum skippy_status skippy_restore_verify_prefix(
                  session,
                  &input_desc,
                  input_payload.data(),
@@ -400,7 +422,7 @@ index 71323d934..00423d6f4 100644
                  nullptr,
                  0,
                  accepted_count,
-@@ -1006,7 +1031,7 @@ enum skippy_status skippy_restore_verify_prefix(
+@@ -1006,7 +1042,7 @@ enum skippy_status skippy_restore_verify_prefix(
      } else if (accepted_count > 0) {
          status = skippy_decode_tokens(
                  session,
@@ -519,7 +541,7 @@ index 4741f55cb..a9251d2c9 100644
              SKIPPY_RUNTIME_EVENT_KIND_KV_PRESSURE_CLEARED,
              static_cast<uint64_t>(session->seq_id),
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
-index 0f9b3a27c..f1ae5bf2b 100644
+index 0f9b3a27c..0ab3bbace 100644
 --- a/src/skippy/state.cpp
 +++ b/src/skippy/state.cpp
 @@ -74,7 +74,7 @@ static void skippy_update_session_state_after_import(
@@ -549,7 +571,7 @@ index 0f9b3a27c..f1ae5bf2b 100644
      session->ctx->synchronize();
      return skippy_success(out_error);
  }
-@@ -759,17 +759,27 @@ enum skippy_status skippy_retire_verify_checkpoint(
+@@ -759,17 +759,28 @@ enum skippy_status skippy_retire_verify_checkpoint(
      if (!skippy_memory_needs_verify_checkpoint(session->ctx->get_memory())) {
          return skippy_success(out_error);
      }
@@ -560,6 +582,7 @@ index 0f9b3a27c..f1ae5bf2b 100644
 +    if (inplace.valid && static_cast<uint64_t>(inplace.token_start) == token_start &&
 +            inplace.token_count == token_count) {
 +        inplace.valid = false;
++        ++session->verify_windows_in_place;
          return skippy_success(out_error);
      }
 -    if (!skippy_retire_verify_checkpoint_exact(
@@ -585,7 +608,7 @@ index 0f9b3a27c..f1ae5bf2b 100644
  }
  
  enum skippy_status skippy_trim_session(
-@@ -799,6 +809,21 @@ enum skippy_status skippy_trim_session(
+@@ -799,6 +810,25 @@ enum skippy_status skippy_trim_session(
          skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "runtime memory is unavailable");
          return SKIPPY_STATUS_RUNTIME_ERROR;
      }
@@ -603,11 +626,15 @@ index 0f9b3a27c..f1ae5bf2b 100644
 +                "an in-place verify window cannot roll back past its first row");
 +        return SKIPPY_STATUS_UNSUPPORTED;
 +    }
++    if (inplace.valid && session->n_past != inplace.token_start) {
++        // The window resolves here, held in place to the end.
++        ++session->verify_windows_in_place;
++    }
 +    session->inplace_verify_window.valid = false;
      bool restored_verify_prefix = false;
      enum skippy_status status = skippy_restore_verify_prefix(
              session,
-@@ -849,7 +874,7 @@ enum skippy_status skippy_trim_session(
+@@ -849,7 +879,7 @@ enum skippy_status skippy_trim_session(
          session->signal_history.resize(static_cast<size_t>(token_count));
      }
      skippy_mtp_trim_session_state(session, static_cast<llama_pos>(token_count));
@@ -616,7 +643,7 @@ index 0f9b3a27c..f1ae5bf2b 100644
      session->ctx->synchronize();
  
      return skippy_success(out_error);
-@@ -1004,7 +1029,7 @@ enum skippy_status skippy_session_restore_prefix(
+@@ -1004,7 +1034,7 @@ enum skippy_status skippy_session_restore_prefix(
      }
      session->signal_history.clear();
      skippy_mtp_clear_session_state(session);
@@ -627,18 +654,21 @@ index 0f9b3a27c..f1ae5bf2b 100644
  
 diff --git a/src/skippy/tests/verify_rollback.cpp b/src/skippy/tests/verify_rollback.cpp
 new file mode 100644
-index 000000000..14b95b687
+index 000000000..d61e314a6
 --- /dev/null
 +++ b/src/skippy/tests/verify_rollback.cpp
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,320 @@
 +// Speculative verify windows with forced rejections must commit exactly the
 +// tokens a session decodes one at a time, whether each window rolls back in
-+// place through the recurrent rollback snapshots or through a host checkpoint.
++// place through the recurrent rollback snapshots or through a host checkpoint,
++// and when windows are pipelined: the next window decodes before the previous
++// one is resolved, and a rejection then lands in the earlier window.
 +#include "skippy.h"
 +#include "../runtime_types.h"
 +
 +#include <cstdio>
 +#include <cstdlib>
++#include <cstring>
 +#include <vector>
 +
 +#define CHECK(condition) do { if (!(condition)) { \
@@ -648,7 +678,7 @@ index 000000000..14b95b687
 +namespace {
 +
 +constexpr size_t WINDOW = 5;
-+constexpr size_t GENERATED = 24;
++constexpr size_t GENERATED = 48;
 +// Proposal index rejected in successive windows; -1 accepts every row.
 +constexpr int REJECTIONS[] = {-1, 0, 3, 1, -1, 2};
 +
@@ -694,18 +724,48 @@ index 000000000..14b95b687
 +
 +const std::vector<llama_token> PROMPT = {1, 7, 3, 9, 4, 12, 5};
 +
-+std::vector<llama_token> reference(skippy_model * model) {
++// Bytes of the session's partial (recurrent and sliding-window) state. Its
++// size follows how many sliding-window rows the session still holds.
++size_t partial_state_size(skippy_session * session) {
++    return llama_state_seq_get_size_ext(session->ctx, session->seq_id, LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY);
++}
++
++struct Reference {
++    std::vector<llama_token> tokens;
++    // Partial state size after one-at-a-time decoding, by position.
++    std::vector<size_t> state_sizes;
++};
++
++Reference reference(skippy_model * model) {
 +    skippy_session * session = create(model);
 +    prefill(session, std::vector<llama_token>(PROMPT.begin(), PROMPT.end() - 1));
-+    std::vector<llama_token> tokens;
++    Reference result;
++    result.state_sizes.assign(static_cast<size_t>(session->n_past) + 1, 0);
++    result.state_sizes[static_cast<size_t>(session->n_past)] = partial_state_size(session);
 +    llama_token current = PROMPT.back();
-+    while (tokens.size() < GENERATED + WINDOW) {
++    while (result.tokens.size() < GENERATED + 2 * WINDOW) {
 +        current = decode(session, current);
-+        tokens.push_back(current);
++        result.tokens.push_back(current);
++        result.state_sizes.resize(static_cast<size_t>(session->n_past) + 1, 0);
++        result.state_sizes[static_cast<size_t>(session->n_past)] = partial_state_size(session);
 +    }
 +    skippy_error * error = nullptr;
 +    ok(skippy_session_free(session, &error), error);
-+    return tokens;
++    return result;
++}
++
++// After a rollback the session must hold the same state a one-at-a-time
++// decode holds at that position, including every sliding-window row still
++// visible from it.
++void check_rolled_back_state(skippy_session * session, const Reference & expected) {
++    const size_t position = static_cast<size_t>(session->n_past);
++    CHECK(position < expected.state_sizes.size());
++    const size_t actual = partial_state_size(session);
++    if (actual != expected.state_sizes[position]) {
++        std::fprintf(stderr, "after a rollback to %zu the partial state is %zu bytes, a one-at-a-time decode holds %zu\n",
++                position, actual, expected.state_sizes[position]);
++        std::exit(1);
++    }
 +}
 +
 +void speculate(skippy_model * model, const std::vector<llama_token> & expected, bool want_in_place) {
@@ -761,6 +821,136 @@ index 000000000..14b95b687
 +    ok(skippy_session_free(session, &error), error);
 +}
 +
++std::vector<llama_token> window_of(
++        llama_token first,
++        const std::vector<llama_token> & expected,
++        size_t from,
++        size_t proposals,
++        int reject) {
++    std::vector<llama_token> window = {first};
++    for (size_t i = 0; i < proposals; ++i) {
++        const llama_token token = expected[from + i];
++        window.push_back(static_cast<int>(i) == reject ? token ^ 1 : token);
++    }
++    return window;
++}
++
++std::vector<llama_token> verify(skippy_session * session, const std::vector<llama_token> & window) {
++    std::vector<llama_token> predicted(window.size(), -1);
++    size_t count = 0;
++    skippy_error * error = nullptr;
++    ok(skippy_verify_tokens(session, window.data(), window.size(),
++            predicted.data(), predicted.size(), &count, &error), error);
++    CHECK(count == window.size());
++    return predicted;
++}
++
++size_t accepted_rows(const std::vector<llama_token> & window, const std::vector<llama_token> & predicted) {
++    size_t accepted = 0;
++    while (accepted + 1 < window.size() && predicted[accepted] == window[accepted + 1]) {
++        ++accepted;
++    }
++    return accepted;
++}
++
++void commit(
++        std::vector<llama_token> & committed,
++        const std::vector<llama_token> & expected,
++        const std::vector<llama_token> & predicted,
++        size_t accepted) {
++    for (size_t i = 0; i <= accepted; ++i) {
++        if (predicted[i] != expected[committed.size()]) {
++            std::fprintf(stderr, "pipelined window committed token %zu as %d, the one-at-a-time decode gives %d\n",
++                    committed.size(), predicted[i], expected[committed.size()]);
++            std::exit(1);
++        }
++        committed.push_back(predicted[i]);
++    }
++}
++
++struct RollbackCounts {
++    uint64_t in_place = 0;
++    uint64_t checkpointed = 0;
++};
++
++RollbackCounts rollback_counts(skippy_session * session) {
++    RollbackCounts counts;
++    skippy_error * error = nullptr;
++    ok(skippy_session_verify_rollback_counts(session, &counts.in_place, &counts.checkpointed, &error), error);
++    return counts;
++}
++
++// Each window counts once its storage is final, so neither count may drop
++// when a pipelined decode moves an in-place window into a host checkpoint.
++void check_counts_grow(RollbackCounts & previous, const RollbackCounts & current) {
++    CHECK(current.in_place >= previous.in_place);
++    CHECK(current.checkpointed >= previous.checkpointed);
++    previous = current;
++}
++
++// Pairs of windows where the second decodes before the first is resolved, so
++// a rejection in the first restores state from before the second. Runs long
++// enough for the sliding window of an SWA fixture to fill several times over.
++void speculate_pipelined(skippy_model * model, const Reference & reference_run) {
++    const std::vector<llama_token> & expected = reference_run.tokens;
++    // Rejected proposal index in the first and second window; -1 accepts all.
++    constexpr int PAIRS[][2] = {{2, -1}, {-1, 0}, {-1, -1}, {-1, 3}, {0, 1}, {3, -1}};
++    skippy_session * session = create(model);
++    prefill(session, std::vector<llama_token>(PROMPT.begin(), PROMPT.end() - 1));
++    const uint64_t prefix = PROMPT.size() - 1;
++    std::vector<llama_token> committed;
++    llama_token current = PROMPT.back();
++    RollbackCounts counts;
++    for (size_t pair = 0; committed.size() < GENERATED; ++pair) {
++        const int * reject = PAIRS[pair % (sizeof(PAIRS) / sizeof(PAIRS[0]))];
++        const uint64_t base = prefix + committed.size();
++        const auto first = window_of(current, expected, committed.size(), WINDOW - 1, reject[0]);
++        // The second window starts at the first one's bonus row, not yet known.
++        const size_t second_from = committed.size() + WINDOW - 1;
++        const auto second = window_of(expected[second_from], expected, second_from + 1, WINDOW - 1, reject[1]);
++        const auto first_predicted = verify(session, first);
++        check_counts_grow(counts, rollback_counts(session));
++        const auto second_predicted = verify(session, second);
++        check_counts_grow(counts, rollback_counts(session));
++        const size_t first_accepted = accepted_rows(first, first_predicted);
++        commit(committed, expected, first_predicted, first_accepted);
++        skippy_error * error = nullptr;
++        if (first_accepted + 1 < first.size()) {
++            ok(skippy_trim_session(session, base + 1 + first_accepted, &error), error);
++            check_rolled_back_state(session, reference_run);
++            current = first_predicted[first_accepted];
++            continue;
++        }
++        ok(skippy_retire_verify_checkpoint(session, base, first.size(), &error), error);
++        const uint64_t second_base = base + first.size();
++        const llama_token bonus = first_predicted[first_accepted];
++        error = nullptr;
++        if (bonus != second[0]) {
++            ok(skippy_trim_session(session, second_base, &error), error);
++            check_rolled_back_state(session, reference_run);
++            current = bonus;
++            continue;
++        }
++        const size_t second_accepted = accepted_rows(second, second_predicted);
++        commit(committed, expected, second_predicted, second_accepted);
++        if (second_accepted + 1 == second.size()) {
++            ok(skippy_retire_verify_checkpoint(session, second_base, second.size(), &error), error);
++        } else {
++            ok(skippy_trim_session(session, second_base + 1 + second_accepted, &error), error);
++            check_rolled_back_state(session, reference_run);
++        }
++        current = second_predicted[second_accepted];
++        check_counts_grow(counts, rollback_counts(session));
++    }
++    CHECK(decode(session, current) == expected[committed.size()]);
++    check_counts_grow(counts, rollback_counts(session));
++    std::fprintf(stderr, "pipelined verify windows: %llu in place, %llu checkpointed\n",
++            static_cast<unsigned long long>(counts.in_place), static_cast<unsigned long long>(counts.checkpointed));
++    CHECK(counts.checkpointed > 0);
++    skippy_error * error = nullptr;
++    ok(skippy_session_free(session, &error), error);
++}
++
 +void release(skippy_model * model) {
 +    skippy_error * error = nullptr;
 +    ok(skippy_model_free(model, &error), error);
@@ -769,23 +959,31 @@ index 000000000..14b95b687
 +} // namespace
 +
 +int main(int argc, char ** argv) {
-+    CHECK(argc == 2);
++    // `sliding-window`: the fixture's attention slides, so no window may roll
++    // back in place and every one takes a host checkpoint.
++    CHECK(argc == 2 || (argc == 3 && std::strcmp(argv[2], "sliding-window") == 0));
++    const bool sliding_window = argc == 3;
 +    skippy_model * deep = open(argv[1], WINDOW + 2);
-+    const auto expected = reference(deep);
-+    speculate(deep, expected, true);
++    const auto deep_reference = reference(deep);
++    const auto & expected = deep_reference.tokens;
++    speculate(deep, expected, !sliding_window);
++    speculate_pipelined(deep, deep_reference);
 +    release(deep);
 +    // Shallower than a window: every rejected window restores a host checkpoint.
 +    skippy_model * shallow = open(argv[1], 1);
++    auto shallow_reference = reference(shallow);
++    CHECK(shallow_reference.tokens == expected);
 +    speculate(shallow, expected, false);
++    speculate_pipelined(shallow, shallow_reference);
 +    release(shallow);
 +    return 0;
 +}
 diff --git a/src/skippy/verify_window.cpp b/src/skippy/verify_window.cpp
 new file mode 100644
-index 000000000..18393e3c4
+index 000000000..50a6fbbae
 --- /dev/null
 +++ b/src/skippy/verify_window.cpp
-@@ -0,0 +1,216 @@
+@@ -0,0 +1,214 @@
 +// Verify-window bookkeeping: the window that rolls back in place, the host
 +// checkpoints that replace it when it cannot, and the buffers they reuse.
 +#include "skippy.h"
@@ -916,7 +1114,8 @@ index 000000000..18393e3c4
 +    window.valid = false;
 +    if (session->n_past != window_end || window.token_count < 2) {
 +        // Either the window no longer ends the sequence, or it holds no row
-+        // that a trim could return to.
++        // that a trim could return to: it stays in place.
++        ++session->verify_windows_in_place;
 +        return SKIPPY_STATUS_OK;
 +    }
 +    if (session->verify_checkpoints.size() >= skippy_max_verify_checkpoints) {
@@ -982,9 +1181,6 @@ index 000000000..18393e3c4
 +    }
 +    checkpoint.valid = true;
 +    session->verify_checkpoints.push_back(std::move(checkpoint));
-+    if (session->verify_windows_in_place > 0) {
-+        --session->verify_windows_in_place;
-+    }
 +    ++session->verify_windows_checkpointed;
 +    return SKIPPY_STATUS_OK;
 +}

@@ -679,10 +679,12 @@ mod tests {
     }
 }
 
-/// Verify windows a session held for rollback, by how they were held.
+/// Verify windows a session held for rollback, by how they were held. A
+/// window counts once its storage is final, so both counts only grow.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct VerifyRollbackCounts {
-    /// Rolled back in place through the recurrent rollback snapshots.
+    /// Rolled back in place through the recurrent rollback snapshots,
+    /// counted when the window is retired or trimmed.
     pub in_place: u64,
     /// Held in a host checkpoint, including windows first held in place that
     /// another decode then landed on.
