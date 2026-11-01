@@ -1221,6 +1221,7 @@ async fn start_local_skippy_model(
     })
     .await
     .context("join load skippy direct GGUF task")??;
+    live_request_defaults::sync_after_load(&model_name);
     emit_measured_memory_reconciliation(
         &model_name,
         &measurement_key,
@@ -1406,6 +1407,7 @@ async fn start_local_package_v2_model(
     })
     .await
     .context("join load skippy package-v2 task")??;
+    live_request_defaults::sync_after_load(&model_name);
     emit_measured_memory_reconciliation(
         &model_name,
         &measurement_key,

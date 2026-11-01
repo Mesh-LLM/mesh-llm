@@ -83,6 +83,27 @@ pub fn replace_live_request_defaults(
     cells.len()
 }
 
+/// A registered backend's defaults, for tests that exercise the swap from
+/// outside this crate.
+#[cfg(feature = "test-support")]
+pub struct RegisteredRequestDefaultsProbe(LiveRequestDefaults);
+
+#[cfg(feature = "test-support")]
+impl RegisteredRequestDefaultsProbe {
+    pub fn snapshot(&self) -> Arc<EmbeddedOpenAiRequestDefaults> {
+        self.0.snapshot()
+    }
+}
+
+/// Register `initial` for `model_id` as a loaded backend would.
+#[cfg(feature = "test-support")]
+pub fn register_request_defaults_probe(
+    model_id: &str,
+    initial: EmbeddedOpenAiRequestDefaults,
+) -> RegisteredRequestDefaultsProbe {
+    RegisteredRequestDefaultsProbe(LiveRequestDefaults::register(model_id, initial))
+}
+
 #[cfg(test)]
 impl From<EmbeddedOpenAiRequestDefaults> for LiveRequestDefaults {
     /// A cell no `replace_live_request_defaults` call can reach, for backends

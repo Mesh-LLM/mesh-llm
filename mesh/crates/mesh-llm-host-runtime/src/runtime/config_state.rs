@@ -139,8 +139,14 @@ impl PendingConfigApply {
         }
     }
 
+    /// Whether this apply changes request defaults, so models were swapped (or
+    /// at least tried) and a failed persist has to put them back.
+    fn changes_request_defaults(&self) -> bool {
+        self.previous_request_defaults_config.is_some()
+    }
+
     pub(crate) fn apply_live_request_defaults(&self) -> bool {
-        if self.previous_request_defaults_config.is_none() {
+        if !self.changes_request_defaults() {
             return false;
         }
         if live_request_defaults::apply_to_loaded_models(&self.config) {
@@ -587,6 +593,7 @@ where
     let live_logging_applied = pending.apply_live_logging();
     let live_kv_disk_rollback = pending.apply_live_kv_disk();
     let live_kv_disk_applied = live_kv_disk_rollback.is_some();
+    let request_defaults_attempted = pending.changes_request_defaults();
     let live_request_defaults_applied = pending.apply_live_request_defaults();
     let persistence = persist(&pending);
     if live_logging_applied && matches!(&persistence, ConfigPersistence::PersistError(_)) {
@@ -600,7 +607,7 @@ where
     {
         super::kv_disk_config::restore_live_kv_disk_limits(rollback);
     }
-    if live_request_defaults_applied && matches!(&persistence, ConfigPersistence::PersistError(_)) {
+    if request_defaults_attempted && matches!(&persistence, ConfigPersistence::PersistError(_)) {
         pending.restore_live_request_defaults();
     }
     let result = finish(pending, persistence);

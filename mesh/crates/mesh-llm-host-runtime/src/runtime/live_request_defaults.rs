@@ -5,6 +5,10 @@
 //! Loads register here what is needed to resolve a model's defaults again, and
 //! a config apply re-resolves them against the new config and swaps them into
 //! the running backends.
+//!
+//! A load works from the config copy its lifecycle captured, which can predate
+//! an apply, and an apply can land while a model is still loading. So the last
+//! applied config is kept, and each load syncs to it once its backend is up.
 
 use std::sync::Mutex;
 
@@ -20,9 +24,18 @@ struct TrackedModel {
     /// `models[].model` selector that picks this model's config entry.
     config_model_id: Option<String>,
     package_generation: Option<PackageGenerationInfo>,
+    /// A swap has reached the model's backend. Until then a swap that finds no
+    /// backend means the model is still loading, not that it is gone.
+    registered: bool,
 }
 
-static TRACKED: Mutex<Vec<TrackedModel>> = Mutex::new(Vec::new());
+/// Tracked models plus the last config applied to them.
+pub(crate) struct LiveRequestDefaults {
+    tracked: Mutex<Vec<TrackedModel>>,
+    latest: Mutex<Option<MeshConfig>>,
+}
+
+static LIVE: LiveRequestDefaults = LiveRequestDefaults::new();
 
 /// Remember how to re-resolve the request defaults of the model about to load.
 pub(crate) fn track_model(
@@ -30,90 +43,169 @@ pub(crate) fn track_model(
     config_model_id: Option<&str>,
     package_generation: Option<&PackageGenerationInfo>,
 ) {
-    track_model_in(
-        &TRACKED,
+    LIVE.track_model(backend_model_id, config_model_id, package_generation);
+}
+
+/// Bring a model whose backend just came up in line with the last applied
+/// config. Call it once the load has finished.
+pub(crate) fn sync_after_load(backend_model_id: &str) {
+    LIVE.sync_after_load(
         backend_model_id,
-        config_model_id,
-        package_generation,
+        skippy_serving::replace_live_request_defaults,
     );
 }
 
-fn track_model_in(
-    registry: &Mutex<Vec<TrackedModel>>,
-    backend_model_id: &str,
-    config_model_id: Option<&str>,
-    package_generation: Option<&PackageGenerationInfo>,
-) {
-    let mut tracked = registry
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    tracked.retain(|entry| entry.backend_model_id != backend_model_id);
-    tracked.push(TrackedModel {
-        backend_model_id: backend_model_id.to_string(),
-        config_model_id: config_model_id.map(str::to_string),
-        package_generation: package_generation.cloned(),
-    });
+/// Swap the request defaults `config` resolves to into every loaded model.
+/// Returns whether every tracked model was updated; a model whose defaults no
+/// longer resolve keeps the ones it is serving with.
+pub(crate) fn apply_to_loaded_models(config: &MeshConfig) -> bool {
+    LIVE.apply(config, skippy_serving::replace_live_request_defaults)
 }
 
 /// Whether any request default differs between two configs.
 pub(crate) fn request_defaults_changed(old: &MeshConfig, new: &MeshConfig) -> bool {
-    request_defaults_fingerprint(old) != request_defaults_fingerprint(new)
+    let global = |config: &MeshConfig| {
+        config
+            .defaults
+            .as_ref()
+            .and_then(|defaults| defaults.request_defaults.as_ref())
+            .cloned()
+    };
+    let per_model = |config: &MeshConfig| {
+        config
+            .models
+            .iter()
+            .filter_map(|entry| Some((entry.model.clone(), entry.request_defaults.clone()?)))
+            .collect::<Vec<_>>()
+    };
+    global(old) != global(new) || per_model(old) != per_model(new)
 }
 
-fn request_defaults_fingerprint(config: &MeshConfig) -> serde_json::Value {
-    let global = config
-        .defaults
-        .as_ref()
-        .and_then(|defaults| defaults.request_defaults.as_ref());
-    let per_model: Vec<_> = config
-        .models
-        .iter()
-        .filter_map(|entry| Some((&entry.model, entry.request_defaults.as_ref()?)))
-        .collect();
-    serde_json::json!({ "global": global, "models": per_model })
-}
+impl LiveRequestDefaults {
+    const fn new() -> Self {
+        Self {
+            tracked: Mutex::new(Vec::new()),
+            latest: Mutex::new(None),
+        }
+    }
 
-/// Re-resolve every tracked model against `config` and swap the result into its
-/// running backends. Returns whether every loaded model was updated; a model
-/// whose defaults no longer resolve keeps the ones it is serving with.
-pub(crate) fn apply_to_loaded_models(config: &MeshConfig) -> bool {
-    apply_with(
-        &TRACKED,
-        config,
-        skippy_serving::replace_live_request_defaults,
-    )
-}
+    fn track_model(
+        &self,
+        backend_model_id: &str,
+        config_model_id: Option<&str>,
+        package_generation: Option<&PackageGenerationInfo>,
+    ) {
+        let mut tracked = lock(&self.tracked);
+        tracked.retain(|entry| entry.backend_model_id != backend_model_id);
+        tracked.push(TrackedModel {
+            backend_model_id: backend_model_id.to_string(),
+            config_model_id: config_model_id.map(str::to_string),
+            package_generation: package_generation.cloned(),
+            registered: false,
+        });
+    }
 
-fn apply_with(
-    registry: &Mutex<Vec<TrackedModel>>,
-    config: &MeshConfig,
-    replace: impl Fn(&str, EmbeddedOpenAiRequestDefaults) -> usize,
-) -> bool {
-    let mut tracked = registry
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut all_applied = true;
-    tracked.retain(|entry| {
-        let defaults = match skippy::resolve_embedded_request_defaults(
-            config,
-            entry.config_model_id.as_deref(),
-            entry.package_generation.as_ref(),
-        ) {
-            Ok(defaults) => defaults,
-            Err(error) => {
-                tracing::warn!(
-                    model = %entry.backend_model_id,
-                    %error,
-                    "request defaults did not resolve; model keeps its current defaults"
-                );
-                all_applied = false;
-                return true;
-            }
+    fn sync_after_load(
+        &self,
+        backend_model_id: &str,
+        replace: impl Fn(&str, EmbeddedOpenAiRequestDefaults) -> usize,
+    ) {
+        let Some(latest) = lock(&self.latest).clone() else {
+            return;
         };
-        // Zero updated backends means the model has unloaded since it was tracked.
-        replace(&entry.backend_model_id, defaults) > 0
-    });
-    all_applied
+        let Some(entry) = self
+            .snapshot(|entry| entry.backend_model_id == backend_model_id)
+            .pop()
+        else {
+            return;
+        };
+        if let Some(defaults) = resolve(&entry, &latest) {
+            self.mark_registered(
+                &entry.backend_model_id,
+                replace(&entry.backend_model_id, defaults),
+            );
+        }
+    }
+
+    fn apply(
+        &self,
+        config: &MeshConfig,
+        replace: impl Fn(&str, EmbeddedOpenAiRequestDefaults) -> usize,
+    ) -> bool {
+        *lock(&self.latest) = Some(config.clone());
+        // Resolving can read a template file from disk, so keep it off the lock
+        // that every model load takes.
+        let entries = self.snapshot(|_| true);
+        let mut all_applied = true;
+        let mut gone = Vec::new();
+        for entry in &entries {
+            let Some(defaults) = resolve(entry, config) else {
+                all_applied = false;
+                continue;
+            };
+            let updated = replace(&entry.backend_model_id, defaults);
+            if updated > 0 {
+                self.mark_registered(&entry.backend_model_id, updated);
+            } else if entry.registered {
+                gone.push(entry.backend_model_id.clone());
+            }
+        }
+        lock(&self.tracked).retain(|entry| !gone.contains(&entry.backend_model_id));
+        all_applied
+    }
+
+    fn snapshot(&self, keep: impl Fn(&TrackedModel) -> bool) -> Vec<TrackedModel> {
+        lock(&self.tracked)
+            .iter()
+            .filter(|entry| keep(entry))
+            .map(|entry| TrackedModel {
+                backend_model_id: entry.backend_model_id.clone(),
+                config_model_id: entry.config_model_id.clone(),
+                package_generation: entry.package_generation.clone(),
+                registered: entry.registered,
+            })
+            .collect()
+    }
+
+    fn mark_registered(&self, backend_model_id: &str, updated: usize) {
+        if updated == 0 {
+            return;
+        }
+        if let Some(entry) = lock(&self.tracked)
+            .iter_mut()
+            .find(|entry| entry.backend_model_id == backend_model_id)
+        {
+            entry.registered = true;
+        }
+    }
+}
+
+/// Resolve and validate a tracked model's defaults, or warn and return `None`
+/// so the model keeps serving with the ones it has.
+fn resolve(entry: &TrackedModel, config: &MeshConfig) -> Option<EmbeddedOpenAiRequestDefaults> {
+    let resolved = skippy::resolve_embedded_request_defaults(
+        config,
+        entry.config_model_id.as_deref(),
+        entry.package_generation.as_ref(),
+    )
+    .and_then(|defaults| defaults.validate().map(|()| defaults));
+    match resolved {
+        Ok(defaults) => Some(defaults),
+        Err(error) => {
+            tracing::warn!(
+                model = %entry.backend_model_id,
+                %error,
+                "request defaults did not resolve; model keeps its current defaults"
+            );
+            None
+        }
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[cfg(test)]

@@ -319,6 +319,7 @@ pub(super) async fn load_split_runtime_generation_inner(
     })
     .await
     .context("join load skippy stage0 config task")??;
+    live_request_defaults::sync_after_load(&model_ref);
     let stage0_output = handle
         .output_activation_boundary()
         .context("stage 0 graph did not expose its output activation boundary")?;

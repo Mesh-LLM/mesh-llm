@@ -52,6 +52,8 @@ pub use self::generation::{
     embedded_openai_router, replace_live_request_defaults, serve_embedded_openai,
     serve_embedded_openai_with_shutdown, serve_openai_backend_with_shutdown,
 };
+#[cfg(feature = "test-support")]
+pub use self::generation::{RegisteredRequestDefaultsProbe, register_request_defaults_probe};
 pub use self::generation::{
     default_generation_queue_capacity, resolve_adaptive_generation_min_concurrency,
 };
