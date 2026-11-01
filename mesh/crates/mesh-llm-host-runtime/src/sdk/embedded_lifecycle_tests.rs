@@ -125,6 +125,12 @@ fn isolated<F: std::future::Future<Output = ()>>(name: &str, scenario: fn() -> F
         return;
     }
     let temp = tempfile::tempdir().unwrap();
+    // Keep an explicit installed-runtime cache for opt-in native tests; otherwise
+    // resolve in the fixture without consulting HOME or platform cache paths.
+    let runtime_cache = std::env::var_os("MESH_LLM_NATIVE_RUNTIME_CACHE_DIR")
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| temp.path().join("native-runtimes"));
     let executable = std::env::current_exe().unwrap();
     #[cfg(target_os = "macos")]
     let executable = {
@@ -152,12 +158,7 @@ fn isolated<F: std::future::Future<Output = ()>>(name: &str, scenario: fn() -> F
         // Lifecycle barriers use local fixtures, not the availability of GitHub.
         .env(mesh_llm_config::MESH_LLM_NO_UPDATE_CHECK_ENV, "1")
         .env("HF_ENDPOINT", endpoint)
-        .env(
-            "MESH_LLM_NATIVE_RUNTIME_CACHE_DIR",
-            crate::system::native_runtime_install::default_native_runtime_cache()
-                .unwrap()
-                .root(),
-        )
+        .env("MESH_LLM_NATIVE_RUNTIME_CACHE_DIR", runtime_cache)
         .env("HF_HOME", temp.path().join("hf"))
         .env("HF_HUB_CACHE", temp.path().join("hf/hub"))
         .env("HF_XET_CACHE", temp.path().join("hf/xet"))
