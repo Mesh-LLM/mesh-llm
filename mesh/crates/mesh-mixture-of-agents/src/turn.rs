@@ -50,6 +50,31 @@ pub struct TurnResult {
     pub turn_kind: TurnKind,
     /// Wall-clock time for this turn.
     pub elapsed_ms: u64,
+    /// The worker drafts the final answer was synthesized from, in the order
+    /// they were gathered. Empty on tool turns, tool-result turns, and failed
+    /// turns. Paired with `response_body` these are the (small worker →
+    /// synthesized answer) distillation pairs a self-training node captures.
+    pub drafts: Vec<Draft>,
+}
+
+/// One worker's answer text as fed to arbitration and synthesis.
+#[derive(Debug, Clone)]
+pub struct Draft {
+    pub model: String,
+    pub role: WorkerRole,
+    pub text: String,
+    pub confidence: f32,
+}
+
+impl Draft {
+    pub fn from_output(output: &normalize::WorkerOutput) -> Self {
+        Self {
+            model: output.model.clone(),
+            role: output.role,
+            text: output.payload.clone(),
+            confidence: output.confidence,
+        }
+    }
 }
 
 #[derive(Debug)]

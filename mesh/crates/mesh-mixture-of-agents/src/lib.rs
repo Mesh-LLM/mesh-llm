@@ -64,8 +64,10 @@ pub(crate) use response::{
 };
 pub(crate) use tool_guard::enforce_tool_call_contract;
 pub(crate) use turn::ForcedToolChoice;
-pub use turn::{TurnKind, TurnResult, WorkerSummary};
-pub use worker::{SMALL_TIER_MAX_B, entry_is_small_tier, strip_thinking, truncate_chars};
+pub use turn::{Draft, TurnKind, TurnResult, WorkerSummary};
+pub use worker::{
+    SMALL_TIER_MAX_B, WorkerRole, entry_is_small_tier, strip_thinking, truncate_chars,
+};
 
 /// The virtual model name that triggers MoA routing.
 pub const VIRTUAL_MODEL_NAME: &str = "mesh";

@@ -3,6 +3,8 @@ use mesh_llm_plugin::{
     SimplePlugin, VirtualModelInvocation, VirtualModelResponse, VirtualModelRouter,
     operation_with_schema, plugin_server_info, structured_tool_result, virtual_model,
 };
+pub mod capture;
+
 use mesh_mixture_of_agents as moa;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -202,6 +204,7 @@ async fn handle(
     };
     let mut result = moa::handle_turn(&config, &invocation.request).await;
     strip_response_thinking(&mut result.response_body);
+    capture::capture_turn(&invocation.request, &result);
     let workers_ok = result
         .worker_summaries
         .iter()
