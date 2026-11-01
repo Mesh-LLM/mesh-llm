@@ -765,14 +765,21 @@ mod tests {
             first.insert(layer, vec![1.0, 2.0]).unwrap();
         }
         let mut frame = frame(1);
-        first.append_to_frame(&mut frame).unwrap();
+        // BF16 round-trips these values exactly, so the frame decodes to them.
+        first
+            .append_to_frame_as(&mut frame, DFlashFeatureEncoding::Bf16)
+            .unwrap();
         assert_eq!(frame.desc.part_count as usize, ACTIVATION_MAX_PARTS - 1);
         let before = frame.clone();
 
         let mut second = DFlashFeatureRows::new(2, 1);
         second.insert(100, vec![3.0, 4.0]).unwrap();
         second.insert(101, vec![5.0, 6.0]).unwrap();
-        assert!(second.append_to_frame(&mut frame).is_err());
+        assert!(
+            second
+                .append_to_frame_as(&mut frame, DFlashFeatureEncoding::Bf16)
+                .is_err()
+        );
 
         assert_eq!(frame.payload, before.payload);
         assert_eq!(frame.desc.part_count, before.desc.part_count);
