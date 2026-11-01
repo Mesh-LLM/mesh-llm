@@ -404,7 +404,10 @@ fn advance_iteration_counts(requests: &mut [IterationBatchRequest<'_>]) -> Resul
         request.session.token_count = count;
         let rows = request.token_ids.len();
         let decoded = DecodedRows::for_prefill(rows, request.positions).offset(first_row);
-        request.session.dflash_after_decode(decoded);
+        match request.phase {
+            IterationBatchPhase::Prefill => request.session.dflash_after_prefill(decoded),
+            IterationBatchPhase::Decode => request.session.dflash_after_decode(decoded),
+        }
         first_row += rows;
     }
     Ok(())

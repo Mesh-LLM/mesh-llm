@@ -104,15 +104,15 @@ pub struct DFlashProposal {
 }
 
 /// Where a session's draft spent its time since the session was last
-/// activated. Only decode-sized injections count; a prefill's rows are not
-/// per-window draft work.
+/// activated. Only injections of decode rows count; a prefill's rows are not
+/// per-window draft work, whatever their chunk size.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DFlashDraftStats {
     /// Block drafts, including empty ones from a draft without context.
     pub proposals: u64,
     /// Time in block decodes.
     pub propose_us: u64,
-    /// Decode-sized feature injections, and the time they took.
+    /// Feature injections of decode rows, and the time they took.
     pub ingests: u64,
     pub ingest_us: u64,
 }
@@ -355,7 +355,8 @@ impl DFlashDraft {
 
     /// Injects the target features for `positions.len()` rows of the last
     /// target decode, starting at batch row `first_row`. Layers an earlier
-    /// stage owns come from the trailing rows of `remote`.
+    /// stage owns come from the trailing rows of `remote`. Rows stream from
+    /// the capture buffer into the draft microbatches without a full copy.
     pub(crate) fn ingest(
         &mut self,
         seq_id: i32,
@@ -363,14 +364,20 @@ impl DFlashDraft {
         positions: &[i32],
         remote: Option<(&DFlashFeatureRows, usize)>,
     ) -> Result<()> {
-        let features = self.gather_features(first_row, positions, remote)?;
-        self.ingest_features(seq_id, &features, positions)
+        if positions.is_empty() {
+            return Ok(());
+        }
+        let layers = self.feature_layers(first_row, positions.len(), remote)?;
+        let n_embd = self.n_embd_target;
+        self.inject_rows(seq_id, positions, |row| {
+            target_feature_row(&layers, n_embd, row)
+        })
     }
 
     /// The draft's encoder input for `positions.len()` rows of the last
     /// target decode, one row after another, every target layer per row.
     /// Copied out, so it outlives the capture buffer the next target decode
-    /// overwrites.
+    /// overwrites; only a deferred ingest needs that.
     fn gather_features(
         &self,
         first_row: usize,
@@ -380,15 +387,33 @@ impl DFlashDraft {
         if positions.is_empty() {
             return Ok(Vec::new());
         }
+        let layers = self.feature_layers(first_row, positions.len(), remote)?;
+        let mut features = Vec::with_capacity(positions.len() * self.n_embd_target * layers.len());
+        for row in 0..positions.len() {
+            features.extend(target_feature_row(&layers, self.n_embd_target, row));
+        }
+        Ok(features)
+    }
+
+    /// Each target layer's rows of the last target decode, from batch row
+    /// `first_row`: this stage's own from the capture buffer, an earlier
+    /// stage's from the trailing rows of `remote`. The capture rows stay
+    /// valid until the next target decode, which cannot run while the draft
+    /// is borrowed.
+    fn feature_layers<'r>(
+        &self,
+        first_row: usize,
+        rows: usize,
+        remote: Option<(&'r DFlashFeatureRows, usize)>,
+    ) -> Result<Vec<&'r [f32]>> {
         // The capture buffer holds `n_batch` rows per layer, filled by the
         // target decode that just ran; reading past it would be out of bounds.
         let rows_needed = first_row
-            .checked_add(positions.len())
+            .checked_add(rows)
             .filter(|rows| *rows <= self.target_n_batch)
             .ok_or_else(|| {
                 anyhow!(
-                    "{} target rows from row {first_row} exceed the capture buffer of {} rows",
-                    positions.len(),
+                    "{rows} target rows from row {first_row} exceed the capture buffer of {} rows",
                     self.target_n_batch
                 )
             })?;
@@ -397,10 +422,10 @@ impl DFlashDraft {
         let mut layers = Vec::with_capacity(self.info.target_layer_ids.len());
         for (&lid, &local) in self.info.target_layer_ids.iter().zip(&self.local_layers) {
             if !local {
-                let rows = remote
-                    .and_then(|(remote, start)| remote.rows_of(lid, start, positions.len()))
+                let layer_rows = remote
+                    .and_then(|(remote, start)| remote.rows_of(lid, start, rows))
                     .ok_or_else(|| anyhow!("target layer {lid} features did not arrive"))?;
-                layers.push(rows);
+                layers.push(layer_rows);
                 continue;
             }
             // The native getter aborts unless the buffer is allocated. Capture
@@ -411,14 +436,11 @@ impl DFlashDraft {
             if data.is_null() {
                 bail!("target layer {lid} input was not captured");
             }
-            let all = unsafe { std::slice::from_raw_parts(data.cast_const(), layer_len) };
+            let all: &'r [f32] =
+                unsafe { std::slice::from_raw_parts(data.cast_const(), layer_len) };
             layers.push(&all[first_value..]);
         }
-        let mut features = Vec::with_capacity(positions.len() * self.n_embd_target * layers.len());
-        for row in 0..positions.len() {
-            features.extend(target_feature_row(&layers, self.n_embd_target, row));
-        }
-        Ok(features)
+        Ok(layers)
     }
 
     /// Injects gathered encoder rows at `positions`, in microbatches.
@@ -427,16 +449,25 @@ impl DFlashDraft {
             return Ok(());
         }
         let row_len = features.len() / positions.len();
+        self.inject_rows(seq_id, positions, |row| {
+            features[row * row_len..(row + 1) * row_len].iter().copied()
+        })
+    }
+
+    /// Injects one encoder row per position, `row(index)` giving its values,
+    /// in microbatches of `n_ubatch` rows.
+    fn inject_rows<I: IntoIterator<Item = f32>>(
+        &mut self,
+        seq_id: i32,
+        positions: &[i32],
+        mut row: impl FnMut(usize) -> I,
+    ) -> Result<()> {
         for (chunk_index, chunk) in positions.chunks(self.n_ubatch).enumerate() {
             self.batch.clear();
             let chunk_row = chunk_index * self.n_ubatch;
             for (offset, &position) in chunk.iter().enumerate() {
-                let row = chunk_row + offset;
-                self.batch.push_features(
-                    features[row * row_len..(row + 1) * row_len].iter().copied(),
-                    position,
-                    seq_id,
-                );
+                self.batch
+                    .push_features(row(chunk_row + offset), position, seq_id);
             }
             let rc = unsafe { (self.api.decode)(self.ctx, self.batch.as_raw(self.mrope)) };
             if rc != 0 {
@@ -844,18 +875,15 @@ impl DFlashSessionLink {
             }
             injected
         });
-        self.record_ingest(pending.positions.len(), started);
+        // Only decode rows are deferred.
+        self.record_ingest(started);
         self.finish_ingest(injected, pending.end);
     }
 
-    fn record_ingest(&mut self, rows: usize, started: Instant) {
-        if rows <= MAX_BLOCK_SIZE {
-            self.stats.ingests += 1;
-            self.stats.ingest_us = self
-                .stats
-                .ingest_us
-                .saturating_add(u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX));
-        }
+    /// Counts one injection of decode rows as draft time.
+    fn record_ingest(&mut self, started: Instant) {
+        self.stats.ingests += 1;
+        self.stats.ingest_us = self.stats.ingest_us.saturating_add(elapsed_us(started));
     }
 
     fn finish_ingest(&mut self, injected: Option<Result<()>>, end: u64) {
@@ -887,6 +915,15 @@ fn lock_recovering<T>(mutex: &Mutex<T>, reset: impl FnOnce(&mut T)) -> MutexGuar
         mutex.clear_poison();
         guard
     })
+}
+
+/// Which kind of target decode produced the rows a draft ingests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TargetPhase {
+    /// Prompt prefill: context for the draft, not per-window draft work.
+    Prefill,
+    /// Token decode and verify windows.
+    Decode,
 }
 
 /// Rows of the last target decode that belong to one session.
@@ -1068,9 +1105,19 @@ impl StageSession {
         self.dflash.as_ref().map(|link| link.stats)
     }
 
+    /// Feeds the target features of this session's rows in the last prefill
+    /// chunk to the draft. Their injection is not counted as draft time.
+    pub(crate) fn dflash_after_prefill(&mut self, rows: DecodedRows<'_>) {
+        self.dflash_after_target(rows, TargetPhase::Prefill);
+    }
+
     /// Feeds the target features of this session's rows in the last decode to
     /// the draft.
     pub(crate) fn dflash_after_decode(&mut self, rows: DecodedRows<'_>) {
+        self.dflash_after_target(rows, TargetPhase::Decode);
+    }
+
+    fn dflash_after_target(&mut self, rows: DecodedRows<'_>, phase: TargetPhase) {
         let (span_row, span_count) = rows.span();
         let remote = match self.dflash_split.as_mut() {
             Some(split) => {
@@ -1130,7 +1177,7 @@ impl StageSession {
             }
         };
         let remote = remote.as_ref().map(|(rows, consumed)| (rows, *consumed));
-        if defer && span_count <= MAX_BLOCK_SIZE {
+        if defer && phase == TargetPhase::Decode && span_count <= MAX_BLOCK_SIZE {
             let gathered =
                 link.with_draft(|draft, _| draft.gather_features(first_row, positions, remote));
             match gathered {
@@ -1162,7 +1209,9 @@ impl StageSession {
             }
             injected
         });
-        link.record_ingest(span_count, started);
+        if phase == TargetPhase::Decode {
+            link.record_ingest(started);
+        }
         link.finish_ingest(injected, end);
     }
 
@@ -1211,10 +1260,10 @@ impl StageSession {
             Some(position) => {
                 if position > 0 {
                     write_native_log_note(format!(
-                        "dflash draft context cleared: target restored to position {position} without its features"
+                        "dflash draft restarts at position {position}: the target was restored there, so the draft drafts from the rows decoded after it"
                     ));
                 }
-                link.context.cleared(position);
+                link.context.restarted_at(position);
             }
             None => link.context.lose(0),
         }
