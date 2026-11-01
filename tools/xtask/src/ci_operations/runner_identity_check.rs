@@ -4,6 +4,7 @@
 
 use crate::ci_operations::catalog_validation::validate;
 use crate::ci_operations::json_access::{Outcome, item, item_by, object, require};
+use crate::ci_operations::prepared_images::check_prepared_images;
 use crate::ci_operations::runner_identity::read_json;
 use crate::ci_operations::sdk_census::check_sdk;
 use crate::ci_operations::seed_census::check_seed;
@@ -66,6 +67,7 @@ pub(crate) fn check(catalog: &Json, root: &Path) -> Outcome<Json> {
     validate(catalog, root)?;
     let workflows = load_workflows(catalog, root)?;
     let locations = check_bindings(catalog, &workflows)?;
+    check_prepared_images(catalog, &workflows, root)?;
     let (runtime_workflow, runtime_job, _) = runtime_consumer(catalog)?;
     let jobs = workflows
         .get(&runtime_workflow)
