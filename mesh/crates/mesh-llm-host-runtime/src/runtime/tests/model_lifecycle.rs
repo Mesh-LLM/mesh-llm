@@ -79,6 +79,7 @@ async fn model_target_reconciliation_replacement_unloads_before_loading() {
             spec,
             config_model_id,
             profile,
+            sizing: _,
             resp,
         }) => {
             assert_eq!(spec, "/models/large.gguf");
@@ -103,6 +104,53 @@ async fn model_target_reconciliation_replacement_unloads_before_loading() {
         .expect("replacement action should finish");
     assert_eq!(result.model, "Large");
     assert!(control_rx.try_recv().is_err());
+}
+
+#[test]
+fn pending_load_rejects_explicit_sizing_and_stacks_default_sizing() {
+    let mut state = ModelTargetReconciliationState::default();
+    let model_ref = "org/model@main:model.gguf";
+    let profile = "low-ctx";
+    state.mark_load_started(model_ref, profile);
+    for sizing in [
+        api::RuntimeLoadSizing {
+            ctx_size: Some(8192),
+            parallel: None,
+        },
+        api::RuntimeLoadSizing {
+            ctx_size: None,
+            parallel: Some(2),
+        },
+    ] {
+        let (rejected_tx, rejected_rx) = tokio::sync::oneshot::channel();
+        state.stack_pending_load_completion(model_ref, profile, sizing, rejected_tx);
+        let error = rejected_rx.blocking_recv().unwrap().unwrap_err();
+        assert!(error.to_string().contains("cannot be applied"));
+    }
+
+    let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+    state.stack_pending_load_completion(
+        model_ref,
+        profile,
+        api::RuntimeLoadSizing::default(),
+        accepted_tx,
+    );
+    state.notify_load_success(
+        model_ref,
+        profile,
+        api::RuntimeLoadResponse {
+            model_ref: model_ref.to_string(),
+            model: "Model".to_string(),
+            instance_id: "runtime-1".to_string(),
+            profile: profile.to_string(),
+            backend: Some("skippy".to_string()),
+            context_length: Some(4096),
+        },
+    );
+    assert_eq!(
+        accepted_rx.blocking_recv().unwrap().unwrap().instance_id,
+        "runtime-1"
+    );
 }
 
 #[test]
@@ -569,5 +617,28 @@ fn runtime_load_ctx_size_prefers_cli_override_over_model_override() {
     assert_eq!(
         runtime_model_ctx_size_override(&options, Some(&model)),
         Some(8192)
+    );
+}
+
+#[test]
+fn load_failure_reaches_waiting_callers_with_its_whole_cause_chain() {
+    let model = "org/model@main:model.gguf";
+    let mut state = ModelTargetReconciliationState::default();
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    state.stack_load_completion(model, "", tx);
+    let failure = anyhow::anyhow!("error loading model: tensor data is not within the file bounds")
+        .context("load Skippy runtime for model org/model");
+
+    state.notify_load_failure(model, "", &failure);
+
+    let reported = rx
+        .try_recv()
+        .expect("waiting caller is answered")
+        .expect_err("the load failed")
+        .to_string();
+    assert!(reported.contains("load Skippy runtime"), "{reported}");
+    assert!(
+        reported.contains("not within the file bounds"),
+        "{reported}"
     );
 }

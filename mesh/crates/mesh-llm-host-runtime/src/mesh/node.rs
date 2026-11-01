@@ -1184,7 +1184,7 @@ impl Node {
         // endpoints share one id.
         let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
             .secret_key(secret_key)
-            .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+            .alpns(vec![ALPN_CONTROL_V2.to_vec()])
             .clear_ip_transports()
             .bind_addr(bind_addr.unwrap_or_else(default_control_bind_addr))?
             .relay_mode(iroh::endpoint::RelayMode::Disabled)
@@ -1557,20 +1557,6 @@ impl Node {
         };
         descriptors.extend(peer_descriptors);
         descriptors
-    }
-
-    pub async fn all_model_runtime_descriptors(&self) -> Vec<ModelRuntimeDescriptor> {
-        let mut runtimes = self.model_runtime_descriptors.lock().await.clone();
-        let peer_runtimes = {
-            let state = self.state.lock().await;
-            state
-                .peers
-                .values()
-                .flat_map(|peer| peer.served_model_runtime.clone())
-                .collect::<Vec<_>>()
-        };
-        runtimes.extend(peer_runtimes);
-        runtimes
     }
 
     pub async fn serving_models(&self) -> Vec<String> {

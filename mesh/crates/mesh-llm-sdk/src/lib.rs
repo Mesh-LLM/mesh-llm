@@ -4,6 +4,9 @@
 pub mod embedded_node;
 
 #[cfg(feature = "serving")]
+pub mod documents;
+
+#[cfg(feature = "serving")]
 pub mod live_transcription;
 
 /// Native discovery and inference types. Model metadata contains advertised
@@ -57,6 +60,9 @@ pub mod inference {
         ModelTarget, ReasoningEffort,
     };
 }
+
+#[cfg(feature = "serving")]
+pub mod models;
 
 #[cfg(feature = "serving")]
 pub use embedded_node::{

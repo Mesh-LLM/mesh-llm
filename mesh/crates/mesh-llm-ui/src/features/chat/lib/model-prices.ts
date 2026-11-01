@@ -1,31 +1,38 @@
-/** Per-model payment summary from the OpenAI `/v1/models` listing (`payment` block). Descriptive only. */
+/** Per-model payment summary from the `/mesh/v1/models` discovery listing (per-provider `payment`). Descriptive only. */
 export type ModelPayment = { freeAvailable: boolean; paidAvailable: boolean; outputMsatPerMillion?: number }
 
-type RawOffer = { local?: unknown; paid?: unknown; pricing?: { output_msat_per_million?: unknown } | null }
-type RawModel = {
-  id?: unknown
-  payment?: { model?: unknown; free_available?: unknown; paid_available?: unknown; offers?: unknown }
-}
+/** A provider entry from `/mesh/v1/models`; discovery keeps offline providers listed with `available: false`. */
+type RawPayment = { paid?: unknown; pricing?: { output_msat_per_million?: unknown } | null }
+type RawProvider = { local?: unknown; available?: unknown; payment?: RawPayment | null }
+type RawModel = { id?: unknown; providers?: unknown }
 
 export function parseModelPayments(body: unknown): Map<string, ModelPayment> {
   const result = new Map<string, ModelPayment>()
   const data = (body as { data?: unknown } | null)?.data
   if (!Array.isArray(data)) return result
   for (const item of data as RawModel[]) {
-    if (typeof item?.id !== 'string' || !item.payment) continue
-    const offers = Array.isArray(item.payment.offers) ? (item.payment.offers as RawOffer[]) : []
-    const rates = offers
-      .filter((offer) => offer.paid === true)
-      .map((offer) => offer.pricing?.output_msat_per_million)
+    if (typeof item?.id !== 'string') continue
+    // Availability gates every derived field: an offline free or local provider
+    // must not make the model free-available, and offline paid rates must not
+    // set the shown minimum.
+    const providers = (Array.isArray(item.providers) ? (item.providers as RawProvider[]) : []).filter(
+      (provider) => provider?.available !== false
+    )
+    if (!providers.some((provider) => provider?.payment != null)) continue
+    const rates = providers
+      .map((provider) => provider.payment)
+      .filter((payment): payment is RawPayment => payment != null && payment.paid === true)
+      .map((payment) => payment.pricing?.output_msat_per_million)
       .filter((rate): rate is number => typeof rate === 'number')
     const payment = {
-      freeAvailable: item.payment.free_available === true || offers.some((offer) => offer.local === true),
-      paidAvailable: item.payment.paid_available === true,
+      // A local provider is free for this node even when it advertises paid
+      // offers, and an advertised free offer keeps the model free elsewhere.
+      freeAvailable: providers.some((provider) => provider?.local === true || provider?.payment?.paid === false),
+      paidAvailable: providers.some((provider) => provider?.payment?.paid === true),
       outputMsatPerMillion: rates.length > 0 ? Math.min(...rates) : undefined
     }
+    // Discovery IDs are the public request identities, profile suffixes included.
     result.set(item.id, payment)
-    // The backend supplies the exact request/catalog identity, including any profile.
-    if (typeof item.payment.model === 'string') result.set(item.payment.model, payment)
   }
   return result
 }

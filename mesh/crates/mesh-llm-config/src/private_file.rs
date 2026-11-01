@@ -15,8 +15,62 @@
 //! never ignored.
 
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+
+/// Reads a small owner-only file after verifying its open handle.
+pub fn read_private_file(target: &Path) -> io::Result<Vec<u8>> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(target)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || is_link_or_reparse_point(&metadata) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "private file must be a regular file",
+        ));
+    }
+    platform::verify_private_file(&file)?;
+    let mut contents = Vec::new();
+    file.take(1025).read_to_end(&mut contents)?;
+    if contents.len() > 1024 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "private file exceeds 1024 bytes",
+        ));
+    }
+    Ok(contents)
+}
+
+/// Creates a complete owner-only file without replacing an existing target.
+///
+/// The file is written and synced before its name is published. Publishing
+/// requires hard-link support; unsupported filesystems return an error rather
+/// than exposing a partially written file.
+pub fn create_private_file_if_absent(target: &Path, contents: &[u8]) -> io::Result<()> {
+    let parent = match target.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    create_private_dirs(parent)?;
+    let (tmp, mut file) = create_private_temp(parent, target)?;
+    let written = file.write_all(contents).and_then(|()| file.sync_all());
+    drop(file);
+    let result = written.and_then(|()| fs::hard_link(&tmp, target));
+    fs::remove_file(&tmp)?;
+    result
+}
 
 pub(crate) fn write_private_file(target: &Path, contents: &[u8]) -> io::Result<()> {
     reject_link_or_special(target)?;
@@ -175,6 +229,20 @@ mod platform {
     pub(super) fn restrict_file(file: &fs::File) -> io::Result<()> {
         file.set_permissions(fs::Permissions::from_mode(0o600))
     }
+
+    pub(super) fn verify_private_file(file: &fs::File) -> io::Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = file.metadata()?;
+        // SAFETY: geteuid has no arguments and no preconditions.
+        let uid = unsafe { libc::geteuid() };
+        if !metadata.is_file() || metadata.uid() != uid || metadata.mode() & 0o077 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "private file must be owned by the current user and inaccessible to others",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(windows)]
@@ -219,6 +287,10 @@ mod platform {
             set_handle(file.as_raw_handle(), sid, &acl)?;
             verify_handle(file.as_raw_handle(), sid, ace_flags(false))
         })
+    }
+
+    pub(super) fn verify_private_file(file: &fs::File) -> io::Result<()> {
+        with_current_user_sid(|sid| verify_handle(file.as_raw_handle(), sid, ace_flags(false)))
     }
 
     #[cfg(test)]
@@ -539,6 +611,58 @@ mod tests {
         write_private_file(&target, b"second = 2\n").unwrap();
         assert_eq!(fs::read_to_string(&target).unwrap(), "second = 2\n");
         assert!(leftover_temp_files(temp.path()).is_empty());
+    }
+
+    #[test]
+    fn private_create_publishes_one_complete_value_without_replacement() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = temp.path().join("credential");
+        let results = std::thread::scope(|scope| {
+            (0..8)
+                .map(|index| {
+                    let target = &target;
+                    scope.spawn(move || {
+                        create_private_file_if_absent(target, format!("value-{index}\n").as_bytes())
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert!(
+            results
+                .iter()
+                .filter_map(|result| result.as_ref().err())
+                .all(|error| { error.kind() == io::ErrorKind::AlreadyExists })
+        );
+        let contents = fs::read_to_string(&target).unwrap();
+        assert!((0..8).any(|index| contents == format!("value-{index}\n")));
+        assert_eq!(read_private_file(&target).unwrap(), contents.as_bytes());
+        assert!(leftover_temp_files(temp.path()).is_empty());
+        #[cfg(unix)]
+        assert_eq!(mode(&target), 0o600);
+        #[cfg(windows)]
+        platform::verify_current_user_only(&target, false).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_read_rejects_a_permissive_file_or_symlink() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = temp.path().join("credential");
+        fs::write(&target, b"private").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            read_private_file(&target).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        let alias = temp.path().join("alias");
+        symlink(&target, &alias).unwrap();
+        assert!(read_private_file(&alias).is_err());
     }
 
     #[test]

@@ -132,7 +132,7 @@ impl MeshNodeHandle {
         body_json: String,
     ) -> Result<OpenAiResponseNative, FfiError> {
         let client = openai_client(self)?;
-        let response = block_on(client.request(&path, body_json))
+        let response = block_on(client.request_raw(&path, body_json))
             .map_err(|e| FfiError::OpenAiRequestFailed(e.to_string()))?;
         Ok(OpenAiResponseNative {
             status_code: response.status_code,
@@ -148,7 +148,7 @@ impl MeshNodeHandle {
         listener: Box<dyn OpenAiStreamListener>,
     ) -> Result<String, FfiError> {
         let client = openai_client(self)?;
-        let response = block_on(client.stream(&path, body_json))
+        let response = block_on(client.stream_raw(&path, body_json))
             .map_err(|e| FfiError::StreamFailed(e.to_string()))?;
         let request_id = format!("stream-{}", uuid::Uuid::new_v4());
         let id = request_id.clone();
@@ -190,7 +190,7 @@ impl MeshNodeHandle {
     }
 }
 
-fn openai_client(handle: &MeshNodeHandle) -> Result<OpenAiClient, FfiError> {
+pub(crate) fn openai_client(handle: &MeshNodeHandle) -> Result<OpenAiClient, FfiError> {
     let node = handle
         .node
         .lock()

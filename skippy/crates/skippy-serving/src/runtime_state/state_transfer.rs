@@ -98,6 +98,19 @@ impl RuntimeState {
         import_result
     }
 
+    /// Bytes [`Self::export_full_state`] would allocate, without copying state.
+    pub fn full_state_size(&mut self, session_id: &str) -> Result<u64> {
+        let layer_start = i32::try_from(self.model_layer_start())?;
+        let layer_end = i32::try_from(self.model_layer_end())?;
+        self.session(session_id)?
+            .full_state_size(layer_start, layer_end)
+    }
+
+    /// Bytes [`Self::export_recurrent_state`] would allocate, without copying state.
+    pub fn recurrent_state_size(&mut self, session_id: &str) -> Result<u64> {
+        self.session(session_id)?.recurrent_state_size()
+    }
+
     pub fn export_recurrent_state(&mut self, session_id: &str) -> Result<Vec<u8>> {
         let session = self.session(session_id)?;
         let result = session.export_recurrent_state();

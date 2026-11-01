@@ -1,995 +1,208 @@
-use crate::mesh;
-use crate::network::openai::client_stream::ClientStream;
-use crate::network::openai::request_parse::public_model_id;
-use crate::network::openai::routing_rank::{capabilities_for_model, descriptor_for_model};
-use tokio::io::AsyncWriteExt;
+//! Vendor-compatible projections of the Mesh discovery catalog.
+//!
+//! Rich metadata remains on `/mesh/v1/models`; these projections deliberately
+//! contain only fields belonging to the selected compatibility protocol.
 
-pub async fn send_models_list_with_descriptors(
-    mut stream: ClientStream,
-    models: &[String],
-    descriptors: &[mesh::ServedModelDescriptor],
-    runtimes: &[mesh::ModelRuntimeDescriptor],
-    virtual_models: &[crate::plugin::VirtualModelRoute],
-    node: Option<&mesh::Node>,
-) -> std::io::Result<()> {
-    let body = models_list_json_with_virtual(models, descriptors, runtimes, virtual_models);
-    #[cfg(feature = "payments")]
-    let body = {
-        let mut body = body;
-        if let Some(node) = node {
-            super::model_prices::attach_prices(&mut body, models, descriptors, node).await;
-        }
-        body
-    };
-    #[cfg(not(feature = "payments"))]
-    let _ = node;
-    let body = body.to_string();
-    let resp = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\n\r\n{}",
-        body.len(),
-        body
-    );
-    stream.write_all(resp.as_bytes()).await?;
-    stream.shutdown().await?;
-    Ok(())
+use mesh_llm_types::models::discovery::MeshModel;
+use serde_json::{Value, json};
+
+#[derive(Default)]
+struct AnthropicPage {
+    limit: Option<usize>,
+    before: Option<String>,
+    after: Option<String>,
 }
 
-#[cfg(test)]
-fn models_list_json(
-    models: &[String],
-    descriptors: &[mesh::ServedModelDescriptor],
-    runtimes: &[mesh::ModelRuntimeDescriptor],
-) -> serde_json::Value {
-    models_list_json_with_virtual(models, descriptors, runtimes, &[])
-}
-
-/// Add the mesh-wide capability union to the automatic directive's entry.
-///
-/// The directive is served by `crate::network::openai::automatic`, which hands
-/// the request to a capability-selected concrete model whenever the plugin
-/// route cannot honour it. So the entry has to describe the mesh, not the
-/// route: see `mesh_capability_union`.
-fn advertise_mesh_capability_union(
-    model: &mut serde_json::Value,
-    models: &[String],
-    descriptors: &[mesh::ServedModelDescriptor],
-    virtual_models: &[crate::plugin::VirtualModelRoute],
-) {
-    let union = mesh_capability_union(models, descriptors, virtual_models);
-    let Some(object) = model.as_object_mut() else {
-        return;
-    };
-    if let Some(capabilities) = object
-        .get_mut("capabilities")
-        .and_then(serde_json::Value::as_array_mut)
-    {
-        for (name, served) in [
-            ("multimodal", union.supports_multimodal_runtime()),
-            ("vision", union.supports_vision_runtime()),
-            ("audio", union.supports_audio_runtime()),
-            ("reasoning", union.reasoning_label().is_some()),
-            ("system_one", union.supports_system_one_runtime()),
-        ] {
-            let already_advertised = capabilities
-                .iter()
-                .any(|value| value.as_str() == Some(name));
-            if served && !already_advertised {
-                capabilities.push(serde_json::json!(name));
-            }
-        }
-        capabilities.sort_by(|left, right| {
-            left.as_str()
-                .unwrap_or_default()
-                .cmp(right.as_str().unwrap_or_default())
-        });
-    }
-    for (field, status) in [
-        ("multimodal_status", union.multimodal_status()),
-        ("vision_status", union.vision_status()),
-        ("audio_status", union.audio_status()),
-        ("reasoning_status", union.reasoning_status()),
-        ("system_one_status", union.system_one_status()),
-    ] {
-        object.insert(field.to_string(), serde_json::json!(status));
-    }
-}
-
-/// Capabilities the automatic directive can serve: the union across the mesh.
-///
-/// A committee is text-only by construction, but the directive is not the
-/// committee — a media request is served by a modality-capable model instead.
-/// So what the directive can accept is what *any* served model can accept.
-/// Plugin-owned virtual models are excluded: they are not concrete targets.
-fn mesh_capability_union(
-    models: &[String],
-    descriptors: &[mesh::ServedModelDescriptor],
-    virtual_models: &[crate::plugin::VirtualModelRoute],
-) -> crate::models::ModelCapabilities {
-    let mut union = crate::models::ModelCapabilities {
-        // `moe` describes one model's architecture, not something a caller can
-        // request, so it is not part of an admission union.
-        moe: false,
-        ..Default::default()
-    };
-    for model in models {
-        if virtual_models.iter().any(|route| route.model_id == *model) {
-            continue;
-        }
-        let (base_model, _) = crate::network::openai::ingress::parse_model_with_profile(model);
-        let caps = capabilities_for_model(base_model, descriptors);
-        union.multimodal |= caps.multimodal;
-        union.vision = union.vision.max(caps.vision);
-        union.audio = union.audio.max(caps.audio);
-        union.reasoning = union.reasoning.max(caps.reasoning);
-        union.tool_use = union.tool_use.max(caps.tool_use);
-        union.system_one = union.system_one.max(caps.system_one);
-    }
-    union
-}
-
-fn models_list_json_with_virtual(
-    models: &[String],
-    descriptors: &[mesh::ServedModelDescriptor],
-    runtimes: &[mesh::ModelRuntimeDescriptor],
-    virtual_models: &[crate::plugin::VirtualModelRoute],
-) -> serde_json::Value {
-    let mut seen = std::collections::HashSet::new();
-    let data: Vec<serde_json::Value> = models
+/// Project list or exact-ID lookup from the same confirmed LLM inventory.
+pub(crate) fn models_response(models: &[MeshModel], path: &str, anthropic: bool) -> (u16, Value) {
+    let (path, query) = path.split_once('?').unwrap_or((path, ""));
+    let mut models = models
         .iter()
-        .filter_map(|m| {
-            if let Some(route) = virtual_models.iter().find(|route| route.model_id == *m) {
-                if !seen.insert(route.model_id.clone()) {
-                    return None;
-                }
-                let mut capabilities = route
-                    .input_modalities
-                    .iter()
-                    .map(|modality| match modality.as_str() {
-                        "image" => "vision".to_string(),
-                        other => other.to_string(),
-                    })
-                    .collect::<Vec<_>>();
-                if route
-                    .input_modalities
-                    .iter()
-                    .any(|modality| modality != "text")
-                {
-                    capabilities.push("multimodal".into());
-                }
-                if route.supports_tools {
-                    capabilities.push("tools".into());
-                }
-                capabilities.sort();
-                capabilities.dedup();
-                let mut model = serde_json::json!({
-                    "id": route.model_id,
-                    "display_name": route.model_id,
-                    "object": "model",
-                    "owned_by": format!("plugin:{}", route.plugin_name),
-                    "capabilities": capabilities,
-                    "virtual_model": {
-                        "plugin": route.plugin_name,
-                        "input_modalities": route.input_modalities,
-                        "output_modalities": route.output_modalities,
-                        "supports_tools": route.supports_tools,
-                        "supports_streaming": route.supports_streaming,
-                    }
-                });
-                // The automatic directive is not one plugin's model. A request
-                // that states something its owning route cannot honour — media
-                // input, `stream: true`, a non-chat endpoint — is served by a
-                // capability-selected concrete model instead of the plugin, so
-                // what the directive can accept is what *any* served model can
-                // accept, not what the route declares. Advertising only the
-                // declared set tells a client the mesh cannot take a request
-                // the mesh will happily route.
-                if route.model_id == crate::network::openai::automatic::DIRECTIVE {
-                    advertise_mesh_capability_union(
-                        &mut model,
-                        models,
-                        descriptors,
-                        virtual_models,
-                    );
-                }
-                return Some(model);
-            }
-            let (base_model, profile) =
-                crate::network::openai::ingress::parse_model_with_profile(m);
-            let descriptor = descriptor_for_model(descriptors, base_model);
-            let public_id = public_model_id(base_model, descriptor, profile);
-            if !seen.insert(public_id.clone()) {
-                return None;
-            }
-            let capabilities = capabilities_for_model(base_model, descriptors);
-            let has_multimodal = capabilities.supports_multimodal_runtime();
-            let has_vision = capabilities.supports_vision_runtime();
-            let has_audio = capabilities.supports_audio_runtime();
-            let mut caps = vec!["text"];
-            if has_multimodal {
-                caps.push("multimodal");
-            }
-            if has_vision {
-                caps.push("vision");
-            }
-            if has_audio {
-                caps.push("audio");
-            }
-            if capabilities.reasoning_label().is_some() {
-                caps.push("reasoning");
-            }
-            if capabilities.supports_system_one_runtime() {
-                caps.push("system_one");
-            }
-            let display_name = if public_id == *m
-                && descriptor.is_none_or(|descriptor| descriptor.identity.model_name == public_id)
-            {
-                crate::models::installed_model_display_name(base_model)
-            } else {
-                public_id.clone()
-            };
-            let mut model = serde_json::json!({
-                "id": public_id,
-                "display_name": display_name,
-                "object": "model",
-                "owned_by": "mesh-llm",
-                "capabilities": caps,
-                "multimodal_status": capabilities.multimodal_status(),
-                "vision_status": capabilities.vision_status(),
-                "audio_status": capabilities.audio_status(),
-                "reasoning_status": capabilities.reasoning_status(),
-                "system_one_status": capabilities.system_one_status(),
-            });
-            if let Some(metadata) = model_metadata_json(base_model, descriptor, runtimes)
-                && let Some(object) = model.as_object_mut()
-            {
-                object.insert("metadata".to_string(), metadata);
-            }
-            // Skippy probes the loaded model's selected chat template and owns the
-            // result; this node republishes it verbatim. Absent when the model was
-            // not probed here — an unprobed control is unknown, not off.
-            if let Some(thinking) = crate::inference::skippy::local_thinking(base_model)
-                && let Some(object) = model.as_object_mut()
-            {
-                object.insert("thinking".to_string(), thinking);
-            }
-            Some(model)
+        .filter(|model| model.is_available_llm())
+        .collect::<Vec<_>>();
+    models.sort_by(|left, right| left.id.cmp(&right.id));
+    models.dedup_by(|left, right| left.id == right.id);
+    if let Some(encoded_id) = path
+        .strip_prefix("/v1/models/")
+        .or_else(|| path.strip_prefix("/models/"))
+    {
+        return model_detail(&models, encoded_id, query, anthropic);
+    }
+    if anthropic {
+        anthropic_list(&models, query)
+    } else if query.is_empty() {
+        let data = models
+            .iter()
+            .map(|model| model_json(model, false))
+            .collect::<Vec<_>>();
+        (200, json!({"object": "list", "data": data}))
+    } else {
+        error_response(400, "model list query parameters are not supported", false)
+    }
+}
+
+fn model_detail(
+    models: &[&MeshModel],
+    encoded_id: &str,
+    query: &str,
+    anthropic: bool,
+) -> (u16, Value) {
+    let Ok(id) = decode_model_id(encoded_id) else {
+        return error_response(400, "invalid model ID", anthropic);
+    };
+    if !query.is_empty() {
+        return error_response(
+            400,
+            "model lookup does not accept query parameters",
+            anthropic,
+        );
+    }
+    match models.iter().find(|model| model.id == id) {
+        Some(model) => (200, model_json(model, anthropic)),
+        None => error_response(404, "model not found", anthropic),
+    }
+}
+
+fn model_json(model: &MeshModel, anthropic: bool) -> Value {
+    if anthropic {
+        json!({
+            "id": model.id,
+            "type": "model",
+            "display_name": model.display_name,
+            "created_at": "1970-01-01T00:00:00Z",
+            "lifecycle": "active",
         })
-        .collect();
-
-    serde_json::json!({ "object": "list", "data": data })
+    } else {
+        json!({
+            "id": model.id,
+            "object": "model",
+            "created": 0,
+            "owned_by": "mesh-llm",
+        })
+    }
 }
 
-fn model_metadata_json(
-    model_name: &str,
-    descriptor: Option<&mesh::ServedModelDescriptor>,
-    runtimes: &[mesh::ModelRuntimeDescriptor],
-) -> Option<serde_json::Value> {
-    let mut metadata = serde_json::Map::new();
-    let descriptor_metadata = descriptor.and_then(|descriptor| descriptor.metadata.as_ref());
-    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.thinking_efforts.as_ref())
-    {
-        metadata.insert("thinking_efforts".to_string(), serde_json::json!(value));
-    }
-    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.workload_class) {
-        metadata.insert("workload_class".to_string(), serde_json::json!(value));
-    }
-    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.architecture.as_ref()) {
-        metadata.insert("architecture".to_string(), serde_json::json!(value));
-    }
-    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.parameter_size.as_ref()) {
-        metadata.insert("parameter_size".to_string(), serde_json::json!(value));
-    }
-    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.parameter_count_b)
-        && value.is_finite()
-    {
-        metadata.insert("parameter_count_b".to_string(), serde_json::json!(value));
-    }
-    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.quant.as_ref()) {
-        metadata.insert("quant".to_string(), serde_json::json!(value));
-    }
-    if let Some(contexts) = runtime_context_lengths_for_model(model_name, runtimes) {
-        metadata.insert(
-            "context_length".to_string(),
-            serde_json::json!(contexts.min),
-        );
-        if contexts.max != contexts.min {
-            metadata.insert(
-                "max_context_length".to_string(),
-                serde_json::json!(contexts.max),
-            );
+fn anthropic_list(models: &[&MeshModel], query: &str) -> (u16, Value) {
+    let page = match parse_page(query) {
+        Ok(page) => page,
+        Err(message) => return error_response(400, &message, true),
+    };
+    let limit = page.limit.unwrap_or(20);
+    let (start, end) = match page_bounds(models, &page, limit) {
+        Ok(bounds) => bounds,
+        Err(message) => return error_response(400, &message, true),
+    };
+    let selected = &models[start..end];
+    let data = selected
+        .iter()
+        .map(|model| model_json(model, true))
+        .collect::<Vec<_>>();
+    let has_more = if page.before.is_some() {
+        start > 0
+    } else {
+        end < models.len()
+    };
+    (
+        200,
+        json!({
+            "data": data,
+            "has_more": has_more,
+            "first_id": selected.first().map(|model| &model.id),
+            "last_id": selected.last().map(|model| &model.id),
+        }),
+    )
+}
+
+fn parse_page(query: &str) -> Result<AnthropicPage, String> {
+    let mut page = AnthropicPage::default();
+    let parameters = crate::models::discovery::parse_query_parameters(query)
+        .map_err(|error| error.to_string())?;
+    for (key, value) in parameters {
+        match key.as_str() {
+            "limit" if page.limit.is_none() => {
+                let limit = value.parse::<usize>().map_err(|_| "invalid limit")?;
+                if !(1..=1000).contains(&limit) {
+                    return Err("limit must be between 1 and 1000".into());
+                }
+                page.limit = Some(limit);
+            }
+            "before_id" if page.before.is_none() => page.before = Some(value),
+            "after_id" if page.after.is_none() => page.after = Some(value),
+            _ => return Err(format!("invalid or duplicate model list parameter: {key}")),
         }
     }
-    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.native_context_length) {
-        metadata.insert(
-            "native_context_length".to_string(),
-            serde_json::json!(value),
-        );
+    if page.before.is_some() && page.after.is_some() {
+        return Err("before_id and after_id cannot be combined".into());
     }
-    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.tokenizer.as_ref()) {
-        metadata.insert("tokenizer".to_string(), serde_json::json!(value));
-    }
-    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.layer_count) {
-        metadata.insert("layer_count".to_string(), serde_json::json!(value));
-    }
-    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.embedding_size) {
-        metadata.insert("embedding_size".to_string(), serde_json::json!(value));
-    }
-    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.head_count) {
-        metadata.insert("head_count".to_string(), serde_json::json!(value));
-    }
-    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.kv_head_count) {
-        metadata.insert("kv_head_count".to_string(), serde_json::json!(value));
-    }
-    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.expert_count) {
-        metadata.insert("expert_count".to_string(), serde_json::json!(value));
-    }
-    if let Some(value) = descriptor_metadata.and_then(|metadata| metadata.active_expert_count) {
-        metadata.insert("active_expert_count".to_string(), serde_json::json!(value));
-    }
-    (!metadata.is_empty()).then_some(serde_json::Value::Object(metadata))
+    Ok(page)
 }
 
-struct RuntimeContextLengths {
-    min: u32,
-    max: u32,
+fn page_bounds(
+    models: &[&MeshModel],
+    page: &AnthropicPage,
+    limit: usize,
+) -> Result<(usize, usize), String> {
+    if let Some(before) = &page.before {
+        let end = models
+            .iter()
+            .position(|model| &model.id == before)
+            .ok_or("unknown before_id")?;
+        Ok((end.saturating_sub(limit), end))
+    } else {
+        let start = match &page.after {
+            Some(after) => {
+                models
+                    .iter()
+                    .position(|model| &model.id == after)
+                    .ok_or("unknown after_id")?
+                    + 1
+            }
+            None => 0,
+        };
+        Ok((start, start.saturating_add(limit).min(models.len())))
+    }
 }
 
-fn runtime_context_lengths_for_model(
-    model_name: &str,
-    runtimes: &[mesh::ModelRuntimeDescriptor],
-) -> Option<RuntimeContextLengths> {
-    let mut lengths = runtimes
-        .iter()
-        .filter(|runtime| runtime.model_name == model_name)
-        .filter_map(mesh::ModelRuntimeDescriptor::advertised_context_length);
-    let first = lengths.next()?;
-    let (min, max) = lengths.fold((first, first), |(min, max), value| {
-        (min.min(value), max.max(value))
-    });
-    Some(RuntimeContextLengths { min, max })
+/// Decode a path suffix exactly once, preserving literal `+` in model IDs.
+fn decode_model_id(encoded: &str) -> Result<String, ()> {
+    let mut decoded = Vec::with_capacity(encoded.len());
+    let mut bytes = encoded.bytes();
+    while let Some(byte) = bytes.next() {
+        if byte == b'%' {
+            let high = bytes
+                .next()
+                .and_then(|value| (value as char).to_digit(16))
+                .ok_or(())?;
+            let low = bytes
+                .next()
+                .and_then(|value| (value as char).to_digit(16))
+                .ok_or(())?;
+            decoded.push((high * 16 + low) as u8);
+        } else {
+            decoded.push(byte);
+        }
+    }
+    let id = String::from_utf8(decoded).map_err(|_| ())?;
+    if id.is_empty() || id.chars().any(char::is_control) {
+        return Err(());
+    }
+    Ok(id)
+}
+
+pub(crate) fn error_response(status: u16, message: &str, anthropic: bool) -> (u16, Value) {
+    let body = if anthropic {
+        let kind = match status {
+            404 => "not_found_error",
+            500..=599 => "api_error",
+            _ => "invalid_request_error",
+        };
+        json!({"type": "error", "error": {"type": kind, "message": message}})
+    } else {
+        json!({"error": {"message": message, "type": "invalid_request_error", "param": null,
+            "code": if status == 404 { Some("model_not_found") } else { None }}})
+    };
+    (status, body)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use tokio::io::AsyncReadExt;
-
-    fn hf_descriptor(model_name: &str) -> mesh::ServedModelDescriptor {
-        mesh::ServedModelDescriptor {
-            identity: mesh::ServedModelIdentity {
-                model_name: model_name.to_string(),
-                source_kind: mesh::ModelSourceKind::HuggingFace,
-                repository: Some("tiiuae/Falcon-H1-1.5B-Instruct-GGUF".to_string()),
-                revision: Some("0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a".to_string()),
-                artifact: Some("Falcon-H1-1.5B-Instruct-Q4_K_M.gguf".to_string()),
-                canonical_ref: Some(
-                    "tiiuae/Falcon-H1-1.5B-Instruct-GGUF@0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a/Falcon-H1-1.5B-Instruct-Q4_K_M.gguf"
-                        .to_string(),
-                ),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
-
-    fn catalog_model_ref_descriptor(model_name: &str) -> mesh::ServedModelDescriptor {
-        mesh::ServedModelDescriptor {
-            identity: mesh::ServedModelIdentity {
-                model_name: model_name.to_string(),
-                source_kind: mesh::ModelSourceKind::Catalog,
-                canonical_ref: Some("tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M".to_string()),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
-
-    fn local_gguf_descriptor(model_name: &str) -> mesh::ServedModelDescriptor {
-        mesh::ServedModelDescriptor {
-            identity: mesh::ServedModelIdentity {
-                model_name: model_name.to_string(),
-                source_kind: mesh::ModelSourceKind::LocalGguf,
-                local_file_name: Some(format!("{model_name}.gguf")),
-                ..Default::default()
-            },
-            ..Default::default()
-        }
-    }
-
-    fn local_gguf_descriptor_with_capabilities(
-        model_name: &str,
-        capabilities: crate::models::ModelCapabilities,
-    ) -> mesh::ServedModelDescriptor {
-        mesh::ServedModelDescriptor {
-            capabilities_known: true,
-            capabilities,
-            ..local_gguf_descriptor(model_name)
-        }
-    }
-
-    fn thinking_fixture() -> skippy_inference_api::thinking::ThinkingControls {
-        skippy_inference_api::thinking::ThinkingControls {
-            toggle: skippy_inference_api::thinking::ThinkingToggle::Observed,
-            reasoning_parser: Some(true),
-            efforts: vec!["low".to_string(), "medium".to_string(), "high".to_string()],
-        }
-    }
-
-    #[test]
-    fn models_list_reports_the_thinking_probe_skippy_recorded_for_the_local_model() {
-        let model = "Qwen3-32B-Q4_K_M";
-        crate::inference::skippy::register_local_thinking(model, Some(&thinking_fixture()));
-        let body = models_list_json(&[model.to_string()], &[local_gguf_descriptor(model)], &[]);
-        let thinking = &body["data"][0]["thinking"];
-        assert_eq!(thinking["toggle"], "observed");
-        assert_eq!(thinking["efforts"][1], "medium");
-        crate::inference::skippy::forget_local_thinking(model);
-    }
-
-    #[test]
-    fn models_list_omits_thinking_for_a_model_this_node_did_not_probe() {
-        let model = "Qwen3-32B-Q4_K_M-unprobed";
-        crate::inference::skippy::forget_local_thinking(model);
-        let body = models_list_json(&[model.to_string()], &[local_gguf_descriptor(model)], &[]);
-        assert!(body["data"][0].get("thinking").is_none());
-    }
-    #[test]
-    fn local_and_remote_listing_preserve_the_same_name_and_resolve_at_the_host() {
-        let internal = "local-gguf/sha256-test";
-        for revision in [Some("main"), Some("pinned-revision"), None] {
-            let mut descriptor = hf_descriptor(internal);
-            descriptor.identity.revision = revision.map(str::to_owned);
-            let public = mesh::public_model_id_from_identity(&descriptor.identity).unwrap();
-            assert_eq!(public_model_id(internal, Some(&descriptor), ""), public);
-            assert_listing_round_trip(descriptor, &public);
-        }
-        let catalog = catalog_model_ref_descriptor(internal);
-        let public = mesh::public_model_id_from_identity(&catalog.identity).unwrap();
-        assert_listing_round_trip(catalog, &public);
-        assert_listing_round_trip(
-            mesh::ServedModelDescriptor {
-                identity: mesh::ServedModelIdentity {
-                    model_name: internal.into(),
-                    source_kind: mesh::ModelSourceKind::LocalGguf,
-                    local_file_name: Some("Example-Q4_K_M.gguf".into()),
-                    ..Default::default()
-                },
-                ..Default::default()
-            },
-            internal,
-        );
-    }
-
-    fn assert_listing_round_trip(descriptor: mesh::ServedModelDescriptor, public: &str) {
-        use crate::network::openai::request_normalize::ResponseAdapter;
-        use crate::network::openai::request_parse::{
-            BufferedHttpRequest, rewrite_public_model_alias,
-        };
-        use mesh_llm_events::logging::identifiers::RequestId;
-        let internal = descriptor.identity.model_name.clone();
-        let descriptors = vec![descriptor];
-        let local = models_list_json(std::slice::from_ref(&internal), &descriptors, &[]);
-        let remote = models_list_json(&[public.into()], &descriptors, &[]);
-        assert_eq!(local["data"][0]["id"], public);
-
-        assert_eq!(remote["data"][0]["id"], local["data"][0]["id"]);
-        assert_eq!(
-            remote["data"][0]["display_name"],
-            local["data"][0]["display_name"]
-        );
-
-        let body = serde_json::json!({"model": remote["data"][0]["id"], "messages": []});
-        let bytes = serde_json::to_vec(&body).unwrap();
-        let mut raw = format!(
-            "POST /v1/chat/completions HTTP/1.1\r\nContent-Length: {}\r\n\r\n",
-            bytes.len()
-        )
-        .into_bytes();
-        raw.extend_from_slice(&bytes);
-        let mut request = BufferedHttpRequest {
-            raw,
-            method: "POST".into(),
-            path: "/v1/chat/completions".into(),
-            client_path: "/v1/chat/completions".into(),
-            request_id: RequestId::default(),
-            body_json: Some(body),
-            body_json_attempted: true,
-            body_len_bytes: bytes.len(),
-            body_bytes: Some(bytes),
-            completion_tokens: None,
-            model_name: Some(public.into()),
-            stream: None,
-            request_object_request_ids: Vec::new(),
-            response_adapter: ResponseAdapter::None,
-            correlation_id: None,
-            exchange_observation_id: None,
-        };
-        // The requesting node forwards the advertised ID; the serving node
-        // must translate it back to its content-addressed runtime key.
-        rewrite_public_model_alias(&mut request, &[public.into()], &descriptors);
-        assert_eq!(request.model_name.as_deref(), Some(public));
-        rewrite_public_model_alias(&mut request, std::slice::from_ref(&internal), &descriptors);
-        assert_eq!(request.model_name.as_deref(), Some(internal.as_str()));
-        assert_eq!(request.body_json.unwrap()["model"], internal);
-    }
-
-    #[test]
-    fn models_list_uses_public_huggingface_model_ref_ids() {
-        let models = vec!["Falcon-H1-1.5B-Instruct-Q4_K_M".to_string()];
-        let descriptors = vec![hf_descriptor(&models[0])];
-
-        let body = models_list_json(&models, &descriptors, &[]);
-
-        assert_eq!(
-            body["data"][0]["id"],
-            "tiiuae/Falcon-H1-1.5B-Instruct-GGUF@0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a:Q4_K_M"
-        );
-        assert_eq!(
-            body["data"][0]["display_name"],
-            "tiiuae/Falcon-H1-1.5B-Instruct-GGUF@0d3a6cfe25fb4eeab0153fb8623aac5b69d6bd0a:Q4_K_M"
-        );
-        assert_eq!(body["data"][0]["owned_by"], "mesh-llm");
-    }
-
-    #[test]
-    fn models_list_id_preserves_quant_suffix_when_descriptor_has_no_artifact() {
-        // Regression for PR #566 review feedback: the gateway's view of a
-        // model's public ID must include enough information to route a
-        // request back to that exact model. When a `ServedModelDescriptor`
-        // for a HuggingFace model has no `artifact` field (because the
-        // descriptor was built without inspecting the GGUF file on disk),
-        // `public_huggingface_model_ref` collapses the public ID to just
-        // the repo name — dropping the quant-tag suffix the internal
-        // `model_name` carries. The model is then advertised in `/v1/models`
-        // under a shorter ID than the resolver knows how to route.
-        //
-        // Symptom on a real 2-node mesh: the studio's Qwen3-0.6B-GGUF
-        // shows as `unsloth/Qwen3-0.6B-GGUF:BF16` (descriptor has
-        // artifact), but the gateway-local Qwen2.5-3B-Instruct-GGUF
-        // shows as `Qwen/Qwen2.5-3B-Instruct-GGUF` (descriptor has no
-        // artifact). A client doing the natural thing — read /v1/models,
-        // call /v1/chat/completions with the listed id — then 404s on
-        // remote models because the resolver doesn't know the short id.
-        //
-        // Acceptable behaviour: the public ID either round-trips to the
-        // same model, OR includes the quant suffix the internal name
-        // carries.
-        let models = vec!["Qwen/Qwen2.5-3B-Instruct-GGUF:qwen2.5-3b-instruct-q4_k_m".to_string()];
-        let descriptor = mesh::ServedModelDescriptor {
-            identity: mesh::ServedModelIdentity {
-                model_name: models[0].clone(),
-                source_kind: mesh::ModelSourceKind::HuggingFace,
-                repository: Some("Qwen/Qwen2.5-3B-Instruct-GGUF".to_string()),
-                // No artifact — this is the field whose absence loses the
-                // quant suffix.
-                artifact: None,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        let descriptors = vec![descriptor];
-
-        let body = models_list_json(&models, &descriptors, &[]);
-        let public_id = body["data"][0]["id"].as_str().unwrap_or_default();
-
-        // The public ID must NOT silently drop the quant suffix that the
-        // internal model_name carries. Acceptable IDs:
-        //   * the full internal name, OR
-        //   * the repo with a quant tag we can route back to.
-        assert!(
-            public_id == models[0]
-                || public_id
-                    .strip_prefix("Qwen/Qwen2.5-3B-Instruct-GGUF:")
-                    .is_some_and(|tag| !tag.is_empty()),
-            "public id must keep enough information to route back; got {public_id:?}, \
-             internal model_name was {:?}",
-            models[0]
-        );
-    }
-
-    #[test]
-    fn models_list_uses_catalog_model_ref_ids() {
-        let models = vec!["Falcon-H1-1.5B-Instruct-Q4_K_M".to_string()];
-        let descriptors = vec![catalog_model_ref_descriptor(&models[0])];
-
-        let body = models_list_json(&models, &descriptors, &[]);
-
-        assert_eq!(
-            body["data"][0]["id"],
-            "tiiuae/Falcon-H1-1.5B-Instruct-GGUF:Q4_K_M"
-        );
-    }
-
-    #[test]
-    fn models_list_keeps_local_gguf_model_name_ids() {
-        let models = vec!["smollm2-a".to_string()];
-        let descriptors = vec![local_gguf_descriptor(&models[0])];
-
-        let body = models_list_json(&models, &descriptors, &[]);
-
-        assert_eq!(body["data"][0]["id"], "smollm2-a");
-        assert_eq!(body["data"][0]["display_name"], "smollm2-a");
-    }
-
-    #[tokio::test]
-    async fn models_http_boundary_advertises_configured_served_alias() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("models response listener");
-        let address = listener.local_addr().expect("listener address");
-        let client = tokio::spawn(async move {
-            let mut stream = tokio::net::TcpStream::connect(address)
-                .await
-                .expect("models response connection");
-            let mut response = Vec::new();
-            stream
-                .read_to_end(&mut response)
-                .await
-                .expect("models response");
-            String::from_utf8(response).expect("utf-8 response")
-        });
-        let (stream, _) = listener.accept().await.expect("models client");
-        let alias = "public-model".to_string();
-
-        send_models_list_with_descriptors(
-            stream.into(),
-            std::slice::from_ref(&alias),
-            &[local_gguf_descriptor(&alias)],
-            &[],
-            &[],
-            None,
-        )
-        .await
-        .expect("models response succeeds");
-
-        let response = client.await.expect("models client task");
-        let (_, body) = response.split_once("\r\n\r\n").expect("HTTP body");
-        let body: serde_json::Value = serde_json::from_str(body).expect("models JSON");
-        assert_eq!(body["data"][0]["id"], alias);
-    }
-
-    #[test]
-    fn models_list_reports_model_metadata() {
-        let models = vec!["Qwen3-32B-Q4_K_M".to_string()];
-        let mut descriptor = local_gguf_descriptor(&models[0]);
-        descriptor.metadata = Some(mesh::ServedModelMetadata {
-            thinking_efforts: Some(vec!["high".into(), "low".into()]),
-            workload_class: Some(mesh::ModelWorkloadClass::CausalGeneration),
-            architecture: Some("qwen3".to_string()),
-            parameter_size: Some("32B".to_string()),
-            parameter_count_b: Some(32.0),
-            quant: Some("Q4_K_M".to_string()),
-            native_context_length: Some(32_768),
-            tokenizer: Some("gpt2".to_string()),
-            layer_count: Some(64),
-            embedding_size: Some(5120),
-            head_count: Some(40),
-            kv_head_count: Some(8),
-            expert_count: Some(128),
-            active_expert_count: Some(8),
-        });
-        let runtimes = vec![mesh::ModelRuntimeDescriptor {
-            model_name: models[0].clone(),
-            identity_hash: None,
-            context_length: Some(65_536),
-            ready: true,
-        }];
-
-        let body = models_list_json(&models, &[descriptor], &runtimes);
-        let metadata = &body["data"][0]["metadata"];
-        assert_eq!(metadata["workload_class"], "causal_generation");
-        assert_eq!(
-            metadata["thinking_efforts"],
-            serde_json::json!(["high", "low"])
-        );
-
-        assert_eq!(metadata["architecture"], "qwen3");
-        assert_eq!(metadata["parameter_size"], "32B");
-        assert_eq!(metadata["parameter_count_b"], 32.0);
-        assert_eq!(metadata["quant"], "Q4_K_M");
-        assert_eq!(metadata["context_length"], 65_536);
-        assert_eq!(metadata["native_context_length"], 32_768);
-        assert_eq!(metadata["tokenizer"], "gpt2");
-        assert_eq!(metadata["layer_count"], 64);
-        assert_eq!(metadata["embedding_size"], 5120);
-        assert_eq!(metadata["head_count"], 40);
-        assert_eq!(metadata["kv_head_count"], 8);
-        assert_eq!(metadata["expert_count"], 128);
-        assert_eq!(metadata["active_expert_count"], 8);
-    }
-
-    #[test]
-    fn models_list_uses_route_safe_context_for_duplicate_runtimes() {
-        let models = vec!["Qwen3.5-9B-Q4_K_M".to_string()];
-        let runtimes = vec![
-            mesh::ModelRuntimeDescriptor {
-                model_name: models[0].clone(),
-                identity_hash: None,
-                context_length: Some(32_768),
-                ready: true,
-            },
-            mesh::ModelRuntimeDescriptor {
-                model_name: models[0].clone(),
-                identity_hash: None,
-                context_length: Some(131_072),
-                ready: true,
-            },
-        ];
-
-        let body = models_list_json(&models, &[], &runtimes);
-        let metadata = &body["data"][0]["metadata"];
-
-        assert_eq!(metadata["context_length"], 32_768);
-        assert_eq!(metadata["max_context_length"], 131_072);
-    }
-
-    #[test]
-    fn models_list_advertises_explicit_virtual_model() {
-        let models = vec![
-            "fast-8b".to_string(),
-            "mesh".to_string(),
-            "strong-32b".to_string(),
-        ];
-        let runtimes = vec![
-            mesh::ModelRuntimeDescriptor {
-                model_name: "fast-8b".to_string(),
-                identity_hash: None,
-                context_length: Some(16_384),
-                ready: true,
-            },
-            mesh::ModelRuntimeDescriptor {
-                model_name: "strong-32b".to_string(),
-                identity_hash: None,
-                context_length: Some(65_536),
-                ready: true,
-            },
-        ];
-
-        let virtual_models = vec![crate::plugin::VirtualModelRoute {
-            plugin_name: "mesh-moa".into(),
-            model_id: "mesh".into(),
-            handler: "chat".into(),
-            input_modalities: vec!["text".into(), "image".into(), "audio".into()],
-            output_modalities: vec!["text".into()],
-            supports_tools: true,
-            supports_streaming: true,
-            requires_candidates: true,
-            progress_lines: Vec::new(),
-        }];
-        let body = models_list_json_with_virtual(&models, &[], &runtimes, &virtual_models);
-        let mesh = body["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|model| model["id"] == "mesh")
-            .expect("virtual mesh model should be listed");
-
-        assert_eq!(mesh["display_name"], "mesh");
-        assert_eq!(mesh["owned_by"], "plugin:mesh-moa");
-        assert_eq!(
-            mesh["capabilities"],
-            serde_json::json!(["audio", "multimodal", "text", "tools", "vision"])
-        );
-        assert_eq!(
-            mesh["virtual_model"]["input_modalities"],
-            serde_json::json!(["text", "image", "audio"])
-        );
-        assert_eq!(mesh["virtual_model"]["supports_tools"], true);
-        assert_eq!(mesh["virtual_model"]["supports_streaming"], true);
-    }
-
-    #[test]
-    fn models_list_does_not_invent_virtual_model_context() {
-        let models = vec!["mesh".to_string(), "unknown-a".to_string()];
-        let virtual_models = vec![crate::plugin::VirtualModelRoute {
-            plugin_name: "mesh-moa".into(),
-            model_id: "mesh".into(),
-            handler: "chat".into(),
-            input_modalities: vec!["text".into()],
-            output_modalities: vec!["text".into()],
-            supports_tools: false,
-            supports_streaming: false,
-            requires_candidates: true,
-            progress_lines: Vec::new(),
-        }];
-
-        let body = models_list_json_with_virtual(&models, &[], &[], &virtual_models);
-        let mesh = body["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|model| model["id"] == "mesh")
-            .expect("virtual mesh model should be listed");
-
-        assert!(mesh.get("metadata").is_none());
-    }
-
-    #[test]
-    fn models_list_uses_descriptor_capabilities_not_filename_heuristics() {
-        let models = vec!["Qwen3VL-2B-Instruct-Q4_K_M".to_string()];
-        let descriptors = vec![local_gguf_descriptor_with_capabilities(
-            &models[0],
-            crate::models::ModelCapabilities::default(),
-        )];
-
-        let body = models_list_json(&models, &descriptors, &[]);
-
-        assert_eq!(body["data"][0]["capabilities"], serde_json::json!(["text"]));
-        assert_eq!(body["data"][0]["vision_status"], "none");
-        assert_eq!(body["data"][0]["multimodal_status"], "none");
-    }
-
-    #[test]
-    fn models_list_uses_static_fallback_for_unknown_descriptor_capabilities() {
-        let models = vec!["Qwen3VL-2B-Instruct-Q4_K_M".to_string()];
-        let descriptors = vec![local_gguf_descriptor(&models[0])];
-
-        let body = models_list_json(&models, &descriptors, &[]);
-        let capabilities = body["data"][0]["capabilities"].as_array().unwrap();
-
-        assert!(capabilities.iter().any(|cap| cap == "multimodal"));
-        assert!(capabilities.iter().any(|cap| cap == "vision"));
-        assert_eq!(body["data"][0]["vision_status"], "supported");
-        assert_eq!(body["data"][0]["multimodal_status"], "supported");
-    }
-
-    #[test]
-    fn models_list_reports_runtime_verified_projector_capabilities() {
-        let models = vec!["Qwen3VL-2B-Instruct-Q4_K_M".to_string()];
-        let descriptors = vec![local_gguf_descriptor_with_capabilities(
-            &models[0],
-            crate::models::ModelCapabilities {
-                multimodal: true,
-                vision: crate::models::CapabilityLevel::Supported,
-                ..Default::default()
-            },
-        )];
-
-        let body = models_list_json(&models, &descriptors, &[]);
-        let capabilities = body["data"][0]["capabilities"].as_array().unwrap();
-
-        assert!(capabilities.iter().any(|cap| cap == "multimodal"));
-        assert!(capabilities.iter().any(|cap| cap == "vision"));
-        assert_eq!(body["data"][0]["vision_status"], "supported");
-        assert_eq!(body["data"][0]["multimodal_status"], "supported");
-    }
-
-    #[test]
-    fn models_list_advertises_runtime_verified_system_one_support() {
-        let models = vec!["openjev-latest".to_string()];
-        let descriptors = vec![local_gguf_descriptor_with_capabilities(
-            &models[0],
-            crate::models::ModelCapabilities {
-                system_one: crate::models::CapabilityLevel::Supported,
-                ..Default::default()
-            },
-        )];
-
-        let body = models_list_json(&models, &descriptors, &[]);
-        let capabilities = body["data"][0]["capabilities"].as_array().unwrap();
-
-        assert!(capabilities.iter().any(|cap| cap == "system_one"));
-        assert_eq!(body["data"][0]["system_one_status"], "supported");
-    }
-
-    #[test]
-    fn models_list_does_not_advertise_unverified_system_one_support() {
-        let models = vec!["possible-system-one".to_string()];
-        let descriptors = vec![local_gguf_descriptor_with_capabilities(
-            &models[0],
-            crate::models::ModelCapabilities {
-                system_one: crate::models::CapabilityLevel::Likely,
-                ..Default::default()
-            },
-        )];
-
-        let body = models_list_json(&models, &descriptors, &[]);
-        let capabilities = body["data"][0]["capabilities"].as_array().unwrap();
-
-        assert!(!capabilities.iter().any(|cap| cap == "system_one"));
-        assert_eq!(body["data"][0]["system_one_status"], "likely");
-    }
-
-    #[test]
-    fn models_list_does_not_advertise_reasoning_effort_values() {
-        let models = vec!["Inkling-32B-Q4_K_M".to_string()];
-        let descriptors = vec![local_gguf_descriptor_with_capabilities(
-            &models[0],
-            crate::models::ModelCapabilities {
-                reasoning: crate::models::CapabilityLevel::Supported,
-                ..Default::default()
-            },
-        )];
-
-        let body = models_list_json(&models, &descriptors, &[]);
-
-        assert_eq!(body["data"][0]["reasoning_status"], "supported");
-        assert!(body["data"][0].get("reasoning").is_none());
-    }
-
-    fn virtual_route(
-        model_id: &str,
-        input_modalities: &[&str],
-    ) -> crate::plugin::VirtualModelRoute {
-        crate::plugin::VirtualModelRoute {
-            plugin_name: "mesh-moa".into(),
-            model_id: model_id.into(),
-            handler: "chat".into(),
-            input_modalities: input_modalities
-                .iter()
-                .map(|value| value.to_string())
-                .collect(),
-            output_modalities: vec!["text".into()],
-            supports_tools: true,
-            supports_streaming: true,
-            requires_candidates: true,
-            progress_lines: Vec::new(),
-        }
-    }
-
-    /// #2093's contract, on the plugin-built directive entry: the directive is
-    /// not the committee, so it advertises what any served model can accept.
-    #[test]
-    fn directive_entry_advertises_the_mesh_capability_union() {
-        let models = vec!["mesh".to_string(), "laya-test".to_string()];
-        let descriptors = vec![local_gguf_descriptor_with_capabilities(
-            "laya-test",
-            crate::models::ModelCapabilities {
-                system_one: crate::models::CapabilityLevel::Supported,
-                ..Default::default()
-            },
-        )];
-        let virtual_models = vec![virtual_route("mesh", &["text", "image", "audio"])];
-
-        let body = models_list_json_with_virtual(&models, &descriptors, &[], &virtual_models);
-        let mesh = body["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|model| model["id"] == "mesh")
-            .expect("virtual mesh model should be listed");
-        let capabilities = mesh["capabilities"].as_array().unwrap();
-
-        assert!(
-            capabilities
-                .iter()
-                .any(|capability| capability == "system_one"),
-            "the directive must advertise a capability any served model can accept: {capabilities:?}"
-        );
-        assert_eq!(mesh["system_one_status"], "supported");
-        assert_eq!(mesh["reasoning_status"], "none");
-        // The declared modalities survive the union.
-        assert!(capabilities.iter().any(|capability| capability == "vision"));
-        assert!(capabilities.iter().any(|capability| capability == "tools"));
-    }
-
-    /// The union belongs to the directive alone: another plugin's model is not
-    /// the mesh, and a request it cannot honour is rejected rather than
-    /// re-routed, so it keeps exactly what its manifest declares.
-    #[test]
-    fn other_virtual_models_keep_their_declared_capabilities() {
-        let models = vec!["mesh-translate".to_string(), "laya-test".to_string()];
-        let descriptors = vec![local_gguf_descriptor_with_capabilities(
-            "laya-test",
-            crate::models::ModelCapabilities {
-                system_one: crate::models::CapabilityLevel::Supported,
-                ..Default::default()
-            },
-        )];
-        let virtual_models = vec![virtual_route("mesh-translate", &["text"])];
-
-        let body = models_list_json_with_virtual(&models, &descriptors, &[], &virtual_models);
-        let translate = body["data"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|model| model["id"] == "mesh-translate")
-            .expect("virtual model should be listed");
-
-        assert_eq!(
-            translate["capabilities"],
-            serde_json::json!(["text", "tools"])
-        );
-        assert!(translate.get("system_one_status").is_none());
-    }
-}
+mod tests;

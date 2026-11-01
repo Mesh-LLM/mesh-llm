@@ -38,6 +38,13 @@ impl MeshNode {
         &self.mode
     }
 
+    /// Native discovery of all workloads advertised in this node's primary mesh.
+    pub fn models(&self) -> crate::models::ModelCatalog<'_> {
+        crate::models::ModelCatalog {
+            handle: &self.handle,
+        }
+    }
+
     pub fn openai_client(&self) -> anyhow::Result<OpenAiClient> {
         anyhow::ensure!(
             self.mode.allows_client_inference(),
@@ -52,6 +59,10 @@ impl MeshNode {
         &self,
         options: crate::live_transcription::LiveTranscriptionOptions,
     ) -> anyhow::Result<crate::live_transcription::LiveTranscription> {
+        anyhow::ensure!(
+            self.mode.allows_client_inference(),
+            "client inference is disabled for a serve-only node"
+        );
         crate::live_transcription::LiveTranscription::start(self.api_base_url(), options).await
     }
 
@@ -135,6 +146,14 @@ pub struct MeshNodeBuilder {
 }
 
 impl MeshNodeBuilder {
+    /// Configure every native node setting through the same validated startup
+    /// path used by the builder's individual setters.
+    pub fn from_config(config: EmbeddedMeshNodeConfig) -> Self {
+        Self {
+            inner: mesh_llm_embedded_runtime::EmbeddedMeshNodeBuilder::from_config(config),
+        }
+    }
+
     pub fn mode(mut self, mode: EmbeddedMeshNodeMode) -> Self {
         self.inner = self.inner.mode(mode);
         self
@@ -422,7 +441,7 @@ pub struct OpenAiClient {
 }
 
 impl OpenAiClient {
-    fn new(base_url: impl Into<String>) -> Self {
+    pub(crate) fn new(base_url: impl Into<String>) -> Self {
         Self {
             http: reqwest::Client::new(),
             base_url: base_url.into(),
@@ -443,7 +462,17 @@ impl OpenAiClient {
         &self.http
     }
 
+    /// Send a request, returning a typed error for a non-success provider response.
     pub async fn request(
+        &self,
+        path: &str,
+        body_json: String,
+    ) -> anyhow::Result<RawOpenAiResponse> {
+        self.request_raw(path, body_json).await?.error_for_status()
+    }
+
+    /// Send a request and preserve provider status, content type and body unchanged.
+    pub async fn request_raw(
         &self,
         path: &str,
         body_json: String,
@@ -467,7 +496,32 @@ impl OpenAiClient {
         })
     }
 
+    /// Start a stream, rejecting unsuccessful provider responses before yielding it.
     pub async fn stream(&self, path: &str, body_json: String) -> anyhow::Result<reqwest::Response> {
+        let response = self.stream_raw(path, body_json).await?;
+        if !response.status().is_success() {
+            let status_code = response.status().as_u16();
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok())
+                .map(ToString::to_string);
+            return Err(OpenAiRequestError {
+                status_code,
+                content_type,
+                body: response.text().await?,
+            }
+            .into());
+        }
+        Ok(response)
+    }
+
+    /// Start a stream while preserving non-success responses for explicit handling.
+    pub async fn stream_raw(
+        &self,
+        path: &str,
+        body_json: String,
+    ) -> anyhow::Result<reqwest::Response> {
         // Bound the header wait without limiting the lifetime of the response body.
         Ok(tokio::time::timeout(
             Duration::from_secs(120),
@@ -482,6 +536,19 @@ impl OpenAiClient {
             .bearer_auth(&self.api_key)
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .body(body_json)
+    }
+
+    pub(crate) fn document_request(
+        &self,
+        form: reqwest::multipart::Form,
+    ) -> reqwest::RequestBuilder {
+        self.http
+            .post(format!(
+                "{}/mesh/v1/documents/ocr",
+                self.base_url.trim_end_matches('/').trim_end_matches("/v1")
+            ))
+            .bearer_auth(&self.api_key)
+            .multipart(form)
     }
 
     /// Starts live transcription against this client's node; see
@@ -554,6 +621,47 @@ pub struct RawOpenAiResponse {
     pub status_code: u16,
     pub content_type: Option<String>,
     pub body: String,
+}
+
+/// A checked inference request failed; provider response metadata is preserved.
+#[derive(Debug)]
+pub struct OpenAiRequestError {
+    pub status_code: u16,
+    pub content_type: Option<String>,
+    pub body: String,
+}
+
+impl std::fmt::Display for OpenAiRequestError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "OpenAI request failed with HTTP {}: {}",
+            self.status_code, self.body
+        )
+    }
+}
+
+impl std::error::Error for OpenAiRequestError {}
+
+impl RawOpenAiResponse {
+    /// Return this response when successful, or an error containing provider status/body.
+    ///
+    /// Explicit raw inference calls preserve provider responses. This helper
+    /// applies the same status check as the default checked SDK methods.
+    ///
+    /// # Errors
+    /// Returns an error for a status outside the HTTP success range.
+    pub fn error_for_status(self) -> anyhow::Result<Self> {
+        if !(200..300).contains(&self.status_code) {
+            return Err(OpenAiRequestError {
+                status_code: self.status_code,
+                content_type: self.content_type,
+                body: self.body,
+            }
+            .into());
+        }
+        Ok(self)
+    }
 }
 
 pub struct SseFrame {
@@ -701,6 +809,57 @@ mod tests {
                 "http://127.0.0.1:9337/v1/chat/completions"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn checked_and_raw_requests_preserve_provider_error_details() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for _ in 0..4 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 2048];
+                loop {
+                    let count = stream.read(&mut buffer).await.unwrap();
+                    assert!(count > 0);
+                    request.extend_from_slice(&buffer[..count]);
+                    if request.ends_with(b"{}") {
+                        break;
+                    }
+                }
+                let body = r#"{"error":"provider refused"}"#;
+                let response = format!(
+                    "HTTP/1.1 422 Unprocessable Entity\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let client = OpenAiClient::new(format!("http://{address}/v1"));
+        let error = client
+            .request("responses", "{}".into())
+            .await
+            .err()
+            .unwrap();
+        let provider = error.downcast_ref::<OpenAiRequestError>().unwrap();
+        assert_eq!(provider.status_code, 422);
+        assert!(provider.body.contains("provider refused"));
+        let raw = client.request_raw("responses", "{}".into()).await.unwrap();
+        assert_eq!(raw.status_code, 422);
+        assert!(raw.body.contains("provider refused"));
+        let error = client.stream("responses", "{}".into()).await.err().unwrap();
+        assert_eq!(
+            error
+                .downcast_ref::<OpenAiRequestError>()
+                .unwrap()
+                .status_code,
+            422
+        );
+        let raw = client.stream_raw("responses", "{}".into()).await.unwrap();
+        assert_eq!(raw.status().as_u16(), 422);
+        server.await.unwrap();
     }
 
     #[test]

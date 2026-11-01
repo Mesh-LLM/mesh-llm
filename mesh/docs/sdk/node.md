@@ -28,9 +28,8 @@ Stream with `node.inference.streamChatCompletions(body)` or
 
 ## Thinking effort levels
 
-`listModels()` returns model metadata in the `/v1/models` shape, including the
-effort strings observed in the loaded chat template. The native addon currently
-queries this metadata through the embedded node's HTTP client:
+`listModels()` returns model metadata including the effort strings observed in
+the loaded chat template:
 
 ```js
 const models = await node.inference.listModels()
@@ -47,3 +46,107 @@ if (chosen) {
 `metadata.thinking_efforts` is absent when the provider is older or has not
 probed the model, and `[]` when the template exposes no effort levels. The list
 is an observation of the template, not a guarantee that generation obeys it.
+
+## Discover advertised models
+
+`node.models` queries the embedded node's mesh inventory directly, including
+local and peer-advertised LLM, OCR, speech, embedding, decision and unknown models.
+It does not use the OpenAI HTTP model list.
+
+```js
+const page = await node.models.list()
+const ocr = await node.models.list({
+  workloadClass: 'document_ocr',
+  available: true,
+  limit: 50
+})
+const model = await node.models.get('org/model@revision#profile')
+for (const provider of model.providers) {
+  console.log(provider.provider_id, provider.workload_class, provider.runtime)
+}
+```
+
+Results use `MeshModelPage` with `data` and `next_cursor`. Query options are
+camelCase; model fields retain the Mesh API's snake_case. Filters combine with
+AND. Continue with the same filters and the returned cursor:
+
+```js
+const next = ocr.next_cursor
+  ? await node.models.list({
+      workloadClass: 'document_ocr',
+      available: true,
+      limit: 50,
+      cursor: ocr.next_cursor
+    })
+  : null
+```
+
+A model's `operations` describe what at least one provider advertises. Runtime
+limits, capabilities, thinking controls and payment offers stay under their
+provider; they are not guarantees for every replica. Missing metadata means
+unknown. `node.inference.listModels()` is the LLM-only compatibility view.
+
+## Document OCR
+
+Discover an OCR provider, then submit the PDF or image bytes through Mesh:
+
+```js
+const { readFile } = require('node:fs/promises')
+const page = await node.models.list({ workloadClass: 'document_ocr', available: true })
+if (!page.data.length) throw new Error('No OCR provider is available')
+const result = await node.inference.documentOcr(await readFile('scan.pdf'), {
+  model: page.data[0].id,
+  filename: 'scan.pdf',
+  contentType: 'application/pdf',
+  responseFormat: 'json',
+  maxPages: 10
+})
+console.log(result.json())
+```
+
+OCR uses binary multipart upload to `/mesh/v1/documents/ocr`, including when the
+provider is remote. It does not send the document through chat completion.
+The response preserves provider status, content type and body. OCR raises
+`OpenAIRequestError` for non-2xx by default; pass a third argument
+`{ raiseForStatus: false }` to inspect a raw error response. Use `body` for
+plain text or Markdown responses and `json()` for JSON.
+
+## Additional mesh memberships
+
+```js
+const team = await node.addMembership({
+  name: 'team', apiPort: 9338,
+  joinTokens: [inviteToken], trustedOwners: [ownerId]
+})
+const memberships = await node.memberships()
+const removed = await node.removeMembership('team')
+```
+
+Each membership has its own identity, owner allowlist and peers. An empty
+allowlist admits nobody. Adding an existing name replaces its membership under
+the same Rust validation/recovery rules. Model discovery queries the node's
+primary mesh; it does not combine these independent meshes.
+
+## Full embedded-node configuration
+
+`Node.fromConfig(config)` accepts the complete Rust `EmbeddedMeshNodeConfig`
+JSON schema, including network relays, bind settings, publication, admission
+and trust policy, storage, serving limits and startup timeout. The exported
+TypeScript `EmbeddedMeshNodeConfig` type describes these fields.
+
+```js
+const node = Node.fromConfig({
+  mode: 'client',
+  network: { join_tokens: [inviteToken], enumerate_host: false },
+  storage: { isolated_config: true },
+  startup_timeout: { secs: 30, nanos: 0 }
+})
+await node.start()
+```
+
+Keys and enum values use the Rust schema's snake_case without language-specific
+filtering. Omitted fields use the Rust defaults; unknown fields are rejected by
+the core. In this schema, `mode: 'serve'` means combined serving and inference,
+while `'serve_only'` means serving without SDK inference. The full-config
+default is combined, exactly as in Rust. Existing `Node.create()` keeps its
+client default and camelCase convenience options.
