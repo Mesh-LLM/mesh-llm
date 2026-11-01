@@ -163,6 +163,9 @@ async fn admit(
         crate::network::openai::ingress::served_model_for_public_id(node, targets, &model).await;
     let backend = Backend::resolve(node, targets, &backend_model, &model).await?;
     request.use_backend_model(&backend_model);
+    // The rewrite can grow the request past the cap `backend_http` enforces;
+    // find out now, before admission, not after the buyer has paid.
+    request.backend_http(&id)?;
     let prices = node.advertised_payment_offers().await?;
     let priced = priced_model(&prices, &model, &backend_model)
         .with_context(|| format!("this seller has no price for {model}"))?

@@ -311,6 +311,20 @@ mod tests {
         let forwarded_err = payer.backend_http("id").unwrap_err();
         assert!(forwarded_err.to_string().contains("once forwarded"));
 
+        // A longer backend model name can push a request that fit over the
+        // cap; `backend_http` reports it so the seller can check pre-admission.
+        let fitting = loop {
+            pad -= 1;
+            let raw = format!("{head}{}", body(pad));
+            let payer = PaidRequest::parse(raw.as_bytes()).unwrap();
+            if payer.backend_http("id").is_ok() {
+                break payer;
+            }
+        };
+        let mut seller = PaidRequest::parse(&fitting.backend_http("id").unwrap()).unwrap();
+        seller.use_backend_model(&"b".repeat(1000));
+        assert!(seller.backend_http("id").is_err());
+
         // Shrink until the rebuilt request fits: the seller then accepts it.
         loop {
             pad -= 1;
