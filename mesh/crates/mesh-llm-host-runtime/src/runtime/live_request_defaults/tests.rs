@@ -121,12 +121,12 @@ fn a_model_that_was_serving_and_unloaded_is_forgotten() {
 #[test]
 fn an_apply_during_load_does_not_drop_the_model_and_the_load_catches_up() {
     let live = LiveRequestDefaults::new();
-    live.track_model("a", None, None);
+    let generation = live.track_model("a", None, None);
     let still_loading = FakeBackends::new(&[]);
 
     live.apply(&temperature("0.0"), |m, d| still_loading.replace(m, d));
     let after_load = FakeBackends::new(&["a"]);
-    live.sync_after_load("a", |m, d| after_load.replace(m, d));
+    live.sync_after_load("a", generation, |m, d| after_load.replace(m, d));
 
     assert_eq!(
         after_load.last_for("a"),
@@ -139,10 +139,10 @@ fn an_apply_during_load_does_not_drop_the_model_and_the_load_catches_up() {
 fn a_load_from_a_stale_config_copy_syncs_to_the_last_applied_config() {
     let live = LiveRequestDefaults::new();
     live.apply(&temperature("0.0"), |_, _| 0);
-    live.track_model("late", None, None);
+    let generation = live.track_model("late", None, None);
     let backends = FakeBackends::new(&["late"]);
 
-    live.sync_after_load("late", |m, d| backends.replace(m, d));
+    live.sync_after_load("late", generation, |m, d| backends.replace(m, d));
 
     assert_eq!(backends.last_for("late"), Some(Some(0.0)));
 }
@@ -150,10 +150,10 @@ fn a_load_from_a_stale_config_copy_syncs_to_the_last_applied_config() {
 #[test]
 fn sync_does_nothing_before_any_apply() {
     let live = LiveRequestDefaults::new();
-    live.track_model("a", None, None);
+    let generation = live.track_model("a", None, None);
     let backends = FakeBackends::new(&["a"]);
 
-    live.sync_after_load("a", |m, d| backends.replace(m, d));
+    live.sync_after_load("a", generation, |m, d| backends.replace(m, d));
 
     assert_eq!(backends.calls_for("a"), 0);
 }
@@ -224,12 +224,40 @@ fn a_reload_tracked_during_an_apply_is_not_pruned_with_the_old_backend() {
     // The model reloads while an apply is mid-flight: its old backend is gone
     // and the reload tracks a fresh entry before the apply prunes.
     let reloaded = FakeBackends::new(&[]);
+    let reload_generation = std::cell::Cell::new(0);
     live.apply(&temperature("0.5"), |m, d| {
-        live.track_model("a", None, None);
+        reload_generation.set(live.track_model("a", None, None));
         reloaded.replace(m, d)
     });
     let after_load = FakeBackends::new(&["a"]);
-    live.sync_after_load("a", |m, d| after_load.replace(m, d));
+    live.sync_after_load("a", reload_generation.get(), |m, d| {
+        after_load.replace(m, d)
+    });
 
     assert_eq!(after_load.last_for("a"), Some(Some(0.5)));
+}
+
+#[test]
+fn an_older_load_does_not_sync_or_register_a_newer_loads_entry() {
+    let live = LiveRequestDefaults::new();
+    live.apply(&temperature("0.0"), |_, _| 0);
+    let older = live.track_model("a", None, None);
+    let newer = live.track_model("a", None, None);
+    let backends = FakeBackends::new(&["a"]);
+
+    live.sync_after_load("a", older, |m, d| backends.replace(m, d));
+
+    assert_eq!(
+        backends.calls_for("a"),
+        0,
+        "the older load's generation is no longer tracked"
+    );
+    assert!(
+        live.snapshot(|entry| entry.generation == newer && !entry.registered)
+            .len()
+            == 1,
+        "the newer entry stays unregistered until its own load syncs"
+    );
+    live.sync_after_load("a", newer, |m, d| backends.replace(m, d));
+    assert_eq!(backends.last_for("a"), Some(Some(0.0)));
 }

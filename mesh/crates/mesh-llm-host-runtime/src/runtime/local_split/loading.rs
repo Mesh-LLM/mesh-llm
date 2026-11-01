@@ -108,6 +108,8 @@ pub(super) struct SplitGenerationLoadSettings<'a> {
     pub(super) last_stage_decode_batch: Option<bool>,
     pub(super) load_mode: LoadMode,
     pub(super) startup_timeout: Duration,
+    /// What `live_request_defaults::track_model` returned for this load.
+    pub(super) live_defaults_generation: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -290,6 +292,7 @@ pub(super) async fn load_split_runtime_generation_inner(
     .await;
     let node_for_hook = spec.node.clone();
     let model_ref = spec.model_ref.to_string();
+    let live_defaults_generation = settings.live_defaults_generation;
     let reporter_model_ref = model_ref.clone();
     let skippy_telemetry = spec.skippy_telemetry.clone();
     let guardrail_telemetry = spec.survey_telemetry.clone();
@@ -319,7 +322,7 @@ pub(super) async fn load_split_runtime_generation_inner(
     })
     .await
     .context("join load skippy stage0 config task")??;
-    live_request_defaults::sync_after_load(&model_ref);
+    live_request_defaults::sync_after_load(&model_ref, live_defaults_generation);
     let stage0_output = handle
         .output_activation_boundary()
         .context("stage 0 graph did not expose its output activation boundary")?;
@@ -891,7 +894,7 @@ pub(super) async fn split_generation_load_settings<'a>(
     // Stage zero replaces this placeholder with its graph-observed output
     // boundary after the native runtime has been constructed.
     let embedded_openai = resolved.to_embedded_openai_args(0, true)?;
-    live_request_defaults::track_model(
+    let live_defaults_generation = live_request_defaults::track_model(
         &resolved.model_id,
         spec.config_model_id,
         spec.package.generation.as_ref(),
@@ -915,6 +918,7 @@ pub(super) async fn split_generation_load_settings<'a>(
         last_stage_decode_batch: resolved.throughput.last_stage_decode_batch,
         load_mode,
         startup_timeout: lifecycle.startup_timeout,
+        live_defaults_generation,
     })
 }
 

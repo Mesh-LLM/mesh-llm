@@ -1188,7 +1188,8 @@ async fn start_local_skippy_model(
         .await,
     );
     let embedded_openai = resolved.to_embedded_openai_args(0, false)?;
-    live_request_defaults::track_model(&resolved.model_id, spec.config_model_id, None);
+    let live_defaults_generation =
+        live_request_defaults::track_model(&resolved.model_id, spec.config_model_id, None);
     let mut options = resolved
         .to_model_load_options(spec.skippy_telemetry.clone())?
         .with_embedded_openai(embedded_openai)
@@ -1221,7 +1222,7 @@ async fn start_local_skippy_model(
     })
     .await
     .context("join load skippy direct GGUF task")??;
-    live_request_defaults::sync_after_load(&model_name);
+    live_request_defaults::sync_after_load(&model_name, live_defaults_generation);
     emit_measured_memory_reconciliation(
         &model_name,
         &measurement_key,
@@ -1341,7 +1342,8 @@ async fn start_local_package_v2_model(
     );
     let run_id = format!("mesh-skippy-{}", now_unix_nanos());
     let embedded_openai = resolved.to_embedded_openai_args(0, true)?;
-    live_request_defaults::track_model(&resolved.model_id, spec.config_model_id, None);
+    let live_defaults_generation =
+        live_request_defaults::track_model(&resolved.model_id, spec.config_model_id, None);
     let mut runtime_options = resolved.to_embedded_runtime_options(
         &spec.skippy_telemetry,
         Some(package.clone()),
@@ -1407,7 +1409,7 @@ async fn start_local_package_v2_model(
     })
     .await
     .context("join load skippy package-v2 task")??;
-    live_request_defaults::sync_after_load(&model_name);
+    live_request_defaults::sync_after_load(&model_name, live_defaults_generation);
     emit_measured_memory_reconciliation(
         &model_name,
         &measurement_key,

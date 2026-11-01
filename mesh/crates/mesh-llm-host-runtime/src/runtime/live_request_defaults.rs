@@ -49,15 +49,18 @@ pub(crate) fn track_model(
     backend_model_id: &str,
     config_model_id: Option<&str>,
     package_generation: Option<&PackageGenerationInfo>,
-) {
-    LIVE.track_model(backend_model_id, config_model_id, package_generation);
+) -> u64 {
+    LIVE.track_model(backend_model_id, config_model_id, package_generation)
 }
 
 /// Bring a model whose backend just came up in line with the last applied
-/// config. Call it once the load has finished.
-pub(crate) fn sync_after_load(backend_model_id: &str) {
+/// config. Call it once the load has finished, with the generation
+/// `track_model` returned for that load so an older load never syncs a newer
+/// one's entry.
+pub(crate) fn sync_after_load(backend_model_id: &str, generation: u64) {
     LIVE.sync_after_load(
         backend_model_id,
+        generation,
         skippy_serving::replace_live_request_defaults,
     );
 }
@@ -103,23 +106,26 @@ impl LiveRequestDefaults {
         backend_model_id: &str,
         config_model_id: Option<&str>,
         package_generation: Option<&PackageGenerationInfo>,
-    ) {
+    ) -> u64 {
         let mut tracked = lock(&self.tracked);
         tracked.retain(|entry| entry.backend_model_id != backend_model_id);
+        let generation = self
+            .next_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         tracked.push(TrackedModel {
             backend_model_id: backend_model_id.to_string(),
             config_model_id: config_model_id.map(str::to_string),
             package_generation: package_generation.cloned(),
             registered: false,
-            generation: self
-                .next_generation
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            generation,
         });
+        generation
     }
 
     fn sync_after_load(
         &self,
         backend_model_id: &str,
+        generation: u64,
         replace: impl Fn(&str, EmbeddedOpenAiRequestDefaults) -> usize,
     ) {
         let _swap = lock(&self.swap);
@@ -127,7 +133,9 @@ impl LiveRequestDefaults {
             return;
         };
         let Some(entry) = self
-            .snapshot(|entry| entry.backend_model_id == backend_model_id)
+            .snapshot(|entry| {
+                entry.backend_model_id == backend_model_id && entry.generation == generation
+            })
             .pop()
         else {
             return;
