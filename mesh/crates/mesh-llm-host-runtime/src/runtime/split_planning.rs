@@ -1716,6 +1716,87 @@ mod tests {
         assert_eq!(plan.stages[1].parameter_bytes, 8 * GIB);
     }
 
+    fn plan_package_v2_fixture(
+        payloads: &[(&str, &str, &str)],
+        layer_count: u32,
+        nextn_predict_layers: u32,
+    ) -> (skippy::SkippyPackageIdentity, PlannedRuntimeSliceTopology) {
+        let root = tempfile::tempdir().unwrap();
+        skippy::write_test_package_v2_fixture_with_layers(
+            root.path(),
+            "fixture/model",
+            payloads,
+            layer_count,
+            nextn_predict_layers,
+        )
+        .unwrap();
+        let package = skippy::identity_from_package_v2(root.path()).unwrap();
+        let metadata = mesh_llm_skippy_adapter::package::identity_from_package_v2_metadata(
+            &root.path().to_string_lossy(),
+            &root.path().to_string_lossy(),
+        )
+        .unwrap();
+        assert_eq!(metadata.layer_count, package.layer_count);
+        assert_eq!(metadata.layer_weight_bytes, package.layer_weight_bytes);
+        let plan = plan_runtime_slice_topology_with_resources(
+            "topology-test",
+            "model-a",
+            &package,
+            &[participant(1, 1 << 30), participant(2, 1 << 30)],
+            &[],
+            SplitTopologyResourceInputs {
+                native_context_length: 1,
+                kv_bytes_per_token: 1,
+                recurrent_bytes_per_sequence_by_layer: Vec::new(),
+                ctx_size_override: Some(1),
+                parallel_override: Some(1),
+                placement: Default::default(),
+            },
+        )
+        .expect("package-v2 split topology");
+        (package, plan)
+    }
+
+    #[test]
+    fn resource_planner_keeps_native_mtp_layers_out_of_package_stage_ranges() {
+        let (package, plan) = plan_package_v2_fixture(
+            &[
+                ("layer-0", "layers/layer-000.gguf", "blk.0.attn_norm.weight"),
+                ("layer-1", "layers/layer-001.gguf", "blk.1.attn_norm.weight"),
+                (
+                    "layer-2",
+                    "layers/layer-002.gguf",
+                    "blk.2.nextn.eh_proj.weight",
+                ),
+            ],
+            3,
+            1,
+        );
+
+        assert_eq!(package.layer_count, 2);
+        // The MTP block's bytes are charged to the stage that ends the trunk.
+        assert_eq!(package.layer_weight_bytes, vec![4, 8]);
+        assert_eq!(plan.stages.first().unwrap().layer_start, 0);
+        assert_eq!(plan.stages.last().unwrap().layer_end, 2);
+    }
+
+    #[test]
+    fn resource_planner_keeps_package_ranges_without_mtp() {
+        let (package, plan) = plan_package_v2_fixture(
+            &[
+                ("layer-0", "layers/layer-000.gguf", "blk.0.attn_norm.weight"),
+                ("layer-1", "layers/layer-001.gguf", "blk.1.attn_norm.weight"),
+                ("layer-2", "layers/layer-002.gguf", "blk.2.attn_norm.weight"),
+            ],
+            3,
+            0,
+        );
+
+        assert_eq!(package.layer_count, 3);
+        assert_eq!(package.layer_weight_bytes, vec![4, 4, 4]);
+        assert_eq!(plan.stages.last().unwrap().layer_end, 3);
+    }
+
     #[test]
     fn resource_planner_assigns_mi300x_a_capacity_weighted_share() {
         const GIB: u64 = 1024 * 1024 * 1024;

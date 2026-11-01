@@ -203,9 +203,12 @@ impl StageControlState {
                 claim,
                 error: None,
             }),
-            ClaimDecision::Rejected { reason, .. } => Ok(StageCoordinatorClaimAck {
+            // A rejection carries the claim that holds the model here, so the
+            // claimant can tell its own newer generation from another
+            // coordinator's.
+            ClaimDecision::Rejected { current, reason } => Ok(StageCoordinatorClaimAck {
                 accepted: false,
-                claim: attempted_claim,
+                claim: current.unwrap_or(attempted_claim),
                 error: Some(reason.to_string()),
             }),
         }
