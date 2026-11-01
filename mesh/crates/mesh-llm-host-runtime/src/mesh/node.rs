@@ -98,6 +98,10 @@ pub struct Node {
     pub(crate) serving_models: Arc<Mutex<Vec<String>>>,
     pub(crate) served_model_descriptors: Arc<Mutex<Vec<ServedModelDescriptor>>>,
     pub(crate) served_model_generations: Arc<Mutex<HashMap<String, u64>>>,
+    /// The local runtime port each model's current generation (and so its
+    /// `weights_digest`) belongs to. A digest read for any other port is not
+    /// that instance's: the descriptor is node-wide and keeps only the newest.
+    pub(crate) served_model_weights_ports: Arc<Mutex<HashMap<String, (u64, u16)>>>,
     pub(crate) model_runtime_descriptors: Arc<Mutex<Vec<ModelRuntimeDescriptor>>>,
     pub(crate) hosted_models: Arc<Mutex<Vec<String>>>,
     pub(crate) llama_ready: Arc<Mutex<bool>>,
@@ -854,6 +858,7 @@ impl Node {
             serving_models: Arc::new(Mutex::new(Vec::new())),
             served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
             served_model_generations: Arc::new(Mutex::new(HashMap::new())),
+            served_model_weights_ports: Arc::new(Mutex::new(HashMap::new())),
             model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
@@ -1048,6 +1053,7 @@ impl Node {
             serving_models: Arc::new(Mutex::new(Vec::new())),
             served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
             served_model_generations: Arc::new(Mutex::new(HashMap::new())),
+            served_model_weights_ports: Arc::new(Mutex::new(HashMap::new())),
             model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
@@ -1409,6 +1415,71 @@ impl Node {
             });
         }
         generation
+    }
+
+    /// Record the local runtime `port` the generation `begin_served_model_generation`
+    /// returned will serve on. Ignored when a newer generation has begun.
+    pub(crate) async fn bind_served_model_generation_to_port(
+        &self,
+        model_name: &str,
+        generation: u64,
+        port: u16,
+    ) {
+        let generations = self.served_model_generations.lock().await;
+        if generations.get(model_name).copied() == Some(generation) {
+            self.served_model_weights_ports
+                .lock()
+                .await
+                .insert(model_name.to_string(), (generation, port));
+        }
+    }
+
+    /// Load a model on `port` the way the runtime does: a new generation
+    /// bound to that port, carrying `digest`.
+    #[cfg(test)]
+    pub(crate) async fn load_model_for_tests(&self, model_name: &str, port: u16, digest: &str) {
+        let generation = self.begin_served_model_generation(model_name).await;
+        self.bind_served_model_generation_to_port(model_name, generation, port)
+            .await;
+        assert!(
+            self.set_served_model_weights_digest_for_generation(
+                model_name,
+                generation,
+                Some(digest.to_owned()),
+            )
+            .await
+        );
+    }
+
+    /// Drop `identity.weights_digest` unless it was computed for the runtime
+    /// instance on `port`. The node-wide descriptor keeps only the newest
+    /// generation's digest, so a request that reached an older instance of the
+    /// same model name (its file replaced between loads) must not report the
+    /// newer file's bytes as the ones it ran.
+    pub(crate) async fn scope_weights_digest_to_port(
+        &self,
+        identity: &mut ServedModelIdentity,
+        port: u16,
+    ) {
+        if identity.weights_digest.is_none() {
+            return;
+        }
+        let name = &identity.model_name;
+        let current = self
+            .served_model_generations
+            .lock()
+            .await
+            .get(name)
+            .copied();
+        let bound = self
+            .served_model_weights_ports
+            .lock()
+            .await
+            .get(name)
+            .copied();
+        if bound.is_none() || bound != current.map(|generation| (generation, port)) {
+            identity.weights_digest = None;
+        }
     }
 
     pub(crate) async fn set_served_model_weights_digest_for_generation(

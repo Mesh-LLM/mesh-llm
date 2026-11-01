@@ -36,12 +36,22 @@ pub(crate) struct ServedModelHeaders {
 impl ServedModelHeaders {
     /// This node's facts for `model`, matched under every name routing
     /// accepts for it: the served descriptor's `model_name`, then its public
-    /// model ID. `None` when this node has neither fact.
-    pub(crate) async fn for_served_model(node: &mesh::Node, model: &str) -> Option<Self> {
+    /// model ID. With the local runtime `port` that served the request, the
+    /// weights digest is reported only when it belongs to that instance (see
+    /// `Node::scope_weights_digest_to_port`). `None` when this node has
+    /// neither fact.
+    pub(crate) async fn for_served_model(
+        node: &mesh::Node,
+        model: &str,
+        port: Option<u16>,
+    ) -> Option<Self> {
         let descriptors = node.served_model_descriptors().await;
-        let identity = routable_descriptor_for_name(&descriptors, model)?
+        let mut identity = routable_descriptor_for_name(&descriptors, model)?
             .identity
             .clone();
+        if let Some(port) = port {
+            node.scope_weights_digest_to_port(&mut identity, port).await;
+        }
         let headers = Self {
             weights_digest: identity.weights_digest.filter(|v| is_header_value(v)),
             canonical_ref: identity.canonical_ref.filter(|v| is_header_value(v)),
@@ -133,7 +143,8 @@ pub(super) fn set_served_model_headers(
 /// Sets the served-model headers on a raw HTTP response that is forwarded
 /// chunk by chunk without a probe: the paid seller's backend stream. It holds
 /// bytes back only until the response head is complete. A head that never
-/// parses, or outgrows `MAX_HEADER_BYTES`, is forwarded unchanged.
+/// parses, or outgrows `MAX_HEADER_BYTES`, fails the response: forwarding it
+/// unchanged would let the backend supply the served-model headers itself.
 #[cfg(feature = "payments")]
 pub(crate) struct ServedModelHeadRewrite {
     served: Option<ServedModelHeaders>,
@@ -152,9 +163,9 @@ impl ServedModelHeadRewrite {
 
     /// Take the next chunk read from the backend; returns the bytes to
     /// forward now, which may be empty while the head is incomplete.
-    pub(crate) fn push(&mut self, chunk: &[u8]) -> Vec<u8> {
+    pub(crate) fn push(&mut self, chunk: &[u8]) -> Result<Vec<u8>, UnusableResponseHead> {
         let Some(pending) = self.pending.as_mut() else {
-            return chunk.to_vec();
+            return Ok(chunk.to_vec());
         };
         pending.extend_from_slice(chunk);
         match try_parse_response_headers(pending) {
@@ -166,10 +177,13 @@ impl ServedModelHeadRewrite {
                     parsed.status_code,
                     self.served.as_ref(),
                 );
-                head
+                Ok(head)
             }
-            Ok(None) if pending.len() <= MAX_HEADER_BYTES => Vec::new(),
-            _ => self.pending.take().unwrap_or_default(),
+            Ok(None) if pending.len() <= MAX_HEADER_BYTES => Ok(Vec::new()),
+            _ => {
+                self.pending = None;
+                Err(UnusableResponseHead)
+            }
         }
     }
 
@@ -178,6 +192,12 @@ impl ServedModelHeadRewrite {
         self.pending.take().unwrap_or_default()
     }
 }
+
+/// The backend's response head never parsed or outgrew `MAX_HEADER_BYTES`, so
+/// its served-model headers cannot be replaced or removed.
+#[cfg(feature = "payments")]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct UnusableResponseHead;
 
 #[cfg(test)]
 mod tests {
@@ -198,15 +218,15 @@ mod tests {
     fn a_rewrite_replaces_upstream_values_with_this_nodes_on_a_2xx_head() {
         let mut rewrite = ServedModelHeadRewrite::new(Some(served()));
         // The head arrives split across two chunks.
-        assert!(rewrite.push(&OK[..20]).is_empty());
-        let out = rewrite.push(&OK[20..]);
+        assert!(rewrite.push(&OK[..20]).unwrap().is_empty());
+        let out = rewrite.push(&OK[20..]).unwrap();
         let text = String::from_utf8(out).unwrap();
         assert!(text.contains("x-mesh-weights-digest: 74a4da8c\r\n"));
         assert!(text.contains("x-mesh-model-canonical-ref: org/repo@main:Q4_K_M\r\n"));
         assert!(!text.contains("upstream"));
         assert!(text.ends_with("\r\n\r\n{}"));
         // The body after the head passes through untouched.
-        assert_eq!(rewrite.push(b"tail"), b"tail");
+        assert_eq!(rewrite.push(b"tail").unwrap(), b"tail");
         assert!(rewrite.finish().is_empty());
     }
 
@@ -214,23 +234,33 @@ mod tests {
     #[test]
     fn a_rewrite_only_removes_the_headers_without_values_or_on_an_error() {
         let mut none = ServedModelHeadRewrite::new(None);
-        let text = String::from_utf8(none.push(OK)).unwrap();
+        let text = String::from_utf8(none.push(OK).unwrap()).unwrap();
         assert!(!text.contains("x-mesh-weights-digest"));
 
         let error = b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n";
         let mut failed = ServedModelHeadRewrite::new(Some(served()));
-        let text = String::from_utf8(failed.push(error)).unwrap();
+        let text = String::from_utf8(failed.push(error).unwrap()).unwrap();
         assert!(!text.contains("x-mesh-"));
     }
 
     #[cfg(feature = "payments")]
     #[test]
-    fn a_rewrite_forwards_an_unparseable_or_unfinished_head_unchanged() {
+    fn a_rewrite_fails_an_unparseable_or_oversized_head_and_holds_an_unfinished_one() {
         let mut garbage = ServedModelHeadRewrite::new(Some(served()));
-        assert_eq!(garbage.push(b"not http\r\n\r\n"), b"not http\r\n\r\n");
+        assert_eq!(garbage.push(b"not http\r\n\r\n"), Err(UnusableResponseHead));
+        assert!(
+            garbage.finish().is_empty(),
+            "nothing is released after the failure"
+        );
+
+        let mut oversized = ServedModelHeadRewrite::new(None);
+        let mut head = b"HTTP/1.1 200 OK\r\nx-mesh-weights-digest: forged\r\n".to_vec();
+        head.resize(MAX_HEADER_BYTES + 1, b'a');
+        assert_eq!(oversized.push(&head), Err(UnusableResponseHead));
+        assert!(oversized.finish().is_empty());
 
         let mut cut = ServedModelHeadRewrite::new(Some(served()));
-        assert!(cut.push(b"HTTP/1.1 200 OK\r\n").is_empty());
+        assert!(cut.push(b"HTTP/1.1 200 OK\r\n").unwrap().is_empty());
         assert_eq!(cut.finish(), b"HTTP/1.1 200 OK\r\n");
     }
 

@@ -62,7 +62,7 @@ pub(in crate::network::openai) async fn route_local_attempt(
             }
         }
     }
-    let served_model = served_model_headers_for_mesh_peer(node, tcp_stream, model).await;
+    let served_model = served_model_headers_for_mesh_peer(node, tcp_stream, model, port).await;
     let Ok((_instance_request, mut upstream)) = acquire_local_attempt_upstream(node, port).await
     else {
         return RouteAttemptResult::RetryableUnavailable;
@@ -98,12 +98,13 @@ async fn served_model_headers_for_mesh_peer(
     node: &mesh::Node,
     tcp_stream: &ClientStream,
     model: Option<&str>,
+    port: u16,
 ) -> Option<ServedModelHeaders> {
     let model = model?;
     if !tcp_stream.is_mesh_peer() {
         return None;
     }
-    ServedModelHeaders::for_served_model(node, model).await
+    ServedModelHeaders::for_served_model(node, model, Some(port)).await
 }
 
 async fn acquire_local_attempt_upstream(
@@ -925,12 +926,12 @@ mod tests {
         *node.served_model_descriptors.lock().await = vec![mesh::ServedModelDescriptor {
             identity: mesh::ServedModelIdentity {
                 model_name: "served".to_owned(),
-                weights_digest: Some("74a4da8c".to_owned()),
                 canonical_ref: Some("org/repo@main:Q4_K_M".to_owned()),
                 ..Default::default()
             },
             ..Default::default()
         }];
+        node.load_model_for_tests("served", 8080, "74a4da8c").await;
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -939,7 +940,7 @@ mod tests {
         let tcp = ClientStream::from(tcp).with_response_metadata(Vec::new());
         assert!(!tcp.is_mesh_peer());
         assert_eq!(
-            served_model_headers_for_mesh_peer(&node, &tcp, Some("served")).await,
+            served_model_headers_for_mesh_peer(&node, &tcp, Some("served"), 8080).await,
             None
         );
         assert!(!ClientStream::null().is_mesh_peer());
@@ -976,15 +977,15 @@ mod tests {
             .with_response_metadata(Vec::new());
         assert!(quic.is_mesh_peer());
         assert_eq!(
-            served_model_headers_for_mesh_peer(&node, &quic, Some("served")).await,
+            served_model_headers_for_mesh_peer(&node, &quic, Some("served"), 8080).await,
             Some(test_served_model())
         );
         assert_eq!(
-            served_model_headers_for_mesh_peer(&node, &quic, Some("other")).await,
+            served_model_headers_for_mesh_peer(&node, &quic, Some("other"), 8080).await,
             None
         );
         assert_eq!(
-            served_model_headers_for_mesh_peer(&node, &quic, None).await,
+            served_model_headers_for_mesh_peer(&node, &quic, None, 8080).await,
             None
         );
 

@@ -363,8 +363,8 @@ async fn served_model_headers(
     backend: &Backend,
     request: &PaidRequest,
 ) -> Option<ServedModelHeaders> {
-    backend.local_port()?;
-    ServedModelHeaders::for_served_model(node, request.backend_model()).await
+    let port = backend.local_port()?;
+    ServedModelHeaders::for_served_model(node, request.backend_model(), Some(port)).await
 }
 
 /// Forward the backend's response to the buyer, observing usage on the way.
@@ -404,7 +404,11 @@ async fn forward_backend(
         if let Some(capture) = delivered.as_deref_mut() {
             capture.push(&buffer[..count]);
         }
-        let bytes = head.push(&buffer[..count]);
+        // A head the rewrite cannot use fails the response before any of its
+        // bytes reach the buyer, so a backend never supplies the headers.
+        let Ok(bytes) = head.push(&buffer[..count]) else {
+            return reported(usage.interrupted_evidence());
+        };
         if !bytes.is_empty() && write_output(writer, bytes).await.is_err() {
             return reported(usage.interrupted_evidence());
         }
@@ -666,12 +670,13 @@ mod tests {
         *node.served_model_descriptors.lock().await = vec![crate::mesh::ServedModelDescriptor {
             identity: crate::mesh::ServedModelIdentity {
                 model_name: "local-gguf/sha256-abc".to_owned(),
-                weights_digest: Some("74a4da8c".to_owned()),
                 canonical_ref: Some("org/repo@main:Q4_K_M".to_owned()),
                 ..Default::default()
             },
             ..Default::default()
         }];
+        node.load_model_for_tests("local-gguf/sha256-abc", 1, "74a4da8c")
+            .await;
         let mut request = PaidRequest::parse(
             b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"model\":\"org/repo:Q4_K_M\"}",
         )
@@ -687,6 +692,15 @@ mod tests {
             }),
             "looked up by the backend name, not the buyer's public ID"
         );
+        let other_instance = served_model_headers(&node, &Backend::Local(2), &request).await;
+        assert_eq!(
+            other_instance,
+            Some(ServedModelHeaders {
+                weights_digest: None,
+                canonical_ref: Some("org/repo@main:Q4_K_M".to_owned()),
+            }),
+            "another instance of the same name does not get this digest"
+        );
         let plugin = served_model_headers(
             &node,
             &Backend::Plugin("http://127.0.0.1:1".into()),
@@ -695,6 +709,30 @@ mod tests {
         .await;
         assert_eq!(plugin, None);
         node.endpoint.close().await;
+    }
+
+    /// A backend whose response head cannot be rewritten (here: it never ends)
+    /// fails the response before any of its bytes, which may carry forged
+    /// served-model headers, reach the buyer.
+    #[tokio::test]
+    async fn an_oversized_backend_head_is_never_forwarded() {
+        let mut response = b"HTTP/1.1 200 OK\r\nx-mesh-weights-digest: forged\r\n".to_vec();
+        response.resize(
+            crate::network::openai::request_parse::MAX_HEADER_BYTES + 1,
+            b'a',
+        );
+        let (_buyer_send, mut buyer_recv) = tokio::io::duplex(16);
+        let mut sink = Vec::new();
+        let usage = forward_backend(
+            &response[..],
+            &mut buyer_recv,
+            &mut sink,
+            None,
+            ServedModelHeadRewrite::new(None),
+        )
+        .await;
+        assert!(usage.is_none());
+        assert!(sink.is_empty(), "no backend byte reaches the buyer");
     }
 
     #[tokio::test]

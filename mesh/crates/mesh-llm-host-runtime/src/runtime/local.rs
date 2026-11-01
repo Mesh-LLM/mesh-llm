@@ -840,7 +840,8 @@ pub(super) async fn start_runtime_local_model(
         .capacity_budget_bytes
         .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()))
         .unwrap_or_else(|| spec.node.vram_bytes());
-    let http_bind_addr = ([127, 0, 0, 1], alloc_local_port().await?).into();
+    let http_port = alloc_local_port().await?;
+    let http_bind_addr = ([127, 0, 0, 1], http_port).into();
     let hook_policy = Some(crate::plugin::exchange_policy::compose_node_hooks(
         spec.node.clone(),
     ));
@@ -886,6 +887,9 @@ pub(super) async fn start_runtime_local_model(
         let generation = spec
             .node
             .begin_served_model_generation(runtime_model_name)
+            .await;
+        spec.node
+            .bind_served_model_generation_to_port(runtime_model_name, generation, http_port)
             .await;
         let node = spec.node.clone();
         let runtime_model_name = runtime_model_name.to_string();

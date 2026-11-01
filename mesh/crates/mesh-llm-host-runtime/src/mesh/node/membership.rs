@@ -393,6 +393,7 @@ impl Node {
             startup_models_resolving: self.startup_models_resolving.clone(),
             served_model_descriptors: self.served_model_descriptors.clone(),
             served_model_generations: self.served_model_generations.clone(),
+            served_model_weights_ports: self.served_model_weights_ports.clone(),
             model_runtime_descriptors: self.model_runtime_descriptors.clone(),
             hosted_models: self.hosted_models.clone(),
             llama_ready: self.llama_ready.clone(),

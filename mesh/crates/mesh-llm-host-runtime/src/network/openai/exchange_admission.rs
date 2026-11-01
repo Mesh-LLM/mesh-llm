@@ -1,8 +1,8 @@
 //! Selected-route plugin admission immediately before each backend attempt.
+use super::workload_routing::unambiguous_descriptor_for_request;
 use super::{client_stream::ClientStream, transport};
 use crate::inference::election::InferenceTarget;
 use crate::mesh;
-use crate::mesh::model_identity::routable_descriptor_for_name;
 use serde_json::json;
 use tokio::io::AsyncWriteExt;
 
@@ -27,7 +27,7 @@ pub(super) async fn admit_selected_route(
     }
     let model_identity = match (&target, model) {
         (SelectedRouteTarget::Mesh(target), Some(model)) => {
-            selected_model_identity(node, target, model).await
+            selected_model_identity(node, target, model, &request.client_path).await
         }
         _ => None,
     };
@@ -54,11 +54,15 @@ pub(super) async fn admit_selected_route(
 /// remote one. A peer descriptor never carries `weights_digest` (gossip strips
 /// it; see `protocol/convert.rs`), so a remote target yields at most its
 /// canonical ref here. Matches `model` under every name routing accepts for
-/// it: the descriptor's `model_name`, then its public model ID.
+/// it (the descriptor's `model_name`, then its public model ID) and only the
+/// descriptor that serves the endpoint at `path`; with none or several
+/// candidates it reports nothing. For a local target the weights digest is
+/// kept only if it belongs to the selected runtime instance.
 pub(super) async fn selected_model_identity(
     node: &mesh::Node,
     target: &InferenceTarget,
     model: &str,
+    path: &str,
 ) -> Option<mesh::ServedModelIdentity> {
     let descriptors = match target {
         InferenceTarget::Local(_) => node.served_model_descriptors().await,
@@ -71,7 +75,14 @@ pub(super) async fn selected_model_identity(
         }
         InferenceTarget::None => return None,
     };
-    routable_descriptor_for_name(&descriptors, model).map(|descriptor| descriptor.identity.clone())
+    let mut identity = unambiguous_descriptor_for_request(model, path, &descriptors)?
+        .identity
+        .clone();
+    if let InferenceTarget::Local(port) = target {
+        node.scope_weights_digest_to_port(&mut identity, *port)
+            .await;
+    }
+    Some(identity)
 }
 
 async fn apply_selected_route_policy(
