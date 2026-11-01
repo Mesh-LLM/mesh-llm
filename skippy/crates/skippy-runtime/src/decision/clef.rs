@@ -15,7 +15,7 @@ use super::{
     DecisionError, DecisionModel, DecisionOutput, DecisionQuestion, DecisionQuestionKind,
     DecisionRequest, check_output,
 };
-use crate::clef::ClefModel;
+use crate::{Status, clef::ClefModel, error::NativeError};
 
 impl DecisionModel for ClefModel {
     fn decide(&self, request: &DecisionRequest) -> Result<DecisionOutput, DecisionError> {
@@ -249,13 +249,13 @@ impl Calibration {
 }
 
 fn invalid_or_backend(error: anyhow::Error) -> DecisionError {
-    // The native read rejects malformed requests with an invalid-argument
-    // status that the FFI layer reports as an error message.
-    let message = format!("{error:#}");
-    if message.contains("invalid argument") || message.contains("clef request") {
-        DecisionError::InvalidRequest(message)
-    } else {
-        DecisionError::Backend(error)
+    // The native plan and read reject malformed or oversized requests with
+    // SKIPPY_STATUS_INVALID_ARGUMENT; every other status is a backend failure.
+    match NativeError::find(&error) {
+        Some(native) if native.status == Status::InvalidArgument => {
+            DecisionError::InvalidRequest(format!("{error:#}"))
+        }
+        _ => DecisionError::Backend(error),
     }
 }
 

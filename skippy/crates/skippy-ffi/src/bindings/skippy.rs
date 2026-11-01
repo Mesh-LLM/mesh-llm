@@ -2052,7 +2052,7 @@ pub enum skippy_clef_order {
 pub struct skippy_clef_info_v1 {
     pub struct_size: u32,
     pub abi_version: u32,
-    #[doc = "< tokens one read may span; also the micro-batch size"]
+    #[doc = "< tokens one read may span: the smallest of the context, batch and micro-batch"]
     pub n_ctx: i32,
     pub n_embd: i32,
     pub n_layer: i32,

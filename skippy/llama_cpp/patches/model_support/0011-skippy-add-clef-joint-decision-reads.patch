@@ -76,7 +76,7 @@ index 000000000..a2bb704e0
 +struct skippy_clef_info_v1 {
 +    uint32_t struct_size;
 +    uint32_t abi_version;
-+    int32_t  n_ctx;            /**< tokens one read may span; also the micro-batch size */
++    int32_t  n_ctx;            /**< tokens one read may span: the smallest of the context, batch and micro-batch */
 +    int32_t  n_embd;
 +    int32_t  n_layer;
 +    int32_t  n_vocab;
@@ -256,7 +256,7 @@ new file mode 100644
 index 000000000..6c16d9ba2
 --- /dev/null
 +++ b/src/skippy/clef.cpp
-@@ -0,0 +1,505 @@
+@@ -0,0 +1,508 @@
 +#include "skippy/clef.h"
 +
 +#include "skippy/errors.h"
@@ -603,7 +603,10 @@ index 000000000..6c16d9ba2
 +        if (handle->ctx == nullptr) {
 +            return clef_fail(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "failed to create clef context");
 +        }
-+        handle->n_ctx = static_cast<int32_t>(llama_n_ctx(handle->ctx));
++        // llama pads the KV context up, but one read must still fit the
++        // single batch and micro-batch, so the usable budget is the smallest.
++        handle->n_ctx = static_cast<int32_t>(std::min({llama_n_ctx(handle->ctx),
++                llama_n_batch(handle->ctx), llama_n_ubatch(handle->ctx)}));
 +        return skippy_success(out_error);
 +    });
 +    if (status != SKIPPY_STATUS_OK) {
