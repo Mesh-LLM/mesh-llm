@@ -1415,6 +1415,7 @@ fn sampling_under_live_defaults(
 #[test]
 fn live_request_default_temperature_applies_to_the_next_request_and_loses_to_the_request() {
     let live = LiveRequestDefaults::register(
+        0,
         "live-temperature-chat",
         EmbeddedOpenAiRequestDefaults::default(),
     );
@@ -1428,6 +1429,7 @@ fn live_request_default_temperature_applies_to_the_next_request_and_loses_to_the
     );
 
     let updated = replace_live_request_defaults(
+        0,
         "live-temperature-chat",
         EmbeddedOpenAiRequestDefaults {
             temperature: Some(0.0),

@@ -343,6 +343,7 @@ impl ResolvedSkippyConfig {
                 .max_tokens
                 .unwrap_or(DEFAULT_EMBEDDED_MAX_TOKENS),
             request_defaults: self.request_defaults.to_embedded()?,
+            live_defaults_scope: 0,
             generation_concurrency: self.throughput.parallel,
             continuous_batching: self.throughput.continuous_batching != "false",
             pipeline_decode_groups: self

@@ -89,6 +89,10 @@ pub struct EmbeddedOpenAiArgs {
     pub model_id: Option<String>,
     pub default_max_tokens: u32,
     pub request_defaults: EmbeddedOpenAiRequestDefaults,
+    /// Scope this backend's request defaults register under, so
+    /// [`replace_live_request_defaults`] only reaches the owner that asked.
+    /// `0` for backends nobody swaps live.
+    pub live_defaults_scope: u64,
     pub generation_concurrency: usize,
     pub continuous_batching: bool,
     /// Decode-wave groups for this frontend's dispatcher. `None` keeps the
@@ -372,6 +376,7 @@ fn embedded_openai_backend_with_scheduler(
         model_id: model_id.clone(),
         default_max_tokens: args.default_max_tokens,
         request_defaults: super::LiveRequestDefaults::register(
+            args.live_defaults_scope,
             model_id.as_str(),
             args.request_defaults,
         ),
