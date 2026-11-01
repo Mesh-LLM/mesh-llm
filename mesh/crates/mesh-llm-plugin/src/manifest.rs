@@ -848,7 +848,19 @@ impl PackagedPluginConstraint {
 }
 
 pub fn mesh_channel(name: impl Into<String>) -> ManifestEntry {
-    ManifestEntry::MeshChannel(proto::MeshChannelManifest { name: name.into() })
+    ManifestEntry::MeshChannel(proto::MeshChannelManifest {
+        name: name.into(),
+        local: false,
+    })
+}
+
+/// A channel this plugin publishes on to the other plugins on its node only
+/// (see [`crate::host_capabilities::LOCAL_CHANNELS`]).
+pub fn local_channel(name: impl Into<String>) -> ManifestEntry {
+    ManifestEntry::MeshChannel(proto::MeshChannelManifest {
+        name: name.into(),
+        local: true,
+    })
 }
 
 pub fn mesh_event_subscription(kind: proto::mesh_event::Kind) -> ManifestEntry {
@@ -1993,5 +2005,40 @@ mod tests {
             error_chain_contains(&error, "unknown plugin config apply mode"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_local_channel_needs_the_host_capability() {
+        let local = crate::plugin_manifest()
+            .item(local_channel("payment.lifecycle.v1"))
+            .build();
+        let message = crate::host_capabilities::unsupported_requirement(Some(&local), |_| false)
+            .expect("refused");
+        assert!(message.contains("local_channels.v1"), "{message}");
+        assert!(
+            crate::host_capabilities::unsupported_requirement(Some(&local), |capability| {
+                capability == crate::host_capabilities::LOCAL_CHANNELS
+            })
+            .is_none()
+        );
+        let mesh = crate::plugin_manifest()
+            .item(mesh_channel("pay.ln.v1"))
+            .build();
+        assert!(
+            crate::host_capabilities::unsupported_requirement(Some(&mesh), |_| false).is_none()
+        );
+    }
+
+    #[test]
+    fn local_channel_declares_the_channel_local_and_mesh_channel_does_not() {
+        let ManifestEntry::MeshChannel(local) = local_channel("payment.lifecycle.v1") else {
+            panic!("local_channel is a mesh channel entry");
+        };
+        assert!(local.local);
+        assert_eq!(local.name, "payment.lifecycle.v1");
+        let ManifestEntry::MeshChannel(mesh) = mesh_channel("pay.ln.v1") else {
+            panic!("mesh_channel is a mesh channel entry");
+        };
+        assert!(!mesh.local);
     }
 }

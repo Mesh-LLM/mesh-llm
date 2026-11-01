@@ -1,5 +1,6 @@
 mod capability_registration;
 mod channel_broadcast;
+pub(crate) use self::channel_broadcast::ChannelRoute;
 mod config;
 mod exchange_grants;
 mod exchange_lifecycle;
@@ -1639,6 +1640,7 @@ pub(crate) fn plugin_manifest_to_json(manifest: &proto::PluginManifest) -> Value
         "mesh_channels": manifest.mesh_channels.iter().map(|channel| {
             json!({
                 "name": channel.name,
+                "local": channel.local,
             })
         }).collect::<Vec<_>>(),
         "mesh_event_subscriptions": manifest.mesh_event_subscriptions.iter().map(|subscription| {

@@ -112,21 +112,13 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                             let payload = envelope.payload.clone();
                             match payload {
                                 Some(super::proto::envelope::Payload::ChannelMessage(message)) => {
-                                    let plugin_id = if plugin_id_from_env.is_empty() {
-                                        plugin_name.clone()
-                                    } else {
-                                        plugin_id_from_env
-                                    };
+                                    let plugin_id = sender_plugin_id(&plugin_name, &plugin_id_from_env);
                                     let _ = mesh_tx
                                         .send(PluginMeshEvent::Channel { plugin_id, message })
                                         .await;
                                 }
                                 Some(super::proto::envelope::Payload::BulkTransferMessage(message)) => {
-                                    let plugin_id = if plugin_id_from_env.is_empty() {
-                                        plugin_name.clone()
-                                    } else {
-                                        plugin_id_from_env
-                                    };
+                                    let plugin_id = sender_plugin_id(&plugin_name, &plugin_id_from_env);
                                     let _ = mesh_tx
                                         .send(PluginMeshEvent::BulkTransfer {
                                             plugin_id,
@@ -135,11 +127,7 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                         .await;
                                 }
                                 Some(super::proto::envelope::Payload::OpenMeshStreamRequest(request)) => {
-                                    let plugin_id = if plugin_id_from_env.is_empty() {
-                                        plugin_name.clone()
-                                    } else {
-                                        plugin_id_from_env
-                                    };
+                                    let plugin_id = sender_plugin_id(&plugin_name, &plugin_id_from_env);
                                     forward_plugin_mesh_stream_request(
                                         plugin_id,
                                         request_id,
@@ -918,6 +906,21 @@ fn forward_plugin_notification(
 #[path = "transport_peer_auth_tests.rs"]
 mod peer_auth_tests;
 
+/// The plugin a connection's message is from: always the plugin the
+/// connection belongs to. An envelope naming another plugin is not believed,
+/// so one plugin cannot send as another (for example on a local channel,
+/// where the host tells receivers who published).
+fn sender_plugin_id(connection_plugin: &str, envelope_plugin_id: &str) -> String {
+    if !envelope_plugin_id.is_empty() && envelope_plugin_id != connection_plugin {
+        tracing::warn!(
+            plugin = %connection_plugin,
+            claimed = %envelope_plugin_id,
+            "plugin envelope names another plugin; using the connection's own name"
+        );
+    }
+    connection_plugin.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1201,6 +1204,16 @@ mod unix_socket_path_tests {
         assert!(
             error.to_string().contains("exceeds"),
             "unexpected message: {error}"
+        );
+    }
+
+    #[test]
+    fn a_message_is_from_the_connections_plugin_whatever_the_envelope_names() {
+        assert_eq!(super::sender_plugin_id("capsules", ""), "capsules");
+        assert_eq!(super::sender_plugin_id("capsules", "capsules"), "capsules");
+        assert_eq!(
+            super::sender_plugin_id("capsules", "pay-lightning"),
+            "capsules"
         );
     }
 }
