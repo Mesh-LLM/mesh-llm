@@ -427,7 +427,7 @@ mod tests {
             telemetry,
             model_id: "linear-proposal-test".to_string(),
             default_max_tokens: 4,
-            request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+            request_defaults: EmbeddedOpenAiRequestDefaults::default().into(),
             thinking: None,
             ctx_size: 128,
             mode: InferenceBackendMode::LocalRuntime,

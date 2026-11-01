@@ -204,6 +204,10 @@ pub struct Node {
     pub gpu_compute_tflops_fp32: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     pub gpu_compute_tflops_fp16: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     pub(crate) config_state: Arc<tokio::sync::Mutex<crate::runtime::config_state::ConfigState>>,
+    /// This node's request-defaults tracker; the same one `config_state` swaps
+    /// through, so a config apply reaches only this node's models.
+    pub(crate) live_request_defaults:
+        Arc<crate::runtime::live_request_defaults::LiveRequestDefaults>,
     /// Peers this node's operator chose to stop routing to (local only).
     pub(crate) peer_blocks: crate::network::peer_blocks::PeerBlocks,
     /// Plugin public keys this node announces, and the verified ones its
@@ -811,6 +815,7 @@ impl Node {
             current_time_unix_ms(),
         );
         let config_revision_init = config_state_init.revision();
+        let live_request_defaults = config_state_init.live_request_defaults();
         let runtime_data_collector = crate::runtime_data::RuntimeDataCollector::new();
         let runtime_data_producer =
             runtime_data_collector.producer(crate::runtime_data::RuntimeDataSource {
@@ -930,6 +935,7 @@ impl Node {
             gpu_compute_tflops_fp32: Arc::new(tokio::sync::Mutex::new(None)),
             gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
             config_state: Arc::new(tokio::sync::Mutex::new(config_state_init)),
+            live_request_defaults,
             peer_blocks: crate::network::peer_blocks::PeerBlocks::for_this_node(),
             config_revision_tx: {
                 let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);
@@ -1022,6 +1028,8 @@ impl Node {
         endpoint: Endpoint,
         secret_key: SecretKey,
     ) -> Self {
+        let test_config_state = crate::runtime::config_state::ConfigState::default();
+        let test_live_request_defaults = test_config_state.live_request_defaults();
         let (peer_change_tx, peer_change_rx) = watch::channel(0usize);
         let (inflight_change_tx, _inflight_change_rx) = watch::channel(0u64);
         let (tunnel_tx, _tunnel_rx) = tokio::sync::mpsc::channel(256);
@@ -1124,9 +1132,8 @@ impl Node {
             gpu_mem_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
             gpu_compute_tflops_fp32: Arc::new(tokio::sync::Mutex::new(None)),
             gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
-            config_state: Arc::new(tokio::sync::Mutex::new(
-                crate::runtime::config_state::ConfigState::default(),
-            )),
+            config_state: Arc::new(tokio::sync::Mutex::new(test_config_state)),
+            live_request_defaults: test_live_request_defaults,
             peer_blocks: crate::network::peer_blocks::PeerBlocks::in_memory(),
             config_revision_tx: {
                 let (tx, _rx) = tokio::sync::watch::channel(0);

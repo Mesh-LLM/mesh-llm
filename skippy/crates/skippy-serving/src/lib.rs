@@ -60,8 +60,11 @@ pub use frontend::{
     LinearProposalIngress, LinearProposalQuery, LinearProposalReceipt, LinearProposalSourceOutcome,
     LinearProposalSourceResponse, LinearProposalSourceTelemetry, NativeMtpProposalConfig,
     NgramExtensionConfig, NgramProposalConfig, NgramProposerKind, OpaqueProposalDecisionId,
-    SpeculativeDecodeConfig, SpeechRecognitionBackend, SpeechTranscriber, VerifyWindowConfig,
-    embedded_openai_backend,
+    PreviousRequestDefaults, SpeculativeDecodeConfig, SpeechRecognitionBackend, SpeechTranscriber,
+    VerifyWindowConfig, capture_live_request_defaults, embedded_openai_backend,
+    replace_live_request_defaults, restore_live_request_defaults,
 };
+#[cfg(feature = "test-support")]
+pub use frontend::{RegisteredRequestDefaultsProbe, register_request_defaults_probe};
 pub use skippy_protocol::StageConfig;
 pub use tokenizer::{MAX_TOKENIZE_TOKENS, TokenizerCapability, TokenizerCapabilityError};
