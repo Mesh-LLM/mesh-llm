@@ -12,6 +12,7 @@ use crate::mesh;
 use crate::network::openai::accept::IngressListener;
 use crate::network::{affinity, discovery as mesh_discovery, nostr};
 use crate::plugin;
+use crate::runtime::embedded_readiness::{EmbeddedReadinessTx, EmbeddedRuntimeReadiness};
 use crate::runtime::interactive;
 use crate::runtime::survey;
 use crate::runtime::{InstanceLifecycleRecord, InstanceLifecycleState};
@@ -940,6 +941,7 @@ pub(super) struct RunAutoServingSurfaceContext<'a> {
     pub(super) interactive_started: &'a Arc<AtomicBool>,
     pub(super) console_state: Option<&'a api::MeshApi>,
     pub(super) model_name_for_console: &'a str,
+    pub(super) embedded_readiness_tx: Option<EmbeddedReadinessTx>,
 }
 
 pub(super) struct RunAutoServingSurface {
@@ -949,6 +951,23 @@ pub(super) struct RunAutoServingSurface {
     pub(super) ready_console_url: Option<String>,
     pub(super) ready_api_port: u16,
     pub(super) ready_console_port: Option<u16>,
+}
+
+async fn apply_owner_control_token(
+    console_state: &api::MeshApi,
+    owner_key_path: Option<&std::path::Path>,
+) {
+    // Owner-control routes fail closed without this credential, so a token
+    // that cannot be persisted must not silently disable owner control.
+    match api::owner_control_token::load_or_create_owner_control_token(owner_key_path) {
+        Ok(token) => console_state.set_owner_control_token(Some(token)).await,
+        Err(error) => {
+            tracing::warn!(
+                "owner control: credential unavailable; owner-control routes will reject callers: {error}"
+            );
+            console_state.set_owner_control_token(None).await;
+        }
+    }
 }
 
 pub(super) async fn setup_run_auto_console_state(
@@ -978,6 +997,7 @@ pub(super) async fn setup_run_auto_console_state(
     });
     console_state.set_primary_backend("skippy".into()).await;
     console_state.set_update_check(ctx.update_check).await;
+    apply_owner_control_token(&console_state, ctx.owner_key_path.as_deref()).await;
     console_state
         .set_runtime_control(ctx.control_tx.clone())
         .await;
@@ -1262,6 +1282,12 @@ pub(super) async fn setup_run_auto_serving_surface(
         ctx.console_state,
         ctx.model_name_for_console,
     );
+    if let Some(readiness_tx) = ctx.embedded_readiness_tx {
+        let invite_token = ctx.node.invite_token().await;
+        let _ = readiness_tx.send(Ok(EmbeddedRuntimeReadiness {
+            invite_token: Some(invite_token),
+        }));
+    }
     spawn_run_auto_local_instance_scanner(ctx.is_client, ctx.console_state).await;
     Ok(RunAutoServingSurface {
         api_proxy_handle,

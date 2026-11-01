@@ -84,8 +84,6 @@ pub(crate) use mesh_llm_skippy_adapter::{
     KvCachePolicy, SkippyDeviceDescriptor, SkippyModelLoadOptions, SkippyTelemetryOptions,
     single_stage_config,
 };
-#[cfg(test)]
-pub(crate) use package::write_test_package_v2_fixture;
 pub use package::{
     SkippyPackageIdentity, identity_from_layer_package, identity_from_package_v2,
     synthetic_direct_gguf_package,
@@ -93,6 +91,10 @@ pub use package::{
 pub(crate) use package::{
     direct_gguf_planning_manifest_from_identity, direct_gguf_source_paths, is_package_v2_ref,
     synthetic_content_addressed_gguf_package, synthetic_huggingface_gguf_package,
+};
+#[cfg(test)]
+pub(crate) use package::{
+    write_test_package_v2_fixture, write_test_package_v2_fixture_with_layers,
 };
 pub(crate) use resolver::{
     ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest,

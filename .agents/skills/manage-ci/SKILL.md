@@ -46,6 +46,15 @@ product, native, canary, and release automation stay in xtask. Put new
 repository automation in xtask unless it belongs to the controller's planning
 and validation scope.
 
+`tools/process-supervision` owns bounded child-process supervision
+(`supervise*`, `retained`) and the command interruption scope (`interrupt`).
+Its normal dependencies are limited to thiserror, libc on Unix, and windows-sys
+on Windows; it never takes HTTP, async runtime, or archive crates. xtask
+imports it as `crate::process` and `crate::command_interrupt`, and keeps
+`curl_https`. The controller does not link it yet; a command that moves to the
+controller and spawns a child must use it rather than a raw `std::process`
+runner.
+
 The explicit `prepare-automation` `hosted-bare` profile is an automation-only
 exception for GitHub-hosted Linux. It uses the existing stable Rust selection
 and locked Cargo without Just or compiler wrappers; default image preparation
@@ -531,8 +540,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   cache namespace) never restores an executable. `prepare-ci-controller` keeps
   a separate exact-key identity (`ci-controller-hosted-...`) over the
   controller's compiled inputs and never shares an entry with the full xtask
-  executable, whose key also hashes `tools/ci-controller/**` because xtask
-  compiles the controller library.
+  executable, whose key also hashes `tools/ci-controller/**` and
+  `tools/process-supervision/**` because xtask compiles both libraries. A
+  library crate that xtask or the controller starts compiling joins the
+  matching key in the same change.
 - PR and smoke-only artifacts default to one-day retention. Release evidence
   follows the release policy.
 

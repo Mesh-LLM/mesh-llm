@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::path::PathBuf;
@@ -6,7 +7,8 @@ use std::time::Duration;
 /// Smallest mesh protocol generation that makes an originator emit signed bootstrap tokens.
 pub const SIGNED_JOIN_TOKEN_MIN_PROTOCOL_VERSION: u32 = 1;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EmbeddedMeshNodeMode {
     /// Consume inference without loading or advertising local models.
     Client,
@@ -28,21 +30,24 @@ impl EmbeddedMeshNodeMode {
 
 pub type EmbeddedServeMode = EmbeddedMeshNodeMode;
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EmbeddedMeshDiscoveryMode {
     #[default]
     Nostr,
     Mdns,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EmbeddedMeshLogFormat {
     Pretty,
     #[default]
     Json,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EmbeddedTrustPolicy {
     #[default]
     Off,
@@ -71,7 +76,8 @@ impl From<EmbeddedTrustPolicy> for crate::crypto::TrustPolicy {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct EmbeddedMeshHttpConfig {
     pub api_port: u16,
     pub console_port: u16,
@@ -88,13 +94,15 @@ impl Default for EmbeddedMeshHttpConfig {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct EmbeddedMeshServingConfig {
     pub models: Vec<String>,
     pub max_vram_gb: Option<f64>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct EmbeddedMeshNetworkConfig {
     pub join_tokens: Vec<String>,
     pub auto_join: bool,
@@ -135,7 +143,8 @@ impl Default for EmbeddedMeshNetworkConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct EmbeddedMeshRequirementsConfig {
     pub require_signed_gossip: bool,
     pub min_node_version: Option<String>,
@@ -146,7 +155,8 @@ pub struct EmbeddedMeshRequirementsConfig {
     pub release_signer_keys: Vec<String>,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct EmbeddedMeshAdmissionConfig {
     pub owner_key: Option<PathBuf>,
     pub owner_required: bool,
@@ -156,7 +166,8 @@ pub struct EmbeddedMeshAdmissionConfig {
     pub mesh_requirements: EmbeddedMeshRequirementsConfig,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct EmbeddedMeshStorageConfig {
     pub config_path: Option<PathBuf>,
     pub isolated_config: bool,
@@ -171,7 +182,8 @@ impl Default for EmbeddedMeshStorageConfig {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct EmbeddedMeshNodeConfig {
     pub mode: EmbeddedMeshNodeMode,
     pub http: EmbeddedMeshHttpConfig,
@@ -210,6 +222,12 @@ pub struct EmbeddedMeshNodeBuilder {
 }
 
 impl EmbeddedMeshNodeBuilder {
+    /// Start with the full native configuration without changing its defaults
+    /// or the validation performed when the node starts.
+    pub fn from_config(config: EmbeddedMeshNodeConfig) -> Self {
+        Self { config }
+    }
+
     pub fn mode(mut self, mode: EmbeddedMeshNodeMode) -> Self {
         self.config.mode = mode;
         self
@@ -640,6 +658,71 @@ impl From<EmbeddedMeshNodeConfig> for EmbeddedServeConfig {
             isolated_config: config.storage.isolated_config,
             log_format: config.log_format,
             startup_timeout: config.startup_timeout,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn json_defaults_are_the_existing_native_defaults_including_admission() {
+        let decoded: EmbeddedMeshNodeConfig = serde_json::from_str("{}").unwrap();
+        let defaults = EmbeddedMeshNodeConfig::default();
+        assert_eq!(
+            serde_json::to_value(&decoded).unwrap(),
+            serde_json::to_value(&defaults).unwrap()
+        );
+        assert_eq!(decoded.admission, defaults.admission);
+        assert!(!decoded.admission.mesh_requirements.require_signed_gossip);
+        assert_eq!(decoded.mode, EmbeddedMeshNodeMode::Serve);
+        assert_eq!(
+            decoded.network.enumerate_host,
+            defaults.network.enumerate_host
+        );
+        assert_eq!(
+            decoded.storage.isolated_config,
+            defaults.storage.isolated_config
+        );
+    }
+
+    #[test]
+    fn full_json_configuration_round_trips_every_group_through_the_native_builder() {
+        let json = serde_json::json!({
+            "mode":"client",
+            "http":{"api_port":9447,"console_port":3147,"console_ui":true},
+            "serving":{"models":["org/model:Q4"],"max_vram_gb":8.5},
+            "network":{"join_tokens":["invite"],"auto_join":true,"discovery_mode":"mdns","publish":true,
+                "mesh_name":"team","region":"region-a","node_name":"node-a","iroh_relays":["https://relay.example"],
+                "iroh_relay_auth":{"https://relay.example":"token"},"disable_iroh_relays":true,
+                "nostr_relays":["wss://relay.example"],"bind_ip":"127.0.0.1","bind_port":12222,"listen_all":true,"enumerate_host":false},
+            "admission":{"owner_key":"owner.key","owner_required":true,"node_label":"node-label","trust_policy":"allowlist",
+                "trusted_owners":["owner-a"],"mesh_requirements":{"min_node_version":"0.78.0","max_node_version":"0.79.0",
+                "min_protocol_version":1,"max_protocol_version":2,"require_signed_gossip":true,
+                "require_release_attestation":true,"release_signer_keys":["signer-a"]}},
+            "storage":{"config_path":"settings.toml","isolated_config":false},
+            "log_format":"pretty","startup_timeout":{"secs":12,"nanos":345}
+        });
+        let config: EmbeddedMeshNodeConfig = serde_json::from_value(json.clone()).unwrap();
+        let built = EmbeddedMeshNodeBuilder::from_config(config).build();
+        assert_eq!(serde_json::to_value(&built).unwrap(), json);
+    }
+
+    #[test]
+    fn json_constructor_rejects_typo_fields_and_invalid_native_types() {
+        for input in [
+            r#"{"typo":true}"#,
+            r#"{"network":{"enumerateHost":false}}"#,
+            r#"{"admission":{"mesh_requirements":{"typo":true}}}"#,
+            r#"{"network":{"bind_ip":"not-an-ip"}}"#,
+            r#"{"http":{"api_port":65536}}"#,
+            r#"{"admission":{"trust_policy":"unknown"}}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<EmbeddedMeshNodeConfig>(input).is_err(),
+                "{input}"
+            );
         }
     }
 }

@@ -351,6 +351,8 @@ impl KvStageIntegration {
             exact_byte_limits,
             exact_state_record_worker,
             snapshot_export_failures: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            snapshot_headroom_skips: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            snapshot_size_probe_failures: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             exact_state_records_queued,
             exact_state_records_dropped,
             exact_state_records_pending,

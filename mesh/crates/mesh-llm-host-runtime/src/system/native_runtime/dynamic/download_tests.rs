@@ -46,6 +46,7 @@ async fn installer_allow_download(config: mesh_llm_config::NativeRuntimeConfig) 
 
 #[tokio::test]
 async fn startup_may_download_by_default() {
+    skippy_runtime_install::rerun_without_bundle_env!(startup_may_download_by_default);
     let (allow_download, error) =
         installer_allow_download(mesh_llm_config::NativeRuntimeConfig::default()).await;
     assert!(allow_download);
@@ -54,6 +55,7 @@ async fn startup_may_download_by_default() {
 
 #[tokio::test]
 async fn download_off_keeps_startup_from_downloading() {
+    skippy_runtime_install::rerun_without_bundle_env!(download_off_keeps_startup_from_downloading);
     for config in [
         mesh_llm_config::NativeRuntimeConfig {
             download: Some(false),

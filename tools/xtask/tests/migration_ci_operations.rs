@@ -41,8 +41,7 @@ mod sccache_stats;
 #[path = "migration_ci_operations/support.rs"]
 mod support;
 
-#[path = "../src/process/mod.rs"]
-pub mod process;
+pub use process_supervision as process;
 #[path = "migration_ci_operations/sccache_summary.rs"]
 mod sccache_summary;
 

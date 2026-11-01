@@ -886,8 +886,9 @@ closed.
 The Rust CI planner is the sole production Clippy and Rust-test batch allocator;
 `ci-crate-lists` validates that the main `matrices.rust_tests` covers every
 workspace crate exactly once, except the `CONTRACT_TESTED_CRATES`
-(`ci-controller` and `xtask`). `just ci-automation-contracts` runs their tests
-in the Quality slice, so each runs exactly once.
+(`ci-controller`, `process-supervision`, and `xtask`). `just
+ci-automation-contracts` runs their tests in the Quality slice, so each runs
+exactly once.
 
 Control-plane changes fail open through the selected profile. When they
 require the `web` slice, both console and website rows execute even without a
@@ -2197,10 +2198,11 @@ workflows. The `hosted-bare` profile now restores a release executable from an
 exact-key `actions/cache` entry (`xtask-hosted-bare-<os>-<arch>-<hash>` over
 `Cargo.lock`, `Cargo.toml`, `.cargo/config.toml`, the action file,
 `.github/cache-version.txt`, `tools/xtask/**`, `tools/ci-controller/**`,
-`tools/trajectory-reader/**`,
+`tools/process-supervision/**`, `tools/trajectory-reader/**`,
 `mesh/crates/mesh-llm-release-footer/**`, the compiled-in JSON/script inputs and
 the Linux linker drivers), compiles only on a miss and saves on a miss. It hashes
-`tools/ci-controller/**` because xtask compiles the controller library. The image
+`tools/ci-controller/**` and `tools/process-supervision/**` because xtask
+compiles both libraries. The image
 profile never restores or saves an executable. The protected authority producers
 pass `reuse-hosted-binary: false`, so their bytes are always compiled in the
 run from the frozen protected source. A first run after any hashed input changes
@@ -2208,6 +2210,18 @@ is a cold miss. Pull requests execute main's reusable workflows, so none of this
 applies to a PR until it is merged. No hosted execution is recorded here.
 
 ## External Python SDK source preparation
+
+The checkout action, admission descriptor and Python-tooling policy use SDK
+commit `85226c50a68a13b48f40fe25e70eb85814e67457`; update all three together.
+Laya product readiness and Decisions smoke discovery query
+`/mesh/v1/models?workload_class=decision&available=true`, since compatibility
+model lists contain only LLMs. The golden and response checks remain required.
+
+The current checkpoint includes typed Mesh model discovery, OCR uploads,
+membership/live-session controls, full node configuration and native-runtime
+management. Its generated bindings were produced from the coordinated Mesh
+implementation recorded in the SDK's `sdk-inputs.json`; keep that source
+checkpoint synchronized with native API changes.
 
 The Python SDK package, generated Python bindings and four genuine compatibility
 and embedding clients are owned by `Mesh-LLM/mesh-llm-python-sdk`. Mesh admits the

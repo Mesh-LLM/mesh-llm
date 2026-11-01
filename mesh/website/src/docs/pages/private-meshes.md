@@ -87,7 +87,7 @@ mesh-llm runtime drain-model \
 ```
 
 The endpoint token pins exactly one target. These commands travel over
-`mesh-llm-control/1`, require same-owner authentication, and create session-only
+`mesh-llm-control/2`, require same-owner authentication, and create session-only
 intents. They do not persist TOML, use public gossip, or silently fall back to
 mesh request streams. Public mixed-version join and routing continue
 independently; an older target that lacks owner lifecycle support returns a
