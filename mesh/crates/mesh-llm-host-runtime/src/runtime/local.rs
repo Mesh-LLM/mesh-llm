@@ -1211,43 +1211,20 @@ async fn start_local_skippy_model(
         )
         .await,
     );
-    let mut embedded_openai = resolved.to_embedded_openai_args(0, false)?;
-    embedded_openai.live_defaults_scope = spec.live_request_defaults.scope();
     let live_defaults_generation =
         spec.live_request_defaults
             .track_model(&resolved.model_id, spec.config_model_id, None);
-    let mut options = resolved
-        .to_model_load_options(spec.skippy_telemetry.clone())?
-        .with_embedded_openai(embedded_openai)
-        .with_serving_hooks_factory(spec.serving_hooks_factory.clone())
-        .with_openai_guardrails(skippy::skippy_openai_guardrails_for_policy_handle(
-            spec.openai_guardrail_policy.clone(),
-        ));
-    if spec.device_override.is_none()
-        && let Some(gpu) = spec.pinned_gpu
-    {
-        options = options.with_selected_device(pinned_skippy_device(gpu));
-    }
     let _ = emit_event(OutputEvent::ModelLoading {
         model: model_name.clone(),
         source: None,
     });
-    let hook_policy = spec.hook_policy.clone();
-    let reporter_model_name = model_name.clone();
-    let guardrail_telemetry = spec.survey_telemetry.clone();
-    let skippy_model = tokio::task::spawn_blocking(move || {
-        skippy::SkippyModelHandle::load_with_hooks_and_open_events(
-            options,
-            hook_policy,
-            Some(skippy_native_model_open_events(
-                reporter_model_name,
-                progress_ingress,
-            )),
-            guardrail_telemetry,
-        )
-    })
-    .await
-    .context("join load skippy direct GGUF task")??;
+    let skippy_model = load_direct_skippy_model_with_dflash_fallback(
+        &spec,
+        &mut resolved,
+        &model_name,
+        progress_ingress,
+    )
+    .await?;
     spec.live_request_defaults.sync_after_load(
         &model_name,
         live_defaults_generation,
@@ -1289,6 +1266,78 @@ async fn start_local_skippy_model(
         },
         death_rx,
     ))
+}
+
+/// Loads a direct GGUF model, and loads it again without its default DFlash
+/// draft when that draft cannot attach (a runtime without the draft-context
+/// API, a vocabulary the target does not share, or no room for its context),
+/// so a default draft never fails the load.
+async fn load_direct_skippy_model_with_dflash_fallback(
+    spec: &LocalOpenAiModelStartSpec<'_>,
+    resolved: &mut skippy::ResolvedSkippyConfig,
+    model_name: &str,
+    progress_ingress: Option<crate::runtime_events::engine::ScopedIngress>,
+) -> Result<skippy::SkippyModelHandle> {
+    let error = match load_direct_skippy_model(
+        spec,
+        resolved,
+        model_name.to_string(),
+        progress_ingress.clone(),
+    )
+    .await
+    {
+        Err(error)
+            if resolved.speculative.default_dflash.is_some()
+                && skippy_serving::DFlashDraftAttachFailed::caused(&error) =>
+        {
+            error
+        }
+        loaded => return loaded,
+    };
+    tracing::warn!(
+        model = model_name,
+        "default DFlash draft could not attach; loading without it: {error:#}"
+    );
+    resolved.speculative.drop_default_dflash();
+    load_direct_skippy_model(spec, resolved, model_name.to_string(), progress_ingress).await
+}
+
+/// Loads a direct GGUF model as `resolved` plans it.
+async fn load_direct_skippy_model(
+    spec: &LocalOpenAiModelStartSpec<'_>,
+    resolved: &skippy::ResolvedSkippyConfig,
+    model_name: String,
+    progress_ingress: Option<crate::runtime_events::engine::ScopedIngress>,
+) -> Result<skippy::SkippyModelHandle> {
+    let mut embedded_openai = resolved.to_embedded_openai_args(0, false)?;
+    embedded_openai.live_defaults_scope = spec.live_request_defaults.scope();
+    let mut options = resolved
+        .to_model_load_options(spec.skippy_telemetry.clone())?
+        .with_embedded_openai(embedded_openai)
+        .with_serving_hooks_factory(spec.serving_hooks_factory.clone())
+        .with_openai_guardrails(skippy::skippy_openai_guardrails_for_policy_handle(
+            spec.openai_guardrail_policy.clone(),
+        ));
+    if spec.device_override.is_none()
+        && let Some(gpu) = spec.pinned_gpu
+    {
+        options = options.with_selected_device(pinned_skippy_device(gpu));
+    }
+    let hook_policy = spec.hook_policy.clone();
+    let guardrail_telemetry = spec.survey_telemetry.clone();
+    tokio::task::spawn_blocking(move || {
+        skippy::SkippyModelHandle::load_with_hooks_and_open_events(
+            options,
+            hook_policy,
+            Some(skippy_native_model_open_events(
+                model_name,
+                progress_ingress,
+            )),
+            guardrail_telemetry,
+        )
+    })
+    .await
+    .context("join load skippy direct GGUF task")?
 }
 
 async fn start_local_package_v2_model(

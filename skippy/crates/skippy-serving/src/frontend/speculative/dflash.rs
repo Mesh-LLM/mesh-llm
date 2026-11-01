@@ -14,6 +14,25 @@ pub const DFLASH_STRATEGY: &str = "dflash";
 /// can propose.
 const UNCAPPED_DRAFT_TOKENS: usize = 15;
 
+/// Context on a load error raised while attaching a DFlash draft, so a caller
+/// that chose the draft by default can load the target again without it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DFlashDraftAttachFailed;
+
+impl std::fmt::Display for DFlashDraftAttachFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("DFlash draft could not attach to the target")
+    }
+}
+
+impl DFlashDraftAttachFailed {
+    /// Whether `error` failed while attaching a DFlash draft, under any
+    /// context added later.
+    pub fn caused(error: &anyhow::Error) -> bool {
+        error.downcast_ref::<Self>().is_some()
+    }
+}
+
 /// A DFlash or DFlash2 draft attached to a single-stage target. The draft
 /// reads target hidden states, so it never runs on its own session.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -53,6 +72,24 @@ pub(super) fn validate_dflash_plan(plan: &SpeculativeDecodeConfig) -> Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_attach_failure_is_recognised_under_later_context() {
+        use anyhow::Context;
+        let attach: Result<()> = Err(anyhow::anyhow!(
+            "native runtime does not export the draft-context API"
+        ))
+        .context("attach DFlash draft model /m/draft.gguf")
+        .context(DFlashDraftAttachFailed);
+        let load = attach
+            .context("construct Skippy OpenAI backend")
+            .context("load model")
+            .unwrap_err();
+        assert!(DFlashDraftAttachFailed::caused(&load));
+
+        let other = anyhow::anyhow!("failed to open target").context("load model");
+        assert!(!DFlashDraftAttachFailed::caused(&other));
+    }
 
     fn dflash_plan() -> SpeculativeDecodeConfig {
         SpeculativeDecodeConfig {
