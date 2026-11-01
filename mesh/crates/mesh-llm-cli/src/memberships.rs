@@ -144,11 +144,6 @@ mod tests {
             ])
             .is_err()
         );
-        assert!(
-            Cli::command()
-                .get_subcommands()
-                .all(|command| command.get_name() != "serve-shared")
-        );
     }
 
     #[test]

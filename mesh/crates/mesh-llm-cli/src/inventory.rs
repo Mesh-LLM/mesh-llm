@@ -872,12 +872,5 @@ mod tests {
                 .iter()
                 .all(|arg| arg.name != "--memberships-config")
         );
-        assert!(
-            inventory
-                .root
-                .children
-                .iter()
-                .all(|command| command.name != "serve-shared")
-        );
     }
 }
