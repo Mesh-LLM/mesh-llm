@@ -137,6 +137,7 @@ pub(crate) fn stage_snapshot_from_runtime_status(
         lease_until_unix_ms: 0,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        dflash_target_layers: None,
     }
 }
 
@@ -281,6 +282,7 @@ pub(super) fn stage_load_to_proto(
         flash_attn_type: stage_flash_attn_type_to_proto(load.flash_attn_type) as i32,
         runtime_settings: Some(stage_runtime_settings_to_proto(load.runtime_settings)),
         native_mtp_enabled: Some(load.native_mtp_enabled),
+        dflash: load.dflash.as_ref().map(stage_dflash_to_proto),
         shutdown_generation: load.shutdown_generation,
         coordinator_term: load.coordinator_term,
         coordinator_id: load.coordinator_id.map(|id| id.to_string()),
@@ -561,6 +563,7 @@ pub(super) fn stage_load_from_proto(
         flash_attn_type: stage_flash_attn_type_from_proto(load.flash_attn_type),
         runtime_settings: stage_runtime_settings_from_proto(load.runtime_settings)?,
         native_mtp_enabled: load.native_mtp_enabled.unwrap_or(true),
+        dflash: load.dflash.map(stage_dflash_from_proto),
         shutdown_generation: load.shutdown_generation,
         coordinator_term: load.coordinator_term,
         coordinator_id: load
@@ -814,6 +817,7 @@ pub(super) fn stage_control_unavailable_response(
                 lease_until_unix_ms: 0,
                 compute_busy_nanos: 0,
                 compute_operations: 0,
+                dflash_target_layers: None,
             }
         }
         crate::inference::skippy::StageControlRequest::Status(_) => {
@@ -896,6 +900,7 @@ pub(crate) fn stage_status_from_load(
         lease_until_unix_ms: load.lease_until_unix_ms,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        dflash_target_layers: None,
     }
 }
 
@@ -1184,6 +1189,9 @@ pub(super) fn stage_status_to_proto(
         ) as i32,
         compute_busy_nanos: status.compute_busy_nanos,
         compute_operations: status.compute_operations,
+        dflash_draft: status
+            .dflash_target_layers
+            .map(|target_layers| skippy_stage_proto::StageDFlashDraftStatus { target_layers }),
     }
 }
 
@@ -1263,6 +1271,7 @@ pub(super) fn stage_status_from_proto(
         lease_until_unix_ms: status.lease_until_unix_ms,
         compute_busy_nanos: status.compute_busy_nanos,
         compute_operations: status.compute_operations,
+        dflash_target_layers: status.dflash_draft.map(|draft| draft.target_layers),
     })
 }
 
@@ -1444,6 +1453,51 @@ pub(super) fn stage_runtime_state_to_proto(
         crate::inference::skippy::StageRuntimeState::Failed => {
             skippy_stage_proto::StageRuntimeState::Failed
         }
+    }
+}
+
+fn stage_dflash_to_proto(
+    plan: &skippy_serving::split_dflash::SplitDFlashStage,
+) -> skippy_stage_proto::StageDFlashPlan {
+    skippy_stage_proto::StageDFlashPlan {
+        target_layers: plan.target_layers.clone(),
+        draft_model_path: plan
+            .draft_model_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
+        max_draft_tokens: plan
+            .max_draft_tokens
+            .map(|tokens| u32::try_from(tokens).unwrap_or(u32::MAX)),
+        draft_n_gpu_layers: plan.draft_n_gpu_layers,
+        draft_device: plan.draft_device.clone(),
+        draft_source: plan.draft_source.as_ref().map(|source| {
+            skippy_stage_proto::StageDFlashDraftSource {
+                repo: source.repo.clone(),
+                revision: source.revision.clone(),
+                file: source.file.clone(),
+                sha256: source.sha256.clone(),
+            }
+        }),
+    }
+}
+
+fn stage_dflash_from_proto(
+    plan: skippy_stage_proto::StageDFlashPlan,
+) -> skippy_serving::split_dflash::SplitDFlashStage {
+    skippy_serving::split_dflash::SplitDFlashStage {
+        target_layers: plan.target_layers,
+        draft_model_path: plan.draft_model_path.map(std::path::PathBuf::from),
+        max_draft_tokens: plan.max_draft_tokens.map(|tokens| tokens as usize),
+        draft_n_gpu_layers: plan.draft_n_gpu_layers,
+        draft_device: plan.draft_device,
+        draft_source: plan.draft_source.map(|source| {
+            skippy_serving::split_dflash::SplitDFlashDraftSource {
+                repo: source.repo,
+                revision: source.revision,
+                file: source.file,
+                sha256: source.sha256,
+            }
+        }),
     }
 }
 

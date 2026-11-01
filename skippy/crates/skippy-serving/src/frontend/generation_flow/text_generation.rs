@@ -258,47 +258,60 @@ impl StageOpenAiBackend {
                 prefill_reply_credit_limit,
                 lane_pool,
                 prediction_returns,
-            } => self.generate_embedded_stage_zero_tokens(
-                EmbeddedStageZeroGeneration {
-                    config: &config,
-                    prefill_chunk_policy: &prefill_chunk_policy,
-                    activation_width,
-                    downstream_wire_condition,
-                    prefill_reply_credit_limit,
-                    lane_pool,
-                    prediction_return: prediction_returns
-                        .as_ref()
-                        .map(|hub| hub.register(ids.request_id, ids.session_id))
-                        .transpose()
-                        .map_err(openai_backend_error)?,
-                    // Stood down with the proposers. Clearing `ngram` and
-                    // `extension` while still handing over a draft runner
-                    // leaves the classic serial draft loop able to propose,
-                    // so the gate would not actually have turned speculation
-                    // off.
-                    draft: if speculating {
-                        self.draft.clone()
-                    } else {
-                        None
+            } => {
+                // A split DFlash target drafts on its final stage, whose drafts
+                // stage 0 verifies like native MTP drafts.
+                let split_dflash = crate::split_dflash::split_stage0_plan(&gated_speculative);
+                let speculative = split_dflash.as_ref().unwrap_or(&gated_speculative);
+                self.generate_embedded_stage_zero_tokens(
+                    EmbeddedStageZeroGeneration {
+                        config: &config,
+                        prefill_chunk_policy: &prefill_chunk_policy,
+                        activation_width,
+                        downstream_wire_condition,
+                        prefill_reply_credit_limit,
+                        lane_pool,
+                        prediction_return: prediction_returns
+                            .as_ref()
+                            .map(|hub| hub.register(ids.request_id, ids.session_id))
+                            .transpose()
+                            .map_err(openai_backend_error)?,
+                        // Stood down with the proposers. Clearing `ngram` and
+                        // `extension` while still handing over a draft runner
+                        // leaves the classic serial draft loop able to propose,
+                        // so the gate would not actually have turned speculation
+                        // off.
+                        draft: if speculating {
+                            self.draft.clone()
+                        } else {
+                            None
+                        },
+                        speculative_window: self.speculative_window,
+                        adaptive_speculative_window: self.adaptive_speculative_window,
+                        speculative,
+                        ngram_max: self.ngram_max,
+                        native_mtp_enabled: split_dflash.is_some()
+                            || (config.native_mtp_enabled && gated_speculative.native_mtp.enabled),
+                        split_dflash_draft: split_dflash
+                            .is_some()
+                            .then(|| gated_speculative.dflash.as_ref())
+                            .flatten()
+                            .map(|dflash| dflash.draft_model_path.as_path()),
+                        split_dflash_health: Default::default(),
+                        prompt_token_ids: &prompt_token_ids,
+                        recurrent_cache_prefix_token_ids: recurrent_cache_prefix_token_ids
+                            .as_deref(),
+                        max_tokens,
+                        sampling: &sampling,
+                        chat_sampling_metadata,
+                        hook_request,
+                        hook_runtime,
+                        cancellation,
+                        ids: &ids,
                     },
-                    speculative_window: self.speculative_window,
-                    adaptive_speculative_window: self.adaptive_speculative_window,
-                    speculative: &gated_speculative,
-                    ngram_max: self.ngram_max,
-                    native_mtp_enabled: config.native_mtp_enabled
-                        && gated_speculative.native_mtp.enabled,
-                    prompt_token_ids: &prompt_token_ids,
-                    recurrent_cache_prefix_token_ids: recurrent_cache_prefix_token_ids.as_deref(),
-                    max_tokens,
-                    sampling: &sampling,
-                    chat_sampling_metadata,
-                    hook_request,
-                    hook_runtime,
-                    cancellation,
-                    ids: &ids,
-                },
-                |token| collector.push_token(token),
-            )?,
+                    |token| collector.push_token(token),
+                )?
+            }
         };
 
         let output = collector.finish(prompt_token_ids.len(), cache_stats)?;

@@ -42,11 +42,16 @@ versioned multipart directory with identity, dtype, dimensions, strides, and a
 token axis for every graph-frontier value. The selected frame codec applies to
 F32 parts; other typed parts remain byte-exact.
 
-Current generation 12 adds unsampled `PrefillReadout` requests and bounded
+Generation 12 added unsampled `PrefillReadout` requests and bounded
 `TokenScores` replies. Only the terminal stage reads selected token log
 probabilities; full vocabulary logits stay in its native runtime. The scores
 return along the ordered stage chain, independently of sampled-token replies.
-All participants must advertise `stage-generation-12`; older peers fail closed.
+
+Current generation 13 carries split DFlash: stage loads may carry a DFlash
+plan, activation frames may carry the draft's target-layer feature rows as
+optional parts, and every reply's fixed statistics end with the split DFlash
+draft-context counters. All participants must advertise `stage-generation-13`;
+older peers fail closed.
 
 Admission requires mesh-subprotocol control, list-valued status responses,
 strict local-content identity, canonical stage-admission descriptors, and stale

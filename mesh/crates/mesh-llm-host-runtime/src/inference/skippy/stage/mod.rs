@@ -381,10 +381,14 @@ impl StageControlState {
         let mut effective_load = load;
         effective_load.bind_addr = bind_addr.to_string();
         super::configure_materialized_stage_cache();
+        if let Some(plan) = effective_load.dflash.as_mut() {
+            crate::inference::skippy::materialize_split_dflash_draft(plan).await;
+        }
+        settle_final_stage_dflash(&mut effective_load);
         let package_request = effective_load.clone();
         let mut resolved_package = None;
         if let Some(package) = tokio::task::spawn_blocking(move || {
-            super::materialization::resolve_stage_load_package(&package_request)
+            resolve_stage_load_package_with_borrowed_tensors(&package_request)
         })
         .await
         .context("join resolve stage load package task")??
@@ -414,6 +418,7 @@ impl StageControlState {
             openai: None,
             l3_manager: crate::runtime::kv_disk_config::node_kv_disk_manager(),
             compute_meter: Some(compute_meter.clone()),
+            split_dflash: effective_load.dflash.clone(),
         });
         self.stages.insert(
             key.clone(),
@@ -715,6 +720,52 @@ pub(crate) fn admitted_activation_frontier(
     skippy_api::stage_load::admitted_activation_frontier(&load.admission)
 }
 
+/// A final stage with a split DFlash plan serves the draft when this node has
+/// it, which replaces native MTP; without it the stage drops the plan (no
+/// borrowed tensors, no extra rollback depth) and keeps the native MTP the
+/// planner sent for that case. The stage reports which it did in its status.
+fn settle_final_stage_dflash(load: &mut StageLoadRequest) {
+    if load.downstream.is_some() {
+        return;
+    }
+    match load.dflash.as_ref() {
+        Some(plan) if plan.drafts() => load.native_mtp_enabled = false,
+        Some(_) => load.dflash = None,
+        None => {}
+    }
+}
+
+/// [`super::materialization::resolve_stage_load_package`] with the target
+/// tensors a drafting final stage's DFlash draft borrows added to the
+/// admitted closure, so the stage fetches the artifacts that hold them. The
+/// admission itself, which the status attests, is unchanged. When the
+/// package cannot supply them the stage resolves its admission alone and
+/// serves without the draft.
+fn resolve_stage_load_package_with_borrowed_tensors(
+    load: &StageLoadRequest,
+) -> Result<Option<super::materialization::ResolvedStagePackage>> {
+    let borrowed = load.dflash.as_ref().and_then(|plan| {
+        skippy_serving::split_dflash::borrowed_resident_tensor_ids(
+            plan,
+            load.downstream.is_none(),
+            &load.admission.resident_tensor_ids,
+        )
+    });
+    if let Some(resident_tensor_ids) = borrowed {
+        let mut widened = load.clone();
+        widened.admission.resident_tensor_ids = resident_tensor_ids;
+        match super::materialization::resolve_stage_load_package(&widened) {
+            Ok(package) => return Ok(package),
+            Err(error) => tracing::warn!(
+                stage = load.stage_id,
+                error = format!("{error:#}"),
+                "cannot fetch the tensors the split DFlash draft borrows; resolving the stage without them"
+            ),
+        }
+    }
+    super::materialization::resolve_stage_load_package(load)
+}
+
 pub(crate) fn admitted_resident_tensor_names(
     load: &StageLoadRequest,
     package: Option<&super::materialization::ResolvedStagePackage>,
@@ -840,6 +891,7 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
         lease_until_unix_ms: stage.load.lease_until_unix_ms,
         compute_busy_nanos: compute.busy_nanos,
         compute_operations: compute.operations,
+        dflash_target_layers: server.split_dflash_target_layers.clone(),
     }
 }
 
@@ -882,6 +934,7 @@ fn stopped_status(stop: &StageStopRequest) -> StageStatusSnapshot {
         lease_until_unix_ms: 0,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        dflash_target_layers: None,
     }
 }
 
@@ -930,5 +983,6 @@ fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatu
         lease_until_unix_ms: load.lease_until_unix_ms,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        dflash_target_layers: None,
     }
 }

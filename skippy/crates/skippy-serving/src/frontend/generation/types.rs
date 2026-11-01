@@ -182,6 +182,11 @@ pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
     pub(in crate::frontend) ngram_max: usize,
     pub(in crate::frontend) speculative: &'a SpeculativeDecodeConfig,
     pub(in crate::frontend) native_mtp_enabled: bool,
+    /// The final stage's DFlash draft when this split speculates with one;
+    /// stage 0 then sizes each block from measured cost and acceptance.
+    pub(in crate::frontend) split_dflash_draft: Option<&'a std::path::Path>,
+    /// The final stage's draft-context counters, from its latest replies.
+    pub(in crate::frontend) split_dflash_health: SplitDFlashHealth,
     pub(in crate::frontend) prompt_token_ids: &'a [i32],
     pub(in crate::frontend) recurrent_cache_prefix_token_ids: Option<&'a [i32]>,
     pub(in crate::frontend) max_tokens: u32,
@@ -193,7 +198,50 @@ pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
     pub(in crate::frontend) ids: &'a InferenceGenerationIds,
 }
 
+/// The largest split DFlash draft-context counters a final stage reported
+/// for this generation's session. Its replies carry running totals.
+#[derive(Debug, Default)]
+pub(in crate::frontend) struct SplitDFlashHealth {
+    feature_rows_missing: std::sync::atomic::AtomicI64,
+    draft_context_resets: std::sync::atomic::AtomicI64,
+}
+
+impl SplitDFlashHealth {
+    pub(in crate::frontend) fn observe(&self, stats: &skippy_protocol::binary::StageReplyStats) {
+        use std::sync::atomic::Ordering;
+        self.feature_rows_missing
+            .fetch_max(stats.dflash_feature_rows_missing, Ordering::Relaxed);
+        self.draft_context_resets
+            .fetch_max(stats.dflash_draft_context_resets, Ordering::Relaxed);
+    }
+
+    /// `(feature rows missing, draft context resets)`.
+    pub(in crate::frontend) fn counts(&self) -> (i64, i64) {
+        use std::sync::atomic::Ordering;
+        (
+            self.feature_rows_missing.load(Ordering::Relaxed),
+            self.draft_context_resets.load(Ordering::Relaxed),
+        )
+    }
+}
+
 impl EmbeddedStageZeroGeneration<'_> {
+    /// Whether this generation drafts with a split DFlash final stage, whose
+    /// decode and verify messages say so.
+    pub(in crate::frontend) fn split_dflash(&self) -> bool {
+        self.split_dflash_draft.is_some()
+    }
+
+    /// Records the draft-context counters a downstream reply carries.
+    pub(in crate::frontend) fn observe_reply_stats(
+        &self,
+        stats: &skippy_protocol::binary::StageReplyStats,
+    ) {
+        if self.split_dflash() {
+            self.split_dflash_health.observe(stats);
+        }
+    }
+
     /// Draft depth to request of the final stage on decode and verify messages.
     pub(in crate::frontend) fn native_mtp_draft_tokens(&self) -> usize {
         if self.native_mtp_enabled {

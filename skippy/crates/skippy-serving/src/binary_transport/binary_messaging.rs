@@ -422,7 +422,11 @@ fn finish_connection_workers(
 fn run_binary_stage(
     options: BinaryStageOptions,
     shutdown: Arc<AtomicBool>,
-    boundary_observer: impl FnOnce(Option<ActivationBoundaryDesc>, Option<ActivationBoundaryDesc>),
+    boundary_observer: impl FnOnce(
+        Option<ActivationBoundaryDesc>,
+        Option<ActivationBoundaryDesc>,
+        Option<Vec<u32>>,
+    ),
 ) -> Result<Option<EmbeddedFrontendTask>> {
     options.tuning.validate()?;
     let mtp_source = options.resolved_mtp_source();
@@ -445,6 +449,7 @@ fn run_binary_stage(
         openai,
         l3_manager,
         compute_meter,
+        split_dflash,
     } = options;
     // With an OpenAI frontend, a stop request closes HTTP admission first.
     // Keep worker connections and prediction returns alive until Axum drains.
@@ -455,6 +460,22 @@ fn run_binary_stage(
         shutdown_requested.clone()
     };
     let native_mtp_enabled = native_mtp_enabled && config.native_mtp_enabled;
+    // The final stage's split DFlash draft needs the target tensors it
+    // borrows loaded; the stage keeps its plain config to fall back on.
+    let plain_config = config.clone();
+    let mut config = config;
+    let borrowing = match split_dflash.as_ref() {
+        Some(plan) => crate::split_dflash::load_borrowed_target_tensors(&mut config, plan)
+            .unwrap_or_else(|error| {
+                tracing::warn!(
+                    stage = config.stage_id,
+                    error = format!("{error:#}"),
+                    "cannot load the tensors the split DFlash draft borrows"
+                );
+                false
+            }),
+        None => false,
+    };
     validate_config(&config, topology.as_ref())?;
     let telemetry = Telemetry::new(
         metrics_otlp_grpc,
@@ -464,17 +485,48 @@ fn run_binary_stage(
     );
     telemetry.emit("stage.binary_server_start", lifecycle_attrs(&config));
     let warm_downstream = Arc::new(Mutex::new(None));
-    let runtime = load_runtime_with_overrides(
-        &config,
-        &RuntimeLaunchOverrides {
-            mtp_source,
-            n_threads: tuning.n_threads,
-            n_threads_batch: tuning.n_threads_batch,
-            recurrent_rollback_tokens: 0,
-        },
-        None,
-    )?
+    let overrides = RuntimeLaunchOverrides {
+        mtp_source,
+        n_threads: tuning.n_threads,
+        n_threads_batch: tuning.n_threads_batch,
+        recurrent_rollback_tokens: split_dflash.as_ref().map_or(
+            0,
+            crate::split_dflash::SplitDFlashStage::recurrent_rollback_tokens,
+        ),
+    };
+    let runtime = match load_runtime_with_overrides(&config, &overrides, None) {
+        // A native runtime that predates borrowed tensors refuses them; the
+        // stage then serves without the draft rather than not at all.
+        Err(error) if borrowing => {
+            tracing::warn!(
+                stage = config.stage_id,
+                error = format!("{error:#}"),
+                "the stage did not load the tensors its split DFlash draft borrows; loading without them"
+            );
+            config = plain_config;
+            load_runtime_with_overrides(&config, &overrides, None)?
+        }
+        loaded => loaded?,
+    }
     .context("binary stage server requires model_path")?;
+    // The draft's target layers once this final stage has attached it, which
+    // the stage reports so stage 0 knows whether it can drive DFlash.
+    let split_dflash_target_layers = split_dflash.as_ref().and_then(|plan| {
+        crate::split_dflash::attach_split_dflash(
+            &mut lock_runtime(&runtime),
+            &config,
+            &overrides,
+            plan,
+        )
+        .unwrap_or_else(|error| {
+            tracing::warn!(
+                stage = config.stage_id,
+                error = format!("{error:#}"),
+                "split DFlash did not attach; serving without speculation"
+            );
+            None
+        })
+    });
     // In-flight admission is bounded by the lanes the runtime actually serves.
     // The native encoder-decoder clamp can hold that below `config.lane_count`
     // (#1954).
@@ -555,7 +607,7 @@ fn run_binary_stage(
     let mut connection_workers = ConnectionWorkers::default();
     let listener = TcpListener::bind(bind_addr)?;
     listener.set_nonblocking(true)?;
-    boundary_observer(input_boundary, output_boundary);
+    boundary_observer(input_boundary, output_boundary, split_dflash_target_layers);
     let frontend_task = public_frontend::start(public_frontend::PublicFrontendLaunch {
         config: config.clone(),
         runtime: runtime.clone(),

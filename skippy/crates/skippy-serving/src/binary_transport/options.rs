@@ -40,6 +40,8 @@ pub struct BinaryStageOptions {
     pub compute_meter: Option<std::sync::Arc<crate::compute_meter::StageComputeMeter>>,
     /// Optional node-scoped durable cache manager supplied by the embedding host.
     pub l3_manager: Option<skippy_cache::L3CacheManager>,
+    /// This stage's part in a split DFlash plan.
+    pub split_dflash: Option<crate::split_dflash::SplitDFlashStage>,
 }
 
 #[derive(Clone)]

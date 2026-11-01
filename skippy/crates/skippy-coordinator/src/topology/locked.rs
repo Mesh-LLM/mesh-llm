@@ -1,8 +1,8 @@
 use super::{
     CandidatePlan, TopologyPlan, TopologyPlanError, TopologyPlanningInput, TopologyStagePlan,
     UsableNode, context_candidates, decode_tpot_target_met, estimate_decode_network_ms_per_token,
-    layer_required_bytes, layer_weight_bytes, minimum_valid_context, parallel_lane_candidates,
-    recurrent_bytes_by_layer, sum_u64, usable_nodes, validate_input,
+    input_layer_required_bytes, layer_weight_bytes, minimum_valid_context,
+    parallel_lane_candidates, sum_u64, usable_nodes, validate_input,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -128,17 +128,7 @@ fn fit_locked_candidate(
     parallel_lanes: usize,
 ) -> Option<CandidatePlan> {
     let layer_weights = layer_weight_bytes(input);
-    let kv_per_layer = input
-        .kv_bytes_per_token
-        .div_ceil(u64::from(input.layer_count));
-    let recurrent_by_layer = recurrent_bytes_by_layer(input);
-    let layer_required_bytes = layer_required_bytes(
-        &layer_weights,
-        &recurrent_by_layer,
-        kv_per_layer,
-        context_length,
-        parallel_lanes,
-    )?;
+    let layer_required_bytes = input_layer_required_bytes(input, context_length, parallel_lanes)?;
     let mut stages = Vec::with_capacity(locked_stages.len());
     let mut minimum_remaining_vram = u64::MAX;
     let mut total_remaining_vram = 0u128;
@@ -215,6 +205,7 @@ mod tests {
             target_decode_tpot_ms: None,
             auto_balance: false,
             placement_objective: Default::default(),
+            final_layer_kv_bytes_per_token: 0,
         }
     }
 

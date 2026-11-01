@@ -302,6 +302,104 @@ pub fn package_v2_layer_weight_bytes(manifest: &PackageManifestV2) -> Result<Vec
     Ok(layer_bytes)
 }
 
+/// Bytes of the target tensors a DFlash draft borrows that the final stage of
+/// a split does not otherwise load: the token embeddings of a target whose
+/// output head is a separate tensor. A tied target's final stage already
+/// loads them for its output head. `0` when the tensor layout is unavailable.
+pub fn split_dflash_borrowed_tensor_bytes(identity: &SkippyPackageIdentity) -> u64 {
+    let tensors = match split_dflash_tensor_sizes(identity) {
+        Ok(tensors) => tensors,
+        Err(error) => {
+            tracing::debug!(
+                package = identity.package_ref,
+                error = format!("{error:#}"),
+                "tensor sizes unavailable; not charging the DFlash draft's borrowed tensors"
+            );
+            return 0;
+        }
+    };
+    untied_token_embd_bytes(tensors.iter().map(|(name, bytes)| (name.as_str(), *bytes)))
+}
+
+const TOKEN_EMBD_TENSOR: &str = "token_embd.weight";
+const OUTPUT_TENSOR: &str = "output.weight";
+
+/// The token embeddings' bytes when the target has a separate output head.
+fn untied_token_embd_bytes<'a>(tensors: impl Iterator<Item = (&'a str, u64)>) -> u64 {
+    let (mut embd, mut untied) = (0, false);
+    for (name, bytes) in tensors {
+        match name {
+            TOKEN_EMBD_TENSOR => embd = bytes,
+            OUTPUT_TENSOR => untied = true,
+            _ => {}
+        }
+    }
+    if untied { embd } else { 0 }
+}
+
+/// The local directory of a package-v2 identity: the package reference for a
+/// local package, else the cached snapshot holding its metadata carrier, as
+/// for a Hugging Face package, whose reference is an `hf://` name.
+fn package_v2_dir(identity: &SkippyPackageIdentity) -> Option<PathBuf> {
+    let local = Path::new(&identity.package_ref);
+    if local.join(PACKAGE_V2_MANIFEST).is_file() {
+        return Some(local.to_path_buf());
+    }
+    identity
+        .source_model_path
+        .ancestors()
+        .skip(1)
+        .find(|dir| dir.join(PACKAGE_V2_MANIFEST).is_file())
+        .map(Path::to_path_buf)
+}
+
+/// `(name, stored bytes)` of every tensor, from a package-v2 manifest resolved
+/// through its metadata carrier, or the GGUF files of a direct load.
+fn split_dflash_tensor_sizes(identity: &SkippyPackageIdentity) -> Result<Vec<(String, u64)>> {
+    if let Some(package_dir) = package_v2_dir(identity) {
+        let manifest_path = package_dir.join(PACKAGE_V2_MANIFEST);
+        let manifest: PackageManifestV2 = serde_json::from_slice(
+            &std::fs::read(&manifest_path)
+                .with_context(|| format!("read {}", manifest_path.display()))?,
+        )
+        .context("parse package-v2 manifest")?;
+        // A package root keeps its tensor catalog in the metadata carrier.
+        let manifest = if manifest.tensor_catalog.entries.is_empty() {
+            skippy_model::package_carrier::resolve_package_carrier_from_dir(manifest, &package_dir)
+                .context("resolve package-v2 metadata carrier")?
+        } else {
+            manifest
+        };
+        return Ok(manifest
+            .tensor_catalog
+            .entries
+            .into_iter()
+            .map(|tensor| {
+                let bytes = match tensor.storage {
+                    TensorStorage::Owned { stored_length, .. } => stored_length,
+                    TensorStorage::Alias { .. } => 0,
+                };
+                (tensor.name, bytes)
+            })
+            .collect());
+    }
+    anyhow::ensure!(
+        skippy_runtime::native_runtime_loaded(),
+        "the native runtime is not loaded"
+    );
+    let mut tensors = Vec::new();
+    for file in &identity.source_files {
+        let info = skippy_runtime::ModelInfo::open(&file.path)
+            .with_context(|| format!("open {}", file.path.display()))?;
+        tensors.extend(
+            info.tensors()?
+                .into_iter()
+                .map(|tensor| (tensor.name, tensor.byte_size)),
+        );
+    }
+    Ok(tensors)
+}
+
 pub fn manifest_ships_mtp_without_generation(manifest: &PackageManifestV2) -> bool {
     let ships_mtp = manifest
         .tensor_catalog
@@ -563,3 +661,67 @@ impl From<SkippyPackageIdentity> for crate::StageSourceIdentity {
 }
 
 pub mod certification;
+
+#[cfg(test)]
+mod split_dflash_tests {
+    use super::{
+        PACKAGE_V2_MANIFEST, SkippyPackageIdentity, package_v2_dir, untied_token_embd_bytes,
+    };
+
+    fn identity(package_ref: &str, source_model_path: std::path::PathBuf) -> SkippyPackageIdentity {
+        SkippyPackageIdentity {
+            package_ref: package_ref.to_string(),
+            manifest_sha256: String::new(),
+            source_model_path,
+            source_model_sha256: String::new(),
+            source_model_bytes: 1,
+            source_files: Vec::new(),
+            layer_weight_bytes: Vec::new(),
+            layer_count: 1,
+            activation_width: 1,
+            tensor_count: 0,
+            generation: None,
+            publisher_defaults: None,
+        }
+    }
+
+    #[test]
+    fn a_hugging_face_package_is_read_from_its_cached_snapshot() {
+        let snapshot = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(snapshot.path().join("shared")).unwrap();
+        std::fs::write(snapshot.path().join(PACKAGE_V2_MANIFEST), b"{}").unwrap();
+        let carrier = snapshot.path().join("shared/metadata.gguf");
+        assert_eq!(
+            package_v2_dir(&identity("hf://meshllm/demo@abc123", carrier.clone())),
+            Some(snapshot.path().to_path_buf())
+        );
+        let local = snapshot.path().to_string_lossy().into_owned();
+        assert_eq!(
+            package_v2_dir(&identity(&local, carrier)),
+            Some(snapshot.path().to_path_buf())
+        );
+        // A direct GGUF load has no package directory.
+        let direct = tempfile::tempdir().unwrap();
+        assert_eq!(
+            package_v2_dir(&identity("model.gguf", direct.path().join("model.gguf"))),
+            None
+        );
+    }
+
+    #[test]
+    fn an_untied_target_charges_its_token_embeddings_to_the_final_stage() {
+        // Qwen3.6-27B Q4_K_M: 5120 x 248320 Q4_K embeddings, a separate head.
+        let untied = [
+            ("token_embd.weight", 715_161_600),
+            ("blk.63.attn_norm.weight", 20_480),
+            ("output.weight", 1_042_944_000),
+        ];
+        assert_eq!(untied_token_embd_bytes(untied.into_iter()), 715_161_600);
+    }
+
+    #[test]
+    fn a_tied_target_already_loads_its_embeddings_on_the_final_stage() {
+        let tied = [("token_embd.weight", 100), ("output_norm.weight", 4)];
+        assert_eq!(untied_token_embd_bytes(tied.into_iter()), 0);
+    }
+}

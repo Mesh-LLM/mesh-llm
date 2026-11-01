@@ -44,6 +44,43 @@ pub(super) fn collect_iteration_samples(
         .collect()
 }
 
+/// Appends each split-DFlash stage's captured target-layer rows to the frame
+/// its request produced, so a decode run through the scheduler carries them
+/// to the final stage like one run as a stage message. Without them the
+/// final stage's draft drops its whole context.
+fn forward_dflash_features(
+    requests: &mut [IterationBatchRequest<'_>],
+    outputs: &mut [ActivationFrame],
+) {
+    for (request, frame) in requests.iter_mut().zip(outputs) {
+        if let Err(error) = request.session.dflash_forward_captured(frame) {
+            crate::write_native_log_note(format!("dflash feature forwarding failed: {error:#}"));
+        }
+    }
+}
+
+/// Hands a split final stage's draft the DFlash feature rows each request's
+/// input frame carries, as a stage message would. A frame without them leaves
+/// the draft nothing to ingest, which it counts as missing rows.
+fn receive_dflash_features(requests: &mut [IterationBatchRequest<'_>]) {
+    for request in requests.iter_mut() {
+        if !request.session.dflash_attached() {
+            continue;
+        }
+        let rows = match request.input.map(crate::DFlashFeatureRows::from_frame) {
+            Some(Ok(rows)) => rows,
+            Some(Err(error)) => {
+                crate::write_native_log_note(format!(
+                    "dflash feature parts are malformed, dropped: {error:#}"
+                ));
+                None
+            }
+            None => None,
+        };
+        request.session.dflash_set_remote_features(rows);
+    }
+}
+
 impl StageSession {
     /// Execute one scheduler iteration for every request as a single native
     /// batch. Frames that carry optional parts, and exporting stages whose
@@ -53,14 +90,17 @@ impl StageSession {
     pub fn iteration_batch_sampled(
         requests: &mut [IterationBatchRequest<'_>],
     ) -> Result<IterationBatchOutput> {
-        if requests
+        receive_dflash_features(requests);
+        let mut outputs = if requests
             .iter()
             .any(iteration_request_requires_one_at_a_time)
         {
-            return Self::iteration_batch_sampled_one_at_a_time(requests);
-        }
-        Self::iteration_batch_sampled_raw(requests, &vec![0; requests.len()], &[])
-            .map(|(outputs, _)| outputs)
+            Self::iteration_batch_sampled_one_at_a_time(requests)?
+        } else {
+            Self::iteration_batch_sampled_raw(requests, &vec![0; requests.len()], &[])?.0
+        };
+        forward_dflash_features(requests, &mut outputs.request_outputs);
+        Ok(outputs)
     }
 
     /// Evaluate independent sequences in one batch and read only the selected
@@ -89,6 +129,7 @@ impl StageSession {
                 "causal readouts require a text-only activation frontier"
             );
         }
+        receive_dflash_features(requests);
         if requests
             .iter()
             .any(iteration_request_requires_one_at_a_time)
@@ -129,9 +170,13 @@ impl StageSession {
                     }));
                 scores.append(&mut readouts);
             }
+            forward_dflash_features(requests, &mut outputs.request_outputs);
             return Ok((outputs, scores));
         }
-        Self::iteration_batch_sampled_raw(requests, &vec![0; requests.len()], selections)
+        let (mut outputs, scores) =
+            Self::iteration_batch_sampled_raw(requests, &vec![0; requests.len()], selections)?;
+        forward_dflash_features(requests, &mut outputs.request_outputs);
+        Ok((outputs, scores))
     }
 
     /// Execute a native batch and validate its sampled or selected-token outputs.

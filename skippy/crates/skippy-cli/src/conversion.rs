@@ -151,6 +151,7 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
             .continuous_batching
             .unwrap_or(skippy_config::local_serving::CONTINUOUS_BATCHING),
         compute_meter: None,
+        split_dflash: None,
         openai,
         l3_manager: None,
     })

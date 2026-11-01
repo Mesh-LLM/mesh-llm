@@ -5,7 +5,7 @@
 //! through the linear-proposal verifier: one batched target forward, commit
 //! through the first mismatch, then trim or retire the speculative suffix.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use skippy_inference_api::{InferenceError, InferenceResult};
@@ -52,7 +52,7 @@ pub(super) struct DFlashDecodeState {
 }
 
 /// Per-request state for block lengths chosen from measured cost.
-struct AdaptiveBlocks {
+pub(in crate::frontend) struct AdaptiveBlocks {
     draft_model_path: PathBuf,
     cost: BlockCost,
     acceptance: Acceptance,
@@ -61,6 +61,8 @@ struct AdaptiveBlocks {
     /// Set when this token was left to a serial step, so the next call can
     /// time it.
     serial_started: Option<Instant>,
+    /// Measured costs chose serial decoding and the next probe is not due.
+    paused: bool,
 }
 
 impl AdaptiveBlocks {
@@ -73,11 +75,21 @@ impl AdaptiveBlocks {
             windows: 0,
             serial_since_probe: 0,
             serial_started: None,
+            paused: false,
         }
     }
 
+    /// Block lengths for stage 0 of a split DFlash target, or `None` when
+    /// adaptive sizing is off. Costs there include the hops between stages,
+    /// so they are learned apart from the same draft serving one node.
+    pub(in crate::frontend) fn for_split(draft_model_path: &Path) -> Option<Self> {
+        let mut key = draft_model_path.as_os_str().to_owned();
+        key.push("#split");
+        adaptive_enabled().then(|| Self::new(PathBuf::from(key)))
+    }
+
     /// Times the serial step that ran since the previous call, if one did.
-    fn finish_serial_step(&mut self) {
+    pub(in crate::frontend) fn finish_serial_step(&mut self) {
         let Some(started) = self.serial_started.take() else {
             return;
         };
@@ -87,7 +99,7 @@ impl AdaptiveBlocks {
     }
 
     /// Drafts for the next window, or 0 to decode this token serially.
-    fn next_drafts(&mut self, limit: usize) -> usize {
+    pub(in crate::frontend) fn next_drafts(&mut self, limit: usize) -> usize {
         let drafts = self.choose_drafts(limit);
         if drafts == 0 {
             self.serial_started = Some(Instant::now());
@@ -95,7 +107,14 @@ impl AdaptiveBlocks {
         drafts
     }
 
+    /// Whether the next step will decode serially too unless costs change,
+    /// so no draft needs to be ready for it.
+    pub(in crate::frontend) fn drafting_paused(&self) -> bool {
+        self.paused
+    }
+
     fn choose_drafts(&mut self, limit: usize) -> usize {
+        self.paused = false;
         // Measure plain steps once a window has run, so serial decoding is
         // weighed against a measured cost.
         if self.windows > 0 && !self.cost.serial_measured() {
@@ -108,13 +127,14 @@ impl AdaptiveBlocks {
         }
         self.serial_since_probe += 1;
         if self.serial_since_probe < ADAPTIVE_PROBE_INTERVAL {
+            self.paused = self.serial_since_probe + 1 < ADAPTIVE_PROBE_INTERVAL;
             return 0;
         }
         self.serial_since_probe = 0;
         ADAPTIVE_PROBE_DRAFTS.min(limit)
     }
 
-    fn record(
+    pub(in crate::frontend) fn record(
         &mut self,
         verify_rows: usize,
         verify_micros: f64,
@@ -415,6 +435,30 @@ fn apply_committed_tokens(
 mod tests {
     use super::*;
     use crate::frontend::NativeMtpVerifyWindowDecision;
+
+    #[test]
+    fn serial_choices_pause_drafting_until_a_probe_is_due() {
+        let mut blocks = AdaptiveBlocks::new(PathBuf::from("/test/serial-pause-draft.gguf"));
+        // Verify windows that cost far more than a serial step and accept
+        // nothing.
+        for rows in [3, 5, 3, 5] {
+            blocks.record(rows, 90_000.0, 0.0, rows - 1, 0);
+        }
+        blocks.cost.observe_serial(10_000.0);
+        blocks.cost.observe_serial(10_000.0);
+
+        let mut chosen = Vec::new();
+        for _ in 0..ADAPTIVE_PROBE_INTERVAL {
+            chosen.push((blocks.next_drafts(4), blocks.drafting_paused()));
+        }
+
+        // Serial steps keep the draft paused, except the one before the probe,
+        // which asks for the draft the probe verifies.
+        let serial = ADAPTIVE_PROBE_INTERVAL - 1;
+        assert!(chosen[..serial - 1].iter().all(|&step| step == (0, true)));
+        assert_eq!(chosen[serial - 1], (0, false));
+        assert_eq!(chosen[serial], (ADAPTIVE_PROBE_DRAFTS, false));
+    }
 
     #[test]
     fn block_limit_leaves_the_last_token_to_a_serial_step() {
