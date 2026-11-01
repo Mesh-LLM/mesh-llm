@@ -32,7 +32,9 @@ impl std::error::Error for NativeError {}
 impl NativeError {
     /// Finds the native failure anywhere in an error chain.
     pub fn find(error: &anyhow::Error) -> Option<&NativeError> {
-        error.chain().find_map(|cause| cause.downcast_ref::<NativeError>())
+        error
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<NativeError>())
     }
 }
 
