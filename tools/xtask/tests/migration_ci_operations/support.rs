@@ -11,7 +11,8 @@ pub type TestResult = Result<(), Box<dyn Error>>;
 static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Checkout files the legacy tool reads through `--root`.
-const STAGED_FILES: [&str; 4] = [
+const STAGED_FILES: [&str; 5] = [
+    ".github/actions/prepare-automation/action.yml",
     "ci/runner-images.json",
     "ci/slices.yml",
     "ci/ownership.yml",
