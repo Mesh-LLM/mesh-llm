@@ -1232,11 +1232,15 @@ async fn start_local_skippy_model(
         live_defaults_generation,
         &spec.live_request_defaults.serving_backends(),
     );
+    // The native buffer measurements also record the DFlash draft context's
+    // allocations, which a later load would read as the target's own KV rate,
+    // so a load with a draft attached is not reused for sizing.
     emit_measured_memory_reconciliation(
         &model_name,
         &measurement_key,
         &plan,
-        skippy_model.permits_memory_measurement_reuse(),
+        skippy_model.permits_memory_measurement_reuse()
+            && resolved.speculative.decode.dflash.is_none(),
     );
     if skippy_model.supports_system_one() {
         capabilities.upgrade_system_one(models::CapabilityLevel::Supported);
