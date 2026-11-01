@@ -42,6 +42,11 @@ pub struct DFlashProposalConfig {
     /// Upper bound on draft tokens per block. `None` uses the trained block.
     #[serde(default)]
     pub max_draft_tokens: Option<usize>,
+    /// The target layers the draft reads, when stage 0 of a split serves a
+    /// draft that lives on the final stage and is not on this node. Empty
+    /// reads them from `draft_model_path`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub target_layers: Vec<u32>,
 }
 
 impl DFlashProposalConfig {
@@ -98,6 +103,7 @@ mod tests {
             dflash: Some(DFlashProposalConfig {
                 draft_model_path: PathBuf::from("/models/draft-dflash.gguf"),
                 max_draft_tokens: Some(8),
+                target_layers: Vec::new(),
             }),
             ..SpeculativeDecodeConfig::default()
         }

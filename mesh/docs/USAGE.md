@@ -1166,7 +1166,10 @@ measured verify cost and acceptance of each request, up to the cap;
 A split serves DFlash too. Each stage forwards the target features the draft
 reads, the final stage holds the draft (a default draft is fetched into that
 node's own cache), and each block is verified in one pass through every
-stage. Split blocks are capped at four draft tokens unless `draft_max_tokens`
+stage. The split plan charges the final stage for the draft, its context and
+the target tensors it borrows. Until the final stage has its copy of a
+default draft, the split serves the native MTP the draft replaces, if the
+model has it. Split blocks are capped at four draft tokens unless `draft_max_tokens`
 is set, because every drafted token is a verify row on every stage.
 
 DFlash drafts tokens for greedy and sampled requests; requests that ask for
