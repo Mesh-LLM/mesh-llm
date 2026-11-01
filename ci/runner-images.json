@@ -566,7 +566,7 @@
       ]
     },
     "nightly-stability": {
-      "image_id": "public-web",
+      "image_id": "public-cpu",
       "scope": "ordinary",
       "bindings": [
         {

@@ -671,7 +671,7 @@ Reusable slices/workflows with a `container:` job, and what backs it:
 | `ci-ui-artifact-slice.yml` | `ui_stamp` | `public cpu`, release-tag callers only; protected automation checkout consumes the immutable raw distribution |
 | `ci-web-slice.yml` | `ui_quality`, `ui_e2e`, `mesh/website` | `public ui`, `public browser`, existing `public web`, respectively |
 | `website-pages.yml` | `build` | `public web` |
-| `nightly-stability-run.yml` | `stability` | `public web` (bakes node/pnpm the CLI-smoke step needs) |
+| `nightly-stability-run.yml` | `stability` | `public cpu`, the image `prepare-automation` verifies (also bakes the node/pnpm the CLI-smoke step needs) |
 | `nightly-kv-coverage.yml` | `ownership-state-machines` | `public cpu`, sha256:8d93de6b... |
 | `release.yml` (CUDA/ROCm/Vulkan compiler rows) | per-backend `public` digests | Native compiler/toolkit images remain backend-specific; amd64 CUDA preserves its intentional ARC self-hosted placement |
 | `release.yml` (Linux CUDA/ROCm/Vulkan composition rows) | `public cpu`, sha256:8d93de6b... | Verify, compose, readiness-test and archive exact producer bytes without downloading a compiler toolkit; packaging also fetches the pinned default-plugin archives from their GitHub releases (curl, HTTPS only) and checks them against the pins |
@@ -832,7 +832,7 @@ trusting this line). Bumping the mesh-llm side alone fails `ui_e2e` on
 cross-repo sequence, in order: bump `config/playwright-pin.txt` in
 `mesh-llm-runner-images`, rebuild and promote the `public web` image, re-pin
 the new digest in `ci-web-slice.yml` (and `ci-ui-artifact-slice.yml` /
-`website-pages.yml` / `nightly-stability-run.yml`, which share it), then
+`website-pages.yml`, which share it), then
 bump `@playwright/test` in `mesh/crates/mesh-llm-ui/package.json`.
 
 ### `setup-macos-lld` composite
