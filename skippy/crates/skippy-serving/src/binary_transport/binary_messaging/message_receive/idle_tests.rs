@@ -7,6 +7,10 @@ use std::net::TcpListener;
 fn connected_pair() -> (TcpStream, TcpStream) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    // Stage peers disable Nagle, and these tests need it too: the peer writes
+    // each frame in many small pieces, and with Nagle on, Windows holds the
+    // tail back until the head is acknowledged, past the 50 ms frame budget.
+    peer.set_nodelay(true).unwrap();
     let (upstream, _) = listener.accept().unwrap();
     peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
     (peer, upstream)
