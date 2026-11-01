@@ -125,11 +125,16 @@ fn isolated<F: std::future::Future<Output = ()>>(name: &str, scenario: fn() -> F
         return;
     }
     let temp = tempfile::tempdir().unwrap();
-    // Keep an explicit installed-runtime cache for opt-in native tests; otherwise
-    // resolve in the fixture without consulting HOME or platform cache paths.
+    // Preserve installed runtimes for opt-in native tests, but fall back to the
+    // fixture when HOME and platform cache paths are unavailable.
     let runtime_cache = std::env::var_os("MESH_LLM_NATIVE_RUNTIME_CACHE_DIR")
         .filter(|path| !path.is_empty())
         .map(std::path::PathBuf::from)
+        .or_else(|| {
+            crate::system::native_runtime_install::default_native_runtime_cache()
+                .ok()
+                .map(|cache| cache.root().to_path_buf())
+        })
         .unwrap_or_else(|| temp.path().join("native-runtimes"));
     let executable = std::env::current_exe().unwrap();
     #[cfg(target_os = "macos")]
