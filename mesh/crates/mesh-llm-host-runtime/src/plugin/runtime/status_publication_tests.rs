@@ -7,6 +7,7 @@ fn runtime_with(generation: u64, declaration: StatusDeclaration) -> PluginRuntim
     PluginRuntime {
         managed_models: Vec::new(),
         generation,
+        started: true,
         authenticated_peer: false,
         initialized_lifecycle: None,
         status_declaration: declaration,

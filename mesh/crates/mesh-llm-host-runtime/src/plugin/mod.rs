@@ -705,6 +705,14 @@ impl PluginManager {
             .with_context(|| format!("Unknown plugin '{name}'"))
     }
 
+    /// A node serves these plugins from now on: see
+    /// [`ExternalPlugin::expect_mesh_snapshots`].
+    pub(crate) fn expect_mesh_snapshots(&self) {
+        for plugin in self.inner.plugins.values() {
+            plugin.expect_mesh_snapshots();
+        }
+    }
+
     pub async fn shutdown(&self) {
         self.inner.shutting_down.store(true, Ordering::SeqCst);
         for plugin in self.inner.plugins.values() {
@@ -1432,14 +1440,44 @@ impl PluginManager {
         plugin.send_bulk_transfer_message(message).await
     }
 
+    /// Sends `event` to every running plugin that subscribes to its kind.
+    /// A plugin that does not take it, such as one whose restart fails,
+    /// does not keep it from the plugins after it; the first error is
+    /// returned once all were tried.
     pub async fn broadcast_mesh_event(&self, event: proto::MeshEvent) -> Result<()> {
+        let mut result = Ok(());
         for (name, plugin) in &self.inner.plugins {
             if !self.plugin_subscribes_mesh_event(name, event.kind).await {
                 continue;
             }
-            plugin.send_mesh_event(event.clone()).await?;
+            if let Err(error) = plugin.send_mesh_event(event.clone()).await {
+                tracing::debug!(plugin = %name, "Plugin did not take a mesh event: {error:#}");
+                result = result.and(Err(error));
+            }
         }
-        Ok(())
+        result
+    }
+
+    /// [`Self::broadcast_mesh_event`] to the process of `generation` of
+    /// `plugin_name` alone, without starting it.
+    pub(crate) async fn send_mesh_event_to(
+        &self,
+        plugin_name: &str,
+        generation: u64,
+        event: proto::MeshEvent,
+    ) -> Result<()> {
+        let Some(plugin) = self.inner.plugins.get(plugin_name) else {
+            return Ok(());
+        };
+        if !self
+            .plugin_subscribes_mesh_event(plugin_name, event.kind)
+            .await
+        {
+            return Ok(());
+        }
+        plugin
+            .send_mesh_event_to_generation(generation, event)
+            .await
     }
 
     /// Whether an already-running `plugin_name` subscribes to mesh event
