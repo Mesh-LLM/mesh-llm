@@ -316,19 +316,19 @@ impl StageModel {
             SpeechOutputFormat::Wav => skippy_ffi::MtmdHelperGenAudioOutputType::Wav,
             SpeechOutputFormat::PcmS16Le => skippy_ffi::MtmdHelperGenAudioOutputType::Pcm,
         };
-        let input = skippy_ffi::MtmdHelperGenAudioInput {
-            seq_id: session.native_sequence_id()?,
-            prompt: prompt.as_ptr(),
-            prompt_len: config.prompt.len(),
-            speaker_ref: ptr::null_mut(),
-            lang: language
-                .as_ref()
-                .map_or(ptr::null(), |value| value.as_ptr()),
-            top_k: config.top_k,
-            top_p: config.top_p,
-            seed: config.seed,
-            out_type: output_type,
-        };
+        let mut input = unsafe { skippy_ffi::mtmd_helper_gen_audio_inp_default() };
+        input.seq_id = session.native_sequence_id()?;
+        input.prompt = prompt.as_ptr();
+        input.prompt_len = config.prompt.len();
+        input.speaker_ref = ptr::null_mut();
+        input.lang = language
+            .as_ref()
+            .map_or(ptr::null(), |value| value.as_ptr());
+        input.voice = ptr::null();
+        input.top_k = config.top_k;
+        input.top_p = config.top_p;
+        input.seed = config.seed;
+        input.out_type = output_type;
         if unsafe { skippy_ffi::mtmd_helper_gen_audio_set_input(generator.0, &input) } != 0 {
             return Err(anyhow!("speech synthesis rejected the input"));
         }

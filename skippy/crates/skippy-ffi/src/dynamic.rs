@@ -288,6 +288,7 @@ dynamic_symbols! {
     mtmd_context_params_default() -> MtmdContextParams;
     mtmd_gen_audio_get_info(ctx: *const MtmdContext) -> MtmdGenAudioInfo;
     mtmd_helper_gen_audio_init(lctx: *mut Opaque, mctx: *mut MtmdContext) -> *mut MtmdHelperGenAudio;
+    mtmd_helper_gen_audio_inp_default() -> MtmdHelperGenAudioInput;
     mtmd_helper_gen_audio_free(ctx: *mut MtmdHelperGenAudio);
     mtmd_helper_gen_audio_reset(ctx: *mut MtmdHelperGenAudio);
     mtmd_helper_gen_audio_set_input(ctx: *mut MtmdHelperGenAudio, input: *const MtmdHelperGenAudioInput) -> i32;

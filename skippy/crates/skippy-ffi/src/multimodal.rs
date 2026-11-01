@@ -50,18 +50,56 @@ pub enum MtmdHelperGenAudioOutputType {
     Wav = 1,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(i32)]
+pub enum MtmdHelperGenAudioOutputMode {
+    Auto = 0,
+    Text = 1,
+    Audio = 2,
+    Mixed = 3,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MtmdHelperGenAudioInput {
+    pub stream: bool,
     pub seq_id: i32,
     pub prompt: *const c_char,
     pub prompt_len: usize,
+    pub n_past: i32,
+    pub out_mode: MtmdHelperGenAudioOutputMode,
     pub speaker_ref: *mut MtmdBitmap,
     pub lang: *const c_char,
+    pub voice: *const c_char,
     pub top_k: i32,
     pub top_p: f32,
     pub seed: u32,
     pub out_type: MtmdHelperGenAudioOutputType,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem::{offset_of, size_of};
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn audio_generator_input_matches_llama_cpp_layout() {
+        assert_eq!(size_of::<MtmdHelperGenAudioInput>(), 72);
+        assert_eq!(offset_of!(MtmdHelperGenAudioInput, stream), 0);
+        assert_eq!(offset_of!(MtmdHelperGenAudioInput, seq_id), 4);
+        assert_eq!(offset_of!(MtmdHelperGenAudioInput, prompt), 8);
+        assert_eq!(offset_of!(MtmdHelperGenAudioInput, prompt_len), 16);
+        assert_eq!(offset_of!(MtmdHelperGenAudioInput, n_past), 24);
+        assert_eq!(offset_of!(MtmdHelperGenAudioInput, out_mode), 28);
+        assert_eq!(offset_of!(MtmdHelperGenAudioInput, speaker_ref), 32);
+        assert_eq!(offset_of!(MtmdHelperGenAudioInput, lang), 40);
+        assert_eq!(offset_of!(MtmdHelperGenAudioInput, voice), 48);
+        assert_eq!(offset_of!(MtmdHelperGenAudioInput, top_k), 56);
+        assert_eq!(offset_of!(MtmdHelperGenAudioInput, top_p), 60);
+        assert_eq!(offset_of!(MtmdHelperGenAudioInput, seed), 64);
+        assert_eq!(offset_of!(MtmdHelperGenAudioInput, out_type), 68);
+    }
 }
 
 /// Mirrors llama.cpp's `mtmd_helper_bitmap_wrapper`: the decoded bitmap plus

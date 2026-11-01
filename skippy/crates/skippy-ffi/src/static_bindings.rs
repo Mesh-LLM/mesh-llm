@@ -916,6 +916,8 @@ unsafe extern "C" {
         mctx: *mut MtmdContext,
     ) -> *mut MtmdHelperGenAudio;
 
+    pub fn mtmd_helper_gen_audio_inp_default() -> MtmdHelperGenAudioInput;
+
     /// Release the generator allocated by `mtmd_helper_gen_audio_init`.
     pub fn mtmd_helper_gen_audio_free(ctx: *mut MtmdHelperGenAudio);
 

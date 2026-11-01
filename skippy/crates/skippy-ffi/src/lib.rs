@@ -64,8 +64,8 @@ pub use model::{
 pub use multimodal::{
     MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos, MtmdGenAudioInfo, MtmdGenAudioType,
     MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
-    MtmdHelperGenAudioOutputType, MtmdHelperInitOpt, MtmdHelperVideo, MtmdHelperVideoInitParams,
-    MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
+    MtmdHelperGenAudioOutputMode, MtmdHelperGenAudioOutputType, MtmdHelperInitOpt, MtmdHelperVideo,
+    MtmdHelperVideoInitParams, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
 };
 pub use runtime::{
     NativeRuntimeLoadError, abi_features, llama_model_is_diffusion, llama_model_is_hybrid,
@@ -113,7 +113,8 @@ pub use dynamic::{
     mtmd_gen_audio_get_info, mtmd_helper_bitmap_init_from_buf, mtmd_helper_eval_chunk_single,
     mtmd_helper_eval_chunk_single_with_callback, mtmd_helper_eval_chunks,
     mtmd_helper_gen_audio_free, mtmd_helper_gen_audio_get_output, mtmd_helper_gen_audio_init,
-    mtmd_helper_gen_audio_reset, mtmd_helper_gen_audio_set_input, mtmd_helper_gen_audio_step_gen,
+    mtmd_helper_gen_audio_inp_default, mtmd_helper_gen_audio_reset,
+    mtmd_helper_gen_audio_set_input, mtmd_helper_gen_audio_step_gen,
     mtmd_helper_gen_audio_step_prompt, mtmd_helper_get_n_pos, mtmd_helper_get_n_tokens,
     mtmd_helper_image_get_decoder_pos, mtmd_helper_init_opt_default, mtmd_helper_log_set,
     mtmd_helper_video_free, mtmd_init_from_file, mtmd_input_chunk_get_n_tokens,
@@ -179,7 +180,8 @@ pub use static_bindings::{
     mtmd_helper_bitmap_init_from_buf, mtmd_helper_eval_chunk_single,
     mtmd_helper_eval_chunk_single_with_callback, mtmd_helper_eval_chunks,
     mtmd_helper_gen_audio_free, mtmd_helper_gen_audio_get_output, mtmd_helper_gen_audio_init,
-    mtmd_helper_gen_audio_reset, mtmd_helper_gen_audio_set_input, mtmd_helper_gen_audio_step_gen,
+    mtmd_helper_gen_audio_inp_default, mtmd_helper_gen_audio_reset,
+    mtmd_helper_gen_audio_set_input, mtmd_helper_gen_audio_step_gen,
     mtmd_helper_gen_audio_step_prompt, mtmd_helper_get_n_pos, mtmd_helper_get_n_tokens,
     mtmd_helper_image_get_decoder_pos, mtmd_helper_init_opt_default, mtmd_helper_log_set,
     mtmd_helper_video_free, mtmd_init_from_file, mtmd_input_chunk_get_n_tokens,
