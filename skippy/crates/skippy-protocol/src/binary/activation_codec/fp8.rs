@@ -20,6 +20,8 @@
 //!
 //! Both layouts keep every row self-contained, so concatenating independently
 //! encoded row chunks is byte-identical to encoding the whole shape at once.
+//! Frames only use these codecs for parts whose rows each hold one token (the
+//! token axis is not the first dimension), so no scale spans two tokens.
 
 use std::io;
 use std::sync::LazyLock;
