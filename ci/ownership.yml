@@ -595,6 +595,7 @@
         "mesh-llm-tui",
         "mesh-llm-ui",
         "mesh-llm-wallet",
+        "process-supervision",
         "skippy-cache"
       ]
     },
