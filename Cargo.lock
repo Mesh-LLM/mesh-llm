@@ -9217,6 +9217,7 @@ dependencies = [
  "skippy-cache",
  "skippy-config",
  "skippy-events",
+ "skippy-hardware-profile",
  "skippy-inference-api",
  "skippy-metrics",
  "skippy-model-artifact",
