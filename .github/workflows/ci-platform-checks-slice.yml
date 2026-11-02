@@ -254,6 +254,17 @@ jobs:
       - name: Prepare patched llama.cpp ABI checkout
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
         run: scripts/prepare-llama.sh pinned
+      - name: Check bindgen-generated FFI bindings freshness
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
+        env:
+          # Regenerates src/bindings from the prepared headers and fails when
+          # the committed bindings drift. The selftest narrows one consumed
+          # native struct field in a copied header tree and requires the
+          # generated bindings to react, proving the check is a real layout
+          # gate. macOS images ship libclang with the Command Line Tools.
+          SKIPPY_FFI_BINDGEN: check
+          SKIPPY_FFI_BINDGEN_SELFTEST: "1"
+        run: cargo check --locked -p skippy-ffi
       - name: Identify patched llama.cpp for cache reuse
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
         id: patched_llama

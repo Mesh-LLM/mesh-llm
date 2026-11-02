@@ -1823,7 +1823,8 @@ Full-session replay contract: [configuration and qualification](agentic-replay-n
 
 Persistent canary preflight, build, family and retry jobs check provisioned tools
 before automation compilation or SDK dependency preparation. Their
-`preinstalled-macos` bootstrap profile skips Rust, Just and Homebrew installers,
+resolver-selected `preinstalled-macos` or `preinstalled-linux` bootstrap profile
+skips installers,
 disables Rustup automatic toolchain installation, and fails early with the name
 of a missing prerequisite. Tool provisioning is external to certification.
 The hosted profiles keep their existing installation behavior. Locked SDK

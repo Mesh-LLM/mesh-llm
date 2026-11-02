@@ -163,7 +163,7 @@ fn regression_inkling_weight_and_metadata_vocab_fallbacks_stay_consistent() {
 #[test]
 fn regression_diffusion_failed_decode_cannot_promote_completed_generation_count() {
     let body = owned(
-        "model_support/-llama-port-diffusion-gemma-support.patch",
+        "model_support/-llama-port-diffusiongemma-support.patch",
         "examples/diffusion/diffusion.cpp",
     );
     let signature = "void diffusion_generate_entropy_bound(";
@@ -185,7 +185,7 @@ fn regression_diffusion_failed_decode_cannot_promote_completed_generation_count(
 #[test]
 fn regression_diffusion_counts_and_size_overflow_are_rejected_before_self_condition_allocation() {
     let body = owned(
-        "model_support/-llama-port-diffusion-gemma-support.patch",
+        "model_support/-llama-port-diffusiongemma-support.patch",
         "examples/diffusion-gemma-server/diffusion-gemma-server.cpp",
     );
     for needle in [
@@ -205,7 +205,7 @@ fn regression_diffusion_counts_and_size_overflow_are_rejected_before_self_condit
 #[test]
 fn regression_system_one_label_coverage_rejects_overlap_and_holes_before_claiming_lane() {
     let body = owned(
-        "model_support/-skippy-add-diffusion-gemma-system-one-reads.patch",
+        "model_support/-skippy-add-diffusiongemma-system-one-reads.patch",
         "src/skippy/system_one.cpp",
     );
     for needle in [
@@ -230,7 +230,7 @@ fn regression_system_one_label_coverage_rejects_overlap_and_holes_before_claimin
 #[test]
 fn regression_pooled_sampler_reset_and_native_gate_repeat_multi_token_prefill() {
     let session = owned(
-        "-skippy-implement-graph-planning-realization-and-runt.patch",
+        "-skippy-realize-admitted-stages-from-live-graphs.patch",
         "src/skippy/session.cpp",
     );
     let session = session
@@ -247,7 +247,7 @@ fn regression_pooled_sampler_reset_and_native_gate_repeat_multi_token_prefill() 
         "skippy_clear_chat_sampling(session)",
     );
     let gate = owned(
-        "-test-cover-graph-derived-stage-contracts.patch",
+        "-test-skippy-cover-live-graph-and-state-contracts.patch",
         "src/skippy/tests/runtime_events.cpp",
     );
     for needle in [

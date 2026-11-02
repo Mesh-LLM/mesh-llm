@@ -97,6 +97,10 @@ pub enum RecordRejection {
     AbiVersion(u32),
     /// `detail_len` exceeds the ABI's detail bound.
     OversizedDetail,
+    /// `status` is not a status code this build's ABI declares; decoding it
+    /// into the `Status` enum would be undefined behavior, so the event is
+    /// refused instead.
+    Status(i32),
 }
 
 impl NativeEventRecord {
@@ -176,12 +180,15 @@ impl NativeEventRecord {
             ([0; 4], 0)
         };
 
+        let status =
+            skippy_ffi::status_from_raw(base.status).ok_or(RecordRejection::Status(base.status))?;
+
         Ok(Self {
             abi_version: base.abi_version,
             struct_size,
-            category: base.category.0,
-            kind: base.kind.0,
-            emitter: base.emitter.0,
+            category: base.category,
+            kind: base.kind,
+            emitter: base.emitter,
             reserved0: base.reserved0,
             sequence: base.sequence,
             timestamp_mono_ns: base.timestamp_mono_ns,
@@ -190,9 +197,9 @@ impl NativeEventRecord {
             session_id: base.session_id,
             progress_current: base.progress_current,
             progress_total: base.progress_total,
-            progress_unit: base.progress_unit.0,
-            failure_code: base.failure_code.0,
-            status: base.status,
+            progress_unit: base.progress_unit,
+            failure_code: base.failure_code,
+            status,
             reserved1: base.reserved1,
             numeric_summary,
             numeric_summary_present,
@@ -224,9 +231,9 @@ impl NativeEventRecord {
         RuntimeEvent {
             abi_version: self.abi_version,
             struct_size: self.struct_size,
-            category: skippy_ffi::SkippyRuntimeEventCategory(self.category).into(),
-            kind: skippy_ffi::SkippyRuntimeEventKind(self.kind).into(),
-            emitter: skippy_ffi::SkippyRuntimeEventEmitterKind(self.emitter).into(),
+            category: self.category.into(),
+            kind: self.kind.into(),
+            emitter: self.emitter.into(),
             reserved0: self.reserved0,
             sequence: self.sequence,
             timestamp_mono_ns: self.timestamp_mono_ns,
@@ -235,8 +242,8 @@ impl NativeEventRecord {
             session_id: self.session_id,
             progress_current: self.progress_current,
             progress_total: self.progress_total,
-            progress_unit: skippy_ffi::SkippyRuntimeEventProgressUnit(self.progress_unit).into(),
-            failure_code: skippy_ffi::SkippyRuntimeEventFailureCode(self.failure_code).into(),
+            progress_unit: self.progress_unit.into(),
+            failure_code: self.failure_code.into(),
             status: self.status,
             reserved1: self.reserved1,
             detail_bytes: self.detail().to_vec(),

@@ -63,10 +63,13 @@ preparation may use step-local Cargo home and target directories outside the
 measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
 
-Persistent macOS canary jobs use the `preinstalled-macos` automation profile.
-Preflight and build require `[self-hosted, macOS, ARM64, jy-managed,
-family-certify, accelerator-memory-128plus]`; family and infrastructure-retry
-jobs replace the final label with the controller's `matrix.memory_tier`.
+Persistent canary jobs use the resolver-selected `preinstalled-macos` or
+`preinstalled-linux` automation profile. Preflight and build require
+`[self-hosted, <selected OS>, ARM64, jy-managed, family-certify,
+accelerator-memory-128plus]`. Family and infrastructure-retry jobs consume the
+controller's memory tier: 128-tier labels follow the selected platform, while
+256-tier labels remain on macOS. Backend selection uses Metal on macOS and
+CUDA on Linux; the Linux image must carry a working driver and toolkit.
 JY owns machine eligibility through attribute selectors: macOS Apple M1 Ultra
 with exactly 128 GiB or Apple M3 Ultra with exactly 256 GiB, with mounted model
 storage. Never select a node name. The JY runner groups must allow only these
@@ -76,7 +79,7 @@ unavailable managed capacity queues rather than falling back to another pool.
 They check runner prerequisites before compiling automation or preparing SDK
 dependencies and fail if any are absent. Tool installation and upgrades belong
 to runner provisioning: never invoke Rust, Just, or Homebrew installers from
-this profile. Keep job-owned compiler-cache startup and linker verification.
+these profiles. Keep job-owned compiler-cache startup and linker verification.
 
 Automation is compiled at most once per run and platform for product-source
 work, never once per job. Each platform lane has one `product_automation_*`

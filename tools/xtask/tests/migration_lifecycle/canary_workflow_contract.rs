@@ -117,16 +117,19 @@ fn reject_nonpublisher_secrets(name: &str, job: &Node) -> Result<(), String> {
         return Err("resolver steps missing".into());
     };
     for step in items {
-        if step.get("id").and_then(Node::text) == Some("upstream") {
+        if matches!(
+            step.get("id").and_then(Node::text),
+            Some("upstream" | "select_platform")
+        ) {
             let Node::Map(env) = change(step, &["env"]) else {
-                return Err("upstream selection environment missing".into());
+                return Err("resolver lookup environment missing".into());
             };
             let token = env
                 .iter()
                 .position(|(key, _)| key == "GH_TOKEN")
-                .ok_or("upstream selection read-only token missing")?;
+                .ok_or("resolver lookup read-only token missing")?;
             if env[token].1.text() != Some("${{ github.token }}") {
-                return Err("upstream selection must use the workflow read-only token".into());
+                return Err("resolver lookup must use the workflow read-only token".into());
             }
             env.remove(token);
         }
@@ -236,6 +239,19 @@ fn protected_controller_and_worker_credentials_refuse_permission_or_token_mutati
     *change(&mut token, &["env", "CANARY_CONTROLLER_SHA"]) =
         Node::Scalar("${{ github.token }}".into());
     assert!(security(&controller, &token).is_err());
+    for id in ["upstream", "select_platform"] {
+        let mut token = controller.clone();
+        let Node::Seq(items) = change(&mut token, &["jobs", "resolve", "steps"]) else {
+            panic!("resolver steps");
+        };
+        let step = items
+            .iter_mut()
+            .find(|step| step.get("id").and_then(Node::text) == Some(id))
+            .unwrap();
+        *change(step, &["env", "GH_TOKEN"]) =
+            Node::Scalar("${{ secrets.CANARY_REPAIR_TOKEN }}".into());
+        assert!(security(&token, &worker).is_err(), "resolver step {id}");
+    }
     let mut forwarded = controller.clone();
     let Node::Map(candidate) = change(&mut forwarded, &["jobs", "repair_1"]) else {
         panic!("job");
@@ -417,19 +433,26 @@ fn frozen_prebuilt_workers_load_cache_after_controller_and_before_consumption() 
     let controller = document(".github/workflows/llama-upstream-canary.yml");
     let worker = document(".github/workflows/llama-canary-family-pass.yml");
     let worker_jobs = worker.get("jobs").unwrap();
-    for (job, consumer) in [
+    for (job, consumer, profile) in [
         (
             controller.get("jobs").unwrap().get("preflight").unwrap(),
             "Verify immutable family plan and pinned cache",
+            "${{ needs.resolve.outputs.runner_profile }}",
         ),
         (
             worker_jobs.get("build").unwrap(),
             "Build exact candidate for distributed certification",
+            "${{ inputs.runner_profile }}",
         ),
-        (worker_jobs.get("family").unwrap(), "Certify one family"),
+        (
+            worker_jobs.get("family").unwrap(),
+            "Certify one family",
+            "${{ inputs.runner_profile }}",
+        ),
         (
             worker_jobs.get("retry_family").unwrap(),
             "Recheck one infrastructure-failed family",
+            "${{ inputs.runner_profile }}",
         ),
     ] {
         let (prepare, step) = named(job, "uses", "./.github/actions/prepare-automation");
@@ -439,7 +462,7 @@ fn frozen_prebuilt_workers_load_cache_after_controller_and_before_consumption() 
         let (consume, _) = named(job, "name", consumer);
         assert!(prepare < cache && cache < consume);
         let config = step.get("with").unwrap();
-        assert_eq!(field(config, "runner-profile"), "preinstalled-macos");
+        assert_eq!(field(config, "runner-profile"), profile);
         assert_eq!(field(config, "allow_depot_remote_cache"), "false");
         assert_eq!(field(config, "allow_native_github_cache"), "false");
         assert!(
@@ -473,16 +496,22 @@ fn frozen_prebuilt_workers_load_cache_after_controller_and_before_consumption() 
                 != Some("./.github/actions/use-canary-cache"))
     );
     let cache = document(".github/actions/use-canary-cache/action.yml");
-    let (_, step) = named(
-        cache.get("runs").unwrap(),
-        "name",
-        "Read configured model cache",
-    );
-    assert_eq!(field(step, "shell"), "/bin/zsh -il {0}");
-    assert_eq!(
-        field(step, "run").trim(),
-        "set -eu\n\"${MESH_LLM_AUTOMATION_BIN:?protected controller automation required}\" ci-ops configure-canary-cache"
-    );
+    for (platform, shell) in [
+        ("macOS", "/bin/zsh -il {0}"),
+        ("Linux", "/bin/bash -il {0}"),
+    ] {
+        let (_, step) = named(
+            cache.get("runs").unwrap(),
+            "name",
+            &format!("Read configured model cache ({platform})"),
+        );
+        assert_eq!(field(step, "if"), format!("runner.os == '{platform}'"));
+        assert_eq!(field(step, "shell"), shell);
+        assert_eq!(
+            field(step, "run").trim(),
+            "set -eu\n\"${MESH_LLM_AUTOMATION_BIN:?protected controller automation required}\" ci-ops configure-canary-cache"
+        );
+    }
 }
 
 // Local component execution of the retained action declarations; no GitHub or toolchain calls.
@@ -583,9 +612,13 @@ fn parsed_family_worker_preserves_bounded_fanout_and_prebuilt_restore_before_cer
             .and_then(Node::text)
             .is_none_or(|s| !s.contains("cargo "))
     }));
-    let build = jobs.get("build").unwrap().get("env").unwrap();
-    assert_eq!(field(build, "LLAMA_STAGE_BACKEND"), "metal");
-    assert!(field(build, "LLAMA_STAGE_BUILD_DIR").contains("inputs.pass_id"));
+    let build = jobs.get("build").unwrap();
+    let (backend, _) = named(build, "uses", "./.github/actions/select-canary-backend");
+    let (prepare, _) = named(build, "uses", "./.github/actions/prepare-automation");
+    assert!(backend < prepare);
+    let env = build.get("env").unwrap();
+    assert!(env.get("LLAMA_STAGE_BACKEND").is_none());
+    assert!(field(env, "LLAMA_STAGE_BUILD_DIR").contains("inputs.pass_id"));
     let certification = fs::read_to_string(
         root().join("tools/xtask/src/automation/canary_receipts/package_closure/certification.rs"),
     )
@@ -632,7 +665,8 @@ fn actual_setup_action_preserves_local_git_identity_and_llvm_fallback_refusal_wi
     let action = document(".github/actions/setup-canary-runner/action.yml");
     let runs = action.get("runs").unwrap();
     let (identity, git) = named(runs, "name", "Configure canary Git identity");
-    let (toolchain, tools) = named(runs, "name", "Verify runner toolchain");
+    let (toolchain, tools) = named(runs, "name", "Verify runner toolchain (macOS)");
+    assert_eq!(field(tools, "if"), "runner.os == 'macOS'");
     assert!(identity < toolchain);
     let temp = tempfile::tempdir().unwrap();
     let directory = temp.path().canonicalize().unwrap();

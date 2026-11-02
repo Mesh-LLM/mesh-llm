@@ -178,8 +178,9 @@ read before selecting: the feed is ordered by creation time, so a draft created
 long ago but published recently is on a late page, and the 180-second budget and
 1000-page ceiling bound the walk. It records the release kind, publication time,
 tag and commit in the Actions summary and rejects lookup failures or tag movement
-without falling back to `master`. The hosted selection step alone receives
-the workflow's read-only GitHub token; fixed read-only GraphQL queries fetch
+without falling back to `master`. The hosted upstream-selection step receives
+the workflow's read-only GitHub token; the platform resolver also uses that token
+to inspect runner availability. Fixed read-only GraphQL queries fetch
 metadata without release assets, and REST resolves the selected tag. The lookup
 has a 180-second total budget, 1 MiB per response and a 1000-page ceiling;
 incomplete pagination fails instead of selecting from a partial feed.
@@ -576,11 +577,11 @@ runner-contract update is active.
 | `ci-web-slice.yml` | Console quality, console Playwright E2E, public website build, and CLI explorer browser validation |
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer; release UI builds upload a raw artifact, then a separate Rust-capable `ui_stamp` job binds source/version and complete file checksums without rebuilding the console |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
-| `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that prepare the patched llama checkout before verifying the producer-owned static ABI revision and toolchain epoch, plus a pinned, digest-verified Skippy correctness fixture; related PR changes (including `mesh-llm-skippy-adapter`) additionally compile the asserted `mesh-llm-skippy-adapter` library test `config::hardware_translation_tests::safetensors_checkpoint_reaches_mesh_host_runtime` and smoke an immutable SmolLM2 SafeTensors checkpoint through the Mesh config/adapter/Skippy serving/native path to sampled prefill and decode with every supported load-time quantization |
+| `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that prepare the patched llama checkout before verifying the producer-owned static ABI revision and toolchain epoch. Its static-ABI job also regenerates `skippy-ffi`'s committed bindgen bindings in memory (`SKIPPY_FFI_BINDGEN=check`, plus the layout-mutation selftest) and fails when they drift from the pinned headers, plus a pinned, digest-verified Skippy correctness fixture; related PR changes (including `mesh-llm-skippy-adapter`) additionally compile the asserted `mesh-llm-skippy-adapter` library test `config::hardware_translation_tests::safetensors_checkpoint_reaches_mesh_host_runtime` and smoke an immutable SmolLM2 SafeTensors checkpoint through the Mesh config/adapter/Skippy serving/native path to sampled prefill and decode with every supported load-time quantization |
 | `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; the macOS host compile has a 60-minute job timeout; no empty cross-platform jobs |
 | `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers. The `native-abi` domain selects `linux-cpu`, `windows-cpu`, and `windows-vulkan`; Windows Vulkan feeds the Windows product/smoke consumers, and Windows CPU also selects the Skippy probe check below. The Linux CPU row also runs the native runtime-event gate against its verified built-or-restored runtime and uploads its evidence. |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
-| `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable/unit, Windows log-store privacy ACL checks, and the Windows CPU native Skippy probes (`windows-skippy-probes`: selected by the `native-abi` platform domain and on every main run; the `native-abi` domain also selects `linux-cpu`, `windows-cpu`, and `windows-vulkan` in `domain_rows`; builds the static CPU ABI with tests, logs memory headroom, then runs every `^skippy_` test serially with the 64-bit ctest, each bounded at 15 minutes, within the row's 150-minute timeout, followed by the `skippy-runtime` and `skippy-serving` lib tests linked against that static ABI); the macOS/Windows unit rows filter their resolved package lists against the checked-out workspace's `cargo metadata` members before the test loops, so a removed crate is skipped with a `::warning::` rather than a missing-package failure |
+| `ci-platform-checks-slice.yml` | macOS portable/unit, Windows portable/unit, Windows log-store privacy ACL checks, and the Windows CPU native Skippy probes (`windows-skippy-probes`: selected by the `native-abi` platform domain and on every main run; the `native-abi` domain also selects `linux-cpu`, `windows-cpu`, and `windows-vulkan` in `domain_rows`; builds the static CPU ABI with tests, logs memory headroom, then runs every `^skippy_` test serially with the 64-bit ctest, each bounded at 15 minutes, within the row's 150-minute timeout, followed by the `skippy-runtime` and `skippy-serving` lib tests linked against that static ABI); the macOS unit row additionally regenerates `skippy-ffi`'s committed bindgen bindings in memory (`SKIPPY_FFI_BINDGEN=check`, plus the layout-mutation selftest) after preparing the patched llama checkout and fails when they drift from the pinned headers; the macOS/Windows unit rows filter their resolved package lists against the checked-out workspace's `cargo metadata` members before the test loops, so a removed crate is skipped with a `::warning::` rather than a missing-package failure |
 | `ci-{linux,macos,windows}-product-smoke-slice.yml` | Platform-local core, scripted, model-download, and Laya smokes. The pinned Laya Multilingual F16 GGUF runs startup plus the complete upstream golden `/systemone` battery on Linux CPU/CUDA, conditional `gpu-nvidia` Vulkan and `gpu-amd` ROCm, macOS Metal, and Windows CPU; each row selects the exact native device name, so an unavailable backend fails at model load. Core CPU/CUDA/Metal restores the registry-pinned SmolLM2 Q8 and IBM Granite 4.0 H Q4 pair once and runs both through standalone inference, OpenAI client compatibility, and constrained-Tokio restart. The CPU two-node split row uses the same pair for dense KV and strict recurrent `KvRecurrent` validation, persists strict-whitelist seed/worker identity and stage/model snapshots, reconciles two-observer topology and exact two-stage contiguous-cut agreement, then compares each loaded stage's Auto payload, reason, fallback, loaded state, and native capability against model-manifest-pinned expectations. A wrong second stage fails even when the first is correct. The row uploads evidence on every outcome. The Linux CPU row additionally preserves node cache roots across restart and requires an observable durable-L3 fill before status and clear verification. Product restore verifies the manifest backend and forces discovery through the bundled runtime. CUDA verifies the packaged dependency closure with `LD_LIBRARY_PATH` unset, runs inherited and strict device probes, installs no cudart or cuBLAS packages, and leaves the NVIDIA driver host-owned. Windows accelerator product targets remain build-only because CI has no Windows accelerator runners. There is no separate product-integration or Qwen migration lane. |
 | `.github/actions/run-laya-product-smoke` | Shared product restore plus Laya startup/read harness. Inputs are bounded to the supported backend/device/cadence combinations, and the fixture is resolved through `product-smoke.json`. The explicit Vulkan row enables the Vulkan profile for runners without `vulkaninfo`; model startup and reads still verify the device. Windows product restore emits LF-delimited manifest fields for Git Bash. |
 | `ci-linux-sdk-slice.yml`, `ci-macos-sdk-slice.yml` | Platform-local Rust/Kotlin/Swift smoke consumers; SDK producers are independent top-level calls and each smoke receives the lane-local immutable UI artifact |
@@ -865,10 +866,11 @@ builds and long test phases. Remote cache configuration is preserved. It never
 stops the default host server. Canary toolchain
 verification only sets cache identity; accelerator setup owns server startup.
 
-Persistent macOS canary preflight, build, family and infrastructure-retry jobs
-require `self-hosted`, `macOS`, `ARM64`, `jy-managed` and `family-certify`.
+Persistent canary preflight, build, family and infrastructure-retry jobs
+require `self-hosted`, the selected OS, `ARM64`, `jy-managed` and `family-certify`.
 Preflight/build require `accelerator-memory-128plus`; workers retain the
-controller's `matrix.memory_tier`. JY attribute policies select macOS Apple M1
+controller's `matrix.memory_tier`. The 128-tier labels follow the selected
+platform; 256-tier labels remain on macOS. JY attribute policies select macOS Apple M1
 Ultra 128 GiB and Apple M3 Ultra 256 GiB with mounted model storage; both carry
 128-plus, and only the M3 carries 256-plus. Runner groups allow only the two
 canary workflows at protected `main` references. The
@@ -877,10 +879,11 @@ must deploy, provision and register matching runners before this switch merges.
 Jobs queue if managed capacity is absent.
 These jobs
 run `setup-canary-runner` before `prepare-automation` with
-`runner-profile: preinstalled-macos`. Missing tools fail with their names and a
-runner-provisioning instruction. This profile skips Rust and Just installers,
-disables Rustup automatic toolchain installation, and selects the accelerator
-action's `tool-source: preinstalled` path, which checks Homebrew lld and sccache
+the selected `preinstalled-macos` or `preinstalled-linux` runner profile.
+Missing tools fail with their names and a runner-provisioning instruction.
+Both profiles skip installers and disable Rustup automatic toolchain installation.
+The macOS profile selects the accelerator action's `tool-source: preinstalled`
+path, which checks Homebrew lld and sccache
 without installing either. Hosted profiles retain their existing installers.
 The build prepares controller automation before the locked Python SDK
 environment, so SDK source admission uses the initialized automation binary.
