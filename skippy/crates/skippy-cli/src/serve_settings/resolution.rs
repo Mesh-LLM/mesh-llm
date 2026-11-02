@@ -299,6 +299,7 @@ impl ServeSettings {
                         plan.dflash = Some(DFlashProposalConfig {
                             draft_model_path: path.to_path_buf(),
                             max_draft_tokens: None,
+                            target_layers: Vec::new(),
                         });
                     }
                 }

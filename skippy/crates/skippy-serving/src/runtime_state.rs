@@ -76,6 +76,9 @@ pub struct RuntimeState {
     sessions_reset_by_panic: BTreeSet<String>,
     #[cfg(test)]
     modelless_for_test: bool,
+    /// Lets modelless tests exercise a split DFlash final stage.
+    #[cfg(test)]
+    pub(crate) dflash_drafts_for_test: bool,
 }
 
 struct RuntimeLaneSession {
@@ -239,6 +242,7 @@ impl RuntimeState {
             session_lifecycle_observer: None,
             compute_meter: Arc::default(),
             modelless_for_test: true,
+            dflash_drafts_for_test: false,
         }
     }
 
@@ -394,6 +398,8 @@ fn runtime_from_loaded_model(
         compute_meter: Arc::default(),
         #[cfg(test)]
         modelless_for_test: false,
+        #[cfg(test)]
+        dflash_drafts_for_test: false,
     })))
 }
 
@@ -509,7 +515,7 @@ fn reject_legacy_serving_package(config: &StageConfig) -> Result<()> {
     Ok(())
 }
 
-fn runtime_config_from_stage_config(
+pub(crate) fn runtime_config_from_stage_config(
     config: &StageConfig,
     overrides: &RuntimeLaunchOverrides,
 ) -> Result<RuntimeConfig> {
@@ -695,6 +701,87 @@ mod tests {
                 decode_tokens: 3,
             }
         );
+    }
+
+    /// A modelless split DFlash final stage with one idle lane.
+    fn split_dflash_final_stage() -> RuntimeState {
+        let mut runtime = RuntimeState::new_modelless_for_test(1);
+        runtime.dflash_drafts_for_test = true;
+        runtime.idle_sessions.push(super::RuntimeLaneSession {
+            index: 0,
+            session: skippy_runtime::StageSession::detached_dflash_for_test(),
+            resident_prefix: None,
+        });
+        runtime.next_lane_index = 1;
+        runtime
+    }
+
+    fn frame_with_dflash_rows(rows: &skippy_runtime::DFlashFeatureRows) -> ActivationFrame {
+        let mut parts =
+            [skippy_runtime::ActivationPartDesc::default(); skippy_runtime::ACTIVATION_MAX_PARTS];
+        parts[0] = skippy_runtime::ActivationPartDesc {
+            ggml_type: skippy_runtime::GGML_TYPE_F32,
+            rank: 2,
+            token_axis: 1,
+            dimensions: [1, 1, 0, 0],
+            byte_strides: [4, 4, 0, 0],
+            payload_bytes: 4,
+            ..Default::default()
+        };
+        let mut frame = ActivationFrame {
+            desc: skippy_runtime::ActivationDesc {
+                version: skippy_runtime::ACTIVATION_FRAME_VERSION,
+                producer_stage_index: 0,
+                layer_start: 0,
+                layer_end: 1,
+                token_count: 1,
+                sequence_count: 1,
+                part_count: 1,
+                payload_bytes: 4,
+                frontier_identity: [0; skippy_runtime::ACTIVATION_IDENTITY_BYTES],
+                parts,
+            },
+            payload: vec![0; 4],
+        };
+        rows.append_to_frame(&mut frame).unwrap();
+        frame
+    }
+
+    /// The first message of a session reaches the final stage before anything
+    /// has created the session. Its feature rows must still reach the draft;
+    /// dropping them cleared the draft's context on every new request.
+    #[test]
+    fn split_dflash_rows_reach_a_session_on_its_first_message() {
+        let mut runtime = split_dflash_final_stage();
+        let mut rows = skippy_runtime::DFlashFeatureRows::new(1, 1);
+        rows.insert(2, vec![0.25]).unwrap();
+
+        runtime.dflash_split_input("first", Some(&frame_with_dflash_rows(&rows)));
+
+        let lane = runtime.sessions.get("first").expect("session created");
+        assert_eq!(lane.session.dflash_remote_features_for_test(), Some(&rows));
+    }
+
+    #[test]
+    fn split_dflash_counters_go_only_to_senders_that_read_them() {
+        skippy_runtime::test_support::require_native_runtime();
+        let mut runtime = split_dflash_final_stage();
+        runtime.dflash_split_input("s", None);
+        runtime
+            .sessions
+            .get_mut("s")
+            .unwrap()
+            .session
+            .dflash_lose_rows_for_test(12);
+        let mut state = skippy_protocol::binary::StageStateHeader::new(
+            skippy_protocol::binary::WireMessageKind::DecodeEmbd,
+        );
+
+        assert!(!runtime.dflash_reply_stats("s", state).has_dflash_health());
+        state.set_split_dflash(true);
+        let stats = runtime.dflash_reply_stats("s", state);
+        assert_eq!(stats.dflash_feature_rows_missing, 12);
+        assert_eq!(stats.dflash_draft_context_resets, 1);
     }
 
     #[test]

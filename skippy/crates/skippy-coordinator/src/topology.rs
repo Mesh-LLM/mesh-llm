@@ -4,9 +4,9 @@ mod capacity;
 mod locked;
 mod performance;
 
-use capacity::layer_required_bytes;
+use capacity::{charge_final_layer_kv, layer_required_bytes};
 pub use capacity::{
-    default_runtime_headroom_bytes, diagnostic_candidate_bytes_per_layer,
+    context_scaled_kv_bytes, default_runtime_headroom_bytes, diagnostic_candidate_bytes_per_layer,
     repriced_stage_weight_bytes, required_stage_bytes,
 };
 
@@ -44,6 +44,9 @@ pub struct TopologyPlanningInput {
     pub model_weight_bytes: u64,
     pub layer_weight_bytes: Vec<u64>,
     pub kv_bytes_per_token: u64,
+    /// KV per token the final stage holds beyond its layers', such as a split
+    /// DFlash draft's context. Charged to the last layer.
+    pub final_layer_kv_bytes_per_token: u64,
     /// Fixed recurrent-state allocation for one configured lane, per layer.
     /// Dense/SWA-only layers use zero. The vector is layer-aligned when set.
     pub recurrent_bytes_per_sequence_by_layer: Vec<u64>,
@@ -172,15 +175,8 @@ pub fn rebalance_topology(
 ) -> Option<TopologyPlan> {
     let nodes = usable_nodes(&input.nodes);
     let layer_weights = layer_weight_bytes(input);
-    let layer_required = layer_required_bytes(
-        &layer_weights,
-        &recurrent_bytes_by_layer(input),
-        input
-            .kv_bytes_per_token
-            .div_ceil(u64::from(input.layer_count)),
-        current.context_length,
-        current.parallel_lanes,
-    )?;
+    let layer_required =
+        input_layer_required_bytes(input, current.context_length, current.parallel_lanes)?;
     let stages = performance::balance_stages(
         &current.stages,
         &nodes,
@@ -486,17 +482,7 @@ fn fit_candidate(
     }
 
     let layer_weights = layer_weight_bytes(input);
-    let kv_per_layer = input
-        .kv_bytes_per_token
-        .div_ceil(u64::from(input.layer_count));
-    let recurrent_by_layer = recurrent_bytes_by_layer(input);
-    let layer_required_bytes = layer_required_bytes(
-        &layer_weights,
-        &recurrent_by_layer,
-        kv_per_layer,
-        context_length,
-        parallel_lanes,
-    )?;
+    let layer_required_bytes = input_layer_required_bytes(input, context_length, parallel_lanes)?;
 
     let mut capacities = nodes.to_vec();
     capacities.sort_by(|left, right| {
@@ -568,6 +554,31 @@ fn fit_candidate(
         minimum_remaining_vram,
         total_remaining_vram,
     })
+}
+
+/// Every layer's placement cost for `input` at a context and lane count,
+/// with the final stage's extra KV on the last layer.
+fn input_layer_required_bytes(
+    input: &TopologyPlanningInput,
+    context_length: u32,
+    parallel_lanes: usize,
+) -> Option<Vec<u64>> {
+    let mut costs = layer_required_bytes(
+        &layer_weight_bytes(input),
+        &recurrent_bytes_by_layer(input),
+        input
+            .kv_bytes_per_token
+            .div_ceil(u64::from(input.layer_count)),
+        context_length,
+        parallel_lanes,
+    )?;
+    charge_final_layer_kv(
+        &mut costs,
+        input.final_layer_kv_bytes_per_token,
+        context_length,
+        parallel_lanes,
+    )?;
+    Some(costs)
 }
 
 fn latency_aware_planning(_input: &TopologyPlanningInput, nodes: &[UsableNode]) -> bool {
@@ -743,6 +754,7 @@ mod tests {
             target_decode_tpot_ms: None,
             auto_balance: false,
             placement_objective: Default::default(),
+            final_layer_kv_bytes_per_token: 0,
         }
     }
 
@@ -762,6 +774,7 @@ mod tests {
             target_decode_tpot_ms: None,
             auto_balance: false,
             placement_objective: Default::default(),
+            final_layer_kv_bytes_per_token: 0,
         }
     }
 
@@ -771,6 +784,18 @@ mod tests {
 
     fn qwen_nodes(count: usize, gib: u64) -> Vec<TopologyNode> {
         (0..count).map(|index| qwen_node(index, gib)).collect()
+    }
+
+    #[test]
+    fn final_stage_kv_is_charged_to_the_last_layer_at_the_planned_context() {
+        let mut request = input(vec![node("a", 80), node("b", 80)]);
+        let plain = input_layer_required_bytes(&request, 8192, 2).unwrap();
+        request.final_layer_kv_bytes_per_token = 24 * 1024;
+        let charged = input_layer_required_bytes(&request, 8192, 2).unwrap();
+        let extra = context_scaled_kv_bytes(24 * 1024, 8192, 2).unwrap();
+        assert!(extra > 0);
+        assert_eq!(charged[..charged.len() - 1], plain[..plain.len() - 1]);
+        assert_eq!(*charged.last().unwrap(), plain.last().unwrap() + extra);
     }
 
     #[test]
@@ -809,6 +834,7 @@ mod tests {
             target_decode_tpot_ms: None,
             auto_balance: false,
             placement_objective: Default::default(),
+            final_layer_kv_bytes_per_token: 0,
         };
         let layer_weights = layer_weight_bytes(&request);
         let kv_per_layer = request.kv_bytes_per_token.div_ceil(u64::from(LAYERS));

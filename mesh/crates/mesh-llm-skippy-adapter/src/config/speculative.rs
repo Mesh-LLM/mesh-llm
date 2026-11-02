@@ -51,6 +51,24 @@ pub(super) fn resolve_speculative_config(
     Ok(resolved)
 }
 
+/// The configured N-gram `(min, max)` lengths, model settings over global ones.
+fn pick_ngram_range(
+    model_config: Option<&SpeculativeConfig>,
+    global_config: Option<&SpeculativeConfig>,
+) -> (u32, u32) {
+    let ngram_min = super::support::pick_value(
+        model_config.and_then(|config| config.ngram_min),
+        global_config.and_then(|config| config.ngram_min),
+        0,
+    );
+    let ngram_max = super::support::pick_value(
+        model_config.and_then(|config| config.ngram_max),
+        global_config.and_then(|config| config.ngram_max),
+        0,
+    );
+    (ngram_min, ngram_max)
+}
+
 /// `dflash_over_auto_mtp` lets a known DFlash pairing replace native MTP that
 /// is on only by default.
 fn resolve_speculative(
@@ -107,12 +125,11 @@ fn resolve_speculative(
         model_path,
     )?;
     let mtp_yields = mtp_yields(dflash_over_auto_mtp, &strategy, model_config, global_config);
-    let mode = pick_string_owned(
+    let mut mode = pick_string_owned(
         model_config.and_then(|config| config.mode.as_deref()),
         global_config.and_then(|config| config.mode.as_deref()),
         Some("auto"),
     );
-    let mut mode = mode;
     let configured_draft_max_tokens = super::support::pick_value(
         model_config.and_then(|config| config.draft_max_tokens),
         global_config.and_then(|config| config.draft_max_tokens),
@@ -132,16 +149,7 @@ fn resolve_speculative(
         model_config.and_then(|config| config.draft_gpu_layers),
         global_config.and_then(|config| config.draft_gpu_layers),
     );
-    let ngram_min = super::support::pick_value(
-        model_config.and_then(|config| config.ngram_min),
-        global_config.and_then(|config| config.ngram_min),
-        0,
-    );
-    let ngram_max = super::support::pick_value(
-        model_config.and_then(|config| config.ngram_max),
-        global_config.and_then(|config| config.ngram_max),
-        0,
-    );
+    let (ngram_min, ngram_max) = pick_ngram_range(model_config, global_config);
     let pairing_fault = normalize_pairing_fault(pick_string(
         model_config.and_then(|config| config.pairing_fault.as_deref()),
         global_config.and_then(|config| config.pairing_fault.as_deref()),
@@ -185,6 +193,7 @@ fn resolve_speculative(
             draft_model_path: None,
             pairing_fault,
             draft_max_tokens,
+            draft_max_tokens_configured: configured_draft_max_tokens > 0,
             draft_min_tokens: 0,
             explicit: default_dflash.is_none(),
             draft_n_gpu_layers,
@@ -258,6 +267,7 @@ fn resolve_speculative(
         draft_model_path,
         pairing_fault,
         draft_max_tokens: effective_draft_max_tokens,
+        draft_max_tokens_configured: configured_draft_max_tokens > 0,
         draft_min_tokens,
         explicit,
         draft_n_gpu_layers,

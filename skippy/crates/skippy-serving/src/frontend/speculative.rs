@@ -667,6 +667,9 @@ pub(super) struct InferenceSpeculativeStats {
     pub(super) adaptive_window_grows: usize,
     pub(super) adaptive_window_shrinks: usize,
     pub(super) adaptive_window_enabled: bool,
+    /// A split DFlash final stage's `(feature rows missing, draft context
+    /// resets)` for this session; `None` when not drafting with one.
+    pub(super) split_dflash_health: Option<(i64, i64)>,
 }
 
 /// Request-local, cache-based N-gram proposer. It mirrors only committed
@@ -915,6 +918,13 @@ impl InferenceSpeculativeStats {
             "verify_window_downstream_wait_ms".to_string(),
             json!(self.primary_verify_downstream_wait_ms),
         );
+        if let Some((rows_missing, resets)) = self.split_dflash_health {
+            timings.insert(
+                "dflash_feature_rows_missing".to_string(),
+                json!(rows_missing),
+            );
+            timings.insert("dflash_draft_context_resets".to_string(), json!(resets));
+        }
     }
 
     pub(super) fn observe_verify_decision(

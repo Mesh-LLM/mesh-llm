@@ -43,9 +43,9 @@ chain alone makes the hot path six hops, or about 60 ms before compute.
 ## Current Stage Admission and Readout Transport
 
 Generation 7 introduced direct prediction return, and generation 9 added
-canonical stage-admission descriptors. Generation 12 is the current
+canonical stage-admission descriptors. Generation 13 is the current
 compatibility-breaking cutover: a peer is stage compatible only when it
-advertises both `skippy-stage/2` and the complete `stage-generation-12` bundle.
+advertises both `skippy-stage/2` and the complete `stage-generation-13` bundle.
 Every load carries a canonical admission descriptor. The ready response echoes
 that descriptor exactly before topology publication.
 Prediction-bearing messages return directly from the final/readout stage to the
