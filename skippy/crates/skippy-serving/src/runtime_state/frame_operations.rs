@@ -545,26 +545,24 @@ impl RuntimeState {
     }
 
     /// Hands a split final stage's draft the feature rows that earlier stages
-    /// sent with `input`. A no-op on stages without a draft. The first message
-    /// of a session arrives before anything has created it, so this does.
+    /// sent with `input`, and lets a stage that starts on a draft target
+    /// layer keep `input` to forward as that layer's rows. A no-op on other
+    /// stages. The first message of a session arrives before anything has
+    /// created it, so this does.
     pub(crate) fn dflash_split_input(&mut self, session_id: &str, input: Option<&ActivationFrame>) {
-        if !self.dflash_drafts() {
+        if !self.dflash_drafts() && !self.model.dflash_forwards_input() {
             return;
         }
-        let rows = match input.map(skippy_runtime::DFlashFeatureRows::from_frame) {
-            Some(Ok(rows)) => rows,
-            Some(Err(error)) => {
-                tracing::warn!(
-                    session_id,
-                    error = format!("{error:#}"),
-                    "dropping malformed split DFlash feature rows"
-                );
-                None
-            }
-            None => None,
-        };
         match self.session(session_id) {
-            Ok(session) => session.dflash_set_remote_features(rows),
+            Ok(session) => {
+                if let Err(error) = session.dflash_receive_input(input) {
+                    tracing::warn!(
+                        session_id,
+                        error = format!("{error:#}"),
+                        "dropping malformed split DFlash feature rows"
+                    );
+                }
+            }
             Err(error) => tracing::warn!(
                 session_id,
                 error = format!("{error:#}"),
@@ -627,6 +625,13 @@ impl RuntimeState {
                 i64::try_from(health.draft_context_resets).unwrap_or(i64::MAX);
         }
         if state.split_dflash()
+            && let Some(draft) = lane.session.dflash_draft_stats()
+        {
+            stats.dflash_draft_us = i64::try_from(draft.draft_us()).unwrap_or(i64::MAX);
+            stats.dflash_drafts = i64::try_from(draft.proposals).unwrap_or(i64::MAX);
+            stats.dflash_ingest_us = i64::try_from(draft.ingest_us).unwrap_or(i64::MAX);
+        }
+        if state.split_dflash()
             && let Ok(counts) = lane.session.verify_rollback_counts()
         {
             stats.verify_rollbacks_in_place = i64::try_from(counts.in_place).unwrap_or(i64::MAX);
@@ -634,6 +639,33 @@ impl RuntimeState {
                 i64::try_from(counts.checkpointed).unwrap_or(i64::MAX);
         }
         stats
+    }
+
+    /// Holds back the feature rows of this session's next decode until its
+    /// next DFlash proposal. A no-op without a draft.
+    pub(crate) fn dflash_defer_next_ingest(&mut self, session_id: &str) {
+        if let Ok(session) = self.session(session_id) {
+            session.dflash_defer_next_ingest();
+        }
+    }
+
+    /// Records the draft this final stage owes stage 0 after an early verdict.
+    pub(crate) fn dflash_defer_draft(&mut self, session_id: &str, draft: DeferredDFlashDraft) {
+        self.dflash_deferred_drafts
+            .insert(session_id.to_string(), draft);
+    }
+
+    /// Whether a draft is owed for this session's last verify window.
+    pub(crate) fn dflash_draft_deferred(&self, session_id: &str) -> bool {
+        self.dflash_deferred_drafts.contains_key(session_id)
+    }
+
+    /// Takes the draft owed for this session, if any.
+    pub(crate) fn dflash_take_deferred_draft(
+        &mut self,
+        session_id: &str,
+    ) -> Option<DeferredDFlashDraft> {
+        self.dflash_deferred_drafts.remove(session_id)
     }
 
     /// Drafts a DFlash block after `anchor` at `anchor_position` on a split

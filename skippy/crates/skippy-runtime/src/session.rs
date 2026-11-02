@@ -366,7 +366,7 @@ impl StageSession {
             .token_count
             .checked_add(u64::try_from(token_ids.len()).context("token count exceeds u64")?)
             .context("session token count overflow")?;
-        self.dflash_after_decode(DecodedRows::trailing(0, token_ids.len()));
+        self.dflash_after_prefill(DecodedRows::trailing(0, token_ids.len()));
         Ok(())
     }
 

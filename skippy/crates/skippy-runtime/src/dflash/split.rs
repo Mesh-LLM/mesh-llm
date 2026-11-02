@@ -11,13 +11,13 @@
 //! captured itself.
 //!
 //! The input of a stage's first layer is the activation it receives, which
-//! its own graph never produces, so no stage captures it there. The stage that
-//! ends on that layer forwards its own output hidden states as that layer's
-//! rows instead; they are the same values.
+//! its own graph never produces, so no stage captures it there. The stage
+//! that receives it already holds those rows: the final stage hands its input
+//! activation to the draft as that layer's rows, and a middle stage forwards
+//! it as a feature part. The boundary layer therefore never crosses a link
+//! twice, once as the activation and again as a feature.
 //!
-//! Rows travel as BF16: hidden states keep their range, and the draft only
-//! proposes tokens the target then verifies, so feature precision can change
-//! acceptance but never output.
+//! Rows travel in a compact encoding; see `feature_wire`.
 
 use std::sync::{Arc, Mutex, Weak};
 
@@ -26,39 +26,16 @@ use skippy_ffi::Opaque;
 use skippy_ffi::llama_draft::LlamaDraftApi;
 
 use crate::{
-    ACTIVATION_IDENTITY_BYTES, ACTIVATION_MAX_PARTS, ACTIVATION_PART_OPTIONAL, ActivationFrame,
-    ActivationPartDesc, StageModel, StageSession,
+    ACTIVATION_MAX_PARTS, ACTIVATION_PART_OPTIONAL, ActivationFrame, ActivationPartDesc,
+    StageModel, StageSession,
 };
 
+use super::feature_wire::{
+    DFlashFeatureEncoding, GGML_TYPE_BF16, decode_bf16, decode_q8_rows, dflash_feature_identity,
+    dflash_feature_layer, dflash_feature_part, encode_bf16, encode_q8_rows, f16_to_f32,
+    q8_feature_identity,
+};
 use super::lock_recovering;
-
-/// ggml's BF16 type id.
-const GGML_TYPE_BF16: u32 = 30;
-/// Identity prefix of a DFlash feature part; the layer id follows in decimal.
-const FEATURE_IDENTITY_PREFIX: &[u8] = b"skippy.dflash.layer_inp.";
-
-/// Activation part identity carrying the input rows of target layer `layer`.
-pub fn dflash_feature_identity(layer: u32) -> [u8; ACTIVATION_IDENTITY_BYTES] {
-    let mut identity = [0_u8; ACTIVATION_IDENTITY_BYTES];
-    let suffix = layer.to_string();
-    identity[..FEATURE_IDENTITY_PREFIX.len()].copy_from_slice(FEATURE_IDENTITY_PREFIX);
-    identity[FEATURE_IDENTITY_PREFIX.len()..][..suffix.len()].copy_from_slice(suffix.as_bytes());
-    identity
-}
-
-/// The target layer a DFlash feature part carries, or `None` for any other
-/// part.
-pub fn dflash_feature_layer(identity: &[u8; ACTIVATION_IDENTITY_BYTES]) -> Option<u32> {
-    let suffix = identity.strip_prefix(FEATURE_IDENTITY_PREFIX)?;
-    let end = suffix
-        .iter()
-        .position(|&byte| byte == 0)
-        .unwrap_or(suffix.len());
-    if end == 0 || suffix[end..].iter().any(|&byte| byte != 0) {
-        return None;
-    }
-    std::str::from_utf8(&suffix[..end]).ok()?.parse().ok()
-}
 
 /// Whether a stage over `layer_start..layer_end` produces the input of
 /// `layer` inside its own graph. A stage's first layer reads the activation it
@@ -67,18 +44,14 @@ pub(crate) fn stage_captures_layer_input(layer: u32, layer_start: u32, layer_end
     (layer_start..layer_end).contains(&layer) && (layer != layer_start || layer_start == 0)
 }
 
-/// The target layer whose input a stage over `layer_start..layer_end` sends
-/// as its own output: the next stage's first layer, when the draft reads it.
-pub(crate) fn stage_forwards_output_as(
-    target_layers: &[u32],
-    layer_start: u32,
-    layer_end: u32,
-) -> Option<u32> {
-    (layer_end > layer_start && target_layers.contains(&layer_end)).then_some(layer_end)
+/// The target layer whose input is the activation a stage starting at
+/// `layer_start` receives, when the draft reads it.
+pub(crate) fn stage_receives_layer_input(target_layers: &[u32], layer_start: u32) -> Option<u32> {
+    (layer_start > 0 && target_layers.contains(&layer_start)).then_some(layer_start)
 }
 
-/// The hidden-state rows of `frame`'s primary part, which are the input of
-/// the layer after the producing stage's range.
+/// The hidden-state rows of `frame`'s primary part: the activation a stage
+/// receives, which is the input of its first layer.
 fn frame_hidden_rows(frame: &ActivationFrame, n_embd: usize) -> Result<Vec<f32>> {
     let part = frame
         .desc
@@ -126,29 +99,24 @@ fn frame_hidden_rows(frame: &ActivationFrame, n_embd: usize) -> Result<Vec<f32>>
     })
 }
 
-fn f16_to_f32(bits: u16) -> f32 {
-    let sign = u32::from(bits >> 15) << 31;
-    let exponent = u32::from((bits >> 10) & 0x1f);
-    let mantissa = u32::from(bits & 0x3ff);
-    let magnitude = match (exponent, mantissa) {
-        (0, 0) => 0,
-        // Subnormal: value is mantissa * 2^-24.
-        (0, _) => {
-            let value = mantissa as f32 * f32::powi(2.0, -24);
-            return if sign == 0 { value } else { -value };
-        }
-        (0x1f, _) => 0x7f80_0000 | (mantissa << 13),
-        _ => ((exponent + 112) << 23) | (mantissa << 13),
-    };
-    f32::from_bits(sign | magnitude)
-}
-
 /// Whether `frame` carries DFlash feature rows for a later stage.
 pub fn frame_has_dflash_features(frame: &ActivationFrame) -> bool {
     frame.desc.parts().is_ok_and(|parts| {
         parts
             .iter()
             .any(|part| dflash_feature_layer(&part.identity).is_some())
+    })
+}
+
+/// Payload bytes of the DFlash feature parts `frame` carries. Activation
+/// codecs pass these parts through, so they cross the link at this size.
+pub fn dflash_feature_payload_bytes(frame: &ActivationFrame) -> usize {
+    frame.desc.parts().map_or(0, |parts| {
+        parts
+            .iter()
+            .filter(|part| dflash_feature_layer(&part.identity).is_some())
+            .map(|part| usize::try_from(part.payload_bytes).unwrap_or(usize::MAX))
+            .fold(0, usize::saturating_add)
     })
 }
 
@@ -240,39 +208,69 @@ impl DFlashFeatureRows {
         self.rows += later.rows;
     }
 
-    /// Reads every DFlash feature part of `frame`.
+    /// Reads every DFlash feature part of `frame`, in either encoding.
     pub fn from_frame(frame: &ActivationFrame) -> Result<Option<Self>> {
         let mut rows: Option<Self> = None;
         for part in frame.desc.parts()? {
-            let Some(layer) = dflash_feature_layer(&part.identity) else {
+            let Some((layer, encoding, width)) = dflash_feature_part(&part.identity) else {
                 continue;
             };
+            let count = usize::try_from(part.dimensions[1]).context("feature rows")?;
+            let (expected_type, n_embd) = match encoding {
+                DFlashFeatureEncoding::Bf16 => (
+                    GGML_TYPE_BF16,
+                    usize::try_from(part.dimensions[0]).context("feature width")?,
+                ),
+                DFlashFeatureEncoding::Q8 => {
+                    let n_embd = width.context("Q8 feature part names no width")?;
+                    let words = usize::try_from(part.dimensions[0]).context("feature words")?;
+                    ensure!(
+                        words * 4 == encoding.row_bytes(n_embd),
+                        "Q8 feature part for layer {layer} has {words} words a row, \
+                         not the {} bytes of {n_embd} values",
+                        encoding.row_bytes(n_embd)
+                    );
+                    (crate::GGML_TYPE_I32, n_embd)
+                }
+            };
             ensure!(
-                part.ggml_type == GGML_TYPE_BF16 && part.rank == 2 && part.token_axis == 1,
+                part.ggml_type == expected_type && part.rank == 2 && part.token_axis == 1,
                 "DFlash feature part for layer {layer} has an unexpected layout"
             );
-            let n_embd = usize::try_from(part.dimensions[0]).context("feature width")?;
-            let count = usize::try_from(part.dimensions[1]).context("feature rows")?;
             let start = usize::try_from(part.payload_offset).context("feature offset")?;
             let bytes = usize::try_from(part.payload_bytes).context("feature bytes")?;
             let payload = frame
                 .payload
                 .get(start..start.saturating_add(bytes))
-                .filter(|payload| payload.len() == n_embd * count * 2)
+                .filter(|payload| payload.len() == encoding.row_bytes(n_embd) * count)
                 .ok_or_else(|| anyhow!("DFlash feature part for layer {layer} is truncated"))?;
             let rows = rows.get_or_insert_with(|| Self::new(n_embd, count));
             ensure!(
                 rows.n_embd == n_embd && rows.rows == count,
                 "DFlash feature parts disagree on their shape"
             );
-            rows.insert(layer, decode_bf16(payload))?;
+            let values = match encoding {
+                DFlashFeatureEncoding::Bf16 => decode_bf16(payload),
+                DFlashFeatureEncoding::Q8 => decode_q8_rows(payload, n_embd),
+            };
+            rows.insert(layer, values)?;
         }
         Ok(rows)
     }
 
-    /// Appends these rows to `frame` as optional parts. Layers the frame
-    /// already carries are left as they are.
+    /// Appends these rows to `frame` as optional parts in this process's
+    /// configured encoding. Layers the frame already carries are left as they
+    /// are.
     pub fn append_to_frame(&self, frame: &mut ActivationFrame) -> Result<()> {
+        self.append_to_frame_as(frame, DFlashFeatureEncoding::configured())
+    }
+
+    /// Appends these rows to `frame` as optional parts in `encoding`.
+    pub fn append_to_frame_as(
+        &self,
+        frame: &mut ActivationFrame,
+        encoding: DFlashFeatureEncoding,
+    ) -> Result<()> {
         if self.layers.is_empty() {
             return Ok(());
         }
@@ -288,8 +286,9 @@ impl DFlashFeatureRows {
             .layers
             .iter()
             .filter(|(layer, _)| {
-                let identity = dflash_feature_identity(*layer);
-                !existing.iter().any(|part| part.identity == identity)
+                !existing
+                    .iter()
+                    .any(|part| dflash_feature_layer(&part.identity) == Some(*layer))
             })
             .collect();
         // Check capacity before touching the frame, so a full part directory
@@ -301,23 +300,43 @@ impl DFlashFeatureRows {
             );
         }
         for (layer, values) in new_layers {
-            let identity = dflash_feature_identity(*layer);
             let offset = frame.payload.len();
-            encode_bf16(values, &mut frame.payload);
+            let row_bytes = encoding.row_bytes(self.n_embd);
+            let (identity, ggml_type, element, width) = match encoding {
+                DFlashFeatureEncoding::Bf16 => {
+                    encode_bf16(values, &mut frame.payload);
+                    (
+                        dflash_feature_identity(*layer),
+                        GGML_TYPE_BF16,
+                        2,
+                        self.n_embd,
+                    )
+                }
+                DFlashFeatureEncoding::Q8 => {
+                    encode_q8_rows(values, self.n_embd, &mut frame.payload);
+                    (
+                        q8_feature_identity(*layer, self.n_embd)?,
+                        crate::GGML_TYPE_I32,
+                        4,
+                        row_bytes / 4,
+                    )
+                }
+            };
             let mut part = ActivationPartDesc {
                 identity,
-                ggml_type: GGML_TYPE_BF16,
+                ggml_type,
                 rank: 2,
                 token_axis: 1,
                 flags: ACTIVATION_PART_OPTIONAL,
                 payload_offset: u64::try_from(offset).context("feature offset")?,
-                payload_bytes: u64::try_from(values.len() * 2).context("feature bytes")?,
+                payload_bytes: u64::try_from(frame.payload.len() - offset)
+                    .context("feature bytes")?,
                 ..ActivationPartDesc::default()
             };
-            part.dimensions[0] = i64::try_from(self.n_embd).context("feature width")?;
+            part.dimensions[0] = i64::try_from(width).context("feature width")?;
             part.dimensions[1] = i64::try_from(self.rows).context("feature rows")?;
-            part.byte_strides[0] = 2;
-            part.byte_strides[1] = u64::try_from(self.n_embd * 2).context("feature stride")?;
+            part.byte_strides[0] = element;
+            part.byte_strides[1] = u64::try_from(row_bytes).context("feature stride")?;
             frame.desc.parts[count] = part;
             count += 1;
         }
@@ -327,29 +346,6 @@ impl DFlashFeatureRows {
     }
 }
 
-fn encode_bf16(values: &[f32], out: &mut Vec<u8>) {
-    out.reserve(values.len() * 2);
-    for value in values {
-        let bits = value.to_bits();
-        // Round to nearest even; NaN keeps a quiet payload.
-        let rounded = if value.is_nan() {
-            (bits >> 16) | 0x40
-        } else {
-            (bits + 0x7fff + ((bits >> 16) & 1)) >> 16
-        };
-        out.extend_from_slice(&(rounded as u16).to_le_bytes());
-    }
-}
-
-fn decode_bf16(bytes: &[u8]) -> Vec<f32> {
-    bytes
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|pair| f32::from_bits(u32::from(u16::from_le_bytes(*pair)) << 16))
-        .collect()
-}
-
 /// Captures the inputs of this stage's DFlash target layers on a stage that
 /// carries no draft.
 pub(crate) struct DFlashCapture {
@@ -357,8 +353,9 @@ pub(crate) struct DFlashCapture {
     target_ctx: *mut Opaque,
     /// Layers whose input this stage's graph produces.
     layers: Vec<u32>,
-    /// The layer whose input is this stage's output, when the draft reads it.
-    output_layer: Option<u32>,
+    /// The layer whose input is the activation this stage receives, when the
+    /// draft reads it. This stage forwards those rows.
+    input_layer: Option<u32>,
     n_embd: usize,
     n_batch: usize,
 }
@@ -408,8 +405,11 @@ pub(crate) type SharedDFlashCapture = Arc<Mutex<DFlashCapture>>;
 pub(crate) struct DFlashSplitSession {
     capture: Option<Weak<Mutex<DFlashCapture>>>,
     captured: Option<DFlashFeatureRows>,
-    /// The layer, and its width, whose input this stage's output frames carry.
-    output_layer: Option<(u32, usize)>,
+    /// The layer, and its width, whose input is the activation this stage
+    /// receives and forwards.
+    input_layer: Option<(u32, usize)>,
+    /// That layer's rows from the input of the message being executed.
+    received_input: Option<Vec<f32>>,
     /// Whether this stage's graph captures any target layer itself.
     captures_layers: bool,
     /// Rows from earlier stages, and how many of them decodes have consumed.
@@ -420,16 +420,16 @@ pub(crate) struct DFlashSplitSession {
 
 impl DFlashSplitSession {
     pub(crate) fn capturing(capture: &SharedDFlashCapture) -> Self {
-        let (output_layer, captures_layers) = {
+        let (input_layer, captures_layers) = {
             let capture = lock_recovering(capture, |_| {});
             (
-                capture.output_layer.map(|layer| (layer, capture.n_embd)),
+                capture.input_layer.map(|layer| (layer, capture.n_embd)),
                 !capture.layers.is_empty(),
             )
         };
         Self {
             capture: Some(Arc::downgrade(capture)),
-            output_layer,
+            input_layer,
             captures_layers,
             ..Self::default()
         }
@@ -467,6 +467,7 @@ impl DFlashSplitSession {
 
     pub(crate) fn clear(&mut self) {
         self.captured = None;
+        self.received_input = None;
         self.remote = None;
     }
 }
@@ -482,12 +483,72 @@ impl StageSession {
         }
     }
 
+    /// Whether this session reads anything from its input frames for split
+    /// DFlash: feature rows for its draft, or the activation it forwards as
+    /// its first layer's rows.
+    pub fn dflash_reads_input(&self) -> bool {
+        self.dflash.is_some()
+            || self
+                .dflash_split
+                .as_ref()
+                .is_some_and(|split| split.input_layer.is_some())
+    }
+
+    /// Takes what split DFlash needs from `input`, the frame of this
+    /// session's next decode. A drafting final stage hands its draft the
+    /// earlier stages' feature rows, plus the activation itself as the rows
+    /// of its first layer when the draft reads that layer. A capturing stage
+    /// that starts on a target layer keeps the activation to forward as that
+    /// layer's rows. Malformed rows are dropped and reported; the draft then
+    /// finds them missing.
+    pub fn dflash_receive_input(&mut self, input: Option<&ActivationFrame>) -> Result<()> {
+        if let Some(link) = self.dflash.as_ref() {
+            let input_layer = link.input_layer;
+            let (rows, error) = match input.map(DFlashFeatureRows::from_frame).transpose() {
+                Ok(rows) => (rows.flatten(), None),
+                Err(error) => (None, Some(error.context("read DFlash feature parts"))),
+            };
+            let mut rows = rows;
+            let mut error = error;
+            if let (Some((layer, n_embd)), Some(frame)) = (input_layer, input)
+                && !rows
+                    .as_ref()
+                    .is_some_and(|rows| rows.layer_ids().any(|id| id == layer))
+                && error.is_none()
+            {
+                let tokens = usize::try_from(frame.desc.token_count).unwrap_or(0);
+                let inserted = frame_hidden_rows(frame, n_embd).and_then(|values| {
+                    rows.get_or_insert_with(|| DFlashFeatureRows::new(n_embd, tokens))
+                        .insert(layer, values)
+                });
+                if let Err(inserted) = inserted {
+                    error = Some(inserted.context(format!("read layer {layer} input")));
+                    rows = None;
+                }
+            }
+            self.dflash_set_remote_features(rows);
+            return error.map_or(Ok(()), Err);
+        }
+        let Some(split) = self.dflash_split.as_mut() else {
+            return Ok(());
+        };
+        split.received_input = None;
+        let (Some((layer, n_embd)), Some(frame)) = (split.input_layer, input) else {
+            return Ok(());
+        };
+        split.received_input = Some(
+            frame_hidden_rows(frame, n_embd)
+                .with_context(|| format!("read layer {layer} input"))?,
+        );
+        Ok(())
+    }
+
     /// Appends the feature rows this stage captured for the decode that
     /// produced `frame` to it, for the final stage's draft. Rows captured by
     /// an earlier decode whose frame left without them are dropped: the frame
     /// carries the rows of its own tokens, which are the last ones captured.
-    /// When the next stage starts on a target layer, the frame's own hidden
-    /// states go along as that layer's rows.
+    /// When this stage starts on a target layer, the activation it received
+    /// for this decode goes along as that layer's rows.
     pub fn dflash_forward_captured(&mut self, frame: &mut ActivationFrame) -> Result<()> {
         let Some(split) = self.dflash_split.as_mut() else {
             return Ok(());
@@ -505,20 +566,24 @@ impl StageSession {
                 .map_or(0, |rows| if rows.is_empty() { 0 } else { rows.rows() });
             split.rows_dropped += u64::try_from(tokens.saturating_sub(carried)).unwrap_or(0);
         }
-        let mut output_error = None;
-        if let Some((layer, n_embd)) = split.output_layer {
-            let inserted = frame_hidden_rows(frame, n_embd).and_then(|values| {
-                rows.get_or_insert_with(|| DFlashFeatureRows::new(n_embd, tokens))
-                    .insert(layer, values)
-            });
+        let received = split.received_input.take();
+        let mut input_error = None;
+        if let Some((layer, n_embd)) = split.input_layer {
+            let inserted = received
+                .ok_or_else(|| anyhow!("no input rows were received for this frame"))
+                .and_then(|values| {
+                    rows.get_or_insert_with(|| DFlashFeatureRows::new(n_embd, tokens))
+                        .insert(layer, values)
+                });
             if let Err(error) = inserted {
-                output_error = Some(error.context(format!("forward layer {layer} input")));
+                split.rows_dropped += u64::try_from(tokens).unwrap_or(u64::MAX);
+                input_error = Some(error.context(format!("forward layer {layer} input")));
             }
         }
         if let Some(rows) = rows {
             rows.append_to_frame(frame)?;
         }
-        output_error.map_or(Ok(()), Err)
+        input_error.map_or(Ok(()), Err)
     }
 
     /// Token rows whose captured DFlash features this stage could not forward
@@ -537,10 +602,17 @@ impl StageSession {
 }
 
 impl StageModel {
+    /// Whether this stage forwards the activation it receives as the rows of
+    /// a draft target layer, so its sessions must see their input frames.
+    pub fn dflash_forwards_input(&self) -> bool {
+        self.dflash_capture()
+            .is_some_and(|capture| lock_recovering(capture, |_| {}).input_layer.is_some())
+    }
+
     /// Captures the inputs of the DFlash target layers this stage owns so its
-    /// sessions can forward them to the final stage's draft, plus its output
-    /// when the next stage starts on a target layer. Returns the forwarded
-    /// layers. Attach before creating serving sessions.
+    /// sessions can forward them to the final stage's draft, plus its input
+    /// activation when this stage starts on a target layer. Returns the
+    /// forwarded layers. Attach before creating serving sessions.
     pub fn attach_dflash_capture(
         &mut self,
         target_layers: &[u32],
@@ -555,8 +627,8 @@ impl StageModel {
             .copied()
             .filter(|&layer| stage_captures_layer_input(layer, layer_start, layer_end))
             .collect::<Vec<_>>();
-        let output_layer = stage_forwards_output_as(target_layers, layer_start, layer_end);
-        if layers.is_empty() && output_layer.is_none() {
+        let input_layer = stage_receives_layer_input(target_layers, layer_start);
+        if layers.is_empty() && input_layer.is_none() {
             return Ok(layers);
         }
         let api = skippy_ffi::llama_draft::llama_draft_api()
@@ -583,7 +655,7 @@ impl StageModel {
             api,
             target_ctx,
             layers: layers.clone(),
-            output_layer,
+            input_layer,
             n_embd,
             n_batch,
         };
@@ -593,16 +665,17 @@ impl StageModel {
         drop(probe);
         self.install_dflash_capture(Arc::new(Mutex::new(capture)))?;
         crate::write_native_log_note(format!(
-            "dflash split capture attached layers={layers:?} output_layer={output_layer:?}"
+            "dflash split capture attached layers={layers:?} input_layer={input_layer:?} encoding={:?}",
+            DFlashFeatureEncoding::configured()
         ));
-        Ok(layers.into_iter().chain(output_layer).collect())
+        Ok(layers.into_iter().chain(input_layer).collect())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ACTIVATION_FRAME_VERSION, ActivationDesc};
+    use crate::{ACTIVATION_FRAME_VERSION, ACTIVATION_IDENTITY_BYTES, ActivationDesc};
 
     fn frame(tokens: u32) -> ActivationFrame {
         let mut part = ActivationPartDesc {
@@ -635,20 +708,6 @@ mod tests {
     }
 
     #[test]
-    fn feature_identities_round_trip_and_ignore_other_parts() {
-        for layer in [0, 6, 43, 4095] {
-            assert_eq!(
-                dflash_feature_layer(&dflash_feature_identity(layer)),
-                Some(layer)
-            );
-        }
-        assert_eq!(dflash_feature_layer(&[7; ACTIVATION_IDENTITY_BYTES]), None);
-        let mut bare = [0; ACTIVATION_IDENTITY_BYTES];
-        bare[..FEATURE_IDENTITY_PREFIX.len()].copy_from_slice(FEATURE_IDENTITY_PREFIX);
-        assert_eq!(dflash_feature_layer(&bare), None);
-    }
-
-    #[test]
     fn feature_rows_ride_a_frame_as_optional_bf16_parts() {
         let mut rows = DFlashFeatureRows::new(2, 3);
         rows.insert(15, vec![1.0, -2.0, 0.5, 3.0, 1024.0, -0.25])
@@ -657,7 +716,8 @@ mod tests {
         let mut frame = frame(3);
         let original = frame.payload.clone();
 
-        rows.append_to_frame(&mut frame).unwrap();
+        rows.append_to_frame_as(&mut frame, DFlashFeatureEncoding::Bf16)
+            .unwrap();
 
         assert_eq!(frame.desc.part_count, 3);
         assert_eq!(&frame.payload[..original.len()], &original[..]);
@@ -687,8 +747,12 @@ mod tests {
         second.insert(3, vec![5.0, 6.0]).unwrap();
         let mut frame = frame(1);
 
-        first.append_to_frame(&mut frame).unwrap();
-        second.append_to_frame(&mut frame).unwrap();
+        first
+            .append_to_frame_as(&mut frame, DFlashFeatureEncoding::Bf16)
+            .unwrap();
+        second
+            .append_to_frame_as(&mut frame, DFlashFeatureEncoding::Q8)
+            .unwrap();
 
         assert_eq!(frame.desc.part_count, 2);
         assert_eq!(DFlashFeatureRows::from_frame(&frame).unwrap(), Some(first));
@@ -701,14 +765,21 @@ mod tests {
             first.insert(layer, vec![1.0, 2.0]).unwrap();
         }
         let mut frame = frame(1);
-        first.append_to_frame(&mut frame).unwrap();
+        // BF16 round-trips these values exactly, so the frame decodes to them.
+        first
+            .append_to_frame_as(&mut frame, DFlashFeatureEncoding::Bf16)
+            .unwrap();
         assert_eq!(frame.desc.part_count as usize, ACTIVATION_MAX_PARTS - 1);
         let before = frame.clone();
 
         let mut second = DFlashFeatureRows::new(2, 1);
         second.insert(100, vec![3.0, 4.0]).unwrap();
         second.insert(101, vec![5.0, 6.0]).unwrap();
-        assert!(second.append_to_frame(&mut frame).is_err());
+        assert!(
+            second
+                .append_to_frame_as(&mut frame, DFlashFeatureEncoding::Bf16)
+                .is_err()
+        );
 
         assert_eq!(frame.payload, before.payload);
         assert_eq!(frame.desc.part_count, before.desc.part_count);
@@ -721,19 +792,6 @@ mod tests {
         let mut rows = DFlashFeatureRows::new(2, 2);
         rows.insert(1, vec![0.0; 4]).unwrap();
         assert!(rows.append_to_frame(&mut frame(3)).is_err());
-    }
-
-    #[test]
-    fn bf16_rounds_to_nearest_even() {
-        let mut bytes = Vec::new();
-        let values = [1.0_f32, 1.0 + f32::EPSILON, -3.140625, 65504.0, 1.0e30];
-        encode_bf16(&values, &mut bytes);
-        let decoded = decode_bf16(&bytes);
-        assert_eq!(decoded[0], 1.0);
-        assert_eq!(decoded[1], 1.0);
-        assert_eq!(decoded[2], -3.140625);
-        assert!((decoded[3] - 65504.0).abs() / 65504.0 < 0.01);
-        assert!((decoded[4] - 1.0e30).abs() / 1.0e30 < 0.01);
     }
 
     fn session_with_captured(rows: DFlashFeatureRows) -> StageSession {
@@ -761,7 +819,7 @@ mod tests {
 
         let forwarded = DFlashFeatureRows::from_frame(&window).unwrap().unwrap();
         assert_eq!(forwarded.rows(), 3);
-        assert_eq!(forwarded.rows_of(2, 0, 3), Some(&[1.0, 2.0, 3.0][..]));
+        assert_close(forwarded.rows_of(2, 0, 3).unwrap(), &[1.0, 2.0, 3.0]);
         // The rows were handed off; the next frame starts empty.
         let mut next = frame(1);
         session.dflash_forward_captured(&mut next).unwrap();
@@ -796,22 +854,22 @@ mod tests {
     }
 
     #[test]
-    fn a_cut_on_a_target_layer_moves_it_to_the_stage_before() {
-        // 64 layers cut at 32: the final stage's first layer is a target, so
-        // stage 0 sends its output as that layer's input.
+    fn a_cut_on_a_target_layer_leaves_it_to_the_stage_that_receives_it() {
+        // 64 layers cut at 32: the final stage's first layer is a target, and
+        // its input is the activation that stage receives.
         assert_eq!(captured_by(0, 32), vec![2, 17]);
-        assert_eq!(stage_forwards_output_as(&TARGETS, 0, 32), Some(32));
+        assert_eq!(stage_receives_layer_input(&TARGETS, 0), None);
         assert_eq!(captured_by(32, 64), vec![47, 62]);
-        assert_eq!(stage_forwards_output_as(&TARGETS, 32, 64), None);
+        assert_eq!(stage_receives_layer_input(&TARGETS, 32), Some(32));
     }
 
     #[test]
-    fn a_middle_stage_starting_on_a_target_layer_leaves_it_to_its_upstream() {
+    fn a_middle_stage_starting_on_a_target_layer_forwards_its_input() {
         assert_eq!(captured_by(0, 17), vec![2]);
-        assert_eq!(stage_forwards_output_as(&TARGETS, 0, 17), Some(17));
         assert_eq!(captured_by(17, 40), vec![32]);
-        assert_eq!(stage_forwards_output_as(&TARGETS, 17, 40), None);
+        assert_eq!(stage_receives_layer_input(&TARGETS, 17), Some(17));
         assert_eq!(captured_by(40, 64), vec![47, 62]);
+        assert_eq!(stage_receives_layer_input(&TARGETS, 40), None);
     }
 
     #[test]
@@ -820,7 +878,7 @@ mod tests {
             for layer in TARGETS {
                 let sources = [
                     stage_captures_layer_input(layer, 0, cut),
-                    stage_forwards_output_as(&TARGETS, 0, cut) == Some(layer),
+                    stage_receives_layer_input(&TARGETS, cut) == Some(layer),
                     stage_captures_layer_input(layer, cut, 64),
                 ];
                 assert_eq!(
@@ -866,70 +924,149 @@ mod tests {
         frame
     }
 
-    #[test]
-    fn a_stage_ending_on_a_target_layer_forwards_its_output_rows() {
-        let hidden = [1.0, -2.0, 0.5, 65504.0];
-        for ggml_type in [crate::GGML_TYPE_F32, crate::GGML_TYPE_F16, GGML_TYPE_BF16] {
-            let mut captured = DFlashFeatureRows::new(2, 2);
-            captured.insert(17, vec![3.0; 4]).unwrap();
-            let mut split = DFlashSplitSession::with_captured(captured);
-            split.output_layer = Some((32, 2));
-            let mut session = session_with_captured(DFlashFeatureRows::default());
-            session.dflash_split = Some(Box::new(split));
-            let mut output = hidden_frame(ggml_type, &hidden);
-
-            session.dflash_forward_captured(&mut output).unwrap();
-
-            let forwarded = DFlashFeatureRows::from_frame(&output).unwrap().unwrap();
-            assert_eq!(forwarded.layer_ids().collect::<Vec<_>>(), vec![17, 32]);
-            let layer = forwarded.rows_of(32, 0, 2).unwrap();
-            for (got, want) in layer.iter().zip(hidden) {
-                assert!(
-                    (got - want).abs() <= want.abs() / 128.0,
-                    "{ggml_type}: {got} vs {want}"
-                );
-            }
+    fn assert_close(got: &[f32], want: &[f32]) {
+        assert_eq!(got.len(), want.len());
+        for (got, want) in got.iter().zip(want) {
+            assert!((got - want).abs() <= want.abs() / 64.0, "{got} vs {want}");
         }
     }
 
     #[test]
-    fn a_stage_without_native_captures_still_forwards_its_output() {
+    fn feature_rows_ride_a_frame_as_optional_q8_parts() {
+        let values = [1.0, -2.0, 0.5, 3.0, 1024.0, -512.0];
+        let mut rows = DFlashFeatureRows::new(2, 3);
+        rows.insert(15, values.to_vec()).unwrap();
+        rows.insert(6, vec![0.0; 6]).unwrap();
+        let mut frame = frame(3);
+
+        rows.append_to_frame_as(&mut frame, DFlashFeatureEncoding::Q8)
+            .unwrap();
+
+        let parts = frame.desc.parts().unwrap();
+        assert_eq!(parts.len(), 3);
+        for part in &parts[1..] {
+            assert!(part.is_optional());
+            assert_eq!(part.ggml_type, crate::GGML_TYPE_I32);
+            // A row is one word: a two-byte scale and two values.
+            assert_eq!(part.dimensions[..2], [1, 3]);
+            assert_eq!(part.byte_strides[..2], [4, 4]);
+            assert_eq!(part.payload_bytes, 12);
+        }
+        assert_eq!(dflash_feature_payload_bytes(&frame), 24);
+        let read = DFlashFeatureRows::from_frame(&frame).unwrap().unwrap();
+        assert_eq!(read.layer_ids().collect::<Vec<_>>(), vec![6, 15]);
+        assert_close(read.rows_of(15, 0, 3).unwrap(), &values);
+        assert_eq!(read.rows_of(6, 0, 3), Some(&[0.0; 6][..]));
+
+        // A width that disagrees with the packed rows is refused.
+        let mut wrong = frame.clone();
+        wrong.desc.parts[1].identity = q8_feature_identity(6, 64).unwrap();
+        assert!(DFlashFeatureRows::from_frame(&wrong).is_err());
+    }
+
+    fn drafting_session(input_layer: Option<(u32, usize)>) -> StageSession {
+        let mut link = super::super::DFlashSessionLink::detached(0);
+        link.input_layer = input_layer;
+        StageSession {
+            raw: std::ptr::null_mut(),
+            token_count: 0,
+            terminal_stage: true,
+            batched_activation_exports: true,
+            dflash: Some(link),
+            dflash_split: None,
+        }
+    }
+
+    #[test]
+    fn a_final_stage_reads_its_first_layer_from_its_input_activation() {
+        let hidden = [1.0, -2.0, 0.5, 65504.0];
+        let mut input = hidden_frame(crate::GGML_TYPE_F32, &hidden);
+        let mut upstream = DFlashFeatureRows::new(2, 2);
+        upstream.insert(17, vec![3.0; 4]).unwrap();
+        upstream.append_to_frame(&mut input).unwrap();
+        let mut session = drafting_session(Some((32, 2)));
+        assert!(session.dflash_reads_input());
+
+        session.dflash_receive_input(Some(&input)).unwrap();
+
+        let remote = session.dflash_remote_features_for_test().unwrap();
+        assert_eq!(remote.layer_ids().collect::<Vec<_>>(), vec![17, 32]);
+        // The activation never went through a feature encoding.
+        assert_eq!(remote.rows_of(32, 0, 2), Some(&hidden[..]));
+        assert_close(remote.rows_of(17, 0, 2).unwrap(), &[3.0; 4]);
+    }
+
+    #[test]
+    fn first_layer_rows_an_upstream_stage_still_sends_are_kept() {
+        let mut input = hidden_frame(crate::GGML_TYPE_F32, &[1.0, 2.0, 3.0, 4.0]);
+        let mut sent = DFlashFeatureRows::new(2, 2);
+        sent.insert(32, vec![5.0; 4]).unwrap();
+        sent.append_to_frame_as(&mut input, DFlashFeatureEncoding::Bf16)
+            .unwrap();
+        let mut session = drafting_session(Some((32, 2)));
+
+        session.dflash_receive_input(Some(&input)).unwrap();
+
+        let remote = session.dflash_remote_features_for_test().unwrap();
+        assert_eq!(remote.rows_of(32, 0, 2), Some(&[5.0; 4][..]));
+    }
+
+    #[test]
+    fn a_malformed_input_activation_leaves_the_draft_without_rows() {
+        let input = hidden_frame(crate::GGML_TYPE_F32, &[1.0, 2.0, 3.0, 4.0]);
+        let mut session = drafting_session(Some((32, 3)));
+
+        assert!(session.dflash_receive_input(Some(&input)).is_err());
+
+        assert_eq!(session.dflash_remote_features_for_test(), None);
+    }
+
+    fn middle_session(captured: Option<DFlashFeatureRows>) -> StageSession {
         let split = DFlashSplitSession {
-            output_layer: Some((32, 2)),
+            input_layer: Some((17, 2)),
+            captured,
             ..DFlashSplitSession::default()
         };
         let mut session = session_with_captured(DFlashFeatureRows::default());
         session.dflash_split = Some(Box::new(split));
-        let mut output = hidden_frame(crate::GGML_TYPE_F32, &[1.0, 2.0, 3.0, 4.0]);
+        session
+    }
 
+    #[test]
+    fn a_middle_stage_forwards_its_input_as_its_first_layer() {
+        let hidden = [1.0, -2.0, 0.5, 4.0];
+        let mut captured = DFlashFeatureRows::new(2, 2);
+        captured.insert(32, vec![3.0; 4]).unwrap();
+        let mut session = middle_session(Some(captured));
+        assert!(session.dflash_reads_input());
+
+        session
+            .dflash_receive_input(Some(&hidden_frame(crate::GGML_TYPE_F32, &hidden)))
+            .unwrap();
+        let mut output = hidden_frame(crate::GGML_TYPE_F32, &[9.0; 4]);
         session.dflash_forward_captured(&mut output).unwrap();
 
         let forwarded = DFlashFeatureRows::from_frame(&output).unwrap().unwrap();
-        assert_eq!(forwarded.rows_of(32, 0, 2), Some(&[1.0, 2.0, 3.0, 4.0][..]));
+        assert_eq!(forwarded.layer_ids().collect::<Vec<_>>(), vec![17, 32]);
+        assert_close(forwarded.rows_of(17, 0, 2).unwrap(), &hidden);
+        // The received rows belonged to that frame alone.
+        let mut next = hidden_frame(crate::GGML_TYPE_F32, &[9.0; 4]);
+        assert!(session.dflash_forward_captured(&mut next).is_err());
+        assert_eq!(session.dflash_rows_dropped(), 2);
     }
 
     #[test]
-    fn a_malformed_output_is_an_error_not_a_panic() {
-        let split = DFlashSplitSession {
-            output_layer: Some((32, 3)),
-            ..DFlashSplitSession::default()
-        };
-        let mut session = session_with_captured(DFlashFeatureRows::default());
-        session.dflash_split = Some(Box::new(split));
-        let mut output = hidden_frame(crate::GGML_TYPE_F32, &[1.0, 2.0, 3.0, 4.0]);
+    fn a_malformed_middle_input_is_an_error_not_a_panic() {
+        let mut session = middle_session(None);
+        if let Some(split) = session.dflash_split.as_mut() {
+            split.input_layer = Some((17, 3));
+        }
 
+        let input = hidden_frame(crate::GGML_TYPE_F32, &[1.0; 4]);
+        assert!(session.dflash_receive_input(Some(&input)).is_err());
+        let mut output = hidden_frame(crate::GGML_TYPE_F32, &[1.0; 4]);
         assert!(session.dflash_forward_captured(&mut output).is_err());
-        assert_eq!(DFlashFeatureRows::from_frame(&output).unwrap(), None);
-    }
 
-    #[test]
-    fn f16_decodes_normals_subnormals_and_specials() {
-        assert_eq!(f16_to_f32(0x0000), 0.0);
-        assert_eq!(f16_to_f32(0x3c00), 1.0);
-        assert_eq!(f16_to_f32(0xc000), -2.0);
-        assert_eq!(f16_to_f32(0x0001), f32::powi(2.0, -24));
-        assert_eq!(f16_to_f32(0x8001), -f32::powi(2.0, -24));
-        assert_eq!(f16_to_f32(0x7c00), f32::INFINITY);
-        assert!(f16_to_f32(0x7e00).is_nan());
+        assert_eq!(DFlashFeatureRows::from_frame(&output).unwrap(), None);
     }
 }
