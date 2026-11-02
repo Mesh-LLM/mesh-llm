@@ -264,8 +264,11 @@ release's kind, publication time, tag and SHA in the summary, because the feed
 is ordered by creation time and a draft created long ago but published recently
 sits on a late page. It peels the selected tag to an exact commit. API errors,
 missing releases and moving tags fail before hardware work;
-there is no `master` fallback. Public API reads use the workflow's read-only
-token only in that selection step. Fixed read-only GraphQL queries fetch metadata
+there is no `master` fallback. The hosted upstream and platform-selection
+steps receive the workflow's read-only token via `GH_TOKEN`; workers remain
+credential-free. That token cannot list repository runners, so `platform=auto`
+falls back to macOS; use explicit `platform=linux` to select Linux.
+Fixed read-only GraphQL queries fetch metadata
 without assets; REST resolves the tag. A 180-second total budget, 1 MiB response
 cap and 1000-page ceiling bound the lookup; incomplete pagination fails without
 choosing a partial result. An explicit full `upstream_sha` remains a deliberate override;

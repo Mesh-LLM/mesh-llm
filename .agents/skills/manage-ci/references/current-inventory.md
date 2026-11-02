@@ -178,9 +178,12 @@ read before selecting: the feed is ordered by creation time, so a draft created
 long ago but published recently is on a late page, and the 180-second budget and
 1000-page ceiling bound the walk. It records the release kind, publication time,
 tag and commit in the Actions summary and rejects lookup failures or tag movement
-without falling back to `master`. The hosted selection step alone receives
-the workflow's read-only GitHub token; fixed read-only GraphQL queries fetch
-metadata without release assets, and REST resolves the selected tag. The lookup
+without falling back to `master`. The hosted upstream and platform-selection
+steps receive the workflow's read-only GitHub token through `GH_TOKEN`.
+It cannot list repository runners, so `platform=auto` falls back to macOS;
+Linux requires explicit `platform=linux`. Workers receive no GitHub token.
+Fixed read-only GraphQL queries fetch metadata without release assets, and
+REST resolves the selected tag. The lookup
 has a 180-second total budget, 1 MiB per response and a 1000-page ceiling;
 incomplete pagination fails instead of selecting from a partial feed.
 An explicit full `upstream_sha` bypasses release lookup; empty or `latest` selects
@@ -872,23 +875,22 @@ builds and long test phases. Remote cache configuration is preserved. It never
 stops the default host server. Canary toolchain
 verification only sets cache identity; accelerator setup owns server startup.
 
-Persistent macOS canary preflight, build, family and infrastructure-retry jobs
-require `self-hosted`, `macOS`, `ARM64`, `jy-managed` and `family-certify`.
-Preflight/build require `accelerator-memory-128plus`; workers retain the
-controller's `matrix.memory_tier`. JY attribute policies select macOS Apple M1
-Ultra 128 GiB and Apple M3 Ultra 256 GiB with mounted model storage; both carry
-128-plus, and only the M3 carries 256-plus. Runner groups allow only the two
-canary workflows at protected `main` references. The
-[companion JY/Fleet change](https://github.com/general-inference/monorepo/pull/244)
-must deploy, provision and register matching runners before this switch merges.
-Jobs queue if managed capacity is absent.
-These jobs
-run `setup-canary-runner` before `prepare-automation` with
-`runner-profile: preinstalled-macos`. Missing tools fail with their names and a
-runner-provisioning instruction. This profile skips Rust and Just installers,
-disables Rustup automatic toolchain installation, and selects the accelerator
-action's `tool-source: preinstalled` path, which checks Homebrew lld and sccache
-without installing either. Hosted profiles retain their existing installers.
+Persistent canary preflight, build, family and infrastructure-retry jobs use
+resolver-selected macOS or Linux profiles. Managed labels retain `self-hosted`,
+`ARM64`, `jy-managed` and `family-certify`. The selected OS applies to
+preflight/build and the `accelerator-memory-128plus` tier; the 256-plus tier
+remains macOS-only. The macOS JY policies select Apple M1 Ultra 128 GiB and
+Apple M3 Ultra 256 GiB with mounted model storage; both carry 128-plus, and only
+the M3 carries 256-plus. Runner groups allow only the two canary workflows at
+protected `main` references. Jobs queue if managed capacity is absent.
+These jobs run `setup-canary-runner` before `prepare-automation` with the
+resolver-selected `preinstalled-macos` or `preinstalled-linux` profile.
+Missing tools fail with their names and a runner-provisioning instruction.
+Both profiles skip Rust and Just installers, disable Rustup automatic toolchain
+installation, and select the accelerator action's `tool-source: preinstalled`
+path. The macOS path checks Homebrew lld and sccache without installing either;
+the Linux path checks its provisioned CUDA/toolchain dependencies. Hosted
+profiles retain their existing installers.
 The build prepares controller automation before the locked Python SDK
 environment, so SDK source admission uses the initialized automation binary.
 
