@@ -1114,6 +1114,10 @@ mod tests {
             mode: EmbeddedMeshNodeMode::Client,
             api_port,
             console_port,
+            // This exercises worker cleanup, not public relay or STUN readiness.
+            discovery_mode: EmbeddedMeshDiscoveryMode::Mdns,
+            bind_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
+            enumerate_host: false,
             startup_timeout: Duration::from_millis(1),
             ..EmbeddedServeConfig::default()
         })
@@ -1129,6 +1133,10 @@ mod tests {
             Err(error) => error,
         };
         let message = format!("{error:#}");
+        assert!(
+            message.contains("timed out waiting for the embedded mesh runtime to become ready"),
+            "startup must fail because readiness timed out: {message}"
+        );
         assert!(
             !message.contains("waiting for embedded mesh runtime thread to exit"),
             "startup timeout must still stop and join the worker thread, not time out: {message}"

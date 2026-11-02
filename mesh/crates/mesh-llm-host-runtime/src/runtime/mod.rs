@@ -17,6 +17,7 @@ mod join_sources;
 pub(crate) mod kv_disk_config;
 pub(crate) mod live_request_defaults;
 mod local;
+mod local_dflash_plan;
 mod local_laya;
 mod local_memory_plan;
 mod local_model_only;

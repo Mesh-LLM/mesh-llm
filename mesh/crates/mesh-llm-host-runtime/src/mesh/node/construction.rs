@@ -21,6 +21,20 @@ pub(crate) struct NodeStartupSpec<'a> {
 }
 
 impl Node {
+    /// The public address raw STUN observes, or `None` when LAN-only
+    /// discovery disables raw STUN.
+    async fn startup_public_addr(
+        endpoint: &Endpoint,
+        relay: RelayConfig<'_>,
+    ) -> Option<stun::PublicAddr> {
+        if relay.policy.uses_raw_stun() {
+            stun_public_addr(endpoint, relay.policy.uses_relay()).await
+        } else {
+            tracing::info!("Raw STUN: disabled by LAN-only discovery mode");
+            None
+        }
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "preserve the existing public constructor while scoped startup uses NodeStartupSpec"
@@ -330,11 +344,6 @@ async fn bind_discoverable_endpoint(
     }
     // Probe the endpoint's actual sockets. A configured bind port is not proof
     // of the externally visible NAT-mapped address.
-    let public_addr = if relay.policy.uses_raw_stun() {
-        stun_public_addr(&endpoint, relay.policy.uses_relay()).await
-    } else {
-        tracing::info!("Raw STUN: disabled by LAN-only discovery mode");
-        None
-    };
+    let public_addr = Node::startup_public_addr(&endpoint, relay).await;
     Ok((endpoint, public_addr))
 }
