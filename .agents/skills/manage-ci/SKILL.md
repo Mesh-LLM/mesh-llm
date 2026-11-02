@@ -571,6 +571,12 @@ checked-in expiry are the maintainer-controlled approval boundary.
 - Host artifacts include the executable checksum and import-policy report.
   Runtime artifacts include manifest, checksums, ABI/version, platform, and
   backend identity. Product manifests record exact host and runtime digests.
+- The typed runtime manifest writer narrows configured Windows ROCm targets
+  when `rocblas.dll` is declared: each advertised target must have a staged
+  rocBLAS `.co` or `.hsaco` file bound by the manifest's checksum map. Missing
+  kernels for every configured target fail packaging. Preserve unconfigured
+  lists and other platforms/backends; filename admission does not replace
+  hardware inference qualification.
 - Use the owning preparation and composition actions. A composer verifies and
   copies exact producer bytes; it never compiles, links, re-stamps, or silently
   substitutes an input.
