@@ -1,8 +1,6 @@
 //! One package-bound worker certification; retained battery owns actual native lanes.
 #[path = "certification/guard.rs"]
 mod guard;
-#[path = "certification/host_lock.rs"]
-mod host_lock;
 #[path = "certification/observation.rs"]
 mod observation;
 #[cfg(test)]
@@ -133,9 +131,6 @@ fn execute_bound(
     if !battery.starts_with(root) || !fs::symlink_metadata(&battery)?.is_file() {
         return Err("selected battery escapes consumer source".into());
     }
-    let (_lock, contended, wait) = host_lock::acquire(deadline)?;
-    report["host_lock_contended"] = json!(contended);
-    report["host_lock_wait_seconds"] = json!(wait.as_secs_f64());
     let initial = observation::observe(root, &process::cancellation())?;
     let peak = row["estimated_peak_bytes"]
         .as_u64()
