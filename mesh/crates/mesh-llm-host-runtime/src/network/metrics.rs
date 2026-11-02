@@ -14,8 +14,8 @@ use mesh_llm_membership::advertised_throughput::MAX_ADVERTISED_MODEL_NAME_BYTES;
 
 pub(crate) use mesh_llm_membership::advertised_throughput::{
     MAX_ADVERTISED_MODEL_THROUGHPUT_HINTS, MAX_ADVERTISED_THROUGHPUT_SAMPLES,
-    MAX_ADVERTISED_TPS_MILLI, ModelThroughputHint, THROUGHPUT_SCALE_MILLI,
-    sanitize_model_throughput_hints,
+    MAX_ADVERTISED_TPS_MILLI, ModelThroughputHint, THROUGHPUT_SCALE_MILLI, ThroughputMeasurement,
+    ThroughputMeasurementKind, sanitize_model_throughput_hints,
 };
 
 #[path = "metrics/throughput_window.rs"]
@@ -496,13 +496,20 @@ impl RoutingMetrics {
         &self,
         hosted_models: &[String],
     ) -> Vec<ModelThroughputHint> {
-        self.advertisable_model_throughput_at(hosted_models, Instant::now())
+        let now_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(duration_millis)
+            .unwrap_or_default();
+        self.advertisable_model_throughput_at(hosted_models, Instant::now(), now_unix_ms)
     }
 
+    /// `now` and `now_unix_ms` are the same moment on the monotonic and the
+    /// wall clock; the newest sample's wall time is derived from their gap.
     fn advertisable_model_throughput_at(
         &self,
         hosted_models: &[String],
         now: Instant,
+        now_unix_ms: u64,
     ) -> Vec<ModelThroughputHint> {
         let mut seen = HashSet::new();
         let mut hints = Vec::new();
@@ -531,11 +538,18 @@ impl RoutingMetrics {
             else {
                 continue;
             };
+            let measurement = recent.newest.map(|newest| ThroughputMeasurement {
+                observed_at_unix_ms: now_unix_ms
+                    .saturating_sub(duration_millis(now.saturating_duration_since(newest))),
+                window_ms: duration_millis(throughput_window::THROUGHPUT_EVIDENCE_MAX_AGE),
+                kind: ThroughputMeasurementKind::EndToEndAttempt,
+            });
             hints.push(ModelThroughputHint {
                 model_name: model.to_string(),
                 avg_tokens_per_second_milli: avg_tokens_per_second_milli
                     .min(MAX_ADVERTISED_TPS_MILLI),
                 throughput_samples: recent.samples.min(MAX_ADVERTISED_THROUGHPUT_SAMPLES),
+                measurement,
             });
             if hints.len() >= MAX_ADVERTISED_MODEL_THROUGHPUT_HINTS {
                 break;
@@ -572,6 +586,8 @@ impl RoutingMetrics {
             model_name: model.to_string(),
             avg_tokens_per_second_milli,
             throughput_samples: recent.samples,
+            // Local observation, read straight from the window: no wire age.
+            measurement: None,
         })
     }
 
@@ -1591,6 +1607,8 @@ mod tests {
         assert_eq!(hints[0].throughput_samples, 1);
     }
 
+    const TEST_NOW_UNIX_MS: u64 = 1_800_000_000_000;
+
     fn record_at(
         metrics: &RoutingMetrics,
         now: Instant,
@@ -1651,6 +1669,19 @@ mod tests {
             (hint.avg_tokens_per_second_milli, hint.throughput_samples),
             (100_000, 1)
         );
+        // Read at the edge of the window, the advertised hint dates its sample
+        // a full window back on the wall clock.
+        let advertised =
+            metrics.advertisable_model_throughput_at(&hosted, at_limit, TEST_NOW_UNIX_MS);
+        assert_eq!(
+            advertised[0].measurement,
+            Some(ThroughputMeasurement {
+                observed_at_unix_ms: TEST_NOW_UNIX_MS
+                    - duration_millis(throughput_window::THROUGHPUT_EVIDENCE_MAX_AGE),
+                window_ms: duration_millis(throughput_window::THROUGHPUT_EVIDENCE_MAX_AGE),
+                kind: ThroughputMeasurementKind::EndToEndAttempt,
+            })
+        );
 
         let after = start + Duration::from_secs(70 * 60);
         assert_eq!(metrics.tps_for_model_at("qwen", after), None);
@@ -1661,7 +1692,7 @@ mod tests {
         );
         assert!(
             metrics
-                .advertisable_model_throughput_at(&hosted, after)
+                .advertisable_model_throughput_at(&hosted, after, TEST_NOW_UNIX_MS)
                 .is_empty()
         );
 
@@ -1766,7 +1797,7 @@ mod tests {
             (hint.avg_tokens_per_second_milli, hint.throughput_samples),
             (40_000, 1)
         );
-        let advertised = metrics.advertisable_model_throughput_at(&hosted, later);
+        let advertised = metrics.advertisable_model_throughput_at(&hosted, later, TEST_NOW_UNIX_MS);
         assert_eq!(advertised.len(), 1);
         assert_eq!(advertised[0].throughput_samples, 1);
         assert_eq!(metrics.model_snapshots()["qwen"].throughput_samples, 4);
@@ -1831,31 +1862,37 @@ mod tests {
                 model_name: "  qwen  ".to_string(),
                 avg_tokens_per_second_milli: MAX_ADVERTISED_TPS_MILLI + 1,
                 throughput_samples: MAX_ADVERTISED_THROUGHPUT_SAMPLES + 1,
+                measurement: None,
             },
             ModelThroughputHint {
                 model_name: "qwen".to_string(),
                 avg_tokens_per_second_milli: 42_000,
                 throughput_samples: 7,
+                measurement: None,
             },
             ModelThroughputHint {
                 model_name: "".to_string(),
                 avg_tokens_per_second_milli: 42_000,
                 throughput_samples: 7,
+                measurement: None,
             },
             ModelThroughputHint {
                 model_name: "x".repeat(MAX_ADVERTISED_MODEL_NAME_BYTES + 1),
                 avg_tokens_per_second_milli: 42_000,
                 throughput_samples: 7,
+                measurement: None,
             },
             ModelThroughputHint {
                 model_name: "empty-speed".to_string(),
                 avg_tokens_per_second_milli: 0,
                 throughput_samples: 7,
+                measurement: None,
             },
             ModelThroughputHint {
                 model_name: "empty-samples".to_string(),
                 avg_tokens_per_second_milli: 42_000,
                 throughput_samples: 0,
+                measurement: None,
             },
         ]);
 

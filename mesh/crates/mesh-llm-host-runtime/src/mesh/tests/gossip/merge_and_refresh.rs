@@ -472,6 +472,7 @@ pub(crate) fn test_apply_transitive_ann_refreshes_advertised_model_throughput() 
         model_name: "qwen".to_string(),
         avg_tokens_per_second_milli: 35_000,
         throughput_samples: 4,
+        measurement: None,
     }];
 
     apply_transitive_ann(
@@ -565,6 +566,7 @@ pub(crate) async fn test_add_peer_refreshes_advertised_model_throughput() {
         model_name: "qwen".to_string(),
         avg_tokens_per_second_milli: 20_000,
         throughput_samples: 2,
+        measurement: None,
     }];
 
     node.add_peer(peer_id, addr.clone(), &ann, None).await;
@@ -577,6 +579,57 @@ pub(crate) async fn test_add_peer_refreshes_advertised_model_throughput() {
     assert_eq!(
         peer.advertised_model_throughput,
         ann.advertised_model_throughput
+    );
+}
+
+/// A peer's throughput hint ranks only while its measuring node says it is
+/// recent; an older peer's hint, which carries no measurement, never does.
+#[tokio::test]
+pub(crate) async fn test_peer_throughput_hint_counts_only_while_fresh() {
+    use crate::network::metrics::{
+        ModelThroughputHint, ThroughputMeasurement, ThroughputMeasurementKind,
+    };
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let peer_id = test_endpoint_id(0x47);
+    let addr = test_addr(0x47);
+    let now = crate::mesh::current_time_unix_ms();
+    let window_ms = 15 * 60 * 1000;
+    let hint = |model: &str, measurement| ModelThroughputHint {
+        model_name: model.to_string(),
+        avg_tokens_per_second_milli: 30_000,
+        throughput_samples: 5,
+        measurement,
+    };
+    let measured = |age_ms: u64| {
+        Some(ThroughputMeasurement {
+            observed_at_unix_ms: now - age_ms,
+            window_ms,
+            kind: ThroughputMeasurementKind::EndToEndAttempt,
+        })
+    };
+    let mut ann = test_announcement(Some(100));
+    ann.advertised_model_throughput = vec![
+        hint("fresh", measured(60_000)),
+        hint("stale", measured(window_ms + 60_000)),
+        hint("legacy", None),
+    ];
+
+    node.add_peer(peer_id, addr, &ann, None).await;
+
+    assert!(
+        node.peer_model_throughput_hint(peer_id, "fresh")
+            .await
+            .is_some()
+    );
+    assert!(
+        node.peer_model_throughput_hint(peer_id, "stale")
+            .await
+            .is_none()
+    );
+    assert!(
+        node.peer_model_throughput_hint(peer_id, "legacy")
+            .await
+            .is_none()
     );
 }
 

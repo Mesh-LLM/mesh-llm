@@ -175,7 +175,8 @@ pub(crate) fn assert_mixed_version_peer_ignores_missing_release_attestation() {
 }
 
 /// Proves advertised model-throughput hints survive a local-to-proto-to-local
-/// announcement round trip unchanged.
+/// announcement round trip unchanged, measurement time and window included:
+/// a relay re-encodes the hint this way and must not make it younger.
 #[test]
 fn advertised_model_throughput_roundtrips_through_proto_announcement() {
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xAC; 32]).public());
@@ -183,6 +184,11 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
         model_name: "qwen".to_string(),
         avg_tokens_per_second_milli: 42_000,
         throughput_samples: 7,
+        measurement: Some(crate::network::metrics::ThroughputMeasurement {
+            observed_at_unix_ms: 1_800_000_000_000,
+            window_ms: 900_000,
+            kind: crate::network::metrics::ThroughputMeasurementKind::EndToEndAttempt,
+        }),
     }];
     let salt = [0xC3; mesh_llm_routing::cache_inventory::CACHE_AFFINITY_SALT_BYTES];
     let prefix_hash = 0xfeed_beef;
@@ -236,6 +242,7 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
                 model_name: "ghost".to_string(),
                 avg_tokens_per_second_milli: 250_000,
                 throughput_samples: 99,
+                measurement: None,
             },
         ],
         cache_affinity: Some(
@@ -301,12 +308,25 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
         proto_pa.advertised_model_throughput[0].throughput_samples,
         7
     );
+    assert_eq!(
+        (
+            proto_pa.advertised_model_throughput[0].observed_at_unix_ms,
+            proto_pa.advertised_model_throughput[0].window_ms,
+            proto_pa.advertised_model_throughput[0].kind,
+        ),
+        (
+            Some(1_800_000_000_000),
+            Some(900_000),
+            Some(crate::proto::node::ThroughputMeasurementKind::EndToEndAttempt as i32),
+        )
+    );
     proto_pa
         .advertised_model_throughput
         .push(crate::proto::node::AdvertisedModelThroughput {
             model_name: "ghost".to_string(),
             avg_tokens_per_second_milli: 250_000,
             throughput_samples: 99,
+            ..Default::default()
         });
 
     let (_, roundtripped) = proto_ann_to_local(&proto_pa).expect("proto_ann_to_local must succeed");
