@@ -371,6 +371,16 @@ impl LocalRequestMetricsWindow {
     }
 }
 
+fn routing_runtime_data_producer() -> crate::runtime_data::RuntimeDataProducer {
+    crate::runtime_data::RuntimeDataCollector::new().producer(
+        crate::runtime_data::RuntimeDataSource {
+            scope: "routing",
+            plugin_data_key: None,
+            plugin_endpoint_key: None,
+        },
+    )
+}
+
 impl Node {
     pub(crate) fn set_swarm_capture_recorder(
         &self,
@@ -816,13 +826,7 @@ impl Node {
         );
         let config_revision_init = config_state_init.revision();
         let live_request_defaults = config_state_init.live_request_defaults();
-        let runtime_data_collector = crate::runtime_data::RuntimeDataCollector::new();
-        let runtime_data_producer =
-            runtime_data_collector.producer(crate::runtime_data::RuntimeDataSource {
-                scope: "routing",
-                plugin_data_key: None,
-                plugin_endpoint_key: None,
-            });
+        let runtime_data_producer = routing_runtime_data_producer();
 
         let owner_keypair = owner_config
             .as_ref()
