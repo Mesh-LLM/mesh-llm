@@ -212,7 +212,7 @@ async fn route_without_a_mesh_host(
         record_pre_routing_rejection(ctx, Some(model_name), 503).await;
         return response_outcome(
             503,
-            proxy::send_503_observed(
+            proxy::send_model_not_ready_observed(
                 tcp_stream,
                 &format!("model '{model_name}' is unavailable locally (loading or draining)"),
                 route_observer,
@@ -351,7 +351,7 @@ pub(super) async fn route_self_targeted_model(
     {
         return response_outcome(
             503,
-            proxy::send_503_observed(
+            proxy::send_model_not_ready_observed(
                 tcp_stream,
                 &format!("model '{model_name}' is unavailable locally (loading or draining)"),
                 route_observer,
