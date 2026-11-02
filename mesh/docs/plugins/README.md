@@ -1339,9 +1339,11 @@ An empty key also makes the host sign a withdrawal of the key it announced
 (`PluginKeyWithdrawal` in `node.proto`: plugin, the withdrawn key as `key_id`,
 and the node's signature) and carry it on its own gossip entry
 (`PeerAnnouncement.plugin_key_withdrawals`, at most 16, one per plugin) until
-the plugin announces a new key. A receiver keeps a peer's verified withdrawals
-after that peer leaves (the latest 256 peers), until the peer announces again
-or is rejected. `GET /api/plugin-keys` lists them as `withdrawn_plugin_keys`
+the plugin announces that same key again (a rotation to a different key keeps
+it). A receiver keeps a peer's verified withdrawals, one per plugin, after that
+peer leaves or restarts (for at most 256 peers, the longest-unrefreshed dropped
+first), until the peer announces the withdrawn key again, withdraws another key
+for that plugin, or is rejected. `GET /api/plugin-keys` lists them as `withdrawn_plugin_keys`
 (this node's own) and `withdrawn_peers` (by peer id, plugin name to withdrawn
 key), so a plugin that polls forgets a withdrawn key at its next poll even
 when the host that withdrew it is offline and no longer listed under `peers`.

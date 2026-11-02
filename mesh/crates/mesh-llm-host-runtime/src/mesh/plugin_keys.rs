@@ -271,9 +271,10 @@ impl PluginKeys {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Announce `key` for its plugin, replacing that plugin's earlier key and
-    /// any withdrawal this node announced for the plugin. Refused when this
-    /// would exceed [`MAX_PLUGIN_KEYS`].
+    /// Announce `key` for its plugin, replacing that plugin's earlier key.
+    /// Announcing the very key it withdrew reinstates it (the withdrawal is
+    /// dropped); a different key leaves the withdrawal of the old one in
+    /// place. Refused when this would exceed [`MAX_PLUGIN_KEYS`].
     pub(crate) fn set_own(&self, key: BoundPluginKey) -> Result<(), String> {
         let mut state = self.state();
         if !state.own.contains_key(&key.plugin) && state.own.len() >= MAX_PLUGIN_KEYS {
@@ -281,7 +282,13 @@ impl PluginKeys {
                 "this node already announces {MAX_PLUGIN_KEYS} plugin keys"
             ));
         }
-        state.own_withdrawn.remove(&key.plugin);
+        if state
+            .own_withdrawn
+            .get(&key.plugin)
+            .is_some_and(|w| w.key_id == key.public_key)
+        {
+            state.own_withdrawn.remove(&key.plugin);
+        }
         state.own.insert(key.plugin.clone(), key);
         Ok(())
     }
@@ -302,6 +309,14 @@ impl PluginKeys {
         let mut state = self.state();
         if let Some(key) = state.own.remove(plugin) {
             let withdrawal = sign(&key);
+            // At most MAX_PLUGIN_KEYS are announced, so make room by dropping
+            // another plugin's withdrawal, the first by name.
+            if !state.own_withdrawn.contains_key(plugin)
+                && state.own_withdrawn.len() >= MAX_PLUGIN_KEYS
+                && let Some(first) = state.own_withdrawn.keys().next().cloned()
+            {
+                state.own_withdrawn.remove(&first);
+            }
             state.own_withdrawn.insert(plugin.to_string(), withdrawal);
         }
     }
@@ -323,31 +338,50 @@ impl PluginKeys {
         self.state().own_withdrawn.values().cloned().collect()
     }
 
-    /// What `peer` announces now: replaces what it announced before; nothing
-    /// forgets it. A key the same announcement withdraws is not kept.
+    /// What `peer` announces now: replaces the keys it announced before;
+    /// nothing forgets them. Its earlier withdrawals are kept, whatever it
+    /// announces now (a host that restarted or rotated has lost them but its
+    /// old key is no less withdrawn), unless it now announces the same key
+    /// again or withdraws another key for that plugin. A key a kept or new
+    /// withdrawal covers is not listed.
     pub(crate) fn set_peer(&self, peer: EndpointId, announced: impl Into<Announced>) {
         let Announced {
             mut keys,
             withdrawals,
         } = announced.into();
+        let mut state = self.state();
+        let mut merged = withdrawals;
+        for kept in state
+            .peer_withdrawn
+            .remove(&peer)
+            .map(|(_, earlier)| earlier)
+            .unwrap_or_default()
+        {
+            let superseded = merged.iter().any(|w| w.plugin == kept.plugin);
+            let reinstated = keys
+                .iter()
+                .any(|key| key.plugin == kept.plugin && key.public_key == kept.key_id);
+            if !superseded && !reinstated {
+                merged.push(kept);
+            }
+        }
+        merged.truncate(MAX_PLUGIN_KEYS);
         keys.retain(|key| {
-            !withdrawals
+            !merged
                 .iter()
                 .any(|w| w.plugin == key.plugin && w.key_id == key.public_key)
         });
-        let mut state = self.state();
         if keys.is_empty() {
             state.peers.remove(&peer);
         } else {
             state.peers.insert(peer, keys);
         }
-        if withdrawals.is_empty() {
-            state.peer_withdrawn.remove(&peer);
+        if merged.is_empty() {
             return;
         }
         state.withdrawn_clock += 1;
         let stamp = state.withdrawn_clock;
-        state.peer_withdrawn.insert(peer, (stamp, withdrawals));
+        state.peer_withdrawn.insert(peer, (stamp, merged));
         if state.peer_withdrawn.len() > MAX_RETAINED_WITHDRAWAL_PEERS
             && let Some(oldest) = state
                 .peer_withdrawn
@@ -530,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn withdrawing_own_key_swaps_it_for_a_withdrawal_until_a_new_key() {
+    fn withdrawing_own_key_swaps_it_for_a_withdrawal_until_it_is_announced_again() {
         let node = SecretKey::generate();
         let keys = PluginKeys::default();
         keys.withdraw_own("capsules", |_| unreachable!("nothing to withdraw"));
@@ -545,8 +579,12 @@ mod tests {
             keys.own_withdrawals(),
             vec![withdraw(&node, "capsules", plugin_public_key())]
         );
-        keys.set_own(bind(&node, "capsules", [9; 32])).unwrap();
-        assert!(keys.own_withdrawals().is_empty());
+        keys.set_own(bind(&node, "capsules", plugin_public_key()))
+            .unwrap();
+        assert!(
+            keys.own_withdrawals().is_empty(),
+            "the same key is reinstated"
+        );
     }
 
     #[test]
@@ -568,7 +606,14 @@ mod tests {
             keys.peer_withdrawals()[&peer.public()],
             vec![withdrawal.clone()]
         );
-        // The peer announces again with no withdrawal: its key is listed again.
+        // It reconnects announcing nothing (a restart): the withdrawal stays.
+        keys.set_peer(peer.public(), Vec::<BoundPluginKey>::new());
+        assert_eq!(
+            keys.peer_withdrawals()[&peer.public()],
+            vec![withdrawal.clone()]
+        );
+        assert!(keys.peers().is_empty());
+        // It announces the same key again: reinstated, the withdrawal is gone.
         keys.set_peer(peer.public(), vec![key.clone()]);
         assert_eq!(keys.peers()[&peer.public()], vec![key]);
         assert!(keys.peer_withdrawals().is_empty());
@@ -581,6 +626,59 @@ mod tests {
         );
         keys.purge_peer(peer.public());
         assert!(keys.peer_withdrawals().is_empty());
+    }
+
+    #[test]
+    fn a_rotation_keeps_the_old_keys_withdrawal_and_a_later_one_supersedes_it() {
+        let peer = SecretKey::generate();
+        let keys = PluginKeys::default();
+        let w1 = withdraw(&peer, "capsules", [1; 32]);
+        keys.set_peer(
+            peer.public(),
+            Announced {
+                keys: Vec::new(),
+                withdrawals: vec![w1.clone()],
+            },
+        );
+        // The host rotated to K2 and no longer sends the withdrawal of K1.
+        let k2 = bind(&peer, "capsules", plugin_public_key());
+        keys.set_peer(peer.public(), vec![k2.clone()]);
+        assert_eq!(keys.peers()[&peer.public()], vec![k2]);
+        assert_eq!(keys.peer_withdrawals()[&peer.public()], vec![w1]);
+        let w2 = withdraw(&peer, "capsules", plugin_public_key());
+        keys.set_peer(
+            peer.public(),
+            Announced {
+                keys: Vec::new(),
+                withdrawals: vec![w2.clone()],
+            },
+        );
+        assert_eq!(keys.peer_withdrawals()[&peer.public()], vec![w2]);
+        assert!(keys.peers().is_empty());
+    }
+
+    #[test]
+    fn own_withdrawal_survives_a_rotation_and_is_capped() {
+        let node = SecretKey::generate();
+        let keys = PluginKeys::default();
+        keys.set_own(bind(&node, "capsules", [1; 32])).unwrap();
+        keys.withdraw_own("capsules", |k| withdraw(&node, &k.plugin, k.public_key));
+        keys.set_own(bind(&node, "capsules", plugin_public_key()))
+            .unwrap();
+        assert_eq!(
+            keys.own_withdrawals(),
+            vec![withdraw(&node, "capsules", [1; 32])]
+        );
+        // Announcing the withdrawn key itself reinstates it.
+        keys.set_own(bind(&node, "capsules", [1; 32])).unwrap();
+        assert!(keys.own_withdrawals().is_empty());
+        for i in 0..=MAX_PLUGIN_KEYS {
+            let plugin = format!("p{i:02}");
+            keys.set_own(bind(&node, &plugin, plugin_public_key())).ok();
+            keys.withdraw_own(&plugin, |k| withdraw(&node, &k.plugin, k.public_key));
+            keys.remove_own(&plugin);
+        }
+        assert!(keys.own_withdrawals().len() <= MAX_PLUGIN_KEYS);
     }
 
     #[test]

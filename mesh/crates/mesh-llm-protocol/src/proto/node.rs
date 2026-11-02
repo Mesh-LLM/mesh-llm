@@ -336,8 +336,10 @@ pub struct PluginKey {
 ///
 /// A withdrawal that does not verify is dropped on receipt. Like `PluginKey`, it
 /// rides only the sender's own entry and is not relayed. A receiver keeps a
-/// peer's last withdrawals after the peer leaves, until that peer announces a
-/// new set on reconnecting.
+/// peer's withdrawals, one per plugin, after the peer leaves and across its
+/// restarts, until the peer announces the withdrawn key again, withdraws another
+/// key for that plugin, is rejected, or its entry is evicted (a receiver keeps
+/// those of at most 256 peers, dropping the longest-unrefreshed first).
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PluginKeyWithdrawal {
     /// the plugin's name on this node
