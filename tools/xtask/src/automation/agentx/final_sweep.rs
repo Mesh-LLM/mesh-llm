@@ -175,10 +175,6 @@ fn execute(request: &Request, output: &Path, arms: &mut Vec<Value>) -> DynResult
 fn admit_host(backend: Backend, output: &Path) -> DynResult<()> {
     let spec = super::command::spec(output, "hostname", &["-s".into()])?;
     super::command::run(&spec, 10, &output.join("hostname"))?;
-    let host = std::fs::read_to_string(output.join("hostname.stdout.log"))?;
-    if ["spark-db08", "spark-9f06", "spark-000280", "spark-000499"].contains(&host.trim()) {
-        return Err("excluded benchmark host".into());
-    }
     if (backend == Backend::Metal && std::env::consts::OS != "macos")
         || (backend == Backend::Cuda && std::env::consts::OS != "linux")
     {

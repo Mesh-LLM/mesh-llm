@@ -1,5 +1,35 @@
 # Reusable KV validation on JY
 
+## Upstream row-list backport qualification
+
+- [x] Resolve the fixed 35B/F16 numerical discrepancy with an independently
+  layout-matched vanilla control at the unchanged `1e-6` bound; preserve the
+  original cross-layout and optional ordinary-restore failures.
+- [x] Fold the upstream row-list/bitmap backport into its owning core patch,
+  preserve the upstream pin and Skippy ABI, and cold-replay all 104 patches.
+- [x] Complete the CPU operator catalog and native suite; explicitly record the
+  GPU-only skip rather than counting it as GPU qualification.
+- [x] Validate the generic Metal gather-tail repair on M1 with the complete
+  unchanged operator catalog and typed resident gates. Retain the initial
+  failing D40 case and verify D72 as well. This bounded diagnostic uses
+  unchanged host objects with the repaired Metal shader.
+- [x] Package the production Metal runtime and complete the early M3 serving
+  comparison on `cc855ab2`; retain its single-pair and tail-latency limits.
+- [x] Build and distribute one `cc855ab2` CUDA runtime; complete distinct model,
+  quantized-KV, ownership and real persistent-L3 gates without per-host builds.
+- [x] Wire row inputs through both cache pools and refresh them during ordinary
+  and hybrid graph reuse. Pass the actual two-pool CPU graph regression and
+  cold replay; final native source is `aec61426`.
+- [ ] Close final `aec61426` CUDA and Metal actual-provider/model gates,
+  including positive full-attention and sliding-window pool execution.
+- [ ] Diagnose the dense benchmark-client setup failure without changing
+  workload, tokenizer bytes, numerical limits or GPU execution policy.
+- [ ] Complete the final-source four-model c1/c2/c4 ABBAAB sweep on Sparks and
+  M3. Earlier complete c4 pairs remain diagnostic, not full-sweep qualification.
+- [ ] Independently audit fixed work, lifecycle and source/model/runtime/client
+  identities, publish into existing MLflow experiment 6, and rewrite the AgentX
+  PRs around the final implementation and source-pinned results.
+
 The bounded [validation foundation](skippy/evals/kv-validation/README.md) now
 provides explicit reusable commands. Complete the remaining cases below after
 the current cache and performance work.

@@ -1,6 +1,96 @@
 # Indexed KV attention: review candidate
 
-## Current repair: retain ordinary attention execution
+## Current candidate: upstream per-owner row lists
+
+The working candidate replaces the custom indexed operator with the per-owner
+row-list and ownership-bitmap implementation from upstream PR29510, based on
+`006fc936d1dcb8077c0bccfad31c72ee453960e8`. It stays on the existing upstream pin.
+CPU, CUDA and Metal use `ggml_flash_attn_ext_rows` with one I32 row list per
+query stream and the existing attention mask. Runtime admission probes the
+actual assigned backend and stored KV representation; unsupported row layouts
+retain ordinary attention on that backend. Model names do not select a path.
+Radix ownership, recurrent checkpoints and persistent L3 remain separate.
+
+The [layout-matched full-model control](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/9562cd5443cd4bd78573dcf0eb61ca38)
+passes all 23 mandatory comparisons byte-for-byte at the unchanged `1e-6`
+bound for the fixed Qwen3.5-35B/F16 fixture. Vanilla kernels independently
+reproduce the full PR's logits, saved states and restored continuations when
+given the matching attention layout. This is a diagnostic intervention, not
+untouched vanilla or universal model qualification. The original cross-layout
+failure and two optional ordinary-restore failures remain recorded.
+
+CPU validation passes 2,452 finite operator comparisons, 36 exceptional controls
+and 294 native tests; one GPU-only test is explicitly skipped. Initial M1
+validation passed bitmap/codec checks and 1,318 finite comparisons before the
+unchanged operator bound failed at F16 head width 40. The inherited row-gather
+copy loop omitted entries at head boundaries for widths 40 and 72. The generic
+repair assigns copy chunks within each head, preserving the original mapping
+for aligned heads. The repaired M1 diagnostic passes the complete unchanged
+operator program and F16/Q8/F32 resident-model gates. Actual loaded-library
+hashes match the sealed provider. F16 and Q8 use row nodes; stored F32 retains
+ordinary attention with F16 attention inputs on Metal. The diagnostic reuses
+unchanged host objects and replaces the Metal auxiliary shader; it is not the
+shipping runtime. The subsequent production builds are attributed separately
+below.
+
+The final candidate also wires row inputs through both the full-attention and
+sliding-window cache pools. Both ordinary and hybrid graph reuse refresh the
+current pool inputs; each layer uses its existing window metadata. The new CPU
+fixture exercises the actual two-pool graph, shared owners, reordered query
+streams and graph reuse. It passes alongside the existing graph-input tests.
+No model-family rule, new setting, kernel arithmetic change or CPU fallback was
+added. Clean replay of all 104 patches produces native `aec61426350541d9f6c4762ef4ca1850e4f34f49`,
+tree `22cbb3144e2926b15ab850016d6fce5eb40d2ceb`, queue digest
+`11701d0ac354c8d240d4813e5ff60b83d07d4f9a2daecde45ebe8ccd6ef3f18f`.
+
+The preceding `cc855ab2` candidate completed the early serving pairs below.
+Every arm completed 69 requests and 18,713 output tokens with clean client and
+server exits. These are single ordered diagnostics, not ABBAAB qualification,
+generated-content parity or results for the final two-pool candidate.
+
+| Backend / model at c4 | Skippy output tok/s | Standard llama output tok/s | Difference |
+|---|---:|---:|---:|
+| [CUDA / hybrid dense 4B](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/da26189089e5493f9dbb5a59e8ce3c57) | 26.476 | 26.654 | -0.67% |
+| [CUDA / hybrid MoE 35B](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/30aa91d8233f4a599d8436f4673fa446) | 24.971 | 25.056 | -0.34% |
+| [CUDA / attention MoE 30B](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/7ae025fc9ac741758d0b0c9e604e2796) | 15.782 | 13.705 | +15.16% |
+| [M3 Metal / hybrid dense 4B](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/33bc478fecf44f3bbe8e5861610b4f99) | 26.613 | 26.228 | +1.47% |
+
+Metal TTFT p95 remains worse in that pair (74.58 versus 29.81 seconds). The
+dense CUDA pair failed in the benchmark client after its exact HTTP cache
+gate passed; no partial throughput is qualified. Its failed attempt remains
+retained. The original Gemma ordinary-attention resident failure reproduces
+with the old `00983cf4` runtime at the same observed deltas; neither failure is
+waived. The final candidate's actual two-pool GPU tests are separate evidence.
+
+The [owning Metal runtime's targeted M1 gates](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/fe742c2cf8944ef69e0fdce624475938)
+pass all five native/admission tests with clean postchecks. Gemma F16 and Q8
+each execute 13 full-attention and 13 sliding-window row nodes on MTL0;
+resident fork logits have zero differences and both page comparisons are exact.
+Dense F16/Q8 execute 36 row nodes, while stored F32 preserves the selected Metal
+ordinary-attention conversion. These tests retain the original `1e-6` limit.
+
+The [final CUDA runtime gates](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/accb9ce48b87441888fc1f4fb100a99f)
+pass the operator catalog, six resident storage pairs, exact four-lane/32-step
+checkpoint continuation and fresh-process L3 restore. The producer reused
+unchanged CUDA kernel objects and rebuilt the changed graph consumers; all 19
+numeric exits and 59 artifact hashes pass audit. Actual CUDA ISWA model gates
+remain distinct from its CPU two-pool graph fixture and are still required.
+
+Remaining qualification uses one frozen final runtime per backend, all four
+models and c1/c2/c4 in ABBAAB order. Audit complete work, source/model/runtime/
+client identities, lifecycle, latency, cache reads and sampled memory before
+publishing performance through the typed owner into existing MLflow experiment
+6. Historical campaigns and failed attempts keep their original attribution.
+
+The preceding candidate's cold replay produced native
+`cc855ab2f443f77626ebf0f4901610dea737fd14`, tree
+`7ff0e7d6b92bf3145b08dd8492b174d2c1bf7ee0`, queue
+`a3628a88bae20819756d22e1fc2a68781de2cedae711ed9b08590e7cd9a3a116`.
+The Skippy ABI remains 0.1.76; this GGML constructor change adds no Rust ABI
+symbol. All performance evidence below remains attributed to its original
+source and does not qualify this candidate.
+
+## Preceding repair: retain ordinary attention execution
 
 The automatic indexed graph is being withheld because it fails the unchanged
 full-model baseline arithmetic contract. This also happens without saved cache
