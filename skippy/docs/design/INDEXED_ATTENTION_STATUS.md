@@ -73,8 +73,14 @@ The [final CUDA runtime gates](https://mlflow.internal.generalinference.xyz/mlfl
 pass the operator catalog, six resident storage pairs, exact four-lane/32-step
 checkpoint continuation and fresh-process L3 restore. The producer reused
 unchanged CUDA kernel objects and rebuilt the changed graph consumers; all 19
-numeric exits and 59 artifact hashes pass audit. Actual CUDA ISWA model gates
-remain distinct from its CPU two-pool graph fixture and are still required.
+numeric exits and 59 artifact hashes pass audit.
+
+The [final CUDA Gemma F16/Q8 gates](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/a459675abb7240088b65f2892d0c663c)
+execute all 26 attention layers through row nodes, with zero fork-logit
+differences and exact restored pages. The [final dense CUDA gates](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/602d580a52b443c79acd38c920766a80)
+also pass F16, Q8 and mixed Q8/F16 with all 36 row nodes and the same unchanged
+resident bound. These actual-model checks are distinct from the CPU two-pool
+graph fixture and do not relabel the older ordinary-attention failures.
 
 Remaining qualification uses one frozen final runtime per backend, all four
 models and c1/c2/c4 in ABBAAB order. Audit complete work, source/model/runtime/

@@ -90,9 +90,9 @@ must report the expected slots/context. Unified-llama is not substituted.
 Use `backend` cuda/metal with matching prepared bundles/hosts. CPU requires
 `diagnostic_cpu:true`; its report is explicitly ineligible for GPU performance
 publication. Independent model campaigns can occupy equivalent idle machines;
-keep each paired campaign on one host. The actual hostname guard refuses
-spark-db08/spark-9f06 (also spark-000280/spark-000499). The admitted external JY
-wrapper must also exclude those node IDs and enforce its lease; this command
+keep each paired campaign on one host. The owner records the actual hostname
+and verifies the backend's operating system. The admitted external JY wrapper
+must enforce its authorized node allocation and exclusive lease; this command
 does not invent a macOS Docker executor or change registered templates.
 
 ## Existing MLflow experiment
