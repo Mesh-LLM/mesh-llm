@@ -18,6 +18,16 @@ use mesh_llm_sdk::live_transcription::{
     LiveTranscription, LiveTranscriptionEvent, LiveTranscriptionOptions,
 };
 
+#[path = "live_transcription_live/native_contract.rs"]
+mod native_contract;
+
+/// Owns an isolated combined node; see the component fixture's environment contract.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires MESH_SDK_LIVE_SPEECH=1 and admitted local speech/runtime artifacts"]
+async fn native_node_live_transcription_contracts() -> anyhow::Result<()> {
+    native_contract::run().await
+}
+
 #[tokio::test]
 #[ignore = "needs a node serving a speech model; see the module docs"]
 async fn streams_a_clip_and_reads_the_transcript() {

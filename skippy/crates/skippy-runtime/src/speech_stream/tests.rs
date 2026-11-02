@@ -1,3 +1,8 @@
+mod cadence;
+mod confirmation_revisions;
+mod native_transcription;
+mod rolling_context;
+
 use super::*;
 use crate::speech_recognition::TranscriptSegment;
 
@@ -251,6 +256,7 @@ fn passes_wait_for_a_step_of_new_audio() {
     let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
     stream.push(&loud(240), &mut transcribe).unwrap();
     assert_eq!(script.seen.len(), 1);
+    assert_eq!(script.seen[0].0, 1_000 * MS);
 }
 
 #[test]
@@ -295,12 +301,80 @@ fn voice_activity_opens_and_closes_turns_with_prefix_padding() {
         ]
     );
     // The final pass saw the padding, the speech, and the trailing silence.
-    assert_eq!(script.seen[0].0, (360 + 340 + 500) * MS);
+    assert_eq!(script.seen.len(), 2);
+    assert_eq!(script.seen[0].0, 1_000 * MS);
+    assert_eq!(script.seen.last().unwrap().0, (360 + 340 + 500) * MS);
+}
+
+#[test]
+fn a_future_segment_end_keeps_audio_and_ownership_until_the_cut_exists() {
+    let mut script = Script::new(vec![
+        vec![(5_000, " A B")],
+        vec![(5_000, " A B")],
+        vec![(5_000, " A B")],
+        vec![(5_000, " A B")],
+        vec![(5_000, " A B")],
+        vec![(5_000, " A B"), (5_900, " C")],
+        vec![(1_900, " C D")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig {
+        trim_after_ms: 1_500,
+        max_buffer_ms: 8_000,
+        ..manual()
+    });
+    let mut events = Vec::new();
+    for pass in 1..=7 {
+        events.extend(stream.push(&loud(1_000), &mut transcribe).unwrap());
+        if pass < 6 {
+            assert_eq!(stream.buffer.len(), pass * 1_000 * MS);
+            assert_eq!(stream.buffer_start, 0);
+            if pass >= 2 {
+                assert_eq!(stream.confirmed_in_buffer, 2);
+            }
+        } else if pass == 6 {
+            assert_eq!(stream.buffer.len(), 1_000 * MS);
+            assert_eq!(stream.buffer_start, 5_000 * MS as u64);
+            assert_eq!(stream.confirmed_in_buffer, 0);
+        }
+    }
+    events.extend(stream.commit(&mut transcribe).unwrap());
+    assert_eq!(deltas(&events).concat(), "A B C D");
+    // A valid end alone no longer discards the newest segment's context.
+    // The cut becomes safe once a later segment has real audio behind it.
+    assert_eq!(script.seen[5], (6_000 * MS, None));
+    assert_eq!(script.seen[6], (2_000 * MS, Some("A B".into())));
+}
+
+#[test]
+fn trimming_keeps_the_last_valid_cut_before_an_invalid_boundary() {
+    for invalid_end in [900, 1_000, 3_000] {
+        let mut script = Script::new(vec![vec![
+            (1_000, " A B"),
+            (invalid_end, " C D"),
+            (1_500, " E F"),
+        ]]);
+        let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+        let mut stream = SpeechStream::new(SpeechStreamConfig {
+            trim_after_ms: 1_500,
+            ..manual()
+        });
+        stream.push(&loud(1_000), &mut transcribe).unwrap();
+        let events = stream.push(&loud(1_000), &mut transcribe).unwrap();
+        assert_eq!(deltas(&events).concat(), "A B C D E F");
+        assert_eq!(stream.buffer.len(), 1_000 * MS);
+        assert_eq!(stream.buffer_start, 1_000 * MS as u64);
+        assert_eq!(stream.confirmed_in_buffer, 4);
+        assert_eq!(stream.prompt(), Some("A B".into()));
+    }
 }
 
 #[test]
 fn long_turns_trim_confirmed_segments_and_carry_them_as_prompt() {
     let config = SpeechStreamConfig {
+        // Keep each scripted hypothesis on its own cadence boundary; this
+        // fixture owns segment trimming and prompt carry, not packet batching.
+        step_ms: 3_500,
         trim_after_ms: 3_000,
         prompt: Some("Mesh".into()),
         ..manual()
@@ -314,13 +388,13 @@ fn long_turns_trim_confirmed_segments_and_carry_them_as_prompt() {
     let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
     let mut stream = SpeechStream::new(config);
     stream.push(&loud(3_500), &mut transcribe).unwrap();
-    let events = stream.push(&loud(1_000), &mut transcribe).unwrap();
+    let events = stream.push(&loud(3_500), &mut transcribe).unwrap();
     assert_eq!(deltas(&events), ["One two. Three"]);
-    let events = stream.push(&loud(1_000), &mut transcribe).unwrap();
+    let events = stream.push(&loud(3_500), &mut transcribe).unwrap();
     assert_eq!(deltas(&events), [" four"]);
-    assert_eq!(script.seen[1].0, 4_500 * MS);
+    assert_eq!(script.seen[1].0, 7_000 * MS);
     // 1000 ms of confirmed audio was cut before the third pass.
-    assert_eq!(script.seen[2].0, (5_500 - 1_000) * MS);
+    assert_eq!(script.seen[2].0, (10_500 - 1_000) * MS);
     assert_eq!(script.seen[0].1.as_deref(), Some("Mesh"));
     assert_eq!(script.seen[2].1.as_deref(), Some("Mesh One two."));
 }
@@ -334,7 +408,7 @@ fn an_overlong_buffer_confirms_what_it_has_and_starts_over() {
     let mut script = Script::new(vec![vec![(2_400, " Never settles")]]);
     let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
     let mut stream = SpeechStream::new(config);
-    let events = stream.push(&loud(2_500), &mut transcribe).unwrap();
+    let events = stream.push(&loud(3_000), &mut transcribe).unwrap();
     assert_eq!(deltas(&events), ["Never settles"]);
     // The audio is gone but the turn stays open until its words are
     // reported in a `Completed`.
@@ -397,7 +471,9 @@ fn a_shortened_hypothesis_keeps_the_last_confirmed_word_out_of_the_tail() {
     ]);
     let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
     let mut stream = SpeechStream::new(manual());
-    for expected in [vec![], vec!["A B C D"], vec![], vec![" E"], vec![" F"]] {
+    // E was heard in both the full and shortened hypotheses, so it can be
+    // confirmed without treating the omitted prefix as newly trimmed audio.
+    for expected in [vec![], vec!["A B C D"], vec![" E"], vec![], vec![" F"]] {
         let events = stream.push(&loud(1_000), &mut transcribe).unwrap();
         assert_eq!(deltas(&events), expected);
     }
@@ -410,6 +486,200 @@ fn a_shortened_hypothesis_keeps_the_last_confirmed_word_out_of_the_tail() {
             transcript: "A B C D E F G".into(),
         })
     );
+}
+
+#[test]
+fn a_temporarily_shorter_hypothesis_does_not_replay_confirmed_words() {
+    let mut script = Script::new(vec![
+        vec![(900, " A B C D")],
+        vec![(1_900, " A B C D E")],
+        vec![(2_900, " C D E")],
+        vec![(3_900, " A B C D E F")],
+        vec![(4_900, " A B C D E F G")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(manual());
+    let mut events = Vec::new();
+    for _ in 0..5 {
+        events.extend(stream.push(&loud(1_000), &mut transcribe).unwrap());
+    }
+    events.extend(stream.commit(&mut transcribe).unwrap());
+    assert_eq!(deltas(&events).concat(), "A B C D E F G");
+    assert_eq!(stream.current_turn(), 1);
+}
+
+#[test]
+fn trimming_a_revised_hypothesis_carries_only_removed_canonical_words() {
+    let mut script = Script::new(vec![
+        vec![(900, " A B C D")],
+        vec![(1_900, " A B C D E")],
+        vec![(2_900, " C D E")],
+        vec![(3_900, " A B C D E F")],
+        vec![(4_500, " A B C D E F"), (4_900, " G")],
+        vec![(1_400, " G H")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig {
+        trim_after_ms: 4_500,
+        ..manual()
+    });
+    let mut events = Vec::new();
+    for _ in 0..6 {
+        events.extend(stream.push(&loud(1_000), &mut transcribe).unwrap());
+    }
+    events.extend(stream.commit(&mut transcribe).unwrap());
+    assert_eq!(deltas(&events).concat(), "A B C D E F G H");
+    assert_eq!(script.seen[5], (1_500 * MS, Some("A B C D E F".into())));
+}
+
+#[test]
+fn a_revised_earlier_word_does_not_replay_a_restored_confirmed_suffix() {
+    let mut script = Script::new(vec![
+        vec![(900, " hello wrong ready ask not")],
+        vec![(1_900, " hello wrong ready ask not next")],
+        vec![(2_900, " hello right ready")],
+        vec![(3_900, " hello right ready ask not")],
+        vec![(4_900, " hello right ready ask not today")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(manual());
+    let mut events = Vec::new();
+    for _ in 0..5 {
+        events.extend(stream.push(&loud(1_000), &mut transcribe).unwrap());
+    }
+    events.extend(stream.commit(&mut transcribe).unwrap());
+    assert_eq!(deltas(&events).concat(), "hello wrong ready ask not today");
+}
+
+#[test]
+fn a_disappearing_confirmed_phrase_does_not_consume_the_pending_clause() {
+    let mut script = Script::new(vec![
+        vec![(900, " for you")],
+        vec![(1_900, " for you ask what you do")],
+        vec![(2_900, " ask what you can do for your country")],
+        vec![(3_900, " ask what you can do for your country")],
+        vec![(4_900, " for you ask what you can do for your country")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(manual());
+    let mut events = Vec::new();
+    for _ in 0..5 {
+        events.extend(stream.push(&loud(1_000), &mut transcribe).unwrap());
+    }
+    events.extend(stream.commit(&mut transcribe).unwrap());
+    assert_eq!(
+        deltas(&events).concat(),
+        "for you ask what you can do for your country"
+    );
+}
+
+#[test]
+fn an_ambiguous_short_repetition_does_not_confirm_the_pending_copy() {
+    let mut script = Script::new(vec![
+        vec![(900, " Go now")],
+        vec![(1_900, " Go now Go now")],
+        vec![(2_900, " Go now")],
+        vec![(3_900, " Go now Go now")],
+        vec![(4_900, " Go now Go now today")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(manual());
+    let mut events = Vec::new();
+    for pass in 0..5 {
+        let batch = stream.push(&loud(1_000), &mut transcribe).unwrap();
+        if pass == 2 {
+            assert!(deltas(&batch).is_empty());
+        }
+        events.extend(batch);
+    }
+    events.extend(stream.commit(&mut transcribe).unwrap());
+    assert_eq!(deltas(&events).concat(), "Go now Go now today");
+}
+
+#[test]
+fn substitutions_inside_the_confirmed_prefix_are_not_appended() {
+    let mut script = Script::new(vec![
+        vec![(900, " Hello Alice")],
+        vec![(1_900, " Hello Alice thanks")],
+        vec![(2_900, " Hello Bob thanks")],
+        vec![(3_900, " Hello Bob thanks today")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(manual());
+    let mut events = Vec::new();
+    for _ in 0..4 {
+        events.extend(stream.push(&loud(1_000), &mut transcribe).unwrap());
+    }
+    events.extend(stream.commit(&mut transcribe).unwrap());
+    assert_eq!(deltas(&events).concat(), "Hello Alice thanks today");
+}
+
+#[test]
+fn partial_trim_maps_revised_words_to_their_canonical_boundary() {
+    let mut script = Script::new(vec![
+        vec![(900, " A B C D")],
+        vec![(1_900, " A B C D E")],
+        vec![(1_000, " C D"), (2_900, " E F")],
+        vec![(2_900, " E F G")],
+        vec![(3_900, " E F G H")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig {
+        trim_after_ms: 2_500,
+        ..manual()
+    });
+    let mut events = Vec::new();
+    for _ in 0..5 {
+        events.extend(stream.push(&loud(1_000), &mut transcribe).unwrap());
+    }
+    events.extend(stream.commit(&mut transcribe).unwrap());
+    assert_eq!(deltas(&events).concat(), "A B C D E F G H");
+    assert_eq!(script.seen[3], (3_000 * MS, Some("A B C D".into())));
+}
+
+#[test]
+fn a_repeated_phrase_restored_after_a_short_pass_is_not_lost_or_replayed() {
+    let mut script = Script::new(vec![
+        vec![(900, " Go now Go now")],
+        vec![(1_900, " Go now Go now extra")],
+        vec![(2_900, " Go now")],
+        vec![(3_900, " Go now Go now Go")],
+        vec![(4_900, " Go now Go now Go now Go")],
+        vec![(5_900, " Go now Go now Go now Go now")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(manual());
+    let mut events = Vec::new();
+    for _ in 0..6 {
+        events.extend(stream.push(&loud(1_000), &mut transcribe).unwrap());
+    }
+    events.extend(stream.commit(&mut transcribe).unwrap());
+    assert_eq!(deltas(&events).concat(), "Go now Go now Go now Go now");
+}
+
+#[test]
+fn a_single_recent_segment_keeps_context_and_an_omitted_confirmed_suffix() {
+    let mut script = Script::new(vec![
+        vec![(900, " A B C D")],
+        vec![(1_900, " A B C D E")],
+        vec![(1_000, " A B")],
+        vec![(2_900, " C D E")],
+        vec![(3_900, " C D E F")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(SpeechStreamConfig {
+        trim_after_ms: 2_500,
+        ..manual()
+    });
+    let mut events = Vec::new();
+    for _ in 0..5 {
+        events.extend(stream.push(&loud(1_000), &mut transcribe).unwrap());
+    }
+    events.extend(stream.commit(&mut transcribe).unwrap());
+    assert_eq!(deltas(&events).concat(), "A B C D E F");
+    // The shortened AB is the only recent segment, so retain its audio and
+    // canonical CD ownership until a later segment provides a safe cut.
+    assert_eq!(script.seen[3], (4_000 * MS, None));
 }
 
 #[test]
@@ -491,7 +761,7 @@ fn a_commit_after_an_overlong_reset_still_completes_the_turn() {
     let mut script = Script::new(vec![vec![(2_400, " Never settles")]]);
     let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
     let mut stream = SpeechStream::new(config);
-    stream.push(&loud(2_500), &mut transcribe).unwrap();
+    stream.push(&loud(3_000), &mut transcribe).unwrap();
     let done = stream.commit(&mut transcribe).unwrap();
     assert_eq!(
         done.last(),
@@ -647,6 +917,7 @@ fn leading_silence_does_not_count_toward_the_confirmation_delay() {
         vec![(2_800, " Yes")],
         vec![(3_200, " Yes")],
         vec![(3_600, " Yes")],
+        vec![(4_000, " Yes")],
         vec![(4_400, " Yes")],
         vec![(4_800, " Yes")],
     ]);
@@ -661,10 +932,13 @@ fn leading_silence_does_not_count_toward_the_confirmation_delay() {
         confirmed.extend(deltas(&stream.push(&loud(400), &mut transcribe).unwrap()));
     }
     assert!(confirmed.is_empty(), "{confirmed:?}");
-    // Two seconds of heard speech confirm the agreed word.
+    // Two seconds of speech arrive at 4.5 s, between scheduled passes.
     for _ in 0..3 {
         confirmed.extend(deltas(&stream.push(&loud(400), &mut transcribe).unwrap()));
     }
+    assert!(confirmed.is_empty(), "the 4.4 s pass heard only 1.9 s");
+    // The next audio-clock pass at 4.8 s can confirm the agreed word.
+    confirmed.extend(deltas(&stream.push(&loud(300), &mut transcribe).unwrap()));
     assert_eq!(confirmed, ["Yes"]);
 }
 

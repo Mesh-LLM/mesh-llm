@@ -312,9 +312,14 @@ impl LiveSession {
             };
             match events {
                 Ok(events) => events.into_iter().for_each(|event| self.report(event)),
-                Err(error) => self.send(RealtimeOutput::Failed {
-                    message: format!("{error:#}"),
-                }),
+                Err(error) => {
+                    self.send(RealtimeOutput::Failed {
+                        message: format!("{error:#}"),
+                    });
+                    // A failed push can have advanced confirmation without
+                    // returning earlier events. Never reuse that stream state.
+                    break;
+                }
             }
             if self.cancellation.is_cancelled() {
                 break;
@@ -421,6 +426,12 @@ fn speech_only() -> InferenceError {
         "this speech-recognition model only serves /v1/audio/transcriptions and /v1/audio/translations",
     )
 }
+
+#[cfg(test)]
+mod native_streaming_tests;
+
+#[cfg(test)]
+mod cadence_tests;
 
 #[cfg(test)]
 mod tests {
@@ -657,9 +668,8 @@ mod tests {
             .await
             .unwrap();
         let second = vec![8_000i16; 16_000];
-        // Audio that queues behind a pass is batched into the next one, so
-        // how the words split across deltas depends on timing; their sum
-        // does not.
+        // Queued audio may be batched, but recognition still visits each
+        // audio-clock cadence boundary before completing the turn.
         for _ in 0..2 {
             session
                 .input

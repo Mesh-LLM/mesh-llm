@@ -61,6 +61,9 @@ fn actual_adapter_starts_native_proxy_captures_upstream_and_reaps_it_on_exit_wit
                 Err(error) => panic!("{error}"),
             }
         };
+        // Accepted streams inherit nonblocking mode on macOS. The request
+        // reader below owns a blocking stream with a bounded read timeout.
+        socket.set_nonblocking(false).unwrap();
         socket
             .set_read_timeout(Some(Duration::from_secs(3)))
             .unwrap();

@@ -460,10 +460,17 @@ No Actions-write credential or dispatch controller is needed. Feature-ref
 manual dispatch is rejected before persistent-runner work. The workflow-level
 non-cancelling concurrency group serializes canary runs, not individual families.
 
+For protected `main`, prepare the complete version update with
+`scripts/release-version.sh` in a PR and merge it after required checks pass.
+The release workflow reapplies that update idempotently, so its main push is
+already up to date. An unprepared version can fail the protected-branch push;
+branch-rule bypass is not part of the release procedure.
+
 For a non-canary manual dispatch, `release.yml` runs the checked-in
-`scripts/release-version.sh`, creates one linear release-source commit when the
-tracked version surface changes, and fast-forwards `main` before any release
-build starts. `just release` is a preflight and synchronous dispatcher for that
+`scripts/release-version.sh` again. Complete preparation leaves the tracked
+versions unchanged. If a diff remains, metadata attempts a new release-source
+commit and main push; protected `main` rejects that unreviewed update before
+any release build starts. `just release` is a preflight and synchronous dispatcher for that
 same workflow. Canary dispatches never update `main` or publish. Release tags
 and releases are immutable on the manual release path: a non-canary dispatch
 refuses an already-existing tag and fails closed if it cannot verify the
@@ -486,9 +493,13 @@ verification. The resume workflow uses the same release-archive contract.
 The `release_notes` job runs after a successful stable publish with
 `contents: write` and regroups that published body into Keep a Changelog
 sections through `scripts/release-notes-generate.sh`, which calls `cargo xtool
-release notes-link`, `notes-classify`, and `notes-regroup`. The deterministic
-classifier maps Conventional Commits types from the canonical commit range; the
-optional agent review pass runs only when `RELEASE_NOTES_AGENT_MODEL` is set,
+release notes-link`, `notes-classify`, and `notes-regroup`. The job selects the
+pinned Rust toolchain and initializes sccache with job-local
+disk storage before invoking the helper. The release compiler contract includes
+this indirect Cargo caller, so missing or late cache setup fails validation.
+The deterministic classifier maps Conventional Commits types from the canonical
+commit range; the optional agent review pass runs only when
+`RELEASE_NOTES_AGENT_MODEL` is set,
 the agent CLI is installed, credentials exist, and a bounded liveness probe
 succeeds. The agent turn runs with `GH_TOKEN` and `GITHUB_TOKEN` stripped and
 never publishes. Any agent failure keeps the deterministic notes without
@@ -1910,14 +1921,17 @@ applies to a PR until it is merged. No hosted execution is recorded here.
 ## External Python SDK source preparation
 
 The checkout action, admission descriptor and Python-tooling policy use SDK
-commit `85226c50a68a13b48f40fe25e70eb85814e67457`; update all three together.
+commit `acaf6fe9e5d899321988203cabfbab97eedf5c7e`; update all three together.
 Laya product readiness and Decisions smoke discovery query
 `/mesh/v1/models?workload_class=decision&available=true`, since compatibility
 model lists contain only LLMs. The golden and response checks remain required.
 
 The current checkpoint includes typed Mesh model discovery, OCR uploads,
-membership/live-session controls, full node configuration and native-runtime
-management. Its generated bindings were produced from the coordinated Mesh
+membership/live-session controls, incremental transcription options, full node
+configuration and native-runtime management. This checkpoint pins Mesh source
+`efd30516fd2cd92ac132dfd7b8341d24d412ee9c`; UniFFI 0.32.0 regeneration from its
+verified native library produced byte-identical Python bindings. Its generated
+bindings were produced from the coordinated Mesh
 implementation recorded in the SDK's `sdk-inputs.json`; keep that source
 checkpoint synchronized with native API changes.
 

@@ -8,6 +8,37 @@ fn accepts_hosted_setup_before_cargo() {
 }
 
 #[test]
+fn release_notes_helper_requires_prior_cache_setup() {
+    let source = VALID.replace("metadata:", "release_notes:").replace(
+        "cargo fmt --all --check",
+        "scripts/release-notes-generate.sh",
+    );
+    check(Path::new("."), &source).unwrap();
+
+    for invalid in [
+        source.replace("      - uses: mozilla-actions/sccache-action@pin\n", ""),
+        source.replace(
+            "      - uses: ./.github/actions/configure-sccache-gha\n",
+            "",
+        ),
+        source
+            .replace("      - run: scripts/release-notes-generate.sh\n", "")
+            .replace(
+                "    steps:\n",
+                "    steps:\n      - run: scripts/release-notes-generate.sh\n",
+            ),
+    ] {
+        assert!(
+            check(Path::new("."), &invalid)
+                .unwrap_err()
+                .to_string()
+                .contains("release_notes"),
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
 fn rejects_absent_late_swapped_conditional_or_suppressed_setup() {
     for source in [
         VALID.replace("      - uses: mozilla-actions/sccache-action@pin\n", ""),

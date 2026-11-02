@@ -146,12 +146,12 @@ from meshllm import LiveTranscriptionOptions
 
 session = await node.start_live_transcription(LiveTranscriptionOptions(
     model="speech-model", sample_rate=16000, turn_detection=None,
+    step_ms=400, tentative=True,
 ))
-try:
+async with session:
     await session.send_audio(pcm16_samples)
     await session.commit()
     event = await session.next_event()
-finally:
     remaining_events = await session.stop()
 ```
 
@@ -159,7 +159,22 @@ finally:
 point samples. Defaults use 16 kHz and server-side turn detection. Setting
 `turn_detection=None` makes turns explicit with `commit`. Read individual
 events with `next_event` or iterate `events()`. `stop` returns remaining final
-events; `close` abandons the session.
+events; `close` abandons the session. Context exit closes it, including on errors.
+
+`step_ms` accepts 200 to 5000 ms; `None` keeps the node's 1000 ms default.
+Shorter steps run more transcription passes. `tentative` defaults to `False`.
+
+Confirmed deltas are append-only. Recognition errors in confirmed text cannot
+be corrected by later passes or the completed event. Shorter transcription
+intervals do not guarantee better recognition accuracy.
+
+Native transcription failures end the session after an error event. Start a
+new session to retry. Request-validation errors may leave the session open.
+
+Each `tentative` event replaces the previous unconfirmed text for its `item_id`;
+empty text clears it. Append `delta` text to the confirmed transcript and let
+`completed` replace the whole turn, including tentative text. Read events
+concurrently with microphone input.
 
 ## Native runtime management
 

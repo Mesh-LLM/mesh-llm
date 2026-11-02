@@ -1,21 +1,45 @@
 # Releasing mesh-llm
 
-## Preferred path: dispatch from GitHub
+## Prepare protected main, then dispatch
 
-Releases are normally cut by running the **Release** workflow
-(`.github/workflows/release.yml`) from the GitHub Actions UI via
-`workflow_dispatch` with the version input (for example `v0.31.0`). The
-dispatched workflow uses `scripts/release-version.sh` as the single version
-authority, commits the complete tracked version update to `main`, and only then
-starts the release build. It later generates and patches the SwiftPM manifest,
-packages SDK console assets, creates and pushes the release tag, builds all
-platform bundles, publishes the GitHub release, and asks GitHub to generate the
-release notes against the highest stable SemVer tag below the target. RC tags
+When `main` requires pull requests and successful checks, prepare the release
+version in a PR before dispatching the **Release** workflow
+(`.github/workflows/release.yml`). `scripts/release-version.sh` is the single
+version authority. From a release-preparation branch, run:
+
+```bash
+scripts/release-version.sh v0.79.0-rc1
+cargo fmt --all --check
+just check-release
+just ci-validate
+```
+
+Review the complete generated version diff, run the additional checks required
+by the changed files, and merge the PR after its required checks pass. Then
+update a clean local `main` and dispatch the release:
+
+```bash
+git pull --ff-only
+just release 0.79.0-rc1
+```
+
+Use the same preparation process for the final version, such as `0.79.0`.
+The workflow reapplies the version script before building. With the complete
+version update already on `main`, this is idempotent and its main push is
+up to date. An unprepared version makes the workflow attempt a new version
+commit, which protected branch rules can reject with `GH013`. Prepare and
+merge the version PR instead of bypassing those rules.
+
+The GitHub Actions UI can dispatch the same workflow from `main` with the
+prepared version input. The workflow builds and verifies the platform bundles,
+then prepares the SwiftPM manifest and SDK console assets. It creates and
+pushes the release tag, publishes the GitHub release, and asks GitHub to generate
+the release notes against the highest stable SemVer tag below the target. RC tags
 are never selected as the comparison base, so every RC includes all changes
 since the previous stable release, and the final release repeats that complete
 range plus any post-RC changes. The `just release <version>` recipe performs
-local preflight and
-dispatches this same workflow; it does not maintain a second version-bump path.
+local preflight and dispatches this same workflow; it does not maintain a second
+version-bump path.
 Canary dispatches build the requested version without changing `main` or
 publishing. After a complete
 stable, non-canary release with the full GPU matrix succeeds, it dispatches

@@ -114,6 +114,32 @@ pub(super) async fn wait_for_endpoint_online(
     }
 }
 
+pub(super) async fn discover_public_addr(
+    endpoint: &Endpoint,
+    policy: RelayPolicy,
+) -> Option<stun::PublicAddr> {
+    if policy.uses_relay() {
+        // Wait briefly for relay connection so the invite token includes the relay URL.
+        // On sinkholed networks this times out and we proceed without relay (direct UDP only).
+        wait_for_endpoint_online(
+            endpoint,
+            "Relay connected",
+            "Relay connection timed out (5s) — proceeding without relay",
+        )
+        .await;
+    }
+
+    // Use iroh's net report because it probes through the endpoint's actual QUIC sockets.
+    // Its observed address includes the NAT-mapped port; substituting the configured
+    // bind port would advertise an address that was never verified externally.
+    if policy.uses_raw_stun() {
+        stun_public_addr(endpoint, policy.uses_relay()).await
+    } else {
+        tracing::info!("Raw STUN: disabled by LAN-only discovery mode");
+        None
+    }
+}
+
 /// Surveys the host and derives the capacity this node will advertise. The
 /// advertised reserve mirrors what the local fit withholds, so the itemized
 /// capacity and the fit target agree on the configured margin.
