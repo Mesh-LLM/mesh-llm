@@ -53,10 +53,10 @@ checkpoint, buffer reuse) and its rollback-count ABI.
  src/skippy/session.cpp                        |   6 +-
  src/skippy/state.cpp                          |  56 ++-
  src/skippy/tests/verify_rollback.cpp          | 320 ++++++++++++++++++
- src/skippy/verify_window.cpp                  | 214 ++++++++++++
+ src/skippy/verify_window.cpp                  | 210 ++++++++++++
  src/skippy/verify_window.h                    |  38 +++
  ...st-skippy-verify-checkpoint-retirement.cpp |   9 +
- 15 files changed, 802 insertions(+), 74 deletions(-)
+ 15 files changed, 798 insertions(+), 74 deletions(-)
  create mode 100644 src/skippy/tests/verify_rollback.cpp
  create mode 100644 src/skippy/verify_window.cpp
  create mode 100644 src/skippy/verify_window.h
@@ -980,10 +980,10 @@ index 000000000..d61e314a6
 +}
 diff --git a/src/skippy/verify_window.cpp b/src/skippy/verify_window.cpp
 new file mode 100644
-index 000000000..50a6fbbae
+index 000000000..9d0bacc81
 --- /dev/null
 +++ b/src/skippy/verify_window.cpp
-@@ -0,0 +1,214 @@
+@@ -0,0 +1,210 @@
 +// Verify-window bookkeeping: the window that rolls back in place, the host
 +// checkpoints that replace it when it cannot, and the buffers they reuse.
 +#include "skippy.h"
@@ -1128,21 +1128,24 @@ index 000000000..50a6fbbae
 +    // trim inside the window lands at or after it.
 +    llama_memory_recurrent * recurrent = skippy_memory_recurrent_adapter(session->ctx->get_memory());
 +    const uint32_t rollback = static_cast<uint32_t>(window.token_count - 1);
-+    llama_memory_recurrent::mem_cell * tail = nullptr;
-+    if (recurrent != nullptr) {
-+        const auto seq = static_cast<size_t>(session->seq_id);
-+        if (seq >= recurrent->cells.size() || seq >= recurrent->rs_idx.size()) {
-+            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "verify-window sequence has no recurrent cell");
-+            return SKIPPY_STATUS_RUNTIME_ERROR;
-+        }
-+        const int32_t tail_id = recurrent->cells[seq].tail;
-+        if (tail_id < 0 || recurrent->rs_idx[seq] != 0 ||
-+                (recurrent->n_rs_seq != 0 && rollback > recurrent->n_rs_seq)) {
-+            skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "verify-window rollback snapshot is unavailable");
-+            return SKIPPY_STATUS_RUNTIME_ERROR;
-+        }
-+        tail = &recurrent->cells[static_cast<size_t>(tail_id)];
++    // Only a window the snapshots can roll back was held in place; fail
++    // closed rather than keep the end-of-window state as the state after the
++    // first row.
++    if (recurrent == nullptr || recurrent->n_rs_seq == 0 || rollback > recurrent->n_rs_seq) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "verify-window rollback snapshot is unavailable");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
 +    }
++    const auto seq = static_cast<size_t>(session->seq_id);
++    if (seq >= recurrent->cells.size() || seq >= recurrent->rs_idx.size()) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "verify-window sequence has no recurrent cell");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    const int32_t tail_id = recurrent->cells[seq].tail;
++    if (tail_id < 0 || recurrent->rs_idx[seq] != 0) {
++        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "verify-window rollback snapshot is unavailable");
++        return SKIPPY_STATUS_RUNTIME_ERROR;
++    }
++    llama_memory_recurrent::mem_cell * tail = &recurrent->cells[static_cast<size_t>(tail_id)];
 +
 +    skippy_verify_checkpoint checkpoint = skippy_acquire_verify_checkpoint(session);
 +    std::swap(checkpoint.token_ids, window.token_ids);
@@ -1154,16 +1157,11 @@ index 000000000..50a6fbbae
 +    checkpoint.state_offset = 1;
 +
 +    session->ctx->synchronize();
-+    llama_pos tail_pos = 0;
-+    if (tail != nullptr) {
-+        // Serialize the sequence as if it had rolled back: the state writer
-+        // reads the snapshot group named by rs_idx and the tail position.
-+        tail_pos = tail->pos;
-+        tail->pos = window.token_start;
-+        if (recurrent->n_rs_seq != 0) {
-+            recurrent->rs_idx[static_cast<size_t>(session->seq_id)] = rollback;
-+        }
-+    }
++    // Serialize the sequence as if it had rolled back: the state writer
++    // reads the snapshot group named by rs_idx and the tail position.
++    const llama_pos tail_pos = tail->pos;
++    tail->pos = window.token_start;
++    recurrent->rs_idx[seq] = rollback;
 +    enum skippy_status status = SKIPPY_STATUS_OK;
 +    try {
 +        status = skippy_copy_verify_state(session, checkpoint.state, out_error);
@@ -1171,10 +1169,8 @@ index 000000000..50a6fbbae
 +        skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, error.what());
 +        status = SKIPPY_STATUS_RUNTIME_ERROR;
 +    }
-+    if (tail != nullptr) {
-+        tail->pos = tail_pos;
-+        recurrent->rs_idx[static_cast<size_t>(session->seq_id)] = 0;
-+    }
++    tail->pos = tail_pos;
++    recurrent->rs_idx[seq] = 0;
 +    if (status != SKIPPY_STATUS_OK) {
 +        skippy_recycle_verify_checkpoint(session, std::move(checkpoint));
 +        return status;
