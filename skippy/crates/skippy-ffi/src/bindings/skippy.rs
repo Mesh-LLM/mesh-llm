@@ -6,7 +6,7 @@
 
 pub const SKIPPY_ABI_VERSION_MAJOR: u32 = 0;
 pub const SKIPPY_ABI_VERSION_MINOR: u32 = 1;
-pub const SKIPPY_ABI_VERSION_PATCH: u32 = 75;
+pub const SKIPPY_ABI_VERSION_PATCH: u32 = 76;
 pub const SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_MAX_LOGIT_BIAS: u32 = 256;
 pub const SKIPPY_MAX_SAMPLERS: u32 = 16;
@@ -492,6 +492,8 @@ pub struct skippy_runtime_config {
     pub host_expert_layer_start: i32,
     #[doc = " @brief One past the last such block index. `host_expert_layer_end <= host_expert_layer_start` keeps every routed expert on the accelerator, and a range wider than 4096 blocks is ignored the same way: no supported model approaches that block count, and the bound keeps override construction proportional to the model. Routing and precision are unchanged; only weight placement differs."]
     pub host_expert_layer_end: i32,
+    #[doc = " @brief Recurrent-state rollback depth (mirrors upstream `n_rs_seq`) for recurrent and hybrid models. Verifying an N-token speculative window in place needs at least N. 0 keeps the default of 2; `SKIPPY_RS_SEQ` overrides either."]
+    pub recurrent_rollback_tokens: u32,
 }
 unsafe extern "C" {
     #[doc = " @brief Returns a C-safe runtime configuration with all derived-default controls set to auto."]

@@ -1,9 +1,9 @@
 use super::capacity::runtime_model_required_bytes;
 use super::context_planning::{
     RuntimeResourcePlan, RuntimeResourcePlanInput, RuntimeResourcePlanningProfile,
-    plan_runtime_resources,
 };
 use super::live_request_defaults;
+use super::local_dflash_plan::{plan_with_default_dflash_draft, planned_default_dflash_draft};
 use super::local_memory_plan::{
     MemoryPlanMeasurementKey, MemoryPlanStartPath, emit_measured_memory_reconciliation,
     emit_memory_plan_resolved, measured_buffers_footprint,
@@ -1098,7 +1098,7 @@ pub(super) async fn start_local_openai_model(
         spec.flash_attention_override,
     ));
 
-    let plan = plan_runtime_resources(RuntimeResourcePlanInput {
+    let plan_input = RuntimeResourcePlanInput {
         ctx_size_override: spec.ctx_size_override,
         parallel_override: spec.parallel_override,
         model_bytes: local_model_bytes,
@@ -1109,7 +1109,20 @@ pub(super) async fn start_local_openai_model(
         local_layer_fraction,
         planning_profile: spec.planning_profile,
         measured_buffers: measured_buffers_footprint(&measurement_key),
-    });
+    };
+    // Only a direct GGUF load keeps a DFlash draft (package loads are staged).
+    let default_dflash_draft = package
+        .is_none()
+        .then(|| planned_default_dflash_draft(&spec, &model_name, compact_meta.as_ref()))
+        .flatten();
+    let (plan, default_dflash_planned) =
+        plan_with_default_dflash_draft(plan_input, default_dflash_draft);
+    if default_dflash_draft.is_some() && !default_dflash_planned {
+        tracing::warn!(
+            model = model_name,
+            "the default DFlash draft does not fit beside the minimum context; serving without speculation"
+        );
+    }
     anyhow::ensure!(
         !plan
             .breakdown
@@ -1137,6 +1150,7 @@ pub(super) async fn start_local_openai_model(
             plan,
             measurement_key,
             compact_meta.as_ref(),
+            default_dflash_planned,
         )
         .await
     }
@@ -1149,6 +1163,7 @@ async fn start_local_skippy_model(
     plan: RuntimeResourcePlan,
     measurement_key: MemoryPlanMeasurementKey,
     compact_meta: Option<&models::gguf::GgufCompactMeta>,
+    default_dflash_planned: bool,
 ) -> Result<(
     String,
     LocalRuntimeModelHandle,
@@ -1170,7 +1185,13 @@ async fn start_local_skippy_model(
         fallback_projector_path,
         compact_meta,
     )?;
+    // The memory plan holds room for the default DFlash draft only when it
+    // fits; without that room the draft is not attached.
+    if !default_dflash_planned {
+        resolved.speculative.drop_default_dflash();
+    }
     crate::inference::skippy::materialize_projector_url(&mut resolved).await?;
+    crate::inference::skippy::materialize_default_dflash_draft(&mut resolved).await;
     tracing::info!(
         model = model_name,
         "KV cache: {} K + {} V, {}K context",
@@ -1190,53 +1211,34 @@ async fn start_local_skippy_model(
         )
         .await,
     );
-    let mut embedded_openai = resolved.to_embedded_openai_args(0, false)?;
-    embedded_openai.live_defaults_scope = spec.live_request_defaults.scope();
     let live_defaults_generation =
         spec.live_request_defaults
             .track_model(&resolved.model_id, spec.config_model_id, None);
-    let mut options = resolved
-        .to_model_load_options(spec.skippy_telemetry.clone())?
-        .with_embedded_openai(embedded_openai)
-        .with_serving_hooks_factory(spec.serving_hooks_factory.clone())
-        .with_openai_guardrails(skippy::skippy_openai_guardrails_for_policy_handle(
-            spec.openai_guardrail_policy.clone(),
-        ));
-    if spec.device_override.is_none()
-        && let Some(gpu) = spec.pinned_gpu
-    {
-        options = options.with_selected_device(pinned_skippy_device(gpu));
-    }
     let _ = emit_event(OutputEvent::ModelLoading {
         model: model_name.clone(),
         source: None,
     });
-    let hook_policy = spec.hook_policy.clone();
-    let reporter_model_name = model_name.clone();
-    let guardrail_telemetry = spec.survey_telemetry.clone();
-    let skippy_model = tokio::task::spawn_blocking(move || {
-        skippy::SkippyModelHandle::load_with_hooks_and_open_events(
-            options,
-            hook_policy,
-            Some(skippy_native_model_open_events(
-                reporter_model_name,
-                progress_ingress,
-            )),
-            guardrail_telemetry,
-        )
-    })
-    .await
-    .context("join load skippy direct GGUF task")??;
+    let skippy_model = load_direct_skippy_model_with_dflash_fallback(
+        &spec,
+        &mut resolved,
+        &model_name,
+        progress_ingress,
+    )
+    .await?;
     spec.live_request_defaults.sync_after_load(
         &model_name,
         live_defaults_generation,
         &spec.live_request_defaults.serving_backends(),
     );
+    // The native buffer measurements also record the DFlash draft context's
+    // allocations, which a later load would read as the target's own KV rate,
+    // so a load with a draft attached is not reused for sizing.
     emit_measured_memory_reconciliation(
         &model_name,
         &measurement_key,
         &plan,
-        skippy_model.permits_memory_measurement_reuse(),
+        skippy_model.permits_memory_measurement_reuse()
+            && resolved.speculative.decode.dflash.is_none(),
     );
     if skippy_model.supports_system_one() {
         capabilities.upgrade_system_one(models::CapabilityLevel::Supported);
@@ -1268,6 +1270,78 @@ async fn start_local_skippy_model(
         },
         death_rx,
     ))
+}
+
+/// Loads a direct GGUF model, and loads it again without its default DFlash
+/// draft when that draft cannot attach (a runtime without the draft-context
+/// API, a vocabulary the target does not share, or no room for its context),
+/// so a default draft never fails the load.
+async fn load_direct_skippy_model_with_dflash_fallback(
+    spec: &LocalOpenAiModelStartSpec<'_>,
+    resolved: &mut skippy::ResolvedSkippyConfig,
+    model_name: &str,
+    progress_ingress: Option<crate::runtime_events::engine::ScopedIngress>,
+) -> Result<skippy::SkippyModelHandle> {
+    let error = match load_direct_skippy_model(
+        spec,
+        resolved,
+        model_name.to_string(),
+        progress_ingress.clone(),
+    )
+    .await
+    {
+        Err(error)
+            if resolved.speculative.default_dflash.is_some()
+                && skippy_serving::DFlashDraftAttachFailed::caused(&error) =>
+        {
+            error
+        }
+        loaded => return loaded,
+    };
+    tracing::warn!(
+        model = model_name,
+        "default DFlash draft could not attach; loading without it: {error:#}"
+    );
+    resolved.speculative.drop_default_dflash();
+    load_direct_skippy_model(spec, resolved, model_name.to_string(), progress_ingress).await
+}
+
+/// Loads a direct GGUF model as `resolved` plans it.
+async fn load_direct_skippy_model(
+    spec: &LocalOpenAiModelStartSpec<'_>,
+    resolved: &skippy::ResolvedSkippyConfig,
+    model_name: String,
+    progress_ingress: Option<crate::runtime_events::engine::ScopedIngress>,
+) -> Result<skippy::SkippyModelHandle> {
+    let mut embedded_openai = resolved.to_embedded_openai_args(0, false)?;
+    embedded_openai.live_defaults_scope = spec.live_request_defaults.scope();
+    let mut options = resolved
+        .to_model_load_options(spec.skippy_telemetry.clone())?
+        .with_embedded_openai(embedded_openai)
+        .with_serving_hooks_factory(spec.serving_hooks_factory.clone())
+        .with_openai_guardrails(skippy::skippy_openai_guardrails_for_policy_handle(
+            spec.openai_guardrail_policy.clone(),
+        ));
+    if spec.device_override.is_none()
+        && let Some(gpu) = spec.pinned_gpu
+    {
+        options = options.with_selected_device(pinned_skippy_device(gpu));
+    }
+    let hook_policy = spec.hook_policy.clone();
+    let guardrail_telemetry = spec.survey_telemetry.clone();
+    tokio::task::spawn_blocking(move || {
+        skippy::SkippyModelHandle::load_with_hooks_and_open_events(
+            options,
+            hook_policy,
+            Some(skippy_native_model_open_events(
+                model_name,
+                progress_ingress,
+            )),
+            guardrail_telemetry,
+        )
+    })
+    .await
+    .context("join load skippy direct GGUF task")?
 }
 
 async fn start_local_package_v2_model(
@@ -1329,6 +1403,8 @@ async fn start_local_package_v2_model(
         fallback_projector_path,
         compact_meta,
     )?;
+    // Package loads are staged and never attach the default DFlash draft.
+    resolved.speculative.drop_default_dflash();
     crate::inference::skippy::materialize_projector_url(&mut resolved).await?;
     tracing::info!(
         model = model_name,

@@ -14,7 +14,7 @@ mod dflash;
 mod standalone;
 mod suffix;
 
-pub use dflash::{DFLASH_STRATEGY, DFlashProposalConfig};
+pub use dflash::{DFLASH_STRATEGY, DFlashDraftAttachFailed, DFlashProposalConfig};
 pub(super) use standalone::{propose_configured_ngram_tokens, standalone_ngram_proposal_limit};
 use suffix::{SUFFIX_MIN_SEED_LEN, SuffixNgramProposer};
 

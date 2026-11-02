@@ -859,7 +859,9 @@ directory is preserved; otherwise the action uses the job's runner temporary
 directory. Missing GHA endpoints retain the existing disk-only fallback.
 The action eagerly starts sccache on a unique short Unix socket in both disk-only
 and remote-cache modes, before any parallel compiler clients, and exports that
-endpoint for subsequent steps. Remote cache configuration is preserved. It never
+endpoint for subsequent steps. It exports `SCCACHE_IDLE_TIMEOUT=0` before startup
+and persists the value for the job, preventing idle shutdown between crate
+builds and long test phases. Remote cache configuration is preserved. It never
 stops the default host server. Canary toolchain
 verification only sets cache identity; accelerator setup owns server startup.
 
@@ -958,6 +960,13 @@ changed paths require the documented CI-control or runner-infrastructure
 fail-open policy.
 
 ## Artifact and cache owners
+
+`native runtime-manifest-write` owns Windows ROCm target admission after the
+shell copies SDK kernels. For configured targets with a declared `rocblas.dll`,
+it hashes staged rocBLAS `.co`/`.hsaco` files into `runtime.files` and advertises
+only targets with matching code objects. An empty intersection fails before
+manifest replacement. Portable `l4_producers` contracts cover the consumed JSON,
+file identity, environment precedence, and unchanged platform/backend paths.
 
 After successful runtime package verification, Windows release CPU/GPU jobs
 publish and verify an exact-key ABI cache miss under the current ref. These

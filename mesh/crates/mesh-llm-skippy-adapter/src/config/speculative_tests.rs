@@ -666,6 +666,7 @@ verify_window_pipeline_depth = 2
         "meshllm/test-model",
         std::path::Path::new("/nonexistent/test-model.gguf"),
         None,
+        None,
     )
     .expect("explicit ngram-suffix must resolve");
     let decode = resolved.decode;
@@ -1111,4 +1112,253 @@ fn dflash_plan_is_dropped_for_split_targets_unless_pairing_fails_closed() {
         .unwrap_err()
         .to_string();
     assert!(err.contains("complete target model"), "{err}");
+}
+
+/// A Qwen3.5-9B target alone in its directory, so no sibling draft is found.
+fn default_dflash_target() -> (tempfile::TempDir, std::path::PathBuf) {
+    let directory = tempfile::tempdir().expect("target directory");
+    let path = directory.path().join("Qwen3.5-9B-Q4_K_M.gguf");
+    std::fs::copy(temp_model_file_with_architecture("qwen35").path(), &path).expect("copy target");
+    (directory, path)
+}
+
+fn resolve_default_dflash(
+    config: &str,
+    model_path: &Path,
+    meta: &skippy_model_artifact::gguf::GgufCompactMeta,
+) -> ResolvedSkippyConfig {
+    let mesh_config = parse_config(config);
+    resolve_skippy_config(SkippyConfigResolveRequest {
+        mesh_config: &mesh_config,
+        model_id: "unsloth/Qwen3.5-9B-GGUF:Q4_K_M",
+        model_path,
+        model_bytes: 5 * 1024 * 1024 * 1024,
+        allocatable_memory_bytes: None,
+        request_defaults: None,
+        package_generation: None,
+        compact_meta: Some(meta),
+    })
+    .expect("a known DFlash target should resolve")
+}
+
+#[test]
+fn a_known_target_defaults_to_its_dflash_draft() {
+    let (_directory, model_path) = default_dflash_target();
+    let resolved = resolve_default_dflash("", &model_path, &target_meta("qwen35", 32, 4096, 0));
+    let speculative = &resolved.speculative;
+    let pairing = speculative.default_dflash.expect("default pairing");
+    let dflash = speculative.decode.dflash.as_ref().expect("DFlash plan");
+
+    assert_eq!(pairing.draft.repo, "AtomicChat/Qwen3.5-9B-DFlash-GGUF");
+    assert_eq!(dflash.draft_model_path, pairing.draft.cache_path());
+    let cap = if cfg!(target_os = "macos") { 6 } else { 15 };
+    assert_eq!(dflash.max_draft_tokens, Some(cap));
+    assert_eq!(speculative.draft_max_tokens, cap as u32);
+    assert_eq!(speculative.decode.requested_strategy, "auto");
+    assert_eq!(speculative.decode.effective_strategy, "dflash");
+    assert_eq!(speculative.mode, "disabled");
+    assert!(!speculative.explicit);
+}
+
+#[test]
+fn a_configured_draft_cap_overrides_the_backend_default() {
+    let (_directory, model_path) = default_dflash_target();
+    let resolved = resolve_default_dflash(
+        "[defaults.speculative]\ndraft_max_tokens = 10",
+        &model_path,
+        &target_meta("qwen35", 32, 4096, 0),
+    );
+
+    let dflash = resolved.speculative.decode.dflash.expect("DFlash plan");
+    assert_eq!(dflash.max_draft_tokens, Some(10));
+}
+
+#[test]
+fn unknown_targets_do_not_default_to_dflash() {
+    let (_directory, model_path) = default_dflash_target();
+    let resolved = resolve_default_dflash("", &model_path, &target_meta("qwen35", 48, 5120, 0));
+
+    assert!(resolved.speculative.default_dflash.is_none());
+    assert!(resolved.speculative.decode.dflash.is_none());
+}
+
+#[test]
+fn explicit_speculation_settings_win_over_the_default_dflash_draft() {
+    let meta = target_meta("qwen35", 32, 4096, 0);
+    for config in [
+        "[defaults.speculative]\nstrategy = \"disabled\"",
+        "[defaults.speculative]\nmode = \"disabled\"",
+        "[defaults.speculative]\nspec_default = false",
+        "[defaults.speculative]\nngram_min = 2\nngram_max = 4",
+        "[defaults.speculative]\nstrategy = \"ngram-cache\"\nngram_min = 2\nngram_max = 4",
+    ] {
+        let (_directory, model_path) = default_dflash_target();
+        let resolved = resolve_default_dflash(config, &model_path, &meta);
+        assert!(resolved.speculative.default_dflash.is_none(), "{config}");
+        assert!(resolved.speculative.decode.dflash.is_none(), "{config}");
+    }
+
+    // A draft next to the target, or one named in configuration, is an
+    // ordinary draft and keeps the DFlash default out.
+    let (directory, model_path) = default_dflash_target();
+    let sibling = directory.path().join("Qwen3.5-0.8B-draft.gguf");
+    std::fs::copy(&model_path, &sibling).expect("copy sibling draft");
+    let resolved = resolve_default_dflash("", &model_path, &meta);
+    assert!(resolved.speculative.decode.dflash.is_none());
+    assert_eq!(resolved.speculative.draft_model_path, Some(sibling.clone()));
+
+    let named = format!(
+        "[defaults.speculative]\ndraft_model_path = {}\ndraft_selection_policy = \"manual\"",
+        toml_path(&sibling)
+    );
+    let resolved = resolve_default_dflash(&named, &model_path, &meta);
+    assert!(resolved.speculative.decode.dflash.is_none());
+    assert_eq!(resolved.speculative.mode, "draft");
+}
+
+#[test]
+fn dropping_the_default_keeps_an_explicit_dflash_draft() {
+    let (_directory, model_path) = default_dflash_target();
+    let draft = temp_model_file_with_architecture("dflash");
+    let config = format!(
+        "[defaults.speculative]\nstrategy = \"dflash\"\ndraft_model_path = {}\ndraft_max_tokens = 5",
+        toml_path(draft.path())
+    );
+    let mut resolved =
+        resolve_default_dflash(&config, &model_path, &target_meta("qwen35", 32, 4096, 0));
+    assert!(resolved.speculative.default_dflash.is_none());
+
+    // The host drops the default whenever its memory plan holds no default draft.
+    resolved.speculative.drop_default_dflash();
+    let args = resolved.to_embedded_openai_args(0, false).unwrap();
+    let dflash = args.speculative.dflash.expect("explicit DFlash plan");
+    assert_eq!(dflash.draft_model_path, draft.path());
+    assert_eq!(dflash.max_draft_tokens, Some(5));
+}
+
+#[test]
+fn a_default_dflash_draft_is_served_only_once_fetched() {
+    let (_directory, model_path) = default_dflash_target();
+    let mut resolved = resolve_default_dflash(
+        "[defaults.speculative]\npairing_fault = \"fail_closed\"",
+        &model_path,
+        &target_meta("qwen35", 32, 4096, 0),
+    );
+
+    resolved
+        .speculative
+        .set_default_dflash_draft(Path::new("/nonexistent/draft-dflash.gguf"));
+    let unfetched = resolved.to_embedded_openai_args(0, false).unwrap();
+    assert!(unfetched.speculative.dflash.is_none());
+    assert_eq!(unfetched.speculative.effective_strategy, "disabled");
+
+    let draft = temp_model_file_with_architecture("dflash");
+    resolved.speculative.set_default_dflash_draft(draft.path());
+    let fetched = resolved.to_embedded_openai_args(0, false).unwrap();
+    assert_eq!(
+        fetched
+            .speculative
+            .dflash
+            .map(|dflash| dflash.draft_model_path),
+        Some(draft.path().to_path_buf())
+    );
+    // A split target drops a default draft even when pairing fails closed.
+    let staged = resolved.to_embedded_openai_args(4096, true).unwrap();
+    assert!(staged.speculative.dflash.is_none());
+
+    resolved.speculative.drop_default_dflash();
+    assert!(resolved.speculative.default_dflash.is_none());
+    let dropped = resolved.to_embedded_openai_args(0, false).unwrap();
+    assert!(dropped.speculative.dflash.is_none());
+    assert_eq!(dropped.speculative.effective_strategy, "disabled");
+}
+
+/// A target carrying a NextN layer, alone in its directory so no sibling
+/// draft is found; native MTP is on for it by default.
+fn native_mtp_target() -> (tempfile::TempDir, std::path::PathBuf) {
+    let directory = tempfile::tempdir().expect("target directory");
+    let path = directory.path().join("Qwen3.8-27B-UD-Q4_K_M.gguf");
+    let source = temp_model_file_with_architecture_and_tensor_names(
+        "qwen35",
+        &["blk.64.nextn.eh_proj.weight"],
+        None,
+    );
+    std::fs::copy(source.path(), &path).expect("copy target");
+    (directory, path)
+}
+
+fn qwen38_27b_meta() -> skippy_model_artifact::gguf::GgufCompactMeta {
+    named(target_meta("qwen35", 64, 5120, 0), "Qwen3.8")
+}
+
+#[test]
+fn a_known_pairing_replaces_automatic_native_mtp() {
+    let (_directory, model_path) = native_mtp_target();
+    let mut resolved = resolve_default_dflash("", &model_path, &qwen38_27b_meta());
+    let speculative = &resolved.speculative;
+    let pairing = speculative.default_dflash.expect("default pairing");
+    let dflash = speculative.decode.dflash.as_ref().expect("DFlash plan");
+
+    assert_eq!(pairing.draft.repo, "z-lab/Qwen3.8-27B-DFlash2-GGUF");
+    assert!(!speculative.native_mtp_enabled);
+    assert!(!speculative.decode.native_mtp.enabled);
+    assert_eq!(speculative.decode.effective_strategy, "dflash");
+    // The pairing's block caps the backend default, and rollback follows it.
+    let cap = if cfg!(target_os = "macos") { 6 } else { 7 };
+    assert_eq!(dflash.max_draft_tokens, Some(cap));
+    assert_eq!(dflash.recurrent_rollback_tokens(), cap as u32 + 1);
+    let draft = temp_model_file_with_architecture("dflash");
+    resolved.speculative.set_default_dflash_draft(draft.path());
+    let args = resolved.to_embedded_openai_args(0, false).unwrap();
+    assert!(!args.native_mtp_enabled);
+    assert!(args.speculative.dflash.is_some());
+
+    // Without the draft (not fetched, no room, or a split target), the load
+    // keeps the native MTP it would have served.
+    resolved.speculative.drop_default_dflash();
+    let speculative = &resolved.speculative;
+    assert!(speculative.default_dflash.is_none());
+    assert!(speculative.decode.dflash.is_none());
+    assert!(speculative.native_mtp_enabled);
+    assert_eq!(speculative.decode.effective_strategy, "native-mtp");
+    let staged = resolved.to_embedded_openai_args(4096, true).unwrap();
+    assert!(staged.native_mtp_enabled);
+}
+
+#[test]
+fn native_mtp_targets_without_a_pairing_keep_native_mtp() {
+    let (_directory, model_path) = native_mtp_target();
+    let resolved = resolve_default_dflash("", &model_path, &target_meta("qwen35", 48, 5120, 0));
+
+    assert!(resolved.speculative.default_dflash.is_none());
+    assert!(resolved.speculative.native_mtp_fallback.is_none());
+    assert!(resolved.speculative.native_mtp_enabled);
+    assert_eq!(resolved.speculative.decode.effective_strategy, "native-mtp");
+}
+
+#[test]
+fn configured_speculation_keeps_its_plan_on_a_native_mtp_target_with_a_pairing() {
+    let unpaired = target_meta("qwen35", 48, 5120, 0);
+    for config in [
+        "[defaults.speculative]\nstrategy = \"mtp\"",
+        "[defaults.speculative]\nnative_mtp_reject_cooldown_tokens = 4",
+        "[defaults.speculative]\nstrategy = \"disabled\"",
+        "[defaults.speculative]\nmode = \"disabled\"",
+        "[defaults.speculative]\nspec_default = false",
+        "[defaults.speculative]\nngram_min = 2\nngram_max = 4",
+        "[defaults.speculative]\nstrategy = \"ngram-cache\"\nngram_min = 2\nngram_max = 4",
+    ] {
+        let (_directory, model_path) = native_mtp_target();
+        let paired = resolve_default_dflash(config, &model_path, &qwen38_27b_meta());
+        let without_pairing = resolve_default_dflash(config, &model_path, &unpaired);
+        assert!(paired.speculative.default_dflash.is_none(), "{config}");
+        assert_eq!(paired.speculative, without_pairing.speculative, "{config}");
+    }
+    let (_directory, model_path) = native_mtp_target();
+    let explicit_mtp = resolve_default_dflash(
+        "[defaults.speculative]\nstrategy = \"mtp\"",
+        &model_path,
+        &qwen38_27b_meta(),
+    );
+    assert!(explicit_mtp.speculative.native_mtp_enabled);
 }

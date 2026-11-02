@@ -181,6 +181,7 @@ pub(super) async fn start_local_laya_model(
             vram_bytes: spec.capacity_budget_bytes,
             model_bytes: weight_bytes,
             projector_bytes: 0,
+            speculative_bytes: 0,
             kv_budget_bytes: 0,
             planned_kv_bytes: 0,
             kv_bytes_per_token: 0,

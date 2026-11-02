@@ -41,40 +41,6 @@ const ENDPOINT_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 /// `abort()` to a no-op, but the endpoint is not marked closed and the
 /// ungraceful-drop ERROR can still be logged. The warning is what tells those
 /// two cases apart in a log.
-/// Bind the startup QUIC endpoint and resolve its STUN-observed public
-/// address. Relay mode waits briefly so the invite token can include the
-/// relay URL; on sinkholed networks that wait times out and startup proceeds
-/// with direct UDP only.
-async fn bind_startup_endpoint(
-    role: &NodeRole,
-    relay: RelayConfig<'_>,
-    quic_bind: QuicBindSelection,
-) -> Result<(SecretKey, Endpoint, Option<PublicAddr>)> {
-    let secret_key = startup_secret_key(role).await?;
-    let endpoint = bind_mesh_endpoint(secret_key.clone(), relay, quic_bind).await?;
-    if relay.policy.uses_relay() {
-        // Wait briefly for relay connection so the invite token includes the relay URL.
-        // On sinkholed networks this times out and we proceed without relay (direct UDP only).
-        wait_for_endpoint_online(
-            &endpoint,
-            "Relay connected",
-            "Relay connection timed out (5s) — proceeding without relay",
-        )
-        .await;
-    }
-
-    // Use iroh's net report because it probes through the endpoint's actual QUIC sockets.
-    // Its observed address includes the NAT-mapped port; substituting the configured
-    // bind port would advertise an address that was never verified externally.
-    let public_addr = if relay.policy.uses_raw_stun() {
-        stun_public_addr(&endpoint, relay.policy.uses_relay()).await
-    } else {
-        tracing::info!("Raw STUN: disabled by LAN-only discovery mode");
-        None
-    };
-    Ok((secret_key, endpoint, public_addr))
-}
-
 async fn close_endpoint_gracefully(endpoint: &Endpoint, label: &str) {
     if endpoint.is_closed() {
         return;
@@ -790,6 +756,20 @@ impl Node {
         close_endpoint_gracefully(&self.endpoint, "mesh").await;
     }
 
+    /// The public address raw STUN observes, or `None` when LAN-only
+    /// discovery disables raw STUN.
+    async fn startup_public_addr(
+        endpoint: &Endpoint,
+        relay: RelayConfig<'_>,
+    ) -> Option<stun::PublicAddr> {
+        if relay.policy.uses_raw_stun() {
+            stun_public_addr(endpoint, relay.policy.uses_relay()).await
+        } else {
+            tracing::info!("Raw STUN: disabled by LAN-only discovery mode");
+            None
+        }
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "startup wires independent node/runtime subsystems; changing the public constructor shape is outside this rebase repair"
@@ -804,8 +784,23 @@ impl Node {
         config_path: Option<&std::path::Path>,
         local_mesh_requirements: crate::MeshRequirements,
     ) -> Result<(Self, TunnelChannels)> {
-        let (secret_key, endpoint, public_addr) =
-            bind_startup_endpoint(&role, relay, quic_bind).await?;
+        let secret_key = startup_secret_key(&role).await?;
+        let endpoint = bind_mesh_endpoint(secret_key.clone(), relay, quic_bind).await?;
+        if relay.policy.uses_relay() {
+            // Wait briefly for relay connection so the invite token includes the relay URL.
+            // On sinkholed networks this times out and we proceed without relay (direct UDP only).
+            wait_for_endpoint_online(
+                &endpoint,
+                "Relay connected",
+                "Relay connection timed out (5s) — proceeding without relay",
+            )
+            .await;
+        }
+
+        // Use iroh's net report because it probes through the endpoint's actual QUIC sockets.
+        // Its observed address includes the NAT-mapped port; substituting the configured
+        // bind port would advertise an address that was never verified externally.
+        let public_addr = Self::startup_public_addr(&endpoint, relay).await;
 
         let (peer_change_tx, peer_change_rx) = watch::channel(0usize);
         let (inflight_change_tx, _inflight_change_rx) = watch::channel(0u64);

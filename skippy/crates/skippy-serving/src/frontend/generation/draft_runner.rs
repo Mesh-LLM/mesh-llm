@@ -247,6 +247,7 @@ pub(in crate::frontend) fn attach_native_mtp_draft_model(
 
 /// Attaches the plan's DFlash draft to the single-stage target model. Must run
 /// before serving sessions exist, since only later sessions feed the draft.
+/// A failure carries [`crate::DFlashDraftAttachFailed`].
 pub(in crate::frontend) fn attach_dflash_draft(
     runtime: &Arc<Mutex<RuntimeState>>,
     config: &StageConfig,
@@ -256,6 +257,17 @@ pub(in crate::frontend) fn attach_dflash_draft(
     let Some(dflash) = &speculative.dflash else {
         return Ok(None);
     };
+    attach_planned_dflash_draft(runtime, config, n_gpu_layers, speculative, dflash)
+        .context(crate::DFlashDraftAttachFailed)
+}
+
+fn attach_planned_dflash_draft(
+    runtime: &Arc<Mutex<RuntimeState>>,
+    config: &StageConfig,
+    n_gpu_layers: Option<i32>,
+    speculative: &SpeculativeDecodeConfig,
+    dflash: &crate::DFlashProposalConfig,
+) -> Result<Option<DFlashDraftInfo>> {
     if config.downstream.is_some() {
         bail!("DFlash drafts require single-stage serving; the target is split across stages");
     }
@@ -347,6 +359,7 @@ pub(in crate::frontend) fn draft_runtime_config(
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
         mtp_source,
+        recurrent_rollback_tokens: 0,
         resident_tensor_names: Vec::new(),
         execution_contract: String::new(),
         activation_import_identities: Vec::new(),
