@@ -323,6 +323,7 @@ impl ResolvedSkippyConfig {
             } else {
                 MtpSource::Disabled
             },
+            recurrent_rollback_tokens: 0,
             metrics_otlp_grpc: telemetry.metrics_otlp_grpc.clone(),
             telemetry_queue_capacity: telemetry.queue_capacity,
             telemetry_level: telemetry.level,
@@ -498,11 +499,20 @@ impl ResolvedSkippyConfig {
 impl ResolvedSkippyConfig {
     /// A DFlash draft reads hidden states from every target layer it was
     /// trained on, so it needs the complete target on this node. A split
-    /// target serves without it unless the pairing policy fails closed.
+    /// target serves without it unless an explicit DFlash pairing fails
+    /// closed. A default draft that was never fetched is dropped too.
     fn speculative_decode_config(&self, staged: bool) -> Result<SpeculativeDecodeConfig> {
         let mut decode = self.speculative.decode.clone();
-        if staged && decode.dflash.take().is_some() {
-            if self.speculative.pairing_fault == "fail_closed" {
+        let default_draft_missing = self.speculative.default_dflash.is_some()
+            && decode
+                .dflash
+                .as_ref()
+                .is_some_and(|dflash| !dflash.draft_model_path.is_file());
+        if (staged || default_draft_missing) && decode.dflash.take().is_some() {
+            if staged
+                && self.speculative.default_dflash.is_none()
+                && self.speculative.pairing_fault == "fail_closed"
+            {
                 bail!("skippy DFlash drafts require the complete target model on one node");
             }
             decode.effective_strategy = "disabled".to_string();

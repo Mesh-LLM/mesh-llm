@@ -148,6 +148,12 @@ pub struct ResolvedSpeculativeConfig {
     pub explicit: bool,
     pub draft_n_gpu_layers: Option<i32>,
     pub decode: SpeculativeDecodeConfig,
+    /// The known pairing whose draft the DFlash plan uses by default. The host
+    /// fetches that draft before loading, and drops the plan if it cannot.
+    pub default_dflash: Option<&'static super::dflash_catalog::DFlashPairing>,
+    /// The native MTP plan a default DFlash plan replaced, served instead when
+    /// the default draft is dropped.
+    pub native_mtp_fallback: Option<Box<ResolvedSpeculativeConfig>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

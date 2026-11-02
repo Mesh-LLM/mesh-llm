@@ -52,8 +52,8 @@ pub use embedded::{
 };
 pub use frontend::{
     CONTEXT_BUDGET_MAX_TOKENS, DECODE_BATCH_HEADROOM_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS,
-    DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, DFLASH_STRATEGY, DFlashProposalConfig,
-    EmbeddedOpenAiArgs, EmbeddedOpenAiBackend, EmbeddedOpenAiRequestDefaults,
+    DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, DFLASH_STRATEGY, DFlashDraftAttachFailed,
+    DFlashProposalConfig, EmbeddedOpenAiArgs, EmbeddedOpenAiBackend, EmbeddedOpenAiRequestDefaults,
     EmbeddedReasoningBudget, EmbeddedReasoningEnabled, EmbeddedReasoningFormat,
     InferenceGuardrailsConfig, InferenceGuardrailsStatus, InferenceGuardrailsTarget,
     LayaSystemOneBackend, LinearProposal, LinearProposalDiscardReason, LinearProposalDisposition,

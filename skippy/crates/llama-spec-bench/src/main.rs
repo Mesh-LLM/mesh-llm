@@ -343,6 +343,7 @@ fn full_model_config(path: &Path, ctx_size: u32, n_gpu_layers: i32) -> Result<Ru
         main_gpu: None,
         split_mode: skippy_runtime::SplitMode::Auto,
         host_expert_layers: None,
+        recurrent_rollback_tokens: 0,
         mmap: Some(true),
         kv_offload: None,
         kv_unified: None,
