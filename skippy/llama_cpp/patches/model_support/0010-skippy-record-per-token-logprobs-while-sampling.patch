@@ -12,7 +12,7 @@ reset drops them. A logprobs request never attaches backend (in-graph)
 sampling, which skips copying the raw logits row; a token drawn while the
 lane still carried a backend sampler from an earlier request is recorded
 as unreadable instead of being read from a stale row. As the last patch
-to touch common.h it carries the queue's ABI version, 0.1.76.
+to touch common.h it carries the queue's ABI version, 0.1.77.
 ---
  include/skippy.h               |  1 +
  include/skippy/common.h        |  2 +-
