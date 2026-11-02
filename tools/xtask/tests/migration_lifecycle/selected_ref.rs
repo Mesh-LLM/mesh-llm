@@ -224,6 +224,79 @@ fn branch_and_commit_freeze_same_origin_source_pin_without_repair_after_branch_m
     );
 }
 #[test]
+fn selected_upgrade_freezes_controller_base_and_new_pin_before_any_repair() {
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.origin.join("candidate.txt"),
+        "selected repair source",
+    )
+    .unwrap();
+    fixture.commit("selected source differs from controller");
+    fixture.git_at(&fixture.origin, &["branch", "-f", "candidate", "HEAD"]);
+    let base = fixture.git_at(&fixture.origin, &["rev-parse", "candidate"]);
+    let target = "b".repeat(40);
+    let result = fixture.select_action(
+        "candidate",
+        "workflow_dispatch",
+        &target,
+        &fixture.url,
+        "upgrade",
+    );
+    assert!(result.success(), "{result:?}");
+    let value: Json = serde_json::from_slice(&result.stdout.bytes_retained).unwrap();
+    assert_eq!(value["source"], fixture.initial);
+    assert_eq!(value["mesh_source"], base);
+    assert_eq!(value["upstream"], target);
+    assert_eq!(value["changed"], "true");
+    assert_eq!(value["mode"], "repair-build");
+    assert_eq!(value["publish_selected"], false);
+    let output = fs::read_to_string(&fixture.output).unwrap();
+    assert!(output.contains("changed=true\nmode=repair-build\n"));
+    assert_eq!(
+        fixture.git_at(&fixture.checkout, &["rev-parse", "HEAD"]),
+        fixture.initial
+    );
+    for (reference, event, upstream, origin) in [
+        ("candidate", "workflow_dispatch", "", fixture.url.as_str()),
+        (
+            "candidate",
+            "workflow_dispatch",
+            "latest",
+            fixture.url.as_str(),
+        ),
+        (
+            "candidate",
+            "workflow_dispatch",
+            &"a".repeat(40),
+            fixture.url.as_str(),
+        ),
+        (
+            "candidate",
+            "schedule",
+            target.as_str(),
+            fixture.url.as_str(),
+        ),
+        (
+            "refs/tags/candidate",
+            "workflow_dispatch",
+            target.as_str(),
+            fixture.url.as_str(),
+        ),
+        (
+            "candidate",
+            "workflow_dispatch",
+            target.as_str(),
+            "https://github.com/foreign/repository",
+        ),
+    ] {
+        let before = fs::read(&fixture.output).unwrap();
+        let rejected = fixture.select_action(reference, event, upstream, origin, "upgrade");
+        assert!(!rejected.success(), "{rejected:?}");
+        assert_eq!(fs::read(&fixture.output).unwrap(), before);
+    }
+}
+
+#[test]
 fn admission_rejects_invalid_refs_manual_scope_override_and_foreign_origin_without_outputs() {
     let fixture = Fixture::new();
     for reference in [

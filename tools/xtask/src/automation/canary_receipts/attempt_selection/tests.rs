@@ -121,6 +121,26 @@ fn exact_boolean_and_typed_identity_admission_never_coerces_json_values() {
     assert!(input::digest(&"B".repeat(64)).is_err());
 }
 #[test]
+fn selected_upgrade_publishes_only_the_independently_verified_changed_candidate() {
+    let base = "b".repeat(40);
+    let candidate = green("success", 'a');
+    let mut failed = green("failure", 'a');
+    failed["outputs"]["green"] = json!("false");
+    assert_ne!(
+        attempt(true, candidate.clone(), failed).unwrap()["state"],
+        "green"
+    );
+    let mut decision = attempt(true, candidate.clone(), candidate).unwrap();
+    decision.insert("state", "green".into());
+    let value = json!({"attempt_1":{"result":"success","outputs":decision}});
+    assert_eq!(
+        final_outputs(true, true, &base, JobResult::Success, value.clone()).unwrap()["publish"],
+        "true"
+    );
+    assert!(final_outputs(true, false, &base, JobResult::Success, value).is_err());
+}
+
+#[test]
 fn final_selects_latest_numeric_slot_and_never_falls_back_from_later_failure() {
     let value = json!({"attempt_1":selected("success","repairable"),"attempt_2":selected("success","green"),"attempt_3":{"result":"skipped","outputs":{}},"resolve":{"outputs":{"state":"green"}}});
     let result = final_outputs(true, true, "", JobResult::Success, value.clone()).unwrap();

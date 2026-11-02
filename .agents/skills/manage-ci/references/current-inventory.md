@@ -261,6 +261,13 @@ gh workflow run llama-upstream-canary.yml --ref main \
 The run summary records the resolved MeshLLM SHA and existing llama.cpp pin;
 a branch moving later cannot change the selected source for that run.
 
+Manual `mesh_action=upgrade` uses that frozen selected revision as a repair base
+and requires an exact, different `upstream_sha`. It keeps the controller on main
+and uses the ordinary candidate, retry, independent verification and publication
+pipeline. Packages bind both the controller and selected base; changed candidates
+must be direct children of that base with an admitted bundle. Certify modes still
+reject upstream overrides and preserve the selected commit unchanged.
+
 `llama-canary-family-pass.yml` owns the reusable build → family matrix → hosted
 aggregate. The protected controller prepares automation and invokes `canary-receipts build`
 with frozen controller/selected revisions, pass identity, budgets and previous-package admission.

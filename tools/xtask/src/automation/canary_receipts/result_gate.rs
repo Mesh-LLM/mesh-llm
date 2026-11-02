@@ -70,9 +70,11 @@ fn decide(input: &str) -> DynResult<Option<String>> {
     let changed = boolean_output(&needs.resolve, "changed")?;
     let selected = needs.resolve.output("mesh_source");
     let candidate = &needs.candidate;
-    if !selected.is_empty() {
-        if changed
-            || candidate.result != "success"
+    if changed && !selected.is_empty() && candidate.output("head") == selected {
+        return Err("selected upgrade did not produce a changed candidate".into());
+    }
+    if !selected.is_empty() && !changed {
+        if candidate.result != "success"
             || candidate.output("green") != "true"
             || candidate.output("head") != selected
         {

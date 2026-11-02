@@ -47,6 +47,36 @@ fn actual_protected_controller_bootstrap_and_selected_output_order_are_admitted(
     check(&actual()).unwrap();
 }
 #[test]
+fn selected_upgrade_action_cannot_be_removed_or_replaced_by_an_unbounded_mode() {
+    for options in [
+        vec!["certify", "certify-and-publish"],
+        vec!["certify", "certify-and-publish", "arbitrary-command"],
+    ] {
+        let mut workflows = actual();
+        let action = field_mut(
+            field_mut(
+                field_mut(
+                    field_mut(
+                        workflows.get_mut("llama-upstream-canary.yml").unwrap(),
+                        "on",
+                    ),
+                    "workflow_dispatch",
+                ),
+                "inputs",
+            ),
+            "mesh_action",
+        );
+        *field_mut(action, "options") = Node::Seq(
+            options
+                .into_iter()
+                .map(|value| Node::Scalar(value.into()))
+                .collect(),
+        );
+        assert!(check(&workflows).is_err());
+    }
+}
+
+#[test]
 fn selection_step_timeout_is_pinned_to_one_bounded_value() {
     for minutes in ["3", "30", "${{ inputs.timeout_minutes }}"] {
         let mut workflows = actual();

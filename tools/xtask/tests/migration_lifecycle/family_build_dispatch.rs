@@ -92,62 +92,46 @@ fn actual_build_dispatch_uses_frozen_controller_wrapper_and_preserves_selected_s
     .unwrap();
     let wrapper = controller.join("scripts/llama-canary-agent-repair.sh");
     fs::write(&wrapper,"set -eu\nprintf '%s\\n' \"$PWD\" \"$CANARY_SOURCE_ROOT\" \"$CANARY_CONTROLLER_SHA\" \"$CANARY_MESH_SOURCE\" \"$CANARY_HARNESS_MODE\" \"$GITHUB_RUN_ATTEMPT\" > wrapper-context\nexit 73\n").unwrap();
-    let input = json!({"controller_root":controller,"source_root":selected,"controller_revision":controller_revision,"selected_revision":selected_revision,"mesh_source":selected_revision,"upstream_revision":"a".repeat(40),"mode":"pinned-build","pass_id":"repair-1","run_id":"123","run_attempt":"3","previous":null,"evidence":root.join("evidence"),"export":root.join("export"),"agent_timeout_seconds":1,"verification_timeout_seconds":1});
-    let path = root.join("request.json");
-    fs::write(&path, serde_json::to_vec(&input).unwrap()).unwrap();
-    let result = invoke(
-        env!("CARGO_BIN_EXE_xtask"),
-        &root,
-        &[
-            "automation",
-            "canary-receipts",
-            "build",
-            "--input",
-            path.to_str().unwrap(),
-        ],
-    );
-    assert!(!result.success());
-    assert!(
-        String::from_utf8_lossy(&result.stderr.bytes_retained).contains("73"),
-        "{result:?}"
-    );
-    assert_eq!(
-        fs::read_to_string(controller.join("wrapper-context")).unwrap(),
-        format!(
-            "{}\n{}\n{}\n{}\npinned-build\n3\n",
-            controller.display(),
-            selected.display(),
-            controller_revision,
-            selected_revision
-        )
-    );
-    assert_eq!(
-        fs::read(selected.join("battery-admitted")).unwrap(),
-        b"admitted\n"
-    );
-    assert!(!selected.join("selected-wrapper-ran").exists());
-    assert!(!controller.join("selected-wrapper-ran").exists());
-    assert!(!root.join("export").exists());
-    // The same private sources refuse repair before either finite boundary runs.
-    fs::remove_file(controller.join("wrapper-context")).unwrap();
-    fs::remove_file(selected.join("battery-admitted")).unwrap();
-    let mut repair = input;
-    repair["mode"] = "repair-build".into();
-    repair["evidence"] = json!(root.join("repair-evidence"));
-    fs::write(&path, serde_json::to_vec(&repair).unwrap()).unwrap();
-    let result = invoke(
-        env!("CARGO_BIN_EXE_xtask"),
-        &root,
-        &[
-            "automation",
-            "canary-receipts",
-            "build",
-            "--input",
-            path.to_str().unwrap(),
-        ],
-    );
-    assert!(!result.success());
-    assert!(!controller.join("wrapper-context").exists());
-    assert!(!selected.join("battery-admitted").exists());
-    assert!(!root.join("repair-evidence").exists());
+    for mode in ["pinned-build", "repair-build"] {
+        let evidence = root.join(format!("{mode}-evidence"));
+        let export = root.join(format!("{mode}-export"));
+        let input = json!({"controller_root":controller,"source_root":selected,"controller_revision":controller_revision,"selected_revision":selected_revision,"mesh_source":selected_revision,"upstream_revision":"a".repeat(40),"mode":mode,"pass_id":"repair-1","run_id":"123","run_attempt":"3","previous":null,"evidence":evidence,"export":export,"agent_timeout_seconds":1,"verification_timeout_seconds":1});
+        let path = root.join("request.json");
+        fs::write(&path, serde_json::to_vec(&input).unwrap()).unwrap();
+        let result = invoke(
+            env!("CARGO_BIN_EXE_xtask"),
+            &root,
+            &[
+                "automation",
+                "canary-receipts",
+                "build",
+                "--input",
+                path.to_str().unwrap(),
+            ],
+        );
+        assert!(!result.success());
+        assert!(
+            String::from_utf8_lossy(&result.stderr.bytes_retained).contains("73"),
+            "{mode}: {result:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(controller.join("wrapper-context")).unwrap(),
+            format!(
+                "{}\n{}\n{}\n{}\n{mode}\n3\n",
+                controller.display(),
+                selected.display(),
+                controller_revision,
+                selected_revision
+            )
+        );
+        assert_eq!(
+            fs::read(selected.join("battery-admitted")).unwrap(),
+            b"admitted\n"
+        );
+        assert!(!selected.join("selected-wrapper-ran").exists());
+        assert!(!controller.join("selected-wrapper-ran").exists());
+        assert!(!export.exists());
+        fs::remove_file(controller.join("wrapper-context")).unwrap();
+        fs::remove_file(selected.join("battery-admitted")).unwrap();
+    }
 }

@@ -200,7 +200,7 @@ impl Fixture {
         )
     }
     fn consumer(&self) -> PathBuf {
-        let target = self.root.join("canary-source");
+        let target = self.context.controller_root.join("canary-source");
         process::git(
             &self.root,
             &[
@@ -492,6 +492,68 @@ fn changed_package(fixture: &Fixture) -> (PathBuf, Digest, String) {
     .unwrap();
     let (package, digest) = fixture.pack_candidate(&candidate, Some(bundle));
     (package, digest, candidate)
+}
+
+#[test]
+fn selected_upgrade_restores_changed_source_with_a_separate_frozen_controller() {
+    if isolated("selected_upgrade_restores_changed_source_with_a_separate_frozen_controller") {
+        return;
+    }
+    let mut fixture = Fixture::new();
+    let controller = fixture.directory.path().join("protected-controller");
+    process::git(
+        &fixture.root,
+        &[
+            "clone".into(),
+            "--quiet".into(),
+            fixture.root.clone().into(),
+            controller.clone().into(),
+        ],
+        None,
+    )
+    .unwrap();
+    fs::write(controller.join("controller.txt"), b"protected controller").unwrap();
+    let revision = commit(&controller, "separate controller revision");
+    fixture.context.controller_root = controller.clone();
+    fixture.context.controller_revision = revision.clone();
+    fixture.context.selected_source = fixture.base.clone();
+    let receipt = fixture.admitted.join("source-plan.json");
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&receipt).unwrap()).unwrap();
+    document["controller_revision"] = revision.clone().into();
+    fs::write(receipt, serde_json::to_vec(&document).unwrap()).unwrap();
+    let (package, digest, candidate) = changed_package(&fixture);
+    let root = fixture.consumer();
+    let request = restoring::Input {
+        context: fixture.context.clone(),
+        root: root.clone(),
+        package,
+        identity_sha256: digest,
+    };
+    let mut foreign = request.context.clone();
+    foreign.selected_source = "f".repeat(40);
+    assert!(
+        restoring::restore(&restoring::Input {
+            context: foreign,
+            root: request.root.clone(),
+            package: request.package.clone(),
+            identity_sha256: request.identity_sha256.clone()
+        })
+        .is_err()
+    );
+    restoring::restore(&request).unwrap();
+    assert_eq!(
+        process::text(&root, &["rev-parse", "HEAD"]).unwrap(),
+        candidate
+    );
+    assert_eq!(
+        process::text(&controller, &["rev-parse", "HEAD"]).unwrap(),
+        revision
+    );
+    assert_eq!(
+        process::text(&root, &["rev-parse", "HEAD^"]).unwrap(),
+        fixture.base
+    );
 }
 
 #[test]
