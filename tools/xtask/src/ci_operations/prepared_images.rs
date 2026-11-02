@@ -33,8 +33,17 @@ fn prepares_in_image_profile(body: &str) -> bool {
         && !body.lines().any(|line| {
             line.trim()
                 .strip_prefix("runner-profile:")
-                .is_some_and(|profile| profile.trim() != "image")
+                .is_some_and(|profile| unquoted(profile.trim()) != "image")
         })
+}
+
+/// A YAML scalar without its surrounding quotes: `"image"` and `'image'` are
+/// the string `image`.
+fn unquoted(value: &str) -> &str {
+    ['"', '\'']
+        .into_iter()
+        .find_map(|quote| value.strip_prefix(quote)?.strip_suffix(quote))
+        .unwrap_or(value)
 }
 
 pub(crate) fn check_prepared_images(
@@ -133,7 +142,15 @@ mod tests {
         let hosted = format!("{PREPARED}        with:\n          runner-profile: hosted-bare\n");
         check_prepared_images(&web, &nightly(&hosted), &root()).unwrap();
         check_prepared_images(&web, &nightly("    steps: []\n"), &root()).unwrap();
-        let image = format!("{PREPARED}        with:\n          runner-profile: image\n");
-        assert!(check_prepared_images(&web, &nightly(&image), &root()).is_err());
+        for value in ["image", "\"image\"", "'image'"] {
+            let image = format!("{PREPARED}        with:\n          runner-profile: {value}\n");
+            assert!(
+                check_prepared_images(&web, &nightly(&image), &root()).is_err(),
+                "runner-profile: {value}"
+            );
+        }
+        let quoted_hosted =
+            format!("{PREPARED}        with:\n          runner-profile: \"hosted-bare\"\n");
+        check_prepared_images(&web, &nightly(&quoted_hosted), &root()).unwrap();
     }
 }
