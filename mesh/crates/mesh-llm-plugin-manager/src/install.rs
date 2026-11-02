@@ -10,7 +10,7 @@ use crate::{
     catalog::PluginCatalog,
     catalog_pin::CatalogPin,
     github::{GitHubReleaseAsset, GitHubReleaseClient},
-    select_plugin_asset,
+    infer_plugin_asset, select_plugin_asset,
     source_ref::{
         GitHubPluginSource, PluginInstallRef, PluginVersion, is_valid_name, parse_install_ref,
     },
@@ -324,12 +324,30 @@ async fn install_resolved_plugin(
         target: options.target.triple().to_string(),
     });
     let asset_names = release.asset_names();
-    let selected = select_plugin_asset(
+    let release_version = PluginVersion::new(release.tag_name.clone())?;
+    let mut resolved = resolved;
+    let selected = match select_plugin_asset(
         &resolved.plugin_name,
-        Some(&PluginVersion::new(release.tag_name.clone())?),
+        Some(&release_version),
         &options.target,
         &asset_names,
-    )?;
+    ) {
+        Ok(selected) => selected,
+        // A direct GitHub reference names a repository, and repositories are
+        // conventionally `<name>-plugin`. When the release assets carry a
+        // different plugin name, take that name from the assets. Catalog and
+        // update installs already know the plugin name, so they never infer.
+        Err(error) if resolved.pin.is_none() && current.is_none() => {
+            let Some((name, selected)) =
+                infer_plugin_asset(&release_version, &options.target, &asset_names)
+            else {
+                return Err(error);
+            };
+            resolved.plugin_name = name;
+            selected
+        }
+        Err(error) => return Err(error),
+    };
     let asset = release
         .asset_by_name(&selected.name)
         .with_context(|| format!("selected asset '{}' missing from release", selected.name))?;
