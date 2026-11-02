@@ -164,9 +164,8 @@ LlamaSession::LlamaSession(llama_context_ptr context, LlamaModel& model, const l
                            std::uint32_t max_tokens, std::uint32_t sequences) noexcept
     // NOLINTEND(bugprone-easily-swappable-parameters)
     : context_(std::move(context)), model_(model), vocab_(vocab), workload_(workload),
-      rerank_prompt_(session_rerank_prompt(model)),
-      decoder_start_(decoder_start), batch_limit_(llama_n_ubatch(context_.get())),
-      max_tokens_(max_tokens), sequences_(sequences) {
+      rerank_prompt_(session_rerank_prompt(model)), decoder_start_(decoder_start),
+      batch_limit_(llama_n_ubatch(context_.get())), max_tokens_(max_tokens), sequences_(sequences) {
     // Pre-size the tokenize scratch to the session's whole budget: the first
     // tokenize on a fresh session then runs in one native call, and
     // create_session bounds max_tokens by the context's batch, so this is
