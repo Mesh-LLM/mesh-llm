@@ -1398,6 +1398,14 @@ fn refresh_target_program(session: &StageSession) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// Every runtime the host ships carries the draft-context entry points,
+    /// whichever C++ decoration its toolchain gives the `llama-ext.h` ones.
+    #[test]
+    fn the_loaded_runtime_exports_the_draft_context_api() {
+        crate::test_support::require_native_runtime();
+        assert!(skippy_ffi::llama_draft::llama_draft_api().is_some());
+    }
+
     #[test]
     fn a_poisoned_lock_is_reset_and_reusable() {
         let mutex = Mutex::new(vec![1, 2, 3]);
