@@ -240,6 +240,8 @@ mod tests {
             kv_lookup_hits: 1,
             dflash_feature_rows_missing: 37,
             dflash_draft_context_resets: 2,
+            verify_rollbacks_in_place: 11,
+            verify_rollbacks_checkpointed: 3,
             ..StageReplyStats::default()
         };
         let reply = StageReply {
