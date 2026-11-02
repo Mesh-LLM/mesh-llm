@@ -562,7 +562,8 @@ impl StageModel {
         let api = skippy_ffi::llama_draft::llama_draft_api()
             .ok_or_else(|| anyhow!("native runtime does not export the draft-context API"))?;
         let probe = self.create_session()?;
-        let target_ctx = unsafe { skippy_ffi::skippy_session_llama_context(probe.raw) };
+        let target_ctx: *mut Opaque =
+            unsafe { skippy_ffi::skippy_session_llama_context(probe.raw) }.cast();
         if target_ctx.is_null() {
             bail!("target session has no llama context");
         }
