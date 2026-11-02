@@ -1823,7 +1823,9 @@ dependency environments and offline NAS model admission retain their owners.
 
 The shared macOS accelerator action eagerly starts sccache in every cache mode
 on a unique short Unix socket before any compiler probe and exports it to
-subsequent steps. Parallel compiler clients never initialize the new endpoint;
+subsequent steps. It exports and persists `SCCACHE_IDLE_TIMEOUT=0` before startup
+to retain the job-owned daemon across quiet test phases. Parallel compiler
+clients never initialize the new endpoint or restart it after idle expiration;
 the caller's remote-cache configuration remains unchanged.
 It never stops the default host server, so concurrent runner accounts cannot
 disrupt each other's compiler cache. Canary toolchain verification sets cache

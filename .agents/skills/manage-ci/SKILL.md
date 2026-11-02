@@ -496,8 +496,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   warmer and consumers aligned, and change the cache epoch with this policy.
 - macOS compiler-cache bootstrap must use a job-owned Unix socket before any
   compiler probe. Eagerly start its server in every cache mode; parallel compiler
-  clients must not race to initialize a newly allocated socket. Never stop or
-  restart the host-wide default sccache server:
+  clients must not race to initialize a newly allocated socket. Export
+  `SCCACHE_IDLE_TIMEOUT=0` before startup and persist it for later job steps so
+  quiet test phases cannot expire the daemon and expose another startup race.
+  Never stop or restart the host-wide default sccache server:
   multiple runner accounts can share one physical host. Preserve the disk cache
   independently of the server endpoint, and pass the endpoint to later steps.
 - Declare cache mode per slice: no remote cache, PR restore-only/isolated, or

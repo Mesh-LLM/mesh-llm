@@ -117,7 +117,10 @@ fn preinstalled_linker_refuses_missing_tools_and_starts_cache_without_installing
 set -euo pipefail
 case "$*" in
  --version) exit 0 ;;
- --start-server) printf '%s' "$SCCACHE_SERVER_UDS" > "$FIXTURE_ROOT/started" ;;
+ --start-server)
+  [[ "$SCCACHE_IDLE_TIMEOUT" == 0 ]] || exit 90
+  printf '%s' "$SCCACHE_SERVER_UDS" > "$FIXTURE_ROOT/started"
+  ;;
  *) exit 96 ;;
 esac
 "#,
@@ -131,6 +134,7 @@ esac
             r#"#!/bin/bash
 [[ "$*" == --mesh-probe ]] || exit 97
 [[ "$SCCACHE_SERVER_UDS" == "$(cat "$FIXTURE_ROOT/started")" ]] || exit 98
+[[ "$SCCACHE_IDLE_TIMEOUT" == 0 ]] || exit 90
 "#,
         );
         let env = f.root.join("github.env");
@@ -139,6 +143,7 @@ esac
             &script,
             &[
                 ("TOOL_SOURCE", "preinstalled"),
+                ("SCCACHE_IDLE_TIMEOUT", "2"),
                 ("SCCACHE_MULTILEVEL_CHAIN", "disk"),
                 ("GITHUB_ENV", env.to_str().unwrap()),
                 ("GITHUB_PATH", path.to_str().unwrap()),
@@ -155,6 +160,13 @@ esac
             assert!(!f.root.join("started").exists());
         } else {
             let endpoint = f.text("started");
+            assert_eq!(
+                f.text("github.env")
+                    .lines()
+                    .filter(|line| line.starts_with("SCCACHE_IDLE_TIMEOUT="))
+                    .collect::<Vec<_>>(),
+                ["SCCACHE_IDLE_TIMEOUT=0"]
+            );
             assert!(
                 f.text("github.env")
                     .contains(&format!("SCCACHE_SERVER_UDS={endpoint}"))

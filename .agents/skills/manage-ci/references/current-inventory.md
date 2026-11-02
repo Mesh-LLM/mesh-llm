@@ -859,7 +859,9 @@ directory is preserved; otherwise the action uses the job's runner temporary
 directory. Missing GHA endpoints retain the existing disk-only fallback.
 The action eagerly starts sccache on a unique short Unix socket in both disk-only
 and remote-cache modes, before any parallel compiler clients, and exports that
-endpoint for subsequent steps. Remote cache configuration is preserved. It never
+endpoint for subsequent steps. It exports `SCCACHE_IDLE_TIMEOUT=0` before startup
+and persists the value for the job, preventing idle shutdown between crate
+builds and long test phases. Remote cache configuration is preserved. It never
 stops the default host server. Canary toolchain
 verification only sets cache identity; accelerator setup owns server startup.
 
