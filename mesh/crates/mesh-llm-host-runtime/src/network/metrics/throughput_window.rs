@@ -42,13 +42,22 @@ pub(super) struct ThroughputWindow {
 }
 
 impl ThroughputWindow {
-    /// Add one valid sample observed at `now`.
+    /// Add one sample observed at `now`. Concurrent attempts can take the
+    /// shard lock out of timestamp order, so the sample goes to its place in
+    /// time and the cap then evicts the oldest observation. A rate that rounds
+    /// down to zero is no evidence and is not kept.
     pub(super) fn record(&mut self, now: Instant, tps_milli: u64) {
+        if tps_milli == 0 {
+            return;
+        }
         self.expire(now);
-        if self.samples.len() >= THROUGHPUT_EVIDENCE_MAX_SAMPLES {
+        let position = self
+            .samples
+            .partition_point(|(observed, _)| *observed <= now);
+        self.samples.insert(position, (now, tps_milli));
+        if self.samples.len() > THROUGHPUT_EVIDENCE_MAX_SAMPLES {
             self.samples.pop_front();
         }
-        self.samples.push_back((now, tps_milli));
     }
 
     /// The samples still inside the window at `now`; empty once all expired.
@@ -151,5 +160,38 @@ mod tests {
         window.record(start + Duration::from_secs(5), 7_000);
 
         assert_eq!(window.recent(start).samples, 1);
+    }
+
+    #[test]
+    fn a_late_recorded_older_sample_is_the_one_evicted() {
+        let start = Instant::now();
+        let mut window = ThroughputWindow::default();
+        for i in 1..=THROUGHPUT_EVIDENCE_MAX_SAMPLES as u64 {
+            window.record(start + Duration::from_millis(i), 1_000);
+        }
+        // Took the lock last, but was observed first: it is the oldest.
+        window.record(start, 9_000);
+
+        assert_eq!(window.samples.len(), THROUGHPUT_EVIDENCE_MAX_SAMPLES);
+        assert!(window.samples.iter().all(|(_, tps)| *tps == 1_000));
+
+        let mut ordered = ThroughputWindow::default();
+        ordered.record(start + Duration::from_millis(2), 2_000);
+        ordered.record(start + Duration::from_millis(1), 1_000);
+        let times: Vec<_> = ordered.samples.iter().map(|(at, _)| *at).collect();
+        assert_eq!(
+            times,
+            [
+                start + Duration::from_millis(1),
+                start + Duration::from_millis(2)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_zero_rate_is_not_evidence() {
+        let mut window = ThroughputWindow::default();
+        window.record(Instant::now(), 0);
+        assert!(window.samples.is_empty());
     }
 }
