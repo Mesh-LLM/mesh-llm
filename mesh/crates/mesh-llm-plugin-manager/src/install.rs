@@ -282,7 +282,7 @@ async fn resolve_install_source(
             })
         }
         PluginInstallRef::GitHub { source, version } => Ok(ResolvedInstallSource {
-            plugin_name: source.repo.clone(),
+            plugin_name: source.plugin_name().to_string(),
             source,
             version,
             pin: None,

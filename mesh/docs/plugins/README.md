@@ -307,6 +307,10 @@ GitHub `owner/repo` references, or GitHub URLs:
 mesh-llm plugins install blackboard Mesh-LLM/metrics-plugin
 ```
 
+A GitHub reference `Owner/<name>-plugin` installs plugin `<name>` from the
+release asset `<name>-<tag>-<target>` for this platform; a repository without
+the `-plugin` suffix installs under its own name.
+
 Each reference uses the existing installer in order, including its permission
 disclosures and existing-install handling. On the first failure, the command
 exits unsuccessfully and names the failed reference; earlier successful installs
