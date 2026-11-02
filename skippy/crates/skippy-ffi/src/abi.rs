@@ -620,6 +620,7 @@ pub struct RuntimeConfig {
     /// One past the last such block index. `end <= start` keeps every routed
     /// expert on the accelerator.
     pub host_expert_layer_end: i32,
+    pub recurrent_rollback_tokens: u32,
 }
 
 /// Sentinel for `RuntimeConfig` tri-state fields: keep the native derived default.

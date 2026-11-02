@@ -130,7 +130,7 @@ impl StageOpenAiBackend {
             *decoded_tokens,
             verify_inputs.len(),
         )?;
-        let message = embedded_verify_window_message(VerifyWindowMessageArgs {
+        let mut message = embedded_verify_window_message(VerifyWindowMessageArgs {
             window_id: window.id,
             request_id,
             session_id,
@@ -141,6 +141,7 @@ impl StageOpenAiBackend {
             sampling: wire_sampling.clone(),
             native_mtp_draft_tokens: request.native_mtp_draft_tokens(),
         })?;
+        message.state.set_split_dflash(request.split_dflash());
         let verify = self.execute_embedded_stage_message(
             request,
             downstream,
@@ -149,6 +150,10 @@ impl StageOpenAiBackend {
             &verify_inputs,
             WireReplyKind::PredictedTokens,
         )?;
+        native_mtp_counters.observe_verify_window_downstream_compute(
+            verify.reply.stats.verify_window_compute_us
+                - crate::frontend::util::ms_to_us(verify.stats.stage0_compute_ms),
+        );
         let completed = verify_window_scheduler.complete_next(verify.reply.window.window_id)?;
         if completed != window {
             return Err(InferenceError::backend(

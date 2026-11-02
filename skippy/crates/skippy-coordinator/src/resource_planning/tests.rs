@@ -827,3 +827,115 @@ fn zero_projector_bytes_keep_the_previous_budget() {
         usable_kv_cache_budget(16_000_000_000, 5_000_000_000, 0)
     );
 }
+
+/// Qwen3.5-9B's header: 24 of 32 layers recurrent.
+fn qwen35_9b_metadata() -> GgufCompactMeta {
+    GgufCompactMeta {
+        architecture: "qwen35".to_string(),
+        context_length: 262_144,
+        embedding_size: 4096,
+        head_count: 16,
+        kv_head_count: 4,
+        layer_count: 32,
+        key_length: 256,
+        value_length: 256,
+        ssm_conv_kernel: 4,
+        ssm_inner_size: 4096,
+        ssm_state_size: 128,
+        ssm_group_count: 16,
+        recurrent_layers: (0..32).map(|layer| layer % 4 != 3).collect(),
+        full_attention_interval: 4,
+        ..Default::default()
+    }
+}
+
+fn plan_qwen35_9b(vram_bytes: u64, draft: Option<PlannedSpeculativeDraft>) -> RuntimeResourcePlan {
+    let metadata = qwen35_9b_metadata();
+    plan_runtime_resources_with_draft(
+        RuntimeResourcePlanInput {
+            ctx_size_override: None,
+            parallel_override: None,
+            model_bytes: 5_680_522_464,
+            projector_bytes: 0,
+            vram_bytes,
+            metadata: Some(&metadata),
+            kv_cache_quant: GgufKvCacheQuant::F16,
+            local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
+            measured_buffers: None,
+        },
+        draft,
+    )
+}
+
+fn dflash_draft(cap: u32) -> PlannedSpeculativeDraft {
+    PlannedSpeculativeDraft {
+        weight_bytes: 1_383_768_224,
+        recurrent_rollback_tokens: cap + 1,
+        kv_bytes_per_token: 0,
+        compute_bytes: 0,
+    }
+}
+
+#[test]
+fn a_planned_draft_charges_its_context_kv_and_compute() {
+    let vram = 24 * 1024 * 1024 * 1024;
+    let weights_only = plan_qwen35_9b(vram, Some(dflash_draft(15)))
+        .breakdown
+        .unwrap();
+    let with_context = PlannedSpeculativeDraft {
+        kv_bytes_per_token: 4 * 1024,
+        compute_bytes: 256 * 1024 * 1024,
+        ..dflash_draft(15)
+    };
+    let charged = plan_qwen35_9b(vram, Some(with_context)).breakdown.unwrap();
+
+    assert_eq!(
+        charged.speculative_bytes,
+        weights_only.speculative_bytes + 256 * 1024 * 1024
+    );
+    assert_eq!(
+        charged.kv_bytes_per_token,
+        weights_only.kv_bytes_per_token + 4 * 1024
+    );
+    assert_eq!(
+        charged.planned_kv_bytes,
+        charged.kv_bytes_per_token * u64::from(charged.context_length) * charged.slots as u64
+    );
+    assert!(charged.planned_kv_bytes <= charged.kv_budget_bytes);
+    assert!(charged.context_length <= weights_only.context_length);
+}
+
+#[test]
+fn a_planned_draft_charges_its_weights_and_extra_rollback_planes() {
+    let plane = qwen35_9b_metadata().recurrent_plane_bytes_per_native_sequence();
+    assert_eq!(plane, 24 * (3 * (4096 + 2 * 16 * 128) + 128 * 4096) * 4);
+    let vram = 64 * 1024 * 1024 * 1024;
+    let none = plan_qwen35_9b(vram, None).breakdown.unwrap();
+    let cap6 = plan_qwen35_9b(vram, Some(dflash_draft(6)))
+        .breakdown
+        .unwrap();
+    let cap15 = plan_qwen35_9b(vram, Some(dflash_draft(15)))
+        .breakdown
+        .unwrap();
+
+    // Four lanes keep eight native sequences, each holding cap + 2 planes
+    // instead of three.
+    assert_eq!(none.speculative_bytes, 0);
+    assert_eq!(cap6.speculative_bytes, 1_383_768_224 + plane * 5 * 8);
+    assert_eq!(cap15.speculative_bytes, 1_383_768_224 + plane * 14 * 8);
+    assert_eq!(cap15.projector_bytes, 0);
+    assert!(cap6.kv_budget_bytes < none.kv_budget_bytes);
+    assert!(cap15.kv_budget_bytes < cap6.kv_budget_bytes);
+    assert!(cap15.context_length <= cap6.context_length);
+}
+
+#[test]
+fn a_draft_that_leaves_no_room_for_the_minimum_context_does_not_fit() {
+    let vram = 10_500_000_000;
+    assert!(plan_qwen35_9b(vram, None).fits());
+    assert!(plan_qwen35_9b(vram, Some(dflash_draft(6))).fits());
+    let tight = plan_qwen35_9b(vram, Some(dflash_draft(15)));
+    assert!(!tight.fits());
+    assert_eq!(tight.context_length, MIN_AUTO_CONTEXT_LENGTH);
+}

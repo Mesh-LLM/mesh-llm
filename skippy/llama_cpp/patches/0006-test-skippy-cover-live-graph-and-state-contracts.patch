@@ -18,7 +18,7 @@ Subject: [PATCH 06/11] test(skippy): cover live graph and state contracts
  .../tests/renamed_multishard_planning.cpp     | 1659 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
  src/skippy/tests/runtime_events.cpp           |  695 +++++++
- src/skippy/tests/sampling_history.cpp         |  459 +++++
+ src/skippy/tests/sampling_history.cpp         |  517 +++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1151 ++++++++++++
@@ -38,7 +38,7 @@ Subject: [PATCH 06/11] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 34 files changed, 9911 insertions(+), 30 deletions(-)
+ 34 files changed, 9966 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -5843,10 +5843,10 @@ index 000000000..00a6ff0ec
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..932b031a9
+index 000000000..9e134586f
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,459 @@
+@@ -0,0 +1,517 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
 +#include "../runtime_support.h"
@@ -6054,6 +6054,60 @@ index 000000000..932b031a9
 +    skippy_error_free(error);
 +    CHECK(restored->token_history == before);
 +    release(restored);
++}
++
++// A verify window longer than the in-place recurrent rollback depth is
++// restored from a host checkpoint, which replays the accepted rows. Trimming to
++// the accepted prefix must keep the request's sampler: its grammar state and
++// RNG continue from the accepted tokens instead of restarting.
++void verify_restore_keeps_sampler(skippy_model * model) {
++    const auto sampling = sampling_config();
++    const std::vector<llama_token> prefix(8, 1);
++    auto * session = create(model);
++    configure(session, sampling, false, prefix.size() + 1);
++    prefill(session, prefix);
++    const auto * sampler = session->sampler;
++    // Rows predict 42 and 43; the proposed 7 rejects the second row.
++    const std::vector<llama_token> window{2, 42, 7, 9};
++    std::vector<llama_token> predicted(window.size(), LLAMA_TOKEN_NULL);
++    size_t predicted_count = 0;
++    size_t output_bytes = 0;
++    skippy_error * error = nullptr;
++    auto status = skippy_verify_tokens_frame_sampled(session, window.data(), window.size(), &sampling,
++            nullptr, nullptr, nullptr, nullptr, 0, &output_bytes,
++            predicted.data(), predicted.size(), &predicted_count, 0, nullptr, &error);
++    ok(status, error);
++    CHECK(predicted_count == 2 && predicted[0] == 42 && predicted[1] == 43);
++    CHECK(window.size() > session->ctx->get_cparams().n_rs_seq);
++    CHECK(session->verify_checkpoints.size() == 1);
++    const uint64_t accepted = prefix.size() + predicted_count;
++    error = nullptr;
++    status = skippy_trim_session(session, accepted, &error);
++    ok(status, error);
++    CHECK(session->token_history.size() == accepted);
++    CHECK(session->sampler == sampler && session->sampling_has_grammar);
++    CHECK(session->sampling_accepted_token_count == accepted);
++    // Without the grammar the 42 bias would win again.
++    CHECK(decode(session, sampling, predicted[1]) == 44);
++    release(session);
++
++    // Discarding the whole window must not keep a sampler that already
++    // accepted its first row.
++    session = create(model);
++    configure(session, sampling, false, prefix.size() + 1);
++    prefill(session, prefix);
++    error = nullptr;
++    status = skippy_verify_tokens_frame_sampled(session, window.data(), window.size(), &sampling,
++            nullptr, nullptr, nullptr, nullptr, 0, &output_bytes,
++            predicted.data(), predicted.size(), &predicted_count, 0, nullptr, &error);
++    ok(status, error);
++    CHECK(session->verify_checkpoints.size() == 1);
++    error = nullptr;
++    status = skippy_trim_session(session, prefix.size(), &error);
++    ok(status, error);
++    CHECK(session->token_history.size() == prefix.size());
++    CHECK(session->sampling_accepted_token_count <= session->token_history.size());
++    release(session);
 +}
 +
 +void penalty_restore(skippy_model * model, bool full) {
@@ -6298,6 +6352,10 @@ index 000000000..932b031a9
 +        }
 +        if (grammar) {
 +            generated_prefix_restore(model);
++            if (require_recurrent) {
++                // Only recurrent memory restores verify windows from a checkpoint.
++                verify_restore_keeps_sampler(model);
++            }
 +            adapter_contracts(model);
 +        }
 +    }
