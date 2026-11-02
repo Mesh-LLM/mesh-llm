@@ -700,8 +700,13 @@ override; `mesh_ref` defaults to certify-only; explicit `mesh_action=certify-and
 adds independent verification and publication of the unchanged selected commit. Upstream release
 qualification never replaces the complete candidate and independent family
 passes required before publishing an upgrade PR. Only the hosted upstream
-selection and platform-availability steps may receive the read-only GitHub token
-for public upstream API and runner reads; workers and repair agents remain credential-free.
+selection and platform-selection steps may receive the read-only GitHub token;
+workers and repair agents remain credential-free. That token can read public
+upstream metadata but cannot list repository runners: the runner API requires
+[repository Administration read access](https://docs.github.com/en/rest/actions/self-hosted-runners#list-self-hosted-runners-for-a-repository).
+With the current token, `platform=auto` falls back to macOS; use explicit
+`platform=linux` to select Linux. Do not rely on automatic Linux availability
+selection or add an administrator credential to repair workers.
 
 Each candidate build owns one complete native CTest pass. The initial native
 build may compile tests without executing them; after fresh annotation
