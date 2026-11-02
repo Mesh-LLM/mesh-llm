@@ -1308,6 +1308,14 @@ Runtime and product artifact IDs preserve every compatibility discriminator:
 `ci-product-<platform>-<architecture>-<backend>`. Consumers download the exact
 platform, architecture, and backend identity selected by the plan.
 
+For configured Windows ROCm targets, the typed manifest writer admits only
+architectures with staged rocBLAS code objects when `rocblas.dll` is declared.
+Those objects join `runtime.files` with SHA-256 checksums, not the loadable DLL
+list. A missing kernel directory or empty target intersection fails packaging.
+The existing shell copy step and producer/composer topology are unchanged;
+supported-GPU inference and unsupported-GPU fallback still require hardware
+qualification.
+
 Release-profile hosts are used for both selected PR rows and main rows. Besides
 keeping product semantics identical, this prevents unstripped debug binaries
 from being duplicated into every composed product artifact.

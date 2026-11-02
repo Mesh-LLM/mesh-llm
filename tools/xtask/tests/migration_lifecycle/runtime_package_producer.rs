@@ -617,5 +617,3 @@ fn prepopulated_cuda_closure_with_no_search_paths_still_redistributes_license() 
 
 #[path = "runtime_package_producer/cuda_package_producer.rs"]
 mod cuda_package_producer;
-#[path = "runtime_package_producer/windows_rocm_kernels.rs"]
-mod windows_rocm_kernels;

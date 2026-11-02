@@ -5,6 +5,8 @@ use std::process::Command;
 
 #[path = "l4_producers/cargo_projection.rs"]
 mod cargo_projection;
+#[path = "l4_producers/windows_rocm_manifest.rs"]
+mod windows_rocm_manifest;
 
 fn runtime_args(root: &std::path::Path) -> Vec<String> {
     let output = root.join("manifest.json").to_string_lossy().into_owned();

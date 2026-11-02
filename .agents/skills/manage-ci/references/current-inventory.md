@@ -952,6 +952,13 @@ fail-open policy.
 
 ## Artifact and cache owners
 
+`native runtime-manifest-write` owns Windows ROCm target admission after the
+shell copies SDK kernels. For configured targets with a declared `rocblas.dll`,
+it hashes staged rocBLAS `.co`/`.hsaco` files into `runtime.files` and advertises
+only targets with matching code objects. An empty intersection fails before
+manifest replacement. Portable `l4_producers` contracts cover the consumed JSON,
+file identity, environment precedence, and unchanged platform/backend paths.
+
 After successful runtime package verification, Windows release CPU/GPU jobs
 publish and verify an exact-key ABI cache miss under the current ref. These
 two jobs grant only `actions: read` for the publication probe; cache writes use

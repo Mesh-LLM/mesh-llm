@@ -305,43 +305,6 @@ copy_windows_rocm_kernel_libraries() {
     done
 }
 
-# The manifest advertises the configured targets, and the resolver picks this
-# runtime for any GPU it lists. The Windows HIP SDK has no rocBLAS kernels for
-# some of them (gfx1103 in 6.4 and 7.1.1, gfx90a, gfx942), and rocBLAS fails
-# to initialize on its first call there (#2768). Advertise only the targets
-# whose rocBLAS kernels were packaged, so those GPUs fall to another runtime.
-# Only code objects (`.co`, `.hsaco`) count; a `.dat` file is a catalog.
-advertise_windows_rocm_targets_with_kernels() {
-    local library="$1/rocblas/library" raw arch file base
-    local -a targets=() kept=() dropped=()
-    [[ -d "$library" ]] || return 0
-    raw="${LLAMA_STAGE_AMDGPU_TARGETS:-${SKIPPY_AMDGPU_TARGETS:-}}"
-    raw="${raw//;/ }"
-    raw="${raw//,/ }"
-    read -r -a targets <<< "$raw"
-    [[ "${#targets[@]}" -gt 0 ]] || return 0
-    for arch in "${targets[@]}"; do
-        for file in "$library"/*; do
-            base="$(basename "$file")"
-            if [[ ( "$base" == *.co || "$base" == *.hsaco ) &&
-                "$base" =~ (^|[^0-9a-z])"$arch"([^0-9a-z]|$) ]]; then
-                kept+=("$arch")
-                continue 2
-            fi
-        done
-        dropped+=("$arch")
-    done
-    if [[ "${#kept[@]}" -eq 0 ]]; then
-        echo "no rocBLAS kernels for any ROCm target (${targets[*]}) in ${ROCM_PATH:-the HIP SDK}; the runtime would match no GPU" >&2
-        return 1
-    fi
-    if [[ "${#dropped[@]}" -gt 0 ]]; then
-        echo "not advertising ${dropped[*]}: the HIP SDK has no rocBLAS kernels for them" >&2
-        LLAMA_STAGE_AMDGPU_TARGETS="$(IFS=';'; printf '%s' "${kept[*]}")"
-        export LLAMA_STAGE_AMDGPU_TARGETS
-    fi
-}
-
 hip_offload_arch_args() {
     local raw arch
     local -a arches=()
@@ -879,7 +842,6 @@ if [[ "$runtime_os" == "windows" ]]; then
         --scan-dir "$stage_dir/tools" \
         "${dependency_args[@]}"
     copy_windows_rocm_kernel_libraries "$stage_dir/lib"
-    advertise_windows_rocm_targets_with_kernels "$stage_dir/lib"
 
     library_paths=()
     while IFS= read -r library; do
