@@ -46,6 +46,8 @@ The metrics described in this section are the current implementation. The code-l
 
 Storage is bounded: 1-hour TTL, maximum 128 tracked models, maximum 16 targets per model. Stale entries are pruned on snapshot. When bounds are exceeded, the least-recently-updated entries are evicted first.
 
+Any attempt keeps an entry alive, failures included, so activity says nothing about when a throughput sample was measured. Routing therefore reads throughput from a separate evidence window per model and per target: the 32 most recent valid samples from the last 15 minutes (`network/metrics/throughput_window.rs`). Only a successful attempt with completion tokens and a positive duration adds a sample; timeouts, rejections, missing usage and zero tokens never refresh it. Local ranking (`tps_for_model`, `throughput_hint_for_target`) and the advertised hints both take their average and sample count from that window. With no surviving sample there is no throughput evidence: ranking treats the target as unmeasured, after measured targets and in its original order among the unmeasured ones. The `avg_tokens_per_second` and `throughput_samples` fields below keep their cumulative meaning over the entry's lifetime.
+
 All currently implemented metrics are `local-only`. None of them are new gossip or protocol fields.
 
 ### `/api/runtime/llama`
