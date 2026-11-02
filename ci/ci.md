@@ -1,5 +1,13 @@
 # MeshLLM CI topology
 
+Linux Rust-test jobs disable test-profile debug information with
+`CARGO_PROFILE_TEST_DEBUG=0`, preserving complete package tests, debug
+assertions and overflow checks. This reduces the dependency variants and
+linked test executables retained across feature-isolated package invocations.
+The shared compiler seed warmer uses the same test setting. Cache epoch `v4`
+starts a fresh namespace. Batch jobs record filesystem space before each
+package and retained target/compiler-cache sizes even when tests fail.
+
 ## Standalone C++ API qualification
 
 The protected catalog admits `skippy/skippy_api/**` and
@@ -1308,6 +1316,14 @@ Runtime and product artifact IDs preserve every compatibility discriminator:
 `ci-product-<platform>-<architecture>-<backend>`. Consumers download the exact
 platform, architecture, and backend identity selected by the plan.
 
+For configured Windows ROCm targets, the typed manifest writer admits only
+architectures with staged rocBLAS code objects when `rocblas.dll` is declared.
+Those objects join `runtime.files` with SHA-256 checksums, not the loadable DLL
+list. A missing kernel directory or empty target intersection fails packaging.
+The existing shell copy step and producer/composer topology are unchanged;
+supported-GPU inference and unsupported-GPU fallback still require hardware
+qualification.
+
 Release-profile hosts are used for both selected PR rows and main rows. Besides
 keeping product semantics identical, this prevents unstripped debug binaries
 from being duplicated into every composed product artifact.
@@ -1815,7 +1831,9 @@ dependency environments and offline NAS model admission retain their owners.
 
 The shared macOS accelerator action eagerly starts sccache in every cache mode
 on a unique short Unix socket before any compiler probe and exports it to
-subsequent steps. Parallel compiler clients never initialize the new endpoint;
+subsequent steps. It exports and persists `SCCACHE_IDLE_TIMEOUT=0` before startup
+to retain the job-owned daemon across quiet test phases. Parallel compiler
+clients never initialize the new endpoint or restart it after idle expiration;
 the caller's remote-cache configuration remains unchanged.
 It never stops the default host server, so concurrent runner accounts cannot
 disrupt each other's compiler cache. Canary toolchain verification sets cache
@@ -2211,6 +2229,18 @@ applies to a PR until it is merged. No hosted execution is recorded here.
 
 ## External Python SDK source preparation
 
+The checkout action, admission descriptor and Python-tooling policy use SDK
+commit `85226c50a68a13b48f40fe25e70eb85814e67457`; update all three together.
+Laya product readiness and Decisions smoke discovery query
+`/mesh/v1/models?workload_class=decision&available=true`, since compatibility
+model lists contain only LLMs. The golden and response checks remain required.
+
+The current checkpoint includes typed Mesh model discovery, OCR uploads,
+membership/live-session controls, full node configuration and native-runtime
+management. Its generated bindings were produced from the coordinated Mesh
+implementation recorded in the SDK's `sdk-inputs.json`; keep that source
+checkpoint synchronized with native API changes.
+
 The Python SDK package, generated Python bindings and four genuine compatibility
 and embedding clients are owned by `Mesh-LLM/mesh-llm-python-sdk`. Mesh admits the
 fixed commit and manifest in `ci/required-sdk-python/sdk-source.json`; source
@@ -2254,8 +2284,7 @@ on immediate repeated requests without publication sleeps or retries.
 
 ## Rolling preview distribution
 
-`rolling-preview.yml` is a main-only scheduled (Tuesday/Friday 03:23 UTC) and
-manual dispatcher of `release.yml` with `preview=true`, the full GPU matrix and
+`rolling-preview.yml` is a main-only manual dispatcher (schedule commented out) of `release.yml` with `preview=true`, the full GPU matrix and
 hosted runners. Unique run/attempt preview versions leave main unchanged. Release
 producers check out the metadata source SHA; publication stages a draft before
 exposing the complete immutable prerelease, never marking it latest. Stable

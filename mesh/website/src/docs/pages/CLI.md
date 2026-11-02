@@ -615,7 +615,7 @@ keeps the cause chain in every case.
 #### `runtime scan-refresh`
 
 Use this to ask exactly one remote, owner-attested node to rescan its managed
-model inventory. It uses the private `mesh-llm-control/1` lane; it does not
+model inventory. It uses the private `mesh-llm-control/2` lane; it does not
 change public mesh join, gossip, routing, or inference behavior.
 
 The target node must expose owner-control and the requester must use an owner
@@ -756,6 +756,10 @@ mesh-llm load Qwen3-0.6B-Q4_K_M
 Switches:
 
 - `--port <PORT>`: target management/API port (default `3131`).
+- `--ctx-size <TOKENS>`: context per lane for this load. Default: the model's `[[models]]` row, else planned for this node.
+- `--parallel <LANES>`: concurrent lanes for this load. The native runtime allocates context × lanes KV cells. Default: the model's row, else `[gpu] parallel`, else planned.
+
+The command waits up to 30 seconds. If the node is still loading (for example while it downloads the model), it says so and the load continues on the node; check with `mesh-llm status`. `Can't connect` means nothing is listening on the port.
 
 The command targets the local runtime. Use `status`,
 `GET /api/runtime/intents`, and `/v1/models` to observe completion.

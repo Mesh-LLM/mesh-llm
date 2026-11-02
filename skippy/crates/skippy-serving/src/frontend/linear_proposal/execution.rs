@@ -10,18 +10,19 @@ use crate::frontend::{
 
 use super::{LinearProposalReceipt, QueriedLinearProposal};
 
-struct LinearProposalExecution {
-    decision: NativeMtpVerifyWindowDecision,
-    predictions: Vec<i32>,
-    committed_tokens: Vec<i32>,
-    reached_stop: bool,
-    position_after_verification: u64,
-    canonical_position: u64,
-    verification_elapsed_us: u64,
-    repair_elapsed_us: u64,
-    runtime_lock_wait_us: u64,
-    runtime_lock_hold_us: u64,
-    runtime_lock_acquires: usize,
+/// A verified, committed, and repaired linear proposal span.
+pub(crate) struct LinearProposalExecution {
+    pub(crate) decision: NativeMtpVerifyWindowDecision,
+    pub(crate) predictions: Vec<i32>,
+    pub(crate) committed_tokens: Vec<i32>,
+    pub(crate) reached_stop: bool,
+    pub(crate) position_after_verification: u64,
+    pub(crate) canonical_position: u64,
+    pub(crate) verification_elapsed_us: u64,
+    pub(crate) repair_elapsed_us: u64,
+    pub(crate) runtime_lock_wait_us: u64,
+    pub(crate) runtime_lock_hold_us: u64,
+    pub(crate) runtime_lock_acquires: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -143,7 +144,10 @@ impl StageOpenAiBackend {
         }))
     }
 
-    fn execute_local_linear_proposal_inner(
+    /// Verifies `[current] + proposal_tokens` in one target forward, emits the
+    /// committed prefix, and trims or retires the speculative suffix. `None`
+    /// means the session was not at `base_position` and nothing ran.
+    pub(crate) fn execute_local_linear_proposal_inner(
         &self,
         params: LinearProposalExecutionParams<'_>,
         proposal_tokens: &[i32],

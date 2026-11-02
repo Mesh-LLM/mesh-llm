@@ -21,7 +21,8 @@ const MEMBERSHIP_JOIN_INTERVAL: Duration = Duration::from_secs(60);
 const MEMBERSHIP_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(60);
 
 /// A further mesh to serve this node's models into.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MeshMembershipConfig {
     /// Names the membership on this node, and the mesh: every node of one
     /// mesh uses the same name. Lowercase letters, digits, `.`, `_` and `-`.
@@ -47,7 +48,7 @@ pub struct MeshMembershipConfig {
 }
 
 /// A running membership.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[non_exhaustive]
 pub struct MeshMembershipStatus {
     pub name: String,

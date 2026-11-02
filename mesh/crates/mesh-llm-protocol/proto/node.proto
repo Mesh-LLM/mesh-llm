@@ -824,6 +824,18 @@ message OwnerControlApplyConfigRequest {
   bytes target_node_id = 2;               // exactly 32 bytes
   uint64 expected_revision = 3;
   NodeConfigSnapshot config = 4;
+  // separate approval for each plugin whose command executable changes
+  repeated OwnerControlPluginCommandApproval plugin_command_approvals = 5;
+}
+
+message OwnerControlPluginCommandApproval {
+  string plugin = 1;
+  string command = 2;                     // exact new command executable
+  optional OwnerControlPluginArguments invocation = 3; // exact approved arguments; required for changes
+}
+
+message OwnerControlPluginArguments {
+  repeated string args = 1;
 }
 
 message OwnerControlApplyConfigResponse {

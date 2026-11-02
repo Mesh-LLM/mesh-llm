@@ -1,6 +1,7 @@
 //! Scheduler batch execution and bounded selected-token readouts.
 
 use super::*;
+use crate::dflash::DecodedRows;
 
 /// Collect valid sampled tokens while retaining their original batch request indexes.
 pub(super) fn collect_iteration_samples(
@@ -357,8 +358,14 @@ fn advance_iteration_counts(requests: &mut [IterationBatchRequest<'_>]) -> Resul
                 .context("session token count overflow")
         })
         .collect::<Result<Vec<_>>>()?;
+    // Native batches concatenate each request's rows in request order.
+    let mut first_row = 0usize;
     for (request, count) in requests.iter_mut().zip(counts) {
         request.session.token_count = count;
+        let rows = request.token_ids.len();
+        let decoded = DecodedRows::for_prefill(rows, request.positions).offset(first_row);
+        request.session.dflash_after_decode(decoded);
+        first_row += rows;
     }
     Ok(())
 }

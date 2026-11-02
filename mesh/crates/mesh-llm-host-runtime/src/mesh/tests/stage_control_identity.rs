@@ -103,6 +103,7 @@ fn identity_test_load_request() -> crate::inference::skippy::StageLoadRequest {
             swa_full: Some(false),
             cache_idle_slots: Some(5),
             activation_codec_policy: Default::default(),
+            host_experts: skippy_protocol::HostExpertPolicy::default(),
         },
         native_mtp_enabled: true,
         shutdown_generation: 7,

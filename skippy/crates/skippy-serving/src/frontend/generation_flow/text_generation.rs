@@ -212,13 +212,14 @@ impl StageOpenAiBackend {
             &gated_speculative,
             self.runahead_governor.as_deref(),
         );
-        // Speculative windows and native MTP sample or accept tokens outside
-        // the one-token-per-sample path that records logprobs.
+        // Speculative windows, native MTP, and DFlash blocks sample or accept
+        // tokens outside the one-token-per-sample path that records logprobs.
         let gated_speculative = if sampling.top_logprobs.is_some() {
             let mut stood_down = gated_speculative.into_owned();
             stood_down.ngram = None;
             stood_down.extension = None;
             stood_down.native_mtp.enabled = false;
+            stood_down.dflash = None;
             std::borrow::Cow::Owned(stood_down)
         } else {
             gated_speculative

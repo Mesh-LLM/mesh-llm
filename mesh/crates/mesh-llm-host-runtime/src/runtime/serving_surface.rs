@@ -953,6 +953,23 @@ pub(super) struct RunAutoServingSurface {
     pub(super) ready_console_port: Option<u16>,
 }
 
+async fn apply_owner_control_token(
+    console_state: &api::MeshApi,
+    owner_key_path: Option<&std::path::Path>,
+) {
+    // Owner-control routes fail closed without this credential, so a token
+    // that cannot be persisted must not silently disable owner control.
+    match api::owner_control_token::load_or_create_owner_control_token(owner_key_path) {
+        Ok(token) => console_state.set_owner_control_token(Some(token)).await,
+        Err(error) => {
+            tracing::warn!(
+                "owner control: credential unavailable; owner-control routes will reject callers: {error}"
+            );
+            console_state.set_owner_control_token(None).await;
+        }
+    }
+}
+
 pub(super) async fn setup_run_auto_console_state(
     ctx: RunAutoConsoleStateContext<'_>,
 ) -> Result<Option<api::MeshApi>> {
@@ -980,6 +997,7 @@ pub(super) async fn setup_run_auto_console_state(
     });
     console_state.set_primary_backend("skippy".into()).await;
     console_state.set_update_check(ctx.update_check).await;
+    apply_owner_control_token(&console_state, ctx.owner_key_path.as_deref()).await;
     console_state
         .set_runtime_control(ctx.control_tx.clone())
         .await;

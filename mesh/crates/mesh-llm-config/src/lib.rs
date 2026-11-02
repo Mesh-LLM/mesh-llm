@@ -56,7 +56,9 @@ pub use plugin_validation::{
     PluginSettingConstraint, PluginSettingSchema, PluginValueKind, PluginValueSchema,
     SUPPORTED_PLUGIN_CONFIG_SCHEMA_VERSION,
 };
-pub use private_file::restrict_private_directory;
+pub use private_file::{
+    create_private_file_if_absent, read_private_file, restrict_private_directory,
+};
 pub use size::{IecSizeParseError, parse_iec_size};
 pub use store::{
     ConfigStore, config_path, config_to_toml, load_config, parse_config_toml,

@@ -11,6 +11,19 @@ mod commands;
 
 pub use mesh_llm_host_runtime::*;
 
+/// Default MeshLLM application and Tokio worker thread stack size: 8 MB.
+///
+/// The standard Tokio default is 2 MB, which is too small for several spawned
+/// futures in this codebase (startup_local_model_loop, api_proxy,
+/// nostr_rediscovery, publish_loop, handle_mesh_request). Box::pin on the
+/// largest spawn sites keeps most futures on the heap, but 8 MB provides a
+/// safety margin for any remaining large futures or deep call chains. This
+/// matches the macOS main-thread default.
+///
+/// Override with MESH_TOKIO_STACK_SIZE for CI or debugging (e.g. set to
+/// 1048576 to catch regressions with a 1 MB clamp).
+pub const DEFAULT_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
+
 /// Handle immutable build metadata before process-wide cache/TLS setup.
 pub fn run_build_contract_if_requested() -> Option<i32> {
     let args: Vec<_> = std::env::args_os().collect();

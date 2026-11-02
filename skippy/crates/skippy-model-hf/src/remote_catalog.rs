@@ -114,12 +114,20 @@ impl Drop for HfModelFileProbeOverrideGuard {
 
 /// Returns the directory where the catalog dataset is cached locally.
 pub fn catalog_cache_dir() -> PathBuf {
-    std::env::var_os("HF_HOME")
-        .map(PathBuf::from)
+    catalog_cache_dir_from(std::env::var_os("HF_HOME"), std::env::var_os("HOME"))
+}
+
+/// An empty `HF_HOME` or `HOME` counts as unset, as in the crate's other
+/// cache paths, rather than a directory relative to the working directory.
+fn catalog_cache_dir_from(
+    hf_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> PathBuf {
+    hf_home
+        .and_then(crate::cache_paths::nonempty_path)
         .map(|path| path.join("meshllm-catalog"))
         .or_else(|| {
-            std::env::var_os("HOME")
-                .map(PathBuf::from)
+            home.and_then(crate::cache_paths::nonempty_path)
                 .map(|path| path.join(".cache/meshllm/catalog"))
         })
         .unwrap_or_else(|| std::env::temp_dir().join("meshllm/catalog"))

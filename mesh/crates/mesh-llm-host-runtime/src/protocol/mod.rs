@@ -7,6 +7,7 @@ use crate::mesh::NodeRole;
 use crate::mesh::PeerAnnouncement;
 
 pub(crate) mod config_diagnostic;
+pub(crate) mod config_redaction;
 pub(crate) mod convert;
 pub(crate) mod node_record;
 use anyhow::Result;
@@ -18,7 +19,7 @@ use prost::Message;
 
 #[cfg(test)]
 mod config_tests;
-pub const ALPN_CONTROL_V1: &[u8] = b"mesh-llm-control/1";
+pub use mesh_llm_protocol::ALPN_CONTROL_V2;
 pub const ALPN_V1: &[u8] = b"mesh-llm/1";
 #[cfg(test)]
 pub const ALPN: &[u8] = ALPN_V1;
@@ -37,7 +38,7 @@ pub(crate) const STREAM_PLUGIN_BULK_TRANSFER: u8 = 0x09;
 pub(crate) const STREAM_PLUGIN_MESH_STREAM: u8 = 0x0a;
 // Stream IDs 0x0b and 0x0c remain reserved for the retired mesh-plane config
 // subscription and push operations. Config and inventory control now live
-// exclusively on `mesh-llm-control/1`.
+// exclusively on `mesh-llm-control/2`.
 #[cfg(test)]
 pub(crate) const STREAM_CONFIG_SUBSCRIBE: u8 = 0x0b;
 #[cfg(test)]

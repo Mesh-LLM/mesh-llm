@@ -831,6 +831,9 @@ mod tests {
 
     #[test]
     fn available_runtime_bundle_dirs_expand_a_product_root() {
+        skippy_runtime_install::rerun_without_bundle_env!(
+            available_runtime_bundle_dirs_expand_a_product_root
+        );
         let temp = tempfile::tempdir().unwrap();
         let product_root = temp.path().join("mesh-bundle");
         let runtime_dir = product_root.join("native-runtimes/runtime-a");
@@ -847,6 +850,9 @@ mod tests {
 
     #[test]
     fn doctor_discovery_includes_a_bundle_when_the_cache_is_empty() {
+        skippy_runtime_install::rerun_without_bundle_env!(
+            doctor_discovery_includes_a_bundle_when_the_cache_is_empty
+        );
         let temp = tempfile::tempdir().unwrap();
         let product_root = temp.path().join("mesh-bundle");
         let runtime_dir = product_root.join("native-runtimes/runtime-a");

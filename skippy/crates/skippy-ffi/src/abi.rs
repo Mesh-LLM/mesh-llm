@@ -614,6 +614,12 @@ pub struct RuntimeConfig {
     pub has_main_gpu_override: bool,
     pub main_gpu: i32,
     pub split_mode: i32,
+    /// First absolute block index whose routed-expert tensors load into host
+    /// memory (the CPU buffer type) instead of accelerator memory.
+    pub host_expert_layer_start: i32,
+    /// One past the last such block index. `end <= start` keeps every routed
+    /// expert on the accelerator.
+    pub host_expert_layer_end: i32,
 }
 
 /// Sentinel for `RuntimeConfig` tri-state fields: keep the native derived default.

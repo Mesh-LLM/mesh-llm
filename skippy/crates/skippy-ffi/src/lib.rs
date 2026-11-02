@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 74;
+pub const ABI_VERSION_PATCH: u32 = 75;
 
 // Propagate static native archive changes through Cargo dependency metadata so
 // final binaries are relinked after CMake rebuilds llama.cpp.
@@ -16,6 +16,7 @@ mod abi;
 mod activation;
 #[cfg(feature = "dynamic-runtime")]
 mod dynamic;
+pub mod llama_draft;
 mod model;
 mod multimodal;
 mod runtime;

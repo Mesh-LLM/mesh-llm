@@ -1,5 +1,12 @@
 # MeshLLM CI inventory
 
+Linux Rust-test batches and the SafeTensors smoke set
+`CARGO_PROFILE_TEST_DEBUG=0` at reusable-workflow scope; the trusted sccache
+warmer uses the same setting for its test graph. Complete package tests,
+assertions and overflow checks remain enabled. Cache epoch `v4` invalidates
+the previous namespace. Batch jobs report filesystem space before each package
+and target/compiler-cache sizes after the test step, including failures.
+
 The standalone C++ facade paths `skippy/skippy_api/**` and
 `skippy/skippy-api-rs/**` have additive tooling ownership. Their catalog-only
 admission is a protected-main prerequisite before dependent branches adopt the
@@ -852,7 +859,9 @@ directory is preserved; otherwise the action uses the job's runner temporary
 directory. Missing GHA endpoints retain the existing disk-only fallback.
 The action eagerly starts sccache on a unique short Unix socket in both disk-only
 and remote-cache modes, before any parallel compiler clients, and exports that
-endpoint for subsequent steps. Remote cache configuration is preserved. It never
+endpoint for subsequent steps. It exports `SCCACHE_IDLE_TIMEOUT=0` before startup
+and persists the value for the job, preventing idle shutdown between crate
+builds and long test phases. Remote cache configuration is preserved. It never
 stops the default host server. Canary toolchain
 verification only sets cache identity; accelerator setup owns server startup.
 
@@ -951,6 +960,13 @@ changed paths require the documented CI-control or runner-infrastructure
 fail-open policy.
 
 ## Artifact and cache owners
+
+`native runtime-manifest-write` owns Windows ROCm target admission after the
+shell copies SDK kernels. For configured targets with a declared `rocblas.dll`,
+it hashes staged rocBLAS `.co`/`.hsaco` files into `runtime.files` and advertises
+only targets with matching code objects. An empty intersection fails before
+manifest replacement. Portable `l4_producers` contracts cover the consumed JSON,
+file identity, environment precedence, and unchanged platform/backend paths.
 
 After successful runtime package verification, Windows release CPU/GPU jobs
 publish and verify an exact-key ABI cache miss under the current ref. These
@@ -1893,6 +1909,18 @@ applies to a PR until it is merged. No hosted execution is recorded here.
 
 ## External Python SDK source preparation
 
+The checkout action, admission descriptor and Python-tooling policy use SDK
+commit `85226c50a68a13b48f40fe25e70eb85814e67457`; update all three together.
+Laya product readiness and Decisions smoke discovery query
+`/mesh/v1/models?workload_class=decision&available=true`, since compatibility
+model lists contain only LLMs. The golden and response checks remain required.
+
+The current checkpoint includes typed Mesh model discovery, OCR uploads,
+membership/live-session controls, full node configuration and native-runtime
+management. Its generated bindings were produced from the coordinated Mesh
+implementation recorded in the SDK's `sdk-inputs.json`; keep that source
+checkpoint synchronized with native API changes.
+
 The Python SDK package, generated Python bindings and four genuine compatibility
 and embedding clients are owned by `Mesh-LLM/mesh-llm-python-sdk`. Mesh admits the
 fixed commit and manifest in `ci/required-sdk-python/sdk-source.json`; source
@@ -1937,8 +1965,7 @@ cleanup must follow the separate protected-catalog rollout procedure.
 
 ## Rolling preview distribution
 
-`rolling-preview.yml` is a main-only scheduled (Tuesday/Friday 03:23 UTC) and
-manual dispatcher of `release.yml` with `preview=true`, the full GPU matrix and
+`rolling-preview.yml` is a main-only manual dispatcher (schedule commented out) of `release.yml` with `preview=true`, the full GPU matrix and
 hosted runners. Unique run/attempt preview versions leave main unchanged. Release
 producers check out the metadata source SHA; publication stages a draft before
 exposing the complete immutable prerelease, never marking it latest. Stable

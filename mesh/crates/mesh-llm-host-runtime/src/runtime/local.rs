@@ -3,6 +3,7 @@ use super::context_planning::{
     RuntimeResourcePlan, RuntimeResourcePlanInput, RuntimeResourcePlanningProfile,
     plan_runtime_resources,
 };
+use super::live_request_defaults;
 use super::local_memory_plan::{
     MemoryPlanMeasurementKey, MemoryPlanStartPath, emit_measured_memory_reconciliation,
     emit_memory_plan_resolved, measured_buffers_footprint,
@@ -309,6 +310,8 @@ pub(super) struct LocalOpenAiModelStartSpec<'a> {
     pub(super) hook_policy: Option<Arc<dyn InferenceHookPolicy>>,
     pub(super) serving_hooks_factory: Option<SharedModelServingHooksFactory>,
     pub(super) http_bind_addr: SocketAddr,
+    /// The owner whose config applies swap this model's request defaults.
+    pub(super) live_request_defaults: Arc<live_request_defaults::LiveRequestDefaults>,
 }
 
 pub(super) fn resolved_model_name(path: &Path) -> String {
@@ -608,19 +611,15 @@ pub(super) async fn set_advertised_model_context(
 /// reference-string hash) -- the two are different facts and neither
 /// replaces the other.
 ///
-/// Nothing in this crate's `openai.exchange.v1` terminal event
-/// (`OpenAiExchangeEnvelope`, `plugin/openai_exchange.rs`) reads this field
-/// yet -- it carries only `exchange_id`/`model`/`status`/capsule-marker
-/// fields today, not a served-model identity block. A `ServingProvenance`
-/// terminal-event block that does thread a served digest through exists, but
-/// only on fork-only demo/ledger-UI lineage (`feat/serving-provenance` and
-/// descendants), never merged to `origin/main` and absent from this branch.
-/// It also deliberately never crosses the mesh gossip wire (see
+/// This node's host-served `openai.exchange.v1` terminal reports it as
+/// `serving_provenance.weights_digest`, and its `backend_selected` event names
+/// it for a local target. A mesh peer that asked this node to serve the model
+/// gets it per response in `x-mesh-weights-digest`
+/// (`network/openai/response/probe.rs`) and records it on its own `RemoteMesh`
+/// terminal. It deliberately never crosses the mesh gossip wire (see
 /// `protocol/convert.rs`'s `descriptor_identity_to_proto`, which drops it on
 /// purpose: a peer could never verify a hash of bytes only this node can
-/// read). So today this is Record-only: the digest lands on this node's own
-/// served-model descriptor and nothing else -- neither an exchange a peer or
-/// plugin observes, nor a peer's gossip view -- reads it.
+/// read), so no peer's gossip view carries it.
 pub(super) async fn set_local_model_weights_digest(
     node: &mesh::Node,
     model_name: &str,
@@ -844,7 +843,8 @@ pub(super) async fn start_runtime_local_model(
         .capacity_budget_bytes
         .or_else(|| spec.pinned_gpu.map(|gpu| gpu.allocatable_vram_bytes()))
         .unwrap_or_else(|| spec.node.vram_bytes());
-    let http_bind_addr = ([127, 0, 0, 1], alloc_local_port().await?).into();
+    let http_port = alloc_local_port().await?;
+    let http_bind_addr = ([127, 0, 0, 1], http_port).into();
     let hook_policy = Some(crate::plugin::exchange_policy::compose_node_hooks(
         spec.node.clone(),
     ));
@@ -872,6 +872,7 @@ pub(super) async fn start_runtime_local_model(
             hook_policy,
             serving_hooks_factory: None,
             http_bind_addr,
+            live_request_defaults: spec.node.live_request_defaults.clone(),
         },
         runtime_model_name,
         progress_ingress,
@@ -890,6 +891,9 @@ pub(super) async fn start_runtime_local_model(
         let generation = spec
             .node
             .begin_served_model_generation(runtime_model_name)
+            .await;
+        spec.node
+            .bind_served_model_generation_to_port(runtime_model_name, generation, http_port)
             .await;
         let node = spec.node.clone();
         let runtime_model_name = runtime_model_name.to_string();
@@ -1186,7 +1190,11 @@ async fn start_local_skippy_model(
         )
         .await,
     );
-    let embedded_openai = resolved.to_embedded_openai_args(0, false)?;
+    let mut embedded_openai = resolved.to_embedded_openai_args(0, false)?;
+    embedded_openai.live_defaults_scope = spec.live_request_defaults.scope();
+    let live_defaults_generation =
+        spec.live_request_defaults
+            .track_model(&resolved.model_id, spec.config_model_id, None);
     let mut options = resolved
         .to_model_load_options(spec.skippy_telemetry.clone())?
         .with_embedded_openai(embedded_openai)
@@ -1219,6 +1227,11 @@ async fn start_local_skippy_model(
     })
     .await
     .context("join load skippy direct GGUF task")??;
+    spec.live_request_defaults.sync_after_load(
+        &model_name,
+        live_defaults_generation,
+        &spec.live_request_defaults.serving_backends(),
+    );
     emit_measured_memory_reconciliation(
         &model_name,
         &measurement_key,
@@ -1337,7 +1350,11 @@ async fn start_local_package_v2_model(
         .await,
     );
     let run_id = format!("mesh-skippy-{}", now_unix_nanos());
-    let embedded_openai = resolved.to_embedded_openai_args(0, true)?;
+    let mut embedded_openai = resolved.to_embedded_openai_args(0, true)?;
+    embedded_openai.live_defaults_scope = spec.live_request_defaults.scope();
+    let live_defaults_generation =
+        spec.live_request_defaults
+            .track_model(&resolved.model_id, spec.config_model_id, None);
     let mut runtime_options = resolved.to_embedded_runtime_options(
         &spec.skippy_telemetry,
         Some(package.clone()),
@@ -1403,6 +1420,11 @@ async fn start_local_package_v2_model(
     })
     .await
     .context("join load skippy package-v2 task")??;
+    spec.live_request_defaults.sync_after_load(
+        &model_name,
+        live_defaults_generation,
+        &spec.live_request_defaults.serving_backends(),
+    );
     emit_measured_memory_reconciliation(
         &model_name,
         &measurement_key,

@@ -393,6 +393,7 @@ impl Node {
             startup_models_resolving: self.startup_models_resolving.clone(),
             served_model_descriptors: self.served_model_descriptors.clone(),
             served_model_generations: self.served_model_generations.clone(),
+            served_model_weights_ports: self.served_model_weights_ports.clone(),
             model_runtime_descriptors: self.model_runtime_descriptors.clone(),
             hosted_models: self.hosted_models.clone(),
             llama_ready: self.llama_ready.clone(),
@@ -419,6 +420,7 @@ impl Node {
             gpu_compute_tflops_fp32: host_figure(&self.gpu_compute_tflops_fp32),
             gpu_compute_tflops_fp16: host_figure(&self.gpu_compute_tflops_fp16),
             config_state: self.config_state.clone(),
+            live_request_defaults: self.live_request_defaults.clone(),
             peer_blocks: self.peer_blocks.clone(),
             config_revision_tx: self.config_revision_tx.clone(),
             #[cfg(feature = "payments")]

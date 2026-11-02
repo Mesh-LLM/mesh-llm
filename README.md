@@ -130,7 +130,7 @@ mesh-llm serve --auto --headless
   nodes, including inference requests, responses, and split-model activations.
   Iroh relays forward encrypted packets without reading their payload.
 - **Owner-control plane.** Operator config and inventory actions use an
-  additive `mesh-llm-control/1` lane with explicit endpoint bootstrap, while
+  additive `mesh-llm-control/2` lane with explicit endpoint bootstrap, while
   public mesh join, gossip, routing, and inference stay on the public mesh
   plane for mixed-version compatibility.
 - **Skippy stage splits.** Large dense models can load as package-backed layer

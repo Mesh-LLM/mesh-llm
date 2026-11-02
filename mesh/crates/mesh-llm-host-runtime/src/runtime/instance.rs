@@ -117,13 +117,29 @@ pub fn runtime_root() -> Result<PathBuf> {
 }
 
 fn runtime_root_with_home(home: Option<PathBuf>) -> Result<PathBuf> {
+    // A non-UTF-8 value stays unset, as before.
+    runtime_root_from(
+        std::env::var("MESH_LLM_RUNTIME_ROOT").ok().map(Into::into),
+        std::env::var("XDG_RUNTIME_DIR").ok().map(Into::into),
+        home,
+    )
+}
+
+/// An empty variable (what a systemd `Environment=NAME=` line sets) counts
+/// as unset, as XDG specifies, rather than a path relative to the working
+/// directory.
+fn runtime_root_from(
+    runtime_root: Option<std::ffi::OsString>,
+    xdg_runtime_dir: Option<std::ffi::OsString>,
+    home: Option<PathBuf>,
+) -> Result<PathBuf> {
     // 1. Explicit override — always wins (also used by tests to avoid touching ~)
-    if let Ok(root) = std::env::var("MESH_LLM_RUNTIME_ROOT") {
+    if let Some(root) = runtime_root.filter(|root| !root.is_empty()) {
         return Ok(PathBuf::from(root));
     }
 
     // 2. XDG_RUNTIME_DIR (standard on modern Linux)
-    if let Ok(xdg) = std::env::var("XDG_RUNTIME_DIR") {
+    if let Some(xdg) = xdg_runtime_dir.filter(|xdg| !xdg.is_empty()) {
         return Ok(PathBuf::from(xdg).join("mesh-llm").join("runtime"));
     }
 
@@ -741,6 +757,18 @@ mod tests {
         let home = dirs::home_dir().expect("Windows profile directory should be available");
         let root = runtime_root().expect("runtime_root should succeed without HOME on Windows");
         assert_eq!(root, home.join(".mesh-llm").join("runtime"));
+    }
+
+    #[test]
+    fn empty_runtime_root_variables_count_as_unset() {
+        let home = PathBuf::from("/home/node");
+        let root = runtime_root_from(Some("".into()), Some("".into()), Some(home.clone()));
+        assert_eq!(root.unwrap(), home.join(".mesh-llm").join("runtime"));
+        let root = runtime_root_from(Some("".into()), Some("/run/user/1000".into()), None);
+        assert_eq!(
+            root.unwrap(),
+            PathBuf::from("/run/user/1000/mesh-llm/runtime")
+        );
     }
 
     #[test]

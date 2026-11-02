@@ -503,6 +503,42 @@ fn reserve_audited_runtime_capacity(
     }
 }
 
+/// Laya models pick their device from the environment; every other model keeps
+/// the device its startup plan resolved.
+fn resolve_runtime_device_override(
+    compact_meta: Option<&models::gguf::GgufCompactMeta>,
+    device_override: Option<String>,
+    pinned_gpu: Option<&crate::runtime::StartupPinnedGpuTarget>,
+) -> Option<String> {
+    if super::super::local_laya::is_laya(compact_meta) {
+        super::super::local_laya::resolve_laya_device(
+            device_override.as_deref(),
+            pinned_gpu.map(|gpu| gpu.backend_device.as_str()),
+        )
+    } else {
+        device_override
+    }
+}
+
+/// A per-load request wins over the model's `[[models]]` row and the node-wide
+/// `serve --ctx-size` / `[gpu] parallel` settings.
+fn resolve_runtime_load_sizing(
+    ctx: &RunAutoRuntimeLoopContext<'_>,
+    requested: api::RuntimeLoadSizing,
+    model_overrides: Option<&plugin::ModelConfigEntry>,
+) -> (Option<u32>, Option<usize>) {
+    let ctx_size = requested
+        .ctx_size
+        .or_else(|| runtime_model_ctx_size_override(ctx.options, model_overrides));
+    let parallel = requested.parallel.or_else(|| {
+        crate::runtime::startup_models::resolve_model_parallel_override(
+            model_overrides.and_then(|m| m.parallel),
+            &ctx.config.gpu,
+        )
+    });
+    (ctx_size, parallel)
+}
+
 /// Run auto-load for a runtime model.
 pub(crate) async fn run_auto_load_runtime_model(
     ctx: &mut RunAutoRuntimeLoopContext<'_>,
@@ -510,6 +546,7 @@ pub(crate) async fn run_auto_load_runtime_model(
     config_model_id: Option<String>,
     profile: String,
     native_residency: bool,
+    requested: api::RuntimeLoadSizing,
 ) -> Result<api::RuntimeLoadResponse> {
     crate::system::native_runtime_requirement::ensure_native_runtime_available()?;
     let (spec, profile) = normalize_runtime_model_request_for_config(
@@ -590,14 +627,8 @@ pub(crate) async fn run_auto_load_runtime_model(
     )?;
     // Configured preflight must succeed before publishing its source policy.
     skippy::register_local_source_policy(&runtime_model_name, &profile, local_source_required);
-    let device_override = if super::super::local_laya::is_laya(sizing.compact_meta.as_ref()) {
-        super::super::local_laya::resolve_laya_device(
-            device_override.as_deref(),
-            pinned_gpu.map(|gpu| gpu.backend_device.as_str()),
-        )
-    } else {
-        device_override
-    };
+    let device_override =
+        resolve_runtime_device_override(sizing.compact_meta.as_ref(), device_override, pinned_gpu);
     let capacity_target = RuntimeCapacityTarget {
         compact_meta: sizing.compact_meta.as_ref(),
         pinned_gpu,
@@ -605,11 +636,8 @@ pub(crate) async fn run_auto_load_runtime_model(
         node_capacity_bytes: capacity_bytes,
         host_ram_capacity_bytes: ctx.node.host_ram_capacity_bytes,
     };
-    let ctx_size_override = runtime_model_ctx_size_override(ctx.options, model_overrides);
-    let parallel_override = crate::runtime::startup_models::resolve_model_parallel_override(
-        model_overrides.and_then(|m| m.parallel),
-        &ctx.config.gpu,
-    );
+    let (ctx_size_override, parallel_override) =
+        resolve_runtime_load_sizing(ctx, requested, model_overrides);
     let capacity_reservation = reserve_audited_runtime_capacity(
         ctx,
         &instance_id,
@@ -698,6 +726,10 @@ pub(crate) async fn run_auto_load_runtime_model(
                 load_started,
             );
             load_op.load_failed(&runtime_model_name);
+            let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Error {
+                message: format!("Failed to load model {runtime_model_name}: {err:#}"),
+                context: Some(format!("model={runtime_model_name}")),
+            });
             return Err(err);
         }
     };

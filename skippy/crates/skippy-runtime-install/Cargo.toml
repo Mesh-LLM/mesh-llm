@@ -11,6 +11,11 @@ readme = "README.md"
 [lints]
 workspace = true
 
+[features]
+# rerun_without_bundle_env! for crates whose tests discover runtimes; enable it
+# from [dev-dependencies] only.
+test-support = []
+
 [dependencies]
 anyhow.workspace = true
 dirs = "6.0.0"

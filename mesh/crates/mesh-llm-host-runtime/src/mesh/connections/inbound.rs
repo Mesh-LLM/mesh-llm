@@ -102,7 +102,7 @@ impl Node {
                 OperationalAuditContext::new().duration_ms(elapsed_ms_u64(started.elapsed())),
             );
         })?;
-        if alpn.as_slice() != ALPN_CONTROL_V1 {
+        if alpn.as_slice() != ALPN_CONTROL_V2 {
             record_mesh_operational_event(MeshOperationalEvent::ControlAlpnRejected);
             anyhow::bail!("unsupported control-plane ALPN");
         }

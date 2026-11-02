@@ -893,12 +893,57 @@ pub fn disable_verbose_native_logs() {
     unsafe { std::env::remove_var("GGML_LLAMA_LOG_LEVEL") };
 }
 
+/// `ggml_log_level` value for errors.
+const NATIVE_LOG_LEVEL_ERROR: c_int = 4;
+
+/// Error lines kept per open; llama.cpp logs the cause first, then a summary.
+const MAX_NATIVE_ERROR_LINES: usize = 4;
+
+thread_local! {
+    /// Native error lines logged on this thread since the last clear. A failed
+    /// model open reports only a generic status; llama.cpp logs the cause on
+    /// the opening thread just before it returns.
+    static NATIVE_ERROR_LINES: std::cell::RefCell<Vec<String>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn record_native_error_line(level: c_int, bytes: &[u8]) {
+    if level != NATIVE_LOG_LEVEL_ERROR {
+        return;
+    }
+    let line = String::from_utf8_lossy(bytes).trim().to_string();
+    if line.is_empty() {
+        return;
+    }
+    NATIVE_ERROR_LINES.with(|lines| {
+        let mut lines = lines.borrow_mut();
+        if lines.len() < MAX_NATIVE_ERROR_LINES {
+            lines.push(line);
+        }
+    });
+}
+
+pub(crate) fn clear_last_native_error() {
+    NATIVE_ERROR_LINES.with(|lines| lines.borrow_mut().clear());
+}
+
+/// Attaches the native error lines logged on this thread since the last clear
+/// to `error`, so the cause travels with the error instead of staying in the log.
+pub(crate) fn with_last_native_error(error: anyhow::Error) -> anyhow::Error {
+    let lines = NATIVE_ERROR_LINES.with(|lines| std::mem::take(&mut *lines.borrow_mut()));
+    if lines.is_empty() {
+        return error;
+    }
+    anyhow::anyhow!(lines.join("; ")).context(error.to_string())
+}
+
 unsafe extern "C" fn write_native_log(level: c_int, text: *const c_char, _user_data: *mut c_void) {
     if text.is_null() {
         return;
     }
 
     let bytes = unsafe { CStr::from_ptr(text) }.to_bytes();
+    record_native_error_line(level, bytes);
     output::forward_raw_native_log(level, bytes);
     if let Ok(mut guard) = native_log_file().lock()
         && let Some(writer) = guard.as_mut()
