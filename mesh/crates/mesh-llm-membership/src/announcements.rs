@@ -243,7 +243,12 @@ pub fn apply_transitive_ann(
     // peer itself. A transitive announcer is not authoritative in either
     // direction, so it may neither promote nor clear them. Direct announcements
     // update both fields authoritatively.
-    existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
+    // A relay may not make the peer's throughput evidence older or undated.
+    existing.advertised_model_throughput =
+        crate::advertised_throughput::merge_relayed_throughput_hints(
+            &existing.advertised_model_throughput,
+            &ann.advertised_model_throughput,
+        );
     crate::merge_advertisement(
         &mut existing.cache_affinity,
         ann.cache_affinity.as_ref(),

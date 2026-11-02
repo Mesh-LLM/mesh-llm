@@ -30,8 +30,11 @@ pub struct ModelThroughputHint {
     pub model_name: String,
     pub avg_tokens_per_second_milli: u64,
     pub throughput_samples: u64,
-    /// When and how the samples were measured. `None` from nodes that predate
-    /// it, or when the sender's metadata was malformed: the age is unknown.
+    /// When and how the samples were measured. On a peer's hint, `None` means
+    /// the age is unknown (a node that predates it, or malformed metadata) and
+    /// [`Self::is_fresh_at`] is false. A node's own local observation also
+    /// carries `None`; it is read straight from the local window and must not
+    /// be filtered through `is_fresh_at`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub measurement: Option<ThroughputMeasurement>,
 }
@@ -75,6 +78,40 @@ impl ModelThroughputHint {
             .window_ms
             .min(MAX_ADVERTISED_THROUGHPUT_WINDOW_MS);
         now_unix_ms.saturating_sub(measurement.observed_at_unix_ms) <= window_ms
+    }
+}
+
+/// Merge the hints a relay forwards for a peer into the ones already held for
+/// it. The relay's set decides which models are listed, but a held hint is
+/// kept when the relay's would make the evidence older: one dated later than
+/// the relay's, or a dated one the relay forwards undated (an older relay
+/// drops the fields). A relay can therefore never age or strip a hint; only
+/// the peer itself, through direct gossip, replaces its hints outright.
+pub fn merge_relayed_throughput_hints(
+    held: &[ModelThroughputHint],
+    relayed: &[ModelThroughputHint],
+) -> Vec<ModelThroughputHint> {
+    relayed
+        .iter()
+        .map(|incoming| {
+            match held
+                .iter()
+                .find(|current| current.model_name == incoming.model_name)
+            {
+                Some(current) if relayed_hint_is_older(current, incoming) => current.clone(),
+                _ => incoming.clone(),
+            }
+        })
+        .collect()
+}
+
+fn relayed_hint_is_older(current: &ModelThroughputHint, incoming: &ModelThroughputHint) -> bool {
+    match (current.measurement, incoming.measurement) {
+        (Some(_), None) => true,
+        (Some(current), Some(incoming)) => {
+            incoming.observed_at_unix_ms < current.observed_at_unix_ms
+        }
+        (None, _) => false,
     }
 }
 
@@ -188,5 +225,51 @@ mod tests {
         assert_eq!(sanitized[0].measurement, None);
         assert_eq!(sanitized[1].measurement, None);
         assert_eq!(sanitized[2].measurement, measured(NOW, 60_000));
+    }
+
+    fn named(model: &str, measurement: Option<ThroughputMeasurement>) -> ModelThroughputHint {
+        ModelThroughputHint {
+            model_name: model.to_string(),
+            ..hint(measurement)
+        }
+    }
+
+    #[test]
+    fn a_relay_can_neither_age_nor_strip_a_held_hint() {
+        let held = [
+            named("older-relayed", measured(NOW, 60_000)),
+            named("stripped", measured(NOW, 60_000)),
+            named("newer-relayed", measured(NOW - 1_000, 60_000)),
+            named("undated", None),
+            named("gone", measured(NOW, 60_000)),
+        ];
+        let relayed = [
+            named("older-relayed", measured(NOW - 5_000, 60_000)),
+            named("stripped", None),
+            named("newer-relayed", measured(NOW, 60_000)),
+            named("undated", measured(NOW, 60_000)),
+            named("added", measured(NOW, 60_000)),
+        ];
+
+        let merged = merge_relayed_throughput_hints(&held, &relayed);
+        let by_model = |model: &str| {
+            merged
+                .iter()
+                .find(|hint| hint.model_name == model)
+                .map(|hint| hint.measurement)
+        };
+        assert_eq!(by_model("older-relayed"), Some(measured(NOW, 60_000)));
+        assert_eq!(by_model("stripped"), Some(measured(NOW, 60_000)));
+        assert_eq!(by_model("newer-relayed"), Some(measured(NOW, 60_000)));
+        assert_eq!(by_model("undated"), Some(measured(NOW, 60_000)));
+        assert_eq!(by_model("added"), Some(measured(NOW, 60_000)));
+        assert_eq!(by_model("gone"), None, "the relay's set decides the models");
+    }
+
+    #[test]
+    fn repeated_relaying_of_the_same_hint_does_not_change_it() {
+        let held = [named("qwen", measured(NOW - 10_000, 60_000))];
+        let merged = merge_relayed_throughput_hints(&held, &held);
+        assert_eq!(merged, held);
     }
 }

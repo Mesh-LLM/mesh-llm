@@ -538,12 +538,22 @@ impl RoutingMetrics {
             else {
                 continue;
             };
-            let measurement = recent.newest.map(|newest| ThroughputMeasurement {
-                observed_at_unix_ms: now_unix_ms
-                    .saturating_sub(duration_millis(now.saturating_duration_since(newest))),
-                window_ms: duration_millis(throughput_window::THROUGHPUT_EVIDENCE_MAX_AGE),
-                kind: ThroughputMeasurementKind::EndToEndAttempt,
-            });
+            // Dated by the newest sample, valid until the oldest sample in the
+            // average expires: the window is what remains of the oldest one's.
+            let measurement =
+                recent
+                    .newest
+                    .zip(recent.oldest)
+                    .map(|(newest, oldest)| ThroughputMeasurement {
+                        observed_at_unix_ms: now_unix_ms
+                            .saturating_sub(duration_millis(now.saturating_duration_since(newest))),
+                        window_ms: duration_millis(
+                            throughput_window::THROUGHPUT_EVIDENCE_MAX_AGE
+                                .saturating_sub(newest.saturating_duration_since(oldest)),
+                        )
+                        .max(1),
+                        kind: ThroughputMeasurementKind::EndToEndAttempt,
+                    });
             hints.push(ModelThroughputHint {
                 model_name: model.to_string(),
                 avg_tokens_per_second_milli: avg_tokens_per_second_milli
@@ -1829,6 +1839,56 @@ mod tests {
             metrics
                 .throughput_hint_for_target_at("qwen", new_target, now)
                 .is_none()
+        );
+    }
+
+    /// An average over samples ten minutes apart is valid only for what is
+    /// left of its oldest sample's window, so a receiver never credits samples
+    /// older than the window.
+    #[test]
+    fn advertised_window_ends_with_the_oldest_sample_in_the_average() {
+        let metrics = RoutingMetrics::new();
+        let target = AttemptTarget::Local("127.0.0.1:9337".into());
+        let hosted = vec!["qwen".to_string()];
+        let start = Instant::now();
+        let second = Duration::from_secs(1);
+        record_at(
+            &metrics,
+            start,
+            &target,
+            second,
+            AttemptOutcome::Success,
+            Some(100),
+        );
+        let later = start + Duration::from_secs(10 * 60);
+        record_at(
+            &metrics,
+            later,
+            &target,
+            second,
+            AttemptOutcome::Success,
+            Some(40),
+        );
+
+        let advertised = metrics.advertisable_model_throughput_at(&hosted, later, TEST_NOW_UNIX_MS);
+        assert_eq!(advertised[0].throughput_samples, 2);
+        assert_eq!(
+            advertised[0].measurement,
+            Some(ThroughputMeasurement {
+                observed_at_unix_ms: TEST_NOW_UNIX_MS,
+                window_ms: 5 * 60 * 1000,
+                kind: ThroughputMeasurementKind::EndToEndAttempt,
+            })
+        );
+    }
+
+    /// What this node keeps as evidence and what it accepts from a peer are
+    /// the same 15 minutes.
+    #[test]
+    fn local_and_advertised_evidence_windows_agree() {
+        assert_eq!(
+            duration_millis(throughput_window::THROUGHPUT_EVIDENCE_MAX_AGE),
+            mesh_llm_membership::advertised_throughput::MAX_ADVERTISED_THROUGHPUT_WINDOW_MS
         );
     }
 
