@@ -308,7 +308,10 @@ mesh-llm plugins install blackboard Mesh-LLM/metrics-plugin
 
 A GitHub reference `Owner/<name>-plugin` installs plugin `<name>` from the
 release asset `<name>-<tag>-<target>` for this platform; a repository without
-the `-plugin` suffix installs under its own name.
+the `-plugin` suffix installs under its own name. If the release assets use a
+different plugin name (for example `Mesh-LLM/ln-payments-plugin` ships
+`pay-lightning-<tag>-<target>`), that name is taken from the one versioned
+asset for this release and platform.
 
 Each reference uses the existing installer in order, including its permission
 disclosures and existing-install handling. On the first failure, the command
