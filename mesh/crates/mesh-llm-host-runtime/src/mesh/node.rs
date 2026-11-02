@@ -371,6 +371,35 @@ impl LocalRequestMetricsWindow {
     }
 }
 
+/// Owner-config values `Node::start` copies into the node, with defaults when no owner config is set.
+struct OwnerStartupSettings {
+    keypair: Option<crate::crypto::OwnerKeypair>,
+    activity_policy_config: mesh_llm_config::RuntimeActivityConfig,
+    public_mesh: bool,
+    drain_timeout_secs: u64,
+    drain_timeout_max_secs: u64,
+}
+
+impl OwnerStartupSettings {
+    fn from_config(owner_config: Option<&OwnerRuntimeConfig>) -> Self {
+        Self {
+            keypair: owner_config.and_then(|config| config.keypair.clone()),
+            activity_policy_config: owner_config
+                .map(|config| config.activity.clone())
+                .unwrap_or_default(),
+            public_mesh: owner_config.is_some_and(|config| config.public_mesh),
+            drain_timeout_secs: owner_config
+                .map_or(mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_SECS, |config| {
+                    config.drain_timeout_secs
+                }),
+            drain_timeout_max_secs: owner_config
+                .map_or(mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_MAX_SECS, |config| {
+                    config.drain_timeout_max_secs
+                }),
+        }
+    }
+}
+
 impl Node {
     pub(crate) fn set_swarm_capture_recorder(
         &self,
@@ -824,26 +853,13 @@ impl Node {
                 plugin_endpoint_key: None,
             });
 
-        let owner_keypair = owner_config
-            .as_ref()
-            .and_then(|config| config.keypair.clone());
-        let activity_policy_config = owner_config
-            .as_ref()
-            .map(|config| config.activity.clone())
-            .unwrap_or_default();
-        let public_mesh = owner_config
-            .as_ref()
-            .is_some_and(|config| config.public_mesh);
-        let drain_timeout_secs = owner_config
-            .as_ref()
-            .map_or(mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_SECS, |config| {
-                config.drain_timeout_secs
-            });
-        let drain_timeout_max_secs = owner_config
-            .as_ref()
-            .map_or(mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_MAX_SECS, |config| {
-                config.drain_timeout_max_secs
-            });
+        let OwnerStartupSettings {
+            keypair: owner_keypair,
+            activity_policy_config,
+            public_mesh,
+            drain_timeout_secs,
+            drain_timeout_max_secs,
+        } = OwnerStartupSettings::from_config(owner_config.as_ref());
 
         let node = Node {
             endpoint,
