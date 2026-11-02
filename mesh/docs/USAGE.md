@@ -1119,10 +1119,35 @@ contract, telemetry, and benchmark requirements.
 
 A DFlash or DFlash2 draft is a small model trained for one target. It reads
 hidden states from several target layers and drafts a whole block in one pass.
-DFlash is opt-in: set `strategy = "dflash"` and point `draft_model` at a GGUF
-whose architecture is `dflash`. Under `strategy = "auto"` a DFlash draft is not
-selected, and speculation stays off for that model. `draft_max_tokens` caps the
-block; the default is the trained block size minus one.
+
+Known targets use their DFlash draft by default under `strategy = "auto"`, with
+nothing to configure. The target is recognised from its GGUF metadata, so every
+quant matches, and the draft is pinned to a Hugging Face revision and SHA-256:
+
+| Target | Draft | Backends |
+|---|---|---|
+| Qwen3.5-9B | `AtomicChat/Qwen3.5-9B-DFlash-GGUF` | all |
+| Qwen3.6-27B | `AtomicChat/Qwen3.6-27B-DFlash-GGUF` | all |
+| Qwen3.8-27B | `z-lab/Qwen3.8-27B-DFlash2-GGUF` | all |
+| Qwen3.6-35B-A3B | `aminya/Qwen3.6-35B-A3B-DFlash2-GGUF` | CUDA and others |
+| Qwen3.6-35B-A3B | `Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp` | Metal |
+| Qwen3-Coder-Next | `AtomicChat/Qwen3-Coder-Next-DFlash-GGUF` | Metal only |
+
+A load uses the draft once it is in the Hugging Face cache. A missing draft
+downloads in the background and the load does not wait for it: it serves with
+the native MTP the draft would have replaced, or without speculation. A later
+load attaches the draft once it passes its size, digest and pairing checks and
+fits the memory plan. A cached draft that fails its size or digest check is
+removed so the next load downloads it again. A cataloged draft
+also replaces native MTP that is on only because the GGUF carries NextN layers.
+An explicit draft, strategy, N-gram setting, MTP tuning or package strategy
+keeps its own choice. `spec_default = false` turns automatic speculation off,
+including the cataloged draft, unless a `strategy` is also set: any configured
+strategy, `"auto"` included, counts as explicit and re-enables the automatic
+defaults.
+
+To use a draft that is not in the catalog, set `strategy = "dflash"` and point
+`draft_model` at a GGUF whose architecture is `dflash`:
 
 ```toml
 [[models]]
@@ -1133,11 +1158,18 @@ strategy = "dflash"
 draft_model = "/models/Qwen3-4B-DFlash.Q8_0.gguf"
 ```
 
+`draft_max_tokens` caps the block. Without it the cap is 6 on Metal and 15
+elsewhere, held to the draft's trained block. Block length adapts to the
+measured verify cost and acceptance of each request, up to the cap;
+`SKIPPY_DFLASH_ADAPTIVE=0` is an off switch that pins blocks at the cap.
+
 DFlash needs the complete target model on one node. A model that is split
-across nodes serves without the draft, unless `pairing_fault = "fail_closed"`,
-which rejects the load. DFlash drafts only for greedy requests that do not ask
-for logprobs; other requests decode normally. DSpark and LiliCorr drafts and
-Windows runtimes are not supported.
+across nodes serves without its cataloged draft, falling back to native MTP when
+the GGUF carries NextN layers. An explicit DFlash draft on a split model is
+dropped too, unless `pairing_fault = "fail_closed"`, which rejects the load.
+DFlash drafts tokens for greedy and sampled requests; requests
+that ask for logprobs decode normally. DSpark and LiliCorr drafts and Windows
+runtimes are not supported.
 
 ### Run-ahead admission
 
