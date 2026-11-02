@@ -434,6 +434,35 @@ mod tests {
         }
     }
 
+    /// llama pads an unaligned context (1000 -> 1024) while the batch and
+    /// micro-batch stay at 1000, so the reported budget must be the batch
+    /// size and a prompt between the two must be an invalid request, not a
+    /// backend failure while building the batch.
+    #[test]
+    #[ignore = "needs a Clef GGUF and a native runtime bundle"]
+    fn real_model_bounds_reads_by_the_batch_on_an_unaligned_context() {
+        crate::test_support::require_native_runtime();
+        let path = std::env::var("SKIPPY_CLEF_MODEL").expect("SKIPPY_CLEF_MODEL");
+        let model = ClefModel::open(&path, 1000, 8, None).unwrap();
+        assert_eq!(model.info().context_tokens, 1000);
+        let request = DecisionRequest {
+            state: text(&"order refund ".repeat(430)),
+            questions: vec![DecisionQuestion {
+                key: "refund".into(),
+                instructions: Some(text("Is the customer asking for a refund?")),
+                kind: DecisionQuestionKind::Noul {
+                    when_true: None,
+                    when_false: None,
+                },
+            }],
+            seed: [0; 32],
+        };
+        match model.decide(&request) {
+            Err(DecisionError::InvalidRequest(message)) => eprintln!("rejected: {message}"),
+            other => panic!("expected an invalid request, got {other:?}"),
+        }
+    }
+
     #[test]
     fn uncalibrated_distribution_is_a_plain_softmax() {
         let probs = Calibration::default().distribution(&choice(&["a", "b"]), &[1.0, 1.0]);
