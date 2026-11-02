@@ -521,7 +521,11 @@ impl Node {
             )));
         }
         if request.public_key.is_empty() {
-            self.plugin_keys.remove_own(plugin_id);
+            // Sign the withdrawal so peers, and their plugins, drop the key at
+            // once, whether or not this node stays up to be asked again.
+            self.plugin_keys.withdraw_own(plugin_id, |key| {
+                plugin_keys::withdraw(&self.endpoint_secret_key, plugin_id, key.public_key)
+            });
             return Ok(crate::plugin::proto::PluginKeyResponse {
                 node_id,
                 binding_signature: Vec::new(),

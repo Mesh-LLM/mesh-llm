@@ -972,6 +972,7 @@ pub(crate) fn local_ann_to_proto_ann(
         // Set only on this node's own entry, when the frame is written
         // (`attach_own_plugin_keys`); never relayed.
         plugin_keys: Vec::new(),
+        plugin_key_withdrawals: Vec::new(),
     }
 }
 

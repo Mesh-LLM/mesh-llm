@@ -8,6 +8,12 @@
 //! that peer's own node key, and only from the directly-connected sender's own
 //! entry: plugin keys are not relayed transitively, like `claimed_log_head`.
 //! A peer's keys are dropped when it leaves this node's peer list.
+//!
+//! A plugin that withdraws its key also makes this node sign a
+//! [`Withdrawal`] of it (`PluginKeyWithdrawal`), announced on the same entry.
+//! A receiver keeps a peer's verified withdrawals after the peer leaves, up to
+//! [`MAX_RETAINED_WITHDRAWAL_PEERS`] peers, so a plugin forgets the key at its
+//! next poll even when the host that withdrew it is offline.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex, PoisonError};
@@ -19,6 +25,11 @@ pub(crate) const SIG_DOMAIN: &[u8] = b"mesh-llm-plugin-key-v1:";
 pub(crate) const SIGNATURE_ALGORITHM: &str = "ed25519";
 /// At most this many plugin keys per node, sent or kept.
 pub(crate) const MAX_PLUGIN_KEYS: usize = 16;
+/// Domain-separation tag of a withdrawal's signed bytes; see `PluginKeyWithdrawal`.
+pub(crate) const WITHDRAWAL_SIG_DOMAIN: &[u8] = b"mesh-llm-plugin-key-withdrawal-v1:";
+/// How many departed peers' withdrawals a node keeps; the oldest are dropped
+/// first, so the memory a peer can cost is bounded.
+pub(crate) const MAX_RETAINED_WITHDRAWAL_PEERS: usize = 256;
 /// The longest plugin name a key may carry, in bytes.
 pub(crate) const MAX_PLUGIN_NAME_BYTES: usize = 128;
 
@@ -29,6 +40,31 @@ pub(crate) struct BoundPluginKey {
     pub(crate) plugin: String,
     pub(crate) public_key: [u8; 32],
     pub(crate) binding_signature: [u8; 64],
+}
+
+/// A node's signed statement that it no longer vouches for `key_id`, the
+/// public key it announced for `plugin`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Withdrawal {
+    pub(crate) plugin: String,
+    pub(crate) key_id: [u8; 32],
+    pub(crate) withdrawal_signature: [u8; 64],
+}
+
+/// The keys and withdrawals one node announces.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Announced {
+    pub(crate) keys: Vec<BoundPluginKey>,
+    pub(crate) withdrawals: Vec<Withdrawal>,
+}
+
+impl From<Vec<BoundPluginKey>> for Announced {
+    fn from(keys: Vec<BoundPluginKey>) -> Self {
+        Self {
+            keys,
+            withdrawals: Vec::new(),
+        }
+    }
 }
 
 fn write_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
@@ -42,6 +78,16 @@ pub(crate) fn sig_input(node: &EndpointId, plugin: &str, public_key: &[u8; 32]) 
     write_bytes(&mut out, node.as_bytes());
     write_bytes(&mut out, plugin.as_bytes());
     write_bytes(&mut out, public_key);
+    write_bytes(&mut out, SIGNATURE_ALGORITHM.as_bytes());
+    out
+}
+
+/// The bytes a node signs to withdraw `key_id` for `plugin`.
+pub(crate) fn withdrawal_sig_input(node: &EndpointId, plugin: &str, key_id: &[u8; 32]) -> Vec<u8> {
+    let mut out = WITHDRAWAL_SIG_DOMAIN.to_vec();
+    write_bytes(&mut out, node.as_bytes());
+    write_bytes(&mut out, plugin.as_bytes());
+    write_bytes(&mut out, key_id);
     write_bytes(&mut out, SIGNATURE_ALGORITHM.as_bytes());
     out
 }
@@ -84,6 +130,81 @@ pub(crate) fn verify(node: &EndpointId, key: &BoundPluginKey) -> bool {
     verifying_key
         .verify_strict(&sig_input(node, &key.plugin, &key.public_key), &signature)
         .is_ok()
+}
+
+/// Withdraw `key_id` for `plugin`, signed by the node `secret` belongs to.
+pub(crate) fn withdraw(secret: &SecretKey, plugin: &str, key_id: [u8; 32]) -> Withdrawal {
+    let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret.to_bytes());
+    let signature = ed25519_dalek::Signer::sign(
+        &signing_key,
+        &withdrawal_sig_input(&secret.public(), plugin, &key_id),
+    );
+    Withdrawal {
+        plugin: plugin.to_string(),
+        key_id,
+        withdrawal_signature: signature.to_bytes(),
+    }
+}
+
+/// Whether `withdrawal` is `node`'s own signature.
+pub(crate) fn verify_withdrawal(node: &EndpointId, withdrawal: &Withdrawal) -> bool {
+    let Ok(verifying_key) = ed25519_dalek::VerifyingKey::from_bytes(node.as_bytes()) else {
+        return false;
+    };
+    let signature = ed25519_dalek::Signature::from_bytes(&withdrawal.withdrawal_signature);
+    verifying_key
+        .verify_strict(
+            &withdrawal_sig_input(node, &withdrawal.plugin, &withdrawal.key_id),
+            &signature,
+        )
+        .is_ok()
+}
+
+pub(crate) fn withdrawals_to_proto(
+    withdrawals: &[Withdrawal],
+) -> Vec<crate::proto::node::PluginKeyWithdrawal> {
+    withdrawals
+        .iter()
+        .take(MAX_PLUGIN_KEYS)
+        .map(|withdrawal| crate::proto::node::PluginKeyWithdrawal {
+            plugin: withdrawal.plugin.clone(),
+            key_id: withdrawal.key_id.to_vec(),
+            withdrawal_signature: withdrawal.withdrawal_signature.to_vec(),
+            signature_algorithm: SIGNATURE_ALGORITHM.to_string(),
+        })
+        .collect()
+}
+
+/// The withdrawals in `withdrawals` that are `node`'s own signature, at most
+/// [`MAX_PLUGIN_KEYS`], one per plugin (the first). Anything malformed or
+/// unverified is dropped.
+pub(crate) fn verified_withdrawals_from_proto(
+    node: &EndpointId,
+    withdrawals: &[crate::proto::node::PluginKeyWithdrawal],
+) -> Vec<Withdrawal> {
+    let mut out: Vec<Withdrawal> = Vec::new();
+    for wire in withdrawals.iter().take(MAX_PLUGIN_KEYS) {
+        if wire.signature_algorithm != SIGNATURE_ALGORITHM || !valid_plugin_name(&wire.plugin) {
+            continue;
+        }
+        let (Ok(key_id), Ok(withdrawal_signature)) = (
+            <[u8; 32]>::try_from(wire.key_id.as_slice()),
+            <[u8; 64]>::try_from(wire.withdrawal_signature.as_slice()),
+        ) else {
+            continue;
+        };
+        let withdrawal = Withdrawal {
+            plugin: wire.plugin.clone(),
+            key_id,
+            withdrawal_signature,
+        };
+        if verify_withdrawal(node, &withdrawal)
+            && !out.iter().any(|kept| kept.plugin == withdrawal.plugin)
+        {
+            out.push(withdrawal);
+        }
+    }
+    out
 }
 
 pub(crate) fn to_proto(keys: &[BoundPluginKey]) -> Vec<crate::proto::node::PluginKey> {
@@ -131,7 +252,12 @@ pub(crate) fn verified_from_proto(
 #[derive(Default)]
 struct State {
     own: BTreeMap<String, BoundPluginKey>,
+    own_withdrawn: BTreeMap<String, Withdrawal>,
     peers: HashMap<EndpointId, Vec<BoundPluginKey>>,
+    /// A peer's last verified withdrawals, with when they arrived (a counter,
+    /// for dropping the oldest); kept after the peer leaves.
+    peer_withdrawn: HashMap<EndpointId, (u64, Vec<Withdrawal>)>,
+    withdrawn_clock: u64,
 }
 
 /// This node's announced plugin keys and the verified ones its peers announced.
@@ -145,8 +271,9 @@ impl PluginKeys {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Announce `key` for its plugin, replacing that plugin's earlier key.
-    /// Refused when this would exceed [`MAX_PLUGIN_KEYS`].
+    /// Announce `key` for its plugin, replacing that plugin's earlier key and
+    /// any withdrawal this node announced for the plugin. Refused when this
+    /// would exceed [`MAX_PLUGIN_KEYS`].
     pub(crate) fn set_own(&self, key: BoundPluginKey) -> Result<(), String> {
         let mut state = self.state();
         if !state.own.contains_key(&key.plugin) && state.own.len() >= MAX_PLUGIN_KEYS {
@@ -154,32 +281,107 @@ impl PluginKeys {
                 "this node already announces {MAX_PLUGIN_KEYS} plugin keys"
             ));
         }
+        state.own_withdrawn.remove(&key.plugin);
         state.own.insert(key.plugin.clone(), key);
         Ok(())
     }
 
-    /// Stop announcing `plugin`'s key.
+    /// Stop announcing `plugin`'s key, without announcing a withdrawal.
     pub(crate) fn remove_own(&self, plugin: &str) {
         self.state().own.remove(plugin);
+    }
+
+    /// Stop announcing `plugin`'s key and announce `sign(key)`'s withdrawal of
+    /// it in its place, replacing any earlier withdrawal for the plugin. Does
+    /// nothing when no key is announced for `plugin`.
+    pub(crate) fn withdraw_own(
+        &self,
+        plugin: &str,
+        sign: impl FnOnce(&BoundPluginKey) -> Withdrawal,
+    ) {
+        let mut state = self.state();
+        if let Some(key) = state.own.remove(plugin) {
+            let withdrawal = sign(&key);
+            state.own_withdrawn.insert(plugin.to_string(), withdrawal);
+        }
     }
 
     pub(crate) fn own(&self) -> Vec<BoundPluginKey> {
         self.state().own.values().cloned().collect()
     }
 
-    /// What `peer` announces now: replaces what it announced before; an empty
-    /// list forgets it.
-    pub(crate) fn set_peer(&self, peer: EndpointId, keys: Vec<BoundPluginKey>) {
+    /// Everything this node announces now, taken under one lock.
+    pub(crate) fn own_announced(&self) -> Announced {
+        let state = self.state();
+        Announced {
+            keys: state.own.values().cloned().collect(),
+            withdrawals: state.own_withdrawn.values().cloned().collect(),
+        }
+    }
+
+    pub(crate) fn own_withdrawals(&self) -> Vec<Withdrawal> {
+        self.state().own_withdrawn.values().cloned().collect()
+    }
+
+    /// What `peer` announces now: replaces what it announced before; nothing
+    /// forgets it. A key the same announcement withdraws is not kept.
+    pub(crate) fn set_peer(&self, peer: EndpointId, announced: impl Into<Announced>) {
+        let Announced {
+            mut keys,
+            withdrawals,
+        } = announced.into();
+        keys.retain(|key| {
+            !withdrawals
+                .iter()
+                .any(|w| w.plugin == key.plugin && w.key_id == key.public_key)
+        });
         let mut state = self.state();
         if keys.is_empty() {
             state.peers.remove(&peer);
         } else {
             state.peers.insert(peer, keys);
         }
+        if withdrawals.is_empty() {
+            state.peer_withdrawn.remove(&peer);
+            return;
+        }
+        state.withdrawn_clock += 1;
+        let stamp = state.withdrawn_clock;
+        state.peer_withdrawn.insert(peer, (stamp, withdrawals));
+        if state.peer_withdrawn.len() > MAX_RETAINED_WITHDRAWAL_PEERS
+            && let Some(oldest) = state
+                .peer_withdrawn
+                .iter()
+                .min_by_key(|(_, (stamp, _))| *stamp)
+                .map(|(peer, _)| *peer)
+        {
+            state.peer_withdrawn.remove(&oldest);
+        }
+    }
+
+    /// `peer` left: stop listing its keys, but keep its withdrawals so a
+    /// plugin still learns of them.
+    pub(crate) fn forget_peer(&self, peer: EndpointId) {
+        self.state().peers.remove(&peer);
+    }
+
+    /// `peer` was rejected or removed: forget its keys and its withdrawals.
+    pub(crate) fn purge_peer(&self, peer: EndpointId) {
+        let mut state = self.state();
+        state.peers.remove(&peer);
+        state.peer_withdrawn.remove(&peer);
     }
 
     pub(crate) fn peers(&self) -> HashMap<EndpointId, Vec<BoundPluginKey>> {
         self.state().peers.clone()
+    }
+
+    pub(crate) fn peer_withdrawals(&self) -> HashMap<EndpointId, Vec<Withdrawal>> {
+        self.state()
+            .peer_withdrawn
+            .iter()
+            .map(|(peer, (_, withdrawals))| (*peer, withdrawals.clone()))
+            .collect()
     }
 }
 
@@ -285,8 +487,124 @@ mod tests {
             vec![bind(&node, "capsules", plugin_public_key())],
         );
         assert_eq!(keys.peers().len(), 1);
-        keys.set_peer(node.public(), Vec::new());
+        keys.set_peer(node.public(), Vec::<BoundPluginKey>::new());
         assert!(keys.peers().is_empty());
+    }
+
+    #[test]
+    fn a_withdrawal_verifies_against_its_own_node_only() {
+        let node = SecretKey::generate();
+        let other = SecretKey::generate();
+        let withdrawal = withdraw(&node, "capsules", plugin_public_key());
+        assert!(verify_withdrawal(&node.public(), &withdrawal));
+        assert!(!verify_withdrawal(&other.public(), &withdrawal));
+        let mut renamed = withdrawal.clone();
+        renamed.plugin = "other".to_string();
+        assert!(!verify_withdrawal(&node.public(), &renamed));
+        let mut swapped = withdrawal.clone();
+        swapped.key_id[0] ^= 1;
+        assert!(!verify_withdrawal(&node.public(), &swapped));
+        // A key's binding is not a withdrawal of it, and the reverse.
+        let bound = bind(&node, "capsules", plugin_public_key());
+        assert_ne!(bound.binding_signature, withdrawal.withdrawal_signature);
+    }
+
+    #[test]
+    fn withdrawals_round_trip_and_unverified_ones_are_dropped() {
+        let node = SecretKey::generate();
+        let good = withdraw(&node, "capsules", plugin_public_key());
+        let mut wire = withdrawals_to_proto(std::slice::from_ref(&good));
+        let mut bad_sig = wire[0].clone();
+        bad_sig.plugin = "second".to_string();
+        let mut bad_len = wire[0].clone();
+        bad_len.plugin = "third".to_string();
+        bad_len.key_id.pop();
+        let mut bad_alg = wire[0].clone();
+        bad_alg.signature_algorithm = "rsa".to_string();
+        let duplicate = wire[0].clone();
+        wire.extend([bad_sig, bad_len, bad_alg, duplicate]);
+        assert_eq!(
+            verified_withdrawals_from_proto(&node.public(), &wire),
+            vec![good]
+        );
+    }
+
+    #[test]
+    fn withdrawing_own_key_swaps_it_for_a_withdrawal_until_a_new_key() {
+        let node = SecretKey::generate();
+        let keys = PluginKeys::default();
+        keys.withdraw_own("capsules", |_| unreachable!("nothing to withdraw"));
+        assert!(keys.own_withdrawals().is_empty());
+        keys.set_own(bind(&node, "capsules", plugin_public_key()))
+            .unwrap();
+        keys.withdraw_own("capsules", |key| {
+            withdraw(&node, &key.plugin, key.public_key)
+        });
+        assert!(keys.own().is_empty());
+        assert_eq!(
+            keys.own_withdrawals(),
+            vec![withdraw(&node, "capsules", plugin_public_key())]
+        );
+        keys.set_own(bind(&node, "capsules", [9; 32])).unwrap();
+        assert!(keys.own_withdrawals().is_empty());
+    }
+
+    #[test]
+    fn a_peers_withdrawn_key_is_not_listed_and_its_withdrawal_outlives_the_peer() {
+        let peer = SecretKey::generate();
+        let keys = PluginKeys::default();
+        let key = bind(&peer, "capsules", plugin_public_key());
+        let withdrawal = withdraw(&peer, "capsules", plugin_public_key());
+        keys.set_peer(
+            peer.public(),
+            Announced {
+                keys: vec![key.clone()],
+                withdrawals: vec![withdrawal.clone()],
+            },
+        );
+        assert!(keys.peers().is_empty(), "a withdrawn key is not listed");
+        keys.forget_peer(peer.public());
+        assert_eq!(
+            keys.peer_withdrawals()[&peer.public()],
+            vec![withdrawal.clone()]
+        );
+        // The peer announces again with no withdrawal: its key is listed again.
+        keys.set_peer(peer.public(), vec![key.clone()]);
+        assert_eq!(keys.peers()[&peer.public()], vec![key]);
+        assert!(keys.peer_withdrawals().is_empty());
+        keys.set_peer(
+            peer.public(),
+            Announced {
+                keys: Vec::new(),
+                withdrawals: vec![withdrawal],
+            },
+        );
+        keys.purge_peer(peer.public());
+        assert!(keys.peer_withdrawals().is_empty());
+    }
+
+    #[test]
+    fn departed_peers_withdrawals_are_bounded_and_the_oldest_go_first() {
+        let keys = PluginKeys::default();
+        let peers: Vec<SecretKey> = (0..=MAX_RETAINED_WITHDRAWAL_PEERS)
+            .map(|_| SecretKey::generate())
+            .collect();
+        for peer in &peers {
+            keys.set_peer(
+                peer.public(),
+                Announced {
+                    keys: Vec::new(),
+                    withdrawals: vec![withdraw(peer, "capsules", plugin_public_key())],
+                },
+            );
+        }
+        let kept = keys.peer_withdrawals();
+        assert_eq!(kept.len(), MAX_RETAINED_WITHDRAWAL_PEERS);
+        assert!(
+            !kept.contains_key(&peers[0].public()),
+            "the oldest is dropped"
+        );
+        assert!(kept.contains_key(&peers[MAX_RETAINED_WITHDRAWAL_PEERS].public()));
     }
 
     #[test]

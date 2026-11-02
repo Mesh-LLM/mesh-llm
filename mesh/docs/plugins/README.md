@@ -1335,6 +1335,17 @@ plugin keys are not relayed. `GET
 /api/plugin-keys` lists this node's announced keys and its peers' verified
 ones, hex-encoded, by plugin name and full 64-hex endpoint id.
 
+An empty key also makes the host sign a withdrawal of the key it announced
+(`PluginKeyWithdrawal` in `node.proto`: plugin, the withdrawn key as `key_id`,
+and the node's signature) and carry it on its own gossip entry
+(`PeerAnnouncement.plugin_key_withdrawals`, at most 16, one per plugin) until
+the plugin announces a new key. A receiver keeps a peer's verified withdrawals
+after that peer leaves (the latest 256 peers), until the peer announces again
+or is rejected. `GET /api/plugin-keys` lists them as `withdrawn_plugin_keys`
+(this node's own) and `withdrawn_peers` (by peer id, plugin name to withdrawn
+key), so a plugin that polls forgets a withdrawn key at its next poll even
+when the host that withdrew it is offline and no longer listed under `peers`.
+
 A published key tells peers that this node runs that plugin. The host
 advertises the `plugin_keys.v1` host capability in its `InitializeRequest`;
 against a host without it, `announce_plugin_key` fails at once. The example
