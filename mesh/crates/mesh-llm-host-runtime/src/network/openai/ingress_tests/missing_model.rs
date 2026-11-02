@@ -27,9 +27,26 @@ async fn missing_local_model_response(
     target: Option<iroh::EndpointId>,
     excluded: &[iroh::EndpointId],
 ) -> String {
+    missing_local_model_response_with_targets(
+        node,
+        &election::ModelTargets::default(),
+        model,
+        target,
+        excluded,
+    )
+    .await
+}
+
+/// The same, with this node's election targets given.
+async fn missing_local_model_response_with_targets(
+    node: &mesh::Node,
+    targets: &election::ModelTargets,
+    model: &str,
+    target: Option<iroh::EndpointId>,
+    excluded: &[iroh::EndpointId],
+) -> String {
     use tokio::io::AsyncReadExt;
 
-    let targets = election::ModelTargets::default();
     let affinity = affinity::AffinityRouter::new();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -59,7 +76,7 @@ async fn missing_local_model_response(
     };
     let ctx = IngressRouteContext {
         node,
-        targets: &targets,
+        targets,
         affinity: &affinity,
         plugin_manager: None,
         requested_by_node_id: None,
@@ -410,6 +427,47 @@ async fn auto_route_with_no_model_ready_tells_clients_when_to_retry() {
     );
     assert_eq!(
         retry_after_and_error_code(&response),
+        (Some("5"), "model_not_ready".to_owned())
+    );
+    node.endpoint.close().await;
+}
+
+/// A model whose local copies are all down (draining, reloading) gives a
+/// client that excluded this node the exclusion 409, like the other loading
+/// cases: the retryable 503 is only for clients this node could serve.
+#[tokio::test]
+async fn route_missing_local_model_keeps_the_exclusion_409_when_local_copies_are_down() {
+    let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+        .await
+        .expect("test node");
+    let mut targets = election::ModelTargets::default();
+    targets.targets.insert(
+        "draining-model".to_string(),
+        vec![election::InferenceTarget::None],
+    );
+
+    let excluded = missing_local_model_response_with_targets(
+        &node,
+        &targets,
+        "draining-model",
+        None,
+        &[node.id()],
+    )
+    .await;
+    assert!(
+        excluded.starts_with("HTTP/1.1 409 Conflict\r\n"),
+        "{excluded}"
+    );
+
+    let retryable =
+        missing_local_model_response_with_targets(&node, &targets, "draining-model", None, &[])
+            .await;
+    assert!(
+        retryable.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+        "{retryable}"
+    );
+    assert_eq!(
+        retry_after_and_error_code(&retryable),
         (Some("5"), "model_not_ready".to_owned())
     );
     node.endpoint.close().await;

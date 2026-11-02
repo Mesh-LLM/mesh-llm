@@ -386,12 +386,12 @@ async fn unavailable_locally(
     model_name: &str,
     excluded: &[iroh::EndpointId],
 ) -> bool {
-    if has_local_unavailable_candidates(ctx.targets, model_name) {
-        return true;
+    if excluded.contains(&ctx.node.id()) {
+        return false;
     }
-    !excluded.contains(&ctx.node.id())
-        && may_be_loading_here(ctx, model_name).await
-        && !plugin_serves_model(ctx, model_name).await
+    has_local_unavailable_candidates(ctx.targets, model_name)
+        || (may_be_loading_here(ctx, model_name).await
+            && !plugin_serves_model(ctx, model_name).await)
 }
 
 /// Whether this node's serving assignment names `model_name`. A first load has
