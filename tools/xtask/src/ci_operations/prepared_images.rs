@@ -27,13 +27,17 @@ fn verified_image(action: &str) -> Outcome<(String, String)> {
 }
 
 /// Whether a job runs the action in its image profile, the one that verifies
-/// the runner image; another `runner-profile` skips the verification.
+/// the runner image; another `runner-profile` skips the verification. The
+/// census reads workflows as text, so a block scalar (`|`, `>`), whose value
+/// sits on the next lines, counts as the image profile: its binding is
+/// checked rather than skipped.
 fn prepares_in_image_profile(body: &str) -> bool {
     body.contains(USES)
         && !body.lines().any(|line| {
             line.trim()
                 .strip_prefix("runner-profile:")
-                .is_some_and(|profile| scalar(profile) != "image")
+                .map(scalar)
+                .is_some_and(|profile| !profile.starts_with(['|', '>']) && profile != "image")
         })
 }
 
@@ -156,6 +160,8 @@ mod tests {
             "'image'",
             "image # the verified profile",
             "\"image\" # quoted, then a comment",
+            ">-\n            image",
+            "|\n            image",
         ] {
             let image = format!("{PREPARED}        with:\n          runner-profile: {value}\n");
             assert!(
