@@ -338,7 +338,7 @@ index 000000000..d06000f11
 +        int32_t n_vocab,
 +        const skippy_argmax_plan & plan);
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
-index 1bf458e62..12250e2b2 100644
+index 9e134586f..4100856f3 100644
 --- a/src/skippy/tests/sampling_history.cpp
 +++ b/src/skippy/tests/sampling_history.cpp
 @@ -1,5 +1,7 @@
@@ -349,7 +349,7 @@ index 1bf458e62..12250e2b2 100644
  #include "../runtime_support.h"
  #include "llama-model.h"
  #include "../../../common/sampling.h"
-@@ -269,6 +271,108 @@ void penalty_restore(skippy_model * model, bool full) {
+@@ -287,6 +289,108 @@ void penalty_restore(skippy_model * model, bool full) {
      release(restored);
  }
  
@@ -458,7 +458,7 @@ index 1bf458e62..12250e2b2 100644
  
  int32_t stage_layers(skippy_session * session) {
      return session->stage_model->model->hparams.n_layer();
-@@ -423,6 +527,7 @@ void adapter_contracts(skippy_model * model) {
+@@ -441,6 +545,7 @@ void adapter_contracts(skippy_model * model) {
      error = nullptr;
  
      config = sampling_config();
@@ -466,7 +466,7 @@ index 1bf458e62..12250e2b2 100644
      config.ignore_eos = 1;
      config.logit_bias_count = 3;
      const auto * vocab = llama_model_get_vocab(model->model);
-@@ -458,7 +563,8 @@ int main(int argc, char ** argv) {
+@@ -476,7 +581,8 @@ int main(int argc, char ** argv) {
      CHECK(argc == 4);
      const bool grammar = std::strcmp(argv[2], "grammar") == 0;
      const bool state = std::strcmp(argv[2], "state") == 0;
@@ -476,7 +476,7 @@ index 1bf458e62..12250e2b2 100644
      CHECK(std::strcmp(argv[3], "dense") == 0 || std::strcmp(argv[3], "recurrent") == 0);
      require_recurrent = std::strcmp(argv[3], "recurrent") == 0;
      auto config = skippy_runtime_config_default();
-@@ -473,6 +579,8 @@ int main(int argc, char ** argv) {
+@@ -491,6 +597,8 @@ int main(int argc, char ** argv) {
          // partial side payload is intentionally empty there.
          CHECK(require_recurrent);
          state_round_trip(model);

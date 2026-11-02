@@ -18,7 +18,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  .../tests/renamed_multishard_planning.cpp     | 1659 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
  src/skippy/tests/runtime_events.cpp           |  695 +++++++
- src/skippy/tests/sampling_history.cpp         |  499 +++++
+ src/skippy/tests/sampling_history.cpp         |  517 +++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1151 ++++++++++++
@@ -38,7 +38,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 34 files changed, 9948 insertions(+), 32 deletions(-)
+ 34 files changed, 9966 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -5839,10 +5839,10 @@ index 000000000..cb420a561
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..1bf458e62
+index 000000000..9e134586f
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,499 @@
+@@ -0,0 +1,517 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
 +#include "../runtime_support.h"
@@ -6085,6 +6085,24 @@ index 000000000..1bf458e62
 +    CHECK(session->sampling_accepted_token_count == accepted);
 +    // Without the grammar the 42 bias would win again.
 +    CHECK(decode(session, sampling, predicted[1]) == 44);
++    release(session);
++
++    // Discarding the whole window must not keep a sampler that already
++    // accepted its first row.
++    session = create(model);
++    configure(session, sampling, false, prefix.size() + 1);
++    prefill(session, prefix);
++    error = nullptr;
++    status = skippy_verify_tokens_frame_sampled(session, window.data(), window.size(), &sampling,
++            nullptr, nullptr, nullptr, nullptr, 0, &output_bytes,
++            predicted.data(), predicted.size(), &predicted_count, 0, nullptr, &error);
++    ok(status, error);
++    CHECK(session->verify_checkpoints.size() == 1);
++    error = nullptr;
++    status = skippy_trim_session(session, prefix.size(), &error);
++    ok(status, error);
++    CHECK(session->token_history.size() == prefix.size());
++    CHECK(session->sampling_accepted_token_count <= session->token_history.size());
 +    release(session);
 +}
 +
