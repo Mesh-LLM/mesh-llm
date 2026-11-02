@@ -9,7 +9,7 @@ use std::time::Duration;
 /// Largest document accepted by the Mesh OCR upload contract (64 MiB).
 pub const MAX_DOCUMENT_BYTES: usize = 64 * 1024 * 1024;
 
-/// Fields sent alongside a document's unchanged bytes in a multipart upload.
+/// Upload metadata and output options for a document's unchanged bytes.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DocumentOcrOptions {
@@ -21,7 +21,8 @@ pub struct DocumentOcrOptions {
     /// MIME type reported to the provider; defaults to `application/octet-stream`.
     #[serde(default = "default_content_type")]
     pub content_type: String,
-    /// Requested provider output: `json`, `text`, or `markdown`.
+    /// Output negotiated through `Accept`: `json`, `text`, or `markdown`.
+    /// Defaults to JSON when omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_format: Option<String>,
     /// Optional positive limit on pages processed by the provider.
@@ -95,18 +96,21 @@ impl OpenAiClient {
         options: DocumentOcrOptions,
     ) -> Result<RawOpenAiResponse> {
         options.validate(file.len())?;
+        let accept = match options.response_format.as_deref() {
+            Some("text") => "text/plain",
+            Some("markdown") => "text/markdown",
+            _ => "application/json",
+        };
         let part = Part::bytes(file)
             .file_name(options.filename)
             .mime_str(&options.content_type)?;
         let mut form = Form::new().text("model", options.model).part("file", part);
-        if let Some(format) = options.response_format {
-            form = form.text("response_format", format);
-        }
         if let Some(pages) = options.max_pages {
             form = form.text("max_pages", pages.to_string());
         }
         let response = self
             .document_request(form)
+            .header(reqwest::header::ACCEPT, accept)
             .timeout(Duration::from_secs(120))
             .send()
             .await?;
