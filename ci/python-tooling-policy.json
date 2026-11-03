@@ -51,6 +51,12 @@
       "purpose": "verify preinstalled canary runner prerequisites"
     },
     {
+      "path": ".github/actions/setup-canary-runner/action.yml",
+      "line": "for cmd in cargo rustc just sccache jq python3 uv cmake ninja hf git-lfs clang ld.lld pkg-config git; do",
+      "occurrences": 1,
+      "purpose": "verify preinstalled canary runner prerequisites"
+    },
+    {
       "path": ".github/actions/setup-canary-python/action.yml",
       "line": "host_python=\"$(command -v python3)\"",
       "occurrences": 1,
