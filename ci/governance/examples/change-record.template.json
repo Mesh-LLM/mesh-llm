@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "request": {
+    "operation_id": "<fresh UUID retained in protected one-use ledger>",
+    "repository": "Mesh-LLM/mesh-llm",
+    "policy_revision": "<exact current protected main SHA>",
+    "policy_sha256": "<SHA256 of compact typed Policy JSON; recursively sorted object keys; preserved array order>",
+    "expected_before_sha256": "<SHA256 of compact typed before LiveState JSON; recursively sorted object keys and sorted unordered state lists>",
+    "before": "<complete actual before LiveState object>",
+    "desired_after": "<complete reviewed desired LiveState object>",
+    "controls": ["reviewer-team", "ci-ruleset", "administration-environment", "credential-boundaries"],
+    "execution_method": "manual-provider-operation",
+    "execution": "<complete ExecutionContext object from observation.template.json>",
+    "owner": {"login": "<human author/sponsor login>", "id": "<verified account ID>", "kind": "human"},
+    "author": {"login": "<same human login>", "id": "<same verified account ID>", "kind": "human"},
+    "sponsor": {"login": "<same human login>", "id": "<same verified account ID>", "kind": "human"},
+    "rationale": "<reviewed reason>",
+    "affected_jobs": ["<affected job or check>"],
+    "tests": ["<actual test evidence link or result>"],
+    "rollout": "<bounded human operation and readback plan>",
+    "rollback": "<bounded recovery plan requiring separate review>",
+    "requested_at_unix": "<actual request time>",
+    "expires_at_unix": "<at most one hour after request>"
+  },
+  "approval": {
+    "approver": {"login": "<eligible independent human>", "id": "<verified account ID>", "kind": "human"},
+    "state": "approved",
+    "request_sha256": "<SHA256 of compact typed ChangeRequest JSON; recursively sorted object keys; normalized before/desired state lists; other arrays preserve order>",
+    "policy_revision": "<exact current protected main SHA>",
+    "execution": "<same complete ExecutionContext object>",
+    "approved_at_unix": "<actual independent approval time>",
+    "expires_at_unix": "<within request window and at most one hour after approval>",
+    "link": "<HTTPS repository approval evidence link>",
+    "environment": "ci-governance-administration",
+    "environment_prevented_self_review": true,
+    "environment_admin_bypass": false
+  },
+  "manual_readback": null
+}

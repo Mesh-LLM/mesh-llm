@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "operation_id": "<canonical lowercase UUID; fixed file ci/governance/records/UUID.json>",
+  "repository": "Mesh-LLM/mesh-llm",
+  "policy_sha256": "<current canonical Policy SHA256; sorted object keys, policy array order preserved>",
+  "desired_state_sha256": "<current expected LiveState SHA256; sorted keys and unordered state lists>",
+  "expected_before_sha256": "<reviewed before LiveState SHA256; sorted keys and unordered state lists>",
+  "before": "<complete reviewed actual before LiveState object>",
+  "desired_after": "<complete final desired LiveState object matching protected expected-state.json>",
+  "controls": ["<exact changed supported controls only: reviewer-team, ci-ruleset, administration-environment, credential-boundaries>"],
+  "execution_method": "manual-provider-operation",
+  "owner": {"login": "<human owner>", "id": "<verified account ID>", "kind": "human"},
+  "author": {"login": "<same human>", "id": "<same verified account ID>", "kind": "human"},
+  "sponsor": {"login": "<same human>", "id": "<same verified account ID>", "kind": "human"},
+  "rationale": "<reviewed bounded reason; never include secrets>",
+  "affected_jobs": ["<actual affected job or check>"],
+  "tests": ["<actual validation evidence>"],
+  "rollout": "<bounded human rollout plan requiring separate verified authorization>",
+  "rollback": "<bounded separately reviewed human recovery plan>",
+  "created_at_unix": "<actual creation time>",
+  "expires_at_unix": "<no later than seven days after creation; runtime packet further limited to one hour>"
+}
