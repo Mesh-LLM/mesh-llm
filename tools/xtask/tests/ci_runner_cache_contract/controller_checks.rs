@@ -56,6 +56,9 @@ fn selected(doc: &Node) -> Result<&Node, String> {
         .get("jobs")
         .and_then(|jobs| jobs.get("dispatch"))
         .ok_or("dispatch job missing")?;
+    if text(dispatch, "if") != "${{ needs.plan.outputs.should_dispatch == 'true' }}" {
+        return Err("resolved dispatch guard missing".into());
+    }
     if !dispatch
         .get("needs")
         .ok_or("needs missing")?
@@ -98,20 +101,73 @@ fn selected(doc: &Node) -> Result<&Node, String> {
     }
     Ok(step)
 }
+fn resolver(doc: &Node) -> Result<&Node, String> {
+    let plan = doc
+        .get("jobs")
+        .and_then(|jobs| jobs.get("plan"))
+        .ok_or("plan job missing")?;
+    if text(plan, "if") != "${{ github.ref_name == github.event.repository.default_branch }}" {
+        return Err("protected default-branch guard missing".into());
+    }
+    let outputs = plan.get("outputs").ok_or("plan outputs missing")?;
+    for key in [
+        "should_dispatch",
+        "source_sha",
+        "original_event_name",
+        "correlation_id",
+        "supersession_key",
+        "use_depot",
+    ] {
+        let expected = format!("${{{{ steps.resolve.outputs.{key} }}}}");
+        if text(outputs, key) != expected {
+            return Err(format!("{key} must bind resolver output"));
+        }
+    }
+    let Some(Node::Seq(steps)) = plan.get("steps") else {
+        return Err("plan steps missing".into());
+    };
+    let matching = steps
+        .iter()
+        .filter(|step| text(step, "id") == "resolve")
+        .collect::<Vec<_>>();
+    let [step] = matching.as_slice() else {
+        return Err("unique resolver required".into());
+    };
+    if text(step, "uses") != SCRIPT
+        || step
+            .get("with")
+            .map(|with| text(with, "script"))
+            .unwrap_or("")
+            .is_empty()
+    {
+        return Err("owned resolver scalar missing".into());
+    }
+    Ok(step)
+}
 fn run(required: [bool; 5], mutation: &str, fail_lane: &str) -> Value {
+    run_with_manual_input(required, mutation, fail_lane, json!(false))
+}
+fn run_with_manual_input(
+    required: [bool; 5],
+    mutation: &str,
+    fail_lane: &str,
+    manual_input: Value,
+) -> Value {
     let fixture = Fixture::new();
     let doc = document();
     let script = text(selected(&doc).unwrap().get("with").unwrap(), "script");
     let actual = fixture.path().join("actual-controller.js");
     fs::write(&actual, script).unwrap();
+    let resolve = text(resolver(&doc).unwrap().get("with").unwrap(), "script");
+    let actual_resolve = fixture.path().join("actual-resolver.js");
+    fs::write(&actual_resolve, resolve).unwrap();
     let harness = fixture.path().join("controller-harness.js");
     fs::write(&harness, include_str!("controller_checks.js")).unwrap();
     let projections = LANES.iter().enumerate().map(|(index, lane)| json!({"lane":lane,"required":required[index],"required_slices":if required[index] {vec!["synthetic"]} else {vec![]},"matrices":{},"fixture_capability":{"cpu":true}})).collect::<Vec<_>>();
     let config = fixture.path().join("finite-input.json");
     fs::write(
         &config,
-        serde_json::to_vec(&json!({"lanes":projections,"mutation":mutation,"fail_lane":fail_lane}))
-            .unwrap(),
+        serde_json::to_vec(&json!({"lanes":projections,"mutation":mutation,"fail_lane":fail_lane,"manual_input":manual_input})).unwrap(),
     )
     .unwrap();
     let mut command = Command::new("node");
@@ -124,7 +180,8 @@ fn run(required: [bool; 5], mutation: &str, fail_lane: &str) -> Value {
         .env("HOME", fixture.path())
         .arg(harness)
         .arg(actual)
-        .arg(config);
+        .arg(config)
+        .arg(actual_resolve);
     let output = fixture.run(command);
     assert!(
         output.status.success(),
@@ -139,8 +196,17 @@ fn checks(output: &Value) -> &[Value] {
 fn dispatches(output: &Value) -> &[Value] {
     output["dispatches"].as_array().unwrap()
 }
-fn common(output: &Value, required: [bool; 5]) {
+fn common(output: &Value, required: [bool; 5], expected_depot: &str) {
     assert!(output["error"].is_null(), "{output}");
+    assert_eq!(output["resolved"]["should_dispatch"], "true");
+    assert_eq!(output["resolved"]["source_sha"], output["source"]);
+    assert_eq!(
+        output["resolved"]["original_event_name"],
+        "workflow_dispatch"
+    );
+    assert_eq!(output["resolved"]["correlation_id"], output["correlation"]);
+    assert_eq!(output["resolved"]["supersession_key"], "manual-91");
+    assert_eq!(output["resolved"]["use_depot"], expected_depot);
     assert_eq!(checks(output).len(), 6);
     assert_eq!(checks(output)[0]["request"]["name"], "CI Required");
     assert_eq!(checks(output)[0]["request"]["status"], "in_progress");
@@ -186,13 +252,37 @@ fn common(output: &Value, required: [bool; 5]) {
         assert!(required[index]);
         assert_eq!(dispatch["ref"], "protected-main");
         let inputs = &dispatch["inputs"];
+        let path = root()
+            .join(".github/workflows")
+            .join(format!("ci-{}-lane.yml", LANES[index]));
+        let target =
+            workflow_yaml::parse_resolved_aliases(&fs::read_to_string(path).unwrap()).unwrap();
+        let declared = target
+            .get("on")
+            .and_then(|on| on.get("workflow_dispatch"))
+            .and_then(|event| event.get("inputs"))
+            .expect("dispatched lane inputs");
+        for key in inputs.as_object().unwrap().keys() {
+            assert!(
+                declared.get(key).is_some(),
+                "undeclared dispatch input: {key}"
+            );
+        }
+        for (key, declaration) in declared.entries() {
+            if text(declaration, "required") == "true" {
+                assert!(
+                    inputs[key].as_str().is_some_and(|value| !value.is_empty()),
+                    "missing required dispatch input: {key}"
+                );
+            }
+        }
         assert_eq!(inputs["source_sha"], output["source"]);
         assert_eq!(inputs["plan_digest"], output["digest"]);
         assert_eq!(inputs["correlation_id"], output["correlation"]);
         assert_eq!(inputs["lane_check_id"], (702 + index).to_string());
         assert_eq!(inputs["overall_check_id"], "701");
         assert_eq!(inputs["original_event_name"], "workflow_dispatch");
-        assert_eq!(inputs["supersession_key"], "finite-supersession");
+        assert_eq!(inputs["supersession_key"], "manual-91");
         assert_eq!(
             serde_json::from_str::<Value>(inputs["expected_lane_checks"].as_str().unwrap())
                 .unwrap(),
@@ -207,19 +297,35 @@ fn common(output: &Value, required: [bool; 5]) {
         }
         assert_eq!(inputs.get("use_depot").is_some(), index == 0 || index == 2);
         if index == 0 || index == 2 {
-            assert_eq!(inputs["use_depot"], "false");
+            assert_eq!(text(declared.get("use_depot").unwrap(), "type"), "boolean");
+            assert_eq!(inputs["use_depot"], expected_depot);
         }
     }
 }
 #[test]
 fn controller_checks_actual_all_lanes_bind_returned_ids_and_protected_identity() {
     let required = [true; 5];
-    common(&run(required, "", ""), required);
+    common(&run(required, "", ""), required, "false");
+}
+#[test]
+fn controller_checks_resolved_manual_opt_in_reaches_only_declared_lanes() {
+    let required = [true; 5];
+    for (input, expected) in [
+        (json!(true), "true"),
+        (json!("true"), "true"),
+        (json!(false), "false"),
+        (json!("false"), "false"),
+        (json!("TRUE"), "false"),
+        (Value::Null, "false"),
+    ] {
+        let output = run_with_manual_input(required, "", "", input);
+        common(&output, required, expected);
+    }
 }
 #[test]
 fn controller_checks_absent_lanes_complete_without_dispatch() {
     for required in [[false; 5], [true, false, true, false, false]] {
-        common(&run(required, "", ""), required);
+        common(&run(required, "", ""), required, "false");
     }
 }
 #[test]
