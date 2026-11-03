@@ -65,8 +65,7 @@ fn run(command: &mut Command, body: &str) -> std::process::Output {
     support::Fixture::new().run(owned)
 }
 
-fn manifest(directory: &Path) {
-    let stage = directory.join("immutable-automation-restored");
+fn manifest_at(stage: &Path) {
     fs::write(
         stage.join("SHA256SUMS"),
         format!(
@@ -78,11 +77,15 @@ fn manifest(directory: &Path) {
     .unwrap();
 }
 
+fn manifest(directory: &Path) {
+    manifest_at(&directory.join("immutable-pr-authority-restored"));
+}
+
 fn staged(binary: &[u8]) -> tempfile::TempDir {
     let directory = tempfile::tempdir().unwrap();
     let output = run(&mut command(directory.path()), &script(0));
     assert!(output.status.success(), "{output:?}");
-    let stage = directory.path().join("immutable-automation-restored");
+    let stage = directory.path().join("immutable-pr-authority-restored");
     fs::write(stage.join("xtask"), binary).unwrap();
     fs::write(stage.join("source.txt"), format!("{SOURCE}\n")).unwrap();
     manifest(directory.path());
@@ -104,6 +107,10 @@ fn consumer_requires_exact_same_run_download_before_verification_and_native_audi
         inputs.get("artifact-ids").and_then(Node::text),
         Some("${{ inputs.artifact_id }}")
     );
+    assert_eq!(
+        inputs.get("path").and_then(Node::text),
+        Some("${{ runner.temp }}/immutable-pr-authority-restored")
+    );
     for forbidden in ["name", "run-id", "github-token", "repository"] {
         assert!(inputs.get(forbidden).is_none(), "{forbidden}");
     }
@@ -120,7 +127,7 @@ fn consumer_requires_exact_same_run_download_before_verification_and_native_audi
     }
     let execution = script(3);
     assert!(execution.contains(
-        "\"$RUNNER_TEMP/immutable-automation-restored/$binary\" ci-ops pr-authority-audit"
+        "\"$RUNNER_TEMP/immutable-pr-authority-restored/$binary\" ci-ops pr-authority-audit"
     ));
     assert!(!execution.contains("MESH_LLM_AUTOMATION_BIN"));
 }
@@ -144,7 +151,7 @@ fn consumer_identity_refuses_download_admission_before_creating_a_stage() {
         assert!(
             !directory
                 .path()
-                .join("immutable-automation-restored")
+                .join("immutable-pr-authority-restored")
                 .exists()
         );
     }
@@ -165,7 +172,7 @@ fn substituted_untrusted_payloads_cannot_run_even_with_a_rehashed_manifest() {
         "wrong-platform",
     ] {
         let directory = staged(payload);
-        let stage = directory.path().join("immutable-automation-restored");
+        let stage = directory.path().join("immutable-pr-authority-restored");
         match attack {
             "wrong-source" => {
                 fs::write(
@@ -228,6 +235,62 @@ fn verified_native_consumer_runs_without_checkout_and_ignores_an_executable_over
     assert!(result.status.success(), "{result:?}");
     assert!(!directory.path().join(".git").exists());
     assert!(result.stderr.is_empty());
+}
+
+#[test]
+fn protected_audit_then_product_restore_keep_distinct_owned_stages() {
+    let protected = fs::read(env!("CARGO_BIN_EXE_xtask")).unwrap();
+    let directory = staged(&protected);
+    let root = directory.path();
+    let mut audit = command(root);
+    audit.env("AUTOMATION_BINARY_SHA256", digest(&protected));
+    let result = run(&mut audit, &format!("{}\n{}", script(2), script(3)));
+    assert!(result.status.success(), "protected audit: {result:?}");
+    assert!(!root.join("checkout").exists());
+
+    // Model the intervening product checkout and the artifact transport boundary:
+    // the real admission and verification scripts still own both stages.
+    fs::create_dir(root.join("checkout")).unwrap();
+    let restore = support::action("restore-automation");
+    let restore_steps = steps(&restore);
+    let download = restore_steps[1].get("with").unwrap();
+    assert_eq!(
+        download.get("path").and_then(Node::text),
+        Some("${{ runner.temp }}/immutable-automation-restored")
+    );
+    let product = b"#!/bin/bash\ntouch \"$RUNNER_TEMP/product-executed\"\n";
+    let env_file = root.join("github-env");
+    let mut admission = command(root);
+    admission.env("AUTOMATION_BINARY_SHA256", digest(product));
+    admission.env("GITHUB_ENV", &env_file);
+    let admit = restore_steps[0].get("run").and_then(Node::text).unwrap();
+    let result = run(&mut admission, admit);
+    assert!(result.status.success(), "product admission: {result:?}");
+    let stage = root.join("immutable-automation-restored");
+    fs::write(stage.join("xtask"), product).unwrap();
+    fs::write(stage.join("source.txt"), format!("{SOURCE}\n")).unwrap();
+    manifest_at(&stage);
+    let verify = restore_steps[2].get("run").and_then(Node::text).unwrap();
+    let mut verification = command(root);
+    verification.env("AUTOMATION_BINARY_SHA256", digest(product));
+    verification.env("GITHUB_ENV", &env_file);
+    let result = run(&mut verification, verify);
+    assert!(result.status.success(), "product verification: {result:?}");
+    assert_eq!(
+        fs::read(root.join("immutable-pr-authority-restored/xtask")).unwrap(),
+        protected
+    );
+    let exported = fs::read_to_string(env_file).unwrap();
+    let binary = exported
+        .trim_end()
+        .strip_prefix("MESH_LLM_AUTOMATION_BIN=")
+        .unwrap();
+    assert_eq!(Path::new(binary), stage.join("xtask"));
+    let mut product_command = Command::new(binary);
+    product_command.env("RUNNER_TEMP", root);
+    let output = support::Fixture::new().run(product_command);
+    assert!(output.status.success(), "product execution: {output:?}");
+    assert!(root.join("product-executed").exists());
 }
 
 #[test]
