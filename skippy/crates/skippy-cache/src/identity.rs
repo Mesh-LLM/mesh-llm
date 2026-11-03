@@ -121,6 +121,16 @@ fn update_layout_identity(hasher: &mut blake3::Hasher, config: &StageConfig) {
     // The CPU/GPU layer split decides which layers live in device memory and
     // therefore how the exported page is assembled.
     hasher.update(&config.n_gpu_layers.to_le_bytes());
+    // Host-resident routed experts run on CPU kernels, so pages produced with
+    // a different expert placement are not interchangeable. The range is
+    // hashed only when one is set: configs that never use host-resident
+    // experts must keep the identity they had before the feature, or the
+    // upgrade alone would invalidate every existing cache entry.
+    if let Some(layers) = config.host_expert_layers {
+        hasher.update(b"host-expert-layers:");
+        hasher.update(&layers.start.to_le_bytes());
+        hasher.update(&layers.end.to_le_bytes());
+    }
     // Backend identity: CUDA/Metal/Vulkan/CPU pages are not interchangeable.
     match config.selected_device.as_ref() {
         Some(device) => hasher.update(device.backend_device.as_bytes()),
@@ -673,6 +683,7 @@ mod identity_completeness_tests {
             direct_io: false,
             main_gpu: None,
             split_mode: skippy_protocol::SplitMode::Auto,
+            host_expert_layers: None,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
@@ -710,6 +721,23 @@ mod identity_completeness_tests {
         assert_ne!(
             prefix_identity(&f16, 0, &[1, 2, 3, 4]).page_id,
             prefix_identity(&quantized, 0, &[1, 2, 3, 4]).page_id
+        );
+    }
+
+    /// Host-resident experts run on CPU kernels, so their pages must not be
+    /// imported into a stage that keeps the same experts on the accelerator.
+    #[test]
+    fn host_expert_placement_changes_page_identity() {
+        let accelerator = test_config();
+        let host = StageConfig {
+            host_expert_layers: skippy_protocol::HostExpertLayers::new(0, 4),
+            ..test_config()
+        };
+
+        assert_ne!(hash_of(&accelerator), hash_of(&host));
+        assert_ne!(
+            prefix_identity(&accelerator, 0, &[1, 2, 3, 4]).page_id,
+            prefix_identity(&host, 0, &[1, 2, 3, 4]).page_id
         );
     }
 
@@ -1020,6 +1048,7 @@ mod identity_stability_tests {
             direct_io: false,
             main_gpu: None,
             split_mode: skippy_protocol::SplitMode::Auto,
+            host_expert_layers: None,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,

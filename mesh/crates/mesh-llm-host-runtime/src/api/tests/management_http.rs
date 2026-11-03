@@ -644,12 +644,13 @@ async fn management_5xx_records_failed_terminal_lifecycle() {
     .await;
     let request_id = "00000000-0000-4000-8000-000000000032";
     let state = build_test_mesh_api().await;
+    seed_owner_control_token(&state).await;
     let (address, server) = spawn_management_test_server(state).await;
 
     let response = send_management_request(
         address,
         format!(
-            "POST /api/runtime/mesh-guardrails HTTP/1.1\r\nHost: localhost\r\nx-request-id: {request_id}\r\nContent-Length: 0\r\n\r\n"
+            "POST /api/runtime/mesh-guardrails HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TEST_OWNER_CONTROL_TOKEN}\r\nx-request-id: {request_id}\r\nContent-Length: 0\r\n\r\n"
         ),
     )
     .await;

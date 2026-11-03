@@ -1,9 +1,4 @@
-#[expect(
-    dead_code,
-    reason = "shared process owner includes HTTPS APIs unused by this client lifecycle driver"
-)]
-#[path = "../../src/process/mod.rs"]
-pub mod process;
+pub use process_supervision as process;
 mod protocol;
 mod qa_scenarios;
 

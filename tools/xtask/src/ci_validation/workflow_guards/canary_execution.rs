@@ -418,12 +418,13 @@ mod tests {
     fn family_memory_dispatch_preserves_selected_source_sdk_before_certification() {
         let document = family();
         let job = h::job(&document, "family").unwrap();
-        let Node::Seq(runners) = h::member(job, "runs-on").unwrap() else {
-            panic!("family runner list required")
-        };
-        assert!(runners.iter().any(
-            |runner| matches!(runner, Node::Scalar(value) if value == "${{ matrix.memory_tier }}")
-        ));
+        let runner = h::member(job, "runs-on").unwrap().text().unwrap();
+        assert!(
+            runner.contains("matrix.memory_tier"),
+            "family placement must dispatch on the matrix memory tier: {runner}"
+        );
+        assert!(runner.contains("runner_labels_256"));
+        assert!(runner.contains("runner_labels_128"));
         let steps = h::steps(job).unwrap();
         let (sdk, _) = h::step(steps, "uses", "./.github/actions/setup-canary-python").unwrap();
         let (certify, command) = h::step(steps, "id", "certify").unwrap();

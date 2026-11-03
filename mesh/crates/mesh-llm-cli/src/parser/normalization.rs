@@ -163,24 +163,24 @@ pub fn legacy_runtime_surface_warning(
     // is built; the warning lands in terminals, logs, and bug reports.
     let redacted_args = redact_suggestion_args(original_args);
 
-    if cli.client {
+    if cli.node.client {
         return Some(format!(
             "⚠️ top-level `--client` now maps to `mesh-llm client`.\n  Please use: {}",
             suggested_client_command(&redacted_args)
         ));
     }
 
-    if !cli.model.is_empty()
-        || !cli.gguf.is_empty()
-        || cli.mmproj.is_some()
-        || cli.checkpoint_quantization.is_some()
-        || cli.checkpoint_imatrix.is_some()
-        || cli.auto
-        || !cli.join.is_empty()
-        || !cli.join_file.is_empty()
-        || cli.discover.is_some()
-        || cli.publish
-        || cli.strategy.is_some()
+    if !cli.serving.model.is_empty()
+        || !cli.serving.gguf.is_empty()
+        || cli.serving.mmproj.is_some()
+        || cli.serving.checkpoint_quantization.is_some()
+        || cli.serving.checkpoint_imatrix.is_some()
+        || cli.joining.auto
+        || !cli.joining.join.is_empty()
+        || !cli.joining.join_file.is_empty()
+        || cli.joining.discover.is_some()
+        || cli.mesh_policy.publish
+        || cli.placement.strategy.is_some()
     {
         return Some(format!(
             "⚠️ top-level serving flags now map to `mesh-llm serve`.\n  Please use: {}",
@@ -576,7 +576,7 @@ mod tests {
         // the relay-auth value reaches `Cli::relay_auth`.
         let cli = Cli::try_parse_from(&normalized.normalized).expect("clap parse");
         assert_eq!(
-            cli.relay_auth,
+            cli.network.relay_auth,
             vec![("https://gated.example/".to_string(), "token".to_string())],
         );
     }
@@ -595,9 +595,9 @@ mod tests {
 
         assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Client));
         let cli = Cli::try_parse_from(&normalized.normalized).expect("clap parse");
-        assert!(cli.client, "client surface flag should be set");
+        assert!(cli.node.client, "client surface flag should be set");
         assert_eq!(
-            cli.relay_auth,
+            cli.network.relay_auth,
             vec![(
                 "https://gated.example/".to_string(),
                 "eyJhbGciOiJFZERTQSJ9.payload==".to_string()
@@ -779,10 +779,10 @@ mod tests {
     #[test]
     fn discover_flag_keeps_equals_and_bare_forms() {
         let cli = Cli::try_parse_from(["mesh-llm", "--discover=MyMesh"]).unwrap();
-        assert_eq!(cli.discover.as_deref(), Some("MyMesh"));
+        assert_eq!(cli.joining.discover.as_deref(), Some("MyMesh"));
 
         let cli = Cli::try_parse_from(["mesh-llm", "--discover"]).unwrap();
-        assert_eq!(cli.discover.as_deref(), Some(""));
+        assert_eq!(cli.joining.discover.as_deref(), Some(""));
     }
 
     #[test]
@@ -790,7 +790,7 @@ mod tests {
         // Regression: with an optional value and no require_equals,
         // `--discover status` consumed `status` as the mesh name.
         let cli = Cli::try_parse_from(["mesh-llm", "--discover", "status"]).unwrap();
-        assert_eq!(cli.discover.as_deref(), Some(""));
+        assert_eq!(cli.joining.discover.as_deref(), Some(""));
         assert!(
             matches!(cli.command, Some(Command::Status { .. })),
             "status must parse as the subcommand, not as --discover's value"
@@ -801,7 +801,7 @@ mod tests {
         // errors on the unknown name at runtime) — the flag keeps its bare
         // meaning.
         let cli = Cli::try_parse_from(["mesh-llm", "--discover", "MyMesh"]).unwrap();
-        assert_eq!(cli.discover.as_deref(), Some(""));
+        assert_eq!(cli.joining.discover.as_deref(), Some(""));
         assert!(matches!(cli.command, Some(Command::ExternalPlugin(_))));
     }
 
@@ -877,7 +877,7 @@ mod tests {
         let args = vec!["mesh-llm", "serve", "--headless", "--auto"];
         let normalized = normalize_runtime_surface_args(args);
         let cli = Cli::try_parse_from(&normalized.normalized).unwrap();
-        assert!(cli.headless);
+        assert!(cli.node.headless);
     }
 
     #[test]
@@ -885,7 +885,7 @@ mod tests {
         let args = vec!["mesh-llm", "client", "--headless", "--auto"];
         let normalized = normalize_runtime_surface_args(args);
         let cli = Cli::try_parse_from(&normalized.normalized).unwrap();
-        assert!(cli.headless);
+        assert!(cli.node.headless);
     }
 
     #[test]
@@ -900,8 +900,11 @@ mod tests {
         let normalized = normalize_runtime_surface_args(args);
         let cli = Cli::try_parse_from(&normalized.normalized).unwrap();
 
-        assert!(cli.client);
-        assert_eq!(cli.swarm_capture, Some(PathBuf::from("/tmp/mesh-capture")));
+        assert!(cli.node.client);
+        assert_eq!(
+            cli.node.swarm_capture,
+            Some(PathBuf::from("/tmp/mesh-capture"))
+        );
     }
 
     #[test]
@@ -915,8 +918,11 @@ mod tests {
         ]);
         let cli = Cli::parse_from(normalized.normalized);
 
-        assert!(cli.client);
-        assert_eq!(cli.swarm_capture, Some(PathBuf::from("/tmp/mesh-capture")));
+        assert!(cli.node.client);
+        assert_eq!(
+            cli.node.swarm_capture,
+            Some(PathBuf::from("/tmp/mesh-capture"))
+        );
         assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Client));
     }
 
@@ -926,7 +932,7 @@ mod tests {
         let normalized = normalize_runtime_surface_args(args);
         let cli = Cli::try_parse_from(&normalized.normalized).unwrap();
         assert!(
-            !cli.headless,
+            !cli.node.headless,
             "--no-console must not activate headless mode"
         );
     }
@@ -944,8 +950,8 @@ mod tests {
         let cli = Cli::try_parse_from(&normalized.normalized).unwrap();
 
         assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Serve));
-        assert!(cli.local_model_only);
-        assert!(!cli.client);
+        assert!(cli.serving.local_model_only);
+        assert!(!cli.node.client);
     }
 
     #[test]
@@ -982,7 +988,7 @@ mod tests {
         let normalized = normalize_runtime_surface_args(["mesh-llm", "serve", "--auto"]);
         let cli = Cli::parse_from(normalized.normalized);
 
-        assert_eq!(cli.log_format, LogFormat::Pretty);
+        assert_eq!(cli.logging.log_format, LogFormat::Pretty);
     }
 
     #[test]
@@ -991,7 +997,7 @@ mod tests {
             normalize_runtime_surface_args(["mesh-llm", "serve", "--log-format", "json", "--auto"]);
         let cli = Cli::parse_from(normalized.normalized);
 
-        assert_eq!(cli.log_format, LogFormat::Json);
+        assert_eq!(cli.logging.log_format, LogFormat::Json);
     }
 
     #[test]
@@ -1000,7 +1006,7 @@ mod tests {
             normalize_runtime_surface_args(["mesh-llm", "--log-format", "json", "serve", "--auto"]);
         let cli = Cli::parse_from(normalized.normalized);
 
-        assert_eq!(cli.log_format, LogFormat::Json);
+        assert_eq!(cli.logging.log_format, LogFormat::Json);
         assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Serve));
     }
 
@@ -1016,8 +1022,11 @@ mod tests {
         ]);
         let cli = Cli::parse_from(normalized.normalized);
 
-        assert_eq!(cli.log_format, LogFormat::Json);
-        assert_eq!(cli.model, vec![std::path::PathBuf::from("Qwen3-8B-Q4_K_M")]);
+        assert_eq!(cli.logging.log_format, LogFormat::Json);
+        assert_eq!(
+            cli.serving.model,
+            vec![std::path::PathBuf::from("Qwen3-8B-Q4_K_M")]
+        );
         assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Serve));
     }
 
@@ -1027,7 +1036,7 @@ mod tests {
             normalize_runtime_surface_args(["mesh-llm", "--log-format=json", "serve", "--auto"]);
         let cli = Cli::parse_from(normalized.normalized);
 
-        assert_eq!(cli.log_format, LogFormat::Json);
+        assert_eq!(cli.logging.log_format, LogFormat::Json);
         assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Serve));
     }
 
@@ -1042,7 +1051,7 @@ mod tests {
         ]);
         let cli = Cli::parse_from(normalized.normalized);
 
-        assert_eq!(cli.log_format, LogFormat::Json);
+        assert_eq!(cli.logging.log_format, LogFormat::Json);
         assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Client));
     }
 
@@ -1058,8 +1067,8 @@ mod tests {
         ]);
         let cli = Cli::parse_from(normalized.normalized);
 
-        assert_eq!(cli.bind_ip, Some("10.1.2.3".parse().unwrap()));
-        assert_eq!(cli.bind_port, Some(47916));
+        assert_eq!(cli.network.bind_ip, Some("10.1.2.3".parse().unwrap()));
+        assert_eq!(cli.network.bind_port, Some(47916));
         assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Serve));
     }
 
@@ -1074,7 +1083,7 @@ mod tests {
         ]);
         let cli = Cli::parse_from(normalized.normalized);
 
-        assert_eq!(cli.mesh_discovery_mode, MeshDiscoveryMode::Mdns);
+        assert_eq!(cli.joining.mesh_discovery_mode, MeshDiscoveryMode::Mdns);
         assert_eq!(normalized.explicit_surface, Some(RuntimeSurface::Serve));
     }
 
@@ -1083,7 +1092,7 @@ mod tests {
         let normalized = normalize_runtime_surface_args(["mesh-llm", "serve", "--auto"]);
         let cli = Cli::parse_from(normalized.normalized);
 
-        assert_eq!(cli.mesh_discovery_mode, MeshDiscoveryMode::Nostr);
+        assert_eq!(cli.joining.mesh_discovery_mode, MeshDiscoveryMode::Nostr);
     }
 
     #[test]
@@ -1092,8 +1101,8 @@ mod tests {
             normalize_runtime_surface_args(["mesh-llm", "client", "--mesh-discovery-mode", "mdns"]);
         let cli = Cli::parse_from(normalized.normalized);
 
-        assert!(cli.client);
-        assert_eq!(cli.mesh_discovery_mode, MeshDiscoveryMode::Mdns);
+        assert!(cli.node.client);
+        assert_eq!(cli.joining.mesh_discovery_mode, MeshDiscoveryMode::Mdns);
     }
 }
 

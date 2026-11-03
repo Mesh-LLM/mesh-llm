@@ -2,8 +2,9 @@ name: Release · Rolling preview
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '23 3 * * 2,5'
+  # On demand only for now. Re-enable once old previews are pruned.
+  # schedule:
+  #   - cron: '23 3 * * 2,5'
 
 concurrency:
   group: rolling-preview-${{ github.repository }}

@@ -677,6 +677,7 @@ fn fixture_spec(
         command: installed.executable_path().display().to_string(),
         args,
         url: None,
+        settings: Default::default(),
         startup: Default::default(),
         web_ui_enabled: None,
         web_ui_primary_tab: None,

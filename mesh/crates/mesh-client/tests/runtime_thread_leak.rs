@@ -4,14 +4,27 @@ use std::time::Duration;
 fn thread_count() -> usize {
     #[cfg(target_os = "macos")]
     {
-        let output = std::process::Command::new("sysctl")
-            .args(["-n", "kern.num_threads"])
-            .output()
-            .unwrap();
-        String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .parse()
-            .unwrap_or(0)
+        let pid = i32::try_from(std::process::id()).expect("pid fits in pid_t");
+        // SAFETY: proc_taskinfo is a C POD whose integer fields admit zero.
+        let mut info: libc::proc_taskinfo = unsafe { std::mem::zeroed() };
+        let size = i32::try_from(std::mem::size_of_val(&info)).expect("proc_taskinfo size");
+        // SAFETY: the task-info flavor matches the aligned, writable info buffer.
+        let read = unsafe {
+            libc::proc_pidinfo(
+                pid,
+                libc::PROC_PIDTASKINFO,
+                0,
+                (&mut info as *mut libc::proc_taskinfo).cast(),
+                size,
+            )
+        };
+        assert_eq!(
+            read,
+            size,
+            "proc_pidinfo: {}",
+            std::io::Error::last_os_error()
+        );
+        usize::try_from(info.pti_threadnum).unwrap_or(0)
     }
     #[cfg(target_os = "linux")]
     {

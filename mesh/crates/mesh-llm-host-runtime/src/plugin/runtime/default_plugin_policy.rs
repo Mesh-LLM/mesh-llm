@@ -11,7 +11,10 @@ pub(super) fn restrict_default_plugin(
     capabilities: &[&str],
 ) -> Vec<&'static str> {
     let may = |surface: Surface| allows.contains(&surface);
-    let keep_capability = |capability: &String| capabilities.contains(&capability.as_str());
+    let keep_capability = |capability: &String| {
+        capabilities.contains(&capability.as_str())
+            || capability == mesh_llm_plugin::host_capabilities::INVOCATION_CALLBACKS
+    };
     let mut removed = Vec::new();
     let before = init.capabilities.len();
     init.capabilities.retain(keep_capability);

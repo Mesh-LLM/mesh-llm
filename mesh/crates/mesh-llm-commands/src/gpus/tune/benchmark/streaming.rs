@@ -44,6 +44,7 @@ pub(crate) fn decode_only_tok_s(
 pub(crate) fn send_chat_request(
     client: &reqwest::blocking::Client,
     port: u16,
+    model: &str,
     prompt: &str,
     max_tokens: u32,
 ) -> anyhow::Result<TrialChatOutcome> {
@@ -51,7 +52,7 @@ pub(crate) fn send_chat_request(
     let response = client
         .post(format!("http://127.0.0.1:{port}/v1/chat/completions"))
         .json(&serde_json::json!({
-            "model": "auto",
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": max_tokens,
             "temperature": 0.0,

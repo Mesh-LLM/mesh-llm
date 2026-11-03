@@ -87,6 +87,10 @@ pub(super) const KNOWN_UNAUDITED_MUTATION_COUNTS: &[(&str, usize)] = &[
     ("skippy/crates/skippy-runtime-install/src/lib.rs", 16),
     ("mesh/crates/mesh-llm/src/commands/plugin_cli.rs", 3),
     ("skippy/crates/skippy-model-hf/src/cache_paths.rs", 2),
+    (
+        "mesh/crates/mesh-llm-host-runtime/src/mesh/tests/own_invite_token.rs",
+        3,
+    ),
 ];
 
 /// Runtime sites that may already have Tokio worker threads; they keep an
@@ -173,9 +177,9 @@ mod tests {
     #[test]
     fn migration_repository_census_tables_are_complete() {
         assert_eq!(AUDITED_FILES.len(), 25);
-        assert_eq!(KNOWN_UNAUDITED_MUTATION_COUNTS.len(), 16);
+        assert_eq!(KNOWN_UNAUDITED_MUTATION_COUNTS.len(), 17);
         let frozen: usize = KNOWN_UNAUDITED_MUTATION_COUNTS.iter().map(|(_, n)| n).sum();
-        assert_eq!(frozen, 80);
+        assert_eq!(frozen, 83);
         assert!(
             DEFERRED_FILES
                 .iter()

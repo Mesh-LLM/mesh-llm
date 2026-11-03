@@ -1,5 +1,5 @@
 use crate::command::DynResult;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const HF_CONVERTED_ARTIFACT_USAGE: &str =
     "usage: cargo xtool hf-converted-artifact preflight --artifact-dir <directory>";
@@ -18,6 +18,7 @@ pub(crate) fn print_usage() {
     println!("  cargo xtool automation system-one-cases --help");
     println!("  cargo xtool automation system-one-smoke --help");
     println!("  cargo xtool automation decisions-smoke --help");
+    println!("  cargo xtool automation skippy-benchmark-compare <report.json>");
     println!("  cargo xtool automation binary-stage-readiness --help");
     println!("  cargo xtool automation workload-monolithic-oracle --help");
     println!("  cargo xtool automation workload-media-oracle --help");
@@ -120,6 +121,7 @@ pub(crate) enum CliCommand<'a> {
     AgentRecordingProxy(&'a [String]),
     AgenticPromptManifest(&'a [String]),
     EventBenchmarkComparison(&'a [String]),
+    SkippyBenchmarkCompare(&'a [String]),
     EventBenchmarkRun(&'a [String]),
     EndpointModelDiscovery(&'a [String]),
     GuardrailCorpus(&'a [String]),
@@ -221,18 +223,7 @@ pub(crate) enum RepositoryCommand<'a> {
 
 impl<'a> Cli<'a> {
     pub(crate) fn parse(args: &'a [String]) -> DynResult<Self> {
-        let (root, command_args) = match args {
-            [flag, value, rest @ ..] if flag == "--repo-root" => {
-                if value.starts_with("--") {
-                    return Err("missing value for --repo-root".into());
-                }
-                (Some(Path::new(value).to_path_buf()), rest)
-            }
-            [flag, ..] if flag == "--repo-root" => {
-                return Err("missing value for --repo-root".into());
-            }
-            _ => (None, args),
-        };
+        let (root, command_args) = ci_controller::repository::parse_root_prefix(args)?;
         let command = match command_args {
             [domain, scope, rest @ ..] if domain == "automation" && scope == "mtp-scheduler" => {
                 CliCommand::MtpScheduler(rest)
@@ -273,6 +264,11 @@ impl<'a> Cli<'a> {
                 if domain == "automation" && scope == "event-benchmark-compare" =>
             {
                 CliCommand::EventBenchmarkComparison(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "skippy-benchmark-compare" =>
+            {
+                CliCommand::SkippyBenchmarkCompare(rest)
             }
             [domain, scope, rest @ ..]
                 if domain == "automation" && scope == "agentic-prompt-manifest" =>

@@ -37,6 +37,44 @@ fn missing_disabled_and_blank_endpoints_do_not_permit_external_startup() {
 }
 
 #[test]
+fn a_command_plugin_is_a_provider_and_a_builtin_toggle_is_not() {
+    let options = RuntimeOptions::default();
+    // `mesh-llm plugins install` declares a plugin by command, with no URL. That
+    // plugin process owns its models, so the node needs no native runtime.
+    let mut config = endpoint_config();
+    config.plugins[0].url = None;
+    config.plugins[0].command = Some("/opt/mesh/plugins/mesh-onnx".into());
+    config.models.push(plugin::ModelConfigEntry {
+        model: "datalab-to/indra-ocr@v1.1.0".into(),
+        provider: Some("openai-endpoint".into()),
+        ..Default::default()
+    });
+    assert!(permits_external_startup(&options, &config));
+    // A blank command is not a provider.
+    for command in [None, Some(String::new()), Some("  ".into())] {
+        let mut config = endpoint_config();
+        config.plugins[0].url = None;
+        config.plugins[0].command = command;
+        assert!(!permits_external_startup(&options, &config));
+    }
+    // Built-in plugins are toggles served by this executable; enabling one
+    // cannot stand in for the runtime that serves local models.
+    let mut config: plugin::MeshConfig = toml::from_str(
+        r#"[[plugin]]
+name = "blobstore"
+enabled = true
+"#,
+    )
+    .unwrap();
+    config.models.push(plugin::ModelConfigEntry {
+        model: "datalab-to/indra-ocr@v1.1.0".into(),
+        provider: Some("blobstore".into()),
+        ..Default::default()
+    });
+    assert!(!permits_external_startup(&options, &config));
+}
+
+#[test]
 fn every_explicit_local_source_retains_native_runtime_requirement() {
     let config = endpoint_config();
     let sources = [
@@ -87,6 +125,42 @@ fn every_explicit_local_source_retains_native_runtime_requirement() {
             &config
         ));
     }
+}
+
+#[test]
+fn provider_served_models_do_not_require_a_native_runtime() {
+    let options = RuntimeOptions::default();
+    // A node whose only models are inference-plugin providers serves without a
+    // native runtime: the plugin owns the process and the sessions.
+    let mut config = endpoint_config();
+    config.models.push(plugin::ModelConfigEntry {
+        model: "datalab-to/indra-ocr@v1.1.0".into(),
+        provider: Some("onnx".into()),
+        ..Default::default()
+    });
+    assert!(permits_external_startup(&options, &config));
+    // A blank provider is not a provider: that entry loads through Skippy.
+    for provider in [None, Some(String::new())] {
+        let mut config = endpoint_config();
+        config.models.push(plugin::ModelConfigEntry {
+            model: "model.gguf".into(),
+            provider,
+            ..Default::default()
+        });
+        assert!(!permits_external_startup(&options, &config));
+    }
+    // Mixing a native entry into a provider-only config restores the requirement.
+    let mut config = endpoint_config();
+    config.models.push(plugin::ModelConfigEntry {
+        model: "datalab-to/indra-ocr@v1.1.0".into(),
+        provider: Some("onnx".into()),
+        ..Default::default()
+    });
+    config.models.push(plugin::ModelConfigEntry {
+        model: "model.gguf".into(),
+        ..Default::default()
+    });
+    assert!(!permits_external_startup(&options, &config));
 }
 
 #[test]
@@ -167,6 +241,27 @@ fn only_typed_availability_errors_qualify_for_external_fallback() {
     assert!(is_runtime_availability_error(
         &resolution_error(false).context("startup context")
     ));
+}
+
+#[cfg(feature = "dynamic-native-runtime")]
+#[test]
+fn an_unused_runtime_is_not_an_operator_error() {
+    // The typical workstation keeps a runtime cached from an earlier version
+    // that this build no longer fits. A provider-only node must start anyway:
+    // it will never load one. Only a node that needs the runtime treats a
+    // rejected artifact as fatal.
+    assert!(
+        is_unavailable_runtime_error(&resolution_error(false), true).unwrap(),
+        "a rejected but unneeded runtime must not block startup"
+    );
+    for message in ["native loader failed", "checksum mismatch"] {
+        let error = anyhow::anyhow!(message);
+        assert!(!is_unavailable_runtime_error(&error, true).unwrap());
+        assert!(!is_unavailable_runtime_error(&error, false).unwrap());
+    }
+    // An enumeration failure means the catalog could not be read at all, which
+    // is never recoverable however the runtime would have been used.
+    assert!(!is_unavailable_runtime_error(&resolution_error(true), true).unwrap());
 }
 
 #[cfg(feature = "dynamic-native-runtime")]

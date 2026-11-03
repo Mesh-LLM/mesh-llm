@@ -19,6 +19,7 @@ mod runtime_activity;
 pub(crate) mod runtime_control_state;
 mod runtime_control_state_sources;
 pub(crate) mod runtime_events;
+mod runtime_load_request;
 mod search;
 #[cfg(feature = "payments")]
 mod wallet;
@@ -42,7 +43,7 @@ type DispatchRequestFn =
     ) -> Pin<Box<dyn Future<Output = anyhow::Result<bool>> + Send + 'a>>;
 
 pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
-    |stream, state, method, path, path_only, body, req, raw_request, caller| {
+    |stream, state, method, path, path_only, body, _req, raw_request, caller| {
         Box::pin(async move {
             match (method, path_only) {
                 #[cfg(feature = "payments")]
@@ -102,6 +103,7 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 | ("GET", "/api/runtime/config-control-state")
                 | ("GET", "/api/runtime/kv-cache")
                 | ("GET", "/api/runtime/control-bootstrap")
+                | ("GET", "/api/runtime/control/owner-control-token")
                 | ("GET", "/api/runtime/intents")
                 | ("GET", "/api/runtime/activity")
                 | ("POST", "/api/runtime/control/get-config")
@@ -121,15 +123,15 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 | ("PUT", "/api/runtime/activity/override")
                 | ("DELETE", "/api/runtime/activity/override")
                 | ("GET", "/api/events") => {
-                    runtime::handle(stream, state, method, path_only, body).await?;
+                    runtime::handle(stream, state, method, path_only, body, raw_request).await?;
                     Ok(true)
                 }
                 ("DELETE", p) if p.starts_with("/api/runtime/instances/") => {
-                    runtime::handle(stream, state, method, path_only, body).await?;
+                    runtime::handle(stream, state, method, path_only, body, raw_request).await?;
                     Ok(true)
                 }
                 ("DELETE", p) if p.starts_with("/api/runtime/models/") => {
-                    runtime::handle(stream, state, method, path_only, body).await?;
+                    runtime::handle(stream, state, method, path_only, body, raw_request).await?;
                     Ok(true)
                 }
                 ("GET", "/api/search") => {
@@ -212,20 +214,20 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 }
                 (m, p)
                     if matches!(m, "GET" | "POST" | "OPTIONS")
-                        && (p.starts_with("/v1/") || p == "/models") =>
+                        && chat::is_inference_passthrough(p) =>
                 {
-                    chat::handle(stream, state, method, path_only, req, caller).await?;
+                    chat::handle(stream, state, method, path_only, raw_request, caller).await?;
                     Ok(true)
                 }
                 (m, p)
                     if m != "POST"
                         && (p.starts_with("/api/chat") || p.starts_with("/api/responses")) =>
                 {
-                    chat::handle(stream, state, method, path_only, req, caller).await?;
+                    chat::handle(stream, state, method, path_only, raw_request, caller).await?;
                     Ok(true)
                 }
                 ("POST", p) if p.starts_with("/api/chat") || p.starts_with("/api/responses") => {
-                    chat::handle(stream, state, method, path_only, req, caller).await?;
+                    chat::handle(stream, state, method, path_only, raw_request, caller).await?;
                     Ok(true)
                 }
                 _ => Ok(false),

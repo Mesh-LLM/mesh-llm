@@ -12,6 +12,7 @@ use crate::gguf_writer::GgufKv;
 const TOKEN_TYPE_NORMAL: i32 = 1;
 const TOKEN_TYPE_UNUSED: i32 = 5;
 const TOKEN_TYPE_CONTROL: i32 = 3;
+const TOKEN_TYPE_USER_DEFINED: i32 = 4;
 const MAX_TOKENIZER_VOCAB_SIZE: usize = 1_048_576;
 
 pub(crate) fn push_tokenizer_metadata(
@@ -163,9 +164,7 @@ fn read_byte_level_bpe(tokenizer: &Value, config: &Value) -> Result<BpeVocabMeta
         );
         tokens[index] = added.content.clone();
         scores[index] = -1000.0;
-        if added.special {
-            token_types[index] = TOKEN_TYPE_CONTROL;
-        }
+        token_types[index] = added_token_type(added);
     }
 
     if let Some(unpadded_vocab) = configured_unpadded_vocab {
@@ -199,6 +198,22 @@ fn read_byte_level_bpe(tokenizer: &Value, config: &Value) -> Result<BpeVocabMeta
             .map(|token| (token.content, token.id))
             .collect(),
     })
+}
+
+/// Type an added token the way llama.cpp's GGUF converter does. Explicitly
+/// special tokens and `<|...|>` sentinels are CONTROL; other added tokens are
+/// USER_DEFINED so llama.cpp matches them whole instead of splitting the text
+/// into byte-pair pieces.
+fn added_token_type(token: &AddedToken) -> i32 {
+    if token.special || is_sentinel_token(&token.content) {
+        TOKEN_TYPE_CONTROL
+    } else {
+        TOKEN_TYPE_USER_DEFINED
+    }
+}
+
+fn is_sentinel_token(content: &str) -> bool {
+    content.starts_with("<|") && content.ends_with("|>")
 }
 
 #[derive(Debug)]
@@ -541,6 +556,60 @@ mod tests {
         assert!(text.contains("tokenizer.ggml.padding_token_id"));
         assert!(text.contains("tokenizer.ggml.add_bos_token"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn classifies_qwen_tool_call_added_tokens_as_control_tokens() {
+        let tokenizer: Value = serde_json::from_str(
+            r#"{
+              "model": {
+                "type": "BPE",
+                "vocab": {
+                  "a": 0,
+                  "<tool_call>": 1,
+                  "</tool_call>": 2,
+                  "<tool_response>": 3,
+                  "</tool_response>": 4,
+                  "<think>": 5,
+                  "</think>": 6,
+                  "<|fim_prefix|>": 7
+                },
+                "merges": []
+              },
+              "decoder": {"type": "ByteLevel"},
+              "added_tokens": [
+                {"id": 1, "content": "<tool_call>", "special": false},
+                {"id": 2, "content": "</tool_call>", "special": false},
+                {"id": 3, "content": "<tool_response>", "special": false},
+                {"id": 4, "content": "</tool_response>", "special": false},
+                {"id": 5, "content": "<think>", "special": false},
+                {"id": 6, "content": "</think>", "special": false},
+                {"id": 7, "content": "<|fim_prefix|>", "special": false}
+              ]
+            }"#,
+        )
+        .unwrap();
+        let config: Value =
+            serde_json::from_str(r#"{"model_type":"qwen3","vocab_size":8}"#).unwrap();
+
+        let metadata = read_byte_level_bpe(&tokenizer, &config).unwrap();
+
+        assert_eq!(metadata.tokens[0], "a");
+        assert_eq!(metadata.token_types[0], TOKEN_TYPE_NORMAL);
+        assert_eq!(metadata.tokens[1], "<tool_call>");
+        assert_eq!(metadata.tokens[2], "</tool_call>");
+        assert_eq!(metadata.tokens[3], "<tool_response>");
+        assert_eq!(metadata.tokens[4], "</tool_response>");
+        assert_eq!(metadata.tokens[5], "<think>");
+        assert_eq!(metadata.tokens[6], "</think>");
+        assert!(
+            metadata.token_types[1..7]
+                .iter()
+                .all(|token_type| { *token_type == TOKEN_TYPE_USER_DEFINED })
+        );
+        // A non-special `<|...|>` sentinel stays CONTROL, matching the converter.
+        assert_eq!(metadata.tokens[7], "<|fim_prefix|>");
+        assert_eq!(metadata.token_types[7], TOKEN_TYPE_CONTROL);
     }
 
     #[test]

@@ -1,8 +1,12 @@
 use super::common::is_retryable_context_overflow_response;
 use anyhow::{Context, Result, anyhow, bail};
+use mesh_llm_events::logging::identifiers::RequestId;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncRead, AsyncReadExt};
 
+use super::served_model_headers::{
+    SERVED_MODEL_CANONICAL_REF_HEADER, SERVED_WEIGHTS_DIGEST_HEADER, ServedModelHeaders,
+};
 use crate::network::openai::request_parse::{MAX_HEADER_BYTES, MAX_HEADERS};
 
 const MAX_RESPONSE_BODY_PREVIEW_BYTES: usize = 4 * 1024;
@@ -19,6 +23,9 @@ pub(in crate::network::openai::response) struct ParsedResponseHeaders {
     /// rebuild fresh HTTP responses instead of forwarding upstream headers.
     pub(in crate::network::openai::response) client_nonce: Option<String>,
     pub(in crate::network::openai::response) nonce_origin: Option<String>,
+    /// The serving node's served-model headers, kept for the same reason: a
+    /// rebuilt response must still carry them back to the routing node.
+    pub(in crate::network::openai::response) served_model: ServedModelHeaders,
 }
 
 /// Append the capsule client nonce and origin-marker headers (when present)
@@ -60,6 +67,23 @@ pub(in crate::network::openai::response) fn append_mesh_served_by_header(
     }
 }
 
+/// The request-id header every OpenAI-facing response echoes with the
+/// canonical request id, the way the management API already does
+/// (`api/management_lifecycle.rs`). A node that rebuilds a response head can
+/// no longer drop the client's trace correlation (issue #2352, papercut 4).
+pub(in crate::network::openai::response) const REQUEST_ID_HEADER: &str = "x-request-id";
+
+/// Echo the canonical request id on a hand-built response header string.
+pub(in crate::network::openai::response) fn append_mesh_request_id_header(
+    header: &mut String,
+    request_id: RequestId,
+) {
+    header.push_str(&format!(
+        "{REQUEST_ID_HEADER}: {}\r\n",
+        request_id.as_uuid()
+    ));
+}
+
 /// Remove an existing `name: ...` header line (case-insensitive) from the
 /// header block `buf[..header_end]`, if one is present, and return how many
 /// bytes were removed (0 if none matched).
@@ -68,7 +92,7 @@ pub(in crate::network::openai::response) fn append_mesh_served_by_header(
 /// already meant to be single-valued (e.g. `x-mesh-served-by`) must never
 /// appear twice just because some upstream response already carried one —
 /// canonicalize to one value instead of appending a second.
-fn remove_existing_header(buf: &mut Vec<u8>, header_end: usize, name: &str) -> usize {
+pub(super) fn remove_existing_header(buf: &mut Vec<u8>, header_end: usize, name: &str) -> usize {
     let mut offset = 0usize;
     let mut total_removed = 0usize;
     while offset < header_end.saturating_sub(total_removed) {
@@ -216,6 +240,7 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
             let mut chunked = false;
             let mut client_nonce = None;
             let mut nonce_origin = None;
+            let mut served_model = ServedModelHeaders::default();
             let nonce_header = skippy_inference_api::lifecycle::CLIENT_NONCE_HEADER.as_str();
             let nonce_origin_header =
                 skippy_inference_api::lifecycle::CLIENT_NONCE_ORIGIN_HEADER.as_str();
@@ -246,6 +271,20 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
                     nonce_origin = std::str::from_utf8(header.value)
                         .ok()
                         .map(|value| value.trim().to_string());
+                } else if header
+                    .name
+                    .eq_ignore_ascii_case(SERVED_WEIGHTS_DIGEST_HEADER)
+                {
+                    served_model.weights_digest = std::str::from_utf8(header.value)
+                        .ok()
+                        .map(|value| value.trim().to_string());
+                } else if header
+                    .name
+                    .eq_ignore_ascii_case(SERVED_MODEL_CANONICAL_REF_HEADER)
+                {
+                    served_model.canonical_ref = std::str::from_utf8(header.value)
+                        .ok()
+                        .map(|value| value.trim().to_string());
                 }
             }
             Ok(Some(ParsedResponseHeaders {
@@ -256,6 +295,7 @@ pub(in crate::network::openai::response) fn try_parse_response_headers(
                 chunked,
                 client_nonce,
                 nonce_origin,
+                served_model,
             }))
         }
         Ok(httparse::Status::Partial) => Ok(None),
@@ -353,17 +393,24 @@ pub(in crate::network::openai::response) async fn read_transformed_response_body
     }
 }
 
+/// Probes a remote OpenAI response using the configured remote first-byte
+/// budget and returns its parsed status and headers.
 pub(in crate::network::openai::response) async fn probe_http_response<R: AsyncRead + Unpin>(
     reader: &mut R,
 ) -> Result<ResponseProbe> {
     probe_http_response_with_timeout(reader, response_first_byte_timeout()).await
 }
 
-/// Like `probe_http_response` but with a much longer timeout suitable for
-/// the local OpenAI surface. Prefill on a busy or slow machine can
-/// legitimately take minutes (large prompts, concurrent slot contention,
-/// slower hardware). We still bound the wait to catch a truly wedged local
-/// runtime path.
+/// Like `probe_http_response` but with the local surface's first-byte budget,
+/// which is far longer than the remote default. Prefill on a busy or slow
+/// machine can legitimately take minutes (large prompts, concurrent slot
+/// contention, slower hardware), and a non-streaming request's first response
+/// byte is its entire completion - so this budget bounds prefill plus decode,
+/// not merely a wedged connection. [`local_response_first_byte_timeout`] says
+/// how an operator raises or removes it (#2195).
+///
+/// The budget is passed as a plain `Duration` on purpose: see the note on
+/// [`probe_http_response_with_timeout`].
 pub(in crate::network::openai::response) async fn probe_http_response_local<
     R: AsyncRead + Unpin,
 >(
@@ -377,19 +424,111 @@ tokio::task_local! {
     pub(crate) static TEST_RESPONSE_FIRST_BYTE_TIMEOUT: Duration;
 }
 
-/// Local OpenAI surface timeout: 10 minutes. This is a safety net for a wedged
-/// local runtime path, not a latency budget. Normal prefill even on slow
-/// hardware with large prompts and concurrent slots completes well within this
-/// window.
+/// Operator knob for the local OpenAI surface first-byte budget, in whole
+/// seconds. `0` removes the deadline.
+pub(in crate::network::openai::response) const LOCAL_FIRST_BYTE_TIMEOUT_SECS_ENV: &str =
+    "MESH_LLM_OPENAI_FIRST_BYTE_TIMEOUT_SECS";
+
+/// Built-in local first-byte budget: 10 minutes.
+const DEFAULT_LOCAL_FIRST_BYTE_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+/// Lets the frontend return its timeout response before the local proxy gives up.
+const LOCAL_FIRST_BYTE_TIMEOUT_GRACE: Duration = Duration::from_secs(1);
+
+/// Largest budget this deadline can represent, and what "removed" resolves to.
+/// `tokio::time::timeout` panics past its far-future limit, so the budget is
+/// clamped here instead of crashing the host on its first local request. At
+/// ~49 days it is beyond any request a client will keep open, so it behaves as
+/// no deadline without adding an optional branch to the probe's hot loop.
+const MAX_LOCAL_FIRST_BYTE_TIMEOUT: Duration = Duration::from_millis(u32::MAX as u64);
+
+/// Local OpenAI surface first-byte budget.
+///
+/// `MESH_LLM_OPENAI_FIRST_BYTE_TIMEOUT_SECS` names this layer directly and
+/// always wins; `0` removes the deadline. When only the inner Skippy frontend's
+/// `MESH_OPENAI_BACKEND_TIMEOUT_SECS` is configured, this budget uses the
+/// 10-minute default or stays one second longer than the frontend deadline,
+/// whichever is longer. It is removed together with the frontend deadline
+/// when the operator disables that timeout. Otherwise the frontend's own
+/// OpenAI-shaped 504 could be unreachable and the operator's setting silently
+/// capped here (#2195).
 fn local_response_first_byte_timeout() -> Duration {
     #[cfg(test)]
     if let Ok(timeout) = TEST_RESPONSE_FIRST_BYTE_TIMEOUT.try_with(|timeout| *timeout) {
         return timeout;
     }
 
-    Duration::from_secs(10 * 60)
+    static EXPLICIT: std::sync::OnceLock<Option<Option<Duration>>> = std::sync::OnceLock::new();
+    let explicit = EXPLICIT.get_or_init(|| {
+        let value = std::env::var_os(LOCAL_FIRST_BYTE_TIMEOUT_SECS_ENV);
+        parse_first_byte_timeout(LOCAL_FIRST_BYTE_TIMEOUT_SECS_ENV, value.as_deref())
+    });
+    resolve_local_first_byte_timeout(
+        *explicit,
+        skippy_inference_api::router::configured_backend_timeout(),
+    )
 }
 
+/// Pure precedence behind [`local_response_first_byte_timeout`], kept free of
+/// the process environment so the table is testable directly. Each layer is
+/// `None` when unset, `Some(None)` when the operator removed it, and
+/// `Some(Some(budget))` when configured.
+fn resolve_local_first_byte_timeout(
+    explicit: Option<Option<Duration>>,
+    inner_backend: Option<Option<Duration>>,
+) -> Duration {
+    if let Some(explicit) = explicit {
+        return explicit.unwrap_or(MAX_LOCAL_FIRST_BYTE_TIMEOUT);
+    }
+    match inner_backend {
+        None => DEFAULT_LOCAL_FIRST_BYTE_TIMEOUT,
+        Some(None) => MAX_LOCAL_FIRST_BYTE_TIMEOUT,
+        Some(Some(inner)) => DEFAULT_LOCAL_FIRST_BYTE_TIMEOUT.max(
+            inner
+                .saturating_add(LOCAL_FIRST_BYTE_TIMEOUT_GRACE)
+                .min(MAX_LOCAL_FIRST_BYTE_TIMEOUT),
+        ),
+    }
+}
+
+/// Pure parse behind reading a whole-seconds first-byte budget from `env`.
+/// `0` means "no deadline"; an unusable value is warned about and reported as
+/// unset, leaving the defaults in place - the same handling the inner frontend
+/// gives its own timeout variable.
+fn parse_first_byte_timeout(
+    env: &str,
+    value: Option<&std::ffi::OsStr>,
+) -> Option<Option<Duration>> {
+    let value = value?;
+    let Some(value) = value.to_str() else {
+        tracing::warn!(
+            env,
+            "ignoring non-UTF-8 local first-byte timeout configuration"
+        );
+        return None;
+    };
+    match value.trim().parse::<u64>() {
+        Ok(0) => Some(None),
+        Ok(secs) => Some(Some(if secs > MAX_LOCAL_FIRST_BYTE_TIMEOUT.as_secs() {
+            MAX_LOCAL_FIRST_BYTE_TIMEOUT
+        } else {
+            Duration::from_secs(secs)
+        })),
+        Err(_) => {
+            tracing::warn!(
+                env,
+                value = %value,
+                "ignoring invalid local first-byte timeout configuration; expected whole seconds"
+            );
+            None
+        }
+    }
+}
+
+/// Reads and parses an HTTP response under one overall deadline.
+///
+/// The same `timeout` bounds the first byte and all continuation reads, so a
+/// peer cannot extend the budget by sending partial headers or body chunks.
 pub(in crate::network::openai::response) async fn probe_http_response_with_timeout<
     R: AsyncRead + Unpin,
 >(
@@ -762,5 +901,164 @@ mod tests {
             "probe_http_response_local should NOT timeout for slow local responses"
         );
         assert_eq!(result.unwrap().status_code, 200);
+    }
+
+    /// #2195: a non-streaming local request's first response byte is the whole
+    /// completion, so a prefill longer than the built-in local first-byte
+    /// deadline must be survivable by raising that deadline. The budget is read
+    /// from the environment, so the assertion runs in a child process (the
+    /// `mesh-llm-config` idiom for env-driven behavior: mutating the shared
+    /// test process environment races every other test in the binary).
+    #[tokio::test]
+    async fn local_first_byte_budget_is_configurable() {
+        if !mesh_llm_config::env_override_in_child_for_test(
+            concat!(module_path!(), "::local_first_byte_budget_is_configurable"),
+            "MESH_LLM_OPENAI_FIRST_BYTE_TIMEOUT_SECS",
+            "1",
+        ) {
+            return;
+        }
+
+        let (mut writer, mut reader) = tokio::io::duplex(4096);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(3)).await;
+            let _ = writer
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}")
+                .await;
+        });
+
+        let started = Instant::now();
+        let probe = tokio::time::timeout(
+            Duration::from_secs(10),
+            super::probe_http_response_local(&mut reader),
+        )
+        .await
+        .expect("a configured 1s first-byte budget must end the wait, not the built-in default");
+        let elapsed = started.elapsed();
+        let result = match probe {
+            Ok(_) => panic!("a first byte later than the configured budget must be a timeout"),
+            Err(error) => error,
+        };
+
+        assert!(is_timeout_error(&result), "unexpected error: {result:#}");
+        assert!(
+            elapsed < Duration::from_secs(3),
+            "the configured 1s first-byte budget was not applied: {elapsed:?}"
+        );
+    }
+
+    /// The precedence table behind the local budget, including the coupling to
+    /// the inner Skippy frontend's deadline (#2195). Inputs are tri-state -
+    /// unset, removed by the operator, or configured - while the resolved
+    /// budget is one duration.
+    #[test]
+    fn local_first_byte_budget_precedence_covers_both_timeout_layers() {
+        let configured = |value: u64| Some(Some(Duration::from_secs(value)));
+
+        // The host knob names this layer, so it wins in both directions.
+        assert_eq!(
+            resolve_local_first_byte_timeout(configured(1800), None),
+            Duration::from_secs(1800)
+        );
+        assert_eq!(
+            resolve_local_first_byte_timeout(configured(30), configured(1800)),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            resolve_local_first_byte_timeout(Some(None), configured(1800)),
+            MAX_LOCAL_FIRST_BYTE_TIMEOUT
+        );
+
+        // Nothing configured: the built-in 10 minute budget.
+        assert_eq!(
+            resolve_local_first_byte_timeout(None, None),
+            DEFAULT_LOCAL_FIRST_BYTE_TIMEOUT
+        );
+
+        // Only the inner frontend's deadline is configured. Give it a second
+        // to return its 504 before the proxy's own deadline fires.
+        assert_eq!(
+            resolve_local_first_byte_timeout(None, configured(1800)),
+            Duration::from_secs(1801)
+        );
+        assert_eq!(
+            resolve_local_first_byte_timeout(None, configured(600)),
+            Duration::from_secs(601)
+        );
+        assert_eq!(
+            resolve_local_first_byte_timeout(None, configured(60)),
+            DEFAULT_LOCAL_FIRST_BYTE_TIMEOUT
+        );
+
+        // Inner deadline removed: the outer proxy removes its own too.
+        assert_eq!(
+            resolve_local_first_byte_timeout(None, Some(None)),
+            MAX_LOCAL_FIRST_BYTE_TIMEOUT
+        );
+    }
+
+    #[test]
+    fn invalid_local_first_byte_budget_warns_once_per_process() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use tracing_subscriber::prelude::*;
+
+        if !mesh_llm_config::env_override_in_child_for_test(
+            concat!(
+                module_path!(),
+                "::invalid_local_first_byte_budget_warns_once_per_process"
+            ),
+            LOCAL_FIRST_BYTE_TIMEOUT_SECS_ENV,
+            "invalid",
+        ) {
+            return;
+        }
+        struct Warnings(Arc<AtomicUsize>);
+        impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for Warnings {
+            fn on_event(
+                &self,
+                event: &tracing::Event<'_>,
+                _context: tracing_subscriber::layer::Context<'_, S>,
+            ) {
+                if *event.metadata().level() == tracing::Level::WARN
+                    && event.metadata().target() == module_path!().trim_end_matches("::tests")
+                {
+                    self.0.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+        let warnings = Arc::new(AtomicUsize::new(0));
+        let subscriber = tracing_subscriber::registry().with(Warnings(warnings.clone()));
+        tracing::subscriber::with_default(subscriber, || {
+            let first = local_response_first_byte_timeout();
+            assert_eq!(local_response_first_byte_timeout(), first);
+        });
+        assert_eq!(warnings.load(Ordering::Relaxed), 1);
+    }
+
+    /// The budget is whole seconds, `0` removes it, and an unusable value
+    /// leaves the defaults in place rather than being half-applied.
+    #[test]
+    fn local_first_byte_budget_parses_whole_seconds_only() {
+        let parse = |value: &str| {
+            parse_first_byte_timeout(
+                LOCAL_FIRST_BYTE_TIMEOUT_SECS_ENV,
+                Some(std::ffi::OsStr::new(value)),
+            )
+        };
+
+        assert_eq!(parse("1800"), Some(Some(Duration::from_secs(1800))));
+        assert_eq!(parse(" 1800 "), Some(Some(Duration::from_secs(1800))));
+        assert_eq!(parse("0"), Some(None));
+        assert_eq!(parse("10min"), None);
+        assert_eq!(parse(""), None);
+        // Past tokio's far-future limit the budget clamps instead of panicking
+        // the host on its first local request.
+        assert_eq!(
+            parse("99999999999"),
+            Some(Some(MAX_LOCAL_FIRST_BYTE_TIMEOUT))
+        );
     }
 }

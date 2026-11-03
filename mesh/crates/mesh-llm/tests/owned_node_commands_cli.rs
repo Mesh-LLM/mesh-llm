@@ -172,8 +172,13 @@ fn doctor_network_runs_without_a_ca_bundle() {
 }
 
 fn run_mesh_llm<const N: usize>(args: [&str; N]) -> Output {
+    let directory = tempfile::tempdir().expect("token directory");
+    let token_path = directory.path().join("owner-control-token-v2");
+    mesh_llm_config::create_private_file_if_absent(&token_path, b"test-token\n")
+        .expect("write private test credential");
     Command::new(env!("CARGO_BIN_EXE_mesh-llm"))
         .args(args)
+        .env("MESH_LLM_OWNER_CONTROL_TOKEN_FILE", token_path)
         .output()
         .expect("mesh-llm command should run")
 }
@@ -237,4 +242,10 @@ fn request_is_complete(request: &[u8]) -> bool {
 fn assert_scan_request(request: &str, path: &str) {
     assert!(request.starts_with(&format!("POST {path} HTTP/1.1\r\n")));
     assert!(request.contains(r#"{"endpoint":"endpoint-token"}"#));
+    assert!(
+        request
+            .to_ascii_lowercase()
+            .contains("authorization: bearer test-token"),
+        "management request must present the fetched owner-control credential"
+    );
 }

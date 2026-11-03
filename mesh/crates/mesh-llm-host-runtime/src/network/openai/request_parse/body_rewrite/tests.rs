@@ -127,3 +127,26 @@ fn hook_injection_rejects_non_json_and_sets_one_valid_flag() {
         }
     }
 }
+
+#[tokio::test]
+async fn typed_image_uploads_preserve_binary_content_and_extract_model() {
+    for path in [
+        "/mesh/v1/images/similarity",
+        "/mesh/v1/images/depth?trace=1",
+    ] {
+        let body = multipart("owner/image@pin");
+        let raw = raw_request(path, "multipart/form-data; boundary=audio", &body, false);
+        let request = read_request(raw.clone()).await;
+        assert_eq!(request.model_name.as_deref(), Some("owner/image@pin"));
+        assert!(request.is_document_ocr_request());
+        // Ingress stamps `x-request-id`, the capsule nonce headers and
+        // `Connection: close` while rebuilding the forwarded request, so `raw`
+        // is never byte-identical to what arrived. What must survive untouched
+        // is the payload itself: a task upload carries opaque binary bytes that
+        // no rewrite is allowed to re-encode.
+        assert_ne!(request.raw, raw);
+        let headers = body_headers(&request.raw).unwrap();
+        assert_eq!(&request.raw[headers.end..], body.as_slice());
+        assert_eq!(request.body_bytes.as_deref(), Some(body.as_slice()));
+    }
+}

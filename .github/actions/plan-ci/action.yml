@@ -152,9 +152,9 @@ outputs:
 runs:
   using: composite
   steps:
-    - uses: ./.github/actions/prepare-automation
-      with:
-        runner-profile: hosted-bare
+    - name: Prepare CI controller
+      if: env.MESH_CI_CONTROLLER_BIN == ''
+      uses: ./.github/actions/prepare-ci-controller
     - name: Build versioned CI plan
       id: plan
       shell: bash
@@ -199,8 +199,11 @@ runs:
             exit 1
           fi
           manifest_root=$(mktemp -d "$RUNNER_TEMP/mesh-ci-manifests.XXXXXX")
-          git archive --format=tar "$SOURCE_SHA" -- ci/ownership.yml ci/slices.yml \
-            | tar -x -C "$manifest_root"
+          # BSD tar can stop after end markers before git writes its padding.
+          # Finish the producer first so pipefail cannot mistake SIGPIPE for drift.
+          manifest_archive=$(mktemp "$RUNNER_TEMP/mesh-ci-manifest-archive.XXXXXX")
+          git archive --format=tar "$SOURCE_SHA" -- ci/ownership.yml ci/slices.yml > "$manifest_archive"
+          tar -x -f "$manifest_archive" -C "$manifest_root"
           profile=pr-ready
           if [[ "$DRAFT" == "true" ]]; then
             profile=pr-draft
@@ -222,7 +225,7 @@ runs:
           --argjson affected_crates "$affected_crates_json" \
           '{profile: $profile, event_name: $event_name, source_sha: $source_sha, base_sha: $base_sha, changed_files: $changed_files[0]}
            + if ($affected_crates | length) > 0 then {affected_crates: $affected_crates} else {} end' \
-          | "$MESH_LLM_AUTOMATION_BIN" ci plan --manifest-root "$manifest_root" > ci-plan.json
+          | "$MESH_CI_CONTROLLER_BIN" ci plan --manifest-root "$manifest_root" > ci-plan.json
 
         plan_json=$(jq -c . ci-plan.json)
         plan_digest=$(printf '%s' "$plan_json" | sha256sum | awk '{print $1}')

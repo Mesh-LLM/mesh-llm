@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
 
+mod model_assets;
+
 use crate::{
     PROTOCOL_VERSION,
     helpers::{channel_message, json_channel_message},
@@ -56,6 +58,7 @@ pub struct PluginContext<'a> {
     pub(crate) outbound_tx: mpsc::Sender<proto::Envelope>,
     pub(crate) pending_host_responses: PendingHostResponses,
     pub(crate) plugin_id: String,
+    pub(crate) invocation_id: Option<u64>,
     /// What the host listed in its `InitializeRequest`.
     pub(crate) host_capabilities: Arc<[String]>,
     pub(crate) inference_observation: crate::inference_observation::FeedSlot,
@@ -72,6 +75,7 @@ impl<'a> PluginContext<'a> {
             outbound_tx,
             pending_host_responses,
             plugin_id,
+            invocation_id: None,
             host_capabilities: Arc::from([]),
             inference_observation: Default::default(),
             _marker: PhantomData,
@@ -83,6 +87,7 @@ impl<'a> PluginContext<'a> {
             outbound_tx: self.outbound_tx.clone(),
             pending_host_responses: self.pending_host_responses.clone(),
             plugin_id: self.plugin_id.clone(),
+            invocation_id: self.invocation_id,
             host_capabilities: self.host_capabilities.clone(),
             inference_observation: self.inference_observation.clone(),
             _marker: PhantomData,
@@ -99,6 +104,11 @@ impl<'a> PluginContext<'a> {
 
     pub(crate) fn with_host_capabilities(mut self, host_capabilities: Arc<[String]>) -> Self {
         self.host_capabilities = host_capabilities;
+        self
+    }
+
+    pub(crate) fn with_invocation_id(mut self, invocation_id: Option<u64>) -> Self {
+        self.invocation_id = invocation_id;
         self
     }
 
@@ -170,6 +180,7 @@ impl<'a> PluginContext<'a> {
     {
         self.send_payload(
             proto::envelope::Payload::RpcNotification(proto::RpcNotification {
+                invocation_id: self.invocation_id,
                 method: method.to_string(),
                 params_json: serde_json::to_string(&params)?,
             }),
@@ -191,6 +202,7 @@ impl<'a> PluginContext<'a> {
 
         self.send_payload(
             proto::envelope::Payload::RpcRequest(proto::RpcRequest {
+                invocation_id: self.invocation_id,
                 method: method.to_string(),
                 params_json: serde_json::to_string(&params)?,
             }),
@@ -561,6 +573,85 @@ pub(crate) fn drain_pending_host_responses(
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[tokio::test]
+    async fn owned_invocation_context_echoes_id_on_callbacks() {
+        let (context, mut outbound, pending) =
+            context(&[crate::host_capabilities::INVOCATION_CALLBACKS]);
+        let mut context = context.with_invocation_id(Some(73)).owned();
+        context
+            .notify_host("notifications/message", serde_json::json!({}))
+            .await
+            .unwrap();
+        let notification = outbound.recv().await.unwrap();
+        let Some(proto::envelope::Payload::RpcNotification(notification)) = notification.payload
+        else {
+            panic!("expected notification");
+        };
+        assert_eq!(notification.invocation_id, Some(73));
+
+        let callback = tokio::spawn(async move {
+            context
+                .request_host::<_, serde_json::Value>("roots/list", serde_json::json!({}))
+                .await
+        });
+        let request = outbound.recv().await.unwrap();
+        let Some(proto::envelope::Payload::RpcRequest(rpc)) = request.payload else {
+            panic!("expected request");
+        };
+        assert_eq!(rpc.invocation_id, Some(73));
+        remove_pending_host_response(&pending, request.request_id)
+            .unwrap()
+            .send(Ok(proto::Envelope {
+                payload: Some(proto::envelope::Payload::RpcResponse(proto::RpcResponse {
+                    result_json: "{}".into(),
+                })),
+                ..Default::default()
+            }))
+            .unwrap();
+        callback.await.unwrap().unwrap();
+    }
+
+    #[test]
+    fn invocation_ids_survive_protobuf_roundtrip_and_legacy_defaults() {
+        use prost::Message;
+        let request = proto::RpcRequest {
+            method: "roots/list".into(),
+            params_json: "{}".into(),
+            invocation_id: Some(91),
+        };
+        assert_eq!(
+            proto::RpcRequest::decode(request.encode_to_vec().as_slice())
+                .unwrap()
+                .invocation_id,
+            Some(91)
+        );
+        let notification = proto::RpcNotification {
+            method: "notifications/message".into(),
+            params_json: "{}".into(),
+            invocation_id: Some(92),
+        };
+        assert_eq!(
+            proto::RpcNotification::decode(notification.encode_to_vec().as_slice())
+                .unwrap()
+                .invocation_id,
+            Some(92)
+        );
+        let service = proto::InvokeServiceRequest {
+            invocation_id: Some(93),
+            ..Default::default()
+        };
+        assert_eq!(
+            proto::InvokeServiceRequest::decode(service.encode_to_vec().as_slice())
+                .unwrap()
+                .invocation_id,
+            Some(93)
+        );
+        assert_eq!(
+            proto::RpcRequest::decode(&[][..]).unwrap().invocation_id,
+            None
+        );
+    }
 
     fn context(
         host_capabilities: &[&str],

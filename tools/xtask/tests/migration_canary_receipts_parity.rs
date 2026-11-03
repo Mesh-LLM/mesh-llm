@@ -1,17 +1,10 @@
 #![cfg(feature = "automation-contracts")]
-#[path = "../src/ci_plan/plan_bytes.rs"]
-pub(crate) mod plan_bytes;
+pub(crate) use ci_controller::plan::plan_bytes;
 mod ci_plan {
     pub(crate) use crate::plan_bytes;
 }
-#[path = "../src/repository/text.rs"]
-#[expect(
-    dead_code,
-    reason = "The isolated parity target consumes only document separator semantics"
-)]
-pub(crate) mod text;
 mod repository {
-    pub(crate) use crate::text;
+    pub(crate) use ci_controller::repository::text;
 }
 #[expect(
     dead_code,

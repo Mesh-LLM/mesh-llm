@@ -179,6 +179,7 @@ mod tests {
             args: Vec::new(),
             url: None,
             env: BTreeMap::new(),
+            settings: Default::default(),
             startup: PluginStartupOptions {
                 optional: true,
                 lazy_start: lazy,
@@ -320,6 +321,7 @@ mod tests {
             args: Vec::new(),
             url: None,
             env: BTreeMap::new(),
+            settings: Default::default(),
             startup: PluginStartupOptions {
                 lazy_start: true,
                 ..Default::default()

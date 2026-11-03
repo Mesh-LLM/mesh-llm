@@ -32,6 +32,7 @@ fn config_sync_noop_apply_skips_disk_write() {
     let mut state = ConfigState::load(&config_path).expect("load");
 
     let config_with_model = MeshConfig {
+        source_directory: None,
         version: Some(1),
         gpu: crate::plugin::GpuConfig {
             host_ram_offload: None,
