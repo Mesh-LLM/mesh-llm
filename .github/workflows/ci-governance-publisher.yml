@@ -1,0 +1,116 @@
+name: CI governance publisher
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '*/15 * * * *'
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+  workflow_run:
+    workflows: [CI governance review signal]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      active: ${{ steps.cost.outputs.active }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Skip inactive preparation without entering an environment
+        id: cost
+        shell: bash
+        run: |
+          set -euo pipefail
+          git --no-replace-objects show "$GITHUB_SHA:ci/governance/activation.json" > "$RUNNER_TEMP/governance-cost-hint.json"
+          active="$(jq -r .active "$RUNNER_TEMP/governance-cost-hint.json")"
+          case "$active" in true|false) ;; *) exit 1 ;; esac
+          printf 'active=%s\n' "$active" >> "$GITHUB_OUTPUT"
+
+  resolve:
+    needs: preflight
+    if: ${{ needs.preflight.outputs.active == 'true' && github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    # This named environment's external main-only restrictions and key custody
+    # are pending activation; its name alone establishes no protection.
+    environment: ci-governance-publisher
+    outputs:
+      active: ${{ steps.activation.outputs.active }}
+      repository_id: ${{ steps.target.outputs.repository_id }}
+      pr_numbers: ${{ steps.target.outputs.pr_numbers }}
+      artifact_id: ${{ steps.automation.outputs.artifact_id }}
+      binary_sha256: ${{ steps.automation.outputs.binary_sha256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/upload-automation
+        id: automation
+        with:
+          runner-profile: hosted-bare
+          source-profile: protected-clean
+          source_sha: ${{ github.sha }}
+      - name: Inspect protected activation
+        id: activation
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" ci-governance activation-status > "$RUNNER_TEMP/governance-activation.json"
+          printf 'active=%s\n' "$(jq -r .active "$RUNNER_TEMP/governance-activation.json")" >> "$GITHUB_OUTPUT"
+      - name: Resolve the authenticated current PR
+        id: target
+        if: ${{ steps.activation.outputs.active == 'true' }}
+        shell: bash
+        env:
+          CI_GOVERNANCE_APP_PRIVATE_KEY: ${{ secrets.CI_GOVERNANCE_APP_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" ci-governance resolve-publisher-event > "$RUNNER_TEMP/governance-target.json"
+          printf 'repository_id=%s\n' "$(jq -r .repository_id "$RUNNER_TEMP/governance-target.json")" >> "$GITHUB_OUTPUT"
+          printf 'pr_numbers=%s\n' "$(jq -c .pr_numbers "$RUNNER_TEMP/governance-target.json")" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: resolve
+    if: ${{ needs.resolve.outputs.active == 'true' && needs.resolve.outputs.pr_numbers != '[]' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: ci-governance-publisher
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        pr_number: ${{ fromJson(needs.resolve.outputs.pr_numbers) }}
+    concurrency:
+      group: ci-governance-pr-${{ needs.resolve.outputs.repository_id }}-${{ matrix.pr_number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ github.sha }}
+          artifact_id: ${{ needs.resolve.outputs.artifact_id }}
+          binary_sha256: ${{ needs.resolve.outputs.binary_sha256 }}
+          producer_os: Linux
+          producer_arch: X64
+      - name: Recollect current evidence and publish with the dedicated App
+        shell: bash
+        env:
+          CI_GOVERNANCE_APP_PRIVATE_KEY: ${{ secrets.CI_GOVERNANCE_APP_PRIVATE_KEY }}
+          GOVERNANCE_EXPECTED_PR: ${{ matrix.pr_number }}
+        run: '"$MESH_LLM_AUTOMATION_BIN" ci-governance publish-event --expected-pr "$GOVERNANCE_EXPECTED_PR"'
