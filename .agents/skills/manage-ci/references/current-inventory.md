@@ -1007,6 +1007,11 @@ selectors receive an explicit hosted override regardless of the manual input
 or repository gate; the release SDK uses metadata's frozen source SHA. The
 release `use_depot` input remains reserved until a provider profile is
 qualified. The separate rolling-preview GPU override is retained.
+The composed placement fixture follows the Linux static-ABI and native-SDK
+caller inputs into the actual planner, selector and compiler-cache action. It
+covers same-repository and fork PRs, the exception expiry boundary, target
+events and PR-origin dispatches, including selected work and artifact identity.
+These local fixtures do not qualify a runner or renew an exception.
 
 ## Artifact and cache owners
 
