@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use mesh_llm_system::embedded_release_footer::{
     EMBEDDED_RELEASE_FOOTER_LEN, EmbeddedReleaseFooterStatus, EmbeddedReleasePayloadSummary,
-    EmbeddedReleasePayloadVerifier, embedded_release_footer_needs_whole_binary,
+    EmbeddedReleasePayloadVerifier, embedded_release_footer_suffix_len,
     verify_embedded_release_footer,
 };
 
@@ -132,9 +132,10 @@ fn current_time_unix_ms() -> u64 {
         .as_millis() as u64
 }
 
-/// Reads what the footer verification needs: the last footer-sized bytes when
-/// they settle the result, the whole binary otherwise. Startup runs this on its
-/// own executable, which for a debug test binary can be gigabytes.
+/// Reads what the footer verification needs: the trailing bytes that settle
+/// the result, which is the whole binary only when it carries a footer. Startup
+/// runs this on its own executable, which for a debug test binary can be
+/// gigabytes.
 fn read_release_footer_bytes(binary_path: &Path) -> std::io::Result<Vec<u8>> {
     use std::io::{Read, Seek, SeekFrom};
 
@@ -145,8 +146,12 @@ fn read_release_footer_bytes(binary_path: &Path) -> std::io::Result<Vec<u8>> {
         let footer_start = file.seek(SeekFrom::End(-(EMBEDDED_RELEASE_FOOTER_LEN as i64)))?;
         file.read_exact(&mut tail)?;
         let binary_len = footer_start + EMBEDDED_RELEASE_FOOTER_LEN as u64;
-        if !embedded_release_footer_needs_whole_binary(&tail, binary_len) {
-            return Ok(tail.to_vec());
+        let suffix_len = embedded_release_footer_suffix_len(&tail, binary_len);
+        if suffix_len < binary_len {
+            let mut suffix = vec![0u8; usize::try_from(suffix_len).map_err(std::io::Error::other)?];
+            file.seek(SeekFrom::Start(binary_len - suffix_len))?;
+            file.read_exact(&mut suffix)?;
+            return Ok(suffix);
         }
         file.rewind()?;
     }
@@ -310,6 +315,24 @@ pub(crate) mod tests {
                 .error
                 .as_deref()
                 .is_some_and(|error| error.contains("truncated"))
+        );
+
+        // A code signature's tail can look like a corrupted footer (canonical
+        // version and reserved, an 8-byte payload); only that much is read.
+        let mut signed = vec![0x7f; 4096];
+        signed.extend_from_slice(b"codesign");
+        signed.extend_from_slice(b"NOTSURE!");
+        signed.extend_from_slice(&1u32.to_le_bytes());
+        signed.extend_from_slice(&8u64.to_le_bytes());
+        signed.extend_from_slice(&0u32.to_le_bytes());
+        let signed_load = load(&signed);
+        assert_eq!(
+            signed_load.summary.status,
+            ReleaseAttestationStatus::Missing
+        );
+        assert_eq!(
+            read_release_footer_bytes(&binary_path).expect("read").len(),
+            8 + EMBEDDED_RELEASE_FOOTER_LEN
         );
 
         let valid = load(&stamped);

@@ -279,19 +279,22 @@ fn parse_embedded_release_footer_fields(footer_bytes: &[u8]) -> EmbeddedReleaseF
     }
 }
 
-/// Whether verifying a binary of `binary_len` bytes that ends in `tail` needs
-/// more of it than `tail`: it does when the tail holds a footer, or a corrupted
-/// footer whose payload has to be inspected. Otherwise verifying `tail` alone
-/// gives the same result as verifying the whole binary, so a caller can skip
-/// reading it.
-pub fn embedded_release_footer_needs_whole_binary(
+/// How many trailing bytes of a binary of `binary_len` bytes that ends in
+/// `tail` verification needs to give the same result as on the whole binary:
+/// all of them for a footer, the candidate payload and the footer for a tail
+/// that may be a corrupted footer, and `tail` alone otherwise. A caller can
+/// read only that suffix.
+pub fn embedded_release_footer_suffix_len(
     tail: &[u8; EMBEDDED_RELEASE_FOOTER_LEN],
     binary_len: u64,
-) -> bool {
-    let footer_start = binary_len.saturating_sub(EMBEDDED_RELEASE_FOOTER_LEN as u64);
-    &tail[..8] == EMBEDDED_RELEASE_FOOTER_MAGIC
-        || corrupted_footer_payload_len(parse_embedded_release_footer_fields(tail), footer_start)
-            .is_some()
+) -> u64 {
+    if &tail[..8] == EMBEDDED_RELEASE_FOOTER_MAGIC {
+        return binary_len;
+    }
+    let footer_len = EMBEDDED_RELEASE_FOOTER_LEN as u64;
+    let footer_start = binary_len.saturating_sub(footer_len);
+    corrupted_footer_payload_len(parse_embedded_release_footer_fields(tail), footer_start)
+        .map_or(footer_len, |payload_len| payload_len as u64 + footer_len)
 }
 
 /// The payload length of a tail that may be a corrupted footer, before the
@@ -525,7 +528,7 @@ mod tests {
     }
 
     #[test]
-    fn embedded_release_footer_tail_alone_matches_whole_binary_when_enough() {
+    fn embedded_release_footer_suffix_matches_whole_binary() {
         let base_bytes = b"mesh-llm release binary";
         let payload = payload_bytes_for(base_bytes, "test-signature");
         let stamped =
@@ -538,32 +541,41 @@ mod tests {
         shaped_plain.extend_from_slice(&EMBEDDED_RELEASE_FOOTER_VERSION.to_le_bytes());
         shaped_plain.extend_from_slice(&0u64.to_le_bytes());
         shaped_plain.extend_from_slice(&0u32.to_le_bytes());
+        // A code signature's tail can look like a corrupted footer: canonical
+        // version and reserved, a small payload length, no release payload.
+        let mut signed_plain = vec![0x7f; 4096];
+        signed_plain.extend_from_slice(b"codesign");
+        signed_plain.extend_from_slice(b"NOTSURE!");
+        signed_plain.extend_from_slice(&EMBEDDED_RELEASE_FOOTER_VERSION.to_le_bytes());
+        signed_plain.extend_from_slice(&8u64.to_le_bytes());
+        signed_plain.extend_from_slice(&0u32.to_le_bytes());
+        let footer_len = EMBEDDED_RELEASE_FOOTER_LEN;
+        let bad_magic_suffix = payload.len() + footer_len;
         let verifier = TestPayloadVerifier {
             expected_payload_bytes: payload,
         };
 
-        let cases: [(&[u8], bool); 5] = [
-            (&stamped, true),
-            (&bad_magic, true),
-            (&stamped[..stamped.len() - 1], false),
-            (b"plain binary without embedded release payload", false),
-            (&shaped_plain, false),
+        let cases: [(&[u8], usize); 6] = [
+            (&stamped, stamped.len()),
+            (&bad_magic, bad_magic_suffix),
+            (&stamped[..stamped.len() - 1], footer_len),
+            (b"plain binary without embedded release payload", footer_len),
+            (&shaped_plain, footer_len),
+            (&signed_plain, 8 + footer_len),
         ];
-        for (binary, needs_whole) in cases {
-            let tail: &[u8; EMBEDDED_RELEASE_FOOTER_LEN] = binary
-                [binary.len() - EMBEDDED_RELEASE_FOOTER_LEN..]
+        for (binary, suffix_len) in cases {
+            let tail: &[u8; EMBEDDED_RELEASE_FOOTER_LEN] = binary[binary.len() - footer_len..]
                 .try_into()
                 .expect("tail length");
             assert_eq!(
-                embedded_release_footer_needs_whole_binary(tail, binary.len() as u64),
-                needs_whole
+                embedded_release_footer_suffix_len(tail, binary.len() as u64),
+                suffix_len as u64
             );
-            if !needs_whole {
-                let whole = verify_embedded_release_footer(binary, &verifier);
-                let tail_only = verify_embedded_release_footer(tail, &verifier);
-                assert_eq!(tail_only.status, whole.status);
-                assert_eq!(tail_only.error, whole.error);
-            }
+            let whole = verify_embedded_release_footer(binary, &verifier);
+            let suffix =
+                verify_embedded_release_footer(&binary[binary.len() - suffix_len..], &verifier);
+            assert_eq!(suffix.status, whole.status);
+            assert_eq!(suffix.error, whole.error);
         }
     }
 
