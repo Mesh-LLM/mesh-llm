@@ -135,6 +135,9 @@ jobs:
           include_tool_versions: "true"
       - name: Install macOS native linker
         uses: ./.github/actions/setup-macos-lld
+        with:
+          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
+          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}
       - uses: ./.github/actions/prepare-native-runtime-input
         with:
           backend: ${{ matrix.runtime.backend }}

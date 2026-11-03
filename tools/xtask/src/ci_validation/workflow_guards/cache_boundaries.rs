@@ -70,7 +70,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
         .find(|step| text(step, "uses") == "./.github/actions/configure-sccache-gha")
         .and_then(|step| step.get("with"))
         .ok_or("release runtime cache projection missing")?;
-    let projection = "${{ ((matrix.target == 'x86_64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_8, 'depot-')) || (matrix.target == 'aarch64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_arm_8, 'depot-'))) && 'false' || 'true' }}";
+    let projection = "${{ ((matrix.target == 'x86_64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_8, 'depot-')) || (matrix.target == 'aarch64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_arm_8, 'depot-'))) && 'false' || needs.metadata.outputs.allow_native_github_cache }}";
     if text(configure, "allow_native_github_cache") != projection
         || text(configure, "allow_depot_remote_cache")
             != "${{ needs.metadata.outputs.allow_depot_remote_cache }}"

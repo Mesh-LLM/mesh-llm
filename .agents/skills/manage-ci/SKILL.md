@@ -510,6 +510,12 @@ retired parser behavior, and source review still owns semantic emulation.
   selected-workflow restriction.
 - Provider changes must not alter source checkout, commands, profile,
   artifacts, tests, required checks, or plan membership.
+- Forward a manual provider request and its original event through every
+  provider-capable reusable boundary. An explicit hosted override wins over
+  both the request and repository gates at every depth. Full-release ordinary
+  Linux and native SDK work remains hosted while its automation profile has no
+  qualified Depot path; a rolling-preview override also retains its documented
+  GPU-runner behavior. Do not infer a nested policy from a weaker parent gate.
 - Shared Linux Clippy/test/host/runtime compiler-cache publication has one
   trusted GitHub-hosted warmer. It
   publishes one bounded, exact-key sccache seed after successful main Quality;
@@ -523,6 +529,11 @@ retired parser behavior, and source review still owns semantic emulation.
   intentional cache miss is classified cold and must not fail the build.
 
 ### Bounded Depot PR cache-risk exception
+
+Use `ci/CACHE_AUTHORITY.md` to review selector permissions by event, provider
+and trust context. It describes source decisions only; actual service ACLs,
+historical entry provenance, independent approval and live qualification
+remain separate requirements.
 
 Depot Cache currently scopes entries by repository but not by branch and
 automatically connects GitHub-cache API consumers on Depot runners. Cache-key
@@ -589,6 +600,12 @@ checked-in expiry are the maintainer-controlled approval boundary.
   independently of the server endpoint, and pass the endpoint to later steps.
 - Declare cache mode per slice: no remote cache, PR restore-only/isolated, or
   trusted read-write. Derive it from the same policy as runner placement.
+- The ARM64 release-artifact verifier applies the selected runner's cache
+  permissions immediately after installing sccache and before its first Cargo
+  invocation. A hosted release runner is not an implicit cache grant.
+- macOS linker setup must allocate a job-owned socket, apply both explicit
+  cache permissions, and start that selected cache before probing or compiling.
+  Callers and nested automation forward the same selector decision.
 - GitHub-hosted PR writes remain isolated from trusted main: normal protected
   same-repository and fork lanes explicitly force restore-only cache mode even
   though their workflow ref is the default branch. The bounded Depot exception

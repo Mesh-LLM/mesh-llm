@@ -109,6 +109,8 @@ runs:
       uses: ./.github/actions/setup-macos-lld
       with:
         tool-source: ${{ inputs.runner-profile == 'preinstalled-macos' && 'preinstalled' || 'homebrew' }}
+        allow_depot_remote_cache: ${{ inputs.allow_depot_remote_cache }}
+        allow_native_github_cache: ${{ inputs.allow_native_github_cache }}
 
     - name: Install Windows compiler cache
       if: runner.os == 'Windows'

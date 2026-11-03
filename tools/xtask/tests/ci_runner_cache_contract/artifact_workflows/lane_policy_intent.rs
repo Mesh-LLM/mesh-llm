@@ -331,6 +331,8 @@ fn graph_main_base_identity_and_manual_depot_forwarding_remain_owned() {
         ("quality", "quality"),
         ("linux", "hosts"),
         ("linux", "native_runtimes"),
+        ("linux", "static_abi"),
+        ("linux", "kotlin_sdk_input"),
     ] {
         let doc = document(&format!("ci-{lane}-lane.yml"));
         assert_eq!(

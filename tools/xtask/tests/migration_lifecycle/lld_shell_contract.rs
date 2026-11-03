@@ -479,13 +479,14 @@ fn macos_action_cache(
     let workflow_yaml::Node::Seq(steps) = action.get("runs").unwrap().get("steps").unwrap() else {
         panic!("action steps")
     };
-    assert_eq!(steps.len(), 2);
+    assert_eq!(steps.len(), 4);
+    assert_eq!(
+        steps[2].get("uses").and_then(workflow_yaml::Node::text),
+        Some("./.github/actions/configure-sccache-gha")
+    );
     let scalars = steps
         .iter()
-        .map(|step| {
-            assert_eq!(step.get("shell").unwrap().text(), Some("bash"));
-            step.get("run").unwrap().text().unwrap()
-        })
+        .filter_map(|step| step.get("run").and_then(workflow_yaml::Node::text))
         .collect::<Vec<_>>();
     fs::create_dir_all(f.root.join("brew/bin")).unwrap();
     executable(&f.root.join("brew/bin/ld64.lld"), "#!/bin/bash\nexit 0\n");
@@ -533,8 +534,21 @@ printf '%s\n' "$SCCACHE_GHA_ENABLED" "$SCCACHE_MULTILEVEL_CHAIN" "$SCCACHE_DIR" 
     if remote_endpoint.is_some() {
         fs::create_dir_all(&expected_cache).unwrap();
     }
+    let mock_policy = if remote_endpoint.is_some() {
+        format!("export SCCACHE_GHA_ENABLED='{gha}' SCCACHE_MULTILEVEL_CHAIN='{chain}'")
+    } else {
+        "export SCCACHE_GHA_ENABLED=false SCCACHE_MULTILEVEL_CHAIN=disk".to_owned()
+    };
+    let script = format!(
+        "{}\n{}\nset -a; source \"$GITHUB_ENV\"; set +a\n{}\nexport SCCACHE_DIR='{}'\nmkdir -p \"$SCCACHE_DIR\"\nsccache --start-server\n{}",
+        scalars[0],
+        scalars[1],
+        mock_policy,
+        expected_cache.display(),
+        scalars[2]
+    );
     let r = f.shell(
-        &scalars.join("\n"),
+        &script,
         &[
             ("TOOL_SOURCE", "homebrew"),
             ("SCCACHE_IDLE_TIMEOUT", "2"),
@@ -594,17 +608,9 @@ printf '%s\n' "$SCCACHE_GHA_ENABLED" "$SCCACHE_MULTILEVEL_CHAIN" "$SCCACHE_DIR" 
     assert!(endpoint.len() < 104, "macOS socket path limit");
     fs::remove_dir(Path::new(&endpoint).parent().unwrap()).unwrap();
     assert!(expected_cache.is_dir());
-    if remote_endpoint.is_none() {
-        assert!(env.contains(&format!("SCCACHE_DIR={}\n", expected_cache.display())));
-    } else {
-        assert!(!env.contains("SCCACHE_GHA_ENABLED="));
-        assert!(!env.contains("SCCACHE_MULTILEVEL_CHAIN="));
-        assert!(!env.contains("SCCACHE_DIR="));
-    }
-    if gha == "true" && remote_endpoint.is_none() {
-        assert!(env.contains("SCCACHE_GHA_ENABLED=false\n"));
-        assert!(env.contains("SCCACHE_MULTILEVEL_CHAIN=disk\n"));
-    }
+    assert!(!env.contains("SCCACHE_GHA_ENABLED="));
+    assert!(!env.contains("SCCACHE_MULTILEVEL_CHAIN="));
+    assert!(!env.contains("SCCACHE_DIR="));
     assert_eq!(
         f.text("github.path"),
         format!("{}\n", f.root.join("brew/bin").display())
