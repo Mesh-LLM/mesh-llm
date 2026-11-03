@@ -1420,6 +1420,16 @@ rules still decide whether any remaining row can use Depot. Reverting this
 source change restores the earlier exhaustive-hosted behavior; it does not
 modify already-running workflows or live provider settings.
 
+Manual provider intent is forwarded from the Linux lane into its static ABI
+and native SDK producers as well as the host and runtime slices. The native
+SDK producer forwards source SHA, original event, hosted override and provider
+intent to its static ABI dependency. A hosted override takes precedence over
+manual requests and repository gates. The current full-release Linux and SDK
+automation profiles remain hosted until a Depot profile is qualified; the
+release input for Depot is retained but does not enable that route. Release
+native SDK and nested ABI work use the frozen metadata source. Rolling preview
+continues to force the separate CUDA GPU leg onto hosted runners as well.
+
 Depot coverage is reported against the selected ordinary-executor denominator,
 not against every job in the Actions run. For a plan, the denominator is every
 ordinary build/test executor row that the same event, trust profile, platform,
