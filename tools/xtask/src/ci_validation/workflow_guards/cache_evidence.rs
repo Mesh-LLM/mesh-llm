@@ -5,6 +5,7 @@ const CONFIGURE: &str = "./.github/actions/configure-sccache-gha";
 const CAPTURE: &str = "./.github/actions/capture-sccache-stats";
 const PREPARE_AUTOMATION: &str = "./.github/actions/prepare-automation";
 const PREPARE_RUNTIME: &str = "./.github/actions/prepare-native-runtime-input";
+const MACOS_LINKER: &str = "./.github/actions/setup-macos-lld";
 pub(super) fn text<'a>(node: &'a Node, key: &str) -> &'a str {
     node.get(key).and_then(Node::text).unwrap_or("")
 }
@@ -152,6 +153,99 @@ pub(super) fn capture_action(action: &Node) -> Result<(), String> {
     }
     Ok(())
 }
+pub(super) fn macos_action(action: &Node) -> Result<(), String> {
+    let inputs = action.get("inputs").ok_or("macOS linker inputs missing")?;
+    for key in ["allow_depot_remote_cache", "allow_native_github_cache"] {
+        equal(
+            inputs.get(key).ok_or("macOS cache input missing")?,
+            "default",
+            "false",
+        )?;
+    }
+    let all = steps(action.get("runs").ok_or("macOS linker runs missing")?);
+    if all.len() != 4 || text(&all[2], "uses") != CONFIGURE {
+        return Err("macOS linker must prepare its endpoint, configure cache, then probe".into());
+    }
+    let setup = text(&all[1], "run");
+    if !setup.contains("SCCACHE_SERVER_UDS=$socket")
+        || !setup.contains("SCCACHE_IDLE_TIMEOUT=0")
+        || !text(&all[3], "run").contains("scripts/cargo-linker --mesh-probe")
+        || all
+            .iter()
+            .any(|step| text(step, "run").contains("sccache --start-server"))
+    {
+        return Err("macOS cache endpoint or linker probe must remain policy-owned".into());
+    }
+    for step in all {
+        if step.get("if").is_some() || step.get("continue-on-error").is_some() {
+            return Err("macOS cache setup must be unconditional and required".into());
+        }
+    }
+    let with = all[2].get("with").ok_or("macOS cache policy missing")?;
+    for key in ["allow_depot_remote_cache", "allow_native_github_cache"] {
+        equal(with, key, &format!("${{{{ inputs.{key} }}}}"))?;
+    }
+    Ok(())
+}
+
+pub(super) fn macos_preparation(action: &Node) -> Result<(), String> {
+    let all = steps(action.get("runs").ok_or("automation runs missing")?);
+    let index = required_step(all, |step| text(step, "uses") == MACOS_LINKER)?;
+    let caller = &all[index];
+    equal(caller, "if", "runner.os == 'macOS'")?;
+    let with = caller
+        .get("with")
+        .ok_or("automation macOS inputs missing")?;
+    for key in ["allow_depot_remote_cache", "allow_native_github_cache"] {
+        equal(with, key, &format!("${{{{ inputs.{key} }}}}"))?;
+    }
+    Ok(())
+}
+
+fn macos_policy_caller(name: &str, job: &str, steps: &[Node]) -> Result<(), String> {
+    let callers: Vec<_> = steps
+        .iter()
+        .filter(|step| text(step, "uses") == MACOS_LINKER)
+        .collect();
+    if callers.is_empty() {
+        return Ok(());
+    }
+    if callers.len() != 1 {
+        return Err("macOS linker caller must be unique within its job".into());
+    }
+    let (depot, native, condition) = match (name, job) {
+        ("ci-macos-host-slice.yml", _)
+        | ("ci-macos-runtime-slice.yml", _)
+        | ("native-sdk-artifact.yml", _)
+        | ("swift-sdk-artifact.yml", _) => (
+            "${{ needs.runner_policy.outputs.allow_depot_remote_cache }}",
+            "${{ needs.runner_policy.outputs.allow_native_github_cache }}",
+            "",
+        ),
+        ("ci-platform-checks-slice.yml", _) => (
+            "${{ needs.runner_policy.outputs.allow_depot_remote_cache }}",
+            "${{ needs.runner_policy.outputs.allow_native_github_cache }}",
+            "${{ matrix.check.platform == 'macos' }}",
+        ),
+        ("release.yml", "build" | "build_native_runtime") => (
+            "${{ needs.metadata.outputs.allow_depot_remote_cache }}",
+            "${{ needs.metadata.outputs.allow_native_github_cache }}",
+            "runner.os == 'macOS'",
+        ),
+        ("node-sdk-addon-artifact.yml", "macos_addon") => ("false", "true", ""),
+        _ => return Err(format!("unclassified macOS cache caller: {name}/{job}")),
+    };
+    let caller = callers[0];
+    equal(caller, "if", condition)?;
+    if caller.get("continue-on-error").is_some() {
+        return Err("macOS cache caller must be required".into());
+    }
+    let with = caller.get("with").ok_or("macOS cache inputs missing")?;
+    equal(with, "allow_depot_remote_cache", depot)?;
+    equal(with, "allow_native_github_cache", native)?;
+    Ok(())
+}
+
 pub(super) fn configure_action(action: &Node) -> Result<(), String> {
     let inputs = action.get("inputs").ok_or("configure inputs missing")?;
     for key in ["allow_depot_remote_cache", "allow_native_github_cache"] {
@@ -296,11 +390,10 @@ fn explicit_native_policy(name: &str, job: &str, steps: &[Node]) -> Result<(), S
         ("release.yml", "smoke_linux_arm64_artifact") => {
             Some("${{ needs.metadata.outputs.allow_native_github_cache }}")
         }
+        ("release.yml", "build") => Some("${{ needs.metadata.outputs.allow_native_github_cache }}"),
         (
             "release.yml",
-            "build"
-            | "build_native_runtime_linux_aarch64_cuda"
-            | "build_native_runtime_linux_x86_64_cuda",
+            "build_native_runtime_linux_aarch64_cuda" | "build_native_runtime_linux_x86_64_cuda",
         ) => Some("true"),
         (
             "release.yml",
@@ -438,6 +531,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
         for (job_name, job) in workflow.get("jobs").ok_or("jobs missing")?.entries() {
             explicit_native_policy(name, job_name, steps(job))?;
             release_arm_smoke_policy(name, job_name, steps(job))?;
+            macos_policy_caller(name, job_name, steps(job))?;
             runtime_input_policy(name, job_name, steps(job))?;
             callers(name, steps(job)).map_err(|e| format!("{name}: {e}"))?;
         }

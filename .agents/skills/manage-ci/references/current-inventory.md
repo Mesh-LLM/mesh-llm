@@ -879,21 +879,16 @@ bump `@playwright/test` in `mesh/crates/mesh-llm-ui/package.json`.
 resolved bin directory to the job path, and invokes the checked-in
 `scripts/cargo-linker` probe. It does not export Rust flags. The repository
 Cargo config owns every later link, so Android target flags and caller flags
-continue to compose normally. Seven call sites:
-`ci-platform-checks-slice.yml`, `ci-macos-host-slice.yml`,
-`swift-sdk-artifact.yml`, `native-sdk-artifact.yml`,
-`node-sdk-addon-artifact.yml`, and two in `release.yml`.
+continue to compose normally. Its callers include macOS host, runtime and
+platform-check slices, SDK workflows, release jobs, and `prepare-automation`.
 
-Disk-only sccache preparation initializes and exports `SCCACHE_DIR` before
-compiler probes, including callers that already disable GHA caching. An explicit
-directory is preserved; otherwise the action uses the job's runner temporary
-directory. Missing GHA endpoints retain the existing disk-only fallback.
-The action eagerly starts sccache on a unique short Unix socket in both disk-only
-and remote-cache modes, before any parallel compiler clients, and exports that
-endpoint for subsequent steps. It exports `SCCACHE_IDLE_TIMEOUT=0` before startup
-and persists the value for the job, preventing idle shutdown between crate
-builds and long test phases. Remote cache configuration is preserved. It never
-stops the default host server. Canary toolchain
+The action allocates a unique short Unix socket before forwarding explicit
+native and Depot cache permissions to `configure-sccache-gha`; that shared
+action starts the selected backend before the linker probe. A repeated setup in
+the same job reuses its endpoint. The action exports `SCCACHE_IDLE_TIMEOUT=0`
+before startup and persists it for the job. Denied or unavailable remote caches
+fall back to job-local disk; an explicit disk directory remains supported.
+It never stops the default host server. Canary toolchain
 verification only sets cache identity; accelerator setup owns server startup.
 
 Persistent macOS canary preflight, build, family and infrastructure-retry jobs

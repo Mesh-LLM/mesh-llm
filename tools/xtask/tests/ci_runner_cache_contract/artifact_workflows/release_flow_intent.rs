@@ -489,7 +489,7 @@ fn graph_release_cpu_cache_authority_uses_the_selected_architecture_runner() {
     assert_eq!(
         input(cache, "allow_native_github_cache"),
         Some(
-            "${{ ((matrix.target == 'x86_64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_8, 'depot-')) || (matrix.target == 'aarch64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_arm_8, 'depot-'))) && 'false' || 'true' }}"
+            "${{ ((matrix.target == 'x86_64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_8, 'depot-')) || (matrix.target == 'aarch64-unknown-linux-gnu' && startsWith(needs.metadata.outputs.runner_arm_8, 'depot-'))) && 'false' || needs.metadata.outputs.allow_native_github_cache }}"
         )
     );
     for name in [
