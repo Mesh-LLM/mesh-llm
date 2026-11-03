@@ -10,6 +10,7 @@
 
 pub mod catalog;
 mod construction;
+pub mod decision_evidence;
 pub mod diagnostics;
 pub mod document;
 mod glob_pattern;

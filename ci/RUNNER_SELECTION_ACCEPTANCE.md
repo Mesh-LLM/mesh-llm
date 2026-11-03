@@ -1,0 +1,31 @@
+# Runner selection acceptance evidence
+
+This is the source-fixture inventory for #2785, not a provider qualification
+or a record of a hosted run. The `artifact_workflows::placement` tests feed
+the real planner's placement result into the checked-in selector and, for
+selected cases, into the compiler-cache action. Fixture dates are synthetic:
+they exercise the recorded exception boundary and do not renew the exception.
+The table records what the local tests assert; actual runner identity and
+effective hosted cache behavior remain unobserved.
+
+| Fixture condition | Local selection and cache assertion | Scope |
+| --- | --- | --- |
+| Ordinary main, gate on | Depot labels; direct Depot cache and native cache denied after expiry. | Exhaustive coverage remains selected. |
+| Ordinary main, gate off | GitHub-hosted labels. | Exhaustive coverage remains selected. |
+| Main control change, missing base, or forced-hosted override | GitHub-hosted labels despite the main gate. | Planner placement and selector composed. |
+| Manual-full on main with Depot requested | Depot labels when no hosted override applies; otherwise hosted. | Exhaustive coverage remains selected. |
+| Same-repository PR before expiry, gate on | Depot labels; the selected compiler-cache fixture remains disk-only for PR execution. | Historical boundary case, not a current approval. |
+| PR at expiry, fork, target event, PR-origin dispatch, or gate off | GitHub-hosted labels. | Trust and event boundary fixtures. |
+| Expired exact-ref canary | Matching same-repository merge ref may select Depot but both direct Depot cache and native cache are denied. | Selector behavior only; no canary activation is asserted. |
+| Wrong canary ref, fork, or PR head ref | GitHub-hosted labels. | Selector refusal fixtures. |
+| Unsupported event or malformed boolean | Selector falls back to hosted for an unsupported event; malformed booleans are refused. The planner rejects unsupported event names. | No fallback to a privileged provider. |
+
+The composed caller checks cover Linux static ABI and the native-SDK nested
+static-ABI path, including source identity, provider intent, hosted override,
+selected slices and artifact names. Other role/caller paths and the complete
+event-by-role acceptance matrix still need the same composed proof. The
+source-only execution-record command can retain caller assertions alongside a
+selector trace, but does not authenticate the selector-to-job binding, observe
+the runner or cache, or retain an artifact. Protected `@main` execution, live
+runner identity, provider isolation and same-source timing evidence remain
+separate requirements.
