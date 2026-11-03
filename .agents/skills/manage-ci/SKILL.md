@@ -411,8 +411,10 @@ retired parser behavior, and source review still owns semantic emulation.
   quota/role catalog, authenticated complete observations and an atomic
   shared reservation and recovery mechanism. Preserve every main revision;
   count running PR work until its cancellation is independently confirmed.
-  The reservation model is a proposal over supplied state, not an atomic
-  store or authenticated runner observation; it cannot release capacity.
+  The reservation model is a proposal over supplied state. Its injected-store
+  interface requires whole-state atomic comparison and treats lost commit
+  acknowledgements as unknown until reconciled. It supplies no shared store
+  or authenticated runner observation and cannot release capacity.
 - Supported profiles are semantic and closed: draft PR, ready PR, exhaustive
   main, and explicit full/manual validation. Do not add ad hoc boolean inputs
   when a profile or ownership rule expresses the decision.

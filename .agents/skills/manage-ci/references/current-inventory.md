@@ -953,7 +953,9 @@ source commit.
   over caller-supplied pool limits, runner classes, active work and pending
   work. No workflow invokes it, and it cannot reserve workers or cancel jobs.
   Its versioned reservation model charges proposed work and transfers a charge
-  to a supplied start observation, but has no store, expiry or release path.
+  to a supplied start observation. Its injected-store interface requires an
+  atomic whole-state comparison and reports uncertain commit outcomes. No
+  shared store, expiry or release path exists.
   It refuses pending supersession until a separate reconciler resolves it.
   Snapshot authenticity, complete quotas, runner identity, atomic shared state
   and lease recovery remain prerequisites for real cross-run admission.

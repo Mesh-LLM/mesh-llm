@@ -1,7 +1,7 @@
 //! Source-only reservation transitions over caller-supplied state.
 //!
-//! This model is not an admission service. It neither authenticates its input
-//! nor stores, dispatches, cancels, or releases work. A real implementation
+//! This model is not an admission service. It does not authenticate its input,
+//! implement a store, or dispatch, cancel, or release work. A real implementation
 //! must commit each transition with an atomic compare-and-swap shared by every
 //! scheduler and use complete, authenticated observations and an independently
 //! approved catalog. The version check alone cannot supply those guarantees.
@@ -34,6 +34,45 @@ pub enum ModelError {
     ReservationOverCapacity,
     UnknownReservation,
     ReservationMismatch,
+}
+
+/// The storage contract needed to serialize proposals from all schedulers.
+///
+/// `compare_exchange` must be a linearizable, durable comparison of the
+/// *entire* expected model and replacement across every participating caller.
+/// A revision-only, process-local, best-effort, or partially written update
+/// does not satisfy this contract. `load` must return one coherent model;
+/// `compare_exchange` returns true only after committing the replacement, or
+/// false without writing only when the expected state no longer matches. An
+/// error from that operation may mean the update committed without an
+/// acknowledgement; it requires reconciliation, not a blind retry. No
+/// implementation is provided here.
+pub trait AtomicModelStore {
+    type Error;
+
+    fn load(&self) -> Result<Model, Self::Error>;
+
+    fn compare_exchange(&self, expected: &Model, replacement: &Model) -> Result<bool, Self::Error>;
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StoredTransition {
+    /// Only the proposed model was stored; this is not permission to start work.
+    Reserved { work: Work, revision: u64 },
+    /// A supplied, unauthenticated start claim was stored in the model.
+    StartRecorded { revision: u64 },
+    /// A read found no capacity; this conservative result may already be stale.
+    Wait,
+    /// Another writer changed the state; the caller must obtain a new snapshot.
+    Contended,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StoreError<E> {
+    Load(E),
+    /// The update may or may not have committed. Reconcile before any retry.
+    CommitUnknown(E),
+    Model(ModelError),
 }
 
 impl From<PreviewError> for ModelError {
@@ -144,6 +183,56 @@ pub fn observe_start(
     next.revision = next_revision;
     first_candidate(&next, now)?;
     Ok(next)
+}
+
+/// Attempt one reservation using an injected, externally implemented store.
+///
+/// This does not authenticate the snapshot, qualify the runner, dispatch a
+/// job, or authorize execution. A store satisfying the trait is necessary but
+/// not sufficient for live admission. Contention is returned to the caller;
+/// there is no unbounded retry or implicit release of capacity.
+pub fn try_reserve<S: AtomicModelStore>(
+    store: &S,
+    now: u64,
+) -> Result<StoredTransition, StoreError<S::Error>> {
+    let current = store.load().map_err(StoreError::Load)?;
+    match propose(&current, current.revision, now).map_err(StoreError::Model)? {
+        Transition::Wait => Ok(StoredTransition::Wait),
+        Transition::Reserve { work, next } => {
+            let revision = next.revision;
+            if store
+                .compare_exchange(&current, &next)
+                .map_err(StoreError::CommitUnknown)?
+            {
+                Ok(StoredTransition::Reserved { work, revision })
+            } else {
+                Ok(StoredTransition::Contended)
+            }
+        }
+    }
+}
+
+/// Attempt to store a supplied start claim without releasing its charge.
+///
+/// The claim remains unverified and requires the same whole-state atomicity
+/// as a reservation. There is no completion, expiry, or cancellation path.
+pub fn try_record_start<S: AtomicModelStore>(
+    store: &S,
+    now: u64,
+    observed: Active,
+) -> Result<StoredTransition, StoreError<S::Error>> {
+    let current = store.load().map_err(StoreError::Load)?;
+    let next =
+        observe_start(&current, current.revision, now, observed).map_err(StoreError::Model)?;
+    let revision = next.revision;
+    if store
+        .compare_exchange(&current, &next)
+        .map_err(StoreError::CommitUnknown)?
+    {
+        Ok(StoredTransition::StartRecorded { revision })
+    } else {
+        Ok(StoredTransition::Contended)
+    }
 }
 
 #[cfg(test)]

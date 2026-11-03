@@ -1,6 +1,8 @@
 use super::*;
 use crate::capacity_preview::{Role, RunnerClass, WorkKind};
 use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
+use std::sync::{Barrier, Mutex};
 
 fn class() -> RunnerClass {
     RunnerClass {
@@ -208,4 +210,145 @@ fn duplicate_work_and_revision_overflow_fail_without_a_transition() {
         propose(&state, u64::MAX, 105),
         Err(ModelError::RevisionOverflow)
     );
+}
+
+// This process-local fake exercises the adapter contract only. It is not a
+// persistent store and supplies no authentication or cross-run coordination.
+struct FakeStore {
+    state: Mutex<Model>,
+    after_read: Option<Barrier>,
+}
+
+impl AtomicModelStore for FakeStore {
+    type Error = Infallible;
+
+    fn load(&self) -> Result<Model, Self::Error> {
+        let current = self.state.lock().unwrap().clone();
+        if let Some(barrier) = &self.after_read {
+            barrier.wait();
+        }
+        Ok(current)
+    }
+
+    fn compare_exchange(&self, expected: &Model, replacement: &Model) -> Result<bool, Self::Error> {
+        let mut current = self.state.lock().unwrap();
+        if *current != *expected {
+            return Ok(false);
+        }
+        *current = replacement.clone();
+        Ok(true)
+    }
+}
+
+#[test]
+fn injected_atomic_store_refuses_a_competing_whole_state_commit() {
+    let mut state = model();
+    state.snapshot.pending = vec![
+        pending(work("main-1", main('a'), 2)),
+        pending(work("main-2", main('b'), 1)),
+    ];
+    let store = FakeStore {
+        state: Mutex::new(state),
+        after_read: Some(Barrier::new(2)),
+    };
+    let (first, second) = std::thread::scope(|scope| {
+        let first = scope.spawn(|| try_reserve(&store, 105).unwrap());
+        let second = scope.spawn(|| try_reserve(&store, 105).unwrap());
+        (first.join().unwrap(), second.join().unwrap())
+    });
+    assert!(matches!(
+        (&first, &second),
+        (
+            StoredTransition::Reserved { .. },
+            StoredTransition::Contended
+        ) | (
+            StoredTransition::Contended,
+            StoredTransition::Reserved { .. }
+        )
+    ));
+    let stored = store.state.lock().unwrap();
+    assert_eq!(stored.revision, 5);
+    assert_eq!(stored.reserved.len(), 1);
+    assert_eq!(stored.reserved[0].id, "main-1");
+    assert_eq!(stored.snapshot.pending[0].work.id, "main-2");
+    assert_eq!(propose(&stored, 5, 105), Ok(Transition::Wait));
+}
+
+#[test]
+fn stored_start_claim_remains_charged_and_invalid_claim_does_not_write() {
+    let mut state = model();
+    state.snapshot.pending = vec![
+        pending(work("main-1", main('a'), 2)),
+        pending(work("main-2", main('b'), 1)),
+    ];
+    let store = FakeStore {
+        state: Mutex::new(state),
+        after_read: None,
+    };
+    let StoredTransition::Reserved { work, revision } = try_reserve(&store, 105).unwrap() else {
+        panic!("expected stored reservation")
+    };
+    assert_eq!(revision, 5);
+    let invalid = Active {
+        work: work.clone(),
+        observed_class: None,
+    };
+    assert_eq!(
+        try_record_start(&store, 105, invalid),
+        Err(StoreError::Model(ModelError::Preview(
+            PreviewError::MissingRunnerClass
+        )))
+    );
+    assert_eq!(store.state.lock().unwrap().revision, 5);
+    let supplied = Active {
+        work,
+        observed_class: Some(class()),
+    };
+    assert_eq!(
+        try_record_start(&store, 105, supplied),
+        Ok(StoredTransition::StartRecorded { revision: 6 })
+    );
+    assert_eq!(try_reserve(&store, 105), Ok(StoredTransition::Wait));
+    let stored = store.state.lock().unwrap();
+    assert!(stored.reserved.is_empty());
+    assert_eq!(stored.snapshot.active.len(), 1);
+    assert_eq!(stored.snapshot.pending.len(), 1);
+}
+
+#[test]
+fn lost_commit_acknowledgement_remains_an_uncertain_outcome() {
+    struct LostAcknowledgement(Mutex<Model>);
+    impl AtomicModelStore for LostAcknowledgement {
+        type Error = &'static str;
+
+        fn load(&self) -> Result<Model, Self::Error> {
+            Ok(self.0.lock().unwrap().clone())
+        }
+
+        fn compare_exchange(
+            &self,
+            expected: &Model,
+            replacement: &Model,
+        ) -> Result<bool, Self::Error> {
+            let mut state = self.0.lock().unwrap();
+            assert_eq!(*state, *expected);
+            *state = replacement.clone();
+            Err("acknowledgement lost")
+        }
+    }
+
+    let mut state = model();
+    state
+        .snapshot
+        .pending
+        .push(pending(work("main", main('a'), 1)));
+    let store = LostAcknowledgement(Mutex::new(state));
+    assert_eq!(
+        try_reserve(&store, 105),
+        Err(StoreError::CommitUnknown("acknowledgement lost"))
+    );
+    let stored = store.0.lock().unwrap();
+    assert_eq!(stored.revision, 5);
+    assert_eq!(stored.reserved[0].id, "main");
+    assert!(stored.snapshot.pending.is_empty());
 }
