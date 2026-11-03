@@ -23,6 +23,7 @@ effective hosted cache behavior remain unobserved.
 | Main Linux runtime, gate on | CPU's explicit override projects hosted placement and native-cache permission while the general runtime selector projects a Depot label and denies that cache. | Planned CPU/CUDA rows and checked-in selector projection; no observed runner or cache. |
 | Main macOS and Windows runtimes | Both callers keep their main gates off and project hosted labels while retaining runtime artifact names. | Planned runtime rows and checked-in callers; no observed job or artifact. |
 | Main platform checks | macOS and Windows check callers keep the main gate off; the actual mapping step maps selector labels to the planned platforms. | Local planner, selector and shell mapping fixture; no observed job. |
+| Main Rust, console, website and Swift callers | These callers keep their main gates off and project hosted labels while retaining selected batches, jobs and artifact names. | Local planner and checked-in caller fixtures; no observed job or artifact. |
 | Main product composition | Linux, macOS and Windows product callers keep their main gates off and project hosted labels; host, runtime and product artifact names remain bound. | Planned runtime rows and checked-in callers; no observed job or artifact. |
 | Quality role and sentinel | Planner inputs and checked-in Quality callers project the expected 4/8-worker labels for main, control, expired PR, fork and PR dispatch; the separate sentinel fixture requires its exact ref. | Synthetic selector and wiring fixtures; no sentinel activation or observed job. |
 
@@ -36,7 +37,7 @@ here. All rows still need complete coverage and review.
 The census test verifies caller identities and declared core inputs; it does
 not independently prove that a row's coverage label is complete.
 
-Current census: 20 direct selector steps; 15 partial and 5 open.
+Current census: 20 direct selector steps; 19 partial and 1 open.
 
 <!-- selector-census:start -->
 | Workflow | Job | Step | Coverage |
@@ -51,16 +52,16 @@ Current census: 20 direct selector steps; 15 partial and 5 open.
 | `ci-platform-checks-slice.yml` | `runner_policy` | `policy` | partial |
 | `ci-quality-slice.yml` | `runner_policy` | `policy` | partial |
 | `ci-quality-slice.yml` | `runner_policy` | `sentinel_policy` | partial |
-| `ci-rust-tests-slice.yml` | `runner_policy` | `policy` | open |
-| `ci-ui-artifact-slice.yml` | `runner_policy` | `policy` | open |
-| `ci-web-slice.yml` | `runner_policy` | `policy` | open |
+| `ci-rust-tests-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-ui-artifact-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-web-slice.yml` | `runner_policy` | `policy` | partial |
 | `ci-windows-host-slice.yml` | `runner_policy` | `policy` | partial |
 | `ci-windows-product-slice.yml` | `runner_policy` | `policy` | partial |
 | `ci-windows-runtime-slice.yml` | `runner_policy` | `policy` | partial |
 | `native-sdk-artifact.yml` | `runner_policy` | `policy` | partial |
 | `release.yml` | `metadata` | `runners` | open |
 | `static-abi-artifact.yml` | `runner_policy` | `policy` | partial |
-| `swift-sdk-artifact.yml` | `runner_policy` | `policy` | open |
+| `swift-sdk-artifact.yml` | `runner_policy` | `policy` | partial |
 <!-- selector-census:end -->
 
 The composed caller checks cover Linux static ABI, the native-SDK nested
