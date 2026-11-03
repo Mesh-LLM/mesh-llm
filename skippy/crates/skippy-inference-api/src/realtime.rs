@@ -7,6 +7,13 @@
 //! `input_audio_format`) and GA (`session.update` with `audio.input`) shapes
 //! of the session configuration, and reports transcripts as
 //! `conversation.item.input_audio_transcription.delta` / `.completed`.
+//!
+//! Two settings go beyond OpenAI's, under the session's `transcription`:
+//! `step_ms`, the new audio between passes (shorter gives faster deltas for
+//! more work), and `tentative: true`, which adds
+//! `conversation.item.input_audio_transcription.tentative` events carrying
+//! what the latest pass heard but has not confirmed. Each replaces the last;
+//! clients that don't ask never see one.
 
 use std::sync::{Arc, Mutex};
 
@@ -36,6 +43,9 @@ const MAX_MESSAGE_BYTES: usize = 1 << 20;
 const MAX_PREFIX_PADDING_MS: f64 = 5_000.0;
 const SILENCE_DURATION_MS: std::ops::RangeInclusive<f64> = 100.0..=30_000.0;
 const INPUT_SAMPLE_RATES: std::ops::RangeInclusive<u64> = 8_000..=96_000;
+/// Passes more often than this would outrun Whisper on most machines; less
+/// often, and deltas lag by seconds.
+const STEP_MS: std::ops::RangeInclusive<u64> = 200..=5_000;
 /// How long a closing socket waits for the client to finish the handshake.
 const CLOSE_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -67,6 +77,10 @@ pub struct RealtimeTranscriptionConfig {
     pub turn_detection: Option<RealtimeTurnDetection>,
     /// Rate of the 16-bit PCM the client appends.
     pub input_sample_rate: u32,
+    /// New audio between passes; `None` keeps the backend's default.
+    pub step_ms: Option<u32>,
+    /// Report unconfirmed text as `tentative` events.
+    pub tentative: bool,
 }
 
 impl RealtimeTranscriptionConfig {
@@ -77,6 +91,8 @@ impl RealtimeTranscriptionConfig {
             prompt: None,
             turn_detection: Some(RealtimeTurnDetection::default()),
             input_sample_rate: DEFAULT_INPUT_SAMPLE_RATE,
+            step_ms: None,
+            tentative: false,
         }
     }
 }
@@ -118,6 +134,11 @@ pub enum RealtimeOutput {
     Completed {
         turn: u64,
         transcript: String,
+    },
+    /// Unconfirmed text after the confirmed; replaces the previous one.
+    Tentative {
+        turn: u64,
+        text: String,
     },
     /// A commit arrived with no audio to transcribe.
     CommitEmpty,
@@ -249,6 +270,10 @@ impl Events {
             RealtimeOutput::Completed { turn, transcript } => self.event(
                 "conversation.item.input_audio_transcription.completed",
                 json!({"item_id": self.item_id(turn), "content_index": 0, "transcript": transcript}),
+            ),
+            RealtimeOutput::Tentative { turn, text } => self.event(
+                "conversation.item.input_audio_transcription.tentative",
+                json!({"item_id": self.item_id(turn), "content_index": 0, "text": text}),
             ),
             RealtimeOutput::CommitEmpty => self.error(
                 "invalid_request_error",
@@ -629,6 +654,29 @@ pub(crate) fn apply_session_update(
                 .filter(|prompt| !prompt.is_empty())
                 .map(str::to_string);
         }
+        match transcription.get("step_ms") {
+            None => {}
+            Some(Value::Null) => config.step_ms = None,
+            Some(step) => {
+                config.step_ms = Some(
+                    step.as_u64()
+                        .filter(|step| STEP_MS.contains(step))
+                        .map(|step| step as u32)
+                        .ok_or_else(|| {
+                            format!(
+                                "transcription.step_ms must be an integer from {} to {}",
+                                STEP_MS.start(),
+                                STEP_MS.end()
+                            )
+                        })?,
+                );
+            }
+        }
+        if let Some(tentative) = transcription.get("tentative") {
+            config.tentative = tentative
+                .as_bool()
+                .ok_or("transcription.tentative must be true or false")?;
+        }
     }
     if let Some(format) = input
         .get("format")
@@ -712,11 +760,18 @@ fn session_json(id: &str, config: &RealtimeTranscriptionConfig, ga: bool) -> Val
             "silence_duration_ms": detection.silence_duration_ms,
         })
     });
-    let transcription = json!({
+    let mut transcription = json!({
         "model": config.model,
         "language": config.language,
         "prompt": config.prompt,
     });
+    // Echoed only when set, so OpenAI's clients see the shape they know.
+    if let Some(step) = config.step_ms {
+        transcription["step_ms"] = step.into();
+    }
+    if config.tentative {
+        transcription["tentative"] = true.into();
+    }
     if ga {
         json!({
             "id": id,

@@ -180,16 +180,26 @@ async fn control_plane_listener_accepts_only_control_alpn() -> anyhow::Result<()
     )?;
     let client = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec(), ALPN_V1.to_vec()])
+        .alpns(vec![
+            ALPN_CONTROL_V2.to_vec(),
+            mesh_llm_protocol::ALPN_CONTROL_V1.to_vec(),
+            ALPN_V1.to_vec(),
+        ])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?
         .bind()
         .await?;
 
     client
-        .connect(endpoint.clone(), ALPN_CONTROL_V1)
+        .connect(endpoint.clone(), ALPN_CONTROL_V2)
         .await
-        .expect("control endpoint should accept mesh-llm-control/1");
+        .expect("control endpoint should accept mesh-llm-control/2");
+    assert!(
+        client
+            .connect(endpoint.clone(), mesh_llm_protocol::ALPN_CONTROL_V1)
+            .await
+            .is_err()
+    );
     assert!(client.connect(endpoint, ALPN_V1).await.is_err());
 
     node.shutdown_control_listener().await;
@@ -213,12 +223,12 @@ async fn stalled_owner_control_handshake_expires_deterministically() -> anyhow::
     )?;
     let client = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?
         .bind()
         .await?;
-    let connection = client.connect(control_addr, ALPN_CONTROL_V1).await?;
+    let connection = client.connect(control_addr, ALPN_CONTROL_V2).await?;
     let (mut send, mut recv) = connection.open_bi().await?;
     send.write_all(&[0, 0]).await?;
 
@@ -298,14 +308,14 @@ async fn control_plane_listener_shutdown_stops_listener_task() -> anyhow::Result
 
     let client = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?
         .bind()
         .await?;
     let reconnect = tokio::time::timeout(
         std::time::Duration::from_millis(500),
-        client.connect(endpoint, ALPN_CONTROL_V1),
+        client.connect(endpoint, ALPN_CONTROL_V2),
     )
     .await;
     assert!(

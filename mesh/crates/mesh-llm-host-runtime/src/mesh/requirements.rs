@@ -27,6 +27,7 @@ pub(crate) mod tests {
 
     pub(crate) fn restricted_requirements() -> MeshRequirements {
         MeshRequirements {
+            require_signed_gossip: false,
             node_version: NodeVersionBounds {
                 min: Some("0.65.0".into()),
                 max: Some("0.66.0".into()),
@@ -403,6 +404,7 @@ pub(crate) mod tests {
 
     pub(crate) fn assert_mesh_requirements_accept_trusted_signer_with_compatible_peer_version() {
         let constrained = MeshRequirements {
+            require_signed_gossip: false,
             node_version: NodeVersionBounds {
                 min: Some("0.65.0".into()),
                 max: Some("0.65.9".into()),

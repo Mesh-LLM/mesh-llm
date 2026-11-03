@@ -597,3 +597,127 @@ fn windows_pipe_name_is_namespaced_by_instance_id() {
         r"\\.\pipe\mesh-llm-p1234-deadbeef-Pipes"
     );
 }
+
+/// A built-in plugin is listed among the resolved externals whenever it is
+/// enabled, but this host serves it itself and neither built-in exposes
+/// inference. Naming one as a model's provider must fail loudly instead of
+/// resolving and then serving nothing: native startup skips provider models.
+#[test]
+#[serial_test::serial]
+fn built_in_plugin_is_not_a_model_provider() {
+    let config: MeshConfig = toml::from_str(
+        r#"
+[[models]]
+model = "mystery"
+provider = "blobstore"
+"#,
+    )
+    .expect("config should parse");
+
+    let error = resolve_plugins(&config, private_host_mode())
+        .expect_err("a built-in plugin must not resolve as a model provider");
+    assert!(
+        error
+            .to_string()
+            .contains("selects unavailable provider 'blobstore'"),
+        "got: {error}"
+    );
+}
+
+/// The provider check must stay a check on *inference-capable* externals: a
+/// configured plugin command still resolves and still receives the model
+/// selection it serves.
+#[test]
+#[serial_test::serial]
+fn external_plugin_still_resolves_as_a_model_provider() {
+    let config: MeshConfig = toml::from_str(
+        r#"
+[[plugin]]
+name = "endpoint-plugin"
+command = "/opt/plugins/endpoint-plugin"
+
+[[models]]
+model = "mystery"
+provider = "endpoint-plugin"
+"#,
+    )
+    .expect("config should parse");
+
+    let resolved = resolve_plugins(&config, private_host_mode())
+        .expect("an external plugin command is a model provider");
+    let plugin = resolved
+        .externals
+        .iter()
+        .find(|spec| spec.name == "endpoint-plugin")
+        .expect("the configured plugin must resolve");
+    let models = plugin
+        .env
+        .get(mesh_llm_plugin::models::CONFIG_ENV)
+        .expect("the plugin must receive its model selection");
+    assert!(
+        models.contains("\"provider\":\"endpoint-plugin\""),
+        "got: {models}"
+    );
+}
+
+#[test]
+fn managed_sources_preserve_relative_config_and_resolve_runtime_paths() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[[plugin]]
+name = "onnx"
+command = "/opt/onnx"
+[[models]]
+model = "owner/model@pin"
+provider = "onnx"
+[models.source]
+local_dir = "weights"
+"#,
+    )
+    .unwrap();
+    let config = load_config(Some(&path)).unwrap();
+    assert_eq!(
+        config.models[0].source.local_dir.as_deref(),
+        Some(std::path::Path::new("weights"))
+    );
+    assert!(
+        config_to_toml(&config)
+            .unwrap()
+            .contains("local_dir = \"weights\"")
+    );
+    let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
+    let spec = resolved
+        .externals
+        .iter()
+        .find(|spec| spec.name == "onnx")
+        .unwrap();
+    let models: Vec<mesh_llm_plugin::models::ManagedModelConfig> =
+        serde_json::from_str(&spec.env[mesh_llm_plugin::models::CONFIG_ENV]).unwrap();
+    assert_eq!(models[0].source.local_dir, Some(dir.path().join("weights")));
+}
+
+#[test]
+fn unavailable_providers_fail_file_validation_and_snapshot_parsing() {
+    for provider in ["blobstore", "payments", "missing-provider"] {
+        let raw = format!("[[models]]\nmodel = 'owner/model@pin'\nprovider = '{provider}'\n");
+        assert!(
+            parse_config_toml(&raw)
+                .unwrap_err()
+                .to_string()
+                .contains("unavailable provider")
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, &raw).unwrap();
+        assert!(
+            validate_config_file(Some(&path))
+                .unwrap()
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("unavailable provider"))
+        );
+    }
+}

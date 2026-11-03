@@ -10,9 +10,11 @@ use std::time::Instant;
 
 use crate::frontend::util::openai_backend_error;
 
+mod dflash;
 mod standalone;
 mod suffix;
 
+pub use dflash::{DFLASH_STRATEGY, DFlashDraftAttachFailed, DFlashProposalConfig};
 pub(super) use standalone::{propose_configured_ngram_tokens, standalone_ngram_proposal_limit};
 use suffix::{SUFFIX_MIN_SEED_LEN, SuffixNgramProposer};
 
@@ -47,6 +49,9 @@ pub struct SpeculativeDecodeConfig {
     /// when it does not. Off unless stated.
     #[serde(default)]
     pub gate: crate::frontend::SpeculationGateSettings,
+    /// DFlash block draft attached to a single-stage target.
+    #[serde(default)]
+    pub dflash: Option<DFlashProposalConfig>,
 }
 
 fn default_draft_cache_type() -> String {
@@ -162,6 +167,7 @@ impl Default for SpeculativeDecodeConfig {
             draft_cache_type_k: default_draft_cache_type(),
             draft_cache_type_v: default_draft_cache_type(),
             gate: crate::frontend::SpeculationGateSettings::default(),
+            dflash: None,
         }
     }
 }
@@ -241,7 +247,7 @@ impl SpeculativeDecodeConfig {
                 "verify window runahead_max_tokens must not exceed {MAX_VERIFY_WINDOW_RUNAHEAD_TOKENS}"
             );
         }
-        Ok(())
+        dflash::validate_dflash_plan(self)
     }
 
     /// Adds the requested and effective strategy names to a telemetry attr map.
@@ -661,6 +667,9 @@ pub(super) struct InferenceSpeculativeStats {
     pub(super) adaptive_window_grows: usize,
     pub(super) adaptive_window_shrinks: usize,
     pub(super) adaptive_window_enabled: bool,
+    /// A split DFlash final stage's `(feature rows missing, draft context
+    /// resets)` for this session; `None` when not drafting with one.
+    pub(super) split_dflash_health: Option<(i64, i64)>,
 }
 
 /// Request-local, cache-based N-gram proposer. It mirrors only committed
@@ -909,6 +918,13 @@ impl InferenceSpeculativeStats {
             "verify_window_downstream_wait_ms".to_string(),
             json!(self.primary_verify_downstream_wait_ms),
         );
+        if let Some((rows_missing, resets)) = self.split_dflash_health {
+            timings.insert(
+                "dflash_feature_rows_missing".to_string(),
+                json!(rows_missing),
+            );
+            timings.insert("dflash_draft_context_resets".to_string(), json!(resets));
+        }
     }
 
     pub(super) fn observe_verify_decision(

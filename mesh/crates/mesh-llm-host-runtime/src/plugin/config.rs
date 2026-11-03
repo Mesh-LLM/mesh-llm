@@ -46,6 +46,13 @@ pub fn load_config(override_path: Option<&Path>) -> Result<MeshConfig> {
         MeshConfig::default()
     };
     apply_env_overrides(&mut config)?;
+    config.source_directory = Some(
+        std::path::absolute(&path)?
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf(),
+    );
+
     Ok(config)
 }
 
@@ -82,24 +89,46 @@ pub(crate) fn validate_config_with_installed_plugin_schemas(
     config: &MeshConfig,
     raw_toml: Option<&str>,
 ) -> Result<()> {
-    validate_config_with_plugin_schemas(config, raw_toml, strict_plugin_schema_availability)
+    validate_config_with_plugin_schemas(config, raw_toml, strict_plugin_schema_availability)?;
+    validate_model_providers(config)
+}
+
+fn validate_model_providers(config: &MeshConfig) -> Result<()> {
+    if config.models.iter().any(|model| model.provider.is_some()) {
+        resolve_plugins(
+            config,
+            PluginHostMode {
+                mesh_visibility: MeshVisibility::Private,
+            },
+        )?;
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_config_diagnostics_with_installed_plugin_schemas(
     config: &MeshConfig,
     raw_toml: Option<&str>,
 ) -> Vec<mesh_llm_config::ConfigDiagnostic> {
-    mesh_llm_config::validate_config_diagnostics_with_plugin_schemas(
+    let mut diagnostics = mesh_llm_config::validate_config_diagnostics_with_plugin_schemas(
         config,
         raw_toml,
         strict_plugin_schema_availability,
-    )
+    );
+    if let Err(error) = validate_model_providers(config) {
+        diagnostics.push(mesh_llm_config::ConfigDiagnostic::error(
+            mesh_llm_config::ConfigDiagnosticCode::InvalidValue,
+            mesh_llm_config::ConfigDiagnosticSource::Validation,
+            error.to_string(),
+        ));
+    }
+    diagnostics
 }
 
 pub(crate) fn mesh_requirements_config_to_runtime(
     config: &MeshRequirementsConfig,
 ) -> MeshRequirements {
     MeshRequirements {
+        require_signed_gossip: config.require_signed_gossip,
         node_version: NodeVersionBounds {
             min: config.min_node_version.clone(),
             max: config.max_node_version.clone(),
@@ -119,6 +148,7 @@ pub(crate) fn mesh_requirements_config_from_runtime(
     requirements: &MeshRequirements,
 ) -> MeshRequirementsConfig {
     MeshRequirementsConfig {
+        require_signed_gossip: requirements.require_signed_gossip,
         min_node_version: requirements.node_version.min.clone(),
         max_node_version: requirements.node_version.max.clone(),
         min_protocol_version: requirements.protocol_generation.min,
@@ -292,6 +322,19 @@ pub struct ExternalPluginSpec {
     pub installed_metadata: Option<mesh_llm_plugin_manager::InstalledPluginMetadata>,
 }
 
+impl ExternalPluginSpec {
+    /// Whether this entry launches a plugin process this host did not build in.
+    ///
+    /// `blobstore` and `payments` are appended to the resolved list whenever they
+    /// are enabled, and this executable runs both itself. Neither can serve
+    /// models in place of the native runtime, so the startup fallback must not
+    /// mistake them for an external provider.
+    pub fn serves_models_itself(&self) -> bool {
+        !matches!(self.name.as_str(), BLOBSTORE_PLUGIN_ID | PAYMENTS_PLUGIN_ID)
+            && !self.command.trim().is_empty()
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct PluginHostMode {
     pub mesh_visibility: MeshVisibility,
@@ -357,6 +400,46 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
         externals.push(in_process_builtin_spec(PAYMENTS_PLUGIN_ID));
     }
 
+    for spec in &mut externals {
+        let models = config
+            .models
+            .iter()
+            .filter_map(|entry| entry.managed_model_config())
+            .map(|mut model| {
+                if let Some(directory) = &model.source.local_dir
+                    && directory.is_relative()
+                {
+                    let origin = config.source_directory.clone().map(Ok).unwrap_or_else(|| {
+                        config_path(None).and_then(|path| {
+                            Ok(std::path::absolute(path)?
+                                .parent()
+                                .unwrap_or(Path::new("."))
+                                .to_path_buf())
+                        })
+                    });
+                    model.source.local_dir = Some(origin?.join(directory));
+                }
+                Ok(model)
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|entry| entry.provider == spec.name)
+            .collect::<Vec<_>>();
+        spec.env.insert(
+            mesh_llm_plugin::models::CONFIG_ENV.into(),
+            serde_json::to_string(&models)?,
+        );
+    }
+    if let Some(diagnostic) =
+        mesh_llm_config::managed_models::provider_diagnostics(config, |name| {
+            externals
+                .iter()
+                .any(|spec| spec.name == name && spec.serves_models_itself())
+        })
+        .first()
+    {
+        bail!("{}", diagnostic.message);
+    }
     Ok(ResolvedPlugins {
         externals,
         inactive,

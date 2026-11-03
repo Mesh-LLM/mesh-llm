@@ -964,6 +964,7 @@ mod tests {
                         entry.canonical_path.as_str(),
                         "version"
                             | "gpu.assignment"
+                            | "mesh_requirements.require_signed_gossip"
                             | "owner_control.advertise_addr"
                             | "runtime.debug"
                             | "runtime.listen_all"

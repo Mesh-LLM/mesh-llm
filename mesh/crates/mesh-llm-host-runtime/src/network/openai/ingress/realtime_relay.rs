@@ -80,7 +80,36 @@ pub(super) async fn relay(
         .await;
         return;
     };
-    let (model, target) = match choose_host(node, request, targets, requested_by.is_some()).await {
+    let mut targets = targets.clone();
+    let mut residency = None;
+    if let Some(requested) = query_model(&request.path)
+        && let Some(service) = node
+            .native_model_lifecycle
+            .get()
+            .filter(|service| service.manages(&requested))
+    {
+        let peers = node
+            .hosts_for_model(&requested)
+            .await
+            .into_iter()
+            .map(InferenceTarget::Remote)
+            .collect::<Vec<_>>();
+        let eligible = eligible_targets(node, &requested, REALTIME_PATH, &peers).await;
+        if requested_by.is_some() || eligible.is_empty() {
+            match service.acquire(&requested).await {
+                Ok(lease) => residency = lease,
+                Err(error) => {
+                    let _ = crate::network::openai::send_503(client, &error.to_string()).await;
+                    return;
+                }
+            }
+            targets
+                .targets
+                .extend(service.targets_for(&requested).targets);
+        }
+    }
+    let _residency = residency;
+    let (model, target) = match choose_host(node, request, &targets, requested_by.is_some()).await {
         Ok(chosen) => chosen,
         Err(message) => {
             let _ = crate::network::openai::send_503(client, &message).await;
@@ -98,6 +127,19 @@ async fn run_session(
     model: &str,
     target: InferenceTarget,
 ) {
+    let _instance = if let InferenceTarget::Local(port) = target {
+        match node.begin_runtime_instance_request(port).await {
+            Ok(guard) => guard,
+            Err(_) => {
+                let _ =
+                    crate::network::openai::send_503(client, "local realtime instance is draining")
+                        .await;
+                return;
+            }
+        }
+    } else {
+        None
+    };
     let opening = upgrade_request(raw, model);
     let started = Instant::now();
     tracing::info!(model, target = ?target, "realtime transcription session started");
@@ -154,7 +196,14 @@ async fn choose_host(
     assigned_by_peer: bool,
 ) -> Result<(String, InferenceTarget), String> {
     let model = match query_model(&request.path) {
-        Some(requested) => resolve_model(node, targets, &requested, assigned_by_peer).await,
+        Some(requested) => {
+            let requested = node
+                .native_model_lifecycle
+                .get()
+                .map(|service| service.execution_model(&requested))
+                .unwrap_or(requested);
+            resolve_model(node, targets, &requested, assigned_by_peer).await
+        }
         None => first_realtime_model(node, targets)
             .await
             .ok_or("no served model supports live transcription")?,

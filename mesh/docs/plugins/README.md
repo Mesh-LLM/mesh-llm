@@ -19,7 +19,8 @@ Plugin-specific documentation:
 - [Flash-MoE](flash-moe.md) - external OpenAI-compatible backend adapter for single-node SSD expert streaming
 - [Telemetry](telemetry.md) - OTLP metrics-only runtime telemetry and external metrics plugin notes
 - [Virtual models](virtual-models.md) - request-orchestrating models backed by a plugin and host-routed inference
-- [Document OCR](document-ocr.md) - provider contract and mesh routing for `/mesh/v1/documents/ocr`
+- [Managed provider models](managed-models.md) - model configuration, host-owned asset acquisition and provider residency policies
+- [Document OCR](document-ocr.md) - provider contract and mesh routing for `/mesh/v1/documents/ocr`, plus the sibling transcription, image/text similarity and depth task contracts
 - [Web UI exemplar](exemplars/web-ui/README.md) - source-owned maintainer sample for v1 plugin web UI projection, read directly by tests to catch drift
 
 The main goals are:

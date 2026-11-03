@@ -3,12 +3,7 @@ mod fixture;
 mod observed_driver;
 mod observed_fixture;
 mod pipe_fixture;
-#[expect(
-    dead_code,
-    reason = "shared process owner includes HTTPS APIs unused by this lifecycle driver"
-)]
-#[path = "../../src/process/mod.rs"]
-pub mod process;
+pub use process_supervision as process;
 mod readiness_fixture;
 mod retained_fixture;
 

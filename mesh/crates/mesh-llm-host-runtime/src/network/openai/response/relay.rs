@@ -29,6 +29,12 @@ fn reason_phrase(status_code: u16) -> &'static str {
         401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
+        405 => "Method Not Allowed",
+        406 => "Not Acceptable",
+        409 => "Conflict",
+        413 => "Payload Too Large",
+        415 => "Unsupported Media Type",
+        422 => "Unprocessable Content",
         429 => "Too Many Requests",
         500 => "Internal Server Error",
         501 => "Not Implemented",
@@ -65,6 +71,7 @@ pub(in crate::network::openai::response) fn remap_error_http_response(
             parsed.client_nonce.as_deref(),
             parsed.nonce_origin.as_deref(),
         );
+        parsed.served_model.append_to(&mut header);
     }
     header.push_str("\r\n");
     let mut response = header.into_bytes();
@@ -419,6 +426,27 @@ mod tests {
     }
 
     #[test]
+    fn test_remap_error_http_response_keeps_a_negotiation_refusal_a_client_error() {
+        // A task provider answers `406` when the caller asked for a body the
+        // route cannot produce. The status is forwarded untouched, but the
+        // body must not call it a server error: that tells the caller to retry
+        // a request only it can fix.
+        let upstream = b"HTTP/1.1 406 Not Acceptable\r\nContent-Type: application/json\r\nContent-Length: 74\r\n\r\n{\"error\":{\"message\":\"no supported response representation is acceptable\"}}";
+        let header_end = upstream
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .map(|idx| idx + 4)
+            .unwrap();
+        let remapped = remap_error_http_response(406, header_end, upstream)
+            .expect("a provider error envelope should be remapped");
+        let remapped_text = String::from_utf8(remapped).unwrap();
+
+        assert!(remapped_text.starts_with("HTTP/1.1 406 Not Acceptable\r\n"));
+        assert!(remapped_text.contains("\"type\":\"invalid_request_error\""));
+        assert!(!remapped_text.contains("\"type\":\"server_error\""));
+    }
+
+    #[test]
     fn test_remap_error_http_response_keeps_openai_error_passthrough() {
         let upstream = b"HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: 110\r\n\r\n{\"error\":{\"message\":\"bad request\",\"type\":\"invalid_request_error\",\"param\":null,\"code\":\"invalid_value\"}}";
         let header_end = upstream
@@ -462,6 +490,7 @@ mod tests {
                     content_type: Some("application/json".to_owned()),
                     client_nonce: None,
                     nonce_origin: None,
+                    served_model: Default::default(),
                 },
                 ResponseRetryPolicy::next_target_available(false),
                 None,
@@ -501,6 +530,7 @@ mod tests {
             chunked: false,
             client_nonce: None,
             nonce_origin: None,
+            served_model: Default::default(),
         };
         let probe_for = |header: &str| ResponseProbe {
             buffered: header.as_bytes().to_vec(),
@@ -522,6 +552,7 @@ mod tests {
             chunked: parsed.chunked,
             client_nonce: None,
             nonce_origin: None,
+            served_model: Default::default(),
         };
         let task = tokio::spawn(async move {
             let (client, _) = listener.accept().await.unwrap();
@@ -811,6 +842,7 @@ mod tests {
                     content_type: Some("application/json; charset=utf-8".to_owned()),
                     client_nonce: None,
                     nonce_origin: None,
+                    served_model: Default::default(),
                 },
                 ResponseRetryPolicy::next_target_available(false),
                 None,
@@ -910,6 +942,7 @@ mod tests {
             chunked: false,
             client_nonce: None,
             nonce_origin: None,
+            served_model: Default::default(),
         };
         let probe = ResponseProbe {
             buffered: header.as_bytes().to_vec(),

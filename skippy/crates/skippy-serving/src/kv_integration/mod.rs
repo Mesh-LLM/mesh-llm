@@ -178,6 +178,11 @@ pub struct KvStageIntegration {
     pub(crate) exact_byte_limits: ExactStateByteLimits,
     pub(crate) exact_state_record_worker: Arc<ExactStateRecordWorker>,
     pub(crate) snapshot_export_failures: Arc<AtomicU64>,
+    /// Records this stage skipped because the snapshot would not fit in host
+    /// memory. The first one emits the stage's only warning for it.
+    pub(crate) snapshot_headroom_skips: Arc<AtomicU64>,
+    /// Snapshot size probes that failed, leaving host-memory admission off.
+    pub(crate) snapshot_size_probe_failures: Arc<AtomicU64>,
     pub(crate) exact_state_records_queued: Arc<AtomicU64>,
     pub(crate) exact_state_records_dropped: Arc<AtomicU64>,
     pub(crate) exact_state_records_pending: Arc<AtomicUsize>,
@@ -1151,6 +1156,20 @@ impl KvStageIntegration {
                 "skippy.exact_cache.export_failures",
                 json!(
                     self.snapshot_export_failures
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                ),
+            ),
+            (
+                "skippy.exact_cache.headroom_skips",
+                json!(
+                    self.snapshot_headroom_skips
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                ),
+            ),
+            (
+                "skippy.exact_cache.size_probe_failures",
+                json!(
+                    self.snapshot_size_probe_failures
                         .load(std::sync::atomic::Ordering::Relaxed)
                 ),
             ),

@@ -221,7 +221,12 @@ fn materialize_package_v2_certification_stages(
                         return Ok(None);
                     };
                     let selected = match tensor.layer_ordinal {
-                        Some(layer) => layer >= range.layer_start && layer < range.layer_end,
+                        // Trailing MTP layers sit past the executable range
+                        // and stay with the terminal stage.
+                        Some(layer) => {
+                            layer >= range.layer_start
+                                && (layer < range.layer_end || range.include_output)
+                        }
                         None => {
                             let artifact = manifest
                                 .artifact_catalog

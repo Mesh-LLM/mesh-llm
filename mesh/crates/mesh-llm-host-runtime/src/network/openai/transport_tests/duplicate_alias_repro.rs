@@ -79,9 +79,23 @@ async fn duplicate_public_alias_executes_on_selected_host() {
     duplicate_host_request(PUBLIC, true, false, false, "").await;
 }
 
-#[tokio::test]
-async fn duplicate_internal_name_executes_on_selected_host() {
-    duplicate_host_request(INTERNAL, true, false, false, "").await;
+#[test]
+fn duplicate_internal_name_executes_on_selected_host() {
+    // Hold the actual peer-ingress exchange to CI's default stack budget even
+    // when the surrounding harness or daemon uses larger worker stacks.
+    std::thread::Builder::new()
+        .name("peer-ingress-2m".into())
+        .stack_size(2 * 1024 * 1024)
+        .spawn(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(duplicate_host_request(INTERNAL, true, false, false, ""));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[tokio::test]
