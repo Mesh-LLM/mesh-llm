@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
-type Caller = (String, String, String);
+pub(super) type Caller = (String, String, String);
 
 fn is_selector(value: &str) -> bool {
     value == "./.github/actions/select-ci-runners"
@@ -47,7 +47,7 @@ fn inspect_steps(file: &str, job: &str, steps: &workflows::Node, found: &mut Vec
     }
 }
 
-fn direct_workflow_callers(root: &Path) -> Vec<Caller> {
+pub(super) fn direct_workflow_callers(root: &Path) -> Vec<Caller> {
     let mut found = Vec::new();
     for entry in fs::read_dir(root.join(".github/workflows")).unwrap() {
         let entry = entry.unwrap();
