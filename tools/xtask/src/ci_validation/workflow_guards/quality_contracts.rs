@@ -178,6 +178,7 @@ fn recipe(source: &str, targets: &[String]) -> DynResult<()> {
     }
     invocation(commands[test], targets)?;
     reader_component(&commands, build, fixture, test)?;
+    component_tests(&commands, build, fixture)?;
     snapshot_component(source, &commands)
 }
 
@@ -204,8 +205,27 @@ fn reader_component(commands: &[&str], build: usize, fixture: usize, test: usize
             && index != build
             && index != test
             && !required.contains(line)
+            && !COMPONENT_TESTS.contains(line)
         {
             return Err("unexpected Cargo invocation in required contracts".into());
+        }
+    }
+    Ok(())
+}
+
+/// The narrow crates are contract-tested here, unfiltered, rather than in the
+/// Rust test matrix (`CONTRACT_TESTED_CRATES`). Supervision tests keep the
+/// single-threaded harness they had inside xtask.
+const COMPONENT_TESTS: [&str; 2] = [
+    "just with-lld cargo test --locked -p ci-controller",
+    "just with-lld cargo test --locked -p process-supervision -- --test-threads=1",
+];
+
+fn component_tests(commands: &[&str], build: usize, fixture: usize) -> DynResult<()> {
+    for expected in COMPONENT_TESTS {
+        let current = position(commands, expected)?;
+        if commands[current] != expected || current <= build || current >= fixture {
+            return Err(format!("{expected} must run in full after the inert build").into());
         }
     }
     Ok(())

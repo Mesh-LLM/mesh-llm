@@ -2,6 +2,18 @@ name: llama canary family pass
 on:
   workflow_call:
     inputs:
+      runner_labels_128:
+        description: JSON runner label array for 128-tier jobs, emitted by the caller's platform selection
+        type: string
+        required: true
+      runner_labels_256:
+        description: JSON runner label array for 256-tier jobs; always targets macOS runners
+        type: string
+        required: true
+      runner_profile:
+        description: prepare-automation profile matching the selected platform (preinstalled-macos or preinstalled-linux)
+        type: string
+        required: true
       source:
         type: string
         required: true
@@ -65,7 +77,7 @@ jobs:
   build:
     # These persistent machines only execute the protected main workflow.
     if: github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main'
-    runs-on: [self-hosted, macOS, ARM64, jy-managed, family-certify, accelerator-memory-128plus]
+    runs-on: ${{ fromJSON(inputs.runner_labels_128) }}
     timeout-minutes: 1430
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}
@@ -78,7 +90,6 @@ jobs:
     env:
       MESH_LLM_REQUIRE_SCCACHE: '1'
       CTEST_PARALLEL_LEVEL: '16'
-      LLAMA_STAGE_BACKEND: metal
       LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
       LLAMA_BUILD_DIR: ${{ github.workspace }}/.deps/llama-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
     steps:
@@ -98,13 +109,14 @@ jobs:
       - uses: ./.github/actions/setup-canary-runner
         with:
           require-agent: ${{ inputs.mode == 'repair-build' }}
+      - uses: ./.github/actions/select-canary-backend
       - name: Prepare protected controller automation
         uses: ./.github/actions/prepare-automation
         env:
           SCCACHE_GHA_ENABLED: 'false'
           SCCACHE_MULTILEVEL_CHAIN: disk
         with:
-          runner-profile: preinstalled-macos
+          runner-profile: ${{ inputs.runner_profile }}
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - uses: ./.github/actions/setup-canary-python
@@ -254,7 +266,7 @@ jobs:
   family:
     name: ${{ inputs.pass_id }} / ${{ matrix.families }}
     needs: build
-    runs-on: [self-hosted, macOS, ARM64, jy-managed, family-certify, "${{ matrix.memory_tier }}"]
+    runs-on: ${{ fromJSON(matrix.memory_tier == 'accelerator-memory-256plus' && inputs.runner_labels_256 || inputs.runner_labels_128) }}
     timeout-minutes: 780
     strategy:
       fail-fast: false
@@ -262,7 +274,6 @@ jobs:
       matrix: ${{ fromJSON(needs.build.outputs.matrix) }}
     env:
       CANARY_SOURCE_ROOT: ${{ github.workspace }}/canary-source
-      LLAMA_STAGE_BACKEND: metal
       FAMILY_BATTERY_RUN_ID: ${{ inputs.pass_id }}-${{ matrix.shard_index }}
       FAMILY_BATTERY_ARTIFACT_ROOT: ${{ github.workspace }}/target/canary-evidence-${{ github.run_id }}-${{ github.run_attempt }}
       FAMILY_BATTERY_MM_TEST_BIN: ${{ github.workspace }}/canary-source/target/debug/skippy-mm-test
@@ -292,13 +303,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-canary-runner
+      - uses: ./.github/actions/select-canary-backend
       - name: Prepare frozen controller automation for verify-only restore
         uses: ./.github/actions/prepare-automation
         env:
           SCCACHE_GHA_ENABLED: 'false'
           SCCACHE_MULTILEVEL_CHAIN: disk
         with:
-          runner-profile: preinstalled-macos
+          runner-profile: ${{ inputs.runner_profile }}
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - uses: ./.github/actions/use-canary-cache
@@ -434,7 +446,7 @@ jobs:
     name: ${{ inputs.pass_id }} infrastructure retry / ${{ matrix.families }}
     needs: [build, aggregate]
     if: ${{ !cancelled() && needs.aggregate.outputs.state == 'infrastructure_retryable' }}
-    runs-on: [self-hosted, macOS, ARM64, jy-managed, family-certify, "${{ matrix.memory_tier }}"]
+    runs-on: ${{ fromJSON(matrix.memory_tier == 'accelerator-memory-256plus' && inputs.runner_labels_256 || inputs.runner_labels_128) }}
     timeout-minutes: 780
     strategy:
       fail-fast: false
@@ -442,7 +454,6 @@ jobs:
       matrix: ${{ fromJSON(needs.aggregate.outputs.retry_matrix) }}
     env:
       CANARY_SOURCE_ROOT: ${{ github.workspace }}/canary-source
-      LLAMA_STAGE_BACKEND: metal
       FAMILY_BATTERY_RUN_ID: ${{ inputs.pass_id }}-infrastructure-retry-${{ matrix.shard_index }}
       FAMILY_BATTERY_ARTIFACT_ROOT: ${{ github.workspace }}/target/canary-evidence-${{ github.run_id }}-${{ github.run_attempt }}
       FAMILY_BATTERY_MM_TEST_BIN: ${{ github.workspace }}/canary-source/target/debug/skippy-mm-test
@@ -468,13 +479,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - uses: ./.github/actions/setup-canary-runner
+      - uses: ./.github/actions/select-canary-backend
       - name: Prepare frozen controller automation for retry cache admission
         uses: ./.github/actions/prepare-automation
         env:
           SCCACHE_GHA_ENABLED: 'false'
           SCCACHE_MULTILEVEL_CHAIN: disk
         with:
-          runner-profile: preinstalled-macos
+          runner-profile: ${{ inputs.runner_profile }}
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - uses: ./.github/actions/use-canary-cache

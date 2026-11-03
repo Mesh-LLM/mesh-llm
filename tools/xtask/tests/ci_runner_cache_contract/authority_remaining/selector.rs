@@ -73,7 +73,7 @@ fn authority_all_eligible_selector_inputs_are_bounded_and_mutations_refused() {
     assert_eq!(count, 19);
 }
 #[test]
-fn authority_protected_audit27_keep_exact_pin_and_central_runner_projection() {
+fn authority_protected_audits_keep_exact_pin_and_central_runner_projection() {
     let documents = workflows();
     let mut count = 0;
     for (name, workflow) in &documents {
@@ -118,7 +118,7 @@ fn authority_protected_audit27_keep_exact_pin_and_central_runner_projection() {
             }
         }
     }
-    assert_eq!(count, 27); // Protected retained component census; no hosted authenticity credit.
+    assert_eq!(count, 28); // Includes the standalone API job; no hosted authenticity credit.
 }
 #[test]
 fn authority_normal_quality_and_runtime_seed_jobs_keep_current_declared_trust_shape() {
@@ -128,6 +128,7 @@ fn authority_normal_quality_and_runtime_seed_jobs_keep_current_declared_trust_sh
         ("rust_fmt", "runner_4"),
         ("cargo_machete", "runner_4"),
         ("rust_clippy", "runner_8"),
+        ("skippy_cpp_api", "runner_8"),
         ("cli_docs_sync", "runner_4"),
     ] {
         let target = job(&documents, "ci-quality-slice.yml", name);

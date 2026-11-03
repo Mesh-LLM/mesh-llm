@@ -55,6 +55,7 @@ pub fn requires_trusted_local_access(method: &str, path: &str) -> bool {
             | ("POST", "/api/runtime/control/drain-model")
             | ("POST", "/api/runtime/control/kv-cache")
             | ("POST", "/api/runtime/kv-cache/prune")
+            | ("GET", "/api/runtime/control/owner-control-token")
             | ("POST", "/api/runtime/config/validate")
             | ("POST", "/api/runtime/pick-directory")
             | ("POST", "/api/runtime/mesh-guardrails")
@@ -67,6 +68,41 @@ pub fn requires_trusted_local_access(method: &str, path: &str) -> bool {
             || path.starts_with("/api/runtime/models/")
             || path.starts_with("/api/runtime/instances/")
             || path.starts_with("/api/model-interests/")))
+}
+
+/// Cache mutations whose body must arrive as exactly the JSON media type.
+///
+/// The trusted-local gate accepts any loopback origin, so a page served by
+/// another local port is already a trusted caller. The media type is what stops
+/// it: a browser sends a cross-origin request without a CORS preflight only for
+/// `application/x-www-form-urlencoded`, `multipart/form-data`, and
+/// `text/plain`, so requiring `application/json` forces the preflight the
+/// management listener never answers. Classified at the server boundary like
+/// `requires_trusted_local_access`, so a future cache route is covered by this
+/// table rather than by the handler that happens to exist today.
+pub fn requires_json_content_type(method: &str, path: &str) -> bool {
+    matches!(
+        (method, path),
+        ("POST", "/api/runtime/control/kv-cache")
+            | ("POST", "/api/runtime/kv-cache/prune")
+            | ("DELETE", "/api/runtime/kv-cache")
+    )
+}
+
+/// Whether a management request declares the JSON media type. A missing or
+/// unparseable `Content-Type` fails closed; an optional parameter such as
+/// `charset` is still the same media type, while a lookalike token is not.
+pub fn request_content_type_is_json(raw_request: &[u8]) -> Result<bool, HeaderParseError> {
+    Ok(request_header(raw_request, "content-type")?.is_some_and(is_json_media_type))
+}
+
+fn is_json_media_type(content_type: &str) -> bool {
+    content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .eq_ignore_ascii_case("application/json")
 }
 
 pub fn is_trusted_local_request(
@@ -90,6 +126,24 @@ pub fn request_origin(raw_request: &[u8]) -> Result<Option<&str>, HeaderParseErr
 
 pub fn request_host(raw_request: &[u8]) -> Result<Option<&str>, HeaderParseError> {
     request_header(raw_request, "host")
+}
+
+/// Returns the bearer token of the `Authorization` header when present.
+///
+/// Only the `Bearer <token>` scheme is recognized; any other scheme (or a
+/// malformed value) yields `None` so callers treat it as a missing credential.
+pub fn request_authorization_bearer(raw_request: &[u8]) -> Result<Option<&str>, HeaderParseError> {
+    let Some(value) = request_header(raw_request, "authorization")? else {
+        return Ok(None);
+    };
+    let Some(token) = value
+        .get(7..)
+        .filter(|_| value[..7].eq_ignore_ascii_case("Bearer "))
+    else {
+        return Ok(None);
+    };
+    let token = token.trim();
+    Ok((!token.is_empty()).then_some(token))
 }
 
 fn request_header<'a>(
@@ -180,6 +234,7 @@ mod tests {
             ("POST", "/api/runtime/control/kv-cache"),
             ("POST", "/api/runtime/kv-cache/prune"),
             ("DELETE", "/api/runtime/kv-cache"),
+            ("GET", "/api/runtime/control/owner-control-token"),
         ] {
             assert!(
                 requires_trusted_local_access(method, path),
@@ -202,6 +257,47 @@ mod tests {
                 "GET {path} should remain readable"
             );
         }
+    }
+
+    #[test]
+    fn kv_cache_mutations_require_the_json_media_type() {
+        for (method, path) in [
+            ("POST", "/api/runtime/control/kv-cache"),
+            ("POST", "/api/runtime/kv-cache/prune"),
+            ("DELETE", "/api/runtime/kv-cache"),
+        ] {
+            assert!(
+                requires_json_content_type(method, path),
+                "{method} {path} must require application/json"
+            );
+        }
+        assert!(!requires_json_content_type("GET", "/api/runtime/kv-cache"));
+        assert!(!requires_json_content_type("POST", "/api/runtime/models"));
+    }
+
+    #[test]
+    fn only_the_json_media_type_counts_as_json() {
+        let request = |content_type: &str| {
+            request_content_type_is_json(
+                format!(
+                    "POST /api/runtime/kv-cache/prune HTTP/1.1\r\nHost: localhost\r\nContent-Type: {content_type}\r\nContent-Length: 0\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+        };
+        assert_eq!(request("application/json"), Ok(true));
+        assert_eq!(request("Application/JSON; charset=utf-8"), Ok(true));
+        assert_eq!(request("application/json;charset=UTF-8"), Ok(true));
+        assert_eq!(request("text/plain"), Ok(false));
+        assert_eq!(request("application/x-www-form-urlencoded"), Ok(false));
+        assert_eq!(request("multipart/form-data"), Ok(false));
+        assert_eq!(request("application/jsonp"), Ok(false));
+        assert_eq!(
+            request_content_type_is_json(
+                b"DELETE /api/runtime/kv-cache HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n"
+            ),
+            Ok(false)
+        );
     }
 
     #[test]
@@ -230,6 +326,20 @@ mod tests {
             None,
             Some("attacker.example")
         ));
+    }
+
+    #[test]
+    fn authorization_bearer_token_is_extracted() {
+        let request = b"POST /api/runtime/control/apply-config HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer tok-123\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(request_authorization_bearer(request), Ok(Some("tok-123")));
+        let lowercase = b"POST /x HTTP/1.1\r\nHost: localhost\r\nauthorization: bearer tok-456\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(request_authorization_bearer(lowercase), Ok(Some("tok-456")));
+        let other_scheme = b"POST /x HTTP/1.1\r\nHost: localhost\r\nAuthorization: Basic abc\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(request_authorization_bearer(other_scheme), Ok(None));
+        let absent = b"POST /x HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(request_authorization_bearer(absent), Ok(None));
+        let empty = b"POST /x HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer \r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(request_authorization_bearer(empty), Ok(None));
     }
 
     #[test]

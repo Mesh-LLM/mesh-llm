@@ -1,0 +1,15 @@
+{
+  "spec": {
+    "name": "Grammar sampler — retain superseded R2 screen",
+    "description": "Archive completed raw cells from the intentionally canceled revision-2 diagnostic. No inference, timing or qualification. Revision 3 uses fresh source, matched instrumentation and all 30 new qualification blocks.",
+    "target": {"executor": "lab", "nodes": ["macmini-gq7vhw"], "os": "macos"},
+    "runtime": {
+      "model_package": {"ref": "hf:unsloth/Qwen3.5-9B-GGUF@3885219b6810b007914f3a7950a8d1b469d598a5", "egress": "lab_only"},
+      "command": "set -eu\ncd '/Users/gi/Library/Application Support/jianyang/work/run_jd9p57k5k5vgppr/workspace/candidate'\ntest \"$(git rev-parse HEAD)\" = 3c74374b1ed0209ade737815ca45e0b58db7a8eb\nmkdir -p \"$JIANYANG_ARTIFACT_DIR\"\nFOUND=0\nfor directory in .deps/grammar-development.*; do\n  if test -d \"$directory\"; then\n    test \"$FOUND\" = 0\n    cp \"$directory/observations.jsonl\" \"$JIANYANG_ARTIFACT_DIR/superseded-r2-observations.jsonl\"\n    cp \"$directory/admitted-fixtures.json\" \"$JIANYANG_ARTIFACT_DIR/superseded-r2-fixtures.json\"\n    FOUND=1\n  fi\ndone\ntest \"$FOUND\" = 1\nshasum -a 256 \"$JIANYANG_ARTIFACT_DIR/\"* > /tmp/grammar-r2-retention-$$.txt\ncp /tmp/grammar-r2-retention-$$.txt \"$JIANYANG_ARTIFACT_DIR/artifact-hashes.txt\"\nrm /tmp/grammar-r2-retention-$$.txt\nprintf 'Retained superseded R2 raw evidence; no metrics accepted.\\n'"
+    },
+    "harness": {"name": "custom", "version": "adhoc", "trace": {"kind": "file", "ref": "superseded-r2-screen-evidence"}, "seed": 73, "warmup_requests": 0, "concurrency": [1], "request_count": 1},
+    "budget": {"max_usd": 0, "max_duration_s": 300, "grace_s": 60},
+    "retries": 0,
+    "labels": {"campaign": "max-grammar-sampling-abc-20261028", "phase": "retain-superseded-r2"}
+  }
+}

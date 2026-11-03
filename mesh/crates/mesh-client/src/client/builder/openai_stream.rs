@@ -1,6 +1,6 @@
 use super::{
     ALPN_V1, ClientConfig, ClientTransport, STREAM_TUNNEL_HTTP, http_post_request,
-    relay_mode_from_endpoint_addr, socket_addr,
+    peer_connections::PeerObservation, relay_mode_from_endpoint_addr, socket_addr,
 };
 use crate::events::{OpenAiStreamEvent, OpenAiStreamListener};
 use iroh::Endpoint;
@@ -67,8 +67,22 @@ struct SseEvent {
     raw: String,
 }
 
+pub(super) struct StreamContext<'a> {
+    config: &'a ClientConfig,
+    observation: PeerObservation,
+}
+
+impl<'a> StreamContext<'a> {
+    pub(super) fn new(config: &'a ClientConfig, observation: PeerObservation) -> Self {
+        Self {
+            config,
+            observation,
+        }
+    }
+}
+
 pub(super) async fn run(
-    config: &ClientConfig,
+    context: StreamContext<'_>,
     path: &str,
     body_json: String,
     request_id: &str,
@@ -76,6 +90,10 @@ pub(super) async fn run(
     cancel_notify: Arc<Notify>,
     listener: Arc<dyn OpenAiStreamListener>,
 ) -> Result<(), StreamFailure> {
+    let StreamContext {
+        config,
+        observation,
+    } = context;
     let request = match &config.transport {
         ClientTransport::DirectMesh => {
             http_post_request(path, "mesh.local", &config.user_agent, body_json)
@@ -92,6 +110,7 @@ pub(super) async fn run(
         ClientTransport::DirectMesh => {
             stream_direct_mesh(
                 config,
+                observation,
                 request,
                 request_id,
                 cancelled,
@@ -103,6 +122,7 @@ pub(super) async fn run(
         ClientTransport::OpenAiHttp { api_base_url } => {
             stream_http(
                 api_base_url,
+                &observation,
                 request,
                 request_id,
                 cancelled,
@@ -116,6 +136,7 @@ pub(super) async fn run(
 
 async fn stream_direct_mesh(
     config: &ClientConfig,
+    observation: PeerObservation,
     request: String,
     request_id: &str,
     cancelled: Arc<AtomicBool>,
@@ -124,6 +145,7 @@ async fn stream_direct_mesh(
 ) -> Result<(), StreamFailure> {
     let addr = super::decode_invite_endpoint_addr(config.invite_token.as_str())
         .map_err(StreamFailure::transport)?;
+    let peer = addr.id.to_string();
     let mut builder = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(iroh::SecretKey::generate())
         .alpns(vec![ALPN_V1.to_vec()])
@@ -149,8 +171,15 @@ async fn stream_direct_mesh(
             cancel_notify.as_ref(),
         )
         .await?
-        .map_err(|_| StreamFailure::transport("connect mesh endpoint: timed out"))?
-        .map_err(|error| StreamFailure::transport(format!("connect mesh endpoint: {error}")))?;
+        .map_err(|_| {
+            observation.record_failure(&peer);
+            StreamFailure::transport("connect mesh endpoint: timed out")
+        })?
+        .map_err(|error| {
+            observation.record_failure(&peer);
+            StreamFailure::transport(format!("connect mesh endpoint: {error}"))
+        })?;
+        observation.record_established(&peer);
         let (mut send, mut recv) = race_cancel(
             connection.open_bi(),
             cancelled.as_ref(),
@@ -190,6 +219,7 @@ async fn stream_direct_mesh(
 
 async fn stream_http(
     api_base_url: &str,
+    observation: &PeerObservation,
     request: String,
     request_id: &str,
     cancelled: Arc<AtomicBool>,
@@ -197,13 +227,18 @@ async fn stream_http(
     listener: Arc<dyn OpenAiStreamListener>,
 ) -> Result<(), StreamFailure> {
     let address = socket_addr(api_base_url).map_err(StreamFailure::transport)?;
+    let peer = super::http_peer(&address);
     let mut stream = race_cancel(
         TcpStream::connect(&address),
         cancelled.as_ref(),
         cancel_notify.as_ref(),
     )
     .await?
-    .map_err(|error| StreamFailure::transport(format!("connect {address}: {error}")))?;
+    .map_err(|error| {
+        observation.record_failure(&peer);
+        StreamFailure::transport(format!("connect {address}: {error}"))
+    })?;
+    observation.record_established(&peer);
     race_cancel(
         stream.write_all(request.as_bytes()),
         cancelled.as_ref(),

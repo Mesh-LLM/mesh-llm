@@ -782,7 +782,7 @@ run_mmproj_smoke() {
       SKIPPY_MM_MAX_TOKENS=256 \
       SKIPPY_MM_N_GPU_LAYERS=999 \
       SKIPPY_MM_SPLIT_LAYER="$split_layer" \
-      LLAMA_STAGE_BACKEND=metal \
+      LLAMA_STAGE_BACKEND="${LLAMA_STAGE_BACKEND:-metal}" \
       "${smoke_command[@]}" \
       >"$log_path" 2>&1 || exit_code=$?
   if (( exit_code != 0 )); then

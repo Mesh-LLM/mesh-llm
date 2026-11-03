@@ -8,6 +8,7 @@ const RUNTIME_MODEL_FIT_HEADROOM_DENOMINATOR: u64 = 10;
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) enum RuntimeCapacityPool {
     Node,
+    HostRam,
     PinnedGpu(String),
 }
 
@@ -15,6 +16,7 @@ impl fmt::Display for RuntimeCapacityPool {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Node => f.write_str("node"),
+            Self::HostRam => f.write_str("host RAM"),
             Self::PinnedGpu(stable_id) => write!(f, "pinned GPU {stable_id}"),
         }
     }
@@ -24,8 +26,15 @@ impl RuntimeCapacityPool {
     fn overlaps(&self, other: &Self) -> bool {
         // Node-wide local loads are not pinned to a backend device, so they
         // share the physical placement domain with every pinned GPU pool.
+        // HostRam is selected only when safe system RAM is separate from the
+        // node's accelerator budget; CPU-only hosts keep CPU Laya in Node.
         // Pinned GPU pools remain independent from each other.
-        self == other || matches!((self, other), (Self::Node, _) | (_, Self::Node))
+        self == other
+            || (matches!((self, other), (Self::Node, _) | (_, Self::Node))
+                && !matches!(
+                    (self, other),
+                    (Self::Node, Self::HostRam) | (Self::HostRam, Self::Node)
+                ))
     }
 }
 
@@ -450,6 +459,118 @@ mod tests {
         assert_eq!(err.reserved_bytes, 1_900);
         assert_eq!(err.available_bytes(), 100);
         assert_eq!(err.shortfall_bytes(), 800);
+    }
+
+    #[test]
+    fn cpu_laya_does_not_consume_pinned_gpu_capacity() {
+        let ledger = RuntimeCapacityLedger::default();
+        let _gpu_model = ledger
+            .reserve(pooled_request(
+                "runtime-gpu",
+                "Qwen",
+                RuntimeCapacityPool::PinnedGpu("gpu-a".to_string()),
+                1_000,
+                900,
+            ))
+            .expect("GPU model should reserve its device capacity");
+
+        let laya_meta = crate::models::gguf::GgufCompactMeta {
+            architecture: "laya".to_string(),
+            ..Default::default()
+        };
+        let laya = ledger
+            .reserve(
+                crate::runtime::runtime_registry::runtime_capacity_request_for_model(
+                    "runtime-laya",
+                    "Laya",
+                    crate::runtime::runtime_registry::RuntimeCapacityTarget {
+                        compact_meta: Some(&laya_meta),
+                        pinned_gpu: None,
+                        device_override: None,
+                        node_capacity_bytes: 1_000,
+                        host_ram_capacity_bytes: 1_000,
+                    },
+                    900,
+                ),
+            )
+            .expect("CPU Laya should use host memory, not GPU capacity");
+
+        assert_eq!(
+            ledger.used_bytes(&RuntimeCapacityPool::HostRam),
+            runtime_model_required_bytes(900)
+        );
+        assert_eq!(laya.capacity_budget_bytes(), 1_000);
+    }
+
+    #[test]
+    fn cpu_only_laya_shares_node_ram_capacity() {
+        let ledger = RuntimeCapacityLedger::default();
+        let _cpu_model = ledger
+            .reserve(pooled_request(
+                "runtime-cpu-model",
+                "Qwen",
+                RuntimeCapacityPool::Node,
+                1_000,
+                900,
+            ))
+            .expect("first CPU model should reserve node RAM");
+        let laya_meta = crate::models::gguf::GgufCompactMeta {
+            architecture: "laya".to_string(),
+            ..Default::default()
+        };
+        let request = crate::runtime::runtime_registry::runtime_capacity_request_for_model(
+            "runtime-laya",
+            "Laya",
+            crate::runtime::runtime_registry::RuntimeCapacityTarget {
+                compact_meta: Some(&laya_meta),
+                pinned_gpu: None,
+                device_override: Some("CPU"),
+                node_capacity_bytes: 1_000,
+                // A CPU-only host's RAM is represented by its Node pool.
+                host_ram_capacity_bytes: 0,
+            },
+            100,
+        );
+
+        assert_eq!(request.pool, RuntimeCapacityPool::Node);
+        let error = ledger
+            .reserve(request)
+            .expect_err("CPU Laya must share RAM capacity with other CPU models");
+
+        assert_eq!(error.pool, RuntimeCapacityPool::Node);
+        assert_eq!(error.capacity_bytes, 1_000);
+        assert_eq!(error.reserved_bytes, 900);
+        assert_eq!(error.required_bytes, runtime_model_required_bytes(100));
+    }
+
+    #[test]
+    fn cpu_laya_is_limited_by_host_ram_capacity() {
+        let ledger = RuntimeCapacityLedger::default();
+        let laya_meta = crate::models::gguf::GgufCompactMeta {
+            architecture: "laya".to_string(),
+            ..Default::default()
+        };
+        let request = crate::runtime::runtime_registry::runtime_capacity_request_for_model(
+            "runtime-laya",
+            "Laya",
+            crate::runtime::runtime_registry::RuntimeCapacityTarget {
+                compact_meta: Some(&laya_meta),
+                pinned_gpu: None,
+                device_override: None,
+                node_capacity_bytes: 1_000,
+                host_ram_capacity_bytes: 800,
+            },
+            900,
+        );
+
+        let error = ledger
+            .reserve(request)
+            .expect_err("CPU Laya should not borrow the accelerator fit budget");
+
+        assert_eq!(error.pool, RuntimeCapacityPool::HostRam);
+        assert_eq!(error.capacity_bytes, 800);
+        assert_eq!(error.reserved_bytes, 0);
+        assert_eq!(error.required_bytes, runtime_model_required_bytes(900));
     }
 
     #[test]

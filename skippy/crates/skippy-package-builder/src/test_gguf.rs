@@ -90,6 +90,9 @@ fn write_fixture(
     split: Option<(u16, u16, u64)>,
     include_alignment: bool,
 ) {
+    // Every test that writes this fixture reads it back through the native
+    // runtime.
+    skippy_runtime::test_support::require_native_runtime();
     let mut bytes = b"GGUF".to_vec();
     bytes.extend_from_slice(&3_u32.to_le_bytes());
     bytes.extend_from_slice(&(tensors.len() as u64).to_le_bytes());

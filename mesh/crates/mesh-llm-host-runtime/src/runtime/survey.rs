@@ -9,7 +9,10 @@ use opentelemetry::KeyValue;
 use opentelemetry::metrics::{Counter, Gauge, Histogram, MeterProvider as _};
 use opentelemetry_otlp::{Protocol, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::Resource;
-use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider};
+use opentelemetry_sdk::error::{OTelSdkError, OTelSdkResult};
+use opentelemetry_sdk::metrics::data::ResourceMetrics;
+use opentelemetry_sdk::metrics::exporter::PushMetricExporter;
+use opentelemetry_sdk::metrics::{PeriodicReader, SdkMeterProvider, Temporality};
 use sha2::{Digest, Sha256};
 use skippy_inference_api::{GuardrailMode, GuardrailTelemetrySink};
 use std::collections::VecDeque;
@@ -17,6 +20,37 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::Notify;
+
+/// Explicit histogram boundaries. The SDK defaults end at 10,000, which would
+/// crush this telemetry (30-minute model launches, multi-day uptimes, and
+/// context sizes well past 10k tokens) into the top bucket.
+const TOKEN_HISTOGRAM_BOUNDS: [f64; 10] = [
+    1.0, 10.0, 100.0, 1_000.0, 4_096.0, 16_384.0, 32_768.0, 65_536.0, 131_072.0, 262_144.0,
+];
+const LAUNCH_DURATION_MS_HISTOGRAM_BOUNDS: [f64; 7] = [
+    100.0,
+    500.0,
+    1_000.0,
+    5_000.0,
+    15_000.0,
+    60_000.0,
+    1_800_000.0,
+];
+const UPTIME_S_HISTOGRAM_BOUNDS: [f64; 7] = [
+    60.0,
+    600.0,
+    3_600.0,
+    21_600.0,
+    86_400.0,
+    604_800.0,
+    2_592_000.0,
+];
+const REQUEST_DURATION_MS_HISTOGRAM_BOUNDS: [f64; 10] = [
+    1.0, 10.0, 50.0, 250.0, 1_000.0, 5_000.0, 15_000.0, 60_000.0, 300_000.0, 600_000.0,
+];
+
+/// Hook invoked with the rendered error text when an OTLP export attempt fails.
+type ExportFailureReporter = Arc<dyn Fn(&str) + Send + Sync>;
 
 mod logging_metrics;
 
@@ -34,6 +68,10 @@ mod survey_exact_head_tests;
 #[cfg(test)]
 #[path = "survey_prompt_shape_tests.rs"]
 mod survey_prompt_shape_tests;
+
+#[cfg(test)]
+#[path = "survey_otlp_contract_tests.rs"]
+mod survey_otlp_contract_tests;
 
 const DEFAULT_SERVICE_NAME: &str = "mesh-llm";
 const DEFAULT_EXPORT_INTERVAL_SECS: u64 = 15;
@@ -414,6 +452,7 @@ impl RoutingTelemetrySink for SurveyTelemetry {
         model: Option<&str>,
         target: &AttemptTarget,
         outcome: AttemptOutcome,
+        attempt_ms: f64,
     ) {
         let Some(inner) = self.inner.as_ref() else {
             return;
@@ -425,6 +464,7 @@ impl RoutingTelemetrySink for SurveyTelemetry {
                 outcome,
                 inner.source.clone(),
             ),
+            attempt_ms,
         });
     }
 
@@ -1000,6 +1040,7 @@ enum SurveyEvent {
     },
     RouteAttempt {
         attrs: RouteAttemptAttributes,
+        attempt_ms: f64,
     },
     PromptShape {
         attrs: PromptShapeAttributes,
@@ -1109,32 +1150,142 @@ struct SurveyRecorder {
     logging_artifact_capture_total: Counter<u64>,
     launch_duration_ms: Histogram<f64>,
     uptime_s: Histogram<f64>,
+    request_duration_ms: Histogram<f64>,
     loaded_count: u64,
+    on_export_failure: Option<ExportFailureReporter>,
+}
+
+/// OTLP exporter wrapper that turns silent export failures into warn logs.
+/// The SDK only reports export errors when its `internal-logs` feature is
+/// enabled, which would leak SDK internals into the node log; this wrapper
+/// keeps the message in product code and rate-limits it: the first failure,
+/// then at most once per interval, plus one line on recovery.
+struct ReportingMetricExporter {
+    inner: opentelemetry_otlp::MetricExporter,
+    state: std::sync::Mutex<ReportState>,
+    on_export_failure: Option<ExportFailureReporter>,
+}
+
+const EXPORT_FAILURE_LOG_INTERVAL: Duration = Duration::from_secs(300);
+
+#[derive(Default)]
+struct ReportState {
+    had_failure: bool,
+    last_reported: Option<Instant>,
+}
+
+impl ReportingMetricExporter {
+    fn report_failure(&self, err: &OTelSdkError) {
+        let message = format!("OTLP metrics export failed: {err:#}");
+        let mut state = self.state.lock().unwrap();
+        state.had_failure = true;
+        let now = Instant::now();
+        if state
+            .last_reported
+            .is_none_or(|previous| now.duration_since(previous) >= EXPORT_FAILURE_LOG_INTERVAL)
+        {
+            state.last_reported = Some(now);
+            drop(state);
+            tracing::warn!(
+                error = %message,
+                "telemetry metrics export failed; the interval's metrics are dropped"
+            );
+            if let Some(report) = &self.on_export_failure {
+                report(&message);
+            }
+        }
+    }
+
+    fn report_recovery(&self) {
+        let mut state = self.state.lock().unwrap();
+        if state.had_failure {
+            state.had_failure = false;
+            state.last_reported = None;
+            drop(state);
+            tracing::info!("telemetry metrics export recovered");
+        }
+    }
+}
+
+impl PushMetricExporter for ReportingMetricExporter {
+    fn export(
+        &self,
+        metrics: &ResourceMetrics,
+    ) -> impl std::future::Future<Output = OTelSdkResult> + Send {
+        let inner = &self.inner;
+        let reporter = self;
+        async move {
+            match inner.export(metrics).await {
+                Ok(()) => {
+                    reporter.report_recovery();
+                    Ok(())
+                }
+                Err(err) => {
+                    reporter.report_failure(&err);
+                    Err(err)
+                }
+            }
+        }
+    }
+
+    fn force_flush(&self) -> OTelSdkResult {
+        self.inner.force_flush()
+    }
+
+    fn shutdown_with_timeout(&self, timeout: Duration) -> OTelSdkResult {
+        self.inner.shutdown_with_timeout(timeout)
+    }
+
+    fn temporality(&self) -> Temporality {
+        self.inner.temporality()
+    }
+}
+
+/// Build the OTLP resource identity: the service name/version plus a
+/// per-process `service.instance.id` so two nodes sharing a service name
+/// stay separable in one collector stream.
+pub(crate) fn telemetry_resource(service_name: &str) -> Resource {
+    Resource::builder()
+        .with_service_name(service_name.to_string())
+        .with_attribute(KeyValue::new("service.version", crate::VERSION))
+        .with_attribute(KeyValue::new(
+            "service.instance.id",
+            uuid::Uuid::new_v4().to_string(),
+        ))
+        .build()
 }
 
 impl SurveyRecorder {
     fn otlp(settings: &SurveySettings) -> Result<Self> {
-        let exporter = opentelemetry_otlp::MetricExporter::builder()
-            .with_http()
-            .with_protocol(Protocol::HttpBinary)
-            .with_endpoint(settings.endpoint.clone())
-            .with_timeout(Duration::from_secs(10))
-            .with_headers(settings.headers.clone())
-            .build()
-            .context("build OTLP metrics exporter")?;
+        Self::otlp_with_hook(settings, None)
+    }
+
+    pub(crate) fn otlp_with_hook(
+        settings: &SurveySettings,
+        on_export_failure: Option<ExportFailureReporter>,
+    ) -> Result<Self> {
+        let exporter = ReportingMetricExporter {
+            inner: opentelemetry_otlp::MetricExporter::builder()
+                .with_http()
+                .with_protocol(Protocol::HttpBinary)
+                .with_endpoint(settings.endpoint.clone())
+                .with_timeout(Duration::from_secs(10))
+                .with_headers(settings.headers.clone())
+                .build()
+                .context("build OTLP metrics exporter")?,
+            state: std::sync::Mutex::new(ReportState::default()),
+            on_export_failure: on_export_failure.clone(),
+        };
         let reader = PeriodicReader::builder(exporter)
             .with_interval(settings.export_interval)
             .build();
         let provider = SdkMeterProvider::builder()
-            .with_resource(
-                Resource::builder()
-                    .with_service_name(settings.service_name.clone())
-                    .with_attribute(KeyValue::new("service.version", crate::VERSION))
-                    .build(),
-            )
+            .with_resource(telemetry_resource(&settings.service_name))
             .with_reader(reader)
             .build();
-        Ok(Self::new(provider))
+        let mut recorder = Self::new(provider);
+        recorder.on_export_failure = on_export_failure;
+        Ok(recorder)
     }
 
     fn new(provider: SdkMeterProvider) -> Self {
@@ -1188,11 +1339,13 @@ impl SurveyRecorder {
                 .u64_histogram("mesh_llm_prompt_tokens")
                 .with_description("Observed prompt token count for completed requests.")
                 .with_unit("{token}")
+                .with_boundaries(TOKEN_HISTOGRAM_BOUNDS.to_vec())
                 .build(),
             completion_tokens: meter
                 .u64_histogram("mesh_llm_completion_tokens")
                 .with_description("Observed completion token count for completed requests.")
                 .with_unit("{token}")
+                .with_boundaries(TOKEN_HISTOGRAM_BOUNDS.to_vec())
                 .build(),
             guardrail_decision_total: meter
                 .u64_counter("mesh_llm_guardrail_decision_total")
@@ -1266,13 +1419,24 @@ impl SurveyRecorder {
                 .f64_histogram("mesh_llm_model_launch_duration_ms")
                 .with_description("Local model launch duration.")
                 .with_unit("ms")
+                .with_boundaries(LAUNCH_DURATION_MS_HISTOGRAM_BOUNDS.to_vec())
                 .build(),
             uptime_s: meter
                 .f64_histogram("mesh_llm_model_uptime_s")
                 .with_description("Local model uptime before unload or unexpected exit.")
                 .with_unit("s")
+                .with_boundaries(UPTIME_S_HISTOGRAM_BOUNDS.to_vec())
+                .build(),
+            request_duration_ms: meter
+                .f64_histogram("mesh_llm_model_request_duration_ms")
+                .with_description(
+                    "Model request duration per routing attempt, by bounded route labels.",
+                )
+                .with_unit("ms")
+                .with_boundaries(REQUEST_DURATION_MS_HISTOGRAM_BOUNDS.to_vec())
                 .build(),
             loaded_count: 0,
+            on_export_failure: None,
         }
     }
 
@@ -1323,9 +1487,10 @@ impl SurveyRecorder {
                 let kv = attrs.key_values();
                 self.model_request_total.add(1, &kv);
             }
-            SurveyEvent::RouteAttempt { attrs } => {
+            SurveyEvent::RouteAttempt { attrs, attempt_ms } => {
                 let kv = attrs.key_values();
                 self.route_attempt_total.add(1, &kv);
+                self.request_duration_ms.record(attempt_ms, &kv);
             }
             SurveyEvent::PromptShape {
                 attrs,

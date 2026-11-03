@@ -7,7 +7,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[cfg(target_os = "macos")]
 const ROOT: &str = "/Library/Application Support/MeshLLM/locks";
+// Linux runners share the lock semantics (owner-only, no group/world write) under
+// a FHS root; fleet provisioning creates the directory for the canary user.
+#[cfg(target_os = "linux")]
+const ROOT: &str = "/var/lib/meshllm/locks";
+#[cfg(not(any(target_os = "macos", target_os = "linux")))]
+const ROOT: &str = "/var/lib/meshllm/locks";
 const NAME: &str = "mesh-canary-family-host.lock";
 
 pub(super) fn acquire(deadline: Instant) -> DynResult<(File, bool, Duration)> {
@@ -82,7 +89,12 @@ pub(super) fn open(root: &Path, uid: u32) -> DynResult<File> {
         )
     };
     if fd < 0 {
-        return Err(std::io::Error::last_os_error().into());
+        let error = std::io::Error::last_os_error();
+        return Err(format!(
+            "family host lock directory {root:?} is not available: {error}; \
+             provision it for the canary user with mode 0755"
+        )
+        .into());
     }
     // SAFETY: successful openat returned a new uniquely owned descriptor.
     let file = unsafe { File::from_raw_fd(fd) };
@@ -165,6 +177,9 @@ mod contention_tests {
         let path = directory.path().join(NAME);
         fs::set_permissions(&path, fs::Permissions::from_mode(0o660)).unwrap();
         assert!(open(directory.path(), uid).is_err());
+        #[cfg(target_os = "macos")]
         assert_eq!(ROOT, "/Library/Application Support/MeshLLM/locks");
+        #[cfg(target_os = "linux")]
+        assert_eq!(ROOT, "/var/lib/meshllm/locks");
     }
 }

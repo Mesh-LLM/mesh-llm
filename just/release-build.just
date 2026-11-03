@@ -104,7 +104,7 @@ release-build-cuda:
     just skippy-cli-release-build
     just release-host-build
 
-release-build-cuda-windows cuda_arch="61;75;80;86;87;89;90":
+release-build-cuda-windows cuda_arch="61;75;80;86;89;90":
     @powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-windows.ps1 -Backend cuda -CudaArch "{{ cuda_arch }}" -BuildProfile release -DynamicHost
 
 # Build a Linux ROCm ABI release artifact with an explicit architecture list.

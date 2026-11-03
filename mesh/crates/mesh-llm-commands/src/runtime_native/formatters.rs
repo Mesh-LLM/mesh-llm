@@ -31,6 +31,9 @@ pub(crate) struct NativeRuntimeDoctorReport {
     pub(crate) healthy: bool,
     pub(crate) status: String,
     pub(crate) blockers: Vec<String>,
+    /// Detected GPU backends the selected runtime leaves unused, with the
+    /// reasons their runtimes were rejected.
+    pub(crate) warnings: Vec<String>,
     pub(crate) recommendations: Vec<String>,
     pub(crate) running_mesh_version: String,
     pub(crate) selected_mesh_version: String,
@@ -416,6 +419,17 @@ fn print_doctor_human(report: &NativeRuntimeDoctorReport) {
         for blocker in &report.blockers {
             let _ = writeln!(out, "  - {blocker}");
         }
+    }
+    if !report.warnings.is_empty() {
+        let _ = writeln!(out);
+        let _ = writeln!(out, "Warnings:");
+        for warning in &report.warnings {
+            let _ = writeln!(out, "  - {warning}");
+        }
+        let _ = writeln!(
+            out,
+            "  `mesh-llm runtime list --available` lists every runtime and why it doesn't fit."
+        );
     }
     if !report.recommendations.is_empty() {
         let _ = writeln!(out);

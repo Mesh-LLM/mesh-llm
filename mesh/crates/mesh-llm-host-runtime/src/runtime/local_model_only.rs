@@ -56,6 +56,7 @@ pub(super) fn validate_local_model_only_options(options: &RuntimeOptions) -> Res
             && options.min_protocol_version.is_none()
             && options.max_protocol_version.is_none()
             && !options.require_release_attestation
+            && !options.require_signed_gossip
             && options.release_signer_key.is_empty(),
         "--local-model-only does not accept mesh admission options"
     );
@@ -179,6 +180,7 @@ async fn run_local_model_only_inner(
         );
     }
     super::node_lifecycle_events::emit_node_starting();
+    crate::system::native_runtime_requirement::emit_unused_gpu_warnings();
     let serving_hooks_factory = native_serving_plugin_factory(&options)?;
     let mut config = plugin::load_config(options.config.as_deref())?;
     // Composed first, so it only fills gaps: the explicit CLI overrides below
@@ -269,6 +271,9 @@ async fn run_local_model_only_inner(
         },
     );
     let launch = LocalOpenAiModelStartSpec {
+        live_request_defaults: Arc::new(
+            crate::runtime::live_request_defaults::LiveRequestDefaults::new(),
+        ),
         mesh_config: &config,
         config_model_id: model.config_model_id.as_deref(),
         model_path: &model.resolved_path,

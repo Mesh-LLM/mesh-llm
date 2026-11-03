@@ -124,6 +124,13 @@ pub(super) async fn handle_buffered_api_request(
     {
         Ok(stream) => stream,
         Err(outcome) => {
+            // A 409 here is a pre-routing rejection (routing headers the
+            // dispatch cannot honor); count it like the other pre-routing
+            // rejections. 400s are malformed-client errors, not rejections.
+            if matches!(outcome, proxy::RouteDispatchOutcome::Responded(409)) {
+                super::record_pre_routing_rejection(&ctx.route, routing_model.as_deref(), 409)
+                    .await;
+            }
             finish_exchange(&mut exchange, outcome).await;
             lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
             return;

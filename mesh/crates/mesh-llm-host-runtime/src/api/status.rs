@@ -618,6 +618,11 @@ pub(crate) struct MeshModelPayload {
     pub(crate) name: String,
     pub(crate) display_name: String,
     pub(crate) status: String,
+    /// The workload the loaded runtime actually serves, the same value the
+    /// model endpoints admit against. Absent for a peer that predates
+    /// workload advertisement, which is not evidence of any class.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) workload_class: Option<crate::mesh::ModelWorkloadClass>,
     pub(crate) node_count: usize,
     pub(crate) mesh_vram_gb: f64,
     pub(crate) size_gb: f64,

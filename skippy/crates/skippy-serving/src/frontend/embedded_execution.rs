@@ -370,6 +370,7 @@ impl StageOpenAiBackend {
             )?
         };
         dispatched.execution.downstream_wait_ms = wait_timer.elapsed_ms();
+        request.observe_reply_stats(&reply.stats);
         dispatched.stats.merge(reply.stats);
         if dispatched.message_kind == WireMessageKind::VerifyWindow {
             dispatched.stats.verify_window_compute_us +=

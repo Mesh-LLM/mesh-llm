@@ -792,7 +792,7 @@ fn test_hardware_survey_default() {
     assert!(s.gpus.is_empty());
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 #[test]
 fn test_cpu_only_runtime_budget_uses_system_ram_when_vram_requested() {
     let mut survey = HardwareSurvey::default();
@@ -804,7 +804,7 @@ fn test_cpu_only_runtime_budget_uses_system_ram_when_vram_requested() {
     assert!(survey.gpus.is_empty());
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 #[test]
 fn test_cpu_only_runtime_budget_respects_requested_metrics() {
     let mut survey = HardwareSurvey::default();
@@ -816,7 +816,7 @@ fn test_cpu_only_runtime_budget_respects_requested_metrics() {
     assert_eq!(survey.vram_bytes, 0);
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 #[test]
 fn test_probe_error_applies_cpu_only_budget_only_when_vram_requested() {
     let mut survey = HardwareSurvey::default();
@@ -842,7 +842,7 @@ fn test_probe_error_applies_cpu_only_budget_only_when_vram_requested() {
     assert_eq!(survey.vram_bytes, 0);
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 #[test]
 fn test_empty_gpu_probe_applies_cpu_only_budget_only_when_vram_requested() {
     let mut survey = HardwareSurvey::default();
@@ -1025,24 +1025,8 @@ fn test_skippy_probe_metal_backend_device_tagged_metal_default_device() {
 
 #[cfg(target_os = "macos")]
 #[test]
-fn test_probe_fallback_leaves_vram_untouched_on_macos() {
-    let mut survey = HardwareSurvey::default();
-    assert!(apply_gpu_probe_outcome_to_survey(
-        &mut survey,
-        &[Metric::VramBytes],
-        Err::<Vec<GpuFacts>, ()>(()),
-        || 16_000_000_000,
-    ));
-    assert_eq!(survey.vram_bytes, 0);
-
-    let mut survey = HardwareSurvey::default();
-    assert!(apply_gpu_probe_outcome_to_survey(
-        &mut survey,
-        &[Metric::VramBytes],
-        Ok::<Vec<GpuFacts>, ()>(Vec::new()),
-        || 16_000_000_000,
-    ));
-    assert_eq!(survey.vram_bytes, 0);
+fn test_macos_reads_system_ram() {
+    assert!(read_system_ram_bytes() > 0);
 }
 
 // Keep real-collector tests in one group so the Linux-only process-global
@@ -1051,6 +1035,7 @@ fn test_probe_fallback_leaves_vram_untouched_on_macos() {
 #[test]
 #[serial(real_collector)]
 fn test_skippy_backend_error_uses_cpu_only_budget_without_legacy_fallback() {
+    skippy_runtime::test_support::require_native_runtime();
     skippy_devices::set_test_gpu_facts_result(Err(anyhow::anyhow!("boom")));
 
     let mut survey = HardwareSurvey::default();
@@ -1074,6 +1059,7 @@ fn test_skippy_backend_error_uses_cpu_only_budget_without_legacy_fallback() {
 #[test]
 #[serial(real_collector)]
 fn test_skippy_backend_empty_result_uses_cpu_only_budget_without_legacy_fallback() {
+    skippy_runtime::test_support::require_native_runtime();
     skippy_devices::set_test_gpu_facts_result(Ok(vec![]));
 
     let mut survey = HardwareSurvey::default();

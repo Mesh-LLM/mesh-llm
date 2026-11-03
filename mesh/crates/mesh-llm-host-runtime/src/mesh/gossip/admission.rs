@@ -38,6 +38,8 @@ impl Node {
         context: AnnouncedPeerContext,
     ) -> Result<()> {
         let direct_announcement = direct_announcement(their_announcements, context.remote)?;
+        self.check_mesh_peer(context.remote, direct_announcement.mesh_id.as_deref())
+            .await?;
         if let Err(reason) = self
             .validate_direct_peer_requirements(
                 context.remote,
