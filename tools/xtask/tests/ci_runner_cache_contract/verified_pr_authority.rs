@@ -294,6 +294,98 @@ fn protected_audit_then_product_restore_keep_distinct_owned_stages() {
 }
 
 #[test]
+fn product_admission_after_protected_audit_refuses_bad_identity_before_staging() {
+    let protected = fs::read(env!("CARGO_BIN_EXE_xtask")).unwrap();
+    let restore = support::action("restore-automation");
+    let admit = steps(&restore)[0].get("run").and_then(Node::text).unwrap();
+    for (name, value) in [
+        ("AUTOMATION_SOURCE_SHA", "main"),
+        ("AUTOMATION_ARTIFACT_ID", ""),
+        ("AUTOMATION_ARTIFACT_ID", "0"),
+        ("AUTOMATION_PRODUCER_OS", "Linux"),
+        ("AUTOMATION_PRODUCER_ARCH", "X64"),
+    ] {
+        let directory = staged(&protected);
+        let root = directory.path();
+        let mut audit = command(root);
+        audit.env("AUTOMATION_BINARY_SHA256", digest(&protected));
+        let result = run(&mut audit, &format!("{}\n{}", script(2), script(3)));
+        assert!(result.status.success(), "protected audit: {result:?}");
+        fs::create_dir(root.join("checkout")).unwrap();
+        let env_file = root.join("github-env");
+        let mut admission = command(root);
+        admission.env("AUTOMATION_BINARY_SHA256", digest(b"product"));
+        admission.env("GITHUB_ENV", &env_file);
+        admission.env(name, value);
+        let result = run(&mut admission, admit);
+        assert!(!result.status.success(), "{name}={value}");
+        assert!(!root.join("immutable-automation-restored").exists());
+        assert!(!env_file.exists());
+        assert_eq!(
+            fs::read(root.join("immutable-pr-authority-restored/xtask")).unwrap(),
+            protected
+        );
+    }
+}
+
+#[test]
+fn product_substitution_after_protected_audit_cannot_export_or_execute() {
+    let protected = fs::read(env!("CARGO_BIN_EXE_xtask")).unwrap();
+    let restore = support::action("restore-automation");
+    let restore_steps = steps(&restore);
+    let expected = b"independently admitted product binary";
+    let substituted = b"#!/bin/bash\ntouch \"$RUNNER_TEMP/substituted-executed\"\n";
+    for attack in ["substituted-product", "wrong-source"] {
+        let directory = staged(&protected);
+        let root = directory.path();
+        let mut audit = command(root);
+        audit.env("AUTOMATION_BINARY_SHA256", digest(&protected));
+        let result = run(&mut audit, &format!("{}\n{}", script(2), script(3)));
+        assert!(result.status.success(), "protected audit: {result:?}");
+        fs::create_dir(root.join("checkout")).unwrap();
+        let env_file = root.join("github-env");
+        let mut admission = command(root);
+        admission.env("AUTOMATION_BINARY_SHA256", digest(expected));
+        admission.env("GITHUB_ENV", &env_file);
+        let result = run(
+            &mut admission,
+            restore_steps[0].get("run").and_then(Node::text).unwrap(),
+        );
+        assert!(result.status.success(), "product admission: {result:?}");
+        let stage = root.join("immutable-automation-restored");
+        let bytes: &[u8] = if attack == "substituted-product" {
+            substituted
+        } else {
+            expected
+        };
+        let source = if attack == "wrong-source" {
+            "1123456789012345678901234567890123456789"
+        } else {
+            SOURCE
+        };
+        fs::write(stage.join("xtask"), bytes).unwrap();
+        fs::write(stage.join("source.txt"), format!("{source}\n")).unwrap();
+        // A regenerated manifest cannot replace the independently admitted
+        // producer digest or source identity.
+        manifest_at(&stage);
+        let mut verification = command(root);
+        verification.env("AUTOMATION_BINARY_SHA256", digest(expected));
+        verification.env("GITHUB_ENV", &env_file);
+        let result = run(
+            &mut verification,
+            restore_steps[2].get("run").and_then(Node::text).unwrap(),
+        );
+        assert!(!result.status.success(), "{attack}");
+        assert!(!env_file.exists());
+        assert!(!root.join("substituted-executed").exists());
+        assert_eq!(
+            fs::read(root.join("immutable-pr-authority-restored/xtask")).unwrap(),
+            protected
+        );
+    }
+}
+
+#[test]
 fn verified_native_consumer_preserves_policy_failure_and_private_diagnostics() {
     let binary = fs::read(env!("CARGO_BIN_EXE_xtask")).unwrap();
     let directory = staged(&binary);
