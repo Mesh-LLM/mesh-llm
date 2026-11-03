@@ -447,6 +447,9 @@ retired parser behavior, and source review still owns semantic emulation.
 - Use measured workload data to rebalance deterministic shards, but keep the
   checked-in algorithm reproducible. Use one Cargo invocation per shard unless
   a documented package-isolation check requires otherwise.
+- Metrics collection must preserve the exact run attempt and reject a run that
+  changes during a compatibility read. A GitHub authentication or permission
+  failure must never trigger a different credential or endpoint fallback.
 - The local `just test-all` gate runs all `xtask` tests in a separate Cargo
   invocation with `--test-threads=1`, because their signal scopes are
   process-global. Pass the harness argument to that package only; a global
@@ -816,6 +819,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   artifact, permission, secret/variable, external service, or workflow logic.
   Fix the owning source; do not weaken a gate or add retries to hide a
   deterministic failure.
+- Treat `ci-ops collect-metrics` queue states as job-level observations. A
+  provider comparison can request human review but cannot authorize activation;
+  follow the matched-run, independent approval, and rollback evidence
+  requirements in `ci/DEPOT_MIGRATION.md`.
 - Validate with the narrowest safe workflow. A run is not successful until all
   required jobs reach a terminal successful conclusion; state expected skips.
 

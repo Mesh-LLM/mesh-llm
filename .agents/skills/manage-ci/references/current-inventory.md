@@ -1213,6 +1213,18 @@ architecture, semantic runner role and Depot size, and emits deterministic
 queue/capacity heuristics plus an optional provider-cohort comparison. Raw
 inputs and dated reports belong under `/tmp` or a tracking issue/artifact, not
 under `ci/` or this inventory.
+Queue-only `eligible` describes pooled job timing, not independent observations
+or rollout qualification. Comparison holds unless at least three distinct
+successful first-attempt runs per condition have no exclusions and complete
+matching recorded source, plan, image, toolchain, cache, job families and runner
+dimensions. Passing yields `review` only; workload per run, resource parity,
+artifact provenance, independent approval and live qualification remain human
+evidence obligations. Small-sample percentiles are descriptive, not population p95.
+When `gh` explicitly reports that its run JSON lacks the `attempt` field, the
+collector retries without that field and reads the actual attempt from the
+fixed GitHub API run endpoint. It checks source and update identity before and
+after fetching jobs, refusing a mixed snapshot. Authentication and other
+errors do not trigger this compatibility path.
 
 Artifacts are correctness boundaries; caches only accelerate regeneration.
 PR artifacts generally retain for one day. Fork lanes cannot publish shared

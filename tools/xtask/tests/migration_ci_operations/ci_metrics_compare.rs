@@ -38,7 +38,8 @@ fn comparison(observed: &Observed) -> Result<Value, Box<dyn Error>> {
 }
 
 #[test]
-fn migration_ci_operations_ci_metrics_compare_eligible_cohorts() -> TestResult {
+fn migration_ci_operations_ci_metrics_compare_holds_legacy_cohorts_without_run_evidence()
+-> TestResult {
     let observed = compare(
         "compare_eligible",
         "comparison_cohort.json",
@@ -46,7 +47,8 @@ fn migration_ci_operations_ci_metrics_compare_eligible_cohorts() -> TestResult {
         &[],
     )?;
     let result = comparison(&observed)?;
-    assert_eq!(result["recommendation"], "eligible");
+    assert_eq!(result["recommendation"], "hold");
+    assert_eq!(result["comparable_runs"], false);
     assert_eq!(result["provider_cohort_separation"]["disjoint"], true);
     assert_eq!(
         result["provider_cohort_separation"]["candidate_providers"],
