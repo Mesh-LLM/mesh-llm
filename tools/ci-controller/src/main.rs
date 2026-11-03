@@ -6,6 +6,7 @@ use ci_controller::{DynError, DynResult, bootstrap, lane_results, plan};
 
 const USAGE: &str = "usage: ci-controller [--repo-root DIR] <command> ...
   ci plan [--manifest-root MANIFEST_ROOT]
+  ci execution-record < request.json
   ci validate-lane ...
   repository affected-crates ...
   repository conventional-commits ...
@@ -14,6 +15,7 @@ const USAGE: &str = "usage: ci-controller [--repo-root DIR] <command> ...
 
 enum Command<'a> {
     Plan(&'a [String]),
+    ExecutionRecord(&'a [String]),
     ValidateLane(&'a [String]),
     AffectedCrates(&'a [String]),
     ConventionalCommits(&'a [String]),
@@ -28,6 +30,7 @@ impl<'a> Command<'a> {
         };
         Some(match (domain.as_str(), verb.as_str()) {
             ("ci", "plan") => Self::Plan(rest),
+            ("ci", "execution-record") => Self::ExecutionRecord(rest),
             ("ci", "validate-lane") => Self::ValidateLane(rest),
             ("repository", "affected-crates") => Self::AffectedCrates(rest),
             ("repository", "conventional-commits") => Self::ConventionalCommits(rest),
@@ -63,6 +66,7 @@ fn run() -> DynResult<()> {
     };
     match command {
         Command::Plan(rest) => plan::run(checkout(explicit_root)?.as_path(), rest),
+        Command::ExecutionRecord(rest) => plan::decision_evidence::run(rest),
         Command::ValidateLane(rest) => lane_results::run(rest),
         Command::Bootstrap(rest) => bootstrap::run(
             checkout(explicit_root)?.as_path(),

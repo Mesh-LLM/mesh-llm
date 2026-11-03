@@ -6,6 +6,7 @@ const HF_CONVERTED_ARTIFACT_USAGE: &str =
 
 pub(crate) fn print_usage() {
     println!("  cargo xtool ci-governance --help");
+    println!("  cargo xtool ci execution-record < request.json");
     println!("  cargo xtool ci-ops pr-authority-audit --help");
     println!("  cargo xtool automation mtp-scheduler --help");
     println!(
@@ -168,6 +169,7 @@ pub(crate) enum CliCommand<'a> {
     Inspect(&'a [String]),
     Check(RepositoryCheck, &'a [String]),
     CiPlan(&'a [String]),
+    CiExecutionRecord(&'a [String]),
     CiGovernance(&'a [String]),
     CiFamilyPlan(&'a [String]),
     NativeGenerator(&'a [String]),
@@ -516,6 +518,9 @@ impl<'a> Cli<'a> {
             }
             [domain, scope, rest @ ..] if domain == "ci" && scope == "plan" => {
                 CliCommand::CiPlan(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "ci" && scope == "execution-record" => {
+                CliCommand::CiExecutionRecord(rest)
             }
             [domain, scope, rest @ ..]
                 if domain == "ci" && (scope == "validate-lane" || scope == "validate-graph") =>
