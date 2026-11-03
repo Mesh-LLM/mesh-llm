@@ -2261,6 +2261,10 @@ command. The existing 27 pinned `audit-depot-pr-isolation` callers remain
 transitional until each has a native protected producer dependency and the
 replacement action is published at a reviewed protected commit. Local fixtures
 do not establish hosted artifact transport or provider isolation.
+The verified authority audit owns `immutable-pr-authority-restored`, separate
+from product automation's `immutable-automation-restored` staging directory.
+A local fixture exercises audit before a simulated checkout and product restore;
+it does not prove hosted artifact transport.
 
 The prepared `protected-automation-artifact.yml` reusable producer accepts
 closed native platform and topic inputs plus one immutable protected source SHA.
