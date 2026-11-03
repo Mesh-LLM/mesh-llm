@@ -8,6 +8,7 @@ pub(crate) mod client;
 pub mod engine;
 pub(crate) mod lifecycle;
 pub(crate) mod node_ext;
+pub(crate) mod refusal;
 pub(crate) mod request;
 mod server;
 pub(crate) mod strikes;
@@ -104,8 +105,7 @@ pub(crate) async fn intercept_inbound(
         let _ = mesh_llm_payments_types::wire::write(
             &mut send,
             &mesh_llm_payments_types::wire::Frame::Error {
-                message: "this seller requires token-metered payment protocol v3; upgrade mesh-llm"
-                    .into(),
+                message: refusal::Refusal::ProtocolVersion.message().into(),
             },
         )
         .await;
