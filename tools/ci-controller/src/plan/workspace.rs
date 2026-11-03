@@ -7,7 +7,7 @@ use crate::plan::diagnostics::{
     PlanError, PlanResult, fail, nonempty_string, repr, repr_list, string_list,
 };
 use crate::plan::document::Json;
-use crate::plan::request::Profile;
+use crate::plan::request::{FORCE_ALL, Profile};
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -153,16 +153,17 @@ pub(super) fn affected_crates(scope: &Scope<'_>, raw: Option<&Json>) -> PlanResu
         .iter()
         .map(|package| package.name.as_str())
         .collect::<Vec<_>>();
-    let affected = if scope.profile.exhaustive() {
-        workspace.iter().map(|name| (*name).to_owned()).collect()
-    } else {
-        match raw {
-            Some(raw) if *raw != Json::Array(Vec::new()) => {
-                string_list(Some(raw), "affected_crates")?
+    let affected =
+        if scope.profile.exhaustive() || scope.changed_files.iter().any(|path| path == FORCE_ALL) {
+            workspace.iter().map(|name| (*name).to_owned()).collect()
+        } else {
+            match raw {
+                Some(raw) if *raw != Json::Array(Vec::new()) => {
+                    string_list(Some(raw), "affected_crates")?
+                }
+                _ => reverse_dependency_closure(scope.root, scope.changed_files)?,
             }
-            _ => reverse_dependency_closure(scope.root, scope.changed_files)?,
-        }
-    };
+        };
     let known = workspace.iter().copied().collect::<BTreeSet<_>>();
     let unknown = affected
         .iter()
