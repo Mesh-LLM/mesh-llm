@@ -42,3 +42,51 @@
 /mesh/scripts/*.ps1 @Virgile-pct @michaelneale @ndizazzo
 /scripts/*.ps1 @Virgile-pct @i386 @ndizazzo @michaelneale
 /tools/xtask/src/**/windows* @Virgile-pct @ndizazzo @i386
+
+# CI-policy controls: last matches must remain team-only, after Windows rules.
+# Proposed team: independently approved human creation/verification and live
+# exact-three membership/write-access/valid-owner readback are REQUIRED BEFORE
+# merging these references. Required review remains inactive pending activation.
+# See ci/CI_GOVERNANCE.md; local validation does not establish team or rule state.
+# Keep these patterns synchronized with ci/governance/policy.json.
+/.github/ @Mesh-LLM/ci-policy-reviewers
+/ci/ @Mesh-LLM/ci-policy-reviewers
+/.agents/skills/manage-ci/ @Mesh-LLM/ci-policy-reviewers
+/.omo/ @Mesh-LLM/ci-policy-reviewers
+/tools/ @Mesh-LLM/ci-policy-reviewers
+/scripts/ @Mesh-LLM/ci-policy-reviewers
+/just/ @Mesh-LLM/ci-policy-reviewers
+/.cargo/ @Mesh-LLM/ci-policy-reviewers
+/.config/ @Mesh-LLM/ci-policy-reviewers
+/mesh/scripts/ @Mesh-LLM/ci-policy-reviewers
+/mesh/deploy/ @Mesh-LLM/ci-policy-reviewers
+/skippy/scripts/ @Mesh-LLM/ci-policy-reviewers
+/mesh/crates/mesh-llm-ui/scripts/ @Mesh-LLM/ci-policy-reviewers
+/mesh/website/scripts/ @Mesh-LLM/ci-policy-reviewers
+/AGENTS.md @Mesh-LLM/ci-policy-reviewers
+/Cargo.toml @Mesh-LLM/ci-policy-reviewers
+/Cargo.lock @Mesh-LLM/ci-policy-reviewers
+/Justfile @Mesh-LLM/ci-policy-reviewers
+/rust-toolchain @Mesh-LLM/ci-policy-reviewers
+/rust-toolchain.toml @Mesh-LLM/ci-policy-reviewers
+/.nvmrc @Mesh-LLM/ci-policy-reviewers
+/.dockerignore @Mesh-LLM/ci-policy-reviewers
+/.gitignore @Mesh-LLM/ci-policy-reviewers
+/.gitattributes @Mesh-LLM/ci-policy-reviewers
+/clippy.toml @Mesh-LLM/ci-policy-reviewers
+/rustfmt.toml @Mesh-LLM/ci-policy-reviewers
+/Dockerfile @Mesh-LLM/ci-policy-reviewers
+/mesh/crates/mesh-llm-ui/package.json @Mesh-LLM/ci-policy-reviewers
+/mesh/crates/mesh-llm-ui/eslint.config.js @Mesh-LLM/ci-policy-reviewers
+/mesh/crates/mesh-llm-ui/vitest.config.ts @Mesh-LLM/ci-policy-reviewers
+/mesh/crates/mesh-llm-ui/vite.config.ts @Mesh-LLM/ci-policy-reviewers
+/mesh/crates/mesh-llm-ui/playwright.config.ts @Mesh-LLM/ci-policy-reviewers
+/mesh/crates/mesh-llm-ui/tsconfig.json @Mesh-LLM/ci-policy-reviewers
+/mesh/crates/mesh-llm-ui/tsconfig.app.json @Mesh-LLM/ci-policy-reviewers
+/mesh/crates/mesh-llm-ui/tsconfig.node.json @Mesh-LLM/ci-policy-reviewers
+/mesh/crates/mesh-llm-ui/.prettierrc @Mesh-LLM/ci-policy-reviewers
+/mesh/crates/mesh-llm-ui/.prettierignore @Mesh-LLM/ci-policy-reviewers
+/mesh/crates/mesh-llm-ui/.npmrc @Mesh-LLM/ci-policy-reviewers
+/mesh/crates/mesh-llm-ui/pnpm-workspace.yaml @Mesh-LLM/ci-policy-reviewers
+/mesh/website/package.json @Mesh-LLM/ci-policy-reviewers
+/Dockerfile.* @Mesh-LLM/ci-policy-reviewers

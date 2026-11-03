@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "repository": "Mesh-LLM/mesh-llm",
+  "drift_target_seconds": 900,
+  "state": {
+    "reviewer_team": {
+      "name": "Mesh-LLM/ci-policy-reviewers",
+      "members": ["micspiral", "ndizazzo", "i386"],
+      "visible": true,
+      "repository_permission": "write"
+    },
+    "native_rule": {
+      "branch": "main",
+      "requires_pull_request": true,
+      "reviewer_team": "Mesh-LLM/ci-policy-reviewers",
+      "required_approvals": 1,
+      "dismiss_stale_reviews": true,
+      "bypass_actors": [],
+      "scope": {
+        "directory_prefixes": [
+          ".github/", "ci/", ".agents/skills/manage-ci/", ".omo/", "tools/",
+          "scripts/", "just/", ".cargo/", ".config/", "mesh/scripts/",
+          "mesh/deploy/", "skippy/scripts/", "mesh/crates/mesh-llm-ui/scripts/",
+          "mesh/website/scripts/"
+        ],
+        "exact_paths": [
+          "AGENTS.md", "Cargo.toml", "Cargo.lock", "Justfile", "rust-toolchain",
+          "rust-toolchain.toml", ".nvmrc", ".dockerignore", ".gitignore",
+          ".gitattributes", "clippy.toml", "rustfmt.toml", "Dockerfile",
+          "mesh/crates/mesh-llm-ui/package.json",
+          "mesh/crates/mesh-llm-ui/eslint.config.js",
+          "mesh/crates/mesh-llm-ui/vitest.config.ts",
+          "mesh/crates/mesh-llm-ui/vite.config.ts",
+          "mesh/crates/mesh-llm-ui/playwright.config.ts",
+          "mesh/crates/mesh-llm-ui/tsconfig.json",
+          "mesh/crates/mesh-llm-ui/tsconfig.app.json",
+          "mesh/crates/mesh-llm-ui/tsconfig.node.json",
+          "mesh/crates/mesh-llm-ui/.prettierrc",
+          "mesh/crates/mesh-llm-ui/.prettierignore",
+          "mesh/crates/mesh-llm-ui/.npmrc",
+          "mesh/crates/mesh-llm-ui/pnpm-workspace.yaml",
+          "mesh/website/package.json"
+        ],
+        "root_filename_prefixes": ["Dockerfile."]
+      },
+      "product_only_requires_team_review": false,
+      "required_check": "CI policy / independent approval",
+      "required_check_source": "separate-github-app"
+    },
+    "administration_environment": {
+      "name": "ci-governance-administration",
+      "reviewers": ["micspiral", "ndizazzo", "i386"],
+      "required_approvals": 1,
+      "prevent_self_review": true,
+      "admin_bypass": false,
+      "allowed_refs": ["refs/heads/main"]
+    },
+    "credentials": {
+      "observer_identity": "dedicated-governance-github-app",
+      "observer_kind": "separate-github-app",
+      "observer_permissions": ["actions-read", "administration-read", "checks-read", "contents-read", "environments-read", "members-read", "metadata-read", "pull-requests-read"],
+      "observer_can_administer": false,
+      "app_can_publish_checks": true,
+      "administration_context": "approved-protected-main-only",
+      "agents_have_administration": false,
+      "pr_has_administration": false
+    }
+  }
+}
