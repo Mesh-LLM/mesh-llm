@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "kind": "deterministic-local-membership-drift-fixture",
+  "drift_started_offset_seconds": 10,
+  "first_detection_offset_seconds": 250,
+  "illustrative_fixture_latency_seconds": 240,
+  "proposed_target_seconds": 900,
+  "live_measurement": false
+}
