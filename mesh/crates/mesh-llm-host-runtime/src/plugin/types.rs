@@ -57,6 +57,12 @@ pub enum PluginMeshEvent {
     /// the plugin restarts): what it published to `/api/status` is shown as
     /// unavailable until a later connection publishes.
     PluginDisconnected { plugin_id: String, generation: u64 },
+    /// Whether the operator lets `plugin_id` observe local inference
+    /// (`allow_inference_observation`), read from the live config.
+    InferenceObservationGrant {
+        plugin_id: String,
+        response_tx: oneshot::Sender<bool>,
+    },
     /// The plugin stopped for good (disabled, or shut down): the host
     /// withdraws what it announced for it. Not sent when the plugin restarts
     /// after a failure, so its key stays announced across a restart.
@@ -84,6 +90,22 @@ pub struct RpcResult {
 pub(crate) type BridgeFuture<T> = Pin<Box<dyn Future<Output = T> + Send>>;
 
 pub trait PluginRpcBridge: Send + Sync {
+    fn handle_invocation_request(
+        &self,
+        plugin_name: String,
+        request: proto::RpcRequest,
+    ) -> BridgeFuture<Result<RpcResult, proto::ErrorResponse>> {
+        self.handle_request(plugin_name, request.method, request.params_json)
+    }
+
+    fn handle_invocation_notification(
+        &self,
+        plugin_name: String,
+        notification: proto::RpcNotification,
+    ) -> BridgeFuture<()> {
+        self.handle_notification(plugin_name, notification.method, notification.params_json)
+    }
+
     fn handle_request(
         &self,
         plugin_name: String,
@@ -232,6 +254,7 @@ impl PluginCapabilityProvider {
 pub struct InferenceEndpointRoute {
     pub plugin_name: String,
     pub endpoint_id: String,
+    pub protocol: Option<String>,
     pub address: String,
     pub models: Vec<String>,
 }

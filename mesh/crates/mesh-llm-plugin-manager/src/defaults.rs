@@ -61,6 +61,9 @@ pub enum Surface {
     OpenAiExchangeHook,
     /// The plugin's own snapshot, shown in `GET /api/status`.
     StatusContributions,
+    /// The local inference observation feed: what this node executes and
+    /// its token counts, never prompts or answers.
+    InferenceObservation,
 }
 
 impl Surface {
@@ -77,6 +80,7 @@ impl Surface {
             Self::VirtualModels => "virtual models",
             Self::OpenAiExchangeHook => "OpenAI exchange hook",
             Self::StatusContributions => "status contributions",
+            Self::InferenceObservation => "local inference observation",
         }
     }
 }
@@ -302,6 +306,7 @@ mod tests {
             last_protocol_version: None,
             last_status: None,
             last_error: None,
+            verified_sha256: None,
         }
     }
 

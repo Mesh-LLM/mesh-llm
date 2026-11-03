@@ -1,6 +1,12 @@
 // napi registration glue requires generated unsafe code; handwritten unsafe remains denied.
 #![deny(unsafe_code)]
 
+mod documents;
+mod live_transcription;
+mod memberships;
+mod model_discovery;
+mod node_config;
+
 use mesh_llm_sdk::embedded_node::{SseDecoder, SseFrame};
 use mesh_llm_sdk::{MeshNode, MeshNodeBuilder, OpenAiClient};
 use napi::bindgen_prelude::*;
@@ -94,6 +100,11 @@ pub struct Node {
 
 #[napi]
 impl Node {
+    #[napi(factory, js_name = "createConfig")]
+    pub fn create_config(config_json: String) -> Result<Self> {
+        node_config::create_config(config_json)
+    }
+
     #[napi(factory)]
     pub fn create(
         mode: String,
@@ -195,7 +206,7 @@ impl Node {
         let response = self
             .openai_client()
             .await?
-            .request(&path, body_json)
+            .request_raw(&path, body_json)
             .await
             .map_err(to_napi_error)?;
         Ok(json!({
@@ -216,7 +227,7 @@ impl Node {
         let response = self
             .openai_client()
             .await?
-            .stream(&path, body_json)
+            .stream_raw(&path, body_json)
             .await
             .map_err(to_napi_error)?;
         let id = format!("stream-{}", uuid::Uuid::new_v4());

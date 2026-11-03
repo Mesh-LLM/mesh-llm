@@ -2,6 +2,7 @@ mod archive;
 pub mod asset;
 pub mod bundled;
 pub mod catalog;
+mod catalog_pin;
 pub mod defaults;
 pub mod github;
 pub mod install;

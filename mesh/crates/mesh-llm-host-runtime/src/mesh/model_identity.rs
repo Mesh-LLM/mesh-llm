@@ -196,3 +196,21 @@ pub(crate) fn descriptor_matches_routable_name(
             .unwrap_or_else(|| canonical_demand_model_ref(&identity.model_name))
             == name
 }
+
+/// The descriptor that serves `name` under the names routing accepts: an
+/// exact `model_name` first, so a runtime name never resolves to another
+/// descriptor's public alias, then the public alias that
+/// [`descriptor_matches_routable_name`] matches.
+pub(crate) fn routable_descriptor_for_name<'a>(
+    descriptors: &'a [ServedModelDescriptor],
+    name: &str,
+) -> Option<&'a ServedModelDescriptor> {
+    descriptors
+        .iter()
+        .find(|descriptor| descriptor.identity.model_name == name)
+        .or_else(|| {
+            descriptors
+                .iter()
+                .find(|descriptor| descriptor_matches_routable_name(descriptor, name))
+        })
+}

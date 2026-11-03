@@ -89,6 +89,8 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
      peer_state| {
         let authenticated_peer = peer_state.load(Ordering::Acquire);
         Box::pin(async move {
+            let observation =
+                super::inference_observation::subscription::ConnectionSubscription::default();
             let result: Result<()> = async {
                 // Started by the first status publication, if any.
                 let mut status_lane = None;
@@ -143,7 +145,14 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                         outbound_tx.clone(),
                                     );
                                 }
+                                Some(super::proto::envelope::Payload::PrepareModelAssetsRequest(request)) => {
+                                    super::model_assets::prepare_for_connection(
+                                        request_id, request, plugin_name.clone(), generation,
+                                        runtime.clone(), outbound_tx.clone(),
+                                    );
+                                }
                                 Some(super::proto::envelope::Payload::PeerBlockRequest(request)) => {
+
                                     // The requester is the connection's own name,
                                     // so one plugin cannot act as another.
                                     forward_plugin_peer_block_request(
@@ -179,6 +188,20 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                             )
                                         })
                                         .push(request_id, request);
+                                }
+                                Some(super::proto::envelope::Payload::SubscribeInferenceObservationRequest(_)) => {
+                                    super::inference_observation::subscription::spawn(
+                                        super::inference_observation::hub(),
+                                        super::inference_observation::subscription::SubscribeRequest {
+                                            plugin_name: plugin_name.clone(),
+                                            generation,
+                                            request_id,
+                                            runtime: runtime.clone(),
+                                            mesh_tx: mesh_tx.clone(),
+                                            outbound_tx: outbound_tx.clone(),
+                                            subscription: observation.clone(),
+                                        },
+                                    );
                                 }
                                 Some(super::proto::envelope::Payload::RpcRequest(request)) => {
                                     forward_plugin_request(
@@ -221,6 +244,7 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                 Ok(())
             }
             .await;
+            observation.end(&super::inference_observation::hub());
 
             let was_active_runtime = {
                 let mut runtime = runtime.lock().await;
@@ -674,11 +698,7 @@ fn forward_plugin_request(
         let bridge = rpc_bridge.lock().await.clone();
         let payload = match bridge {
             Some(bridge) => match bridge
-                .handle_request(
-                    plugin_name.clone(),
-                    request.method.clone(),
-                    request.params_json.clone(),
-                )
+                .handle_invocation_request(plugin_name.clone(), request)
                 .await
             {
                 Ok(result) => {
@@ -860,7 +880,7 @@ fn forward_plugin_notification(
     tokio::spawn(async move {
         if let Some(bridge) = rpc_bridge.lock().await.clone() {
             bridge
-                .handle_notification(plugin_name, notification.method, notification.params_json)
+                .handle_invocation_notification(plugin_name, notification)
                 .await;
         }
     });

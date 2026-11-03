@@ -54,7 +54,7 @@ pub(super) fn download_until(
         }
     }
     let mut url = super::url_policy::trusted(input)?;
-    let curl = process::curl_https::Curl::discover_for(remaining_until(deadline)?, cancellation)?;
+    let curl = crate::curl_https::Curl::discover_for(remaining_until(deadline)?, cancellation)?;
     let parent = output.parent().ok_or("projector output parent absent")?;
     std::fs::create_dir_all(parent)?;
     let directory = tempfile::tempdir_in(parent)?;
@@ -112,7 +112,7 @@ pub(super) enum Reply {
     Complete(std::path::PathBuf),
 }
 pub(super) fn exchange(
-    curl: &process::curl_https::Curl,
+    curl: &crate::curl_https::Curl,
     url: &Url,
     pin: &str,
     directory: &Path,
@@ -120,12 +120,12 @@ pub(super) fn exchange(
     cancellation: &process::Cancellation,
     maximum: u64,
 ) -> DynResult<Reply> {
-    let execution = process::curl_https::execution_budget(budget)?;
+    let execution = crate::curl_https::execution_budget(budget)?;
     let body = directory.join("body");
     let spec = curl.pinned_get(
         url.as_str(),
         pin,
-        process::curl_https::Files {
+        crate::curl_https::Files {
             directory,
             body: &body,
             headers: Path::new("-"),
@@ -136,7 +136,7 @@ pub(super) fn exchange(
     );
     let raw = process::supervise_raw(
         &spec,
-        &process::curl_https::limits(execution),
+        &crate::curl_https::limits(execution),
         cancellation,
         process::RawCaptureOptions {
             stdout: NonZeroUsize::new(65536),
@@ -336,7 +336,7 @@ mod acquisition_tests {
     fn hf_acquire_local_tls_to_fresh_pinned_bytes_retains_no_auth_or_network_fallback() {
         let bytes = b"GGUFsuccess";
         let server = Server::with_host(vec![TlsReply::bytes(200, bytes.to_vec())], "hf.co");
-        let curl = process::curl_https::Curl::fixture(&server.ca);
+        let curl = crate::curl_https::Curl::fixture(&server.ca);
         let url = Url::parse(&server.base).unwrap();
         let pin = format!("hf.co:{}:127.0.0.1", url.port().unwrap());
         let root = tempfile::tempdir().unwrap();

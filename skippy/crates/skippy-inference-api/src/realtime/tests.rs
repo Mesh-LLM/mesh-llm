@@ -52,6 +52,46 @@ fn ga_session_updates_read_audio_input_and_can_disable_vad() {
 }
 
 #[test]
+fn step_and_tentative_are_set_under_transcription_and_echoed_only_when_set() {
+    let base = RealtimeTranscriptionConfig::new("whisper");
+    assert!(
+        !session_json("s", &base, true)
+            .to_string()
+            .contains("tentative")
+    );
+    let config = apply_session_update(
+        base.clone(),
+        &json!({"audio": {"input": {"transcription": {"step_ms": 400, "tentative": true}}}}),
+    )
+    .unwrap();
+    assert_eq!(config.step_ms, Some(400));
+    assert!(config.tentative);
+    let echoed = session_json("s", &config, true);
+    assert_eq!(
+        echoed.pointer("/audio/input/transcription/step_ms"),
+        Some(&json!(400))
+    );
+    assert_eq!(
+        echoed.pointer("/audio/input/transcription/tentative"),
+        Some(&json!(true))
+    );
+    for transcription in [
+        json!({"step_ms": 50}),
+        json!({"step_ms": "fast"}),
+        json!({"tentative": 1}),
+    ] {
+        assert!(
+            apply_session_update(
+                base.clone(),
+                &json!({"input_audio_transcription": transcription})
+            )
+            .is_err(),
+            "{transcription}"
+        );
+    }
+}
+
+#[test]
 fn unsupported_formats_and_turn_detection_are_refused() {
     let base = RealtimeTranscriptionConfig::new("whisper");
     assert!(

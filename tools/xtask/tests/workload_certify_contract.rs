@@ -16,9 +16,8 @@ mod battery_evidence;
 #[path = "workload_certify_contract/media_fixture.rs"]
 mod media_fixture;
 
-#[allow(dead_code, unused_imports)]
-#[path = "../src/process/mod.rs"]
-mod process;
+#[allow(unused_imports)]
+use process_supervision as process;
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

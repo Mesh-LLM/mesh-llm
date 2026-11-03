@@ -38,6 +38,7 @@ tokio = { version = "1", features = ["full"] }
 urlencoding = "2"
 
 [dev-dependencies]
+mesh-llm-config = { path = "../mesh-llm-config", version = "0.78.0" }
 axum = "0.8"
 hex = "0.4"
 reqwest = { version = "0.13", features = ["json"] }

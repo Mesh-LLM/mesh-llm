@@ -81,11 +81,15 @@ fn spawn_stage_control_loop_with_state(mut state: StageControlState) -> StageCon
                 command = rx.recv() => {
                     let Some(command) = command else { break };
                     match command {
-                        StageControlCommand::Execute { request, resp } => {
+                        StageControlCommand::Execute {
+                            request,
+                            requester,
+                            resp,
+                        } => {
                             tokio::select! {
                                 biased;
                                 _ = &mut shutdown_rx => break,
-                                result = state.handle(request) => {
+                                result = state.handle(request, requester) => {
                                     let _ = resp.send(result);
                                 }
                             }
@@ -125,22 +129,30 @@ impl StageControlState {
         Ok(())
     }
 
-    async fn handle(&mut self, request: StageControlRequest) -> Result<StageControlResponse> {
+    async fn handle(
+        &mut self,
+        request: StageControlRequest,
+        requester: iroh::EndpointId,
+    ) -> Result<StageControlResponse> {
         match request {
             StageControlRequest::Claim(claim) => self
-                .claim(claim)
+                .claim(claim, requester)
                 .await
                 .map(StageControlResponse::ClaimAccepted),
-            StageControlRequest::Load(load) => {
-                self.load(load).await.map(StageControlResponse::Ready)
-            }
+            StageControlRequest::Load(load) => self
+                .load(load, requester)
+                .await
+                .map(StageControlResponse::Ready),
             StageControlRequest::LoadLocal(mut load) => {
                 load.local_source_required = true;
-                self.load(load).await.map(StageControlResponse::Ready)
+                self.load(load, requester)
+                    .await
+                    .map(StageControlResponse::Ready)
             }
-            StageControlRequest::Stop(stop) => {
-                self.stop(stop).await.map(StageControlResponse::Ready)
-            }
+            StageControlRequest::Stop(stop) => self
+                .stop(stop, requester)
+                .await
+                .map(StageControlResponse::Ready),
             StageControlRequest::Status(filter) => {
                 Ok(StageControlResponse::Status(self.statuses(&filter)))
             }
@@ -150,8 +162,27 @@ impl StageControlState {
         }
     }
 
-    async fn claim(&mut self, claim: StageCoordinatorClaim) -> Result<StageCoordinatorClaimAck> {
+    async fn claim(
+        &mut self,
+        claim: StageCoordinatorClaim,
+        requester: iroh::EndpointId,
+    ) -> Result<StageCoordinatorClaimAck> {
         let attempted_claim = claim.clone();
+        // A claim binds its term to the identity that issues it. The wire
+        // conversion rejects a mismatched identity for remote commands; the
+        // in-process control channel carries the local endpoint as requester.
+        // Rejecting here keeps the fence from accepting a claim the requester
+        // cannot own (#2217).
+        if claim.coordinator_id.parse::<iroh::EndpointId>().ok() != Some(requester) {
+            return Ok(StageCoordinatorClaimAck {
+                accepted: false,
+                claim: attempted_claim,
+                error: Some(
+                    "stage claim coordinator identity does not match the authenticated requester"
+                        .to_string(),
+                ),
+            });
+        }
         match self
             .coordinator_claims
             .accept_claim(claim, current_time_unix_ms())
@@ -172,9 +203,12 @@ impl StageControlState {
                 claim,
                 error: None,
             }),
-            ClaimDecision::Rejected { reason, .. } => Ok(StageCoordinatorClaimAck {
+            // A rejection carries the claim that holds the model here, so the
+            // claimant can tell its own newer generation from another
+            // coordinator's.
+            ClaimDecision::Rejected { current, reason } => Ok(StageCoordinatorClaimAck {
                 accepted: false,
-                claim: attempted_claim,
+                claim: current.unwrap_or(attempted_claim),
                 error: Some(reason.to_string()),
             }),
         }
@@ -267,13 +301,49 @@ impl StageControlState {
         }
     }
 
-    async fn load(&mut self, mut load: StageLoadRequest) -> Result<StageReadyResponse> {
+    async fn load(
+        &mut self,
+        mut load: StageLoadRequest,
+        requester: iroh::EndpointId,
+    ) -> Result<StageReadyResponse> {
+        let key = stage_key(&load.topology_id, &load.run_id, &load.stage_id);
+        if let Some(existing) = self.stages.get(&key) {
+            // An unbound load (no coordinator identity) never takes over a
+            // generation a coordinator has bound: it carries no term or
+            // identity to fence with (#2217).
+            if load.coordinator_id.is_none() && existing.load.coordinator_id.is_some() {
+                let error = "an unbound stage load cannot replace a coordinator-bound stage";
+                return Ok(StageReadyResponse {
+                    accepted: false,
+                    removed_running_stage: false,
+                    status: failed_status_from_load(&load, error.to_string()),
+                    error: Some(error.to_string()),
+                });
+            }
+        }
+        if let Some(coordinator_id) = load.coordinator_id {
+            // A claimed load must be issued by the coordinator it names. The
+            // wire conversion rejects a mismatched identity for remote
+            // commands; this keeps the execution boundary authoritative for
+            // the in-process control channel (#2217).
+            if coordinator_id != requester {
+                let error =
+                    "stage load coordinator identity does not match the authenticated requester";
+                return Ok(StageReadyResponse {
+                    accepted: false,
+                    removed_running_stage: false,
+                    status: failed_status_from_load(&load, error.to_string()),
+                    error: Some(error.to_string()),
+                });
+            }
+        }
         if let Err(error) =
             crate::system::native_runtime_requirement::ensure_native_runtime_available()
         {
             let error = error.to_string();
             return Ok(StageReadyResponse {
                 accepted: false,
+                removed_running_stage: false,
                 status: failed_status_from_load(&load, error.clone()),
                 error: Some(error),
             });
@@ -286,6 +356,7 @@ impl StageControlState {
         if let Some(error) = self.validate_load_claim(&load) {
             return Ok(StageReadyResponse {
                 accepted: false,
+                removed_running_stage: false,
                 status: failed_status_from_load(&load, error.clone()),
                 error: Some(error),
             });
@@ -310,10 +381,14 @@ impl StageControlState {
         let mut effective_load = load;
         effective_load.bind_addr = bind_addr.to_string();
         super::configure_materialized_stage_cache();
+        if let Some(plan) = effective_load.dflash.as_mut() {
+            crate::inference::skippy::materialize_split_dflash_draft(plan).await;
+        }
+        settle_final_stage_dflash(&mut effective_load);
         let package_request = effective_load.clone();
         let mut resolved_package = None;
         if let Some(package) = tokio::task::spawn_blocking(move || {
-            super::materialization::resolve_stage_load_package(&package_request)
+            resolve_stage_load_package_with_borrowed_tensors(&package_request)
         })
         .await
         .context("join resolve stage load package task")??
@@ -343,6 +418,7 @@ impl StageControlState {
             openai: None,
             l3_manager: crate::runtime::kv_disk_config::node_kv_disk_manager(),
             compute_meter: Some(compute_meter.clone()),
+            split_dflash: effective_load.dflash.clone(),
         });
         self.stages.insert(
             key.clone(),
@@ -393,27 +469,49 @@ impl StageControlState {
         stage_op.ready(effective_load.lane_count);
         Ok(StageReadyResponse {
             accepted: true,
+            removed_running_stage: false,
             status,
             error: None,
         })
     }
 
-    async fn stop(&mut self, stop: StageStopRequest) -> Result<StageReadyResponse> {
+    async fn stop(
+        &mut self,
+        stop: StageStopRequest,
+        requester: iroh::EndpointId,
+    ) -> Result<StageReadyResponse> {
         let key = stage_key(&stop.topology_id, &stop.run_id, &stop.stage_id);
         let Some(existing) = self.stages.remove(&key) else {
             let status = stopped_status(&stop);
             return Ok(StageReadyResponse {
                 accepted: true,
+                removed_running_stage: false,
                 status,
                 error: None,
             });
         };
+        // Shutdown binds to the coordinator identity the running stage was
+        // loaded under. A stop from any other requester must not take the
+        // stage down, whatever term it claims (#2217).
+        if let Some(coordinator_id) = existing.load.coordinator_id
+            && coordinator_id != requester
+        {
+            let status = status_from_running(&existing);
+            self.stages.insert(key, existing);
+            return Ok(StageReadyResponse {
+                accepted: false,
+                removed_running_stage: false,
+                status,
+                error: Some("stage stop requester is not the stage coordinator".to_string()),
+            });
+        }
         if stop.coordinator_term < existing.load.coordinator_term {
             let current_term = existing.load.coordinator_term;
             let status = status_from_running(&existing);
             self.stages.insert(key, existing);
             return Ok(StageReadyResponse {
                 accepted: false,
+                removed_running_stage: false,
                 status,
                 error: Some(format!(
                     "stale coordinator term {} < {}",
@@ -426,6 +524,7 @@ impl StageControlState {
             self.stages.insert(key, existing);
             return Ok(StageReadyResponse {
                 accepted: false,
+                removed_running_stage: false,
                 status,
                 error: Some("stale shutdown generation".to_string()),
             });
@@ -439,6 +538,7 @@ impl StageControlState {
         stage_op.stopped();
         Ok(StageReadyResponse {
             accepted: true,
+            removed_running_stage: true,
             status,
             error: None,
         })
@@ -620,6 +720,52 @@ pub(crate) fn admitted_activation_frontier(
     skippy_api::stage_load::admitted_activation_frontier(&load.admission)
 }
 
+/// A final stage with a split DFlash plan serves the draft when this node has
+/// it, which replaces native MTP; without it the stage drops the plan (no
+/// borrowed tensors, no extra rollback depth) and keeps the native MTP the
+/// planner sent for that case. The stage reports which it did in its status.
+fn settle_final_stage_dflash(load: &mut StageLoadRequest) {
+    if load.downstream.is_some() {
+        return;
+    }
+    match load.dflash.as_ref() {
+        Some(plan) if plan.drafts() => load.native_mtp_enabled = false,
+        Some(_) => load.dflash = None,
+        None => {}
+    }
+}
+
+/// [`super::materialization::resolve_stage_load_package`] with the target
+/// tensors a drafting final stage's DFlash draft borrows added to the
+/// admitted closure, so the stage fetches the artifacts that hold them. The
+/// admission itself, which the status attests, is unchanged. When the
+/// package cannot supply them the stage resolves its admission alone and
+/// serves without the draft.
+fn resolve_stage_load_package_with_borrowed_tensors(
+    load: &StageLoadRequest,
+) -> Result<Option<super::materialization::ResolvedStagePackage>> {
+    let borrowed = load.dflash.as_ref().and_then(|plan| {
+        skippy_serving::split_dflash::borrowed_resident_tensor_ids(
+            plan,
+            load.downstream.is_none(),
+            &load.admission.resident_tensor_ids,
+        )
+    });
+    if let Some(resident_tensor_ids) = borrowed {
+        let mut widened = load.clone();
+        widened.admission.resident_tensor_ids = resident_tensor_ids;
+        match super::materialization::resolve_stage_load_package(&widened) {
+            Ok(package) => return Ok(package),
+            Err(error) => tracing::warn!(
+                stage = load.stage_id,
+                error = format!("{error:#}"),
+                "cannot fetch the tensors the split DFlash draft borrows; resolving the stage without them"
+            ),
+        }
+    }
+    super::materialization::resolve_stage_load_package(load)
+}
+
 pub(crate) fn admitted_resident_tensor_names(
     load: &StageLoadRequest,
     package: Option<&super::materialization::ResolvedStagePackage>,
@@ -670,6 +816,7 @@ pub(crate) fn admitted_resident_tensor_names(
 
 fn peer_config(peer: &StagePeerDescriptor) -> PeerConfig {
     PeerConfig {
+        persistent_lane_marker: peer.persistent_lane_marker,
         stage_id: peer.stage_id.clone(),
         stage_index: peer.stage_index,
         endpoint: peer.endpoint.clone(),
@@ -744,6 +891,7 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
         lease_until_unix_ms: stage.load.lease_until_unix_ms,
         compute_busy_nanos: compute.busy_nanos,
         compute_operations: compute.operations,
+        dflash_target_layers: server.split_dflash_target_layers.clone(),
     }
 }
 
@@ -786,6 +934,7 @@ fn stopped_status(stop: &StageStopRequest) -> StageStatusSnapshot {
         lease_until_unix_ms: 0,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        dflash_target_layers: None,
     }
 }
 
@@ -834,5 +983,6 @@ fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatu
         lease_until_unix_ms: load.lease_until_unix_ms,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        dflash_target_layers: None,
     }
 }

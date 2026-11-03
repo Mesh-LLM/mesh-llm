@@ -158,7 +158,7 @@ struct ConnectionSlot(Arc<AtomicUsize>);
 impl ConnectionSlot {
     fn claim(active: &Arc<AtomicUsize>, limit: usize) -> Option<Self> {
         active
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
                 (count < limit).then_some(count + 1)
             })
             .ok()

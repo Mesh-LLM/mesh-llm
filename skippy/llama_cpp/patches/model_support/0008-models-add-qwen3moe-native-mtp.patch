@@ -167,15 +167,15 @@ index a39d046fe..5a7beb09b 100644
      MODEL_ARCH.QWEN3NEXT: [
          MODEL_TENSOR.TOKEN_EMBD,
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 2fc90a14e..5180a2531 100644
+index 5180a2531..4da8a4664 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 70
-+#define SKIPPY_ABI_VERSION_PATCH 71
+-#define SKIPPY_ABI_VERSION_PATCH 71
++#define SKIPPY_ABI_VERSION_PATCH 72
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))

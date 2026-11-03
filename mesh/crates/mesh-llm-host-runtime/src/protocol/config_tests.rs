@@ -6,6 +6,7 @@ use crate::plugin::{
 #[test]
 fn config_sync_full_config_roundtrip() {
     let config = crate::plugin::MeshConfig {
+        source_directory: None,
         version: Some(1),
         gpu: GpuConfig {
             host_ram_offload: None,
@@ -45,6 +46,7 @@ fn config_sync_full_config_roundtrip() {
             web_ui_enabled: Some(false),
             web_ui_primary_tab: Some(true),
             allow_peer_blocks: Some(true),
+            allow_inference_observation: None,
             openai_exchange_grant: None,
             command: Some("mesh-llm".to_string()),
             args: vec!["--plugin".to_string()],

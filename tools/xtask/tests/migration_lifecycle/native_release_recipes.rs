@@ -402,7 +402,7 @@ printf '%s\0' "$@" > "$FIXTURE_ROOT/windows.arguments"
         if backend == "cuda" {
             assert!(
                 args.windows(2)
-                    .any(|pair| pair == ["-CudaArch", "61;75;80;86;87;89;90"])
+                    .any(|pair| pair == ["-CudaArch", "61;75;80;86;89;90"])
             );
         }
     }

@@ -125,6 +125,17 @@ fn isolated<F: std::future::Future<Output = ()>>(name: &str, scenario: fn() -> F
         return;
     }
     let temp = tempfile::tempdir().unwrap();
+    // Preserve installed runtimes for opt-in native tests, but fall back to the
+    // fixture when HOME and platform cache paths are unavailable.
+    let runtime_cache = std::env::var_os("MESH_LLM_NATIVE_RUNTIME_CACHE_DIR")
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            crate::system::native_runtime_install::default_native_runtime_cache()
+                .ok()
+                .map(|cache| cache.root().to_path_buf())
+        })
+        .unwrap_or_else(|| temp.path().join("native-runtimes"));
     let executable = std::env::current_exe().unwrap();
     #[cfg(target_os = "macos")]
     let executable = {
@@ -152,12 +163,7 @@ fn isolated<F: std::future::Future<Output = ()>>(name: &str, scenario: fn() -> F
         // Lifecycle barriers use local fixtures, not the availability of GitHub.
         .env(mesh_llm_config::MESH_LLM_NO_UPDATE_CHECK_ENV, "1")
         .env("HF_ENDPOINT", endpoint)
-        .env(
-            "MESH_LLM_NATIVE_RUNTIME_CACHE_DIR",
-            crate::system::native_runtime_install::default_native_runtime_cache()
-                .unwrap()
-                .root(),
-        )
+        .env("MESH_LLM_NATIVE_RUNTIME_CACHE_DIR", runtime_cache)
         .env("HF_HOME", temp.path().join("hf"))
         .env("HF_HUB_CACHE", temp.path().join("hf/hub"))
         .env("HF_XET_CACHE", temp.path().join("hf/xet"))
@@ -413,5 +419,33 @@ async fn serve_hub_request(
             )
             .await
             .unwrap();
+    }
+}
+
+#[cfg(windows)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial]
+async fn embedded_listen_all_rejects_foreign_loopback_console() {
+    let foreign = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind foreign console");
+    let console_port = foreign.local_addr().expect("foreign address").port();
+    let api = TcpListener::bind("127.0.0.1:0").expect("reserve API port");
+    let api_port = api.local_addr().expect("API address").port();
+    drop(api);
+
+    let result = start_embedded_serve(EmbeddedServeConfig {
+        mode: EmbeddedMeshNodeMode::Client,
+        api_port,
+        console_port,
+        listen_all: true,
+        startup_timeout: Duration::from_secs(30),
+        ..EmbeddedServeConfig::default()
+    })
+    .await;
+
+    if let Ok(handle) = result {
+        let _ = handle.stop().await;
+        panic!("embedded startup must reject a foreign loopback console");
     }
 }

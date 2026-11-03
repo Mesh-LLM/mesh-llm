@@ -1,5 +1,5 @@
 name: Save and verify exact Actions cache
-description: Save a cache miss with one bounded retry and require a new non-empty exact key/ref entry
+description: Save a cache miss with one bounded retry and require a non-empty exact key/ref entry that the current version lookup restores
 
 inputs:
   path:
@@ -9,7 +9,7 @@ inputs:
     description: Exact Actions cache key to save
     required: true
   cache-ref:
-    description: Exact Git ref that must own the new cache entry
+    description: Exact Git ref that must own the cache entry
     required: true
   cache-label:
     description: Human-readable cache label for evidence and failures
@@ -75,12 +75,18 @@ runs:
               (candidate) =>
                 candidate.key === key &&
                 candidate.ref === ref &&
-                candidate.size_in_bytes > 0 &&
-                !existingIds.has(String(candidate.id)),
+                candidate.size_in_bytes > 0,
             );
+            // Idempotent: a concurrent writer (e.g. the main cache warmer) may
+            // publish the immutable key between the snapshot and this save,
+            // so a pre-existing exact entry is valid. Version fitness is
+            // proven fail-closed by the lookup-only restore below.
+            const origin = cache && existingIds.has(String(cache.id))
+              ? 'concurrently published'
+              : 'new';
             if (cache) {
               core.notice(
-                `Verified new exact ${label} cache ${cache.id} ` +
+                `Verified ${origin} exact ${label} cache ${cache.id} ` +
                 `(${cache.size_in_bytes} bytes) after the initial save.`,
               );
               return 'published';
@@ -93,13 +99,21 @@ runs:
             `The initial ${label} cache save was not published; retrying once.`,
           );
           return 'missing';
+    - name: Probe current cache version before retry
+      id: current-version
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+      with:
+        path: ${{ inputs.path }}
+        key: ${{ inputs.cache-key }}
+        lookup-only: true
+        fail-on-cache-miss: false
     - name: Retry exact cache after cache-service cooldown
-      if: steps.initial-publication.outputs.result != 'published'
+      if: steps.initial-publication.outputs.result != 'published' || steps.current-version.outputs.cache-hit != 'true'
       uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
       with:
         path: ${{ inputs.path }}
         key: ${{ inputs.cache-key }}
-    - name: Verify new exact cache publication
+    - name: Verify exact cache publication
       uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
       env:
         CACHE_KEY: ${{ inputs.cache-key }}
@@ -128,12 +142,18 @@ runs:
               (candidate) =>
                 candidate.key === key &&
                 candidate.ref === ref &&
-                candidate.size_in_bytes > 0 &&
-                !existingIds.has(String(candidate.id)),
+                candidate.size_in_bytes > 0,
             );
+            // Idempotent: a concurrent writer (e.g. the main cache warmer) may
+            // publish the immutable key between the snapshot and this save,
+            // so a pre-existing exact entry is valid. Version fitness is
+            // proven fail-closed by the lookup-only restore below.
+            const origin = cache && existingIds.has(String(cache.id))
+              ? 'concurrently published'
+              : 'new';
             if (cache) {
               core.notice(
-                `Verified new exact ${label} cache ${cache.id} ` +
+                `Verified ${origin} exact ${label} cache ${cache.id} ` +
                 `(${cache.size_in_bytes} bytes).`,
               );
               return;
@@ -143,7 +163,7 @@ runs:
             }
           }
           core.setFailed(
-            `No new exact ${label} cache was published for ${ref}.`,
+            `No exact ${label} cache was published for ${ref}.`,
           );
     - name: Verify current cache version lookup
       uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0

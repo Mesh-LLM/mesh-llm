@@ -7,9 +7,11 @@ mod context;
 mod dsl;
 mod error;
 mod helpers;
+pub mod inference_observation;
 mod internal_rpc;
 mod io;
 mod manifest;
+pub mod models;
 pub mod openai_exchange;
 pub mod plugin_status;
 mod runtime;
@@ -101,6 +103,8 @@ pub const PROTOCOL_VERSION: u32 = 3;
 /// Additive protobuf messages alone do not tell a plugin whether its host
 /// handles them; these do.
 pub mod host_capabilities {
+    /// Invocation-scoped RPC callbacks carry the host-assigned parent call ID.
+    pub const INVOCATION_CALLBACKS: &str = "invocation_callbacks.v1";
     /// The host supports permissioned OpenAI exchange lifecycle services.
     pub const OPENAI_EXCHANGE: &str = crate::openai_exchange::OPENAI_EXCHANGE_CAPABILITY;
     /// The host accepts `PeerBlockRequest`.
@@ -110,6 +114,9 @@ pub mod host_capabilities {
     /// The host accepts `PublishPluginStatusRequest` and shows the snapshot in
     /// `GET /api/status` (see [`crate::plugin_status`]).
     pub const PLUGIN_STATUS: &str = "plugin_status.v1";
+    /// The host accepts `SubscribeInferenceObservationRequest` and sends the
+    /// local inference observation feed (see [`crate::inference_observation`]).
+    pub const LOCAL_INFERENCE_OBSERVATION: &str = "local_inference_observation.v1";
 
     /// Why a plugin with `manifest` cannot run on this host: a capability its
     /// manifest requires that the host does not list.
@@ -133,6 +140,16 @@ pub mod host_capabilities {
             && !host_supports(PLUGIN_STATUS)
         {
             return Some("host does not support required plugin_status.v1 contributions");
+        }
+        if manifest
+            .inference_observation
+            .as_ref()
+            .is_some_and(|observation| observation.required)
+            && !host_supports(LOCAL_INFERENCE_OBSERVATION)
+        {
+            return Some(
+                "host does not support required local_inference_observation.v1 observation",
+            );
         }
         None
     }

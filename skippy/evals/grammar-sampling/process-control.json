@@ -1,0 +1,144 @@
+{
+  "schema": 1,
+  "phase": "independent-process residual control",
+  "native_source": "983f2aad129270dea4d172bff9441d2195a86d9a",
+  "reference": "Frozen baseline B primary; R diagnostic only; no qualification or normalization.",
+  "prerequisite": "Verified R5 diagnostic decision 393804003767c38f1e9f14e335548324edaa0c769a383874d9904e55a74af7c3 requests independent process control.",
+  "pairs": [
+    {
+      "startup": "baseline-first",
+      "A_preconditioning": false,
+      "order": "RCB"
+    },
+    {
+      "startup": "baseline-first",
+      "A_preconditioning": false,
+      "order": "CBR"
+    },
+    {
+      "startup": "candidate-first",
+      "A_preconditioning": false,
+      "order": "CBR"
+    },
+    {
+      "startup": "candidate-first",
+      "A_preconditioning": false,
+      "order": "BCR"
+    },
+    {
+      "startup": "candidate-first",
+      "A_preconditioning": false,
+      "order": "BRC"
+    },
+    {
+      "startup": "candidate-first",
+      "A_preconditioning": true,
+      "order": "BCR"
+    },
+    {
+      "startup": "candidate-first",
+      "A_preconditioning": true,
+      "order": "RBC"
+    },
+    {
+      "startup": "baseline-first",
+      "A_preconditioning": true,
+      "order": "CRB"
+    },
+    {
+      "startup": "baseline-first",
+      "A_preconditioning": true,
+      "order": "RBC"
+    },
+    {
+      "startup": "baseline-first",
+      "A_preconditioning": false,
+      "order": "BRC"
+    },
+    {
+      "startup": "candidate-first",
+      "A_preconditioning": true,
+      "order": "CBR"
+    },
+    {
+      "startup": "baseline-first",
+      "A_preconditioning": true,
+      "order": "BRC"
+    },
+    {
+      "startup": "baseline-first",
+      "A_preconditioning": false,
+      "order": "CRB"
+    },
+    {
+      "startup": "baseline-first",
+      "A_preconditioning": false,
+      "order": "BCR"
+    },
+    {
+      "startup": "candidate-first",
+      "A_preconditioning": false,
+      "order": "RCB"
+    },
+    {
+      "startup": "candidate-first",
+      "A_preconditioning": false,
+      "order": "RBC"
+    },
+    {
+      "startup": "candidate-first",
+      "A_preconditioning": true,
+      "order": "BRC"
+    },
+    {
+      "startup": "baseline-first",
+      "A_preconditioning": false,
+      "order": "RBC"
+    },
+    {
+      "startup": "baseline-first",
+      "A_preconditioning": true,
+      "order": "CBR"
+    },
+    {
+      "startup": "candidate-first",
+      "A_preconditioning": true,
+      "order": "CRB"
+    },
+    {
+      "startup": "candidate-first",
+      "A_preconditioning": false,
+      "order": "CRB"
+    },
+    {
+      "startup": "baseline-first",
+      "A_preconditioning": true,
+      "order": "RCB"
+    },
+    {
+      "startup": "candidate-first",
+      "A_preconditioning": true,
+      "order": "RCB"
+    },
+    {
+      "startup": "baseline-first",
+      "A_preconditioning": true,
+      "order": "BCR"
+    }
+  ],
+  "design": "24 fresh worker pairs; full factorial startup order x A-workload preconditioning x six B/R/C orders, shuffled once with Python random.Random(7301). Each worker fully loaded before starting the next. Only one worker computes at a time.",
+  "warmup_blocks": 3,
+  "repetitions_per_cell": 20,
+  "cases": "All five admitted fixed-logit fixtures, identical source, model, inputs, binaries and sampler controls to R5. No decode or A/B/C qualification.",
+  "preconditioning": "After both workers load, A-present runs one complete five-case A block with20 repetitions per cell in the baseline worker, before the three warmup blocks. A-absent performs none. All preconditioning output retained and excluded from paired statistics.",
+  "timing": "Existing unchanged worker monotonic sampling timers. Model loading, process creation, preconditioning, warmup and IPC excluded. No instrumentation during measurement.",
+  "statistics": "Report per-case and aggregate C/B, R/B and C/R geometric ratios; one-sided95% pair-bootstrap bounds10000 draws seed7301. Pair is unit, retain all24pairs. A-history contrast compares12 A-present vs12 absent pairs; startup contrast compares12 baseline-first vs12 candidate-first pairs using within-condition pair resampling and shared draws across cases.",
+  "interpretation": "Diagnostic only. A condition effect is supported when the absolute point shift exceeds0.5% and its95% interval excludes1.0; report all cases, no selection/removal. An effect supports a newly preregistered qualification process policy, not automatic source qualification. Persistent material offsets across fresh pairs and both conditions require build/layout investigation. Any ambiguity remains unresolved; do not normalize or promote R.",
+  "exclusions": "No outcome-based exclusions. Identity mismatch, missing pair/case/arm, decision mismatch, co-tenant JY run, stale/missing placement evidence or observed thermal throttling invalidates the full job; retain evidence and rerun complete job.",
+  "budget": {
+    "node": "macmini-gq7vhw",
+    "chip": "Apple M6",
+    "max_usd": 0,
+    "max_duration_s": 7200
+  }
+}

@@ -141,7 +141,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
     (value: boolean) => updateRoutingPreferences({ freeOnly: value }),
     [updateRoutingPreferences]
   )
-  // Prices come from /v1/models. Free mode hides paid-only models; paid mode labels them with price.
+  // Prices come from /mesh/v1/models discovery. Free mode hides paid-only models; paid mode labels them with price.
   const modelPayments = useModelPaymentsQuery({ enabled: liveMode }).data
   const offeredModels = useMemo(
     () => selectableModels.filter((item) => isOfferedForMode(modelPayments?.get(item.name), freeOnly)),

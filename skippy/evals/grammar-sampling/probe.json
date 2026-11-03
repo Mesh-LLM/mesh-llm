@@ -1,0 +1,17 @@
+{
+  "spec": {
+    "name": "Grammar sampler A/B/C — model and toolchain probe",
+    "description": "Prerequisite check only. No timing, inference or benchmark metrics. Verify the JY job account can read the registered Qwen model and build native Metal code.",
+    "target": {"executor": "lab", "nodes": ["macstudio-2l0352"], "os": "macos"},
+    "runtime": {
+      "model_package": {"ref": "hf:unsloth/Qwen3.6-35B-A3B-MTP-GGUF@5bc3e238d916f48a861bac2f8a1990a0e9b7e98d", "sha256": "0b21525e972670ed59e1812e170b27c26355381f0656ecc4e25617ece7dac58b", "egress": "lab_only"},
+      "models": [{"ref": "hf:unsloth/Qwen3.6-35B-A3B-MTP-GGUF@5bc3e238d916f48a861bac2f8a1990a0e9b7e98d", "env": "MODEL_DIR", "delivery": "stream"}],
+      "workspace": {"repos": [{"url": "https://github.com/Mesh-LLM/mesh-llm.git", "rev": "2c82637ba4499b421b7703f6efeb80c0b90098d1", "path": "mesh"}], "retain": "on_failure"},
+      "command": "set -eu\ncd mesh\ntest \"$(git rev-parse HEAD)\" = 2c82637ba4499b421b7703f6efeb80c0b90098d1\ntest -r \"$MODEL_DIR/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf\"\nmkdir -p \"$JIANYANG_ARTIFACT_DIR\"\n{ git rev-parse HEAD; sw_vers; sysctl -n machdep.cpu.brand_string hw.memsize; clang++ --version; cmake --version; ninja --version; just --version; xcrun --find metal; stat -f '%z' \"$MODEL_DIR/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf\"; shasum -a 256 \"$MODEL_DIR/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf\"; } > \"$JIANYANG_ARTIFACT_DIR/probe.txt\"\ncat \"$JIANYANG_ARTIFACT_DIR/probe.txt\""
+    },
+    "harness": {"name": "custom", "version": "adhoc", "trace": {"kind": "synthetic", "ref": "prerequisite-only"}, "seed": 73, "warmup_requests": 0, "concurrency": [1], "request_count": 1},
+    "budget": {"max_usd": 0, "max_duration_s": 900, "grace_s": 60},
+    "retries": 0,
+    "labels": {"campaign": "max-grammar-sampling-abc-20261028", "phase": "probe"}
+  }
+}

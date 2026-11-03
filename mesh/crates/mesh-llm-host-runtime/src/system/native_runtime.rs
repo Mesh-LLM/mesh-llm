@@ -21,6 +21,8 @@ mod dynamic {
     #[derive(Clone, Debug)]
     pub(crate) struct LoadedNativeRuntime {
         pub(crate) native_runtime_id: String,
+        /// The release the runtime was loaded from; ids repeat across releases.
+        pub(crate) release_version: String,
         pub(crate) libraries: Vec<PathBuf>,
     }
 
@@ -180,6 +182,7 @@ mod dynamic {
         resolution.completed();
         Ok(Some(LoadedNativeRuntime {
             native_runtime_id: plan.native_runtime_id,
+            release_version: plan.cache_mesh_version,
             libraries: plan.libraries,
         }))
     }
@@ -351,6 +354,7 @@ mod dynamic {
         })?;
         Ok(Some(LoadedNativeRuntime {
             native_runtime_id: plan.native_runtime_id,
+            release_version: plan.cache_mesh_version,
             libraries: plan.libraries,
         }))
     }
@@ -840,6 +844,9 @@ mod dynamic {
 
         #[tokio::test]
         async fn default_startup_selects_the_verified_product_runtime_release() {
+            skippy_runtime_install::rerun_without_bundle_env!(
+                default_startup_selects_the_verified_product_runtime_release
+            );
             let temp = tempfile::tempdir().unwrap();
             let release = "99.123.456";
             assert_ne!(release, skippy_native_runtime::runtime_release_version());
@@ -1183,6 +1190,9 @@ mod dynamic {
 
         #[test]
         fn startup_local_discovery_keeps_cached_fallback_after_legacy_bundle() {
+            skippy_runtime_install::rerun_without_bundle_env!(
+                startup_local_discovery_keeps_cached_fallback_after_legacy_bundle
+            );
             let temp = tempfile::tempdir().unwrap();
             let cache = NativeRuntimeCache::new(temp.path().join("cache"));
             let runtime_id = "meshllm-native-runtime-test-cpu";
@@ -1233,6 +1243,9 @@ mod dynamic {
 
         #[tokio::test]
         async fn startup_bundle_with_newer_glibc_does_not_block_compatible_cache() {
+            skippy_runtime_install::rerun_without_bundle_env!(
+                startup_bundle_with_newer_glibc_does_not_block_compatible_cache
+            );
             let temp = tempfile::tempdir().unwrap();
             let cache = NativeRuntimeCache::new(temp.path().join("cache"));
             let runtime_id = "meshllm-native-runtime-test-cpu";
@@ -1296,6 +1309,9 @@ mod dynamic {
 
         #[tokio::test]
         async fn startup_does_not_pass_legacy_linux_bundle_to_installer() {
+            skippy_runtime_install::rerun_without_bundle_env!(
+                startup_does_not_pass_legacy_linux_bundle_to_installer
+            );
             let temp = tempfile::tempdir().unwrap();
             let cache = NativeRuntimeCache::new(temp.path().join("cache"));
             let runtime_id = "meshllm-native-runtime-test-cpu";
@@ -1622,6 +1638,9 @@ mod dynamic {
 
         #[tokio::test]
         async fn cache_hit_skips_install_and_loads_cached_runtime_once() {
+            skippy_runtime_install::rerun_without_bundle_env!(
+                cache_hit_skips_install_and_loads_cached_runtime_once
+            );
             let temp = tempfile::tempdir().unwrap();
             let cache = NativeRuntimeCache::new(temp.path().join("cache"));
             let runtime_id = "meshllm-native-runtime-test-cpu";
@@ -1746,6 +1765,9 @@ mod dynamic {
 
         #[tokio::test]
         async fn cache_miss_installs_once_and_loads_post_install_runtime() {
+            skippy_runtime_install::rerun_without_bundle_env!(
+                cache_miss_installs_once_and_loads_post_install_runtime
+            );
             let temp = tempfile::tempdir().unwrap();
             let cache = NativeRuntimeCache::new(temp.path().join("cache"));
             let bundle_dir = temp.path().join("bundle");
@@ -1966,6 +1988,9 @@ mod dynamic {
         // never consulted the flavor.
         #[tokio::test]
         async fn vulkan_flavor_loads_vulkan_runtime_over_higher_ranked_cuda() {
+            skippy_runtime_install::rerun_without_bundle_env!(
+                vulkan_flavor_loads_vulkan_runtime_over_higher_ranked_cuda
+            );
             let temp = tempfile::tempdir().unwrap();
             let cache = NativeRuntimeCache::new(temp.path().join("cache"));
             let release_version = skippy_native_runtime::runtime_release_version().to_string();

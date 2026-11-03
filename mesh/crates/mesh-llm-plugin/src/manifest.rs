@@ -40,6 +40,7 @@ pub enum ManifestEntry {
     WebUi(proto::PluginWebUiManifest),
     OpenAiExchangeHook(proto::OpenAiExchangeHookManifest),
     PluginStatus(proto::PluginStatusManifest),
+    InferenceObservation(proto::InferenceObservationManifest),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -90,6 +91,9 @@ impl PluginManifestBuilder {
                 self.manifest.openai_exchange_hook = Some(Box::new(hook))
             }
             ManifestEntry::PluginStatus(status) => self.manifest.plugin_status = Some(status),
+            ManifestEntry::InferenceObservation(observation) => {
+                self.manifest.inference_observation = Some(observation)
+            }
         }
     }
 }
@@ -1024,6 +1028,7 @@ pub fn operation<Input: JsonSchema>(
             input_schema_json: schema_json::<Input>(),
             output_schema_json: None,
             title: None,
+            timeout_secs: None,
         },
     }
 }
@@ -1036,6 +1041,14 @@ impl OperationBuilder {
 
     pub fn output_schema<Output: JsonSchema>(mut self) -> Self {
         self.inner.output_schema_json = Some(schema_json::<Output>());
+        self
+    }
+
+    /// How long the host may wait for this operation before it gives up on it.
+    /// Without this the host applies its default request deadline; `0` asks the
+    /// host to wait as long as the caller does.
+    pub fn timeout_secs(mut self, secs: u32) -> Self {
+        self.inner.timeout_secs = Some(secs);
         self
     }
 }

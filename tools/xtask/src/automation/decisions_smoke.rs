@@ -7,7 +7,10 @@ mod request;
 mod response;
 use super::guardrail_corpus::transport;
 use crate::{command::DynResult, command_interrupt::Interrupt, process::Cancellation};
-use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeSet,
+    time::{Duration, Instant},
+};
 
 async fn cancelled(token: &Cancellation) {
     while !token.is_cancelled() {
@@ -52,12 +55,54 @@ async fn exchange(
     serde_json::from_slice(&response.body)
         .map_err(|_| "Decisions smoke response is not JSON".into())
 }
+/// Bound the discovery walk well below the request deadline budget while
+/// still covering meshes larger than one default page.
+const DISCOVERY_PAGE_CAP: usize = 20;
+
+/// Follow bounded discovery pages within the shared deadline. `/v1/decisions`
+/// admission is capability-based, so no workload class filters the pages.
+async fn discovery_models(
+    base: &str,
+    deadline: Instant,
+    token: &Cancellation,
+) -> DynResult<serde_json::Value> {
+    let mut rows = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut cursor = String::new();
+    for _ in 0..DISCOVERY_PAGE_CAP {
+        let suffix = if cursor.is_empty() {
+            "mesh/v1/models?available=true".to_owned()
+        } else {
+            format!("mesh/v1/models?available=true&cursor={cursor}")
+        };
+        let page = exchange(base, &suffix, None, deadline, token).await?;
+        rows.extend(
+            page["data"]
+                .as_array()
+                .map(|data| data.iter().cloned())
+                .unwrap_or_default(),
+        );
+        let Some(next) = page["next_cursor"]
+            .as_str()
+            .filter(|next| !next.is_empty())
+            .map(str::to_owned)
+        else {
+            return Ok(serde_json::json!({"data": rows}));
+        };
+        if !seen.insert(next.clone()) {
+            return Err("Decisions discovery repeated a page cursor".into());
+        }
+        cursor = next;
+    }
+    Err("Decisions discovery exceeded its page cap".into())
+}
+
 async fn smoke(
     options: &options::Options,
     deadline: Instant,
     token: &Cancellation,
 ) -> DynResult<String> {
-    let models = exchange(&options.base, "v1/models", None, deadline, token).await?;
+    let models = discovery_models(&options.base, deadline, token).await?;
     let model = response::select_model(&models, options.model.as_deref())?;
     let body = request::questions(&model);
     let answers = exchange(&options.base, "v1/decisions", Some(&body), deadline, token).await?;

@@ -456,3 +456,101 @@ fn reservation_exhaustion_degrades_without_failing_inference() {
     assert!(engine.health().snapshot().reservation_exhausted > 0);
     clear_runtime_event_engine();
 }
+
+/// #2199: a successful long request must not lose its native decode timing.
+/// The terminal per-request summary is the durable carrier, so the receipt's
+/// per-token emission timings must reach the `generation_completed` terminal
+/// fact as a bounded derived summary even when client-side frames are lost.
+#[test]
+#[serial_test::serial(runtime_event_engine_state)]
+fn completed_receipt_terminal_carries_native_decode_timing() {
+    let engine = install_test_engine();
+    let adapter = SkippyGenerationRuntimeEventAdapter::new();
+
+    adapter
+        .try_submit(GenerationLifecycleObservation::Started(start(1, 2, None)))
+        .unwrap();
+    let mut receipt = receipt(1, 2, GenerationTermination::MaxTokens);
+    receipt.generated_token_ids = vec![7, 8, 9].into_boxed_slice();
+    receipt.request_to_token_emission_us = vec![1_000_000, 1_500_000, 2_000_000].into_boxed_slice();
+    adapter
+        .try_submit(GenerationLifecycleObservation::Completed(receipt))
+        .unwrap();
+    engine.drain();
+
+    let summaries = engine
+        .replay()
+        .snapshot()
+        .into_iter()
+        .find_map(|frame| match frame.fact.as_ref() {
+            RuntimeFact::Generation(fact)
+                if *fact.kind() == GenerationEventKind::GenerationCompleted =>
+            {
+                Some(fact.data().numeric_summaries.clone())
+            }
+            _ => None,
+        })
+        .expect("completed generation must carry a terminal fact");
+    // Three emissions spanning one second of decode: two intervals over
+    // 1_000_000 us is exactly 2 tok/s, reported as 2_000 milli-tok/s.
+    assert!(summaries.as_slice().iter().any(|summary| {
+        summary.key.as_str() == "decode_elapsed_us"
+            && summary.value == NumericValue::Unsigned(1_000_000)
+    }));
+    assert!(summaries.as_slice().iter().any(|summary| {
+        summary.key.as_str() == "decode_tokens_per_second_milli"
+            && summary.value == NumericValue::Unsigned(2_000)
+    }));
+    clear_runtime_event_engine();
+}
+
+/// #2199, production path: mesh serving installs lifecycle-only hooks, so a
+/// successful request finishes with a lightweight [`GenerationCompletion`],
+/// not a receipt. Its first/last token span must still reach the terminal.
+#[test]
+#[serial_test::serial(runtime_event_engine_state)]
+fn lightweight_completion_terminal_carries_native_decode_timing() {
+    let engine = install_test_engine();
+    let adapter = SkippyGenerationRuntimeEventAdapter::new();
+
+    adapter
+        .try_submit(GenerationLifecycleObservation::Started(start(1, 2, None)))
+        .unwrap();
+    adapter
+        .try_submit(GenerationLifecycleObservation::Finished(
+            GenerationCompletion::new(
+                1,
+                2,
+                5,
+                3,
+                GenerationTermination::MaxTokens,
+                Some(1_000_000),
+            )
+            .with_request_to_last_token_us(Some(2_000_000)),
+        ))
+        .unwrap();
+    engine.drain();
+
+    let summaries = engine
+        .replay()
+        .snapshot()
+        .into_iter()
+        .find_map(|frame| match frame.fact.as_ref() {
+            RuntimeFact::Generation(fact)
+                if *fact.kind() == GenerationEventKind::GenerationCompleted =>
+            {
+                Some(fact.data().numeric_summaries.clone())
+            }
+            _ => None,
+        })
+        .expect("completed generation must carry a terminal fact");
+    assert!(summaries.as_slice().iter().any(|summary| {
+        summary.key.as_str() == "decode_elapsed_us"
+            && summary.value == NumericValue::Unsigned(1_000_000)
+    }));
+    assert!(summaries.as_slice().iter().any(|summary| {
+        summary.key.as_str() == "decode_tokens_per_second_milli"
+            && summary.value == NumericValue::Unsigned(2_000)
+    }));
+    clear_runtime_event_engine();
+}

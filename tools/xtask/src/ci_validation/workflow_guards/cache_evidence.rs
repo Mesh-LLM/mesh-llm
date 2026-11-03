@@ -3,6 +3,8 @@ use super::{Node, cache_predicate::requires};
 use std::collections::{BTreeMap, BTreeSet};
 const CONFIGURE: &str = "./.github/actions/configure-sccache-gha";
 const CAPTURE: &str = "./.github/actions/capture-sccache-stats";
+const PREPARE_AUTOMATION: &str = "./.github/actions/prepare-automation";
+const PREPARE_RUNTIME: &str = "./.github/actions/prepare-native-runtime-input";
 pub(super) fn text<'a>(node: &'a Node, key: &str) -> &'a str {
     node.get(key).and_then(Node::text).unwrap_or("")
 }
@@ -188,6 +190,62 @@ pub(super) fn configure_action(action: &Node) -> Result<(), String> {
     }
     Ok(())
 }
+// On Windows the runtime producer prepares automation mid-job, which reapplies
+// sccache policy for every later step, so it must forward its caller's policy.
+pub(super) fn runtime_input_action(action: &Node) -> Result<(), String> {
+    let inputs = action.get("inputs").ok_or("runtime input inputs missing")?;
+    let steps = steps(action.get("runs").ok_or("runtime input runs missing")?);
+    let prepare = &steps[required_step(steps, |s| text(s, "uses") == PREPARE_AUTOMATION)?];
+    let forwarded = prepare
+        .get("with")
+        .ok_or("runtime input must forward cache authority")?;
+    for key in ["allow_depot_remote_cache", "allow_native_github_cache"] {
+        equal(
+            inputs.get(key).ok_or("runtime input authority missing")?,
+            "default",
+            "false",
+        )?;
+        equal(forwarded, key, &format!("${{{{ inputs.{key} }}}}"))?;
+    }
+    Ok(())
+}
+fn runtime_input_policy(name: &str, job: &str, steps: &[Node]) -> Result<(), String> {
+    let policy = |flag: &str| format!("${{{{ needs.runner_policy.outputs.{flag} }}}}");
+    let expected = match (name, job) {
+        (
+            "release.yml",
+            "build_native_runtime_windows_cpu" | "build_native_runtime_windows_gpu",
+        ) => [("allow_native_github_cache", "true".to_owned())].to_vec(),
+        ("ci-windows-runtime-slice.yml", "windows_runtime") => [
+            (
+                "allow_depot_remote_cache",
+                policy("allow_depot_remote_cache"),
+            ),
+            (
+                "allow_native_github_cache",
+                policy("allow_native_github_cache"),
+            ),
+        ]
+        .to_vec(),
+        _ => return Ok(()),
+    };
+    let callers: Vec<_> = steps
+        .iter()
+        .filter(|s| text(s, "uses") == PREPARE_RUNTIME)
+        .collect();
+    if callers.is_empty() {
+        return Err(format!("{name}/{job}: Windows runtime producer missing"));
+    }
+    for caller in callers {
+        let inputs = caller
+            .get("with")
+            .ok_or("runtime producer inputs missing")?;
+        for (key, value) in &expected {
+            equal(inputs, key, value).map_err(|e| format!("{name}/{job}: {e}"))?;
+        }
+    }
+    Ok(())
+}
 // The CI slices and original evidence callers own direct-install adjacency.
 // Release initialization is checked by its release owner before compilation;
 // every explicit configure caller here still declares cache authority.
@@ -331,6 +389,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
     for (name, workflow) in workflows {
         for (job_name, job) in workflow.get("jobs").ok_or("jobs missing")?.entries() {
             explicit_native_policy(name, job_name, steps(job))?;
+            runtime_input_policy(name, job_name, steps(job))?;
             callers(name, steps(job)).map_err(|e| format!("{name}: {e}"))?;
         }
     }

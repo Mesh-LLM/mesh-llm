@@ -17,6 +17,14 @@ inputs:
     description: Build the native libraries before packaging.
     required: false
     default: "true"
+  allow_depot_remote_cache:
+    description: Caller's Depot cache authority. On Windows, preparing automation reconfigures sccache for the rest of the job, so the caller's policy must be forwarded.
+    required: false
+    default: "false"
+  allow_native_github_cache:
+    description: Caller's GitHub cache authority. On Windows, preparing automation reconfigures sccache for the rest of the job, so the caller's policy must be forwarded.
+    required: false
+    default: "false"
 
 outputs:
   runtime_dir:
@@ -35,6 +43,9 @@ runs:
     - name: Prepare automation for runtime verification
       if: runner.os != 'Linux' && env.MESH_LLM_AUTOMATION_BIN == ''
       uses: ./.github/actions/prepare-automation
+      with:
+        allow_depot_remote_cache: ${{ inputs.allow_depot_remote_cache }}
+        allow_native_github_cache: ${{ inputs.allow_native_github_cache }}
 
     - name: Package and verify native runtime
       id: prepare

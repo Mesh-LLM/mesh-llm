@@ -33,6 +33,7 @@ fn installed_capsules(store_root: &Path, enabled: bool) -> InstalledPluginMetada
         last_protocol_version: Some(1),
         last_status: Some("installed".to_string()),
         last_error: None,
+        verified_sha256: None,
     };
     std::fs::create_dir_all(&metadata.install_path).expect("install dir");
     std::fs::write(metadata.executable_path(), b"").expect("plugin executable");
@@ -50,6 +51,7 @@ fn capsules_entry(command: Option<&str>) -> PluginConfigEntry {
         web_ui_enabled: None,
         web_ui_primary_tab: None,
         allow_peer_blocks: None,
+        allow_inference_observation: None,
         openai_exchange_grant: None,
         command: command.map(str::to_string),
         args: Vec::new(),
@@ -259,4 +261,31 @@ fn explicit_installed_command_still_runs_when_the_store_copy_is_disabled() {
     assert_eq!(spec.command, command);
     assert!(!spec.startup.optional, "explicit commands remain required");
     assert_eq!(spec.installed_metadata, Some(metadata));
+}
+
+/// `[plugin.settings]` are validated and shown in the console; the launch spec
+/// is what carries them to the process.
+#[test]
+#[serial_test::serial]
+fn configured_plugin_settings_reach_the_launch_spec() {
+    let store = tempfile::TempDir::new().expect("plugin store");
+    let mut entry = capsules_entry(Some("/opt/capsules/bin"));
+    entry.settings = [(
+        "greeting".to_string(),
+        toml::Value::String("marker-7f3a".to_string()),
+    )]
+    .into_iter()
+    .collect();
+
+    let resolved = with_plugin_dir(store.path(), || configured_external_plugin_spec(&entry))
+        .expect("entry resolves");
+
+    let ConfiguredExternalPlugin::Active(spec) = resolved else {
+        panic!("an enabled entry with a command is active");
+    };
+    assert_eq!(
+        spec.settings.get("greeting"),
+        Some(&serde_json::json!("marker-7f3a")),
+        "[plugin.settings] were dropped from the spec the plugin is started from"
+    );
 }

@@ -37,11 +37,13 @@ pub(super) fn partition(config: &StageConfig) -> Result<[StageConfig; 2]> {
         // Preserve the caller's chunk shape across both stage partitions.
     }
     stages[0].downstream = Some(PeerConfig {
+        persistent_lane_marker: false,
         stage_id: stages[1].stage_id.clone(),
         stage_index: 1,
         endpoint: stages[1].bind_addr.clone(),
     });
     stages[1].upstream = Some(PeerConfig {
+        persistent_lane_marker: false,
         stage_id: stages[0].stage_id.clone(),
         stage_index: 0,
         endpoint: stages[0].bind_addr.clone(),
@@ -69,6 +71,7 @@ pub(super) async fn terminal(config: StageConfig) -> Result<EmbeddedServerHandle
         continuous_batching: true,
         openai: None,
         compute_meter: None,
+        split_dflash: None,
         l3_manager: None,
     });
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);

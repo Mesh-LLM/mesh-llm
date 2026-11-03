@@ -92,7 +92,7 @@ pub(super) async fn rank(
         return Ok(false);
     }
     candidates.ordered.sort_by_key(|target| key(target));
-    let first = candidates.ordered.first().and_then(&key);
+    let first = candidates.ordered.first().and_then(key);
     candidates.equivalent_prefix = candidates
         .ordered
         .iter()
