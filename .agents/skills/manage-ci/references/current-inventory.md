@@ -1015,6 +1015,7 @@ selectors receive an explicit hosted override regardless of the manual input
 or repository gate; the release SDK uses metadata's frozen source SHA. The
 release `use_depot` input remains reserved until a provider profile is
 qualified. The separate rolling-preview GPU override is retained.
+
 ## Artifact and cache owners
 
 `native runtime-manifest-write` owns Windows ROCm target admission after the
