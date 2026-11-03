@@ -27,6 +27,7 @@ fn planned_host_roles_follow_checked_in_callers_and_selector_labels() {
             "linux-build-8",
             "linux_host",
             "runner_8",
+            "${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}",
             "depot-ubuntu-24.04-8",
             "ubuntu-24.04",
         ),
@@ -36,7 +37,8 @@ fn planned_host_roles_follow_checked_in_callers_and_selector_labels() {
             "macos-build",
             "macos_host",
             "runner_macos",
-            "depot-macos-15",
+            "false",
+            "macos-15",
             "macos-15",
         ),
         (
@@ -45,11 +47,12 @@ fn planned_host_roles_follow_checked_in_callers_and_selector_labels() {
             "windows-build",
             "windows_host",
             "runner_windows",
-            "depot-windows-2022",
+            "false",
+            "windows-2022",
             "windows-2022",
         ),
     ];
-    for (platform, row_id, role, job_id, output, depot_label, hosted_label) in cases {
+    for (platform, row_id, role, job_id, output, main_gate, main_label, hosted_label) in cases {
         let row = planned["matrices"]["hosts"]
             .as_array()
             .unwrap()
@@ -91,6 +94,15 @@ fn planned_host_roles_follow_checked_in_callers_and_selector_labels() {
             Some("${{ inputs.force_hosted }}")
         );
         assert_eq!(
+            workflows::input(selector, "depot_main_enabled"),
+            Some(main_gate)
+        );
+        let main_gate_value = match main_gate {
+            "false" => "false",
+            "${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}" => "true",
+            _ => panic!("unrecognized main gate for {platform}"),
+        };
+        assert_eq!(
             workflows::text(policy.get("outputs").unwrap(), output),
             Some(format!("${{{{ steps.policy.outputs.{output} }}}}").as_str())
         );
@@ -102,7 +114,7 @@ fn planned_host_roles_follow_checked_in_callers_and_selector_labels() {
         for (force, expected) in [
             (
                 planned["signals"]["force_hosted"].as_bool().unwrap(),
-                depot_label,
+                main_label,
             ),
             (
                 control["signals"]["force_hosted"].as_bool().unwrap(),
@@ -113,7 +125,7 @@ fn planned_host_roles_follow_checked_in_callers_and_selector_labels() {
             let result = fixture.selector(&[
                 ("INPUT_EVENT_NAME", "push"),
                 ("INPUT_REF", "refs/heads/main"),
-                ("INPUT_DEPOT_MAIN_ENABLED", "true"),
+                ("INPUT_DEPOT_MAIN_ENABLED", main_gate_value),
                 ("INPUT_FORCE_HOSTED", if force { "true" } else { "false" }),
             ]);
             assert!(result.status.success(), "{platform}: {result:?}");
@@ -171,6 +183,10 @@ fn planned_linux_cpu_runtime_keeps_the_hosted_exception() {
             workflows::text(selector, "uses"),
             Some("./.github/actions/select-ci-runners")
         );
+        assert_eq!(
+            workflows::input(selector, "depot_main_enabled"),
+            Some("${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}")
+        );
     }
     assert_eq!(
         workflows::input(normal, "force_hosted"),
@@ -185,6 +201,10 @@ fn planned_linux_cpu_runtime_keeps_the_hosted_exception() {
     assert_eq!(
         workflows::text(outputs, "runner_cpu"),
         Some("${{ steps.cpu_policy.outputs.runner_16 }}")
+    );
+    assert_eq!(
+        workflows::text(outputs, "allow_native_github_cache_cpu"),
+        Some("${{ steps.cpu_policy.outputs.allow_native_github_cache }}")
     );
     assert_eq!(
         workflows::text(workflows::job(&slice, "linux_runtime"), "runs-on"),

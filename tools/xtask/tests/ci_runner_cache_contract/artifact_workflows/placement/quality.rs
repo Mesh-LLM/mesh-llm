@@ -73,6 +73,14 @@ fn assert_quality_caller_wiring() {
         workflows::input(normal, "manual_use_depot"),
         Some("${{ inputs.use_depot }}")
     );
+    assert_eq!(
+        workflows::input(normal, "depot_main_enabled"),
+        Some("${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}")
+    );
+    assert_eq!(
+        workflows::input(normal, "depot_pr_enabled"),
+        Some("${{ vars.DEPOT_PR_RUNNERS_ENABLED == 'true' }}")
+    );
     for (key, expected) in [
         ("depot_main_enabled", "false"),
         ("depot_pr_enabled", "false"),
