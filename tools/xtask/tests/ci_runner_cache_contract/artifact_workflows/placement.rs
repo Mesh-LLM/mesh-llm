@@ -37,6 +37,37 @@ fn plan(profile: &str, event: &str, base: &str, path: &str) -> Value {
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
+fn nested_sdk_forwards_placement(workflow: &super::Node) -> bool {
+    let nested = super::job(workflow, "produce_linux_static_abi");
+    [
+        "force_hosted",
+        "use_depot",
+        "original_event_name",
+        "source_sha",
+    ]
+    .into_iter()
+    .all(|key| super::input(nested, key) == Some(format!("${{{{ inputs.{key} }}}}").as_str()))
+}
+
+fn release_sdk_forces_hosted(workflow: &super::Node) -> bool {
+    super::input(
+        super::job(workflow, "build_native_sdk_runtime"),
+        "force_hosted",
+    ) == Some("true")
+}
+
+fn assert_wiring_mutation_rejected(
+    file: &str,
+    original: &str,
+    replacement: &str,
+    check: fn(&super::Node) -> bool,
+) {
+    let source = super::source(file);
+    assert_eq!(source.matches(original).count(), 1, "{file}");
+    let changed = source.replacen(original, replacement, 1);
+    assert!(!check(&super::workflow_yaml::parse(&changed).unwrap()));
+}
+
 #[test]
 fn pr_and_dispatch_decisions_follow_planned_work_and_checked_in_linux_callers() {
     let lane = super::document("ci-linux-lane.yml");
@@ -91,20 +122,9 @@ fn pr_and_dispatch_decisions_follow_planned_work_and_checked_in_linux_callers() 
             );
         }
     }
-    let sdk = super::document("native-sdk-artifact.yml");
-    let nested_abi = super::job(&sdk, "produce_linux_static_abi");
-    for key in [
-        "force_hosted",
-        "use_depot",
-        "original_event_name",
-        "source_sha",
-    ] {
-        assert_eq!(
-            super::input(nested_abi, key),
-            Some(format!("${{{{ inputs.{key} }}}}").as_str()),
-            "{key}"
-        );
-    }
+    assert!(nested_sdk_forwards_placement(&super::document(
+        "native-sdk-artifact.yml"
+    )));
 
     let base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     let product = plan(
@@ -314,6 +334,53 @@ fn pr_and_dispatch_decisions_follow_planned_work_and_checked_in_linux_callers() 
     let malformed = fixture.selector(&[("INPUT_DEPOT_PR_ENABLED", "not-a-boolean")]);
     assert!(!malformed.status.success());
     assert!(!fixture.path().join("outputs").exists());
+}
+
+#[test]
+fn placement_guards_reject_nested_and_release_override_mutations() {
+    let sdk = super::document("native-sdk-artifact.yml");
+    assert!(nested_sdk_forwards_placement(&sdk));
+    let static_abi = super::document("static-abi-artifact.yml");
+    assert_eq!(
+        static_abi
+            .get("on")
+            .and_then(|on| on.get("workflow_call"))
+            .and_then(|call| call.get("inputs"))
+            .and_then(|inputs| inputs.get("force_hosted"))
+            .and_then(|input| super::text(input, "default")),
+        Some("false")
+    );
+    assert_wiring_mutation_rejected(
+        "native-sdk-artifact.yml",
+        "      original_event_name: ${{ inputs.original_event_name }}\n      force_hosted: ${{ inputs.force_hosted }}\n      backend: ${{ inputs.backend }}",
+        "      original_event_name: ${{ inputs.original_event_name }}\n      backend: ${{ inputs.backend }}",
+        nested_sdk_forwards_placement,
+    );
+
+    let release = super::document("release.yml");
+    assert!(release_sdk_forces_hosted(&release));
+    assert_wiring_mutation_rejected(
+        "release.yml",
+        "      original_event_name: ${{ github.event_name }}\n      force_hosted: true\n      use_depot: ${{ inputs.use_depot == true }}",
+        "      original_event_name: ${{ github.event_name }}\n      force_hosted: false\n      use_depot: ${{ inputs.use_depot == true }}",
+        release_sdk_forces_hosted,
+    );
+
+    // Exercise the real selector with the correctly forwarded override and
+    // with the false value caused by each synthetic wiring mutation.
+    for (force_hosted, expected_depot) in [("true", "false"), ("false", "true")] {
+        let fixture = support::Fixture::new();
+        let result = fixture.selector(&[
+            ("INPUT_EVENT_NAME", "workflow_dispatch"),
+            ("INPUT_REF", "refs/heads/main"),
+            ("INPUT_DEPOT_MAIN_ENABLED", "true"),
+            ("INPUT_MANUAL_USE_DEPOT", "true"),
+            ("INPUT_FORCE_HOSTED", force_hosted),
+        ]);
+        assert!(result.status.success(), "{result:?}");
+        assert_eq!(fixture.outputs()["depot_enabled"], expected_depot);
+        fixture.0.close().unwrap();
+    }
 }
 
 #[test]

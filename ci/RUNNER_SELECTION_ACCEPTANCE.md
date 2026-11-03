@@ -22,8 +22,12 @@ effective hosted cache behavior remain unobserved.
 
 The composed caller checks cover Linux static ABI and the native-SDK nested
 static-ABI path, including source identity, provider intent, hosted override,
-selected slices and artifact names. Other role/caller paths and the complete
-event-by-role acceptance matrix still need the same composed proof. The
+selected slices and artifact names. A local mutation fixture verifies that the
+same wiring checks reject a dropped nested hosted override and a disabled
+release SDK override. The real selector also demonstrates that those changed
+inputs can select Depot in a synthetic trusted manual-main scenario. This is
+not a live release or proof of other callers. Other role/caller paths and the
+complete event-by-role acceptance matrix still need the same composed proof. The
 source-only execution-record command can retain caller assertions alongside a
 selector trace, but does not authenticate the selector-to-job binding, observe
 the runner or cache, or retain an artifact. Protected `@main` execution, live
