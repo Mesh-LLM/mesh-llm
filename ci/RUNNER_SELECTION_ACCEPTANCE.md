@@ -1,0 +1,112 @@
+# Runner selection acceptance evidence
+
+This is the source-fixture inventory for #2785, not a provider qualification
+or a record of a hosted run. The `artifact_workflows::placement` tests feed
+the real planner's placement result into the checked-in selector and, for
+selected cases, into the compiler-cache action. Fixture dates are synthetic:
+they exercise the recorded exception boundary and do not renew the exception.
+The table records what the local tests assert; actual runner identity and
+effective hosted cache behavior remain unobserved.
+
+| Fixture condition | Local selection and cache assertion | Scope |
+| --- | --- | --- |
+| Ordinary main, selector gate on | Depot labels; direct Depot cache and native cache denied after expiry. | Generic selector fixture; individual callers may hold their gate off. |
+| Ordinary main, gate off | GitHub-hosted labels. | Exhaustive coverage remains selected. |
+| Main control change, missing base, or forced-hosted override | GitHub-hosted labels despite the main gate. | Planner placement and selector composed. |
+| Manual-full on main with Depot requested | Depot labels when no hosted override applies; otherwise hosted. | Generic selector fixture; caller-specific input forwarding still applies. |
+| Manual controller dispatch | The checked-in resolver and dispatcher forward both opt-in values, source identity and event to selected lanes; all dispatched inputs match the checked-in lane declarations. | Finite GitHub API seams; does not execute a hosted workflow or prove the protected revision. |
+| Same-repository PR before expiry, gate on | Depot labels; the selected compiler-cache fixture remains disk-only for PR execution. | Historical boundary case, not a current approval. |
+| PR at expiry, fork, target event, PR-origin dispatch, or gate off | GitHub-hosted labels. | Trust and event boundary fixtures. |
+| Expired exact-ref canary | Matching same-repository merge ref may select Depot but both direct Depot cache and native cache are denied. | Selector behavior only; no canary activation is asserted. |
+| Wrong canary ref, fork, or PR head ref | GitHub-hosted labels. | Selector refusal fixtures. |
+| Unsupported event or malformed boolean | Selector falls back to hosted for an unsupported event; malformed booleans are refused. The planner rejects unsupported event names. | No fallback to a privileged provider. |
+| Main host roles, repository gate on | Linux host projects Depot; macOS and Windows host callers keep their main gates off and project hosted labels. A control-change plan projects hosted labels for all three. | Planned host rows, checked-in caller gates and real selector; no hosted execution. |
+| Main Linux runtime, gate on | CPU's explicit override projects hosted placement and native-cache permission while the general runtime selector projects a Depot label and denies that cache. | Planned CPU/CUDA rows and checked-in selector projection; no observed runner or cache. |
+| Main macOS and Windows runtimes | Both callers keep their main gates off and project hosted labels while retaining runtime artifact names. | Planned runtime rows and checked-in callers; no observed job or artifact. |
+| Main platform checks | macOS and Windows check callers keep the main gate off; the actual mapping step maps selector labels to the planned platforms. | Local planner, selector and shell mapping fixture; no observed job. |
+| Main Rust, console, website and Swift callers | These callers keep their main gates off and project hosted labels while retaining selected batches, jobs and artifact names. | Local planner and checked-in caller fixtures; no observed job or artifact. |
+| Manual full release with Depot requested | Release metadata and its nested native-SDK/static-ABI path keep explicit hosted overrides and preserve source and artifact identities. | Synthetic selector and checked-in caller fixtures; no release was dispatched. |
+| Direct caller event matrix | All 20 direct selector steps are exercised with their checked-in gates and overrides across 14 main, control, manual, PR, fork, expiry and exact-ref cases. | Local synthetic inputs and real selector; nested callers, commands and live execution remain incomplete. |
+| Protected PR canary CPU chain | The checked-in canary matrix step selects the one catalog CPU row; its UI, host, runtime and product callers forward the merge source and forced-hosted policy. The real selector projects hosted labels for same-repository and fork contexts. | Local script and wiring fixtures only; no canary was dispatched, and protected `@main` may differ from candidate source. |
+| Main product composition | Linux, macOS and Windows product callers keep their main gates off and project hosted labels; host, runtime and product artifact names remain bound. | Planned runtime rows and checked-in callers; no observed job or artifact. |
+| Quality role and sentinel | Planner inputs and checked-in Quality callers project the expected 4/8-worker labels for main, control, expired PR, fork and PR dispatch; the separate sentinel fixture requires its exact ref. | Synthetic selector and wiring fixtures; no sentinel activation or observed job. |
+
+## Direct selector caller census
+
+This census covers direct workflow steps using `select-ci-runners`, not all
+transitive callers, third-party actions, or live execution. `partial` means at
+least one composed case above covers the caller; it does not mean its full
+event/role matrix is complete. `open` means no composed caller case is recorded
+here. All rows still need complete coverage and review. Zero `open` rows means
+only that each direct step has at least one case, not that the matrix is complete.
+The census test verifies caller identities and declared core inputs; it does
+not independently prove that a row's coverage label is complete.
+
+Current census: 20 direct selector steps; 20 partial and 0 open.
+
+<!-- selector-census:start -->
+| Workflow | Job | Step | Coverage |
+| --- | --- | --- | --- |
+| `ci-linux-host-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-linux-product-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-linux-runtime-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-linux-runtime-slice.yml` | `runner_policy` | `cpu_policy` | partial |
+| `ci-macos-host-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-macos-product-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-macos-runtime-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-platform-checks-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-quality-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-quality-slice.yml` | `runner_policy` | `sentinel_policy` | partial |
+| `ci-rust-tests-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-ui-artifact-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-web-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-windows-host-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-windows-product-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-windows-runtime-slice.yml` | `runner_policy` | `policy` | partial |
+| `native-sdk-artifact.yml` | `runner_policy` | `policy` | partial |
+| `release.yml` | `metadata` | `runners` | partial |
+| `static-abi-artifact.yml` | `runner_policy` | `policy` | partial |
+| `swift-sdk-artifact.yml` | `runner_policy` | `policy` | partial |
+<!-- selector-census:end -->
+
+The checked-in reusable-workflow census tracks 39 static call edges that can
+reach these selector steps, including protected `@main` references. It checks
+that each declared policy and source input is supplied, except for four
+push-only or PR-only entrypoints that intentionally use the lane's false
+`use_depot` default. The contract rejects an enabled default or an added manual
+trigger for those exceptions. For the ten main/PR entrypoints it also checks
+the event, source and plan bindings; for standard Linux, macOS, Windows,
+Quality and website lane-to-slice edges it checks exact source and original-event
+forwarding, the plan's fail-closed hosted override and the manual Depot input
+when the target declares them. The nine canary, release and nested SDK edges
+are checked against their own source, event and hosted-override rules. Mutation
+fixtures reject nonempty substitutions that would lose those bindings. A new
+special edge needs an explicit value contract as well as a census entry. These
+checks do not prove every input or event/role outcome; dynamic dispatch,
+third-party actions and the actual protected `@main` revision remain outside
+this source census.
+
+The composed caller checks cover Linux static ABI, the native-SDK nested
+static-ABI path, the three platform host, runtime and product paths, Linux
+runtime's CPU exception and Quality's normal and sentinel selectors, including
+selected planner rows and forwarding. A local mutation fixture verifies that
+the same wiring checks reject a dropped nested hosted override and a disabled
+release SDK override.
+The direct caller contract also rejects replacing the PR head identity recorded
+in the selection trace with the workflow SHA. This remains a source check, not
+an authenticated binding to a running job.
+The selector's deprecated `pr_approved_ref` and `pr_approved_sha` inputs are
+compatibility fields and do not authorize placement. Removing them requires a
+coordinated change to their remaining callers and guards.
+The real selector also demonstrates that dropping those hosted overrides can
+select Depot in a synthetic trusted manual-main scenario. This is not a live
+release or proof of other callers.
+Other role/caller paths and the complete event-by-role acceptance matrix still
+need the same composed proof. The source-only execution-record command can
+render caller assertions alongside a selector trace. It rejects contradictory
+provider, label, reason and cache projections, and the direct caller matrix
+exercises the validator against real selector output. These checks do not
+authenticate the trace or selector-to-job binding, observe the runner or
+cache, or retain an artifact. Protected `@main` execution, live
+runner identity, provider isolation and same-source timing evidence remain
+separate requirements.
