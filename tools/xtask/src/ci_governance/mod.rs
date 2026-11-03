@@ -3,6 +3,7 @@ pub(crate) mod activation;
 pub(crate) mod app_auth;
 pub(crate) mod approval;
 pub(crate) mod collector;
+mod live_inspection;
 pub(crate) mod operations;
 pub(crate) mod ownership;
 pub(crate) mod policy;
@@ -24,12 +25,13 @@ pub(crate) fn run(root: &Path, args: &[String]) -> DynResult<()> {
     if args.is_empty() || args == ["--help"] {
         writeln!(
             crate::cli_output::stdout(),
-            "ci-governance validate-pr --policy PATH --snapshot PATH\nci-governance validate-ownership --policy PATH --codeowners PATH\nci-governance validate-change --policy PATH --expected PATH --record PATH --observed PATH\nci-governance check-drift --policy PATH --expected PATH --observed PATH\nci-governance activation-status\nci-governance collect-pr <positive PR number>\nci-governance publish-pr <positive PR number>\nci-governance resolve-publisher-event\nci-governance publish-event --expected-pr N\nci-governance prepare-administration --record-id UUID --record-sha256 SHA256\nci-governance inspect-administration-approval --record-id UUID --record-sha256 SHA256\nLocal snapshot checks only establish consistency; live adapters require protected activation and explicit App credentials."
+            "ci-governance validate-pr --policy PATH --snapshot PATH\nci-governance validate-ownership --policy PATH --codeowners PATH\nci-governance validate-change --policy PATH --expected PATH --record PATH --observed PATH\nci-governance check-drift --policy PATH --expected PATH --observed PATH\nci-governance inspect-live-controls\nci-governance activation-status\nci-governance collect-pr <positive PR number>\nci-governance publish-pr <positive PR number>\nci-governance resolve-publisher-event\nci-governance publish-event --expected-pr N\nci-governance prepare-administration --record-id UUID --record-sha256 SHA256\nci-governance inspect-administration-approval --record-id UUID --record-sha256 SHA256\nLocal snapshot checks only establish consistency; the read-only inspector reports partial unverified observations; activated enforcement requires protected activation and explicit App credentials."
         )?;
         return Ok(());
     }
     let command = args[0].as_str();
     match command {
+        "inspect-live-controls" => return print_json(&live_inspection::run(root, &args[1..])?),
         "activation-status" => return publisher::activation_status(root, &args[1..]),
         "publish-pr" => return publisher::run(root, &args[1..]),
         "collect-pr" => return publisher::collect_pr(root, &args[1..]),

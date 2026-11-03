@@ -239,3 +239,82 @@ fn every_governance_target_is_in_both_exact_quality_rosters() -> TestResult {
     }
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn live_inspection_cli_uses_fixed_gets_and_preserves_denials_as_unknown() -> TestResult {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+
+    let temp = tempfile::tempdir()?;
+    let bin = temp.path().join("bin");
+    fs::create_dir(&bin)?;
+    let gh = bin.join("gh");
+    fs::write(
+        &gh,
+        r##"#!/bin/sh
+set -eu
+directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+method_ok=false
+endpoint=
+for arg in "$@"; do
+    [ "$arg" != GET ] || method_ok=true
+    case "$arg" in repos/Mesh-LLM/mesh-llm*|orgs/Mesh-LLM/teams/ci-policy-reviewers*) endpoint=$arg;; esac
+done
+[ "$method_ok" = true ] || exit 42
+case "$endpoint" in
+  'repos/Mesh-LLM/mesh-llm'|'repos/Mesh-LLM/mesh-llm/branches/main'|\
+  'orgs/Mesh-LLM/teams/ci-policy-reviewers'|\
+  'orgs/Mesh-LLM/teams/ci-policy-reviewers/repos/Mesh-LLM/mesh-llm'|\
+  'repos/Mesh-LLM/mesh-llm/environments/ci-governance-administration'|\
+  'repos/Mesh-LLM/mesh-llm/branches/main/protection'|\
+  'repos/Mesh-LLM/mesh-llm/rulesets?per_page=100&page=1') ;;
+  *) exit 43;;
+esac
+printf '%s\n' "$endpoint" >> "$directory/requests"
+printf 'HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n\r\n{"message":"fixture-private-error"}'
+exit 1
+"##,
+    )?;
+    fs::set_permissions(&gh, fs::Permissions::from_mode(0o700))?;
+    let path = format!("{}:/usr/bin:/bin", bin.display());
+    let output = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .current_dir(root())
+        .args(["ci-governance", "inspect-live-controls"])
+        .env("PATH", path)
+        .env("MESH_CI_GOVERNANCE_AUDIT_TOKEN", "fixture-private-token")
+        .output()?;
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(!stdout.contains("fixture-private-token"));
+    assert!(!stdout.contains("fixture-private-error"));
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("fixture-private"));
+    let report: Value = serde_json::from_str(&stdout)?;
+    assert_eq!(report["status"], "PARTIAL_UNVERIFIED");
+    assert_eq!(report["drift_status"], "UNKNOWN");
+    assert_eq!(report["activation_authorized"], false);
+    for source in [
+        "repository",
+        "main_branch",
+        "reviewer_team",
+        "team_repository_access",
+        "administration_environment",
+        "legacy_branch_protection",
+        "repository_rulesets_first_page",
+    ] {
+        assert_eq!(
+            report["observations"][source]["reason"], "access_denied",
+            "{source}"
+        );
+    }
+    let requests = fs::read_to_string(bin.join("requests"))?;
+    let lines = requests.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 7);
+    assert_eq!(lines.iter().copied().collect::<BTreeSet<_>>().len(), 7);
+    Ok(())
+}

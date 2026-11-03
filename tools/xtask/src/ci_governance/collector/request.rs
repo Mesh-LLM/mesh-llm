@@ -28,6 +28,10 @@ pub(crate) enum CheckConclusion {
 pub(crate) enum Request {
     Repository,
     CurrentMain,
+    /// The legacy branch-protection endpoint; a denial is not absence.
+    MainBranchProtection,
+    /// One bounded page only. It is not a complete effective-ruleset census.
+    RepositoryRulesetsFirstPage,
     Pull {
         number: u64,
     },
@@ -105,6 +109,10 @@ impl Request {
         let (method, endpoint, body) = match self {
             Self::Repository => ("GET", repo, None),
             Self::CurrentMain => ("GET", format!("{repo}/branches/main"), None),
+            Self::MainBranchProtection => ("GET", format!("{repo}/branches/main/protection"), None),
+            Self::RepositoryRulesetsFirstPage => {
+                ("GET", format!("{repo}/rulesets?per_page=100&page=1"), None)
+            }
             Self::Pull { number } => ("GET", format!("{repo}/pulls/{}", positive(*number)?), None),
             Self::Policy { revision } => {
                 if !valid_sha(revision) {
@@ -333,3 +341,41 @@ fn validate_cursor(cursor: &Option<String>) -> DynResult<()> {
 
 const REVIEWS_QUERY: &str = r#"query($number:Int!,$cursor:String){repository(owner:"Mesh-LLM",name:"mesh-llm"){pullRequest(number:$number){reviews(first:100,after:$cursor){totalCount nodes{fullDatabaseId state submittedAt commit{oid} author{__typename login ... on User{databaseId} ... on Bot{databaseId}}} pageInfo{hasNextPage endCursor}}}}}"#;
 const MEMBERS_QUERY: &str = r#"query($cursor:String){organization(login:"Mesh-LLM"){team(slug:"ci-policy-reviewers"){databaseId members(first:100,after:$cursor,membership:ALL){totalCount nodes{__typename login databaseId} pageInfo{hasNextPage endCursor}}}}}"#;
+
+#[cfg(test)]
+mod inspection_request_tests {
+    use super::*;
+
+    #[test]
+    fn inspection_endpoints_are_fixed_read_only_requests() {
+        for (request, endpoint) in [
+            (Request::Repository, "repos/Mesh-LLM/mesh-llm"),
+            (
+                Request::CurrentMain,
+                "repos/Mesh-LLM/mesh-llm/branches/main",
+            ),
+            (Request::Team, "orgs/Mesh-LLM/teams/ci-policy-reviewers"),
+            (
+                Request::TeamPermission,
+                "orgs/Mesh-LLM/teams/ci-policy-reviewers/repos/Mesh-LLM/mesh-llm",
+            ),
+            (
+                Request::AdministrationEnvironment,
+                "repos/Mesh-LLM/mesh-llm/environments/ci-governance-administration",
+            ),
+            (
+                Request::MainBranchProtection,
+                "repos/Mesh-LLM/mesh-llm/branches/main/protection",
+            ),
+            (
+                Request::RepositoryRulesetsFirstPage,
+                "repos/Mesh-LLM/mesh-llm/rulesets?per_page=100&page=1",
+            ),
+        ] {
+            let encoded = request.encode().unwrap();
+            assert_eq!(encoded.method, "GET");
+            assert_eq!(encoded.endpoint, endpoint);
+            assert!(encoded.body.is_none());
+        }
+    }
+}

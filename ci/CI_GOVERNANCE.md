@@ -1,5 +1,18 @@
 # CI governance: human review and activation
 
+The optional `cargo xtool ci-governance inspect-live-controls` command accepts
+an existing read-only credential through `MESH_CI_GOVERNANCE_AUDIT_TOKEN` and
+uses a fixed, bounded set of GitHub GET requests. It never mints a credential
+or retries a denied request. A 403 is unknown; a 404 is ambiguous between
+absence and inaccessible state. The output is deliberately partial and
+unverified: membership, effective inherited rules, path-scoped requirements,
+required-check sources, bypasses, environment review/branch policy, and token
+permissions remain unknown. It does not authenticate its observer, establish
+an atomic snapshot, report drift clearance, deliver notifications, or grant
+execution or activation authority. Treat observed values as leads for the
+independent human's complete readback, not as substitutes for it. Do not put
+credentials or raw provider error bodies into records.
+
 The normative rule is in the [manage-ci skill](../.agents/skills/manage-ci/SKILL.md#independent-human-approval-for-ci-policy).
 This procedure implements issue [#2781](https://github.com/Mesh-LLM/mesh-llm/issues/2781).
 It is a local proposal until an eligible independent human reviews the exact

@@ -34,6 +34,11 @@ capacity, queue/backlog behavior or actual drift/report delivery latency.
 The team must be independently approved, created/verified and read back as a
 valid write-access owner before its CODEOWNERS references merge; native rules
 require separate authorized activation and live readback.
+An optional `ci-governance inspect-live-controls` command reports a bounded
+subset of live controls with an explicitly supplied existing read-only token.
+It makes fixed GET requests and records denied and ambiguous missing controls
+as unknown. Its output is partial, unauthenticated and non-atomic; it cannot
+prove effective rules, drift clearance, token scope or activation authority.
 
 ## Standalone C++ API qualification
 

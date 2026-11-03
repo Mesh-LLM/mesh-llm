@@ -99,7 +99,11 @@ initial governance PR itself needs eligible independent review before merge;
 team bootstrap precedes merge of its ownership references, and live rule
 activation needs separate authorized human administration and readback. Team
 and rule state remain unverified/inactive until actual live readback establishes
-otherwise.
+otherwise. The optional `ci-governance inspect-live-controls` command uses only
+an explicitly supplied existing read-only token and fixed GitHub GET requests.
+It reports denied or inaccessible controls as unknown. Its partial,
+unauthenticated output is neither drift clearance nor activation evidence and
+does not replace the protected observer or independent human approval.
 An administrator can still change protections, and an agent holding a human
 token is indistinguishable from that human to GitHub. Retain credential
 separation, audit and drift controls; do not promise perfect prevention.
