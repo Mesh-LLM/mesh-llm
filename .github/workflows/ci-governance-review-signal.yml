@@ -1,0 +1,16 @@
+name: CI governance review signal
+
+on:
+  pull_request_review:
+    types: [submitted, edited, dismissed]
+
+permissions: {}
+
+jobs:
+  signal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Signal metadata recollection
+        shell: bash
+        run: ':'

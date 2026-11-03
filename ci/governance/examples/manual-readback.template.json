@@ -1,0 +1,14 @@
+{
+  "operation_id": "<same canonical lowercase UUID as approved request>",
+  "request_sha256": "<same canonical reviewed ChangeRequest SHA256; sorted object keys and normalized unordered before/desired state lists>",
+  "execution": "<same complete approved ExecutionContext object>",
+  "operated_at_unix": "<actual human operation time within approval window>",
+  "observed_at_unix": "<actual after-readback time>",
+  "operator": {"login": "<same approved human operator>", "id": "<verified account ID>", "kind": "human"},
+  "actual_state": "<complete actual after LiveState object>",
+  "operation_link": "<HTTPS repository operation audit evidence link>",
+  "readback_link": "<HTTPS repository actual provider readback evidence link>",
+  "replay_ledger_link": "<HTTPS repository protected updated one-use ledger evidence link>",
+  "consumed_operation_ids": ["<all prior canonical UUIDs plus this operation exactly once>"],
+  "replay_ledger_complete": false
+}

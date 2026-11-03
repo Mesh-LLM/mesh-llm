@@ -1,0 +1,114 @@
+name: CI governance administration plan
+
+on:
+  workflow_dispatch:
+    inputs:
+      record_id:
+        description: Canonical UUID of a reviewed intent on protected main.
+        required: true
+        type: string
+      record_sha256:
+        description: SHA256 of the exact reviewed intent file bytes.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-governance-administration
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      active: ${{ steps.cost.outputs.active }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Skip inactive preparation without entering an environment
+        id: cost
+        shell: bash
+        run: |
+          set -euo pipefail
+          git --no-replace-objects show "$GITHUB_SHA:ci/governance/activation.json" > "$RUNNER_TEMP/governance-cost-hint.json"
+          active="$(jq -r .active "$RUNNER_TEMP/governance-cost-hint.json")"
+          case "$active" in true|false) ;; *) exit 1 ;; esac
+          printf 'active=%s\n' "$active" >> "$GITHUB_OUTPUT"
+
+  prepare:
+    needs: preflight
+    if: ${{ needs.preflight.outputs.active == 'true' && github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    # The parent App key can publish checks. This job mints only a read-scoped
+    # installation token and has no administration-write permission.
+    environment: ci-governance-publisher
+    outputs:
+      active: ${{ steps.activation.outputs.active }}
+      artifact_id: ${{ steps.automation.outputs.artifact_id }}
+      binary_sha256: ${{ steps.automation.outputs.binary_sha256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/upload-automation
+        id: automation
+        with:
+          runner-profile: hosted-bare
+          source-profile: protected-clean
+          source_sha: ${{ github.sha }}
+      - name: Inspect protected activation
+        id: activation
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" ci-governance activation-status > "$RUNNER_TEMP/governance-activation.json"
+          printf 'active=%s\n' "$(jq -r .active "$RUNNER_TEMP/governance-activation.json")" >> "$GITHUB_OUTPUT"
+      - name: Prepare concrete nonauthorizing review packet
+        if: ${{ steps.activation.outputs.active == 'true' }}
+        shell: bash
+        env:
+          CI_GOVERNANCE_APP_PRIVATE_KEY: ${{ secrets.CI_GOVERNANCE_APP_PRIVATE_KEY }}
+          GOVERNANCE_RECORD_ID: ${{ inputs.record_id }}
+          GOVERNANCE_RECORD_SHA256: ${{ inputs.record_sha256 }}
+        run: |
+          set -euo pipefail
+          "$MESH_LLM_AUTOMATION_BIN" ci-governance prepare-administration --record-id "$GOVERNANCE_RECORD_ID" --record-sha256 "$GOVERNANCE_RECORD_SHA256" > "$RUNNER_TEMP/governance-prepared.json"
+          cat "$RUNNER_TEMP/governance-prepared.json" >> "$GITHUB_STEP_SUMMARY"
+
+  independent_review:
+    needs: prepare
+    if: ${{ needs.prepare.outputs.active == 'true' && github.ref == 'refs/heads/main' && github.workflow_sha == github.sha }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    # Required reviewers, self-review prevention, disabled admin bypass and
+    # exact-main deployment rules are external prerequisites, still pending.
+    environment: ci-governance-administration
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/restore-automation
+        with:
+          source_sha: ${{ github.sha }}
+          artifact_id: ${{ needs.prepare.outputs.artifact_id }}
+          binary_sha256: ${{ needs.prepare.outputs.binary_sha256 }}
+          producer_os: Linux
+          producer_arch: X64
+      - name: Inspect review evidence and refuse unsupported authorization
+        shell: bash
+        env:
+          CI_GOVERNANCE_APP_PRIVATE_KEY: ${{ secrets.CI_GOVERNANCE_APP_PRIVATE_KEY }}
+          GOVERNANCE_RECORD_ID: ${{ inputs.record_id }}
+          GOVERNANCE_RECORD_SHA256: ${{ inputs.record_sha256 }}
+        run: '"$MESH_LLM_AUTOMATION_BIN" ci-governance inspect-administration-approval --record-id "$GOVERNANCE_RECORD_ID" --record-sha256 "$GOVERNANCE_RECORD_SHA256"'
