@@ -21,18 +21,20 @@ effective hosted cache behavior remain unobserved.
 | Unsupported event or malformed boolean | Selector falls back to hosted for an unsupported event; malformed booleans are refused. The planner rejects unsupported event names. | No fallback to a privileged provider. |
 | Main host roles, gate on | Linux, macOS and Windows host callers project their respective Depot labels; a control-change plan projects hosted labels. | Planned host rows, caller wiring and real selector; no hosted execution. |
 | Main Linux runtime, gate on | CPU's explicit override projects hosted placement and native-cache permission while the general runtime selector projects a Depot label and denies that cache. | Planned CPU/CUDA rows and checked-in selector projection; no observed runner or cache. |
+| Quality role and sentinel | Planner inputs and checked-in Quality callers project the expected 4/8-worker labels for main, control, expired PR, fork and PR dispatch; the separate sentinel fixture requires its exact ref. | Synthetic selector and wiring fixtures; no sentinel activation or observed job. |
 
 The composed caller checks cover Linux static ABI, the native-SDK nested
-static-ABI path, the three platform host paths and Linux runtime's CPU
-exception, including selected planner rows and forwarding. A local mutation
-fixture verifies that the same wiring checks reject a dropped nested hosted
-override and a disabled release SDK override. The real selector also
-demonstrates that those changed inputs can select Depot in a synthetic trusted
-manual-main scenario. This is not a live release or proof of other callers.
+static-ABI path, the three platform host paths, Linux runtime's CPU exception
+and Quality's normal and sentinel selectors, including selected planner rows
+and forwarding. A local mutation fixture verifies that the same wiring checks
+reject a dropped nested hosted override and a disabled release SDK override.
+The real selector also demonstrates that those changed inputs can select Depot
+in a synthetic trusted manual-main scenario. This is not a live release or
+proof of other callers.
 Other role/caller paths and the complete event-by-role acceptance matrix still
-need the same composed proof. The
-source-only execution-record command can retain caller assertions alongside a
-selector trace, but does not authenticate the selector-to-job binding, observe
-the runner or cache, or retain an artifact. Protected `@main` execution, live
+need the same composed proof. The source-only execution-record command can
+retain caller assertions alongside a selector trace, but does not authenticate
+the selector-to-job binding, observe the runner or cache, or retain an
+artifact. Protected `@main` execution, live
 runner identity, provider isolation and same-source timing evidence remain
 separate requirements.
