@@ -3,6 +3,7 @@
 //! bootstrap identity.
 
 pub mod bootstrap;
+pub mod capacity_preview;
 pub mod child_output;
 pub mod lane_results;
 pub mod plan;
