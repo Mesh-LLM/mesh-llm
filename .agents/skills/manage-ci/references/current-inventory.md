@@ -55,6 +55,10 @@ permitted; release composition remains compilation-free. Live execution and
 runtime-seed timing qualification are not claimed by this source cutover.
 
 This file records checked-in CI facts and selected controlled probe evidence.
+The hosted-bare preparation census fails on unclassified explicit profiles,
+non-hosted literal callers, or drift in closed producer/release runner paths.
+Canary dynamic profiles retain their separate self-hosted contract; this check
+does not qualify live labels or resources.
 It is not a complete historical run log or live GitHub/Depot administration.
 Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
