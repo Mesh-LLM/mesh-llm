@@ -35,7 +35,7 @@ fn skippy_stage_subprotocols(
     }
     if stage_protocol_generation_supported {
         features.push(
-            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12.to_string(),
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V13.to_string(),
         );
     }
     if artifact_transfer_supported {
@@ -89,7 +89,7 @@ fn supports_decode_batch_policy(subprotocols: &[crate::proto::node::MeshSubproto
 /// Accept a stage generation only when one descriptor contains its entire bundle.
 fn supports_skippy_stage_generation(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
     let required_features = [
-        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V13,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
@@ -307,10 +307,10 @@ fn descriptor_identity_to_proto(
         // `weights_digest` deliberately does NOT cross the gossip wire: it is
         // a hash of file bytes only THIS node can read, so a peer receiving
         // it over gossip could never verify it against anything -- it would
-        // be a claim, not a locally-checkable fact. A future exchange-event
-        // consumer could carry it to whoever actually served the exchange
-        // instead, but no such consumer exists in this crate today -- see
-        // `runtime/local.rs::set_local_model_weights_digest`'s doc comment.
+        // be a claim, not a locally-checkable fact. The serving node instead
+        // returns it per response to the peer that asked it to serve
+        // (`x-mesh-weights-digest`), which records it as that node's
+        // statement -- see `runtime/local.rs::set_local_model_weights_digest`.
     }
 }
 

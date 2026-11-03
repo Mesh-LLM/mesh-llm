@@ -13,6 +13,7 @@ use crate::frontend::generation::InferenceBackendMode;
 use crate::frontend::generation::PersistentStageLanePool;
 use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
+use crate::frontend::generation::attach_dflash_draft;
 use crate::frontend::generation::attach_native_mtp_draft_model;
 use crate::frontend::generation::ensure_generation_concurrency_fits_lanes;
 use crate::frontend::generation::generation_admission_lane_count;
@@ -90,6 +91,10 @@ pub struct EmbeddedOpenAiArgs {
     pub model_id: Option<String>,
     pub default_max_tokens: u32,
     pub request_defaults: EmbeddedOpenAiRequestDefaults,
+    /// Scope this backend's request defaults register under, so
+    /// [`replace_live_request_defaults`] only reaches the owner that asked.
+    /// `0` for backends nobody swaps live.
+    pub live_defaults_scope: u64,
     pub generation_concurrency: usize,
     pub continuous_batching: bool,
     /// Decode-wave groups for this frontend's dispatcher. `None` keeps the
@@ -273,6 +278,11 @@ fn embedded_openai_backend_with_state_kind(
     {
         bail!("embedded OpenAI serving is only supported on stage 0");
     }
+    if args.speculative.dflash.is_some()
+        && (args.native_mtp_enabled || args.draft_model_path.is_some())
+    {
+        bail!("a DFlash draft cannot be combined with native MTP or a separate draft model");
+    }
     apply_native_mtp_draft_cap(&mut args.speculative, state_kind);
     attach_native_mtp_draft_model(
         args.native_mtp_draft_model_path.as_deref(),
@@ -281,6 +291,27 @@ fn embedded_openai_backend_with_state_kind(
         args.draft_n_gpu_layers,
         &args.speculative,
     )?;
+    if let Some(info) = attach_dflash_draft(
+        &args.runtime,
+        &args.config,
+        args.draft_n_gpu_layers,
+        &args.speculative,
+    )? {
+        let mut attrs = lifecycle_attrs(&args.config);
+        attrs.insert(
+            "llama_stage.dflash.variant".to_string(),
+            serde_json::json!(info.variant.as_str()),
+        );
+        attrs.insert(
+            "llama_stage.dflash.block_size".to_string(),
+            serde_json::json!(info.block_size),
+        );
+        attrs.insert(
+            "llama_stage.dflash.max_draft_tokens".to_string(),
+            serde_json::json!(info.max_draft_tokens),
+        );
+        args.telemetry.emit("stage.openai_dflash_attached", attrs);
+    }
     let draft = open_draft_runner(
         args.draft_model_path.as_deref(),
         &args.config,
@@ -405,7 +436,11 @@ fn embedded_openai_backend_with_state_kind(
         telemetry: args.telemetry.clone(),
         model_id: model_id.clone(),
         default_max_tokens: args.default_max_tokens,
-        request_defaults: args.request_defaults,
+        request_defaults: super::LiveRequestDefaults::register(
+            args.live_defaults_scope,
+            model_id.as_str(),
+            args.request_defaults,
+        ),
         thinking: thinking.clone(),
         ctx_size,
         mode,

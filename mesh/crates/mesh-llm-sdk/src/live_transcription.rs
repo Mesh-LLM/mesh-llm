@@ -66,6 +66,12 @@ pub struct LiveTranscriptionOptions {
     /// Server-side turn detection; `None` ends turns only on
     /// [`LiveTranscription::commit`] (push to talk).
     pub turn_detection: Option<LiveTurnDetection>,
+    /// New audio between transcription passes, 200 to 5000 ms; shorter gives
+    /// faster deltas for more work. `None` keeps the node's default (1 s).
+    pub step_ms: Option<u32>,
+    /// Also report [`LiveTranscriptionEvent::Tentative`]: what the latest pass
+    /// heard but has not confirmed, a pass sooner than the deltas.
+    pub tentative: bool,
 }
 
 impl Default for LiveTranscriptionOptions {
@@ -76,6 +82,8 @@ impl Default for LiveTranscriptionOptions {
             prompt: None,
             sample_rate: 16_000,
             turn_detection: Some(LiveTurnDetection::default()),
+            step_ms: None,
+            tentative: false,
         }
     }
 }
@@ -128,6 +136,13 @@ pub enum LiveTranscriptionEvent {
     Completed {
         item_id: String,
         transcript: String,
+    },
+    /// What the latest pass heard after the confirmed text, when
+    /// [`LiveTranscriptionOptions::tentative`] is set. It may change: each
+    /// replaces the last, an empty one clears it, and `Completed` supersedes it.
+    Tentative {
+        item_id: String,
+        text: String,
     },
     /// The session reported a problem. After a lost connection this is the
     /// last event; otherwise the session may continue.
@@ -479,10 +494,16 @@ fn session_update(options: &LiveTranscriptionOptions) -> Value {
     // The model is chosen by the handshake's query, where the node resolves
     // public ids and profiles; naming it here again would replace the
     // resolved model with the client's name for it.
-    let transcription = json!({
+    let mut transcription = json!({
         "language": options.language,
         "prompt": options.prompt,
     });
+    if let Some(step) = options.step_ms {
+        transcription["step_ms"] = step.into();
+    }
+    if options.tentative {
+        transcription["tentative"] = true.into();
+    }
     json!({
         "type": "session.update",
         "session": {
@@ -513,6 +534,12 @@ fn parse_event(event: &Value) -> Option<LiveTranscriptionEvent> {
             item_id: item_id(),
             text: event["delta"].as_str().unwrap_or_default().to_string(),
         },
+        "conversation.item.input_audio_transcription.tentative" => {
+            LiveTranscriptionEvent::Tentative {
+                item_id: item_id(),
+                text: event["text"].as_str().unwrap_or_default().to_string(),
+            }
+        }
         "conversation.item.input_audio_transcription.completed" => {
             LiveTranscriptionEvent::Completed {
                 item_id: item_id(),
@@ -879,8 +906,33 @@ mod tests {
             })
         );
         assert_eq!(
+            parse_event(
+                &json!({"type": "conversation.item.input_audio_transcription.tentative", "item_id": "item_3", "text": " world"})
+            ),
+            Some(LiveTranscriptionEvent::Tentative {
+                item_id: "item_3".into(),
+                text: " world".into()
+            })
+        );
+        assert_eq!(
             parse_event(&json!({"type": "input_audio_buffer.cleared"})),
             None
         );
+    }
+
+    #[test]
+    fn session_updates_ask_for_a_step_and_tentative_text_only_when_set() {
+        let plain = session_update(&LiveTranscriptionOptions::default());
+        let transcription = &plain["session"]["audio"]["input"]["transcription"];
+        assert!(transcription.get("step_ms").is_none());
+        assert!(transcription.get("tentative").is_none());
+        let fast = session_update(&LiveTranscriptionOptions {
+            step_ms: Some(400),
+            tentative: true,
+            ..Default::default()
+        });
+        let transcription = &fast["session"]["audio"]["input"]["transcription"];
+        assert_eq!(transcription["step_ms"], 400);
+        assert_eq!(transcription["tentative"], true);
     }
 }

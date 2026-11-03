@@ -496,6 +496,7 @@ set -euo pipefail
 printf '%s\n' "$*" >> "$FIXTURE_ROOT/cache.calls"
 if [[ "$1" == --version ]]; then echo 'finite sccache'; exit 0; fi
 [[ "$1" == --start-server ]] || exit 94
+[[ "$SCCACHE_IDLE_TIMEOUT" == 0 ]] || exit 90
 [[ "$SCCACHE_SERVER_UDS" == /tmp/mesh-sccache.*/server.sock ]] || exit 93
 [[ -d "${SCCACHE_SERVER_UDS%/*}" ]] || exit 92
 printf '%s' "$SCCACHE_SERVER_UDS" > "$FIXTURE_ROOT/cache.endpoint"
@@ -519,6 +520,7 @@ set -euo pipefail
 [[ "$PATH" == "$FIXTURE_ROOT/brew/bin:"* ]] || exit 95
 printf '%s\n' "$SCCACHE_GHA_ENABLED" "$SCCACHE_MULTILEVEL_CHAIN" "$SCCACHE_DIR" > "$FIXTURE_ROOT/action.probe"
 [[ "$SCCACHE_SERVER_UDS" == "$(cat "$FIXTURE_ROOT/cache.endpoint")" ]] || exit 91
+[[ "$SCCACHE_IDLE_TIMEOUT" == 0 ]] || exit 90
 "#,
     );
     let output = f.root.join("github.env");
@@ -535,6 +537,7 @@ printf '%s\n' "$SCCACHE_GHA_ENABLED" "$SCCACHE_MULTILEVEL_CHAIN" "$SCCACHE_DIR" 
         &scalars.join("\n"),
         &[
             ("TOOL_SOURCE", "homebrew"),
+            ("SCCACHE_IDLE_TIMEOUT", "2"),
             ("SCCACHE_GHA_ENABLED", gha),
             ("SCCACHE_MULTILEVEL_CHAIN", chain),
             (
@@ -581,6 +584,12 @@ printf '%s\n' "$SCCACHE_GHA_ENABLED" "$SCCACHE_MULTILEVEL_CHAIN" "$SCCACHE_DIR" 
     );
     let env = f.text("github.env");
     let endpoint = f.text("cache.endpoint");
+    assert_eq!(
+        env.lines()
+            .filter(|line| line.starts_with("SCCACHE_IDLE_TIMEOUT="))
+            .collect::<Vec<_>>(),
+        ["SCCACHE_IDLE_TIMEOUT=0"]
+    );
     assert!(env.contains(&format!("SCCACHE_SERVER_UDS={endpoint}\n")));
     assert!(endpoint.len() < 104, "macOS socket path limit");
     fs::remove_dir(Path::new(&endpoint).parent().unwrap()).unwrap();

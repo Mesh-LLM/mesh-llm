@@ -3,10 +3,10 @@ use anyhow::{Context, Result};
 pub(crate) use skippy_coordinator::topology::PlacementObjective;
 use skippy_coordinator::topology::{
     LockedTopologyStage, ThroughputEstimate, TopologyNode, TopologyPlan, TopologyPlanningInput,
-    TopologyStagePlan, default_runtime_headroom_bytes, diagnostic_candidate_bytes_per_layer,
-    estimate_plan_throughput, minimum_valid_context, plan_locked_topology, plan_topology,
-    plan_topology_with_stage0, rebalance_topology, repriced_stage_weight_bytes,
-    required_stage_bytes,
+    TopologyStagePlan, context_scaled_kv_bytes, default_runtime_headroom_bytes,
+    diagnostic_candidate_bytes_per_layer, estimate_plan_throughput, minimum_valid_context,
+    plan_locked_topology, plan_topology, plan_topology_with_stage0, rebalance_topology,
+    repriced_stage_weight_bytes, required_stage_bytes,
 };
 use std::collections::HashMap;
 
@@ -24,6 +24,8 @@ pub(super) struct SplitTopologyPlanInput {
     pub(super) model_weight_bytes: u64,
     pub(super) layer_weight_bytes: Vec<u64>,
     pub(super) kv_bytes_per_token: u64,
+    /// KV per token the final stage holds beyond its layers'.
+    pub(super) final_layer_kv_bytes_per_token: u64,
     pub(super) recurrent_bytes_per_sequence_by_layer: Vec<u64>,
     pub(super) reserved_sequence_ids: usize,
     pub(super) context_length_override: Option<u32>,
@@ -168,6 +170,14 @@ pub(super) struct SplitTopologyResourceInputs {
     pub(super) parallel_override: Option<usize>,
     /// How boundaries are chosen, and whether they keep moving.
     pub(super) placement: SplitPlacementPolicy,
+    /// Weight the final stage loads beyond its layers: a split DFlash draft
+    /// and the target tensors it borrows (see
+    /// `loading::split_dflash_final_stage_charge`).
+    pub(super) final_stage_reserve_bytes: u64,
+    /// KV per token the final stage holds beyond its layers': a split DFlash
+    /// draft's context, which grows with the planned context like the
+    /// target's.
+    pub(super) final_stage_kv_bytes_per_token: u64,
 }
 
 /// Per-stage capacity-model inputs resolved for a finished plan: the context
@@ -182,6 +192,10 @@ pub(super) struct SplitCapacityModel {
     recurrent_bytes_per_sequence_by_layer: Vec<u64>,
     context_length: u32,
     parallel_lanes: usize,
+    /// Weight charged to the final stage beyond its layers.
+    final_stage_reserve_bytes: u64,
+    /// KV per token charged to the final stage beyond its layers'.
+    final_stage_kv_bytes_per_token: u64,
     /// Whether the planner behind the validated plan already budgeted its
     /// stages against VRAM minus [`default_runtime_headroom_bytes`]. The
     /// resource-aware planners do — re-charging the same headroom here is
@@ -204,6 +218,8 @@ impl SplitCapacityModel {
                 .clone(),
             context_length,
             parallel_lanes,
+            final_stage_reserve_bytes: resources.final_stage_reserve_bytes,
+            final_stage_kv_bytes_per_token: resources.final_stage_kv_bytes_per_token,
             budgets_runtime_headroom: true,
         }
     }
@@ -219,6 +235,8 @@ impl SplitCapacityModel {
             recurrent_bytes_per_sequence_by_layer: Vec::new(),
             context_length: 0,
             parallel_lanes: 1,
+            final_stage_reserve_bytes: 0,
+            final_stage_kv_bytes_per_token: 0,
             budgets_runtime_headroom: false,
         }
     }
@@ -286,6 +304,7 @@ fn topology_planning_input(input: SplitTopologyPlanInput) -> TopologyPlanningInp
         target_decode_tpot_ms: input.target_decode_tpot_ms,
         auto_balance: input.auto_balance,
         placement_objective: input.placement_objective,
+        final_layer_kv_bytes_per_token: input.final_layer_kv_bytes_per_token,
     }
 }
 
@@ -678,9 +697,16 @@ fn runtime_slice_plan_input(
     SplitTopologyPlanInput {
         native_context_length: resources.native_context_length,
         layer_count: package.layer_count,
-        model_weight_bytes: package.source_model_bytes,
-        layer_weight_bytes: package_layer_weight_bytes(package),
+        model_weight_bytes: package
+            .source_model_bytes
+            .saturating_add(resources.final_stage_reserve_bytes),
+        layer_weight_bytes: if resources.final_stage_reserve_bytes == 0 {
+            package_layer_weight_bytes(package)
+        } else {
+            charged_layer_weight_bytes(package, resources.final_stage_reserve_bytes)
+        },
         kv_bytes_per_token: resources.kv_bytes_per_token,
+        final_layer_kv_bytes_per_token: resources.final_stage_kv_bytes_per_token,
         recurrent_bytes_per_sequence_by_layer: resources.recurrent_bytes_per_sequence_by_layer,
         reserved_sequence_ids: 0,
         context_length_override: resources.ctx_size_override,
@@ -786,6 +812,19 @@ fn planner_layer_weight_bytes(package: &skippy::SkippyPackageIdentity) -> Vec<u6
         .source_model_bytes
         .div_ceil(u64::from(package.layer_count.max(1)));
     vec![per_layer; package.layer_count as usize]
+}
+
+/// [`planner_layer_weight_bytes`] with `final_stage_reserve` added to the
+/// last layer, which every plan keeps on the final stage.
+fn charged_layer_weight_bytes(
+    package: &skippy::SkippyPackageIdentity,
+    final_stage_reserve: u64,
+) -> Vec<u64> {
+    let mut weights = planner_layer_weight_bytes(package);
+    if let Some(last) = weights.last_mut() {
+        *last = last.saturating_add(final_stage_reserve);
+    }
+    weights
 }
 
 /// Per-layer recurrent-state bytes, mirroring the topology planner: the
@@ -1054,7 +1093,7 @@ pub(super) fn validate_split_capacity(
         .iter()
         .map(|participant| (participant.node_id, participant.vram_bytes))
         .collect::<HashMap<_, _>>();
-    let layer_weights = planner_layer_weight_bytes(package);
+    let layer_weights = charged_layer_weight_bytes(package, capacity.final_stage_reserve_bytes);
     let recurrent_by_layer = planner_recurrent_bytes_by_layer(
         &capacity.recurrent_bytes_per_sequence_by_layer,
         package.layer_count,
@@ -1080,7 +1119,17 @@ pub(super) fn validate_split_capacity(
             kv_per_layer,
             capacity.context_length,
             capacity.parallel_lanes,
-        );
+        )
+        .saturating_add(if stage.layer_end >= package.layer_count {
+            context_scaled_kv_bytes(
+                capacity.final_stage_kv_bytes_per_token,
+                capacity.context_length,
+                capacity.parallel_lanes,
+            )
+            .unwrap_or(u64::MAX)
+        } else {
+            0
+        });
         anyhow::ensure!(
             usable_vram_bytes >= required_bytes,
             "{} assigned to {} for {model_ref} exceeds node capacity: requires {} against usable {} (node budget {} minus {} runtime headroom) for {} layer(s) of repriced weights plus context-scaled KV at the compute reserve and recurrent state (context {}, {} lane(s))",
@@ -1283,6 +1332,8 @@ mod tests {
             context_length,
             parallel_lanes,
             budgets_runtime_headroom: true,
+            final_stage_reserve_bytes: 0,
+            final_stage_kv_bytes_per_token: 0,
         }
     }
 
@@ -1298,6 +1349,57 @@ mod tests {
             &capacity_model(128, Vec::new(), 65_536, 1),
         )
         .expect("12 GiB of weights plus negligible KV fits an 18 GiB usable budget");
+    }
+
+    #[test]
+    fn a_split_dflash_final_stage_is_charged_for_the_tensors_its_draft_borrows() {
+        let (pkg, participants, stages) = overridden_stages();
+        let charged = |reserve| SplitCapacityModel {
+            final_stage_reserve_bytes: reserve,
+            ..capacity_model(128, Vec::new(), 65_536, 1)
+        };
+        // 12 GiB of layers fit 18 GiB usable with room for a 1 GiB embedding.
+        validate_split_capacity("model-a", &pkg, &participants, &stages, &[], &charged(GIB))
+            .expect("the borrowed embeddings fit beside the final stage's layers");
+        // 7 GiB more does not fit the final stage, though stage 0 is unchanged.
+        let error = validate_split_capacity(
+            "model-a",
+            &pkg,
+            &participants,
+            &stages,
+            &[],
+            &charged(7 * GIB),
+        )
+        .expect_err("the final stage must pay for what its draft borrows");
+        assert!(error.to_string().contains("stage-1"), "{error}");
+        // The planner prices the same bytes into the final layer.
+        assert_eq!(
+            charged_layer_weight_bytes(&pkg, GIB).last(),
+            Some(&(2 * GIB))
+        );
+    }
+
+    #[test]
+    fn a_split_dflash_final_stage_is_charged_for_its_draft_context() {
+        let (pkg, participants, stages) = overridden_stages();
+        let charged = |kv_bytes_per_token| SplitCapacityModel {
+            final_stage_kv_bytes_per_token: kv_bytes_per_token,
+            ..capacity_model(128, Vec::new(), 65_536, 1)
+        };
+        validate_split_capacity("model-a", &pkg, &participants, &stages, &[], &charged(0))
+            .expect("the final stage fits without a draft context");
+        // 128 KiB a token over 64K tokens is 8 GiB (9.4 with the compute
+        // reserve), more than the final stage has left.
+        let error = validate_split_capacity(
+            "model-a",
+            &pkg,
+            &participants,
+            &stages,
+            &[],
+            &charged(128 * 1024),
+        )
+        .expect_err("the final stage must pay for its draft's context");
+        assert!(error.to_string().contains("stage-1"), "{error}");
     }
 
     #[test]
@@ -1670,6 +1772,8 @@ mod tests {
                 ctx_size_override: None,
                 parallel_override: None,
                 placement: Default::default(),
+                final_stage_reserve_bytes: 0,
+                final_stage_kv_bytes_per_token: 0,
             },
         )
         .expect("resource-aware topology");
@@ -1701,6 +1805,8 @@ mod tests {
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
                 placement: Default::default(),
+                final_stage_reserve_bytes: 0,
+                final_stage_kv_bytes_per_token: 0,
             },
         )
         .expect("resource-aware topology with exact layer weights");
@@ -1751,6 +1857,8 @@ mod tests {
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
                 placement: Default::default(),
+                final_stage_reserve_bytes: 0,
+                final_stage_kv_bytes_per_token: 0,
             },
         )
         .expect("package-v2 split topology");
@@ -1818,6 +1926,8 @@ mod tests {
                 ctx_size_override: Some(1),
                 parallel_override: Some(1),
                 placement: Default::default(),
+                final_stage_reserve_bytes: 0,
+                final_stage_kv_bytes_per_token: 0,
             },
         )
         .expect("MI300X and smaller accelerator should form a valid topology");
@@ -1862,6 +1972,8 @@ mod tests {
                 ctx_size_override: None,
                 parallel_override: None,
                 placement: Default::default(),
+                final_stage_reserve_bytes: 0,
+                final_stage_kv_bytes_per_token: 0,
             },
         )
         .expect("latency-aware runtime topology");
@@ -1916,6 +2028,8 @@ mod tests {
                 ctx_size_override: None,
                 parallel_override: None,
                 placement: Default::default(),
+                final_stage_reserve_bytes: 0,
+                final_stage_kv_bytes_per_token: 0,
             },
         );
 

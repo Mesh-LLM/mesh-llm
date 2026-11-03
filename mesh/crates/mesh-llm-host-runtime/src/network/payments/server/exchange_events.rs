@@ -11,16 +11,23 @@ use crate::network::payments::request::PaidRequest;
 pub(super) async fn end_exchange(
     node: &Node,
     exchange: Option<(PaidServedExchange, DeliveredCapture)>,
-    adapter: crate::network::openai::transport::ResponseAdapter,
+    request: &PaidRequest,
     served: bool,
     model: &str,
     request_digest: Option<&str>,
     payer: iroh::EndpointId,
 ) {
     if let Some((exchange, delivered)) = exchange {
-        let outcome = exchange_outcome(served, delivered, adapter).await;
+        let outcome = exchange_outcome(served, delivered, paid_response_adapter(request)).await;
         exchange
-            .finish(node, model, &outcome, request_digest, payer)
+            .finish(
+                node,
+                model,
+                &outcome,
+                request_digest,
+                payer,
+                request.client_nonce.as_deref(),
+            )
             .await;
     }
 }

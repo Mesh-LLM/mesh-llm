@@ -38,6 +38,7 @@ pub(crate) async fn served_outcome_of_raw_response(
         adapter,
         None,
         None,
+        None,
         OpenAiRouteObserver::default(),
     )
     .await
@@ -117,6 +118,7 @@ mod tests {
                 RequestId::new(),
                 ResponseRetryPolicy::next_target_available(false),
                 ResponseAdapter::OpenAiChatCompletionsStream,
+                None,
                 None,
                 None,
                 OpenAiRouteObserver::default(),

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result, anyhow};
 use skippy_ffi::Model as RawModel;
 
+use crate::dflash::{DFlashSplitSession, SharedDFlashCapture, SharedDFlashDraft};
 use crate::error::{ensure_ok, free_error};
 use crate::logging::{clear_last_native_error, with_last_native_error, write_native_log_note};
 use crate::media::MediaProjector;
@@ -101,6 +102,11 @@ struct StageModelInner {
     raw: *mut RawModel,
     terminal_stage: bool,
     capability: Option<LoadedModelCapability>,
+    /// External DFlash draft that borrows this model's context. Freed before
+    /// the native model.
+    dflash: Option<SharedDFlashDraft>,
+    /// Target-layer capture for a split DFlash draft on a later stage.
+    dflash_capture: Option<SharedDFlashCapture>,
 }
 
 /// A read-only model handle for vocabulary operations that do not touch a
@@ -144,7 +150,8 @@ fn capability_from_state_probes(
 }
 
 fn loaded_model_capability(raw: *mut RawModel) -> Option<LoadedModelCapability> {
-    let model = unsafe { skippy_ffi::skippy_model_llama_model(raw) };
+    let model: *const skippy_ffi::Opaque =
+        unsafe { skippy_ffi::skippy_model_llama_model(raw) }.cast();
     if model.is_null() {
         return None;
     }
@@ -163,6 +170,8 @@ impl StageModel {
                 raw: std::ptr::null_mut(),
                 terminal_stage: true,
                 capability: None,
+                dflash: None,
+                dflash_capture: None,
             }),
             media: None,
         }
@@ -227,6 +236,8 @@ impl StageModel {
                 raw,
                 terminal_stage: config.is_terminal_stage(),
                 capability,
+                dflash: None,
+                dflash_capture: None,
             }),
             media,
         })
@@ -523,12 +534,16 @@ impl StageModel {
         if raw.is_null() {
             return Err(anyhow!("skippy_session_create returned a null handle"));
         }
-        Ok(StageSession {
+        let mut session = StageSession {
             raw,
             token_count: 0,
             terminal_stage: self.inner.terminal_stage,
             batched_activation_exports: self.supports_batched_activation_exports(),
-        })
+            dflash: None,
+            dflash_split: None,
+        };
+        self.link_session_dflash(&mut session)?;
+        Ok(session)
     }
 
     pub fn create_session_from_resident_prefix(
@@ -554,12 +569,57 @@ impl StageModel {
                 "skippy_session_create_from_resident_prefix returned a null handle"
             ));
         }
-        Ok(StageSession {
+        let mut session = StageSession {
             raw,
             token_count: u64::try_from(token_ids.len()).context("token count exceeds u64")?,
             terminal_stage: self.inner.terminal_stage,
             batched_activation_exports: self.supports_batched_activation_exports(),
-        })
+            dflash: None,
+            dflash_split: None,
+        };
+        self.link_session_dflash(&mut session)?;
+        Ok(session)
+    }
+
+    fn link_session_dflash(&self, session: &mut StageSession) -> Result<()> {
+        if let Some(capture) = &self.inner.dflash_capture {
+            session.dflash_split = Some(Box::new(DFlashSplitSession::capturing(capture)));
+        }
+        match &self.inner.dflash {
+            Some(draft) => session.link_dflash(draft),
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) fn dflash_capture(&self) -> Option<&SharedDFlashCapture> {
+        self.inner.dflash_capture.as_ref()
+    }
+
+    pub(crate) fn install_dflash_capture(&mut self, capture: SharedDFlashCapture) -> Result<()> {
+        let inner = Arc::get_mut(&mut self.inner).ok_or_else(|| {
+            anyhow!("cannot attach DFlash capture while model readers are active")
+        })?;
+        inner.dflash_capture = Some(capture);
+        Ok(())
+    }
+
+    pub(crate) fn raw_model(&self) -> *mut RawModel {
+        self.inner.raw
+    }
+
+    pub(crate) fn dflash_draft(&self) -> Option<&SharedDFlashDraft> {
+        self.inner.dflash.as_ref()
+    }
+
+    pub(crate) fn install_dflash_draft(&mut self, draft: SharedDFlashDraft) -> Result<()> {
+        let inner = Arc::get_mut(&mut self.inner).ok_or_else(|| {
+            anyhow!("cannot attach a DFlash draft while model readers are active")
+        })?;
+        if inner.dflash.is_some() {
+            return Err(anyhow!("a DFlash draft is already attached"));
+        }
+        inner.dflash = Some(draft);
+        Ok(())
     }
 
     pub fn tokenize(&self, text: &str, add_special: bool) -> Result<Vec<i32>> {
@@ -1177,6 +1237,9 @@ fn apply_chat_template_json(
 
 impl Drop for StageModelInner {
     fn drop(&mut self) {
+        // The draft context borrows tensors from this model's context.
+        self.dflash.take();
+        self.dflash_capture.take();
         if !self.raw.is_null() {
             unsafe {
                 let _ = skippy_ffi::skippy_model_free(self.raw, ptr::null_mut());

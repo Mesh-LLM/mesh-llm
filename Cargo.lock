@@ -8888,6 +8888,7 @@ dependencies = [
 name = "skippy-ffi"
 version = "0.78.0"
 dependencies = [
+ "bindgen",
  "libloading 0.9.0",
 ]
 

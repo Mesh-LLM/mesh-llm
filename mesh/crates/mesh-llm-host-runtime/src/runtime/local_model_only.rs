@@ -271,6 +271,9 @@ async fn run_local_model_only_inner(
         },
     );
     let launch = LocalOpenAiModelStartSpec {
+        live_request_defaults: Arc::new(
+            crate::runtime::live_request_defaults::LiveRequestDefaults::new(),
+        ),
         mesh_config: &config,
         config_model_id: model.config_model_id.as_deref(),
         model_path: &model.resolved_path,

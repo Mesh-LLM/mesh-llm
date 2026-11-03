@@ -5,6 +5,7 @@ use std::path::PathBuf;
 
 mod certification;
 mod deployment;
+mod dflash_draft;
 pub(crate) mod diagnostics;
 mod hooks;
 mod loading;
@@ -19,6 +20,10 @@ mod package;
 mod projector;
 #[cfg(test)]
 mod resolver_host_tests;
+pub(crate) use dflash_draft::{
+    default_dflash_draft_cached, materialize_default_dflash_draft, materialize_split_dflash_draft,
+    split_dflash_draft_source,
+};
 use mesh_llm_skippy_adapter::config as resolver;
 pub(crate) use projector::materialize_projector_url;
 pub(crate) mod runtime_events;
@@ -98,8 +103,8 @@ pub(crate) use package::{
 };
 pub(crate) use resolver::{
     ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest,
-    effective_safety_margin_bytes, resolve_skippy_config_for_selector,
-    resolve_skippy_config_for_selector_with_publisher_defaults,
+    effective_safety_margin_bytes, resolve_embedded_request_defaults,
+    resolve_skippy_config_for_selector, resolve_skippy_config_for_selector_with_publisher_defaults,
 };
 pub(crate) use skippy_api::family_policy;
 pub(crate) use skippy_api::family_policy::family_policy_for_stage_config;

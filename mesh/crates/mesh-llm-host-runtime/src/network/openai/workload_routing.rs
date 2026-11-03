@@ -235,6 +235,39 @@ pub(super) fn descriptor_for_request<'a>(
     })
 }
 
+/// The one descriptor that serves `model` for the endpoint at `path`, or
+/// `None` when none does or more than one could have: a node can advertise a
+/// native embedding model and a chat plugin under one name, and a fact read
+/// from the wrong one would be attributed to a model that never ran. Exact
+/// `model_name` matches win over public-ID aliases, as in routing.
+pub(super) fn unambiguous_descriptor_for_request<'a>(
+    model: &str,
+    path: &str,
+    descriptors: &'a [ServedModelDescriptor],
+) -> Option<&'a ServedModelDescriptor> {
+    let serves = |descriptor: &&ServedModelDescriptor| {
+        model_satisfies_request(model, path, std::slice::from_ref(*descriptor))
+    };
+    let exact = descriptors
+        .iter()
+        .filter(|descriptor| descriptor.identity.model_name == model)
+        .filter(serves)
+        .collect::<Vec<_>>();
+    let candidates = if exact.is_empty() {
+        descriptors
+            .iter()
+            .filter(|descriptor| descriptor_matches_routable_name(descriptor, model))
+            .filter(serves)
+            .collect()
+    } else {
+        exact
+    };
+    match candidates.as_slice() {
+        [only] => Some(*only),
+        _ => None,
+    }
+}
+
 /// Infer binary upload requirements without interpreting file bytes as JSON.
 pub(super) fn request_media(
     path: &str,
