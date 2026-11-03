@@ -150,6 +150,14 @@ preparation may use step-local Cargo home and target directories outside the
 measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
 
+Automation preparation profiles must have a classified runner path, including
+default `image` profiles and nested local composite and reusable callers.
+`hosted-bare` requires GitHub-hosted Linux. The source contracts check direct
+platform and image boundaries, closed producer maps, forced-hosted release
+selection, and the declared local caller graph. Bare self-hosted smoke tooling
+remains a qualification prerequisite. Source checks do not establish actual
+runner identity, tool availability, provider isolation or qualification.
+
 Persistent macOS canary jobs use the `preinstalled-macos` automation profile.
 Preflight and build require `[self-hosted, macOS, ARM64, jy-managed,
 family-certify, accelerator-memory-128plus]`; family and infrastructure-retry
@@ -472,6 +480,9 @@ retired parser behavior, and source review still owns semantic emulation.
 
 ## Trust, runners, and providers
 
+- Maintain `ci/RUNNER_ROLE_READINESS.md` as source-level role inventory; keep
+  planned placement, supported preparation, observed execution and qualified
+  provider/cache authority distinct. New primary selectors need a roster row.
 - Use `pull_request`, never `pull_request_target`, to build or execute PR
   content. Metadata-only and positively matched cleanup workflows may use
   `pull_request_target` but must never execute PR-controlled content.
@@ -481,6 +492,13 @@ retired parser behavior, and source review still owns semantic emulation.
 - A caller may not choose a privileged runner label or independently grant
   remote-cache access. The workflow that owns `runs-on` must derive both from
   repository, event, ref, trust profile, architecture, and a bounded size.
+- The central runner selector emits a bounded non-secret selection trace and a
+  job summary. It records policy inputs, selected provider and projected labels,
+  not actual execution. Role, protected policy revision, runner identity and
+  effective cache mode remain unknown until separately observed and retained.
+  `ci execution-record` can combine that trace with bounded caller assertions,
+  but does not authenticate or retain them. Never treat its unverified record
+  as proof of job identity, cache mode, policy authority or qualification.
 - Ordinary PR jobs remain GitHub-hosted unless the bounded same-repository
   Depot risk exception below is active; an explicitly approved ephemeral,
   uncredentialed hardware runner may own a documented GPU smoke exception.
@@ -512,6 +530,20 @@ retired parser behavior, and source review still owns semantic emulation.
   selected-workflow restriction.
 - Provider changes must not alter source checkout, commands, profile,
   artifacts, tests, required checks, or plan membership.
+- Exhaustive main and manual-full profiles still run the complete runner
+  contracts, but that coverage alone must not force every eligible job onto
+  GitHub-hosted runners. The planner separately derives hosted placement from
+  actual CI-control, runner-infrastructure and governance-scoped changes.
+  Missing or invalid policy, an unavailable comparison base, an oversized or
+  otherwise incomplete change list, and the force-all sentinel remain hosted.
+  Compare both sides of a rename, and keep existing provider gates, role
+  exclusions, explicit hosted overrides and cache boundaries intact.
+- Forward a manual provider request and its original event through every
+  provider-capable reusable boundary. An explicit hosted override wins over
+  both the request and repository gates at every depth. Full-release ordinary
+  Linux and native SDK work remains hosted while its automation profile has no
+  qualified Depot path; a rolling-preview override also retains its documented
+  GPU-runner behavior. Do not infer a nested policy from a weaker parent gate.
 - Shared Linux Clippy/test/host/runtime compiler-cache publication has one
   trusted GitHub-hosted warmer. It
   publishes one bounded, exact-key sccache seed after successful main Quality;
@@ -525,6 +557,11 @@ retired parser behavior, and source review still owns semantic emulation.
   intentional cache miss is classified cold and must not fail the build.
 
 ### Bounded Depot PR cache-risk exception
+
+Use `ci/CACHE_AUTHORITY.md` to review selector permissions by event, provider
+and trust context. It describes source decisions only; actual service ACLs,
+historical entry provenance, independent approval and live qualification
+remain separate requirements.
 
 Depot Cache currently scopes entries by repository but not by branch and
 automatically connects GitHub-cache API consumers on Depot runners. Cache-key
@@ -591,6 +628,15 @@ checked-in expiry are the maintainer-controlled approval boundary.
   independently of the server endpoint, and pass the endpoint to later steps.
 - Declare cache mode per slice: no remote cache, PR restore-only/isolated, or
   trusted read-write. Derive it from the same policy as runner placement.
+- Routing coverage must compose checked-in caller inputs, planner placement,
+  selector decisions and compiler-cache configuration across trust and override
+  cases. Historical fixture dates do not renew an expired exception.
+- The ARM64 release-artifact verifier applies the selected runner's cache
+  permissions immediately after installing sccache and before its first Cargo
+  invocation. A hosted release runner is not an implicit cache grant.
+- macOS linker setup must allocate a job-owned socket, apply both explicit
+  cache permissions, and start that selected cache before probing or compiling.
+  Callers and nested automation forward the same selector decision.
 - GitHub-hosted PR writes remain isolated from trusted main: normal protected
   same-repository and fork lanes explicitly force restore-only cache mode even
   though their workflow ref is the default branch. The bounded Depot exception

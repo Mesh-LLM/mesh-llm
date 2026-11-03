@@ -973,6 +973,13 @@ parallelism.
 
 ## Native contract execution
 
+The preparation-profile census requires literal `hosted-bare` callers to use
+hosted Linux labels and checks default image platform boundaries, local
+composite and reusable caller declarations, and the closed producer and
+forced-hosted release runtime paths. Dynamic canary profiles remain separately
+classified. Source checks do not establish actual runner identity, installed
+tools, third-party action internals, runtime dispatch paths or quota readiness.
+
 Quality runs both `just ci-automation-contracts` and `just ci-legacy-contracts`,
 with pinned external SDK and research source preparation. Model-resolution
 steps call the native resolver directly. The compatibility changes merged in
@@ -1383,6 +1390,11 @@ from being duplicated into every composed product artifact.
 
 ## Provider and cache policy
 
+The [runner role inventory](RUNNER_ROLE_READINESS.md) records the proposed
+source-level provider and preparation map. It is not a live runner-group or
+capacity readback; role-specific qualification and rollback evidence remain
+separate requirements.
+
 After successful runtime package verification, Windows release CPU/GPU jobs
 publish and verify an exact-key ABI cache miss under the current ref. These
 two jobs grant only `actions: read` for the publication probe; cache writes use
@@ -1397,6 +1409,9 @@ are recorded in PR #2662; cache compatibility remains tied to the runner image.
 
 Windows platform checks apply the shared sccache policy immediately after
 installation, using the selected runner's native and Depot cache permissions.
+
+`ci/CACHE_AUTHORITY.md` records the corresponding source-level cache
+permissions and the limits of those flags as evidence of live isolation.
 
 The checked-in Cargo configuration is the repository-wide Rust accelerator
 owner: `sccache` is mandatory, Linux final links prefer the probed mold driver
@@ -1417,6 +1432,19 @@ backend sets `CMAKE_OBJECT_PATH_MAX=180`, so even the nine-target ROCm
 release row no longer disables sccache.
 
 `.github/actions/select-ci-runners` maps semantic roles to approved labels.
+It emits a bounded selection trace and projected labels in its output and job
+summary. The trace does not establish the executing runner, role, protected policy revision or
+effective cache mode; those remain separate observed-run evidence.
+The source-only `cargo xtool ci execution-record` command reads a bounded JSON
+request with `selection_trace` and optional `context` fields and writes a JSON
+record to stdout. It hashes the exact supplied trace bytes and any supplied job
+or runner name, accepts only catalog role names, and marks all context and the
+selection-to-job binding unverified. Hashing names is not authentication or a
+secrecy guarantee. Verified policy, actual runner and effective cache remain
+unknown, and no retention is established. No workflow invokes this command;
+protected collection, binding, durable retention and live evidence remain open.
+The [runner selection acceptance inventory](RUNNER_SELECTION_ACCEPTANCE.md)
+maps the existing composed fixture cases and their remaining caller coverage.
 Fork pull requests use GitHub-hosted runners. Eligible same-repository PRs may
 use Depot while the repository-wide gate and time-bounded cache-risk exception
 in `ci/DEPOT_PR_RISK_EXCEPTION.md` are active. The
@@ -1432,6 +1460,40 @@ retain explicit approved placement. The same-repository PR exception may also
 select eligible build/test rows on Depot macOS 15 and
 Windows 2022, subject to the same policy and documented exceptions. Provider
 choice never changes plan membership, commands, artifacts, tests or summaries.
+
+The ARM64 release-artifact smoke applies both cache permissions from the
+release runner selector immediately after installing sccache, before its
+checksum and extraction verifier invokes Cargo. A denied remote cache remains
+denied even if the runner exposes cache endpoint variables.
+
+The placement contract composes the checked-in Linux caller inputs, planner
+outputs, selector and compiler-cache configuration for PR, fork, expiry,
+target-event and dispatch fixtures. Its historical dates only exercise the
+recorded exception boundary; they do not renew that exception or qualify a
+provider.
+
+Exhaustive main and manual-full coverage continues to include runner contracts
+without forcing every otherwise eligible row to a hosted runner. The canonical
+plan carries a separate conservative `force_hosted` signal: CI-control,
+runner-infrastructure, tooling and governance-scoped changes force hosted;
+missing or invalid scope, missing comparison history, and incomplete or
+oversized change lists do the same. Manual-full compares the selected main
+commit with its parent, and change collection includes both sides of renames.
+Lane callers treat an absent placement signal as hosted during version changes.
+Existing exact-string gates, role exclusions, explicit overrides and cache
+rules still decide whether any remaining row can use Depot. Reverting this
+source change restores the earlier exhaustive-hosted behavior; it does not
+modify already-running workflows or live provider settings.
+
+Manual provider intent is forwarded from the Linux lane into its static ABI
+and native SDK producers as well as the host and runtime slices. The native
+SDK producer forwards source SHA, original event, hosted override and provider
+intent to its static ABI dependency. A hosted override takes precedence over
+manual requests and repository gates. The current full-release Linux and SDK
+automation profiles remain hosted until a Depot profile is qualified; the
+release input for Depot is retained but does not enable that route. Release
+native SDK and nested ABI work use the frozen metadata source. Rolling preview
+continues to force the separate CUDA GPU leg onto hosted runners as well.
 
 Depot coverage is reported against the selected ordinary-executor denominator,
 not against every job in the Actions run. For a plan, the denominator is every
@@ -1882,20 +1944,19 @@ of a missing prerequisite. Tool provisioning is external to certification.
 The hosted profiles keep their existing installation behavior. Locked SDK
 dependency environments and offline NAS model admission retain their owners.
 
-The shared macOS accelerator action eagerly starts sccache in every cache mode
-on a unique short Unix socket before any compiler probe and exports it to
-subsequent steps. It exports and persists `SCCACHE_IDLE_TIMEOUT=0` before startup
-to retain the job-owned daemon across quiet test phases. Parallel compiler
-clients never initialize the new endpoint or restart it after idle expiration;
-the caller's remote-cache configuration remains unchanged.
+The shared macOS accelerator action allocates a job-owned short Unix socket,
+then applies the caller's explicit native and Depot cache permissions before
+starting sccache and probing the compiler. A repeated setup in the same job
+reuses its endpoint. It exports and persists `SCCACHE_IDLE_TIMEOUT=0` before
+startup to keep the server alive through long test phases.
 It never stops the default host server, so concurrent runner accounts cannot
 disrupt each other's compiler cache. Canary toolchain verification sets cache
 identity and leaves server startup to this action.
-The action initializes the disk directory before any
-compiler probe, including protected canary bootstrap calls that already set
-`SCCACHE_GHA_ENABLED=false`. It preserves an explicit `SCCACHE_DIR` and otherwise
-creates a job-local directory beneath `RUNNER_TEMP`. This does not grant remote
-cache authority or change the canary's later persistent compiler-cache identity.
+The selected cache policy initializes the disk directory before any compiler
+probe. It preserves an explicit `SCCACHE_DIR` and otherwise creates a job-local
+directory beneath `RUNNER_TEMP`. Missing or denied remote cache authority falls
+back to local disk; the canary's later persistent compiler-cache identity remains
+separate.
 
 `scripts/lib/macos-deployment-target.txt` records the shared default (13.3),
 matching the pinned llama.cpp

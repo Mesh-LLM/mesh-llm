@@ -67,6 +67,14 @@ permitted; release composition remains compilation-free. Live execution and
 runtime-seed timing qualification are not claimed by this source cutover.
 
 This file records checked-in CI facts and selected controlled probe evidence.
+The preparation census checks explicit and default profiles, local composite
+edges, direct workflow callers and declared reusable-workflow paths. It fails
+on unclassified paths, non-hosted literal `hosted-bare` callers, changed
+default platform/image boundaries, or drift in closed producer/release runner
+paths. Canary dynamic profiles retain their separate self-hosted contract.
+Bare self-hosted GPU smoke may rely on locally provisioned automation tooling;
+its actual tools and identity remain unverified. The census does not qualify
+live labels, resources, third-party action internals or runtime dispatches.
 It is not a complete historical run log or live GitHub/Depot administration.
 Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
@@ -900,21 +908,16 @@ bump `@playwright/test` in `mesh/crates/mesh-llm-ui/package.json`.
 resolved bin directory to the job path, and invokes the checked-in
 `scripts/cargo-linker` probe. It does not export Rust flags. The repository
 Cargo config owns every later link, so Android target flags and caller flags
-continue to compose normally. Seven call sites:
-`ci-platform-checks-slice.yml`, `ci-macos-host-slice.yml`,
-`swift-sdk-artifact.yml`, `native-sdk-artifact.yml`,
-`node-sdk-addon-artifact.yml`, and two in `release.yml`.
+continue to compose normally. Its callers include macOS host, runtime and
+platform-check slices, SDK workflows, release jobs, and `prepare-automation`.
 
-Disk-only sccache preparation initializes and exports `SCCACHE_DIR` before
-compiler probes, including callers that already disable GHA caching. An explicit
-directory is preserved; otherwise the action uses the job's runner temporary
-directory. Missing GHA endpoints retain the existing disk-only fallback.
-The action eagerly starts sccache on a unique short Unix socket in both disk-only
-and remote-cache modes, before any parallel compiler clients, and exports that
-endpoint for subsequent steps. It exports `SCCACHE_IDLE_TIMEOUT=0` before startup
-and persists the value for the job, preventing idle shutdown between crate
-builds and long test phases. Remote cache configuration is preserved. It never
-stops the default host server. Canary toolchain
+The action allocates a unique short Unix socket before forwarding explicit
+native and Depot cache permissions to `configure-sccache-gha`; that shared
+action starts the selected backend before the linker probe. A repeated setup in
+the same job reuses its endpoint. The action exports `SCCACHE_IDLE_TIMEOUT=0`
+before startup and persists it for the job. Denied or unavailable remote caches
+fall back to job-local disk; an explicit disk directory remains supported.
+It never stops the default host server. Canary toolchain
 verification only sets cache identity; accelerator setup owns server startup.
 
 Persistent macOS canary preflight, build, family and infrastructure-retry jobs
@@ -1010,6 +1013,29 @@ supported product/SDK rows. Ready PR profiles select affected or directly owned
 rows from that same catalog. Draft PR profiles select no build rows unless the
 changed paths require the documented CI-control or runner-infrastructure
 fail-open policy.
+
+The planner emits distinct `runner_contract_required` coverage and
+`force_hosted` placement signals. Main/manual-full still execute the exhaustive
+contracts, while complete ordinary product or documentation changes may use
+the existing eligible provider paths. CI-control, runner-infrastructure,
+tooling and governance-scoped paths stay hosted. An absent/invalid governance
+scope, missing comparison base, oversized change list or force-all sentinel
+also forces hosted. Manual-full compares its selected main commit with its
+parent; change discovery disables rename detection so both paths are checked.
+Lane callers treat a missing placement field as hosted for safe version
+transitions. This changes neither live provider gates nor the role allowlist.
+Manual `use_depot` intent reaches Quality, Linux host/runtime, static ABI and
+native SDK callers; native SDK forwards the same source, event, override and
+intent to its nested static-ABI producer. Full-release Linux and native SDK
+selectors receive an explicit hosted override regardless of the manual input
+or repository gate; the release SDK uses metadata's frozen source SHA. The
+release `use_depot` input remains reserved until a provider profile is
+qualified. The separate rolling-preview GPU override is retained.
+The composed placement fixture follows the Linux static-ABI and native-SDK
+caller inputs into the actual planner, selector and compiler-cache action. It
+covers same-repository and fork PRs, the exception expiry boundary, target
+events and PR-origin dispatches, including selected work and artifact identity.
+These local fixtures do not qualify a runner or renew an exception.
 
 ## Artifact and cache owners
 
@@ -1148,9 +1174,22 @@ boundary.
   Depot jobs enable the GitHub Actions cache API while direct Depot remote
   cache remains disabled. Hosted PR, release, and cache-warmer selections
   retain native GitHub cache behavior.
+  Its `selection_trace` output and job summary capture bounded non-secret
+  selection facts. They are not an authenticated execution record: role,
+  policy revision, actual runner and effective cache mode remain unknown.
+  `ci execution-record` validates and hashes the supplied trace, accepts only
+  catalog role names, and records caller context as unverified assertions. It
+  hashes supplied job and runner names but does not establish their identity,
+  cache behavior, policy authority, job binding or retention. No workflow calls it.
+  `ci/RUNNER_SELECTION_ACCEPTANCE.md` records the local case coverage and the
+  remaining event-by-role and caller gaps without asserting live qualification.
 - `configure-sccache-gha`: event/provider-derived compiler-cache setup. The
   Windows platform-check lane applies it immediately after sccache installation,
-  with both cache permissions from the shared runner policy.
+  with both cache permissions from the shared runner policy. The ARM64 release
+  artifact smoke does the same before its Cargo verifier, using the metadata
+  selector's explicit native and Depot cache permissions.
+  `ci/CACHE_AUTHORITY.md` records the source-level event/provider permission
+  table and explicitly separates selector flags from actual backend access.
 - `restore-sccache-seed`: exact-key restore of the trusted 2 GiB Linux seed;
   central runner policy permits it only for GitHub-hosted selections, and
   native runtime restore is explicitly disabled after zero-reuse qualification.
@@ -1222,6 +1261,10 @@ PR-controlled workflows and executor jobs retain no Actions-write
 permission.
 
 ## Providers and variables
+
+`ci/RUNNER_ROLE_READINESS.md` records the source-level role/preparation roster
+and its unresolved live evidence. The primary-selector fixture checks its
+trusted-main allowlist and hosted exclusions without asserting live readiness.
 
 GitHub-hosted labels are `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`, and
 `windows-2022`. Depot labels are selected only by `select-ci-runners`; no

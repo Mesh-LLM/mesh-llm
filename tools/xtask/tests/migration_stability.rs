@@ -78,12 +78,14 @@ mod fixture {
                         "HTTP/1.1 {status} fixture\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         body.len()
                     );
-                    if socket.write_all(header.as_bytes()).is_err() {
-                        return;
+                    if let Err(error) = socket.write_all(header.as_bytes()) {
+                        assert!(disconnected(&error), "HTTP fixture header write: {error}");
+                        continue;
                     }
                     for fragment in body.as_bytes().chunks(7) {
-                        if socket.write_all(fragment).is_err() {
-                            return;
+                        if let Err(error) = socket.write_all(fragment) {
+                            assert!(disconnected(&error), "HTTP fixture body write: {error}");
+                            break;
                         }
                     }
                 }
@@ -104,6 +106,15 @@ mod fixture {
                 assert!(outcome.is_ok(), "HTTP fixture failed");
             }
         }
+    }
+    fn disconnected(error: &std::io::Error) -> bool {
+        matches!(
+            error.kind(),
+            std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::ConnectionAborted
+                | std::io::ErrorKind::NotConnected
+        )
     }
     fn read_request(socket: &mut TcpStream) -> (String, Json) {
         let mut bytes = Vec::new();

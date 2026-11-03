@@ -23,6 +23,10 @@ fn fixture() -> support::Fixture {
         fixture.path().join("golden.json"),
     )
     .unwrap();
+    let golden_path = fixture.path().join("golden.json");
+    let mut golden: Value = serde_json::from_slice(&fs::read(&golden_path).unwrap()).unwrap();
+    golden["signals"]["force_hosted"] = json!(false);
+    fs::write(golden_path, serde_json::to_vec(&golden).unwrap()).unwrap();
     fixture.executable("automation",r#"[[ "$*" == "ci plan --manifest-root $GITHUB_WORKSPACE" ]] || exit 92
 /bin/cat > planner-input.json
 jq -e '.profile == "main" and .event_name == "push" and .changed_files == ["docs/MESHES.md"]' planner-input.json >/dev/null || exit 93

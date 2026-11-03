@@ -104,3 +104,18 @@ fn push_unknown_or_zero_event_history_and_manual_dispatch_fail_open() {
     }
     finish(f);
 }
+
+#[test]
+fn manual_dispatch_uses_its_known_parent_and_retains_both_rename_paths() {
+    let f = Fixture::new();
+    f.write(".github/workflows/old.yml", "workflow content\n");
+    f.write("docs/placeholder.md", "placeholder\n");
+    let base = f.commit();
+    f.git(&["mv", ".github/workflows/old.yml", "docs/moved.yml"]);
+    let head = f.commit();
+    let expected = BTreeSet::from([".github/workflows/old.yml".into(), "docs/moved.yml".into()]);
+    for event in ["push", "pull_request", "workflow_dispatch"] {
+        assert_eq!(changed_files(&f, &base, &head, event), expected, "{event}");
+    }
+    finish(f);
+}

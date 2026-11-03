@@ -103,6 +103,7 @@ fn abi_reuse(document: &Node) -> bool {
             "target",
             "backend",
             "runner_size",
+            "source_sha",
             "original_event_name",
             "force_hosted",
             "use_depot",
@@ -160,6 +161,7 @@ fn native_sdk_workflow_binds_immutable_source_preparation_and_uploads_on_both_pl
 fn native_sdk_workflow_requires_matching_abi_producer_and_ordered_restore_without_rebuild() {
     assert!(abi_reuse(&document()));
     for (valid, invalid) in [
+        ("source_sha: ${{ inputs.source_sha }}", "source_sha: ''"),
         (
             "needs: [runner_policy, produce_linux_static_abi]",
             "needs: [runner_policy]",
