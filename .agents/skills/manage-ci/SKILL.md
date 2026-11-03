@@ -5,11 +5,6 @@ description: Use this skill as the mandatory starting point whenever inspecting,
 
 # Manage CI
 
-The central runner selector emits a bounded non-secret selection trace and a
-job summary. It records policy inputs, selected provider and projected labels,
-not actual execution. Role, protected policy revision, runner identity and effective
-cache mode remain unknown until separately observed and retained.
-
 This is the normative CI rule source for MeshLLM. Read it completely before
 every CI task.
 
@@ -480,6 +475,10 @@ retired parser behavior, and source review still owns semantic emulation.
 - A caller may not choose a privileged runner label or independently grant
   remote-cache access. The workflow that owns `runs-on` must derive both from
   repository, event, ref, trust profile, architecture, and a bounded size.
+- The central runner selector emits a bounded non-secret selection trace and a
+  job summary. It records policy inputs, selected provider and projected labels,
+  not actual execution. Role, protected policy revision, runner identity and
+  effective cache mode remain unknown until separately observed and retained.
 - Ordinary PR jobs remain GitHub-hosted unless the bounded same-repository
   Depot risk exception below is active; an explicitly approved ephemeral,
   uncredentialed hardware runner may own a documented GPU smoke exception.
