@@ -352,6 +352,7 @@ fn graph_actual_pr_and_main_event_census_keeps_exact_five_lane_entries() {
         "pr_auto_assign.yml".to_owned(),
         "pr_cleanup.yml".to_owned(),
         "pr_ci_canary.yml".to_owned(),
+        "ci-governance-publisher.yml".to_owned(),
     ]);
     let expected_main = lanes
         .map(|l| format!("main_{l}.yml"))
@@ -391,6 +392,18 @@ fn graph_actual_pr_and_main_event_census_keeps_exact_five_lane_entries() {
         expected_pr
     );
     assert_eq!(main, expected_main);
+    // Governance is protected metadata control infrastructure, outside the
+    // five product validation lanes. Its exception cannot become a PR build.
+    let governance = document("ci-governance-publisher.yml");
+    let governance_events = governance.get("on").unwrap();
+    assert!(governance_events.get("pull_request_target").is_some());
+    assert!(governance_events.get("pull_request").is_none());
+    for (_, job) in governance.get("jobs").unwrap().entries() {
+        assert!(
+            job.get("uses").is_none(),
+            "governance cannot compose a product lane"
+        );
+    }
     for lane in lanes {
         for (prefix, expected) in [
             (
