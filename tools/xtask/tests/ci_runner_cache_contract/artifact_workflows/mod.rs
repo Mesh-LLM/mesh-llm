@@ -1,7 +1,12 @@
 //! Producer reachability, platform adapters and smoke input contracts.
+mod default_profile;
 mod graph;
+mod hosted_profile;
+mod placement;
 mod planner;
 mod platform;
+mod reusable_paths;
+mod role_readiness;
 mod smoke;
 use super::{
     support,
