@@ -34,9 +34,13 @@ fn inspect_steps(file: &str, job: &str, steps: &workflows::Node, found: &mut Vec
             "depot_pr_enabled",
             "force_hosted",
         ] {
+            let value = inputs
+                .get(key)
+                .and_then(workflows::Node::text)
+                .unwrap_or_else(|| panic!("{file}/{job}/{id}: missing {key}"));
             assert!(
-                inputs.get(key).and_then(workflows::Node::text).is_some(),
-                "{file}/{job}/{id}: missing {key}"
+                key == "original_event_name" || !value.trim().is_empty(),
+                "{file}/{job}/{id}: empty {key}"
             );
         }
         found.push((file.into(), job.into(), id.into()));
@@ -73,22 +77,25 @@ fn direct_workflow_callers(root: &Path) -> Vec<Caller> {
 
 fn assert_no_uninventoried_composite_callers(root: &Path) {
     for entry in fs::read_dir(root.join(".github/actions")).unwrap() {
-        let path = entry.unwrap().path().join("action.yml");
-        if !path.is_file() {
-            continue;
-        }
-        let source = fs::read_to_string(&path).unwrap();
-        if !source.contains("select-ci-runners") {
-            continue;
-        }
-        let document = workflows::workflow_yaml::parse(&source).unwrap();
-        if let Some(steps) = document.get("runs").and_then(|runs| runs.get("steps")) {
-            let mut found = Vec::new();
-            inspect_steps(path.to_str().unwrap(), "runs", steps, &mut found);
-            assert!(
-                found.is_empty(),
-                "extend the census for composite selector callers: {found:?}"
-            );
+        let directory = entry.unwrap().path();
+        for name in ["action.yml", "action.yaml"] {
+            let path = directory.join(name);
+            if !path.is_file() {
+                continue;
+            }
+            let source = fs::read_to_string(&path).unwrap();
+            if !source.contains("select-ci-runners") {
+                continue;
+            }
+            let document = workflows::workflow_yaml::parse(&source).unwrap();
+            if let Some(steps) = document.get("runs").and_then(|runs| runs.get("steps")) {
+                let mut found = Vec::new();
+                inspect_steps(path.to_str().unwrap(), "runs", steps, &mut found);
+                assert!(
+                    found.is_empty(),
+                    "extend the census for composite selector callers: {found:?}"
+                );
+            }
         }
     }
 }
@@ -149,4 +156,77 @@ fn every_direct_selector_caller_declares_inputs_and_appears_in_the_census() {
         "Current census: {} direct selector steps; {partial} partial and {open} open.",
         declared.len()
     )));
+}
+
+#[test]
+fn census_rejects_an_empty_core_gate_but_allows_an_empty_release_origin() {
+    let source = r#"
+steps:
+  - id: policy
+    uses: ./.github/actions/select-ci-runners
+    with:
+      event_name: push
+      original_event_name: ''
+      repository: owner/repo
+      head_repository: owner/repo
+      head_sha: abc
+      ref: refs/heads/main
+      depot_main_enabled: 'false'
+      depot_pr_enabled: 'false'
+      force_hosted: 'false'
+"#;
+    let document = workflows::workflow_yaml::parse(source).unwrap();
+    let mut found = Vec::new();
+    inspect_steps(
+        "fixture.yml",
+        "job",
+        document.get("steps").unwrap(),
+        &mut found,
+    );
+    assert_eq!(found.len(), 1);
+    let invalid = source.replace("depot_main_enabled: 'false'", "depot_main_enabled: ''");
+    let document = workflows::workflow_yaml::parse(&invalid).unwrap();
+    assert!(
+        std::panic::catch_unwind(|| {
+            inspect_steps(
+                "fixture.yml",
+                "job",
+                document.get("steps").unwrap(),
+                &mut Vec::new(),
+            );
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn census_detects_a_selector_in_an_action_yaml_composite() {
+    let root = tempfile::tempdir().unwrap();
+    let directory = root.path().join(".github/actions/example");
+    fs::create_dir_all(&directory).unwrap();
+    fs::write(
+        directory.join("action.yaml"),
+        r#"
+runs:
+  using: composite
+  steps:
+    - id: policy
+      uses: ./.github/actions/select-ci-runners
+      with:
+        event_name: push
+        original_event_name: ''
+        repository: owner/repo
+        head_repository: owner/repo
+        head_sha: abc
+        ref: refs/heads/main
+        depot_main_enabled: 'false'
+        depot_pr_enabled: 'false'
+        force_hosted: 'false'
+"#,
+    )
+    .unwrap();
+    assert!(
+        std::panic::catch_unwind(|| assert_no_uninventoried_composite_callers(root.path()))
+            .is_err()
+    );
 }
