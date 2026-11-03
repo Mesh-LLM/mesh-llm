@@ -55,6 +55,14 @@ permitted; release composition remains compilation-free. Live execution and
 runtime-seed timing qualification are not claimed by this source cutover.
 
 This file records checked-in CI facts and selected controlled probe evidence.
+The preparation census checks explicit and default profiles, local composite
+edges, direct workflow callers and declared reusable-workflow paths. It fails
+on unclassified paths, non-hosted literal `hosted-bare` callers, changed
+default platform/image boundaries, or drift in closed producer/release runner
+paths. Canary dynamic profiles retain their separate self-hosted contract.
+Bare self-hosted GPU smoke may rely on locally provisioned automation tooling;
+its actual tools and identity remain unverified. The census does not qualify
+live labels, resources, third-party action internals or runtime dispatches.
 It is not a complete historical run log or live GitHub/Depot administration.
 Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
@@ -1236,6 +1244,10 @@ PR-controlled workflows and executor jobs retain no Actions-write
 permission.
 
 ## Providers and variables
+
+`ci/RUNNER_ROLE_READINESS.md` records the source-level role/preparation roster
+and its unresolved live evidence. The primary-selector fixture checks its
+trusted-main allowlist and hosted exclusions without asserting live readiness.
 
 GitHub-hosted labels are `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`, and
 `windows-2022`. Depot labels are selected only by `select-ci-runners`; no

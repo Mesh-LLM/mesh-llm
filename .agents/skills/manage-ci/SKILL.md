@@ -153,6 +153,14 @@ preparation may use step-local Cargo home and target directories outside the
 measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
 
+Automation preparation profiles must have a classified runner path, including
+default `image` profiles and nested local composite and reusable callers.
+`hosted-bare` requires GitHub-hosted Linux. The source contracts check direct
+platform and image boundaries, closed producer maps, forced-hosted release
+selection, and the declared local caller graph. Bare self-hosted smoke tooling
+remains a qualification prerequisite. Source checks do not establish actual
+runner identity, tool availability, provider isolation or qualification.
+
 Persistent macOS canary jobs use the `preinstalled-macos` automation profile.
 Preflight and build require `[self-hosted, macOS, ARM64, jy-managed,
 family-certify, accelerator-memory-128plus]`; family and infrastructure-retry
@@ -486,6 +494,9 @@ retired parser behavior, and source review still owns semantic emulation.
 
 ## Trust, runners, and providers
 
+- Maintain `ci/RUNNER_ROLE_READINESS.md` as source-level role inventory; keep
+  planned placement, supported preparation, observed execution and qualified
+  provider/cache authority distinct. New primary selectors need a roster row.
 - Use `pull_request`, never `pull_request_target`, to build or execute PR
   content. Metadata-only and positively matched cleanup workflows may use
   `pull_request_target` but must never execute PR-controlled content.

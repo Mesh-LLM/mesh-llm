@@ -952,6 +952,13 @@ parallelism.
 
 ## Native contract execution
 
+The preparation-profile census requires literal `hosted-bare` callers to use
+hosted Linux labels and checks default image platform boundaries, local
+composite and reusable caller declarations, and the closed producer and
+forced-hosted release runtime paths. Dynamic canary profiles remain separately
+classified. Source checks do not establish actual runner identity, installed
+tools, third-party action internals, runtime dispatch paths or quota readiness.
+
 Quality runs both `just ci-automation-contracts` and `just ci-legacy-contracts`,
 with pinned external SDK and research source preparation. Model-resolution
 steps call the native resolver directly. The compatibility changes merged in
@@ -1392,6 +1399,11 @@ keeping product semantics identical, this prevents unstripped debug binaries
 from being duplicated into every composed product artifact.
 
 ## Provider and cache policy
+
+The [runner role inventory](RUNNER_ROLE_READINESS.md) records the proposed
+source-level provider and preparation map. It is not a live runner-group or
+capacity readback; role-specific qualification and rollback evidence remain
+separate requirements.
 
 After successful runtime package verification, Windows release CPU/GPU jobs
 publish and verify an exact-key ABI cache miss under the current ref. These
