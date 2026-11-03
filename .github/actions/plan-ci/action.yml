@@ -17,7 +17,7 @@ inputs:
     required: false
     default: "false"
   changed_files:
-    description: Bounded compatibility input; the planner reads the generated file
+    description: Bounded compatibility input; the force-all sentinel overrides the generated file
     required: false
     default: ""
   affected_crates:
@@ -121,6 +121,9 @@ outputs:
   runner_contract_required:
     description: Planner-owned runner contract signal
     value: ${{ steps.plan.outputs.runner_contract_required }}
+  force_hosted:
+    description: Conservative planner-owned provider placement restriction
+    value: ${{ steps.plan.outputs.force_hosted }}
   linux_max_parallel:
     description: Validated Linux worker ceiling for the selected profile
     value: ${{ steps.plan.outputs.linux_max_parallel }}
@@ -163,6 +166,7 @@ runs:
         SOURCE_SHA: ${{ inputs.source_sha }}
         BASE_SHA: ${{ inputs.base_sha }}
         DRAFT: ${{ inputs.draft }}
+        CHANGED_FILES_HINT: ${{ inputs.changed_files }}
         AFFECTED_CRATES: ${{ inputs.affected_crates }}
         UPLOAD_ARTIFACT: ${{ inputs.upload_artifact }}
         ARTIFACT_NAME: ${{ inputs.artifact_name }}
@@ -176,6 +180,12 @@ runs:
         [[ -f /tmp/changed_files.txt ]] || { echo "changed file list is missing" >&2; exit 1; }
         changed_files_json_file=$(mktemp "$RUNNER_TEMP/mesh-ci-changed-files.XXXXXX")
         jq -Rsc 'split("\n") | map(select(length > 0))' /tmp/changed_files.txt > "$changed_files_json_file"
+        # Callers bound the action input size and pass this sentinel on an
+        # oversized list. Do not silently replace that conservative fallback
+        # with the original unbounded file during planning.
+        if [[ "${CHANGED_FILES_HINT:-}" == "__force_all__" ]]; then
+          printf '%s\n' '["__force_all__"]' > "$changed_files_json_file"
+        fi
         if [[ "$EVENT_NAME" == "pull_request" ]]; then
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "pull request source SHA is malformed" >&2; exit 1; }
           git cat-file -e "$SOURCE_SHA^{commit}"
@@ -207,8 +217,9 @@ runs:
           fi
         elif [[ "$EVENT_NAME" == "push" ]]; then
           profile=main
-        else
-          printf '%s\n' '["__force_all__"]' > "$changed_files_json_file"
+        elif [[ "$EVENT_NAME" != "workflow_dispatch" ]]; then
+          echo "unsupported CI planning event" >&2
+          exit 1
         fi
 
         affected_crates_json="${AFFECTED_CRATES:-[]}"
@@ -272,7 +283,7 @@ runs:
           echo "linux_runtime_products_matrix=$(jq -c '[.matrices.runtime_products[] | select(.platform == "linux")]' ci-plan.json)"
           echo "macos_runtime_products_matrix=$(jq -c '[.matrices.runtime_products[] | select(.platform == "macos")]' ci-plan.json)"
           echo "windows_runtime_products_matrix=$(jq -c '[.matrices.runtime_products[] | select(.platform == "windows")]' ci-plan.json)"
-          for signal in rust_changed ui_changed website_changed website_docs_changed plugin_exemplars_changed cli_surface_changed docs_only backend_changed runner_contract_required; do
+          for signal in rust_changed ui_changed website_changed website_docs_changed plugin_exemplars_changed cli_surface_changed docs_only backend_changed runner_contract_required force_hosted; do
             echo "${signal}=$(jq -r --arg signal "$signal" '.signals[$signal]' ci-plan.json)"
           done
           echo "linux_max_parallel=$(jq -r '.budgets.linux_max_parallel' ci-plan.json)"
