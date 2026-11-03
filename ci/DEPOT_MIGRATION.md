@@ -72,9 +72,11 @@ cache mode and ephemeral runner allocation may differ. The runner-owning
 workflow checks out the immutable PR SHA with `persist-credentials: false`,
 receives no PR secrets or registry/cache credentials, and forces the hosted
 path for CI-control/workflow/policy changes. The planner-owned
-`signals.runner_contract_required` value is passed as `force_hosted` through
-every protected lane and runner-owning slice, and the centralized selector
-requires it to be false before enabling Depot. Control-plane planning/required
+`signals.force_hosted` value is passed as `force_hosted` through every protected
+lane and runner-owning slice, and the centralized selector requires it to be
+false before enabling Depot. `signals.runner_contract_required` independently
+selects exhaustive runner-contract coverage and does not itself force hosted
+placement. Missing placement evidence remains hosted. Control-plane planning/required
 summaries, credential-bearing smoke, `gpu-nvidia` hardware, and any Intel macOS
 row without a Depot-equivalent remain their approved provider exceptions.
 

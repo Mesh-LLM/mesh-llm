@@ -599,6 +599,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
   independently of the server endpoint, and pass the endpoint to later steps.
 - Declare cache mode per slice: no remote cache, PR restore-only/isolated, or
   trusted read-write. Derive it from the same policy as runner placement.
+- Routing coverage must compose checked-in caller inputs, planner placement,
+  selector decisions and compiler-cache configuration across trust and override
+  cases. Historical fixture dates do not renew an expired exception.
 - The ARM64 release-artifact verifier applies the selected runner's cache
   permissions immediately after installing sccache and before its first Cargo
   invocation. A hosted release runner is not an implicit cache grant.

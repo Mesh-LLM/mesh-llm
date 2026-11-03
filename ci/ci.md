@@ -1412,6 +1412,12 @@ release runner selector immediately after installing sccache, before its
 checksum and extraction verifier invokes Cargo. A denied remote cache remains
 denied even if the runner exposes cache endpoint variables.
 
+The placement contract composes the checked-in Linux caller inputs, planner
+outputs, selector and compiler-cache configuration for PR, fork, expiry,
+target-event and dispatch fixtures. Its historical dates only exercise the
+recorded exception boundary; they do not renew that exception or qualify a
+provider.
+
 Exhaustive main and manual-full coverage continues to include runner contracts
 without forcing every otherwise eligible row to a hosted runner. The canonical
 plan carries a separate conservative `force_hosted` signal: CI-control,
