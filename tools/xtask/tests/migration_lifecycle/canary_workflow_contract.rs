@@ -1,4 +1,7 @@
 //! Parsed current canary graph and authority contracts; no hosted execution proof.
+#[path = "canary_workflow_contract/backend_selection.rs"]
+mod backend_selection;
+
 use crate::workflow_yaml::{self, Node};
 use std::{collections::BTreeSet, fs, path::PathBuf};
 fn root() -> PathBuf {
@@ -117,22 +120,20 @@ fn reject_nonpublisher_secrets(name: &str, job: &Node) -> Result<(), String> {
         return Err("resolver steps missing".into());
     };
     for step in items {
+        // Read-only workflow-token API calls are never given publication credentials.
         if matches!(
             step.get("id").and_then(Node::text),
-            Some("upstream") | Some("select_platform")
+            Some("upstream" | "select_platform")
         ) {
-            // Read-only workflow-token API calls (upstream release selection
-            // and platform/runner resolution) are admitted only with the
-            // workflow token, never a publication credential.
             let Node::Map(env) = change(step, &["env"]) else {
-                return Err("read-only selection environment missing".into());
+                return Err("resolver API step environment missing".into());
             };
             let token = env
                 .iter()
                 .position(|(key, _)| key == "GH_TOKEN")
-                .ok_or("read-only selection token missing")?;
+                .ok_or("resolver API step read-only token missing")?;
             if env[token].1.text() != Some("${{ github.token }}") {
-                return Err("read-only selection must use the workflow read-only token".into());
+                return Err("resolver API steps must use the workflow read-only token".into());
             }
             env.remove(token);
         }
@@ -423,6 +424,9 @@ fn frozen_prebuilt_workers_load_cache_after_controller_and_before_consumption() 
     let controller = document(".github/workflows/llama-upstream-canary.yml");
     let worker = document(".github/workflows/llama-canary-family-pass.yml");
     let worker_jobs = worker.get("jobs").unwrap();
+    // Verify declared profile wiring and preparation order. This does not
+    // qualify Linux execution: package admission remains macOS-only, and
+    // mixed-platform placement needs a separate fix.
     for (job, consumer, profile) in [
         (
             controller.get("jobs").unwrap().get("preflight").unwrap(),
@@ -486,11 +490,20 @@ fn frozen_prebuilt_workers_load_cache_after_controller_and_before_consumption() 
                 != Some("./.github/actions/use-canary-cache"))
     );
     let cache = document(".github/actions/use-canary-cache/action.yml");
-    for (name, shell) in [
-        ("Read configured model cache (macOS)", "/bin/zsh -il {0}"),
-        ("Read configured model cache (Linux)", "/bin/bash -il {0}"),
+    for (name, condition, shell) in [
+        (
+            "Read configured model cache (macOS)",
+            "runner.os == 'macOS'",
+            "/bin/zsh -il {0}",
+        ),
+        (
+            "Read configured model cache (Linux)",
+            "runner.os == 'Linux'",
+            "/bin/bash -il {0}",
+        ),
     ] {
         let (_, step) = named(cache.get("runs").unwrap(), "name", name);
+        assert_eq!(field(step, "if"), condition);
         assert_eq!(field(step, "shell"), shell);
         assert_eq!(
             field(step, "run").trim(),
@@ -564,6 +577,7 @@ fn action_shell(root: &std::path::Path, setup: &str, production: &str) -> (i32, 
         ],
     )
 }
+
 #[test]
 fn parsed_family_worker_preserves_bounded_fanout_and_prebuilt_restore_before_certification() {
     let worker = document(".github/workflows/llama-canary-family-pass.yml");
@@ -597,16 +611,22 @@ fn parsed_family_worker_preserves_bounded_fanout_and_prebuilt_restore_before_cer
             .and_then(Node::text)
             .is_none_or(|s| !s.contains("cargo "))
     }));
-    let build = jobs.get("build").unwrap();
+    let build_job = jobs.get("build").unwrap();
     assert_eq!(
-        field(build, "runs-on"),
+        field(build_job, "runs-on"),
         "${{ fromJSON(inputs.runner_labels_128) }}"
     );
-    let build_env = build.get("env").unwrap();
+    let build_env = build_job.get("env").unwrap();
     assert!(
         build_env.get("LLAMA_STAGE_BACKEND").is_none(),
         "the backend is platform-independent; the resolve job selects the platform"
     );
+    for job in [build_job, family, jobs.get("retry_family").unwrap()] {
+        let (setup, _) = named(job, "uses", "./.github/actions/setup-canary-runner");
+        let (backend, _) = named(job, "uses", "./.github/actions/select-canary-backend");
+        let (prepare, _) = named(job, "uses", "./.github/actions/prepare-automation");
+        assert!(setup < backend && backend < prepare);
+    }
     assert!(field(build_env, "LLAMA_STAGE_BUILD_DIR").contains("inputs.pass_id"));
     let certification = fs::read_to_string(
         root().join("tools/xtask/src/automation/canary_receipts/package_closure/certification.rs"),
