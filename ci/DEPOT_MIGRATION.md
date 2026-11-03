@@ -489,11 +489,19 @@ semantic role and Depot size. Use `--compare-input` only with matching plan
 profile, selected slices, source/change class, image/toolchain epoch and cache
 mode; the provider sets must be disjoint and job families common.
 
-The date-independent rollout signals are deterministic: fewer than three job
-queue samples is `insufficient_sample`; queue p95 over 60 seconds is `hold`;
-job or terminal-job queue p95 at least 300 seconds is capacity-contaminated and
-`rollback`; a candidate cohort is `eligible` only when provider separation and
-all other comparability checks pass. A contaminated run may prove correctness
+Queue heuristics are observations of pooled jobs, not a qualification decision:
+fewer than three job queue samples is `insufficient_sample`; queue p95 over 60
+seconds is `hold`; job or terminal-job queue p95 at least 300 seconds is
+capacity-contaminated and `rollback`. Small-sample percentiles are descriptive,
+not evidence of a population p95. A comparison requests `review` only after
+at least three distinct successful first-attempt runs per condition have no
+excluded records and match recorded workflow, event, source SHA, plan profile
+and digest, change class, runner image, toolchain epoch, cache mode, job
+families, OS, architecture and role. Missing metadata holds; enrich raw inputs
+with verified evidence, and keep intentionally different images for separate
+human assessment. This conservative signal does not validate workload per run,
+resource parity, artifact provenance, reliability, thresholds, approval or
+rollback, and never authorizes rollout. A contaminated run may prove correctness
 or artifact reuse but cannot prove provider latency. Rollback changes only the
 central provider gate to GitHub-hosted and reruns the same plan; it does not
 change build shape. Do not place dated conclusions or raw evidence in `ci/`.

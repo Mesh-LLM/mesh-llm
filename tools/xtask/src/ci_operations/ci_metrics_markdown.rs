@@ -121,7 +121,8 @@ fn runner_dimensions(lines: &mut Vec<String>, jobs: &Value, top: usize) -> Outco
 fn capacity(lines: &mut Vec<String>, report: &Value) -> Outcome<()> {
     let capacity = field(report, "capacity");
     let heuristics = field(report, "heuristics");
-    lines.extend(["", "## Capacity and rollout heuristics", ""].map(str::to_owned));
+    lines.extend(["", "## Capacity and queue observations", ""].map(str::to_owned));
+    lines.push("Queue states describe pooled job samples, not rollout qualification; small-sample percentiles are descriptive only.".to_owned());
     lines.push(format!(
         "Runner-minutes: **{}**; cancelled runner-minutes: **{}**; peak workers: **{}**.",
         display(field(capacity, "runner_minutes")),
@@ -130,7 +131,7 @@ fn capacity(lines: &mut Vec<String>, report: &Value) -> Outcome<()> {
     ));
     lines.push(format!(
         "Queue p95: **{}**; terminal queue p95: **{}**; capacity contaminated: **{}**; \
-         state: **{}**.",
+         queue-only state: **{}**.",
         human(field(heuristics, "queue_p95_seconds"))?,
         human(field(heuristics, "terminal_job_queue_p95_seconds"))?,
         display(field(heuristics, "capacity_contaminated")),
@@ -202,5 +203,6 @@ fn comparison(lines: &mut Vec<String>, report: &Value) {
         providers(separation, "candidate_providers"),
         display(field(comparison, "recommendation")),
     ));
+    lines.push("Comparison signals do not replace matched evidence, independent approval, or authorized rollout and rollback.".to_owned());
     lines.push(String::new());
 }
