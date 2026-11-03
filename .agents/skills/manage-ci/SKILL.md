@@ -5,14 +5,6 @@ description: Use this skill as the mandatory starting point whenever inspecting,
 
 # Manage CI
 
-Automation preparation profiles must have a classified runner path, including
-default `image` profiles and nested local composite and reusable callers.
-`hosted-bare` requires GitHub-hosted Linux. The source contracts check direct
-platform and image boundaries, closed producer maps, forced-hosted release
-selection, and the declared local caller graph. Bare self-hosted smoke tooling
-remains a qualification prerequisite. Source checks do not establish actual
-runner identity, tool availability, provider isolation or qualification.
-
 This is the normative CI rule source for MeshLLM. Read it completely before
 every CI task.
 
@@ -151,6 +143,14 @@ still verifies the runner image and configures sccache. Runtime-seed automation
 preparation may use step-local Cargo home and target directories outside the
 measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
+
+Automation preparation profiles must have a classified runner path, including
+default `image` profiles and nested local composite and reusable callers.
+`hosted-bare` requires GitHub-hosted Linux. The source contracts check direct
+platform and image boundaries, closed producer maps, forced-hosted release
+selection, and the declared local caller graph. Bare self-hosted smoke tooling
+remains a qualification prerequisite. Source checks do not establish actual
+runner identity, tool availability, provider isolation or qualification.
 
 Persistent macOS canary jobs use the `preinstalled-macos` automation profile.
 Preflight and build require `[self-hosted, macOS, ARM64, jy-managed,
