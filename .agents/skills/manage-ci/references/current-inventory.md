@@ -83,6 +83,12 @@ credential is supplied. See the procedure for exact interfaces and limitations.
 Independently approved human team creation/verification and valid-owner
 readback are prerequisites to merging its CODEOWNERS references. Team/rule
 state remains unverified/inactive until actual live readback establishes it.
+The optional read-only `ci-governance inspect-live-controls` command collects a
+bounded subset using an explicitly supplied existing token and fixed GETs; it
+does not mint credentials. A 403 is unknown, and a 404 may mean absent or
+inaccessible. Its first ruleset page is not an effective-rule census; the
+output is always partial and cannot establish drift clearance, identity,
+credential boundaries, required-check enforcement or activation authority.
 
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes
 `mesh-llm-moa-plugin` and `mesh-llm-wallet` alongside their related workspace
