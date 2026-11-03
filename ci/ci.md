@@ -947,6 +947,13 @@ parallelism.
 
 ## Native contract execution
 
+The preparation-profile census requires literal `hosted-bare` callers to use
+hosted Linux labels and checks default image platform boundaries, local
+composite and reusable caller declarations, and the closed producer and
+forced-hosted release runtime paths. Dynamic canary profiles remain separately
+classified. Source checks do not establish actual runner identity, installed
+tools, third-party action internals, runtime dispatch paths or quota readiness.
+
 Quality runs both `just ci-automation-contracts` and `just ci-legacy-contracts`,
 with pinned external SDK and research source preparation. Model-resolution
 steps call the native resolver directly. The compatibility changes merged in
@@ -1227,13 +1234,6 @@ lifecycle execution, and does not remove another lane's interpreter setup.
 
 ## Fan-out and timing controls
 
-The preparation-profile census requires literal `hosted-bare` callers to use
-hosted Linux labels and checks default image platform boundaries, local
-composite and reusable caller declarations, and the closed producer and
-forced-hosted release runtime paths. Dynamic canary profiles remain separately
-classified. Source checks do not establish actual runner identity, installed
-tools, third-party action internals, runtime dispatch paths or quota readiness.
-
 The planner records profile budgets: PR drafts/ready runs allow at most
 7 Linux, 2 macOS, 1 Windows matrix workers and 10 planned workers overall;
 main/manual runs allow 12, 4, 2 and 18 respectively. Each matrix also sets
@@ -1364,6 +1364,11 @@ from being duplicated into every composed product artifact.
 
 ## Provider and cache policy
 
+The [runner role inventory](RUNNER_ROLE_READINESS.md) records the proposed
+source-level provider and preparation map. It is not a live runner-group or
+capacity readback; role-specific qualification and rollback evidence remain
+separate requirements.
+
 After successful runtime package verification, Windows release CPU/GPU jobs
 publish and verify an exact-key ABI cache miss under the current ref. These
 two jobs grant only `actions: read` for the publication probe; cache writes use
@@ -1418,11 +1423,6 @@ The ARM64 release-artifact smoke applies both cache permissions from the
 release runner selector immediately after installing sccache, before its
 checksum and extraction verifier invokes Cargo. A denied remote cache remains
 denied even if the runner exposes cache endpoint variables.
-
-The [runner role inventory](RUNNER_ROLE_READINESS.md) records the proposed
-source-level provider and preparation map. It is not a live runner-group or
-capacity readback; role-specific qualification and rollback evidence remain
-separate requirements.
 
 Exhaustive main and manual-full coverage continues to include runner contracts
 without forcing every otherwise eligible row to a hosted runner. The canonical

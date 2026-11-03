@@ -1015,10 +1015,6 @@ selectors receive an explicit hosted override regardless of the manual input
 or repository gate; the release SDK uses metadata's frozen source SHA. The
 release `use_depot` input remains reserved until a provider profile is
 qualified. The separate rolling-preview GPU override is retained.
-`ci/RUNNER_ROLE_READINESS.md` records the source-level role/preparation roster
-and its unresolved live evidence. The primary-selector fixture checks its
-trusted-main allowlist and hosted exclusions without asserting live readiness.
-
 ## Artifact and cache owners
 
 `native runtime-manifest-write` owns Windows ROCm target admission after the
@@ -1232,6 +1228,10 @@ PR-controlled workflows and executor jobs retain no Actions-write
 permission.
 
 ## Providers and variables
+
+`ci/RUNNER_ROLE_READINESS.md` records the source-level role/preparation roster
+and its unresolved live evidence. The primary-selector fixture checks its
+trusted-main allowlist and hosted exclusions without asserting live readiness.
 
 GitHub-hosted labels are `ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15`, and
 `windows-2022`. Depot labels are selected only by `select-ci-runners`; no
