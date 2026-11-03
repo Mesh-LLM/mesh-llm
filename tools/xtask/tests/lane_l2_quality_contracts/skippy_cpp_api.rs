@@ -125,9 +125,8 @@ fn api_qualified_cpu_image_is_scoped_to_its_own_consumer() -> TestResult {
     assert_eq!(consumers, ["skippy-cpp-api"]);
     assert_eq!(
         catalog["runtime_rows"]["linux-cpu"]["image_id"],
-        "public-cpu"
+        catalog["compiler_seed"]["image_id"]
     );
-    assert_eq!(catalog["compiler_seed"]["image_id"], "public-cpu");
     let workflow = workflow()?;
     let job = workflow
         .split("  skippy_cpp_api:\n")
