@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "normalization": "operator-normalized-v1",
+  "repository": "Mesh-LLM/mesh-llm",
+  "complete": false,
+  "observed_at_unix": "<actual collection Unix seconds>",
+  "protected_policy_revision": "<exact current protected main SHA>",
+  "current_protected_main_revision": "<separately collected current protected main SHA; must equal frozen protected policy revision>",
+  "policy_sha256": "<SHA256 of compact typed Policy JSON; recursively sorted object keys; preserved array order>",
+  "readback_link": "<HTTPS repository evidence link>",
+  "replay_ledger_complete": false,
+  "replay_ledger_link": "<HTTPS repository protected one-use ledger evidence link>",
+  "consumed_operation_ids": [],
+  "observer": {
+    "repository": "Mesh-LLM/mesh-llm",
+    "run_id": "<actual observer run ID>",
+    "run_attempt": "<actual observer attempt>",
+    "ref_name": "refs/heads/main",
+    "protected_revision": "<separately collected current protected main SHA>",
+    "principal": {"login": "<human or read-only service login>", "id": "<verified observer account ID>", "kind": "<human or bot>"}
+  },
+  "execution": {
+    "repository": "Mesh-LLM/mesh-llm",
+    "run_id": "<actual run ID>",
+    "run_attempt": "<actual attempt>",
+    "ref_name": "refs/heads/main",
+    "protected_revision": "<exact current protected main SHA>",
+    "operator": {"login": "<human login>", "id": "<verified account ID>", "kind": "human"},
+    "triggerer": {"login": "<human login>", "id": "<verified account ID>", "kind": "human"},
+    "rerun_actor": {"login": "<human login>", "id": "<verified account ID>", "kind": "human"}
+  },
+  "state": "<complete actual LiveState object; same field shape as expected-state.json state; do not substitute desired state for readback>"
+}

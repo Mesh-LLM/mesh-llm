@@ -8,6 +8,33 @@ The shared compiler seed warmer uses the same test setting. Cache epoch `v4`
 starts a fresh namespace. Batch jobs record filesystem space before each
 package and retained target/compiler-cache sizes even when tests fail.
 
+## CI governance preparation (#2781)
+
+The [manage-ci rule](../.agents/skills/manage-ci/SKILL.md#independent-human-approval-for-ci-policy)
+requires one eligible independent current-revision human approval for CI policy.
+The [human procedure](CI_GOVERNANCE.md) separates local preparation from the
+pending creation/readback of the exact-three reviewer team, native file-scoped
+required review, protected main-only administration environment, credential
+custody and drift reporting. Human PR authors are the responsible sponsors;
+bot-authored policy PRs are unsupported and fail closed. The five product
+validation lanes remain separate; unrelated product-only work retains normal
+ownership. The initial governance change itself requires independent eligible
+review before merge. No external governance activation is established here.
+Prepared protected metadata collection/App-check publication and a main-only
+administration-plan workflow are checked in, with `activation.json` inactive
+and numeric IDs unset. The no-checkout review signal triggers protected
+recollection; it adds no product-validation lane. Administration takes only a
+fixed record UUID/digest and prepares a concrete packet, but inspection blocks
+authorization where exact-attempt approval/live-state/runtime proof is absent.
+No administration mutation or administration-write credential is supplied.
+Main pushes and a 15-minute outage cron also reconcile open PRs through two
+complete matching list passes capped at 200 and authenticated per-repository/PR
+matrix serialization. This parser/matrix bound and cadence do not qualify API
+capacity, queue/backlog behavior or actual drift/report delivery latency.
+The team must be independently approved, created/verified and read back as a
+valid write-access owner before its CODEOWNERS references merge; native rules
+require separate authorized activation and live readback.
+
 ## Standalone C++ API qualification
 
 The protected catalog admits `skippy/skippy_api/**` and

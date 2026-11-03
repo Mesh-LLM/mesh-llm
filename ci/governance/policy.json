@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "repository": "Mesh-LLM/mesh-llm",
+  "protected_branch": "main",
+  "reviewer_team": "Mesh-LLM/ci-policy-reviewers",
+  "eligible_humans": ["micspiral", "ndizazzo", "i386"],
+  "required_approvals": 1,
+  "submission": "human-author-is-sponsor",
+  "scope": {
+    "directory_prefixes": [
+      ".github/", "ci/", ".agents/skills/manage-ci/", ".omo/", "tools/",
+      "scripts/", "just/", ".cargo/", ".config/", "mesh/scripts/",
+      "mesh/deploy/", "skippy/scripts/", "mesh/crates/mesh-llm-ui/scripts/",
+      "mesh/website/scripts/"
+    ],
+    "exact_paths": [
+      "AGENTS.md", "Cargo.toml", "Cargo.lock", "Justfile", "rust-toolchain",
+      "rust-toolchain.toml", ".nvmrc", ".dockerignore", ".gitignore",
+      ".gitattributes", "clippy.toml", "rustfmt.toml", "Dockerfile",
+      "mesh/crates/mesh-llm-ui/package.json",
+      "mesh/crates/mesh-llm-ui/eslint.config.js",
+      "mesh/crates/mesh-llm-ui/vitest.config.ts",
+      "mesh/crates/mesh-llm-ui/vite.config.ts",
+      "mesh/crates/mesh-llm-ui/playwright.config.ts",
+      "mesh/crates/mesh-llm-ui/tsconfig.json",
+      "mesh/crates/mesh-llm-ui/tsconfig.app.json",
+      "mesh/crates/mesh-llm-ui/tsconfig.node.json",
+      "mesh/crates/mesh-llm-ui/.prettierrc",
+      "mesh/crates/mesh-llm-ui/.prettierignore",
+      "mesh/crates/mesh-llm-ui/.npmrc",
+      "mesh/crates/mesh-llm-ui/pnpm-workspace.yaml",
+      "mesh/website/package.json"
+    ],
+    "root_filename_prefixes": ["Dockerfile."]
+  }
+}
