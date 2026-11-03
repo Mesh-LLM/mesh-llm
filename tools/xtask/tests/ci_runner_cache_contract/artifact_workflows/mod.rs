@@ -1,5 +1,6 @@
 //! Producer reachability, platform adapters and smoke input contracts.
 mod graph;
+mod placement;
 mod planner;
 mod platform;
 mod smoke;

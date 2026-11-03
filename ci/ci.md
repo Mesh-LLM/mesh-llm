@@ -1407,6 +1407,19 @@ select eligible build/test rows on Depot macOS 15 and
 Windows 2022, subject to the same policy and documented exceptions. Provider
 choice never changes plan membership, commands, artifacts, tests or summaries.
 
+Exhaustive main and manual-full coverage continues to include runner contracts
+without forcing every otherwise eligible row to a hosted runner. The canonical
+plan carries a separate conservative `force_hosted` signal: CI-control,
+runner-infrastructure, tooling and governance-scoped changes force hosted;
+missing or invalid scope, missing comparison history, and incomplete or
+oversized change lists do the same. Manual-full compares the selected main
+commit with its parent, and change collection includes both sides of renames.
+Lane callers treat an absent placement signal as hosted during version changes.
+Existing exact-string gates, role exclusions, explicit overrides and cache
+rules still decide whether any remaining row can use Depot. Reverting this
+source change restores the earlier exhaustive-hosted behavior; it does not
+modify already-running workflows or live provider settings.
+
 Depot coverage is reported against the selected ordinary-executor denominator,
 not against every job in the Actions run. For a plan, the denominator is every
 ordinary build/test executor row that the same event, trust profile, platform,

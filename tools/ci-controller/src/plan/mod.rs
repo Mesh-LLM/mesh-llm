@@ -13,6 +13,7 @@ mod construction;
 pub mod diagnostics;
 pub mod document;
 mod glob_pattern;
+mod hosted_policy;
 mod matrices;
 pub use construction::CONTRACT_TESTED_CRATES;
 pub mod plan_bytes;

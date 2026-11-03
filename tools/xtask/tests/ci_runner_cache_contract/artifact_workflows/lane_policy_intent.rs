@@ -121,7 +121,7 @@ fn graph_runner_contract_and_original_event_follow_all_current_typed_build_calls
                     assert_eq!(
                         input(caller, "force_hosted"),
                         Some(
-                            "${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}"
+                            "${{ toJSON(fromJson(inputs.lane_plan_json).signals.force_hosted) != 'false' }}"
                         )
                     );
                 }
