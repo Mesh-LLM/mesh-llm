@@ -4,6 +4,7 @@
 use crate::plan::catalog::{self, Ownership};
 use crate::plan::diagnostics::{PlanResult, fail};
 use crate::plan::document::Json;
+use crate::plan::hosted_policy;
 use crate::plan::matrices::{self, RowRequest};
 use crate::plan::profile_catalog::BUDGET_KEYS;
 use crate::plan::request::{self, Profile};
@@ -125,7 +126,12 @@ pub(super) fn build(payload: &Json, roots: &Roots<'_>) -> PlanResult<Value> {
         "runner_roles": per_slice(&|slice| json!(slice.runner_role)),
         "cache_modes": per_slice(&|slice| json!(planned_cache_mode(slice, profile))),
         "budgets": BUDGET_KEYS.iter().zip(budgets).map(|(key, value)| ((*key).to_owned(), json!(value))).collect::<Map<_, _>>(),
-        "signals": signals::signals(&changed_files, &domains, profile),
+        "signals": signals::signals(
+            &changed_files,
+            &domains,
+            profile,
+            hosted_policy::force_hosted(roots.workspace, &input.base_sha, &changed_files, &domains),
+        ),
     });
     validate(&plan, profile, &packages)?;
     Ok(plan)
