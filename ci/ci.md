@@ -1357,6 +1357,11 @@ from being duplicated into every composed product artifact.
 
 ## Provider and cache policy
 
+The [runner role inventory](RUNNER_ROLE_READINESS.md) records the proposed
+source-level provider and preparation map. It is not a live runner-group or
+capacity readback; role-specific qualification and rollback evidence remain
+separate requirements.
+
 After successful runtime package verification, Windows release CPU/GPU jobs
 publish and verify an exact-key ABI cache miss under the current ref. These
 two jobs grant only `actions: read` for the publication probe; cache writes use
@@ -1411,11 +1416,6 @@ The ARM64 release-artifact smoke applies both cache permissions from the
 release runner selector immediately after installing sccache, before its
 checksum and extraction verifier invokes Cargo. A denied remote cache remains
 denied even if the runner exposes cache endpoint variables.
-
-The [runner role inventory](RUNNER_ROLE_READINESS.md) records the proposed
-source-level provider and preparation map. It is not a live runner-group or
-capacity readback; role-specific qualification and rollback evidence remain
-separate requirements.
 
 Exhaustive main and manual-full coverage continues to include runner contracts
 without forcing every otherwise eligible row to a hosted runner. The canonical
