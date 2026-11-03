@@ -9,8 +9,7 @@ mod gh_contracts;
 mod git_contracts;
 #[path = "../src/release/inventory/github.rs"]
 mod github;
-#[path = "../src/process/mod.rs"]
-pub mod process;
+pub use process_supervision as process;
 #[path = "../src/release/inventory/provenance.rs"]
 mod provenance;
 #[path = "release_inventory_provenance/real_git.rs"]

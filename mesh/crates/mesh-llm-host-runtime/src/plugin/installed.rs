@@ -7,8 +7,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub(crate) enum ConfiguredExternalPlugin {
-    Active(ExternalPluginSpec),
-    Inactive(PluginSummary),
+    Active(Box<ExternalPluginSpec>),
+    Inactive(Box<PluginSummary>),
 }
 
 pub(crate) fn configured_disabled_installed_plugin_summary(
@@ -98,8 +98,8 @@ pub(crate) fn configured_external_plugin_spec(
             .as_ref()
             .filter(|metadata| !metadata.enabled)
     {
-        return Ok(ConfiguredExternalPlugin::Inactive(disabled_entry_summary(
-            entry, metadata,
+        return Ok(ConfiguredExternalPlugin::Inactive(Box::new(
+            disabled_entry_summary(entry, metadata),
         )));
     }
 
@@ -108,27 +108,51 @@ pub(crate) fn configured_external_plugin_spec(
         None => match installed_plugin_command_for_name(&entry.name) {
             Ok(command) => command,
             Err(error) if startup.optional => {
-                return Ok(ConfiguredExternalPlugin::Inactive(
+                return Ok(ConfiguredExternalPlugin::Inactive(Box::new(
                     optional_configured_plugin_summary(entry, &startup, error),
-                ));
+                )));
             }
             Err(error) => return Err(error),
         },
     };
 
-    Ok(ConfiguredExternalPlugin::Active(ExternalPluginSpec {
-        openai_exchange_grant: entry.openai_exchange_grant.clone().map(Box::new),
-        name: entry.name.clone(),
-        command,
-        args: entry.args.clone(),
-        url: url.map(str::to_owned),
-        env: BTreeMap::new(),
-        startup,
-        web_ui_enabled: entry.web_ui_enabled,
-        web_ui_primary_tab: entry.web_ui_primary_tab,
-        endpoint_models: entry.models.clone(),
-        installed_metadata,
-    }))
+    Ok(ConfiguredExternalPlugin::Active(Box::new(
+        ExternalPluginSpec {
+            openai_exchange_grant: entry.openai_exchange_grant.clone().map(Box::new),
+            name: entry.name.clone(),
+            command,
+            args: entry.args.clone(),
+            url: url.map(str::to_owned),
+            env: BTreeMap::new(),
+            settings: plugin_settings(&entry.settings),
+            startup,
+            web_ui_enabled: entry.web_ui_enabled,
+            web_ui_primary_tab: entry.web_ui_primary_tab,
+            endpoint_models: entry.models.clone(),
+            installed_metadata,
+        },
+    )))
+}
+
+/// The operator's `[plugin.settings]` in the JSON the plugin is handed at
+/// startup. A value TOML can hold and JSON cannot is reported, not dropped.
+fn plugin_settings(
+    settings: &BTreeMap<String, toml::Value>,
+) -> BTreeMap<String, serde_json::Value> {
+    settings
+        .iter()
+        .filter_map(|(key, value)| match serde_json::to_value(value) {
+            Ok(value) => Some((key.clone(), value)),
+            Err(err) => {
+                tracing::warn!(
+                    plugin = %key,
+                    error = %err,
+                    "Plugin setting cannot be represented as JSON; the plugin will not see it"
+                );
+                None
+            }
+        })
+        .collect()
 }
 
 pub(crate) fn append_installed_plugins(
@@ -205,6 +229,7 @@ fn installed_plugin_spec(metadata: &InstalledPluginMetadata) -> ExternalPluginSp
         args: Vec::new(),
         url: None,
         env: BTreeMap::new(),
+        settings: Default::default(),
         startup: PluginStartupOptions {
             optional: metadata.default_managed,
             ..PluginStartupOptions::default()

@@ -213,3 +213,45 @@ fn runtime_config_apply_matches_validator_signatures_for_schema_driven_invalid_f
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn unavailable_provider_is_rejected_without_persisting() {
+    let dir = test_dir();
+    let path = dir.join("config.toml");
+    let mut state = ConfigState::load(&path).unwrap();
+    let config: MeshConfig =
+        toml::from_str("[[models]]\nmodel='owner/model@pin'\nprovider='blobstore'").unwrap();
+    assert!(matches!(
+        state.apply(config, 0),
+        ApplyResult::ValidationError { .. }
+    ));
+    assert!(!path.exists());
+    assert_eq!(state.revision(), 0);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn applied_provider_source_uses_receiving_config_directory() {
+    let dir = test_dir();
+    let path = dir.join("config.toml");
+    let mut state = ConfigState::load(&path).unwrap();
+    let config: MeshConfig = toml::from_str("[[plugin]]\nname='onnx'\ncommand='/opt/onnx'\n[[models]]\nmodel='owner/model@pin'\nprovider='onnx'\n[models.source]\nlocal_dir='weights'").unwrap();
+    assert!(matches!(
+        state.apply(config, 0),
+        ApplyResult::Applied { .. }
+    ));
+    assert_eq!(
+        state.config().source_directory.as_deref(),
+        Some(dir.as_path())
+    );
+    assert_eq!(
+        state.config().models[0].source.local_dir.as_deref(),
+        Some(std::path::Path::new("weights"))
+    );
+    assert!(
+        std::fs::read_to_string(path)
+            .unwrap()
+            .contains("local_dir = \"weights\"")
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

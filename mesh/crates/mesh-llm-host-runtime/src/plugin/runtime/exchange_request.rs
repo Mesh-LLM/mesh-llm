@@ -37,6 +37,7 @@ impl ExternalPlugin {
             deadline,
             self.request_lifecycle_once(
                 proto::envelope::Payload::InvokeServiceRequest(proto::InvokeServiceRequest {
+                    invocation_id: None,
                     kind: proto::ServiceKind::OpenaiExchange as i32,
                     service_name: declaration.handler.clone(),
                     input_json: input_json.to_owned(),

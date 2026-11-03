@@ -7,6 +7,8 @@ use std::path::Path;
 mod backend;
 #[path = "runtime_manifest_files.rs"]
 mod files;
+#[path = "windows_rocm_kernels.rs"]
+mod windows_rocm_kernels;
 
 #[derive(Serialize)]
 struct Manifest<'a> {
@@ -102,8 +104,9 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
     let root = Path::new(output)
         .parent()
         .ok_or("manifest requires a parent directory")?;
-    let hashes = files::hashes(root, libraries.iter().chain(licenses.iter()))?;
+    let mut hashes = files::hashes(root, libraries.iter().chain(licenses.iter()))?;
     let tool_hashes = files::hashes(root, tools.iter())?;
+    let runtime_backend = backend::build(backend, cuda_major, os, root, &mut hashes)?;
     let primary_sha = hashes.get(primary).ok_or("missing primary checksum")?;
     let manifest = Manifest {
         schema_version: schema_v2.then_some(2),
@@ -118,7 +121,7 @@ pub(super) fn run(args: &[String]) -> DynResult<()> {
                 target,
                 min_glibc: files::glibc_floor(root, os, libraries.iter().chain(tools.iter()))?,
             },
-            backend: backend::build(backend, cuda_major)?,
+            backend: runtime_backend,
             rank: backend::environment("MESH_LLM_NATIVE_RUNTIME_RANK")
                 .map_or(Ok(0), |value| value.parse::<i64>())?,
             libraries,

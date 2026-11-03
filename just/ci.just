@@ -41,6 +41,12 @@ automation-bootstrap:
     just with-lld cargo build --locked -p xtask --bin xtask
     just with-lld cargo run --locked -p xtask --bin xtask -- automation bootstrap
 
+# Build only the narrow CI controller (planning, lane admission, planner-side
+# repository checks), then prove no other workspace crate was compiled in.
+ci-controller-bootstrap:
+    just with-lld cargo build --locked -p ci-controller --bin ci-controller
+    just with-lld cargo run --locked -p ci-controller --bin ci-controller -- automation bootstrap
+
 [private]
 [unix]
 [positional-arguments]
@@ -168,11 +174,14 @@ test-all:
         --exclude skippy-runtime \
         --exclude skippy-serving \
         --exclude skippy-cli \
+        --exclude process-supervision \
         --exclude xtask
     # Automation fixtures own process-global signal scopes. Keep this harness
     # serial without changing the environment of other packages' child tests.
     echo "--- Repository automation tests ---"
     just with-lld cargo test --package xtask -- --test-threads=1
+    echo "--- Process supervision tests ---"
+    just with-lld cargo test --package process-supervision -- --test-threads=1
     echo "--- Static Skippy package-builder tests ---"
     just with-lld cargo test --package skippy-package-builder --no-default-features
     echo "--- Static Skippy runtime tests ---"
@@ -218,6 +227,10 @@ ci-automation-contracts:
     just with-lld cargo build --locked -p trajectory-reader --features corpus-input --bin trajectory-reader
     just with-lld cargo test --locked -p trajectory-reader --features corpus-input --lib -- --test-threads=1
     MESH_LLM_TEST_XTASK_BIN="$binary" just with-lld cargo test --locked -p trajectory-reader --features corpus-input --test prompt_command native_prompt_command_ -- --test-threads=1
+    # The narrow controller and supervision crates are contract-tested here, not
+    # in the Rust test matrix. Supervision tests keep xtask's single-threaded harness.
+    just with-lld cargo test --locked -p ci-controller
+    just with-lld cargo test --locked -p process-supervision -- --test-threads=1
     fixture_suffix=""
     case "$binary" in *.exe) fixture_suffix=".exe" ;; esac
     export SPV_ADAPTER_FIXTURE="$target_directory/debug/examples/swift_privacy_lint_fixture$fixture_suffix"

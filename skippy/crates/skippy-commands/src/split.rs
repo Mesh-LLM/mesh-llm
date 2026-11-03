@@ -153,6 +153,7 @@ pub fn run(args: PlanSplitCommand) -> Result<()> {
     );
     validate_frontiers(&admissions)?;
     let peer = |index: usize| PeerConfig {
+        persistent_lane_marker: false,
         stage_id: topology.stages[index].stage_id.clone(),
         stage_index: index as u32,
         endpoint: args.workers[index].to_string(),

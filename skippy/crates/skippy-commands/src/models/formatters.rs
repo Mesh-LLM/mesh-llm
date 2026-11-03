@@ -311,8 +311,11 @@ pub(crate) fn catalog_model_kind(model: &remote_catalog::RemoteCatalogModel) -> 
 }
 
 pub(crate) fn model_kind_code(kind: &str) -> &'static str {
-    if kind.to_ascii_lowercase().contains("mlx") {
+    let lowered = kind.to_ascii_lowercase();
+    if lowered.contains("mlx") {
         "mlx"
+    } else if lowered.contains("layer package") {
+        "layer_package"
     } else {
         "gguf"
     }

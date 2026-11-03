@@ -6,6 +6,7 @@ use crate::plugin::{
 #[test]
 fn config_sync_full_config_roundtrip() {
     let config = crate::plugin::MeshConfig {
+        source_directory: None,
         version: Some(1),
         gpu: GpuConfig {
             host_ram_offload: None,

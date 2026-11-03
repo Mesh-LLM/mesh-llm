@@ -3,6 +3,9 @@
 const path = require('node:path')
 const nativeRuntime = require('./native-runtime')
 const { Inference, OpenAIRequestError } = require('./inference')
+const { LiveTranscription, startLiveTranscription } = require('./live-transcription')
+const { Models } = require('./models')
+const { Memberships } = require('./memberships')
 const nativeModuleCache = new Map()
 
 function loadNativeAddon() {
@@ -59,6 +62,8 @@ class Node {
   constructor(handle) {
     this._handle = handle
     this.inference = new Inference(handle)
+    this.models = new Models(handle)
+    this._memberships = new Memberships(handle)
   }
 
   static create(options = {}) {
@@ -72,6 +77,11 @@ class Node {
       options.consolePort ?? 3131
     )
     return new Node(handle)
+  }
+
+  /** Pass the complete Rust embedded-node configuration to the native core. */
+  static fromConfig(config) {
+    return new Node(native.Node.createConfig(JSON.stringify(config)))
   }
 
   start() {
@@ -89,6 +99,16 @@ class Node {
   joinToken(token) {
     return this._handle.joinToken(token)
   }
+
+  startLiveTranscription(options = {}) {
+    return startLiveTranscription(this._handle, options)
+  }
+
+  addMembership(config) { return this._memberships.add(config) }
+
+  removeMembership(name) { return this._memberships.remove(name) }
+
+  memberships() { return this._memberships.list() }
 }
 
 function parse(json) {
@@ -96,7 +116,9 @@ function parse(json) {
 }
 
 module.exports = {
+  LiveTranscription,
   Inference,
+  Models,
   Node,
   OpenAIRequestError,
   currentMeshVersion: nativeRuntime.currentMeshVersion,

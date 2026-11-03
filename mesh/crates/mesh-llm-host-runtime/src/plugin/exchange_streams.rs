@@ -425,7 +425,7 @@ impl ResponseCopies {
                     let size = chunk.len() as u64;
                     if copy
                         .queued_bytes
-                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
+                        .try_update(Ordering::AcqRel, Ordering::Acquire, |queued| {
                             queued
                                 .checked_add(size)
                                 .filter(|total| *total <= copy.max_queue_bytes)

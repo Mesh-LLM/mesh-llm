@@ -8,6 +8,9 @@ use mesh_llm_cli::{BinaryFlavor, MeshGuardrailCliMode};
 use mesh_llm_commands::runtime_native::NativeRuntimeConfigSelection;
 use mesh_llm_host_runtime::command_support::plugin::{MeshConfig, load_config};
 
+mod owner_control_http;
+use owner_control_http::post_runtime_payload;
+
 pub(crate) async fn dispatch_runtime_command(
     command: Option<&RuntimeCommand>,
     config_path: Option<&Path>,
@@ -158,7 +161,12 @@ pub(crate) async fn dispatch_runtime_command(
             port,
             json,
         }) => run_control_apply_config(endpoint, *expected_revision, config, *port, *json).await,
-        Some(RuntimeCommand::Load { name, port }) => run_load(name, *port).await,
+        Some(RuntimeCommand::Load {
+            name,
+            port,
+            ctx_size,
+            parallel,
+        }) => run_load(name, *port, LoadSizing::from_flags(*ctx_size, *parallel)).await,
         Some(RuntimeCommand::Unload { name, port }) => run_drop(name, *port).await,
         Some(RuntimeCommand::Guardrails { mode, port, json }) => {
             run_set_mesh_guardrails(*mode, *port, *json).await
@@ -360,24 +368,92 @@ pub(crate) async fn run_drop(model_name: &str, port: u16) -> Result<()> {
     let url = format!("http://127.0.0.1:{port}/api/runtime/models/{encoded}");
     let resp = client
         .delete(&url)
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!(
+                "Bearer {}",
+                mesh_llm_commands::owner_control::owner_control_token(port).await?
+            ),
+        )
         .send()
         .await
         .with_context(|| format!("Can't connect to mesh-llm on port {port}. Is it running?"))?;
     display_runtime_result(resp, model_name, "Unloaded").await
 }
 
-pub(crate) async fn run_load(model_name: &str, port: u16) -> Result<()> {
+/// Optional per-load sizing; absent fields keep the node's own plan.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct LoadSizing {
+    ctx_size: Option<u32>,
+    parallel: Option<usize>,
+}
+
+impl LoadSizing {
+    pub(crate) fn from_flags(
+        ctx_size: Option<std::num::NonZeroU32>,
+        parallel: Option<std::num::NonZeroUsize>,
+    ) -> Self {
+        Self {
+            ctx_size: ctx_size.map(std::num::NonZeroU32::get),
+            parallel: parallel.map(std::num::NonZeroUsize::get),
+        }
+    }
+}
+
+fn build_load_request(model_name: &str, sizing: LoadSizing) -> serde_json::Value {
+    let mut body = json!({ "model": model_name });
+    if let Some(ctx_size) = sizing.ctx_size {
+        body["ctx_size"] = json!(ctx_size);
+    }
+    if let Some(parallel) = sizing.parallel {
+        body["parallel"] = json!(parallel);
+    }
+    body
+}
+
+const LOAD_REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+pub(crate) async fn run_load(model_name: &str, port: u16, sizing: LoadSizing) -> Result<()> {
+    let token = mesh_llm_commands::owner_control::owner_control_token(port).await?;
+    send_load_request(model_name, port, sizing, &token, LOAD_REQUEST_TIMEOUT).await
+}
+
+pub(crate) async fn send_load_request(
+    model_name: &str,
+    port: u16,
+    sizing: LoadSizing,
+    token: &str,
+    timeout: std::time::Duration,
+) -> Result<()> {
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(timeout.min(std::time::Duration::from_secs(5)))
+        .timeout(timeout)
         .build()?;
     let url = format!("http://127.0.0.1:{port}/api/runtime/models");
     let resp = client
         .post(&url)
-        .json(&serde_json::json!({"model": model_name}))
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
+        .json(&build_load_request(model_name, sizing))
         .send()
         .await
-        .with_context(|| format!("Can't connect to mesh-llm on port {port}. Is it running?"))?;
+        .map_err(|error| load_send_error(error, model_name, port))?;
     display_runtime_result(resp, model_name, "Loaded").await
+}
+
+/// A timeout does not establish whether the node accepted the load request.
+fn load_send_error(error: reqwest::Error, model_name: &str, port: u16) -> anyhow::Error {
+    let message = if error.is_connect() {
+        format!("Can't connect to mesh-llm on port {port}. Is it running?")
+    } else if error.is_timeout() {
+        format!(
+            "Load request to mesh-llm on port {port} timed out while loading {model_name}; \
+             it may have been accepted and may still be running. \
+             Run `mesh-llm status --port {port}` to see when it is ready."
+        )
+    } else {
+        format!("Load request to mesh-llm on port {port} failed")
+    };
+    anyhow::Error::new(error).context(message)
 }
 
 async fn display_runtime_result(
@@ -672,35 +748,6 @@ fn load_mesh_config_file(path: &Path) -> Result<MeshConfig> {
     load_config(Some(path))
 }
 
-async fn post_runtime_payload(
-    port: u16,
-    path: &str,
-    body: &serde_json::Value,
-) -> Result<serde_json::Value> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
-    let url = format!("http://127.0.0.1:{port}{path}");
-    let response = client.post(&url).json(body).send().await.with_context(|| {
-        format!("Can't connect to mesh-llm console on port {port}. Is it running?")
-    })?;
-    let status = response.status();
-    let body = response
-        .json::<serde_json::Value>()
-        .await
-        .unwrap_or(serde_json::Value::Null);
-    if status.is_success() {
-        Ok(body)
-    } else {
-        let reason = body
-            .get("error")
-            .and_then(|value| value.get("message").or(Some(value)))
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("unknown error");
-        anyhow::bail!("{reason}");
-    }
-}
-
 fn print_control_response(title: &str, body: &serde_json::Value, json_output: bool) -> Result<()> {
     if !json_output {
         let mut out = mesh_llm_events::console_out();
@@ -776,7 +823,7 @@ mod tests {
         build_apply_config_request, build_control_endpoint_request, build_guardrail_mode_request,
         build_lifecycle_request, control_bootstrap_lines, control_scan_refresh_lines,
         display_backend_label, native_runtime_command_selection, native_runtime_config_selector,
-        runtime_success_lines, yes_no,
+        owner_control_http, runtime_success_lines, yes_no,
     };
     use mesh_llm_cli::{BinaryFlavor, MeshGuardrailCliMode};
     use mesh_llm_host_runtime::command_support::plugin::{GpuAssignment, GpuConfig, MeshConfig};
@@ -951,6 +998,7 @@ mod tests {
     #[test]
     fn control_plane_api_cli_builds_apply_request_body() {
         let config = MeshConfig {
+            source_directory: None,
             version: Some(1),
             gpu: GpuConfig {
                 assignment: GpuAssignment::Auto,
@@ -987,5 +1035,46 @@ mod tests {
             build_guardrail_mode_request(MeshGuardrailCliMode::Enforce),
             json!({ "mode": "enforce" })
         );
+    }
+
+    #[tokio::test]
+    async fn control_calls_present_owner_control_credential() {
+        use axum::{Router, routing::post};
+        use std::sync::{Arc, Mutex as StdMutex};
+        use tokio::net::TcpListener as TokioTcpListener;
+
+        let seen = Arc::new(StdMutex::new(Vec::<String>::new()));
+        let seen_app = seen.clone();
+        let app = Router::new().route(
+            "/api/runtime/control/scan-refresh",
+            post(move |headers: axum::http::HeaderMap| async move {
+                seen_app.lock().expect("auth lock").push(
+                    headers
+                        .get("authorization")
+                        .and_then(|value| value.to_str().ok())
+                        .unwrap_or_default()
+                        .to_string(),
+                );
+                axum::Json(json!({ "ok": true }))
+            }),
+        );
+        let listener = TokioTcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.expect("serve") });
+
+        let body = owner_control_http::post_with_token(
+            port,
+            "/api/runtime/control/scan-refresh",
+            &json!({}),
+            "ax-secret",
+        )
+        .await
+        .expect("control call with supplied credential");
+        assert_eq!(body.get("ok"), Some(&json!(true)));
+        let auth = seen.lock().expect("auth lock").clone();
+        assert_eq!(auth, vec!["Bearer ax-secret".to_string()]);
+        server.abort();
     }
 }

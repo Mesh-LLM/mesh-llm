@@ -28,6 +28,20 @@ public struct OpenAIResponse: Sendable {
     public func jsonObject() throws -> Any {
         try JSONSerialization.jsonObject(with: Data(body.utf8))
     }
+
+    /// Return this response, throwing a typed failure for non-success statuses.
+    public func errorForStatus() throws -> OpenAIResponse {
+        guard (200..<300).contains(statusCode) else {
+            throw OpenAIRequestFailure(statusCode: statusCode, body: body)
+        }
+        return self
+    }
+}
+
+public struct OpenAIRequestFailure: Error, Sendable, CustomStringConvertible {
+    public let statusCode: UInt16
+    public let body: String
+    public var description: String { "OpenAI-compatible request failed with HTTP \(statusCode): \(body)" }
 }
 
 public struct OpenAISSEEvent: Sendable {
@@ -69,6 +83,20 @@ public typealias MeshError = FfiError
 public final class Node: @unchecked Sendable {
     private let handle: MeshNodeHandle
     public let inference: Inference
+    public let models: Models
+    private let membershipControls: Memberships
+
+    /// Construct using the full Rust config schema and its native defaults.
+    /// Keys remain snake_case and unknown fields are rejected by the core.
+    public static func fromConfig(_ config: [String: ModelJSONValue]) throws -> Node {
+        try fromConfig(config, create: { try createNodeConfigJson(configJson: $0) })
+    }
+
+    internal static func fromConfig(_ config: [String: ModelJSONValue],
+                                    create: (String) throws -> MeshNodeHandle) throws -> Node {
+        let json = String(decoding: try JSONEncoder().encode(config), as: UTF8.self)
+        return Node(handle: try create(json))
+    }
 
     public init(
         mode: NodeMode = .client,
@@ -90,11 +118,42 @@ public final class Node: @unchecked Sendable {
         )
         self.handle = handle
         self.inference = Inference(handle: handle)
+        self.models = Self.modelDiscovery(handle: handle)
+        self.membershipControls = Self.memberships(handle: handle)
     }
 
     internal init(handle: MeshNodeHandle) {
         self.handle = handle
         self.inference = Inference(handle: handle)
+        self.models = Self.modelDiscovery(handle: handle)
+        self.membershipControls = Self.memberships(handle: handle)
+    }
+
+    private static func modelDiscovery(handle: MeshNodeHandle) -> Models {
+        Models(
+            listJSON: { query in try await runBlocking { try handle.meshModelsJson(queryJson: query) } },
+            modelJSON: { id in try await runBlocking { try handle.meshModelJson(id: id) } }
+        )
+    }
+
+    private static func memberships(handle: MeshNodeHandle) -> Memberships {
+        Memberships(
+            addJSON: { config in try await runBlocking { try handle.addMembershipJson(configJson: config) } },
+            removeNative: { name in try await runBlocking { try handle.removeMembership(name: name) } },
+            listJSON: { try await runBlocking { try handle.membershipsJson() } }
+        )
+    }
+
+    public func addMembership(_ config: MeshMembershipConfig) async throws -> MeshMembershipStatus {
+        try await membershipControls.add(config)
+    }
+
+    public func removeMembership(_ name: String) async throws -> Bool {
+        try await membershipControls.remove(name)
+    }
+
+    public func memberships() async throws -> [MeshMembershipStatus] {
+        try await membershipControls.list()
     }
 
     public func start() async throws {
@@ -124,6 +183,22 @@ public final class Node: @unchecked Sendable {
         try await runBlocking { try handle.joinToken(token: token) }
     }
 
+    public func startLiveTranscription(_ options: LiveTranscriptionOptions = LiveTranscriptionOptions()) async throws -> LiveTranscription {
+        let handle = self.handle
+        let optionsJSON = try options.json()
+        let live = try await runBlocking { try handle.startLiveTranscriptionJson(optionsJson: optionsJSON) }
+        return LiveTranscription(
+            audio: { samples in try await runBlocking { try live.sendAudio(samples: samples) } },
+            floatAudio: { samples in try await runBlocking { try live.sendAudioF32(samples: samples) } },
+            commit: { try await runBlocking { try live.commit() } },
+            eventJSON: { try await runBlocking { try live.nextEventJson() } },
+            stopJSON: { try await runBlocking { try live.stopJson() } },
+            close: { await withCheckedContinuation { continuation in
+                DispatchQueue.global().async { live.closeAudio(); continuation.resume() }
+            } }
+        )
+    }
+
     public final class Inference: @unchecked Sendable {
         private let handle: MeshNodeHandle
 
@@ -137,17 +212,31 @@ public final class Node: @unchecked Sendable {
                 .map { Model(id: $0.id, name: $0.name, contextLength: $0.contextLength) }
         }
 
-        public func request(path: String, body: [String: Any]) async throws -> OpenAIResponse {
+        /// Submit PDF or image bytes to a mesh-advertised document OCR model.
+        public func documentOcr(_ file: Data, options: DocumentOcrOptions,
+                                raiseForStatus: Bool = true) async throws -> OpenAIResponse {
+            let optionsJSON = try options.json()
+            let handle = self.handle
+            let response = try await runBlocking {
+                try handle.documentOcr(file: file, optionsJson: optionsJSON)
+            }
+            let result = OpenAIResponse(statusCode: response.statusCode,
+                contentType: response.contentType, body: response.body)
+            return try raiseForStatus ? result.errorForStatus() : result
+        }
+
+        public func request(path: String, body: [String: Any], raiseForStatus: Bool = true) async throws -> OpenAIResponse {
             let bodyJson = try encodeOpenAIObject(body)
             let handle = self.handle
             let response = try await runBlocking {
                 try handle.openaiRequest(path: path, bodyJson: bodyJson)
             }
-            return OpenAIResponse(
+            let result = OpenAIResponse(
                 statusCode: response.statusCode,
                 contentType: response.contentType,
                 body: response.body
             )
+            return try raiseForStatus ? result.errorForStatus() : result
         }
 
         public func chatCompletions(_ body: [String: Any]) async throws -> OpenAIResponse {

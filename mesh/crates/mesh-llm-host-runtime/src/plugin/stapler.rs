@@ -112,6 +112,7 @@ mod tests {
             input_schema_json: "not-json".into(),
             output_schema_json: None,
             title: None,
+            timeout_secs: None,
         };
         let operation = operation("demo.echo".into(), &manifest);
         assert_eq!(

@@ -4,6 +4,11 @@ use serde_json::Value;
 /// Output tokens a paid request may produce when the caller set no limit.
 pub(crate) const DEFAULT_OUTPUT_ALLOWANCE: u32 = 16_384;
 
+/// Largest paid request either side accepts. The payer re-serializes the
+/// request (defaults, `stream_options`, forwarded headers) before the seller
+/// parses it again, so both ends measure the rebuilt bytes against this.
+const MAX_PAID_REQUEST_BYTES: usize = 1024 * 1024;
+
 pub(crate) struct PaidRequest {
     pub model: String,
     /// The caller's output limit, or [`DEFAULT_OUTPUT_ALLOWANCE`].
@@ -11,11 +16,18 @@ pub(crate) struct PaidRequest {
     pub path: String,
     pub body: Value,
     pub intent: Option<mesh_llm_payments_types::intent::PaymentIntent>,
+    /// The caller's single valid `x-capsule-client-nonce`, forwarded to the
+    /// seller so its terminal exchange event reports it. As on the free
+    /// path's tunnelled hop, the origin marker is not forwarded.
+    pub client_nonce: Option<String>,
 }
 
 impl PaidRequest {
     pub fn parse(raw: &[u8]) -> Result<Self> {
-        ensure!(raw.len() <= 1024 * 1024, "paid request exceeds 1 MiB limit");
+        ensure!(
+            raw.len() <= MAX_PAID_REQUEST_BYTES,
+            "paid request exceeds 1 MiB limit"
+        );
         let mut headers = [httparse::EMPTY_HEADER; 64];
         let mut request = httparse::Request::new(&mut headers);
         let httparse::Status::Complete(offset) = request.parse(raw)? else {
@@ -25,6 +37,18 @@ impl PaidRequest {
             request.method == Some("POST"),
             "paid inference requires POST"
         );
+        let client_nonce = skippy_inference_api::parse_single_client_nonce(
+            request
+                .headers
+                .iter()
+                .filter(|header| {
+                    header.name.eq_ignore_ascii_case(
+                        skippy_inference_api::lifecycle::CLIENT_NONCE_HEADER.as_str(),
+                    )
+                })
+                .map(|header| std::str::from_utf8(header.value).ok()),
+        )
+        .and_then(|value| value.to_str().ok().map(str::to_owned));
         let path = request.path.context("missing request path")?;
         ensure!(
             matches!(path, "/v1/chat/completions" | "/v1/completions"),
@@ -98,6 +122,7 @@ impl PaidRequest {
             path: path.into(),
             body,
             intent,
+            client_nonce,
         })
     }
 
@@ -107,10 +132,27 @@ impl PaidRequest {
         }
     }
 
+    /// The name the backend serves this request under: the one
+    /// [`Self::use_backend_model`] set, else the requested model.
+    pub fn backend_model(&self) -> &str {
+        self.body["model"].as_str().unwrap_or(&self.model)
+    }
+
     pub fn backend_http(&self, request_id: &str) -> Result<Vec<u8>> {
         let bytes = serde_json::to_vec(&self.body)?;
-        let mut raw = format!("POST {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nAccept-Encoding: identity\r\nConnection: close\r\nx-request-id: {}\r\nContent-Length: {}\r\n\r\n", self.path, request_id, bytes.len()).into_bytes();
+        let mut raw = format!("POST {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nAccept-Encoding: identity\r\nConnection: close\r\nx-request-id: {}\r\n", self.path, request_id).into_bytes();
+        if let Some(nonce) = &self.client_nonce {
+            let name = skippy_inference_api::lifecycle::CLIENT_NONCE_HEADER.as_str();
+            raw.extend(format!("{name}: {nonce}\r\n").into_bytes());
+        }
+        raw.extend(format!("Content-Length: {}\r\n\r\n", bytes.len()).into_bytes());
         raw.extend(bytes);
+        // The seller parses these exact bytes under the same cap, so refuse
+        // here, before any payment, what it would reject.
+        ensure!(
+            raw.len() <= MAX_PAID_REQUEST_BYTES,
+            "paid request exceeds 1 MiB limit once forwarded"
+        );
         Ok(raw)
     }
 }
@@ -214,10 +256,100 @@ mod tests {
     }
 
     #[test]
+    fn a_single_valid_client_nonce_is_forwarded_to_the_seller() {
+        let nonce = "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e5f";
+        let parse = |headers: &str| {
+            PaidRequest::parse(
+                format!("POST /v1/completions HTTP/1.1\r\n{headers}\r\n{{\"model\":\"m\"}}")
+                    .as_bytes(),
+            )
+            .unwrap()
+        };
+        let payer = parse(&format!("X-Capsule-Client-Nonce: {nonce}\r\n"));
+        assert_eq!(payer.client_nonce.as_deref(), Some(nonce));
+        let forwarded = payer.backend_http("id").unwrap();
+        // The seller reads back what the payer forwarded.
+        let seller = PaidRequest::parse(&forwarded).unwrap();
+        assert_eq!(seller.client_nonce.as_deref(), Some(nonce));
+
+        // A nonce the payer's frontend minted (origin marker present) is kept
+        // too, and the marker is not forwarded.
+        let minted = parse(&format!(
+            "X-Capsule-Client-Nonce: {nonce}\r\nX-Capsule-Nonce-Origin: frontend\r\n"
+        ));
+        assert_eq!(minted.client_nonce.as_deref(), Some(nonce));
+        let forwarded = String::from_utf8(minted.backend_http("id").unwrap()).unwrap();
+        assert!(!forwarded.to_ascii_lowercase().contains("origin"));
+
+        // Absent, duplicated or malformed nonces are neither kept nor forwarded.
+        for headers in [
+            String::new(),
+            "X-Capsule-Client-Nonce: nope\r\n".into(),
+            format!("X-Capsule-Client-Nonce: {nonce}\r\nX-Capsule-Client-Nonce: {nonce}\r\n"),
+        ] {
+            let request = parse(&headers);
+            assert!(request.client_nonce.is_none());
+            let forwarded = String::from_utf8(request.backend_http("id").unwrap()).unwrap();
+            assert!(!forwarded.to_ascii_lowercase().contains("nonce"));
+        }
+    }
+
+    #[test]
+    fn forwarded_request_is_held_to_the_same_cap_the_seller_applies() {
+        let nonce = "123e4567-e89b-42d3-a456-426614174000";
+        let head = format!(
+            "POST /v1/chat/completions HTTP/1.1\r\nX-Capsule-Client-Nonce: {nonce}\r\n\r\n"
+        );
+        let body = |pad: usize| {
+            format!(
+                "{{\"model\":\"m\",\"stream\":true,\"max_tokens\":8,\"pad\":\"{}\"}}",
+                "x".repeat(pad)
+            )
+        };
+        let size_for = |pad: usize| head.len() + body(pad).len();
+        // Largest input the payer's parse accepts.
+        let mut pad = MAX_PAID_REQUEST_BYTES - size_for(0);
+        assert_eq!(size_for(pad), MAX_PAID_REQUEST_BYTES);
+        let raw = format!("{head}{}", body(pad));
+        let payer = PaidRequest::parse(raw.as_bytes()).unwrap();
+        // The rebuilt request gains headers and `stream_options`, so it is
+        // over the cap: the payer must refuse it rather than let the seller.
+        let forwarded_err = payer.backend_http("id").unwrap_err();
+        assert!(forwarded_err.to_string().contains("once forwarded"));
+
+        // A longer backend model name can push a request that fit over the
+        // cap; `backend_http` reports it so the seller can check pre-admission.
+        let fitting = loop {
+            pad -= 1;
+            let raw = format!("{head}{}", body(pad));
+            let payer = PaidRequest::parse(raw.as_bytes()).unwrap();
+            if payer.backend_http("id").is_ok() {
+                break payer;
+            }
+        };
+        let mut seller = PaidRequest::parse(&fitting.backend_http("id").unwrap()).unwrap();
+        seller.use_backend_model(&"b".repeat(1000));
+        assert!(seller.backend_http("id").is_err());
+
+        // Shrink until the rebuilt request fits: the seller then accepts it.
+        loop {
+            pad -= 1;
+            let raw = format!("{head}{}", body(pad));
+            let payer = PaidRequest::parse(raw.as_bytes()).unwrap();
+            if let Ok(forwarded) = payer.backend_http("id") {
+                assert!(forwarded.len() <= MAX_PAID_REQUEST_BYTES);
+                PaidRequest::parse(&forwarded).unwrap();
+                break;
+            }
+        }
+    }
+
+    #[test]
     fn backend_model_rewrites_only_the_forwarded_body() {
         let mut parsed = PaidRequest::parse(b"POST /v1/chat/completions HTTP/1.1\r\n\r\n{\"model\":\"org/repo:Q4_K_M\",\"max_tokens\":8}").unwrap();
         parsed.use_backend_model("local-gguf/sha256-abc");
         assert_eq!(parsed.model, "org/repo:Q4_K_M");
+        assert_eq!(parsed.backend_model(), "local-gguf/sha256-abc");
         let raw = parsed.backend_http("id").unwrap();
         let body = &raw[raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4..];
         let body: Value = serde_json::from_slice(body).unwrap();

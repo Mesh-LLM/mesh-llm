@@ -5,7 +5,8 @@ use super::common::{
 };
 use super::probe::{
     ParsedResponseHeaders, ResponseBodyReadLimits, ResponseProbe, append_capsule_nonce_headers,
-    append_mesh_served_by_header, read_transformed_response_body, try_parse_response_headers,
+    append_mesh_request_id_header, append_mesh_served_by_header, read_transformed_response_body,
+    try_parse_response_headers,
 };
 use super::relay::relay_error_response;
 use crate::logging::OpenAiRouteObserver;
@@ -13,6 +14,7 @@ use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::response_adapter;
 use crate::network::openai::tool_call_ids::normalize_chat_completion_json_body;
 use anyhow::{Result, anyhow};
+use mesh_llm_events::logging::identifiers::RequestId;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncWriteExt};
 
@@ -71,6 +73,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
     retry_policy: ResponseRetryPolicy,
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
+    request_id: RequestId,
 ) -> Result<RouteAttemptResult> {
     relay_translated_json(
         tcp_stream,
@@ -79,6 +82,7 @@ pub(in crate::network::openai::response) async fn relay_translated_responses_jso
         retry_policy,
         served_by,
         route_observer,
+        request_id,
         false,
     )
     .await
@@ -93,6 +97,7 @@ pub(in crate::network::openai::response) async fn relay_translated_messages_json
     retry_policy: ResponseRetryPolicy,
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
+    request_id: RequestId,
 ) -> Result<RouteAttemptResult> {
     relay_translated_json(
         tcp_stream,
@@ -101,11 +106,13 @@ pub(in crate::network::openai::response) async fn relay_translated_messages_json
         retry_policy,
         served_by,
         route_observer,
+        request_id,
         true,
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::network::openai::response) async fn relay_translated_json<R: AsyncRead + Unpin>(
     tcp_stream: &mut ClientStream,
     reader: &mut R,
@@ -113,14 +120,29 @@ pub(in crate::network::openai::response) async fn relay_translated_json<R: Async
     retry_policy: ResponseRetryPolicy,
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
+    request_id: RequestId,
     anthropic: bool,
 ) -> Result<RouteAttemptResult> {
     if retry_policy.context_overflow && probe.retryable_context_overflow {
         return Ok(RouteAttemptResult::RetryableContextOverflow);
     }
+    if crate::network::openai::response::common::withheld_payment_required_response(
+        retry_policy,
+        probe.status_code,
+    ) {
+        return Ok(RouteAttemptResult::RetryablePaymentRequired);
+    }
 
     if !anthropic && !(200..300).contains(&probe.status_code) {
-        return relay_error_response(tcp_stream, reader, probe, served_by, route_observer).await;
+        return relay_error_response(
+            tcp_stream,
+            reader,
+            probe,
+            served_by,
+            route_observer,
+            request_id,
+        )
+        .await;
     }
     let status_code = if anthropic { probe.status_code } else { 200 };
     let mut buffered = probe.buffered;
@@ -173,7 +195,9 @@ pub(in crate::network::openai::response) async fn relay_translated_json<R: Async
         parsed.client_nonce.as_deref(),
         parsed.nonce_origin.as_deref(),
     );
+    parsed.served_model.append_to(&mut header);
     append_mesh_served_by_header(&mut header, served_by);
+    append_mesh_request_id_header(&mut header, request_id);
     header.push_str("Connection: close\r\n\r\n");
     tcp_stream.write_all(header.as_bytes()).await?;
     tcp_stream.write_all(&translated_body).await?;
@@ -197,13 +221,28 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     retry_policy: ResponseRetryPolicy,
     served_by: Option<&str>,
     route_observer: OpenAiRouteObserver<'_>,
+    request_id: RequestId,
 ) -> Result<RouteAttemptResult> {
     if retry_policy.context_overflow && probe.retryable_context_overflow {
         return Ok(RouteAttemptResult::RetryableContextOverflow);
     }
+    if crate::network::openai::response::common::withheld_payment_required_response(
+        retry_policy,
+        probe.status_code,
+    ) {
+        return Ok(RouteAttemptResult::RetryablePaymentRequired);
+    }
 
     if !(200..300).contains(&probe.status_code) {
-        return relay_error_response(tcp_stream, reader, probe, served_by, route_observer).await;
+        return relay_error_response(
+            tcp_stream,
+            reader,
+            probe,
+            served_by,
+            route_observer,
+            request_id,
+        )
+        .await;
     }
     let mut buffered = probe.buffered;
     let parsed = try_parse_response_headers(&buffered)?
@@ -236,7 +275,9 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
         parsed.client_nonce.as_deref(),
         parsed.nonce_origin.as_deref(),
     );
+    parsed.served_model.append_to(&mut header);
     append_mesh_served_by_header(&mut header, served_by);
+    append_mesh_request_id_header(&mut header, request_id);
     header.push_str("Connection: close\r\n\r\n");
     tcp_stream.write_all(header.as_bytes()).await?;
     tcp_stream.write_all(&normalized_body).await?;
@@ -318,6 +359,7 @@ mod tests {
                 ResponseRetryPolicy::next_target_available(false),
                 None,
                 OpenAiRouteObserver::default(),
+                RequestId::new(),
             )
             .await
             .expect("relay")
@@ -413,6 +455,7 @@ mod tests {
                 ResponseRetryPolicy::next_target_available(false),
                 None,
                 OpenAiRouteObserver::default(),
+                RequestId::new(),
             )
             .await
             .expect("relay")
@@ -476,6 +519,7 @@ mod tests {
                 ResponseRetryPolicy::next_target_available(false),
                 None,
                 OpenAiRouteObserver::default(),
+                RequestId::new(),
             )
             .await
             .expect("relay")
@@ -554,6 +598,7 @@ mod tests {
                 ResponseRetryPolicy::next_target_available(false),
                 None,
                 OpenAiRouteObserver::default(),
+                RequestId::new(),
             )
             .await
             .expect("relay")
@@ -637,6 +682,7 @@ mod tests {
                         policy,
                         None,
                         observer,
+                        RequestId::new(),
                     )
                     .await
                 }
@@ -648,6 +694,7 @@ mod tests {
                         policy,
                         None,
                         observer,
+                        RequestId::new(),
                         matches!(relay, Relay::Anthropic),
                     )
                     .await
@@ -693,6 +740,111 @@ mod tests {
         assert_eq!(
             response_digest_via(Relay::Anthropic, SERVED_CHAT_COMPLETION).await,
             chat
+        );
+    }
+
+    // issue #2352, papercut 4: the translated JSON head (Responses-API and
+    // Anthropic-Messages JSON) must echo the canonical request id.
+    #[tokio::test]
+    async fn relay_translated_json_echoes_the_canonical_request_id() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let body = br#"{"id":"chatcmpl-a","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":4,"total_tokens":6}}"#;
+        let request_id = RequestId::new();
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let header = format!(
+            "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let header_end = header.len();
+        let server_task = tokio::spawn(async move {
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
+            let probe = ResponseProbe {
+                buffered: header.into_bytes(),
+                header_end,
+                status_code: 201,
+                retryable_context_overflow: false,
+            };
+            relay_translated_responses_json(
+                &mut client_socket,
+                &mut upstream_reader,
+                probe,
+                ResponseRetryPolicy::next_target_available(false),
+                None,
+                OpenAiRouteObserver::default(),
+                request_id,
+            )
+            .await
+            .expect("relay")
+        });
+
+        upstream_writer.write_all(body).await.unwrap();
+        let mut client = ClientStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        tokio::time::timeout(Duration::from_secs(1), client.read_to_end(&mut output))
+            .await
+            .expect("relay should not wait for upstream keep-alive close")
+            .unwrap();
+        drop(upstream_writer);
+        server_task.await.expect("server task");
+
+        let head = String::from_utf8_lossy(&output);
+        assert!(
+            head.contains(&format!("x-request-id: {}", request_id.as_uuid())),
+            "the translated JSON head must echo the canonical request id: {head}"
+        );
+    }
+
+    // issue #2352, papercut 4: the normalized chat-completions JSON head must
+    // echo the canonical request id.
+    #[tokio::test]
+    async fn relay_normalized_chat_completion_json_echoes_the_canonical_request_id() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let body = br#"{"id":"chatcmpl-rid","object":"chat.completion","created":1,"model":"test","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":4,"total_tokens":6}}"#;
+        let header = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        let probe = ResponseProbe {
+            buffered: header.as_bytes().to_vec(),
+            header_end: header.len(),
+            status_code: 200,
+            retryable_context_overflow: false,
+        };
+        let (mut upstream_writer, mut upstream_reader) = tokio::io::duplex(64 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_task = tokio::spawn(async move {
+            let (client_socket, _) = listener.accept().await.unwrap();
+            let mut client_socket: ClientStream = client_socket.into();
+            relay_normalized_chat_completion_json(
+                &mut client_socket,
+                &mut upstream_reader,
+                probe,
+                ResponseRetryPolicy::next_target_available(false),
+                None,
+                OpenAiRouteObserver::default(),
+                RequestId::new(),
+            )
+            .await
+            .expect("relay")
+        });
+
+        upstream_writer.write_all(body).await.unwrap();
+        let mut client = ClientStream::connect(addr).await.unwrap();
+        let mut output = Vec::new();
+        client.read_to_end(&mut output).await.unwrap();
+        drop(upstream_writer);
+        server_task.await.expect("server task");
+
+        let head = String::from_utf8_lossy(&output);
+        assert!(
+            head.contains("x-request-id: "),
+            "the normalized chat JSON head must echo the canonical request id: {head}"
         );
     }
 }

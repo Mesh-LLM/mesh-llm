@@ -235,10 +235,17 @@ async fn run_lan_discover(
 /// Stop all mesh-llm instances tracked in the runtime root.
 pub(crate) fn run_stop() -> Result<()> {
     let mut err = mesh_llm_events::console_err();
-    let root = match discovery::runtime_root() {
+    run_stop_with_root(discovery::runtime_root(), &mut err)
+}
+
+fn run_stop_with_root(root: Result<std::path::PathBuf>, err: &mut impl Write) -> Result<()> {
+    const CLIENT_COVERAGE_NOTE: &str =
+        "Note: mesh-llm client processes are not covered by this command and keep running.";
+    let root = match root {
         Ok(root) => root,
         Err(_) => {
             writeln!(err, "Nothing running.")?;
+            writeln!(err, "{CLIENT_COVERAGE_NOTE}")?;
             return Ok(());
         }
     };
@@ -256,6 +263,11 @@ pub(crate) fn run_stop() -> Result<()> {
     if let Some(line) = tally.finish()? {
         writeln!(err, "{line}")?;
     }
+    // A plain client never registers a runtime instance, so this command
+    // cannot see it; say so in the closing output, since a bare
+    // "Nothing running." would be false while a client still serves
+    // (issue #2352, papercut 1).
+    writeln!(err, "{CLIENT_COVERAGE_NOTE}")?;
     Ok(())
 }
 
@@ -308,6 +320,18 @@ impl StopTally {
 mod stop_tests {
     use super::*;
     use backend::TerminationOutcome;
+
+    #[test]
+    fn unavailable_runtime_root_has_the_same_coverage_as_an_empty_root() {
+        let root = tempfile::tempdir().unwrap();
+        let mut empty = Vec::new();
+        run_stop_with_root(Ok(root.path().to_owned()), &mut empty).unwrap();
+        let mut unavailable = Vec::new();
+
+        run_stop_with_root(Err(anyhow::anyhow!("no runtime root")), &mut unavailable).unwrap();
+
+        assert_eq!(unavailable, empty);
+    }
 
     #[test]
     fn an_owner_that_would_not_stop_is_reported_and_fails_the_command() {

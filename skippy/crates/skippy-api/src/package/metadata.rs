@@ -1,7 +1,7 @@
 //! Lightweight identity verification using the package metadata carrier.
 use super::{
-    PACKAGE_V2_MANIFEST, SkippyPackageIdentity, hex_lower, package_v2_generation_info,
-    package_v2_layer_weight_bytes, source_file_sha256,
+    PACKAGE_V2_MANIFEST, SkippyPackageIdentity, hex_lower, package_v2_executable_layer_count,
+    package_v2_generation_info, package_v2_layer_weight_bytes, source_file_sha256,
 };
 use crate::hash_cache::SidecarDigestCache;
 use anyhow::{Context, Result};
@@ -100,6 +100,7 @@ pub fn identity_from_package_v2_metadata(
         source_model_bytes > 0,
         "package-v2 source model byte count must be positive"
     );
+    let layer_count = package_v2_executable_layer_count(&manifest)?;
     let layer_weight_bytes = package_v2_layer_weight_bytes(&manifest)?;
     let tensor_count = u64::try_from(manifest.tensor_catalog.entries.len())
         .context("package-v2 tensor count exceeds u64")?;
@@ -114,7 +115,7 @@ pub fn identity_from_package_v2_metadata(
         source_model_bytes,
         source_files: Vec::new(),
         layer_weight_bytes,
-        layer_count: manifest.layer_count,
+        layer_count,
         activation_width,
         tensor_count,
         generation: manifest.generation.as_ref().map(package_v2_generation_info),

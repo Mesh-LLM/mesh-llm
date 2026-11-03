@@ -64,6 +64,7 @@ pub(super) async fn route(
         ResponseRetryPolicy::next_target_available(false),
         logging.response_adapter,
         logging.served_by,
+        None,
         logging.peer_capsule_id,
         logging.route_observer,
     )
@@ -583,6 +584,7 @@ mod tests {
             path: "/v1/completions".into(),
             body: serde_json::Value::Null,
             intent: None,
+            client_nonce: None,
         };
         let admission = |deposit_msat: u64| Frame::Admission {
             terms: AdmissionTerms {

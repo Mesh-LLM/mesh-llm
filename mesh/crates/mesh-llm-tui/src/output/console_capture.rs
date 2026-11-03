@@ -175,7 +175,7 @@ mod unix {
     }
 
     fn unregister_capture(active_captures: &AtomicUsize) {
-        let result = active_captures.fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+        let result = active_captures.try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
             count.checked_sub(1)
         });
         debug_assert!(result.is_ok(), "capture activity count underflowed");

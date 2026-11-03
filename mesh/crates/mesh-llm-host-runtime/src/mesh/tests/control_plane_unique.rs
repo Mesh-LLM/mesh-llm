@@ -20,7 +20,7 @@ async fn control_plane_legacy_compat_new_client_prefers_control_alpn() -> Result
 
     let wrong_alpn_client = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec(), ALPN_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec(), ALPN_V1.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?
         .bind()
@@ -96,12 +96,12 @@ async fn control_plane_legacy_compat_control_alpn_rejects_legacy_frames() -> Res
 
     let client = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))?
         .bind()
         .await?;
-    let conn = client.connect(control_addr, ALPN_CONTROL_V1).await?;
+    let conn = client.connect(control_addr, ALPN_CONTROL_V2).await?;
     let (mut send, mut recv) = conn.open_bi().await?;
     write_len_prefixed(&mut send, br#"{"request_id":7,"command":"GetConfig"}"#).await?;
 

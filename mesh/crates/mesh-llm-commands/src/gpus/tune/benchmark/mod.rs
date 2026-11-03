@@ -17,7 +17,8 @@ pub(crate) use candidates::*;
 pub(crate) use trial::run_trial;
 #[cfg(test)]
 use trial::{
-    build_trial_child_command, trial_startup_failure_from_log, trial_startup_failure_from_log_line,
+    build_trial_child_command, trial_chat_request_model, trial_startup_failure_from_log,
+    trial_startup_failure_from_log_line,
 };
 pub(crate) use trial_config::trial_config;
 

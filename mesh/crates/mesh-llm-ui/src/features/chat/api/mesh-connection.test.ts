@@ -542,7 +542,70 @@ describe('createMeshConnectionAdapter', () => {
       name: 'ApiError',
       status: 503,
       body: 'Backend exploded',
-      message: 'Chat request failed: 503'
+      message: 'Backend exploded'
+    })
+  })
+
+  it('surfaces the server reason when a decision-only model is rejected with 422', async () => {
+    const reason = 'no served model advertises the required CausalGeneration workload'
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: { message: reason, type: 'invalid_request_error', param: null, code: 'unprocessable_content' }
+        }),
+        { status: 422, statusText: 'Unprocessable Entity', headers: { 'Content-Type': 'application/json' } }
+      )
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('meshllm/laya-multilingual-F16-GGUF:F16')
+    const iterator = adapter.connect(createMessages(), undefined, undefined)[Symbol.asyncIterator]()
+
+    expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+
+    await expect(iterator.next()).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 422,
+      body: reason,
+      message: reason
+    })
+  })
+
+  it.each([
+    { label: 'prefix-matching server reason', reason: 'HTTP 422: model is unavailable' },
+    { label: 'server reason identical to the fallback', reason: 'HTTP 422: Unprocessable Entity' }
+  ])('surfaces a $label', async ({ reason }) => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(reason, { status: 422, statusText: 'Unprocessable Entity' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('model-a')
+    const iterator = adapter.connect(createMessages(), undefined, undefined)[Symbol.asyncIterator]()
+
+    expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+
+    await expect(iterator.next()).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 422,
+      body: reason,
+      message: reason
+    })
+  })
+
+  it('keeps the generic status message when the failure body carries no reason', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 500, statusText: 'Internal Server Error' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('model-a')
+    const iterator = adapter.connect(createMessages(), undefined, undefined)[Symbol.asyncIterator]()
+
+    expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+
+    await expect(iterator.next()).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 500,
+      message: 'Chat request failed: 500'
     })
   })
 

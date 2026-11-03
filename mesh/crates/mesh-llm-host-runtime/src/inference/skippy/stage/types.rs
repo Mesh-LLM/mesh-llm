@@ -6,6 +6,11 @@ use tokio::sync::oneshot;
 pub(crate) enum StageControlCommand {
     Execute {
         request: StageControlRequest,
+        /// Authenticated sender of the command: the QUIC peer identity on the
+        /// remote stage-control stream, the local endpoint on the in-process
+        /// control channel. Stage transitions bind terms and shutdown to it
+        /// (#2217).
+        requester: iroh::EndpointId,
         resp: oneshot::Sender<Result<StageControlResponse>>,
     },
     ValidateLoad {
@@ -100,6 +105,8 @@ pub(crate) struct StageLoadRequest {
     pub(crate) flash_attn_type: FlashAttentionType,
     pub(crate) runtime_settings: StageLoadRuntimeSettings,
     pub(crate) native_mtp_enabled: bool,
+    /// This stage's part in a split DFlash plan.
+    pub(crate) dflash: Option<skippy_serving::split_dflash::SplitDFlashStage>,
     pub(crate) shutdown_generation: u64,
     pub(crate) coordinator_term: u64,
     pub(crate) coordinator_id: Option<iroh::EndpointId>,
@@ -212,6 +219,8 @@ pub(crate) enum SourceModelKind {
 
 #[derive(Clone, Debug)]
 pub(crate) struct StagePeerDescriptor {
+    /// Local capability evidence, never accepted from a stage-control request.
+    pub(crate) persistent_lane_marker: bool,
     pub(crate) stage_id: String,
     pub(crate) stage_index: u32,
     pub(crate) endpoint: String,
@@ -230,6 +239,8 @@ pub(crate) enum StageRuntimeState {
 #[derive(Clone, Debug)]
 pub(crate) struct StageReadyResponse {
     pub(crate) accepted: bool,
+    /// Local control-loop evidence; never inferred from an idempotent stop ACK.
+    pub(crate) removed_running_stage: bool,
     pub(crate) status: StageStatusSnapshot,
     pub(crate) error: Option<String>,
 }
@@ -274,4 +285,8 @@ pub(crate) struct StageStatusSnapshot {
     /// Cumulative runtime compute-busy time; see `skippy_serving::compute_meter`.
     pub(crate) compute_busy_nanos: u64,
     pub(crate) compute_operations: u64,
+    /// On a split final stage that attached its DFlash draft, the target
+    /// layers the draft reads. `None` when the stage drafts nothing, so the
+    /// coordinator serves stage 0 without DFlash.
+    pub(crate) dflash_target_layers: Option<Vec<u32>>,
 }

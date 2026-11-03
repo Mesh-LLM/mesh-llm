@@ -245,7 +245,7 @@ fn increment_outstanding(outstanding: &AtomicU64, metrics: &LoggingMetrics) {
 }
 
 fn decrement_outstanding(outstanding: &AtomicU64, metrics: &LoggingMetrics) {
-    let _ = outstanding.fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+    let _ = outstanding.try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
         current.checked_sub(1)
     });
     metrics.record(LoggingMetric::PersistenceOutstanding {

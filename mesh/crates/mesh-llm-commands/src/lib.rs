@@ -11,6 +11,7 @@ pub mod kv_cache;
 pub mod model_output;
 pub mod model_package;
 pub mod operational_logging;
+pub mod owner_control;
 pub mod plugin;
 pub mod runtime_native;
 pub mod setup;
