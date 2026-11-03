@@ -1407,6 +1407,11 @@ select eligible build/test rows on Depot macOS 15 and
 Windows 2022, subject to the same policy and documented exceptions. Provider
 choice never changes plan membership, commands, artifacts, tests or summaries.
 
+The ARM64 release-artifact smoke applies both cache permissions from the
+release runner selector immediately after installing sccache, before its
+checksum and extraction verifier invokes Cargo. A denied remote cache remains
+denied even if the runner exposes cache endpoint variables.
+
 Exhaustive main and manual-full coverage continues to include runner contracts
 without forcing every otherwise eligible row to a hosted runner. The canonical
 plan carries a separate conservative `force_hosted` signal: CI-control,

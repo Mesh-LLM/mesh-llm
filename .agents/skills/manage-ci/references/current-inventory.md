@@ -1147,7 +1147,9 @@ boundary.
   retain native GitHub cache behavior.
 - `configure-sccache-gha`: event/provider-derived compiler-cache setup. The
   Windows platform-check lane applies it immediately after sccache installation,
-  with both cache permissions from the shared runner policy.
+  with both cache permissions from the shared runner policy. The ARM64 release
+  artifact smoke does the same before its Cargo verifier, using the metadata
+  selector's explicit native and Depot cache permissions.
 - `restore-sccache-seed`: exact-key restore of the trusted 2 GiB Linux seed;
   central runner policy permits it only for GitHub-hosted selections, and
   native runtime restore is explicitly disabled after zero-reuse qualification.
