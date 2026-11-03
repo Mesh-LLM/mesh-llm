@@ -76,16 +76,15 @@ fn text<'a>(node: &'a Node, key: &str) -> Option<&'a str> {
 
 fn check_forwarding(lane: &str, job: &str, slice: &str) {
     let caller = workflow(&format!("ci-{lane}-lane.yml"));
-    let job = caller.get("jobs").unwrap().get(job).unwrap();
+    let caller_job = caller.get("jobs").unwrap().get(job).unwrap();
     assert_eq!(
-        text(job, "uses"),
+        text(caller_job, "uses"),
         Some(format!("./.github/workflows/{slice}").as_str())
     );
-    let inputs = job.get("with").unwrap();
+    let inputs = caller_job.get("with").unwrap();
     for (key, expected) in [
         ("source_sha", "${{ inputs.source_sha }}"),
         ("original_event_name", "${{ inputs.original_event_name }}"),
-        ("use_depot", "${{ inputs.use_depot }}"),
         (
             "force_hosted",
             "${{ toJSON(fromJson(inputs.lane_plan_json).signals.force_hosted) != 'false' }}",
@@ -93,21 +92,31 @@ fn check_forwarding(lane: &str, job: &str, slice: &str) {
     ] {
         assert_eq!(text(inputs, key), Some(expected), "{lane}/{key}");
     }
-    match lane {
-        "quality" => assert_eq!(
+    let accepts_manual_opt_in = matches!(lane, "quality" | "linux");
+    assert_eq!(
+        text(inputs, "use_depot"),
+        accepts_manual_opt_in.then_some("${{ inputs.use_depot }}"),
+        "{lane}/use_depot"
+    );
+    match (lane, job) {
+        ("quality", "quality") => assert_eq!(
             text(inputs, "clippy_matrix"),
             Some("${{ toJson(fromJson(inputs.lane_plan_json).matrices.clippy) }}")
         ),
-        "linux" => {
+        ("linux" | "macos" | "windows", "hosts") => {
             assert_eq!(
                 text(inputs, "hosts_matrix"),
                 Some("${{ toJson(fromJson(inputs.lane_plan_json).matrices.hosts) }}")
             );
             assert_eq!(
                 text(inputs, "ui_artifact_name"),
-                Some("ci-ui-dist-linux-${{ github.run_id }}")
+                Some(format!("ci-ui-dist-{lane}-${{{{ github.run_id }}}}").as_str())
             );
         }
+        ("macos" | "windows", "native_runtimes" | "runtime_product") => assert_eq!(
+            text(inputs, "runtime_matrix"),
+            Some("${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}")
+        ),
         _ => panic!("unexpected composed lane"),
     }
     let called = workflow(slice);
@@ -133,14 +142,28 @@ fn check_forwarding(lane: &str, job: &str, slice: &str) {
     for (key, expected) in [
         ("event_name", "${{ github.event_name }}"),
         ("original_event_name", "${{ inputs.original_event_name }}"),
-        ("manual_use_depot", "${{ inputs.use_depot }}"),
         ("force_hosted", "${{ inputs.force_hosted }}"),
     ] {
         assert_eq!(text(inputs, key), Some(expected), "{slice}/{key}");
     }
+    assert_eq!(
+        text(inputs, "manual_use_depot"),
+        accepts_manual_opt_in.then_some("${{ inputs.use_depot }}"),
+        "{slice}/manual_use_depot"
+    );
+    if !accepts_manual_opt_in {
+        assert_eq!(text(inputs, "depot_main_enabled"), Some("false"));
+        let action = support::action("select-ci-runners");
+        let manual = action
+            .get("inputs")
+            .unwrap()
+            .get("manual_use_depot")
+            .unwrap();
+        assert_eq!(text(manual, "default"), Some("false"));
+    }
 }
 
-fn check_selection(dispatch: &Value, forced: bool, expected_depot: bool) {
+fn check_selection(lane: &str, dispatch: &Value, forced: bool, expected_depot: bool) {
     let inputs = &dispatch["inputs"];
     let fixture = Fixture::new();
     let output = fixture.selector(&[
@@ -155,7 +178,11 @@ fn check_selection(dispatch: &Value, forced: bool, expected_depot: bool) {
         ("INPUT_DEPOT_PR_ENABLED", "false"),
         (
             "INPUT_MANUAL_USE_DEPOT",
-            inputs["use_depot"].as_str().unwrap(),
+            if matches!(lane, "quality" | "linux") {
+                inputs["use_depot"].as_str().unwrap()
+            } else {
+                "false"
+            },
         ),
         ("INPUT_FORCE_HOSTED", if forced { "true" } else { "false" }),
         ("FIXTURE_DATE", "2026-11-03"),
@@ -163,13 +190,20 @@ fn check_selection(dispatch: &Value, forced: bool, expected_depot: bool) {
     assert!(output.status.success(), "{output:?}");
     let selected = fixture.outputs();
     assert_eq!(selected["depot_enabled"], expected_depot.to_string());
+    let (runner, depot_label, hosted_label) = match lane {
+        "quality" | "linux" => ("runner_8", "depot-ubuntu-24.04-8", "ubuntu-24.04"),
+        "macos" => ("runner_macos", "depot-macos-15", "macos-15"),
+        "windows" => ("runner_windows", "depot-windows-2022", "windows-2022"),
+        _ => panic!("unexpected composed lane"),
+    };
     assert_eq!(
-        selected["runner_8"],
+        selected[runner],
         if expected_depot {
-            "depot-ubuntu-24.04-8"
+            depot_label
         } else {
-            "ubuntu-24.04"
-        }
+            hosted_label
+        },
+        "{lane}"
     );
     assert_eq!(selected["allow_depot_remote_cache"], "false");
     assert_eq!(
@@ -183,6 +217,12 @@ fn manual_dispatch_carries_real_plan_to_checked_in_runner_selectors() {
     for (lane, job, slice) in [
         ("quality", "quality", "ci-quality-slice.yml"),
         ("linux", "hosts", "ci-linux-host-slice.yml"),
+        ("macos", "hosts", "ci-macos-host-slice.yml"),
+        ("macos", "native_runtimes", "ci-macos-runtime-slice.yml"),
+        ("macos", "runtime_product", "ci-macos-product-slice.yml"),
+        ("windows", "hosts", "ci-windows-host-slice.yml"),
+        ("windows", "native_runtimes", "ci-windows-runtime-slice.yml"),
+        ("windows", "runtime_product", "ci-windows-product-slice.yml"),
     ] {
         check_forwarding(lane, job, slice);
     }
@@ -199,13 +239,16 @@ fn manual_dispatch_carries_real_plan_to_checked_in_runner_selectors() {
             let projection: Value = serde_json::from_str(action[key].as_str().unwrap()).unwrap();
             projection["required"].as_bool().unwrap()
         });
-        assert!(required[0] && required[2], "quality and Linux are selected");
+        assert!(
+            required[0] && required[2] && required[3] && required[4],
+            "quality and all host lanes are selected"
+        );
         for manual in [false, true] {
             let output = run_with_plan(required, "", "", json!(manual), Some(&action));
             common(&output, required, if manual { "true" } else { "false" });
             assert_eq!(output["canonical"], action["plan_json"]);
             assert_eq!(output["digest"], action["plan_digest"]);
-            for lane in ["quality", "linux"] {
+            for lane in ["quality", "linux", "macos", "windows"] {
                 let dispatch = output["dispatches"]
                     .as_array()
                     .unwrap()
@@ -224,16 +267,28 @@ fn manual_dispatch_carries_real_plan_to_checked_in_runner_selectors() {
                         .as_array()
                         .unwrap()
                         .iter()
-                        .filter(|row| row["platform"] == "linux")
+                        .filter(|row| row["platform"] == lane)
                         .cloned()
                         .collect::<Vec<_>>();
                     assert!(!hosts.is_empty());
                     assert_eq!(projection["matrices"]["hosts"], json!(hosts));
+                    if lane != "linux" {
+                        let runtimes = plan["matrices"]["runtime_products"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .filter(|row| row["platform"] == lane)
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        assert!(!runtimes.is_empty());
+                        assert_eq!(projection["matrices"]["runtime_products"], json!(runtimes));
+                    }
                 }
                 let forwarded_force =
                     projection["signals"]["force_hosted"].as_bool() != Some(false);
                 assert_eq!(forwarded_force, forced);
-                check_selection(dispatch, forwarded_force, manual && !forced);
+                let expected_depot = matches!(lane, "quality" | "linux") && manual && !forced;
+                check_selection(lane, dispatch, forwarded_force, expected_depot);
             }
         }
     }
