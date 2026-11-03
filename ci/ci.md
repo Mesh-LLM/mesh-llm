@@ -1272,6 +1272,13 @@ be reconciled before retry. The model has no expiry, completion release or job
 control; its caller-supplied observations are not attested. A real service
 must atomically commit the complete expected state and independently reconcile
 completion before freeing capacity.
+The source-only receipt journal can replay an identical committed operation
+after an uncertain acknowledgement. Its caller-supplied entry limit is part of
+the atomic value: when full it retains existing replay receipts and refuses new
+operations, including start observations. It does not evict receipts, bound
+bytes, choose a provider quota or establish a safe retry horizon. Exhaustion can
+halt progress; live use still needs approved recovery, authenticated state and
+an actual shared atomic store.
 
 Timing evidence is collected read-only with `cargo xtool ci-ops collect-metrics`.
 Schema-v3 reports keep workflow wall/queue, runner queue, dependency wait,

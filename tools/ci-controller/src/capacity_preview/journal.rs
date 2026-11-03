@@ -33,10 +33,13 @@ pub struct Entry {
     pub receipt: Receipt,
 }
 
-/// The model and all committed operation receipts must be one atomic value.
+/// The model, supplied receipt limit and all committed receipts are one atomic
+/// value. The limit is a storage bound supplied by the caller, not a provider
+/// quota or an approved live operating limit.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Journal {
     pub model: Model,
+    pub max_receipts: usize,
     pub receipts: BTreeMap<String, Entry>,
 }
 
@@ -47,11 +50,12 @@ pub struct Journal {
 /// model and append-only receipts. A false result writes nothing and means the
 /// expected value did not match. An error
 /// can occur before or after commitment. All receipts must be retained for as
-/// long as an operation ID could be retried; there is no safe eviction rule or
-/// bounded storage implementation here. Every participant must use the same
-/// journal and validated transitions, and the store must prevent rollback or
-/// replacement of committed history. The store must also authenticate its
-/// state and participants before any live use.
+/// long as an operation ID could be retried. The supplied entry limit fails
+/// closed when full; it does not establish a byte bound, safe eviction rule,
+/// storage implementation, or approved retry horizon. Every participant must
+/// use the same journal and validated transitions, and the store must prevent
+/// rollback or replacement of committed history and the limit. The store must
+/// also authenticate its state and participants before any live use.
 pub trait AtomicJournalStore {
     type Error;
 
@@ -81,6 +85,8 @@ pub enum Outcome {
 pub enum JournalError<E> {
     InvalidOperationId,
     ReusedOperationId,
+    InvalidReceiptLimit,
+    ReceiptCapacityExhausted,
     Load(E),
     /// The commit may have happened. Retry only with the same ID and request.
     CommitUnknown(E),
@@ -95,9 +101,12 @@ pub enum JournalError<E> {
 /// for a different request is rejected. A reserve request selects the next
 /// work at commit time; callers must use the returned receipt, not assume an
 /// earlier uncommitted candidate. `Wait` and `NoSupersession` are not recorded
-/// and may change on a later attempt. IDs must not contain secrets. This cannot
-/// compensate for a non-atomic store, incomplete history, reused IDs or
-/// unauthenticated input.
+/// and may change on a later attempt. A full journal still replays an existing
+/// operation but refuses every new ID, including start observations. No receipt
+/// is silently evicted. This can halt progress and cannot safely be used as a
+/// live admission mechanism without a reviewed capacity/recovery design. IDs
+/// must not contain secrets. This cannot compensate for a non-atomic store,
+/// incomplete history, reused IDs or unauthenticated input.
 pub fn apply<S: AtomicJournalStore>(
     store: &S,
     operation_id: &str,
@@ -107,12 +116,18 @@ pub fn apply<S: AtomicJournalStore>(
         return Err(JournalError::InvalidOperationId);
     }
     let current = store.load().map_err(JournalError::Load)?;
+    if current.max_receipts == 0 || current.receipts.len() > current.max_receipts {
+        return Err(JournalError::InvalidReceiptLimit);
+    }
     if let Some(entry) = current.receipts.get(operation_id) {
         return if entry.request == request {
             Ok(Outcome::Replayed(entry.receipt.clone()))
         } else {
             Err(JournalError::ReusedOperationId)
         };
+    }
+    if current.receipts.len() == current.max_receipts {
+        return Err(JournalError::ReceiptCapacityExhausted);
     }
     let (model, receipt) = match &request {
         Request::Reserve { now } => {

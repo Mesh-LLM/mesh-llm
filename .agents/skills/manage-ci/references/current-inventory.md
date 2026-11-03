@@ -959,6 +959,10 @@ source commit.
   An explicit pending-only supersession proposal may remove older queued PR
   requests from supplied state; reserved and active predecessors still require
   separate cancellation evidence and reconciliation.
+  The source-only receipt journal has a caller-supplied entry limit in the
+  atomic state. At the limit it preserves exact replay and refuses new
+  operations, including start observations, without eviction. This can halt
+  progress and is not an approved quota, byte bound or recovery mechanism.
   Snapshot authenticity, complete quotas, runner identity, atomic shared state
   and lease recovery remain prerequisites for real cross-run admission.
 - `ci/ci-plan.schema.json` versions the machine-readable output.

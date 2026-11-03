@@ -49,6 +49,7 @@ fn journal() -> Journal {
             },
             reserved: Vec::new(),
         },
+        max_receipts: 128,
         receipts: BTreeMap::new(),
     }
 }
@@ -288,4 +289,127 @@ fn invalid_ids_and_noop_results_do_not_change_the_supplied_journal() {
         Ok(Outcome::NoSupersession)
     );
     assert_eq!(store.state.lock().unwrap().0, state);
+}
+
+#[test]
+fn full_journal_replays_but_never_evicts_or_commits_a_new_operation() {
+    let mut state = journal();
+    state.max_receipts = 1;
+    state.model.snapshot.pending = vec![
+        pending(work("main-1", main('a'))),
+        pending(work("main-2", main('b'))),
+    ];
+    let store = store(state, Failure::None);
+    let request = Request::Reserve { now: 105 };
+    let receipt = match apply(&store, "reserve-1", request.clone()).unwrap() {
+        Outcome::Applied(receipt) => receipt,
+        outcome => panic!("unexpected outcome: {outcome:?}"),
+    };
+    let committed = store.state.lock().unwrap().0.clone();
+    assert_eq!(
+        apply(&store, "reserve-1", request),
+        Ok(Outcome::Replayed(receipt))
+    );
+    assert_eq!(
+        apply(&store, "reserve-1", Request::Reserve { now: 106 }),
+        Err(JournalError::ReusedOperationId)
+    );
+    for request in [
+        Request::Reserve { now: 105 },
+        Request::SupersedePending { now: 105 },
+        Request::RecordStart {
+            now: 105,
+            observed: Box::new(Active {
+                work: work("main-1", main('a')),
+                observed_class: Some(class()),
+            }),
+        },
+    ] {
+        assert_eq!(
+            apply(&store, "new-operation", request),
+            Err(JournalError::ReceiptCapacityExhausted)
+        );
+    }
+    assert_eq!(store.state.lock().unwrap().0, committed);
+}
+
+#[test]
+fn zero_or_already_exceeded_receipt_limit_is_rejected_without_writes() {
+    let mut state = journal();
+    state.max_receipts = 0;
+    let zero_store = store(state.clone(), Failure::None);
+    assert_eq!(
+        apply(&zero_store, "reserve", Request::Reserve { now: 105 }),
+        Err(JournalError::InvalidReceiptLimit)
+    );
+    assert_eq!(zero_store.state.lock().unwrap().0, state);
+
+    state.max_receipts = 1;
+    let entry = Entry {
+        request: Request::Reserve { now: 105 },
+        receipt: Receipt::StartRecorded { revision: 5 },
+    };
+    state.receipts.insert("one".into(), entry.clone());
+    state.receipts.insert("two".into(), entry);
+    let overfull_store = store(state.clone(), Failure::None);
+    assert_eq!(
+        apply(&overfull_store, "one", Request::Reserve { now: 105 }),
+        Err(JournalError::InvalidReceiptLimit)
+    );
+    assert_eq!(overfull_store.state.lock().unwrap().0, state);
+}
+
+#[test]
+fn last_slot_with_lost_acknowledgement_replays_the_committed_receipt() {
+    let mut state = journal();
+    state.max_receipts = 1;
+    let selected = work("main", main('a'));
+    state.model.snapshot.pending.push(pending(selected.clone()));
+    let store = store(state, Failure::AfterCommit);
+    let request = Request::Reserve { now: 105 };
+    assert_eq!(
+        apply(&store, "reserve", request.clone()),
+        Err(JournalError::CommitUnknown("acknowledgement unavailable"))
+    );
+    assert_eq!(
+        apply(&store, "reserve", request),
+        Ok(Outcome::Replayed(Receipt::Reserved {
+            work: selected,
+            revision: 5,
+        }))
+    );
+    assert_eq!(
+        apply(&store, "another", Request::Reserve { now: 105 }),
+        Err(JournalError::ReceiptCapacityExhausted)
+    );
+    let state = &store.state.lock().unwrap().0;
+    assert_eq!(state.receipts.len(), 1);
+    assert_eq!(state.model.reserved.len(), 1);
+}
+
+#[test]
+fn racing_for_last_receipt_slot_commits_at_most_one_operation() {
+    let mut state = journal();
+    state.max_receipts = 1;
+    state.model.snapshot.pending = vec![
+        pending(work("main-1", main('a'))),
+        pending(work("main-2", main('b'))),
+    ];
+    let store = FakeStore {
+        state: Mutex::new((state, Failure::None)),
+        after_load: Some(Barrier::new(2)),
+    };
+    let (a, b) = std::thread::scope(|scope| {
+        let a = scope.spawn(|| apply(&store, "one", Request::Reserve { now: 105 }).unwrap());
+        let b = scope.spawn(|| apply(&store, "two", Request::Reserve { now: 105 }).unwrap());
+        (a.join().unwrap(), b.join().unwrap())
+    });
+    assert!(matches!(
+        (&a, &b),
+        (Outcome::Applied(_), Outcome::Contended) | (Outcome::Contended, Outcome::Applied(_))
+    ));
+    let state = &store.state.lock().unwrap().0;
+    assert_eq!(state.max_receipts, 1);
+    assert_eq!(state.receipts.len(), 1);
+    assert_eq!(state.model.reserved.len(), 1);
 }
