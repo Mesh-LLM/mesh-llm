@@ -93,6 +93,63 @@ fn malformed_or_forged_trace_fields_are_rejected_without_echoing_input() {
 }
 
 #[test]
+fn contradictory_provider_label_reason_and_cache_claims_are_rejected() {
+    let mut depot = selection();
+    depot["selected_provider"] = json!("depot");
+    depot["force_hosted"] = json!(false);
+    depot["reason"] = json!("eligible_depot_selection");
+    depot["allow_native_github_cache"] = json!(false);
+    depot["allow_trusted_sccache_seed"] = json!(false);
+    depot["selected_labels"] = json!({
+        "linux": "depot-ubuntu-24.04", "linux_4": "depot-ubuntu-24.04-4",
+        "linux_8": "depot-ubuntu-24.04-8", "linux_16": "depot-ubuntu-24.04-16",
+        "linux_arm": "depot-ubuntu-24.04-arm", "linux_arm_4": "depot-ubuntu-24.04-arm-4",
+        "linux_arm_8": "depot-ubuntu-24.04-arm-8", "linux_arm_16": "depot-ubuntu-24.04-arm-16",
+        "macos": "depot-macos-15", "windows": "depot-windows-2022"
+    });
+    assert!(render(&request(&depot.to_string(), json!({}))).is_ok());
+
+    let mut cases = Vec::new();
+    for (path, value) in [
+        ("linux", "depot-ubuntu-24.04"),
+        ("linux_4", "ubuntu-24.04-arm"),
+        ("macos", "depot-macos-15"),
+    ] {
+        let mut candidate = selection();
+        candidate["selected_labels"][path] = json!(value);
+        cases.push(candidate);
+    }
+    for (field, value) in [
+        ("reason", json!("eligible_depot_selection")),
+        ("force_hosted", json!(false)),
+        ("allow_depot_remote_cache", json!(true)),
+        ("allow_native_github_cache", json!(false)),
+        ("allow_trusted_sccache_seed", json!(false)),
+        ("exception_active", json!(true)),
+    ] {
+        let mut candidate = selection();
+        candidate[field] = value;
+        cases.push(candidate);
+    }
+    for (field, value) in [
+        ("force_hosted", json!(true)),
+        ("reason", json!("not_eligible_or_disabled")),
+        ("allow_native_github_cache", json!(true)),
+        ("allow_trusted_sccache_seed", json!(true)),
+    ] {
+        let mut candidate = depot.clone();
+        candidate[field] = value;
+        cases.push(candidate);
+    }
+    for candidate in cases {
+        assert_eq!(
+            render(&request(&candidate.to_string(), json!({}))).unwrap_err(),
+            "invalid or oversized execution-record input"
+        );
+    }
+}
+
+#[test]
 fn invalid_claims_unknown_fields_and_oversized_input_are_rejected() {
     let trace = selection().to_string();
     for context in [

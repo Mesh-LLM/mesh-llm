@@ -78,8 +78,10 @@ in a synthetic trusted manual-main scenario. This is not a live release or
 proof of other callers.
 Other role/caller paths and the complete event-by-role acceptance matrix still
 need the same composed proof. The source-only execution-record command can
-retain caller assertions alongside a selector trace, but does not authenticate
-the selector-to-job binding, observe the runner or cache, or retain an
-artifact. Protected `@main` execution, live
+render caller assertions alongside a selector trace. It rejects contradictory
+provider, label, reason and cache projections, and the direct caller matrix
+exercises the validator against real selector output. These checks do not
+authenticate the trace or selector-to-job binding, observe the runner or
+cache, or retain an artifact. Protected `@main` execution, live
 runner identity, provider isolation and same-source timing evidence remain
 separate requirements.

@@ -161,32 +161,68 @@ fn role(value: &str) -> bool {
     SUPPORTED_ROLES.contains(&value)
 }
 
-fn valid_labels(labels: &Labels) -> bool {
-    let linux = [
-        &labels.linux,
-        &labels.linux_4,
-        &labels.linux_8,
-        &labels.linux_16,
-        &labels.linux_arm,
-        &labels.linux_arm_4,
-        &labels.linux_arm_8,
-        &labels.linux_arm_16,
+fn consistent_projection(selection: &Selection) -> bool {
+    let labels = &selection.selected_labels;
+    let actual = [
+        labels.linux.as_str(),
+        labels.linux_4.as_str(),
+        labels.linux_8.as_str(),
+        labels.linux_16.as_str(),
+        labels.linux_arm.as_str(),
+        labels.linux_arm_4.as_str(),
+        labels.linux_arm_8.as_str(),
+        labels.linux_arm_16.as_str(),
+        labels.macos.as_str(),
+        labels.windows.as_str(),
     ];
-    let allowed = [
-        "ubuntu-24.04",
-        "ubuntu-24.04-arm",
-        "depot-ubuntu-24.04",
-        "depot-ubuntu-24.04-4",
-        "depot-ubuntu-24.04-8",
-        "depot-ubuntu-24.04-16",
-        "depot-ubuntu-24.04-arm",
-        "depot-ubuntu-24.04-arm-4",
-        "depot-ubuntu-24.04-arm-8",
-        "depot-ubuntu-24.04-arm-16",
-    ];
-    linux.iter().all(|value| allowed.contains(&value.as_str()))
-        && ["macos-15", "depot-macos-15"].contains(&labels.macos.as_str())
-        && ["windows-2022", "depot-windows-2022"].contains(&labels.windows.as_str())
+    if selection.allow_depot_remote_cache || (selection.exception_active && !selection.pr_gate) {
+        return false;
+    }
+    match selection.selected_provider.as_str() {
+        "depot" => {
+            actual
+                == [
+                    "depot-ubuntu-24.04",
+                    "depot-ubuntu-24.04-4",
+                    "depot-ubuntu-24.04-8",
+                    "depot-ubuntu-24.04-16",
+                    "depot-ubuntu-24.04-arm",
+                    "depot-ubuntu-24.04-arm-4",
+                    "depot-ubuntu-24.04-arm-8",
+                    "depot-ubuntu-24.04-arm-16",
+                    "depot-macos-15",
+                    "depot-windows-2022",
+                ]
+                && !selection.force_hosted
+                && selection.reason == "eligible_depot_selection"
+                && !selection.allow_trusted_sccache_seed
+                && (!selection.allow_native_github_cache || selection.exception_active)
+        }
+        "github_hosted" => {
+            actual
+                == [
+                    "ubuntu-24.04",
+                    "ubuntu-24.04",
+                    "ubuntu-24.04",
+                    "ubuntu-24.04",
+                    "ubuntu-24.04-arm",
+                    "ubuntu-24.04-arm",
+                    "ubuntu-24.04-arm",
+                    "ubuntu-24.04-arm",
+                    "macos-15",
+                    "windows-2022",
+                ]
+                && selection.reason
+                    == if selection.force_hosted {
+                        "forced_hosted"
+                    } else {
+                        "not_eligible_or_disabled"
+                    }
+                && selection.allow_native_github_cache
+                && selection.allow_trusted_sccache_seed
+        }
+        _ => false,
+    }
 }
 
 fn valid_selection(selection: &Selection) -> bool {
@@ -210,14 +246,7 @@ fn valid_selection(selection: &Selection) -> bool {
         .contains(&selection.declared_origin.as_str())
         && ["main", "pull_request_merge", "other"].contains(&selection.ref_kind.as_str())
         && selection.declared_head_sha.as_deref().is_none_or(sha)
-        && ["github_hosted", "depot"].contains(&selection.selected_provider.as_str())
-        && [
-            "not_eligible_or_disabled",
-            "eligible_depot_selection",
-            "forced_hosted",
-        ]
-        .contains(&selection.reason.as_str())
-        && valid_labels(&selection.selected_labels)
+        && consistent_projection(selection)
 }
 
 fn valid_context(context: &Context) -> bool {

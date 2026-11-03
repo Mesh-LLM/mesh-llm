@@ -285,6 +285,14 @@ fn exercise(step: &workflows::Node, class: Class, scenario: &Scenario, identity:
     );
     let selected = fixture.outputs();
     let depot = scenario.expected_depot[class.index()];
+    let request = serde_json::json!({ "selection_trace": selected["selection_trace"] });
+    let record =
+        ci_controller::plan::decision_evidence::render(&serde_json::to_vec(&request).unwrap())
+            .unwrap_or_else(|error| panic!("{identity}/{}: {error}", scenario.name));
+    let record: serde_json::Value = serde_json::from_str(&record).unwrap();
+    assert_eq!(record["authenticity"], "unverified");
+    assert_eq!(record["authorizes_execution"], false);
+    assert!(record["actual_runner"].is_null());
     assert_eq!(
         selected["depot_enabled"],
         bit(depot),
