@@ -1,7 +1,7 @@
 //! Binds a lane projection to the digest-bound canonical plan without
 //! changing either schema: the digest is the SHA-256 of the exact `plan_json`
 //! bytes (as `plan-ci/action.yml` and `ci-control.yml` compute it), and the
-//! projection's shared fields and matrix rows must come from that plan.
+//! projection must be the complete, exact selection derived from that plan.
 
 use super::Checked;
 use crate::plan::document::Json;
@@ -15,7 +15,12 @@ const SHARED: [&str; 5] = [
     "budgets",
 ];
 
-pub(super) fn verify(lane_plan: &Json, digest: &str, canonical: &str) -> Checked<()> {
+pub(super) fn verify(
+    lane_plan: &Json,
+    raw_lane: &str,
+    digest: &str,
+    canonical: &str,
+) -> Checked<()> {
     if hex::encode(Sha256::digest(canonical.as_bytes())) != digest {
         return Err("plan digest does not match the canonical plan".to_owned());
     }
@@ -54,5 +59,5 @@ pub(super) fn verify(lane_plan: &Json, digest: &str, canonical: &str) -> Checked
             }
         }
     }
-    Ok(())
+    super::projection::verify_embedded(canonical, digest, raw_lane)
 }

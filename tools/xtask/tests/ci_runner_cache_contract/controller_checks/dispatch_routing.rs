@@ -17,7 +17,11 @@ mod resolvers;
 const SOURCE: &str = "0123456789abcdef0123456789abcdef01234567";
 const BASE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-fn plan_action(changed_file: &str) -> Value {
+fn plan_action_case(
+    changed_file: &str,
+    injection: &str,
+    canonical_fixture: Option<&str>,
+) -> (std::process::Output, Value) {
     let fixture = Fixture::new();
     let inherited_path = std::env::var_os("PATH").expect("fixture tool PATH");
     if !std::env::split_paths(&inherited_path)
@@ -30,14 +34,39 @@ fn plan_action(changed_file: &str) -> Value {
     // launches Cargo or downloads dependencies during this local contract.
     fixture.executable(
         "planner",
-        r#"jq -c '. + {workspace_packages: [{name: "mesh-llm", path: "mesh/crates/mesh-llm"}]}' | "$MESH_FIXTURE_XTASK" --repo-root "$GITHUB_WORKSPACE" "$@""#,
+        r#"
+if [[ "$1" == ci && "$2" == plan ]]; then
+    if [[ -n "$MESH_FIXTURE_PLAN" ]]; then
+        cat >/dev/null
+        cat "$MESH_FIXTURE_PLAN"
+    else
+        jq -c '. + {workspace_packages: [{name: "mesh-llm", path: "mesh/crates/mesh-llm"}]}' | "$MESH_FIXTURE_XTASK" --repo-root "$GITHUB_WORKSPACE" "$@"
+    fi
+else
+    exec "$MESH_FIXTURE_XTASK" --repo-root "$GITHUB_WORKSPACE" "$@"
+fi
+"#,
     );
+    let source_sha = if let Some(plan) = canonical_fixture {
+        let path = fixture.path().join("canonical.json");
+        fs::write(&path, plan).unwrap();
+        serde_json::from_str::<Value>(plan).unwrap()["source_sha"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    } else {
+        SOURCE.to_owned()
+    };
     let changed = fixture.path().join("changed.txt");
     fs::write(&changed, format!("{changed_file}\n")).unwrap();
     // Isolate the action's fixed file transport; the planner and projection
     // script themselves remain the checked-in implementations.
     let script = support::step(&support::action("plan-ci"), "run")
-        .replace("/tmp/changed_files.txt", "\"$MESH_FIXTURE_CHANGED_FILES\"");
+        .replace("/tmp/changed_files.txt", "\"$MESH_FIXTURE_CHANGED_FILES\"")
+        .replace(
+            "# Validate the complete projection",
+            &format!("{injection}\n# Validate the complete projection"),
+        );
     let path = std::env::join_paths(
         std::iter::once(fixture.path().join("bin")).chain(std::env::split_paths(&inherited_path)),
     )
@@ -55,9 +84,15 @@ fn plan_action(changed_file: &str) -> Value {
         .env("GITHUB_STEP_SUMMARY", fixture.path().join("summary"))
         .env("MESH_CI_CONTROLLER_BIN", fixture.path().join("bin/planner"))
         .env("MESH_FIXTURE_XTASK", env!("CARGO_BIN_EXE_xtask"))
+        .env(
+            "MESH_FIXTURE_PLAN",
+            canonical_fixture
+                .map(|_| fixture.path().join("canonical.json"))
+                .unwrap_or_default(),
+        )
         .env("MESH_FIXTURE_CHANGED_FILES", &changed)
         .env("EVENT_NAME", "workflow_dispatch")
-        .env("SOURCE_SHA", SOURCE)
+        .env("SOURCE_SHA", source_sha)
         .env("BASE_SHA", BASE)
         .env("DRAFT", "false")
         .env("CHANGED_FILES_HINT", "")
@@ -66,8 +101,67 @@ fn plan_action(changed_file: &str) -> Value {
         .env("ARTIFACT_NAME", "")
         .args(["-c", &script]);
     let output = fixture.run_with_timeout(command, Duration::from_secs(30));
+    (output, fixture.outputs())
+}
+
+fn plan_action(changed_file: &str) -> Value {
+    let (output, result) = plan_action_case(changed_file, "", None);
     assert!(output.status.success(), "{output:?}");
-    fixture.outputs()
+    result
+}
+
+#[test]
+fn planner_rejects_omitted_runtime_rows_and_false_required_before_dispatch() {
+    for mutation in [
+        ".matrices.runtime_products = [] | .matrices.smoke = []",
+        ".required = false",
+    ] {
+        let injection = format!(
+            r#"
+          while IFS= read -r line; do
+            case "$line" in
+              windows_lane_plan=*)
+                printf 'windows_lane_plan=%s\n' "$(jq -c '{mutation}' <<<"${{line#windows_lane_plan=}}")" ;;
+              *) printf '%s\n' "$line" ;;
+            esac
+          done < "$GITHUB_OUTPUT" > "$RUNNER_TEMP/mutated-output"
+          mv "$RUNNER_TEMP/mutated-output" "$GITHUB_OUTPUT"
+        "#
+        );
+        let (output, _) = plan_action_case("README.md", &injection, None);
+        assert!(!output.status.success(), "accepted mutation {mutation}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("lane plan does not match canonical windows projection"),
+            "{stderr}"
+        );
+    }
+}
+
+#[test]
+fn planner_accepts_actual_projections_for_every_frozen_canonical_profile() {
+    let directory = support::root().join("tools/xtask/tests/fixtures/ci_plan/expected");
+    let mut paths = fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.to_string_lossy().ends_with(".outputs.txt"))
+        .collect::<Vec<_>>();
+    paths.sort();
+    assert_eq!(paths.len(), 38);
+    for path in paths {
+        let contents = fs::read_to_string(&path).unwrap();
+        let canonical = contents
+            .lines()
+            .find_map(|line| line.strip_prefix("plan_json="))
+            .unwrap();
+        let (output, _) = plan_action_case("README.md", "", Some(canonical));
+        assert!(
+            output.status.success(),
+            "{}: {}",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 fn workflow(file: &str) -> Node {

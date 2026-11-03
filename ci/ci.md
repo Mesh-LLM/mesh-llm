@@ -585,6 +585,15 @@ unneeded. The manual controller validates all five lane flags before creating
 correlated checks or dispatching work; it also refuses non-boolean flags in its
 dispatch logic. Rejection creates no new check and does not invalidate earlier
 checks; independent publisher and stale-check controls remain necessary.
+Before the planning step succeeds, the controller independently derives each
+complete lane projection from the canonical plan and verifies its digest,
+source SHA, matrices, required flag and shared fields. Missing selected rows,
+invented rows and ambiguous JSON therefore fail planning before a lane can be
+skipped. This check does not prove which runner eventually executes a job or
+replace the required publisher and live execution evidence.
+The optional digest-bound `ci validate-lane` mode applies the same complete
+projection check. Existing lane summaries do not pass it a canonical plan, so
+the planner preflight is the current enforcement point for those callers.
 The entries receive no repository secrets and independently cancel superseded
 synchronizations. Eligible same-repository executor jobs may select Depot
 through protected runner policy while the bounded repository gate is active;

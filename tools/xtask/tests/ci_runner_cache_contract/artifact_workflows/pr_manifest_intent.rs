@@ -66,7 +66,10 @@ fn graph_pr_plan_admits_only_exact_regular_protected_manifest_source() {
         } else {
             "pr-ready"
         };
-        f.executable("automation",r#"[[ $# == 4 && "$1" == ci && "$2" == plan && "$3" == --manifest-root ]] || exit 91
+        f.executable("automation",r#"if [[ "$1" == ci && "$2" == validate-projection ]]; then
+  exec "$MESH_FIXTURE_XTASK" "$@"
+fi
+[[ $# == 4 && "$1" == ci && "$2" == plan && "$3" == --manifest-root ]] || exit 91
 [[ "$4" != "$GITHUB_WORKSPACE" && "$4" == "$RUNNER_TEMP/mesh-ci-manifests."* ]] || exit 92
 [[ -f "$4/ci/ownership.yml" && -f "$4/ci/slices.yml" ]] || exit 93
 /usr/bin/cmp "$4/ci/ownership.yml" "$GITHUB_WORKSPACE/ci/ownership.yml"
@@ -74,7 +77,7 @@ fn graph_pr_plan_admits_only_exact_regular_protected_manifest_source() {
 /bin/cat > planner-input.json
 jq -e --arg profile "$EXPECTED_PROFILE" --arg source "$SOURCE_SHA" '.profile == $profile and .source_sha == $source and .event_name == "pull_request"' planner-input.json >/dev/null
 printf '%s\n' "$4" > planner-manifest-root
-/bin/cat golden.json"#);
+jq -c --arg source "$SOURCE_SHA" --arg profile "$EXPECTED_PROFILE" '.source_sha = $source | .profile = $profile' golden.json"#);
         let action = super::support::action("plan-ci");
         let super::Node::Seq(items) = action.get("runs").unwrap().get("steps").unwrap() else {
             panic!("steps")
@@ -130,6 +133,7 @@ printf '%s\n' "$4" > planner-manifest-root
             .env("RUNNER_TEMP", f.path())
             .env("GITHUB_OUTPUT", f.path().join("outputs"))
             .env("GITHUB_STEP_SUMMARY", f.path().join("summary"))
+            .env("MESH_FIXTURE_XTASK", env!("CARGO_BIN_EXE_xtask"))
             .env("MESH_CI_CONTROLLER_BIN", f.path().join("bin/automation"))
             .args(["-c", &run]);
         let output = f.run(command);

@@ -360,6 +360,25 @@ runs:
             | .required = ([.matrices[] | length] | add) > 0
           ' ci-plan.json)"
         } >> "$GITHUB_OUTPUT"
+
+        # Validate the complete projection before any entrypoint can use its
+        # `required` flag to skip a lane. A row-membership check alone permits
+        # a selected matrix row to disappear from the projection entirely.
+        projection_dir=$(mktemp -d "$RUNNER_TEMP/mesh-ci-projection.XXXXXX")
+        trap 'rm -rf "$projection_dir"' EXIT
+        printf '%s' "$plan_json" > "$projection_dir/canonical.json"
+        for lane in quality website linux macos windows; do
+          lane_plan=$(awk -v key="${lane}_lane_plan=" '
+            index($0, key) == 1 { count++; value = substr($0, length(key) + 1) }
+            END { if (count != 1) exit 1; print value }
+          ' "$GITHUB_OUTPUT")
+          printf '%s' "$lane_plan" > "$projection_dir/lane.json"
+          "$MESH_CI_CONTROLLER_BIN" ci validate-projection \
+            --canonical-plan-file "$projection_dir/canonical.json" --plan-digest "$plan_digest" \
+            --lane-plan-file "$projection_dir/lane.json" --lane "$lane" --source-sha "$SOURCE_SHA"
+        done
+        rm -rf "$projection_dir"
+        trap - EXIT
         {
           echo "## CI plan"
           echo

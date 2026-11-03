@@ -78,6 +78,7 @@ pub(crate) fn lane_jobs(lane: &str) -> &'static [&'static str] {
             "native_runtimes",
             "runtime_product",
             "platform_checks",
+            "product_smoke",
         ],
     }
 }
@@ -106,7 +107,28 @@ impl Golden {
     }
 
     pub(crate) fn lane_plan(&self, lane: &str) -> String {
-        self.output(&format!("{lane}_lane_plan")).to_owned()
+        let raw = self.output(&format!("{lane}_lane_plan"));
+        if lane != "windows" {
+            return raw.to_owned();
+        }
+        // The frozen projection predates the checked-in Windows smoke caller.
+        // Reconstruct that caller's current projection from the same golden
+        // canonical plan; the real action is exercised independently.
+        let mut projection: Value = serde_json::from_str(raw).expect("Windows lane fixture");
+        let plan: Value =
+            serde_json::from_str(self.output("plan_json")).expect("canonical plan fixture");
+        let has_runtime = projection["matrices"]["runtime_products"]
+            .as_array()
+            .is_some_and(|rows| !rows.is_empty());
+        let smoke = plan["matrices"]["smoke"]
+            .as_array()
+            .expect("canonical smoke rows")
+            .iter()
+            .filter(|row| has_runtime && row["id"] == "core")
+            .cloned()
+            .collect::<Vec<_>>();
+        projection["matrices"]["smoke"] = Value::Array(smoke);
+        projection.to_string()
     }
 }
 
@@ -114,7 +136,22 @@ impl Golden {
 pub(crate) fn expected_jobs() -> Result<Map<String, Value>, Box<dyn Error>> {
     let path = fixtures().join("ci_graph/lane_jobs.json");
     match serde_json::from_slice(&fs::read(path)?)? {
-        Value::Object(cases) => Ok(cases),
+        Value::Object(mut cases) => {
+            for (case, lanes) in &mut cases {
+                let golden = Golden::load(case)?;
+                let windows: Value = serde_json::from_str(&golden.lane_plan("windows"))?;
+                if windows["matrices"]["smoke"]
+                    .as_array()
+                    .is_some_and(|rows| !rows.is_empty())
+                {
+                    lanes["windows"]
+                        .as_array_mut()
+                        .ok_or("Windows jobs")?
+                        .push(json!("product_smoke"));
+                }
+            }
+            Ok(cases)
+        }
         _ => Err("lane_jobs.json must be an object".into()),
     }
 }

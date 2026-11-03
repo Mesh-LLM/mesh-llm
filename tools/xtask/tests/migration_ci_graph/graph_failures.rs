@@ -204,6 +204,39 @@ fn migration_ci_graph_mismatched_digest_and_projection_are_rejected() -> TestRes
     Ok(())
 }
 
+#[test]
+fn digest_bound_lane_rejects_omitted_runtime_and_smoke_even_if_jobs_skipped() -> TestResult {
+    let golden = Golden::load("control-main")?;
+    let mut lane: serde_json::Value = serde_json::from_str(&golden.lane_plan("windows"))?;
+    assert!(
+        !lane["matrices"]["runtime_products"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(!lane["matrices"]["smoke"].as_array().unwrap().is_empty());
+    lane["matrices"]["runtime_products"] = serde_json::json!([]);
+    lane["matrices"]["smoke"] = serde_json::json!([]);
+    let jobs = planned("control-main", "windows")?
+        .into_iter()
+        .filter(|job| {
+            !["native_runtimes", "runtime_product", "product_smoke"].contains(&job.as_str())
+        })
+        .collect::<Vec<_>>();
+    let jobs = jobs.iter().map(String::as_str).collect::<Vec<_>>();
+    let output = Call::lane(&lane.to_string(), &needs("windows", &jobs))
+        .with("--workflow", &lane_workflow("windows"))
+        .with_text("--plan-digest", golden.output("plan_digest"))
+        .with_text("--canonical-plan", golden.output("plan_json"))
+        .run_rust_only()?;
+    assert_output(
+        &output,
+        2,
+        "ERROR: lane plan does not match canonical windows projection\n",
+    );
+    Ok(())
+}
+
 fn entrypoints_reject(file: &str, edits: &[(&str, &str)], message: &str) -> TestResult {
     let scratch = Scratch::new("entry")?;
     let workflows = scratch.entrypoints(file, edits)?;

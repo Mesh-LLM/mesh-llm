@@ -8,6 +8,7 @@ const USAGE: &str = "usage: ci-controller [--repo-root DIR] <command> ...
   ci plan [--manifest-root MANIFEST_ROOT]
   ci execution-record < request.json
   ci validate-lane ...
+  ci validate-projection ...
   repository affected-crates ...
   repository conventional-commits ...
   repository llama-upstream-pin ...
@@ -17,6 +18,7 @@ enum Command<'a> {
     Plan(&'a [String]),
     ExecutionRecord(&'a [String]),
     ValidateLane(&'a [String]),
+    ValidateProjection(&'a [String]),
     AffectedCrates(&'a [String]),
     ConventionalCommits(&'a [String]),
     LlamaUpstreamPin(&'a [String]),
@@ -32,6 +34,7 @@ impl<'a> Command<'a> {
             ("ci", "plan") => Self::Plan(rest),
             ("ci", "execution-record") => Self::ExecutionRecord(rest),
             ("ci", "validate-lane") => Self::ValidateLane(rest),
+            ("ci", "validate-projection") => Self::ValidateProjection(rest),
             ("repository", "affected-crates") => Self::AffectedCrates(rest),
             ("repository", "conventional-commits") => Self::ConventionalCommits(rest),
             ("repository", "llama-upstream-pin") => Self::LlamaUpstreamPin(rest),
@@ -68,6 +71,7 @@ fn run() -> DynResult<()> {
         Command::Plan(rest) => plan::run(checkout(explicit_root)?.as_path(), rest),
         Command::ExecutionRecord(rest) => plan::decision_evidence::run(rest),
         Command::ValidateLane(rest) => lane_results::run(rest),
+        Command::ValidateProjection(rest) => lane_results::run_projection(rest),
         Command::Bootstrap(rest) => bootstrap::run(
             checkout(explicit_root)?.as_path(),
             rest,

@@ -6,7 +6,7 @@ use std::{fs, os::unix::fs::symlink, process::Command};
 
 fn fixture() -> support::Fixture {
     let fixture = support::Fixture::new();
-    for tool in ["jq", "awk", "mktemp"] {
+    for tool in ["jq", "awk", "mktemp", "rm"] {
         let executable = ["/usr/bin", "/bin", "/opt/homebrew/bin", "/usr/local/bin"]
             .into_iter()
             .map(|dir| std::path::Path::new(dir).join(tool))
@@ -27,7 +27,10 @@ fn fixture() -> support::Fixture {
     let mut golden: Value = serde_json::from_slice(&fs::read(&golden_path).unwrap()).unwrap();
     golden["signals"]["force_hosted"] = json!(false);
     fs::write(golden_path, serde_json::to_vec(&golden).unwrap()).unwrap();
-    fixture.executable("automation",r#"[[ "$*" == "ci plan --manifest-root $GITHUB_WORKSPACE" ]] || exit 92
+    fixture.executable("automation",r#"if [[ "$1" == ci && "$2" == validate-projection ]]; then
+  exec "$MESH_FIXTURE_XTASK" "$@"
+fi
+[[ "$*" == "ci plan --manifest-root $GITHUB_WORKSPACE" ]] || exit 92
 /bin/cat > planner-input.json
 jq -e '.profile == "main" and .event_name == "push" and .changed_files == ["docs/MESHES.md"]' planner-input.json >/dev/null || exit 93
 if [[ "$AFFECTED_CRATES" == '[]' ]]; then
@@ -71,7 +74,8 @@ fn project(fixture: &support::Fixture, affected: &str) -> Value {
         .env("TMPDIR", fixture.path());
     command
         .env("GITHUB_OUTPUT", fixture.path().join("outputs"))
-        .env("GITHUB_STEP_SUMMARY", fixture.path().join("summary"));
+        .env("GITHUB_STEP_SUMMARY", fixture.path().join("summary"))
+        .env("MESH_FIXTURE_XTASK", env!("CARGO_BIN_EXE_xtask"));
     command.env(
         "MESH_CI_CONTROLLER_BIN",
         fixture.path().join("bin/automation"),

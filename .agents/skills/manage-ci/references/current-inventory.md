@@ -980,6 +980,10 @@ source commit.
 - `ci/slices.yml` defines profiles, slice dependencies, rows, runner roles,
   cache modes and worker budgets.
 - `ci/ci-plan.schema.json` versions the machine-readable output.
+- Before a planner step succeeds, the controller checks all five lane
+  projections against the complete canonical plan, its digest and source SHA.
+  Selected matrix rows cannot disappear while a lane remains green; this is
+  planning evidence and does not attest the runner or the job's execution.
 - `compute-changes` supplies the complete event diff and affected Cargo
   closure; the planner owns signals and final matrix selection.
 - Each `pr_*.yml` workflow checks out the default branch for canonical planning,

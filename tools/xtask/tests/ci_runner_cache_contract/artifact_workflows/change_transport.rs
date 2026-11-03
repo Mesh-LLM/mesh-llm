@@ -40,6 +40,7 @@ fn command(f: &support::Fixture, source: &str) -> Command {
         .env("TMPDIR", f.path())
         .env("GITHUB_OUTPUT", f.path().join("outputs"))
         .env("GITHUB_STEP_SUMMARY", f.path().join("summary"))
+        .env("MESH_FIXTURE_XTASK", env!("CARGO_BIN_EXE_xtask"))
         .env("MESH_CI_CONTROLLER_BIN", f.path().join("bin/automation"))
         .args(["-c", source]);
     command
@@ -67,7 +68,10 @@ fn artifact_plan_large_file_input_survives_without_bulk_argv_or_environment() {
         serde_json::to_vec(&paths).unwrap(),
     )
     .unwrap();
-    f.executable("automation", r#"[[ "$*" == "ci plan --manifest-root $GITHUB_WORKSPACE" ]] || exit 90
+    f.executable("automation", r#"if [[ "$1" == ci && "$2" == validate-projection ]]; then
+  exec "$MESH_FIXTURE_XTASK" "$@"
+fi
+[[ "$*" == "ci plan --manifest-root $GITHUB_WORKSPACE" ]] || exit 90
 [[ -z "${CHANGED_FILES+x}" ]] || exit 91
 /bin/cat > planner-input.json
 jq -e --slurpfile expected expected.json '.profile == "main" and .event_name == "push" and .changed_files == $expected[0]' planner-input.json >/dev/null
@@ -119,7 +123,10 @@ fn manual_change_list_survives_and_the_bounded_fallback_overrides_it() {
         fs::write(f.path().join("changed.txt"), "docs/MESHES.md\n").unwrap();
         f.executable(
             "automation",
-            r#"/bin/cat > planner-input.json
+            r#"if [[ "$1" == ci && "$2" == validate-projection ]]; then
+  exec "$MESH_FIXTURE_XTASK" "$@"
+fi
+/bin/cat > planner-input.json
 jq -e --arg expected "$EXPECTED_PATH" '.profile == "manual-full" and .changed_files == [$expected]' planner-input.json >/dev/null
 /bin/cat golden.json"#,
         );

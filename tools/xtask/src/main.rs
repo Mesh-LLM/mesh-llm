@@ -207,6 +207,7 @@ fn run() -> DynResult<()> {
         }
         cli::CliCommand::CiValidate(verb, rest) => match verb {
             "validate-graph" => ci_validation::entrypoint_graph::run(rest),
+            "validate-projection" => ci_controller::lane_results::run_projection(rest),
             _ => ci_controller::lane_results::run(rest),
         },
         cli::CliCommand::CiFamilyPlan(rest) => {

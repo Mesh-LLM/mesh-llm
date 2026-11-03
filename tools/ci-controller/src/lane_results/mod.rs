@@ -6,6 +6,7 @@
 mod authority_results;
 mod digest;
 mod lane_graph;
+mod projection;
 pub mod results;
 pub mod workflow_yaml;
 
@@ -37,6 +38,11 @@ const LANE_OPTIONS: [&str; 5] = [
 /// Runs `ci validate-lane`.
 pub fn run(args: &[String]) -> DynResult<()> {
     lane_report(args).emit()
+}
+
+/// Verify one complete lane projection against its source-bound canonical plan.
+pub fn run_projection(args: &[String]) -> DynResult<()> {
+    projection::run(args)
 }
 
 fn error(message: String) -> CheckReport {
@@ -144,7 +150,7 @@ impl Request<'_> {
         let needs = results::load_object(self.needs, "needs")?;
         let outcome = results::validate(&lane_plan, &needs)?;
         if let Some((digest, canonical)) = self.digest {
-            digest::verify(&lane_plan, digest, canonical)?;
+            digest::verify(&lane_plan, self.lane_plan, digest, canonical)?;
         }
         if let Some(path) = self.workflow {
             let source =
