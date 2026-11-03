@@ -5,6 +5,11 @@ description: Use this skill as the mandatory starting point whenever inspecting,
 
 # Manage CI
 
+The macOS lane serializes its macOS-producing phases and preserves independent
+checks after an unrelated phase fails. Its matrix limit is a per-lane-run
+ceiling, not admission across concurrent PRs, main revisions, releases or
+other workflows; verify those separately before qualifying capacity.
+
 This is the normative CI rule source for MeshLLM. Read it completely before
 every CI task.
 

@@ -59,7 +59,9 @@ jobs:
 
   laya_metal:
     name: Laya smoke (macOS Metal)
-    if: ${{ contains(fromJson(inputs.runtime_matrix).*.id, 'macos-metal') && contains(fromJson(inputs.smoke_matrix).*.id, 'metal-model-load') }}
+    # A failed model-load smoke must not suppress the independent Laya check.
+    needs: [metal_model_load]
+    if: ${{ !cancelled() && contains(fromJson(inputs.runtime_matrix).*.id, 'macos-metal') && contains(fromJson(inputs.smoke_matrix).*.id, 'metal-model-load') }}
     runs-on: macos-15
     timeout-minutes: ${{ inputs.timeout_minutes }}
     env:

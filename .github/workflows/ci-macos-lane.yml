@@ -102,7 +102,10 @@ jobs:
 
   product_automation_macos_arm64:
     name: Product macos arm64 automation
-    if: ${{ (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null || fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null) }}
+    # Serialize macOS-producing phases within this lane. This scheduling edge
+    # does not make the product artifact depend on protected build success.
+    needs: [authority_macos_arm64]
+    if: ${{ !cancelled() && (fromJson(inputs.lane_plan_json).matrices.hosts[0] != null || fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null) }}
     permissions:
       contents: read
     uses: ./.github/workflows/product-automation-artifact.yml
@@ -158,9 +161,9 @@ jobs:
       fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   native_runtimes:
-    needs: [authority_macos_arm64, product_automation_macos_arm64]
+    needs: [hosts, authority_macos_arm64, product_automation_macos_arm64]
     name: Native macOS runtimes
-    if: ${{ (fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null) && needs.authority_macos_arm64.result == 'success' && needs.product_automation_macos_arm64.result == 'success' }}
+    if: ${{ !cancelled() && (fromJson(inputs.lane_plan_json).matrices.runtime_products[0] != null) && needs.authority_macos_arm64.result == 'success' && needs.product_automation_macos_arm64.result == 'success' }}
     uses: ./.github/workflows/ci-macos-runtime-slice.yml
     with:
       authority_macos_arm64: ${{ needs.authority_macos_arm64.outputs.identity_json }}
@@ -188,9 +191,9 @@ jobs:
       fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   platform_checks:
-    needs: [authority_macos_arm64]
+    needs: [runtime_product, authority_macos_arm64]
     name: macOS checks
-    if: ${{ (fromJson(inputs.lane_plan_json).matrices.platform_checks[0] != null) && needs.authority_macos_arm64.result == 'success' }}
+    if: ${{ !cancelled() && (fromJson(inputs.lane_plan_json).matrices.platform_checks[0] != null) && needs.authority_macos_arm64.result == 'success' }}
     uses: ./.github/workflows/ci-platform-checks-slice.yml
     with:
       authority_macos_arm64: ${{ needs.authority_macos_arm64.outputs.identity_json }}
@@ -203,9 +206,9 @@ jobs:
       fail_fast: ${{ inputs.original_event_name == 'pull_request' }}
 
   swift_sdk_input:
-    needs: [authority_macos_arm64]
+    needs: [platform_checks, authority_macos_arm64]
     name: Swift SDK input
-    if: ${{ (contains(fromJson(inputs.lane_plan_json).matrices.sdk.*.id, 'swift')) && needs.authority_macos_arm64.result == 'success' }}
+    if: ${{ !cancelled() && (contains(fromJson(inputs.lane_plan_json).matrices.sdk.*.id, 'swift')) && needs.authority_macos_arm64.result == 'success' }}
     uses: ./.github/workflows/swift-sdk-artifact.yml
     with:
       authority_macos_arm64: ${{ needs.authority_macos_arm64.outputs.identity_json }}
@@ -237,7 +240,7 @@ jobs:
 
   product_smoke:
     name: Metal product smoke
-    needs: [validate_plan, runtime_product]
+    needs: [validate_plan, runtime_product, sdk]
     if: ${{ !cancelled() && needs.validate_plan.result == 'success' && needs.runtime_product.result == 'success' && fromJson(inputs.lane_plan_json).matrices.smoke[0] != null }}
     uses: ./.github/workflows/ci-macos-product-smoke-slice.yml
     with:
