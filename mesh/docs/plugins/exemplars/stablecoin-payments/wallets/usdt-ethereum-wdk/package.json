@@ -1,0 +1,15 @@
+{
+  "name": "mesh-wallet-usdt-ethereum-wdk-worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Private local WDK worker for direct mainnet USDT transfers on Ethereum",
+  "engines": { "node": ">=22.13.0" },
+  "scripts": { "test": "node --test test/*.test.mjs", "check": "node --check worker.mjs" },
+  "dependencies": {
+    "@tetherto/wdk": "1.0.0-beta.22",
+    "@tetherto/wdk-wallet-evm": "1.0.0-beta.24",
+    "ethers": "6.17.0"
+  },
+  "overrides": { "@tetherto/wdk-wallet": "1.0.0-beta.21" }
+}

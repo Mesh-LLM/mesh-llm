@@ -85,6 +85,7 @@ impl Wallet {
             asset: Asset::default(),
             method: METHOD.into(),
             can_send: self.signer.is_some(),
+            fee_asset: None,
         })
     }
     pub async fn balance(&self) -> Result<Balance> {

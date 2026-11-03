@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/wallet-contract", "crates/pay-stablecoin", "crates/wallet-ousd-tempo", "crates/demo-fixture"]
+members = ["crates/wallet-contract", "crates/pay-stablecoin", "crates/wallet-ousd-tempo", "crates/wallet-usdt-ethereum", "crates/demo-fixture"]
 resolver = "3"
 
 [workspace.package]

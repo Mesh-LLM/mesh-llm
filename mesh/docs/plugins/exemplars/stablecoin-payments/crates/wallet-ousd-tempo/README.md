@@ -66,7 +66,7 @@ max_fee = "10000"      # 0.01 OUSD per transaction, local safety limit
 
 No command arguments are needed when Mesh launches it. Host initialization
 settings are authoritative. Install the plugin and resolve it by name; omit a
-`command` override so the host recognizes its installed executable for grants.
+`command` override so the host recognizes the installed executable for grants.
 `wallet_open` accepts `{}` and never selects a caller-
 controlled directory or silently initializes a missing keystore.
 

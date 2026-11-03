@@ -10,8 +10,26 @@ use wallet_contract::{Asset, VerifyResult, WalletInfo};
 #[derive(Default)]
 struct Chain {
     attempts: Mutex<BTreeMap<String, PaymentAttempt>>,
+    payments: Mutex<Vec<PayRequest>>,
+    lookups: std::sync::atomic::AtomicUsize,
+    pending: std::sync::atomic::AtomicBool,
     lose_reply: std::sync::atomic::AtomicBool,
     reject_before_journal: std::sync::atomic::AtomicBool,
+}
+impl Chain {
+    fn receipt(request: &PaymentRequest) -> Receipt {
+        Receipt {
+            tx_hash: format!("0x{}", request.memo.trim_start_matches("0x")),
+            block_hash: "0xfixture".into(),
+            block_number: 10,
+            transfer_log_index: 0,
+            payer: request.obligation.payer.clone(),
+            recipient: request.obligation.recipient.clone(),
+            amount: request.obligation.amount,
+            memo: request.memo.clone(),
+            finalized: true,
+        }
+    }
 }
 impl WalletTransport for Chain {
     fn execute<'a>(
@@ -24,6 +42,7 @@ impl WalletTransport for Chain {
                 ops::PAY => {
                     let pay: PayRequest = serde_json::from_value(input)?;
                     pay.request.validate()?;
+                    self.payments.lock().unwrap().push(pay.clone());
                     if self
                         .reject_before_journal
                         .swap(false, std::sync::atomic::Ordering::SeqCst)
@@ -31,27 +50,28 @@ impl WalletTransport for Chain {
                         bail!("fixture rejected payment before signing");
                     }
                     let mut attempts = self.attempts.lock().unwrap();
-                    if let Some(old) = attempts.get(&pay.payment_id) {
+                    if let Some(old) = attempts.get_mut(&pay.payment_id) {
                         ensure!(old.request == pay.request, "intent changed");
+                        if old.state == PaymentState::Prepared
+                            && !self.pending.load(std::sync::atomic::Ordering::SeqCst)
+                        {
+                            old.state = PaymentState::Finalized;
+                            old.receipt = Some(Self::receipt(&old.request));
+                        }
                         return Ok(serde_json::to_value(old)?);
                     }
-                    let receipt = Receipt {
-                        tx_hash: format!("0x{}", pay.request.memo.trim_start_matches("0x")),
-                        block_hash: "0xfixture".into(),
-                        block_number: 10,
-                        transfer_log_index: 0,
-                        payer: pay.request.obligation.payer.clone(),
-                        recipient: pay.request.obligation.recipient.clone(),
-                        amount: pay.request.obligation.amount,
-                        memo: pay.request.memo.clone(),
-                        finalized: true,
-                    };
+                    let receipt = Self::receipt(&pay.request);
+                    let pending = self.pending.load(std::sync::atomic::Ordering::SeqCst);
                     let attempt = PaymentAttempt {
                         payment_id: pay.payment_id.clone(),
                         request: pay.request,
-                        state: PaymentState::Finalized,
+                        state: if pending {
+                            PaymentState::Submitted
+                        } else {
+                            PaymentState::Finalized
+                        },
                         tx_hashes: vec![receipt.tx_hash.clone()],
-                        receipt: Some(receipt),
+                        receipt: if pending { None } else { Some(receipt) },
                         error: None,
                     };
                     attempts.insert(pay.payment_id, attempt.clone());
@@ -75,20 +95,26 @@ impl WalletTransport for Chain {
                         "wrong delivery evidence"
                     );
                     Ok(serde_json::to_value(VerifyResult {
-                        state: PaymentState::Finalized,
+                        state: attempt.state.clone(),
                         receipt: attempt.receipt.clone(),
                         reason: None,
                     })?)
                 }
                 ops::LOOKUP => {
+                    self.lookups
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     let lookup: LookupRequest = serde_json::from_value(input)?;
-                    Ok(serde_json::to_value(
-                        self.attempts
-                            .lock()
-                            .unwrap()
-                            .get(&lookup.payment_id)
-                            .context("unknown intent")?,
-                    )?)
+                    let mut attempts = self.attempts.lock().unwrap();
+                    let attempt = attempts
+                        .get_mut(&lookup.payment_id)
+                        .context("unknown intent")?;
+                    if attempt.state == PaymentState::Submitted
+                        && !self.pending.load(std::sync::atomic::Ordering::SeqCst)
+                    {
+                        attempt.state = PaymentState::Finalized;
+                        attempt.receipt = Some(Self::receipt(&attempt.request));
+                    }
+                    Ok(serde_json::to_value(attempt)?)
                 }
                 _ => bail!("unexpected fixture wallet operation"),
             }
@@ -108,6 +134,7 @@ fn engine(
         asset: Asset::default(),
         method: wallet_contract::METHOD.into(),
         can_send: true,
+        fee_asset: None,
     };
     let price = Price {
         input_per_million: 1_000_000,
@@ -134,6 +161,7 @@ fn engine(
     let ledger = Ledger::open(temp).unwrap();
     ledger.pin_node(node).unwrap();
     ledger.pin(&info).unwrap();
+    ledger.detach_buyer_admissions().unwrap();
     Arc::new(Engine {
         config,
         ledger,
@@ -255,7 +283,7 @@ async fn authenticated_admission_decode_and_exact_postpaid_roundtrip() {
                 id: settled.id.clone(),
                 input: usage.0,
                 output: usage.1,
-                payment: settled.usage_payment,
+                payment: settled.usage_payment.map(Box::new),
             },
         )
         .await
@@ -684,3 +712,6 @@ async fn remote_tracking_capacity_fails_closed_and_terminal_releases_it() {
         OpenAiAdmissionDecision::Abstain
     );
 }
+
+#[path = "engine_admission_tests.rs"]
+mod pending;

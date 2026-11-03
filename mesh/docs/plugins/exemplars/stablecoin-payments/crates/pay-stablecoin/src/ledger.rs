@@ -66,11 +66,31 @@ impl Ledger {
                 old.wallet_id == info.wallet_id
                     && old.address == info.address
                     && old.asset == info.asset
+                    && old.effective_fee_asset() == info.effective_fee_asset()
                     && old.method == info.method,
                 "wallet identity changed; refusing to adopt another account"
             );
         } else {
             db.execute("INSERT INTO identity(id,body) VALUES(1,?1)", [identity])?;
+        }
+        Ok(())
+    }
+    /// A restarted host cannot still own an unstarted admission's HTTP observation.
+    /// Running or billed work is deliberately retained and may not be inferred again.
+    pub fn detach_buyer_admissions(&self) -> Result<()> {
+        for exchange in self.active()? {
+            if !exchange.seller
+                && matches!(exchange.state.as_str(), "negotiating" | "ready")
+                && exchange.exchange_id.is_some()
+            {
+                self.update(&exchange.id, |current| {
+                    if !current.seller && matches!(current.state.as_str(), "negotiating" | "ready")
+                    {
+                        current.exchange_id = None;
+                    }
+                    Ok(())
+                })?;
+            }
         }
         Ok(())
     }
@@ -252,6 +272,7 @@ mod tests {
             asset: wallet_contract::Asset::default(),
             method: "fixture".into(),
             can_send: true,
+            fee_asset: None,
         };
         let ledger = Ledger::open(temp.path()).unwrap();
         ledger.pin_node(&"aa".repeat(32)).unwrap();
@@ -295,6 +316,7 @@ mod tests {
                 asset: wallet_contract::Asset::default(),
                 method: "fixture".into(),
                 can_send: true,
+                fee_asset: None,
             })
             .unwrap();
         let receipt = Receipt {
@@ -312,5 +334,63 @@ mod tests {
         ledger.receipt("a", "peer", &receipt, true).unwrap();
         assert!(ledger.earned("peer").unwrap());
         assert!(ledger.receipt("b", "peer", &receipt, false).is_err());
+    }
+    #[test]
+    fn fee_currency_is_pinned_but_explicit_payment_asset_keeps_legacy_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(directory.path()).unwrap();
+        let mut info = WalletInfo {
+            wallet_id: "legacy".into(),
+            address: "account".into(),
+            asset: wallet_contract::Asset::default(),
+            method: "fixture".into(),
+            can_send: true,
+            fee_asset: None,
+        };
+        ledger.pin(&info).unwrap();
+        info.fee_asset = Some(info.asset.clone());
+        ledger.pin(&info).unwrap();
+        info.fee_asset = Some(wallet_contract::Asset {
+            token: "native:fee-token".into(),
+            ..info.asset.clone()
+        });
+        assert!(ledger.pin(&info).is_err());
+        let separate = tempfile::tempdir().unwrap();
+        let separate = Ledger::open(separate.path()).unwrap();
+        separate.pin(&info).unwrap();
+        info.fee_asset = None;
+        assert!(separate.pin(&info).is_err());
+    }
+    #[test]
+    fn restart_detaches_unstarted_buyer_hooks_without_replaying_running_work() {
+        let directory = tempfile::tempdir().unwrap();
+        let ledger = Ledger::open(directory.path()).unwrap();
+        for (id, peer, seller, state) in [
+            ("pending", "buyer-pending", false, "negotiating"),
+            ("ready", "buyer-ready", false, "ready"),
+            ("running", "buyer-running", false, "running"),
+            ("seller", "serving-peer", true, "ready"),
+        ] {
+            let mut row = exchange(id);
+            row.peer = peer.into();
+            row.seller = seller;
+            row.state = state.into();
+            row.exchange_id = Some(format!("{id}-observation"));
+            ledger.insert(&row).unwrap();
+        }
+        drop(ledger);
+        let ledger = Ledger::open(directory.path()).unwrap();
+        ledger.detach_buyer_admissions().unwrap();
+        assert!(ledger.get("pending").unwrap().exchange_id.is_none());
+        assert!(ledger.get("ready").unwrap().exchange_id.is_none());
+        assert_eq!(
+            ledger.get("running").unwrap().exchange_id.as_deref(),
+            Some("running-observation")
+        );
+        assert_eq!(ledger.get("running").unwrap().state, "running");
+        assert_eq!(
+            ledger.get("seller").unwrap().exchange_id.as_deref(),
+            Some("seller-observation")
+        );
     }
 }

@@ -83,6 +83,7 @@ impl Fixture {
                     asset: Asset::default(),
                     method: wallet_contract::METHOD.into(),
                     can_send: true,
+                    fee_asset: None,
                 })?)
             }
             ops::BALANCE => Ok(serde_json::to_value(Balance {

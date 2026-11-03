@@ -13,3 +13,5 @@
 **/password
 **/password.*
 .env
+node_modules/
+**/seed.json

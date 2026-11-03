@@ -15,10 +15,16 @@ use wallet_contract::{
     LookupRequest, Obligation, PayRequest, PaymentAttempt, PaymentRequest, PaymentState, Purpose,
     Receipt, VerifyRequest, VerifyResult, ops,
 };
+#[path = "engine_admission.rs"]
+mod admission;
 #[path = "engine_recovery.rs"]
 mod recovery;
 #[path = "engine_serving.rs"]
 mod serving;
+
+// Direct settlement may require several epochs of finality. This bounds how
+// long an unconsumed admission offer remains usable without holding HTTP open.
+const ADMISSION_QUOTE_TTL: u64 = 3600;
 
 pub struct Engine {
     pub config: Config,
@@ -43,6 +49,7 @@ impl Engine {
         let ledger = Ledger::open(&config.data_dir)?;
         ledger.pin_node(&node)?;
         ledger.pin(&wallet.info)?;
+        ledger.detach_buyer_admissions()?;
         Ok(Arc::new(Self {
             config,
             ledger,
@@ -87,7 +94,7 @@ impl Engine {
         let _guard = serial.lock().await;
         match message {
             Message::Hello { id, model, payer } => self.hello(peer, id, model, payer).await,
-            Message::Quote { quote } => self.quote(peer, quote).await,
+            Message::Quote { quote } => self.quote(peer, *quote).await,
             Message::AdmissionProof { id, tx_hash } => {
                 self.admission_proof(peer, &id, &tx_hash).await
             }
@@ -116,7 +123,10 @@ impl Engine {
                 input,
                 output,
                 payment,
-            } => self.bill(peer, &id, input, output, payment).await,
+            } => {
+                self.bill(peer, &id, input, output, payment.map(|value| *value))
+                    .await
+            }
             Message::UsageProof { id, tx_hash } => self.usage_proof(peer, &id, &tx_hash).await,
             Message::Settled { id } => {
                 self.ledger.update(&id, |x| {
@@ -160,7 +170,13 @@ impl Engine {
                 "request ID reused with different terms"
             );
             if let Some(quote) = existing.quote {
-                self.send(peer, &Message::Quote { quote }).await?;
+                self.send(
+                    peer,
+                    &Message::Quote {
+                        quote: Box::new(quote),
+                    },
+                )
+                .await?;
             }
             if existing.state == "ready" {
                 self.send(peer, &Message::Ready { id }).await?;
@@ -176,7 +192,7 @@ impl Engine {
         let first = !self.ledger.earned(peer)?;
         let fee = if first { self.config.admission_fee } else { 0 };
         let offer_id = uuid::Uuid::new_v4().to_string();
-        let expires_at = now() + 120;
+        let expires_at = now() + ADMISSION_QUOTE_TTL;
         let mut exchange = Exchange {
             id: id.clone(),
             peer: peer.into(),
@@ -218,7 +234,13 @@ impl Engine {
             exchange.state = "ready".into();
         }
         self.ledger.insert(&exchange)?;
-        self.send(peer, &Message::Quote { quote }).await?;
+        self.send(
+            peer,
+            &Message::Quote {
+                quote: Box::new(quote),
+            },
+        )
+        .await?;
         if fee == 0 {
             self.send(peer, &Message::Ready { id }).await?;
         }
@@ -260,7 +282,7 @@ impl Engine {
             "unexpected quote"
         );
         ensure!(
-            quote.expires_at > now() && quote.expires_at <= now() + 300,
+            quote.expires_at > now() && quote.expires_at <= now() + ADMISSION_QUOTE_TTL,
             "quote expiry out of range"
         );
         ensure!(
@@ -382,11 +404,15 @@ impl Engine {
             request.obligation.amount <= policy.max_payment,
             "payment exceeds configured limit"
         );
-        let total = request
-            .obligation
-            .amount
-            .checked_add(policy.max_fee)
-            .context("maximum total overflow")?;
+        let total = if self.wallet.info.effective_fee_asset() == &self.wallet.info.asset {
+            request
+                .obligation
+                .amount
+                .checked_add(policy.max_fee)
+                .context("maximum total overflow")?
+        } else {
+            request.obligation.amount
+        };
         self.ledger
             .reserve_budget(&request.obligation.id, total, policy.daily_budget)?;
         Ok(PayRequest {
@@ -397,6 +423,10 @@ impl Engine {
         })
     }
     async fn recover_payment(&self, request: &PaymentRequest) -> Result<Receipt> {
+        let attempt = self.lookup_payment(request).await?;
+        self.wait_payment(attempt).await
+    }
+    async fn lookup_payment(&self, request: &PaymentRequest) -> Result<PaymentAttempt> {
         let attempt: PaymentAttempt = self
             .wallet
             .call(
@@ -410,7 +440,27 @@ impl Engine {
             attempt.request == *request,
             "wallet attempt changed immutable payment terms"
         );
-        self.wait_payment(attempt).await
+        Ok(attempt)
+    }
+    fn finalized_receipt(attempt: PaymentAttempt) -> Result<Option<Receipt>> {
+        if attempt.state == PaymentState::Finalized {
+            return Ok(Some(
+                attempt
+                    .receipt
+                    .filter(|r| r.finalized)
+                    .context("finalized payment omitted receipt")?,
+            ));
+        }
+        ensure!(
+            !matches!(
+                attempt.state,
+                PaymentState::Reverted | PaymentState::Held | PaymentState::Expired
+            ),
+            "payment failed: {:?} {:?}",
+            attempt.state,
+            attempt.error
+        );
+        Ok(None)
     }
     async fn wait_payment(&self, mut attempt: PaymentAttempt) -> Result<Receipt> {
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(120);
@@ -599,6 +649,8 @@ impl Engine {
     fn cancel(&self, peer: &str, id: &str) -> Result<()> {
         self.ledger.update(id, |x| {
             ensure!(x.peer == peer, "unexpected cancellation peer");
+            ensure!(x.seller,
+                "a peer cannot cancel a buyer's pending payment; reconcile the original obligation locally");
             ensure!(
                 x.exchange_id.is_none(),
                 "consumed work cannot be cancelled to erase debt"
@@ -650,77 +702,6 @@ impl Engine {
                 Ok(Default::default())
             }
             _ => Ok(Default::default()),
-        }
-    }
-    async fn buyer_hook(&self, event: &Value) -> Result<OpenAiExchangeDecision> {
-        let Some(peer) = event["target_peer_id"].as_str() else {
-            return Ok(Default::default());
-        };
-        if !self.config.buying.enabled || !self.config.buying.peers.iter().any(|p| p == peer) {
-            return Ok(Default::default());
-        }
-        bounded_request(event)?;
-        let id = uuid::Uuid::new_v4().to_string();
-        let model = event["model"]
-            .as_str()
-            .context("selected model missing")?
-            .to_owned();
-        self.ledger.insert(&Exchange {
-            id: id.clone(),
-            peer: peer.into(),
-            model: model.clone(),
-            payer: self.wallet.info.address.clone(),
-            seller: false,
-            exchange_id: Some(serving::correlation(event)?.into()),
-            state: "negotiating".into(),
-            quote: None,
-            usage: None,
-            usage_payment: None,
-            admission_receipt: None,
-            usage_receipt: None,
-            error: None,
-        })?;
-        self.send(
-            peer,
-            &Message::Hello {
-                id: id.clone(),
-                model,
-                payer: self.wallet.info.address.clone(),
-            },
-        )
-        .await?;
-        let wait = async {
-            loop {
-                let notified = self.changed.notified();
-                let exchange = self.ledger.get(&id)?;
-                if let Some(error) = exchange.error {
-                    bail!("seller admission failed: {error}")
-                }
-                if exchange.state == "ready" {
-                    self.ledger.update(&id, |x| {
-                        x.state = "running".into();
-                        Ok(())
-                    })?;
-                    return Ok::<_, anyhow::Error>(());
-                }
-                tokio::select! {_=notified=>{},_=tokio::time::sleep(std::time::Duration::from_millis(100))=>{}}
-            }
-        };
-        match tokio::time::timeout(std::time::Duration::from_secs(25), wait).await {
-            Ok(result) => {
-                result?;
-                Ok(allow())
-            }
-            Err(_) => {
-                self.send(peer, &Message::Cancel { id: id.clone() }).await?;
-                self.ledger.update(&id, |x| {
-                    x.state = "cancelled".into();
-                    Ok(())
-                })?;
-                Ok(deny(
-                    "payment admission timed out; inspect pending transfers",
-                ))
-            }
         }
     }
     fn seller_hook(&self, event: &Value) -> Result<OpenAiExchangeDecision> {
@@ -800,7 +781,7 @@ impl Engine {
                         id: exchange.id,
                         input,
                         output,
-                        payment: exchange.usage_payment,
+                        payment: exchange.usage_payment.map(Box::new),
                     },
                 )
                 .await;
@@ -837,7 +818,7 @@ impl Engine {
                 id: exchange.id,
                 input,
                 output,
-                payment,
+                payment: payment.map(Box::new),
             },
         )
         .await

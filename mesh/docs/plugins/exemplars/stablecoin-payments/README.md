@@ -1,30 +1,39 @@
-# Mesh direct OUSD payments
+# Mesh direct stablecoin payments
 
-**Reference demo only.** This is a source snapshot of the separately developed
+**Reference demo only.** This is a source snapshot of separately developed
 plugins, built against #2654 with no additional Mesh core changes. Start with
 [the architecture and demonstrated results](REFERENCE.md). This placement makes
 the work reviewable; it does not propose shipping these plugins in Mesh core.
 
-Two standalone Mesh plugins implement direct **OUSD on Tempo mainnet (4217)**
-payments for inference:
+A standalone payment engine and two wallet providers implement direct stablecoin
+payments for inference. OUSD on Tempo is the live-tested first rail; USDT on Ethereum
+uses Tether's standard Wallet Development Kit (WDK).
 
 - `pay-stablecoin`: peer admission, quoted prices, actual token-usage bills and
   durable debt enforcement.
 - `wallet-ousd-tempo`: an operator-owned encrypted local wallet, native Tempo
   transactions, OUSD gas payment and independently verified finalized receipts.
+- `wallet-usdt-ethereum`: a locally encrypted WDK seed, direct ERC20 USDT transfers,
+  ETH network fees, immutable signed-transaction recovery and finalized receipts.
 
 They communicate through `wallet.stablecoin.v1`, defined in the shared Rust
-`mesh-llm-stablecoin-wallet` crate. That crate is linked into both executables;
+`mesh-llm-stablecoin-wallet` crate. That crate is linked into the engine and wallet providers;
 it is not another installed plugin. Mesh core remains payment agnostic. The
 Lightning plugin and its wallet contract remain separate.
 
-The supported token is Open USD, **not Origin Dollar**:
+The Tempo token is Open USD, **not Origin Dollar**:
 `0x20c0000000000000000000006a37da5c996874be`, six decimals. Both payment and
 network fees come from the sender's OUSD balance. There is no ETH, paymaster,
 custodial service, inference escrow, allowance or reusable customer balance.
 Keys are generated and held locally, with no wallet-provider account or API key.
 Funding from an existing OUSD holder is a normal crypto transfer; fiat funding
 services can impose their own requirements.
+
+The Ethereum wallet accepts only mainnet USDT
+`0xdac17f958d2ee523a2206206994597c13d831ec7`, six decimals, chain `1`.
+Its sender needs **USDT plus ETH**, with no relay or wallet-provider account. See the
+[USDT/Ethereum walkthrough](docs/ethereum-demo.md). Each selected rail uses separate wallet
+and engine state; automatic selection between multiple rails is not implemented.
 
 ## Build and validate
 
@@ -35,6 +44,12 @@ SDK to the reviewed #2654 head and Tempo's Rust SDK to its documented release.
 Keep `Cargo.lock` and use the locked build recipes: Tempo's pinned Reth revision
 requires the SDK's compatible Alloy dependency set. A fresh unconstrained update
 currently selects an incompatible newer trie dependency.
+
+For the Ethereum wallet, install **Node.js 22.13+** and the pinned WDK dependencies first:
+
+```sh
+just wdk-install
+```
 
 ```sh
 just build

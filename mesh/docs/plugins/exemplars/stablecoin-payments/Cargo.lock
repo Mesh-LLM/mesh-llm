@@ -6077,6 +6077,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "wallet-usdt-ethereum"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "clap",
+ "fs2",
+ "mesh-llm-plugin",
+ "mesh-llm-stablecoin-wallet",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "want"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

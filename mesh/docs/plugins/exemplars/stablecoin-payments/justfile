@@ -12,9 +12,22 @@ check:
     cargo fmt --all --check
     cargo check --locked --workspace --all-targets
     cargo clippy --locked --workspace --all-targets -- -D warnings
+    npm --prefix wallets/usdt-ethereum-wdk run check
 
 test:
     cargo test --locked --workspace
+    npm --prefix wallets/usdt-ethereum-wdk test
+
+# Explicit dependency setup; locked source builds never update package versions.
+wdk-install:
+    npm --prefix wallets/usdt-ethereum-wdk ci --ignore-scripts --no-audit --no-fund
+
+check-ethereum:
+    cargo check --locked -p wallet-usdt-ethereum --all-targets
+
+test-ethereum:
+    cargo test --locked -p wallet-usdt-ethereum
+    npm --prefix wallets/usdt-ethereum-wdk test
 
 fmt:
     cargo fmt --all
@@ -24,3 +37,7 @@ smoke mesh_bin output_dir:
 
 package target_triple version="0.1.0":
     bash scripts/package.sh target/release "{{target_triple}}" "{{version}}"
+
+# Local functional demos can package the already-built debug binaries.
+package-debug target_triple version="0.1.0":
+    bash scripts/package.sh target/debug "{{target_triple}}" "{{version}}"

@@ -31,6 +31,7 @@ impl Wallet {
         let (handle, output) = setup(&context, &binding).await?;
         let info: WalletInfo = serde_json::from_str(&output)?;
         info.asset.validate()?;
+        info.effective_fee_asset().validate()?;
         validate_identifier(&info.wallet_id)?;
         validate_identifier(&info.address)?;
         ensure!(

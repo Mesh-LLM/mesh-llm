@@ -29,6 +29,7 @@ binary can have a different plugin ABI. No Mesh core patch is part of this demo.
 Build this workspace separately on each architecture:
 
 ```sh
+just wdk-install # Node.js 22+; required when packaging the Ethereum provider too
 just build
 just check
 just test

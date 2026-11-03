@@ -159,6 +159,14 @@ pub struct WalletInfo {
     pub asset: Asset,
     pub method: String,
     pub can_send: bool,
+    /// Absent means fees are paid in `asset`, preserving the original contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fee_asset: Option<Asset>,
+}
+impl WalletInfo {
+    pub fn effective_fee_asset(&self) -> &Asset {
+        self.fee_asset.as_ref().unwrap_or(&self.asset)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -185,8 +193,10 @@ pub struct FeeEstimate {
 pub struct PayRequest {
     pub payment_id: String,
     pub request: PaymentRequest,
+    /// Maximum fee in the wallet's declared fee asset; zero-cap semantics are provider-owned.
     #[serde(with = "decimal")]
     pub max_fee: u64,
+    /// Maximum payment-asset debit, including fees only when paid in that asset.
     #[serde(with = "decimal")]
     pub max_total: u64,
 }
@@ -319,5 +329,21 @@ mod tests {
         asset.chain_id = 42431;
         assert!(asset.validate_mainnet_ousd().is_err());
         assert!(validate_address("0x0000000000000000000000000000000000000000").is_err());
+    }
+    #[test]
+    fn legacy_wallet_info_keeps_payment_asset_as_fee_currency() {
+        let legacy = serde_json::json!({
+            "wallet_id":"legacy","address":"account","asset":Asset::default(),
+            "method":METHOD,"can_send":true
+        });
+        let info: WalletInfo = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(info.fee_asset.is_none());
+        assert_eq!(info.effective_fee_asset(), &info.asset);
+        assert_eq!(serde_json::to_value(&info).unwrap(), legacy);
+        let explicit = WalletInfo {
+            fee_asset: Some(info.asset.clone()),
+            ..info
+        };
+        assert_eq!(explicit.effective_fee_asset(), &explicit.asset);
     }
 }

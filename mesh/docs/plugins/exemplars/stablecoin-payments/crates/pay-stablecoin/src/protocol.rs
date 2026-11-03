@@ -27,7 +27,7 @@ pub enum Message {
         payer: String,
     },
     Quote {
-        quote: Quote,
+        quote: Box<Quote>,
     },
     AdmissionProof {
         id: String,
@@ -40,7 +40,7 @@ pub enum Message {
         id: String,
         input: u64,
         output: u64,
-        payment: Option<PaymentRequest>,
+        payment: Option<Box<PaymentRequest>>,
     },
     UsageProof {
         id: String,

@@ -1,5 +1,7 @@
 # Demo validation — 2026-11-03
 
+## Original OUSD/Tempo checkpoint
+
 The implementation passed local validation against unmodified Mesh commit
 `8d03dea4555cbb1ac7cdfce7b9fe1a284f55fb76` (#2654).
 
@@ -45,5 +47,41 @@ This validates the Chat Completions payment flow at the pinned checkpoint.
 Responses API / bundled-console compatibility, concurrent exchanges and combined
 Lightning/stablecoin selection were not implemented or validated. No new live
 transactions are needed to inspect or run unit tests for this reference snapshot.
-See [the reference overview](../REFERENCE.md) and [demo.md](demo.md) for setup and
-explicit spending bounds.
+See [demo.md](demo.md) for setup and explicit spending bounds.
+
+## USDT/Ethereum provider validation
+
+The active USDT provider is `wallet-usdt-ethereum`, using Tether WDK's standard
+EVM wallet on Ethereum mainnet. It replaces the earlier unpublished Tron
+experiment. Validation on Apple Silicon and Node 22.23.1 passed:
+
+- `just check`: Rust formatting, all-target checking, Clippy with warnings denied,
+  and worker JavaScript syntax checks.
+- `just test`: 50 Rust tests and 26 Node tests. The fixtures exercise actual WDK
+  detached signing, exact raw-byte rebroadcast after process restart, USDT's
+  empty successful return data, full memo-bearing calldata simulation, separate
+  ETH fee units, independent finalized receipt/signature reconstruction, and
+  uncertain nonces that cannot be released by a local deadline.
+- `just build` and `just package-debug aarch64-apple-darwin`: all executables and
+  all three production archives built. The extracted Ethereum archive loaded
+  its bundled WDK dependencies and read a public fixture profile offline,
+  without creating an encrypted seed or accessing RPC.
+- Actual-host smoke: two isolated Mesh processes with the production engine,
+  real plugin IPC and peer transport, and offline inference/wallet fixtures.
+  Buffered and SSE requests, admission credit, post-decode settlement, buyer
+  restart, cleared debts and unavailable public wallet spending all passed.
+- Read-only Ethereum mainnet checks confirmed chain 1, finalized state,
+  canonical USDT contract code and six decimals. A zero-value `eth_call` accepted
+  the complete 100-byte memo-bearing calldata and returned `0x`, as expected for
+  this token. Pruned public RPC compatibility does not require a genesis query.
+
+Pending-admission regression tests cover an explicit same-peer/model retry
+without a second payment, cancellation/concurrent hooks, expired quotes,
+same-byte operator resubmission, and background reconciliation that continues
+past another pending or failing peer. Admission quotes now allow one hour for
+slower settlement.
+
+No real Ethereum wallet was initialized and no live transaction was broadcast.
+Signing tests used deterministic offline fixtures. Funded Ethereum inference
+remains the next operator validation step. The historical OUSD mainnet results above refer
+to their original checkpoint; the running OUSD services were not restarted.

@@ -3,14 +3,21 @@ use super::*;
 
 impl Engine {
     pub async fn retry(&self) -> Result<()> {
+        let mut first_error = None;
         for exchange in self.ledger.active()? {
-            if exchange.seller {
-                self.retry_seller(exchange).await?;
+            let result = if exchange.seller {
+                self.retry_seller(exchange).await
             } else {
-                self.retry_buyer(exchange).await?;
+                self.retry_buyer(exchange).await
+            };
+            if let Err(error) = result {
+                first_error.get_or_insert(error);
             }
         }
-        Ok(())
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
     async fn retry_seller(&self, exchange: Exchange) -> Result<()> {
         if let Some((input, output)) = exchange.usage {
@@ -21,7 +28,7 @@ impl Engine {
                         id: exchange.id,
                         input,
                         output,
-                        payment: exchange.usage_payment,
+                        payment: exchange.usage_payment.map(Box::new),
                     },
                 )
                 .await;
@@ -50,7 +57,14 @@ impl Engine {
         if exchange.state == "quoted"
             && let Some(quote) = exchange.quote
         {
-            return self.send(&exchange.peer, &Message::Quote { quote }).await;
+            return self
+                .send(
+                    &exchange.peer,
+                    &Message::Quote {
+                        quote: Box::new(quote),
+                    },
+                )
+                .await;
         }
         Ok(())
     }
@@ -68,8 +82,11 @@ impl Engine {
         }
         if let Some(payment) = exchange.usage_payment.as_ref() {
             if self.ledger.budget_reserved(&payment.obligation.id)? {
-                let receipt = self.recover_payment(payment).await?;
-                return self.store_proof(&exchange, payment, receipt).await;
+                if let Some(receipt) = Self::finalized_receipt(self.lookup_payment(payment).await?)?
+                {
+                    self.store_proof(&exchange, payment, receipt).await?;
+                }
+                return Ok(());
             }
             return Ok(());
         }
@@ -88,8 +105,10 @@ impl Engine {
         if let Some(payment) = payment
             && self.ledger.budget_reserved(&payment.obligation.id)?
         {
-            let receipt = self.recover_payment(payment).await?;
-            return self.store_proof(&exchange, payment, receipt).await;
+            if let Some(receipt) = Self::finalized_receipt(self.lookup_payment(payment).await?)? {
+                self.store_proof(&exchange, payment, receipt).await?;
+            }
+            return Ok(());
         }
         if exchange.state == "negotiating" && exchange.quote.is_none() {
             return self
@@ -161,7 +180,20 @@ impl Engine {
                     attempt.request == *payment,
                     "wallet attempt changed immutable payment terms"
                 );
-                attempt
+                if matches!(
+                    attempt.state,
+                    PaymentState::Finalized
+                        | PaymentState::Reverted
+                        | PaymentState::Held
+                        | PaymentState::Expired
+                ) {
+                    attempt
+                } else {
+                    // An explicit operator action can recover the durable
+                    // prepare/broadcast crash gap. PAY must retain this ID and
+                    // immutable intent and rebroadcast its original signed data.
+                    self.wallet.call(ops::PAY, authorized).await?
+                }
             }
             Err(error) => {
                 tracing::warn!(
