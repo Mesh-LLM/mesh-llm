@@ -41,9 +41,57 @@ fn current_cache_capture_callers_and_compatibility_identities_are_owned() {
     let documents = workflows();
     cache_evidence::capture_action(&action("capture-sccache-stats")).unwrap();
     cache_evidence::configure_action(&action("configure-sccache-gha")).unwrap();
+    cache_evidence::macos_action(&action("setup-macos-lld")).unwrap();
+    cache_evidence::macos_preparation(&action("prepare-automation")).unwrap();
     cache_evidence::runtime_input_action(&action("prepare-native-runtime-input")).unwrap();
     cache_evidence::check(&documents).unwrap();
     cache_identity::check(&documents).unwrap();
+}
+
+#[test]
+fn macos_cache_setup_requires_selected_policy_at_each_caller() {
+    let source =
+        fs::read_to_string(root().join(".github/actions/setup-macos-lld/action.yml")).unwrap();
+    for (old, new) in [
+        (
+            "uses: ./.github/actions/configure-sccache-gha",
+            "uses: ./.github/actions/other",
+        ),
+        (
+            "allow_native_github_cache: ${{ inputs.allow_native_github_cache }}",
+            "allow_native_github_cache: true",
+        ),
+        (
+            "echo \"SCCACHE_SERVER_UDS=$socket\"",
+            "echo \"SCCACHE_SERVER_UDS=default\"",
+        ),
+        (
+            "echo \"SCCACHE_IDLE_TIMEOUT=0\"",
+            "echo \"SCCACHE_IDLE_TIMEOUT=1\"",
+        ),
+        (
+            "uses: ./.github/actions/configure-sccache-gha",
+            "if: false\n      uses: ./.github/actions/configure-sccache-gha",
+        ),
+    ] {
+        assert!(source.contains(old));
+        let altered = workflow_yaml::parse(&source.replacen(old, new, 1)).unwrap();
+        assert!(cache_evidence::macos_action(&altered).is_err(), "{old}");
+    }
+    let old = "uses: ./.github/actions/setup-macos-lld\n        with:\n          allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}\n          allow_native_github_cache: ${{ needs.runner_policy.outputs.allow_native_github_cache }}";
+    let missing = "uses: ./.github/actions/setup-macos-lld";
+    for workflow in [
+        "ci-macos-host-slice.yml",
+        "ci-macos-runtime-slice.yml",
+        "ci-platform-checks-slice.yml",
+        "native-sdk-artifact.yml",
+        "swift-sdk-artifact.yml",
+    ] {
+        assert!(
+            cache_evidence::check(&changed(workflow, old, missing)).is_err(),
+            "{workflow}"
+        );
+    }
 }
 #[test]
 fn evidence_upload_binding_retention_and_enforcement_mutations_are_rejected() {

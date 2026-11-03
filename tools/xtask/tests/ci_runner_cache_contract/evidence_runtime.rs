@@ -4,6 +4,72 @@ use serde_json::{Value, json};
 use std::{fs, process::Command};
 
 #[test]
+fn repeated_macos_setup_reuses_the_job_owned_socket() {
+    let fixture = Fixture::new();
+    fixture.executable("sccache", "[[ \"$*\" == --version ]]");
+    let document = action("setup-macos-lld");
+    let super::Node::Seq(steps) = document.get("runs").unwrap().get("steps").unwrap() else {
+        panic!("steps");
+    };
+    let allocate = steps[1].get("run").and_then(super::Node::text).unwrap();
+    let script = format!("{allocate}\nset -a; source \"$GITHUB_ENV\"; set +a\n{allocate}");
+    let mut command = Command::new("bash");
+    command
+        .args(["-c", &script])
+        .env_clear()
+        .env(
+            "PATH",
+            format!("{}:/usr/bin:/bin", fixture.path().join("bin").display()),
+        )
+        .env("GITHUB_ENV", fixture.path().join("env"));
+    let output = fixture.run(command);
+    assert!(output.status.success(), "{output:?}");
+    let env = fs::read_to_string(fixture.path().join("env")).unwrap();
+    let endpoints = env
+        .lines()
+        .filter_map(|line| line.strip_prefix("SCCACHE_SERVER_UDS="))
+        .collect::<Vec<_>>();
+    assert_eq!(endpoints.len(), 2);
+    assert_eq!(endpoints[0], endpoints[1]);
+    assert!(endpoints[0].starts_with("/tmp/mesh-sccache."));
+    fs::remove_dir(std::path::Path::new(endpoints[0]).parent().unwrap()).unwrap();
+}
+
+#[test]
+fn denied_macos_cache_starts_its_selected_endpoint_without_remote_credentials() {
+    let fixture = Fixture::new();
+    let endpoint = "/tmp/mesh-sccache.fixture/server.sock";
+    let result = fixture.cache(&[
+        ("INPUT_ALLOW_DEPOT_REMOTE_CACHE", "false"),
+        ("INPUT_ALLOW_NATIVE_GITHUB_CACHE", "false"),
+        ("SCCACHE_SERVER_UDS", endpoint),
+        ("SCCACHE_IDLE_TIMEOUT", "0"),
+        ("SCCACHE_GHA_ENABLED", "true"),
+        ("SCCACHE_WEBDAV_ENDPOINT", "https://cache.fixture"),
+        ("DEPOT_CACHE_TOKEN", "fixture-token"),
+    ]);
+    assert_eq!(result["failures"], json!([]));
+    assert_eq!(result["exports"]["SCCACHE_MULTILEVEL_CHAIN"], "disk");
+    let start = result["calls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|call| call["args"][0] == "--start-server")
+        .unwrap();
+    assert_eq!(start["env"]["SCCACHE_SERVER_UDS"], endpoint);
+    assert_eq!(start["env"]["SCCACHE_IDLE_TIMEOUT"], "0");
+    for key in [
+        "ACTIONS_CACHE_URL",
+        "ACTIONS_RESULTS_URL",
+        "ACTIONS_RUNTIME_TOKEN",
+        "SCCACHE_WEBDAV_ENDPOINT",
+        "SCCACHE_WEBDAV_TOKEN",
+    ] {
+        assert_eq!(start["env"][key], "", "{key}");
+    }
+}
+
+#[test]
 fn all_successful_configure_routes_reset_once_and_reset_failures_fail_closed() {
     let depot = vec![
         ("INPUT_ALLOW_DEPOT_REMOTE_CACHE", "true"),
