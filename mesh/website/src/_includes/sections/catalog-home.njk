@@ -35,9 +35,9 @@
         <span class="control-label">Hardware</span>
         <select id="filter-hardware" aria-label="Filter by hardware">
           <option value="">Any</option>
-          <option value="&le; 8 GB">&le; 8 GB</option>
-          <option value="11–20 GB">11–20 GB</option>
-          <option value="40 GB +">40 GB+</option>
+          <option value="≤ 8 GB">≤ 8 GB</option>
+          <option value="8–20 GB">8–20 GB</option>
+          <option value="20 GB+">20 GB+</option>
         </select>
       </label>
       <label class="control control-select" for="filter-source">
@@ -79,7 +79,7 @@
         </thead>
         <tbody id="catalog-rows">
 
-          <tr data-capability="" data-runtime="Multi-machine" data-hardware="40 GB +" data-source="Kimi">
+          <tr data-capability="" data-runtime="Multi-machine" data-hardware="20 GB+" data-source="Kimi">
             <td class="model-cell col-model" data-label="Model"><strong>Kimi K2 Thinking</strong><br><span>Layer package for unsloth/Kimi-K2-Thinking-GGUF:UD-Q4_K_XL</span></td>
             <td class="size-cell col-size" data-label="Size / quant">646.2 GB<br><span class="badge">UD-Q4_K_XL</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
@@ -92,7 +92,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="≤ 8 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-0.5B-Instruct</strong><br><span>Draft for Qwen2.5 and DeepSeek-R1-Distill models</span></td>
             <td class="size-cell col-size" data-label="Size / quant">491 MB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -104,7 +104,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="≤ 8 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-3B-Instruct</strong><br><span>Small &amp; fast general chat</span></td>
             <td class="size-cell col-size" data-label="Size / quant">2.1 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -116,7 +116,7 @@
           </tr>
 
 
-          <tr data-capability="Code" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+          <tr data-capability="Code" data-runtime="Single machine" data-hardware="8–20 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-Coder-32B-Instruct</strong><br><span>Top-tier code gen, matches GPT-4o on code</span></td>
             <td class="size-cell col-size" data-label="Size / quant">20 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -128,7 +128,7 @@
           </tr>
 
 
-          <tr data-capability="Code" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <tr data-capability="Code" data-runtime="Single machine" data-hardware="≤ 8 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-Coder-7B-Instruct</strong><br><span>Code generation &amp; completion</span></td>
             <td class="size-cell col-size" data-label="Size / quant">4.4 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -140,7 +140,7 @@
           </tr>
 
 
-          <tr data-capability="Code" data-runtime="Single machine" data-hardware="40 GB +" data-source="Qwen">
+          <tr data-capability="Code" data-runtime="Single machine" data-hardware="20 GB+" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen3-Coder-Next</strong><br><span>~85B dense, frontier coding model</span></td>
             <td class="size-cell col-size" data-label="Size / quant">48 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -152,7 +152,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Mistral">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="≤ 8 GB" data-source="Mistral">
             <td class="model-cell col-model" data-label="Model"><strong>Hermes-2-Pro-Mistral-7B</strong><br><span>Goose default, strong tool calling for agents</span></td>
             <td class="size-cell col-size" data-label="Size / quant">4.4 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -164,7 +164,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Llama">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="≤ 8 GB" data-source="Llama">
             <td class="model-cell col-model" data-label="Model"><strong>Llama-3.2-1B-Instruct</strong><br><span>Draft for Llama 3.x and Llama 4 models</span></td>
             <td class="size-cell col-size" data-label="Size / quant">760 MB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -176,7 +176,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Llama">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="≤ 8 GB" data-source="Llama">
             <td class="model-cell col-model" data-label="Model"><strong>Llama-3.2-3B-Instruct</strong><br><span>Meta Llama 3.2, goose default, good tool calling</span></td>
             <td class="size-cell col-size" data-label="Size / quant">2.0 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -188,7 +188,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="8–20 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-14B-Instruct</strong><br><span>Solid general chat</span></td>
             <td class="size-cell col-size" data-label="Size / quant">9.0 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -200,7 +200,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="8–20 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-32B-Instruct</strong><br><span>Proven general chat</span></td>
             <td class="size-cell col-size" data-label="Size / quant">20 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -212,7 +212,7 @@
           </tr>
 
 
-          <tr data-capability="Code" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+          <tr data-capability="Code" data-runtime="Single machine" data-hardware="8–20 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen2.5-Coder-14B-Instruct</strong><br><span>Strong code gen, fills gap between 7B and 32B</span></td>
             <td class="size-cell col-size" data-label="Size / quant">9.0 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -224,7 +224,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Gemma">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="≤ 8 GB" data-source="Gemma">
             <td class="model-cell col-model" data-label="Model"><strong>Gemma-3-1B-it</strong><br><span>Draft for Gemma 3 models</span></td>
             <td class="size-cell col-size" data-label="Size / quant">780 MB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -236,7 +236,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Gemma">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="8–20 GB" data-source="Gemma">
             <td class="model-cell col-model" data-label="Model"><strong>Gemma-3-27B-it</strong><br><span>Google Gemma 3 27B, strong reasoning</span></td>
             <td class="size-cell col-size" data-label="Size / quant">17 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -248,7 +248,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Llama">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="20 GB+" data-source="Llama">
             <td class="model-cell col-model" data-label="Model"><strong>Llama-4-Scout</strong><br><span>MoE 109B/17B active, 16 experts top-1, Meta latest, tool calling</span></td>
             <td class="size-cell col-size" data-label="Size / quant">22.5 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -260,7 +260,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="DeepSeek">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="8–20 GB" data-source="DeepSeek">
             <td class="model-cell col-model" data-label="Model"><strong>DeepSeek-R1-Distill-Qwen-14B</strong><br><span>DeepSeek R1 reasoning distilled into Qwen 14B</span></td>
             <td class="size-cell col-size" data-label="Size / quant">9.0 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -272,7 +272,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="DeepSeek">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="8–20 GB" data-source="DeepSeek">
             <td class="model-cell col-model" data-label="Model"><strong>DeepSeek-R1-Distill-Qwen-32B</strong><br><span>DeepSeek R1 reasoning distilled into Qwen 32B</span></td>
             <td class="size-cell col-size" data-label="Size / quant">19.9 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -284,7 +284,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Multi-machine" data-hardware="40 GB +" data-source="DeepSeek">
+          <tr data-capability="" data-runtime="Multi-machine" data-hardware="20 GB+" data-source="DeepSeek">
             <td class="model-cell col-model" data-label="Model"><strong>DeepSeek-V3.2</strong><br><span>MoE 671B, frontier general model, requires multi-node</span></td>
             <td class="size-cell col-size" data-label="Size / quant">382 GB<br><span class="badge">UD-Q4_K_XL</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
@@ -297,7 +297,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Mistral">
+          <tr data-capability="Code" data-runtime="Single machine" data-hardware="8–20 GB" data-source="Mistral">
             <td class="model-cell col-model" data-label="Model"><strong>Devstral-Small-2505</strong><br><span>Mistral agentic coding, tool use</span></td>
             <td class="size-cell col-size" data-label="Size / quant">14.3 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -309,7 +309,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="GLM">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="8–20 GB" data-source="GLM">
             <td class="model-cell col-model" data-label="Model"><strong>GLM-4-32B</strong><br><span>Strong 32B, good tool calling</span></td>
             <td class="size-cell col-size" data-label="Size / quant">19.7 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -321,7 +321,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="GLM">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="8–20 GB" data-source="GLM">
             <td class="model-cell col-model" data-label="Model"><strong>GLM-4.7-Flash</strong><br><span>MoE 30B/3B active, 64 experts top-4, fast inference, tool calling</span></td>
             <td class="size-cell col-size" data-label="Size / quant">18 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -333,7 +333,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="40 GB +" data-source="MiniMax">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="20 GB+" data-source="MiniMax">
             <td class="model-cell col-model" data-label="Model"><strong>MiniMax-M2.5</strong><br><span>MoE 456B/46B active, 256 experts top-8, Q4_K_M</span></td>
             <td class="size-cell col-size" data-label="Size / quant">138 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -345,7 +345,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Mistral">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="8–20 GB" data-source="Mistral">
             <td class="model-cell col-model" data-label="Model"><strong>Mistral-Small-3.1-24B-Instruct</strong><br><span>Mistral general chat, good tool calling</span></td>
             <td class="size-cell col-size" data-label="Size / quant">14.3 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -357,7 +357,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="≤ 8 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen3-0.6B</strong><br><span>Draft for Qwen3 models</span></td>
             <td class="size-cell col-size" data-label="Size / quant">397 MB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -369,7 +369,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="8–20 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen3-14B</strong><br><span>Qwen3 strong chat, thinking modes</span></td>
             <td class="size-cell col-size" data-label="Size / quant">9.0 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -381,7 +381,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Multi-machine" data-hardware="40 GB +" data-source="Qwen">
+          <tr data-capability="" data-runtime="Multi-machine" data-hardware="20 GB+" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen3-235B-A22B</strong><br><span>MoE 235B/22B, proven at 16 tok/s across 2 nodes</span></td>
             <td class="size-cell col-size" data-label="Size / quant">134 GB<br><span class="badge">UD-Q4_K_XL</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
@@ -394,7 +394,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="8–20 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen3-30B-A3B</strong><br><span>MoE general chat, 128 experts top-8, thinking/non-thinking</span></td>
             <td class="size-cell col-size" data-label="Size / quant">17.3 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -406,7 +406,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="8–20 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen3-32B</strong><br><span>Best Qwen3 dense, thinking/non-thinking modes</span></td>
             <td class="size-cell col-size" data-label="Size / quant">19.8 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -418,7 +418,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Multi-machine" data-hardware="11–20 GB" data-source="Qwen">
+          <tr data-capability="" data-runtime="Multi-machine" data-hardware="8–20 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen3-32B (UD)</strong><br><span>Qwen3 32B dense, layer package available</span></td>
             <td class="size-cell col-size" data-label="Size / quant">20.0 GB<br><span class="badge">UD-Q4_K_XL</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
@@ -431,7 +431,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="≤ 8 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen3-4B</strong><br><span>Qwen3 starter, thinking/non-thinking modes</span></td>
             <td class="size-cell col-size" data-label="Size / quant">2.5 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -443,7 +443,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Multi-machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <tr data-capability="" data-runtime="Multi-machine" data-hardware="≤ 8 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen3-8B</strong><br><span>Qwen3 mid-tier, strong for its size</span></td>
             <td class="size-cell col-size" data-label="Size / quant">5.0 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
@@ -456,7 +456,7 @@
           </tr>
 
 
-          <tr data-capability="Code" data-runtime="Single machine" data-hardware="11–20 GB" data-source="Qwen">
+          <tr data-capability="Code" data-runtime="Single machine" data-hardware="8–20 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen3-Coder-30B-A3B-Instruct</strong><br><span>MoE agentic coding, tool use, 128 experts top-8</span></td>
             <td class="size-cell col-size" data-label="Size / quant">18.6 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -468,7 +468,7 @@
           </tr>
 
 
-          <tr data-capability="Code" data-runtime="Multi-machine" data-hardware="40 GB +" data-source="Qwen">
+          <tr data-capability="Code" data-runtime="Multi-machine" data-hardware="20 GB+" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen3-Coder-480B-A35B-Instruct</strong><br><span>MoE 480B/35B, largest coding model, requires multi-node</span></td>
             <td class="size-cell col-size" data-label="Size / quant">294 GB<br><span class="badge">UD-Q4_K_XL</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
@@ -481,7 +481,7 @@
           </tr>
 
 
-          <tr data-capability="Vision" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <tr data-capability="Vision" data-runtime="Single machine" data-hardware="≤ 8 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen3.5-0.8B-Vision</strong><br><span>Tiny vision model, OCR, screenshots, runs anywhere</span></td>
             <td class="size-cell col-size" data-label="Size / quant">508 MB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -493,7 +493,7 @@
           </tr>
 
 
-          <tr data-capability="Vision" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <tr data-capability="Vision" data-runtime="Single machine" data-hardware="≤ 8 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen3.5-4B-Vision</strong><br><span>Small vision model, good quality/size balance</span></td>
             <td class="size-cell col-size" data-label="Size / quant">2.7 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -505,7 +505,7 @@
           </tr>
 
 
-          <tr data-capability="Vision" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Qwen">
+          <tr data-capability="Vision" data-runtime="Single machine" data-hardware="≤ 8 GB" data-source="Qwen">
             <td class="model-cell col-model" data-label="Model"><strong>Qwen3.5-9B-Vision</strong><br><span>Vision + text, replaces Qwen3-8B with image understanding</span></td>
             <td class="size-cell col-size" data-label="Size / quant">5.8 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -517,7 +517,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Single machine" data-hardware="&le; 8 GB" data-source="Gemma">
+          <tr data-capability="" data-runtime="Single machine" data-hardware="≤ 8 GB" data-source="Gemma">
             <td class="model-cell col-model" data-label="Model"><strong>Gemma-3-12B-it</strong><br><span>Google Gemma 3 12B, punches above weight</span></td>
             <td class="size-cell col-size" data-label="Size / quant">7.3 GB<br><span class="badge">Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-single">Single machine</span></td>
@@ -529,7 +529,7 @@
           </tr>
 
 
-          <tr data-capability="" data-runtime="Multi-machine" data-hardware="11–20 GB" data-source="Gemma">
+          <tr data-capability="" data-runtime="Multi-machine" data-hardware="8–20 GB" data-source="Gemma">
             <td class="model-cell col-model" data-label="Model"><strong>Gemma-4-26B-A4B-it</strong><br><span>Layer package for unsloth/gemma-4-26B-A4B-it-GGUF:UD-Q4_K_M</span></td>
             <td class="size-cell col-size" data-label="Size / quant">16.9 GB<br><span class="badge">UD-Q4_K_M</span></td>
             <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>

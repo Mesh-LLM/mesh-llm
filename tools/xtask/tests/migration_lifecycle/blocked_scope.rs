@@ -1,5 +1,4 @@
-use super::super::Interrupt;
-use super::{action, replace};
+use super::{Interrupt, action, replace};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static DELIVERED: AtomicBool = AtomicBool::new(false);
@@ -17,7 +16,7 @@ fn migration_lifecycle_blocked_scope_preserves_mask_pending_and_dispositions() {
                 let output = std::process::Command::new(std::env::current_exe().unwrap())
                     .args([
                         "--exact",
-                        "command_interrupt::platform::tests::migration_lifecycle_blocked_scope_preserves_mask_pending_and_dispositions",
+                        "command_interrupt::blocked_scope::migration_lifecycle_blocked_scope_preserves_mask_pending_and_dispositions",
                         "--nocapture",
                     ])
                     .env("TASK20_BLOCKED_SCOPE_PROBE", case)
@@ -98,7 +97,11 @@ fn probe(case: &str) {
         assert_same_set(&after.sa_mask, &before.sa_mask);
     }
     assert!(!DELIVERED.load(Ordering::SeqCst));
-    assert!(!super::super::OWNED.load(Ordering::SeqCst));
+    // A released scope refuses for the blocked signal again, never as busy.
+    assert!(matches!(
+        Interrupt::install(),
+        Err(super::Reason::BlockedSigint | super::Reason::BlockedSigterm)
+    ));
 }
 
 fn thread_mask() -> libc::sigset_t {

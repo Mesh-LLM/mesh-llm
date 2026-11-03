@@ -176,6 +176,7 @@ impl LocalOpenAiOptions {
                     n_threads: self.tuning.n_threads,
                     n_threads_batch: self.tuning.n_threads_batch,
                     mtp_source,
+                    recurrent_rollback_tokens: 0,
                     metrics_otlp_grpc: self.metrics_otlp_grpc,
                     telemetry_queue_capacity: self.telemetry_queue_capacity,
                     telemetry_level: self.telemetry_level,
@@ -331,6 +332,7 @@ mod tests {
         let mut options = options();
         options.config.model_path = Some("does-not-exist.gguf".into());
         options.config.downstream = Some(skippy_protocol::PeerConfig {
+            persistent_lane_marker: false,
             stage_id: "stage-1".into(),
             stage_index: 1,
             endpoint: "127.0.0.1:19001".into(),

@@ -630,6 +630,89 @@ mod tests {
         assert!(!detail.contains("no safetensors files"), "{detail}");
     }
 
+    /// Write the SafeTensors half of the layout `mlx_lm.fuse --export-gguf` and
+    /// llama.cpp's `convert_hf_to_gguf.py` leave in a model directory.
+    fn write_colocated_checkpoint(root: &Path) {
+        std::fs::write(
+            root.join("config.json"),
+            r#"{
+              "model_type": "qwen2",
+              "num_hidden_layers": 1,
+              "hidden_size": 4,
+              "max_position_embeddings": 128
+            }"#,
+        )
+        .unwrap();
+        let header = serde_json::json!({
+            "model.layers.0.input_layernorm.weight": {
+                "dtype": "F32",
+                "shape": [1],
+                "data_offsets": [0, 4]
+            }
+        })
+        .to_string();
+        let mut safetensors = Vec::new();
+        safetensors.extend_from_slice(&(header.len() as u64).to_le_bytes());
+        safetensors.extend_from_slice(header.as_bytes());
+        safetensors.extend_from_slice(&1.0_f32.to_le_bytes());
+        std::fs::write(root.join("model.safetensors"), safetensors).unwrap();
+    }
+
+    /// Write a GGUF whose metadata is unmistakably different from the colocated
+    /// checkpoint's: 24 blocks, width 4096, context 8192.
+    fn write_colocated_gguf(path: &Path) {
+        fn kv_string(bytes: &mut Vec<u8>, key: &str, value: &str) {
+            bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(key.as_bytes());
+            bytes.extend_from_slice(&8u32.to_le_bytes());
+            bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(value.as_bytes());
+        }
+        fn kv_u32(bytes: &mut Vec<u8>, key: &str, value: u32) {
+            bytes.extend_from_slice(&(key.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(key.as_bytes());
+            bytes.extend_from_slice(&4u32.to_le_bytes());
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"GGUF");
+        bytes.extend_from_slice(&2u32.to_le_bytes());
+        bytes.extend_from_slice(&0i64.to_le_bytes());
+        bytes.extend_from_slice(&6i64.to_le_bytes());
+        kv_string(&mut bytes, "general.architecture", "llama");
+        kv_string(&mut bytes, "tokenizer.ggml.model", "gpt2");
+        kv_u32(&mut bytes, "llama.context_length", 8192);
+        kv_u32(&mut bytes, "llama.embedding_length", 4096);
+        kv_u32(&mut bytes, "llama.block_count", 24);
+        kv_u32(&mut bytes, "llama.attention.head_count", 32);
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn named_gguf_path_keeps_the_backing_it_named_beside_a_checkpoint() {
+        let root = tempfile::tempdir().unwrap();
+        write_colocated_checkpoint(root.path());
+        let gguf = root.path().join("b.gguf");
+        write_colocated_gguf(&gguf);
+
+        let identity = synthetic_direct_gguf_package("named-gguf", &gguf, None).unwrap();
+
+        assert_eq!(
+            identity.source_model_path,
+            gguf.canonicalize().unwrap(),
+            "a path naming a .gguf must be served from that file; package_ref={}",
+            identity.package_ref
+        );
+        assert_eq!(
+            identity.layer_count, 24,
+            "GGUF block_count must be reported"
+        );
+        assert_eq!(
+            identity.activation_width, 4096,
+            "GGUF embedding length must be reported"
+        );
+    }
+
     #[test]
     fn synthetic_manifest_identity_is_stable_and_metadata_sensitive() {
         let source_files = vec![SkippyPackageSourceFile {

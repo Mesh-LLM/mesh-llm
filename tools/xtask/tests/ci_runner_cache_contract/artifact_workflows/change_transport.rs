@@ -40,7 +40,7 @@ fn command(f: &support::Fixture, source: &str) -> Command {
         .env("TMPDIR", f.path())
         .env("GITHUB_OUTPUT", f.path().join("outputs"))
         .env("GITHUB_STEP_SUMMARY", f.path().join("summary"))
-        .env("MESH_LLM_AUTOMATION_BIN", f.path().join("bin/automation"))
+        .env("MESH_CI_CONTROLLER_BIN", f.path().join("bin/automation"))
         .args(["-c", source]);
     command
 }

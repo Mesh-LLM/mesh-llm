@@ -1,4 +1,4 @@
-use super::{Interrupt, platform};
+use super::{Interrupt, action, replace};
 use crate::process::{retained::*, *};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -30,11 +30,11 @@ fn migration_lifecycle_interrupt_scope_restores_and_refuses_other_owners() {
         return;
     }
 
-    let original_int = platform::action(libc::SIGINT).unwrap();
-    let original_term = platform::action(libc::SIGTERM).unwrap();
+    let original_int = action(libc::SIGINT).unwrap();
+    let original_term = action(libc::SIGTERM).unwrap();
     let mut other = original_term;
     other.sa_sigaction = (unrelated as *const ()).expose_provenance();
-    platform::replace(libc::SIGTERM, &other).unwrap();
+    replace(libc::SIGTERM, &other).unwrap();
     assert!(Interrupt::install().is_err());
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().canonicalize().unwrap();
@@ -50,12 +50,12 @@ fn migration_lifecycle_interrupt_scope_restores_and_refuses_other_owners() {
     assert!(error.to_string().contains("existing signal handler"));
     assert_eq!(std::fs::read_dir(&root).unwrap().count(), 0);
     assert_eq!(
-        platform::action(libc::SIGINT).unwrap().sa_sigaction,
+        action(libc::SIGINT).unwrap().sa_sigaction,
         original_int.sa_sigaction
     );
     raise(libc::SIGTERM);
     assert!(UNRELATED.swap(false, Ordering::SeqCst));
-    platform::replace(libc::SIGTERM, &original_term).unwrap();
+    replace(libc::SIGTERM, &original_term).unwrap();
 
     let scope = Interrupt::install().unwrap();
     assert!(Interrupt::install().is_err());
@@ -65,32 +65,29 @@ fn migration_lifecycle_interrupt_scope_restores_and_refuses_other_owners() {
     assert!(scope.cancellation().is_cancelled());
     assert!(scope.finish().is_err());
     assert_eq!(
-        platform::action(libc::SIGINT).unwrap().sa_sigaction,
+        action(libc::SIGINT).unwrap().sa_sigaction,
         original_int.sa_sigaction
     );
     assert_eq!(
-        platform::action(libc::SIGTERM).unwrap().sa_sigaction,
+        action(libc::SIGTERM).unwrap().sa_sigaction,
         original_term.sa_sigaction
     );
 
     let scope = Interrupt::install().unwrap();
     assert!(!scope.cancellation().is_cancelled());
-    platform::replace(libc::SIGTERM, &other).unwrap();
+    replace(libc::SIGTERM, &other).unwrap();
     scope.finish().unwrap();
     raise(libc::SIGTERM);
     assert!(UNRELATED.load(Ordering::SeqCst));
-    platform::replace(libc::SIGTERM, &original_term).unwrap();
+    replace(libc::SIGTERM, &original_term).unwrap();
 
     let mut ignored = original_int;
     ignored.sa_sigaction = libc::SIG_IGN;
-    platform::replace(libc::SIGINT, &ignored).unwrap();
+    replace(libc::SIGINT, &ignored).unwrap();
     let scope = Interrupt::install().unwrap();
     drop(scope);
-    assert_eq!(
-        platform::action(libc::SIGINT).unwrap().sa_sigaction,
-        libc::SIG_IGN
-    );
-    platform::replace(libc::SIGINT, &original_int).unwrap();
+    assert_eq!(action(libc::SIGINT).unwrap().sa_sigaction, libc::SIG_IGN);
+    replace(libc::SIGINT, &original_int).unwrap();
     let mut retained = RetainedInterrupt(false);
     let limits = crate::process::Limits {
         execution: std::time::Duration::from_secs(1),

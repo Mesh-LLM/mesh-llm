@@ -38,9 +38,9 @@ permalink: /catalog/index.html
       <span class="control-label">Hardware</span>
       <select id="filter-hardware" aria-label="Filter by hardware">
         <option value="">Any</option>
-        <option value="&le; 8 GB">&le; 8 GB</option>
-        <option value="11–20 GB">11–20 GB</option>
-        <option value="40 GB +">40 GB+</option>
+        <option value="≤ 8 GB">≤ 8 GB</option>
+        <option value="8–20 GB">8–20 GB</option>
+        <option value="20 GB+">20 GB+</option>
       </select>
     </label>
     <label class="control control-select" for="filter-source">
@@ -77,7 +77,7 @@ permalink: /catalog/index.html
         </tr>
       </thead>
       <tbody id="catalog-rows">
-        <tr data-capability="" data-runtime="Multi-machine" data-hardware="11–20 GB" data-source="Qwen3">
+        <tr data-capability="" data-runtime="Multi-machine" data-hardware="8–20 GB" data-source="Qwen3">
           <td class="model-cell col-model" data-label="Model"><strong>Qwen3 32B</strong><br><span>Strongest dense Qwen3 &middot; thinking modes</span></td>
           <td class="size-cell col-size" data-label="Size / quant">19.8GB<br><span class="badge">Q4_K_M</span></td>
           <td class="run-cell col-run" data-label="Run mode"><span class="run-mode run-multi">Multi-machine</span></td>
@@ -194,6 +194,20 @@ permalink: /catalog/index.html
     return `${repo}:${quant}`;
   }
 
+  // The meshllm/catalog dataset has no capabilities column, so the capability
+  // tag is derived from the row: a vision projector file marks the multimodal
+  // models and the model name marks the code ones. Nothing in the dataset
+  // carries a context length, so "Long context" has no source to read yet.
+  function capabilitiesFrom(row) {
+    const capabilities = [];
+    const mmproj = String(row.mmproj_json || '').trim();
+    if (mmproj && mmproj !== '{}' && mmproj !== 'null') capabilities.push('Vision');
+    const identity = [row.name, row.variant_id, row.source_model_repo || row.source_repo]
+      .filter(Boolean).join(' ');
+    if (/coder|devstral[- ]small[- ]2505/i.test(identity)) capabilities.push('Code');
+    return capabilities.join(' ');
+  }
+
   function runMode(row) {
     return row.layer_package_available ? 'Multi-machine' : 'Single machine';
   }
@@ -219,9 +233,9 @@ permalink: /catalog/index.html
     if (sizeLooksLikeLayerCount(sizeStr)) return '';
     const num = parseSizeInGb(sizeStr);
     if (isNaN(num)) return '';
-    if (num <= 8) return '&le; 8 GB';
-    if (num <= 20) return '11–20 GB';
-    return '40 GB +';
+    if (num <= 8) return '≤ 8 GB';
+    if (num <= 20) return '8–20 GB';
+    return '20 GB+';
   }
 
   function copyButton(ref) {
@@ -235,7 +249,7 @@ permalink: /catalog/index.html
       const rt = runMode(row);
       const hw = guessHardware(displaySize(row));
       return `
-        <tr data-capability="${escapeHtml(row.capabilities || '')}" data-runtime="${escapeHtml(rt)}" data-hardware="${escapeHtml(hw)}" data-source="${escapeHtml((row.source_model_repo || row.source_repo || '').split('/')[0] || '')}">
+        <tr data-capability="${escapeHtml(capabilitiesFrom(row))}" data-runtime="${escapeHtml(rt)}" data-hardware="${escapeHtml(hw)}" data-source="${escapeHtml((row.source_model_repo || row.source_repo || '').split('/')[0] || '')}">
           <td class="model-cell col-model" data-label="Model"><strong>${escapeHtml(row.name || row.variant_id)}</strong><br><span>${escapeHtml(row.description || row.source_file || '')}</span></td>
           <td class="size-cell col-size" data-label="Size / quant">${sizeCell(row)}</td>
           <td class="run-cell col-run" data-label="Run mode">${runModeCell(rt)}</td>

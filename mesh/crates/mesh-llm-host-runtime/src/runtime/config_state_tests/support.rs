@@ -88,6 +88,7 @@ pub(super) fn test_dir() -> PathBuf {
 
 pub(super) fn minimal_valid_config() -> MeshConfig {
     MeshConfig {
+        source_directory: None,
         version: Some(1),
         gpu: GpuConfig {
             host_ram_offload: None,
@@ -130,6 +131,7 @@ pub(super) fn installed_plugin_metadata(
         last_protocol_version: Some(1),
         last_status: Some("installed".to_string()),
         last_error: None,
+        verified_sha256: None,
     }
 }
 

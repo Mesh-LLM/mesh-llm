@@ -44,24 +44,55 @@ pub(super) fn scan_layer_package_metadata(
     None
 }
 
-pub(super) fn runtime_model_planning_bytes(model_path: &Path) -> Result<u64> {
+pub(super) struct RuntimeModelSizing {
+    pub(super) model_bytes: u64,
+    pub(super) compact_meta: Option<models::gguf::GgufCompactMeta>,
+}
+
+pub(super) fn runtime_model_sizing(model_path: &Path) -> Result<RuntimeModelSizing> {
     if model_path.join("model-package.json").is_file() {
-        return Ok(skippy::identity_from_package_v2(model_path)?.source_model_bytes);
+        let package = skippy::identity_from_package_v2(model_path)?;
+        let compact_meta = scan_layer_package_metadata(&package);
+        return Ok(runtime_model_sizing_from_metadata(
+            package.source_model_bytes,
+            compact_meta,
+        ));
     }
     let package_ref = model_path.to_string_lossy().to_string();
     if skippy::is_layer_package_ref(&package_ref) {
-        return Ok(skippy::identity_from_layer_package(&package_ref)?.source_model_bytes);
+        let package = skippy::identity_from_layer_package(&package_ref)?;
+        let compact_meta = scan_layer_package_metadata(&package);
+        return Ok(runtime_model_sizing_from_metadata(
+            package.source_model_bytes,
+            compact_meta,
+        ));
     }
     let weight_bytes = election::total_model_bytes(model_path);
+    let compact_meta = models::gguf::scan_gguf_compact_meta(model_path);
+    Ok(runtime_model_sizing_from_metadata(
+        weight_bytes,
+        compact_meta,
+    ))
+}
+
+fn runtime_model_sizing_from_metadata(
+    weight_bytes: u64,
+    compact_meta: Option<models::gguf::GgufCompactMeta>,
+) -> RuntimeModelSizing {
     // A Laya model holds a worst-case read reserve on top of its weights; the
     // capacity ledger reserves from this, so charge it here.
-    Ok(match models::gguf::scan_gguf_compact_meta(model_path) {
-        Some(meta) if super::local_laya::is_laya(Some(&meta)) => {
-            super::local_laya::laya_resident_bytes(weight_bytes, &meta)
+    let model_bytes = match compact_meta.as_ref() {
+        Some(meta) if super::local_laya::is_laya(Some(meta)) => {
+            super::local_laya::laya_resident_bytes(weight_bytes, meta)
         }
         _ => weight_bytes,
-    })
+    };
+    RuntimeModelSizing {
+        model_bytes,
+        compact_meta,
+    }
 }
+
 pub(super) async fn split_runtime_compact_meta(
     package: &skippy::SkippyPackageIdentity,
 ) -> Result<models::gguf::GgufCompactMeta> {
