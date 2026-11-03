@@ -154,7 +154,7 @@ mod tests {
         &mut entries.iter_mut().find(|(key, _)| key == name).unwrap().1
     }
 
-    fn scalar_mut<'a>(node: &'a mut Node) -> &'a mut String {
+    fn scalar_mut(node: &mut Node) -> &mut String {
         let Node::Scalar(text) = node else {
             panic!("expected scalar")
         };
