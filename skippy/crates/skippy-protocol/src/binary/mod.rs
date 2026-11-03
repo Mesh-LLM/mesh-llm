@@ -28,12 +28,12 @@ pub use types::{
     MAX_STAGE_PREDICTED_TOKENS, MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES,
     MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC,
     STAGE_ACTIVATION_FRAME_VERSION, STAGE_ACTIVATION_IDENTITY_BYTES,
-    STAGE_ACTIVATION_PART_OPTIONAL, STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES,
-    STAGE_STATE_HEADER_BYTES, STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES,
-    StageActivationDesc, StageActivationFrame, StageActivationPartDesc, StageLogitBias,
-    StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow, StageRequestEpoch,
-    StageSamplingConfig, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
-    WireStagePhase, state_flags,
+    STAGE_ACTIVATION_PART_OPTIONAL, STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_REPLY_STATS_FIELD_COUNT,
+    STAGE_REPLY_STATS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES, STAGE_STATE_HEADER_BYTES,
+    STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES, StageActivationDesc, StageActivationFrame,
+    StageActivationPartDesc, StageLogitBias, StageNativeMtpDraft, StageReply, StageReplyStats,
+    StageReplyWindow, StageRequestEpoch, StageSamplingConfig, StageStateHeader, StageWireMessage,
+    WireMessageKind, WireReplyKind, WireStagePhase, state_flags,
 };
 
 pub(crate) fn invalid_data(message: &'static str) -> std::io::Error {
@@ -232,6 +232,69 @@ mod tests {
         assert_eq!(reply.stats.prefill_compute_stage_index, 1);
         assert_eq!(reply.stats.prefill_compute_token_count_at_slowest_rate, 128);
         assert_eq!(reply.stats.prefill_compute_observation_count, 3);
+    }
+
+    #[test]
+    fn dflash_health_rides_a_reply_after_its_stats() {
+        let stats = StageReplyStats {
+            kv_lookup_hits: 1,
+            dflash_feature_rows_missing: 37,
+            dflash_draft_context_resets: 2,
+            ..StageReplyStats::default()
+        };
+        let reply = StageReply {
+            kind: WireReplyKind::PredictedTokens,
+            predicted: 5,
+            predicted_tokens: vec![5],
+            native_mtp_draft: Some(StageNativeMtpDraft {
+                token_ids: vec![6, 7],
+                proposal_compute_us: 9,
+                follows_correction: true,
+            }),
+            window: StageReplyWindow::default(),
+            stats,
+            log_probabilities: Vec::new(),
+        };
+        let mut bytes = Vec::new();
+        send_reply_message(&mut bytes, &reply).unwrap();
+        bytes.extend_from_slice(&[0xAB; 4]);
+        let mut cursor = Cursor::new(bytes);
+
+        let decoded = recv_reply(&mut cursor).unwrap();
+
+        assert_eq!(decoded, reply);
+        // The counters were consumed, and nothing after them.
+        assert_eq!(cursor.position() as usize, cursor.get_ref().len() - 4);
+    }
+
+    #[test]
+    fn dflash_counters_merge_as_cumulative_maxima() {
+        let mut stats = StageReplyStats {
+            dflash_feature_rows_missing: 10,
+            dflash_draft_context_resets: 1,
+            ..StageReplyStats::default()
+        };
+        stats.merge(StageReplyStats {
+            dflash_feature_rows_missing: 4,
+            dflash_draft_context_resets: 3,
+            ..StageReplyStats::default()
+        });
+        assert_eq!(stats.dflash_feature_rows_missing, 10);
+        assert_eq!(stats.dflash_draft_context_resets, 3);
+        assert!(!stats.is_empty());
+    }
+
+    #[test]
+    fn split_dflash_flag_round_trips() {
+        let mut state = StageStateHeader::new(WireMessageKind::DecodeEmbd);
+        assert!(!state.split_dflash());
+        state.set_split_dflash(true);
+        assert!(state.split_dflash());
+        state.set_native_mtp_draft_tokens(4);
+        assert!(state.split_dflash());
+        state.set_split_dflash(false);
+        assert!(!state.split_dflash());
+        assert_eq!(state.native_mtp_draft_tokens(), Some(4));
     }
 
     #[test]

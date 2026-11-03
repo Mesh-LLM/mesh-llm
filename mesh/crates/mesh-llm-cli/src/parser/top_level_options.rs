@@ -214,7 +214,7 @@ pub struct MeshPolicyOptions {
 /// Speculative decoding and draft models (hidden from default --help).
 #[derive(Args, Debug)]
 pub struct SpeculativeOptions {
-    /// Override speculative decoding (`mtp`, `ngram-cache`, `ngram-suffix`, or a package strategy id).
+    /// Override speculative decoding (`mtp`, `ngram-cache`, `ngram-suffix`, `dflash`, or a package strategy id).
     #[arg(long, hide = true)]
     pub speculative_strategy: Option<String>,
 

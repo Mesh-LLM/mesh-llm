@@ -19,13 +19,14 @@ fn kv_cache_request(
     body: &str,
 ) -> String {
     format!(
-        "{method} {path} HTTP/1.1\r\nHost: localhost:3131\r\nOrigin: {origin}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n{body}",
+        "{method} {path} HTTP/1.1\r\nHost: localhost:3131\r\nOrigin: {origin}\r\nAuthorization: Bearer {TEST_OWNER_CONTROL_TOKEN}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
     )
 }
 
 async fn send_kv_cache_request(request: String) -> String {
     let state = build_test_mesh_api().await;
+    seed_owner_control_token(&state).await;
     let (address, server) = spawn_management_test_server(state).await;
     let response = send_management_request(address, request).await;
     server

@@ -27,6 +27,9 @@ pub use validation::validate_discovery_mode_args;
 mod agent_launcher_tests;
 
 #[cfg(test)]
+mod load_tests;
+
+#[cfg(test)]
 mod setup_tests;
 
 #[cfg(test)]

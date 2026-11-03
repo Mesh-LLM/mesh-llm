@@ -487,6 +487,22 @@ fileprivate struct FfiConverterUInt16: FfiConverterPrimitive {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterInt16: FfiConverterPrimitive {
+    typealias FfiType = Int16
+    typealias SwiftType = Int16
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Int16 {
+        return try lift(readInt(&buf))
+    }
+
+    public static func write(_ value: Int16, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterUInt32: FfiConverterPrimitive {
     typealias FfiType = UInt32
     typealias SwiftType = UInt32
@@ -513,6 +529,22 @@ fileprivate struct FfiConverterUInt64: FfiConverterPrimitive {
 
     public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
         writeInt(&buf, lower(value))
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterFloat: FfiConverterPrimitive {
+    typealias FfiType = Float
+    typealias SwiftType = Float
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Float {
+        return try lift(readFloat(&buf))
+    }
+
+    public static func write(_ value: Float, into buf: inout [UInt8]) {
+        writeFloat(&buf, lower(value))
     }
 }
 
@@ -586,10 +618,224 @@ fileprivate struct FfiConverterString: FfiConverter {
     }
 }
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterData: FfiConverterRustBuffer {
+    typealias SwiftType = Data
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> Data {
+        let len: Int32 = try readInt(&buf)
+        return Data(try readBytes(&buf, count: Int(len)))
+    }
+
+    public static func write(_ value: Data, into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        writeBytes(&buf, value)
+    }
+}
+
+
+
+
+public protocol LiveTranscriptionNativeProtocol: AnyObject, Sendable {
+
+    func closeAudio()
+
+    func commit() throws
+
+    func nextEventJson() throws  -> String?
+
+    func sendAudio(samples: [Int16]) throws
+
+    func sendAudioF32(samples: [Float]) throws
+
+    func stopJson() throws  -> String
+
+}
+open class LiveTranscriptionNative: LiveTranscriptionNativeProtocol, @unchecked Sendable {
+    fileprivate let handle: UInt64
+
+    /// Used to instantiate a [FFIObject] without an actual handle, for fakes in tests, mostly.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public struct NoHandle {
+        public init() {}
+    }
+
+    // TODO: We'd like this to be `private` but for Swifty reasons,
+    // we can't implement `FfiConverter` without making this `required` and we can't
+    // make it `required` without making it `public`.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    required public init(unsafeFromHandle handle: UInt64) {
+        self.handle = handle
+    }
+
+    // This constructor can be used to instantiate a fake object.
+    // - Parameter noHandle: Placeholder value so we can have a constructor separate from the default empty one that may be implemented for classes extending [FFIObject].
+    //
+    // - Warning:
+    //     Any object instantiated with this constructor cannot be passed to an actual Rust-backed object. Since there isn't a backing handle the FFI lower functions will crash.
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public init(noHandle: NoHandle) {
+        self.handle = 0
+    }
+
+#if swift(>=5.8)
+    @_documentation(visibility: private)
+#endif
+    public func uniffiCloneHandle() -> UInt64 {
+        return try! rustCall { uniffi_meshllm_ffi_fn_clone_livetranscriptionnative(self.handle, $0) }
+    }
+    // No primary constructor declared for this class.
+
+    deinit {
+        if handle == 0 {
+            // Mock objects have handle=0 don't try to free them
+            return
+        }
+
+        try! rustCall { uniffi_meshllm_ffi_fn_free_livetranscriptionnative(handle, $0) }
+    }
+
+
+
+
+open func closeAudio()  {try! rustCall() {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_livetranscriptionnative_close_audio(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+
+open func commit()throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_livetranscriptionnative_commit(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+}
+}
+
+open func nextEventJson()throws  -> String?  {
+    return try  FfiConverterOptionString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_livetranscriptionnative_next_event_json(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func sendAudio(samples: [Int16])throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_livetranscriptionnative_send_audio(
+            self.uniffiCloneHandle(),
+        FfiConverterSequenceInt16.lower(samples),uniffiCallStatus
+    )
+}
+}
+
+open func sendAudioF32(samples: [Float])throws   {try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_livetranscriptionnative_send_audio_f32(
+            self.uniffiCloneHandle(),
+        FfiConverterSequenceFloat.lower(samples),uniffiCallStatus
+    )
+}
+}
+
+open func stopJson()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_livetranscriptionnative_stop_json(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+
+
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeLiveTranscriptionNative: FfiConverter {
+    typealias FfiType = UInt64
+    typealias SwiftType = LiveTranscriptionNative
+
+    public static func lift(_ handle: UInt64) throws -> LiveTranscriptionNative {
+        return LiveTranscriptionNative(unsafeFromHandle: handle)
+    }
+
+    public static func lower(_ value: LiveTranscriptionNative) -> UInt64 {
+        return value.uniffiCloneHandle()
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> LiveTranscriptionNative {
+        let handle: UInt64 = try readInt(&buf)
+        return try lift(handle)
+    }
+
+    public static func write(_ value: LiveTranscriptionNative, into buf: inout [UInt8]) {
+        writeInt(&buf, lower(value))
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLiveTranscriptionNative_lift(_ handle: UInt64) throws -> LiveTranscriptionNative {
+    return try FfiConverterTypeLiveTranscriptionNative.lift(handle)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeLiveTranscriptionNative_lower(_ value: LiveTranscriptionNative) -> UInt64 {
+    return FfiConverterTypeLiveTranscriptionNative.lower(value)
+}
+
+
+
 
 
 
 public protocol MeshNodeHandleProtocol: AnyObject, Sendable {
+
+    /**
+     * Upload unchanged document bytes with the same options as the Rust API.
+     */
+    func documentOcr(file: Data, optionsJson: String) throws  -> OpenAiResponseNative
+
+    /**
+     * Start a session with the Rust SDK's defaults and role checks.
+     */
+    func startLiveTranscriptionJson(optionsJson: String) throws  -> LiveTranscriptionNative
+
+    func addMembershipJson(configJson: String) throws  -> String
+
+    func membershipsJson() throws  -> String
+
+    func removeMembership(name: String) throws  -> Bool
+
+    /**
+     * Look up an exact public serving ID without applying LLM filtering.
+     */
+    func meshModelJson(id: String) throws  -> String
+
+    /**
+     * Query all advertised workloads directly through the embedded node.
+     */
+    func meshModelsJson(queryJson: String) throws  -> String
 
     func cancel(requestId: String)
 
@@ -660,6 +906,88 @@ open class MeshNodeHandle: MeshNodeHandleProtocol, @unchecked Sendable {
 
 
 
+
+    /**
+     * Upload unchanged document bytes with the same options as the Rust API.
+     */
+open func documentOcr(file: Data, optionsJson: String)throws  -> OpenAiResponseNative  {
+    return try  FfiConverterTypeOpenAiResponseNative_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_meshnodehandle_document_ocr(
+            self.uniffiCloneHandle(),
+        FfiConverterData.lower(file),
+        FfiConverterString.lower(optionsJson),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * Start a session with the Rust SDK's defaults and role checks.
+     */
+open func startLiveTranscriptionJson(optionsJson: String)throws  -> LiveTranscriptionNative  {
+    return try  FfiConverterTypeLiveTranscriptionNative_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_meshnodehandle_start_live_transcription_json(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(optionsJson),uniffiCallStatus
+    )
+})
+}
+
+open func addMembershipJson(configJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_meshnodehandle_add_membership_json(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(configJson),uniffiCallStatus
+    )
+})
+}
+
+open func membershipsJson()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_meshnodehandle_memberships_json(
+            self.uniffiCloneHandle(),uniffiCallStatus
+    )
+})
+}
+
+open func removeMembership(name: String)throws  -> Bool  {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_meshnodehandle_remove_membership(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(name),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * Look up an exact public serving ID without applying LLM filtering.
+     */
+open func meshModelJson(id: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_meshnodehandle_mesh_model_json(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(id),uniffiCallStatus
+    )
+})
+}
+
+    /**
+     * Query all advertised workloads directly through the embedded node.
+     */
+open func meshModelsJson(queryJson: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_method_meshnodehandle_mesh_models_json(
+            self.uniffiCloneHandle(),
+        FfiConverterString.lower(queryJson),uniffiCallStatus
+    )
+})
+}
 
 open func cancel(requestId: String)  {try! rustCall() {
         uniffiCallStatus in
@@ -1297,22 +1625,22 @@ enum FfiError: Swift.Error, Equatable, Hashable, Foundation.LocalizedError {
 
 
 
-    case BuildFailed(message: String)
-
-    case JoinFailed(message: String)
-
-    case DiscoveryFailed(message: String)
-
-    case StreamFailed(message: String)
-
-    case HostUnavailable(message: String)
-
-    case ServingUnsupported(message: String)
-
-    case NativeRuntimeFailed(message: String)
-
-    case OpenAiRequestFailed(message: String)
-
+    case BuildFailed(String
+    )
+    case JoinFailed(String
+    )
+    case DiscoveryFailed(String
+    )
+    case StreamFailed(String
+    )
+    case HostUnavailable(String
+    )
+    case ServingUnsupported(String
+    )
+    case NativeRuntimeFailed(String
+    )
+    case OpenAiRequestFailed(String
+    )
 
 
 
@@ -1343,39 +1671,31 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
 
 
         case 1: return .BuildFailed(
-            message: try FfiConverterString.read(from: &buf)
-        )
-
+            try FfiConverterString.read(from: &buf)
+            )
         case 2: return .JoinFailed(
-            message: try FfiConverterString.read(from: &buf)
-        )
-
+            try FfiConverterString.read(from: &buf)
+            )
         case 3: return .DiscoveryFailed(
-            message: try FfiConverterString.read(from: &buf)
-        )
-
+            try FfiConverterString.read(from: &buf)
+            )
         case 4: return .StreamFailed(
-            message: try FfiConverterString.read(from: &buf)
-        )
-
+            try FfiConverterString.read(from: &buf)
+            )
         case 5: return .HostUnavailable(
-            message: try FfiConverterString.read(from: &buf)
-        )
-
+            try FfiConverterString.read(from: &buf)
+            )
         case 6: return .ServingUnsupported(
-            message: try FfiConverterString.read(from: &buf)
-        )
-
+            try FfiConverterString.read(from: &buf)
+            )
         case 7: return .NativeRuntimeFailed(
-            message: try FfiConverterString.read(from: &buf)
-        )
-
+            try FfiConverterString.read(from: &buf)
+            )
         case 8: return .OpenAiRequestFailed(
-            message: try FfiConverterString.read(from: &buf)
-        )
+            try FfiConverterString.read(from: &buf)
+            )
 
-
-        default: throw UniffiInternalError.unexpectedEnumCase
+         default: throw UniffiInternalError.unexpectedEnumCase
         }
     }
 
@@ -1385,23 +1705,45 @@ public struct FfiConverterTypeFfiError: FfiConverterRustBuffer {
 
 
 
-        case .BuildFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(1))
-        case .JoinFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(2))
-        case .DiscoveryFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(3))
-        case .StreamFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(4))
-        case .HostUnavailable(_ /* message is ignored*/):
-            writeInt(&buf, Int32(5))
-        case .ServingUnsupported(_ /* message is ignored*/):
-            writeInt(&buf, Int32(6))
-        case .NativeRuntimeFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(7))
-        case .OpenAiRequestFailed(_ /* message is ignored*/):
-            writeInt(&buf, Int32(8))
 
+        case let .BuildFailed(v1):
+            writeInt(&buf, Int32(1))
+            FfiConverterString.write(v1, into: &buf)
+
+
+        case let .JoinFailed(v1):
+            writeInt(&buf, Int32(2))
+            FfiConverterString.write(v1, into: &buf)
+
+
+        case let .DiscoveryFailed(v1):
+            writeInt(&buf, Int32(3))
+            FfiConverterString.write(v1, into: &buf)
+
+
+        case let .StreamFailed(v1):
+            writeInt(&buf, Int32(4))
+            FfiConverterString.write(v1, into: &buf)
+
+
+        case let .HostUnavailable(v1):
+            writeInt(&buf, Int32(5))
+            FfiConverterString.write(v1, into: &buf)
+
+
+        case let .ServingUnsupported(v1):
+            writeInt(&buf, Int32(6))
+            FfiConverterString.write(v1, into: &buf)
+
+
+        case let .NativeRuntimeFailed(v1):
+            writeInt(&buf, Int32(7))
+            FfiConverterString.write(v1, into: &buf)
+
+
+        case let .OpenAiRequestFailed(v1):
+            writeInt(&buf, Int32(8))
+            FfiConverterString.write(v1, into: &buf)
 
         }
     }
@@ -2047,6 +2389,56 @@ fileprivate struct FfiConverterOptionCallbackInterfaceNativeRuntimeProgressListe
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceInt16: FfiConverterRustBuffer {
+    typealias SwiftType = [Int16]
+
+    public static func write(_ value: [Int16], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterInt16.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [Int16] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [Int16]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterInt16.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceFloat: FfiConverterRustBuffer {
+    typealias SwiftType = [Float]
+
+    public static func write(_ value: [Float], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterFloat.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [Float] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [Float]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterFloat.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
     typealias SwiftType = [String]
 
@@ -2118,20 +2510,6 @@ fileprivate struct FfiConverterSequenceTypeModelNative: FfiConverterRustBuffer {
         return seq
     }
 }
-public func createNode(mode: String, joinTokens: [String], models: [String], autoJoin: Bool, ownerKeyPath: String?, apiPort: UInt16, consolePort: UInt16)throws  -> MeshNodeHandle  {
-    return try  FfiConverterTypeMeshNodeHandle_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
-        uniffiCallStatus in
-    uniffi_meshllm_ffi_fn_func_create_node(
-        FfiConverterString.lower(mode),
-        FfiConverterSequenceString.lower(joinTokens),
-        FfiConverterSequenceString.lower(models),
-        FfiConverterBool.lower(autoJoin),
-        FfiConverterOptionString.lower(ownerKeyPath),
-        FfiConverterUInt16.lower(apiPort),
-        FfiConverterUInt16.lower(consolePort),uniffiCallStatus
-    )
-})
-}
 public func currentMeshVersion() -> String  {
     return try!  FfiConverterString.lift(try! rustCall() {
         uniffiCallStatus in
@@ -2183,6 +2561,32 @@ public func removeNativeRuntime(cacheDir: String?, meshVersion: String, nativeRu
     )
 })
 }
+public func createNode(mode: String, joinTokens: [String], models: [String], autoJoin: Bool, ownerKeyPath: String?, apiPort: UInt16, consolePort: UInt16)throws  -> MeshNodeHandle  {
+    return try  FfiConverterTypeMeshNodeHandle_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_func_create_node(
+        FfiConverterString.lower(mode),
+        FfiConverterSequenceString.lower(joinTokens),
+        FfiConverterSequenceString.lower(models),
+        FfiConverterBool.lower(autoJoin),
+        FfiConverterOptionString.lower(ownerKeyPath),
+        FfiConverterUInt16.lower(apiPort),
+        FfiConverterUInt16.lower(consolePort),uniffiCallStatus
+    )
+})
+}
+/**
+ * Construct a node from the complete native configuration. Starting the handle
+ * performs the same runtime validation as the Rust builder.
+ */
+public func createNodeConfigJson(configJson: String)throws  -> MeshNodeHandle  {
+    return try  FfiConverterTypeMeshNodeHandle_lift(try rustCallWithError(FfiConverterTypeFfiError_lift) {
+        uniffiCallStatus in
+    uniffi_meshllm_ffi_fn_func_create_node_config_json(
+        FfiConverterString.lower(configJson),uniffiCallStatus
+    )
+})
+}
 
 private enum InitializationResult {
     case ok
@@ -2198,9 +2602,6 @@ private let initializationResult: InitializationResult = {
     let scaffolding_contract_version = ffi_meshllm_ffi_uniffi_contract_version()
     if bindings_contract_version != scaffolding_contract_version {
         return InitializationResult.contractVersionMismatch
-    }
-    if (uniffi_meshllm_ffi_checksum_func_create_node() != 7741) {
-        return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_func_current_mesh_version() != 50997) {
         return InitializationResult.apiChecksumMismatch
@@ -2218,6 +2619,33 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_func_remove_native_runtime() != 6828) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_func_create_node() != 7741) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_func_create_node_config_json() != 28072) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_document_ocr() != 37662) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_start_live_transcription_json() != 38423) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_add_membership_json() != 17642) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_memberships_json() != 7007) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_remove_membership() != 60373) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_mesh_model_json() != 14746) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_mesh_models_json() != 12969) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_cancel() != 153) {
@@ -2242,6 +2670,24 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_method_meshnodehandle_stop() != 25964) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_close_audio() != 32045) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_commit() != 13409) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_next_event_json() != 55429) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_send_audio() != 46161) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_send_audio_f32() != 32901) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_meshllm_ffi_checksum_method_livetranscriptionnative_stop_json() != 12637) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_meshllm_ffi_checksum_method_nativeruntimeprogresslistener_on_progress() != 47323) {

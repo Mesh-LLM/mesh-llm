@@ -46,6 +46,15 @@ product, native, canary, and release automation stay in xtask. Put new
 repository automation in xtask unless it belongs to the controller's planning
 and validation scope.
 
+`tools/process-supervision` owns bounded child-process supervision
+(`supervise*`, `retained`) and the command interruption scope (`interrupt`).
+Its normal dependencies are limited to thiserror, libc on Unix, and windows-sys
+on Windows; it never takes HTTP, async runtime, or archive crates. xtask
+imports it as `crate::process` and `crate::command_interrupt`, and keeps
+`curl_https`. The controller does not link it yet; a command that moves to the
+controller and spawns a child must use it rather than a raw `std::process`
+runner.
+
 The explicit `prepare-automation` `hosted-bare` profile is an automation-only
 exception for GitHub-hosted Linux. It uses the existing stable Rust selection
 and locked Cargo without Just or compiler wrappers; default image preparation
@@ -479,10 +488,18 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Cache contract
 
+- Linux Rust-test jobs and the trusted compiler seed's test build disable
+  Cargo test-profile debug information (`CARGO_PROFILE_TEST_DEBUG=0`). Keep
+  debug assertions, overflow checks and complete package test coverage. The
+  per-package feature-isolated builds otherwise retain large DWARF-bearing
+  dependency variants and test executables on the same hosted disk. Keep the
+  warmer and consumers aligned, and change the cache epoch with this policy.
 - macOS compiler-cache bootstrap must use a job-owned Unix socket before any
   compiler probe. Eagerly start its server in every cache mode; parallel compiler
-  clients must not race to initialize a newly allocated socket. Never stop or
-  restart the host-wide default sccache server:
+  clients must not race to initialize a newly allocated socket. Export
+  `SCCACHE_IDLE_TIMEOUT=0` before startup and persist it for later job steps so
+  quiet test phases cannot expire the daemon and expose another startup race.
+  Never stop or restart the host-wide default sccache server:
   multiple runner accounts can share one physical host. Preserve the disk cache
   independently of the server endpoint, and pass the endpoint to later steps.
 - Declare cache mode per slice: no remote cache, PR restore-only/isolated, or
@@ -531,8 +548,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   cache namespace) never restores an executable. `prepare-ci-controller` keeps
   a separate exact-key identity (`ci-controller-hosted-...`) over the
   controller's compiled inputs and never shares an entry with the full xtask
-  executable, whose key also hashes `tools/ci-controller/**` because xtask
-  compiles the controller library.
+  executable, whose key also hashes `tools/ci-controller/**` and
+  `tools/process-supervision/**` because xtask compiles both libraries. A
+  library crate that xtask or the controller starts compiling joins the
+  matching key in the same change.
 - PR and smoke-only artifacts default to one-day retention. Release evidence
   follows the release policy.
 
@@ -554,6 +573,12 @@ checked-in expiry are the maintainer-controlled approval boundary.
 - Host artifacts include the executable checksum and import-policy report.
   Runtime artifacts include manifest, checksums, ABI/version, platform, and
   backend identity. Product manifests record exact host and runtime digests.
+- The typed runtime manifest writer narrows configured Windows ROCm targets
+  when `rocblas.dll` is declared: each advertised target must have a staged
+  rocBLAS `.co` or `.hsaco` file bound by the manifest's checksum map. Missing
+  kernels for every configured target fail packaging. Preserve unconfigured
+  lists and other platforms/backends; filename admission does not replace
+  hardware inference qualification.
 - Use the owning preparation and composition actions. A composer verifies and
   copies exact producer bytes; it never compiles, links, re-stamps, or silently
   substitutes an input.
@@ -837,4 +862,4 @@ never a parallel packaging implementation. Preview versions must contain
 frozen source SHA. Publish verified assets as a draft before exposing the
 complete prerelease, without marking it latest or invoking stable registries.
 Keep immutable preview tags and previous downloads; no automated deletion is
-part of the initial rollout. The schedule is Tuesday/Friday 03:23 UTC.
+part of the initial rollout. The Tuesday/Friday 03:23 UTC schedule is commented out; dispatch manually.

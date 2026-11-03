@@ -293,3 +293,32 @@ pub(super) fn load_config_state(
         .unwrap_or_else(|_| std::path::PathBuf::from("config.toml"));
     crate::runtime::config_state::ConfigState::load(&path)
 }
+
+/// Which model names may still be coming while the startup models resolve,
+/// before any of them is assigned to this node.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum StartupResolution {
+    /// Nothing is resolving.
+    #[default]
+    Done,
+    /// Every startup model is declared or configured under a name before it
+    /// resolves, so only these names may be coming.
+    Names(Vec<String>),
+    /// A bare local GGUF is named only once it is hashed, so any name may be.
+    AnyName,
+}
+
+impl Node {
+    pub(crate) async fn set_startup_resolution(&self, resolution: StartupResolution) {
+        *self.startup_models_resolving.lock().await = resolution;
+    }
+
+    /// True while the startup models resolve and `model_name` may be one of them.
+    pub(crate) async fn startup_model_may_be(&self, model_name: &str) -> bool {
+        match &*self.startup_models_resolving.lock().await {
+            StartupResolution::Done => false,
+            StartupResolution::Names(names) => names.iter().any(|name| name == model_name),
+            StartupResolution::AnyName => true,
+        }
+    }
+}

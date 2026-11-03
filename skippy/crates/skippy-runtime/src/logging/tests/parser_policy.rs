@@ -153,7 +153,7 @@ fn auto_keeps_only_safetensors_fallback_note_with_full_coverage() {
             health_messages: Vec::new(),
         },
     ));
-    unsafe { write_native_log(0, line.as_ptr(), ptr::null_mut()) };
+    unsafe { write_native_log(log_level(0), line.as_ptr(), ptr::null_mut()) };
     write_native_log_note("ordinary GGUF model note");
     write_native_log_fallback_note(
         "SafeTensors source loading does not yet emit native model-open events",
@@ -169,7 +169,7 @@ fn auto_keeps_only_safetensors_fallback_note_with_full_coverage() {
         NativeLogParserMode::Auto,
         &crate::CapabilityReport::default(),
     ));
-    unsafe { write_native_log(0, line.as_ptr(), ptr::null_mut()) };
+    unsafe { write_native_log(log_level(0), line.as_ptr(), ptr::null_mut()) };
     assert_eq!(
         receiver.try_recv().map(|event| event.category),
         Ok("tokenizer")
@@ -211,4 +211,10 @@ mod native_log {
         env!("CARGO_MANIFEST_DIR"),
         "/src/tests/native_log.rs"
     ));
+}
+
+#[cfg(test)]
+fn log_level(level: i32) -> skippy_ffi::bindings::llama::ggml_log_level {
+    // Test helper: the generated enum mirrors the C values verbatim.
+    unsafe { std::mem::transmute(level) }
 }

@@ -78,6 +78,7 @@ members = [
     "mesh/crates/mesh-llm-moa-plugin",
     "tools/xtask",
     "tools/ci-controller",
+    "tools/process-supervision",
     "tools/trajectory-reader",
 ]
 default-members = [

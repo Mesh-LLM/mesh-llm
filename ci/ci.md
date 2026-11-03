@@ -1,5 +1,13 @@
 # MeshLLM CI topology
 
+Linux Rust-test jobs disable test-profile debug information with
+`CARGO_PROFILE_TEST_DEBUG=0`, preserving complete package tests, debug
+assertions and overflow checks. This reduces the dependency variants and
+linked test executables retained across feature-isolated package invocations.
+The shared compiler seed warmer uses the same test setting. Cache epoch `v4`
+starts a fresh namespace. Batch jobs record filesystem space before each
+package and retained target/compiler-cache sizes even when tests fail.
+
 ## Standalone C++ API qualification
 
 The protected catalog admits `skippy/skippy_api/**` and
@@ -56,6 +64,27 @@ inputs and executes sanitized C++23 and libFuzzer probes. The run staged exact
 digests without moving production aliases; consumer binding does not require
 promotion. This admission does not establish source-present API coverage,
 which still requires the protected-main executor rollout and real PR runs.
+
+### Libclang-capable CPU image
+
+The dedicated `public-cpu-libclang` image entry binds the compiler-seed
+cohort: the `rust-tests`, `rust-clippy`, `linux-host`,
+`safetensors-runtime-smoke`, `compiler-seed-publisher` and
+`runtime-seed-canary` consumer roles, the `linux-cpu` runtime row, and the
+compiler seed, which rolls forward to
+`mesh-llm-sccache-seed-linux-x86_64-img-aaa36843-epoch-aaa36843-v3-`. The
+image is the reviewed `libclang-dev` toolchain addition over `public-cpu`; it
+exists so `skippy-ffi`'s bindgen freshness gate (which dlopens libclang through
+clang-sys) runs with the tool baked in instead of a job-time install. Its
+immutable multi-architecture CPU index is
+`sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60`;
+the previous `public-cpu` image remains admitted for the consumers that stay
+on it (including release-compose and SDK roles). Runner-images main run
+`41541864277`, attempt 3, successfully staged and verified AMD64/ARM64 CPU
+candidates at producer `45e0c35a191cc7026fb1b9a24700cc1b40be7ca6` and Mesh
+source `06f6347323552d07bdeffdb1bc1aba2808c26519`. Native
+`runner-identity bind` retained the complete cohort bytes under
+`ci/runner-image-evidence/032e84ac5046e246959adc937c125cf63c33da11fa2b6a2dda18a44032190153.json`.
 
 The L2 planner action and all five lane summaries now invoke Rust `ci plan`
 and `ci validate-lane` through the narrow `ci-controller` executable that
@@ -886,8 +915,9 @@ closed.
 The Rust CI planner is the sole production Clippy and Rust-test batch allocator;
 `ci-crate-lists` validates that the main `matrices.rust_tests` covers every
 workspace crate exactly once, except the `CONTRACT_TESTED_CRATES`
-(`ci-controller` and `xtask`). `just ci-automation-contracts` runs their tests
-in the Quality slice, so each runs exactly once.
+(`ci-controller`, `process-supervision`, and `xtask`). `just
+ci-automation-contracts` runs their tests in the Quality slice, so each runs
+exactly once.
 
 Control-plane changes fail open through the selected profile. When they
 require the `web` slice, both console and website rows execute even without a
@@ -1306,6 +1336,14 @@ Runtime and product artifact IDs preserve every compatibility discriminator:
 `ci-runtime-<platform>-<architecture>-<backend>` and
 `ci-product-<platform>-<architecture>-<backend>`. Consumers download the exact
 platform, architecture, and backend identity selected by the plan.
+
+For configured Windows ROCm targets, the typed manifest writer admits only
+architectures with staged rocBLAS code objects when `rocblas.dll` is declared.
+Those objects join `runtime.files` with SHA-256 checksums, not the loadable DLL
+list. A missing kernel directory or empty target intersection fails packaging.
+The existing shell copy step and producer/composer topology are unchanged;
+supported-GPU inference and unsupported-GPU fallback still require hardware
+qualification.
 
 Release-profile hosts are used for both selected PR rows and main rows. Besides
 keeping product semantics identical, this prevents unstripped debug binaries
@@ -1814,7 +1852,9 @@ dependency environments and offline NAS model admission retain their owners.
 
 The shared macOS accelerator action eagerly starts sccache in every cache mode
 on a unique short Unix socket before any compiler probe and exports it to
-subsequent steps. Parallel compiler clients never initialize the new endpoint;
+subsequent steps. It exports and persists `SCCACHE_IDLE_TIMEOUT=0` before startup
+to retain the job-owned daemon across quiet test phases. Parallel compiler
+clients never initialize the new endpoint or restart it after idle expiration;
 the caller's remote-cache configuration remains unchanged.
 It never stops the default host server, so concurrent runner accounts cannot
 disrupt each other's compiler cache. Canary toolchain verification sets cache
@@ -2197,10 +2237,11 @@ workflows. The `hosted-bare` profile now restores a release executable from an
 exact-key `actions/cache` entry (`xtask-hosted-bare-<os>-<arch>-<hash>` over
 `Cargo.lock`, `Cargo.toml`, `.cargo/config.toml`, the action file,
 `.github/cache-version.txt`, `tools/xtask/**`, `tools/ci-controller/**`,
-`tools/trajectory-reader/**`,
+`tools/process-supervision/**`, `tools/trajectory-reader/**`,
 `mesh/crates/mesh-llm-release-footer/**`, the compiled-in JSON/script inputs and
 the Linux linker drivers), compiles only on a miss and saves on a miss. It hashes
-`tools/ci-controller/**` because xtask compiles the controller library. The image
+`tools/ci-controller/**` and `tools/process-supervision/**` because xtask
+compiles both libraries. The image
 profile never restores or saves an executable. The protected authority producers
 pass `reuse-hosted-binary: false`, so their bytes are always compiled in the
 run from the frozen protected source. A first run after any hashed input changes
@@ -2208,6 +2249,18 @@ is a cold miss. Pull requests execute main's reusable workflows, so none of this
 applies to a PR until it is merged. No hosted execution is recorded here.
 
 ## External Python SDK source preparation
+
+The checkout action, admission descriptor and Python-tooling policy use SDK
+commit `85226c50a68a13b48f40fe25e70eb85814e67457`; update all three together.
+Laya product readiness and Decisions smoke discovery query
+`/mesh/v1/models?workload_class=decision&available=true`, since compatibility
+model lists contain only LLMs. The golden and response checks remain required.
+
+The current checkpoint includes typed Mesh model discovery, OCR uploads,
+membership/live-session controls, full node configuration and native-runtime
+management. Its generated bindings were produced from the coordinated Mesh
+implementation recorded in the SDK's `sdk-inputs.json`; keep that source
+checkpoint synchronized with native API changes.
 
 The Python SDK package, generated Python bindings and four genuine compatibility
 and embedding clients are owned by `Mesh-LLM/mesh-llm-python-sdk`. Mesh admits the
@@ -2252,8 +2305,7 @@ on immediate repeated requests without publication sleeps or retries.
 
 ## Rolling preview distribution
 
-`rolling-preview.yml` is a main-only scheduled (Tuesday/Friday 03:23 UTC) and
-manual dispatcher of `release.yml` with `preview=true`, the full GPU matrix and
+`rolling-preview.yml` is a main-only manual dispatcher (schedule commented out) of `release.yml` with `preview=true`, the full GPU matrix and
 hosted runners. Unique run/attempt preview versions leave main unchanged. Release
 producers check out the metadata source SHA; publication stages a draft before
 exposing the complete immutable prerelease, never marking it latest. Stable
