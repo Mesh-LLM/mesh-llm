@@ -1398,6 +1398,9 @@ are recorded in PR #2662; cache compatibility remains tied to the runner image.
 Windows platform checks apply the shared sccache policy immediately after
 installation, using the selected runner's native and Depot cache permissions.
 
+`ci/CACHE_AUTHORITY.md` records the corresponding source-level cache
+permissions and the limits of those flags as evidence of live isolation.
+
 The checked-in Cargo configuration is the repository-wide Rust accelerator
 owner: `sccache` is mandatory, Linux final links prefer the probed mold driver
 and fall back to a compatible lld or the platform linker when mold is absent or
@@ -1433,6 +1436,20 @@ select eligible build/test rows on Depot macOS 15 and
 Windows 2022, subject to the same policy and documented exceptions. Provider
 choice never changes plan membership, commands, artifacts, tests or summaries.
 
+The ARM64 release-artifact smoke applies both cache permissions from the
+release runner selector immediately after installing sccache, before its
+checksum and extraction verifier invokes Cargo. A denied remote cache remains
+denied even if the runner exposes cache endpoint variables.
+
+Manual provider intent is forwarded from the Linux lane into its static ABI
+and native SDK producers as well as the host and runtime slices. The native
+SDK producer forwards source SHA, original event, hosted override and provider
+intent to its static ABI dependency. A hosted override takes precedence over
+manual requests and repository gates. The current full-release Linux and SDK
+automation profiles remain hosted until a Depot profile is qualified; the
+release input for Depot is retained but does not enable that route. Release
+native SDK and nested ABI work use the frozen metadata source. Rolling preview
+continues to force the separate CUDA GPU leg onto hosted runners as well.
 Depot coverage is reported against the selected ordinary-executor denominator,
 not against every job in the Actions run. For a plan, the denominator is every
 ordinary build/test executor row that the same event, trust profile, platform,
@@ -1882,20 +1899,19 @@ of a missing prerequisite. Tool provisioning is external to certification.
 The hosted profiles keep their existing installation behavior. Locked SDK
 dependency environments and offline NAS model admission retain their owners.
 
-The shared macOS accelerator action eagerly starts sccache in every cache mode
-on a unique short Unix socket before any compiler probe and exports it to
-subsequent steps. It exports and persists `SCCACHE_IDLE_TIMEOUT=0` before startup
-to retain the job-owned daemon across quiet test phases. Parallel compiler
-clients never initialize the new endpoint or restart it after idle expiration;
-the caller's remote-cache configuration remains unchanged.
+The shared macOS accelerator action allocates a job-owned short Unix socket,
+then applies the caller's explicit native and Depot cache permissions before
+starting sccache and probing the compiler. A repeated setup in the same job
+reuses its endpoint. It exports and persists `SCCACHE_IDLE_TIMEOUT=0` before
+startup to keep the server alive through long test phases.
 It never stops the default host server, so concurrent runner accounts cannot
 disrupt each other's compiler cache. Canary toolchain verification sets cache
 identity and leaves server startup to this action.
-The action initializes the disk directory before any
-compiler probe, including protected canary bootstrap calls that already set
-`SCCACHE_GHA_ENABLED=false`. It preserves an explicit `SCCACHE_DIR` and otherwise
-creates a job-local directory beneath `RUNNER_TEMP`. This does not grant remote
-cache authority or change the canary's later persistent compiler-cache identity.
+The selected cache policy initializes the disk directory before any compiler
+probe. It preserves an explicit `SCCACHE_DIR` and otherwise creates a job-local
+directory beneath `RUNNER_TEMP`. Missing or denied remote cache authority falls
+back to local disk; the canary's later persistent compiler-cache identity remains
+separate.
 
 `scripts/lib/macos-deployment-target.txt` records the shared default (13.3),
 matching the pinned llama.cpp

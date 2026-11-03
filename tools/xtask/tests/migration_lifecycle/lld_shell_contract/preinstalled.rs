@@ -97,11 +97,14 @@ fn preinstalled_profile_excludes_installers_and_selects_existing_linker_tools() 
 #[test]
 fn preinstalled_linker_refuses_missing_tools_and_starts_cache_without_installing() {
     let steps = action_steps(".github/actions/setup-macos-lld/action.yml");
-    let script = steps
+    let scripts = steps
         .iter()
-        .map(|step| field(step, "run"))
-        .collect::<Vec<_>>()
-        .join("\n");
+        .filter_map(|step| step.get("run").and_then(workflow_yaml::Node::text))
+        .collect::<Vec<_>>();
+    let script = format!(
+        "{}\n{}\nset -a; source \"$GITHUB_ENV\"; set +a\nsccache --start-server\n{}",
+        scripts[0], scripts[1], scripts[2]
+    );
     for missing in [None, Some("brew"), Some("sccache"), Some("ld64.lld")] {
         let f = Fixture::new();
         if missing != Some("brew") {
