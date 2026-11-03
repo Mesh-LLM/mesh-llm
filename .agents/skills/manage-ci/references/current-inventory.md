@@ -70,6 +70,41 @@ This file records checked-in CI facts and selected controlled probe evidence.
 It is not a complete historical run log or live GitHub/Depot administration.
 Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 
+## CI governance preparation (#2781)
+
+The [manage-ci rule](../SKILL.md#independent-human-approval-for-ci-policy) and
+[human procedure](../../../../ci/CI_GOVERNANCE.md) require one independent
+current-revision human approval from `micspiral`, `ndizazzo`, or `i386` for CI
+policy. The initial supported path is a human-authored PR whose author is the
+responsible sponsor; bot-authored policy PRs fail closed. The proposed visible
+`@Mesh-LLM/ci-policy-reviewers` team must have exactly those three members and
+explicit repository write access. Local files do not establish team creation,
+native file-scoped required-review rules, environment protection, administration
+credentials or drift-report delivery. Independent bootstrap review, authorized
+activation and effective-state readback remain pending. Product-only ownership
+outside declared CI control paths is preserved. See the procedure's activation
+evidence list before treating this proposal as enforced.
+The local JSON evaluators do not authenticate collection or authorize execution;
+prepared live collection/App-check publication and main-only administration
+preparation require the deliberately inactive numeric activation anchor and
+externally provisioned App/environment controls. The metadata publisher and
+credential-free review signal are separate from the five validation lanes.
+Administration preparation reads real supported metadata but its independent
+inspection remains authorization-blocked; no executor or administration-write
+credential is supplied. See the procedure for exact interfaces and limitations.
+Independently approved human team creation/verification and valid-owner
+readback are prerequisites to merging its CODEOWNERS references. Team/rule
+state remains unverified/inactive until actual live readback establishes it.
+The optional read-only `ci-governance inspect-live-controls` command collects a
+bounded subset using an explicitly supplied existing token and fixed GETs; it
+does not mint credentials. A 403 is unknown, and a 404 may mean absent or
+inaccessible. It also samples the active rules GitHub reports for `main` twice,
+with bounded pagination and repository/head rechecks. This reports only limited
+team-review and required-check observations; omitted parameters remain unknown.
+The first ruleset page and active-rule sample do not establish effective path
+scope, bypasses, legacy-rule interaction, producer identity or authenticated
+drift clearance. The output cannot authorize activation.
+
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes
 `mesh-llm-moa-plugin` and `mesh-llm-wallet` alongside their related workspace
 crates; `just ci-crate-lists` checks it against workspace membership. The
@@ -132,6 +167,9 @@ workflow owners, direct PR routing and still-unverified census in agreement.
 | `website-pages.yml` | main website paths, dispatch | Public website deployment |
 | `pr_cleanup.yml` | PR close, dispatch | Positively matched cleanup only |
 | `pr_auto_assign.yml` | PR lifecycle | Metadata only |
+| `ci-governance-publisher.yml` | protected PR metadata, completed review signals, main push and 15-minute outage reconciliation | Inactive App-bound current-revision approval publisher; exact-main policy and no PR checkout; two complete open-PR list passes, maximum 200 (parser/matrix bound, not qualified capacity) |
+| `ci-governance-review-signal.yml` | review submitted, edited or dismissed | Credential-free no-checkout signal; protected publisher independently recollects metadata |
+| `ci-governance-administration.yml` | dispatch on exact current `main` | Fixed UUID/digest intent preparation and independently gated inspection; authorization remains blocked |
 | `cache-warm-sccache.yml` (`Cache · Trusted sccache seed`) | successful Main Quality, dispatch | Sole bounded Linux compiler-seed publisher on GitHub-hosted infrastructure |
 | `agentic-replay-nightly.yml` (`Agentic Replay Nightly (micstudio)`) | trusted-main dispatch; schedule paused for qualification | Coding-agent serving benchmark on the pinned persistent macOS `micstudio` runner. Scheduled and manual execution is restricted to trusted `main`; exact model and trajectory revisions are SHA-256 verified, the trajectory pin is cross-checked against the canonical harness, replay shape comes from the checked-in matrix, history lookup fails closed, summaries are retained on regressions, and the persistent repair loop receives no publication credential. It emits a patch, PR body and validated run/attempt status artifact; a separate canonical-main, failed-run GitHub-hosted job validates and applies that data with hooks disabled, then uses `CANARY_REPAIR_TOKEN` to publish the deterministic run/attempt repair branch and PR. |
 
@@ -548,9 +586,11 @@ What enforces the convention instead:
   the title and body that CI validated, so a branch commit that skipped the
   hook cannot carry a trailer onto `main`.
 
-The four `main` ruleset bypass actors remain deliberately: maintainers need a
-fast merge path. Required checks therefore do not bind them, and the CI check
-is the control for everyone else.
+Historical observation: the 2026-11-01 audit recorded four always-bypass users
+on `main` ruleset `20090642`, with zero required approvals and code-owner review
+disabled. These are dated observations, not the #2781 desired state or current
+verification. Re-read effective rules and bypass actors before activation;
+the governance target allows no routine bypass for CI-policy changes.
 
 The five PR lifecycle rows and five main push rows above are the complete
 allowed routine required-validation entry sets. `pr_ci_canary.yml` is an
