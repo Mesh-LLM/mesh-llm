@@ -419,3 +419,242 @@ fn exhaustive_coverage_and_provider_selection_remain_separate() {
         fixture.0.close().unwrap();
     }
 }
+
+#[test]
+fn composed_runner_selection_refuses_untrusted_events_and_expired_cache_authority() {
+    let base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let pr = plan(
+        "pr-ready",
+        "pull_request",
+        base,
+        "mesh/crates/mesh-llm/src/main.rs",
+    );
+    let main = plan("main", "push", base, "README.md");
+    let manual = plan("manual-full", "workflow_dispatch", base, "README.md");
+    struct Case<'a> {
+        name: &'static str,
+        plan: &'a Value,
+        inputs: &'a [(&'static str, &'static str)],
+        depot: bool,
+        native_cache: bool,
+        trusted_seed: bool,
+    }
+    let cases = [
+        Case {
+            name: "expired matching canary stays cache-denied",
+            plan: &pr,
+            inputs: &[("INPUT_PR_CANARY_REF", "refs/pull/12/merge")],
+            depot: true,
+            native_cache: false,
+            trusted_seed: false,
+        },
+        Case {
+            name: "expired unrelated canary",
+            plan: &pr,
+            inputs: &[("INPUT_PR_CANARY_REF", "refs/pull/13/merge")],
+            depot: false,
+            native_cache: true,
+            trusted_seed: true,
+        },
+        Case {
+            name: "fork cannot use matching canary",
+            plan: &pr,
+            inputs: &[
+                ("INPUT_PR_CANARY_REF", "refs/pull/12/merge"),
+                ("INPUT_HEAD_REPOSITORY", "fork/mesh-llm"),
+            ],
+            depot: false,
+            native_cache: true,
+            trusted_seed: true,
+        },
+        Case {
+            name: "PR head ref cannot use merge canary",
+            plan: &pr,
+            inputs: &[
+                ("INPUT_PR_CANARY_REF", "refs/pull/12/merge"),
+                ("INPUT_REF", "refs/pull/12/head"),
+            ],
+            depot: false,
+            native_cache: true,
+            trusted_seed: true,
+        },
+        Case {
+            name: "disabled PR gate before expiry",
+            plan: &pr,
+            inputs: &[
+                ("FIXTURE_DATE", "2026-09-13"),
+                ("INPUT_DEPOT_PR_ENABLED", "false"),
+            ],
+            depot: false,
+            native_cache: true,
+            trusted_seed: true,
+        },
+        Case {
+            name: "trusted main without the exception",
+            plan: &main,
+            inputs: &[
+                ("INPUT_EVENT_NAME", "push"),
+                ("INPUT_REF", "refs/heads/main"),
+            ],
+            depot: true,
+            native_cache: false,
+            trusted_seed: false,
+        },
+        Case {
+            name: "push to another branch",
+            plan: &main,
+            inputs: &[
+                ("INPUT_EVENT_NAME", "push"),
+                ("INPUT_REF", "refs/heads/other"),
+            ],
+            depot: false,
+            native_cache: true,
+            trusted_seed: true,
+        },
+        Case {
+            name: "PR-origin dispatch cannot opt in",
+            plan: &manual,
+            inputs: &[
+                ("INPUT_EVENT_NAME", "workflow_dispatch"),
+                ("INPUT_ORIGINAL_EVENT_NAME", "pull_request"),
+                ("INPUT_REF", "refs/heads/main"),
+                ("INPUT_MANUAL_USE_DEPOT", "true"),
+            ],
+            depot: false,
+            native_cache: true,
+            trusted_seed: true,
+        },
+        Case {
+            name: "unsupported event fails closed",
+            plan: &main,
+            inputs: &[
+                ("INPUT_EVENT_NAME", "schedule"),
+                ("INPUT_REF", "refs/heads/main"),
+            ],
+            depot: false,
+            native_cache: true,
+            trusted_seed: true,
+        },
+    ];
+    for case in cases {
+        assert_eq!(case.plan["signals"]["force_hosted"], false, "{}", case.name);
+        let fixture = support::Fixture::new();
+        let mut inputs = vec![
+            ("FIXTURE_DATE", "2026-09-14"),
+            ("INPUT_DEPOT_PR_ENABLED", "true"),
+            ("INPUT_DEPOT_MAIN_ENABLED", "true"),
+            ("INPUT_FORCE_HOSTED", "false"),
+        ];
+        inputs.extend_from_slice(case.inputs);
+        let result = fixture.selector(&inputs);
+        assert!(result.status.success(), "{}: {result:?}", case.name);
+        let selected = fixture.outputs();
+        assert_eq!(
+            selected["depot_enabled"],
+            case.depot.to_string(),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            selected["allow_depot_remote_cache"], "false",
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            selected["allow_native_github_cache"],
+            case.native_cache.to_string(),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            selected["allow_trusted_sccache_seed"],
+            case.trusted_seed.to_string(),
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            selected["runner"],
+            if case.depot {
+                "depot-ubuntu-24.04"
+            } else {
+                "ubuntu-24.04"
+            },
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            selected["runner_macos"],
+            if case.depot {
+                "depot-macos-15"
+            } else {
+                "macos-15"
+            },
+            "{}",
+            case.name
+        );
+        assert_eq!(
+            selected["runner_windows"],
+            if case.depot {
+                "depot-windows-2022"
+            } else {
+                "windows-2022"
+            },
+            "{}",
+            case.name
+        );
+        if case.depot {
+            let cache = fixture.cache(&[
+                (
+                    "INPUT_ALLOW_DEPOT_REMOTE_CACHE",
+                    selected["allow_depot_remote_cache"].as_str().unwrap(),
+                ),
+                (
+                    "INPUT_ALLOW_NATIVE_GITHUB_CACHE",
+                    selected["allow_native_github_cache"].as_str().unwrap(),
+                ),
+            ]);
+            assert_eq!(cache["failures"], json!([]), "{}", case.name);
+            assert_eq!(
+                cache["exports"]["SCCACHE_MULTILEVEL_CHAIN"], "disk",
+                "{}",
+                case.name
+            );
+        }
+        fixture.0.close().unwrap();
+    }
+    for key in [
+        "INPUT_FORCE_HOSTED",
+        "INPUT_DEPOT_MAIN_ENABLED",
+        "INPUT_MANUAL_USE_DEPOT",
+    ] {
+        let fixture = support::Fixture::new();
+        let output = fixture.selector(&[(key, "TRUE")]);
+        assert!(!output.status.success(), "{key}");
+        assert!(!fixture.path().join("outputs").exists(), "{key}");
+        fixture.0.close().unwrap();
+    }
+
+    let request = json!({
+        "profile": "main", "event_name": "schedule",
+        "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "base_sha": base,
+        "changed_files": ["README.md"], "affected_crates": ["mesh-llm"],
+        "workspace_packages": [{"name": "mesh-llm", "path": "mesh/crates/mesh-llm"}]
+    });
+    let mut child = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .current_dir(support::root())
+        .args(["ci", "plan"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(request.to_string().as_bytes())
+        .unwrap();
+    let rejected = child.wait_with_output().unwrap();
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("unsupported event_name"));
+}
