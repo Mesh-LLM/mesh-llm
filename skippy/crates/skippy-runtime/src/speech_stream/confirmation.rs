@@ -45,6 +45,20 @@ impl ConfirmedPrefix {
         self.anchors.iter().filter(|anchor| anchor.observed).count()
     }
 
+    /// A wholly rewritten prefix can still have new words after its last
+    /// observed length. If any owned spelling survives, the failed alignment
+    /// is ambiguous: exposing a positional tail could replay that owner.
+    /// This fallback does not establish an alignment or change ownership.
+    pub(super) fn unsupported_boundary(&self, words: &[String]) -> usize {
+        if self.anchors.iter().any(|anchor| {
+            anchor.canonical.is_some() && words.iter().any(|word| anchor.matches(word))
+        }) {
+            words.len()
+        } else {
+            self.observed_len().min(words.len())
+        }
+    }
+
     /// A vanished confirmed prefix can leave the previous unconfirmed tail at
     /// the beginning of the new hypothesis. Prefer that supported tail only
     /// when its leading agreement exceeds the exact support in both confirmed

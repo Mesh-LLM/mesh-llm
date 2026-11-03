@@ -178,3 +178,56 @@ fn discarded_insertions_do_not_accumulate_history() {
     prefix.clear();
     assert!(prefix.anchors.is_empty());
 }
+
+#[test]
+fn unsupported_boundaries_use_the_capped_observed_length_without_mutation() {
+    let mut prefix = prefix("A B");
+    for (text, expected) in [("X Y tail", 2), ("X", 1), ("", 0)] {
+        assert_eq!(prefix.unsupported_boundary(&words(text)), expected);
+        assert_eq!(ownership(&prefix), 2);
+        assert_eq!(prefix.observed_len(), 2);
+    }
+    assert_eq!(prefix.align(&words("A B next")), Some(2));
+}
+
+#[test]
+fn unsupported_boundaries_preserve_canonical_and_latest_owned_spellings_anywhere() {
+    let mut prefix = prefix("Hello Alice");
+    assert_eq!(prefix.align(&words("Hello Bob")), Some(2));
+    for spelling in ["Alice", "Bob"] {
+        for text in [
+            format!("{spelling} fresh new words"),
+            format!("fresh {spelling} new words"),
+            format!("fresh new words {spelling}"),
+        ] {
+            assert_eq!(prefix.unsupported_boundary(&words(&text)), 4, "{text}");
+        }
+    }
+    assert_eq!(ownership(&prefix), 2);
+    assert_eq!(prefix.observed_len(), 2);
+}
+
+#[test]
+fn unsupported_boundaries_preserve_an_omitted_owner() {
+    let mut prefix = prefix("A B");
+    assert_eq!(prefix.align(&words("A")), Some(1));
+    let hypothesis = words("X Y B");
+    assert_eq!(prefix.align(&hypothesis), None);
+    assert_eq!(prefix.unsupported_boundary(&hypothesis), 3);
+    assert_eq!(ownership(&prefix), 2);
+    assert_eq!(prefix.observed_len(), 1);
+    assert_eq!(prefix.align(&words("A B next")), Some(2));
+}
+
+#[test]
+fn unsupported_boundaries_count_observed_insertions_without_treating_them_as_owners() {
+    let mut prefix = prefix("A C");
+    assert_eq!(prefix.align(&words("A B C")), Some(3));
+    assert_eq!(ownership(&prefix), 2);
+    assert_eq!(prefix.observed_len(), 3);
+    // B was heard inside the owned span, but was never emitted itself.
+    assert_eq!(prefix.unsupported_boundary(&words("X Y Z B tail")), 3);
+    assert_eq!(ownership(&prefix), 2);
+    assert_eq!(prefix.observed_len(), 3);
+    assert_eq!(prefix.align(&words("A B C next")), Some(3));
+}
