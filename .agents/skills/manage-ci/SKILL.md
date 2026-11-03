@@ -506,6 +506,13 @@ retired parser behavior, and source review still owns semantic emulation.
 - A caller may not choose a privileged runner label or independently grant
   remote-cache access. The workflow that owns `runs-on` must derive both from
   repository, event, ref, trust profile, architecture, and a bounded size.
+- The central runner selector emits a bounded non-secret selection trace and a
+  job summary. It records policy inputs, selected provider and projected labels,
+  not actual execution. Role, protected policy revision, runner identity and
+  effective cache mode remain unknown until separately observed and retained.
+  `ci execution-record` can combine that trace with bounded caller assertions,
+  but does not authenticate or retain them. Never treat its unverified record
+  as proof of job identity, cache mode, policy authority or qualification.
 - Ordinary PR jobs remain GitHub-hosted unless the bounded same-repository
   Depot risk exception below is active; an explicitly approved ephemeral,
   uncredentialed hardware runner may own a documented GPU smoke exception.
@@ -635,6 +642,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
   independently of the server endpoint, and pass the endpoint to later steps.
 - Declare cache mode per slice: no remote cache, PR restore-only/isolated, or
   trusted read-write. Derive it from the same policy as runner placement.
+- Routing coverage must compose checked-in caller inputs, planner placement,
+  selector decisions and compiler-cache configuration across trust and override
+  cases. Historical fixture dates do not renew an expired exception.
 - The ARM64 release-artifact verifier applies the selected runner's cache
   permissions immediately after installing sccache and before its first Cargo
   invocation. A hosted release runner is not an implicit cache grant.

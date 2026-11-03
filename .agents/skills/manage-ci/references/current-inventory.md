@@ -1028,6 +1028,11 @@ selectors receive an explicit hosted override regardless of the manual input
 or repository gate; the release SDK uses metadata's frozen source SHA. The
 release `use_depot` input remains reserved until a provider profile is
 qualified. The separate rolling-preview GPU override is retained.
+The composed placement fixture follows the Linux static-ABI and native-SDK
+caller inputs into the actual planner, selector and compiler-cache action. It
+covers same-repository and fork PRs, the exception expiry boundary, target
+events and PR-origin dispatches, including selected work and artifact identity.
+These local fixtures do not qualify a runner or renew an exception.
 
 ## Artifact and cache owners
 
@@ -1166,6 +1171,15 @@ boundary.
   Depot jobs enable the GitHub Actions cache API while direct Depot remote
   cache remains disabled. Hosted PR, release, and cache-warmer selections
   retain native GitHub cache behavior.
+  Its `selection_trace` output and job summary capture bounded non-secret
+  selection facts. They are not an authenticated execution record: role,
+  policy revision, actual runner and effective cache mode remain unknown.
+  `ci execution-record` validates and hashes the supplied trace, accepts only
+  catalog role names, and records caller context as unverified assertions. It
+  hashes supplied job and runner names but does not establish their identity,
+  cache behavior, policy authority, job binding or retention. No workflow calls it.
+  `ci/RUNNER_SELECTION_ACCEPTANCE.md` records the local case coverage and the
+  remaining event-by-role and caller gaps without asserting live qualification.
 - `configure-sccache-gha`: event/provider-derived compiler-cache setup. The
   Windows platform-check lane applies it immediately after sccache installation,
   with both cache permissions from the shared runner policy. The ARM64 release
