@@ -1249,6 +1249,17 @@ artifact build per active platform workflow because artifacts are run-scoped;
 UI tests still execute only in the Website graph and host producers never
 rebuild the UI themselves.
 
+`ci-controller::capacity_preview` is a source-only FIFO calculation over
+supplied pool limits, role classes, active work and queued work. It charges
+each declared pool, retains every main revision, and keeps running PR work
+counted when cancellation is proposed. It rejects missing or inconsistent
+classes, unknown pools, stale inputs under the caller-supplied window and
+arithmetic overflow. Its candidates and cancellation candidates are not
+reservations or authorization; strict FIFO may leave otherwise usable capacity
+idle. No workflow calls this preview. Actual cross-run admission still needs an
+independently approved complete catalog, authenticated observations, an atomic
+shared state and recovery design, and separately authorized live qualification.
+
 Timing evidence is collected read-only with `cargo xtool ci-ops collect-metrics`.
 Schema-v3 reports keep workflow wall/queue, runner queue, dependency wait,
 execution, runner-minutes, cancelled runner-minutes and peak workers separate,
