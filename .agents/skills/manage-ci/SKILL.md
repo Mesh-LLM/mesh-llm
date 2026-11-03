@@ -602,6 +602,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
 - The ARM64 release-artifact verifier applies the selected runner's cache
   permissions immediately after installing sccache and before its first Cargo
   invocation. A hosted release runner is not an implicit cache grant.
+- macOS linker setup must allocate a job-owned socket, apply both explicit
+  cache permissions, and start that selected cache before probing or compiling.
+  Callers and nested automation forward the same selector decision.
 - GitHub-hosted PR writes remain isolated from trusted main: normal protected
   same-repository and fork lanes explicitly force restore-only cache mode even
   though their workflow ref is the default branch. The bounded Depot exception
