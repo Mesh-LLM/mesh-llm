@@ -390,6 +390,7 @@ mod platform_checks;
 mod platform_runtimes;
 mod product_roles;
 mod quality;
+mod release_roles;
 
 #[test]
 fn exhaustive_coverage_and_provider_selection_remain_separate() {

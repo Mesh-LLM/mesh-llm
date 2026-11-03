@@ -24,6 +24,7 @@ effective hosted cache behavior remain unobserved.
 | Main macOS and Windows runtimes | Both callers keep their main gates off and project hosted labels while retaining runtime artifact names. | Planned runtime rows and checked-in callers; no observed job or artifact. |
 | Main platform checks | macOS and Windows check callers keep the main gate off; the actual mapping step maps selector labels to the planned platforms. | Local planner, selector and shell mapping fixture; no observed job. |
 | Main Rust, console, website and Swift callers | These callers keep their main gates off and project hosted labels while retaining selected batches, jobs and artifact names. | Local planner and checked-in caller fixtures; no observed job or artifact. |
+| Manual full release with Depot requested | Release metadata and its nested native-SDK/static-ABI path keep explicit hosted overrides and preserve source and artifact identities. | Synthetic selector and checked-in caller fixtures; no release was dispatched. |
 | Main product composition | Linux, macOS and Windows product callers keep their main gates off and project hosted labels; host, runtime and product artifact names remain bound. | Planned runtime rows and checked-in callers; no observed job or artifact. |
 | Quality role and sentinel | Planner inputs and checked-in Quality callers project the expected 4/8-worker labels for main, control, expired PR, fork and PR dispatch; the separate sentinel fixture requires its exact ref. | Synthetic selector and wiring fixtures; no sentinel activation or observed job. |
 
@@ -33,11 +34,12 @@ This census covers direct workflow steps using `select-ci-runners`, not all
 transitive callers, third-party actions, or live execution. `partial` means at
 least one composed case above covers the caller; it does not mean its full
 event/role matrix is complete. `open` means no composed caller case is recorded
-here. All rows still need complete coverage and review.
+here. All rows still need complete coverage and review. Zero `open` rows means
+only that each direct step has at least one case, not that the matrix is complete.
 The census test verifies caller identities and declared core inputs; it does
 not independently prove that a row's coverage label is complete.
 
-Current census: 20 direct selector steps; 19 partial and 1 open.
+Current census: 20 direct selector steps; 20 partial and 0 open.
 
 <!-- selector-census:start -->
 | Workflow | Job | Step | Coverage |
@@ -59,7 +61,7 @@ Current census: 20 direct selector steps; 19 partial and 1 open.
 | `ci-windows-product-slice.yml` | `runner_policy` | `policy` | partial |
 | `ci-windows-runtime-slice.yml` | `runner_policy` | `policy` | partial |
 | `native-sdk-artifact.yml` | `runner_policy` | `policy` | partial |
-| `release.yml` | `metadata` | `runners` | open |
+| `release.yml` | `metadata` | `runners` | partial |
 | `static-abi-artifact.yml` | `runner_policy` | `policy` | partial |
 | `swift-sdk-artifact.yml` | `runner_policy` | `policy` | partial |
 <!-- selector-census:end -->
