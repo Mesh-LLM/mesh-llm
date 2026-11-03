@@ -2,6 +2,7 @@ mod artifact;
 mod attestation;
 mod automation;
 mod automation_bootstrap;
+mod ci_governance;
 mod ci_operations;
 mod ci_plan;
 mod ci_validation;
@@ -193,6 +194,13 @@ fn run() -> DynResult<()> {
                 None => repository::RepositoryRoot::resolve(None)?,
             };
             ci_controller::plan::run(root.as_path(), rest)
+        }
+        cli::CliCommand::CiGovernance(rest) => {
+            let root = match explicit_root {
+                Some(root) => root,
+                None => repository::RepositoryRoot::resolve(None)?,
+            };
+            ci_governance::run(root.as_path(), rest)
         }
         cli::CliCommand::CiValidate(verb, rest) => match verb {
             "validate-graph" => ci_validation::entrypoint_graph::run(rest),
