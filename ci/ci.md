@@ -1247,10 +1247,15 @@ Schema-v3 reports keep workflow wall/queue, runner queue, dependency wait,
 execution, runner-minutes, cancelled runner-minutes and peak workers separate,
 and group results by provider, OS, architecture, semantic runner role and
 Depot size. When `--compare-input` is supplied, the report always emits a
-`comparison` block. Its recommendation is `hold` when job families or
-provider sets are not comparable. Deterministic queue p95 and
-capacity-contamination heuristics emit `eligible`, `hold`, `rollback` or
-`insufficient_sample`; they are rollout signals, not dated conclusions. Keep
+`comparison` block. It holds unless provider sets are disjoint, recorded job
+families and dimensions match, and at least three distinct successful
+first-attempt runs per condition have complete matching source, plan, image,
+toolchain and cache identities without excluded records. A passing comparison
+requests `review`, not rollout qualification; it cannot establish per-run
+workload, resources, artifact provenance or approval. Deterministic queue p95
+and capacity heuristics describe pooled jobs, not independent runs; their
+`eligible` state is queue-only and small-sample percentiles are descriptive.
+See `ci/DEPOT_MIGRATION.md` for the complete evidence and approval boundary. Keep
 raw inputs and dated reports under `/tmp` or a tracking artifact, never in
 `ci/`.
 On `gh` versions without the run JSON `attempt` field, the read-only collector
