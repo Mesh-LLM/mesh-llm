@@ -5,7 +5,7 @@ an existing read-only credential through `MESH_CI_GOVERNANCE_AUDIT_TOKEN` and
 uses a fixed, bounded set of GitHub GET requests. It never mints a credential
 or retries a denied request. A 403 is unknown; a 404 is ambiguous between
 absence and inaccessible state. The output is deliberately partial and
-unverified: numeric member identity, effective inherited rules, path-scoped requirements,
+unverified: numeric member identity, full effective rules, path-scoped requirements,
 required-check sources, bypasses, environment review/branch policy, and token
 permissions remain unknown. It does not authenticate its observer, establish
 an atomic snapshot, report drift clearance, deliver notifications, or grant
@@ -34,6 +34,19 @@ incomplete list, or missing branch/tag type remains unknown. Reviewer numeric
 anchors, complete effective policy and administrator bypass remain unverified;
 an undocumented bypass field in a response is not accepted as proof that bypass
 is disabled.
+
+The inspector also reads GitHub's [active rules for `main`](https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch)
+through a terminal empty page twice and rechecks repository identity and head.
+The report summarizes whether the observed team ID appears with a minimum of
+one reviewer, whether stale-review dismissal is present in a sampled active
+pull-request rule, and whether the fixed governance check context has an
+integration ID. Missing parameters, denied requests, changing results and
+incomplete pages stay unknown. These observations do not evaluate file-pattern
+coverage, legacy-rule interactions, bypasses, or the producer's identity; an
+integration ID alone is not proof it is the approved App. They do not establish
+that the rule applies correctly to any particular pull request. The inspector
+does not request this active-rule view when the legacy branch-protection
+response is denied, inaccessible, malformed or otherwise unknown.
 
 The normative rule is in the [manage-ci skill](../.agents/skills/manage-ci/SKILL.md#independent-human-approval-for-ci-policy).
 This procedure implements issue [#2781](https://github.com/Mesh-LLM/mesh-llm/issues/2781).

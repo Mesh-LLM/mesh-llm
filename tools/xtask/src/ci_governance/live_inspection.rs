@@ -1,6 +1,7 @@
 //! Bounded read-only observations before activation. This is not an authority,
 //! effective-rules evaluator, authenticated drift snapshot, or approval.
 mod branches;
+mod effective_rules;
 mod environment;
 mod membership;
 
@@ -26,9 +27,53 @@ pub(super) fn run(root: &Path, args: &[String]) -> DynResult<Value> {
     let cancellation = interrupt.cancellation();
     let mut client = GithubClient::installation(root, &cancellation, credential)?;
     let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
-    let report = inspect(&mut client, now);
+    let report = inspect_all(&mut client, now);
     interrupt.finish()?;
     Ok(report)
+}
+
+fn inspect_all(client: &mut impl GithubRead, now: u64) -> Value {
+    let mut report = inspect(client, now);
+    let observations = &report["observations"];
+    let stopped = observations.as_object().is_some_and(|items| {
+        items.values().any(|value| {
+            matches!(
+                value.get("reason").and_then(Value::as_str),
+                Some("transport_failure" | "not_queried_after_transport_failure")
+            )
+        })
+    });
+    let protection_unavailable = observations
+        .pointer("/legacy_branch_protection/state")
+        .and_then(Value::as_str)
+        != Some("observed")
+        || [
+            "required_approvals",
+            "dismiss_stale_reviews",
+            "require_code_owner_review",
+            "enforce_admins",
+        ]
+        .iter()
+        .any(|field| {
+            observations
+                .pointer(&format!("/legacy_branch_protection/fields/{field}/state"))
+                .and_then(Value::as_str)
+                != Some("observed")
+        });
+    let rules = if stopped {
+        unknown("not_queried_after_transport_failure")
+    } else if protection_unavailable {
+        unknown("not_queried_after_protection_unknown")
+    } else {
+        effective_rules::inspect(
+            client,
+            observations.get("repository"),
+            observations.get("main_branch"),
+            observations.get("reviewer_team"),
+        )
+    };
+    report["observations"]["main_active_rulesets"] = rules;
+    report
 }
 
 fn unknown(reason: &str) -> Value {
@@ -401,7 +446,7 @@ fn inspect(client: &mut impl GithubRead, now: u64) -> Value {
         "observations":observations,
         "unassessed":{
             "reviewer_membership":unknown("numeric_anchors_and_effective_membership_not_verified"),
-            "effective_branch_rules_and_path_scope":unknown("not_collected"),
+            "effective_branch_rules_and_path_scope":unknown("active_ruleset_summary_does_not_establish_complete_policy_or_path_scope"),
             "required_check_source_and_bypasses":unknown("not_collected"),
             "environment_reviewers_and_branch_policy":unknown("numeric_anchors_bypass_and_complete_branch_policy_not_verified"),
             "credential_permissions_and_boundaries":unknown("not_collected")

@@ -298,6 +298,10 @@ exit 1
     assert_eq!(report["status"], "PARTIAL_UNVERIFIED");
     assert_eq!(report["drift_status"], "UNKNOWN");
     assert_eq!(report["activation_authorized"], false);
+    assert_eq!(
+        report["observations"]["main_active_rulesets"]["reason"],
+        "not_queried_after_protection_unknown"
+    );
     for source in [
         "repository",
         "main_branch",
@@ -349,10 +353,9 @@ case "$endpoint" in
   'orgs/Mesh-LLM/teams/ci-policy-reviewers/repos/Mesh-LLM/mesh-llm') body='{"id":1,"full_name":"Mesh-LLM/mesh-llm","role_name":"write"}';;
   'repos/Mesh-LLM/mesh-llm/environments/ci-governance-administration') body='{"id":3,"name":"ci-governance-administration","protection_rules":[{"id":31,"type":"required_reviewers","prevent_self_review":true,"reviewers":[{"type":"User","reviewer":{"id":11,"login":"micspiral","type":"User"}},{"type":"User","reviewer":{"id":12,"login":"ndizazzo","type":"User"}},{"type":"User","reviewer":{"id":13,"login":"i386","type":"User"}}]},{"id":32,"type":"branch_policy"}],"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}';;
   'repos/Mesh-LLM/mesh-llm/environments/ci-governance-administration/deployment-branch-policies?per_page=100&page=1') body='{"total_count":1,"branch_policies":[{"id":33,"name":"main","type":"branch"}]}';;
-  'repos/Mesh-LLM/mesh-llm/branches/main/protection')
-    printf 'HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\n\r\n{"message":"fixture-private-error"}'
-    exit 1;;
+  'repos/Mesh-LLM/mesh-llm/branches/main/protection') body='{"required_pull_request_reviews":{"required_approving_review_count":0,"dismiss_stale_reviews":false,"require_code_owner_reviews":false},"enforce_admins":{"enabled":false}}';;
   'repos/Mesh-LLM/mesh-llm/rulesets?per_page=100&page=1') body='[]';;
+  'repos/Mesh-LLM/mesh-llm/rules/branches/main?per_page=100&page=1') body='[]';;
   'orgs/Mesh-LLM/teams/ci-policy-reviewers/members?role=all&per_page=100&page=1') body='[{"id":11,"login":"micspiral","type":"User"},{"id":12,"login":"ndizazzo","type":"User"},{"id":13,"login":"i386","type":"User"}]';;
   'orgs/Mesh-LLM/teams/ci-policy-reviewers/members?role=all&per_page=100&page=2') body='[]';;
   *) exit 43;;
@@ -383,19 +386,32 @@ printf 'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n%s' "$body"
         true
     );
     assert_eq!(
-        report["observations"]["legacy_branch_protection"]["reason"],
-        "access_denied"
+        report["observations"]["legacy_branch_protection"]["fields"]["required_approvals"]["value"],
+        0
     );
     assert_eq!(
         report["observations"]["administration_branch_policies"]["fields"]["expected_main_branch_only"]
             ["value"],
         true
     );
+    assert_eq!(
+        report["observations"]["main_active_rulesets"]["fields"]["active_rule_count"]["value"],
+        0
+    );
     assert_eq!(report["drift_status"], "UNKNOWN");
     assert_eq!(report["evidence_authenticated"], false);
     assert_eq!(report["execution_authorized"], false);
     let requests = fs::read_to_string(bin.join("requests"))?;
-    assert_eq!(requests.lines().count(), 15);
+    assert_eq!(requests.lines().count(), 19);
+    assert_eq!(
+        requests
+            .lines()
+            .filter(
+                |line| *line == "repos/Mesh-LLM/mesh-llm/rules/branches/main?per_page=100&page=1"
+            )
+            .count(),
+        2
+    );
     assert_eq!(
         requests
             .lines()

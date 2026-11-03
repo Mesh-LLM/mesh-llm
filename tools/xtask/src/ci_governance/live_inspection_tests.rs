@@ -704,3 +704,77 @@ fn membership_transport_failure_stops_independent_branch_reads() {
             .any(|r| matches!(r, Request::AdministrationEnvironmentBranches { .. }))
     );
 }
+
+#[test]
+fn all_inspection_adds_active_rules_without_claiming_authority() {
+    let mut client = mock();
+    for _ in 0..2 {
+        client.replies.push_back((
+            Request::EffectiveMainRulesPage { page: 1 },
+            response(200, json!([])),
+        ));
+    }
+    client.replies.push_back((
+        Request::Repository,
+        response(
+            200,
+            json!({"id":1,"full_name":REPOSITORY,"default_branch":"main"}),
+        ),
+    ));
+    client.replies.push_back((
+        Request::CurrentMain,
+        response(
+            200,
+            json!({"name":"main","commit":{"sha":"1111111111111111111111111111111111111111"}}),
+        ),
+    ));
+    let result = inspect_all(&mut client, 123);
+    assert_eq!(
+        result["observations"]["main_active_rulesets"]["fields"]["active_rule_count"]["value"],
+        0
+    );
+    assert_eq!(result["drift_status"], "UNKNOWN");
+    assert_eq!(result["evidence_authenticated"], false);
+    assert_eq!(result["activation_authorized"], false);
+}
+
+#[test]
+fn all_inspection_does_not_continue_after_transport_failure() {
+    let mut client = mock();
+    client.replies[2].1 = None;
+    let result = inspect_all(&mut client, 123);
+    assert_eq!(
+        result["observations"]["main_active_rulesets"]["reason"],
+        "not_queried_after_transport_failure"
+    );
+    assert!(
+        !client
+            .requests
+            .iter()
+            .any(|request| matches!(request, Request::EffectiveMainRulesPage { .. }))
+    );
+}
+
+#[test]
+fn all_inspection_does_not_use_active_rules_after_protection_denial() {
+    for (status, body) in [
+        (403, json!({"message":"private-provider-error"})),
+        (404, json!({"message":"private-provider-error"})),
+        (200, json!({})),
+    ] {
+        let mut client = mock();
+        client.replies[5].1 = response(status, body);
+        let result = inspect_all(&mut client, 123);
+        assert_eq!(
+            result["observations"]["main_active_rulesets"]["reason"],
+            "not_queried_after_protection_unknown"
+        );
+        assert!(
+            !client
+                .requests
+                .iter()
+                .any(|request| matches!(request, Request::EffectiveMainRulesPage { .. }))
+        );
+        assert!(!result.to_string().contains("private-provider-error"));
+    }
+}

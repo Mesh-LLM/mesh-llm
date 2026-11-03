@@ -32,6 +32,10 @@ pub(crate) enum Request {
     MainBranchProtection,
     /// One bounded page only. It is not a complete effective-ruleset census.
     RepositoryRulesetsFirstPage,
+    /// Active rules that GitHub reports for the fixed main branch.
+    EffectiveMainRulesPage {
+        page: u32,
+    },
     Pull {
         number: u64,
     },
@@ -117,6 +121,14 @@ impl Request {
             Self::RepositoryRulesetsFirstPage => {
                 ("GET", format!("{repo}/rulesets?per_page=100&page=1"), None)
             }
+            Self::EffectiveMainRulesPage { page } => (
+                "GET",
+                format!(
+                    "{repo}/rules/branches/main?per_page=100&page={}",
+                    page_number(*page)?
+                ),
+                None,
+            ),
             Self::Pull { number } => ("GET", format!("{repo}/pulls/{}", positive(*number)?), None),
             Self::Policy { revision } => {
                 if !valid_sha(revision) {
@@ -387,6 +399,10 @@ mod inspection_request_tests {
                 Request::RepositoryRulesetsFirstPage,
                 "repos/Mesh-LLM/mesh-llm/rulesets?per_page=100&page=1",
             ),
+            (
+                Request::EffectiveMainRulesPage { page: 1 },
+                "repos/Mesh-LLM/mesh-llm/rules/branches/main?per_page=100&page=1",
+            ),
         ] {
             let encoded = request.encode().unwrap();
             assert_eq!(encoded.method, "GET");
@@ -395,5 +411,15 @@ mod inspection_request_tests {
         }
         assert!(Request::TeamMembersPage { page: 0 }.encode().is_err());
         assert!(Request::TeamMembersPage { page: 101 }.encode().is_err());
+        assert!(
+            Request::EffectiveMainRulesPage { page: 0 }
+                .encode()
+                .is_err()
+        );
+        assert!(
+            Request::EffectiveMainRulesPage { page: 101 }
+                .encode()
+                .is_err()
+        );
     }
 }
