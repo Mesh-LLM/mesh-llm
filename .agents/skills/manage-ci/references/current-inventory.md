@@ -1000,6 +1000,13 @@ also forces hosted. Manual-full compares its selected main commit with its
 parent; change discovery disables rename detection so both paths are checked.
 Lane callers treat a missing placement field as hosted for safe version
 transitions. This changes neither live provider gates nor the role allowlist.
+Manual `use_depot` intent reaches Quality, Linux host/runtime, static ABI and
+native SDK callers; native SDK forwards the same source, event, override and
+intent to its nested static-ABI producer. Full-release Linux and native SDK
+selectors receive an explicit hosted override regardless of the manual input
+or repository gate; the release SDK uses metadata's frozen source SHA. The
+release `use_depot` input remains reserved until a provider profile is
+qualified. The separate rolling-preview GPU override is retained.
 
 ## Artifact and cache owners
 

@@ -514,6 +514,12 @@ retired parser behavior, and source review still owns semantic emulation.
   otherwise incomplete change list, and the force-all sentinel remain hosted.
   Compare both sides of a rename, and keep existing provider gates, role
   exclusions, explicit hosted overrides and cache boundaries intact.
+- Forward a manual provider request and its original event through every
+  provider-capable reusable boundary. An explicit hosted override wins over
+  both the request and repository gates at every depth. Full-release ordinary
+  Linux and native SDK work remains hosted while its automation profile has no
+  qualified Depot path; a rolling-preview override also retains its documented
+  GPU-runner behavior. Do not infer a nested policy from a weaker parent gate.
 - Shared Linux Clippy/test/host/runtime compiler-cache publication has one
   trusted GitHub-hosted warmer. It
   publishes one bounded, exact-key sccache seed after successful main Quality;

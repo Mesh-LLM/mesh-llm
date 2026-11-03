@@ -26,12 +26,12 @@ on:
         default: false
         type: boolean
       force_hosted_runners:
-        description: Route the self-hosted x86_64 CUDA release lane to GitHub-hosted runners for this run only
+        description: Also route the self-hosted x86_64 CUDA release lane to GitHub-hosted runners
         required: true
         default: false
         type: boolean
       use_depot:
-        description: Route eligible non-GPU Linux jobs to Depot for a trusted main-ref canary
+        description: Reserved for a future qualified release provider; current release jobs remain hosted
         required: true
         default: false
         type: boolean
@@ -301,11 +301,12 @@ jobs:
           head_repository: ${{ github.event.pull_request.head.repo.full_name }}
           head_sha: ${{ github.sha }}
           ref: ${{ github.ref }}
-          # force_hosted_runners (set by rolling previews) keeps every Linux leg on
-          # GitHub-hosted runners, matching how tagged releases from release/* run.
-          depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' && inputs.force_hosted_runners != true }}
+          # The current full-release automation profile is hosted-only. Pass
+          # the real request and gate, but make the hosted override decisive.
+          depot_main_enabled: ${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}
           depot_pr_enabled: 'false'
           manual_use_depot: ${{ inputs.use_depot == true }}
+          force_hosted: true
 
   release_ui:
     if: ${{ needs.authority_linux_x64.result == 'success' }}
@@ -559,8 +560,10 @@ jobs:
       authority_linux_x64: ${{ needs.authority_linux_x64.outputs.identity_json }}
       authority_linux_arm64: ${{ needs.authority_linux_arm64.outputs.identity_json }}
       authority_macos_arm64: ${{ needs.authority_macos_arm64.outputs.identity_json }}
+      source_sha: ${{ needs.metadata.outputs.source_sha }}
       original_event_name: ${{ github.event_name }}
-      force_hosted: false
+      force_hosted: true
+      use_depot: ${{ inputs.use_depot == true }}
       backend: ${{ matrix.backend }}
       target: ${{ matrix.target }}
       profile: release
@@ -638,8 +641,7 @@ jobs:
 
       # Package verification runs through scripts/lib/automation.sh; the shared
       # automation setup exports MESH_LLM_AUTOMATION_BIN so just is never needed.
-      # Depot Linux legs (DEPOT_RUNNERS_ENABLED main dispatch) have no supported
-      # profile, so dispatch with force_hosted_runners=true for full releases.
+      # Full-release Linux legs stay hosted until a Depot profile is qualified.
       - name: Prepare automation
         uses: ./.github/actions/prepare-automation
         with:
@@ -979,7 +981,7 @@ jobs:
       source_sha: ${{ needs.metadata.outputs.source_sha }}
       ui_artifact_name: prepared-release-ui-${{ needs.metadata.outputs.tag }}-${{ needs.metadata.outputs.source_sha }}
       original_event_name: ${{ github.event_name }}
-      force_hosted: false
+      force_hosted: true
       mode: full
       artifact_name: release-swift-sdk
       release_tag: ${{ needs.metadata.outputs.tag }}

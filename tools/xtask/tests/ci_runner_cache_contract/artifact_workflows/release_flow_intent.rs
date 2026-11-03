@@ -198,14 +198,13 @@ fn graph_release_selector_and_secret_hosts_keep_approved_effective_runner_author
     assert_eq!(input(selector, "ref"), Some("${{ github.ref }}"));
     assert_eq!(
         input(selector, "depot_main_enabled"),
-        // Rolling previews pass force_hosted_runners=true so main dispatches stay
-        // on GitHub-hosted runners, like tagged releases from release/* refs.
-        Some("${{ vars.DEPOT_RUNNERS_ENABLED == 'true' && inputs.force_hosted_runners != true }}")
+        Some("${{ vars.DEPOT_RUNNERS_ENABLED == 'true' }}")
     );
     assert_eq!(
         input(selector, "manual_use_depot"),
         Some("${{ inputs.use_depot == true }}")
     );
+    assert_eq!(input(selector, "force_hosted"), Some("true"));
     assert!(
         doc.get("on")
             .unwrap()
@@ -334,6 +333,9 @@ fn graph_release_sdk_calls_are_typed_and_publish_flat_exact_artifact_outputs() {
     for (key, value) in [
         ("profile", "release"),
         ("include_runtime_crate", "true"),
+        ("source_sha", "${{ needs.metadata.outputs.source_sha }}"),
+        ("force_hosted", "true"),
+        ("use_depot", "${{ inputs.use_depot == true }}"),
         (
             "produce_static_abi",
             "${{ endsWith(matrix.target, '-unknown-linux-gnu') }}",
@@ -359,6 +361,7 @@ fn graph_release_sdk_calls_are_typed_and_publish_flat_exact_artifact_outputs() {
     );
     for (key, value) in [
         ("mode", "full"),
+        ("force_hosted", "true"),
         ("artifact_name", "release-swift-sdk"),
         ("max_parallel", "4"),
         ("timeout_minutes", "180"),
