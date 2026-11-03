@@ -1329,7 +1329,7 @@ The standalone API adds only its dedicated CPU identity; existing image
 references and evidence bindings remain unchanged.
 
 The `product-smoke` catalog role covers `smoke.yml`; accelerator and macOS paths
-retain their existing container opt-outs. The inventory has 10 images, 37 roles
+retain their existing container opt-outs. The inventory has 11 images, 37 roles
 and 37 literal workflow image bindings.
 
 ### Qualified lean UI consumers
