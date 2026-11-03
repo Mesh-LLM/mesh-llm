@@ -384,6 +384,7 @@ fn placement_guards_reject_nested_and_release_override_mutations() {
 }
 
 mod caller_census;
+mod canary_chain;
 mod event_matrix;
 mod excluded_main;
 mod host_roles;
