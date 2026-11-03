@@ -251,6 +251,9 @@ ci-automation-contracts:
         --test canary_cache_configuration \
         --test canary_controller_plan \
         --test canary_result_gate \
+        --test ci_governance_api_contracts \
+        --test ci_governance_operations_contracts \
+        --test ci_governance_pr_contracts \
         --test ci_runner_cache_contract \
         --test family_battery_environment \
         --test family_battery_prepared_source \
