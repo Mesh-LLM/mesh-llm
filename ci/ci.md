@@ -1253,6 +1253,11 @@ capacity-contamination heuristics emit `eligible`, `hold`, `rollback` or
 `insufficient_sample`; they are rollout signals, not dated conclusions. Keep
 raw inputs and dated reports under `/tmp` or a tracking artifact, never in
 `ci/`.
+On `gh` versions without the run JSON `attempt` field, the read-only collector
+gets the actual attempt from GitHub's run API and verifies the run identity
+before and after job collection. Changed or incomplete snapshots fail rather
+than being assigned an inferred attempt; permission failures do not trigger
+the compatibility retry.
 
 ### PR failure domains
 

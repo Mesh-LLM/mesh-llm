@@ -414,6 +414,9 @@ retired parser behavior, and source review still owns semantic emulation.
 - Use measured workload data to rebalance deterministic shards, but keep the
   checked-in algorithm reproducible. Use one Cargo invocation per shard unless
   a documented package-isolation check requires otherwise.
+- Metrics collection must preserve the exact run attempt and reject a run that
+  changes during a compatibility read. A GitHub authentication or permission
+  failure must never trigger a different credential or endpoint fallback.
 - The local `just test-all` gate runs all `xtask` tests in a separate Cargo
   invocation with `--test-threads=1`, because their signal scopes are
   process-global. Pass the harness argument to that package only; a global
