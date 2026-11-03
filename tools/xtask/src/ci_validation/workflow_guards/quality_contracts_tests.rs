@@ -50,6 +50,7 @@ fn bootstrap_fixture_build_and_required_environment_cannot_be_omitted_or_reorder
             "target_directory=\"$(printf",
             "guessed_directory=\"$(printf",
         ),
+        source.replace("$1 == \"binary_path\"", "$1 == \"target_directory\""),
         source.replace(
             "export CARGO_TARGET_DIR=\"$target_directory\"",
             "export CARGO_TARGET_DIR=target",

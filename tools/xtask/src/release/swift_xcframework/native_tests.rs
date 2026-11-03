@@ -1,10 +1,10 @@
 use super::{Error, NativeLipo, fixtures::Fixture};
 use crate::process::{Cancellation, Outcome};
-use std::{collections::BTreeMap, fs, num::NonZeroUsize, path::PathBuf, time::Duration};
+use std::{collections::BTreeMap, fs, num::NonZeroUsize, time::Duration};
 
 fn native(fixture: &Fixture) -> NativeLipo {
-    let executable = PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap())
-        .join("debug/examples/migration_xcframework_lipo_fixture");
+    let executable =
+        crate::fixture_paths::examples_dir().join("migration_xcframework_lipo_fixture");
     assert!(
         executable.is_file(),
         "build the authored inert Rust example first"

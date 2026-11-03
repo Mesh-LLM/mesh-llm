@@ -9,8 +9,7 @@ fn cli_verifies_host_when_inert_rust_lipo_is_explicit() {
     let fixture = Fixture::host();
     fixture.materialize();
     fixture.write(true);
-    let directory =
-        std::path::PathBuf::from(std::env::var_os("CARGO_TARGET_DIR").unwrap()).join("debug");
+    let directory = crate::fixture_paths::target_profile_dir();
     let executable = directory.join("xtask");
     let lipo = directory.join("examples/migration_xcframework_lipo_fixture");
     let before = super::layout_tests::snapshot(&fixture.root);
