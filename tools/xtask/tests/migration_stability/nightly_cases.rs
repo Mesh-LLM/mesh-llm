@@ -2,6 +2,47 @@
 use super::*;
 
 #[test]
+fn stability_fixture_serves_later_requests_after_a_client_disconnects() {
+    use std::{
+        io::{Read, Write},
+        net::{Shutdown, TcpStream},
+        time::{Duration, Instant},
+    };
+
+    let server = fixture::Server::new(vec![
+        (503, "x".repeat(16 * 1024 * 1024), false),
+        (200, "{}".into(), false),
+    ]);
+    let address = server
+        .base
+        .strip_prefix("http://")
+        .unwrap()
+        .split('/')
+        .next()
+        .unwrap();
+    let request = b"GET /tenant/v1/models HTTP/1.1\r\nHost: fixture\r\nConnection: close\r\n\r\n";
+    let mut first = TcpStream::connect(address).unwrap();
+    first.write_all(request).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while server.requests.lock().unwrap().is_empty() {
+        assert!(Instant::now() < deadline, "first request was not observed");
+        std::thread::yield_now();
+    }
+    first.shutdown(Shutdown::Both).unwrap();
+    drop(first);
+
+    let mut second = TcpStream::connect(address).expect("fixture must keep accepting requests");
+    second
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    second.write_all(request).unwrap();
+    let mut response = String::new();
+    second.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 200 "), "{response}");
+    assert_eq!(server.requests.lock().unwrap().len(), 2);
+}
+
+#[test]
 fn stability_cli_nightly_plan_is_repeatable_and_skip_streaming_is_explicit() {
     let directory = tempfile::tempdir().unwrap();
     let output = directory.path().join("uncreated evidence");
