@@ -35,6 +35,85 @@ fn plan_rejects_malformed_json_when_input_is_invalid() -> TestResult {
 }
 
 #[test]
+fn exhaustive_plans_keep_coverage_while_restricting_actual_policy_changes() -> TestResult {
+    let plan = |profile: &str,
+                event: &str,
+                base: &str,
+                path: &str|
+     -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+        let request = serde_json::json!({
+            "profile": profile,
+            "event_name": event,
+            "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "base_sha": base,
+            "changed_files": [path],
+            "workspace_packages": [{"name": "mesh-llm", "path": "mesh/crates/mesh-llm"}]
+        });
+        let result = run(&["ci", "plan"], &serde_json::to_vec(&request)?)?;
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        Ok(serde_json::from_slice(&result.stdout)?)
+    };
+    let base = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    let main = plan("main", "push", base, "README.md")?;
+    let manual = plan("manual-full", "workflow_dispatch", base, "README.md")?;
+    let controlled = plan("main", "push", base, ".github/workflows/main_linux.yml")?;
+    let fallback = plan("main", "push", "", "__force_all__")?;
+    for value in [&main, &manual, &controlled, &fallback] {
+        assert_eq!(value["signals"]["runner_contract_required"], true);
+        assert_eq!(value["required_slices"], main["required_slices"]);
+        assert_eq!(value["matrices"], main["matrices"]);
+    }
+    assert_eq!(main["signals"]["force_hosted"], false);
+    assert_eq!(manual["signals"]["force_hosted"], false);
+    assert_eq!(controlled["signals"]["force_hosted"], true);
+    assert_eq!(fallback["signals"]["force_hosted"], true);
+    Ok(())
+}
+
+#[test]
+fn force_all_rejects_partial_pr_crate_coverage() -> TestResult {
+    let request = serde_json::json!({
+        "profile": "pr-ready",
+        "event_name": "pull_request",
+        "source_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "base_sha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "changed_files": ["__force_all__"],
+        "workspace_packages": [
+            {"name": "mesh-llm", "path": "mesh/crates/mesh-llm"},
+            {"name": "mesh-llm-cli", "path": "mesh/crates/mesh-llm-cli"}
+        ],
+        "affected_crates": ["mesh-llm"]
+    });
+    let result = run(&["ci", "plan"], &serde_json::to_vec(&request)?)?;
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let plan: serde_json::Value = serde_json::from_slice(&result.stdout)?;
+    assert_eq!(
+        plan["affected_crates"],
+        serde_json::json!(["mesh-llm", "mesh-llm-cli"])
+    );
+    let tested = plan["matrices"]["rust_tests"]
+        .as_array()
+        .ok_or("test batches")?;
+    for name in ["mesh-llm", "mesh-llm-cli"] {
+        assert!(tested.iter().any(|batch| {
+            batch["crates"]
+                .as_array()
+                .is_some_and(|crates| crates.iter().any(|crate_name| crate_name == name))
+        }));
+    }
+    assert_eq!(plan["signals"]["force_hosted"], true);
+    Ok(())
+}
+
+#[test]
 fn lane_succeeds_when_unselected_jobs_are_skipped() -> TestResult {
     // Given: an unselected website lane with its only job skipped.
     let plan = r#"{"lane":"website","required":false,"required_slices":[]}"#;

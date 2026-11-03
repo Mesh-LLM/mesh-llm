@@ -506,6 +506,14 @@ retired parser behavior, and source review still owns semantic emulation.
   selected-workflow restriction.
 - Provider changes must not alter source checkout, commands, profile,
   artifacts, tests, required checks, or plan membership.
+- Exhaustive main and manual-full profiles still run the complete runner
+  contracts, but that coverage alone must not force every eligible job onto
+  GitHub-hosted runners. The planner separately derives hosted placement from
+  actual CI-control, runner-infrastructure and governance-scoped changes.
+  Missing or invalid policy, an unavailable comparison base, an oversized or
+  otherwise incomplete change list, and the force-all sentinel remain hosted.
+  Compare both sides of a rename, and keep existing provider gates, role
+  exclusions, explicit hosted overrides and cache boundaries intact.
 - Shared Linux Clippy/test/host/runtime compiler-cache publication has one
   trusted GitHub-hosted warmer. It
   publishes one bounded, exact-key sccache seed after successful main Quality;

@@ -990,6 +990,17 @@ rows from that same catalog. Draft PR profiles select no build rows unless the
 changed paths require the documented CI-control or runner-infrastructure
 fail-open policy.
 
+The planner emits distinct `runner_contract_required` coverage and
+`force_hosted` placement signals. Main/manual-full still execute the exhaustive
+contracts, while complete ordinary product or documentation changes may use
+the existing eligible provider paths. CI-control, runner-infrastructure,
+tooling and governance-scoped paths stay hosted. An absent/invalid governance
+scope, missing comparison base, oversized change list or force-all sentinel
+also forces hosted. Manual-full compares its selected main commit with its
+parent; change discovery disables rename detection so both paths are checked.
+Lane callers treat a missing placement field as hosted for safe version
+transitions. This changes neither live provider gates nor the role allowlist.
+
 ## Artifact and cache owners
 
 `native runtime-manifest-write` owns Windows ROCm target admission after the

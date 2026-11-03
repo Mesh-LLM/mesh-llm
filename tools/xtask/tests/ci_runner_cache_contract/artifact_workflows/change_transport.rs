@@ -111,6 +111,33 @@ jq -e --slurpfile expected expected.json '.profile == "main" and .event_name == 
     }
 }
 
+#[test]
+fn manual_change_list_survives_and_the_bounded_fallback_overrides_it() {
+    let (_, source) = plan_source();
+    for (hint, expected) in [("", "docs/MESHES.md"), ("__force_all__", "__force_all__")] {
+        let f = fixture();
+        fs::write(f.path().join("changed.txt"), "docs/MESHES.md\n").unwrap();
+        f.executable(
+            "automation",
+            r#"/bin/cat > planner-input.json
+jq -e --arg expected "$EXPECTED_PATH" '.profile == "manual-full" and .changed_files == [$expected]' planner-input.json >/dev/null
+/bin/cat golden.json"#,
+        );
+        let script = source.replace(
+            "/tmp/changed_files.txt",
+            &format!("\"{}\"", f.path().join("changed.txt").display()),
+        );
+        let mut command = command(&f, &script);
+        command
+            .env("EVENT_NAME", "workflow_dispatch")
+            .env("CHANGED_FILES_HINT", hint)
+            .env("EXPECTED_PATH", expected);
+        let output = f.run(command);
+        assert!(output.status.success(), "{hint:?}: {output:?}");
+        f.0.close().unwrap();
+    }
+}
+
 fn caller_limits(document: &Node) -> Result<Vec<String>, String> {
     let mut guards = Vec::new();
     for (_, job) in document.get("jobs").ok_or("jobs missing")?.entries() {
