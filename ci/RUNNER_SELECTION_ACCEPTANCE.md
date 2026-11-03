@@ -23,6 +23,43 @@ effective hosted cache behavior remain unobserved.
 | Main Linux runtime, gate on | CPU's explicit override projects hosted placement and native-cache permission while the general runtime selector projects a Depot label and denies that cache. | Planned CPU/CUDA rows and checked-in selector projection; no observed runner or cache. |
 | Quality role and sentinel | Planner inputs and checked-in Quality callers project the expected 4/8-worker labels for main, control, expired PR, fork and PR dispatch; the separate sentinel fixture requires its exact ref. | Synthetic selector and wiring fixtures; no sentinel activation or observed job. |
 
+## Direct selector caller census
+
+This census covers direct workflow steps using `select-ci-runners`, not all
+transitive callers, third-party actions, or live execution. `partial` means at
+least one composed case above covers the caller; it does not mean its full
+event/role matrix is complete. `open` means no composed caller case is recorded
+here. All rows still need complete coverage and review.
+The census test verifies caller identities and declared core inputs; it does
+not independently prove that a row's coverage label is complete.
+
+Current census: 20 direct selector steps; 9 partial and 11 open.
+
+<!-- selector-census:start -->
+| Workflow | Job | Step | Coverage |
+| --- | --- | --- | --- |
+| `ci-linux-host-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-linux-product-slice.yml` | `runner_policy` | `policy` | open |
+| `ci-linux-runtime-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-linux-runtime-slice.yml` | `runner_policy` | `cpu_policy` | partial |
+| `ci-macos-host-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-macos-product-slice.yml` | `runner_policy` | `policy` | open |
+| `ci-macos-runtime-slice.yml` | `runner_policy` | `policy` | open |
+| `ci-platform-checks-slice.yml` | `runner_policy` | `policy` | open |
+| `ci-quality-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-quality-slice.yml` | `runner_policy` | `sentinel_policy` | partial |
+| `ci-rust-tests-slice.yml` | `runner_policy` | `policy` | open |
+| `ci-ui-artifact-slice.yml` | `runner_policy` | `policy` | open |
+| `ci-web-slice.yml` | `runner_policy` | `policy` | open |
+| `ci-windows-host-slice.yml` | `runner_policy` | `policy` | partial |
+| `ci-windows-product-slice.yml` | `runner_policy` | `policy` | open |
+| `ci-windows-runtime-slice.yml` | `runner_policy` | `policy` | open |
+| `native-sdk-artifact.yml` | `runner_policy` | `policy` | partial |
+| `release.yml` | `metadata` | `runners` | open |
+| `static-abi-artifact.yml` | `runner_policy` | `policy` | partial |
+| `swift-sdk-artifact.yml` | `runner_policy` | `policy` | open |
+<!-- selector-census:end -->
+
 The composed caller checks cover Linux static ABI, the native-SDK nested
 static-ABI path, the three platform host paths, Linux runtime's CPU exception
 and Quality's normal and sentinel selectors, including selected planner rows

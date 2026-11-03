@@ -212,7 +212,7 @@ fn assert_quality_selection_cases(
 }
 
 fn assert_quality_sentinel_cases() {
-    // The exact-ref sentinel is an isolated historical fixture, not a live
+    // The exact-ref sentinel is an isolated synthetic fixture, not a live
     // activation. Both ordinary gates and manual intent remain disabled.
     for (canary, expected) in [
         ("", "false"),

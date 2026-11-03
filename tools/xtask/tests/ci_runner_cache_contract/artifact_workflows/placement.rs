@@ -383,6 +383,7 @@ fn placement_guards_reject_nested_and_release_override_mutations() {
     }
 }
 
+mod caller_census;
 mod host_roles;
 mod quality;
 
