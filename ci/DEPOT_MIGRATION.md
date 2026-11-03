@@ -276,6 +276,9 @@ Official references:
 
 ## Cache isolation and remaining registry investigation
 
+The event, provider, trust and cache-permission table is maintained in
+`ci/CACHE_AUTHORITY.md`; it is source evidence, not live qualification.
+
 Depot documents an organization setting named **Allow Actions jobs to
 automatically connect to Depot Cache**. That setting and automatic Registry
 Actions authentication are now admin-verified off. The negative
