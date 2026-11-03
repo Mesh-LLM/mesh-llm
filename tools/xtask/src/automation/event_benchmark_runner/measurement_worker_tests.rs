@@ -99,13 +99,36 @@ async fn measured_timeout_keeps_warmup_and_model_evidence() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn warmup_timeout_still_attempts_one_measurement() {
-    let fixture = Fixture::new(vec![Reply::models(), Reply::Hold, Reply::stream(8)]).await;
+    let mut fixture = Fixture::new(vec![Reply::models(), Reply::Hold, Reply::stream(8)]).await;
     let mut input = input(fixture.port);
-    input.request_timeout_ms = 30;
+    // Allow a busy runner to finish readiness and the measured response. The
+    // held warmup still must cross the real request deadline.
+    input.readiness_timeout_ms = 1_000;
+    input.request_timeout_ms = 200;
     let result = run(&input, &Cancellation::default()).await;
-    assert!(result.error.is_none());
+    assert!(
+        result.error.is_none(),
+        "measured error: {:?}; warmup error: {:?}; warmup ms: {:?}; readiness ms: {:?}",
+        result.error,
+        result.warmup_error,
+        result.warmup_ms,
+        result.readiness_ms
+    );
     assert!(result.warmup_error.unwrap().contains("deadline"));
     assert_eq!(result.measurement.unwrap().completion_tokens, Some(8));
+    assert!(fixture.next().await.starts_with("GET /v1/models "));
+    assert!(
+        fixture
+            .next()
+            .await
+            .starts_with("POST /v1/chat/completions ")
+    );
+    assert!(
+        fixture
+            .next()
+            .await
+            .starts_with("POST /v1/chat/completions ")
+    );
 }
 #[tokio::test(flavor = "current_thread")]
 async fn measured_malformed_usage_is_failed_with_null_metrics() {
