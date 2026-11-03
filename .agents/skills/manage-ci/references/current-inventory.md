@@ -949,6 +949,11 @@ source commit.
   paths fail closed.
 - `ci/slices.yml` defines profiles, slice dependencies, rows, runner roles,
   cache modes and worker budgets.
+- `ci-controller::capacity_preview` can calculate a conservative FIFO preview
+  over caller-supplied pool limits, runner classes, active work and pending
+  work. No workflow invokes it, and it cannot reserve workers or cancel jobs.
+  Snapshot authenticity, complete quotas, runner identity, atomic shared state
+  and lease recovery remain prerequisites for real cross-run admission.
 - `ci/ci-plan.schema.json` versions the machine-readable output.
 - `compute-changes` supplies the complete event diff and affected Cargo
   closure; the planner owns signals and final matrix selection.

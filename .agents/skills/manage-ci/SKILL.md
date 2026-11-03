@@ -405,6 +405,12 @@ retired parser behavior, and source review still owns semantic emulation.
   The planner must emit a versioned machine-readable plan containing the
   profile, source identity, direct domains, affected crates, required slice
   IDs, bounded matrices, dependency reasons, and fan-out budgets.
+- `ci-controller::capacity_preview` is an inactive calculation over
+  caller-supplied state, not admission authority. Do not connect its proposed
+  starts or cancellations to workflows without an independently approved
+  quota/role catalog, authenticated complete observations and an atomic
+  shared reservation and recovery mechanism. Preserve every main revision;
+  count running PR work until its cancellation is independently confirmed.
 - Supported profiles are semantic and closed: draft PR, ready PR, exhaustive
   main, and explicit full/manual validation. Do not add ad hoc boolean inputs
   when a profile or ownership rule expresses the decision.
