@@ -251,3 +251,47 @@ fn unsupported_boundaries_count_observed_insertions_without_treating_them_as_own
     assert_eq!(prefix.observed_len(), 3);
     assert_eq!(prefix.align(&words("A B C next")), Some(3));
 }
+
+#[test]
+fn repeated_pending_speech_can_shorten_but_not_extend_an_unsupported_prefix() {
+    for (text, pending, expected) in [
+        ("X Y fresh", "fresh", 2),
+        ("X Y fresh words", "fresh words", 2),
+        ("X fresh Y fresh", "fresh", 3),
+        ("X Y Z Q fresh", "fresh", 3),
+        ("X Y Z", "missing", 3),
+    ] {
+        let mut prefix = prefix("A C");
+        assert_eq!(prefix.align(&words("A B C")), Some(3));
+        let hypothesis = words(text);
+        assert_eq!(prefix.align(&hypothesis), None);
+        assert_eq!(
+            prefix.unsupported_boundary(&hypothesis, &words(pending)),
+            expected,
+            "{text}"
+        );
+        assert_eq!(prefix.observed_len(), expected);
+        assert_eq!(ownership(&prefix), 2);
+        assert_eq!(
+            prefix
+                .anchors
+                .iter()
+                .map(|anchor| (
+                    anchor.text.as_str(),
+                    anchor.canonical.as_deref(),
+                    anchor.observed
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("A", Some("A"), true),
+                ("B", None, true),
+                ("C", Some("C"), true)
+            ]
+        );
+        assert_eq!(prefix.align(&words("A B C next")), Some(3));
+        assert_eq!(prefix.observed_len(), 3);
+        assert_eq!(prefix.trim(2), 1);
+        assert_eq!(prefix.observed_len(), 1);
+        assert_eq!(ownership(&prefix), 1);
+    }
+}

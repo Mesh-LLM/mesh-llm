@@ -223,6 +223,85 @@ fn recovered_prefixes_do_not_make_uncertain_audio_trimmable() {
 }
 
 #[test]
+fn a_repeated_pending_word_survives_a_shorter_unsupported_prefix_at_commit() {
+    let mut script = Script::new(vec![
+        vec![(900, " A C")],
+        vec![(1_900, " A C")],
+        vec![(2_900, " A B C fresh")],
+        vec![(3_000, " X Y fresh")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(manual());
+    let mut events = Vec::new();
+    for _ in 0..3 {
+        events.extend(stream.push(&loud(1_000), &mut transcribe).unwrap());
+    }
+    assert_eq!(deltas(&events), ["A C"]);
+    let done = stream.commit(&mut transcribe).unwrap();
+    assert_eq!(deltas(&done), [" fresh"]);
+    assert_eq!(
+        done.last(),
+        Some(&SpeechStreamEvent::Completed {
+            turn: 0,
+            transcript: "A C fresh".into(),
+        })
+    );
+    events.extend(done);
+    assert_eq!(deltas(&events).concat(), "A C fresh");
+}
+
+#[test]
+fn shortened_pending_boundaries_track_later_unsupported_prefixes() {
+    for (passes, transcript, final_delta) in [
+        (4, "A C fresh new", " new"),
+        (6, "A C fresh new today", " today"),
+    ] {
+        let mut script = Script::new(vec![
+            vec![(900, " A C")],
+            vec![(1_900, " A C")],
+            vec![(2_900, " A B C fresh")],
+            vec![(3_900, " X Y fresh")],
+            vec![(4_900, " P Q R new")],
+            vec![(5_900, " P Q R new")],
+            vec![(6_000, " P Q R new today")],
+        ]);
+        let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+        let mut stream = SpeechStream::new(manual());
+        let mut events = Vec::new();
+        for (pass, expected) in [
+            vec![],
+            vec!["A C"],
+            vec![],
+            vec![" fresh"],
+            vec![],
+            vec![" new"],
+        ]
+        .into_iter()
+        .take(passes)
+        .enumerate()
+        {
+            let batch = stream.push(&loud(1_000), &mut transcribe).unwrap();
+            assert_eq!(deltas(&batch), expected);
+            if pass == 3 {
+                assert_eq!(stream.confirmed_prefix.observed_len(), 3);
+            }
+            events.extend(batch);
+        }
+        let done = stream.commit(&mut transcribe).unwrap();
+        assert_eq!(deltas(&done), [final_delta]);
+        assert_eq!(
+            done.last(),
+            Some(&SpeechStreamEvent::Completed {
+                turn: 0,
+                transcript: transcript.into(),
+            })
+        );
+        events.extend(done);
+        assert_eq!(deltas(&events).concat(), transcript);
+    }
+}
+
+#[test]
 fn an_unsupported_prefix_does_not_replay_a_restored_omitted_owner() {
     // Y revises the retained prefix before the already emitted B returns.
     // The cheapest alignment has no supported match, although B occurs later.

@@ -26,6 +26,9 @@ impl Anchor {
 #[derive(Debug, Default)]
 pub(super) struct ConfirmedPrefix {
     anchors: Vec<Anchor>,
+    /// Latest prefix boundary; unsupported observations do not change the
+    /// last supported spelling/ownership mapping in `anchors`.
+    observed_words: usize,
 }
 
 impl ConfirmedPrefix {
@@ -35,25 +38,46 @@ impl ConfirmedPrefix {
             canonical: Some(text.clone()),
             observed: true,
         }));
+        self.observed_words += words.len();
     }
 
     pub(super) fn clear(&mut self) {
         self.anchors.clear();
+        self.observed_words = 0;
     }
 
     pub(super) fn observed_len(&self) -> usize {
-        self.anchors.iter().filter(|anchor| anchor.observed).count()
+        self.observed_words
     }
 
     /// Recover a supported prefix without making uncertain audio trimmable.
-    /// Otherwise retain the last observed length, never the whole hypothesis
-    /// merely because an owned spelling appears somewhere in it.
+    /// Repeated pending speech may shorten the last observed boundary without
+    /// assigning unsupported spellings to canonical owners.
     pub(super) fn unsupported_boundary(&mut self, words: &[String], pending: &[String]) -> usize {
         if let Some(alignment) = self.recovered_alignment(words, pending) {
             self.anchors = self.aligned_anchors(words, &alignment.cells, alignment.end);
+            self.observed_words = alignment.end;
             return alignment.end;
         }
-        self.observed_len().min(words.len())
+        let boundary = self.observed_len().min(words.len());
+        if pending.is_empty() {
+            return boundary;
+        }
+        let (end, support) = (0..=boundary)
+            .map(|end| {
+                let support = words[end..]
+                    .iter()
+                    .zip(pending)
+                    .take_while(|(a, b)| same_word(a, b))
+                    .count();
+                (end, support)
+            })
+            .max_by_key(|(end, support)| (*support, *end))
+            .unwrap_or((boundary, 0));
+        if support > 0 && end < boundary {
+            self.observed_words = end;
+        }
+        end
     }
 
     /// A vanished confirmed prefix can leave the previous unconfirmed tail at
@@ -88,6 +112,7 @@ impl ConfirmedPrefix {
             for anchor in &mut self.anchors {
                 anchor.observed = false;
             }
+            self.observed_words = 0;
             return Some(0);
         }
         self.align_pending(words, pending)
@@ -103,10 +128,12 @@ impl ConfirmedPrefix {
 
     fn align_pending(&mut self, words: &[String], pending: &[String]) -> Option<usize> {
         if self.anchors.is_empty() {
+            self.observed_words = 0;
             return Some(0);
         }
         let alignment = self.alignment(words, pending, None)?;
         self.anchors = self.aligned_anchors(words, &alignment.cells, alignment.end);
+        self.observed_words = alignment.end;
         Some(alignment.end)
     }
 
@@ -279,6 +306,7 @@ impl ConfirmedPrefix {
             .nth(words - 1)
             .map(|(index, _)| index + 1)
             .expect("trim stays inside the aligned confirmed prefix");
+        self.observed_words -= words;
         self.anchors
             .drain(..end)
             .filter(|anchor| anchor.canonical.is_some())

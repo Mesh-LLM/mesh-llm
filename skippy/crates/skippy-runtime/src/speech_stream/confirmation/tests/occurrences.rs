@@ -41,6 +41,7 @@ fn captured_prefix() -> ConfirmedPrefix {
         ("asked", Some("asked"), true),
     ];
     ConfirmedPrefix {
+        observed_words: entries.iter().filter(|(_, _, observed)| *observed).count(),
         anchors: entries
             .into_iter()
             .map(|(text, canonical, observed)| Anchor {
