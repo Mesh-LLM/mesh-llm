@@ -658,3 +658,102 @@ fn composed_runner_selection_refuses_untrusted_events_and_expired_cache_authorit
     assert!(!rejected.status.success());
     assert!(String::from_utf8_lossy(&rejected.stderr).contains("unsupported event_name"));
 }
+
+#[test]
+fn selection_trace_preserves_decision_without_claiming_execution_or_echoing_untrusted_text() {
+    let fixture = support::Fixture::new();
+    let summary = fixture.path().join("selection-summary.md");
+    let summary_path = summary.to_str().unwrap();
+    let output = fixture.selector(&[
+        ("FIXTURE_DATE", "2026-09-14"),
+        ("INPUT_PR_CANARY_REF", "refs/pull/12/merge"),
+        ("GITHUB_STEP_SUMMARY", summary_path),
+    ]);
+    assert!(output.status.success());
+    let selected = fixture.outputs();
+    let trace_text = selected["selection_trace"].as_str().unwrap();
+    let trace: Value = serde_json::from_str(trace_text).unwrap();
+    assert_eq!(trace["kind"], "selection_only");
+    assert_eq!(trace["selected_provider"], "depot");
+    assert_eq!(trace["selected_labels"]["linux"], selected["runner"]);
+    assert_eq!(trace["selected_labels"]["linux_8"], selected["runner_8"]);
+    assert_eq!(
+        trace["selected_labels"]["linux_arm_8"],
+        selected["runner_arm_8"]
+    );
+    assert_eq!(trace["selected_labels"]["macos"], selected["runner_macos"]);
+    assert_eq!(
+        trace["selected_labels"]["windows"],
+        selected["runner_windows"]
+    );
+    assert_eq!(trace["reason"], "eligible_depot_selection");
+    assert_eq!(trace["allow_native_github_cache"], false);
+    assert_eq!(trace["exception_active"], false);
+    for field in [
+        "role",
+        "policy_revision",
+        "actual_runner",
+        "effective_cache_mode",
+    ] {
+        assert!(trace[field].is_null(), "{field}");
+    }
+    let written = std::fs::read_to_string(&summary).unwrap();
+    assert!(written.contains("not execution evidence"));
+    assert!(written.contains(trace_text));
+    fixture.0.close().unwrap();
+
+    let fixture = support::Fixture::new();
+    assert!(
+        fixture
+            .selector(&[
+                ("INPUT_EVENT_NAME", "workflow_dispatch"),
+                ("INPUT_REF", "refs/heads/main"),
+                ("INPUT_MANUAL_USE_DEPOT", "true"),
+                ("INPUT_FORCE_HOSTED", "true"),
+            ])
+            .status
+            .success()
+    );
+    let selected = fixture.outputs();
+    let trace: Value = serde_json::from_str(selected["selection_trace"].as_str().unwrap()).unwrap();
+    assert_eq!(trace["selected_provider"], "github_hosted");
+    assert_eq!(trace["reason"], "forced_hosted");
+    assert_eq!(trace["force_hosted"], true);
+    fixture.0.close().unwrap();
+
+    let fixture = support::Fixture::new();
+    let summary = fixture.path().join("untrusted-summary.md");
+    assert!(
+        fixture
+            .selector(&[
+                ("INPUT_EVENT_NAME", "unknown-sensitive-value"),
+                ("INPUT_HEAD_SHA", "invalid-sensitive-value"),
+                ("GITHUB_STEP_SUMMARY", summary.to_str().unwrap()),
+            ])
+            .status
+            .success()
+    );
+    let selected = fixture.outputs();
+    let text = selected["selection_trace"].as_str().unwrap();
+    let trace: Value = serde_json::from_str(text).unwrap();
+    assert_eq!(trace["event"], "other");
+    assert!(trace["declared_head_sha"].is_null());
+    assert!(!text.contains("sensitive-value"));
+    assert!(
+        !std::fs::read_to_string(summary)
+            .unwrap()
+            .contains("sensitive-value")
+    );
+    fixture.0.close().unwrap();
+
+    let fixture = support::Fixture::new();
+    let summary = fixture.path().join("invalid-summary.md");
+    let output = fixture.selector(&[
+        ("INPUT_FORCE_HOSTED", "TRUE"),
+        ("GITHUB_STEP_SUMMARY", summary.to_str().unwrap()),
+    ]);
+    assert!(!output.status.success());
+    assert!(!summary.exists());
+    assert!(!fixture.path().join("outputs").exists());
+    fixture.0.close().unwrap();
+}
