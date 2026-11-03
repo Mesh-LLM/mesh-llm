@@ -5,11 +5,6 @@ description: Use this skill as the mandatory starting point whenever inspecting,
 
 # Manage CI
 
-Treat `ci-ops collect-metrics` queue states as job-level observations. A
-provider comparison can request human review but cannot authorize activation;
-follow the matched-run, independent approval, and rollback evidence requirements
-in `ci/DEPOT_MIGRATION.md`.
-
 This is the normative CI rule source for MeshLLM. Read it completely before
 every CI task.
 
@@ -770,6 +765,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   artifact, permission, secret/variable, external service, or workflow logic.
   Fix the owning source; do not weaken a gate or add retries to hide a
   deterministic failure.
+- Treat `ci-ops collect-metrics` queue states as job-level observations. A
+  provider comparison can request human review but cannot authorize activation;
+  follow the matched-run, independent approval, and rollback evidence
+  requirements in `ci/DEPOT_MIGRATION.md`.
 - Validate with the narrowest safe workflow. A run is not successful until all
   required jobs reach a terminal successful conclusion; state expected skips.
 
