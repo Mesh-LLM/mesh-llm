@@ -952,6 +952,9 @@ source commit.
 - `ci-controller::capacity_preview` can calculate a conservative FIFO preview
   over caller-supplied pool limits, runner classes, active work and pending
   work. No workflow invokes it, and it cannot reserve workers or cancel jobs.
+  Its versioned reservation model charges proposed work and transfers a charge
+  to a supplied start observation, but has no store, expiry or release path.
+  It refuses pending supersession until a separate reconciler resolves it.
   Snapshot authenticity, complete quotas, runner identity, atomic shared state
   and lease recovery remain prerequisites for real cross-run admission.
 - `ci/ci-plan.schema.json` versions the machine-readable output.
