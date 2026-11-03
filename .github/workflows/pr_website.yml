@@ -98,7 +98,15 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$PLAN_RESULT" == "success" ]]
-          required=$(jq -r '.required' <<<"$LANE_PLAN")
+          required_count=$(jq -r -s --stream '[.[] | select(length == 2 and .[0] == ["required"])] | length' <<<"$LANE_PLAN")
+          [[ "$required_count" == "1" ]]
+          required=$(jq -er -s '
+            if length == 1 and (.[0] | type == "object") and (.[0].required | type == "boolean") then
+              .[0].required | tostring
+            else
+              error("invalid lane plan required flag")
+            end
+          ' <<<"$LANE_PLAN")
           if [[ "$required" == "true" ]]; then
             [[ "$LANE_RESULT" == "success" ]]
           else

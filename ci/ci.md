@@ -577,6 +577,14 @@ Each PR entry checks out the default branch for canonical planning, projects
 only its matching bounded lane, and invokes that lane at `@main` as a nested
 reusable workflow. GitHub therefore exposes five focused PR-associated runs
 with direct job and step drill-down. Each has a stable `PR / <lane>` result.
+Each PR and main terminal result requires a successful plan containing exactly
+one JSON object with exactly one boolean `required` field. A required lane must
+succeed; an unneeded lane must be skipped. Missing, malformed, duplicated, or
+non-boolean flags fail the terminal result instead of treating the lane as
+unneeded. The manual controller validates all five lane flags before creating
+correlated checks or dispatching work; it also refuses non-boolean flags in its
+dispatch logic. Rejection creates no new check and does not invalidate earlier
+checks; independent publisher and stale-check controls remain necessary.
 The entries receive no repository secrets and independently cancel superseded
 synchronizations. Eligible same-repository executor jobs may select Depot
 through protected runner policy while the bounded repository gate is active;

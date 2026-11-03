@@ -137,6 +137,27 @@ jobs:
       checks: write
       contents: read
     steps:
+      - name: Validate lane plan required flags
+        env:
+          QUALITY_LANE_PLAN: ${{ needs.plan.outputs.quality_lane_plan }}
+          WEBSITE_LANE_PLAN: ${{ needs.plan.outputs.website_lane_plan }}
+          LINUX_LANE_PLAN: ${{ needs.plan.outputs.linux_lane_plan }}
+          MACOS_LANE_PLAN: ${{ needs.plan.outputs.macos_lane_plan }}
+          WINDOWS_LANE_PLAN: ${{ needs.plan.outputs.windows_lane_plan }}
+        run: |
+          set -euo pipefail
+          for variable in QUALITY_LANE_PLAN WEBSITE_LANE_PLAN LINUX_LANE_PLAN MACOS_LANE_PLAN WINDOWS_LANE_PLAN; do
+            lane_plan="${!variable}"
+            required_count=$(jq -r -s --stream '[.[] | select(length == 2 and .[0] == ["required"])] | length' <<<"$lane_plan")
+            [[ "$required_count" == "1" ]]
+            jq -e -s '
+              if length == 1 and (.[0] | type == "object") and (.[0].required | type == "boolean") then
+                true
+              else
+                error("invalid lane plan required flag")
+              end
+            ' <<<"$lane_plan" >/dev/null
+          done
       - name: Create correlated checks and dispatch selected lanes
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         env:
@@ -174,6 +195,9 @@ jobs:
             ].map(([name, workflow, serialized]) => ({name, workflow, plan: JSON.parse(serialized)}));
             const expected = lanes.map((lane) => lane.name);
             for (const lane of lanes) {
+              if (!lane.plan || typeof lane.plan !== 'object' || Array.isArray(lane.plan) || typeof lane.plan.required !== 'boolean') {
+                throw new Error(`invalid required flag for ${lane.name}`);
+              }
               if (lane.plan.lane !== lane.name.replace('CI / ', '').toLowerCase()) {
                 throw new Error(`lane identity mismatch for ${lane.name}`);
               }

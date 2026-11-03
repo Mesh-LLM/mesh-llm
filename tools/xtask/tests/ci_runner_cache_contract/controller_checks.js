@@ -4,6 +4,7 @@ globalThis.fetch = async () => {throw new Error('network disabled in finite cont
 globalThis.WebSocket = class {constructor() {throw new Error('network disabled in finite controller fixture');}};
 const fs = require('fs');
 const crypto = require('crypto');
+const {spawnSync} = require('child_process');
 const config = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
 const source = '0123456789abcdef0123456789abcdef01234567';
 const correlation = `ci-91-${source.slice(0, 12)}`;
@@ -14,7 +15,12 @@ const canonical = config.canonical || JSON.stringify(plan);
 const digest = config.digest || crypto.createHash('sha256').update(canonical).digest('hex');
 const projections = config.lanes;
 if (config.mutation === 'lane') projections[2].lane = 'unowned';
+if (config.mutation === 'required-missing') delete projections[2].required;
+if (config.mutation === 'required-string') projections[2].required = 'false';
+if (config.mutation === 'required-null') projections[2].required = null;
 for (const projection of projections) process.env[projection.lane === 'unowned' ? 'LINUX_LANE_PLAN' : `${projection.lane.toUpperCase()}_LANE_PLAN`] = JSON.stringify(projection);
+if (config.mutation === 'required-duplicate') process.env.LINUX_LANE_PLAN = process.env.LINUX_LANE_PLAN.replace('"required":true', '"required":true,"required":false');
+if (config.mutation === 'required-multiple') process.env.LINUX_LANE_PLAN += '\n' + process.env.LINUX_LANE_PLAN;
 const creates = [], dispatches = [], updates = [];
 const resolved = {};
 const copy = value => JSON.parse(JSON.stringify(value));
@@ -47,6 +53,9 @@ const closedRequire = name => {if (name !== 'crypto') throw new Error(`unowned m
       CORRELATION_ID: resolved.correlation_id, SUPERSESSION_KEY: resolved.supersession_key, USE_DEPOT: resolved.use_depot,
       PLAN_JSON: canonical, PLAN_DIGEST: config.mutation === 'digest' ? '0'.repeat(64) : digest,
     });
+    const guard = fs.readFileSync(process.argv[5], 'utf8');
+    const admission = spawnSync('/bin/bash', ['-c', guard], {env: process.env, timeout: 15000});
+    if (admission.status !== 0) throw new Error('lane plan guard refused input');
     const actual = fs.readFileSync(process.argv[2], 'utf8');
     const execute = new Function('github', 'context', 'core', 'require', `return (async () => {${actual}\n})()`);
     await execute(github, context, core, closedRequire);

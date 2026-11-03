@@ -601,12 +601,18 @@ verification. Re-read effective rules and bypass actors before activation;
 the governance target allows no routine bypass for CI-policy changes.
 
 The five PR lifecycle rows and five main push rows above are the complete
-allowed routine required-validation entry sets. `pr_ci_canary.yml` is an
-explicit optional diagnostic exception, not a required check and not part of
-the sibling monitor's five-workflow target list. It calls the protected
-`main`-owned reusable lane, which uses the pull-request merge SHA as the built
-source while retaining the PR head SHA as separate identity evidence. Its
-runner-policy jobs leave `policy_source_sha` unset and therefore use the
+allowed routine required-validation entry sets. Each terminal result requires a
+successful plan containing one object with exactly one boolean `required` flag;
+true requires lane success and false requires a skipped lane. Invalid flags or
+multiple plan values fail closed. The manual controller checks the same five
+flags before creating correlated checks or dispatching lanes.
+It does not invalidate earlier checks; publisher and stale-check controls remain
+separate prerequisites.
+`pr_ci_canary.yml` is an explicit optional diagnostic exception, not a required
+check and not part of the sibling monitor's five-workflow target list. It calls
+the protected `main`-owned reusable lane, which uses the pull-request merge SHA
+as the built source while retaining the PR head SHA as separate identity
+evidence. Its runner-policy jobs leave `policy_source_sha` unset and therefore use the
 protected default branch. The canary owns
 one fixed Linux amd64 CPU chain
 (UI artifact, release host, native runtime, and product composition), uses

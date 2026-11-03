@@ -4,7 +4,7 @@ use super::{
     workflow_yaml::{self, Node},
 };
 use serde_json::{Value, json};
-use std::{fs, process::Command};
+use std::{fs, process::Command, time::Duration};
 
 #[path = "controller_checks/dispatch_routing.rs"]
 mod dispatch_routing;
@@ -105,6 +105,45 @@ fn selected(doc: &Node) -> Result<&Node, String> {
     }
     Ok(step)
 }
+
+fn lane_plan_guard(doc: &Node) -> Result<&Node, String> {
+    let dispatch = doc
+        .get("jobs")
+        .and_then(|jobs| jobs.get("dispatch"))
+        .ok_or("dispatch job missing")?;
+    if text(dispatch, "runs-on") != "ubuntu-24.04" {
+        return Err("guard requires the declared hosted shell".into());
+    }
+    let Some(Node::Seq(steps)) = dispatch.get("steps") else {
+        return Err("steps missing".into());
+    };
+    let guards = steps
+        .iter()
+        .enumerate()
+        .filter(|(_, step)| text(step, "name") == "Validate lane plan required flags")
+        .collect::<Vec<_>>();
+    let [(guard_index, guard)] = guards.as_slice() else {
+        return Err("unique lane plan guard required".into());
+    };
+    let owner_index = steps
+        .iter()
+        .position(|step| {
+            text(step, "name") == "Create correlated checks and dispatch selected lanes"
+        })
+        .ok_or("dispatch owner missing")?;
+    if *guard_index >= owner_index || !text(guard, "if").is_empty() || text(guard, "run").is_empty()
+    {
+        return Err("lane plan guard must run before check creation".into());
+    }
+    let environment = guard.get("env").ok_or("guard env missing")?;
+    for (key, output) in INPUTS.iter().filter(|(key, _)| key.ends_with("_LANE_PLAN")) {
+        let expected = format!("${{{{ needs.plan.outputs.{output} }}}}");
+        if text(environment, key) != expected {
+            return Err(format!("{key} must bind planner output"));
+        }
+    }
+    Ok(guard)
+}
 fn resolver(doc: &Node) -> Result<&Node, String> {
     let plan = doc
         .get("jobs")
@@ -175,6 +214,8 @@ fn run_with_plan(
     let resolve = text(resolver(&doc).unwrap().get("with").unwrap(), "script");
     let actual_resolve = fixture.path().join("actual-resolver.js");
     fs::write(&actual_resolve, resolve).unwrap();
+    let actual_guard = fixture.path().join("actual-lane-guard.sh");
+    fs::write(&actual_guard, text(lane_plan_guard(&doc).unwrap(), "run")).unwrap();
     let harness = fixture.path().join("controller-harness.js");
     fs::write(&harness, include_str!("controller_checks.js")).unwrap();
     let projections = if let Some(outputs) = action_outputs {
@@ -208,8 +249,9 @@ fn run_with_plan(
         .arg(harness)
         .arg(actual)
         .arg(config)
-        .arg(actual_resolve);
-    let output = fixture.run(command);
+        .arg(actual_resolve)
+        .arg(actual_guard);
+    let output = fixture.run_with_timeout(command, Duration::from_secs(30));
     assert!(
         output.status.success(),
         "{}",
@@ -392,6 +434,53 @@ fn controller_checks_source_schema_digest_and_lane_mismatch_refuse_before_creati
         assert!(checks(&output).is_empty());
         assert!(dispatches(&output).is_empty());
         assert_eq!(output["updates"], json!([]));
+    }
+}
+
+#[test]
+fn controller_refuses_invalid_lane_required_flags_before_creating_checks() {
+    for mutation in [
+        "required-missing",
+        "required-string",
+        "required-null",
+        "required-duplicate",
+        "required-multiple",
+    ] {
+        let output = run([true; 5], mutation, "");
+        assert!(
+            output["error"]
+                .as_str()
+                .unwrap()
+                .contains("lane plan guard refused"),
+            "{mutation}: {output}"
+        );
+        assert!(checks(&output).is_empty(), "{mutation}");
+        assert!(dispatches(&output).is_empty(), "{mutation}");
+        assert_eq!(output["updates"], json!([]));
+    }
+}
+
+#[test]
+fn controller_guard_requires_unconditional_planner_bound_inputs() {
+    let source = fs::read_to_string(root().join(".github/workflows/ci-control.yml")).unwrap();
+    lane_plan_guard(&workflow_yaml::parse(&source).unwrap()).unwrap();
+    for (before, after) in [
+        (
+            "LINUX_LANE_PLAN: ${{ needs.plan.outputs.linux_lane_plan }}",
+            "LINUX_LANE_PLAN: ${{ needs.plan.outputs.windows_lane_plan }}",
+        ),
+        (
+            "- name: Validate lane plan required flags\n",
+            "- name: Validate lane plan required flags\n        if: false\n",
+        ),
+        (
+            "- name: Validate lane plan required flags\n",
+            "- name: Unrelated step\n",
+        ),
+    ] {
+        assert!(source.contains(before));
+        let changed = source.replacen(before, after, 1);
+        assert!(lane_plan_guard(&workflow_yaml::parse(&changed).unwrap()).is_err());
     }
 }
 fn change(node: &mut Node, key: &str, value: Node) {
