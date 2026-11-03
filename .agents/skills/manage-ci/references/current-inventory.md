@@ -36,6 +36,18 @@ The producer's CPU C++23/sanitizer/tooling probes passed; source-present API
 and real-model CI qualification remains pending protected-main execution.
 The matching clang-tidy plugin build/fixtures and configured C++/bridge lints
 are required after Rust header generation; missing lint tools fail preflight.
+
+A second CPU image entry, `public-cpu-libclang` (immutable index
+`sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60`,
+evidence hash `032e84ac5046e246959adc937c125cf63c33da11fa2b6a2dda18a44032190153`,
+runner-images main run `41541864277` attempt 3, producer
+`45e0c35a191cc7026fb1b9a24700cc1b40be7ca6`), carries the reviewed `libclang-dev`
+toolchain addition so the skippy-ffi bindgen freshness gate runs without a
+job-time install. It binds the compiler-seed cohort (rust-tests, rust-clippy,
+linux-host, safetensors-runtime-smoke, compiler-seed-publisher,
+runtime-seed-canary), the linux-cpu runtime row, and the rolled-forward
+compiler seed (`img-aaa36843-epoch-aaa36843-v3-`); the previous `public-cpu`
+image remains admitted for consumers that stay on it.
 The new job raises the retained pre-checkout audit caller census from 27 to 28,
 using the same published audit pin and central runner/cache projection.
 
@@ -576,7 +588,7 @@ runner-contract update is active.
 | `ci-web-slice.yml` | Console quality, console Playwright E2E, public website build, and CLI explorer browser validation |
 | `ci-ui-artifact-slice.yml` | Immutable console distribution producer; release UI builds upload a raw artifact, then a separate Rust-capable `ui_stamp` job binds source/version and complete file checksums without rebuilding the console |
 | `static-abi-artifact.yml` | Typed static llama ABI producer with internal runner policy and an exact toolchain-epoch output |
-| `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that prepare the patched llama checkout before verifying the producer-owned static ABI revision and toolchain epoch. Its static-ABI job also regenerates `skippy-ffi`'s committed bindgen bindings in memory (`SKIPPY_FFI_BINDGEN=check`, plus the layout-mutation selftest) and fails when they drift from the pinned headers (the CUDA runner image lacks libclang, so the job installs `libclang-dev` through `apt-get` before the gate), plus a pinned, digest-verified Skippy correctness fixture; related PR changes (including `mesh-llm-skippy-adapter`) additionally compile the asserted `mesh-llm-skippy-adapter` library test `config::hardware_translation_tests::safetensors_checkpoint_reaches_mesh_host_runtime` and smoke an immutable SmolLM2 SafeTensors checkpoint through the Mesh config/adapter/Skippy serving/native path to sampled prefill and decode with every supported load-time quantization |
+| `ci-rust-tests-slice.yml` | Typed deterministic Cargo test batches that prepare the patched llama checkout before verifying the producer-owned static ABI revision and toolchain epoch. Its static-ABI job also regenerates `skippy-ffi`'s committed bindgen bindings in memory (`SKIPPY_FFI_BINDGEN=check`, plus the layout-mutation selftest) and fails when they drift from the pinned headers, plus a pinned, digest-verified Skippy correctness fixture; related PR changes (including `mesh-llm-skippy-adapter`) additionally compile the asserted `mesh-llm-skippy-adapter` library test `config::hardware_translation_tests::safetensors_checkpoint_reaches_mesh_host_runtime` and smoke an immutable SmolLM2 SafeTensors checkpoint through the Mesh config/adapter/Skippy serving/native path to sampled prefill and decode with every supported load-time quantization |
 | `ci-{linux,macos,windows}-host-slice.yml` | Platform-pure neutral host producers; the macOS host compile has a 60-minute job timeout; no empty cross-platform jobs |
 | `ci-{linux,macos,windows}-runtime-slice.yml` | Platform-pure native runtime producers. The `native-abi` domain selects `linux-cpu`, `windows-cpu`, and `windows-vulkan`; Windows Vulkan feeds the Windows product/smoke consumers, and Windows CPU also selects the Skippy probe check below. The Linux CPU row also runs the native runtime-event gate against its verified built-or-restored runtime and uploads its evidence. |
 | `ci-{linux,macos,windows}-product-slice.yml` | Platform-pure composition-only product consumers |
@@ -1317,7 +1329,7 @@ The standalone API adds only its dedicated CPU identity; existing image
 references and evidence bindings remain unchanged.
 
 The `product-smoke` catalog role covers `smoke.yml`; accelerator and macOS paths
-retain their existing container opt-outs. The inventory has 10 images, 37 roles
+retain their existing container opt-outs. The inventory has 11 images, 37 roles
 and 37 literal workflow image bindings.
 
 ### Qualified lean UI consumers
