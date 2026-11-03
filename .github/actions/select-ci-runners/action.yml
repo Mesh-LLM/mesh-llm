@@ -51,6 +51,9 @@ inputs:
     default: "false"
 
 outputs:
+  selection_trace:
+    description: Non-secret selection-only JSON; execution identity and effective cache remain unknown.
+    value: ${{ steps.select.outputs.selection_trace }}
   depot_enabled:
     description: Whether the selected event may use Depot.
     value: ${{ steps.select.outputs.depot_enabled }}
@@ -271,7 +274,50 @@ runs:
           runner_windows=windows-2022
         fi
 
+        # Record only bounded, non-secret policy inputs and outputs. This is
+        # a selection trace, not proof of the runner or cache actually used.
+        trace_event=other
+        case "$INPUT_EVENT_NAME" in
+          pull_request|pull_request_target|push|workflow_dispatch)
+            trace_event="$INPUT_EVENT_NAME" ;;
+        esac
+        trace_origin=unknown
+        case "$dispatch_original_event" in
+          pull_request|pull_request_target|push|workflow_dispatch)
+            trace_origin="$dispatch_original_event" ;;
+        esac
+        trace_ref=other
+        if [[ "$INPUT_REF" == 'refs/heads/main' ]]; then
+          trace_ref=main
+        elif [[ "$INPUT_REF" =~ ^refs/pull/[0-9]+/merge$ ]]; then
+          trace_ref=pull_request_merge
+        fi
+        trace_sha=null
+        if [[ "$INPUT_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+          trace_sha="\"$INPUT_HEAD_SHA\""
+        fi
+        trace_repository=false
+        trace_head_repository=false
+        if [[ "$INPUT_REPOSITORY" == "$trusted_repository" ]]; then trace_repository=true; fi
+        if [[ "$INPUT_HEAD_REPOSITORY" == "$trusted_repository" ]]; then trace_head_repository=true; fi
+        trace_provider=github_hosted
+        trace_reason=not_eligible_or_disabled
+        if [[ "$depot_enabled" == 'true' ]]; then
+          trace_provider=depot
+          trace_reason=eligible_depot_selection
+        elif [[ "$INPUT_FORCE_HOSTED" == 'true' ]]; then
+          trace_reason=forced_hosted
+        fi
+        printf -v selection_trace '{"schema_version":1,"kind":"selection_only","event":"%s","declared_origin":"%s","ref_kind":"%s","declared_head_sha":%s,"repository_matches":%s,"head_repository_matches":%s,"main_gate":%s,"pr_gate":%s,"exception_active":%s,"manual_depot_request":%s,"force_hosted":%s,"selected_provider":"%s","selected_labels":{"linux":"%s","linux_4":"%s","linux_8":"%s","linux_16":"%s","linux_arm":"%s","linux_arm_4":"%s","linux_arm_8":"%s","linux_arm_16":"%s","macos":"%s","windows":"%s"},"reason":"%s","allow_depot_remote_cache":%s,"allow_native_github_cache":%s,"allow_trusted_sccache_seed":%s,"role":null,"policy_revision":null,"actual_runner":null,"effective_cache_mode":null}' \
+          "$trace_event" "$trace_origin" "$trace_ref" "$trace_sha" "$trace_repository" "$trace_head_repository" \
+          "$INPUT_DEPOT_MAIN_ENABLED" "$INPUT_DEPOT_PR_ENABLED" "$depot_pr_exception_active" \
+          "$INPUT_MANUAL_USE_DEPOT" "$INPUT_FORCE_HOSTED" "$trace_provider" \
+          "$runner" "$runner_4" "$runner_8" "$runner_16" "$runner_arm" "$runner_arm_4" \
+          "$runner_arm_8" "$runner_arm_16" "$runner_macos" "$runner_windows" "$trace_reason" \
+          "$allow_depot_remote_cache" "$allow_native_github_cache" "$allow_trusted_sccache_seed"
+
         {
+          echo "selection_trace=$selection_trace"
           echo "depot_enabled=$depot_enabled"
           echo "allow_depot_remote_cache=$allow_depot_remote_cache"
           echo "allow_native_github_cache=$allow_native_github_cache"
@@ -287,3 +333,10 @@ runs:
           echo "runner_macos=$runner_macos"
           echo "runner_windows=$runner_windows"
         } >> "$GITHUB_OUTPUT"
+        if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+          {
+            printf '### CI runner selection (not execution evidence)\n\n```json\n'
+            printf '%s\n' "$selection_trace"
+            printf '\x60\x60\x60\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+        fi
