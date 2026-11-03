@@ -65,6 +65,27 @@ digests without moving production aliases; consumer binding does not require
 promotion. This admission does not establish source-present API coverage,
 which still requires the protected-main executor rollout and real PR runs.
 
+### Libclang-capable CPU image
+
+The dedicated `public-cpu-libclang` image entry binds the compiler-seed
+cohort: the `rust-tests`, `rust-clippy`, `linux-host`,
+`safetensors-runtime-smoke`, `compiler-seed-publisher` and
+`runtime-seed-canary` consumer roles, the `linux-cpu` runtime row, and the
+compiler seed, which rolls forward to
+`mesh-llm-sccache-seed-linux-x86_64-img-aaa36843-epoch-aaa36843-v3-`. The
+image is the reviewed `libclang-dev` toolchain addition over `public-cpu`; it
+exists so `skippy-ffi`'s bindgen freshness gate (which dlopens libclang through
+clang-sys) runs with the tool baked in instead of a job-time install. Its
+immutable multi-architecture CPU index is
+`sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60`;
+the previous `public-cpu` image remains admitted for the consumers that stay
+on it (including release-compose and SDK roles). Runner-images main run
+`41541864277`, attempt 3, successfully staged and verified AMD64/ARM64 CPU
+candidates at producer `45e0c35a191cc7026fb1b9a24700cc1b40be7ca6` and Mesh
+source `06f6347323552d07bdeffdb1bc1aba2808c26519`. Native
+`runner-identity bind` retained the complete cohort bytes under
+`ci/runner-image-evidence/032e84ac5046e246959adc937c125cf63c33da11fa2b6a2dda18a44032190153.json`.
+
 The L2 planner action and all five lane summaries now invoke Rust `ci plan`
 and `ci validate-lane` through the narrow `ci-controller` executable that
 `prepare-ci-controller` builds. Other automation uses `prepare-automation`'s
