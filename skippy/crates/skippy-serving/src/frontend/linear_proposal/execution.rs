@@ -53,6 +53,10 @@ struct LinearProposalRepairParams<'a> {
     checkpoint_count: usize,
     canonical_position: u64,
     position_after_verification: u64,
+    /// Position the sampler's accepted history reached in verification: one
+    /// row per returned prediction, since sampled verification stops at the
+    /// first rejected row.
+    sampler_history_position: u64,
     sampling: &'a SamplingConfig,
     chat_sampling_metadata: Option<&'a str>,
     prompt_token_count: usize,
@@ -253,6 +257,9 @@ impl StageOpenAiBackend {
                 checkpoint_count: verify_inputs.len(),
                 canonical_position,
                 position_after_verification,
+                sampler_history_position: params
+                    .base_position
+                    .saturating_add(u64::try_from(predictions.len()).unwrap_or(u64::MAX)),
                 sampling: params.sampling,
                 chat_sampling_metadata: params.chat_sampling_metadata,
                 prompt_token_count: params.prompt_token_count,
@@ -292,6 +299,7 @@ impl StageOpenAiBackend {
             checkpoint_count,
             canonical_position,
             position_after_verification,
+            sampler_history_position,
             sampling,
             chat_sampling_metadata,
             prompt_token_count,
@@ -332,7 +340,10 @@ impl StageOpenAiBackend {
                         "linear proposal repair failed and the session was retired: {error:#}"
                     )));
                 }
-                if let Some(metadata) = chat_sampling_metadata.as_deref() {
+                if let Some(metadata) = chat_sampling_metadata
+                    .as_deref()
+                    .filter(|_| trim_resets_sampler(canonical_position, sampler_history_position))
+                {
                     runtime
                         .configure_chat_sampling(
                             &session_id,
@@ -406,6 +417,15 @@ fn linear_proposal_disposition(
     }
 }
 
+/// Whether trimming to `canonical_position` drops rows the sampler already
+/// accepted, which clears the session's chat sampler so it must be configured
+/// again. After a rejected window the sampler stopped at the rejected row, so
+/// its state (grammar, penalties and RNG) carries on unchanged; configuring it
+/// again would restart a seeded request's RNG and repeat its draws.
+fn trim_resets_sampler(canonical_position: u64, sampler_history_position: u64) -> bool {
+    canonical_position < sampler_history_position
+}
+
 fn finish_linear_proposal_after_repair<T>(
     callback_error: Option<InferenceError>,
     repair: impl FnOnce() -> InferenceResult<T>,
@@ -421,6 +441,24 @@ mod tests {
 
     fn decision(proposal: &[i32], predictions: &[i32]) -> NativeMtpVerifyWindowDecision {
         classify_native_mtp_verify_window(proposal, predictions, 0, 64, |_| Ok(false)).unwrap()
+    }
+
+    #[test]
+    fn a_rejected_window_keeps_the_sampler_and_an_early_stop_resets_it() {
+        // Base 10, window [current, 11, 12]: the target rejected 12, so
+        // verification sampled two rows and the session commits two tokens.
+        let base = 10;
+        let mismatch = decision(&[11, 12], &[11, 99]);
+        assert!(mismatch.rejected);
+        assert!(!trim_resets_sampler(base + 2, base + 2));
+        // Several rejected windows in a row never reset it.
+        for window in 0..4 {
+            let start = base + window * 2;
+            assert!(!trim_resets_sampler(start + 2, start + 2));
+        }
+        // A stop after the first committed token trims below the rows the
+        // sampler accepted, so the sampler is configured again.
+        assert!(trim_resets_sampler(base + 1, base + 2));
     }
 
     #[test]

@@ -126,6 +126,7 @@ fn test_stage_load_request() -> crate::inference::skippy::StageLoadRequest {
             activation_codec_policy: Default::default(),
         },
         native_mtp_enabled: true,
+        dflash: None,
         shutdown_generation: 7,
         coordinator_term: 11,
         coordinator_id: Some(make_test_endpoint_id(0x70)),

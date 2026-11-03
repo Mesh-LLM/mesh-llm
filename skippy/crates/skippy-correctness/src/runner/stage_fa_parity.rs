@@ -101,6 +101,7 @@ fn decode_boundary(
         main_gpu: None,
         split_mode: skippy_runtime::SplitMode::Auto,
         host_expert_layers: None,
+        recurrent_rollback_tokens: 0,
         selected_backend_device: None,
         cache_type_k: GGML_TYPE_F16,
         cache_type_v: GGML_TYPE_F16,

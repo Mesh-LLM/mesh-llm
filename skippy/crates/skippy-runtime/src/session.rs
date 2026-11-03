@@ -58,6 +58,8 @@ pub struct StageSession {
     pub(crate) batched_activation_exports: bool,
     /// Attached DFlash draft that mirrors this session's target positions.
     pub(crate) dflash: Option<crate::dflash::DFlashSessionLink>,
+    /// Split-DFlash feature capture and the rows an earlier stage sent.
+    pub(crate) dflash_split: Option<Box<crate::dflash::DFlashSplitSession>>,
 }
 
 pub struct DecodeBatchRequest<'a> {
@@ -109,7 +111,8 @@ impl StageSession {
     /// deltas between builds -- an inference that cannot separate "reuse is
     /// firing and the residual cost is elsewhere" from "reuse is not firing".
     pub fn graph_reuse_stats(&self) -> Option<GraphReuseStats> {
-        let ctx = unsafe { skippy_ffi::skippy_session_llama_context(self.raw) };
+        let ctx: *mut skippy_ffi::Opaque =
+            unsafe { skippy_ffi::skippy_session_llama_context(self.raw) }.cast();
         if ctx.is_null() {
             return None;
         }

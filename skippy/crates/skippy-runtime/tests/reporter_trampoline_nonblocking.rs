@@ -23,9 +23,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use skippy_ffi::{
-    SkippyRuntimeEventCategory, SkippyRuntimeEventEmitterKind, SkippyRuntimeEventFailureCode,
-    SkippyRuntimeEventKind, SkippyRuntimeEventProgressUnit, SkippyRuntimeEventV1, Status,
+    RUNTIME_EVENT_CATEGORY_DEVICE, RUNTIME_EVENT_CATEGORY_MODEL_OPEN,
+    RUNTIME_EVENT_EMITTER_WORKER_THREAD, RUNTIME_EVENT_FAILURE_NONE,
+    RUNTIME_EVENT_KIND_DEVICE_READY, RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS,
+    RUNTIME_EVENT_PROGRESS_UNIT_ITEMS,
 };
+use skippy_ffi::{SkippyRuntimeEventV1, Status};
 
 thread_local! {
     /// Total allocation CALLS on this thread, never decremented. A
@@ -63,9 +66,9 @@ fn raw_event(detail: &[u8]) -> SkippyRuntimeEventV1 {
     SkippyRuntimeEventV1 {
         abi_version: 1,
         struct_size: std::mem::size_of::<SkippyRuntimeEventV1>() as u32,
-        category: SkippyRuntimeEventCategory::DEVICE,
-        kind: SkippyRuntimeEventKind::DEVICE_READY,
-        emitter: SkippyRuntimeEventEmitterKind::WORKER_THREAD,
+        category: RUNTIME_EVENT_CATEGORY_DEVICE,
+        kind: RUNTIME_EVENT_KIND_DEVICE_READY,
+        emitter: RUNTIME_EVENT_EMITTER_WORKER_THREAD,
         reserved0: 0,
         sequence: 7,
         timestamp_mono_ns: 11,
@@ -74,9 +77,9 @@ fn raw_event(detail: &[u8]) -> SkippyRuntimeEventV1 {
         session_id: 19,
         progress_current: 1,
         progress_total: 2,
-        progress_unit: SkippyRuntimeEventProgressUnit::ITEMS,
-        failure_code: SkippyRuntimeEventFailureCode::NONE,
-        status: Status::Ok,
+        progress_unit: RUNTIME_EVENT_PROGRESS_UNIT_ITEMS,
+        failure_code: RUNTIME_EVENT_FAILURE_NONE,
+        status: Status::Ok as i32,
         reserved1: 0,
         detail_ptr: if detail.is_empty() {
             std::ptr::null()
@@ -221,8 +224,8 @@ fn concurrent_native_threads_do_not_serialize_on_each_other() {
 
 fn model_open_event(detail: &[u8]) -> SkippyRuntimeEventV1 {
     SkippyRuntimeEventV1 {
-        category: SkippyRuntimeEventCategory::MODEL_OPEN,
-        kind: SkippyRuntimeEventKind::MODEL_OPEN_PROGRESS,
+        category: RUNTIME_EVENT_CATEGORY_MODEL_OPEN,
+        kind: RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS,
         ..raw_event(detail)
     }
 }
