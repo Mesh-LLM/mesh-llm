@@ -55,10 +55,14 @@ permitted; release composition remains compilation-free. Live execution and
 runtime-seed timing qualification are not claimed by this source cutover.
 
 This file records checked-in CI facts and selected controlled probe evidence.
-The hosted-bare preparation census fails on unclassified explicit profiles,
-non-hosted literal callers, or drift in closed producer/release runner paths.
-Canary dynamic profiles retain their separate self-hosted contract; this check
-does not qualify live labels or resources.
+The preparation census checks explicit and default profiles, local composite
+edges, direct workflow callers and declared reusable-workflow paths. It fails
+on unclassified paths, non-hosted literal `hosted-bare` callers, changed
+default platform/image boundaries, or drift in closed producer/release runner
+paths. Canary dynamic profiles retain their separate self-hosted contract.
+Bare self-hosted GPU smoke may rely on locally provisioned automation tooling;
+its actual tools and identity remain unverified. The census does not qualify
+live labels, resources, third-party action internals or runtime dispatches.
 It is not a complete historical run log or live GitHub/Depot administration.
 Read it with `../SKILL.md` and `ci/ci.md` before editing CI.
 

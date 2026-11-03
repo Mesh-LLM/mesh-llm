@@ -1227,10 +1227,12 @@ lifecycle execution, and does not remove another lane's interpreter setup.
 
 ## Fan-out and timing controls
 
-The explicit preparation-profile census requires literal `hosted-bare`
-callers to use hosted Linux labels and checks the closed producer and
+The preparation-profile census requires literal `hosted-bare` callers to use
+hosted Linux labels and checks default image platform boundaries, local
+composite and reusable caller declarations, and the closed producer and
 forced-hosted release runtime paths. Dynamic canary profiles remain separately
-classified; source checks do not establish live runner or quota readiness.
+classified. Source checks do not establish actual runner identity, installed
+tools, third-party action internals, runtime dispatch paths or quota readiness.
 
 The planner records profile budgets: PR drafts/ready runs allow at most
 7 Linux, 2 macOS, 1 Windows matrix workers and 10 planned workers overall;

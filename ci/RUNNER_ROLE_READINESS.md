@@ -33,6 +33,35 @@ fallback in its projected labels.
 | Hardware GPU smokes | Dedicated `gpu-nvidia` path rather than a generic Depot label. | Hardware/device checks and the selected verified runtime/model artifacts. | Hardware eligibility and capacity are separate; no expansion follows from CPU or compile-only runtime results. |
 | Full release and publication | Candidate #2783 source forces the full-release selector and nested SDK calls hosted; the separate rolling-preview CUDA override is unchanged. | Release metadata freezes source; hosted publication and secret-bearing jobs retain their existing dependencies and native artifact checks. | Full-release Depot is not enabled by the reserved manual input. Release execution, signing and publication remain separate authorized operations. |
 
+## Default and nested automation preparation
+
+The checked-in `prepare-automation` default is `image`. On Linux it verifies
+the pinned public CPU image before building automation. Direct default callers
+are classified as follows; these are source paths, not machine attestations.
+
+| Direct path | Declared preparation boundary | Remaining evidence |
+| --- | --- | --- |
+| UI stamp, nightly stability and static ABI fallback | Linux job containers name pinned images; the static ABI fallback runs only without a product automation input. | Actual container identity, tools and provider admission. |
+| macOS smoke, Swift target and native SDK target | macOS label or target-specific macOS runner selection; the SDK target is restricted to Apple Darwin. | Native tools, cache policy and actual runner identity. |
+| Windows unit platform checks, release host and two cache warmers | Windows-specific unit guard or Windows runner label. | Native tools, source/artifact identity and actual runner identity. |
+
+Five local composite actions can lead to this preparation action. Product
+composition and native runtime preparation invoke its default only on non-Linux
+when no automation executable is already exported. Automation upload forwards
+its closed profile and has a Unix image-profile bootstrap fallback. Smoke input
+restoration uses the default for non-Linux or a container, and `hosted-bare`
+only for bare GitHub-hosted Linux. A bare self-hosted Linux smoke may instead
+fall back to `cargo xtool`; the runner's toolchain and cache state must be
+independently verified. The Laya CUDA, ROCm and Vulkan jobs prepare a
+source-bound cleanup executable before their nested smoke action, but their
+hardware, installed tools and group admission are still unverified here.
+
+The source contract inventories these local composite callers and the local
+reusable-workflow edges that reach them. Six PR entrypoints call protected
+`@main` workflow references, so their actual protected source may differ from
+the candidate revision. Runtime shell dispatch, third-party action internals,
+live runner state and external admission remain outside this source census.
+
 ## Cache and evidence boundaries
 
 `allow_depot_remote_cache` remains false in the checked-in selector. Native
