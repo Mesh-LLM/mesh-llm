@@ -1140,6 +1140,8 @@ boundary.
   Depot jobs enable the GitHub Actions cache API while direct Depot remote
   cache remains disabled. Hosted PR, release, and cache-warmer selections
   retain native GitHub cache behavior.
+  `ci/CACHE_AUTHORITY.md` records the source-level event/provider permission
+  table and explicitly separates selector flags from actual backend access.
 - `configure-sccache-gha`: event/provider-derived compiler-cache setup. The
   Windows platform-check lane applies it immediately after sccache installation,
   with both cache permissions from the shared runner policy. The ARM64 release

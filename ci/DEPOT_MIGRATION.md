@@ -302,6 +302,8 @@ runtime questions are:
 5. Does the restricted runner group continue to allow only the exact protected
    workflow refs after the PR canary is enabled?
 
+The event, provider, trust and cache-permission table is maintained in
+`ci/CACHE_AUTHORITY.md`; it is source evidence, not live qualification.
 The selector emits provider-derived `allow_native_github_cache` and
 `allow_depot_remote_cache` outputs. Depot remote build-tool cache remains
 disabled. Outside the bounded exception, Depot selections keep native Actions

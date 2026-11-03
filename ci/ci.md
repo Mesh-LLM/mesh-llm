@@ -1391,6 +1391,8 @@ backend sets `CMAKE_OBJECT_PATH_MAX=180`, so even the nine-target ROCm
 release row no longer disables sccache.
 
 `.github/actions/select-ci-runners` maps semantic roles to approved labels.
+`ci/CACHE_AUTHORITY.md` records the corresponding source-level cache
+permissions and the limits of those flags as evidence of live isolation.
 Fork pull requests use GitHub-hosted runners. Eligible same-repository PRs may
 use Depot while the repository-wide gate and time-bounded cache-risk exception
 in `ci/DEPOT_PR_RISK_EXCEPTION.md` are active. The

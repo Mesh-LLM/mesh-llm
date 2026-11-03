@@ -534,6 +534,11 @@ retired parser behavior, and source review still owns semantic emulation.
 
 ### Bounded Depot PR cache-risk exception
 
+Use `ci/CACHE_AUTHORITY.md` to review selector permissions by event, provider
+and trust context. It describes source decisions only; actual service ACLs,
+historical entry provenance, independent approval and live qualification
+remain separate requirements.
+
 Depot Cache currently scopes entries by repository but not by branch and
 automatically connects GitHub-cache API consumers on Depot runners. Cache-key
 prefixes, job-local sccache, and a trusted caller do not prevent checked-out PR
