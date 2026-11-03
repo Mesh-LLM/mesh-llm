@@ -235,8 +235,10 @@ jobs:
         # runtime (clang-sys dlopens it). Cheap no-op when already present.
         run: |
           if ! ldconfig -p 2>/dev/null | grep -q 'libclang\.so'; then
-            sudo apt-get update
-            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libclang-dev
+            # The job container runs as root; invoke apt-get directly (the
+            # image's sudoers policy has no root entry, so sudo can fail here).
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libclang-dev
           fi
       - name: Check bindgen-generated FFI bindings freshness
         env:
