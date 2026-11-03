@@ -17,10 +17,11 @@ enum Signal {
     DocsOnly,
     BackendChanged,
     RunnerContractRequired,
+    ForceHosted,
 }
 
 impl Signal {
-    const ALL: [Signal; 9] = [
+    const ALL: [Signal; 10] = [
         Signal::RustChanged,
         Signal::UiChanged,
         Signal::WebsiteChanged,
@@ -30,6 +31,7 @@ impl Signal {
         Signal::DocsOnly,
         Signal::BackendChanged,
         Signal::RunnerContractRequired,
+        Signal::ForceHosted,
     ];
 
     fn name(self) -> &'static str {
@@ -43,6 +45,7 @@ impl Signal {
             Signal::DocsOnly => "docs_only",
             Signal::BackendChanged => "backend_changed",
             Signal::RunnerContractRequired => "runner_contract_required",
+            Signal::ForceHosted => "force_hosted",
         }
     }
 }
@@ -103,15 +106,18 @@ impl Change<'_> {
             Signal::RunnerContractRequired => {
                 self.has_domain("ci-control") || self.has_domain("runner-infra")
             }
+            // Placement is calculated separately from test selection.
+            Signal::ForceHosted => unreachable!("force_hosted is computed independently"),
         }
     }
 }
 
-/// Every signal; exhaustive runs set all but `docs_only`.
+/// Exhaustive runs select all coverage signals; placement is independent.
 pub(super) fn signals(
     files: &[String],
     domains: &[String],
     profile: Profile,
+    force_hosted: bool,
 ) -> Map<String, Value> {
     let exhaustive = profile.exhaustive() || files.iter().any(|path| path == FORCE_ALL);
     let change = Change { files, domains };
@@ -119,6 +125,7 @@ pub(super) fn signals(
         .into_iter()
         .map(|signal| {
             let value = match signal {
+                Signal::ForceHosted => force_hosted,
                 Signal::DocsOnly if exhaustive => false,
                 _ if exhaustive => true,
                 _ => change.value(signal),
@@ -140,11 +147,20 @@ mod tests {
             "mesh/website/src/docs/pages/index.md".to_owned(),
             "mesh/docs/plugins/exemplars/demo/README.md".to_owned(),
         ];
-        let result = signals(&files, &[], Profile::PrReady);
+        let result = signals(&files, &[], Profile::PrReady, false);
         assert_eq!(result["website_docs_changed"], Value::Bool(true));
         assert_eq!(result["plugin_exemplars_changed"], Value::Bool(true));
-        let unrelated = signals(&["mesh/README.md".to_owned()], &[], Profile::PrReady);
+        let unrelated = signals(&["mesh/README.md".to_owned()], &[], Profile::PrReady, false);
         assert_eq!(unrelated["website_docs_changed"], Value::Bool(false));
         assert_eq!(unrelated["plugin_exemplars_changed"], Value::Bool(false));
+    }
+
+    #[test]
+    fn exhaustive_coverage_does_not_imply_hosted_placement() {
+        for profile in [Profile::Main, Profile::ManualFull] {
+            let result = signals(&["README.md".into()], &["docs".into()], profile, false);
+            assert_eq!(result["runner_contract_required"], Value::Bool(true));
+            assert_eq!(result["force_hosted"], Value::Bool(false));
+        }
     }
 }
