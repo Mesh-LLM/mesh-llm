@@ -5,10 +5,13 @@ description: Use this skill as the mandatory starting point whenever inspecting,
 
 # Manage CI
 
-Explicit automation preparation profiles must have a classified runner path.
-`hosted-bare` requires GitHub-hosted Linux; the source contract checks direct
-callers, closed producer maps and forced-hosted release runtime selection.
-This does not establish a live runner identity or provider qualification.
+Automation preparation profiles must have a classified runner path, including
+default `image` profiles and nested local composite and reusable callers.
+`hosted-bare` requires GitHub-hosted Linux. The source contracts check direct
+platform and image boundaries, closed producer maps, forced-hosted release
+selection, and the declared local caller graph. Bare self-hosted smoke tooling
+remains a qualification prerequisite. Source checks do not establish actual
+runner identity, tool availability, provider isolation or qualification.
 
 This is the normative CI rule source for MeshLLM. Read it completely before
 every CI task.
