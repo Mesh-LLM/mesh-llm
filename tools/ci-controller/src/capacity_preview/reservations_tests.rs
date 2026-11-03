@@ -352,3 +352,138 @@ fn lost_commit_acknowledgement_remains_an_uncertain_outcome() {
     assert_eq!(stored.reserved[0].id, "main");
     assert!(stored.snapshot.pending.is_empty());
 }
+
+#[test]
+fn pending_pr_supersession_preserves_every_main_and_queue_order() {
+    let mut state = model();
+    let pr = WorkKind::PullRequest {
+        repository_id: 42,
+        number: 7,
+    };
+    state.snapshot.pending = vec![
+        pending(work("old-1", pr.clone(), 1)),
+        pending(work("main-1", main('a'), 1)),
+        Pending {
+            work: work("old-2", pr.clone(), 1),
+            supersedes: Some("old-1".into()),
+        },
+        pending(work("release", WorkKind::Release { repository_id: 42 }, 1)),
+        Pending {
+            work: work("new", pr, 1),
+            supersedes: Some("old-2".into()),
+        },
+        pending(work("main-2", main('b'), 1)),
+    ];
+    let proposal = propose_pending_supersession(&state, 4, 105)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        proposal
+            .removed
+            .iter()
+            .map(|work| work.id.as_str())
+            .collect::<Vec<_>>(),
+        ["old-1", "old-2"]
+    );
+    assert_eq!(proposal.next.revision, 5);
+    assert_eq!(
+        proposal
+            .next
+            .snapshot
+            .pending
+            .iter()
+            .map(|entry| entry.work.id.as_str())
+            .collect::<Vec<_>>(),
+        ["main-1", "release", "new", "main-2"]
+    );
+    assert!(
+        proposal
+            .next
+            .snapshot
+            .pending
+            .iter()
+            .all(|entry| entry.supersedes.is_none())
+    );
+    let (selected, _) = reserved(propose(&proposal.next, 5, 105).unwrap());
+    assert_eq!(selected.id, "main-1");
+    assert_eq!(state.snapshot.pending.len(), 6, "input is not mutated");
+}
+
+#[test]
+fn active_reserved_or_cross_pr_predecessors_are_never_pruned() {
+    let pr = WorkKind::PullRequest {
+        repository_id: 42,
+        number: 7,
+    };
+    let mut state = model();
+    state.snapshot.active.push(Active {
+        work: work("old", pr.clone(), 1),
+        observed_class: Some(class()),
+    });
+    state.snapshot.pending.push(Pending {
+        work: work("new", pr.clone(), 1),
+        supersedes: Some("old".into()),
+    });
+    assert_eq!(
+        propose_pending_supersession(&state, 4, 105),
+        Err(ModelError::UnreconciledSupersession)
+    );
+    state.snapshot.active.clear();
+    state.reserved.push(work("old", pr, 1));
+    assert_eq!(
+        propose_pending_supersession(&state, 4, 105),
+        Err(ModelError::UnreconciledSupersession)
+    );
+    assert_eq!(state.reserved.len(), 1);
+
+    state.reserved.clear();
+    state
+        .snapshot
+        .pending
+        .insert(0, pending(work("old", main('a'), 1)));
+    assert_eq!(
+        propose_pending_supersession(&state, 4, 105),
+        Err(ModelError::Preview(PreviewError::InvalidSupersession))
+    );
+    assert_eq!(state.snapshot.pending.len(), 2);
+}
+
+#[test]
+fn competing_pending_supersession_proposals_commit_at_most_once() {
+    let mut state = model();
+    let pr = WorkKind::PullRequest {
+        repository_id: 42,
+        number: 7,
+    };
+    state.snapshot.pending = vec![
+        pending(work("old", pr.clone(), 1)),
+        Pending {
+            work: work("new", pr, 1),
+            supersedes: Some("old".into()),
+        },
+    ];
+    let store = FakeStore {
+        state: Mutex::new(state),
+        after_read: Some(Barrier::new(2)),
+    };
+    let (first, second) = std::thread::scope(|scope| {
+        let first = scope.spawn(|| try_supersede_pending(&store, 105).unwrap());
+        let second = scope.spawn(|| try_supersede_pending(&store, 105).unwrap());
+        (first.join().unwrap(), second.join().unwrap())
+    });
+    assert!(matches!(
+        (&first, &second),
+        (
+            StoredTransition::PendingSuperseded { .. },
+            StoredTransition::Contended
+        ) | (
+            StoredTransition::Contended,
+            StoredTransition::PendingSuperseded { .. }
+        )
+    ));
+    let stored = store.state.lock().unwrap();
+    assert_eq!(stored.revision, 5);
+    assert_eq!(stored.snapshot.pending.len(), 1);
+    assert_eq!(stored.snapshot.pending[0].work.id, "new");
+    assert_eq!(stored.snapshot.pending[0].supersedes, None);
+}

@@ -956,7 +956,9 @@ source commit.
   to a supplied start observation. Its injected-store interface requires an
   atomic whole-state comparison and reports uncertain commit outcomes. No
   shared store, expiry or release path exists.
-  It refuses pending supersession until a separate reconciler resolves it.
+  An explicit pending-only supersession proposal may remove older queued PR
+  requests from supplied state; reserved and active predecessors still require
+  separate cancellation evidence and reconciliation.
   Snapshot authenticity, complete quotas, runner identity, atomic shared state
   and lease recovery remain prerequisites for real cross-run admission.
 - `ci/ci-plan.schema.json` versions the machine-readable output.

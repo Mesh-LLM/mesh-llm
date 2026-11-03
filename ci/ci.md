@@ -1261,15 +1261,17 @@ independently approved complete catalog, authenticated observations, an atomic
 shared state and recovery design, and separately authorized live qualification.
 The versioned reservation model proposes one FIFO transition while charging
 existing reservations and active work. A supplied start observation transfers
-the charge without releasing it. Stale revisions, overcommitted reservations
-and unresolved supersession fail closed. An injected-store interface requires
-atomic comparison of the whole expected state and exposes contention, but no
-shared store implementation is provided. An unsuccessful commit call may
-have succeeded remotely, so its outcome must be reconciled before retry. The
-model has no expiry, completion
-release or job control; its caller-supplied observations are not
-attested. A real service must atomically commit the complete expected state and
-independently reconcile completion before freeing capacity.
+the charge without releasing it. A separate proposal can remove explicitly
+superseded pending PR requests while preserving the rest of the queue; active
+or reserved predecessors require separate reconciliation. Stale revisions,
+overcommitted reservations and unresolved supersession fail closed. An
+injected-store interface requires atomic comparison of the whole expected
+state and exposes contention, but no shared store implementation is provided.
+An unsuccessful commit call may have succeeded remotely, so its outcome must
+be reconciled before retry. The model has no expiry, completion release or job
+control; its caller-supplied observations are not attested. A real service
+must atomically commit the complete expected state and independently reconcile
+completion before freeing capacity.
 
 Timing evidence is collected read-only with `cargo xtool ci-ops collect-metrics`.
 Schema-v3 reports keep workflow wall/queue, runner queue, dependency wait,

@@ -6,7 +6,8 @@
 //! scheduler and use complete, authenticated observations and an independently
 //! approved catalog. The version check alone cannot supply those guarantees.
 
-use super::{Active, Pending, PreviewError, Snapshot, Work, preview};
+use super::{Active, Pending, Preview, PreviewError, Snapshot, Work, preview};
+use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Model {
@@ -23,6 +24,13 @@ pub enum Transition {
     Reserve { work: Work, next: Box<Model> },
     /// No pending request can fit at the head of the supplied queue.
     Wait,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PendingSupersession {
+    /// Older, never-reserved requests removed from the supplied queue model.
+    pub removed: Vec<Work>,
+    pub next: Box<Model>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -61,6 +69,10 @@ pub enum StoredTransition {
     Reserved { work: Work, revision: u64 },
     /// A supplied, unauthenticated start claim was stored in the model.
     StartRecorded { revision: u64 },
+    /// Only older pending PR requests were removed from the supplied model.
+    PendingSuperseded { removed: Vec<Work>, revision: u64 },
+    /// The supplied queue contained no pending supersession to reconcile.
+    NoSupersession,
     /// A read found no capacity; this conservative result may already be stale.
     Wait,
     /// Another writer changed the state; the caller must obtain a new snapshot.
@@ -94,17 +106,8 @@ fn expected_revision(model: &Model, expected: u64) -> Result<u64, ModelError> {
 /// Charge every reservation before evaluating the remaining FIFO queue.
 ///
 /// Reservations are modeled as pending demand, never as observed runners.
-/// Until a separate reconciler can prove cancellation or supersession, any
-/// such request is refused rather than silently removing a predecessor.
-fn first_candidate(model: &Model, now: u64) -> Result<Option<String>, ModelError> {
-    if model
-        .snapshot
-        .pending
-        .iter()
-        .any(|work| work.supersedes.is_some())
-    {
-        return Err(ModelError::UnreconciledSupersession);
-    }
+/// Every reservation must remain charged before later work is considered.
+fn preview_model(model: &Model, now: u64) -> Result<Preview, ModelError> {
     let mut snapshot = model.snapshot.clone();
     let mut pending = model
         .reserved
@@ -119,6 +122,13 @@ fn first_candidate(model: &Model, now: u64) -> Result<Option<String>, ModelError
     snapshot.pending = pending;
 
     let result = preview(&snapshot, now)?;
+    if result
+        .superseded_pending
+        .iter()
+        .any(|id| model.reserved.iter().any(|reserved| reserved.id == *id))
+    {
+        return Err(ModelError::UnreconciledSupersession);
+    }
     if result.candidates.len() < model.reserved.len()
         || !result
             .candidates
@@ -128,6 +138,19 @@ fn first_candidate(model: &Model, now: u64) -> Result<Option<String>, ModelError
     {
         return Err(ModelError::ReservationOverCapacity);
     }
+    Ok(result)
+}
+
+fn first_candidate(model: &Model, now: u64) -> Result<Option<String>, ModelError> {
+    if model
+        .snapshot
+        .pending
+        .iter()
+        .any(|work| work.supersedes.is_some())
+    {
+        return Err(ModelError::UnreconciledSupersession);
+    }
+    let result = preview_model(model, now)?;
     Ok(result.candidates.get(model.reserved.len()).cloned())
 }
 
@@ -135,8 +158,8 @@ fn first_candidate(model: &Model, now: u64) -> Result<Option<String>, ModelError
 ///
 /// `expected` is a local precondition. Before any live use, an external store
 /// must atomically replace the exact expected state with `next`; two callers
-/// evaluating the same revision otherwise both receive a proposal. No caller
-/// in this repository performs that replacement or starts a job from it.
+/// evaluating the same revision otherwise both receive a proposal. This
+/// repository provides no production store or workflow caller.
 pub fn propose(model: &Model, expected: u64, now: u64) -> Result<Transition, ModelError> {
     let next_revision = expected_revision(model, expected)?;
     let Some(candidate) = first_candidate(model, now)? else {
@@ -185,6 +208,65 @@ pub fn observe_start(
     Ok(next)
 }
 
+/// Propose removing only explicitly superseded, still-pending PR work.
+///
+/// This operates entirely on supplied state. A complete, authenticated queue
+/// and atomic participation by all schedulers are prerequisites for live use.
+/// Reserved or active predecessors are never removed by this transition;
+/// they require separately observed cancellation and reconciliation. Main,
+/// release, warmer and control work are preserved.
+pub fn propose_pending_supersession(
+    model: &Model,
+    expected: u64,
+    now: u64,
+) -> Result<Option<PendingSupersession>, ModelError> {
+    let next_revision = expected_revision(model, expected)?;
+    let result = preview_model(model, now)?;
+    if !result.active_cancellation_candidates.is_empty() {
+        return Err(ModelError::UnreconciledSupersession);
+    }
+    let ids = result
+        .superseded_pending
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    if ids.is_empty() {
+        return Ok(None);
+    }
+    let pending_ids = model
+        .snapshot
+        .pending
+        .iter()
+        .map(|pending| pending.work.id.as_str())
+        .collect::<BTreeSet<_>>();
+    if ids.iter().any(|id| !pending_ids.contains(id.as_str())) {
+        return Err(ModelError::UnreconciledSupersession);
+    }
+    let mut next = model.clone();
+    let mut removed = Vec::new();
+    next.snapshot.pending.retain(|pending| {
+        if ids.contains(&pending.work.id) {
+            removed.push(pending.work.clone());
+            false
+        } else {
+            true
+        }
+    });
+    for pending in &mut next.snapshot.pending {
+        if let Some(target) = &pending.supersedes {
+            if !ids.contains(target) {
+                return Err(ModelError::UnreconciledSupersession);
+            }
+            pending.supersedes = None;
+        }
+    }
+    next.revision = next_revision;
+    first_candidate(&next, now)?;
+    Ok(Some(PendingSupersession {
+        removed,
+        next: Box::new(next),
+    }))
+}
+
 /// Attempt one reservation using an injected, externally implemented store.
 ///
 /// This does not authenticate the snapshot, qualify the runner, dispatch a
@@ -230,6 +312,35 @@ pub fn try_record_start<S: AtomicModelStore>(
         .map_err(StoreError::CommitUnknown)?
     {
         Ok(StoredTransition::StartRecorded { revision })
+    } else {
+        Ok(StoredTransition::Contended)
+    }
+}
+
+/// Attempt to store a pending-only supersession proposal.
+///
+/// This does not cancel work or establish that a supplied queue is complete.
+/// Contention and unknown commit outcomes require the same handling as a
+/// reservation. There is no store implementation or workflow caller here.
+pub fn try_supersede_pending<S: AtomicModelStore>(
+    store: &S,
+    now: u64,
+) -> Result<StoredTransition, StoreError<S::Error>> {
+    let current = store.load().map_err(StoreError::Load)?;
+    let Some(proposal) =
+        propose_pending_supersession(&current, current.revision, now).map_err(StoreError::Model)?
+    else {
+        return Ok(StoredTransition::NoSupersession);
+    };
+    let revision = proposal.next.revision;
+    if store
+        .compare_exchange(&current, &proposal.next)
+        .map_err(StoreError::CommitUnknown)?
+    {
+        Ok(StoredTransition::PendingSuperseded {
+            removed: proposal.removed,
+            revision,
+        })
     } else {
         Ok(StoredTransition::Contended)
     }
