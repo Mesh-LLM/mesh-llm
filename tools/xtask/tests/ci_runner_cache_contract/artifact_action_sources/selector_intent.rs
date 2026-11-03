@@ -135,6 +135,28 @@ fn shared_selector_preserves_legacy_approval_independence_and_dispatch_branch_co
     );
 }
 #[test]
+fn explicit_hosted_override_beats_every_main_and_manual_depot_request() {
+    for gate in ["false", "true"] {
+        for manual in ["false", "true"] {
+            for origin in ["push", "workflow_dispatch", "pull_request"] {
+                selected(
+                    &[
+                        ("INPUT_EVENT_NAME", "workflow_dispatch"),
+                        ("INPUT_ORIGINAL_EVENT_NAME", origin),
+                        ("INPUT_REF", "refs/heads/main"),
+                        ("INPUT_DEPOT_MAIN_ENABLED", gate),
+                        ("INPUT_MANUAL_USE_DEPOT", manual),
+                        ("INPUT_FORCE_HOSTED", "true"),
+                    ],
+                    false,
+                    true,
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn shared_selector_exact_canary_cannot_bypass_repository_event_or_hosted_controls() {
     let cases: &[&[(&str, &str)]] = &[
         &[("INPUT_PR_CANARY_REF", "refs/pull/13/merge")],

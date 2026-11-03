@@ -128,6 +128,7 @@ jobs:
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
       force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
+      use_depot: ${{ inputs.use_depot }}
       backend: cpu
       target: x86_64-unknown-linux-gnu
       artifact_name: ci-static-abi-${{ github.run_id }}
@@ -211,6 +212,7 @@ jobs:
       source_sha: ${{ inputs.source_sha }}
       original_event_name: ${{ inputs.original_event_name }}
       force_hosted: ${{ fromJson(inputs.lane_plan_json).signals.runner_contract_required }}
+      use_depot: ${{ inputs.use_depot }}
       backend: cpu
       target: x86_64-unknown-linux-gnu
       profile: release
