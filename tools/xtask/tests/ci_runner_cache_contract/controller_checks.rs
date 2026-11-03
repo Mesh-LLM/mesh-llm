@@ -5,6 +5,10 @@ use super::{
 };
 use serde_json::{Value, json};
 use std::{fs, process::Command};
+
+#[path = "controller_checks/dispatch_routing.rs"]
+mod dispatch_routing;
+
 const SCRIPT: &str = "actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd";
 const LABELS: [&str; 5] = [
     "CI / Quality",
@@ -153,6 +157,16 @@ fn run_with_manual_input(
     fail_lane: &str,
     manual_input: Value,
 ) -> Value {
+    run_with_plan(required, mutation, fail_lane, manual_input, None)
+}
+
+fn run_with_plan(
+    required: [bool; 5],
+    mutation: &str,
+    fail_lane: &str,
+    manual_input: Value,
+    action_outputs: Option<&Value>,
+) -> Value {
     let fixture = Fixture::new();
     let doc = document();
     let script = text(selected(&doc).unwrap().get("with").unwrap(), "script");
@@ -163,13 +177,26 @@ fn run_with_manual_input(
     fs::write(&actual_resolve, resolve).unwrap();
     let harness = fixture.path().join("controller-harness.js");
     fs::write(&harness, include_str!("controller_checks.js")).unwrap();
-    let projections = LANES.iter().enumerate().map(|(index, lane)| json!({"lane":lane,"required":required[index],"required_slices":if required[index] {vec!["synthetic"]} else {vec![]},"matrices":{},"fixture_capability":{"cpu":true}})).collect::<Vec<_>>();
+    let projections = if let Some(outputs) = action_outputs {
+        LANES
+            .iter()
+            .map(|lane| {
+                serde_json::from_str::<Value>(
+                    outputs[format!("{lane}_lane_plan")].as_str().unwrap(),
+                )
+                .unwrap()
+            })
+            .collect::<Vec<_>>()
+    } else {
+        LANES.iter().enumerate().map(|(index, lane)| json!({"lane":lane,"required":required[index],"required_slices":if required[index] {vec!["synthetic"]} else {vec![]},"matrices":{},"fixture_capability":{"cpu":true}})).collect::<Vec<_>>()
+    };
+    let mut configuration = json!({"lanes":projections,"mutation":mutation,"fail_lane":fail_lane,"manual_input":manual_input});
+    if let Some(outputs) = action_outputs {
+        configuration["canonical"] = outputs["plan_json"].clone();
+        configuration["digest"] = outputs["plan_digest"].clone();
+    }
     let config = fixture.path().join("finite-input.json");
-    fs::write(
-        &config,
-        serde_json::to_vec(&json!({"lanes":projections,"mutation":mutation,"fail_lane":fail_lane,"manual_input":manual_input})).unwrap(),
-    )
-    .unwrap();
+    fs::write(&config, serde_json::to_vec(&configuration).unwrap()).unwrap();
     let mut command = Command::new("node");
     command
         .env_clear()

@@ -53,6 +53,9 @@ impl Fixture {
         fs::set_permissions(p, fs::Permissions::from_mode(0o700)).unwrap();
     }
     pub(super) fn run(&self, command: Command) -> Output {
+        self.run_with_timeout(command, Duration::from_secs(8))
+    }
+    pub(super) fn run_with_timeout(&self, command: Command, timeout: Duration) -> Output {
         let mut environment = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"]
             .into_iter()
             .filter_map(|key| {
@@ -97,7 +100,7 @@ impl Fixture {
             environment,
         };
         let limits = process::Limits {
-            execution: Duration::from_secs(8),
+            execution: timeout,
             graceful_shutdown: Duration::from_secs(1),
             forced_shutdown: Duration::from_secs(1),
             retained_bytes_per_stream: 1024 * 1024,
