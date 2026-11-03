@@ -181,6 +181,11 @@ restores an exact-key cached full xtask executable and compiles only on a miss;
 the protected authority producers opt out of that cache so their bytes are
 always compiled in-run.
 
+The verified pre-checkout PR authority audit owns a staging directory distinct
+from product automation restore. Preserve the order protected admission and
+audit, product checkout, product restore, then product execution; an executable
+from product source must not supply protected audit authority.
+
 Do not implement Python emulation in xtask: repr/str formatting, argparse or
 JSON quirks, interpreter-limit emulation, or vendored parser/entity tables for
 parity. Do not commit differential oracle tests that invoke Python. Legacy
