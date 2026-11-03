@@ -1372,6 +1372,9 @@ are recorded in PR #2662; cache compatibility remains tied to the runner image.
 Windows platform checks apply the shared sccache policy immediately after
 installation, using the selected runner's native and Depot cache permissions.
 
+`ci/CACHE_AUTHORITY.md` records the corresponding source-level cache
+permissions and the limits of those flags as evidence of live isolation.
+
 The checked-in Cargo configuration is the repository-wide Rust accelerator
 owner: `sccache` is mandatory, Linux final links prefer the probed mold driver
 and fall back to a compatible lld or the platform linker when mold is absent or
@@ -1391,8 +1394,6 @@ backend sets `CMAKE_OBJECT_PATH_MAX=180`, so even the nine-target ROCm
 release row no longer disables sccache.
 
 `.github/actions/select-ci-runners` maps semantic roles to approved labels.
-`ci/CACHE_AUTHORITY.md` records the corresponding source-level cache
-permissions and the limits of those flags as evidence of live isolation.
 Fork pull requests use GitHub-hosted runners. Eligible same-repository PRs may
 use Depot while the repository-wide gate and time-bounded cache-risk exception
 in `ci/DEPOT_PR_RISK_EXCEPTION.md` are active. The
