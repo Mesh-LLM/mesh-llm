@@ -254,3 +254,31 @@ fn bootstrap_rejects_extra_arguments() -> TestResult {
     );
     Ok(())
 }
+
+#[test]
+fn execution_record_cli_preserves_unknowns_and_does_not_echo_runner_name() -> TestResult {
+    let trace = include_str!("fixtures/decision-selector-trace.json");
+    let input = serde_json::to_vec(&serde_json::json!({
+        "selection_trace": trace,
+        "context": {"runner": {"name": "private-runner", "os": "Linux", "arch": "X64"}}
+    }))?;
+    let output = run(&["ci", "execution-record"], &input)?;
+    assert!(output.status.success(), "{output:?}");
+    let text = String::from_utf8(output.stdout)?;
+    assert!(!text.contains("private-runner"));
+    let record: serde_json::Value = serde_json::from_str(&text)?;
+    assert_eq!(record["authenticity"], "unverified");
+    assert!(record["actual_runner"].is_null());
+    assert!(record["effective_cache_mode"].is_null());
+    assert_eq!(record["authorizes_execution"], false);
+    Ok(())
+}
+
+#[test]
+fn execution_record_cli_rejects_untrusted_input_without_echoing_it() -> TestResult {
+    let output = run(&["ci", "execution-record"], b"private-invalid-input")?;
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(!String::from_utf8(output.stderr)?.contains("private-invalid-input"));
+    Ok(())
+}

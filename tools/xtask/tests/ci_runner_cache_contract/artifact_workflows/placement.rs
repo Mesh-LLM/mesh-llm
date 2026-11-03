@@ -757,3 +757,39 @@ fn selection_trace_preserves_decision_without_claiming_execution_or_echoing_untr
     assert!(!fixture.path().join("outputs").exists());
     fixture.0.close().unwrap();
 }
+
+#[test]
+fn execution_record_accepts_the_real_selector_trace_without_claiming_observation() {
+    let fixture = support::Fixture::new();
+    assert!(fixture.selector(&[]).status.success());
+    let output = fixture.outputs();
+    let trace = output["selection_trace"].as_str().unwrap();
+    let request = json!({
+        "selection_trace": trace,
+        "context": {
+            "role": "linux-native-16", "run_id": 42, "run_attempt": 1,
+            "runner": {"name": "private-fixture-runner", "os": "Linux", "arch": "X64"}
+        }
+    });
+    let input = serde_json::to_vec(&request).unwrap();
+    let expected = ci_controller::plan::decision_evidence::render(&input).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(["ci", "execution-record"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(&input).unwrap();
+    let result = child.wait_with_output().unwrap();
+    assert!(result.status.success(), "{:?}", result.stderr);
+    assert_eq!(result.stdout, format!("{expected}\n").as_bytes());
+    assert!(!expected.contains("private-fixture-runner"));
+    let record: Value = serde_json::from_str(&expected).unwrap();
+    assert_eq!(record["authenticity"], "unverified");
+    assert_eq!(record["selection_to_job_binding"], "unverified");
+    assert!(record["actual_runner"].is_null());
+    assert!(record["effective_cache_mode"].is_null());
+    assert_eq!(record["authorizes_execution"], false);
+    fixture.0.close().unwrap();
+}

@@ -479,6 +479,9 @@ retired parser behavior, and source review still owns semantic emulation.
   job summary. It records policy inputs, selected provider and projected labels,
   not actual execution. Role, protected policy revision, runner identity and
   effective cache mode remain unknown until separately observed and retained.
+  `ci execution-record` can combine that trace with bounded caller assertions,
+  but does not authenticate or retain them. Never treat its unverified record
+  as proof of job identity, cache mode, policy authority or qualification.
 - Ordinary PR jobs remain GitHub-hosted unless the bounded same-repository
   Depot risk exception below is active; an explicitly approved ephemeral,
   uncredentialed hardware runner may own a documented GPU smoke exception.

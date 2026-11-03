@@ -1394,6 +1394,16 @@ release row no longer disables sccache.
 It emits a bounded selection trace and projected labels in its output and job
 summary. The trace does not establish the executing runner, role, protected policy revision or
 effective cache mode; those remain separate observed-run evidence.
+The source-only `cargo xtool ci execution-record` command reads a bounded JSON
+request with `selection_trace` and optional `context` fields and writes a JSON
+record to stdout. It hashes the exact supplied trace bytes and any supplied job
+or runner name, accepts only catalog role names, and marks all context and the
+selection-to-job binding unverified. Hashing names is not authentication or a
+secrecy guarantee. Verified policy, actual runner and effective cache remain
+unknown, and no retention is established. No workflow invokes this command;
+protected collection, binding, durable retention and live evidence remain open.
+The [runner selection acceptance inventory](RUNNER_SELECTION_ACCEPTANCE.md)
+maps the existing composed fixture cases and their remaining caller coverage.
 Fork pull requests use GitHub-hosted runners. Eligible same-repository PRs may
 use Depot while the repository-wide gate and time-bounded cache-risk exception
 in `ci/DEPOT_PR_RISK_EXCEPTION.md` are active. The
