@@ -304,6 +304,10 @@ runtime questions are:
 5. Does the restricted runner group continue to allow only the exact protected
    workflow refs after the PR canary is enabled?
 
+The selector's non-secret `selection_trace` and job summary record the
+decision only. Role, protected policy revision, actual runner and effective
+cache mode are unknown; retain separately authenticated execution evidence
+and an approved decision record before qualification.
 The selector emits provider-derived `allow_native_github_cache` and
 `allow_depot_remote_cache` outputs. Depot remote build-tool cache remains
 disabled. Outside the bounded exception, Depot selections keep native Actions
