@@ -621,13 +621,23 @@ fn test_run_benchmark_times_out_child_process() {
     let child = write_test_child(&root, "mesh-llm-child", "exec sleep 5");
     #[cfg(windows)]
     let child = write_test_child(&root, "mesh-llm-child.cmd", "timeout /t 5 >NUL");
-    let started = Instant::now();
-    let result =
-        with_benchmark_child_override(&child, || run_benchmark(&child, Duration::from_millis(100)));
+    // Timed from the attempt that ran: a start retried on "Text file busy"
+    // isn't part of the timeout.
+    let mut started = Instant::now();
+    let err = with_benchmark_child_override(&child, || {
+        crate::text_file_busy::retry(|| {
+            started = Instant::now();
+            run_benchmark_subprocess(&child, Duration::from_millis(100))
+        })
+        .expect_err("timed out benchmark should fail")
+    });
     let elapsed = started.elapsed();
     let _ = std::fs::remove_dir_all(&root);
 
-    assert!(result.is_none(), "timed out benchmark should fail");
+    assert!(
+        err.to_string().contains("benchmark timed out"),
+        "the benchmark child should time out, got: {err:#}"
+    );
     assert!(
         elapsed < Duration::from_secs(2),
         "timeout should be bounded"
