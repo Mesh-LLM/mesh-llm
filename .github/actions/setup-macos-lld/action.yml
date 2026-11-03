@@ -14,6 +14,14 @@ inputs:
     description: Use preinstalled runner tools or install them through Homebrew.
     required: false
     default: homebrew
+  allow_depot_remote_cache:
+    description: Runner-policy permission to use Depot remote compiler cache.
+    required: false
+    default: "false"
+  allow_native_github_cache:
+    description: Runner-policy permission to use GitHub compiler cache.
+    required: false
+    default: "false"
 
 runs:
   using: composite
@@ -47,7 +55,7 @@ runs:
           *) echo "unsupported macOS tool source: $TOOL_SOURCE" >&2; exit 1 ;;
         esac
 
-    - name: Verify repository build accelerators
+    - name: Allocate job-owned compiler-cache endpoint
       shell: bash
       run: |
         set -euo pipefail
@@ -55,31 +63,26 @@ runs:
         sccache --version
         # A short, unique socket avoids both cross-account TCP-port collisions
         # and macOS's Unix-socket path limit in long runner workspaces.
-        socket_dir="$(mktemp -d /tmp/mesh-sccache.XXXXXXXX)"
-        export SCCACHE_SERVER_UDS="$socket_dir/server.sock"
-        echo "SCCACHE_SERVER_UDS=$SCCACHE_SERVER_UDS" >> "$GITHUB_ENV"
-        if [[ "${SCCACHE_GHA_ENABLED:-}" == "true" &&
-              -z "${ACTIONS_CACHE_URL:-}" &&
-              -z "${ACTIONS_RESULTS_URL:-}" ]]; then
-          echo "SCCACHE_GHA_ENABLED=false" >> "$GITHUB_ENV"
-          echo "SCCACHE_MULTILEVEL_CHAIN=disk" >> "$GITHUB_ENV"
-          export SCCACHE_GHA_ENABLED=false
-          export SCCACHE_MULTILEVEL_CHAIN=disk
+        socket="${MESH_LLM_SCCACHE_JOB_SOCKET:-}"
+        if [[ -z "$socket" || "${SCCACHE_SERVER_UDS:-}" != "$socket" ||
+              "$socket" != /tmp/mesh-sccache.*/server.sock || ! -d "${socket%/*}" ]]; then
+          socket_dir="$(mktemp -d /tmp/mesh-sccache.XXXXXXXX)"
+          socket="$socket_dir/server.sock"
         fi
-        if [[ "${SCCACHE_MULTILEVEL_CHAIN:-}" == "disk" ]]; then
-          cache_dir="${SCCACHE_DIR:-$RUNNER_TEMP/mesh-llm-sccache}"
-          mkdir -p "$cache_dir"
-          echo "SCCACHE_DIR=$cache_dir" >> "$GITHUB_ENV"
-          echo "SCCACHE_IGNORE_SERVER_IO_ERROR=1" >> "$GITHUB_ENV"
-          export SCCACHE_DIR="$cache_dir"
-          export SCCACHE_IGNORE_SERVER_IO_ERROR=1
-        fi
-        # Start the fresh endpoint in remote-cache modes too, before parallel
-        # compiler clients can race to bind the same Unix socket.
-        # Keep the job-owned daemon alive through quiet test phases.
-        export SCCACHE_IDLE_TIMEOUT=0
+        echo "MESH_LLM_SCCACHE_JOB_SOCKET=$socket" >> "$GITHUB_ENV"
+        echo "SCCACHE_SERVER_UDS=$socket" >> "$GITHUB_ENV"
         echo "SCCACHE_IDLE_TIMEOUT=0" >> "$GITHUB_ENV"
-        sccache --start-server
+
+    - name: Apply selected compiler-cache policy
+      uses: ./.github/actions/configure-sccache-gha
+      with:
+        allow_depot_remote_cache: ${{ inputs.allow_depot_remote_cache }}
+        allow_native_github_cache: ${{ inputs.allow_native_github_cache }}
+
+    - name: Verify repository build accelerators
+      shell: bash
+      run: |
+        set -euo pipefail
         lld_bin="$(brew --prefix lld)/bin"
         test -x "$lld_bin/ld64.lld"
         echo "$lld_bin" >> "$GITHUB_PATH"
