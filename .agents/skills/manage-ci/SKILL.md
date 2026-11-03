@@ -599,6 +599,9 @@ checked-in expiry are the maintainer-controlled approval boundary.
   independently of the server endpoint, and pass the endpoint to later steps.
 - Declare cache mode per slice: no remote cache, PR restore-only/isolated, or
   trusted read-write. Derive it from the same policy as runner placement.
+- The ARM64 release-artifact verifier applies the selected runner's cache
+  permissions immediately after installing sccache and before its first Cargo
+  invocation. A hosted release runner is not an implicit cache grant.
 - GitHub-hosted PR writes remain isolated from trusted main: normal protected
   same-repository and fork lanes explicitly force restore-only cache mode even
   though their workflow ref is the default branch. The bounded Depot exception

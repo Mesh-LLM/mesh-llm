@@ -293,6 +293,9 @@ fn explicit_native_policy(name: &str, job: &str, steps: &[Node]) -> Result<(), S
         ("release.yml", "metadata" | "publish" | "publish_crates_preflight" | "publish_crates") => {
             Some("false")
         }
+        ("release.yml", "smoke_linux_arm64_artifact") => {
+            Some("${{ needs.metadata.outputs.allow_native_github_cache }}")
+        }
         (
             "release.yml",
             "build"
@@ -324,6 +327,51 @@ fn explicit_native_policy(name: &str, job: &str, steps: &[Node]) -> Result<(), S
                 expected,
             )?;
         }
+    }
+    Ok(())
+}
+
+fn release_arm_smoke_policy(name: &str, job: &str, steps: &[Node]) -> Result<(), String> {
+    if name != "release.yml" || job != "smoke_linux_arm64_artifact" {
+        return Ok(());
+    }
+    let install = required_step(steps, |step| {
+        text(step, "uses").starts_with("mozilla-actions/sccache-action@")
+    })?;
+    let configure_index = required_step(steps, |step| text(step, "uses") == CONFIGURE)?;
+    if configure_index != install + 1 {
+        return Err(
+            "ARM64 release smoke must configure cache immediately after installation".into(),
+        );
+    }
+    let installer = steps
+        .get(install)
+        .ok_or("ARM64 release cache installer missing")?;
+    let configure = steps
+        .get(configure_index)
+        .ok_or("ARM64 release cache policy missing")?;
+    if [installer, configure]
+        .iter()
+        .any(|step| step.get("if").is_some() || step.get("continue-on-error").is_some())
+    {
+        return Err("ARM64 release smoke cache setup must be unconditional and required".into());
+    }
+    let first_cargo = steps
+        .iter()
+        .position(|step| text(step, "run").contains("cargo "))
+        .ok_or("ARM64 release smoke Cargo verifier missing")?;
+    if first_cargo <= configure_index {
+        return Err("ARM64 release smoke Cargo ran before cache policy".into());
+    }
+    let inputs = configure
+        .get("with")
+        .ok_or("ARM64 release cache inputs missing")?;
+    for key in ["allow_depot_remote_cache", "allow_native_github_cache"] {
+        equal(
+            inputs,
+            key,
+            &format!("${{{{ needs.metadata.outputs.{key} }}}}"),
+        )?;
     }
     Ok(())
 }
@@ -389,6 +437,7 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
     for (name, workflow) in workflows {
         for (job_name, job) in workflow.get("jobs").ok_or("jobs missing")?.entries() {
             explicit_native_policy(name, job_name, steps(job))?;
+            release_arm_smoke_policy(name, job_name, steps(job))?;
             runtime_input_policy(name, job_name, steps(job))?;
             callers(name, steps(job)).map_err(|e| format!("{name}: {e}"))?;
         }

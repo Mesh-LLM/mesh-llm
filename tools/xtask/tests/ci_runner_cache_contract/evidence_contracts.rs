@@ -227,6 +227,29 @@ fn direct_sccache_users_cannot_bypass_immediate_policy_or_omit_authority_inputs(
     assert!(cache_evidence::check(&documents).is_err());
 }
 #[test]
+fn arm64_release_smoke_requires_adjacent_selected_cache_permissions() {
+    let policy = "      - name: Apply selected ARM64 smoke cache policy\n        uses: ./.github/actions/configure-sccache-gha\n        with:\n          allow_depot_remote_cache: ${{ needs.metadata.outputs.allow_depot_remote_cache }}\n          allow_native_github_cache: ${{ needs.metadata.outputs.allow_native_github_cache }}\n";
+    let mutations = [
+        String::new(),
+        policy.replace("needs.metadata.outputs.allow_native_github_cache", "true"),
+        policy.replace("needs.metadata.outputs.allow_depot_remote_cache", "true"),
+        policy.replace("        uses:", "        if: false\n        uses:"),
+        policy.replace(
+            "        uses:",
+            "        continue-on-error: true\n        uses:",
+        ),
+        format!("      - run: echo delayed-cache\n{policy}"),
+        format!("{policy}{policy}"),
+    ];
+    for replacement in mutations {
+        assert!(
+            cache_evidence::check(&changed("release.yml", policy, &replacement)).is_err(),
+            "accepted ARM64 smoke cache-policy mutation"
+        );
+    }
+}
+
+#[test]
 fn sdk_dependency_cache_identity_and_hash_boundaries_reject_each_lost_dimension() {
     for (old, new) in [
         (
