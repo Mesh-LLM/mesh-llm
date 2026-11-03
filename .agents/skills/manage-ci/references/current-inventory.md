@@ -1176,6 +1176,11 @@ architecture, semantic runner role and Depot size, and emits deterministic
 queue/capacity heuristics plus an optional provider-cohort comparison. Raw
 inputs and dated reports belong under `/tmp` or a tracking issue/artifact, not
 under `ci/` or this inventory.
+When `gh` explicitly reports that its run JSON lacks the `attempt` field, the
+collector retries without that field and reads the actual attempt from the
+fixed GitHub API run endpoint. It checks source and update identity before and
+after fetching jobs, refusing a mixed snapshot. Authentication and other
+errors do not trigger this compatibility path.
 
 Artifacts are correctness boundaries; caches only accelerate regeneration.
 PR artifacts generally retain for one day. Fork lanes cannot publish shared
