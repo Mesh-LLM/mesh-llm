@@ -157,9 +157,7 @@ async fn a_plugin_that_goes_away_by_itself_is_started_again() {
 /// disable that runs after the connection loop took the runtime and before
 /// its teardown settles the plugin's status: they find no runtime to stop and
 /// leave that status. Returns once the teardown has ended.
-async fn go_away_while_settled_as(running: &Running, status: &str) {
-    let plugin = running.plugin();
-
+async fn go_away_while_settled_as(plugin: &ExternalPlugin, crash: &Notify, status: &str) {
     // The connection loop's teardown fails the requests still waiting on the
     // connection once it has settled the plugin's status.
     let (settled_tx, settled_rx) = oneshot::channel();
@@ -177,7 +175,7 @@ async fn go_away_while_settled_as(running: &Running, status: &str) {
     // Holding the summary lets the connection loop take the runtime and then
     // makes it wait.
     let mut summary = plugin.summary.lock().await;
-    running.crash.notify_one();
+    crash.notify_one();
     tokio::time::timeout(Duration::from_secs(30), async {
         while plugin.runtime.lock().await.is_some() {
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -196,25 +194,38 @@ async fn go_away_while_settled_as(running: &Running, status: &str) {
         .expect_err("with the disconnection");
 }
 
+// These tests control the teardown interleaving themselves. A manager's
+// periodic supervisor can otherwise start an unrelated round while the test
+// holds the summary, changing the status before the assertion.
+async fn isolated_plugin() -> (ExternalPlugin, Arc<Notify>, Arc<AtomicUsize>) {
+    let starts = Arc::new(AtomicUsize::new(0));
+    let crash = Arc::new(Notify::new());
+    let runner = crashes_once(starts.clone(), Arc::new(AtomicUsize::new(0)), crash.clone());
+    let plugin = super::tests::in_process_plugin("flaky", runner);
+    plugin.ensure_running().await.unwrap();
+    (plugin, crash, starts)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_plugin_disabled_as_it_goes_away_stays_down() {
-    let running = Running::start().await;
-    go_away_while_settled_as(&running, "disabled").await;
-    let plugin = running.plugin();
+    let (plugin, crash, starts) = isolated_plugin().await;
+    go_away_while_settled_as(&plugin, &crash, "disabled").await;
     assert_eq!(plugin.summary().await.status, "disabled");
     plugin.supervise().await.unwrap();
     assert_eq!(
-        running.starts.load(Ordering::SeqCst),
+        starts.load(Ordering::SeqCst),
         1,
         "a disabled plugin stays down"
     );
-    running.manager.shutdown().await;
+    plugin.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_plugin_shut_down_as_it_goes_away_stays_stopped() {
-    let running = Running::start().await;
-    go_away_while_settled_as(&running, "stopped").await;
-    assert_eq!(running.plugin().summary().await.status, "stopped");
-    running.manager.shutdown().await;
+    let (plugin, crash, starts) = isolated_plugin().await;
+    go_away_while_settled_as(&plugin, &crash, "stopped").await;
+    assert_eq!(plugin.summary().await.status, "stopped");
+    plugin.supervise().await.unwrap();
+    assert_eq!(starts.load(Ordering::SeqCst), 1);
+    plugin.shutdown().await;
 }

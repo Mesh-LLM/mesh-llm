@@ -389,15 +389,7 @@ impl Serialize for ModelConfigEntry {
     {
         let mut state = serializer.serialize_struct("ModelConfigEntry", 19)?;
         state.serialize_field("model", &self.model)?;
-        if let Some(provider) = &self.provider {
-            state.serialize_field("provider", provider)?;
-            state.serialize_field("variant", &self.variant)?;
-            state.serialize_field("options", &self.options)?;
-            state.serialize_field("request_defaults", &self.provider_request_defaults)?;
-            state.serialize_field("lifecycle", &self.lifecycle)?;
-            state.serialize_field("source", &self.source)?;
-        }
-
+        self.serialize_model_management(&mut state)?;
         if let Some(value) = &self.mmproj {
             state.serialize_field("mmproj", value)?;
         }

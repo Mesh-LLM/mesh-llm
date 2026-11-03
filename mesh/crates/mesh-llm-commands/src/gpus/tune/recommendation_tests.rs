@@ -34,6 +34,7 @@ pub(crate) fn sample_metadata(
                 base_resident_bytes: model_bytes,
                 expert_tensor_bytes: 0,
                 file_overhead_bytes: 0,
+                expert_block_bytes: Some(Vec::new()),
             },
         ),
         model_bytes,

@@ -149,7 +149,19 @@ async fn a_membership_admits_only_its_own_allowlist() -> Result<()> {
 
     // Trusted by the node itself, but not on the membership's allowlist.
     let my_other_node = owned_node(&me, &[&me]).await?;
-    let _ = my_other_node.join(&membership.invite_token().await).await;
+    // Exercise owner admission over the bound loopback socket. Invite-token
+    // addresses depend on iroh's asynchronous address discovery; discarding a
+    // failed dial would leave this test waiting for a rejection of a peer the
+    // membership never saw.
+    let socket = membership
+        .endpoint
+        .bound_sockets()
+        .into_iter()
+        .find(|addr| addr.is_ipv4())
+        .expect("membership binds an IPv4 socket");
+    assert!(socket.ip().is_loopback());
+    let address = EndpointAddr::new(membership.id()).with_ip_addr(socket);
+    let dial_result = my_other_node.connect_to_peer(address).await;
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while !membership
             .state
@@ -162,7 +174,9 @@ async fn a_membership_admits_only_its_own_allowlist() -> Result<()> {
         }
     })
     .await
-    .expect("the membership should refuse an owner its allowlist lacks");
+    .unwrap_or_else(|_| {
+        panic!("membership must record its owner-policy rejection: {dial_result:?}")
+    });
     assert!(peer_ids(&membership).await.is_empty());
     assert!(peer_ids(&node).await.is_empty());
     Ok(())

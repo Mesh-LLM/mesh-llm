@@ -55,11 +55,11 @@ impl TuneField {
             ),
             Self::CpuMoe => (
                 ConfigPath::from_fields(["models", "<model-ref>", "hardware", "cpu_moe"]),
-                TuneFieldSupport::Unsupported,
+                TuneFieldSupport::ReportOnly,
             ),
             Self::NCpuMoe => (
                 ConfigPath::from_fields(["models", "<model-ref>", "hardware", "n_cpu_moe"]),
-                TuneFieldSupport::Unsupported,
+                TuneFieldSupport::Writable,
             ),
             Self::TensorSplit => (
                 ConfigPath::from_fields(["models", "<model-ref>", "hardware", "tensor_split"]),

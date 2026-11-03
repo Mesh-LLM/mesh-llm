@@ -69,7 +69,7 @@ fn project(fixture: &support::Fixture, affected: &str) -> Value {
         .env("GITHUB_OUTPUT", fixture.path().join("outputs"))
         .env("GITHUB_STEP_SUMMARY", fixture.path().join("summary"));
     command.env(
-        "MESH_LLM_AUTOMATION_BIN",
+        "MESH_CI_CONTROLLER_BIN",
         fixture.path().join("bin/automation"),
     );
     fs::write(fixture.path().join("changed.txt"), "docs/MESHES.md\n").unwrap();

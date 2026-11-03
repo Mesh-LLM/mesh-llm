@@ -55,6 +55,7 @@ pub fn requires_trusted_local_access(method: &str, path: &str) -> bool {
             | ("POST", "/api/runtime/control/drain-model")
             | ("POST", "/api/runtime/control/kv-cache")
             | ("POST", "/api/runtime/kv-cache/prune")
+            | ("GET", "/api/runtime/control/owner-control-token")
             | ("POST", "/api/runtime/config/validate")
             | ("POST", "/api/runtime/pick-directory")
             | ("POST", "/api/runtime/mesh-guardrails")
@@ -125,6 +126,24 @@ pub fn request_origin(raw_request: &[u8]) -> Result<Option<&str>, HeaderParseErr
 
 pub fn request_host(raw_request: &[u8]) -> Result<Option<&str>, HeaderParseError> {
     request_header(raw_request, "host")
+}
+
+/// Returns the bearer token of the `Authorization` header when present.
+///
+/// Only the `Bearer <token>` scheme is recognized; any other scheme (or a
+/// malformed value) yields `None` so callers treat it as a missing credential.
+pub fn request_authorization_bearer(raw_request: &[u8]) -> Result<Option<&str>, HeaderParseError> {
+    let Some(value) = request_header(raw_request, "authorization")? else {
+        return Ok(None);
+    };
+    let Some(token) = value
+        .get(7..)
+        .filter(|_| value[..7].eq_ignore_ascii_case("Bearer "))
+    else {
+        return Ok(None);
+    };
+    let token = token.trim();
+    Ok((!token.is_empty()).then_some(token))
 }
 
 fn request_header<'a>(
@@ -215,6 +234,7 @@ mod tests {
             ("POST", "/api/runtime/control/kv-cache"),
             ("POST", "/api/runtime/kv-cache/prune"),
             ("DELETE", "/api/runtime/kv-cache"),
+            ("GET", "/api/runtime/control/owner-control-token"),
         ] {
             assert!(
                 requires_trusted_local_access(method, path),
@@ -306,6 +326,20 @@ mod tests {
             None,
             Some("attacker.example")
         ));
+    }
+
+    #[test]
+    fn authorization_bearer_token_is_extracted() {
+        let request = b"POST /api/runtime/control/apply-config HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer tok-123\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(request_authorization_bearer(request), Ok(Some("tok-123")));
+        let lowercase = b"POST /x HTTP/1.1\r\nHost: localhost\r\nauthorization: bearer tok-456\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(request_authorization_bearer(lowercase), Ok(Some("tok-456")));
+        let other_scheme = b"POST /x HTTP/1.1\r\nHost: localhost\r\nAuthorization: Basic abc\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(request_authorization_bearer(other_scheme), Ok(None));
+        let absent = b"POST /x HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(request_authorization_bearer(absent), Ok(None));
+        let empty = b"POST /x HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer \r\nContent-Length: 0\r\n\r\n";
+        assert_eq!(request_authorization_bearer(empty), Ok(None));
     }
 
     #[test]

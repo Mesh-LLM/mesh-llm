@@ -5,6 +5,11 @@ release checks. It is not published as a library. Root `just` recipes and CI
 invoke it for crate-list, publish-chain, release-target, and console-output
 consistency checks, and for release attestation operations.
 
+CI planning, lane result admission, the planner-side repository checks, and
+`automation bootstrap` live in [ci-controller](../ci-controller/README.md).
+xtask keeps those commands and delegates them to the controller library, so
+their output and exit codes are unchanged.
+
 From the workspace root, run the repository checks through `just`:
 
 ```bash

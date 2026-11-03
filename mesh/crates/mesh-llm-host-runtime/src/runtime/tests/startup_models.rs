@@ -979,6 +979,7 @@ mod cli_device_and_config_matching;
 mod layer_diagnostics;
 mod local_required;
 mod pinned_gpu_preflight;
+mod startup_resolution;
 
 #[tokio::test]
 async fn prepare_runtime_startup_defers_model_resolution_until_after_surfaces() {

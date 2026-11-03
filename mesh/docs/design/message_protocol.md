@@ -2,7 +2,12 @@
 
 Use this reference for public mesh communication over the `meshllm.node.v1`
 protobuf schema on QUIC ALPN `mesh-llm/1` and for the separate private
-owner-control lane on `mesh-llm-control/1`.
+owner-control lane on `mesh-llm-control/2`.
+
+The owner-control ALPN changed from `/1` to `/2` when plugin command approvals
+began binding the full argument list. Both the controlling and target nodes must
+support `/2`; the controller does not downgrade to `/1`, whose receivers could
+ignore the argument approval field. Public mesh ALPN negotiation is unchanged.
 
 ## ALPN
 
@@ -43,9 +48,9 @@ Maximum frame size: 8 MiB (`MAX_CONTROL_FRAME_BYTES`). Frames exceeding this
 limit are rejected before allocation on read and before a prefix or body is
 written on send.
 
-Config and inventory mutation are exclusive to `mesh-llm-control/1`. The former mesh-plane config stream IDs `0x0b` and `0x0c` remain reserved for wire compatibility bookkeeping, but `mesh-llm/1` no longer dispatches protobuf request/response handlers for them. Skippy layer-package artifact transfer is not a mesh-owned schema. Gossip advertises `skippy-stage/2` feature support through `PeerAnnouncement.subprotocols`; mesh stream `0x0d` opens the advertised subprotocol, and the request/response schema plus artifact byte framing remain owned by `skippy-protocol`.
+Config and inventory mutation are exclusive to `mesh-llm-control/2`. The former mesh-plane config stream IDs `0x0b` and `0x0c` remain reserved for wire compatibility bookkeeping, but `mesh-llm/1` no longer dispatches protobuf request/response handlers for them. Skippy layer-package artifact transfer is not a mesh-owned schema. Gossip advertises `skippy-stage/2` feature support through `PeerAnnouncement.subprotocols`; mesh stream `0x0d` opens the advertised subprotocol, and the request/response schema plus artifact byte framing remain owned by `skippy-protocol`.
 
-## Private owner-control (`mesh-llm-control/1`)
+## Private owner-control (`mesh-llm-control/2`)
 
 Owned-node commands use a separate QUIC ALPN and do not consume a public mesh
 stream type. Each bidirectional owner-control stream carries 4-byte
@@ -144,7 +149,7 @@ remain a separate projection of a successful local scan.
 
 `load_model` (tag 6), `unload_model` (tag 7), `ensure_model` (tag 8), and
 `drain_model` (tag 9) are shipped additive owner-control commands on
-`mesh-llm-control/1`. They create session-only desired intents on the target
+`mesh-llm-control/2`. They create session-only desired intents on the target
 node's reconciler and never mutate durable config.
 
 - **`load_model`**: one-shot present intent. Accepts one canonical model

@@ -34,6 +34,10 @@ const SPEECH_START_FRAMES: usize = 3;
 const MAX_NO_SPEECH_PROB: f32 = 0.6;
 /// Confirmed text kept as the prompt once its audio is trimmed away.
 const PROMPT_TAIL_CHARS: usize = 200;
+/// Audio a turn needs before any of its words are confirmed. With less,
+/// Whisper may miss or mishear the first word in two passes alike, and a word
+/// confirmed wrongly stays wrong; a pass a second becomes the default's two.
+const MIN_CONFIRM_MS: u64 = 2_000;
 
 /// Server-side turn detection, in the shape of OpenAI's `server_vad`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -79,6 +83,9 @@ pub struct SpeechStreamConfig {
     /// Buffer length past which unconfirmed words are confirmed anyway, to
     /// stay inside Whisper's 30 s window.
     pub max_buffer_ms: u32,
+    /// Report the words a pass heard but has not confirmed, so a caller can
+    /// show speech a pass sooner than the deltas do.
+    pub tentative: bool,
 }
 
 impl Default for SpeechStreamConfig {
@@ -90,6 +97,7 @@ impl Default for SpeechStreamConfig {
             step_ms: 1_000,
             trim_after_ms: 15_000,
             max_buffer_ms: 28_000,
+            tentative: false,
         }
     }
 }
@@ -115,6 +123,13 @@ pub enum SpeechStreamEvent {
         turn: u64,
         transcript: String,
     },
+    /// What the latest pass heard after the confirmed text, when
+    /// [`SpeechStreamConfig::tentative`] is set. It may change: each replaces
+    /// the last, an empty one clears it, and `Completed` supersedes it.
+    Tentative {
+        turn: u64,
+        text: String,
+    },
 }
 
 /// Transcribes 16 kHz mono PCM; a [`crate::SpeechRecognitionModel`] in
@@ -139,12 +154,22 @@ pub struct SpeechStream {
     partial_frame: Vec<f32>,
     speech_frames: usize,
     silence_samples: u64,
+    /// Sample index of the first speech frame in the current buffer
+    /// window; the confirmation delay counts from here, not from the
+    /// turn's opening audio.
+    speech_started_at: Option<u64>,
     /// Every word confirmed in this turn.
     confirmed: Vec<String>,
     /// How many of `confirmed` lie in `buffer`, rather than trimmed audio.
     confirmed_in_buffer: usize,
     /// The previous pass's words after the confirmed ones.
     pending: Vec<String>,
+    /// Words the passes agreed on that the confirmation delay still holds
+    /// back; `finish_turn` confirms these when the final pass hears
+    /// nothing, while a hypothesis no pass repeated stays unconfirmed.
+    held: Vec<String>,
+    /// The tentative text last reported, so an unchanged one isn't repeated.
+    reported_tentative: String,
     last_pass_at: u64,
 }
 
@@ -162,9 +187,12 @@ impl SpeechStream {
             partial_frame: Vec::new(),
             speech_frames: 0,
             silence_samples: 0,
+            speech_started_at: None,
             confirmed: Vec::new(),
             confirmed_in_buffer: 0,
             pending: Vec::new(),
+            held: Vec::new(),
+            reported_tentative: String::new(),
             last_pass_at: 0,
         }
     }
@@ -175,9 +203,25 @@ impl SpeechStream {
 
     /// Replaces the configuration immediately, including mid-turn: a new
     /// `turn_detection`, `step_ms`, or buffer bound governs the very next
-    /// frame and pass. Language and prompt reach the next pass.
-    pub fn set_config(&mut self, config: SpeechStreamConfig) {
+    /// frame and pass. Language and prompt reach the next pass. Turning
+    /// tentative off returns an empty replacement for text already
+    /// reported, so a consumer stops showing words it will hear no more
+    /// about.
+    pub fn set_config(&mut self, config: SpeechStreamConfig) -> Vec<SpeechStreamEvent> {
+        let mut events = Vec::new();
+        if config.tentative != self.config.tentative {
+            if self.config.tentative && !self.reported_tentative.is_empty() {
+                events.push(SpeechStreamEvent::Tentative {
+                    turn: self.turn,
+                    text: String::new(),
+                });
+            }
+            // A consumer that stopped asking may have cleared its display;
+            // the next pass must be free to repeat the last text it saw.
+            self.reported_tentative.clear();
+        }
         self.config = config;
+        events
     }
 
     /// Whether a turn is open with audio or confirmed words that its
@@ -232,11 +276,20 @@ impl SpeechStream {
     }
 
     /// Drops the current turn's audio and unconfirmed words without a
-    /// transcript.
-    pub fn clear(&mut self) {
+    /// transcript. Tentative text already reported for that turn is replaced
+    /// by an empty event, so a consumer stops showing the discarded words.
+    pub fn clear(&mut self) -> Vec<SpeechStreamEvent> {
+        let mut events = Vec::new();
+        if self.config.tentative && !self.reported_tentative.is_empty() {
+            events.push(SpeechStreamEvent::Tentative {
+                turn: self.turn,
+                text: String::new(),
+            });
+        }
         self.reset_turn();
         self.preroll.clear();
         self.partial_frame.clear();
+        events
     }
 
     fn push_frame(
@@ -280,6 +333,11 @@ impl SpeechStream {
         }
         self.buffer.extend_from_slice(frame);
         if speech {
+            if !self.buffer_has_speech {
+                // The confirmation delay starts at the first speech
+                // frame in a window, not at the turn's opening audio.
+                self.speech_started_at = Some(self.received - frame.len() as u64);
+            }
             self.buffer_has_speech = true;
             self.silence_samples = 0;
         } else {
@@ -302,6 +360,11 @@ impl SpeechStream {
         self.buffer = audio.to_vec();
         self.buffer_start = start.unwrap_or(self.received - audio.len() as u64);
         self.buffer_has_speech = speech;
+        self.speech_started_at = if speech {
+            Some(self.buffer_start)
+        } else {
+            None
+        };
         self.silence_samples = 0;
         self.speech_frames = 0;
         self.last_pass_at = self.buffer_start;
@@ -343,11 +406,31 @@ impl SpeechStream {
             self.pending.clear();
         }
         let tail = &words[self.confirmed_in_buffer..];
-        let agreed = tail
+        // Only a turn's start is held back; later words have the earlier ones
+        // as context. The delay counts speech heard in this window, so
+        // leading silence cannot satisfy it.
+        let heard_ms = self
+            .speech_started_at
+            .map_or(0, |first| self.received.saturating_sub(first))
+            / SAMPLES_PER_MS;
+        let matches = tail
             .iter()
             .zip(&self.pending)
             .take_while(|(now, before)| same_word(now, before))
             .count();
+        let agreed = if self.confirmed.is_empty() && heard_ms < MIN_CONFIRM_MS {
+            0
+        } else {
+            matches
+        };
+        // The delay guard held back words the passes agreed on; keep them
+        // for a final pass that hears nothing, but never confirm a word
+        // only the latest pass heard.
+        self.held = if agreed < matches {
+            tail[..matches].to_vec()
+        } else {
+            Vec::new()
+        };
         let (newly_confirmed, pending) = tail.split_at(agreed);
         self.pending = pending.to_vec();
         self.confirm(newly_confirmed.to_vec(), events);
@@ -358,14 +441,35 @@ impl SpeechStream {
             // and start a fresh window.
             let pending = std::mem::take(&mut self.pending);
             self.confirm(pending, events);
+            self.held.clear();
             self.buffer_start += self.buffer.len() as u64;
             self.buffer.clear();
             self.buffer_has_speech = false;
             self.confirmed_in_buffer = 0;
+            self.speech_started_at = None;
         } else if buffer_ms > u64::from(self.config.trim_after_ms) {
             self.trim_confirmed(&segments);
         }
+        self.report_tentative(events);
         Ok(())
+    }
+
+    fn report_tentative(&mut self, events: &mut Vec<SpeechStreamEvent>) {
+        if !self.config.tentative {
+            return;
+        }
+        let mut text = self.pending.join(" ");
+        // Like a delta, it reads on from the confirmed text.
+        if !text.is_empty() && !self.confirmed.is_empty() {
+            text.insert(0, ' ');
+        }
+        if text != self.reported_tentative {
+            self.reported_tentative.clone_from(&text);
+            events.push(SpeechStreamEvent::Tentative {
+                turn: self.turn,
+                text,
+            });
+        }
     }
 
     /// Cuts the buffer at the end of the last segment whose words are all
@@ -403,8 +507,18 @@ impl SpeechStream {
                 .into_iter()
                 .flatten()
                 .collect::<Vec<_>>();
-            let rest = words[self.confirmed_in_buffer.min(words.len())..].to_vec();
-            self.confirm(rest, events);
+            if words.is_empty() {
+                // The final pass can judge known speech silent (merged
+                // words, a dropped segment). Keep what earlier passes
+                // agreed on rather than report an empty transcript for
+                // audio that held speech; an unstable hypothesis heard
+                // once may be a mishearing and stays unconfirmed.
+                let held = std::mem::take(&mut self.held);
+                self.confirm(held, events);
+            } else {
+                let rest = words[self.confirmed_in_buffer.min(words.len())..].to_vec();
+                self.confirm(rest, events);
+            }
         }
         events.push(SpeechStreamEvent::Completed {
             turn: self.turn,
@@ -422,8 +536,11 @@ impl SpeechStream {
         self.confirmed.clear();
         self.confirmed_in_buffer = 0;
         self.pending.clear();
+        self.held.clear();
+        self.reported_tentative.clear();
         self.speech_frames = 0;
         self.silence_samples = 0;
+        self.speech_started_at = None;
     }
 
     fn confirm(&mut self, words: Vec<String>, events: &mut Vec<SpeechStreamEvent>) {

@@ -4,6 +4,7 @@ use super::common::{
 };
 use super::dispatch::{RelayAttemptContext, relay_attempted_response};
 use super::probe::probe_http_response;
+use super::served_model_headers::set_served_model_headers;
 use crate::logging::OpenAiRouteObserver;
 use crate::network::openai::client_stream::ClientStream;
 use crate::network::openai::forwarded_request::is_ingress_credential_header;
@@ -114,7 +115,11 @@ async fn route_http_endpoint_attempt_after_forward(
     route_observer: OpenAiRouteObserver<'_>,
 ) -> RouteAttemptResult {
     match probe_http_response(upstream).await {
-        Ok(probe) => {
+        Ok(mut probe) => {
+            // A plugin backend is not this node's native runtime, so any
+            // served-model headers it sent are its own claims: strip them
+            // before a mesh peer reads this response as the node's.
+            set_served_model_headers(&mut probe, None);
             let result = relay_attempted_response(
                 tcp_stream,
                 upstream,
@@ -314,6 +319,62 @@ fn rewrite_http_request_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
+
+    /// Serve `response` from a plugin backend to a mesh client and return the
+    /// bytes the client received.
+    async fn relay_plugin_response(response: &str) -> String {
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let upstream_address = upstream_listener.local_addr().unwrap();
+        let client_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let client_address = client_listener.local_addr().unwrap();
+        let response = response.to_owned();
+        tokio::spawn(async move {
+            let (mut backend, _) = upstream_listener.accept().await.unwrap();
+            backend.write_all(response.as_bytes()).await.unwrap();
+        });
+        let relay = tokio::spawn(async move {
+            let (client, _) = client_listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
+            let mut upstream: ClientStream =
+                TcpStream::connect(upstream_address).await.unwrap().into();
+            route_http_endpoint_attempt_after_forward(
+                &mut client,
+                &mut upstream,
+                "http://plugin.test",
+                RequestId::new(),
+                ResponseRetryPolicy::next_target_available(false),
+                ResponseAdapter::None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+        });
+        let mut socket = TcpStream::connect(client_address).await.unwrap();
+        let mut relayed = Vec::new();
+        socket.read_to_end(&mut relayed).await.unwrap();
+        relay.await.unwrap();
+        String::from_utf8(relayed).unwrap()
+    }
+
+    /// A plugin backend's served-model headers are its own claims, not this
+    /// node's: they never reach a mesh peer that reads the response as ours.
+    #[tokio::test]
+    async fn a_plugin_backends_served_model_headers_are_stripped() {
+        let body = r#"{"id":"c","object":"chat.completion","choices":[]}"#;
+        let relayed = relay_plugin_response(&format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+             x-mesh-weights-digest: forged\r\nx-mesh-model-canonical-ref: forged/ref\r\n\r\n{body}",
+            body.len()
+        ))
+        .await;
+        assert!(relayed.starts_with("HTTP/1.1 200 OK"), "{relayed}");
+        assert!(
+            !relayed.to_ascii_lowercase().contains("x-mesh-"),
+            "{relayed}"
+        );
+        assert!(relayed.ends_with(body));
+    }
 
     #[test]
     fn external_endpoint_target_only_accepts_openai_inference_routes() {
