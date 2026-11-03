@@ -1,4 +1,7 @@
 //! Parsed current canary graph and authority contracts; no hosted execution proof.
+#[path = "canary_workflow_contract/backend_selection.rs"]
+mod backend_selection;
+
 use crate::workflow_yaml::{self, Node};
 use std::{collections::BTreeSet, fs, path::PathBuf};
 fn root() -> PathBuf {
@@ -488,11 +491,20 @@ fn frozen_prebuilt_workers_load_cache_after_controller_and_before_consumption() 
                 != Some("./.github/actions/use-canary-cache"))
     );
     let cache = document(".github/actions/use-canary-cache/action.yml");
-    for (name, shell) in [
-        ("Read configured model cache (macOS)", "/bin/zsh -il {0}"),
-        ("Read configured model cache (Linux)", "/bin/bash -il {0}"),
+    for (name, condition, shell) in [
+        (
+            "Read configured model cache (macOS)",
+            "runner.os == 'macOS'",
+            "/bin/zsh -il {0}",
+        ),
+        (
+            "Read configured model cache (Linux)",
+            "runner.os == 'Linux'",
+            "/bin/bash -il {0}",
+        ),
     ] {
         let (_, step) = named(cache.get("runs").unwrap(), "name", name);
+        assert_eq!(field(step, "if"), condition);
         assert_eq!(field(step, "shell"), shell);
         assert_eq!(
             field(step, "run").trim(),
@@ -566,6 +578,7 @@ fn action_shell(root: &std::path::Path, setup: &str, production: &str) -> (i32, 
         ],
     )
 }
+
 #[test]
 fn parsed_family_worker_preserves_bounded_fanout_and_prebuilt_restore_before_certification() {
     let worker = document(".github/workflows/llama-canary-family-pass.yml");
