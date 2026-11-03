@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
     Reserve { now: u64 },
-    RecordStart { now: u64, observed: Active },
+    RecordStart { now: u64, observed: Box<Active> },
     SupersedePending { now: u64 },
 }
 
@@ -49,8 +49,9 @@ pub struct Journal {
 /// can occur before or after commitment. All receipts must be retained for as
 /// long as an operation ID could be retried; there is no safe eviction rule or
 /// bounded storage implementation here. Every participant must use the same
-/// journal for every transition. The store must also authenticate its state
-/// and participants before any live use.
+/// journal and validated transitions, and the store must prevent rollback or
+/// replacement of committed history. The store must also authenticate its
+/// state and participants before any live use.
 pub trait AtomicJournalStore {
     type Error;
 
@@ -133,7 +134,7 @@ pub fn apply<S: AtomicJournalStore>(
                 &current.model,
                 current.model.revision,
                 *now,
-                observed.clone(),
+                observed.as_ref().clone(),
             )
             .map_err(JournalError::Model)?;
             let receipt = Receipt::StartRecorded {

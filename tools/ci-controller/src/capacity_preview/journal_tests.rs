@@ -169,10 +169,10 @@ fn receipts_survive_later_transitions_and_bind_the_complete_request() {
     );
     let start = Request::RecordStart {
         now: 105,
-        observed: Active {
+        observed: Box::new(Active {
             work: selected,
             observed_class: Some(class()),
-        },
+        }),
     };
     store.state.lock().unwrap().1 = Failure::AfterCommit;
     assert_eq!(
