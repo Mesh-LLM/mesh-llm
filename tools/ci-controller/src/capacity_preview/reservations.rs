@@ -44,49 +44,6 @@ pub enum ModelError {
     ReservationMismatch,
 }
 
-/// The storage contract needed to serialize proposals from all schedulers.
-///
-/// `compare_exchange` must be a linearizable, durable comparison of the
-/// *entire* expected model and replacement across every participating caller.
-/// A revision-only, process-local, best-effort, or partially written update
-/// does not satisfy this contract. `load` must return one coherent model;
-/// `compare_exchange` returns true only after committing the replacement, or
-/// false without writing only when the expected state no longer matches. An
-/// error from that operation may mean the update committed without an
-/// acknowledgement; it requires reconciliation, not a blind retry. No
-/// implementation is provided here.
-pub trait AtomicModelStore {
-    type Error;
-
-    fn load(&self) -> Result<Model, Self::Error>;
-
-    fn compare_exchange(&self, expected: &Model, replacement: &Model) -> Result<bool, Self::Error>;
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum StoredTransition {
-    /// Only the proposed model was stored; this is not permission to start work.
-    Reserved { work: Work, revision: u64 },
-    /// A supplied, unauthenticated start claim was stored in the model.
-    StartRecorded { revision: u64 },
-    /// Only older pending PR requests were removed from the supplied model.
-    PendingSuperseded { removed: Vec<Work>, revision: u64 },
-    /// The supplied queue contained no pending supersession to reconcile.
-    NoSupersession,
-    /// A read found no capacity; this conservative result may already be stale.
-    Wait,
-    /// Another writer changed the state; the caller must obtain a new snapshot.
-    Contended,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum StoreError<E> {
-    Load(E),
-    /// The update may or may not have committed. Reconcile before any retry.
-    CommitUnknown(E),
-    Model(ModelError),
-}
-
 impl From<PreviewError> for ModelError {
     fn from(value: PreviewError) -> Self {
         Self::Preview(value)
@@ -265,85 +222,6 @@ pub fn propose_pending_supersession(
         removed,
         next: Box::new(next),
     }))
-}
-
-/// Attempt one reservation using an injected, externally implemented store.
-///
-/// This does not authenticate the snapshot, qualify the runner, dispatch a
-/// job, or authorize execution. A store satisfying the trait is necessary but
-/// not sufficient for live admission. Contention is returned to the caller;
-/// there is no unbounded retry or implicit release of capacity.
-pub fn try_reserve<S: AtomicModelStore>(
-    store: &S,
-    now: u64,
-) -> Result<StoredTransition, StoreError<S::Error>> {
-    let current = store.load().map_err(StoreError::Load)?;
-    match propose(&current, current.revision, now).map_err(StoreError::Model)? {
-        Transition::Wait => Ok(StoredTransition::Wait),
-        Transition::Reserve { work, next } => {
-            let revision = next.revision;
-            if store
-                .compare_exchange(&current, &next)
-                .map_err(StoreError::CommitUnknown)?
-            {
-                Ok(StoredTransition::Reserved { work, revision })
-            } else {
-                Ok(StoredTransition::Contended)
-            }
-        }
-    }
-}
-
-/// Attempt to store a supplied start claim without releasing its charge.
-///
-/// The claim remains unverified and requires the same whole-state atomicity
-/// as a reservation. There is no completion, expiry, or cancellation path.
-pub fn try_record_start<S: AtomicModelStore>(
-    store: &S,
-    now: u64,
-    observed: Active,
-) -> Result<StoredTransition, StoreError<S::Error>> {
-    let current = store.load().map_err(StoreError::Load)?;
-    let next =
-        observe_start(&current, current.revision, now, observed).map_err(StoreError::Model)?;
-    let revision = next.revision;
-    if store
-        .compare_exchange(&current, &next)
-        .map_err(StoreError::CommitUnknown)?
-    {
-        Ok(StoredTransition::StartRecorded { revision })
-    } else {
-        Ok(StoredTransition::Contended)
-    }
-}
-
-/// Attempt to store a pending-only supersession proposal.
-///
-/// This does not cancel work or establish that a supplied queue is complete.
-/// Contention and unknown commit outcomes require the same handling as a
-/// reservation. There is no store implementation or workflow caller here.
-pub fn try_supersede_pending<S: AtomicModelStore>(
-    store: &S,
-    now: u64,
-) -> Result<StoredTransition, StoreError<S::Error>> {
-    let current = store.load().map_err(StoreError::Load)?;
-    let Some(proposal) =
-        propose_pending_supersession(&current, current.revision, now).map_err(StoreError::Model)?
-    else {
-        return Ok(StoredTransition::NoSupersession);
-    };
-    let revision = proposal.next.revision;
-    if store
-        .compare_exchange(&current, &proposal.next)
-        .map_err(StoreError::CommitUnknown)?
-    {
-        Ok(StoredTransition::PendingSuperseded {
-            removed: proposal.removed,
-            revision,
-        })
-    } else {
-        Ok(StoredTransition::Contended)
-    }
 }
 
 #[cfg(test)]

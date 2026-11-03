@@ -1265,13 +1265,14 @@ the charge without releasing it. A separate proposal can remove explicitly
 superseded pending PR requests while preserving the rest of the queue; active
 or reserved predecessors require separate reconciliation. Stale revisions,
 overcommitted reservations and unresolved supersession fail closed. An
-injected-store interface requires atomic comparison of the whole expected
+receipt-journal interface requires atomic comparison of the whole expected
 state and exposes contention, but no shared store implementation is provided.
-An unsuccessful commit call may have succeeded remotely, so its outcome must
-be reconciled before retry. The model has no expiry, completion release or job
-control; its caller-supplied observations are not attested. A real service
-must atomically commit the complete expected state and independently reconcile
-completion before freeing capacity.
+An unsuccessful commit call may have succeeded remotely, so a retry must use
+the same operation ID and request to reconcile its outcome. The earlier
+unjournaled write interface is removed. The model has no expiry, completion
+release or job control; its caller-supplied observations are not attested. A
+real service must atomically commit the complete expected state and
+independently reconcile completion before freeing capacity.
 The source-only receipt journal can replay an identical committed operation
 after an uncertain acknowledgement. Its caller-supplied entry limit is part of
 the atomic value: when full it retains existing replay receipts and refuses new

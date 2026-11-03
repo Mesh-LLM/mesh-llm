@@ -953,9 +953,10 @@ source commit.
   over caller-supplied pool limits, runner classes, active work and pending
   work. No workflow invokes it, and it cannot reserve workers or cancel jobs.
   Its versioned reservation model charges proposed work and transfers a charge
-  to a supplied start observation. Its injected-store interface requires an
-  atomic whole-state comparison and reports uncertain commit outcomes. No
-  shared store, expiry or release path exists.
+  to a supplied start observation. Its receipt-journal interface requires an
+  atomic whole-state comparison and reports uncertain commit outcomes. The
+  earlier unjournaled write interface is removed. No shared store, expiry or
+  release path exists.
   An explicit pending-only supersession proposal may remove older queued PR
   requests from supplied state; reserved and active predecessors still require
   separate cancellation evidence and reconciliation.

@@ -241,10 +241,18 @@ fn pending_supersession_replays_its_removed_work_without_removing_main() {
 fn concurrent_operations_commit_at_most_one_reservation_and_receipt() {
     for (first_id, second_id) in [("one", "two"), ("one", "one")] {
         let mut state = journal();
-        state.model.snapshot.pending = vec![
-            pending(work("main-1", main('a'))),
-            pending(work("main-2", main('b'))),
-        ];
+        state.model.snapshot.pools = BTreeMap::from([("mac".into(), 2), ("org".into(), 2)]);
+        state
+            .model
+            .snapshot
+            .roles
+            .get_mut("mac")
+            .unwrap()
+            .pools
+            .insert("org".into());
+        let mut first = work("main-1", main('a'));
+        first.workers = 2;
+        state.model.snapshot.pending = vec![pending(first), pending(work("main-2", main('b')))];
         let store = FakeStore {
             state: Mutex::new((state, Failure::None)),
             after_load: Some(Barrier::new(2)),
@@ -260,10 +268,120 @@ fn concurrent_operations_commit_at_most_one_reservation_and_receipt() {
             (Outcome::Applied(_), Outcome::Contended) | (Outcome::Contended, Outcome::Applied(_))
         ));
         let state = &store.state.lock().unwrap().0;
+        assert_eq!(state.model.revision, 5);
         assert_eq!(state.model.reserved.len(), 1);
+        assert_eq!(state.model.reserved[0].id, "main-1");
+        assert_eq!(state.model.reserved[0].workers, 2);
         assert_eq!(state.model.snapshot.pending.len(), 1);
+        assert_eq!(state.model.snapshot.pending[0].work.id, "main-2");
+        assert_eq!(propose(&state.model, 5, 105), Ok(Transition::Wait));
         assert_eq!(state.receipts.len(), 1);
     }
+}
+
+#[test]
+fn invalid_start_writes_nothing_and_valid_start_keeps_capacity_charged() {
+    let mut state = journal();
+    state.model.snapshot.pools = BTreeMap::from([("mac".into(), 2), ("org".into(), 2)]);
+    state
+        .model
+        .snapshot
+        .roles
+        .get_mut("mac")
+        .unwrap()
+        .pools
+        .insert("org".into());
+    let mut selected = work("main-1", main('a'));
+    selected.workers = 2;
+    state.model.snapshot.pending = vec![
+        pending(selected.clone()),
+        pending(work("main-2", main('b'))),
+    ];
+    let store = store(state, Failure::None);
+    assert_eq!(
+        apply(&store, "reserve", Request::Reserve { now: 105 }),
+        Ok(Outcome::Applied(Receipt::Reserved {
+            work: selected.clone(),
+            revision: 5,
+        }))
+    );
+    let before = store.state.lock().unwrap().0.clone();
+    let invalid = Request::RecordStart {
+        now: 105,
+        observed: Box::new(Active {
+            work: selected.clone(),
+            observed_class: None,
+        }),
+    };
+    assert_eq!(
+        apply(&store, "start", invalid),
+        Err(JournalError::Model(ModelError::Preview(
+            crate::capacity_preview::PreviewError::MissingRunnerClass
+        )))
+    );
+    assert_eq!(store.state.lock().unwrap().0, before);
+    let valid = Request::RecordStart {
+        now: 105,
+        observed: Box::new(Active {
+            work: selected,
+            observed_class: Some(class()),
+        }),
+    };
+    assert_eq!(
+        apply(&store, "start", valid),
+        Ok(Outcome::Applied(Receipt::StartRecorded { revision: 6 }))
+    );
+    assert_eq!(
+        apply(&store, "next", Request::Reserve { now: 105 }),
+        Ok(Outcome::Wait)
+    );
+    let state = &store.state.lock().unwrap().0;
+    assert!(state.model.reserved.is_empty());
+    assert_eq!(state.model.snapshot.active.len(), 1);
+    assert_eq!(state.model.snapshot.pending.len(), 1);
+    assert_eq!(state.receipts.len(), 2);
+}
+
+#[test]
+fn competing_supersession_commits_at_most_one_receipt() {
+    let mut state = journal();
+    let pr = WorkKind::PullRequest {
+        repository_id: 42,
+        number: 7,
+    };
+    let old = work("old", pr.clone());
+    state.model.snapshot.pending = vec![
+        pending(old.clone()),
+        Pending {
+            work: work("new", pr),
+            supersedes: Some("old".into()),
+        },
+    ];
+    let store = FakeStore {
+        state: Mutex::new((state, Failure::None)),
+        after_load: Some(Barrier::new(2)),
+    };
+    let (first, second) = std::thread::scope(|scope| {
+        let first =
+            scope.spawn(|| apply(&store, "first", Request::SupersedePending { now: 105 }).unwrap());
+        let second = scope
+            .spawn(|| apply(&store, "second", Request::SupersedePending { now: 105 }).unwrap());
+        (first.join().unwrap(), second.join().unwrap())
+    });
+    let receipt = Outcome::Applied(Receipt::PendingSuperseded {
+        removed: vec![old],
+        revision: 5,
+    });
+    assert!(
+        (first == receipt && second == Outcome::Contended)
+            || (first == Outcome::Contended && second == receipt)
+    );
+    let state = &store.state.lock().unwrap().0;
+    assert_eq!(state.model.revision, 5);
+    assert_eq!(state.model.snapshot.pending.len(), 1);
+    assert_eq!(state.model.snapshot.pending[0].work.id, "new");
+    assert_eq!(state.model.snapshot.pending[0].supersedes, None);
+    assert_eq!(state.receipts.len(), 1);
 }
 
 #[test]
