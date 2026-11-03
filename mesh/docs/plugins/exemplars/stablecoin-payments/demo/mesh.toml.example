@@ -1,0 +1,45 @@
+# Copy separately for each node. All paths are absolute, node-local paths.
+# Omit password_file on a seller which only receives payments.
+version = 1
+
+# BUYER ONLY: uncomment this table and run `mesh-llm serve` without --model.
+# This routes remote inference while preserving the explicit node-key identity.
+# [runtime]
+# mode = "on_demand"
+
+[[plugin]]
+name = "wallet-ousd-tempo"
+[plugin.settings]
+data_dir = "/ABS/private/NODE/wallet"
+rpc_url = "https://rpc.tempo.xyz"
+# password_file = "/ABS/private/NODE/password"
+max_payment = "10000"
+max_fee = "1000"
+
+[[plugin]]
+name = "pay-stablecoin"
+[plugin.settings]
+config_path = "/ABS/private/NODE/payments.json"
+
+# Install both archives into the runtime's MESH_LLM_PLUGIN_DIR before startup.
+# Do not override command: runtime identity access requires the installed executable.
+[[plugin.operation_bindings]]
+name = "wallet"
+provider = "wallet-ousd-tempo"
+profile = "mainnet"
+setup_operation = "wallet_open"
+setup_input_json = "{}"
+operations = ["wallet_balance", "wallet_estimate_payment", "wallet_pay", "wallet_lookup", "wallet_verify_payment", "wallet_list_attempts"]
+
+[plugin.openai_exchange_grant]
+endpoints = ["chat_completions", "completions", "responses"]
+phases = ["request_received", "backend_selected", "exchange_finished"]
+request_body = true
+effective_request_body = true
+admission = true
+read_identity_bundle = true
+deadline_ms = 30000
+max_body_bytes = 65536
+max_queue_bytes = 2097152
+max_in_flight = 32
+failure_policy = "required"

@@ -1,0 +1,26 @@
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+default: check
+
+build:
+    cargo build --locked --workspace
+
+release:
+    cargo build --locked --workspace --release
+
+check:
+    cargo fmt --all --check
+    cargo check --locked --workspace --all-targets
+    cargo clippy --locked --workspace --all-targets -- -D warnings
+
+test:
+    cargo test --locked --workspace
+
+fmt:
+    cargo fmt --all
+
+smoke mesh_bin output_dir:
+    ./target/debug/host-smoke --mesh-bin "{{mesh_bin}}" --output-dir "{{output_dir}}"
+
+package target_triple version="0.1.0":
+    bash scripts/package.sh target/release "{{target_triple}}" "{{version}}"

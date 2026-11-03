@@ -1,0 +1,12 @@
+{
+  "data_dir": "/ABS/private/seller/payments",
+  "wallet_binding": "wallet",
+  "prices": {
+    "REPLACE_WITH_EXACT_ADVERTISED_MODEL_ID": {
+      "input_per_million": "1000000",
+      "output_per_million": "10000000"
+    }
+  },
+  "admission_fee": "10",
+  "buying": { "enabled": false }
+}

@@ -1,0 +1,33 @@
+[package]
+name = "mesh-stablecoin-demo-fixture"
+description = "Explicit offline fixtures and actual Mesh host smoke harness for stablecoin plugins"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum = "0.8"
+clap.workspace = true
+hex.workspace = true
+mesh-llm-plugin.workspace = true
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+wallet-contract.workspace = true
+
+[[bin]]
+name = "demo-backend-fixture"
+path = "src/bin/backend.rs"
+
+[[bin]]
+name = "demo-wallet-fixture"
+path = "src/bin/wallet.rs"
+
+[[bin]]
+name = "host-smoke"
+path = "src/bin/host.rs"

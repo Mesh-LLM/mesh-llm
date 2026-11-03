@@ -1,0 +1,17 @@
+{
+  "data_dir": "/ABS/private/buyer/payments",
+  "wallet_binding": "wallet",
+  "prices": {},
+  "admission_fee": "0",
+  "buying": {
+    "enabled": false,
+    "peers": ["REPLACE_WITH_SELLER_64_CHARACTER_HEX_PEER_ID"],
+    "maximum_price": {
+      "input_per_million": "1000000",
+      "output_per_million": "10000000"
+    },
+    "max_payment": "10000",
+    "max_fee": "1000",
+    "daily_budget": "50000"
+  }
+}

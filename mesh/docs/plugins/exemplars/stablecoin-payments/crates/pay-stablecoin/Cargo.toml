@@ -1,0 +1,28 @@
+[package]
+name = "mesh-llm-pay-stablecoin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Plugin-owned direct stablecoin admission and post-decode settlement"
+
+[[bin]]
+name = "pay-stablecoin"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+hex.workspace = true
+mesh-llm-plugin.workspace = true
+rmcp.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+wallet-contract.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
