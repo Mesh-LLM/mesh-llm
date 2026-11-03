@@ -74,6 +74,13 @@ fn text<'a>(node: &'a Node, key: &str) -> Option<&'a str> {
     node.get(key).and_then(Node::text)
 }
 
+fn accepts_manual_opt_in(lane: &str, job: &str) -> bool {
+    matches!(
+        (lane, job),
+        ("quality", "quality") | ("linux", "hosts" | "native_runtimes")
+    )
+}
+
 fn check_forwarding(lane: &str, job: &str, slice: &str) {
     let caller = workflow(&format!("ci-{lane}-lane.yml"));
     let caller_job = caller.get("jobs").unwrap().get(job).unwrap();
@@ -92,7 +99,7 @@ fn check_forwarding(lane: &str, job: &str, slice: &str) {
     ] {
         assert_eq!(text(inputs, key), Some(expected), "{lane}/{key}");
     }
-    let accepts_manual_opt_in = matches!(lane, "quality" | "linux");
+    let accepts_manual_opt_in = accepts_manual_opt_in(lane, job);
     assert_eq!(
         text(inputs, "use_depot"),
         accepts_manual_opt_in.then_some("${{ inputs.use_depot }}"),
@@ -103,6 +110,15 @@ fn check_forwarding(lane: &str, job: &str, slice: &str) {
             text(inputs, "clippy_matrix"),
             Some("${{ toJson(fromJson(inputs.lane_plan_json).matrices.clippy) }}")
         ),
+        ("website", "web") => {
+            for key in ["ui_changed", "website_changed"] {
+                assert_eq!(
+                    text(inputs, key),
+                    Some(format!("${{{{ fromJson(inputs.lane_plan_json).signals.{key} || contains(fromJson(inputs.lane_plan_json).domains, 'ci-control') }}}}").as_str()),
+                    "{lane}/{key}"
+                );
+            }
+        }
         ("linux" | "macos" | "windows", "hosts") => {
             assert_eq!(
                 text(inputs, "hosts_matrix"),
@@ -113,7 +129,7 @@ fn check_forwarding(lane: &str, job: &str, slice: &str) {
                 Some(format!("ci-ui-dist-{lane}-${{{{ github.run_id }}}}").as_str())
             );
         }
-        ("macos" | "windows", "native_runtimes" | "runtime_product") => assert_eq!(
+        ("linux" | "macos" | "windows", "native_runtimes" | "runtime_product") => assert_eq!(
             text(inputs, "runtime_matrix"),
             Some("${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}")
         ),
@@ -161,9 +177,88 @@ fn check_forwarding(lane: &str, job: &str, slice: &str) {
             .unwrap();
         assert_eq!(text(manual, "default"), Some("false"));
     }
+    if (lane, job) == ("linux", "native_runtimes") {
+        let cpu = steps
+            .iter()
+            .find(|step| text(step, "id") == Some("cpu_policy"))
+            .unwrap();
+        assert_eq!(
+            text(cpu, "uses"),
+            Some("./.github/actions/select-ci-runners")
+        );
+        let cpu_inputs = cpu.get("with").unwrap();
+        assert_eq!(text(cpu_inputs, "force_hosted"), Some("true"));
+        assert_eq!(text(cpu_inputs, "manual_use_depot"), None);
+        let policy = called.get("jobs").unwrap().get("runner_policy").unwrap();
+        let outputs = policy.get("outputs").unwrap();
+        assert_eq!(
+            text(outputs, "runner_cpu"),
+            Some("${{ steps.cpu_policy.outputs.runner_16 }}")
+        );
+        assert_eq!(
+            text(outputs, "allow_native_github_cache_cpu"),
+            Some("${{ steps.cpu_policy.outputs.allow_native_github_cache }}")
+        );
+        let runtime = called.get("jobs").unwrap().get("linux_runtime").unwrap();
+        assert_eq!(
+            text(runtime, "runs-on"),
+            Some(
+                "${{ matrix.runtime.backend == 'cpu' && needs.runner_policy.outputs.runner_cpu || needs.runner_policy.outputs.runner_16 }}"
+            )
+        );
+    }
+    if lane == "quality" {
+        let sentinel = steps
+            .iter()
+            .find(|step| text(step, "id") == Some("sentinel_policy"))
+            .unwrap();
+        assert_eq!(
+            text(sentinel, "uses"),
+            Some("./.github/actions/select-ci-runners")
+        );
+        let sentinel_inputs = sentinel.get("with").unwrap();
+        for (key, value) in [
+            ("event_name", "${{ github.event_name }}"),
+            ("original_event_name", "${{ inputs.original_event_name }}"),
+            ("force_hosted", "${{ inputs.force_hosted }}"),
+        ] {
+            assert_eq!(text(sentinel_inputs, key), Some(value), "{key}");
+        }
+        for key in ["depot_main_enabled", "depot_pr_enabled", "manual_use_depot"] {
+            assert_eq!(text(sentinel_inputs, key), Some("false"), "{key}");
+        }
+        assert_eq!(
+            text(sentinel_inputs, "pr_canary_ref"),
+            Some("${{ vars.DEPOT_PR_SENTINEL_REF }}")
+        );
+    }
+    if lane == "website" {
+        for (name, input) in [
+            ("ui_quality", "ui_changed"),
+            ("ui_e2e", "ui_changed"),
+            ("website", "website_changed"),
+        ] {
+            let web_job = called.get("jobs").unwrap().get(name).unwrap();
+            assert_eq!(
+                text(web_job, "if"),
+                Some(format!("${{{{ inputs.{input} }}}}").as_str())
+            );
+            assert_eq!(
+                text(web_job, "runs-on"),
+                Some("${{ needs.runner_policy.outputs.runner_4 }}")
+            );
+        }
+    }
 }
 
-fn check_selection(lane: &str, dispatch: &Value, forced: bool, expected_depot: bool) {
+fn check_selection(
+    lane: &str,
+    job: &str,
+    dispatch: &Value,
+    forced: bool,
+    manual_allowed: bool,
+    expected_depot: bool,
+) {
     let inputs = &dispatch["inputs"];
     let fixture = Fixture::new();
     let output = fixture.selector(&[
@@ -178,7 +273,7 @@ fn check_selection(lane: &str, dispatch: &Value, forced: bool, expected_depot: b
         ("INPUT_DEPOT_PR_ENABLED", "false"),
         (
             "INPUT_MANUAL_USE_DEPOT",
-            if matches!(lane, "quality" | "linux") {
+            if manual_allowed {
                 inputs["use_depot"].as_str().unwrap()
             } else {
                 "false"
@@ -190,10 +285,13 @@ fn check_selection(lane: &str, dispatch: &Value, forced: bool, expected_depot: b
     assert!(output.status.success(), "{output:?}");
     let selected = fixture.outputs();
     assert_eq!(selected["depot_enabled"], expected_depot.to_string());
-    let (runner, depot_label, hosted_label) = match lane {
-        "quality" | "linux" => ("runner_8", "depot-ubuntu-24.04-8", "ubuntu-24.04"),
-        "macos" => ("runner_macos", "depot-macos-15", "macos-15"),
-        "windows" => ("runner_windows", "depot-windows-2022", "windows-2022"),
+    let (runner, depot_label, hosted_label) = match (lane, job) {
+        ("quality", _) | ("linux", "hosts") => ("runner_8", "depot-ubuntu-24.04-8", "ubuntu-24.04"),
+        ("website", _) => ("runner_4", "depot-ubuntu-24.04-4", "ubuntu-24.04"),
+        ("linux", "native_runtimes") => ("runner_16", "depot-ubuntu-24.04-16", "ubuntu-24.04"),
+        ("linux", "runtime_product") => ("runner", "depot-ubuntu-24.04", "ubuntu-24.04"),
+        ("macos", _) => ("runner_macos", "depot-macos-15", "macos-15"),
+        ("windows", _) => ("runner_windows", "depot-windows-2022", "windows-2022"),
         _ => panic!("unexpected composed lane"),
     };
     assert_eq!(
@@ -214,16 +312,20 @@ fn check_selection(lane: &str, dispatch: &Value, forced: bool, expected_depot: b
 
 #[test]
 fn manual_dispatch_carries_real_plan_to_checked_in_runner_selectors() {
-    for (lane, job, slice) in [
+    let targets = [
         ("quality", "quality", "ci-quality-slice.yml"),
+        ("website", "web", "ci-web-slice.yml"),
         ("linux", "hosts", "ci-linux-host-slice.yml"),
+        ("linux", "native_runtimes", "ci-linux-runtime-slice.yml"),
+        ("linux", "runtime_product", "ci-linux-product-slice.yml"),
         ("macos", "hosts", "ci-macos-host-slice.yml"),
         ("macos", "native_runtimes", "ci-macos-runtime-slice.yml"),
         ("macos", "runtime_product", "ci-macos-product-slice.yml"),
         ("windows", "hosts", "ci-windows-host-slice.yml"),
         ("windows", "native_runtimes", "ci-windows-runtime-slice.yml"),
         ("windows", "runtime_product", "ci-windows-product-slice.yml"),
-    ] {
+    ];
+    for (lane, job, slice) in targets {
         check_forwarding(lane, job, slice);
     }
     for (changed, forced) in [
@@ -240,15 +342,15 @@ fn manual_dispatch_carries_real_plan_to_checked_in_runner_selectors() {
             projection["required"].as_bool().unwrap()
         });
         assert!(
-            required[0] && required[2] && required[3] && required[4],
-            "quality and all host lanes are selected"
+            required.iter().all(|selected| *selected),
+            "all five lanes are selected"
         );
         for manual in [false, true] {
             let output = run_with_plan(required, "", "", json!(manual), Some(&action));
             common(&output, required, if manual { "true" } else { "false" });
             assert_eq!(output["canonical"], action["plan_json"]);
             assert_eq!(output["digest"], action["plan_digest"]);
-            for lane in ["quality", "linux", "macos", "windows"] {
+            for lane in LANES {
                 let dispatch = output["dispatches"]
                     .as_array()
                     .unwrap()
@@ -262,6 +364,14 @@ fn manual_dispatch_carries_real_plan_to_checked_in_runner_selectors() {
                 assert_eq!(projection["required_slices"], plan["required_slices"]);
                 if lane == "quality" {
                     assert_eq!(projection["matrices"]["clippy"], plan["matrices"]["clippy"]);
+                } else if lane == "website" {
+                    assert!(
+                        projection["required_slices"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|slice| slice == "web")
+                    );
                 } else {
                     let hosts = plan["matrices"]["hosts"]
                         .as_array()
@@ -272,23 +382,39 @@ fn manual_dispatch_carries_real_plan_to_checked_in_runner_selectors() {
                         .collect::<Vec<_>>();
                     assert!(!hosts.is_empty());
                     assert_eq!(projection["matrices"]["hosts"], json!(hosts));
-                    if lane != "linux" {
-                        let runtimes = plan["matrices"]["runtime_products"]
-                            .as_array()
-                            .unwrap()
-                            .iter()
-                            .filter(|row| row["platform"] == lane)
-                            .cloned()
-                            .collect::<Vec<_>>();
-                        assert!(!runtimes.is_empty());
-                        assert_eq!(projection["matrices"]["runtime_products"], json!(runtimes));
-                    }
+                    let runtimes = plan["matrices"]["runtime_products"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .filter(|row| row["platform"] == lane)
+                        .cloned()
+                        .collect::<Vec<_>>();
+                    assert!(!runtimes.is_empty());
+                    assert_eq!(projection["matrices"]["runtime_products"], json!(runtimes));
                 }
                 let forwarded_force =
                     projection["signals"]["force_hosted"].as_bool() != Some(false);
                 assert_eq!(forwarded_force, forced);
-                let expected_depot = matches!(lane, "quality" | "linux") && manual && !forced;
-                check_selection(lane, dispatch, forwarded_force, expected_depot);
+                for (_, job, _) in targets
+                    .into_iter()
+                    .filter(|(target_lane, _, _)| *target_lane == lane)
+                {
+                    let accepts = accepts_manual_opt_in(lane, job);
+                    check_selection(
+                        lane,
+                        job,
+                        dispatch,
+                        forwarded_force,
+                        accepts,
+                        accepts && manual && !forced,
+                    );
+                    if (lane, job) == ("linux", "native_runtimes") {
+                        check_selection(lane, job, dispatch, true, false, false);
+                    }
+                    if lane == "quality" {
+                        check_selection(lane, job, dispatch, forwarded_force, false, false);
+                    }
+                }
             }
         }
     }
