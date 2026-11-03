@@ -71,7 +71,7 @@ fn preinstalled_profile_excludes_installers_and_selects_existing_linker_tools() 
     for (name, condition) in [
         (
             "Install pinned Rust toolchain",
-            "inputs.runner-profile != 'preinstalled-macos' && (runner.os != 'Linux' || inputs.runner-profile == 'hosted-bare')",
+            "inputs.runner-profile != 'preinstalled-macos' && inputs.runner-profile != 'preinstalled-linux' && (runner.os != 'Linux' || inputs.runner-profile == 'hosted-bare')",
         ),
         (
             "Install just",
