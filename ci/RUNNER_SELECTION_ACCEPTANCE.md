@@ -19,15 +19,18 @@ effective hosted cache behavior remain unobserved.
 | Expired exact-ref canary | Matching same-repository merge ref may select Depot but both direct Depot cache and native cache are denied. | Selector behavior only; no canary activation is asserted. |
 | Wrong canary ref, fork, or PR head ref | GitHub-hosted labels. | Selector refusal fixtures. |
 | Unsupported event or malformed boolean | Selector falls back to hosted for an unsupported event; malformed booleans are refused. The planner rejects unsupported event names. | No fallback to a privileged provider. |
+| Main host roles, gate on | Linux, macOS and Windows host callers project their respective Depot labels; a control-change plan projects hosted labels. | Planned host rows, caller wiring and real selector; no hosted execution. |
+| Main Linux runtime, gate on | CPU's explicit override projects hosted placement and native-cache permission while the general runtime selector projects a Depot label and denies that cache. | Planned CPU/CUDA rows and checked-in selector projection; no observed runner or cache. |
 
-The composed caller checks cover Linux static ABI and the native-SDK nested
-static-ABI path, including source identity, provider intent, hosted override,
-selected slices and artifact names. A local mutation fixture verifies that the
-same wiring checks reject a dropped nested hosted override and a disabled
-release SDK override. The real selector also demonstrates that those changed
-inputs can select Depot in a synthetic trusted manual-main scenario. This is
-not a live release or proof of other callers. Other role/caller paths and the
-complete event-by-role acceptance matrix still need the same composed proof. The
+The composed caller checks cover Linux static ABI, the native-SDK nested
+static-ABI path, the three platform host paths and Linux runtime's CPU
+exception, including selected planner rows and forwarding. A local mutation
+fixture verifies that the same wiring checks reject a dropped nested hosted
+override and a disabled release SDK override. The real selector also
+demonstrates that those changed inputs can select Depot in a synthetic trusted
+manual-main scenario. This is not a live release or proof of other callers.
+Other role/caller paths and the complete event-by-role acceptance matrix still
+need the same composed proof. The
 source-only execution-record command can retain caller assertions alongside a
 selector trace, but does not authenticate the selector-to-job binding, observe
 the runner or cache, or retain an artifact. Protected `@main` execution, live
