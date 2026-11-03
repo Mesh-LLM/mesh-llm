@@ -403,8 +403,10 @@ impl SpeechStream {
         let aligned = self
             .confirmed_prefix
             .align_with_pending(&words, &self.pending, canonical);
-        let boundary =
-            aligned.unwrap_or_else(|| self.confirmed_prefix.unsupported_boundary(&words));
+        let boundary = aligned.unwrap_or_else(|| {
+            self.confirmed_prefix
+                .unsupported_boundary(&words, &self.pending)
+        });
         if boundary != self.confirmed_in_buffer {
             // A revised hypothesis can omit already confirmed words. Keep
             // their canonical count: they may return on the next pass.
@@ -538,7 +540,10 @@ impl SpeechStream {
                 let boundary = self
                     .confirmed_prefix
                     .align_with_pending(&words, &self.pending, canonical)
-                    .unwrap_or_else(|| self.confirmed_prefix.unsupported_boundary(&words));
+                    .unwrap_or_else(|| {
+                        self.confirmed_prefix
+                            .unsupported_boundary(&words, &self.pending)
+                    });
                 let rest = words[boundary..].to_vec();
                 self.confirm(rest, events);
             }

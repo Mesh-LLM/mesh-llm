@@ -295,10 +295,10 @@ fn different_punctuation_only_words_do_not_create_a_collision() {
 fn impossible_pins_have_no_reachable_alignment() {
     let prefix = prefix("A B");
     let hypothesis = words("A");
-    let cells = prefix.alignment_cells(&hypothesis, &[true, true]);
+    let cells = prefix.alignment_cells(&hypothesis, &[true, true], None);
     assert!(
         prefix
-            .best_alignment(&cells, hypothesis.len() + 1, &[0, 0])
+            .best_alignment(&cells, &hypothesis, &[0, 0], false)
             .is_none()
     );
     assert_eq!(ownership(&prefix), 2);

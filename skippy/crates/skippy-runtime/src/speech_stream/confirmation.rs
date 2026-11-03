@@ -45,18 +45,15 @@ impl ConfirmedPrefix {
         self.anchors.iter().filter(|anchor| anchor.observed).count()
     }
 
-    /// A wholly rewritten prefix can still have new words after its last
-    /// observed length. If any owned spelling survives, the failed alignment
-    /// is ambiguous: exposing a positional tail could replay that owner.
-    /// This fallback does not establish an alignment or change ownership.
-    pub(super) fn unsupported_boundary(&self, words: &[String]) -> usize {
-        if self.anchors.iter().any(|anchor| {
-            anchor.canonical.is_some() && words.iter().any(|word| anchor.matches(word))
-        }) {
-            words.len()
-        } else {
-            self.observed_len().min(words.len())
+    /// Recover a supported prefix without making uncertain audio trimmable.
+    /// Otherwise retain the last observed length, never the whole hypothesis
+    /// merely because an owned spelling appears somewhere in it.
+    pub(super) fn unsupported_boundary(&mut self, words: &[String], pending: &[String]) -> usize {
+        if let Some(alignment) = self.recovered_alignment(words, pending) {
+            self.anchors = self.aligned_anchors(words, &alignment.cells, alignment.end);
+            return alignment.end;
         }
+        self.observed_len().min(words.len())
     }
 
     /// A vanished confirmed prefix can leave the previous unconfirmed tail at
@@ -108,21 +105,68 @@ impl ConfirmedPrefix {
         if self.anchors.is_empty() {
             return Some(0);
         }
-        let alignment = self.alignment(words, pending)?;
+        let alignment = self.alignment(words, pending, None)?;
         self.anchors = self.aligned_anchors(words, &alignment.cells, alignment.end);
         Some(alignment.end)
     }
 
     fn alignment_support(&self, words: &[String], pending: &[String]) -> usize {
-        self.alignment(words, pending)
+        self.alignment(words, pending, None)
             .map_or(0, |alignment| alignment.score.matched)
+    }
+
+    /// A cheaper unsupported path can hide a restored owner. Require one
+    /// owned anchor to match, then compare the supported paths by the normal
+    /// edit, pending-tail, and observed-length ordering. Ownerless insertions
+    /// cannot justify consuming a new tail.
+    fn recovered_alignment(&self, words: &[String], pending: &[String]) -> Option<Alignment> {
+        self.anchors
+            .iter()
+            .enumerate()
+            .filter(|(_, anchor)| {
+                anchor.canonical.is_some() && words.iter().any(|word| anchor.matches(word))
+            })
+            .filter_map(|(required, _)| self.alignment(words, pending, Some(required)))
+            .min_by_key(|alignment| {
+                let tail_support = words[alignment.end..]
+                    .iter()
+                    .zip(pending)
+                    .take_while(|(a, b)| same_word(a, b))
+                    .count();
+                (
+                    alignment.score.preference(),
+                    std::cmp::Reverse(tail_support),
+                    alignment.end.abs_diff(self.observed_len()),
+                    alignment.end,
+                )
+            })
+    }
+
+    fn tail_replays_omitted_owner(
+        &self,
+        words: &[String],
+        cells: &[Option<Cell>],
+        end: usize,
+    ) -> bool {
+        self.aligned_anchors(words, cells, end)
+            .iter()
+            .any(|anchor| {
+                !anchor.observed
+                    && anchor.canonical.is_some()
+                    && words[end..].iter().any(|word| anchor.matches(word))
+            })
     }
 
     /// A newly omitted owned word must not simultaneously reappear as an
     /// ownerless insertion inside the consumed prefix. Keep that owner in the
     /// alignment and recompute from the unchanged anchors. Pins only grow for
     /// this call, so there are at most one more passes than there are anchors.
-    fn alignment(&self, words: &[String], pending: &[String]) -> Option<Alignment> {
+    fn alignment(
+        &self,
+        words: &[String],
+        pending: &[String],
+        required: Option<usize>,
+    ) -> Option<Alignment> {
         let mut pinned = vec![false; self.anchors.len()];
         // Prior unconfirmed text is independent evidence for a candidate tail.
         // It only resolves ties in edits and supported matches; empty pending
@@ -137,12 +181,13 @@ impl ConfirmedPrefix {
             })
             .collect::<Vec<_>>();
         loop {
-            let cells = self.alignment_cells(words, &pinned);
-            let (end, score) = self.best_alignment(&cells, words.len() + 1, &tail_agreement)?;
+            let cells = self.alignment_cells(words, &pinned, required);
+            let (end, score) =
+                self.best_alignment(&cells, words, &tail_agreement, required.is_some())?;
             if score.matched == 0 && !words.is_empty() {
                 return None;
             }
-            let conflicts = self.relocated_owners(words, &cells, end);
+            let conflicts = self.relocated_owners(words, &cells, end, required.is_some());
             if conflicts.is_empty() {
                 return Some(Alignment { cells, end, score });
             }
@@ -156,13 +201,16 @@ impl ConfirmedPrefix {
     fn best_alignment(
         &self,
         cells: &[Option<Cell>],
-        columns: usize,
+        words: &[String],
         tail_agreement: &[usize],
+        recovering: bool,
     ) -> Option<(usize, Cell)> {
+        let columns = words.len() + 1;
         cells[self.anchors.len() * columns..]
             .iter()
             .enumerate()
             .filter_map(|(end, cell)| cell.map(|cell| (end, cell)))
+            .filter(|(end, _)| !recovering || !self.tail_replays_omitted_owner(words, cells, *end))
             .min_by_key(|(end, cell)| {
                 (
                     cell.preference(),
@@ -173,7 +221,13 @@ impl ConfirmedPrefix {
             })
     }
 
-    fn relocated_owners(&self, words: &[String], cells: &[Option<Cell>], end: usize) -> Vec<usize> {
+    fn relocated_owners(
+        &self,
+        words: &[String],
+        cells: &[Option<Cell>],
+        end: usize,
+        recovering: bool,
+    ) -> Vec<usize> {
         let columns = words.len() + 1;
         let (mut row, mut column) = (self.anchors.len(), end);
         let mut omitted = Vec::new();
@@ -190,7 +244,7 @@ impl ConfirmedPrefix {
                 Step::Delete => {
                     row -= 1;
                     let anchor = &self.anchors[row];
-                    if anchor.observed && anchor.canonical.is_some() {
+                    if (anchor.observed || recovering) && anchor.canonical.is_some() {
                         omitted.push(row);
                     }
                 }
@@ -231,7 +285,12 @@ impl ConfirmedPrefix {
             .count()
     }
 
-    fn alignment_cells(&self, words: &[String], pinned: &[bool]) -> Vec<Option<Cell>> {
+    fn alignment_cells(
+        &self,
+        words: &[String],
+        pinned: &[bool],
+        required: Option<usize>,
+    ) -> Vec<Option<Cell>> {
         let columns = words.len() + 1;
         let mut cells = Vec::with_capacity((self.anchors.len() + 1) * columns);
         for edits in 0..columns {
@@ -244,7 +303,8 @@ impl ConfirmedPrefix {
         for (row, anchor) in self.anchors.iter().enumerate() {
             let previous_row = row * columns;
             let deletion = usize::from(anchor.observed);
-            cells.push(if pinned[row] {
+            let must_match = required == Some(row) || (required.is_some() && pinned[row]);
+            cells.push(if pinned[row] || must_match {
                 None
             } else {
                 cells[previous_row].map(|cell| cell.advance(deletion, false, Step::Delete))
@@ -254,7 +314,7 @@ impl ConfirmedPrefix {
                 let above = cells[previous_row + column + 1];
                 let left = *cells.last().expect("row has its first cell");
                 let mut best = [
-                    if pinned[row] {
+                    if pinned[row] || must_match {
                         None
                     } else {
                         above.map(|cell| cell.advance(deletion, false, Step::Delete))
@@ -264,7 +324,7 @@ impl ConfirmedPrefix {
                 .into_iter()
                 .flatten()
                 .min_by_key(|cell| cell.preference());
-                if (matches || anchor.observed)
+                if (matches || (anchor.observed && !must_match))
                     && let Some(cell) = cells[previous_row + column]
                 {
                     let diagonal = cell.advance(usize::from(!matches), matches, Step::Consume);

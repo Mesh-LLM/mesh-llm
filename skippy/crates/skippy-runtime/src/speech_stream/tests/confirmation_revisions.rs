@@ -106,6 +106,123 @@ fn a_final_wholly_substituted_prefix_keeps_new_speech_at_commit() {
 }
 
 #[test]
+fn a_restored_owned_word_keeps_new_speech_streaming() {
+    let mut script = Script::new(vec![
+        vec![(900, " A B")],
+        vec![(1_900, " A B")],
+        vec![(2_900, " A")],
+        vec![(3_900, " X Y B fresh words")],
+        vec![(4_900, " X Y B fresh words")],
+        vec![(5_000, " X Y B fresh words today")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(manual());
+    let mut events = Vec::new();
+    for expected in [vec![], vec!["A B"], vec![], vec![], vec![" fresh words"]] {
+        let batch = stream.push(&loud(1_000), &mut transcribe).unwrap();
+        assert_eq!(deltas(&batch), expected);
+        events.extend(batch);
+    }
+    let done = stream.commit(&mut transcribe).unwrap();
+    assert_eq!(deltas(&done), [" today"]);
+    assert_eq!(
+        done.last(),
+        Some(&SpeechStreamEvent::Completed {
+            turn: 0,
+            transcript: "A B fresh words today".into(),
+        })
+    );
+    events.extend(done);
+    assert_eq!(deltas(&events).concat(), "A B fresh words today");
+}
+
+#[test]
+fn a_restored_owned_word_keeps_new_speech_at_commit() {
+    let mut script = Script::new(vec![
+        vec![(900, " A B")],
+        vec![(1_900, " A B")],
+        vec![(2_900, " A")],
+        vec![(3_000, " X Y B final words")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(manual());
+    let mut events = Vec::new();
+    for _ in 0..3 {
+        events.extend(stream.push(&loud(1_000), &mut transcribe).unwrap());
+    }
+    assert_eq!(deltas(&events), ["A B"]);
+    let done = stream.commit(&mut transcribe).unwrap();
+    assert_eq!(deltas(&done), [" final words"]);
+    assert_eq!(
+        done.last(),
+        Some(&SpeechStreamEvent::Completed {
+            turn: 0,
+            transcript: "A B final words".into(),
+        })
+    );
+    events.extend(done);
+    assert_eq!(deltas(&events).concat(), "A B final words");
+}
+
+#[test]
+fn multiple_restored_owners_leave_only_genuinely_new_trailing_speech() {
+    for (hypothesis, transcript) in [
+        (" X Y B filler C", "A B C"),
+        (" X Y B filler C today", "A B C today"),
+        (" X Y C B Z C", "A B C"),
+        (" X Y C B Z C today", "A B C today"),
+    ] {
+        for passes in [3, 5] {
+            let mut script = Script::new(vec![
+                vec![(900, " A B C")],
+                vec![(1_900, " A B C")],
+                vec![(2_900, " A")],
+                vec![(3_900, hypothesis)],
+                vec![(4_900, hypothesis)],
+            ]);
+            let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+            let mut stream = SpeechStream::new(manual());
+            let mut events = Vec::new();
+            for _ in 0..passes {
+                events.extend(stream.push(&loud(1_000), &mut transcribe).unwrap());
+            }
+            let done = stream.commit(&mut transcribe).unwrap();
+            assert_eq!(
+                done.last(),
+                Some(&SpeechStreamEvent::Completed {
+                    turn: 0,
+                    transcript: transcript.into(),
+                })
+            );
+            events.extend(done);
+            assert_eq!(deltas(&events).concat(), transcript);
+        }
+    }
+}
+
+#[test]
+fn recovered_prefixes_do_not_make_uncertain_audio_trimmable() {
+    let mut script = Script::new(vec![
+        vec![(900, " A B")],
+        vec![(1_900, " A B")],
+        vec![(2_900, " A")],
+        vec![(3_500, " X Y B"), (3_900, " fresh words")],
+    ]);
+    let mut transcribe = |s: &[f32], o: &TranscriptionOptions| script.transcribe(s, o);
+    let mut stream = SpeechStream::new(manual());
+    for _ in 0..3 {
+        stream.push(&loud(1_000), &mut transcribe).unwrap();
+    }
+    stream.config.trim_after_ms = 2_500;
+    stream.push(&loud(1_000), &mut transcribe).unwrap();
+    assert_eq!(stream.confirmed_prefix.observed_len(), 3);
+    assert_eq!(stream.buffer_start, 0);
+    assert_eq!(stream.buffer.len(), 4_000 * MS);
+    let done = stream.commit(&mut transcribe).unwrap();
+    assert_eq!(deltas(&done), [" fresh words"]);
+}
+
+#[test]
 fn an_unsupported_prefix_does_not_replay_a_restored_omitted_owner() {
     // Y revises the retained prefix before the already emitted B returns.
     // The cheapest alignment has no supported match, although B occurs later.
