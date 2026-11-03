@@ -123,6 +123,11 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
     let configure =
         std::fs::read_to_string(root.join(".github/actions/configure-sccache-gha/action.yml"))?;
     cache_evidence::configure_action(&workflow_yaml::parse(&configure)?)?;
+    let macos = std::fs::read_to_string(root.join(".github/actions/setup-macos-lld/action.yml"))?;
+    cache_evidence::macos_action(&workflow_yaml::parse(&macos)?)?;
+    let preparation =
+        std::fs::read_to_string(root.join(".github/actions/prepare-automation/action.yml"))?;
+    cache_evidence::macos_preparation(&workflow_yaml::parse(&preparation)?)?;
     let runtime_input = std::fs::read_to_string(
         root.join(".github/actions/prepare-native-runtime-input/action.yml"),
     )?;
