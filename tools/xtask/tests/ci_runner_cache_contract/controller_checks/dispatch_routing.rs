@@ -9,6 +9,11 @@ use crate::workflow_yaml::{self, Node};
 use serde_json::{Value, json};
 use std::{fs, process::Command, time::Duration};
 
+#[path = "dispatch_routing/callers.rs"]
+mod callers;
+#[path = "dispatch_routing/resolvers.rs"]
+mod resolvers;
+
 const SOURCE: &str = "0123456789abcdef0123456789abcdef01234567";
 const BASE: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -77,178 +82,12 @@ fn text<'a>(node: &'a Node, key: &str) -> Option<&'a str> {
 fn accepts_manual_opt_in(lane: &str, job: &str) -> bool {
     matches!(
         (lane, job),
-        ("quality", "quality") | ("linux", "hosts" | "native_runtimes")
-    )
-}
-
-fn check_forwarding(lane: &str, job: &str, slice: &str) {
-    let caller = workflow(&format!("ci-{lane}-lane.yml"));
-    let caller_job = caller.get("jobs").unwrap().get(job).unwrap();
-    assert_eq!(
-        text(caller_job, "uses"),
-        Some(format!("./.github/workflows/{slice}").as_str())
-    );
-    let inputs = caller_job.get("with").unwrap();
-    for (key, expected) in [
-        ("source_sha", "${{ inputs.source_sha }}"),
-        ("original_event_name", "${{ inputs.original_event_name }}"),
-        (
-            "force_hosted",
-            "${{ toJSON(fromJson(inputs.lane_plan_json).signals.force_hosted) != 'false' }}",
-        ),
-    ] {
-        assert_eq!(text(inputs, key), Some(expected), "{lane}/{key}");
-    }
-    let accepts_manual_opt_in = accepts_manual_opt_in(lane, job);
-    assert_eq!(
-        text(inputs, "use_depot"),
-        accepts_manual_opt_in.then_some("${{ inputs.use_depot }}"),
-        "{lane}/use_depot"
-    );
-    match (lane, job) {
-        ("quality", "quality") => assert_eq!(
-            text(inputs, "clippy_matrix"),
-            Some("${{ toJson(fromJson(inputs.lane_plan_json).matrices.clippy) }}")
-        ),
-        ("website", "web") => {
-            for key in ["ui_changed", "website_changed"] {
-                assert_eq!(
-                    text(inputs, key),
-                    Some(format!("${{{{ fromJson(inputs.lane_plan_json).signals.{key} || contains(fromJson(inputs.lane_plan_json).domains, 'ci-control') }}}}").as_str()),
-                    "{lane}/{key}"
-                );
-            }
-        }
-        ("linux" | "macos" | "windows", "hosts") => {
-            assert_eq!(
-                text(inputs, "hosts_matrix"),
-                Some("${{ toJson(fromJson(inputs.lane_plan_json).matrices.hosts) }}")
-            );
-            assert_eq!(
-                text(inputs, "ui_artifact_name"),
-                Some(format!("ci-ui-dist-{lane}-${{{{ github.run_id }}}}").as_str())
-            );
-        }
-        ("linux" | "macos" | "windows", "native_runtimes" | "runtime_product") => assert_eq!(
-            text(inputs, "runtime_matrix"),
-            Some("${{ toJson(fromJson(inputs.lane_plan_json).matrices.runtime_products) }}")
-        ),
-        _ => panic!("unexpected composed lane"),
-    }
-    let called = workflow(slice);
-    let steps = called
-        .get("jobs")
-        .unwrap()
-        .get("runner_policy")
-        .unwrap()
-        .get("steps")
-        .unwrap();
-    let Node::Seq(steps) = steps else {
-        panic!("selector steps")
-    };
-    let selector = steps
-        .iter()
-        .find(|step| text(step, "id") == Some("policy"))
-        .unwrap();
-    assert_eq!(
-        text(selector, "uses"),
-        Some("./.github/actions/select-ci-runners")
-    );
-    let inputs = selector.get("with").unwrap();
-    for (key, expected) in [
-        ("event_name", "${{ github.event_name }}"),
-        ("original_event_name", "${{ inputs.original_event_name }}"),
-        ("force_hosted", "${{ inputs.force_hosted }}"),
-    ] {
-        assert_eq!(text(inputs, key), Some(expected), "{slice}/{key}");
-    }
-    assert_eq!(
-        text(inputs, "manual_use_depot"),
-        accepts_manual_opt_in.then_some("${{ inputs.use_depot }}"),
-        "{slice}/manual_use_depot"
-    );
-    if !accepts_manual_opt_in {
-        assert_eq!(text(inputs, "depot_main_enabled"), Some("false"));
-        let action = support::action("select-ci-runners");
-        let manual = action
-            .get("inputs")
-            .unwrap()
-            .get("manual_use_depot")
-            .unwrap();
-        assert_eq!(text(manual, "default"), Some("false"));
-    }
-    if (lane, job) == ("linux", "native_runtimes") {
-        let cpu = steps
-            .iter()
-            .find(|step| text(step, "id") == Some("cpu_policy"))
-            .unwrap();
-        assert_eq!(
-            text(cpu, "uses"),
-            Some("./.github/actions/select-ci-runners")
-        );
-        let cpu_inputs = cpu.get("with").unwrap();
-        assert_eq!(text(cpu_inputs, "force_hosted"), Some("true"));
-        assert_eq!(text(cpu_inputs, "manual_use_depot"), None);
-        let policy = called.get("jobs").unwrap().get("runner_policy").unwrap();
-        let outputs = policy.get("outputs").unwrap();
-        assert_eq!(
-            text(outputs, "runner_cpu"),
-            Some("${{ steps.cpu_policy.outputs.runner_16 }}")
-        );
-        assert_eq!(
-            text(outputs, "allow_native_github_cache_cpu"),
-            Some("${{ steps.cpu_policy.outputs.allow_native_github_cache }}")
-        );
-        let runtime = called.get("jobs").unwrap().get("linux_runtime").unwrap();
-        assert_eq!(
-            text(runtime, "runs-on"),
-            Some(
-                "${{ matrix.runtime.backend == 'cpu' && needs.runner_policy.outputs.runner_cpu || needs.runner_policy.outputs.runner_16 }}"
+        ("quality", "quality")
+            | (
+                "linux",
+                "hosts" | "native_runtimes" | "static_abi" | "kotlin_sdk_input"
             )
-        );
-    }
-    if lane == "quality" {
-        let sentinel = steps
-            .iter()
-            .find(|step| text(step, "id") == Some("sentinel_policy"))
-            .unwrap();
-        assert_eq!(
-            text(sentinel, "uses"),
-            Some("./.github/actions/select-ci-runners")
-        );
-        let sentinel_inputs = sentinel.get("with").unwrap();
-        for (key, value) in [
-            ("event_name", "${{ github.event_name }}"),
-            ("original_event_name", "${{ inputs.original_event_name }}"),
-            ("force_hosted", "${{ inputs.force_hosted }}"),
-        ] {
-            assert_eq!(text(sentinel_inputs, key), Some(value), "{key}");
-        }
-        for key in ["depot_main_enabled", "depot_pr_enabled", "manual_use_depot"] {
-            assert_eq!(text(sentinel_inputs, key), Some("false"), "{key}");
-        }
-        assert_eq!(
-            text(sentinel_inputs, "pr_canary_ref"),
-            Some("${{ vars.DEPOT_PR_SENTINEL_REF }}")
-        );
-    }
-    if lane == "website" {
-        for (name, input) in [
-            ("ui_quality", "ui_changed"),
-            ("ui_e2e", "ui_changed"),
-            ("website", "website_changed"),
-        ] {
-            let web_job = called.get("jobs").unwrap().get(name).unwrap();
-            assert_eq!(
-                text(web_job, "if"),
-                Some(format!("${{{{ inputs.{input} }}}}").as_str())
-            );
-            assert_eq!(
-                text(web_job, "runs-on"),
-                Some("${{ needs.runner_policy.outputs.runner_4 }}")
-            );
-        }
-    }
+    )
 }
 
 fn check_selection(
@@ -286,10 +125,14 @@ fn check_selection(
     let selected = fixture.outputs();
     assert_eq!(selected["depot_enabled"], expected_depot.to_string());
     let (runner, depot_label, hosted_label) = match (lane, job) {
-        ("quality", _) | ("linux", "hosts") => ("runner_8", "depot-ubuntu-24.04-8", "ubuntu-24.04"),
-        ("website", _) => ("runner_4", "depot-ubuntu-24.04-4", "ubuntu-24.04"),
+        (_, "ui_artifact") | ("website", _) => ("runner_4", "depot-ubuntu-24.04-4", "ubuntu-24.04"),
+        ("quality", _) | ("linux", "hosts" | "static_abi" | "kotlin_sdk_input") => {
+            ("runner_8", "depot-ubuntu-24.04-8", "ubuntu-24.04")
+        }
         ("linux", "native_runtimes") => ("runner_16", "depot-ubuntu-24.04-16", "ubuntu-24.04"),
-        ("linux", "runtime_product") => ("runner", "depot-ubuntu-24.04", "ubuntu-24.04"),
+        ("linux", "runtime_product" | "rust_tests") => {
+            ("runner", "depot-ubuntu-24.04", "ubuntu-24.04")
+        }
         ("macos", _) => ("runner_macos", "depot-macos-15", "macos-15"),
         ("windows", _) => ("runner_windows", "depot-windows-2022", "windows-2022"),
         _ => panic!("unexpected composed lane"),
@@ -308,6 +151,16 @@ fn check_selection(
         selected["allow_native_github_cache"],
         (!expected_depot).to_string()
     );
+    match (lane, job) {
+        ("linux", "static_abi") => {
+            resolvers::check_native_resolver("static-abi-artifact.yml", &selected)
+        }
+        ("linux", "kotlin_sdk_input") => {
+            resolvers::check_native_resolver("native-sdk-artifact.yml", &selected)
+        }
+        ("macos" | "windows", "platform_checks") => resolvers::check_platform_resolver(&selected),
+        _ => {}
+    }
 }
 
 #[test]
@@ -315,18 +168,27 @@ fn manual_dispatch_carries_real_plan_to_checked_in_runner_selectors() {
     let targets = [
         ("quality", "quality", "ci-quality-slice.yml"),
         ("website", "web", "ci-web-slice.yml"),
+        ("linux", "ui_artifact", "ci-ui-artifact-slice.yml"),
+        ("linux", "static_abi", "static-abi-artifact.yml"),
+        ("linux", "rust_tests", "ci-rust-tests-slice.yml"),
         ("linux", "hosts", "ci-linux-host-slice.yml"),
         ("linux", "native_runtimes", "ci-linux-runtime-slice.yml"),
         ("linux", "runtime_product", "ci-linux-product-slice.yml"),
+        ("linux", "kotlin_sdk_input", "native-sdk-artifact.yml"),
+        ("macos", "ui_artifact", "ci-ui-artifact-slice.yml"),
         ("macos", "hosts", "ci-macos-host-slice.yml"),
         ("macos", "native_runtimes", "ci-macos-runtime-slice.yml"),
         ("macos", "runtime_product", "ci-macos-product-slice.yml"),
+        ("macos", "platform_checks", "ci-platform-checks-slice.yml"),
+        ("macos", "swift_sdk_input", "swift-sdk-artifact.yml"),
+        ("windows", "ui_artifact", "ci-ui-artifact-slice.yml"),
         ("windows", "hosts", "ci-windows-host-slice.yml"),
         ("windows", "native_runtimes", "ci-windows-runtime-slice.yml"),
         ("windows", "runtime_product", "ci-windows-product-slice.yml"),
+        ("windows", "platform_checks", "ci-platform-checks-slice.yml"),
     ];
     for (lane, job, slice) in targets {
-        check_forwarding(lane, job, slice);
+        callers::check_forwarding(lane, job, slice);
     }
     for (changed, forced) in [
         ("README.md", false),
@@ -391,6 +253,48 @@ fn manual_dispatch_carries_real_plan_to_checked_in_runner_selectors() {
                         .collect::<Vec<_>>();
                     assert!(!runtimes.is_empty());
                     assert_eq!(projection["matrices"]["runtime_products"], json!(runtimes));
+                    if lane == "linux" {
+                        assert_eq!(
+                            projection["matrices"]["rust_tests"],
+                            plan["matrices"]["rust_tests"]
+                        );
+                        assert!(
+                            !projection["matrices"]["rust_tests"]
+                                .as_array()
+                                .unwrap()
+                                .is_empty()
+                        );
+                        assert!(
+                            projection["required_slices"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .any(|slice| slice == "static-abi")
+                        );
+                    } else {
+                        let checks = plan["matrices"]["platform_checks"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .filter(|row| row["platform"] == lane)
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        assert!(!checks.is_empty());
+                        assert_eq!(projection["matrices"]["platform_checks"], json!(checks));
+                    }
+                    if lane != "windows" {
+                        let sdks = plan["matrices"]["sdk"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .filter(|row| row["platform"] == lane)
+                            .cloned()
+                            .collect::<Vec<_>>();
+                        assert!(sdks.iter().any(
+                            |row| row["id"] == if lane == "linux" { "kotlin" } else { "swift" }
+                        ));
+                        assert_eq!(projection["matrices"]["sdk"], json!(sdks));
+                    }
                 }
                 let forwarded_force =
                     projection["signals"]["force_hosted"].as_bool() != Some(false);
