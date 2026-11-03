@@ -79,23 +79,22 @@ runs:
       run: |
         if [[ "${{ inputs.event_name }}" == "pull_request" ]]; then
           # For pull_request: use base_sha...head_sha
-          git diff --name-only "${{ inputs.base_sha }}...${{ inputs.head_sha }}" > /tmp/changed_files.txt
-        elif [[ "${{ inputs.event_name }}" == "push" ]]; then
+          git diff --no-renames --name-only "${{ inputs.base_sha }}...${{ inputs.head_sha }}" > /tmp/changed_files.txt
+        elif [[ "${{ inputs.event_name }}" == "push" || "${{ inputs.event_name }}" == "workflow_dispatch" ]]; then
           # A push may contain more than one commit. Diff the complete event
-          # range; never classify only the final commit. New branches, missing
+          # range; never classify only the final commit. Manual-full supplies
+          # the selected main commit and its parent. New branches, missing
           # history, and malformed payloads fail open to the full CI graph.
+          # Include both sides of a rename so protected paths cannot disappear.
           base_sha="${{ inputs.base_sha }}"
           head_sha="${{ inputs.head_sha }}"
           if [[ -z "$base_sha" || -z "$head_sha" || "$base_sha" =~ ^0+$ ]] ||
               ! git cat-file -e "$base_sha^{commit}" 2>/dev/null ||
               ! git cat-file -e "$head_sha^{commit}" 2>/dev/null; then
             echo "__force_all__" > /tmp/changed_files.txt
-          elif ! git diff --name-only "$base_sha" "$head_sha" > /tmp/changed_files.txt; then
+          elif ! git diff --no-renames --name-only "$base_sha" "$head_sha" > /tmp/changed_files.txt; then
             echo "__force_all__" > /tmp/changed_files.txt
           fi
-        elif [[ "${{ inputs.event_name }}" == "workflow_dispatch" ]]; then
-          # For workflow_dispatch: force all by using a known Rust file
-          echo "__force_all__" > /tmp/changed_files.txt
         else
           echo "Unknown event type: ${{ inputs.event_name }}" >&2
           exit 1

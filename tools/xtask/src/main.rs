@@ -195,6 +195,9 @@ fn run() -> DynResult<()> {
             };
             ci_controller::plan::run(root.as_path(), rest)
         }
+        cli::CliCommand::CiExecutionRecord(rest) => {
+            ci_controller::plan::decision_evidence::run(rest)
+        }
         cli::CliCommand::CiGovernance(rest) => {
             let root = match explicit_root {
                 Some(root) => root,
