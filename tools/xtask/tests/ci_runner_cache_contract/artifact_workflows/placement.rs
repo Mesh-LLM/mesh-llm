@@ -385,6 +385,7 @@ fn placement_guards_reject_nested_and_release_override_mutations() {
 
 mod caller_census;
 mod host_roles;
+mod platform_checks;
 mod platform_runtimes;
 mod product_roles;
 mod quality;

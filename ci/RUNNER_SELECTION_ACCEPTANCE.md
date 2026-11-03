@@ -22,6 +22,7 @@ effective hosted cache behavior remain unobserved.
 | Main host roles, repository gate on | Linux host projects Depot; macOS and Windows host callers keep their main gates off and project hosted labels. A control-change plan projects hosted labels for all three. | Planned host rows, checked-in caller gates and real selector; no hosted execution. |
 | Main Linux runtime, gate on | CPU's explicit override projects hosted placement and native-cache permission while the general runtime selector projects a Depot label and denies that cache. | Planned CPU/CUDA rows and checked-in selector projection; no observed runner or cache. |
 | Main macOS and Windows runtimes | Both callers keep their main gates off and project hosted labels while retaining runtime artifact names. | Planned runtime rows and checked-in callers; no observed job or artifact. |
+| Main platform checks | macOS and Windows check callers keep the main gate off; the actual mapping step maps selector labels to the planned platforms. | Local planner, selector and shell mapping fixture; no observed job. |
 | Main product composition | Linux, macOS and Windows product callers keep their main gates off and project hosted labels; host, runtime and product artifact names remain bound. | Planned runtime rows and checked-in callers; no observed job or artifact. |
 | Quality role and sentinel | Planner inputs and checked-in Quality callers project the expected 4/8-worker labels for main, control, expired PR, fork and PR dispatch; the separate sentinel fixture requires its exact ref. | Synthetic selector and wiring fixtures; no sentinel activation or observed job. |
 
@@ -35,7 +36,7 @@ here. All rows still need complete coverage and review.
 The census test verifies caller identities and declared core inputs; it does
 not independently prove that a row's coverage label is complete.
 
-Current census: 20 direct selector steps; 14 partial and 6 open.
+Current census: 20 direct selector steps; 15 partial and 5 open.
 
 <!-- selector-census:start -->
 | Workflow | Job | Step | Coverage |
@@ -47,7 +48,7 @@ Current census: 20 direct selector steps; 14 partial and 6 open.
 | `ci-macos-host-slice.yml` | `runner_policy` | `policy` | partial |
 | `ci-macos-product-slice.yml` | `runner_policy` | `policy` | partial |
 | `ci-macos-runtime-slice.yml` | `runner_policy` | `policy` | partial |
-| `ci-platform-checks-slice.yml` | `runner_policy` | `policy` | open |
+| `ci-platform-checks-slice.yml` | `runner_policy` | `policy` | partial |
 | `ci-quality-slice.yml` | `runner_policy` | `policy` | partial |
 | `ci-quality-slice.yml` | `runner_policy` | `sentinel_policy` | partial |
 | `ci-rust-tests-slice.yml` | `runner_policy` | `policy` | open |
