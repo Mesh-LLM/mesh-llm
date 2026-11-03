@@ -20,6 +20,93 @@ The specification records design, status and acceptance criteria. When
 implementation and documentation disagree, inspect the implementation, fix the
 owning source, and update the inventory and topology in the same change.
 
+## Independent human approval for CI policy
+
+Before a CI-policy change is merged or live CI settings are changed, require
+one independent human approval for the exact current revision. Only Mic
+(`micspiral`), Nick (`ndizazzo`), or James (`i386`) can supply that approval.
+Exclude the PR author and responsible human sponsor. One eligible independent
+current approval is sufficient; multiple approvals are not required. Missing,
+unlisted, self, stale, dismissed, or superseded approvals do not satisfy this
+rule. Evaluate each reviewer's latest effective review and bind approval to
+the current PR head SHA; a new commit requires fresh approval.
+
+The initial supported submission path requires an authenticated human GitHub
+PR author, who is also the responsible sponsor. Bot-authored CI-policy PRs
+fail closed: the sponsoring human must submit a human-authored PR. A sponsor
+string in a body, label, commit trailer or agent report is not authenticated
+sponsor evidence. Agents may investigate, edit, validate, write commits and
+prepare changes; they cannot approve, impersonate a reviewer, or infer
+policy-change authority from a request to "fix CI." Agent confirmation never
+substitutes for an independent human, including for this governance bootstrap.
+
+CI policy includes provider and runner-size selection; repository, organization
+and environment variables; cache authority and retention; exceptions and their
+expiries; required checks, test selection and validation rosters; concurrency
+and cancellation; runner groups, worker provisioning and images; workflow
+permissions and credential access; release and deployment gates; and the
+policy, reviewer roster, ownership patterns, validators and administration
+controls themselves. Shared build/automation entrypoints are conservatively
+in scope. Ordinary product-only source, UI and documentation changes outside
+the declared control paths retain their normal review policy. Moving policy
+into a product path does not exempt it: protect its new owner before use.
+
+Use the proposed visible `@Mesh-LLM/ci-policy-reviewers` team with exactly
+`micspiral`, `ndizazzo`, and `i386`, with explicit repository write access.
+Before merging CODEOWNERS references to that team, an authorized human must
+create/verify it under independent eligible approval and retain live membership,
+visibility, write-access and valid-owner readbacks. Otherwise prepare a
+separately reviewed coordinated transition that preserves valid owners; never
+merge references to an absent or ineligible team and call them protection.
+Require one team review only for CI paths through a native file-scoped rule,
+dismiss stale approvals, and allow no routine bypass. Keep final team-only
+CODEOWNERS matches after Windows and other overrides; combining unrelated
+owners on the same line permits any one owner to approve. CODEOWNERS alone
+does not establish the independent-review or sponsor rule. The protected-base
+validator and native controls must cover changes to their own gate, policy,
+roster, workflow and ownership files. Never load enforcement policy or execute
+enforcement code from the PR revision being judged.
+
+Any active required custom approval check must use a distinct restricted GitHub
+App identity bound in required-status configuration, or an independently
+verified equivalent protected workflow mechanism. A check name emitted by the
+shared GitHub Actions app is spoofable by PR workflows with `checks: write`.
+Do not place the distinct publisher's credential in ordinary repository secrets
+accessible to PR execution. Local metadata fixtures establish no authenticated
+publisher, live API collection or native merge protection.
+
+Live administration must use a reviewed bounded change record, an exact
+protected `main` revision, independently approved environment with self-review
+prevention and administrator bypass disabled, and a matching live-state
+precondition. Keep administration credentials out of agent sessions and PR
+execution. Record expected non-secret state separately from observed state;
+retain before/after readbacks, rationale, affected jobs, tests, human owner,
+revision, approver/link, rollout, rollback and operator/time. Where a provider
+API is unsupported, the authorized human performs the same approved bounded
+operation manually and records its readback. No generic shell or arbitrary
+API input is an approved administration interface.
+
+Follow [the human procedure](../../../ci/CI_GOVERNANCE.md) for bootstrap,
+activation, change records, credentials, drift reporting and acceptance
+evidence. Local implementation does not create a team, configure protections,
+grant credentials, approve a change or activate any live enforcement. The
+initial governance PR itself needs eligible independent review before merge;
+team bootstrap precedes merge of its ownership references, and live rule
+activation needs separate authorized human administration and readback. Team
+and rule state remain unverified/inactive until actual live readback establishes
+otherwise. The optional `ci-governance inspect-live-controls` command uses only
+an explicitly supplied existing read-only token and fixed GitHub GET requests.
+It reports denied or inaccessible controls as unknown. Its partial,
+unauthenticated output is neither drift clearance nor activation evidence and
+does not replace the protected observer or independent human approval.
+Its repeated, bounded team-member listing can flag a changed proposed roster,
+but login matches do not authenticate numeric identities or deliver a report.
+An administrator can still change protections, and an agent holding a human
+token is indistinguishable from that human to GitHub. Retain credential
+separation, audit and drift controls; do not promise perfect prevention.
+Asynchronous checks also leave a review/membership race: native controls and
+a fresh pre-merge/pre-operation readback remain necessary.
+
 ## Rust automation ownership during migration
 
 For new repository automation, reuse an existing typed Rust command in

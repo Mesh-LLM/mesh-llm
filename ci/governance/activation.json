@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "repository": "Mesh-LLM/mesh-llm",
+  "active": false,
+  "repository_id": null,
+  "reviewer_team_id": null,
+  "administration_environment_id": null,
+  "observer_app_id": null,
+  "observer_installation_id": null,
+  "publisher_app_id": null,
+  "publisher_installation_id": null,
+  "native_ruleset_ids": [],
+  "human_ids": {"micspiral": null, "ndizazzo": null, "i386": null}
+}
