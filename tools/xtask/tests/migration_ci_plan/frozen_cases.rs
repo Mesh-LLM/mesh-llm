@@ -58,7 +58,14 @@ fn check_case(case: &Case) -> TestResult {
         let golden = fs::read_to_string(plan)?;
         assert_eq!(text(&ported.stderr), "", "{}: stderr", case.name);
         assert_eq!(ported.status.code(), Some(0), "{}: status", case.name);
-        assert_eq!(text(&ported.stdout), format!("{golden}\n"), "{}", case.name);
+        // The separate placement signal is an additive post-migration field;
+        // retain byte-for-byte coverage of the original frozen plan contract.
+        let actual = text(&ported.stdout);
+        let legacy = actual
+            .replace("\"force_hosted\":true,", "")
+            .replace("\"force_hosted\":false,", "");
+        assert_ne!(actual, legacy, "{}: placement signal missing", case.name);
+        assert_eq!(legacy, format!("{golden}\n"), "{}", case.name);
     } else {
         let golden = fs::read_to_string(expected.join(format!("{}.error.txt", case.name)))?;
         let stderr = text(&ported.stderr).replace(&placeholder, "<manifests>/");
