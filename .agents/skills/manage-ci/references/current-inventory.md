@@ -885,21 +885,16 @@ bump `@playwright/test` in `mesh/crates/mesh-llm-ui/package.json`.
 resolved bin directory to the job path, and invokes the checked-in
 `scripts/cargo-linker` probe. It does not export Rust flags. The repository
 Cargo config owns every later link, so Android target flags and caller flags
-continue to compose normally. Seven call sites:
-`ci-platform-checks-slice.yml`, `ci-macos-host-slice.yml`,
-`swift-sdk-artifact.yml`, `native-sdk-artifact.yml`,
-`node-sdk-addon-artifact.yml`, and two in `release.yml`.
+continue to compose normally. Its callers include macOS host, runtime and
+platform-check slices, SDK workflows, release jobs, and `prepare-automation`.
 
-Disk-only sccache preparation initializes and exports `SCCACHE_DIR` before
-compiler probes, including callers that already disable GHA caching. An explicit
-directory is preserved; otherwise the action uses the job's runner temporary
-directory. Missing GHA endpoints retain the existing disk-only fallback.
-The action eagerly starts sccache on a unique short Unix socket in both disk-only
-and remote-cache modes, before any parallel compiler clients, and exports that
-endpoint for subsequent steps. It exports `SCCACHE_IDLE_TIMEOUT=0` before startup
-and persists the value for the job, preventing idle shutdown between crate
-builds and long test phases. Remote cache configuration is preserved. It never
-stops the default host server. Canary toolchain
+The action allocates a unique short Unix socket before forwarding explicit
+native and Depot cache permissions to `configure-sccache-gha`; that shared
+action starts the selected backend before the linker probe. A repeated setup in
+the same job reuses its endpoint. The action exports `SCCACHE_IDLE_TIMEOUT=0`
+before startup and persists it for the job. Denied or unavailable remote caches
+fall back to job-local disk; an explicit disk directory remains supported.
+It never stops the default host server. Canary toolchain
 verification only sets cache identity; accelerator setup owns server startup.
 
 Persistent macOS canary preflight, build, family and infrastructure-retry jobs
@@ -996,6 +991,14 @@ rows from that same catalog. Draft PR profiles select no build rows unless the
 changed paths require the documented CI-control or runner-infrastructure
 fail-open policy.
 
+
+Manual `use_depot` intent reaches Quality, Linux host/runtime, static ABI and
+native SDK callers; native SDK forwards the same source, event, override and
+intent to its nested static-ABI producer. Full-release Linux and native SDK
+selectors receive an explicit hosted override regardless of the manual input
+or repository gate; the release SDK uses metadata's frozen source SHA. The
+release `use_depot` input remains reserved until a provider profile is
+qualified. The separate rolling-preview GPU override is retained.
 ## Artifact and cache owners
 
 `native runtime-manifest-write` owns Windows ROCm target admission after the
@@ -1135,7 +1138,11 @@ boundary.
   retain native GitHub cache behavior.
 - `configure-sccache-gha`: event/provider-derived compiler-cache setup. The
   Windows platform-check lane applies it immediately after sccache installation,
-  with both cache permissions from the shared runner policy.
+  with both cache permissions from the shared runner policy. The ARM64 release
+  artifact smoke does the same before its Cargo verifier, using the metadata
+  selector's explicit native and Depot cache permissions.
+  `ci/CACHE_AUTHORITY.md` records the source-level event/provider permission
+  table and explicitly separates selector flags from actual backend access.
 - `restore-sccache-seed`: exact-key restore of the trusted 2 GiB Linux seed;
   central runner policy permits it only for GitHub-hosted selections, and
   native runtime restore is explicitly disabled after zero-reuse qualification.
