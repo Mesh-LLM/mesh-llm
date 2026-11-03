@@ -1259,6 +1259,13 @@ reservations or authorization; strict FIFO may leave otherwise usable capacity
 idle. No workflow calls this preview. Actual cross-run admission still needs an
 independently approved complete catalog, authenticated observations, an atomic
 shared state and recovery design, and separately authorized live qualification.
+The versioned reservation model proposes one FIFO transition while charging
+existing reservations and active work. A supplied start observation transfers
+the charge without releasing it. Stale revisions, overcommitted reservations
+and unresolved supersession fail closed. The model has no shared store, expiry,
+completion release or job control; its caller-supplied observations are not
+attested. A real service must atomically commit the complete expected state and
+independently reconcile completion before freeing capacity.
 
 Timing evidence is collected read-only with `cargo xtool ci-ops collect-metrics`.
 Schema-v3 reports keep workflow wall/queue, runner queue, dependency wait,
