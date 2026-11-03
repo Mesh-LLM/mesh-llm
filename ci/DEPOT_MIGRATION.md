@@ -72,9 +72,11 @@ cache mode and ephemeral runner allocation may differ. The runner-owning
 workflow checks out the immutable PR SHA with `persist-credentials: false`,
 receives no PR secrets or registry/cache credentials, and forces the hosted
 path for CI-control/workflow/policy changes. The planner-owned
-`signals.runner_contract_required` value is passed as `force_hosted` through
-every protected lane and runner-owning slice, and the centralized selector
-requires it to be false before enabling Depot. Control-plane planning/required
+`signals.force_hosted` value is passed as `force_hosted` through every protected
+lane and runner-owning slice, and the centralized selector requires it to be
+false before enabling Depot. `signals.runner_contract_required` independently
+selects exhaustive runner-contract coverage and does not itself force hosted
+placement. Missing placement evidence remains hosted. Control-plane planning/required
 summaries, credential-bearing smoke, `gpu-nvidia` hardware, and any Intel macOS
 row without a Depot-equivalent remain their approved provider exceptions.
 
@@ -305,6 +307,10 @@ runtime questions are:
 5. Does the restricted runner group continue to allow only the exact protected
    workflow refs after the PR canary is enabled?
 
+The selector's non-secret `selection_trace` and job summary record the
+decision only. Role, protected policy revision, actual runner and effective
+cache mode are unknown; retain separately authenticated execution evidence
+and an approved decision record before qualification.
 The selector emits provider-derived `allow_native_github_cache` and
 `allow_depot_remote_cache` outputs. Depot remote build-tool cache remains
 disabled. Outside the bounded exception, Depot selections keep native Actions
