@@ -5,11 +5,16 @@ title: Swift and Apple SDK
 # Swift and Apple SDK
 
 Use the `MeshLLM` SwiftPM product in macOS, Mac Catalyst and iOS applications.
-Tagged packages resolve a prebuilt XCFramework. Add the package dependency:
+Tagged packages resolve a prebuilt XCFramework. Add this dependency only after
+the release tag and its referenced XCFramework asset have been published:
 
 ```swift
 .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "{{ site.sdkVersion }}")
 ```
+
+Before publication, use the exact candidate checkout as a local Swift package
+with its matching locally prepared XCFramework and generated binding, as
+described below. A Git commit pin alone does not supply the required XCFramework.
 
 Use `.product(name: "MeshLLM", package: "mesh-llm")` in your target dependencies.
 The SDK exposes one embedded `Node` in `.client`, `.serve` or `.combined`
@@ -98,10 +103,11 @@ try await servingNode.start()
 Node configuration selects loaded models. Discovery does not download or load
 them. Check the release's platform support before enabling local serving.
 
-For local source development, build the matching XCFramework with
-`mesh/sdk/swift/scripts/build-xcframework.sh`. Binding generation reads the
-prebuilt FFI library's actual metadata. A standalone regeneration accepts an
-absolute library path:
+For local source development, build the matching XCFramework from the exact
+candidate checkout with `mesh/sdk/swift/scripts/build-xcframework.sh`, run from
+the repository root. This also generates the Swift binding from the built
+native library's metadata. A standalone regeneration accepts an absolute
+prebuilt library path:
 
 ```bash
 mesh/sdk/swift/scripts/generate-swift-bindings.sh /absolute/path/libmeshllm_ffi.a

@@ -4,9 +4,13 @@ title: Node.js and Electron SDK
 
 # Node.js and Electron SDK
 
-Install `@mesh-llm/sdk` with `npm install @mesh-llm/sdk`. The SDK uses a native
-N-API addon and one embedded `Node` with `client`, `serve`, and `combined`
-roles. `serve` is serve-only; `combined` also permits inference.
+Install the published stable SDK with `npm install @mesh-llm/sdk`. MeshLLM
+prereleases do not trigger npm publication. For a release candidate, use its
+exact source commit or published tag and the matching local addon through the
+[local development](#local-development-and-electron) path below.
+
+The SDK uses a native N-API addon and one embedded `Node` with `client`, `serve`,
+and `combined` roles. `serve` is serve-only; `combined` also permits inference.
 
 ## Join and infer
 
@@ -103,7 +107,8 @@ queries advertisements; it does not download or load a model.
 
 ## Local development and Electron
 
-Build the native addon with `npm run build:native` from `mesh/sdk/node`.
+From the exact candidate checkout, build the native addon with
+`npm run build:native` in `mesh/sdk/node` and use that checkout's SDK package.
 Package the matching addon under `native/<platform>-<arch>/` and a compatible
 native runtime for applications that serve models. Resolve bundled runtimes
 explicitly and put writable cache data in the application's data directory.

@@ -63,10 +63,10 @@ just bundle          # builds release products, then packages host + default run
 ```
 
 `just bundle` depends on `just release-build` and uses the canonical product
-packager. These local development checks prepare a candidate; final release
-qualification must exercise the published RC archives and preserve their exact
-source, archive, host, and runtime identities under the `release-validation`
-skill.
+packager. These development checks prepare a candidate. Final release
+qualification under `release-validation` builds each candidate locally on every
+validation host with `just release-bundle`. Record each build's exact source,
+archive SHA-256, host identity, runtime manifests, and binary version.
 
 Ship and unpack:
 

@@ -1,7 +1,10 @@
 # Kotlin/Android SDK
 
-Install `ai.meshllm:meshllm-android:<version>` from GitHub Packages. Configure
-the repository and credentials in Gradle:
+Install `ai.meshllm:meshllm-android:<published-version>` from GitHub Packages,
+using a version actually published there. A MeshLLM release tag does not by
+itself publish the Maven package. For an unpublished candidate, use the source
+and native-library preparation below. Configure the repository and credentials
+in Gradle:
 
 ```kotlin
 repositories {
@@ -16,6 +19,17 @@ repositories {
     }
 }
 ```
+
+For candidate source development, check out the exact candidate commit or its
+published tag. Set `MESH_LLM_FFI_LIBRARY` to an absolute prebuilt FFI library
+from the same native API revision, then run
+`mesh/sdk/kotlin/scripts/generate-kotlin-bindings.sh` from the repository root.
+The generator requires UniFFI 0.32.0. With that environment variable still set,
+run `./gradlew assembleAar` from `mesh/sdk/kotlin`; this also builds the Android
+native libraries and requires the Android NDK and Rust Android build tools.
+Keep the Kotlin wrapper, generated bindings and native libraries together from
+that revision. A registry package with an older version does not provide the
+candidate's API.
 
 The Kotlin package exposes one embedded `Node` with `CLIENT`, `SERVE`, and
 `COMBINED` roles. `SERVE` is serve-only.

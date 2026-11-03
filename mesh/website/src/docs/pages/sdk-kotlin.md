@@ -4,8 +4,12 @@ title: Java, Kotlin, and Android SDK
 
 # Java, Kotlin, and Android SDK
 
-Install `ai.meshllm:meshllm-android:{{ site.sdkVersion }}` from the GitHub
-Packages registry at `https://maven.pkg.github.com/Mesh-LLM/mesh-llm`.
+Install `ai.meshllm:meshllm-android:<published-version>` from the GitHub
+Packages registry at `https://maven.pkg.github.com/Mesh-LLM/mesh-llm`, using a
+version actually published there. A MeshLLM release tag does not by itself
+publish the Maven package. For an unpublished candidate, use the
+[local development](#local-development) path below with the exact candidate
+source and matching native libraries.
 Configure the registry credentials through your Gradle properties or environment.
 The Kotlin API uses coroutines and Flow and one embedded `Node` in
 `CLIENT`, `SERVE` or `COMBINED` mode. `SERVE` is serve-only.
@@ -91,9 +95,9 @@ local serving.
 
 ## Local development
 
-Build the AAR with `./gradlew assembleAar` from `mesh/sdk/kotlin`. Bindings
-must match a prebuilt native FFI library; generation reads its metadata rather
-than the legacy UDL:
+Check out the exact candidate commit or its published tag. Bindings must match
+a prebuilt native FFI library from the same native API revision; generation
+reads its metadata rather than the legacy UDL. Run from the repository root:
 
 ```bash
 export MESH_LLM_FFI_LIBRARY=/absolute/path/libmeshllm_ffi.a
@@ -101,7 +105,12 @@ mesh/sdk/kotlin/scripts/generate-kotlin-bindings.sh
 ```
 
 The generator uses UniFFI 0.32.0. The same environment variable selects the
-native metadata input for Gradle's binding generation task.
+native metadata input for Gradle's binding generation task. With it still set,
+build the AAR with `./gradlew assembleAar` from `mesh/sdk/kotlin`. This also
+builds the Android native libraries and requires the Android NDK and Rust
+Android build tools. Keep the Kotlin wrapper, generated bindings and native
+libraries together from that revision; an older registry package does not
+provide the candidate's API.
 
 ## Document OCR
 
