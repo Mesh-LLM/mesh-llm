@@ -7,6 +7,7 @@
 //! Preview candidates must never be treated as admission authorization.
 use std::collections::{BTreeMap, BTreeSet};
 
+pub mod journal;
 pub mod reservations;
 
 /// A caller-supplied runner class, not an attested machine identity.
