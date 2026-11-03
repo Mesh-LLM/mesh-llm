@@ -300,6 +300,36 @@
         "schema": 1
       },
       "reference": "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:656e4874af027e0b437427f4415fdaab51ff8b1cda444dcdd4bc331794f703c5"
+    },
+    "public-cpu-libclang": {
+      "reference": "ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60",
+      "environment": "public",
+      "backend": "cpu",
+      "native_toolchain_epoch": "mesh-llm-cuda-runner-sha256-aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60",
+      "receipt": {
+        "schema": 1,
+        "cohort_sha256": "sha256:032e84ac5046e246959adc937c125cf63c33da11fa2b6a2dda18a44032190153",
+        "index_candidate_key": "candidate-index-public-cpu"
+      },
+      "provenance": {
+        "schema": 1,
+        "scope": "reviewed_producer_admission",
+        "validation": "offline_binding_only",
+        "cohort_sha256": "sha256:032e84ac5046e246959adc937c125cf63c33da11fa2b6a2dda18a44032190153",
+        "origin": {
+          "event": "push",
+          "mesh_revision": "06f6347323552d07bdeffdb1bc1aba2808c26519",
+          "repository": "Mesh-LLM/mesh-llm-runner-images",
+          "repository_id": 1210986689,
+          "run_attempt": 3,
+          "run_id": 41541864277,
+          "runner_images_revision": "45e0c35a191cc7026fb1b9a24700cc1b40be7ca6",
+          "timestamp": "20261102234644",
+          "workflow_id": 318369515,
+          "workflow_path": ".github/workflows/build-and-push.yml"
+        },
+        "admission_validator_revision": "45e0c35a191cc7026fb1b9a24700cc1b40be7ca6"
+      }
     }
   },
   "consumer_roles": {
@@ -317,7 +347,7 @@
       ]
     },
     "rust-clippy": {
-      "image_id": "public-cpu",
+      "image_id": "public-cpu-libclang",
       "scope": "ordinary",
       "bindings": [
         {
@@ -330,7 +360,7 @@
       ]
     },
     "linux-host": {
-      "image_id": "public-cpu",
+      "image_id": "public-cpu-libclang",
       "scope": "ordinary",
       "bindings": [
         {
@@ -356,7 +386,7 @@
       ]
     },
     "rust-tests": {
-      "image_id": "public-cpu",
+      "image_id": "public-cpu-libclang",
       "scope": "ordinary",
       "bindings": [
         {
@@ -369,7 +399,7 @@
       ]
     },
     "safetensors-runtime-smoke": {
-      "image_id": "public-cpu",
+      "image_id": "public-cpu-libclang",
       "scope": "ordinary",
       "bindings": [
         {
@@ -382,7 +412,7 @@
       ]
     },
     "compiler-seed-publisher": {
-      "image_id": "public-cpu",
+      "image_id": "public-cpu-libclang",
       "scope": "ordinary",
       "bindings": [
         {
@@ -745,7 +775,7 @@
       ]
     },
     "runtime-seed-canary": {
-      "image_id": "public-cpu",
+      "image_id": "public-cpu-libclang",
       "scope": "ordinary",
       "bindings": [
         {
@@ -799,7 +829,7 @@
   },
   "runtime_rows": {
     "linux-cpu": {
-      "image_id": "public-cpu",
+      "image_id": "public-cpu-libclang",
       "platform": "linux",
       "architecture": "amd64",
       "backend": "cpu"
@@ -824,9 +854,9 @@
     }
   },
   "compiler_seed": {
-    "image_id": "public-cpu",
+    "image_id": "public-cpu-libclang",
     "architecture": "amd64",
-    "key_prefix": "mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-",
+    "key_prefix": "mesh-llm-sccache-seed-linux-x86_64-img-aaa36843-epoch-aaa36843-v3-",
     "recipe_inputs": [
       "Cargo.lock",
       ".github/cache-version.txt",
