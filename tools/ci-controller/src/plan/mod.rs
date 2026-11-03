@@ -10,9 +10,11 @@
 
 pub mod catalog;
 mod construction;
+pub mod decision_evidence;
 pub mod diagnostics;
 pub mod document;
 mod glob_pattern;
+mod hosted_policy;
 mod matrices;
 pub use construction::CONTRACT_TESTED_CRATES;
 pub mod plan_bytes;
