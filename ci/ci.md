@@ -1227,11 +1227,18 @@ lifecycle execution, and does not remove another lane's interpreter setup.
 
 ## Fan-out and timing controls
 
-The planner records profile budgets: PR drafts/ready runs allow at most
+The planner declares profile budgets: PR drafts/ready runs specify
 7 Linux, 2 macOS, 1 Windows matrix workers and 10 planned workers overall;
-main/manual runs allow 12, 4, 2 and 18 respectively. Each matrix also sets
-`max-parallel`, and backend/platform rows are selected by ownership rather than
-by a blanket PR fan-out. The fixed two-row split-model matrix is serialized, so
+main/manual runs specify 12, 4, 2 and 18 respectively. These numbers are not
+a cross-workflow admission mechanism. Each matrix sets `max-parallel`, and
+backend/platform rows are selected by ownership rather than
+by a blanket PR fan-out. The macOS lane orders its macOS-producing phases so
+their matrix limits do not add together within a run; scheduling-only edges
+continue independent checks after a previous phase fails or is skipped. Its two
+Metal smokes are also ordered. This trades earlier parallel diagnostics for a
+per-run bound and does not impose a shared limit across concurrent PRs, main
+revisions, releases, warmers or other workflows. Provider-wide admission and
+actual quota/resource qualification remain separate requirements. The fixed two-row split-model matrix is serialized, so
 it adds runner-minutes without increasing peak workers. Host, ABI and runtime
 producers remain unique per selected row. The full Swift target matrix is the
 intentional exception: its seven architecture/platform libraries are

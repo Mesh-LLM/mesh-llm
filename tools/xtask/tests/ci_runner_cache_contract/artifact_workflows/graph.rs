@@ -43,7 +43,7 @@ fn artifact_platform_products_depend_only_on_matching_host_and_runtime_producers
 }
 
 #[test]
-fn artifact_sdk_producers_keep_parallel_start_and_static_abi_identity() {
+fn artifact_sdk_producers_keep_static_abi_identity_and_macos_budget_order() {
     let linux = document("ci-linux-lane.yml");
     let kotlin = job(&linux, "kotlin_sdk_input");
     assert_eq!(
@@ -58,7 +58,7 @@ fn artifact_sdk_producers_keep_parallel_start_and_static_abi_identity() {
     let swift = job(&macos, "swift_sdk_input");
     assert_eq!(
         swift.get("needs").unwrap().list(),
-        ["authority_macos_arm64"]
+        ["platform_checks", "authority_macos_arm64"]
     );
     assert_eq!(
         input(swift, "max_parallel"),
@@ -91,6 +91,98 @@ fn artifact_sdk_producers_keep_parallel_start_and_static_abi_identity() {
     assert_eq!(
         input(job(&linux, "rust_tests"), "static_abi_toolchain_epoch"),
         Some("${{ needs.static_abi.outputs.toolchain_epoch }}")
+    );
+}
+
+fn precedes(doc: &super::Node, earlier: &str, later: &str) -> bool {
+    fn search(doc: &super::Node, current: &str, target: &str, seen: &mut BTreeSet<String>) -> bool {
+        if !seen.insert(current.to_owned()) {
+            return false;
+        }
+        job(doc, current).get("needs").is_some_and(|needs| {
+            needs
+                .list()
+                .iter()
+                .any(|parent| *parent == target || search(doc, parent, target, seen))
+        })
+    }
+    search(doc, later, earlier, &mut BTreeSet::new())
+}
+
+fn macos_phases_ordered(doc: &super::Node) -> bool {
+    let phases = [
+        "authority_macos_arm64",
+        "product_automation_macos_arm64",
+        "hosts",
+        "native_runtimes",
+        "runtime_product",
+        "platform_checks",
+        "swift_sdk_input",
+        "sdk",
+        "product_smoke",
+    ];
+    phases
+        .windows(2)
+        .all(|pair| precedes(doc, pair[0], pair[1]))
+}
+
+#[test]
+fn macos_phases_share_one_lane_budget_without_suppressing_independent_checks() {
+    let lane = document("ci-macos-lane.yml");
+    assert!(macos_phases_ordered(&lane));
+    for matrix in [
+        "hosts",
+        "native_runtimes",
+        "runtime_product",
+        "platform_checks",
+        "swift_sdk_input",
+    ] {
+        assert_eq!(
+            input(job(&lane, matrix), "max_parallel"),
+            Some("${{ fromJson(inputs.lane_plan_json).budgets.macos_max_parallel }}")
+        );
+    }
+    for (file, matrix) in [
+        ("ci-macos-host-slice.yml", "macos_host"),
+        ("ci-macos-runtime-slice.yml", "macos_runtime"),
+        ("ci-macos-product-slice.yml", "macos_product"),
+        ("ci-platform-checks-slice.yml", "platform_checks"),
+        ("swift-sdk-artifact.yml", "swift_sdk_target"),
+    ] {
+        let doc = document(file);
+        let strategy = job(&doc, matrix).get("strategy").unwrap();
+        assert_eq!(
+            text(strategy, "max-parallel"),
+            Some("${{ inputs.max_parallel }}"),
+            "{file}"
+        );
+    }
+    // These are scheduling edges: an unselected or failed prior phase must
+    // not prevent unrelated selected diagnostics from being attempted.
+    for (consumer, prior) in [
+        ("product_automation_macos_arm64", "authority_macos_arm64"),
+        ("native_runtimes", "hosts"),
+        ("platform_checks", "runtime_product"),
+        ("swift_sdk_input", "platform_checks"),
+        ("product_smoke", "sdk"),
+    ] {
+        let condition = text(job(&lane, consumer), "if").unwrap();
+        assert!(condition.contains("!cancelled()"), "{consumer}");
+        assert!(
+            !condition.contains(&format!("needs.{prior}.result")),
+            "{consumer}"
+        );
+    }
+    let smoke = document("ci-macos-product-smoke-slice.yml");
+    assert!(precedes(&smoke, "metal_model_load", "laya_metal"));
+    let condition = text(job(&smoke, "laya_metal"), "if").unwrap();
+    assert!(condition.contains("!cancelled()"));
+    assert!(!condition.contains("needs.metal_model_load.result"));
+    super::assert_mutation_rejected(
+        "ci-macos-lane.yml",
+        "needs: [platform_checks, authority_macos_arm64]",
+        "needs: [authority_macos_arm64]",
+        macos_phases_ordered,
     );
 }
 

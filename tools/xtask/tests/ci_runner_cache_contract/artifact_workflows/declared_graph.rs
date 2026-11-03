@@ -69,7 +69,14 @@ fn graph_platform_producers_and_consumers_keep_separate_responsibilities() {
             ],
         );
         let runtime = job(&lane, "native_runtimes");
-        assert!(!runtime.get("needs").unwrap().list().contains(&"hosts"));
+        let needs = runtime.get("needs").unwrap().list();
+        if platform == "macos" {
+            assert!(needs.contains(&"hosts"));
+            assert!(text(runtime, "if").unwrap().contains("!cancelled()"));
+            assert!(!text(runtime, "if").unwrap().contains("needs.hosts.result"));
+        } else {
+            assert!(!needs.contains(&"hosts"));
+        }
         for (component, required, forbidden) in [
             (
                 "runtime",
