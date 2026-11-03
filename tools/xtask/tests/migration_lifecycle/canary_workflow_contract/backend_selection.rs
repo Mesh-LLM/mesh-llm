@@ -2,6 +2,26 @@ use super::{action_shell, document, field, named};
 use std::fs;
 
 #[test]
+fn darwin_canary_backend_exports_metal_without_cuda_architectures() {
+    let action = document(".github/actions/select-canary-backend/action.yml");
+    let (_, step) = named(action.get("runs").unwrap(), "name", "Detect stage backend");
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().canonicalize().unwrap();
+    let setup = r#"
+export GITHUB_ENV="$PWD/backend.env"
+unset SKIPPY_CUDA_ARCHITECTURES
+uname() { [[ "$*" == -s ]] || return 91; printf 'Darwin\n'; }
+"#;
+    let (status, stdout, stderr) = action_shell(&directory, setup, field(step, "run"));
+    assert_eq!(status, 0, "{}", String::from_utf8_lossy(&stderr));
+    assert_eq!(
+        fs::read_to_string(directory.join("backend.env")).unwrap(),
+        "LLAMA_STAGE_BACKEND=metal\n"
+    );
+    assert!(String::from_utf8_lossy(&stdout).contains("selected stage backend: metal"));
+}
+
+#[test]
 fn linux_canary_backend_exports_cuda_and_refuses_missing_architectures() {
     let action = document(".github/actions/select-canary-backend/action.yml");
     let (_, step) = named(action.get("runs").unwrap(), "name", "Detect stage backend");
