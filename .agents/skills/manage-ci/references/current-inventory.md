@@ -36,6 +36,18 @@ The producer's CPU C++23/sanitizer/tooling probes passed; source-present API
 and real-model CI qualification remains pending protected-main execution.
 The matching clang-tidy plugin build/fixtures and configured C++/bridge lints
 are required after Rust header generation; missing lint tools fail preflight.
+
+A second CPU image entry, `public-cpu-libclang` (immutable index
+`sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60`,
+evidence hash `032e84ac5046e246959adc937c125cf63c33da11fa2b6a2dda18a44032190153`,
+runner-images main run `41541864277` attempt 3, producer
+`45e0c35a191cc7026fb1b9a24700cc1b40be7ca6`), carries the reviewed `libclang-dev`
+toolchain addition so the skippy-ffi bindgen freshness gate runs without a
+job-time install. It binds the compiler-seed cohort (rust-tests, rust-clippy,
+linux-host, safetensors-runtime-smoke, compiler-seed-publisher,
+runtime-seed-canary), the linux-cpu runtime row, and the rolled-forward
+compiler seed (`img-aaa36843-epoch-aaa36843-v3-`); the previous `public-cpu`
+image remains admitted for consumers that stay on it.
 The new job raises the retained pre-checkout audit caller census from 27 to 28,
 using the same published audit pin and central runner/cache projection.
 
@@ -1326,7 +1338,7 @@ The standalone API adds only its dedicated CPU identity; existing image
 references and evidence bindings remain unchanged.
 
 The `product-smoke` catalog role covers `smoke.yml`; accelerator and macOS paths
-retain their existing container opt-outs. The inventory has 10 images, 37 roles
+retain their existing container opt-outs. The inventory has 11 images, 37 roles
 and 37 literal workflow image bindings.
 
 ### Qualified lean UI consumers
