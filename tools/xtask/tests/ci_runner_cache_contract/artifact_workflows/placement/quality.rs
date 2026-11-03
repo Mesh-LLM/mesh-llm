@@ -174,6 +174,11 @@ fn assert_quality_selection_cases(
     ] {
         let fixture = support::Fixture::new();
         let force = plan["signals"]["force_hosted"].as_bool().unwrap();
+        let manual_request = if event == "workflow_dispatch" && origin == "pull_request" {
+            "true"
+        } else {
+            "false"
+        };
         let result = fixture.selector(&[
             ("INPUT_EVENT_NAME", event),
             ("INPUT_ORIGINAL_EVENT_NAME", origin),
@@ -182,7 +187,7 @@ fn assert_quality_selection_cases(
             ("FIXTURE_DATE", date),
             ("INPUT_DEPOT_MAIN_ENABLED", "true"),
             ("INPUT_DEPOT_PR_ENABLED", "true"),
-            ("INPUT_MANUAL_USE_DEPOT", "true"),
+            ("INPUT_MANUAL_USE_DEPOT", manual_request),
             ("INPUT_FORCE_HOSTED", if force { "true" } else { "false" }),
         ]);
         assert!(result.status.success(), "{name}: {result:?}");
