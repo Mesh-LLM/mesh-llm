@@ -5,6 +5,7 @@ const HF_CONVERTED_ARTIFACT_USAGE: &str =
     "usage: cargo xtool hf-converted-artifact preflight --artifact-dir <directory>";
 
 pub(crate) fn print_usage() {
+    println!("  cargo xtool ci-governance --help");
     println!("  cargo xtool ci-ops pr-authority-audit --help");
     println!("  cargo xtool automation mtp-scheduler --help");
     println!(
@@ -167,6 +168,7 @@ pub(crate) enum CliCommand<'a> {
     Inspect(&'a [String]),
     Check(RepositoryCheck, &'a [String]),
     CiPlan(&'a [String]),
+    CiGovernance(&'a [String]),
     CiFamilyPlan(&'a [String]),
     NativeGenerator(&'a [String]),
     SplitEvidence(&'a [String]),
@@ -223,6 +225,7 @@ impl<'a> Cli<'a> {
     pub(crate) fn parse(args: &'a [String]) -> DynResult<Self> {
         let (root, command_args) = ci_controller::repository::parse_root_prefix(args)?;
         let command = match command_args {
+            [domain, rest @ ..] if domain == "ci-governance" => CliCommand::CiGovernance(rest),
             [domain, scope, rest @ ..] if domain == "automation" && scope == "mtp-scheduler" => {
                 CliCommand::MtpScheduler(rest)
             }

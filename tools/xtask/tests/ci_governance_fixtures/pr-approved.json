@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "collection": {"source":"github-api","observed_at":200,"files_complete":true,"reviews_complete":true,"team_complete":true,"truncated":false},
+  "repository":"Mesh-LLM/mesh-llm",
+  "base_ref":"main",
+  "base_sha":"1111111111111111111111111111111111111111",
+  "current_protected_sha":"1111111111111111111111111111111111111111",
+  "head_sha":"2222222222222222222222222222222222222222",
+  "current_head_sha":"2222222222222222222222222222222222222222",
+  "policy_authority":"protected-base",
+  "policy_revision":"1111111111111111111111111111111111111111",
+  "policy_sha256":"REPLACED_WITH_ACTUAL_POLICY_DIGEST",
+  "pr_number":2781,
+  "author":{"login":"contributor","id":4,"kind":"human"},
+  "sponsor":{"login":"contributor","id":4,"kind":"human"},
+  "changed_file_count":1,
+  "changes":[{"kind":"modified","path":"ci/governance/policy.json","previous_path":null}],
+  "reviews":[{"id":10,"reviewer":{"login":"micspiral","id":1,"kind":"human"},"state":"approved","commit_sha":"2222222222222222222222222222222222222222","submitted_at":100}],
+  "team":{"slug":"Mesh-LLM/ci-policy-reviewers","visible":true,"repository":"Mesh-LLM/mesh-llm","repository_permission":"write","members":[{"login":"micspiral","id":1,"kind":"human"},{"login":"ndizazzo","id":2,"kind":"human"},{"login":"i386","id":3,"kind":"human"}]}
+}
