@@ -1412,6 +1412,11 @@ release runner selector immediately after installing sccache, before its
 checksum and extraction verifier invokes Cargo. A denied remote cache remains
 denied even if the runner exposes cache endpoint variables.
 
+The [runner role inventory](RUNNER_ROLE_READINESS.md) records the proposed
+source-level provider and preparation map. It is not a live runner-group or
+capacity readback; role-specific qualification and rollback evidence remain
+separate requirements.
+
 Exhaustive main and manual-full coverage continues to include runner contracts
 without forcing every otherwise eligible row to a hosted runner. The canonical
 plan carries a separate conservative `force_hosted` signal: CI-control,

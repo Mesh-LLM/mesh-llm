@@ -3,6 +3,7 @@ mod graph;
 mod placement;
 mod planner;
 mod platform;
+mod role_readiness;
 mod smoke;
 use super::{
     support,
