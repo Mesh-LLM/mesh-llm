@@ -916,6 +916,8 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
 
 /// Proves a transitively gossiped update refreshes a peer's metadata fields
 /// in place, without dropping unrelated state.
+const NOW: u64 = 1_800_000_000_000;
+
 #[test]
 fn transitive_peer_update_refreshes_metadata_fields() {
     use crate::proto::node::CompactModelMetadata;
@@ -1007,7 +1009,7 @@ fn transitive_peer_update_refreshes_metadata_fields() {
         claimed_log_head: None,
     };
 
-    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
+    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee), NOW);
 
     assert!(
         existing.available_models.is_empty(),
@@ -1107,7 +1109,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         claimed_log_head: None,
     };
 
-    apply_transitive_ann(&mut existing, &weak_addr, &ann, make_test_endpoint_id(0xee));
+    apply_transitive_ann(&mut existing, &weak_addr, &ann, make_test_endpoint_id(0xee), NOW);
 
     assert_eq!(
         existing.addr.addrs.len(),
@@ -1183,6 +1185,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         &richer_addr,
         &ann2,
         make_test_endpoint_id(0xee),
+        NOW,
     );
 
     assert_eq!(
@@ -1481,7 +1484,7 @@ fn transitive_peer_update_refreshes_memory_only_when_advertised() {
         addrs: Default::default(),
     };
     let mut ann = peer_state_test_announcement(addr.clone());
-    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
+    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee), NOW);
     assert_eq!(
         existing.memory,
         Some(advertised),
@@ -1494,7 +1497,7 @@ fn transitive_peer_update_refreshes_memory_only_when_advertised() {
         ..advertised
     };
     ann.memory = Some(refreshed);
-    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
+    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee), NOW);
     assert_eq!(existing.memory, Some(refreshed));
 }
 
@@ -1522,7 +1525,7 @@ fn transitive_peer_update_drops_the_cached_memory_when_the_capacity_moves() {
     // explained the old budget, so it must not travel with the new one.
     let mut ann = peer_state_test_announcement(addr.clone());
     ann.vram_bytes = 8_000_000_000;
-    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
+    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee), NOW);
     assert_eq!(existing.vram_bytes, 8_000_000_000);
     assert_eq!(
         existing.memory, None,
@@ -1531,7 +1534,7 @@ fn transitive_peer_update_drops_the_cached_memory_when_the_capacity_moves() {
 
     // The same relay with the unchanged capacity keeps the block.
     existing.memory = Some(advertised);
-    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
+    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee), NOW);
     assert_eq!(existing.memory, Some(advertised));
 }
 

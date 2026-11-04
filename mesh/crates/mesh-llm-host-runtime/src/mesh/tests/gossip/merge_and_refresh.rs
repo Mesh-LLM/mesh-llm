@@ -1,5 +1,7 @@
 use mesh_llm_membership::announcements::{apply_transitive_ann, peer_meaningfully_changed};
 
+const NOW: u64 = 1_800_000_000_000;
+
 #[test]
 pub(crate) fn test_merge_none_to_some() {
     let mut existing = test_peer(None);
@@ -10,6 +12,7 @@ pub(crate) fn test_merge_none_to_some() {
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert_eq!(existing.first_joined_mesh_ts, Some(100));
@@ -25,6 +28,7 @@ pub(crate) fn test_merge_some_to_none_keeps_existing() {
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert_eq!(existing.first_joined_mesh_ts, Some(100));
@@ -40,6 +44,7 @@ pub(crate) fn test_merge_earlier_incoming_wins() {
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert_eq!(existing.first_joined_mesh_ts, Some(100));
@@ -55,6 +60,7 @@ pub(crate) fn test_merge_later_incoming_loses() {
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert_eq!(existing.first_joined_mesh_ts, Some(100));
@@ -70,6 +76,7 @@ pub(crate) fn test_merge_equal_values_unchanged() {
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert_eq!(existing.first_joined_mesh_ts, Some(100));
@@ -159,6 +166,7 @@ pub(crate) fn test_transitive_merge_rejects_replayed_cache_advertisement() {
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     let retained = existing.cache_affinity.expect("cache advertisement");
@@ -301,6 +309,7 @@ pub(crate) fn test_apply_transitive_ann_refreshes_explicit_model_interests() {
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert_eq!(
@@ -321,6 +330,7 @@ pub(crate) fn test_apply_transitive_ann_refreshes_stage_status_list_support() {
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert!(existing.stage_status_list_supported);
@@ -338,6 +348,7 @@ pub(crate) fn test_apply_transitive_ann_cannot_promote_stage_protocol_generation
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert!(!existing.stage_protocol_generation_supported);
@@ -355,6 +366,7 @@ pub(crate) fn test_apply_transitive_ann_preserves_direct_stage_protocol_generati
         &test_addr(0x33),
         &old_relay_ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert!(existing.stage_protocol_generation_supported);
@@ -372,6 +384,7 @@ pub(crate) fn test_apply_transitive_ann_cannot_promote_local_gguf_content_id_sup
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert!(!existing.local_gguf_content_id_supported);
@@ -389,6 +402,7 @@ pub(crate) fn test_apply_transitive_ann_preserves_direct_local_gguf_content_id_s
         &test_addr(0x33),
         &old_relay_ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert!(existing.local_gguf_content_id_supported);
@@ -480,6 +494,7 @@ pub(crate) fn test_apply_transitive_ann_refreshes_advertised_model_throughput() 
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert_eq!(

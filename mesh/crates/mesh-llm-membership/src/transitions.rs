@@ -118,6 +118,7 @@ impl MembershipState {
         ann: &PeerAnnouncement,
         bridge_id: EndpointId,
         owner_summary: OwnershipSummary,
+        now_unix_ms: u64,
     ) -> TransitivePeerUpdate {
         if id == local_id
             || self
@@ -135,7 +136,7 @@ impl MembershipState {
             let old_peer = existing.clone();
             let serving_changed = if bridge_may_rewrite_peer_record(existing) {
                 existing.owner_summary = owner_summary;
-                apply_transitive_ann(existing, addr, ann, bridge_id)
+                apply_transitive_ann(existing, addr, ann, bridge_id, now_unix_ms)
             } else {
                 // Direct state wins. A relay of a live direct peer buys only
                 // the mention-age refresh below.

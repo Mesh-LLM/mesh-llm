@@ -83,13 +83,17 @@ impl ModelThroughputHint {
 
 /// Merge the hints a relay forwards for a peer into the ones already held for
 /// it. The relay's set decides which models are listed, but a held hint is
-/// kept when the relay's would make the evidence older: one dated later than
-/// the relay's, or a dated one the relay forwards undated (an older relay
-/// drops the fields). A relay can therefore never age or strip a hint; only
-/// the peer itself, through direct gossip, replaces its hints outright.
+/// kept when the relay's would leave worse evidence: one dated later than the
+/// relay's, a dated one the relay forwards undated (an older relay drops the
+/// fields), an equal-timestamp copy with a window no longer than the held
+/// one's, or any copy that is not fresh at `now_unix_ms` while the held hint
+/// still is (a too-future timestamp must not clobber usable evidence). A relay
+/// can therefore never age, strip, shrink, or spoil a hint; only the peer
+/// itself, through direct gossip, replaces its hints outright.
 pub fn merge_relayed_throughput_hints(
     held: &[ModelThroughputHint],
     relayed: &[ModelThroughputHint],
+    now_unix_ms: u64,
 ) -> Vec<ModelThroughputHint> {
     relayed
         .iter()
@@ -98,18 +102,29 @@ pub fn merge_relayed_throughput_hints(
                 .iter()
                 .find(|current| current.model_name == incoming.model_name)
             {
-                Some(current) if relayed_hint_is_older(current, incoming) => current.clone(),
+                Some(current)
+                    if relayed_hint_is_not_newer(current, incoming)
+                        || (current.is_fresh_at(now_unix_ms)
+                            && !incoming.is_fresh_at(now_unix_ms)) =>
+                {
+                    current.clone()
+                }
                 _ => incoming.clone(),
             }
         })
         .collect()
 }
 
-fn relayed_hint_is_older(current: &ModelThroughputHint, incoming: &ModelThroughputHint) -> bool {
+fn relayed_hint_is_not_newer(
+    current: &ModelThroughputHint,
+    incoming: &ModelThroughputHint,
+) -> bool {
     match (current.measurement, incoming.measurement) {
         (Some(_), None) => true,
         (Some(current), Some(incoming)) => {
             incoming.observed_at_unix_ms < current.observed_at_unix_ms
+                || (incoming.observed_at_unix_ms == current.observed_at_unix_ms
+                    && incoming.window_ms <= current.window_ms)
         }
         (None, _) => false,
     }
@@ -241,6 +256,7 @@ mod tests {
             named("stripped", measured(NOW, 60_000)),
             named("newer-relayed", measured(NOW - 1_000, 60_000)),
             named("undated", None),
+            named("shrunk", measured(NOW, 60_000)),
             named("gone", measured(NOW, 60_000)),
         ];
         let relayed = [
@@ -248,10 +264,11 @@ mod tests {
             named("stripped", None),
             named("newer-relayed", measured(NOW, 60_000)),
             named("undated", measured(NOW, 60_000)),
+            named("shrunk", measured(NOW, 30_000)),
             named("added", measured(NOW, 60_000)),
         ];
 
-        let merged = merge_relayed_throughput_hints(&held, &relayed);
+        let merged = merge_relayed_throughput_hints(&held, &relayed, NOW);
         let by_model = |model: &str| {
             merged
                 .iter()
@@ -262,6 +279,11 @@ mod tests {
         assert_eq!(by_model("stripped"), Some(measured(NOW, 60_000)));
         assert_eq!(by_model("newer-relayed"), Some(measured(NOW, 60_000)));
         assert_eq!(by_model("undated"), Some(measured(NOW, 60_000)));
+        assert_eq!(
+            by_model("shrunk"),
+            Some(measured(NOW, 60_000)),
+            "an equal-timestamp relay with a shorter window does not shrink the held hint"
+        );
         assert_eq!(by_model("added"), Some(measured(NOW, 60_000)));
         assert_eq!(by_model("gone"), None, "the relay's set decides the models");
     }
@@ -269,7 +291,35 @@ mod tests {
     #[test]
     fn repeated_relaying_of_the_same_hint_does_not_change_it() {
         let held = [named("qwen", measured(NOW - 10_000, 60_000))];
-        let merged = merge_relayed_throughput_hints(&held, &held);
+        let merged = merge_relayed_throughput_hints(&held, &held, NOW);
         assert_eq!(merged, held);
+    }
+
+    #[test]
+    fn a_not_fresh_relayed_hint_does_not_clobber_a_fresh_held_hint() {
+        let held = [named("qwen", measured(NOW - 30_000, 60_000))];
+        let beyond_skew = NOW + MAX_THROUGHPUT_FUTURE_SKEW_MS + 1;
+        let relayed = [named("qwen", measured(beyond_skew, 60_000))];
+        assert!(!relayed[0].is_fresh_at(NOW));
+        assert!(held[0].is_fresh_at(NOW));
+
+        let merged = merge_relayed_throughput_hints(&held, &relayed, NOW);
+        assert_eq!(
+            merged[0].measurement, held[0].measurement,
+            "a too-future timestamp must not spoil usable evidence"
+        );
+    }
+
+    #[test]
+    fn a_not_fresh_held_hint_is_replaced_by_a_fresh_relayed_one() {
+        let held = [named("qwen", measured(NOW - 10 * 60_000, 60_000))];
+        let relayed = [named("qwen", measured(NOW, 60_000))];
+        assert!(!held[0].is_fresh_at(NOW));
+
+        let merged = merge_relayed_throughput_hints(&held, &relayed, NOW);
+        assert_eq!(
+            merged[0].measurement, relayed[0].measurement,
+            "the freshness guard only protects a still-usable held hint"
+        );
     }
 }

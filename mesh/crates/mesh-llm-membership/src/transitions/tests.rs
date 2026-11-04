@@ -67,6 +67,8 @@ pub(crate) fn test_announcement(ts: Option<u64>) -> PeerAnnouncement {
     }
 }
 
+const NOW: u64 = 1_800_000_000_000;
+
 fn apply(state: &mut MembershipState, ann: &PeerAnnouncement) -> TransitivePeerUpdate {
     state.apply_accepted_transitive_peer(
         test_endpoint_id(1),
@@ -75,6 +77,7 @@ fn apply(state: &mut MembershipState, ann: &PeerAnnouncement) -> TransitivePeerU
         ann,
         test_endpoint_id(2),
         OwnershipSummary::default(),
+        NOW,
     )
 }
 

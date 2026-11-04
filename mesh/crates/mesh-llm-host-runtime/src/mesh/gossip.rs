@@ -1245,6 +1245,7 @@ impl Node {
             ann,
             bridge_id,
             owner_summary,
+            crate::mesh::current_time_unix_ms(),
         );
         match update {
             TransitivePeerUpdate::Ignored => {}
