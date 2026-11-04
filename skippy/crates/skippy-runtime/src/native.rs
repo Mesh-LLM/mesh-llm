@@ -14,6 +14,23 @@ use crate::path_cstring::path_to_cstring;
 use crate::runtime_events;
 use crate::session::StageSession;
 use crate::vocabulary::{ensure_in_vocabulary, vocabulary_size};
+mod receipt_attention;
+mod receipt_glue;
+mod receipts;
+
+pub use receipt_attention::{
+    ReceiptAttention, ReceiptAttentionOp, ReceiptAttentionWindow, ReceiptStoredRows,
+};
+pub use receipt_glue::{
+    ReceiptGlueInput, ReceiptGlueRequestRef, ReceiptGlueResult, ReceiptGlueTensor,
+    ReceiptGlueValues, StoredRowError, receipt_stored_row_error,
+};
+pub use receipts::{
+    ReceiptAnchorRef, ReceiptFlusher, ReceiptMemoryEvent, ReceiptRecorderSink, ReceiptReplayScope,
+    ReceiptReplayStepRef, ReceiptReplayer, ReceiptTensorView, ReceiptUbatchView, RecordedUbatch,
+    StageIdle, receipt_runtime_source,
+};
+
 use crate::{
     ActivationBoundaryDesc, ChatReasoningFormat, ChatTemplateJsonOptions, ChatTemplateJsonResult,
     ChatTemplateMessage, ChatTemplateOptions, LoadedModelCapability, ModelOpenEventQueue,
@@ -107,6 +124,7 @@ struct StageModelInner {
     dflash: Option<SharedDFlashDraft>,
     /// Target-layer capture for a split DFlash draft on a later stage.
     dflash_capture: Option<SharedDFlashCapture>,
+    receipt_recorder: receipts::InstalledRecorder,
 }
 
 /// A read-only model handle for vocabulary operations that do not touch a
@@ -172,6 +190,7 @@ impl StageModel {
                 capability: None,
                 dflash: None,
                 dflash_capture: None,
+                receipt_recorder: Default::default(),
             }),
             media: None,
         }
@@ -238,6 +257,7 @@ impl StageModel {
                 capability,
                 dflash: None,
                 dflash_capture: None,
+                receipt_recorder: Default::default(),
             }),
             media,
         })
