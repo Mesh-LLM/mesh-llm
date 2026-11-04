@@ -123,22 +123,7 @@ impl MeshNodeHandle {
             .get("data")
             .and_then(serde_json::Value::as_array)
             .ok_or_else(|| FfiError::DiscoveryFailed("invalid /v1/models response".to_string()))?;
-        Ok(models
-            .iter()
-            .filter_map(|value| {
-                value
-                    .get("id")
-                    .and_then(serde_json::Value::as_str)
-                    .map(|id| ModelNative {
-                        id: id.to_string(),
-                        name: id.to_string(),
-                        context_length: value
-                            .get("context_length")
-                            .and_then(serde_json::Value::as_u64)
-                            .and_then(|v| u32::try_from(v).ok()),
-                    })
-            })
-            .collect())
+        Ok(models.iter().filter_map(model_native_from_json).collect())
     }
 
     pub fn openai_request(
@@ -312,4 +297,83 @@ fn stream_failed(
         error,
         body: None,
     });
+}
+
+/// Map one `/v1/models` entry to the SDK record.
+///
+/// Model metadata is published under `metadata`. Flat fields stay readable for
+/// peers that still advertise them at the top level, and a missing effort list
+/// means unknown — an older provider or an unprobed model — rather than "this
+/// model has no effort levels".
+fn model_native_from_json(value: &serde_json::Value) -> Option<ModelNative> {
+    let id = value.get("id").and_then(serde_json::Value::as_str)?;
+    let metadata = value.get("metadata").filter(|value| value.is_object());
+    let field = |key: &str| {
+        metadata
+            .and_then(|metadata| metadata.get(key))
+            .or_else(|| value.get(key))
+    };
+    Some(ModelNative {
+        id: id.to_string(),
+        name: id.to_string(),
+        context_length: field("context_length")
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok()),
+        thinking_efforts: field("thinking_efforts")
+            .and_then(serde_json::Value::as_array)
+            .map(|efforts| {
+                efforts
+                    .iter()
+                    .filter_map(serde_json::Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            }),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_listing_exposes_advertised_efforts_and_context() {
+        let native = model_native_from_json(&serde_json::json!({
+            "id": "Qwen3-32B-Q4_K_M",
+            "display_name": "Qwen3 32B",
+            "metadata": {
+                "context_length": 65_536,
+                "thinking_efforts": ["low", "medium", "high"],
+            },
+        }))
+        .expect("model record");
+        assert_eq!(native.id, "Qwen3-32B-Q4_K_M");
+        assert_eq!(native.context_length, Some(65_536));
+        assert_eq!(
+            native.thinking_efforts,
+            Some(vec!["low".into(), "medium".into(), "high".into()])
+        );
+    }
+
+    #[test]
+    fn model_listing_keeps_unknown_efforts_and_flat_legacy_fields_apart() {
+        let unknown = model_native_from_json(&serde_json::json!({
+            "id": "legacy-model",
+            "context_length": 4_096,
+        }))
+        .expect("model record");
+        assert_eq!(unknown.context_length, Some(4_096));
+        assert_eq!(unknown.thinking_efforts, None);
+
+        let known_empty = model_native_from_json(&serde_json::json!({
+            "id": "no-efforts",
+            "metadata": { "thinking_efforts": [] },
+        }))
+        .expect("model record");
+        assert_eq!(known_empty.thinking_efforts, Some(Vec::new()));
+    }
+
+    #[test]
+    fn model_listing_requires_an_id() {
+        assert!(model_native_from_json(&serde_json::json!({ "display_name": "x" })).is_none());
+    }
 }

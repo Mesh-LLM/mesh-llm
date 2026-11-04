@@ -334,11 +334,19 @@ fn proto_identity_to_local(
     }
 }
 
+#[cfg(test)]
+mod thinking_efforts;
+
 /// Encode optional serving metadata without inventing a class for legacy models.
 fn local_model_metadata_to_proto(
     metadata: &crate::mesh::ServedModelMetadata,
 ) -> crate::proto::node::ServedModelMetadata {
     crate::proto::node::ServedModelMetadata {
+        thinking_efforts: metadata.thinking_efforts.as_ref().map(|values| {
+            crate::proto::node::ThinkingEfforts {
+                values: values.clone(),
+            }
+        }),
         workload_class: metadata.workload_class.map(local_workload_class_to_proto),
         architecture: metadata.architecture.clone(),
         parameter_size: metadata.parameter_size.clone(),
@@ -360,6 +368,10 @@ fn proto_model_metadata_to_local(
     metadata: &crate::proto::node::ServedModelMetadata,
 ) -> crate::mesh::ServedModelMetadata {
     crate::mesh::ServedModelMetadata {
+        thinking_efforts: metadata
+            .thinking_efforts
+            .as_ref()
+            .map(|efforts| efforts.values.clone()),
         // Keep an explicit unknown descriptor: dropping it can re-enable the
         // legacy model-name fallback elsewhere in routing and gossip.
         workload_class: metadata
