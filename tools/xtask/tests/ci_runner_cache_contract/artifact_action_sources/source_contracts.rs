@@ -194,15 +194,16 @@ fn artifact_native_attestation_verifier_dependencies_remain_abi_free() {
     assert_eq!(names, ["hex", "sha2"].into_iter().collect());
 }
 #[test]
-fn artifact_seed_hashes_bind_all_imported_just_sources_on_every_original_consumer() {
+fn artifact_seed_hashes_bind_cargo_manifests_and_just_sources_on_every_consumer() {
     for name in [
         "cache-warm-sccache.yml",
         "ci-quality-slice.yml",
         "ci-linux-host-slice.yml",
         "ci-rust-tests-slice.yml",
         "ci-linux-runtime-slice.yml",
+        "depot-canary.yml",
     ] {
         let workflow = source(&format!(".github/workflows/{name}"));
-        assert!(workflow.contains("hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**')"), "{name}");
+        assert!(workflow.contains("hashFiles('Cargo.lock', 'Cargo.toml', 'mesh/crates/*/Cargo.toml', 'skippy/crates/*/Cargo.toml', 'tools/*/Cargo.toml', '.github/workflows/cache-warm-sccache.yml', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**')"), "{name}");
     }
 }
