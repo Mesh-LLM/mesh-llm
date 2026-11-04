@@ -190,6 +190,9 @@ impl Calibration {
                 let Ok(bias) = value.trim().parse::<f32>() else {
                     continue;
                 };
+                if !bias.is_finite() {
+                    continue;
+                }
                 if level >= count {
                     continue;
                 }
@@ -346,6 +349,9 @@ mod tests {
             ("temperature.score".into(), "2".into()),
             ("score_bias.3.0".into(), "1".into()),
             ("score_bias.3.2".into(), "-1".into()),
+            ("score_bias.3.1".into(), "NaN".into()),
+            ("score_bias.3.3".into(), "inf".into()),
+            ("score_bias.2.0".into(), "1e999".into()),
         ]);
         assert_eq!(calibration.temperature(&choice(&["a", "b", "c"])), 0.5);
         assert_eq!(calibration.temperature(&choice(&["a", "b"])), 1.0);
