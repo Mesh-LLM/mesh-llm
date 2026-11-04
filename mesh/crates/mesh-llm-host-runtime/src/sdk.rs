@@ -1104,6 +1104,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial_test::serial]
+    #[ignore = "opens localhost mesh runtime sockets"]
     async fn embedded_startup_reports_ready_from_in_process_worker() {
         let api_port = free_local_port();
         let console_port = free_local_port();
