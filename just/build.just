@@ -30,7 +30,11 @@ with-lld *COMMAND:
 [script("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File")]
 @with-lld *COMMAND:
     $ErrorActionPreference = 'Stop'
-    if (-not (Get-Command sccache -ErrorAction SilentlyContinue)) { throw 'sccache is required; install it and retry.' }
+    # Look for sccache.exe on PATH directly: Get-Command, on a name it cannot
+    # find, first rebuilds the module analysis cache, which takes seconds on a
+    # fresh runner. A malformed PATH entry is skipped.
+    $sccache = $env:PATH -split ';' | Where-Object { $_ } | Where-Object { Test-Path -LiteralPath "$_\sccache.exe" -PathType Leaf -ErrorAction SilentlyContinue }
+    if (-not $sccache) { throw 'sccache is required; install it and retry.' }
     $LASTEXITCODE = 0
     Invoke-Expression '{{ COMMAND }}'
     exit $LASTEXITCODE
