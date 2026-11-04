@@ -94,6 +94,8 @@ mod tests {
         assert_eq!(total, 2048);
     }
 
+    // Creating a symlink on Windows needs a privilege test runners do not hold.
+    #[cfg(unix)]
     #[test]
     fn symlinked_snapshot_entries_report_target_bytes() {
         // HuggingFace-style snapshot dirs symlink weight files into a blobs/
@@ -110,18 +112,15 @@ mod tests {
         std::fs::create_dir_all(&snapshot).unwrap();
         std::fs::write(blobs.join("blob-weights"), vec![0u8; 8192]).unwrap();
         std::fs::write(blobs.join("blob-config"), vec![0u8; 256]).unwrap();
-        #[cfg(unix)]
         std::os::unix::fs::symlink(
             "../../blobs/blob-weights",
             snapshot.join("model.safetensors"),
         )
         .unwrap();
-        #[cfg(unix)]
         std::os::unix::fs::symlink("../../blobs/blob-config", snapshot.join("config.json"))
             .unwrap();
         let total = total_model_bytes(&snapshot);
         let _ = std::fs::remove_dir_all(&root);
-        #[cfg(unix)]
         assert_eq!(total, 8192 + 256);
     }
 
