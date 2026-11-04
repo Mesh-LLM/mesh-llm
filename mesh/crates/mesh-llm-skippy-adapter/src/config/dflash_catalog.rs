@@ -29,9 +29,9 @@ use skippy_runtime::package::PackageGenerationInfo;
 pub const DFLASH_PAIRING_INDEX_REPO: &str = "meshllm/dflash-pairings";
 /// The index file in [`DFLASH_PAIRING_INDEX_REPO`].
 pub const DFLASH_PAIRING_INDEX_FILE: &str = "index.json";
-/// The one index commit this release trusts. `None` until the repo is
-/// published; until then the bootstrap table is the only source.
-pub const DFLASH_PAIRING_INDEX_REVISION: Option<&str> = None;
+/// The one index commit this release trusts.
+pub const DFLASH_PAIRING_INDEX_REVISION: Option<&str> =
+    Some("91c1cb2cc50f4087ac73a7a74b01670a18015059");
 
 /// A pairing index file pinned to one commit of a Hugging Face repo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
