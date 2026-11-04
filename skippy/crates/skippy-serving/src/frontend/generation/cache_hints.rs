@@ -3,6 +3,7 @@ use crate::frontend::util::now_unix_millis;
 use crate::frontend::util::stable_wire_id;
 use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::CompletionRequest;
+use skippy_inference_api::InferenceExecutionScope;
 use skippy_protocol::binary::StageReplyStats;
 use std::sync::OnceLock;
 use std::sync::atomic::AtomicU64;
@@ -94,6 +95,29 @@ impl InferenceGenerationIds {
         self.session_id.to_string()
     }
 
+    /// Scope both native session reuse and every prefix-cache identity. Merely
+    /// prefixing the session label would leave content-addressed KV shared.
+    pub(in crate::frontend) fn with_execution_scope(
+        mut self,
+        scope: Option<InferenceExecutionScope>,
+    ) -> Self {
+        if let Some(scope) = scope {
+            self.session_id = stable_wire_id(&[
+                b"scoped-inference-session",
+                scope.as_bytes(),
+                &self.session_id.to_le_bytes(),
+            ]);
+            self.session_label = format!("scoped-{scope}-{}", self.session_label);
+            self.request_id = stable_wire_id(&[
+                b"scoped-inference-request",
+                scope.as_bytes(),
+                &self.request_id.to_le_bytes(),
+            ]);
+            self.cache.execution_scope = Some(scope);
+        }
+        self
+    }
+
     pub(in crate::frontend) fn request_id_string(&self) -> String {
         self.request_id.to_string()
     }
@@ -116,6 +140,56 @@ fn request_id(session_label: &str, sequence: u64, process_nonce: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    /// Equal client metadata must reuse a session only inside the same trusted execution scope.
+    fn scopes_separate_trusted_sessions_and_content_addressed_cache() {
+        let a = InferenceExecutionScope::new();
+        let b = InferenceExecutionScope::new();
+        let make = |scope| {
+            InferenceGenerationIds::new_with_trust(
+                InferenceCacheHints {
+                    prompt_cache_key: Some("same-key".into()),
+                    ..Default::default()
+                },
+                Some("same-agent"),
+                true,
+                None,
+            )
+            .with_execution_scope(Some(scope))
+        };
+        let first = make(a);
+        let repeat = make(a);
+        let other = make(b);
+        assert_eq!(first.session_id, repeat.session_id);
+        assert_ne!(first.request_id, repeat.request_id);
+        assert_ne!(first.session_id, other.session_id);
+        assert_eq!(first.cache.namespace(), repeat.cache.namespace());
+        assert_ne!(first.cache.namespace(), other.cache.namespace());
+    }
+
+    #[test]
+    /// Requests without client cache keys must still retain their execution-scope namespace.
+    fn scoped_default_cache_never_falls_back_to_the_global_namespace() {
+        let scope = InferenceExecutionScope::new();
+        let ids = InferenceGenerationIds::new_with_trust(
+            InferenceCacheHints::default(),
+            None,
+            false,
+            None,
+        )
+        .with_execution_scope(Some(scope));
+        assert_eq!(ids.cache.namespace(), Some(format!("execution:{scope}:")));
+        assert_eq!(InferenceCacheHints::default().namespace(), None);
+        let legacy = InferenceCacheHints {
+            prompt_cache_key: Some("x".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            legacy.namespace().as_deref(),
+            Some("openai:prompt_cache_key:x")
+        );
+    }
 
     #[test]
     fn trusted_agent_session_reuses_native_session_but_not_request_id() {
@@ -196,9 +270,11 @@ mod tests {
 pub(in crate::frontend) struct InferenceCacheHints {
     pub(in crate::frontend) prompt_cache_key: Option<String>,
     pub(in crate::frontend) prompt_cache_retention: Option<String>,
+    execution_scope: Option<InferenceExecutionScope>,
 }
 
 impl InferenceCacheHints {
+    /// Read normalized client cache hints without granting a trusted execution scope.
     pub(in crate::frontend) fn from_chat_request(request: &ChatCompletionRequest) -> Self {
         Self {
             prompt_cache_key: request
@@ -211,9 +287,11 @@ impl InferenceCacheHints {
                 .prompt_cache_retention
                 .map(prompt_cache_retention_label)
                 .map(ToString::to_string),
+            execution_scope: None,
         }
     }
 
+    /// Read completion cache hints; only the backend owner may add an execution scope.
     pub(in crate::frontend) fn from_completion_request(request: &CompletionRequest) -> Self {
         Self {
             prompt_cache_key: request
@@ -226,13 +304,24 @@ impl InferenceCacheHints {
                 .prompt_cache_retention
                 .map(prompt_cache_retention_label)
                 .map(ToString::to_string),
+            execution_scope: None,
         }
     }
 
+    /// Derive a cache namespace from the trusted scope and optional client cache key.
+    /// A scoped request always has a namespace, even when the client supplies no key.
     pub(in crate::frontend) fn namespace(&self) -> Option<String> {
-        self.prompt_cache_key
+        let namespace = self
+            .prompt_cache_key
             .as_ref()
-            .map(|key| format!("openai:prompt_cache_key:{key}"))
+            .map(|key| format!("openai:prompt_cache_key:{key}"));
+        match self.execution_scope {
+            Some(scope) => Some(format!(
+                "execution:{scope}:{}",
+                namespace.unwrap_or_default()
+            )),
+            None => namespace,
+        }
     }
 }
 
