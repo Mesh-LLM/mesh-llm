@@ -9,7 +9,7 @@ name: Public Mesh Probe
 # the console has peers, even while every completion fails.
 #
 # A failing probe fails the run (red in Actions). After
-# MESH_PROBE_FAILURE_THRESHOLD consecutive failing runs (default 3 ≈ 45 min)
+# MESH_PROBE_FAILURE_THRESHOLD consecutive failing probes (default 3 ≈ 45 min)
 # it opens one GitHub issue labelled `public-mesh-down`, assigned to the
 # on-call list, and reuses that issue while the outage lasts. The first green
 # probe afterwards comments on the issue and closes it.
@@ -86,6 +86,19 @@ jobs:
           # Do not fail here: the alerting steps below need to run first.
           echo "probe exit code $rc (state=$state)"
 
+      - name: Upload probe result
+        # The artifact name records the probe outcome so later runs can
+        # distinguish a failed probe from a failed alerting step (run
+        # conclusions alone cannot: a successful probe whose issue-close or
+        # Buzz step fails still concludes "failure").
+        if: ${{ steps.probe.outputs.state != '' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: public-mesh-probe-state-${{ steps.probe.outputs.state }}
+          path: ${{ runner.temp }}/probe.json
+          retention-days: 30
+          if-no-files-found: error
+
       - name: Count consecutive failures
         id: history
         if: ${{ github.event_name == 'schedule' }}
@@ -99,9 +112,30 @@ jobs:
           # count so a manual dispatch against another URL cannot trip alerts.
           previous="$(gh api \
             "repos/${GITHUB_REPOSITORY}/actions/workflows/public-mesh-probe.yml/runs?event=schedule&status=completed&per_page=20" \
-            --jq '[.workflow_runs[] | select(.id != '"${GITHUB_RUN_ID}"') | .conclusion]')"
-          previous_state="$(jq -r 'if length == 0 then "none" elif .[0] == "success" then "ok" else "failed" end' <<<"$previous")"
-          prior_failures="$(jq -r '[.[] | select(. != "cancelled") | if . == "success" then 0 else 1 end] | reduce .[] as $f ({n:0, stop:false}; if .stop or $f == 0 then .stop = true else .n += 1 end) | .n' <<<"$previous")"
+            --jq '[.workflow_runs[] | select(.id != '"${GITHUB_RUN_ID}"') | {id, conclusion}]')"
+          previous_state="$(jq -r 'if length == 0 then "none" elif .[0].conclusion == "success" then "ok" else "failed" end' <<<"$previous")"
+          # Count consecutive runs whose probe itself failed. A run whose
+          # probe succeeded always concludes "success" (the final step exits
+          # non-zero only when the probe state is not ok), so it stops the
+          # count without further queries. A "failure" conclusion is
+          # ambiguous (probe vs alerting step), so it is only counted when
+          # the run's probe-result artifact also says the probe failed.
+          count="$(jq length <<<"$previous")"
+          prior_failures=0
+          for ((i = 0; i < count; i++)); do
+            conclusion="$(jq -r ".[$i].conclusion" <<<"$previous")"
+            [[ "$conclusion" == "cancelled" ]] && continue
+            if [[ "$conclusion" == "success" ]]; then
+              break
+            fi
+            run_id="$(jq -r ".[$i].id" <<<"$previous")"
+            artifact="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" \
+              --jq '[.artifacts[].name | select(startswith("public-mesh-probe-state-"))][0] // "missing"')"
+            if [[ "$artifact" == "public-mesh-probe-state-ok" ]]; then
+              break
+            fi
+            ((prior_failures += 1))
+          done
           if [[ "$CURRENT_STATE" == "failed" ]]; then
             consecutive=$((prior_failures + 1))
           else
@@ -195,7 +229,9 @@ jobs:
           fi
 
       - name: Notify Buzz on state change
-        if: ${{ github.event_name == 'schedule' && steps.history.outputs.previous_state != steps.probe.outputs.state }}
+        # The none -> ok case is excluded: with no earlier scheduled run the
+        # first successful probe is not a recovery and must not page anyone.
+        if: ${{ github.event_name == 'schedule' && steps.history.outputs.previous_state != steps.probe.outputs.state && !(steps.history.outputs.previous_state == 'none' && steps.probe.outputs.state == 'ok') }}
         env:
           HOOK_URL: ${{ secrets.MESH_STATUS_BUZZ_HOOK_URL }}
           HOOK_SECRET: ${{ secrets.MESH_STATUS_BUZZ_HOOK_SECRET }}
