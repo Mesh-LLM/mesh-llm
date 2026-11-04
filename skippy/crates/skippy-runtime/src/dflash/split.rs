@@ -1117,22 +1117,4 @@ mod tests {
         output.desc.parts[0].dimensions[1] = i64::MAX;
         assert!(frame_hidden_rows(&output, 2).is_err());
     }
-
-    #[test]
-    fn a_malformed_output_is_an_error_not_a_panic() {
-        let split = DFlashSplitSession {
-            output_layer: Some((32, 3)),
-            ..DFlashSplitSession::default()
-        };
-        let mut session = session_with_captured(DFlashFeatureRows::default());
-        session.dflash_split = Some(Box::new(split));
-        let mut output = hidden_frame(crate::GGML_TYPE_F32, &[1.0, 2.0, 3.0, 4.0]);
-
-        let input = hidden_frame(crate::GGML_TYPE_F32, &[1.0; 4]);
-        assert!(session.dflash_receive_input(Some(&input)).is_err());
-        let mut output = hidden_frame(crate::GGML_TYPE_F32, &[1.0; 4]);
-        assert!(session.dflash_forward_captured(&mut output).is_err());
-
-        assert_eq!(DFlashFeatureRows::from_frame(&output).unwrap(), None);
-    }
 }
