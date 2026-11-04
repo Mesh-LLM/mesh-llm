@@ -16,14 +16,47 @@ use serde::{Deserialize, Serialize};
 /// Artifact schema version this reader understands.
 pub const CALIBRATION_SCHEMA_VERSION: &str = "1";
 
+/// One kind's calibration. The canonical artifact form is `{"temperature": 1.64}`;
+/// a bare number (`"choice": 1.64`) is also accepted for hand-written files.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq)]
+#[serde(untagged)]
+pub enum KindCalibration {
+    Number(f64),
+    Table { temperature: f64 },
+}
+
+impl KindCalibration {
+    pub fn temperature(&self) -> f64 {
+        match self {
+            Self::Number(t) => *t,
+            Self::Table { temperature } => *temperature,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for KindCalibration {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Form {
+            Number(f64),
+            Table { temperature: f64 },
+        }
+        match Form::deserialize(deserializer)? {
+            Form::Number(t) => Ok(Self::Number(t)),
+            Form::Table { temperature } => Ok(Self::Table { temperature }),
+        }
+    }
+}
+
 /// Per-kind temperatures. Kinds absent from the artifact keep T = 1.0 (uncalibrated).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct DecisionCalibration {
     #[serde(default)]
     pub schema_version: Option<String>,
-    /// Question kind ("noul" | "choice" | "score") → temperature.
+    /// Question kind ("noul" | "choice" | "score") → calibration.
     #[serde(default)]
-    pub kinds: BTreeMap<String, f64>,
+    pub kinds: BTreeMap<String, KindCalibration>,
 }
 
 impl DecisionCalibration {
@@ -54,7 +87,7 @@ impl DecisionCalibration {
                 "unknown calibration kind {kind:?}"
             );
             anyhow::ensure!(
-                *t > 0.0,
+                t.temperature() > 0.0,
                 "calibration temperature for {kind} must be positive"
             );
         }
@@ -63,12 +96,14 @@ impl DecisionCalibration {
 
     /// Temperature for a question kind; 1.0 when the kind is not calibrated.
     pub fn temperature(&self, kind: &str) -> f64 {
-        self.kinds.get(kind).copied().unwrap_or(1.0)
+        self.kinds.get(kind).map_or(1.0, KindCalibration::temperature)
     }
 
     /// True when at least one kind deviates from identity.
     pub fn is_active(&self) -> bool {
-        self.kinds.values().any(|t| (*t - 1.0).abs() > f64::EPSILON)
+        self.kinds
+            .values()
+            .any(|t| (t.temperature() - 1.0).abs() > f64::EPSILON)
     }
 }
 
@@ -104,9 +139,10 @@ mod tests {
 
     #[test]
     fn roundtrip_and_lookup() {
+        // Canonical artifact form, as written by training/decision-calibration.
         let json = r#"{
             "schema_version": "1",
-            "kinds": {"noul": 0.89, "choice": 1.64, "score": 2.09}
+            "kinds": {"noul": {"temperature": 0.89}, "choice": {"temperature": 1.64}, "score": {"temperature": 2.09}}
         }"#;
         let cal: DecisionCalibration = serde_json::from_str(json).unwrap();
         assert!(cal.is_active());
@@ -152,3 +188,10 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
+
+    #[test]
+    fn bare_number_form_also_accepted() {
+        let json = r#"{"kinds": {"noul": 0.89}}"#;
+        let cal: DecisionCalibration = serde_json::from_str(json).unwrap();
+        assert_eq!(cal.temperature("noul"), 0.89);
+    }
