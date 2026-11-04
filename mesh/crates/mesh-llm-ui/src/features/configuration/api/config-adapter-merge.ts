@@ -14,6 +14,12 @@ import {
 } from '@/features/configuration/lib/settings-utils'
 import { objectArrayItemSchema, parseSchemaObjectArrayValue } from '@/features/configuration/lib/schema-object-array'
 import {
+  isPluginModelAllowlist,
+  parsePluginModelAllowlist,
+  serializePluginModelAllowlist
+} from '@/features/configuration/lib/plugin-model-allowlist'
+import { parsePluginCanonicalPath } from '@/features/configuration/lib/plugin-setting-path'
+import {
   createConfigurationAuditSettingsFromSchema,
   createConfigurationAttestationSettingsFromSchema,
   createConfigurationIntegrationsFromSchema,
@@ -74,6 +80,13 @@ function normalizedChoiceValue(value: string) {
   return value
 }
 
+function splitCommaList(value: string): string[] {
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+}
+
 function serializeDefaultSettingValue(setting: ConfigurationDefaultsSetting, value: unknown): string | undefined {
   if (value == null) return undefined
   if (typeof value === 'boolean' && setting.control.kind === 'choice') {
@@ -82,7 +95,9 @@ function serializeDefaultSettingValue(setting: ConfigurationDefaultsSetting, val
   }
   if (typeof value === 'string' && setting.control.kind === 'choice') return normalizedChoiceValue(value)
   if (Array.isArray(value) && setting.control.kind === 'text') {
-    return objectArrayItemSchema(setting.valueSchema) ? JSON.stringify(value) : value.join(',')
+    if (objectArrayItemSchema(setting.valueSchema)) return JSON.stringify(value)
+    if (isPluginModelAllowlist(setting)) return serializePluginModelAllowlist(value)
+    return value.join(',')
   }
   if (value && typeof value === 'object' && setting.control.kind === 'text') {
     if (
@@ -145,11 +160,8 @@ function parseDefaultSettingValue(setting: ConfigurationDefaultsSetting, value: 
     if (setting.valueSchema?.kind === 'array') {
       const arraySchema = setting.valueSchema
       if (objectArrayItemSchema(arraySchema)) return parseSchemaObjectArrayValue(value) ?? value
-      return value
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean)
-        .map((item) => parseArrayItemValue(arraySchema.items, item))
+      if (isPluginModelAllowlist(setting)) return parsePluginModelAllowlist(value)
+      return splitCommaList(value).map((item) => parseArrayItemValue(arraySchema.items, item))
     }
     if (hasSchemaKind(setting.valueSchema ?? { kind: 'string' }, 'integer')) {
       const parsed = Number(value)
@@ -176,28 +188,6 @@ function pluginEntryByName(
   pluginName: string
 ): RuntimeControlPluginConfigEntry | undefined {
   return pluginEntries(config).find((entry) => entry.name === pluginName)
-}
-
-function parsePluginCanonicalPath(
-  setting: Pick<ConfigurationDefaultsSetting, 'canonicalPath' | 'tomlSection' | 'tomlKey'>
-) {
-  const canonicalPath = setting.canonicalPath
-  const sectionSegments = setting.tomlSection?.split('.').filter(Boolean) ?? []
-  if (canonicalPath?.startsWith('plugin.') && sectionSegments[0] === 'plugin' && setting.tomlKey) {
-    const hasSettingsSection = sectionSegments.at(-1) === 'settings'
-    const pluginName = sectionSegments.slice(1, hasSettingsSection ? -1 : undefined).join('.')
-    if (!pluginName) return undefined
-
-    return {
-      pluginName,
-      path: hasSettingsSection ? ['settings', setting.tomlKey] : [setting.tomlKey]
-    }
-  }
-
-  const match = canonicalPath?.match(/^plugin\.([^.]+)\.(.+)$/)
-  if (!match) return undefined
-
-  return { pluginName: match[1], path: match[2].split('.').filter(Boolean) }
 }
 
 function readPluginConfigPath(

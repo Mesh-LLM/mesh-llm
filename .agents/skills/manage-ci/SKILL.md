@@ -137,8 +137,10 @@ not need to contain the dependency manifest.
 checks repository Python tooling. Its typed policy is
 `ci/python-tooling-policy.json`: exact external dependency inputs, source pins,
 and executable invocation exceptions must retain their documented owners and
-reviewed occurrence counts. The census includes tracked and new nonignored
-files, including hidden directories. Python sources, shebangs, unapproved
+reviewed occurrence counts. Platform-specific runner prerequisite lists require
+separate exact entries; listing an interpreter as a prerequisite does not
+authorize executing or installing it. The census includes tracked and new
+nonignored files, including hidden directories. Python sources, shebangs, unapproved
 package inputs and direct interpreter invocations fail validation. Archived
 receipts and documentation examples remain data. Literal process checks are
 bounded static analysis; native caller tests must continue to reject the

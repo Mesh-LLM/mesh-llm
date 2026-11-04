@@ -897,6 +897,11 @@ without installing either. Hosted profiles retain their existing installers.
 The build prepares controller automation before the locked Python SDK
 environment, so SDK source admission uses the initialized automation binary.
 
+The macOS and Linux tool-presence loops in `setup-canary-runner` have separate
+exact, single-occurrence entries in `ci/python-tooling-policy.json`. Both check
+for preinstalled `python3` and `uv`; these prerequisite lists neither execute
+Python nor install tools.
+
 ### A pinned digest is a frozen artifact
 
 `mesh-llm-runner-images` HEAD says nothing about what is inside the digest a

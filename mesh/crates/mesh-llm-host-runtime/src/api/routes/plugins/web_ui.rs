@@ -346,6 +346,7 @@ fn validate_setting_key(key: &str) -> Result<(), String> {
             | "command"
             | "args"
             | "url"
+            | "models"
             | "startup"
     ) {
         return Err(format!(

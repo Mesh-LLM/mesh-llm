@@ -51,8 +51,9 @@ pub use decision::{
 };
 pub use devices::{BackendDevice, BackendDeviceType, backend_devices};
 pub use dflash::{
-    DFLASH_BORROWED_TARGET_TENSOR, DFlashDraftInfo, DFlashDraftOptions, DFlashFeatureRows,
-    DFlashHealth, DFlashProposal, DFlashVariant, dflash_feature_identity, dflash_feature_layer,
+    DFLASH_BORROWED_TARGET_TENSOR, DFlashDraftInfo, DFlashDraftOptions, DFlashDraftStats,
+    DFlashFeatureEncoding, DFlashFeatureRows, DFlashHealth, DFlashProposal, DFlashVariant,
+    dflash_feature_identity, dflash_feature_layer, dflash_feature_payload_bytes,
     frame_has_dflash_features,
 };
 pub use error::NativeError;
@@ -87,7 +88,7 @@ pub use runtime_events::{
     OperationId, RecordRejection, RuntimeEvent, RuntimeEventCategory, RuntimeEventEmitterKind,
     RuntimeEventFailureCode, RuntimeEventKind, RuntimeEventProgressUnit, next_operation_id,
 };
-pub use session::{DecodeBatchRequest, StageSession};
+pub use session::{DecodeBatchRequest, StageSession, VerifyRollbackCounts};
 pub use skippy_ffi::LoadMode as RuntimeLoadMode;
 pub use skippy_ffi::MAX_DRY_SEQUENCE_BREAKER_BYTES;
 pub use skippy_ffi::{
