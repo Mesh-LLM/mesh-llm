@@ -13,6 +13,10 @@ pub type SamplingConfig = bindings::skippy::skippy_sampling_config;
 /// Record each sampled token's log-probability and top alternatives.
 pub const SAMPLING_FLAG_LOGPROBS: u32 = bindings::skippy::SKIPPY_SAMPLING_FLAG_LOGPROBS;
 
+/// Draw each sampled token with a uniform derived from the seed and the
+/// token's position, so a receipt's client can replay the draw.
+pub const SAMPLING_FLAG_INDEXED_DRAW: u32 = bindings::skippy::SKIPPY_SAMPLING_FLAG_INDEXED_DRAW;
+
 /// Alternatives recorded per token with [`SAMPLING_FLAG_LOGPROBS`].
 pub const MAX_TOP_LOGPROBS: usize = bindings::skippy::SKIPPY_MAX_TOP_LOGPROBS as usize;
 
