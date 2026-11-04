@@ -1380,7 +1380,12 @@ fn a_dflash_proposer_must_be_pinned_and_fit_its_block() {
         ("revision", serde_json::json!("main"), "draft.revision"),
         ("sha256", serde_json::json!("00"), "draft.sha256"),
         ("repo", serde_json::json!("no-namespace"), "draft.repo"),
+        ("repo", serde_json::json!("owner/.."), "draft.repo"),
+        ("repo", serde_json::json!("owner/my model"), "draft.repo"),
         ("file", serde_json::json!("../draft.gguf"), "draft.file"),
+        ("file", serde_json::json!("C:\\draft.gguf"), "draft.file"),
+        ("file", serde_json::json!("\\draft.gguf"), "draft.file"),
+        ("file", serde_json::json!("c:draft.gguf"), "draft.file"),
         ("file", serde_json::json!("draft.bin"), "draft.file"),
         ("bytes", serde_json::json!(0), "draft.bytes"),
     ] {

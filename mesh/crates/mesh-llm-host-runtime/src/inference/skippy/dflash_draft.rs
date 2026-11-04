@@ -19,6 +19,9 @@ use super::resolver::{
 /// load from the index. Nothing happens until the index is published and
 /// pinned.
 pub(crate) fn refresh_dflash_pairing_index() {
+    if dflash_pairing_index_installed() {
+        return;
+    }
     if let Some(pin) = DFlashPairingIndexPin::shipped() {
         refresh_cached_dflash_pairing_index(
             &pin.cache_path(),
@@ -34,9 +37,6 @@ fn refresh_cached_dflash_pairing_index(
     key: &str,
     fetch: impl Future<Output = Result<PathBuf>> + Send + 'static,
 ) {
-    if dflash_pairing_index_installed() {
-        return;
-    }
     if path.is_file() {
         let Err(error) = install_cached_dflash_pairing_index(path) else {
             return;
@@ -293,16 +293,7 @@ fn split_dflash_pinned_draft(
         sha256: source.sha256.clone(),
         bytes: source.bytes,
     };
-    let pinned = draft.bytes > 0
-        && draft.revision.len() == 40
-        && draft.revision.bytes().all(|byte| byte.is_ascii_hexdigit())
-        && draft.sha256.len() == 64
-        && draft.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
-        && !draft
-            .file
-            .split('/')
-            .any(|part| part.is_empty() || part == "..");
-    if !pinned {
+    if !draft.is_pinned() {
         tracing::warn!(
             draft = %format!("{}/{}@{}", draft.repo, draft.file, draft.revision),
             "split DFlash draft source is not pinned to a commit, digest and size; serving without speculation"
@@ -532,6 +523,12 @@ mod tests {
                 source.file = "../escape.gguf".into()
             },
             |source: &mut skippy_serving::split_dflash::SplitDFlashDraftSource| source.bytes = 0,
+            |source: &mut skippy_serving::split_dflash::SplitDFlashDraftSource| {
+                source.repo = "owner/..".into()
+            },
+            |source: &mut skippy_serving::split_dflash::SplitDFlashDraftSource| {
+                source.file = "C:\\draft.gguf".into()
+            },
         ] {
             let mut source = pinned_source();
             unpin(&mut source);

@@ -19,6 +19,17 @@ pub struct DFlashDraft {
     pub bytes: u64,
 }
 
+impl DFlashDraft {
+    /// Whether the draft names one file in a Hugging Face repo at an immutable
+    /// commit, with its size and SHA-256: what a pairing index or package
+    /// requires of it.
+    pub fn is_pinned(&self) -> bool {
+        let mut issues = Vec::new();
+        validate_dflash_draft("draft", self, &mut issues);
+        issues.is_empty()
+    }
+}
+
 /// Where a DFlash proposer applies, so a package can choose a different draft
 /// per backend.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -241,8 +252,14 @@ fn validate_dflash_draft(base: &str, draft: &DFlashDraft, issues: &mut Vec<Valid
             message,
         );
     };
+    let repo_part = |part: &str| {
+        !matches!(part, "" | "." | "..")
+            && part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    };
     let repo_parts = draft.repo.split('/').collect::<Vec<_>>();
-    if repo_parts.len() != 2 || repo_parts.iter().any(|part| part.trim().is_empty()) {
+    if repo_parts.len() != 2 || !repo_parts.iter().all(|part| repo_part(part)) {
         invalid(
             "repo",
             "draft repo must be a Hugging Face repo id, namespace/name",
@@ -259,12 +276,14 @@ fn validate_dflash_draft(base: &str, draft: &DFlashDraft, issues: &mut Vec<Valid
             "draft revision must be an immutable 40-character lowercase Git commit SHA",
         );
     }
+    // No `\` or `:`, so no drive prefix or backslash path escapes the cache on
+    // Windows.
     if !draft.file.ends_with(".gguf")
-        || draft.file.starts_with('/')
+        || draft.file.contains(['\\', ':'])
         || draft
             .file
             .split('/')
-            .any(|part| part.is_empty() || part == "..")
+            .any(|part| matches!(part, "" | "." | ".."))
     {
         invalid("file", "draft file must be a relative path to a .gguf file");
     }
