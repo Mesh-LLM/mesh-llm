@@ -24,7 +24,7 @@ Results use typed model, provider, runtime and page objects. Retain the same
 filters when continuing a page. Unrecognized peer workloads become `unknown`;
 the original peer string is not preserved; optional metadata remains absent
 when unknown. Open-ended capabilities,
-thinking, payment and plugin metadata uses `JsonElement`. Runtime observations
+thinking, channel requirements and plugin metadata uses `JsonElement`. Runtime observations
 apply to their provider. `inference.listModels()` remains the LLM-only
 compatibility view. Full model discovery queries the embedded node directly.
 

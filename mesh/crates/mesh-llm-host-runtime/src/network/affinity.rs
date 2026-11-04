@@ -93,6 +93,14 @@ impl AffinityRouter {
         }
     }
 
+    /// The production router: registers its route-health table on `node`
+    /// so peer vouches (plugin UNBLOCKs) can lift cooldowns on it.
+    pub(crate) fn for_node(node: &crate::mesh::Node) -> Self {
+        let router = Self::new();
+        let _ = node.route_target_health.set(router.target_health.clone());
+        router
+    }
+
     #[cfg(test)]
     pub(crate) fn with_config(prefix_enabled: bool, sticky_enabled: bool) -> Self {
         Self {

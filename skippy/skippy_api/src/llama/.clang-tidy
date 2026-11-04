@@ -1,0 +1,18 @@
+# llama boundary (TYPE-RULES.md §5): the checks that encode call order,
+# single-source getters, lock discipline, const honesty, narrowing and OOM
+# handlers at the llama/ggml C ABI — shapes no signature can carry. The core
+# config is inherited (migration checks stay on here too).
+InheritParentConfig: true
+Checks: >
+  skippy-preceded-by,
+  skippy-single-call-site,
+  skippy-no-lock-across-native-call,
+  skippy-const-native-mutation,
+  skippy-explicit-narrowing,
+  skippy-no-alloc-in-oom-handler
+HeaderFilterRegex: '.*/skippy_api/(include|src)/.*'
+
+CheckOptions:
+  skippy-single-call-site.Functions: 'llama_model_n_cls_out;llama_n_ctx;llama_n_batch;llama_n_ubatch;llama_n_seq_max'
+  skippy-single-call-site.AllowedCallers: 'skippy::llama::ClassifierHead::detect;skippy::llama::ContextCapacity::ContextCapacity;skippy::llama::BatchLimit::BatchLimit'
+  skippy-explicit-narrowing.AllowedFiles: 'narrow\.h$'

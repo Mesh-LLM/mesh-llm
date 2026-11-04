@@ -367,12 +367,12 @@ impl Node {
             stage_topologies: Arc::new(Mutex::new(StageTopologyState::default())),
             plugin_manager: Arc::new(Mutex::new(None)),
             plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
+            model_requirements: Default::default(),
+            unmatched_model_requirements: Default::default(),
             control_listener: Arc::new(Mutex::new(None)),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
             native_model_lifecycle: self.native_model_lifecycle.clone(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
-            #[cfg(feature = "payments")]
-            payment_recovery: Arc::new(Mutex::new(None)),
             memberships: MeshMemberships::default(),
             // This membership's admission: its own allowlist, always enforced.
             owner_attestation: Arc::new(Mutex::new(Some(owner_attestation))),
@@ -422,9 +422,8 @@ impl Node {
             config_state: self.config_state.clone(),
             live_request_defaults: self.live_request_defaults.clone(),
             peer_blocks: self.peer_blocks.clone(),
+            route_target_health: self.route_target_health.clone(),
             config_revision_tx: self.config_revision_tx.clone(),
-            #[cfg(feature = "payments")]
-            payments: self.payments.clone(),
             activity_policy_guard: self.activity_policy_guard.clone(),
             drain_timeout_secs: self.drain_timeout_secs,
             drain_timeout_max_secs: self.drain_timeout_max_secs,
