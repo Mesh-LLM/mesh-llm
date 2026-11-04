@@ -181,12 +181,22 @@ impl Node {
         let supported = self
             .supported_model_channels(std::slice::from_ref(peer))
             .await;
-        peer.served_model_descriptors.iter().any(|d| {
-            (d.identity.model_name == model
-                || super::public_model_id_for_routable_model(peer, &d.identity.model_name) == model)
-                && d.requires.iter().any(|ch| !supported.contains(&ch.channel))
-        })
+        model_requires_unsupported_channel(peer, model, &supported)
     }
+}
+
+/// Whether `peer` advertises `model` (by served name or public ID) with a
+/// required channel outside `supported`, the set a local plugin declares.
+pub(crate) fn model_requires_unsupported_channel(
+    peer: &PeerInfo,
+    model: &str,
+    supported: &HashSet<String>,
+) -> bool {
+    peer.served_model_descriptors.iter().any(|d| {
+        (d.identity.model_name == model
+            || super::public_model_id_for_routable_model(peer, &d.identity.model_name) == model)
+            && d.requires.iter().any(|ch| !supported.contains(&ch.channel))
+    })
 }
 
 fn filter_peer_models(peer: &mut PeerInfo, supported: &HashSet<String>) {

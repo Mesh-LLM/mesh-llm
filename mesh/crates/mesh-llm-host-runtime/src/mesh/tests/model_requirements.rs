@@ -1,5 +1,6 @@
 use super::super::*;
 use crate::plugin::{BridgeFuture, PluginManager, PluginRpcBridge, RpcResult, proto};
+use mesh_llm_types::models::discovery::MeshModelAvailability;
 use std::{collections::BTreeMap, sync::Arc};
 
 struct NoRpc;
@@ -34,6 +35,36 @@ fn request(terms: Vec<u8>) -> proto::ModelRequirementRequest {
             terms,
         }],
     }
+}
+
+/// Model IDs the chat-compatible `/v1/models` offers on `node`.
+async fn listed_llms(node: &super::Node) -> Vec<String> {
+    let models = crate::models::discovery::collect(node).await.unwrap();
+    let (status, body) = crate::network::openai::models_response(&models, "/v1/models", false);
+    assert_eq!(status, 200);
+    let mut ids: Vec<String> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["id"].as_str().unwrap().to_string())
+        .collect();
+    ids.sort();
+    ids
+}
+
+/// The catalog's availability for `model` and the `requires` of its first provider.
+async fn catalog_entry(
+    node: &super::Node,
+    model: &str,
+) -> (MeshModelAvailability, Vec<serde_json::Value>) {
+    let models = crate::models::discovery::collect(node).await.unwrap();
+    let entry = models.into_iter().find(|m| m.id == model).unwrap();
+    let requires = entry.providers[0]
+        .requires
+        .as_ref()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    (entry.availability, requires)
 }
 
 #[tokio::test]
@@ -72,6 +103,13 @@ async fn requirements_round_trip_announce_gate_withdraw_and_local_bypass() {
     peer.hosted_models = vec!["gated".into(), "free".into()];
     peer.serving_models = peer.hosted_models.clone();
     peer.served_model_descriptors = ann.served_model_descriptors;
+    // The catalog lists a provider as an LLM only with a chat workload class.
+    for descriptor in &mut peer.served_model_descriptors {
+        descriptor
+            .metadata
+            .get_or_insert_with(Default::default)
+            .workload_class = Some(mesh_llm_types::mesh::ModelWorkloadClass::CausalGeneration);
+    }
     let gated = peer
         .served_model_descriptors
         .iter_mut()
@@ -106,6 +144,16 @@ async fn requirements_round_trip_announce_gate_withdraw_and_local_bypass() {
             .contains(&"gated".into()),
         "raw advertisement retained"
     );
+    // Listing follows routing: the chat-compatible list drops the gated
+    // model, while the catalog keeps it as unavailable with its `requires`.
+    assert_eq!(listed_llms(&buyer).await, vec!["free".to_string()]);
+    let (availability, requires) = catalog_entry(&buyer, "gated").await;
+    assert_eq!(availability, MeshModelAvailability::Unavailable);
+    assert_eq!(requires[0]["channel"], "fixture.v1");
+    assert_eq!(
+        catalog_entry(&buyer, "free").await.0,
+        MeshModelAvailability::Available
+    );
     assert!(
         crate::inference::consult::find_vision_peer(&buyer, "")
             .await
@@ -131,6 +179,14 @@ async fn requirements_round_trip_announce_gate_withdraw_and_local_bypass() {
     *buyer.plugin_manager.lock().await = Some(manager().await);
     assert!(buyer.models_being_served().await.contains(&"gated".into()));
     assert_eq!(buyer.hosts_for_model("gated").await, vec![seller.id()]);
+    assert_eq!(
+        listed_llms(&buyer).await,
+        vec!["free".to_string(), "gated".to_string()]
+    );
+    assert_eq!(
+        catalog_entry(&buyer, "gated").await.0,
+        MeshModelAvailability::Available
+    );
     assert_eq!(
         crate::inference::consult::find_vision_peer(&buyer, "").await,
         Some(seller.id())
