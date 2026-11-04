@@ -30,6 +30,7 @@ impl Node {
             {
                 Some(plugin) => plugin.web_ui_enabled = Some(enabled),
                 None => config.plugins.push(crate::plugin::PluginConfigEntry {
+                    operation_bindings: Vec::new(),
                     name: plugin_name,
                     enabled: None,
                     web_ui_enabled: Some(enabled),
@@ -105,6 +106,7 @@ impl Node {
             {
                 Some(plugin) => plugin.web_ui_primary_tab = Some(primary_tab_enabled),
                 None => config.plugins.push(crate::plugin::PluginConfigEntry {
+                    operation_bindings: Vec::new(),
                     name: plugin_name,
                     enabled: None,
                     web_ui_enabled: None,
@@ -193,6 +195,7 @@ impl Node {
                 Some(plugin) => plugin,
                 None => {
                     config.plugins.push(crate::plugin::PluginConfigEntry {
+                        operation_bindings: Vec::new(),
                         name: plugin_name.clone(),
                         enabled: None,
                         web_ui_enabled: None,

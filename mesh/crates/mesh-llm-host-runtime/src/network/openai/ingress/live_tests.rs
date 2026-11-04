@@ -61,6 +61,43 @@ impl LiveHost {
         delegate_signing: bool,
         recipients: &[LiveRecipient],
     ) -> Self {
+        Box::pin(Self::start_full(
+            admission,
+            bodies,
+            read_identity,
+            delegate_signing,
+            recipients,
+            None,
+        ))
+        .await
+    }
+
+    /// The exemplar denies `blocked-model` with `deny_status` (402 or 403)
+    /// instead of the default 403.
+    pub(super) async fn start_with_deny_status(
+        admission: bool,
+        bodies: bool,
+        deny_status: u16,
+    ) -> Self {
+        Box::pin(Self::start_full(
+            admission,
+            bodies,
+            false,
+            false,
+            &[],
+            Some(deny_status),
+        ))
+        .await
+    }
+
+    async fn start_full(
+        admission: bool,
+        bodies: bool,
+        read_identity: bool,
+        delegate_signing: bool,
+        recipients: &[LiveRecipient],
+        deny_status: Option<u16>,
+    ) -> Self {
         let root = tempfile::tempdir().unwrap();
         let archive = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../../dist/openai-exchange-observer.tar.gz");
@@ -85,7 +122,7 @@ impl LiveHost {
         .unwrap()
         .metadata;
         assert!(installed.executable_path().exists());
-        let spec = fixture_spec(
+        let mut spec = fixture_spec(
             &root,
             &installed,
             admission,
@@ -93,6 +130,10 @@ impl LiveHost {
             read_identity,
             delegate_signing,
         );
+        if let Some(status) = deny_status {
+            spec.env
+                .insert("MESH_LLM_EXEMPLAR_DENY_STATUS".into(), status.to_string());
+        }
         let externals = recipient_specs(spec, &installed, &options, &root, bodies, recipients);
         let specs = ResolvedPlugins {
             externals,
@@ -673,6 +714,7 @@ fn fixture_spec(
         args.push("--delegate".into());
     }
     ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         name: NAME.into(),
         command: installed.executable_path().display().to_string(),
         args,

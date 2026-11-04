@@ -97,6 +97,7 @@ mod tests {
             models: None,
             settings: std::collections::BTreeMap::new(),
             startup: PluginStartupConfig::default(),
+            operation_bindings: Vec::new(),
         }
     }
 

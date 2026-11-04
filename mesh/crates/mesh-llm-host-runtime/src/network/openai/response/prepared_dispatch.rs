@@ -95,21 +95,24 @@ async fn write_pipeline_rejection(
     status: u16,
 ) -> super::pipeline::PipelineProxyResult {
     use tokio::io::AsyncWriteExt;
-    let body = json!({"error":{"message":"OpenAI plugin policy rejected pipeline dispatch","type":if status==403 {"permission_error"} else {"service_unavailable"}}}).to_string();
+    let denied = matches!(status, 402 | 403);
+    let body = json!({"error":{"message":"OpenAI plugin policy rejected pipeline dispatch","type":if denied {"permission_error"} else {"service_unavailable"}}}).to_string();
     let wire = format!(
         "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        if status == 403 {
-            "Forbidden"
-        } else {
-            "Service Unavailable"
+        match status {
+            402 => "Payment Required",
+            403 => "Forbidden",
+            _ => "Service Unavailable",
         },
         body.len()
     );
     if stream.write_all(wire.as_bytes()).await.is_err() {
         return super::pipeline::PipelineProxyResult::Dropped;
     }
-    if status == 403 {
-        super::pipeline::PipelineProxyResult::PolicyDenied
+    if denied {
+        super::pipeline::PipelineProxyResult::PolicyDenied {
+            status_code: status,
+        }
     } else {
         super::pipeline::PipelineProxyResult::RequiredHookFailed
     }

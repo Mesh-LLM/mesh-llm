@@ -515,6 +515,17 @@ pub(crate) async fn apply_plugin_request(
     })
     .await
     .map_err(|error| request_error(format!("peer block worker failed: {error}")))??;
+    if choice.change == RoutingChange::Unblock {
+        // The plugin vouches for this peer: whatever made the router skip it
+        // (a gate it has since satisfied, a transient failure) is over from the
+        // plugin's point of view, so try the peer again on the next request.
+        if let (Some(health), Ok(peer)) = (
+            node.route_target_health.get(),
+            choice.peer.parse::<iroh::EndpointId>(),
+        ) {
+            health.lift_cooldowns(&crate::inference::election::InferenceTarget::Remote(peer));
+        }
+    }
     publish(node, &choice).await;
     let choice_json =
         serde_json::to_string(&choice).map_err(|error| request_error(error.to_string()))?;
@@ -524,10 +535,17 @@ pub(crate) async fn apply_plugin_request(
 /// Whether the operator lets `plugin_id` request peer blocks. Read from the
 /// live config on every request, so turning it off takes effect at once.
 fn plugin_may_request(config: &crate::plugin::MeshConfig, plugin_id: &str) -> bool {
-    config
+    if let Some(entry) = config
         .plugins
         .iter()
-        .any(|plugin| plugin.name == plugin_id && plugin.peer_blocks_allowed())
+        .find(|plugin| plugin.name == plugin_id)
+        && entry.allow_peer_blocks.is_some()
+    {
+        return entry.peer_blocks_allowed();
+    }
+    // No operator decision: an installed package that asked for it was
+    // granted at install (see `plugin::installed::installed_peer_blocks`).
+    crate::plugin::installed_plugin_peer_blocks(plugin_id)
 }
 
 fn plugin_request_choice(
@@ -930,6 +948,7 @@ mod tests {
     ) -> crate::plugin::MeshConfig {
         let mut config = crate::plugin::MeshConfig::default();
         config.plugins.push(crate::plugin::PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: name.into(),
             enabled: None,
             web_ui_enabled: None,

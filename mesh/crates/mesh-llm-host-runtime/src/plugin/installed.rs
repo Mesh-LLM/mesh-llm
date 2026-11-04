@@ -6,9 +6,11 @@ use mesh_llm_plugin_manager::{InstalledPluginMetadata, PluginStore, default_stor
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+// The active spec carries every grant; the inactive summary is a few strings.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ConfiguredExternalPlugin {
-    Active(Box<ExternalPluginSpec>),
-    Inactive(Box<PluginSummary>),
+    Active(ExternalPluginSpec),
+    Inactive(PluginSummary),
 }
 
 pub(crate) fn configured_disabled_installed_plugin_summary(
@@ -98,8 +100,8 @@ pub(crate) fn configured_external_plugin_spec(
             .as_ref()
             .filter(|metadata| !metadata.enabled)
     {
-        return Ok(ConfiguredExternalPlugin::Inactive(Box::new(
-            disabled_entry_summary(entry, metadata),
+        return Ok(ConfiguredExternalPlugin::Inactive(disabled_entry_summary(
+            entry, metadata,
         )));
     }
 
@@ -108,30 +110,42 @@ pub(crate) fn configured_external_plugin_spec(
         None => match installed_plugin_command_for_name(&entry.name) {
             Ok(command) => command,
             Err(error) if startup.optional => {
-                return Ok(ConfiguredExternalPlugin::Inactive(Box::new(
+                return Ok(ConfiguredExternalPlugin::Inactive(
                     optional_configured_plugin_summary(entry, &startup, error),
-                )));
+                ));
             }
             Err(error) => return Err(error),
         },
     };
 
-    Ok(ConfiguredExternalPlugin::Active(Box::new(
-        ExternalPluginSpec {
-            openai_exchange_grant: entry.openai_exchange_grant.clone().map(Box::new),
-            name: entry.name.clone(),
-            command,
-            args: entry.args.clone(),
-            url: url.map(str::to_owned),
-            env: BTreeMap::new(),
-            settings: plugin_settings(&entry.settings),
-            startup,
-            web_ui_enabled: entry.web_ui_enabled,
-            web_ui_primary_tab: entry.web_ui_primary_tab,
-            endpoint_models: entry.models.clone(),
-            installed_metadata,
-        },
-    )))
+    let operation_bindings = if entry.operation_bindings.is_empty() {
+        installed_metadata
+            .as_ref()
+            .map(installed_operation_bindings)
+            .unwrap_or_default()
+    } else {
+        entry.operation_bindings.clone()
+    };
+    let openai_exchange_grant = entry.openai_exchange_grant.clone().or_else(|| {
+        installed_metadata
+            .as_ref()
+            .and_then(installed_exchange_grant)
+    });
+    Ok(ConfiguredExternalPlugin::Active(ExternalPluginSpec {
+        operation_bindings,
+        openai_exchange_grant: openai_exchange_grant.map(Box::new),
+        name: entry.name.clone(),
+        command,
+        args: entry.args.clone(),
+        url: url.map(str::to_owned),
+        env: BTreeMap::new(),
+        settings: plugin_settings(&entry.settings),
+        startup,
+        web_ui_enabled: entry.web_ui_enabled,
+        web_ui_primary_tab: entry.web_ui_primary_tab,
+        endpoint_models: entry.models.clone(),
+        installed_metadata,
+    }))
 }
 
 /// The operator's `[plugin.settings]` in the JSON the plugin is handed at
@@ -176,7 +190,6 @@ pub(crate) fn append_installed_plugins(
             return;
         }
     };
-
     for metadata in installed {
         if names.contains_key(&metadata.name) {
             continue;
@@ -216,14 +229,80 @@ fn installed_plugin_command_for_name(name: &str) -> Result<String> {
     Ok(command.display().to_string())
 }
 
-fn installed_plugin_metadata_for_name(name: &str) -> Result<Option<InstalledPluginMetadata>> {
+pub(super) fn installed_plugin_metadata_for_name(
+    name: &str,
+) -> Result<Option<InstalledPluginMetadata>> {
     let root = default_store_root().context("Cannot determine plugin install root")?;
     PluginStore::new(root).load_optional(name)
 }
 
+/// Grants an installed package carries. `plugins install` printed what the
+/// package asks for and the operator accepted it by installing; a `[[plugin]]`
+/// entry that sets the same field replaces (or removes) the grant.
+pub(crate) fn installed_exchange_grant(
+    metadata: &InstalledPluginMetadata,
+) -> Option<mesh_llm_config::OpenAiExchangeGrant> {
+    let hook = metadata.manifest.as_ref()?.openai_exchange_hook.as_ref()?;
+    Some(mesh_llm_config::OpenAiExchangeGrant {
+        endpoints: hook.endpoints.clone(),
+        phases: hook.phases.clone(),
+        request_body: hook.request_body,
+        effective_request_body: hook.effective_request_body,
+        response_body: hook.response_body,
+        headers: hook.headers.clone(),
+        admission: hook.admission,
+        metadata: hook.metadata,
+        read_identity_bundle: hook.read_identity_bundle,
+        delegate_signing_key: hook.delegate_signing_key,
+        signing_scopes: hook.signing_scopes.clone(),
+        deadline_ms: hook.deadline_ms,
+        max_body_bytes: hook.max_body_bytes,
+        max_queue_bytes: hook.max_queue_bytes,
+        max_in_flight: hook.max_in_flight,
+        max_delegation_ttl_secs: hook.max_delegation_ttl_secs,
+        ..mesh_llm_config::OpenAiExchangeGrant::default()
+    })
+}
+
+/// Capability bindings an installed package asks for, as grants the binding
+/// registry resolves to the single running provider of each capability.
+pub(crate) fn installed_operation_bindings(
+    metadata: &InstalledPluginMetadata,
+) -> Vec<mesh_llm_config::PluginOperationBinding> {
+    metadata
+        .manifest
+        .as_ref()
+        .map(|manifest| {
+            manifest
+                .operation_bindings
+                .iter()
+                .map(|request| mesh_llm_config::PluginOperationBinding {
+                    name: request.name.clone(),
+                    provider: String::new(),
+                    capability: Some(request.capability.clone()),
+                    setup_directory: request.setup_directory,
+                    profile: "default".into(),
+                    setup_operation: request.setup_operation.clone(),
+                    setup_input_json: "{}".into(),
+                    operations: request.operations.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether the installed package asks for peer-block permission.
+pub(crate) fn installed_peer_blocks(metadata: &InstalledPluginMetadata) -> bool {
+    metadata
+        .manifest
+        .as_ref()
+        .is_some_and(|manifest| manifest.peer_blocks)
+}
+
 fn installed_plugin_spec(metadata: &InstalledPluginMetadata) -> ExternalPluginSpec {
     ExternalPluginSpec {
-        openai_exchange_grant: None,
+        operation_bindings: installed_operation_bindings(metadata),
+        openai_exchange_grant: installed_exchange_grant(metadata).map(Box::new),
         name: metadata.name.clone(),
         command: installed_plugin_command(metadata).display().to_string(),
         args: Vec::new(),

@@ -39,10 +39,8 @@ pub(super) async fn admit_invocation(
             .await;
             return Err(Box::new(if written.is_err() {
                 proxy::RouteDispatchOutcome::Dropped("virtual_model_response_write_failed")
-            } else if status == 403 {
-                proxy::RouteDispatchOutcome::PolicyDenied
             } else {
-                proxy::RouteDispatchOutcome::RequiredHookFailed
+                proxy::RouteDispatchOutcome::admission_rejected(status)
             }));
         }
     }
