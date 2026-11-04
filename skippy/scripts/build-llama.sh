@@ -523,6 +523,7 @@ if [[ "$LLAMA_STAGE_BUILD_TESTS" == "ON" ]]; then
     skippy-noalloc-graph-planning
     skippy-renamed-multishard-planning
     skippy-stage-slice-plan
+    skippy-verify-rollback
   )
 fi
 if [[ "$LLAMA_STAGE_FULL_REPLAY" == "ON" ]]; then

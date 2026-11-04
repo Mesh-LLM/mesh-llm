@@ -9,6 +9,12 @@ mesh-llm reads configuration from `~/.mesh-llm/config.toml` by default. You can 
 
 The file uses standard [TOML](https://toml.io/en/) syntax. Config is validated when loaded and on save; invalid files produce a clear error at startup.
 
+To serve one local GGUF across independent meshes, use a separate local
+`memberships.toml` with `serve --memberships-config`. Membership identities,
+trust inputs, and shared host limits belong in that manifest, outside the
+ordinary configuration and web config editor. See
+[One model across independent meshes](/docs/pages/shared-serving/).
+
 ## Version
 
 ```toml
@@ -50,6 +56,17 @@ rails are ordinary plugins that use the generic seams described above (operation
 bindings, the OpenAI-exchange hook, model `requires`). The Lightning rail lives in
 [Mesh-LLM/ln-payments-plugin](https://github.com/Mesh-LLM/ln-payments-plugin);
 its README covers installation, pricing and spending policy.
+
+Install it together with one wallet plugin in a single command:
+
+```sh
+mesh-llm plugins install Mesh-LLM/lexe-wallet-plugin Mesh-LLM/ln-payments-plugin
+# or, for a Nostr Wallet Connect wallet:
+mesh-llm plugins install Mesh-LLM/nwc-wallet-plugin Mesh-LLM/ln-payments-plugin
+```
+
+A wallet plugin alone does not enable payments, and `pay-lightning` without a
+wallet refuses every wallet call.
 
 ## Telemetry
 

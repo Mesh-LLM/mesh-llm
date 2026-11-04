@@ -348,11 +348,7 @@ fn validate(options: &RuntimeOptions, config: &MeshMembershipConfig) -> Result<(
 /// Lowercase only, so two names never share a key file on a case-insensitive
 /// filesystem.
 fn valid_name(name: &str) -> bool {
-    (1..=64).contains(&name.len())
-        && !name.starts_with('.')
-        && name.bytes().all(|b| {
-            b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')
-        })
+    mesh_llm_config::memberships::valid_membership_name(name)
 }
 
 /// The membership's node key, made on first use. One key per membership keeps

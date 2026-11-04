@@ -14,14 +14,12 @@ fn field<'a>(node: &'a workflow_yaml::Node, key: &str) -> &'a str {
     node.get(key).and_then(workflow_yaml::Node::text).unwrap()
 }
 
-#[test]
-fn preinstalled_profile_requires_self_hosted_macos_and_each_bootstrap_tool() {
+fn assert_preinstalled_profile(profile: &str, expected_os: &str, tools: &[&str]) {
     let steps = action_steps(".github/actions/prepare-automation/action.yml");
     let check = field(&steps[0], "run");
-    let tools = ["cargo", "rustc", "just", "sccache", "brew", "xcrun"];
     for missing in std::iter::once(None).chain(tools.iter().copied().map(Some)) {
         let f = Fixture::new();
-        for tool in tools {
+        for &tool in tools {
             if Some(tool) != missing {
                 // Presence checks must not invoke the tool or its installer.
                 executable(&f.root.join("bin").join(tool), "#!/bin/bash\nexit 93\n");
@@ -30,8 +28,8 @@ fn preinstalled_profile_requires_self_hosted_macos_and_each_bootstrap_tool() {
         let result = f.shell(
             check,
             &[
-                ("AUTOMATION_PROFILE", "preinstalled-macos"),
-                ("RUNNER_OS", "macOS"),
+                ("AUTOMATION_PROFILE", profile),
+                ("RUNNER_OS", expected_os),
                 ("RUNNER_ENVIRONMENT", "self-hosted"),
                 ("GITHUB_ENV", f.root.join("github.env").to_str().unwrap()),
             ],
@@ -46,15 +44,20 @@ fn preinstalled_profile_requires_self_hosted_macos_and_each_bootstrap_tool() {
     }
     for (os, environment) in [
         ("Linux", "self-hosted"),
+        ("macOS", "self-hosted"),
+        ("Linux", "github-hosted"),
         ("macOS", "github-hosted"),
         ("Windows", "self-hosted"),
     ] {
+        if os == expected_os && environment == "self-hosted" {
+            continue;
+        }
         let f = Fixture::new();
         assert_ne!(
             f.shell(
                 check,
                 &[
-                    ("AUTOMATION_PROFILE", "preinstalled-macos"),
+                    ("AUTOMATION_PROFILE", profile),
                     ("RUNNER_OS", os),
                     ("RUNNER_ENVIRONMENT", environment),
                 ]
@@ -63,6 +66,24 @@ fn preinstalled_profile_requires_self_hosted_macos_and_each_bootstrap_tool() {
             0
         );
     }
+}
+
+#[test]
+fn preinstalled_profile_requires_self_hosted_macos_and_each_bootstrap_tool() {
+    assert_preinstalled_profile(
+        "preinstalled-macos",
+        "macOS",
+        &["cargo", "rustc", "just", "sccache", "brew", "xcrun"],
+    );
+}
+
+#[test]
+fn preinstalled_profile_requires_self_hosted_linux_and_each_bootstrap_tool() {
+    assert_preinstalled_profile(
+        "preinstalled-linux",
+        "Linux",
+        &["cargo", "rustc", "just", "sccache"],
+    );
 }
 
 #[test]

@@ -33,6 +33,7 @@ mod node_lifecycle_events;
 mod operational_logging;
 mod options;
 mod passive_readiness;
+mod pi_models;
 mod plugin_host_role;
 pub(crate) mod proxy;
 mod publication;
@@ -60,6 +61,7 @@ pub(crate) fn placement_policy_for(
     )
 }
 mod serving_surface;
+pub mod shared_serving;
 mod shutdown_signal;
 mod split_participant_settle;
 mod split_planning;
@@ -130,6 +132,7 @@ pub(crate) use self::operational_logging::{
     NativeSkippyOperationalEvent, RuntimeOperationalEvent, record_native_skippy_operational_event,
     record_runtime_operational_event, record_runtime_operational_event_with_context,
 };
+use self::pi_models::update_pi_models_json;
 use self::publication::*;
 pub use self::run_auto::load_resolved_plugins;
 use self::run_auto::*;

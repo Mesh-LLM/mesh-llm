@@ -161,6 +161,7 @@ fn external_capability_plugin_is_an_ordinary_plugin() {
             command: Some("/opt/plugins/vault-provider".into()),
             args: Vec::new(),
             url: None,
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -189,6 +190,7 @@ fn external_plugin_can_be_configured() {
             command: Some("mesh-llm-plugin-demo".into()),
             args: vec!["--stdio".into()],
             url: None,
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -200,8 +202,64 @@ fn external_plugin_can_be_configured() {
     assert_eq!(resolved.externals[0].name, "demo");
     assert_eq!(resolved.externals[0].command, "mesh-llm-plugin-demo");
     assert_eq!(resolved.externals[0].args, ["--stdio"]);
+    assert_eq!(resolved.externals[0].endpoint_models, None);
     assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
     assert!(resolved.inactive.is_empty());
+}
+
+#[test]
+#[serial_test::serial]
+fn external_plugin_carries_its_endpoint_model_allowlist() {
+    let config: MeshConfig = toml::from_str(
+        r#"
+[[plugin]]
+name = "openai-endpoint"
+command = "mesh-llm-plugin-openai-endpoint"
+url = "http://127.0.0.1:8888/v1"
+models = ["deepseek-v4-1-flash"]
+"#,
+    )
+    .unwrap();
+    let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
+    assert_eq!(resolved.externals[0].name, "openai-endpoint");
+    assert_eq!(
+        resolved.externals[0].endpoint_models.as_deref(),
+        Some(&["deepseek-v4-1-flash".to_string()][..])
+    );
+}
+
+/// A minimal built-in plugin stanza used as a template by the tests below.
+fn wallet_entry(enabled: Option<bool>) -> PluginConfigEntry {
+    PluginConfigEntry {
+        name: "wallet".into(),
+        enabled,
+        web_ui_enabled: None,
+        web_ui_primary_tab: None,
+        allow_peer_blocks: None,
+        allow_inference_observation: None,
+        openai_exchange_grant: None,
+        operation_bindings: Vec::new(),
+        command: None,
+        args: Vec::new(),
+        url: None,
+        models: None,
+        settings: Default::default(),
+        startup: Default::default(),
+    }
+}
+
+#[test]
+fn builtin_plugin_entry_rejects_an_endpoint_model_allowlist() {
+    let mut entry = wallet_entry(Some(true));
+    entry.name = BLOBSTORE_PLUGIN_ID.into();
+    entry.models = Some(vec!["anything".into()]);
+    let config = MeshConfig {
+        plugins: vec![entry],
+        ..MeshConfig::default()
+    };
+    let error = resolve_plugins(&config, private_host_mode())
+        .expect_err("a built-in plugin exposes no endpoint models to restrict");
+    assert!(error.to_string().contains("only `enabled` may be set"));
 }
 
 #[test]
@@ -221,6 +279,7 @@ fn failed_plugin_summary_redacts_urls_before_serialization() {
         },
         web_ui_enabled: None,
         web_ui_primary_tab: None,
+        endpoint_models: None,
         installed_metadata: None,
     };
     let error = anyhow::anyhow!(
@@ -251,6 +310,7 @@ fn blobstore_can_be_disabled() {
             command: None,
             args: Vec::new(),
             url: None,
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -278,6 +338,7 @@ fn external_plugin_can_be_enabled_with_url() {
             command: Some("endpoint-plugin".into()),
             args: Vec::new(),
             url: Some("http://gpu-box:8000/v1".into()),
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -310,6 +371,7 @@ fn external_plugin_rejects_url_that_is_empty_after_normalization() {
             command: Some("endpoint-plugin".into()),
             args: Vec::new(),
             url: Some("\u{2003}\t\n".into()),
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -338,6 +400,7 @@ fn remote_plugin_control_url_is_rejected_without_authentication() {
             command: None,
             args: Vec::new(),
             url: Some(raw_url.into()),
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -371,6 +434,7 @@ fn external_plugin_can_be_enabled_with_command_args() {
             command: Some("/opt/plugins/endpoint-plugin".into()),
             args: vec!["--verbose".into()],
             url: None,
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -402,6 +466,7 @@ fn external_plugin_ignores_disabled_entry_without_install() {
             command: None,
             args: Vec::new(),
             url: Some("http://gpu-box:8000/v1".into()),
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -444,6 +509,7 @@ fn resolves_external_plugin() {
             command: Some("/tmp/demo".into()),
             args: vec!["--flag".into()],
             url: None,
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -475,6 +541,7 @@ async fn plugin_load_failure_keeps_declared_web_ui_metadata() {
             },
             web_ui_enabled: None,
             web_ui_primary_tab: None,
+            endpoint_models: None,
             installed_metadata: Some(installed_metadata_with_web_ui(
                 InstalledPluginWebUiValidationStatus::Valid,
                 Some("web"),

@@ -10,8 +10,9 @@
 //! A target restored from a cache without a decode leaves the draft without
 //! the restored prefix. Its rows are not coming back, but the rows decoded
 //! after the restore point are whole, so the draft drafts from those, as a
-//! shorter context. A row lost after that stops drafting until the target
-//! restarts at position 0.
+//! shorter context. That is the expected cost of a cache hit, not a loss, so
+//! it is not counted as one. A row lost after that stops drafting until the
+//! target restarts at position 0.
 
 /// Feature rows a session's draft lost, and how many times its context
 /// stopped matching the target. Both only grow until the session is reused
@@ -127,6 +128,15 @@ impl DraftContext {
         self.fed = Some(target_position);
     }
 
+    /// The target was deliberately replaced without a decode (a reset, a
+    /// cache restore, or imported state) and holds `0..target_position`; the
+    /// draft, cleared with it, starts a new run there. Not a loss: the
+    /// restored rows were never sent to this draft.
+    pub(crate) fn restarted_at(&mut self, target_position: u64) {
+        self.from = target_position;
+        self.fed = Some(target_position);
+    }
+
     /// The draft dropped its rows at and after `position`, with the target.
     pub(crate) fn truncated(&mut self, position: u64) {
         if position == 0 {
@@ -197,7 +207,31 @@ mod tests {
     }
 
     #[test]
-    fn a_restore_drafts_only_from_rows_decoded_after_it() {
+    fn a_restore_drafts_only_from_rows_decoded_after_it_without_a_loss() {
+        let mut context = fed_through(3);
+        context.restarted_at(40);
+        // Nothing after the restore point yet: an empty context.
+        assert!(!context.can_propose(40));
+        assert_eq!(
+            context.plan_ingest(40, 47),
+            IngestPlan::Ingest {
+                truncate_from: None
+            }
+        );
+        context.ingested(47);
+        assert!(context.can_propose(47));
+        assert!(!context.can_propose(40));
+        // A cache hit is not a feature-delivery failure.
+        assert_eq!(context.health(), DFlashHealth::default());
+        assert_eq!(context.take_new_losses(), None);
+        // A row lost after the restore still stops drafting, and counts.
+        context.lose(1);
+        assert!(!context.can_propose(48));
+        assert_eq!(context.health().feature_rows_missing, 1);
+    }
+
+    #[test]
+    fn a_failed_draft_cleared_mid_context_counts_the_rows_it_lost() {
         let mut context = fed_through(3);
         context.cleared(40);
         // Nothing after the restore point yet: an empty context.

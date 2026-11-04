@@ -33,6 +33,9 @@ pub use crate::runtime::{MeshMembershipConfig, MeshMembershipStatus};
 pub use embedded_config::*;
 pub use embedded_openai::{EmbeddedOpenAiResponse, EmbeddedOpenAiStream, EmbeddedSseEvent};
 
+/// Independent mesh attachments backed by one host-owned local model.
+pub use crate::runtime::shared_serving;
+
 pub mod config {
     pub use mesh_llm_config::{
         AdvancedConfig, AdvancedServerConfig, BoolOrAuto, BoolOrString, ConfigEditor, ConfigStore,
@@ -1111,7 +1114,15 @@ mod tests {
             mode: EmbeddedMeshNodeMode::Client,
             api_port,
             console_port,
+            // This exercises worker cleanup, not public relay or STUN readiness.
+            discovery_mode: EmbeddedMeshDiscoveryMode::Mdns,
+            bind_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
+            enumerate_host: false,
             startup_timeout: Duration::from_millis(1),
+            // Local only, as the lifecycle tests are: without network, the
+            // relay probes' DNS lookups keep the worker past its 5 s join.
+            disable_iroh_relays: true,
+            bind_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
             ..EmbeddedServeConfig::default()
         })
         .await;
@@ -1126,6 +1137,10 @@ mod tests {
             Err(error) => error,
         };
         let message = format!("{error:#}");
+        assert!(
+            message.contains("timed out waiting for the embedded mesh runtime to become ready"),
+            "startup must fail because readiness timed out: {message}"
+        );
         assert!(
             !message.contains("waiting for embedded mesh runtime thread to exit"),
             "startup timeout must still stop and join the worker thread, not time out: {message}"

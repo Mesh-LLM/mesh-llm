@@ -763,6 +763,13 @@ fn skippy_multimodal_presentation(rendered: &str) -> Option<SettingPresentation>
         )
         .placeholder("e.g. 512,1024,2048")
         .hint("text")),
+        "defaults.skippy.activation_codec" => Some(sp(
+            "Split activation codec",
+            "Choose how activations travel between split stages. f16, the default, halves the bytes by rounding activations to half precision, which matched single-node top-1 tokens in testing; lossless sends exact values; bf16 also halves them; s8-row and the fp8 codecs quarter them at some cost in accuracy (fp8-e4m3-block32 scales each 32 values separately, so an outlier costs precision only in its own block).",
+            SKIPPY_CATEGORY,
+            75,
+        )
+        .hint("select")),
         "defaults.skippy.binary_stage_transport" => Some(sp(
             "Binary stage transport",
             "Choose whether the binary stage transport is enabled or left to auto selection.",
@@ -915,6 +922,16 @@ fn model_and_plugin_presentation(rendered: &str) -> Option<SettingPresentation> 
                 20,
             )
             .placeholder("http://localhost:8000/v1")
+            .hint("text"),
+        ),
+        "plugin.<plugin-name>.models" => Some(
+            sp(
+                "Shared endpoint models",
+                "Model IDs the plugin's inference endpoints may share. Other listed models are not advertised or routed. Unset shares every listed model.",
+                PLUGIN_HOST_CATEGORY,
+                25,
+            )
+            .placeholder("one model ID per line; [] alone shares none")
             .hint("text"),
         ),
         "plugin.<plugin-name>.command" => Some(
