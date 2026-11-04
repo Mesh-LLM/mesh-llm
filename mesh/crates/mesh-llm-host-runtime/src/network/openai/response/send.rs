@@ -146,10 +146,52 @@ pub(crate) async fn send_503_observed(
     send_error_observed(stream, 503, reason, route_observer).await
 }
 
+/// Seconds a client is told to wait (`Retry-After`) before retrying a model
+/// that is not ready here yet.
+const MODEL_NOT_READY_RETRY_AFTER_SECS: u32 = 5;
+
+/// Stable OpenAI error `code` for a model that is not ready here yet: the
+/// startup models still resolving, a first load or reload, a drain, or `auto`
+/// with no model ready. Other 503s keep `service_unavailable`.
+const MODEL_NOT_READY_ERROR_CODE: &str = "model_not_ready";
+
+/// 503 for a model that is not ready here yet, with `Retry-After` and the
+/// stable `model_not_ready` code so clients can tell it from other outages.
+pub(crate) async fn send_model_not_ready_observed(
+    stream: ClientStream,
+    reason: &str,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> std::io::Result<()> {
+    tracing::warn!("503 → client: {reason}");
+    send_openai_error_with(
+        stream,
+        503,
+        reason,
+        Some(MODEL_NOT_READY_ERROR_CODE),
+        Some(MODEL_NOT_READY_RETRY_AFTER_SECS),
+        Some(route_observer),
+    )
+    .await
+}
+
 async fn send_openai_error(
+    stream: ClientStream,
+    code: u16,
+    msg: &str,
+    route_observer: Option<OpenAiRouteObserver<'_>>,
+) -> std::io::Result<()> {
+    let retry_after_secs = (code == 429).then_some(5);
+    send_openai_error_with(stream, code, msg, None, retry_after_secs, route_observer).await
+}
+
+/// `error_code` replaces the status's default OpenAI `code`; the Anthropic
+/// shape has no code field and keeps only the header.
+async fn send_openai_error_with(
     mut stream: ClientStream,
     code: u16,
     msg: &str,
+    error_code: Option<&str>,
+    retry_after_secs: Option<u32>,
     route_observer: Option<OpenAiRouteObserver<'_>>,
 ) -> std::io::Result<()> {
     let status = match code {
@@ -183,13 +225,15 @@ async fn send_openai_error(
             &serde_json::json!({"type":"error", "error":{"type":kind,"message":msg}}),
         )?
     } else {
-        openai_error_body(code, msg)
+        openai_error_body(
+            code,
+            msg,
+            error_code.unwrap_or(openai_error_code_for_status(code)),
+        )
     };
-    let retry_after = if code == 429 {
-        "Retry-After: 5\r\n"
-    } else {
-        ""
-    };
+    let retry_after = retry_after_secs
+        .map(|secs| format!("Retry-After: {secs}\r\n"))
+        .unwrap_or_default();
     let resp = format!(
         "HTTP/1.1 {code} {status}\r\nContent-Type: application/json\r\n{retry_after}Content-Length: {}\r\n\r\n{}",
         body.len(),
@@ -208,12 +252,12 @@ pub async fn send_503(stream: ClientStream, reason: &str) -> std::io::Result<()>
     send_openai_error(stream, 503, reason, None).await
 }
 
-fn openai_error_body(status_code: u16, message: &str) -> Vec<u8> {
+fn openai_error_body(status_code: u16, message: &str, error_code: &str) -> Vec<u8> {
     let status =
         http::StatusCode::from_u16(status_code).unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR);
     let kind = openai_error_kind_for_status(status_code);
     let error = skippy_inference_api::InferenceError::from_kind(status, kind, message)
-        .with_code(openai_error_code_for_status(status_code));
+        .with_code(error_code);
     serde_json::to_vec(&error.body()).expect("serializing JSON error response should not fail")
 }
 
@@ -325,6 +369,7 @@ mod tests {
         let body = response_json_body(&response);
 
         assert!(response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
+        assert!(!response.contains("Retry-After"));
         assert_eq!(
             body["error"]["message"],
             "skippy ABI call failed: Unsupported"
