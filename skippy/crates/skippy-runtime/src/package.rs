@@ -81,6 +81,18 @@ pub struct PackageSpeculativeProposerInfo {
     pub ngram_max: Option<u32>,
     pub max_proposal_tokens: Option<u32>,
     pub history_scope: Option<String>,
+    /// Set for a `dflash` proposer.
+    pub dflash: Option<PackageDFlashProposerInfo>,
+}
+
+/// A package-declared DFlash draft and how it is used.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct PackageDFlashProposerInfo {
+    pub draft: skippy_package_format::DFlashDraft,
+    pub target_layers: Vec<u32>,
+    pub block_size: u32,
+    pub max_draft_tokens: u32,
+    pub backends: skippy_package_format::DFlashBackends,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -93,6 +105,8 @@ pub struct PackageSpeculativeStrategyInfo {
     pub primary: Option<String>,
     pub extender: Option<String>,
     pub extension_policy: Option<PackageExtensionPolicyInfo>,
+    /// A `dflash` strategy's proposers, in order of preference.
+    pub proposers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -260,6 +274,16 @@ struct PackageSpeculativeProposer {
     max_proposal_tokens: Option<u32>,
     #[serde(default)]
     history_scope: Option<String>,
+    #[serde(default)]
+    draft: Option<skippy_package_format::DFlashDraft>,
+    #[serde(default)]
+    target_layers: Vec<u32>,
+    #[serde(default)]
+    block_size: Option<u32>,
+    #[serde(default)]
+    max_draft_tokens: Option<u32>,
+    #[serde(default)]
+    backends: Option<skippy_package_format::DFlashBackends>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -280,6 +304,8 @@ struct PackageSpeculativeStrategy {
     extender: Option<String>,
     #[serde(default)]
     extension_policy: Option<PackageExtensionPolicy>,
+    #[serde(default)]
+    proposers: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -584,7 +610,10 @@ pub fn inspect_layer_package(package_ref: &str) -> Result<LayerPackageInfo> {
             .flatten(),
         layer_count: manifest.layer_count,
         activation_width: manifest.activation_width,
-        generation: manifest.generation.map(package_generation_info),
+        generation: manifest
+            .generation
+            .map(package_generation_info)
+            .transpose()?,
         projectors,
         layers: manifest
             .layers
@@ -599,37 +628,65 @@ pub fn inspect_layer_package(package_ref: &str) -> Result<LayerPackageInfo> {
     })
 }
 
-fn package_generation_info(generation: PackageGeneration) -> PackageGenerationInfo {
-    PackageGenerationInfo {
+fn package_generation_info(generation: PackageGeneration) -> Result<PackageGenerationInfo> {
+    Ok(PackageGenerationInfo {
         request_defaults: generation.request_defaults,
         speculative_decoding: generation
             .speculative_decoding
-            .map(package_speculative_decoding_info),
-    }
+            .map(package_speculative_decoding_info)
+            .transpose()?,
+    })
 }
 
 fn package_speculative_decoding_info(
     speculative: PackageSpeculativeDecoding,
-) -> PackageSpeculativeDecodingInfo {
-    PackageSpeculativeDecodingInfo {
+) -> Result<PackageSpeculativeDecodingInfo> {
+    Ok(PackageSpeculativeDecodingInfo {
         default: speculative.default,
         proposers: speculative
             .proposers
             .into_iter()
-            .map(|(name, proposer)| (name, package_speculative_proposer_info(proposer)))
-            .collect(),
+            .map(|(name, proposer)| {
+                let info = package_speculative_proposer_info(proposer)
+                    .with_context(|| format!("package speculative proposer {name:?}"))?;
+                Ok((name, info))
+            })
+            .collect::<Result<_>>()?,
         strategies: speculative
             .strategies
             .into_iter()
             .map(|(name, strategy)| (name, package_speculative_strategy_info(strategy)))
             .collect(),
-    }
+    })
 }
 
+/// A `dflash` proposer must carry its draft, target layers, block size and
+/// draft-token cap; any other proposer carries no DFlash info.
 fn package_speculative_proposer_info(
     proposer: PackageSpeculativeProposer,
-) -> PackageSpeculativeProposerInfo {
-    PackageSpeculativeProposerInfo {
+) -> Result<PackageSpeculativeProposerInfo> {
+    let dflash = if proposer.proposer_type == "dflash" {
+        let (Some(draft), Some(block_size), Some(max_draft_tokens)) = (
+            proposer.draft,
+            proposer.block_size,
+            proposer.max_draft_tokens,
+        ) else {
+            bail!("a dflash proposer requires draft, block_size and max_draft_tokens");
+        };
+        if proposer.target_layers.is_empty() {
+            bail!("a dflash proposer requires target_layers");
+        }
+        Some(PackageDFlashProposerInfo {
+            draft,
+            target_layers: proposer.target_layers,
+            block_size,
+            max_draft_tokens,
+            backends: proposer.backends.unwrap_or_default(),
+        })
+    } else {
+        None
+    };
+    Ok(PackageSpeculativeProposerInfo {
         proposer_type: proposer.proposer_type,
         prediction_depth: proposer.prediction_depth,
         layer_indices: proposer.layer_indices,
@@ -637,7 +694,8 @@ fn package_speculative_proposer_info(
         ngram_max: proposer.ngram_max,
         max_proposal_tokens: proposer.max_proposal_tokens,
         history_scope: proposer.history_scope,
-    }
+        dflash,
+    })
 }
 
 fn package_speculative_strategy_info(
@@ -664,6 +722,7 @@ fn package_speculative_strategy_info(
             .map(|policy| PackageExtensionPolicyInfo {
                 max_tokens: policy.max_tokens,
             }),
+        proposers: strategy.proposers,
     }
 }
 
@@ -1544,7 +1603,7 @@ mod tests {
         }))
         .unwrap();
 
-        let info = package_generation_info(generation);
+        let info = package_generation_info(generation).unwrap();
         let defaults = info.request_defaults.expect("request defaults");
         assert_eq!(defaults.selection.default, "thinking");
         assert_eq!(defaults.profiles["thinking"].temperature, Some(1.0));
@@ -1690,5 +1749,34 @@ mod tests {
             .to_string();
 
         assert!(error.contains("safe relative"), "{error}");
+    }
+
+    #[test]
+    fn a_dflash_proposer_without_its_fields_is_rejected() {
+        let proposer = |value: serde_json::Value| {
+            package_speculative_proposer_info(serde_json::from_value(value).unwrap())
+        };
+        let complete = serde_json::json!({
+            "type": "dflash",
+            "draft": {
+                "repo": "meshllm/draft",
+                "revision": "a3d4fb1eff6f268cbbdf808042f6902cc17f5458",
+                "file": "draft.gguf",
+                "sha256": "b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1",
+                "bytes": 1024
+            },
+            "target_layers": [2, 62],
+            "block_size": 8,
+            "max_draft_tokens": 7
+        });
+        let info = proposer(complete.clone()).unwrap();
+        assert_eq!(info.dflash.unwrap().target_layers, [2, 62]);
+        for field in ["draft", "block_size", "max_draft_tokens", "target_layers"] {
+            let mut incomplete = complete.clone();
+            incomplete.as_object_mut().unwrap().remove(field);
+            assert!(proposer(incomplete).is_err(), "{field}");
+        }
+        let ngram = proposer(serde_json::json!({ "type": "ngram-cache", "ngram_min": 2 })).unwrap();
+        assert!(ngram.dflash.is_none());
     }
 }

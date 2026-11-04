@@ -2,7 +2,7 @@
   "schema_version": 1,
   "manifest_kind": "test-model-artifacts",
   "suite": "skippy-correctness",
-  "registry_sha256": "7dddd17073604649bcbb697a0ae8f2e7b2ea9e96cb171e419df25fba0d6d8945",
+  "registry_sha256": "b728aded7ecf526901a7b2735a4cb94aac4d749c0ebb8888caa8aa82d65e134e",
   "artifacts": [
     {
       "id": "qwen3-q8-correctness",
@@ -42,6 +42,47 @@
       "sha256": "12fae8b8f78f0360b498d04c8db7d33aff29ab7d8080231f93a17c18119e6735",
       "url": "https://huggingface.co/Qwen/Qwen3-0.6B-GGUF/resolve/ef4088322893040952513f532f736ddeab518403/Qwen3-0.6B-Q8_0.gguf",
       "notes": "Pinned Skippy runtime/skippy-model-package correctness fixture."
+    },
+    {
+      "id": "qwen35-q4-rollback-correctness",
+      "family": "qwen35",
+      "capability_tags": [
+        "gguf",
+        "hybrid",
+        "recurrent",
+        "skippy-correctness",
+        "small"
+      ],
+      "suites": [
+        "skippy-correctness"
+      ],
+      "cadences": [
+        "pull-request",
+        "main",
+        "manual"
+      ],
+      "repo": "unsloth/Qwen3.5-0.8B-GGUF",
+      "revision": "6ab461498e2023f6e3c1baea90a8f0fe38ab64d0",
+      "selector": "Q4_K_M",
+      "files": [
+        "Qwen3.5-0.8B-Q4_K_M.gguf"
+      ],
+      "file_integrity": {
+        "Qwen3.5-0.8B-Q4_K_M.gguf": {
+          "size_bytes": 532517120,
+          "blob_id": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517"
+        }
+      },
+      "model_ref": "unsloth/Qwen3.5-0.8B-GGUF:Q4_K_M",
+      "urls": [
+        "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/Qwen3.5-0.8B-Q4_K_M.gguf"
+      ],
+      "file": "Qwen3.5-0.8B-Q4_K_M.gguf",
+      "size_bytes": 532517120,
+      "sha256": "bd258782e35f7f458f8aced1adc053e6e92e89bc735ba3be89d38a06121dc517",
+      "url": "https://huggingface.co/unsloth/Qwen3.5-0.8B-GGUF/resolve/6ab461498e2023f6e3c1baea90a8f0fe38ab64d0/Qwen3.5-0.8B-Q4_K_M.gguf",
+      "notes": "Pinned recurrent fixture for the split verify-rollback correctness test."
     }
-  ]
+  ],
+  "default_artifact_id": "qwen3-q8-correctness"
 }

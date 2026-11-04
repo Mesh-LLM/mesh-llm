@@ -7,7 +7,10 @@
 //! drives the decode loop as it does for split native MTP: it sends drafted
 //! blocks as verify windows, commits through the first mismatch, and rolls
 //! every stage back to the committed position. The final stage drafts the next
-//! block right after each decode or verify and returns it on the reply. Unless
+//! block right after each decode or verify and returns it on the reply. On a
+//! verify window it answers with the verdict first and sends the draft in a
+//! second reply, so stage 0 commits and streams the window's tokens while the
+//! draft runs (`SKIPPY_DFLASH_EARLY_VERDICT=0` turns that off). Unless
 //! `SKIPPY_DFLASH_ADAPTIVE=0`, stage 0 verifies as much of each block as its
 //! measured window and serial-step times favour, down to a serial step.
 
@@ -39,9 +42,10 @@ pub struct SplitDFlashStage {
     /// The backend device the configured draft runs on, on the final stage
     /// only. `None` puts it on the target's device.
     pub draft_device: Option<String>,
-    /// Where a catalog default draft comes from, on the final stage only, so
-    /// that stage fetches and verifies its own copy. `None` for a configured
-    /// draft, which the operator places, and from older planners.
+    /// Where a default draft (from the package, the pairing index or the
+    /// bootstrap table) comes from, on the final stage only, so that stage
+    /// fetches and verifies its own copy. `None` for a configured draft, which
+    /// the operator places, and from older planners.
     pub draft_source: Option<SplitDFlashDraftSource>,
 }
 
@@ -52,6 +56,8 @@ pub struct SplitDFlashDraftSource {
     pub revision: String,
     pub file: String,
     pub sha256: String,
+    /// File size. A stage refuses a source without one (zero).
+    pub bytes: u64,
 }
 
 impl SplitDFlashStage {

@@ -25,9 +25,10 @@ const SUITES: [&str; 12] = [
     "competitive-benchmark",
     "radix-cache",
 ];
-const SUITE_DEFAULT_ARTIFACTS: [(&str, &str); 2] = [
+const SUITE_DEFAULT_ARTIFACTS: [(&str, &str); 3] = [
     ("product-smoke", "smollm2-q8-inference"),
     ("scripted-binary-smoke", "smollm2-q8-inference"),
+    ("skippy-correctness", "qwen3-q8-correctness"),
 ];
 
 /// One generated file: repository-relative path and exact bytes.

@@ -306,6 +306,7 @@ fn installed_package_grant_survives_config_apply_until_replaced() {
         let mut config = MeshConfig::default();
         config.plugins.push(crate::plugin::PluginConfigEntry {
             operation_bindings: bindings,
+            models: None,
             name: "consumer".into(),
             enabled,
             web_ui_enabled: None,
@@ -435,6 +436,7 @@ fn resolved_provider_is_exclusive_and_leaves_the_grant_comparable() {
     let mut config = MeshConfig::default();
     config.plugins.push(crate::plugin::PluginConfigEntry {
         operation_bindings: vec![capability_grant("vault")],
+        models: None,
         name: "consumer".into(),
         enabled: None,
         web_ui_enabled: None,
@@ -455,6 +457,7 @@ fn resolved_provider_is_exclusive_and_leaves_the_grant_comparable() {
     drop(registry);
     config.plugins.push(crate::plugin::PluginConfigEntry {
         operation_bindings: Vec::new(),
+        models: None,
         name: "vault-a".into(),
         enabled: Some(false),
         web_ui_enabled: None,

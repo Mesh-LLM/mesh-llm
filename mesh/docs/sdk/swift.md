@@ -38,6 +38,27 @@ constructor are removed; `ownerKeyPath` accepts a Mesh LLM keystore path.
 Streaming uses `node.inference.streamChatCompletions(...)` or
 `streamResponses(...)`. See [runtime artifacts](../SDK.md#native-runtime-artifacts).
 
+## Thinking effort levels
+
+`listModels()` returns each model with the effort strings the provider observed
+in its loaded chat template:
+
+```swift
+let model = try await node.inference.listModels()
+    .first { $0.thinkingEfforts?.contains("high") == true }
+if let model {
+    let response = try await node.inference.chatCompletions([
+        "model": model.id,
+        "messages": [["role": "user", "content": "Explain lock ordering."]],
+        "reasoning_effort": "high",
+    ])
+}
+```
+
+`thinkingEfforts` is `nil` when the provider is older or has not probed the
+model, and empty when the template exposes no effort levels. The list is an
+observation of the template, not a guarantee that generation obeys it.
+
 ## Discover advertised models
 
 `node.models` queries the embedded mesh directly for all advertised workloads,

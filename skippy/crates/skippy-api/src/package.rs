@@ -458,6 +458,7 @@ pub fn package_v2_generation_info(
                                 ngram_max: None,
                                 max_proposal_tokens: None,
                                 history_scope: None,
+                                dflash: None,
                             },
                             ProposerKind::NgramCache {
                                 ngram_min,
@@ -474,7 +475,10 @@ pub fn package_v2_generation_info(
                                 proposer_type: match &proposer.kind {
                                     ProposerKind::NgramCache { .. } => "ngram-cache",
                                     ProposerKind::NgramSuffix { .. } => "ngram-suffix",
-                                    ProposerKind::NativeMtp { .. } => unreachable!(),
+                                    ProposerKind::NativeMtp { .. }
+                                    | ProposerKind::Dflash { .. } => {
+                                        unreachable!()
+                                    }
                                 }
                                 .to_string(),
                                 prediction_depth: None,
@@ -483,6 +487,29 @@ pub fn package_v2_generation_info(
                                 ngram_max: Some(*ngram_max),
                                 max_proposal_tokens: Some(*max_proposal_tokens),
                                 history_scope: Some(history_scope.clone()),
+                                dflash: None,
+                            },
+                            ProposerKind::Dflash {
+                                draft,
+                                target_layers,
+                                block_size,
+                                max_draft_tokens,
+                                backends,
+                            } => skippy_runtime::package::PackageSpeculativeProposerInfo {
+                                proposer_type: "dflash".to_string(),
+                                prediction_depth: None,
+                                layer_indices: Vec::new(),
+                                ngram_min: None,
+                                ngram_max: None,
+                                max_proposal_tokens: None,
+                                history_scope: None,
+                                dflash: Some(skippy_runtime::package::PackageDFlashProposerInfo {
+                                    draft: draft.clone(),
+                                    target_layers: target_layers.clone(),
+                                    block_size: *block_size,
+                                    max_draft_tokens: *max_draft_tokens,
+                                    backends: *backends,
+                                }),
                             },
                         };
                         (name.clone(), info)
@@ -509,6 +536,7 @@ pub fn package_v2_generation_info(
                                 primary: None,
                                 extender: None,
                                 extension_policy: None,
+                                proposers: Vec::new(),
                             },
                             StrategyKind::NgramCache {
                                 proposer,
@@ -522,6 +550,7 @@ pub fn package_v2_generation_info(
                                     StrategyKind::NgramCache { .. } => "ngram-cache",
                                     StrategyKind::NgramSuffix { .. } => "ngram-suffix",
                                     StrategyKind::NativeMtp { .. }
+                                    | StrategyKind::Dflash { .. }
                                     | StrategyKind::Composite { .. } => unreachable!(),
                                 }
                                 .to_string(),
@@ -534,6 +563,7 @@ pub fn package_v2_generation_info(
                                 primary: None,
                                 extender: None,
                                 extension_policy: None,
+                                proposers: Vec::new(),
                             },
                             StrategyKind::Composite {
                                 primary,
@@ -555,7 +585,21 @@ pub fn package_v2_generation_info(
                                         max_tokens: extension_policy.max_tokens,
                                     },
                                 ),
+                                proposers: Vec::new(),
                             },
+                            StrategyKind::Dflash { proposers } => {
+                                skippy_runtime::package::PackageSpeculativeStrategyInfo {
+                                    strategy_type: "dflash".to_string(),
+                                    prediction_depth: None,
+                                    layer_indices: Vec::new(),
+                                    window_policy: None,
+                                    proposer: None,
+                                    primary: None,
+                                    extender: None,
+                                    extension_policy: None,
+                                    proposers: proposers.clone(),
+                                }
+                            }
                         };
                         (name.clone(), info)
                     })
@@ -723,5 +767,64 @@ mod split_dflash_tests {
     fn a_tied_target_already_loads_its_embeddings_on_the_final_stage() {
         let tied = [("token_embd.weight", 100), ("output_norm.weight", 4)];
         assert_eq!(untied_token_embd_bytes(tied.into_iter()), 0);
+    }
+}
+
+#[cfg(test)]
+mod dflash_generation_tests {
+    use super::package_v2_generation_info;
+    use skippy_package_format::{
+        DFlashBackends, DFlashDraft, Generation, ProposerKind, ProposerSpec, SpeculativeDecoding,
+        StrategyKind, StrategySpec,
+    };
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn a_dflash_proposer_reaches_the_runtime_generation_info() {
+        let draft = DFlashDraft {
+            repo: "meshllm/draft".to_string(),
+            revision: "a3d4fb1eff6f268cbbdf808042f6902cc17f5458".to_string(),
+            file: "draft-Q8_0.gguf".to_string(),
+            sha256: "b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1".to_string(),
+            bytes: 1 << 30,
+        };
+        let generation = Generation {
+            request_defaults: None,
+            speculative_decoding: Some(SpeculativeDecoding {
+                default: "dflash".to_string(),
+                proposers: BTreeMap::from([(
+                    "draft".to_string(),
+                    ProposerSpec {
+                        kind: ProposerKind::Dflash {
+                            draft: draft.clone(),
+                            target_layers: vec![2, 62],
+                            block_size: 8,
+                            max_draft_tokens: 7,
+                            backends: DFlashBackends::Metal,
+                        },
+                    },
+                )]),
+                strategies: BTreeMap::from([(
+                    "dflash".to_string(),
+                    StrategySpec {
+                        kind: StrategyKind::Dflash {
+                            proposers: vec!["draft".to_string()],
+                        },
+                    },
+                )]),
+            }),
+        };
+        let info = package_v2_generation_info(&generation);
+        let speculative = info.speculative_decoding.unwrap();
+        let proposer = &speculative.proposers["draft"];
+        assert_eq!(proposer.proposer_type, "dflash");
+        let dflash = proposer.dflash.as_ref().unwrap();
+        assert_eq!(dflash.draft, draft);
+        assert_eq!(dflash.target_layers, [2, 62]);
+        assert_eq!((dflash.block_size, dflash.max_draft_tokens), (8, 7));
+        assert_eq!(dflash.backends, DFlashBackends::Metal);
+        let strategy = &speculative.strategies["dflash"];
+        assert_eq!(strategy.strategy_type, "dflash");
+        assert_eq!(strategy.proposers, ["draft"]);
     }
 }

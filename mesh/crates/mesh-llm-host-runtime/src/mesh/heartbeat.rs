@@ -497,7 +497,8 @@ impl Node {
         fail_counts: &mut std::collections::HashMap<EndpointId, u32>,
     ) {
         // Renewed before gossiping, so this cycle already carries it.
-        self.renew_owner_attestation_on_heartbeat().await;
+        self.renew_owner_attestation_on_heartbeat(super::current_time_unix_ms())
+            .await;
         for (peer_id, conn) in self.selected_heartbeat_peers().await {
             let outcome = self.probe_heartbeat_peer(peer_id, conn).await;
             self.record_heartbeat_result(peer_id, outcome, fail_counts)
@@ -507,82 +508,6 @@ impl Node {
         self.prune_stale_heartbeat_peers().await;
         self.gc_heartbeat_state().await;
         self.gc_demand().await;
-    }
-
-    /// The ownership certificate is signed at startup for 7 days. Re-signing it
-    /// inside its renewal window keeps peers that enforce an owner policy from
-    /// dropping a node that runs longer than that.
-    async fn renew_owner_attestation_on_heartbeat(&self) {
-        match self
-            .renew_owner_attestation_if_due(super::current_time_unix_ms())
-            .await
-        {
-            Ok(Some(renewed)) => {
-                tracing::info!(
-                    expires_at_unix_ms = renewed.claim.expires_at_unix_ms,
-                    "renewed this node's ownership certificate"
-                );
-                if self.owner_attestation_path.is_some() {
-                    *self.unsaved_owner_attestation.lock().await = Some(renewed);
-                }
-            }
-            Ok(None) => {}
-            Err(error) => tracing::warn!(
-                "could not renew this node's ownership certificate, retrying on the next heartbeat: {error:#}"
-            ),
-        }
-        self.save_renewed_owner_attestation().await;
-    }
-
-    /// Writes a renewed ownership certificate where `mesh-llm auth` reads it.
-    /// The running node already uses it, so a failed write is logged and kept
-    /// for the next heartbeat rather than waiting for the next renewal. Only a
-    /// node with an ownership file has anything to write; a mesh membership
-    /// never touches the node's file.
-    async fn save_renewed_owner_attestation(&self) {
-        let Some(path) = &self.owner_attestation_path else {
-            return;
-        };
-        let mut unsaved = self.unsaved_owner_attestation.lock().await;
-        let Some(renewed) = unsaved.as_ref() else {
-            return;
-        };
-        match super::save_node_ownership(path, renewed) {
-            Ok(()) => *unsaved = None,
-            Err(error) => tracing::warn!(
-                "could not save the renewed ownership certificate, retrying on the next heartbeat: {error:#}"
-            ),
-        }
-    }
-
-    /// Swaps in a renewed ownership certificate, and the summary `/api/status`
-    /// reports, once the current one is inside its renewal window. Gossip reads
-    /// the certificate on every exchange, so peers get the new one next.
-    pub(crate) async fn renew_owner_attestation_if_due(
-        &self,
-        now_unix_ms: u64,
-    ) -> anyhow::Result<Option<super::SignedNodeOwnership>> {
-        let Some(owner_keypair) = self.owner_keypair.as_ref() else {
-            return Ok(None);
-        };
-        let Some(current) = self.owner_attestation.lock().await.clone() else {
-            return Ok(None);
-        };
-        let Some(renewed) =
-            super::renewed_owner_attestation(owner_keypair, self.id(), &current, now_unix_ms)?
-        else {
-            return Ok(None);
-        };
-        let summary = super::verify_node_ownership(
-            Some(&renewed),
-            self.id().as_bytes(),
-            &*self.trust_store.lock().await,
-            super::TrustPolicy::Off,
-            now_unix_ms,
-        );
-        *self.owner_attestation.lock().await = Some(renewed.clone());
-        *self.owner_summary.lock().await = summary;
-        Ok(Some(renewed))
     }
 
     pub(crate) async fn selected_heartbeat_peers(&self) -> Vec<(EndpointId, Option<Connection>)> {
