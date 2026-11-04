@@ -5,45 +5,14 @@ import { SchemaObjectFields } from '@/features/configuration/components/settings
 import type { SchemaSettingControlProps } from '@/features/configuration/components/settings/schema-control-utils'
 import {
   createSchemaObjectDefault,
-  isSchemaRecord,
   parseSchemaObjectArrayValue,
-  schemaValueFromInput
+  schemaValueFromInput,
+  singularItemLabel,
+  updateObjectPath
 } from '@/features/configuration/lib/schema-object-array'
 
 type SchemaObjectArrayControlProps = SchemaSettingControlProps & {
   readonly itemSchema: ConfigurationSettingObjectSchema
-}
-
-function singularItemLabel(label: string): string {
-  const noun = label.trim().split(/\s+/).at(-1) ?? 'item'
-  const singular = noun.endsWith('ies')
-    ? `${noun.slice(0, -3)}y`
-    : noun.endsWith('s') && !noun.endsWith('ss')
-      ? noun.slice(0, -1)
-      : noun
-  return `${singular.charAt(0).toUpperCase()}${singular.slice(1)}`
-}
-
-function updateObjectPath(
-  value: Record<string, unknown>,
-  path: readonly string[],
-  nextValue: unknown
-): Record<string, unknown> {
-  const [name, ...remainingPath] = path
-  if (!name) return value
-
-  if (remainingPath.length === 0) {
-    const next = { ...value }
-    if (nextValue === undefined) delete next[name]
-    else next[name] = nextValue
-    return next
-  }
-
-  const child = value[name]
-  return {
-    ...value,
-    [name]: updateObjectPath(isSchemaRecord(child) ? child : {}, remainingPath, nextValue)
-  }
 }
 
 function moveItem(
