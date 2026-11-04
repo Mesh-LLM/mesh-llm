@@ -149,3 +149,41 @@ instead of the default auxiliary navigation item, but only when the page's own
 manifest also requests `placement = "primary"` — the preference alone does
 nothing. It defaults to off, is independent of `web_ui_enabled`, and the host
 may still fall back to auxiliary placement if the primary tab row is full.
+
+## On-demand native models
+
+Mesh can load an unsplit native Skippy/llama model when an explicitly named
+request arrives, then unload that instance after its final request has been
+idle for the configured interval. The server stays running and cached disk
+assets remain available for the next load.
+
+```toml
+[[models]]
+model = "Qwen3-0.6B-Q4_K_M"
+
+[models.lifecycle]
+load = "on_demand"
+idle_timeout_secs = 300
+prefetch = true
+```
+
+Restart Mesh after changing lifecycle policy. The default is `load = "startup"`, with idle eviction disabled. Set `prefetch`
+to `false` to defer disk resolution/download until the first request. With
+`prefetch = true`, Mesh resolves disk assets in the background without loading
+weights into GPU memory. Strict local source policies never prefetch remotely.
+
+Concurrent requests share a load, with a five-minute wait limit. Active
+responses, including streaming, hold residency leases. Routing to an already
+ready peer avoids a local cold load; assigned peer requests execute locally.
+Idle unloading uses the normal non-forced drain path and respects maintained
+owner intents. Capacity admission includes the existing runtime memory budget;
+a failed cold load returns HTTP 503 and can be retried.
+
+This initial policy applies to uniquely configured native model identifiers and
+instances loaded on demand. Configured aliases and cached public IDs resolve to the same residency.
+On-demand configuration rejects `--split` and `--split-topology-lock`; use
+`load = "startup"` for split serving. Explicit CLI model selections retain their
+eager startup behavior. Startup models, split controllers, and manually
+loaded instances retain their existing residency behavior. Automatic model
+selection chooses ready models; explicitly name a cold configured model to
+load it. Direct standalone Skippy serving retains its existing lifecycle.

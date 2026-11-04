@@ -88,7 +88,6 @@ produces a clear startup error rather than a partial start.
 | `mesh_requirements.release_signer_keys` | array of string | `[]`; when non-empty, only those signer keys admit peers | node-level | process restart | wired | none |
 | `owner_control.bind` | socket address | unset (auto); e.g. `[::]:7447` | node-level | process restart | wired | none |
 | `owner_control.advertise_addr` | socket address | unset (auto-detected) | node-level | process restart | wired | none |
-| `payments.wallet` | string | unset: the only running `wallet.v1` plugin | node-level | process restart | wired | none |
 | `telemetry.enabled` | boolean | `false` | node-level | process restart | wired | none |
 | `telemetry.service_name` | string | `mesh-llm` | node-level | process restart | wired | none |
 | `telemetry.endpoint` | URL | unset | node-level | process restart | wired | none |
@@ -184,12 +183,14 @@ normal warnings in every mode.
 
 | Key path | Type | Allowed values / default (`auto`) | `[defaults]` / `[[models]]` | Restart | Status | CLI equivalent |
 |---|---|---|---|---|---|---|
+| `lifecycle.load` | enum | `startup` (default), `on_demand` | `[[models]]` only | process restart | wired | none |
+| `lifecycle.idle_timeout_secs` | integer | `0` disables idle eviction; native instances or provider sessions | `[[models]]` only | process restart | wired | none |
+| `lifecycle.prefetch` | boolean | `true` (default) prepares disk assets without constructing on-demand sessions | `[[models]]` only | process restart | wired | none |
 | `model` | string | required; catalog id, Hugging Face reference, URL, or local path | `[[models]]` only | model reload | wired | positional `--model` / `--gguf` on the ad-hoc single-model path |
 | `provider` | string | unset for built-in models; installed plugin name for provider models | `[[models]]` only | model reload | wired | none |
 | `variant` | string | provider-defined; defaults to fp32 | `[[models]]` only | model reload | wired | none |
 | `options` | object | empty; typed and validated by the selected provider | `[[models]]` only | model reload | wired | none |
 | `request_defaults` | object | empty provider-specific request defaults | `[[models]]` only | model reload | wired | none |
-| `lifecycle` | object | startup loading, idle eviction disabled, prefetch enabled | `[[models]]` only | model reload | wired | none |
 | `source` | object | model reference; optional local_dir or repo/revision override | `[[models]]` only | model reload | wired | none |
 | `hardware.model_path` | path | unset | both | model reload | wired | `--gguf` sets it for the ad-hoc single-model path |
 | `hardware.hf_repo`<br>`hardware.hf_file` | string | unset | both | model reload | wired | none |
@@ -222,6 +223,8 @@ one.
 See [KV Caching](/docs/pages/kv-caching/) for the default behavior and common
 configuration recipes.
 
+Lifecycle settings apply to native and provider model entries. Native policy changes require a process restart; providers interpret the same settings when initialized or reloaded. See [managed providers](https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/docs/plugins/managed-models.md).
+
 ## Group 4: device selection, GPU offload, multi-GPU, CPU MoE, and loading behavior
 
 | Key path | Type | Allowed values / default (`auto`) | `[defaults]` / `[[models]]` | Restart | Status | CLI equivalent |
@@ -234,7 +237,7 @@ configuration recipes.
 | `hardware.tensor_split` | comma ratios or string | unset | both | model reload | unwired (passes validation, then fails at model load; the separate `--tensor-split` CLI flag has its own plumbing) | `--tensor-split` (separate code path, does not read this field) |
 | `hardware.split_mode` | enum | `auto` (default), `none`, `layer`, `row`, `tensor` | both | model reload | partial (single-node resolution only; multi-node stages use auto) | none |
 | `hardware.main_gpu` | integer | unset (auto); overrides the derived GPU index when `split_mode` resolves to `none` | both | model reload | partial (single-node resolution only; multi-node stages use auto) | none |
-| `hardware.cpu_moe`<br>`hardware.n_cpu_moe` | bool-or-`auto` / integer | family or planner default | both | model reload | unwired | none |
+| `hardware.cpu_moe`<br>`hardware.n_cpu_moe` | bool-or-`auto` / integer | routed experts stay on the accelerator (`auto`) | both | model reload | wired (routed experts of the selected blocks load into host memory; `n_cpu_moe` counts blocks from block 0 like llama.cpp `--n-cpu-moe`; `cpu_moe = false` wins over `n_cpu_moe`) | none |
 | `hardware.fit_target_mib` | integer | optional | both | model reload | wired (GPU tuner authors it and Skippy fit planning consumes it) | derived from allocatable memory when unset |
 | `hardware.safety_margin_gb` | float | not a saved key; documented mapping only | both | model reload | wired (feeds `fit_target_mib` derivation) | none |
 | `hardware.fit_context` | bool-or-`auto` | unsupported | both | not applicable | rejected | none |
@@ -416,6 +419,7 @@ sampling at the backend when it selects mode `1` or `2`.
 | `plugin.<name>.web_ui_enabled` | boolean | unset (follows the plugin's declared default) | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.web_ui_primary_tab` | boolean | unset (`false`; primary placement stays off until explicitly enabled) | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.allow_peer_blocks` | boolean | unset (`false`; the plugin's peer block requests are refused until explicitly enabled) | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.operation_bindings` | array of objects | empty; operator-fixed provider/profile, setup JSON and operation allowlist | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.allow_inference_observation` | boolean | unset (`false`; the plugin's local inference observation subscription is refused until explicitly enabled) | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.openai_exchange_grant.endpoints` | array of enum | absent grant denies access | plugin entry | applies dynamically | wired | none |
 | `plugin.<name>.openai_exchange_grant.phases` | array of enum | absent grant denies access | plugin entry | applies dynamically | wired | none |

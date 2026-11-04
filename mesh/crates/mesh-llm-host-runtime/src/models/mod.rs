@@ -2,6 +2,7 @@ pub(crate) mod artifact_transfer;
 pub mod capabilities;
 pub mod catalog;
 pub mod delete;
+pub mod discovery;
 pub use delete::DeleteResult;
 mod download_parts;
 mod download_transfer;

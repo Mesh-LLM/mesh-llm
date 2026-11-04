@@ -47,7 +47,7 @@ fn resolve_using(
     budget: Duration,
     cancellation: &process::Cancellation,
 ) -> DynResult<Vec<IpAddr>> {
-    let execution = process::curl_https::execution_budget(budget)?.min(Duration::from_secs(5));
+    let execution = crate::curl_https::execution_budget(budget)?.min(Duration::from_secs(5));
     let directory = tempfile::tempdir()?;
     let input = directory.path().join("request.json");
     let output = directory.path().join("receipt.json");
@@ -76,7 +76,7 @@ fn resolve_using(
                 .filter_map(|k| std::env::var_os(k).map(|v| (k.into(), process::Value::Public(v))))
                 .collect(),
         },
-        &process::curl_https::limits(execution),
+        &crate::curl_https::limits(execution),
         cancellation,
         process::OutputFiles::default(),
     );

@@ -39,7 +39,6 @@ fn build_built_in_config_schema() -> ConfigSchema {
             "owner_control.advertise_addr",
             ConfigValueSchema::SocketAddr,
         ),
-        top_level_setting("payments.wallet", ConfigValueSchema::String),
         telemetry_setting("telemetry.enabled", ConfigValueSchema::Boolean),
         telemetry_setting("telemetry.service_name", ConfigValueSchema::String),
         telemetry_setting("telemetry.endpoint", ConfigValueSchema::Url),
@@ -219,7 +218,9 @@ fn model_entry_settings() -> Vec<ConfigSettingSchema> {
         basic_setting(&format!("{model_prefix}.variant"), ConfigValueSchema::String),
         basic_setting(&format!("{model_prefix}.options"), ConfigValueSchema::object()),
         basic_setting(&format!("{model_prefix}.request_defaults"), ConfigValueSchema::object()),
-        basic_setting(&format!("{model_prefix}.lifecycle"), ConfigValueSchema::object()),
+        top_level_setting(&format!("{model_prefix}.lifecycle.load"), string_enum(["startup", "on_demand"])),
+        top_level_setting(&format!("{model_prefix}.lifecycle.idle_timeout_secs"), ConfigValueSchema::Integer),
+        top_level_setting(&format!("{model_prefix}.lifecycle.prefetch"), ConfigValueSchema::Boolean),
         basic_setting(&format!("{model_prefix}.source"), ConfigValueSchema::object()),
     ]);
     settings.extend(model_fit_settings(
@@ -370,6 +371,19 @@ fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
             ConfigValueSchema::Boolean,
         ),
     ];
+    let mut binding = plugin_setting(
+        &format!("{plugin_prefix}.operation_bindings"),
+        ConfigValueSchema::Array { items: Box::new(ConfigValueSchema::Object {
+            properties: ["name", "provider", "profile", "setup_operation", "setup_input_json", "operations"]
+                .into_iter().map(|name| ConfigObjectPropertySchema {
+                    name: name.into(), label: name.into(), required: true,
+                    value_schema: if name == "operations" { ConfigValueSchema::Array { items: Box::new(ConfigValueSchema::String) } } else { ConfigValueSchema::String },
+                }).collect(),
+        }) },
+    );
+    binding.control_surfaces = vec![ConfigControlSurface::ConfigFile, ConfigControlSurface::OwnerControl];
+    binding.description = Some("Operator-approved exclusive local provider/profile, fixed setup payload and operation allowlist. Changes revoke existing handles; restart applies new bindings.".into());
+    settings.push(binding);
     settings.extend(exchange_grants::exchange_grant_settings(&plugin_prefix));
     settings
 }
@@ -514,8 +528,8 @@ fn hardware_settings(
             string_enum(["auto", "none", "layer", "row", "tensor"]),
         ),
         experimental_setting(&format!("{prefix}.main_gpu"), ConfigValueSchema::Integer),
-        unwired_setting(&format!("{prefix}.cpu_moe"), bool_or_auto_schema()),
-        unwired_setting(&format!("{prefix}.n_cpu_moe"), ConfigValueSchema::Integer),
+        basic_setting(&format!("{prefix}.cpu_moe"), bool_or_auto_schema()),
+        basic_setting(&format!("{prefix}.n_cpu_moe"), ConfigValueSchema::Integer),
         rejected_setting(
             &format!("{prefix}.rpc_backend"),
             ConfigValueSchema::object(),

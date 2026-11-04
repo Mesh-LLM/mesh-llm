@@ -76,6 +76,7 @@ pub(super) async fn local_model_unavailable(
     if plugin_serves_request {
         return try_route_plugin_model(ctx, stream, request, model, observer).await;
     }
+    super::record_pre_routing_rejection(ctx, Some(model), 503).await;
     response_outcome(
         503,
         proxy::send_503_observed(

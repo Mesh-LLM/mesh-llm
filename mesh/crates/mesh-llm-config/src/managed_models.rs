@@ -9,8 +9,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelLoadPolicy {
+    /// Load during normal model startup.
     #[default]
     Startup,
+    /// Load when a named inference request needs the model.
     OnDemand,
 }
 
@@ -18,8 +20,11 @@ pub enum ModelLoadPolicy {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct ModelLifecycle {
+    /// Defaults to startup loading.
     pub load: ModelLoadPolicy,
+    /// Idle interval after the last response; zero keeps weights resident.
     pub idle_timeout_secs: u64,
+    /// Resolve disk assets without constructing sessions.
     pub prefetch: bool,
 }
 
@@ -98,6 +103,28 @@ pub fn provider_diagnostics(
 }
 
 impl crate::ModelConfigEntry {
+    /// Serialize provider fields and the lifecycle shared with native entries.
+    pub(crate) fn serialize_model_management<S: serde::ser::SerializeStruct>(
+        &self,
+        state: &mut S,
+    ) -> Result<(), S::Error> {
+        if let Some(provider) = &self.provider {
+            state.serialize_field("provider", provider)?;
+            state.serialize_field("variant", &self.variant)?;
+            state.serialize_field("options", &self.options)?;
+            state.serialize_field("request_defaults", &self.provider_request_defaults)?;
+            state.serialize_field("lifecycle", &self.lifecycle)?;
+            state.serialize_field("source", &self.source)?;
+        }
+
+        if self.provider.is_none()
+            && self.lifecycle != crate::managed_models::ModelLifecycle::default()
+        {
+            state.serialize_field("lifecycle", &self.lifecycle)?;
+        }
+        Ok(())
+    }
+
     /// Return this entry's plugin selection, without inheriting LLM defaults.
     pub fn managed_model_config(&self) -> Option<ManagedModelConfig> {
         Some(ManagedModelConfig {
@@ -162,14 +189,6 @@ local_dir = "models/local"
         );
         assert!(crate::parse_config_toml(&config).is_err());
     }
-
-    #[test]
-    fn lifecycle_typos_fail_structural_parsing() {
-        assert!(
-            crate::parse_config_toml(&CONFIG.replace("idle_timeout_secs", "idle_timout_secs"))
-                .is_err()
-        );
-    }
 }
 
 #[cfg(test)]
@@ -208,6 +227,51 @@ mod provider_validation_tests {
                 valid,
                 "{name} {command:?} {enabled}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod native_lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn native_and_provider_lifecycle_pass_validation_and_persist_together() {
+        let input = "[[plugin]]\nname='onnx'\ncommand='/opt/mesh-onnx'\n[[models]]\nmodel='native'\n[models.lifecycle]\nload='on_demand'\nprefetch=false\n[[models]]\nmodel='provider-model'\nprovider='onnx'\n[models.lifecycle]\nload='on_demand'\nidle_timeout_secs=15\nprefetch=false";
+        let config = crate::parse_config_toml(input).unwrap();
+        let saved = crate::config_to_toml(&config).unwrap();
+        let restored = crate::parse_config_toml(&saved).unwrap();
+        for model in &restored.models {
+            assert_eq!(model.lifecycle.load, ModelLoadPolicy::OnDemand);
+        }
+        assert_eq!(restored.models[1].lifecycle.idle_timeout_secs, 15);
+        assert_eq!(
+            restored.models[1].managed_model_config(),
+            config.models[1].managed_model_config()
+        );
+    }
+
+    #[test]
+    fn residency_policy_round_trips_without_changing_legacy_defaults() {
+        let config: crate::ModelConfigEntry = toml::from_str("model = 'test'").unwrap();
+        assert_eq!(config.lifecycle, ModelLifecycle::default());
+        assert!(!toml::to_string(&config).unwrap().contains("lifecycle"));
+        let input = "model = 'test'\n[lifecycle]\nload = 'on_demand'\nidle_timeout_secs = 30\nprefetch = false";
+        let config: crate::ModelConfigEntry = toml::from_str(input).unwrap();
+        assert_eq!(config.lifecycle.load, ModelLoadPolicy::OnDemand);
+        let saved = toml::to_string(&config).unwrap();
+        let restored: crate::ModelConfigEntry = toml::from_str(&saved).unwrap();
+        assert_eq!(restored.lifecycle, config.lifecycle);
+    }
+
+    #[test]
+    fn rejects_misspelled_policy_and_negative_timeout() {
+        for invalid in [
+            "load = 'on-demand'",
+            "idle_timeout_secs = -1",
+            "preftech = true",
+        ] {
+            assert!(toml::from_str::<ModelLifecycle>(invalid).is_err());
         }
     }
 }

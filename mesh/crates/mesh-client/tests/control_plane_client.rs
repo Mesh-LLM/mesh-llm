@@ -7,7 +7,7 @@ use mesh_client::proto::node::{
     OwnerControlRefreshInventoryDisposition,
 };
 use mesh_client::protocol::{
-    ALPN_CONTROL_V1, MAX_CONTROL_FRAME_BYTES, NODE_PROTOCOL_GENERATION,
+    ALPN_CONTROL_V2, MAX_CONTROL_FRAME_BYTES, NODE_PROTOCOL_GENERATION,
     decode_owner_control_envelope, read_len_prefixed, write_len_prefixed,
 };
 use mesh_client::{
@@ -95,7 +95,7 @@ async fn spawn_success_server_with_refresh_detail(
 ) -> (Endpoint, String, TestServerState, oneshot::Receiver<()>) {
     let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .unwrap()
@@ -347,7 +347,7 @@ async fn spawn_success_server_with_refresh_detail(
 async fn spawn_auth_failure_server() -> (Endpoint, String) {
     let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .unwrap()
@@ -390,7 +390,7 @@ async fn spawn_auth_failure_server() -> (Endpoint, String) {
 async fn spawn_control_unsupported_server() -> (Endpoint, String) {
     let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .unwrap()
@@ -418,7 +418,7 @@ async fn spawn_control_unsupported_server() -> (Endpoint, String) {
                 response: None,
                 error: Some(mesh_client::proto::node::OwnerControlError {
                     code: OwnerControlErrorCode::ControlUnsupported as i32,
-                    message: "remote endpoint did not negotiate mesh-llm-control/1".to_string(),
+                    message: "remote endpoint did not negotiate mesh-llm-control/2".to_string(),
                     request_id,
                     current_revision: None,
                 }),
@@ -434,7 +434,7 @@ async fn spawn_control_unsupported_server() -> (Endpoint, String) {
 async fn spawn_legacy_unknown_lifecycle_server() -> (Endpoint, String) {
     let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .unwrap()
@@ -479,7 +479,7 @@ async fn spawn_legacy_unknown_lifecycle_server() -> (Endpoint, String) {
 async fn spawn_stalled_response_server() -> (Endpoint, String) {
     let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .unwrap()
@@ -564,6 +564,7 @@ async fn control_plane_client_apply_config_get_watch_refresh_and_close() {
                 mesh_requirements: None,
                 lifecycle_log_parser: None,
             },
+            vec![],
         )
         .await
         .expect("apply_config should succeed");
@@ -726,7 +727,7 @@ async fn control_plane_client_watch_stream_has_no_unary_deadline_after_acceptanc
 async fn oversized_outbound_control_frame_emits_no_prefix_or_body() {
     let server = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .unwrap()
@@ -751,7 +752,7 @@ async fn oversized_outbound_control_frame_emits_no_prefix_or_body() {
         .await
         .unwrap();
     let connection = client
-        .connect(server.addr(), ALPN_CONTROL_V1)
+        .connect(server.addr(), ALPN_CONTROL_V2)
         .await
         .expect("client should connect");
     let (mut send, _recv) = connection.open_bi().await.expect("stream should open");
@@ -884,10 +885,46 @@ async fn lifecycle_command_maps_legacy_unknown_command_to_control_unsupported() 
 }
 
 #[tokio::test]
+async fn updated_controller_rejects_a_legacy_v1_only_control_listener() {
+    let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
+        .secret_key(SecretKey::generate())
+        .alpns(vec![mesh_client::protocol::ALPN_CONTROL_V1.to_vec()])
+        .relay_mode(iroh::endpoint::RelayMode::Disabled)
+        .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+        .unwrap()
+        .bind()
+        .await
+        .unwrap();
+    let token = control_endpoint_token(&endpoint.addr());
+    let server_endpoint = endpoint.clone();
+    let server = tokio::spawn(async move {
+        while let Some(incoming) = server_endpoint.accept().await {
+            if let Ok(connection) = incoming.await {
+                connection.close(0_u32.into(), b"legacy listener");
+            }
+        }
+    });
+    let client = make_client().await;
+    let result = client
+        .connect_control_plane(
+            ControlPlaneBootstrapOptions::new()
+                .with_control_endpoint(token)
+                .with_connect_timeout(std::time::Duration::from_secs(2)),
+        )
+        .await;
+    assert!(
+        result.is_err(),
+        "v2 controller must not connect to a v1-only listener"
+    );
+    server.abort();
+    endpoint.close().await;
+}
+
+#[tokio::test]
 async fn control_plane_client_unreachable_listener_returns_structured_negotiation_error() {
     let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .unwrap()

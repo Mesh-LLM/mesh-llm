@@ -64,13 +64,7 @@ pub(crate) enum ClientStream {
     /// Discards every byte written and reports immediate EOF on read, with no
     /// real downstream socket behind it.
     ///
-    /// Used where the relay runs with no client waiting on its output: the
-    /// paid seller replays the response it already delivered through the
-    /// relay to learn the usage and digests the payer's relay computes (see
-    /// `network::openai::response::replay`). The relay streams response bytes
-    /// to a `ClientStream` by design, so it needs somewhere to write that
-    /// isn't a client's socket.
-    #[cfg_attr(not(feature = "payments"), allow(dead_code))]
+    /// Also used as a temporary placeholder when wrapping a stream.
     Null,
 }
 
@@ -155,6 +149,17 @@ impl ClientStream {
         }
     }
 
+    /// Whether a mesh peer sent this request over its authenticated QUIC
+    /// tunnel, rather than a local client over TCP.
+    pub(crate) fn is_mesh_peer(&self) -> bool {
+        match self {
+            Self::Metadata { stream, .. } => stream.is_mesh_peer(),
+            Self::Observed { stream, .. } => stream.is_mesh_peer(),
+            Self::Quic { .. } => true,
+            Self::Tcp { .. } | Self::Null => false,
+        }
+    }
+
     pub(crate) fn from_quic_with_prefix(
         recv: iroh::endpoint::RecvStream,
         send: iroh::endpoint::SendStream,
@@ -172,7 +177,7 @@ impl ClientStream {
     }
 
     /// A discard sink with no real downstream socket — see [`Self::Null`].
-    #[cfg_attr(not(feature = "payments"), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn null() -> Self {
         Self::Null
     }

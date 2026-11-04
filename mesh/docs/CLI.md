@@ -578,6 +578,10 @@ mesh-llm load Qwen3-0.6B-Q4_K_M
 Switches:
 
 - `--port <PORT>`: target management/API port (default `3131`).
+- `--ctx-size <TOKENS>`: context per lane for this load. Default: the model's `[[models]]` row, else planned for this node.
+- `--parallel <LANES>`: concurrent lanes for this load. The native runtime allocates context × lanes KV cells. Default: the model's row, else `[gpu] parallel`, else planned.
+
+The command waits up to 30 seconds. If the node is still loading (for example while it downloads the model), it says so and the load continues on the node; check with `mesh-llm status`. `Can't connect` means nothing is listening on the port.
 
 ### `unload`
 
@@ -712,7 +716,7 @@ All four owner lifecycle commands share these properties:
 - **Session-only**: intents disappear when the target node restarts. They never
   mutate durable config or TOML. Use `runtime apply-config` for persistent
   configuration changes.
-- **Private**: commands travel the `mesh-llm-control/1` ALPN, not the public
+- **Private**: commands travel the `mesh-llm-control/2` ALPN, not the public
   mesh plane. They require an explicit endpoint token and same-owner
   authentication.
 - **Legacy peers**: a current client talking to a released host that does not

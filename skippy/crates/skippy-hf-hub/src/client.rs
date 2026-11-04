@@ -266,7 +266,7 @@ impl HFClientBuilder {
     pub fn build(self) -> HFResult<HFClient> {
         let endpoint = self
             .endpoint
-            .or_else(|| std::env::var(constants::HF_ENDPOINT).ok())
+            .or_else(|| constants::env_value(constants::HF_ENDPOINT))
             .unwrap_or_else(|| constants::DEFAULT_HF_ENDPOINT.to_string());
 
         let _ = url::Url::parse(&endpoint)?;
@@ -601,7 +601,7 @@ fn resolve_token() -> Option<String> {
         return Some(token);
     }
 
-    if let Ok(path) = std::env::var(constants::HF_TOKEN_PATH)
+    if let Some(path) = constants::env_value(constants::HF_TOKEN_PATH)
         && let Ok(token) = std::fs::read_to_string(&path)
     {
         let token = token.trim().to_string();
@@ -923,6 +923,68 @@ mod tests {
         assert_eq!(g1, g2);
         assert!(s1.new_file_download_group().is_ok());
         assert!(s2.new_file_download_group().is_ok());
+    }
+
+    /// Empty variables are exercised in a child process, so the parent's
+    /// environment never changes.
+    mod empty_variables {
+        use std::process::Command;
+
+        use super::HFClientBuilder;
+        use crate::constants::{
+            DEFAULT_HF_ENDPOINT, HF_ENDPOINT, HF_HOME, HF_HUB_CACHE, HUGGINGFACE_HUB_CACHE,
+            XDG_CACHE_HOME,
+        };
+
+        const CHILD: &str = "SKIPPY_HF_EMPTY_VARIABLES_TEST_CHILD";
+
+        #[test]
+        fn empty_variables_fall_back_like_unset_ones() {
+            let home = tempfile::tempdir().unwrap();
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command.args([
+                "--exact",
+                "client::tests::empty_variables::empty_variables_child",
+                "--nocapture",
+            ]);
+            for key in [
+                HF_ENDPOINT,
+                HF_HOME,
+                HF_HUB_CACHE,
+                HUGGINGFACE_HUB_CACHE,
+                XDG_CACHE_HOME,
+            ] {
+                command.env(key, "");
+            }
+            let output = command
+                .env(CHILD, "1")
+                .env("HOME", home.path())
+                .output()
+                .expect("spawn empty variables child");
+            assert!(
+                output.status.success(),
+                "empty variables child failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(
+                String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+                "child test filter must execute its assertion"
+            );
+        }
+
+        #[test]
+        fn empty_variables_child() {
+            if std::env::var_os(CHILD).is_none() {
+                return;
+            }
+            let client = HFClientBuilder::new().build().unwrap();
+            assert_eq!(client.inner.endpoint, DEFAULT_HF_ENDPOINT);
+            let home = std::env::var("HOME").unwrap();
+            assert_eq!(
+                client.inner.cache_dir,
+                std::path::Path::new(&home).join(".cache/huggingface/hub")
+            );
+        }
     }
 
     /// Token precedence is exercised in child processes with a clean environment.

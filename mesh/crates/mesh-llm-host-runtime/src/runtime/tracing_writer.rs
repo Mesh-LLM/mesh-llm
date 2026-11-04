@@ -412,13 +412,15 @@ pub(super) fn runtime_tracing_subscriber()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive("mesh_inference=info".parse()?)
-                .add_directive("mesh_wallet=info".parse()?)
                 .add_directive("nostr_relay_pool=off".parse()?)
                 .add_directive("nostr_sdk=warn".parse()?)
                 .add_directive("noq_proto::connection=warn".parse()?)
                 .add_directive("skippy_serving=warn".parse()?)
                 .add_directive("mesh_native_serving_plugin_host=warn".parse()?)
-                .add_directive("skippy_runtime_install=warn".parse()?),
+                .add_directive("skippy_runtime_install=warn".parse()?)
+                // Telemetry export failures and the pre-existing exporter-disarm
+                // warn in this module must reach the dashboard by default.
+                .add_directive("mesh_llm_host_runtime::runtime::survey=info".parse()?),
         )
         .with_writer(MeshTracingStderr)
         .finish())

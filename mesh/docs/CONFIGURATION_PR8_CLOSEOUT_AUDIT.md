@@ -24,6 +24,8 @@ the hardware limitation or ownership boundary that prevents a final consumer.
 
 ## Reverse audit
 
+Native residency extension: `lifecycle.load`, `lifecycle.idle_timeout_secs`, and `lifecycle.prefetch` are consumed by `runtime/native_model_lifecycle.rs`; request leases and exact-instance eviction are tested in that module.
+
 The reverse audit covers every canonical manifest origin. The tables below
 call out changed sinks in detail; this inventory prevents an undocumented
 schema row or stale manifest row from passing review:
@@ -141,7 +143,8 @@ schema row or stale manifest row from passing review:
 `multimodal.generation_signal_window`, `plugin.<name>.name`,
 `plugin.<name>.enabled`, `plugin.<name>.web_ui_enabled`,
 `plugin.<name>.web_ui_primary_tab`, `plugin.<name>.allow_peer_blocks`,
-`plugin.<name>.allow_inference_observation`, `plugin.<name>.command`, `plugin.<name>.args`, `plugin.<name>.url`,
+`plugin.<name>.operation_bindings`, `plugin.<name>.allow_inference_observation`,
+`plugin.<name>.command`, `plugin.<name>.args`, `plugin.<name>.url`,
 `plugin.<name>.startup.connect_timeout_secs`,
 `plugin.<name>.startup.init_timeout_secs`, `plugin.<name>.startup.optional`,
 `plugin.<name>.startup.lazy_start`, `plugin.<name>.settings.*`,

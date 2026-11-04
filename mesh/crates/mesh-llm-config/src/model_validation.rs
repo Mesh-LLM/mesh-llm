@@ -255,7 +255,6 @@ pub(crate) fn validate_model_entry(
     if model.variant.is_some()
         || !model.options.is_empty()
         || !model.provider_request_defaults.is_empty()
-        || model.lifecycle != Default::default()
         || model.source != Default::default()
     {
         return Err(validation_diagnostic(

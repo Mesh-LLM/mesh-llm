@@ -1,6 +1,6 @@
 ---
 title: API Reference
-description: Local management, lifecycle, owner-control, activity, and status APIs
+description: Model discovery, compatible inference, local management, and status APIs
 ---
 
 # API Reference
@@ -8,6 +8,21 @@ description: Local management, lifecycle, owner-control, activity, and status AP
 Mesh exposes an OpenAI-compatible inference endpoint at
 `http://localhost:9337/v1` and a management API at
 `http://localhost:3131`.
+
+The inference listener also serves the Mesh model catalog:
+
+| Request | Result |
+|---|---|
+| `GET /mesh/v1/models` | Bounded page of all mesh-advertised workloads and provider metadata |
+| `GET /mesh/v1/models?workload_class=document_ocr&available=true` | Available OCR offerings |
+| `GET /mesh/v1/models/lookup?id={encoded-id}` | One exact public serving ID |
+| `GET /v1/models` | OpenAI-compatible list of available confirmed LLMs |
+| `GET /v1/models` with `anthropic-version` | Anthropic-compatible LLM list |
+
+See [Mesh model discovery](/docs/pages/model-discovery/) for response schemas,
+filters, cursor rules, provider observations, and the migration of Mesh-specific
+metadata out of compatibility responses. Native `node.models` SDK queries read
+the same catalog in process.
 
 The lifecycle, activity, configuration, and owner-control management routes are
 loopback-only. A non-loopback caller is rejected even if it can reach the
@@ -169,7 +184,7 @@ has finished loading, draining, or stopping. Observe `/api/runtime/intents`,
 ## Owner-control lifecycle
 
 These loopback REST facades ask the local node to contact exactly one remote,
-owner-attested target over the private `mesh-llm-control/1` ALPN:
+owner-attested target over the private `mesh-llm-control/2` ALPN:
 
 ```http
 POST /api/runtime/control/load-model

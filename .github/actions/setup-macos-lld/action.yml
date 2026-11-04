@@ -76,6 +76,9 @@ runs:
         fi
         # Start the fresh endpoint in remote-cache modes too, before parallel
         # compiler clients can race to bind the same Unix socket.
+        # Keep the job-owned daemon alive through quiet test phases.
+        export SCCACHE_IDLE_TIMEOUT=0
+        echo "SCCACHE_IDLE_TIMEOUT=0" >> "$GITHUB_ENV"
         sccache --start-server
         lld_bin="$(brew --prefix lld)/bin"
         test -x "$lld_bin/ld64.lld"

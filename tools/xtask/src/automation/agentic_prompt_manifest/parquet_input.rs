@@ -59,7 +59,8 @@ pub(super) fn select(path: &Path, selection: &Selection) -> DynResult<Vec<Trajec
         )
         .into());
     }
-    let response: Response = serde_json::from_reader(std::fs::File::open(response_file)?)?;
+    let response: Response =
+        serde_json::from_reader(std::io::BufReader::new(std::fs::File::open(response_file)?))?;
     let rows = response.into_rows(selection.families)?;
     let mut selector = Selector::new(selection)?;
     for row in rows {
