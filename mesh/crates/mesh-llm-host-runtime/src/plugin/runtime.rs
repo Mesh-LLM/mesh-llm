@@ -40,10 +40,10 @@ mod restart_tests;
 mod settings_tests;
 mod shutdown;
 mod socket_auth;
-pub(crate) mod status_publication;
 mod start_announce;
 #[cfg(test)]
 mod start_announce_tests;
+pub(crate) mod status_publication;
 
 use self::default_plugin_policy::restrict_default_plugin;
 use self::status_publication::StatusDeclaration;
