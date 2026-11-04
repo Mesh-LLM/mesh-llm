@@ -56,8 +56,6 @@ pub(crate) fn test_announcement(ts: Option<u64>) -> PeerAnnouncement {
         decode_batch_policy_supported: true,
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
         advertised_model_throughput: vec![],
         cache_affinity: None,
         latency_ms: None,
@@ -297,41 +295,4 @@ fn heartbeat_gc_expires_each_cooldown_without_removing_peer_records() {
     assert_eq!(state.direct_path_request_last_at.len(), 1);
     assert!(state.direct_path_request_last_at.contains_key(&live_id));
     assert!(state.peers.contains_key(&expired_id));
-}
-
-#[cfg(feature = "payments")]
-#[test]
-fn transitive_prices_propagate_until_direct_admission() {
-    let mut state = MembershipState::default();
-    let mut ann = test_announcement(None);
-    apply(&mut state, &ann);
-    ann.lightning_offers.insert(
-        "model".into(),
-        mesh_llm_payments_types::pricing::Pricing {
-            input_msat_per_million: 500,
-            output_msat_per_million: 1500,
-            cache_discount_percent: 0,
-        },
-    );
-    apply(&mut state, &ann);
-    assert_eq!(
-        state.peers[&ann.addr.id].lightning_offers,
-        ann.lightning_offers
-    );
-
-    let mut direct = ann.clone();
-    direct.lightning_offers.clear();
-    state
-        .upsert_existing_direct_peer(
-            direct.addr.id,
-            direct.addr.clone(),
-            &direct,
-            OwnershipSummary::default(),
-            Instant::now(),
-        )
-        .unwrap();
-    apply(&mut state, &ann);
-    let peer = &state.peers[&ann.addr.id];
-    assert!(peer.is_admitted());
-    assert!(peer.lightning_offers.is_empty());
 }

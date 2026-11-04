@@ -24,7 +24,7 @@ const next = page.next_cursor
 both local and peer-advertised. Queries use camelCase options; result objects
 retain the Mesh HTTP API's snake_case fields. Filters combine with AND; retain
 the same filters when continuing a page. Runtime limits, capability evidence,
-thinking controls and payment offers are observations under each `provider`.
+thinking controls and plugin channel requirements are observations under each `provider`.
 They do not guarantee every replica has those properties. Missing facts remain
 absent. `inference.listModels()` remains the LLM-only compatibility view.
 
