@@ -72,6 +72,7 @@ WORKSPACE_MEMBERS=(
   "skippy-model"
   "skippy-package-format"
   "skippy-runtime"
+  "skippy-receipt-audit"
   "skippy-scheduler"
   "skippy-api"
   "skippy-serving"

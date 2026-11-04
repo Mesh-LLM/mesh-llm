@@ -124,6 +124,7 @@ impl From<ChatCompletionResponse> for GenerationResponse {
             choices: value.choices.into_iter().map(Into::into).collect(),
             usage: value.usage,
             timings: value.timings,
+            receipt: value.receipt,
             capsule_marker: value.capsule_marker,
             exchange_id: value.exchange_id,
         }
@@ -140,6 +141,7 @@ impl From<GenerationResponse> for ChatCompletionResponse {
             choices: value.choices.into_iter().map(Into::into).collect(),
             usage: value.usage,
             timings: value.timings,
+            receipt: value.receipt,
             capsule_marker: value.capsule_marker,
             exchange_id: value.exchange_id,
         }
@@ -199,6 +201,7 @@ impl From<ChatCompletionChunk> for GenerationEvent {
             choices: value.choices.into_iter().map(Into::into).collect(),
             usage: value.usage,
             timings: value.timings,
+            receipt: value.receipt,
         }
     }
 }
@@ -213,6 +216,7 @@ impl From<GenerationEvent> for ChatCompletionChunk {
             choices: value.choices.into_iter().map(Into::into).collect(),
             usage: value.usage,
             timings: value.timings,
+            receipt: value.receipt,
         }
     }
 }

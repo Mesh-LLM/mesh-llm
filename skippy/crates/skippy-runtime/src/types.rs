@@ -699,6 +699,10 @@ pub struct SamplingConfig {
     /// (OpenAI `logprobs` / `top_logprobs`), read back with
     /// `StageSession::take_token_logprobs`. `None` records nothing.
     pub top_logprobs: Option<u32>,
+    /// Draw each sampled token with a uniform derived from `seed` and the
+    /// token's position, over the kept candidates in token id order, so a
+    /// client that holds the turn's inference receipt can replay the draw.
+    pub indexed_draw: bool,
 }
 
 /// Reasoning-token limit resolved after the prompt establishes the effective
@@ -801,6 +805,7 @@ impl Default for SamplingConfig {
             ],
             reasoning_budget: ReasoningBudget::Unrestricted,
             top_logprobs: None,
+            indexed_draw: false,
         }
     }
 }
@@ -890,6 +895,11 @@ impl SamplingConfig {
                 | (u32::from(self.ignore_eos) << 1)
                 | if self.top_logprobs.is_some() {
                     skippy_ffi::SAMPLING_FLAG_LOGPROBS
+                } else {
+                    0
+                }
+                | if self.indexed_draw {
+                    skippy_ffi::SAMPLING_FLAG_INDEXED_DRAW
                 } else {
                     0
                 },

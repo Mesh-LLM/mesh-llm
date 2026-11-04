@@ -450,6 +450,7 @@ fn run_binary_stage(
         l3_manager,
         compute_meter,
         split_dflash,
+        receipts,
     } = options;
     // With an OpenAI frontend, a stop request closes HTTP admission first.
     // Keep worker connections and prediction returns alive until Axum drains.
@@ -532,6 +533,9 @@ fn run_binary_stage(
     // (#1954).
     let max_inflight = max_inflight
         .min(usize::try_from(lock_runtime(&runtime).lane_count()).unwrap_or(usize::MAX));
+    if let Some(receipts) = receipts {
+        crate::receipts::start(receipts, &config, runtime.clone())?;
+    }
     let (input_boundary, output_boundary) = {
         let runtime = lock_runtime(&runtime);
         (
@@ -710,6 +714,7 @@ fn run_binary_stage(
             let worker_shutdown = shutdown.clone();
             let prediction_returns = prediction_returns.clone();
             let prediction_return_sinks = prediction_return_sinks.clone();
+            let receipts_runtime = runtime.clone();
             let session_ownership = session_ownership.clone();
             let worker_control = Arc::new(ConnectionWorkerControl::default());
             worker_control
@@ -747,6 +752,13 @@ fn run_binary_stage(
                                 .handle_return_connection(first_message, upstream);
                         }
                         return prediction_return_sinks.insert_opened_sink(first_message, upstream);
+                    }
+                    if first_message.kind == WireMessageKind::Receipts {
+                        return crate::receipts::serve_stage_connection(
+                            &receipts_runtime,
+                            upstream,
+                            first_message,
+                        );
                     }
                     // Dedicated connect-failure event at the fallible
                     // boundary (see acquire_downstream_or_emit_connect_error):

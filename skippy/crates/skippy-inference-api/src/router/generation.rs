@@ -17,7 +17,7 @@ pub(super) async fn chat_completions(
     if request.stream {
         let include_usage = request.include_usage();
         let model = request.model.clone();
-        let backend_context = request_context(context.request_id, trusted_agent_session, true);
+        let backend_context = request_context(&context, trusted_agent_session, true);
         let cancellation = backend_context.cancellation_token();
         let stream = call_backend_with_context(
             state.config.lifecycle_observer.clone(),
@@ -72,7 +72,7 @@ pub(super) async fn chat_completions(
         }
         Ok(response)
     } else {
-        let backend_context = request_context(context.request_id, trusted_agent_session, false);
+        let backend_context = request_context(&context, trusted_agent_session, false);
         let response = call_backend_with_context(
             state.config.lifecycle_observer.clone(),
             &context,
@@ -144,7 +144,7 @@ async fn stream_responses(
     trusted_agent_session: bool,
 ) -> Result<Response, InferenceError> {
     let include_usage = request.include_usage();
-    let backend_context = request_context(context.request_id, trusted_agent_session, true);
+    let backend_context = request_context(context, trusted_agent_session, true);
     let cancellation = backend_context.cancellation_token();
     let state_machine = Arc::new(Mutex::new(ResponseSseState::new(request.model.clone())));
     let stream = call_backend_with_context(
@@ -197,7 +197,7 @@ async fn non_streaming_responses(
     request: GenerationRequest,
     trusted_agent_session: bool,
 ) -> Result<Response, InferenceError> {
-    let backend_context = request_context(context.request_id, trusted_agent_session, false);
+    let backend_context = request_context(context, trusted_agent_session, false);
     let response = call_backend_with_context(
         state.config.lifecycle_observer.clone(),
         context,

@@ -289,6 +289,7 @@ pub(super) fn stage_load_to_proto(
         runtime_settings: Some(stage_runtime_settings_to_proto(load.runtime_settings)),
         native_mtp_enabled: Some(load.native_mtp_enabled),
         dflash: load.dflash.as_ref().map(stage_dflash_to_proto),
+        issue_receipts: false,
         shutdown_generation: load.shutdown_generation,
         coordinator_term: load.coordinator_term,
         coordinator_id: load.coordinator_id.map(|id| id.to_string()),
