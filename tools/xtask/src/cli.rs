@@ -156,7 +156,6 @@ pub(crate) enum CliCommand<'a> {
     LoggingRecovery(&'a [String]),
     ControlPlaneQa(&'a [String]),
     RemoteHandoffSummary(&'a [String]),
-    LightningCompatibility(&'a [String]),
     HfCertification(&'a [String]),
     HfMtpCompose(&'a [String]),
     HfConvertedArtifact(&'a [String]),
@@ -406,11 +405,6 @@ impl<'a> Cli<'a> {
                 if domain == "automation" && scope == "remote-handoff-summary" =>
             {
                 CliCommand::RemoteHandoffSummary(rest)
-            }
-            [domain, scope, rest @ ..]
-                if domain == "automation" && scope == "lightning-compatibility" =>
-            {
-                CliCommand::LightningCompatibility(rest)
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "control-plane-qa" => {
                 CliCommand::ControlPlaneQa(rest)

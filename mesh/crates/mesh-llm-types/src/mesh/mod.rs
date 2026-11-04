@@ -50,6 +50,9 @@ pub struct ServedModelIdentity {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct ServedModelDescriptor {
     pub identity: ServedModelIdentity,
+    /// Every required plugin mesh channel must be available at the client.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<ChannelRequirement>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub capabilities_known: bool,
     pub capabilities: ModelCapabilities,
@@ -57,6 +60,14 @@ pub struct ServedModelDescriptor {
     pub topology: Option<ModelTopology>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<ServedModelMetadata>,
+}
+
+/// Opaque protocol terms belonging to a plugin mesh channel.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct ChannelRequirement {
+    pub channel: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terms: Vec<u8>,
 }
 
 fn is_false(value: &bool) -> bool {
@@ -236,6 +247,7 @@ pub fn infer_served_model_descriptors(
                 }
             };
             ServedModelDescriptor {
+                requires: Vec::new(),
                 identity,
                 capabilities_known: false,
                 capabilities: ModelCapabilities::default(),

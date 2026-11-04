@@ -5,15 +5,11 @@
 //! peer's own, unverified statement (see `PeerCapsuleIdSink`) and never
 //! relays them on to its own client.
 
-#[cfg(feature = "payments")]
-use super::probe::try_parse_response_headers;
 use super::probe::{
     ResponseProbe, insert_header_before_body, peer_response_header_value, remove_existing_header,
 };
 use crate::mesh;
 use crate::mesh::model_identity::routable_descriptor_for_name;
-#[cfg(feature = "payments")]
-use crate::network::openai::request_parse::MAX_HEADER_BYTES;
 
 /// The SHA-256 of the GGUF the serving node loaded for the model
 /// (`ServedModelIdentity::weights_digest`).
@@ -140,129 +136,9 @@ pub(super) fn set_served_model_headers(
     );
 }
 
-/// Sets the served-model headers on a raw HTTP response that is forwarded
-/// chunk by chunk without a probe: the paid seller's backend stream. It holds
-/// bytes back only until the response head is complete. A head that never
-/// parses, or outgrows `MAX_HEADER_BYTES`, fails the response: forwarding it
-/// unchanged would let the backend supply the served-model headers itself.
-#[cfg(feature = "payments")]
-pub(crate) struct ServedModelHeadRewrite {
-    served: Option<ServedModelHeaders>,
-    /// The head bytes held back so far; `None` once the head has been sent.
-    pending: Option<Vec<u8>>,
-}
-
-#[cfg(feature = "payments")]
-impl ServedModelHeadRewrite {
-    pub(crate) fn new(served: Option<ServedModelHeaders>) -> Self {
-        Self {
-            served,
-            pending: Some(Vec::new()),
-        }
-    }
-
-    /// Take the next chunk read from the backend; returns the bytes to
-    /// forward now, which may be empty while the head is incomplete.
-    pub(crate) fn push(&mut self, chunk: &[u8]) -> Result<Vec<u8>, UnusableResponseHead> {
-        let Some(pending) = self.pending.as_mut() else {
-            return Ok(chunk.to_vec());
-        };
-        pending.extend_from_slice(chunk);
-        match try_parse_response_headers(pending) {
-            Ok(Some(parsed)) => {
-                let mut head = self.pending.take().unwrap_or_default();
-                set_on_raw_head(
-                    &mut head,
-                    parsed.header_end,
-                    parsed.status_code,
-                    self.served.as_ref(),
-                );
-                Ok(head)
-            }
-            Ok(None) if pending.len() <= MAX_HEADER_BYTES => Ok(Vec::new()),
-            _ => {
-                self.pending = None;
-                Err(UnusableResponseHead)
-            }
-        }
-    }
-
-    /// The bytes still held back when the backend ended mid-head.
-    pub(crate) fn finish(&mut self) -> Vec<u8> {
-        self.pending.take().unwrap_or_default()
-    }
-}
-
-/// The backend's response head never parsed or outgrew `MAX_HEADER_BYTES`, so
-/// its served-model headers cannot be replaced or removed.
-#[cfg(feature = "payments")]
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) struct UnusableResponseHead;
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn served() -> ServedModelHeaders {
-        ServedModelHeaders {
-            weights_digest: Some("74a4da8c".into()),
-            canonical_ref: Some("org/repo@main:Q4_K_M".into()),
-        }
-    }
-
-    const OK: &[u8] =
-        b"HTTP/1.1 200 OK\r\nx-mesh-weights-digest: upstream\r\nContent-Length: 2\r\n\r\n{}";
-
-    #[cfg(feature = "payments")]
-    #[test]
-    fn a_rewrite_replaces_upstream_values_with_this_nodes_on_a_2xx_head() {
-        let mut rewrite = ServedModelHeadRewrite::new(Some(served()));
-        // The head arrives split across two chunks.
-        assert!(rewrite.push(&OK[..20]).unwrap().is_empty());
-        let out = rewrite.push(&OK[20..]).unwrap();
-        let text = String::from_utf8(out).unwrap();
-        assert!(text.contains("x-mesh-weights-digest: 74a4da8c\r\n"));
-        assert!(text.contains("x-mesh-model-canonical-ref: org/repo@main:Q4_K_M\r\n"));
-        assert!(!text.contains("upstream"));
-        assert!(text.ends_with("\r\n\r\n{}"));
-        // The body after the head passes through untouched.
-        assert_eq!(rewrite.push(b"tail").unwrap(), b"tail");
-        assert!(rewrite.finish().is_empty());
-    }
-
-    #[cfg(feature = "payments")]
-    #[test]
-    fn a_rewrite_only_removes_the_headers_without_values_or_on_an_error() {
-        let mut none = ServedModelHeadRewrite::new(None);
-        let text = String::from_utf8(none.push(OK).unwrap()).unwrap();
-        assert!(!text.contains("x-mesh-weights-digest"));
-
-        let error = b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n";
-        let mut failed = ServedModelHeadRewrite::new(Some(served()));
-        let text = String::from_utf8(failed.push(error).unwrap()).unwrap();
-        assert!(!text.contains("x-mesh-"));
-    }
-
-    #[cfg(feature = "payments")]
-    #[test]
-    fn a_rewrite_fails_an_unparseable_or_oversized_head_and_holds_an_unfinished_one() {
-        let mut garbage = ServedModelHeadRewrite::new(Some(served()));
-        assert_eq!(garbage.push(b"not http\r\n\r\n"), Err(UnusableResponseHead));
-        assert!(
-            garbage.finish().is_empty(),
-            "nothing is released after the failure"
-        );
-
-        let mut oversized = ServedModelHeadRewrite::new(None);
-        let mut head = b"HTTP/1.1 200 OK\r\nx-mesh-weights-digest: forged\r\n".to_vec();
-        head.resize(MAX_HEADER_BYTES + 1, b'a');
-        assert_eq!(oversized.push(&head), Err(UnusableResponseHead));
-        assert!(oversized.finish().is_empty());
-
-        let mut cut = ServedModelHeadRewrite::new(Some(served()));
-        assert!(cut.push(b"HTTP/1.1 200 OK\r\n").unwrap().is_empty());
-        assert_eq!(cut.finish(), b"HTTP/1.1 200 OK\r\n");
-    }
 
     #[test]
     fn values_that_would_break_the_head_are_not_sent() {

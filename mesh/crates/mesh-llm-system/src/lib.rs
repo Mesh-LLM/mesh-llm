@@ -11,6 +11,8 @@ pub mod process;
 #[cfg(windows)]
 pub mod process_lifetime;
 pub mod release_target;
+#[cfg(test)]
+mod text_file_busy;
 pub mod util;
 pub mod vram;
 
