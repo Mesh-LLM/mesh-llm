@@ -116,15 +116,6 @@ the admission outcome. The optional `admission_denied` and
 including when delivery of a 403 or 503 response fails. Observer-copy loss
 changes evidence completeness without changing the execution outcome.
 
-A terminal event for an exchange that did not complete carries an additive
-`failure_class`: `payment_required` (a 402, including a peer's relayed one),
-`refused` (a policy denial, a failed required hook, another 4xx),
-`upstream_error` (a 5xx, a transport failure, a stream that ended before its
-body), `timeout` or `dropped`. It is absent on a completed exchange and on
-every other phase, so existing consumers read what they read before. `status`
-cannot say this alone: a stream cut after its 200 headers terminates with
-status 200.
-
 Terminal events preserve a bounded history of up to 16 prepared dispatches,
 their commitments, reported usage when available, and elapsed lifecycle time.
 Truncating the history marks evidence incomplete. Usage is reported data, never
@@ -167,6 +158,23 @@ deduplicate headers and retain at most 16 names in lexical order across plugins
 and dispatches. Each author's accumulated annotations remain within 4096 bytes;
 discarding excess metadata marks evidence incomplete without breaking HTTP
 emission.
+
+### Why an exchange did not complete (`failure_class`)
+
+On the `openai.exchange.v1` channel, the `terminal` envelope that the
+raw-proxy (`raw_proxy`) and mesh-routed (`remote_mesh`) paths publish carries an
+additive `failure_class` when the exchange did not complete:
+`payment_required` (a 402, including a peer's relayed one), `refused` (a
+policy denial, a failed required hook, another 4xx), `upstream_error` (a 5xx,
+a transport failure, a stream that ended before its body), `timeout` (a 408 or
+504, or a route timeout) or `dropped`. `status` cannot say this alone: a stream
+cut after its 200 headers terminates with status 200.
+
+On those two paths an absent `failure_class` means the exchange completed. The
+`typed_frontend` path does not set the field, so there its absence says
+nothing; the lifecycle service's `exchange_finished` callbacks do not carry
+it. Other phases never carry it, so existing consumers read what they read
+before.
 
 ### Client-marked pairs (`twin_bracket_id`)
 

@@ -680,6 +680,15 @@ fn exchange_failure_class_names_every_way_an_exchange_does_not_complete() {
             Some(PaymentRequired),
         ),
         (O::Responded(429), Some(Refused)),
+        (O::Responded(408), Some(Timeout)),
+        (
+            O::RespondedWithUsage {
+                status_code: 500,
+                usage: mesh_llm_events::logging::events::TokenUsage::default(),
+                output_digests: digests,
+            },
+            Some(UpstreamError),
+        ),
         (O::Responded(500), Some(UpstreamError)),
         (O::Responded(504), Some(Timeout)),
         (
@@ -2606,6 +2615,44 @@ fn serving_provenance_for_remote_mesh_is_absent_on_an_unserved_outcome() {
             &proxy::RouteDispatchOutcome::Dropped("x")
         )
         .is_none()
+    );
+}
+
+/// The `RemoteMesh` terminal states why an exchange did not complete, including
+/// a stream cut after its 200 headers, whose status says nothing.
+#[test]
+fn remote_delivered_terminal_states_the_failure_class() {
+    use crate::plugin::openai_exchange::ExchangeFailureClass;
+    let terminal_for = |outcome: proxy::RouteDispatchOutcome| {
+        remote_delivered_terminal(
+            RemoteDeliveredFacts {
+                exchange_id: "exchange-failed".to_string(),
+                model_name: "acme/remote-model",
+                nonce: None,
+                nonce_source: None,
+                peer_capsule_id: None,
+                target: None,
+                observed_served_by_hex: None,
+                peer_served_model: ServedModelHeaders::default(),
+                request_digest: None,
+                twin_bracket_id: None,
+            },
+            &outcome,
+        )
+    };
+    let cut = terminal_for(proxy::RouteDispatchOutcome::FailedWithStatus {
+        status_code: 200,
+        reason: "upstream_stream_incomplete",
+    });
+    assert_eq!(cut.status, Some(200));
+    assert_eq!(cut.failure_class, Some(ExchangeFailureClass::UpstreamError));
+    assert_eq!(
+        terminal_for(proxy::RouteDispatchOutcome::Responded(402)).failure_class,
+        Some(ExchangeFailureClass::PaymentRequired)
+    );
+    assert_eq!(
+        terminal_for(proxy::RouteDispatchOutcome::Responded(200)).failure_class,
+        None
     );
 }
 

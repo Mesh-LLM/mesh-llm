@@ -29,7 +29,9 @@ pub(super) fn plugin_route_status(outcome: &proxy::RouteDispatchOutcome) -> Opti
 /// The class a terminal event states for an exchange that did not complete,
 /// `None` for one that did. `plugin_route_status` cannot carry this alone: a
 /// stream cut after its 200 headers is a `FailedWithStatus` whose status is
-/// 200, and a timeout or dropped stream may have no status at all.
+/// 200, and a dropped stream or transport failure has no status at all. A
+/// timeout is classed by its 408/504 status or by `FailedWithStatus`'s
+/// "timeout" reason, the only forms the routes emit today.
 pub(super) fn exchange_failure_class(
     outcome: &proxy::RouteDispatchOutcome,
 ) -> Option<ExchangeFailureClass> {

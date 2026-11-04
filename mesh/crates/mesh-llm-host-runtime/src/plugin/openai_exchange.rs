@@ -458,11 +458,12 @@ pub struct OpenAiExchangeEnvelope {
     /// client's choice. `None` when the header is absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub twin_bracket_id: Option<String>,
-    /// Why this exchange did not complete, on a `Terminal` envelope only —
-    /// see [`ExchangeFailureClass`]. Absent on a completed exchange and on
-    /// every non-terminal envelope, so a consumer that predates the member
-    /// reads exactly what it read before. `status` alone cannot say this: a
-    /// stream cut after its 200 headers terminates with status 200.
+    /// Why this exchange did not complete, on a `Terminal` envelope the
+    /// raw-proxy and remote-mesh paths publish — see [`ExchangeFailureClass`].
+    /// Absent there when the exchange completed. The typed-frontend path does
+    /// not set it, so on that path absence says nothing, and no other phase
+    /// carries it. `status` alone cannot say this: a stream cut after its 200
+    /// headers terminates with status 200.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_class: Option<ExchangeFailureClass>,
 }
