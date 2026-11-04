@@ -17,10 +17,12 @@ dynamic-native-runtime = ["skippy-serving/dynamic-native-runtime", "skippy-api/d
 [dependencies]
 anyhow.workspace = true
 dirs = "6.0.0"
+hex = "0.4"
 clap.workspace = true
 skippy-api = { path = "../skippy-api", version = "0.79.0" }
 skippy-cache = { path = "../skippy-cache", version = "0.79.0" }
 skippy-commands = { path = "../skippy-commands", version = "0.79.0" }
+skippy-receipt-audit = { path = "../skippy-receipt-audit", version = "0.79.0" }
 skippy-model-hf = { path = "../skippy-model-hf", version = "0.79.0" }
 skippy-model-artifact = { path = "../skippy-model-artifact", version = "0.79.0" }
 skippy-inference-api = { path = "../skippy-inference-api", version = "0.79.0" }

@@ -2,10 +2,13 @@ mod activation;
 mod activation_codec;
 mod codec;
 mod readout;
+mod receipts;
 mod types;
 
 #[cfg(test)]
 mod frame_budget_tests;
+#[cfg(test)]
+mod receipts_reply_tests;
 
 pub use activation::{
     activation_frame_wire_bytes, decode_activation_frame, decode_raw_activation_frame,
@@ -19,6 +22,10 @@ pub use codec::{
     send_reply_predicted_tokens_with_stats, send_reply_predicted_tokens_with_window_and_stats,
     send_reply_predicted_with_stats, send_reply_predicted_with_tokens_and_stats,
     send_reply_predicted_with_tokens_window_and_stats, write_stage_message,
+};
+pub use receipts::{
+    MAX_STAGE_RECEIPTS_REFUSAL_BYTES, MAX_STAGE_RECEIPTS_REPLY_BYTES,
+    MAX_STAGE_RECEIPTS_REQUEST_BYTES, ReceiptsReply, recv_receipts_reply, send_receipts_reply,
 };
 pub use types::sampling_flags;
 pub use types::{

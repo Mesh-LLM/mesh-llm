@@ -104,10 +104,11 @@ pub(super) fn sampling_semantic_fingerprint(
         samplers,
         reasoning_budget,
         top_logprobs,
+        indexed_draw,
     } = sampling;
 
     let mut digest = Sha256::new();
-    digest.update(b"skippy-sampling-fingerprint-v3");
+    digest.update(b"skippy-sampling-fingerprint-v4");
     update_bool(&mut digest, b"enabled", *enabled);
     update_bool(&mut digest, b"ignore_eos", *ignore_eos);
     update_string(
@@ -122,6 +123,8 @@ pub(super) fn sampling_semantic_fingerprint(
         b"top_logprobs",
         top_logprobs.unwrap_or(u32::MAX),
     );
+    // The indexed draw picks other tokens than the stream draw does.
+    update_bool(&mut digest, b"indexed_draw", *indexed_draw);
     update_f32(&mut digest, b"temperature", *temperature);
     update_f32(&mut digest, b"top_p", *top_p);
     update_i32(&mut digest, b"top_k", *top_k);
@@ -304,6 +307,9 @@ mod tests {
         });
         mutation!("top_logprobs", |sampling: &mut SamplingConfig| {
             sampling.top_logprobs = Some(2)
+        });
+        mutation!("indexed_draw", |sampling: &mut SamplingConfig| {
+            sampling.indexed_draw = true
         });
 
         for (field, sampling) in mutations {

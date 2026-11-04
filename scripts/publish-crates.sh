@@ -407,6 +407,7 @@ publish_crates=(
     mesh-llm-api-server
     skippy-hardware-profile
     skippy-runtime
+    skippy-receipt-audit
     skippy-scheduler
     skippy-inference-api
     skippy-runtime-install

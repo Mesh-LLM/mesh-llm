@@ -366,6 +366,7 @@ fn tool_call_chunk(
         }],
         usage: None,
         timings: None,
+        receipt: None,
     }
 }
 

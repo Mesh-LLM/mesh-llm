@@ -128,6 +128,7 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
         native_mtp_min_tokens: openai_speculative.native_mtp.min_draft_tokens,
         speculative: openai_speculative,
     });
+    let receipts = args.receipts.stage_options(&config.model_id)?;
     let native_mtp_enabled = config.native_mtp_enabled;
     Ok(BinaryStageOptions {
         tuning: tuning.clone(),
@@ -154,6 +155,7 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
         split_dflash: None,
         openai,
         l3_manager: None,
+        receipts,
     })
 }
 

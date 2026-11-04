@@ -81,7 +81,7 @@ async fn non_streaming_messages(
     request: crate::generation::GenerationRequest,
     trusted_agent_session: bool,
 ) -> Result<Response, AnthropicRejection> {
-    let backend_context = request_context(context.request_id, trusted_agent_session, false);
+    let backend_context = request_context(&context, trusted_agent_session, false);
     let response = call_backend_with_context(
         state.config.lifecycle_observer.clone(),
         &context,
@@ -117,7 +117,7 @@ async fn streaming_messages(
 ) -> Result<Response, AnthropicRejection> {
     let model = request.model.clone();
     let request_id: RequestId = context.request_id;
-    let backend_context = request_context(request_id, trusted_agent_session, true);
+    let backend_context = request_context(&context, trusted_agent_session, true);
     let cancellation = backend_context.cancellation_token();
     let stream = call_backend_with_context(
         state.config.lifecycle_observer.clone(),
@@ -252,7 +252,7 @@ pub(crate) async fn messages_count_tokens(
 ) -> Result<Json<Value>, AnthropicRejection> {
     let Json(request) = json_payload(payload)?;
     let session = agent_session_from_header(&state.config, &headers)?;
-    let backend_context = request_context(context.request_id, session.is_some(), false);
+    let backend_context = request_context(&context, session.is_some(), false);
     let mut chat = messages_request_to_generation(request.into_messages())?;
     chat.set_agent_session(session);
     chat.validate()?;

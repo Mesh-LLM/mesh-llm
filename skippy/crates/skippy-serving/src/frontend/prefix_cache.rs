@@ -25,6 +25,7 @@ use crate::kv_integration::ExactStateKvExport;
 use crate::kv_integration::KvStageIntegration;
 use crate::kv_integration::proactive_eviction_attrs;
 use crate::kv_integration::proactive_eviction_error_kind;
+use crate::runtime_state::panic_recovery::lock_runtime;
 use anyhow::Context;
 use serde_json::Value;
 use serde_json::json;
@@ -310,7 +311,10 @@ impl StageOpenAiBackend {
         token_ids: &[i32],
         activation_width: i32,
     ) -> InferenceResult<Option<ActivationFrame>> {
-        if token_start != 0 {
+        // a later stage takes no prefix alone while the stage issues
+        // receipts (`maybe_lookup_binary_prefill`), so neither does stage 0:
+        // every stage must start a turn at the same position
+        if token_start != 0 || !lock_runtime(&self.runtime).restores_prefixes_alone() {
             return Ok(None);
         }
         let Some(kv) = self.kv.as_ref() else {
@@ -791,6 +795,7 @@ impl StageOpenAiBackend {
         if request.prompt_token_ids.is_empty()
             || !kv.should_lookup()
             || !request_allows_exact_replay(request)
+            || self.receipts_forbid_generated_token_reuse()
         {
             return Ok(None);
         }
@@ -896,7 +901,10 @@ impl StageOpenAiBackend {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(None);
         };
-        if request.prompt_token_ids.is_empty() || !kv.should_lookup() {
+        if request.prompt_token_ids.is_empty()
+            || !kv.should_lookup()
+            || self.receipts_forbid_generated_token_reuse()
+        {
             return Ok(None);
         }
         let timer = PhaseTimer::start();
