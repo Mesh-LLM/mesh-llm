@@ -376,9 +376,9 @@ mesh-llm --llama-flavor cuda serve \
 <details>
 <summary><b>Pay for, and get paid for, inference (experimental)</b></summary>
 
-Plugins can extend Mesh. With a Lightning wallet plugin (Lexe, LDK Server, or
-NWC), your node can charge per token for the models it serves and pay
-automatically for models served by others. Payments use Bitcoin mainnet, so
+Plugins can extend Mesh. With the `pay-lightning` plugin and a Lightning wallet
+plugin (Lexe or NWC), your node can charge per token for the models it serves
+and pay automatically for models served by others. Payments use Bitcoin mainnet, so
 start with small balances.
 
 How it works and how to set it up:

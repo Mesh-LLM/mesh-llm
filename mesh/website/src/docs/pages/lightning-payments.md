@@ -5,23 +5,23 @@ title: Paid inference over Lightning
 # Paid inference over Lightning
 
 > **Note:**
-> Paid inference and wallet plugins are in early preview release and use Bitcoin mainnet.
+> Paid inference is a work-in-progress preview and uses Bitcoin mainnet.
 > Wallets can hold and send real funds, so start with small balances and protect
 > recovery material and wallet credentials.
 
-MeshLLM providers can advertise per-model prices, and clients can automatically
-settle paid inference over the Lightning Network. MeshLLM includes the payment
-protocol, ledger, spending policy, and recovery logic; the wallet itself runs as
-an external `wallet.v1` plugin.
+The MeshLLM node itself is payment-agnostic. Paid inference is added by two
+plugins: the [`pay-lightning`](https://github.com/Mesh-LLM/ln-payments-plugin)
+payments plugin, which owns pricing, spending policy, the ledger and settlement,
+and a wallet plugin that holds the funds. Providers can then advertise per-model
+prices and clients settle automatically over the Lightning Network.
 
-Install the latest MeshLLM release before enabling payments. This release uses
-the token-metered `/mesh/payment/v3` flow. Paid inference currently supports
-`POST /v1/chat/completions` and `POST /v1/completions`, with one completion per
-request (`n=1`).
+You need a MeshLLM build that includes the generic plugin seams (mesh-llm `main`
+after #2654, or the first release after v0.78.0). Paid inference currently
+supports `POST /v1/chat/completions` and `POST /v1/completions`.
 
 ## How it works
 
-Payments are added by a wallet plugin. With one installed, the same node can
+Payments are added by plugins. With `pay-lightning` and a wallet installed, the same node can
 **earn** by serving models to other peers and **pay** for models served by
 others. Inference still travels over Mesh's authenticated QUIC connections;
 only the money moves over Lightning, between the two nodes' wallets.
@@ -60,99 +60,67 @@ What happens in the edge cases:
 
 Prices and token counts are the provider's claims. Mesh does not prove that
 inference was done correctly, and there are no refunds. See the
-[Lightning payments specification](https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/docs/specs/lightning-payments.md)
-for wire frames, timeouts, and wallet persistence.
+[ln-payments-plugin README](https://github.com/Mesh-LLM/ln-payments-plugin#readme)
+for protocol, state and control details.
 
-## 1. Install a wallet plugin
+## 1. Install pay-lightning and a wallet plugin
 
-The published Lexe preview provisions a self-custodial mainnet wallet when the
-first wallet-backed operation opens it:
-
-```bash
-mesh-llm plugins install Mesh-LLM/lexe-wallet
-```
-
-Restart MeshLLM after installation.
-
-Two other adapters are available as source-build development previews. They do
-not yet publish the release assets required by `plugins install OWNER/REPO`:
-
-| Plugin | Wallet backend | Setup |
-|---|---|---|
-| [`Mesh-LLM/ldk-server-wallet`](https://github.com/Mesh-LLM/ldk-server-wallet) | An external [LDK Server](https://github.com/lightningdevkit/ldk-server) node over gRPC | Build and install its local archive, then configure the server address, TLS certificate, and macaroon file |
-| [`Mesh-LLM/nwc-wallet`](https://github.com/Mesh-LLM/nwc-wallet) | An external wallet over [Nostr Wallet Connect](https://nwc.dev/) | Build and install its local archive, then configure a protected file containing the NWC connection URI |
-
-Follow each plugin repository's README for its local-archive command and
-configuration. Installing a wallet does not authorize inference spending.
-
-If you pass the global `--config PATH`, use the same path for the node and every
-wallet command. If the node uses a nondefault management port, add `--port PORT`
-after `wallet`.
-
-## 2. Set provider pricing
-
-Free serving is the default. To charge for a model, use a model ID advertised by
-your node and set positive input and output rates:
+Install both plugins, in either order, before starting the node. Pick one wallet:
 
 ```bash
-mesh-llm wallet pricing "MODEL_ID" \
-  --input-msat-per-million INPUT_RATE \
-  --output-msat-per-million OUTPUT_RATE
+mesh-llm plugins install Mesh-LLM/lexe-wallet-plugin Mesh-LLM/ln-payments-plugin
+# or, for a Nostr Wallet Connect wallet:
+mesh-llm plugins install Mesh-LLM/nwc-wallet-plugin Mesh-LLM/ln-payments-plugin
 ```
 
-Rates use the CLI's `msat` field per million tokens. For example,
-`--input-msat-per-million 1000` means ₿1 per million input tokens. MeshLLM bills
-the `prompt_tokens` and `completion_tokens` reported by the inference backend at
-the rates frozen when the request is admitted.
+Installing prints the grants `pay-lightning` needs and applies them; no
+`[[plugin]]` stanza is required. A wallet alone does not enable payments, and
+`pay-lightning` without a running wallet refuses every wallet call. If two
+wallet plugins are running, name one before payments will work. Follow the
+wallet plugin's README for its own setup (the Lexe wallet provisions itself on
+first use; NWC needs a connection URI).
 
-Inspect current prices or return a model to free serving with:
+## 2. Control payments with `plugins call`
+
+MeshLLM has no `wallet` command. Everything goes through the plugin's `control`
+operation on the node API (add `--port PORT` if it is not on 3131):
 
 ```bash
-mesh-llm wallet pricing
-mesh-llm wallet pricing "MODEL_ID" --free
+mesh-llm plugins call pay-lightning control --input '{"command":"balance"}'
 ```
 
-The provider must keep its selected wallet plugin available while serving so it
-can create invoices and observe their settlement.
+Other commands include `transactions`, `fund`, `pending`, `policy`, `pricing`,
+`set_pricing`, `blocked` and `unblock`.
 
-## 3. Fund a client wallet and authorize spending
+## 3. Sell: price a model
 
-Start the MeshLLM node or client first; wallet-backed commands such as
-`fund-wallet` and `get-balance` require the running wallet plugin. In another
-terminal, create a BOLT11 funding invoice:
+Free serving is the default. Start `mesh-llm --model MODEL_ID`, then:
 
 ```bash
-mesh-llm wallet fund-wallet --amount-sats AMOUNT
+mesh-llm plugins call pay-lightning control --input \
+  '{"command":"set_pricing","model":"MODEL_ID","value":{"input_msat_per_million":1000,"output_msat_per_million":1000}}'
 ```
 
-Pay the returned JSON `bolt11` value from another Lightning wallet, then confirm
-the funds arrived and enable automatic payments:
+Rates are millisatoshis per million tokens (1000 = ₿1 per million). A request for
+a priced model from a buyer without spending enabled gets `402 Payment Required`.
+Keep the wallet plugin running while serving so invoices can be created and
+settled.
+
+## 4. Buy: fund a wallet and allow spending
+
+Start the client (for example `mesh-llm client --join TOKEN`), fund the wallet
+with the `fund` command or from the wallet's own app, then allow spending:
 
 ```bash
-mesh-llm wallet get-balance
-mesh-llm wallet policy --mode automatic --daily-budget-sats BUDGET
+mesh-llm plugins call pay-lightning control --input \
+  '{"command":"policy","value":{"mode":"automatic","daily_budget_msat":600000}}'
 ```
 
-`AMOUNT` and `BUDGET` must be positive whole base-unit counts; for example,
-`1000` means ₿1,000. A fresh profile remains `free-only` until the policy command
-is run. Funding the wallet alone never authorizes inference spending. Inspect or
-disable the saved policy with:
+A fresh install is `free_only` and buys nothing. Funding the wallet alone never
+authorizes spending. The daily budget gates new paid requests; it is not a hard
+wallet ceiling, since requests already admitted can settle above it.
 
-```bash
-mesh-llm wallet policy
-mesh-llm wallet policy --mode free-only
-```
-
-The daily budget gates new paid admissions using successful payments settled
-since 00:00 UTC, including actual routing fees. Pending payments do not reserve
-budget, and wallet balance is not checked before admission. It is not a hard
-wallet ceiling: concurrent or already-admitted requests can take settled spend
-above the budget, and insufficient funds fail when a payment is attempted.
-
-With automatic policy enabled, routing prefers local inference, then eligible
-paid providers, then free providers.
-
-## 4. Limitations
+## 5. Limitations
 
 Payments in MeshLLM are still experimental, and the protocol may change rapidly.
 This early implementation has several known limitations that are being actively
@@ -166,6 +134,5 @@ addressed:
   invoice after the backend response completes; incremental streaming payments
   are not yet supported.
 
-See the [Lightning payments specification](https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/docs/specs/lightning-payments.md)
-for settlement, recovery, fees, compatibility, and operator details.
-
+See the [ln-payments-plugin README](https://github.com/Mesh-LLM/ln-payments-plugin#readme)
+for current status and known gaps.
