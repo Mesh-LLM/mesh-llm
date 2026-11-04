@@ -439,6 +439,22 @@ audited. Replay on Metal needed one fix: Metal has no pinned host buffers,
 and its asynchronous read accepts only memory it has mapped, so the recorder
 reads values into pageable memory with blocking copies.
 
+**Metal through `skippy serve`, Apple M5 Max.** Two-stage Qwen3-4B Q8_0
+split, both stages on Metal with the tensor API on (`has tensor = true`;
+`kernel_mul_mm_q8_0_f32` compiled for prefill), 662-token prompts in
+64-token ubatches. The auditor gives Metal three profiles: `raw`,
+`f16_weights` and `f16_weights_rtz` (f16 weights, activation truncated to
+f16). Three honest audits passed: 9 layers, 63 matrices, 252 column checks,
+every column on `raw`, maximum `e` 6.7e-6, no column over 1e-3. Q6_K
+served as Q8_0 failed every one of 112 columns (`e` 7.3e-3 to 4.4e-2). The
+M6 residual above did not appear on the M5; the two chips, or their builds,
+differ in a way not yet traced. The other two profiles cover what the
+pre-Metal-4 `mul_mm` kernel does in a standalone replica (f16 weights and
+activations, round to nearest) and what a Metal 4 `matmul2d` replica fed f32
+activations did (truncation); neither has been seen through `skippy serve`
+yet, and both sit far above the honest error, so they add no leniency a
+substituted quant could use.
+
 **ARM CPU (DGX Spark, Neon with i8mm and SVE).** The CPU profile matches as on
 x86: `e` ≤ 4e-7 for q4_K, q4_0 (repacked) and q8_0, and ≤ 9e-7 for q4_1 with
 the quirk above.
@@ -922,9 +938,12 @@ Not yet measured or built (see [RECEIPTS_PLAN.md](RECEIPTS_PLAN.md) for the buil
   It needs forced f32 accumulation, which makes prefill with receipts 1.66
   times slower on an RTX 5060 Ti. That is over the serving budget, so a
   Vulkan node serves receipts only when its operator turns them on.
-- Metal prefill. Its outputs fit no rounding profile (1e-4 to 8e-4 from the
-  exact product), so Metal stages are not audited. A Metal profile needs the
-  rounding that the `mul_mm` kernel really does.
+- Metal on M1 to M4 and on the M6. The auditor's Metal family is measured
+  through `skippy serve` on an M5 Max only, where prefill fits `raw`. The
+  M6 run above fit no profile, and the pre-Metal-4 `mul_mm` kernel of M1 to
+  M4 converts activations and dequantized weights to f16 (`f16_weights` in
+  a standalone replica, not yet through `skippy serve`). Each needs a
+  served run before Metal nodes of that generation count as covered.
 - Draft-model speculation: `--draft-model-path` loaded the draft but never
   proposed in standalone `skippy serve` (`draft_n` stayed 0), so only native
   MTP rollback was measured.

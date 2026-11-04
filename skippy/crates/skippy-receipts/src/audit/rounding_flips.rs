@@ -25,7 +25,11 @@ pub struct Flip {
 /// The values of a block of a profile's activation that share a scale.
 fn block_len(profile: Profile) -> usize {
     match profile {
-        Profile::Raw | Profile::F16 | Profile::F16Weights | Profile::Bf16 => 1,
+        Profile::Raw
+        | Profile::F16
+        | Profile::F16Weights
+        | Profile::F16WeightsRtz
+        | Profile::Bf16 => 1,
         Profile::Q8Mul64F32 => 64,
         Profile::CpuQ8K => 256,
         Profile::Q8DivHalf

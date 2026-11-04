@@ -40,6 +40,11 @@ pub enum Profile {
     /// The activation and the dequantized weights both rounded to f16, as
     /// Vulkan's cooperative-matrix kernels compute with f32 accumulation.
     F16Weights,
+    /// [`Self::F16Weights`] with the activation truncated to f16 (rounded
+    /// toward zero) instead of to nearest, as a Metal 4 `matmul2d` fed f32
+    /// activations does in a standalone replica (RECEIPTS.md, "Detection").
+    /// Accumulation is f32.
+    F16WeightsRtz,
     /// Rounded to bf16, as CPU bf16 dot products and cuBLAS bf16 do.
     Bf16,
     /// CUDA `quantize_q8_1` (MMVQ): d = amax/127, q = round(x/d), d stored as f16.
@@ -65,14 +70,13 @@ pub enum Profile {
     CpuQ8K,
 }
 
-/// The backends with measured rounding profiles. Metal has none: through
-/// `skippy serve`, its prefill outputs differ from every profile by up to
-/// 8e-4, which would fail honest nodes (RECEIPTS.md, "Detection").
+/// The backends with measured rounding profiles.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BackendFamily {
     Cpu,
     Cuda,
     Vulkan,
+    Metal,
 }
 
 impl BackendFamily {
@@ -84,6 +88,8 @@ impl BackendFamily {
             Some(Self::Cuda)
         } else if backend.starts_with("Vulkan") {
             Some(Self::Vulkan)
+        } else if backend.starts_with("MTL") {
+            Some(Self::Metal)
         } else {
             None
         }
@@ -110,6 +116,13 @@ impl BackendFamily {
 /// on a Vulkan stage (`F16Weights`); with f16 accumulation, as Vulkan picks by
 /// default, honest outputs are 1e-3 to 4e-3 off.
 ///
+/// Metal is measured through `skippy serve` on an M5 Max, where decode and
+/// prefill both fit `Raw` (RECEIPTS.md, "Detection"). `F16Weights` is what
+/// the pre-Metal-4 `mul_mm` kernel of M1 to M4 does in a standalone replica
+/// (f16 weights and activations, f32 accumulation), `F16WeightsRtz` what a
+/// Metal 4 `matmul2d` fed f32 activations did in one; neither is seen
+/// through `skippy serve` yet. Metal bf16 weights have no profile.
+///
 /// Q4_1 and Q5_1 have none: their kernels round the product of the weight
 /// and activation scales, and the activation block sum, which a profile of
 /// the activation alone cannot reproduce (RECEIPTS.md, "Detection").
@@ -119,8 +132,8 @@ pub fn profiles_for(family: BackendFamily, weight_type: u32) -> Option<&'static 
         GGML_Q4_K, GGML_Q5_0, GGML_Q5_K, GGML_Q6_K, GGML_Q8_0,
     };
     use Profile::{
-        Bf16, CpuQ8, CpuQ8K, F16, F16Weights, Q8DivHalf, Q8Mul64F32, Q8MulF32, Q8MulHalf,
-        Q8MulHalfSums, Q8MulHalfSumsDp4a, Raw,
+        Bf16, CpuQ8, CpuQ8K, F16, F16Weights, F16WeightsRtz, Q8DivHalf, Q8Mul64F32, Q8MulF32,
+        Q8MulHalf, Q8MulHalfSums, Q8MulHalfSumsDp4a, Raw,
     };
     let profiles: &'static [Profile] = match (family, weight_type) {
         (_, GGML_F32) => &[Raw],
@@ -148,6 +161,11 @@ pub fn profiles_for(family: BackendFamily, weight_type: u32) -> Option<&'static 
             GGML_F16 | GGML_Q8_0 | GGML_Q4_0 | GGML_Q5_0 | GGML_Q2_K | GGML_Q3_K | GGML_Q4_K
             | GGML_Q5_K | GGML_Q6_K | GGML_IQ4_NL | GGML_IQ4_XS,
         ) => &[Raw, F16Weights, CpuQ8],
+        (
+            BackendFamily::Metal,
+            GGML_F16 | GGML_Q8_0 | GGML_Q4_0 | GGML_Q5_0 | GGML_Q2_K | GGML_Q3_K | GGML_Q4_K
+            | GGML_Q5_K | GGML_Q6_K | GGML_IQ4_NL | GGML_IQ4_XS,
+        ) => &[Raw, F16Weights, F16WeightsRtz],
         _ => return None,
     };
     Some(profiles)
@@ -169,6 +187,7 @@ impl Profile {
             Self::Raw => "raw",
             Self::F16 => "f16",
             Self::F16Weights => "f16_weights",
+            Self::F16WeightsRtz => "f16_weights_rtz",
             Self::Bf16 => "bf16",
             Self::Q8DivHalf => "q8_32_div_dh",
             Self::Q8MulHalf => "q8_32_mul_dh",
@@ -183,7 +202,7 @@ impl Profile {
 
     /// Whether the weights meet the activation rounded to f16 too.
     fn rounds_weights(self) -> bool {
-        self == Self::F16Weights
+        matches!(self, Self::F16Weights | Self::F16WeightsRtz)
     }
 
     /// For the profiles that apply a weight's minimum to block sums of the
@@ -203,6 +222,7 @@ impl Profile {
                 .iter()
                 .map(|&v| f64::from(half::f16::from_f32(v).to_f32()))
                 .collect(),
+            Self::F16WeightsRtz => x.iter().map(|&v| f64::from(truncate_to_f16(v))).collect(),
             Self::Bf16 => x
                 .iter()
                 .map(|&v| f64::from(half::bf16::from_f32(v).to_f32()))
@@ -213,6 +233,26 @@ impl Profile {
             Self::Q8Mul64F32 => quantize_mul_blocks(x, 64),
             Self::CpuQ8K => quantize_q8_k(x),
         }
+    }
+}
+
+/// `v` rounded toward zero to the f16 grid: the f16 value nearest zero
+/// among those around `v`, so the largest finite one above the f16 range.
+/// Infinities and NaN pass through.
+fn truncate_to_f16(v: f32) -> f32 {
+    let f16_min_normal = 2f32.powi(-14);
+    let f16_subnormal_step = 2f32.powi(-24);
+    const F16_MAX: f32 = 65504.0;
+    let magnitude = v.abs();
+    if !v.is_finite() {
+        v
+    } else if magnitude >= 65536.0 {
+        F16_MAX.copysign(v)
+    } else if magnitude < f16_min_normal {
+        (v / f16_subnormal_step).trunc() * f16_subnormal_step
+    } else {
+        // the f16 mantissa keeps the top 10 of the 23 f32 mantissa bits
+        f32::from_bits(v.to_bits() & !0x1fff)
     }
 }
 
@@ -823,12 +863,67 @@ mod tests {
     }
 
     #[test]
+    fn f16_truncation_rounds_toward_zero() {
+        let nearest = |v: f32| half::f16::from_f32(v).to_f32();
+        // 1.0009 is 0.92 of an f16 ulp above 1: nearest goes up, truncation down
+        assert_eq!(nearest(1.0009), 1.000_976_6);
+        assert_eq!(truncate_to_f16(1.0009), 1.0);
+        assert_eq!(truncate_to_f16(-1.0009), -1.0);
+        assert_eq!(truncate_to_f16(1.000_976_6), 1.000_976_6);
+        // subnormals: 1.5 steps rounds to 2 steps (ties to even), truncates to 1
+        let step = 2f32.powi(-24);
+        assert_eq!(nearest(1.5 * step), 2.0 * step);
+        assert_eq!(truncate_to_f16(1.5 * step), step);
+        assert_eq!(truncate_to_f16(-0.25 * step), -0.0);
+        // above the f16 range: nearest overflows, truncation saturates
+        assert!(nearest(65520.0).is_infinite());
+        assert_eq!(truncate_to_f16(65520.0), 65504.0);
+        assert_eq!(truncate_to_f16(-1e9), -65504.0);
+        assert!(truncate_to_f16(f32::NAN).is_nan());
+        assert_eq!(truncate_to_f16(f32::INFINITY), f32::INFINITY);
+        // never farther from zero than the value, never below the nearest f16 under it
+        let mut state = 0x9e37_79b9u32;
+        for _ in 0..100_000 {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let v = f32::from_bits(state);
+            if !v.is_finite() || v.abs() >= 65504.0 {
+                continue;
+            }
+            let t = truncate_to_f16(v);
+            assert!(t.abs() <= v.abs(), "{v} -> {t}");
+            assert_eq!(nearest(t), t, "{t} is not an f16 value");
+            let ulp = (nearest(v).abs().max(t.abs()) * 2f32.powi(-10)).max(step);
+            assert!((v - t).abs() <= ulp, "{v} -> {t}");
+        }
+    }
+
+    #[test]
+    fn f16_weights_rtz_fits_a_truncating_kernel() {
+        let w: Vec<f64> = (0..64).map(|i| 0.0123 * f64::from(i - 31) + 1e-4).collect();
+        let x: Vec<f32> = (0..64).map(|i| 0.37 - 0.011 * i as f32 + 1e-5).collect();
+        let rounded = round_to_f16(&w);
+        let kernel = rounded
+            .iter()
+            .zip(x.iter().map(|&v| f64::from(truncate_to_f16(v))))
+            .map(|(a, b)| a * b)
+            .sum::<f64>() as f32;
+        let rows = [(0, rounded.as_slice())];
+        let rtz = column_error(&rows, &Profile::F16WeightsRtz.apply(&x), &[kernel]);
+        let rte = column_error(&rows, &Profile::F16Weights.apply(&x), &[kernel]);
+        assert!(rtz < 1e-7, "{rtz}");
+        assert!(rte > 1e-5, "{rte}");
+    }
+
+    #[test]
     fn each_backend_names_its_own_profiles() {
         use crate::dequant::{GGML_F16, GGML_F32, GGML_Q8_0};
         assert_eq!(BackendFamily::of("CPU"), Some(BackendFamily::Cpu));
         assert_eq!(BackendFamily::of("CUDA0"), Some(BackendFamily::Cuda));
         assert_eq!(BackendFamily::of("Vulkan0"), Some(BackendFamily::Vulkan));
-        assert_eq!(BackendFamily::of("MTL0"), None);
+        assert_eq!(BackendFamily::of("MTL0"), Some(BackendFamily::Metal));
+        assert_eq!(BackendFamily::of("OpenCL0"), None);
         assert_eq!(
             profiles_for(BackendFamily::Vulkan, GGML_Q8_0),
             Some(&[Profile::Raw, Profile::F16Weights, Profile::CpuQ8][..])
@@ -857,6 +952,20 @@ mod tests {
             profiles_for(BackendFamily::Cuda, crate::dequant::GGML_Q2_K)
                 .unwrap()
                 .contains(&Profile::Q8Mul64F32)
+        );
+        // Metal: f32 activations in decode, f16 ones rounded either way in
+        // prefill; no integer kernels, and no bf16 profile yet
+        assert_eq!(
+            profiles_for(BackendFamily::Metal, GGML_Q8_0),
+            Some(&[Profile::Raw, Profile::F16Weights, Profile::F16WeightsRtz][..])
+        );
+        assert_eq!(
+            profiles_for(BackendFamily::Metal, crate::dequant::GGML_Q4_K),
+            Some(&[Profile::Raw, Profile::F16Weights, Profile::F16WeightsRtz][..])
+        );
+        assert_eq!(
+            profiles_for(BackendFamily::Metal, crate::dequant::GGML_BF16),
+            None
         );
         // types without a reference dequantization or a known profile have none
         assert_eq!(profiles_for(BackendFamily::Cpu, 19), None);
