@@ -15,11 +15,11 @@ use super::routing_rank::descriptor_for_model;
 mod audio_multipart;
 use audio_multipart::multipart_model_field;
 mod body_rewrite;
-mod chunked;
 mod effective_entity;
 mod plugin_transform;
+use crate::network::http_framing::chunked::{ChunkedDecoder, try_decode_chunked_body};
+use crate::network::http_framing::{CRLF, CRLF_HEADER_TERMINATOR, http_header_terminator};
 pub use body_rewrite::{inject_skippy_hooks_flag, rewrite_model_field};
-use chunked::{ChunkedDecoder, try_decode_chunked_body};
 pub(crate) use plugin_transform::RequestTransforms;
 
 pub(crate) const MAX_HEADER_BYTES: usize = 64 * 1024;
@@ -50,10 +50,6 @@ const MAX_AUDIO_UPLOAD_CHUNKED_WIRE_BYTES: usize = MAX_AUDIO_UPLOAD_BODY_BYTES *
 const MAX_DOCUMENT_UPLOAD_CHUNKED_WIRE_BYTES: usize =
     MAX_DOCUMENT_UPLOAD_BODY_BYTES * 6 + 64 * 1024;
 pub(super) const MAX_HEADERS: usize = 64;
-const CRLF: &[u8] = b"\r\n";
-const LF: &[u8] = b"\n";
-const CRLF_HEADER_TERMINATOR: &[u8] = b"\r\n\r\n";
-const LF_HEADER_TERMINATOR: &[u8] = b"\n\n";
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct HttpReadLimits {
@@ -1023,23 +1019,6 @@ pub(crate) fn canonical_request_id_from_header_prefix(prefix: &[u8]) -> Option<R
     match request.parse(prefix) {
         Ok(httparse::Status::Complete(_)) => canonical_request_id_from_headers(request.headers),
         Ok(httparse::Status::Partial) | Err(_) => None,
-    }
-}
-
-pub(crate) fn http_header_terminator(prefix: &[u8]) -> Option<(usize, &'static [u8])> {
-    let crlf = prefix
-        .windows(CRLF_HEADER_TERMINATOR.len())
-        .position(|window| window == CRLF_HEADER_TERMINATOR)
-        .map(|offset| (offset + CRLF_HEADER_TERMINATOR.len(), CRLF));
-    let lf = prefix
-        .windows(LF_HEADER_TERMINATOR.len())
-        .position(|window| window == LF_HEADER_TERMINATOR)
-        .map(|offset| (offset + LF_HEADER_TERMINATOR.len(), LF));
-
-    match (crlf, lf) {
-        (Some(crlf), Some(lf)) => Some(if crlf.0 <= lf.0 { crlf } else { lf }),
-        (Some(terminator), None) | (None, Some(terminator)) => Some(terminator),
-        (None, None) => None,
     }
 }
 
