@@ -63,6 +63,8 @@ pub struct SkippyModelLoadOptions {
     pub openai_guardrails: Option<InferenceGuardrailsConfig>,
     pub native_mtp_enabled: bool,
     pub serving_hooks_factory: Option<SharedModelServingHooksFactory>,
+    /// Issue inference receipts for the turns this model serves.
+    pub receipts: Option<crate::receipts::ReceiptsLoadOptions>,
 }
 
 pub use skippy_api::serving::ServingTelemetryOptions as SkippyTelemetryOptions;
@@ -118,6 +120,7 @@ impl SkippyModelLoadOptions {
             openai_guardrails: Some(InferenceGuardrailsConfig::disabled_for_skippy()),
             native_mtp_enabled: defaults.native_mtp_enabled,
             serving_hooks_factory: None,
+            receipts: None,
         }
     }
 
@@ -229,6 +232,14 @@ impl SkippyModelLoadOptions {
 
     pub fn with_package_identity(mut self, package_identity: SkippyPackageIdentity) -> Self {
         self.package_identity = Some(package_identity);
+        self
+    }
+
+    pub fn with_receipts(
+        mut self,
+        receipts: Option<skippy_serving::receipts::ReceiptsOptions>,
+    ) -> Self {
+        self.receipts = receipts.map(Into::into);
         self
     }
 }

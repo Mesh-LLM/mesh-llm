@@ -160,3 +160,58 @@ async fn automatic_image_request_draws_only_vision_placements() {
             .await;
     assert_eq!(drawn.len(), 2, "a text request draws over both placements");
 }
+
+#[tokio::test]
+/// The automatic draw widens past the pool ingress narrowed to the hosts the
+/// request's trust policy permits, so it must apply the policy itself: under
+/// the `receipts` tier only a peer that advertises receipts for the model is
+/// drawn, never this node's runtime that issues none, nor a peer without them.
+async fn automatic_draw_under_the_receipts_tier_keeps_only_qualifying_hosts() {
+    // A name this node can tie to a Hugging Face file, so it can audit peers.
+    const TIED: &str = "acme/receipted-chat:Q4_K_M";
+    async fn draw(
+        node: &mesh::Node,
+        request: &BufferedHttpRequest,
+        targets: &election::ModelTargets,
+    ) -> Vec<election::InferenceTarget> {
+        super::super::super::route_model::execution_candidates(node, TIED, request, targets, false)
+            .await
+    }
+    let chat = |receipts: bool| {
+        let mut descriptor = descriptor(Some(ModelWorkloadClass::CausalGeneration), false);
+        descriptor.identity.model_name = TIED.into();
+        descriptor.receipts = receipts;
+        descriptor
+    };
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("node");
+    node.set_served_model_descriptors(vec![chat(false)]).await;
+    let peer_with = |receipts: bool| {
+        let id = iroh::SecretKey::generate().public();
+        let mut peer = test_peer_serving_model(id, TIED);
+        peer.served_model_descriptors = vec![chat(receipts)];
+        (id, peer)
+    };
+    let (receipted, receipted_peer) = peer_with(true);
+    let (plain, plain_peer) = peer_with(false);
+    node.insert_test_peer(receipted_peer).await;
+    node.insert_test_peer(plain_peer).await;
+    let mut local_targets = election::ModelTargets::default();
+    local_targets
+        .targets
+        .insert(TIED.into(), vec![election::InferenceTarget::Local(9337)]);
+    let mut request = request_with_model("/v1/chat/completions", Some("mesh"));
+    crate::network::openai::ingress::maybe_enable_auto_route_hooks(&mut request, Some(TIED));
+    assert_eq!(
+        draw(&node, &request, &local_targets).await.len(),
+        3,
+        "with no policy the draw spans this node and both peers"
+    );
+    request.trust = crate::network::request_trust::RequestTrust::Receipts { audit: true };
+    assert_eq!(
+        draw(&node, &request, &local_targets).await,
+        vec![election::InferenceTarget::Remote(receipted)],
+        "under the receipts tier only the peer with receipts is drawn, not {plain:?} or this node"
+    );
+}

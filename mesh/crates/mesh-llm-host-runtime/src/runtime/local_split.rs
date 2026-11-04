@@ -4,6 +4,7 @@ mod attestation;
 mod auto_balance;
 mod coordinator;
 mod loading;
+mod receipts;
 mod recovery;
 #[cfg(test)]
 mod test_support;

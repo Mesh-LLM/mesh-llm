@@ -9,6 +9,7 @@ mod json_adaptation;
 mod models;
 pub(crate) mod prepared_dispatch;
 mod probe;
+mod receipt_watch;
 mod relay;
 mod routing;
 mod send;

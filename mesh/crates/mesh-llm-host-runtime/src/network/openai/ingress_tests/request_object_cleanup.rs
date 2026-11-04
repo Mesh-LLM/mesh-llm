@@ -122,6 +122,7 @@ async fn rejected_request_releases_objects(model: &str, media: bool, required_ho
         // Parsing/normalization already owns these objects when this handler starts.
         request.request_object_request_ids = vec!["upload-a".into(), "upload-b".into()];
         let affinity = affinity::AffinityRouter::new();
+        let trust_decided = trust_policy::decide(&node, &mut request, false).await;
         handle_buffered_api_request(
             stream.into(),
             request,
@@ -138,6 +139,7 @@ async fn rejected_request_releases_objects(model: &str, media: bool, required_ho
             },
             None,
             crate::runtime::IngressType::LocalOpenAi,
+            trust_decided,
         )
         .await;
     });

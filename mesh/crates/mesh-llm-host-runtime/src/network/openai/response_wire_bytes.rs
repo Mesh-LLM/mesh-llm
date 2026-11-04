@@ -30,7 +30,11 @@ impl HttpResponseByteTap {
     pub(super) fn execution_outcome(&self, outcome: &str) {
         self.observer.execution_outcome(outcome);
     }
-    pub(super) fn new(observer: Arc<dyn WireBytesObserver>) -> Self {
+    /// Whether this tap reports to `observer`.
+    pub(super) fn observes(&self, observer: &Arc<dyn WireBytesObserver>) -> bool {
+        Arc::ptr_eq(&self.observer, observer)
+    }
+    pub(crate) fn new(observer: Arc<dyn WireBytesObserver>) -> Self {
         Self {
             framing: Framing::Headers(Vec::new()),
             tap: WireBytesTap::new(Some(observer.clone())),
@@ -39,7 +43,7 @@ impl HttpResponseByteTap {
     }
 
     /// Called only for the prefix accepted by the downstream AsyncWrite.
-    pub(super) fn update(&mut self, mut bytes: &[u8]) {
+    pub(crate) fn update(&mut self, mut bytes: &[u8]) {
         while !bytes.is_empty() {
             match &mut self.framing {
                 Framing::Headers(header) => {
@@ -101,6 +105,21 @@ impl HttpResponseByteTap {
             Framing::Invalid => Some(WireBytesIncomplete::InvalidFraming),
             _ => Some(WireBytesIncomplete::TransportError),
         });
+        self.tap.finish(incomplete);
+    }
+
+    /// Ends the tap of bytes read from an upstream, which the reader stops
+    /// taking once it has the entity: a chunked entity whose last chunk
+    /// came ended whole, though its trailer may not have been read. An
+    /// entity that runs until the connection closes ended whole only when
+    /// the reader saw the close (`at_eof`).
+    pub(crate) fn finish_read(&mut self, at_eof: bool) {
+        let incomplete = match self.framing {
+            Framing::Done | Framing::Trailers { .. } => None,
+            Framing::UntilClose if at_eof => None,
+            Framing::Invalid => Some(WireBytesIncomplete::InvalidFraming),
+            _ => Some(WireBytesIncomplete::TransportError),
+        };
         self.tap.finish(incomplete);
     }
 }

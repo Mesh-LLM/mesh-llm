@@ -91,6 +91,9 @@ async fn dispatch_fixture(status: u16, expected: u16, attempts: usize, automatic
     client.write_all(wire.as_bytes()).await.unwrap();
     let (mut stream, _) = listener.accept().await.unwrap();
     let mut request = proxy::read_http_request(&mut stream).await.unwrap();
+    // Ingress decides the trust policy before any route; this request runs
+    // under none.
+    request.trust = crate::network::request_trust::RequestTrust::UNRESTRICTED;
     let client = tokio::spawn(async move {
         let mut response = String::new();
         client.read_to_string(&mut response).await.unwrap();
@@ -222,6 +225,7 @@ async fn automatic_model_without_a_host_spills_to_another_model() {
     let (stream, _) = listener.accept().await.unwrap();
     let mut stream = stream;
     let mut request = proxy::read_http_request(&mut stream).await.unwrap();
+    request.trust = crate::network::request_trust::RequestTrust::UNRESTRICTED;
     let client = tokio::spawn(async move {
         let mut response = String::new();
         client.read_to_string(&mut response).await.unwrap();

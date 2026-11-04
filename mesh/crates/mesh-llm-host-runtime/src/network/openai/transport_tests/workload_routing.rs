@@ -78,8 +78,14 @@ async fn explicit_ingress_falls_back_to_capable_remote_when_local_workload_is_in
         targets
             .targets
             .insert(MODEL.into(), vec![election::InferenceTarget::Local(9337)]);
-        let selected =
-            workload_routing::ingress_candidates(&node, MODEL, "/v1/embeddings", &targets).await;
+        let selected = workload_routing::ingress_candidates(
+            &node,
+            MODEL,
+            "/v1/embeddings",
+            &targets,
+            crate::network::request_trust::RequestTrust::UNRESTRICTED,
+        )
+        .await;
         assert_eq!(selected, vec![election::InferenceTarget::Remote(remote)]);
     }
 }
@@ -112,7 +118,14 @@ async fn mesh_candidates_cover_local_and_remote_placements() {
         ]
     );
     assert_eq!(
-        workload_routing::ingress_candidates(&node, MODEL, path, &targets).await,
+        workload_routing::ingress_candidates(
+            &node,
+            MODEL,
+            path,
+            &targets,
+            crate::network::request_trust::RequestTrust::UNRESTRICTED
+        )
+        .await,
         vec![election::InferenceTarget::Local(9337)]
     );
 }
@@ -367,6 +380,7 @@ fn request_with_model(path: &str, model: Option<&str>) -> BufferedHttpRequest {
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     }
 }
 

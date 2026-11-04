@@ -163,6 +163,9 @@ async fn collect_peers(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
     // while the catalog keeps the advertisement and its `requires` so a
     // consumer can see what the node is missing.
     let supported_channels = node.supported_model_channels(&peers).await;
+    // A blocked peer is never routed to (`routable_peers`), so it is listed
+    // as unavailable too.
+    let now_ms = crate::network::peer_blocks::now_ms();
     for (peer, live) in peers.into_iter().zip(liveness) {
         let mut names: BTreeSet<_> = peer.serving_models.iter().cloned().collect();
         names.extend(peer.hosted_models.iter().cloned());
@@ -185,6 +188,7 @@ async fn collect_peers(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
         for name in names {
             let available = live
                 && !paused
+                && !node.peer_blocks.is_blocked(&peer.id, now_ms)
                 && mesh::routes_http_model(&peer, &name)
                 && !mesh::model_requires_unsupported_channel(&peer, &name, &supported_channels);
             insert_observations(

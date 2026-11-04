@@ -24,6 +24,7 @@ pub(crate) mod routing_scope;
 pub(crate) mod runtime_events;
 mod tool_call_ids;
 pub(crate) mod transport;
+mod trust_policy;
 pub(crate) mod virtual_model;
 
 pub(crate) mod workload_routing;
