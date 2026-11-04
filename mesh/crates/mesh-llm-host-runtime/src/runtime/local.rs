@@ -1111,6 +1111,8 @@ pub(super) async fn start_local_openai_model(
         planning_profile: spec.planning_profile,
         measured_buffers: measured_buffers_footprint(&measurement_key),
     };
+    // Choose from the published DFlash pairing index once it is cached.
+    crate::inference::skippy::refresh_dflash_pairing_index();
     // Only a direct GGUF load keeps a DFlash draft (package loads are staged).
     let default_dflash_draft = package
         .is_none()
