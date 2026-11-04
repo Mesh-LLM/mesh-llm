@@ -63,10 +63,12 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
-          MESH_PROBE_OUT="$RUNNER_TEMP/probe.json" ./scripts/public-mesh-probe.sh
-          rc=$?
+          rc=0
+          MESH_PROBE_OUT="$RUNNER_TEMP/probe.json" ./scripts/public-mesh-probe.sh || rc=$?
           state="$(jq -r .state "$RUNNER_TEMP/probe.json")"
-          detail="$(jq -r .detail "$RUNNER_TEMP/probe.json")"
+          # detail can carry remote error text; flatten it so it cannot break
+          # $GITHUB_OUTPUT with extra lines (e.g. a forged "state=ok").
+          detail="$(jq -r '.detail | gsub("[\r\n]+"; " ")' "$RUNNER_TEMP/probe.json")"
           {
             echo "state=$state"
             echo "detail=$detail"
@@ -216,7 +218,14 @@ jobs:
 
       - name: Fail the run when the probe failed
         if: ${{ steps.probe.outputs.state != 'ok' }}
+        env:
+          PROBE_DETAIL: ${{ steps.probe.outputs.detail }}
         shell: bash
         run: |
-          echo "::error::Public mesh probe failed: ${{ steps.probe.outputs.detail }}"
+          # detail is untrusted (remote error text): escape workflow-command
+          # characters before it reaches the runner's command parser.
+          detail="${PROBE_DETAIL//%/%25}"
+          detail="${detail//$'\r'/%0D}"
+          detail="${detail//$'\n'/%0A}"
+          printf '::error::Public mesh probe failed: %s\n' "$detail"
           exit 1
