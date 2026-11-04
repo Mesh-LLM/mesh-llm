@@ -75,11 +75,13 @@ async fn spawn_with_runner(
     let plugin = ExternalPlugin::spawn(
         &ExternalPluginSpec {
             openai_exchange_grant: None,
+            operation_bindings: Vec::new(),
             name: name.into(),
             command: String::new(),
             args: Vec::new(),
             url: None,
             env: BTreeMap::new(),
+            settings: BTreeMap::new(),
             startup: crate::plugin::PluginStartupOptions {
                 lazy_start,
                 ..crate::plugin::PluginStartupOptions::default()
