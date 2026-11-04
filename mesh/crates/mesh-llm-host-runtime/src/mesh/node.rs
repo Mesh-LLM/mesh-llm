@@ -1336,11 +1336,15 @@ impl Node {
         peer_id: EndpointId,
         model_name: &str,
     ) -> Option<crate::network::metrics::ModelThroughputHint> {
+        // Only a hint whose measuring node says when it measured, recently
+        // enough, is evidence; an older peer's hint ranks as unmeasured.
+        let now_unix_ms = current_time_unix_ms();
         let state = self.state.lock().await;
         state.peers.get(&peer_id).and_then(|peer| {
             peer.advertised_model_throughput
                 .iter()
                 .find(|hint| hint.model_name == model_name)
+                .filter(|hint| hint.is_fresh_at(now_unix_ms))
                 .cloned()
         })
     }

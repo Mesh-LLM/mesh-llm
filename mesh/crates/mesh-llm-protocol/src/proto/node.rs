@@ -557,6 +557,16 @@ pub struct AdvertisedModelThroughput {
     pub avg_tokens_per_second_milli: u64,
     #[prost(uint64, tag = "3")]
     pub throughput_samples: u64,
+    /// Wall-clock time of the newest sample behind the average, set by the node
+    /// that measured it and never rewritten when the hint is relayed.
+    #[prost(uint64, optional, tag = "4")]
+    pub observed_at_unix_ms: ::core::option::Option<u64>,
+    /// How long the measuring node keeps a sample as evidence.
+    #[prost(uint32, optional, tag = "5")]
+    pub window_ms: ::core::option::Option<u32>,
+    /// What the average measures.
+    #[prost(enumeration = "ThroughputMeasurementKind", optional, tag = "6")]
+    pub kind: ::core::option::Option<i32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CacheAffinityAdvertisement {
@@ -1465,6 +1475,33 @@ impl LatencySource {
             "LATENCY_SOURCE_DIRECT" => Some(Self::Direct),
             "LATENCY_SOURCE_ESTIMATED" => Some(Self::Estimated),
             "LATENCY_SOURCE_UNKNOWN" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ThroughputMeasurementKind {
+    Unspecified = 0,
+    /// Completion tokens over the whole routed attempt's duration.
+    EndToEndAttempt = 1,
+}
+impl ThroughputMeasurementKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "THROUGHPUT_MEASUREMENT_KIND_UNSPECIFIED",
+            Self::EndToEndAttempt => "THROUGHPUT_MEASUREMENT_KIND_END_TO_END_ATTEMPT",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "THROUGHPUT_MEASUREMENT_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "THROUGHPUT_MEASUREMENT_KIND_END_TO_END_ATTEMPT" => Some(Self::EndToEndAttempt),
             _ => None,
         }
     }
