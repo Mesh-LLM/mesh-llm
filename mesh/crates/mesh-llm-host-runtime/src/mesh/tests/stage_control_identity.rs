@@ -107,6 +107,7 @@ fn identity_test_load_request() -> crate::inference::skippy::StageLoadRequest {
         },
         native_mtp_enabled: true,
         dflash: None,
+        issue_receipts: false,
         shutdown_generation: 7,
         coordinator_term: 11,
         coordinator_id: Some(make_test_endpoint_id(0x70)),

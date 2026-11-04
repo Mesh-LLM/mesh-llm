@@ -93,6 +93,9 @@ pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic>
     if let Err(diagnostic) = validate_telemetry_config(&config.telemetry) {
         diagnostics.push(diagnostic);
     }
+    if let Some(problem) = config.receipts.audit_one_in_problem() {
+        diagnostics.push(validation_diagnostic("receipts.audit_one_in", problem));
+    }
     diagnostics.extend(validate_logging_config(&config.logging));
     diagnostics.extend(validate_audit_config(&config.logging.audit));
 
@@ -371,6 +374,9 @@ where
 {
     let mut diagnostics = validate_config_diagnostics(config);
     diagnostics.extend(crate::unknown_fields::unknown_model_row_field_diagnostics(
+        raw_toml,
+    ));
+    diagnostics.extend(crate::unknown_fields::unknown_receipts_field_diagnostics(
         raw_toml,
     ));
     diagnostics.extend(validate_plugin_entries_strict(

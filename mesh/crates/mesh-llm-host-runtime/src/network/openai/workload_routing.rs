@@ -8,6 +8,7 @@
 use crate::inference::election::InferenceTarget;
 use crate::mesh::model_identity::descriptor_matches_routable_name;
 use crate::mesh::{self, ModelWorkloadClass, ServedModelDescriptor};
+use crate::network::request_trust::{self, RequestTrust};
 
 #[cfg(test)]
 mod tests;
@@ -94,13 +95,20 @@ pub(super) fn affinity_body(
 
 /// Prefer the elected targets only when at least one supports this request.
 /// A stale/local incompatible copy must not shadow capable remote replicas.
+///
+/// Both pools, the elected one and the fallback read from mesh state, hold
+/// only candidates the request's trust policy permits: the fallback is no
+/// way around the policy to a peer that serves the same name without
+/// qualifying.
 pub(super) async fn ingress_candidates(
     node: &mesh::Node,
     model: &str,
     path: &str,
     targets: &crate::inference::election::ModelTargets,
+    trust: RequestTrust,
 ) -> Vec<InferenceTarget> {
     let local = eligible_targets(node, model, path, &targets.candidates(model)).await;
+    let local = request_trust::permitted(node, trust, model, path, local).await;
     if local
         .iter()
         .any(|target| !matches!(target, InferenceTarget::None))
@@ -113,7 +121,19 @@ pub(super) async fn ingress_candidates(
         .into_iter()
         .map(InferenceTarget::Remote)
         .collect::<Vec<_>>();
-    eligible_targets(node, model, path, &remote).await
+    let remote = eligible_targets(node, model, path, &remote).await;
+    request_trust::permitted(node, trust, model, path, remote).await
+}
+
+/// Whether this one descriptor serves `model` on the endpoint at `path`:
+/// its name routes to the model and its own workload admits the endpoint.
+pub(crate) fn descriptor_serves_request(
+    descriptor: &ServedModelDescriptor,
+    model: &str,
+    path: &str,
+) -> bool {
+    descriptor_matches_routable_name(descriptor, model)
+        && model_satisfies_request(model, path, std::slice::from_ref(descriptor))
 }
 
 /// Every placement of `model` this node may dispatch to: its own eligible

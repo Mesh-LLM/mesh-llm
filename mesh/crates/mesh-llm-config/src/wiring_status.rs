@@ -19,6 +19,7 @@
 mod checkpoint;
 mod lifecycle;
 mod managed_models;
+mod receipts;
 mod runtime;
 mod topology;
 
@@ -177,6 +178,11 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         reason: "",
         behavior: WiringBehavior::None,
     },
+    receipts::ENABLED,
+    receipts::AUDIT,
+    receipts::REQUIRE,
+    receipts::OFFLINE,
+    receipts::AUDIT_ONE_IN,
     WiringEntry {
         path: "telemetry.enabled",
         status: WiringStatus::Wired,

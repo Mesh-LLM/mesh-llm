@@ -34,6 +34,7 @@ use super::operational_logging::{
 };
 
 mod native_runtime_events;
+pub(super) mod receipts;
 
 pub(super) use super::local_package::{
     RuntimeModelSizing, SPLIT_DEFAULT_MIN_PARTICIPANTS, SplitParticipant,
@@ -120,6 +121,8 @@ pub(super) struct LocalRuntimeModelHandle {
     pub(super) workload_class: mesh::ModelWorkloadClass,
     /// Render-only reasoning-control observations Skippy produced for this model.
     pub(super) thinking: Option<skippy_inference_api::thinking::ThinkingControls>,
+    /// The runtime issues inference receipts, which the node advertises.
+    pub(super) receipts: bool,
     pub(super) inner: LocalRuntimeBackendHandle,
 }
 
@@ -321,6 +324,9 @@ pub(super) struct LocalOpenAiModelStartSpec<'a> {
     pub(super) http_bind_addr: SocketAddr,
     /// The owner whose config applies swap this model's request defaults.
     pub(super) live_request_defaults: Arc<live_request_defaults::LiveRequestDefaults>,
+    /// Ed25519 seed of the node key, which signs the model's receipts when
+    /// `[receipts]` is on. `None` signs them with a key made at load.
+    pub(super) receipts_signing_key: Option<[u8; 32]>,
 }
 
 pub(super) fn resolved_model_name(path: &Path) -> String {
@@ -794,6 +800,7 @@ pub(super) fn runtime_verified_served_model_descriptor(
     workload_class: mesh::ModelWorkloadClass,
 ) -> mesh::ServedModelDescriptor {
     let mut descriptor = existing.unwrap_or_else(|| mesh::ServedModelDescriptor {
+        receipts: false,
         identity: mesh::ServedModelIdentity {
             model_name: model_name.to_string(),
             is_primary: model_name == primary_model_name,
@@ -925,6 +932,7 @@ pub(super) async fn start_runtime_local_model(
             serving_hooks_factory: None,
             http_bind_addr,
             live_request_defaults: spec.node.live_request_defaults.clone(),
+            receipts_signing_key: Some(spec.node.endpoint_secret_key.to_bytes()),
         },
         runtime_model_name,
         progress_ingress,
@@ -1305,7 +1313,7 @@ async fn start_local_skippy_model(
     report_model_loaded_analytics(&model_name, ModelLoadSource::DirectGguf, compact_meta);
     let http = skippy_model.start_http_on(spec.http_bind_addr)?;
     let (death_tx, death_rx) = tokio::sync::oneshot::channel();
-
+    let receipts = receipts::advertised(&spec, &model_name, &skippy_model, workload_class);
     Ok((
         model_name,
         LocalRuntimeModelHandle {
@@ -1316,6 +1324,7 @@ async fn start_local_skippy_model(
             capabilities,
             workload_class,
             thinking: skippy_model.thinking().cloned(),
+            receipts,
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: Box::new(skippy_model),
                 http,
@@ -1375,7 +1384,8 @@ async fn load_direct_skippy_model(
         .with_serving_hooks_factory(spec.serving_hooks_factory.clone())
         .with_openai_guardrails(skippy::skippy_openai_guardrails_for_policy_handle(
             spec.openai_guardrail_policy.clone(),
-        ));
+        ))
+        .with_receipts(receipts::receipts_options(spec, &model_name));
     if spec.device_override.is_none()
         && let Some(gpu) = spec.pinned_gpu
     {
@@ -1583,6 +1593,7 @@ async fn start_local_package_v2_model(
             capabilities,
             workload_class,
             thinking: handle.thinking().cloned(),
+            receipts: false,
             inner: LocalRuntimeBackendHandle::Skippy {
                 model: Box::new(handle),
                 http,
@@ -1781,6 +1792,7 @@ mod tests {
         // Pre-seed a descriptor so the function takes the overwrite branch.
         node.upsert_served_model_descriptor(mesh::ServedModelDescriptor {
             requires: Vec::new(),
+            receipts: false,
             identity: mesh::ServedModelIdentity {
                 model_name: model_name.to_string(),
                 source_kind: mesh::ModelSourceKind::LocalGguf,

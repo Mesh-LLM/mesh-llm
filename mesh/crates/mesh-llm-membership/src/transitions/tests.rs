@@ -303,3 +303,49 @@ fn heartbeat_gc_expires_each_cooldown_without_removing_peer_records() {
     assert!(state.direct_path_request_last_at.contains_key(&live_id));
     assert!(state.peers.contains_key(&expired_id));
 }
+
+fn receipt_descriptors(peer: &PeerInfo) -> Vec<bool> {
+    peer.served_model_descriptors
+        .iter()
+        .map(|descriptor| descriptor.receipts)
+        .collect()
+}
+
+#[test]
+fn only_the_peer_itself_can_say_it_issues_receipts() {
+    let mut ann = test_announcement(None);
+    ann.served_model_descriptors = vec![mesh_llm_types::mesh::ServedModelDescriptor {
+        receipts: true,
+        ..Default::default()
+    }];
+    // a peer this node learns of through a bridge
+    let mut state = MembershipState::default();
+    let TransitivePeerUpdate::Added(peer) = apply(&mut state, &ann) else {
+        panic!("expected new peer")
+    };
+    assert_eq!(receipt_descriptors(&peer), [false]);
+    // a direct peer that has gone stale, whose record a bridge may rewrite
+    let mut state = MembershipState::default();
+    let id = ann.addr.id;
+    let (direct, _) =
+        state.insert_new_direct_peer(id, ann.addr.clone(), &ann, OwnershipSummary::default());
+    assert_eq!(receipt_descriptors(&direct), [true]);
+    if let Some(peer) = state.peers.get_mut(&id) {
+        peer.last_seen = Instant::now() - Duration::from_secs(PEER_STALE_SECS * 2);
+    }
+    let TransitivePeerUpdate::Updated { peer, .. } = apply(&mut state, &ann) else {
+        panic!("expected update")
+    };
+    assert_eq!(receipt_descriptors(&peer), [false]);
+    // its own announcement says it again
+    let update = state
+        .upsert_existing_direct_peer(
+            id,
+            ann.addr.clone(),
+            &ann,
+            OwnershipSummary::default(),
+            Instant::now(),
+        )
+        .expect("known peer");
+    assert_eq!(receipt_descriptors(&update.peer), [true]);
+}

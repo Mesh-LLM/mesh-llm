@@ -175,8 +175,14 @@ async fn stale_remote_targets_cannot_bypass_peer_admission() {
         .targets
         .insert("shared".into(), vec![InferenceTarget::Remote(departed)]);
     assert_eq!(
-        workload_routing::ingress_candidates(&node, "shared", "/v1/chat/completions", &targets)
-            .await,
+        workload_routing::ingress_candidates(
+            &node,
+            "shared",
+            "/v1/chat/completions",
+            &targets,
+            crate::network::request_trust::RequestTrust::UNRESTRICTED
+        )
+        .await,
         vec![InferenceTarget::Remote(legacy)],
         "a stale elected target must not shadow an admitted legacy replica"
     );

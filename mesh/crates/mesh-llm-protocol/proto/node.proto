@@ -509,6 +509,10 @@ message ServedModelDescriptor {
   optional ServedModelMetadata metadata = 5;
   // Local clients must speak every named plugin channel. Empty means ungated.
   repeated ChannelRequirement requires = 6;
+  // This node issues inference receipts for the model, so a client can
+  // audit the turns it serves (RECEIPTS.md). Absent from older nodes: no
+  // receipts.
+  optional bool receipts = 7;
 }
 
 message ChannelRequirement {

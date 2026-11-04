@@ -9,7 +9,7 @@ use tokio::net::TcpStream;
 #[path = "response_metadata.rs"]
 mod response_metadata;
 #[path = "response_wire_bytes.rs"]
-mod response_wire_bytes;
+pub(crate) mod response_wire_bytes;
 use response_metadata::ResponseMetadata;
 use response_wire_bytes::HttpResponseByteTap;
 use skippy_inference_api::wire_bytes::{WireBytesIncomplete, WireBytesObserver};
@@ -109,17 +109,54 @@ impl ClientStream {
         }
     }
 
+    /// Observe the bytes written from here on with `observer` too, until
+    /// [`Self::stop_observing`].
+    pub(crate) fn observe(&mut self, observer: Arc<dyn WireBytesObserver>) {
+        let original = std::mem::replace(self, Self::Null);
+        *self = original.with_wire_bytes_observer(observer);
+    }
+
+    /// Stop observing with `observer`, wherever a later wrapper put its
+    /// layer. The observer is finished as cancelled unless the response it
+    /// saw already ended.
+    pub(crate) fn stop_observing(&mut self, observer: &Arc<dyn WireBytesObserver>) {
+        match self {
+            Self::Observed { tap, .. } if tap.observes(observer) => {
+                let Self::Observed { stream, .. } = std::mem::replace(self, Self::Null) else {
+                    unreachable!("matched above");
+                };
+                *self = *stream;
+            }
+            Self::Observed { stream, .. } | Self::Metadata { stream, .. } => {
+                stream.stop_observing(observer);
+            }
+            _ => {}
+        }
+    }
+
     /// Mark upstream timeout/cancellation explicitly before transport shutdown.
+    /// Every observer on the stream is told, not only the outermost: a
+    /// layer added for one attempt (`Self::observe`) must not hide the
+    /// outcome from the exchange session below it.
     pub(crate) fn finish_wire_bytes(&mut self, incomplete: WireBytesIncomplete) {
         match self {
-            Self::Observed { tap, .. } => tap.finish(Some(incomplete)),
+            Self::Observed { stream, tap } => {
+                tap.finish(Some(incomplete));
+                stream.finish_wire_bytes(incomplete);
+            }
             Self::Metadata { stream, .. } => stream.finish_wire_bytes(incomplete),
             _ => {}
         }
     }
+
+    /// Report a host-observed execution outcome to every observer on the
+    /// stream.
     pub(crate) fn record_exchange_outcome(&self, outcome: &str) {
         match self {
-            Self::Observed { tap, .. } => tap.execution_outcome(outcome),
+            Self::Observed { stream, tap } => {
+                tap.execution_outcome(outcome);
+                stream.record_exchange_outcome(outcome);
+            }
             Self::Metadata { stream, .. } => stream.record_exchange_outcome(outcome),
             _ => {}
         }
@@ -340,11 +377,15 @@ mod tests {
         bytes: Mutex<Vec<u8>>,
         terminals: Mutex<Vec<WireBytesCommitment>>,
         status: Mutex<Option<u16>>,
+        outcomes: Mutex<Vec<String>>,
     }
 
     impl WireBytesObserver for ByteRecorder {
         fn response_status(&self, status: u16) {
             *self.status.lock().unwrap() = Some(status);
+        }
+        fn execution_outcome(&self, outcome: &str) {
+            self.outcomes.lock().unwrap().push(outcome.to_owned());
         }
         fn try_chunk(&self, offset: u64, bytes: &[u8]) -> bool {
             let mut captured = self.bytes.lock().unwrap();
@@ -394,6 +435,46 @@ mod tests {
             observer.terminals.lock().unwrap().as_slice(),
             &[commit_wire_bytes(b"data: first\n\ndata: [DONE]\n\n")]
         );
+    }
+
+    /// The exchange session observes the whole response; an attempt adds its
+    /// own observer on top. A mid-stream failure must reach both, or the
+    /// session reads an until-close response that was cut short as complete
+    /// and loses the outcome label.
+    #[tokio::test]
+    async fn a_stream_failure_reaches_every_stacked_observer() {
+        use tokio::io::AsyncWriteExt;
+        let session = Arc::new(ByteRecorder::default());
+        let attempt = Arc::new(ByteRecorder::default());
+        let mut stream = ClientStream::null()
+            .with_wire_bytes_observer(session.clone())
+            .with_response_metadata(vec![("x-plugin-test".into(), "1".into())]);
+        let attempt_observer: Arc<dyn WireBytesObserver> = attempt.clone();
+        stream.observe(attempt_observer.clone());
+        // no Content-Length and no chunking: the entity runs until close
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\ndata: partial")
+            .await
+            .unwrap();
+        stream.record_exchange_outcome("transport_error");
+        stream.finish_wire_bytes(WireBytesIncomplete::TransportError);
+        stream.stop_observing(&attempt_observer);
+        stream.shutdown().await.unwrap();
+
+        for (name, observer) in [("session", &session), ("attempt", &attempt)] {
+            assert_eq!(
+                *observer.outcomes.lock().unwrap(),
+                ["transport_error"],
+                "{name} observer lost the outcome"
+            );
+            let terminals = observer.terminals.lock().unwrap();
+            assert_eq!(terminals.len(), 1, "{name} observer terminals");
+            assert_eq!(
+                terminals[0].incomplete,
+                Some(WireBytesIncomplete::TransportError),
+                "{name} observer read a truncated response as complete"
+            );
+        }
     }
 
     const TEST_ALPN: &[u8] = b"mesh-llm/client-stream-test/1";

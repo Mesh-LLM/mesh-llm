@@ -182,6 +182,7 @@ fn text_auto_request() -> BufferedHttpRequest {
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     }
 }
 fn unparsed_chat_request(model: &str) -> BufferedHttpRequest {
@@ -211,6 +212,7 @@ fn unparsed_chat_request(model: &str) -> BufferedHttpRequest {
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     }
 }
 fn large_tokenize_request(model: &str) -> BufferedHttpRequest {
@@ -232,6 +234,7 @@ fn large_tokenize_request(model: &str) -> BufferedHttpRequest {
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     }
 }
 fn local_gguf_descriptor(model_name: &str) -> mesh::ServedModelDescriptor {
@@ -753,6 +756,7 @@ fn test_capture_path_for_request_uses_client_path() {
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     };
 
     assert_eq!(capture_path_for_request(&request), "/v1/responses?foo=1");
@@ -837,6 +841,7 @@ async fn routed_completion_http_boundary_preserves_configured_served_alias() -> 
             request_id: mesh_llm_events::logging::identifiers::RequestId::default(),
             response_adapter: ResponseAdapter::None,
             route_observer: OpenAiRouteObserver::default(),
+            trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
         },
     )
     .await;

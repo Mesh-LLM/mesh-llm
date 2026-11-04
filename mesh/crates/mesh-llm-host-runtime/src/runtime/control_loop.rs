@@ -406,6 +406,8 @@ pub(super) async fn shutdown_run_auto_runtime(ctx: RunAutoShutdownContext<'_>) {
     // log `Endpoint dropped without calling `Endpoint::close`. Aborting
     // ungracefully.` and abandon the connection-close frames, leaving peers to
     // time this node out rather than seeing it depart.
+    // The receipt audits challenge peers over it, so they end first.
+    node.receipt_audits.shut_down().await;
     node.close_endpoint().await;
 
     cleanup_run_auto_runtime_dir(runtime);
