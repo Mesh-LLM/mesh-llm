@@ -716,7 +716,7 @@ fn successful_artifact_hook_may_leave_verified_copies_for_rechecking() {
         out.clone(),
         PackageSidecars::default(),
         ArtifactHook {
-            command: Some("/usr/bin/true".into()),
+            command: Some("true".into()),
         },
         ArtifactHook { command: None },
         PackageWriteOptions {
