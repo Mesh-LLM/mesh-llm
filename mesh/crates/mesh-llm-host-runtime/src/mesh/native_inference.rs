@@ -224,21 +224,6 @@ impl Node {
         {
             anyhow::bail!("native inference paused: {reason}");
         }
-        #[cfg(feature = "payments")]
-        if remote {
-            let prices = self.advertised_payment_offers().await?;
-            let public_id = self
-                .served_model_descriptors()
-                .await
-                .iter()
-                .find(|descriptor| descriptor.identity.model_name == call.target.serving_id)
-                .and_then(|descriptor| public_model_id_from_identity(&descriptor.identity));
-            anyhow::ensure!(
-                !prices.contains_key(&call.target.serving_id)
-                    && !public_id.is_some_and(|id| prices.contains_key(&id)),
-                "native chat does not support this provider's payment protocol"
-            );
-        }
         let slot = self
             .native_inference
             .slots
