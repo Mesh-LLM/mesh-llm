@@ -6,6 +6,7 @@ pub mod benchmark_prompts;
 pub mod capacity;
 pub use mesh_llm_release_footer as embedded_release_footer;
 pub mod hardware;
+pub mod local_http;
 pub mod process;
 #[cfg(windows)]
 pub mod process_lifetime;
