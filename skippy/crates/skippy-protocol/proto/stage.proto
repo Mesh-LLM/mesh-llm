@@ -121,9 +121,10 @@ message StageDFlashPlan {
   optional string draft_model_path = 2;
   optional uint32 max_draft_tokens = 3;
   optional int32 draft_n_gpu_layers = 4;
-  // The pinned catalog draft, on the final stage only, which fetches and
-  // verifies its own copy. Unset for a configured draft and from older
-  // planners; the stage then loads draft_model_path as sent.
+  // The pinned default draft (from the package, the pairing index or the
+  // bootstrap table), on the final stage only, which fetches and verifies its
+  // own copy. Unset for a configured draft and from older planners; the stage
+  // then loads draft_model_path as sent.
   optional StageDFlashDraftSource draft_source = 5;
   // The configured draft device, on the final stage only. A stage without
   // it places the draft with the target.
@@ -135,6 +136,8 @@ message StageDFlashDraftSource {
   string revision = 2;
   string file = 3;
   string sha256 = 4;
+  // File size; a stage refuses a source without one.
+  uint64 bytes = 5;
 }
 
 message StageTopologyStage {

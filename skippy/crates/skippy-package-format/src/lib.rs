@@ -6,8 +6,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+mod dflash_pairing;
 pub mod materialization;
 pub mod stage_admission;
+
+pub use dflash_pairing::{
+    DFLASH_MAX_DRAFT_TOKENS, DFLASH_PAIRING_INDEX_SCHEMA_VERSION, DFlashBackends, DFlashDraft,
+    DFlashPairing, DFlashPairingIndex, DFlashTarget,
+};
+use dflash_pairing::{validate_dflash_proposer, validate_dflash_strategy};
 
 pub const PACKAGE_SCHEMA_VERSION: u32 = 2;
 
@@ -593,6 +600,30 @@ pub enum ProposerKind {
         max_proposal_tokens: u32,
         history_scope: String,
     },
+    /// A DFlash draft model pinned on Hugging Face. It reads the hidden
+    /// states of `target_layers` and proposes up to `max_draft_tokens` per
+    /// block of `block_size`.
+    Dflash {
+        draft: DFlashDraft,
+        target_layers: Vec<u32>,
+        block_size: u32,
+        max_draft_tokens: u32,
+        /// The backends this draft is the package's choice on.
+        #[serde(default)]
+        backends: DFlashBackends,
+    },
+}
+
+impl ProposerKind {
+    /// The proposer's `type` tag.
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Self::NativeMtp { .. } => "native-mtp",
+            Self::NgramCache { .. } => "ngram-cache",
+            Self::NgramSuffix { .. } => "ngram-suffix",
+            Self::Dflash { .. } => "dflash",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -632,6 +663,9 @@ pub enum StrategyKind {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         window_policy: Option<WindowPolicy>,
     },
+    /// DFlash with the first of `proposers` that applies on the serving
+    /// backend; none applying means no DFlash there.
+    Dflash { proposers: Vec<String> },
     Composite {
         primary: String,
         extender: String,
@@ -1871,6 +1905,20 @@ fn validate_proposer(
                 );
             }
         }
+        ProposerKind::Dflash {
+            draft,
+            target_layers,
+            block_size,
+            max_draft_tokens,
+            backends: _,
+        } => validate_dflash_proposer(
+            &format!("generation.speculative_decoding.proposers[{name}]"),
+            draft,
+            target_layers,
+            (*block_size, *max_draft_tokens),
+            layer_count,
+            issues,
+        ),
     }
 }
 
@@ -1900,11 +1948,7 @@ fn validate_strategy(
                 format!("references undeclared proposer {proposer_name:?}"),
             );
         } else {
-            let actual = match &proposers[proposer_name].kind {
-                ProposerKind::NativeMtp { .. } => "native-mtp",
-                ProposerKind::NgramCache { .. } => "ngram-cache",
-                ProposerKind::NgramSuffix { .. } => "ngram-suffix",
-            };
+            let actual = proposers[proposer_name].kind.type_name();
             if !allowed.contains(&actual) {
                 push_issue(
                     issues,
@@ -2049,6 +2093,17 @@ fn validate_strategy(
         } => {
             validate_window_policy(window_policy, issues);
             require_proposer("proposer", proposer, &["ngram-suffix"], issues);
+        }
+        StrategyKind::Dflash { proposers: names } => {
+            validate_dflash_strategy(name, names, issues);
+            for (index, proposer_name) in names.iter().enumerate() {
+                require_proposer(
+                    &format!("proposers[{index}]"),
+                    proposer_name,
+                    &["dflash"],
+                    issues,
+                );
+            }
         }
         StrategyKind::Composite {
             primary,

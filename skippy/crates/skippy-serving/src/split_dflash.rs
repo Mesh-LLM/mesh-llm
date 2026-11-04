@@ -42,9 +42,10 @@ pub struct SplitDFlashStage {
     /// The backend device the configured draft runs on, on the final stage
     /// only. `None` puts it on the target's device.
     pub draft_device: Option<String>,
-    /// Where a catalog default draft comes from, on the final stage only, so
-    /// that stage fetches and verifies its own copy. `None` for a configured
-    /// draft, which the operator places, and from older planners.
+    /// Where a default draft (from the package, the pairing index or the
+    /// bootstrap table) comes from, on the final stage only, so that stage
+    /// fetches and verifies its own copy. `None` for a configured draft, which
+    /// the operator places, and from older planners.
     pub draft_source: Option<SplitDFlashDraftSource>,
 }
 
@@ -55,6 +56,8 @@ pub struct SplitDFlashDraftSource {
     pub revision: String,
     pub file: String,
     pub sha256: String,
+    /// File size. A stage refuses a source without one (zero).
+    pub bytes: u64,
 }
 
 impl SplitDFlashStage {
