@@ -6,6 +6,45 @@
 //! candidate look cheaper than one that reported its costs.
 
 use crate::InferenceTarget;
+use crate::affinity::{prompt_bytes_from_body, scaffold_prefix_from_body};
+use serde_json::Value;
+
+/// Typical bytes per token for prompt text, used to size the whole prompt.
+pub const PROMPT_BYTES_PER_TOKEN: usize = 4;
+/// Deliberately high bytes per token for the shared prefix: dividing by it
+/// gives a count below what a tokenizer would report for ordinary text, so an
+/// estimated credit errs toward too small, never toward too large.
+pub const SHARED_PREFIX_BYTES_PER_TOKEN: usize = 8;
+
+/// Size this request from its parsed body. Without a body nothing is known;
+/// with one, the provably shared prefix is the hashed scaffold, even when an
+/// explicit cache key chose the prefix identity (a key says "same prefix",
+/// not "this deep").
+pub fn request_cost_input_from_body(
+    body: Option<&Value>,
+    prefix_fallback_to_first_user: bool,
+) -> RequestCostInput {
+    let Some(body) = body else {
+        return RequestCostInput {
+            prompt_tokens: None,
+            reusable_prefix_tokens: None,
+        };
+    };
+    let prompt_bytes = prompt_bytes_from_body(body);
+    let shared_bytes = scaffold_prefix_from_body(body, prefix_fallback_to_first_user)
+        .map_or(0, |scaffold| scaffold.bytes);
+    RequestCostInput {
+        prompt_tokens: Some(TokenEstimate {
+            tokens: u32::try_from(prompt_bytes.div_ceil(PROMPT_BYTES_PER_TOKEN))
+                .unwrap_or(u32::MAX),
+            source: TokenSource::Heuristic,
+        }),
+        // Rounded down: a partial token is not credited.
+        reusable_prefix_tokens: Some(
+            u32::try_from(shared_bytes / SHARED_PREFIX_BYTES_PER_TOKEN).unwrap_or(u32::MAX),
+        ),
+    }
+}
 
 /// How a token count was obtained.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -392,6 +431,70 @@ mod tests {
             MIN_SAVED,
         );
         assert_eq!(decision, CacheRouteDecision::ColdWins);
+    }
+
+    fn chat_body(system: usize, user: usize) -> Value {
+        serde_json::json!({
+            "messages": [
+                {"role": "system", "content": "s".repeat(system)},
+                {"role": "user", "content": "u".repeat(user)},
+            ]
+        })
+    }
+
+    #[test]
+    fn the_request_is_sized_from_its_body() {
+        let input = request_cost_input_from_body(Some(&chat_body(800, 400)), true);
+        assert_eq!(input.prompt_tokens.map(|p| p.tokens), Some(300));
+        assert_eq!(input.reusable_prefix_tokens, Some(100));
+    }
+
+    #[test]
+    fn later_turns_are_never_part_of_the_shared_prefix() {
+        let mut body = chat_body(800, 400);
+        let messages = body["messages"].as_array_mut().unwrap();
+        messages.push(serde_json::json!({"role": "assistant", "content": "a".repeat(4_000)}));
+        messages.push(serde_json::json!({"role": "user", "content": "u".repeat(400)}));
+        let input = request_cost_input_from_body(Some(&body), true);
+        assert_eq!(input.prompt_tokens.map(|p| p.tokens), Some(1_400));
+        assert_eq!(input.reusable_prefix_tokens, Some(100));
+    }
+
+    #[test]
+    fn an_explicit_cache_key_does_not_deepen_the_credit() {
+        let mut body = chat_body(800, 400);
+        body["prompt_cache_key"] = Value::from("k".repeat(4_000));
+        let input = request_cost_input_from_body(Some(&body), true);
+        assert_eq!(input.reusable_prefix_tokens, Some(100));
+    }
+
+    #[test]
+    fn without_a_scaffold_only_the_fallback_policy_shares_the_first_user_turn() {
+        let body = serde_json::json!({"messages": [{"role": "user", "content": "u".repeat(800)}]});
+        assert_eq!(
+            request_cost_input_from_body(Some(&body), true).reusable_prefix_tokens,
+            Some(100)
+        );
+        assert_eq!(
+            request_cost_input_from_body(Some(&body), false).reusable_prefix_tokens,
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn an_unparsed_body_leaves_the_request_unknown() {
+        let input = request_cost_input_from_body(None, true);
+        assert_eq!(input.prompt_tokens, None);
+        assert_eq!(input.reusable_prefix_tokens, None);
+    }
+
+    #[test]
+    fn the_sized_scaffold_is_the_hashed_scaffold() {
+        let body = chat_body(800, 400);
+        assert_eq!(
+            crate::affinity::scaffold_prefix_from_body(&body, true).map(|s| s.hash),
+            crate::affinity::scaffold_prefix_hash_from_body(&body, true)
+        );
     }
 
     #[test]
