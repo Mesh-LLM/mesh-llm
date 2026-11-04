@@ -1,6 +1,7 @@
 pub(crate) mod affinity;
 pub(crate) mod discovery;
 pub(crate) mod exclusive_listener;
+pub(crate) mod http_framing;
 pub(crate) mod lan_beacon;
 pub(crate) mod lan_bootstrap;
 pub(crate) mod local_http;

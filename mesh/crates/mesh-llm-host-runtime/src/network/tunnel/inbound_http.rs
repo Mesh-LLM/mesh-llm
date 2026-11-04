@@ -125,7 +125,7 @@ where
         let max_header_bytes = crate::network::openai::request_parse::MAX_HEADER_BYTES;
 
         while prefix.len() < max_header_bytes {
-            if crate::network::openai::request_parse::http_header_terminator(&prefix).is_some() {
+            if crate::network::http_framing::http_header_terminator(&prefix).is_some() {
                 break;
             }
             let read_cap = (max_header_bytes - prefix.len()).min(chunk.len());
