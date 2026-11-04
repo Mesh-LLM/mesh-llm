@@ -56,8 +56,8 @@ pub struct SplitDFlashDraftSource {
     pub revision: String,
     pub file: String,
     pub sha256: String,
-    /// File size; `None` from older planners.
-    pub bytes: Option<u64>,
+    /// File size. A stage refuses a source without one (zero).
+    pub bytes: u64,
 }
 
 impl SplitDFlashStage {

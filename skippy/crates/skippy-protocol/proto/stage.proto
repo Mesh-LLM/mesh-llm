@@ -136,8 +136,8 @@ message StageDFlashDraftSource {
   string revision = 2;
   string file = 3;
   string sha256 = 4;
-  // File size; unset from older planners.
-  optional uint64 bytes = 5;
+  // File size; a stage refuses a source without one.
+  uint64 bytes = 5;
 }
 
 message StageTopologyStage {

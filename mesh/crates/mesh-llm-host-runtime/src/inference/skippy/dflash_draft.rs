@@ -37,20 +37,22 @@ fn refresh_cached_dflash_pairing_index(
     if dflash_pairing_index_installed() {
         return;
     }
-    if !path.is_file() {
-        draft_cached_or_fetch(path, key, async move {
-            let path = fetch.await?;
-            install_cached_dflash_pairing_index(&path)?;
-            Ok(path)
-        });
-        return;
-    }
-    if let Err(error) = install_cached_dflash_pairing_index(path) {
+    if path.is_file() {
+        let Err(error) = install_cached_dflash_pairing_index(path) else {
+            return;
+        };
+        // A partial or corrupt download: remove it so a fresh one replaces it.
         tracing::warn!(
             index = %path.display(),
             "DFlash pairing index unusable, choosing from the bootstrap table: {error:#}"
         );
+        discard_cached_artifact(path);
     }
+    draft_cached_or_fetch(path, key, async move {
+        let path = fetch.await?;
+        install_cached_dflash_pairing_index(&path)?;
+        Ok(path)
+    });
 }
 
 fn install_cached_dflash_pairing_index(path: &Path) -> Result<()> {
@@ -90,7 +92,7 @@ pub(crate) fn default_dflash_draft_cached(chosen: &DefaultDFlash) -> bool {
     let chosen_for_fetch = chosen.clone();
     draft_cached_or_fetch(
         &dflash_draft_cache_path(&chosen.pairing.draft),
-        &chosen.pairing.draft.repo,
+        &draft_fetch_key(&chosen.pairing.draft),
         async move {
             let draft = chosen_for_fetch.pairing.draft.clone();
             let path = fetch_dflash_draft(&draft).await?;
@@ -140,7 +142,7 @@ pub(crate) async fn materialize_default_dflash_draft(resolved: &mut super::Resol
                 "DFlash draft unavailable, serving without speculation: {error:#}"
             );
             if error.downcast_ref::<CorruptDraft>().is_some() {
-                discard_cached_draft(&cache_path);
+                discard_cached_artifact(&cache_path);
             }
             resolved.speculative.drop_default_dflash();
         }
@@ -153,21 +155,22 @@ pub(crate) async fn materialize_default_dflash_draft(resolved: &mut super::Resol
 #[error("{0}")]
 struct CorruptDraft(String);
 
-/// Removes a corrupt cached draft, the snapshot entry and the blob it points
-/// to, so the next load downloads it again instead of finding it cached. The
-/// downloader returns an existing snapshot as is, so the blob has to go too.
-fn discard_cached_draft(path: &Path) {
+/// Removes a corrupt cached draft or pairing index, the snapshot entry and the
+/// blob it points to, so the next load downloads it again instead of finding
+/// it cached. The downloader returns an existing snapshot as is, so the blob
+/// has to go too.
+fn discard_cached_artifact(path: &Path) {
     let blob = std::fs::canonicalize(path).ok();
     for path in std::iter::once(path.to_path_buf()).chain(blob) {
         match std::fs::remove_file(&path) {
             Ok(()) => tracing::info!(
                 path = %path.display(),
-                "removed a corrupt DFlash draft; the next load downloads it again"
+                "removed a corrupt DFlash artifact; the next load downloads it again"
             ),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => tracing::warn!(
                 path = %path.display(),
-                "could not remove a corrupt DFlash draft: {error}"
+                "could not remove a corrupt DFlash artifact: {error}"
             ),
         }
     }
@@ -184,7 +187,7 @@ pub(crate) fn split_dflash_draft_source(
         revision: draft.revision.clone(),
         file: draft.file.clone(),
         sha256: draft.sha256.clone(),
-        bytes: Some(draft.bytes),
+        bytes: draft.bytes,
     }
 }
 
@@ -199,8 +202,8 @@ pub(crate) fn split_dflash_draft_source(
 /// the draft up. A draft that fails its checks also serves without
 /// speculation. A plan without a source (a configured draft, or an older
 /// planner) loads its path as sent. A source that does not pin an immutable
-/// commit and digest serves without speculation: the planner's path names a
-/// file on the planner's node, which this node cannot check.
+/// commit, digest and size serves without speculation: the planner's path
+/// names a file on the planner's node, which this node cannot check.
 pub(crate) async fn materialize_split_dflash_draft(
     plan: &mut skippy_serving::split_dflash::SplitDFlashStage,
 ) {
@@ -229,16 +232,20 @@ pub(crate) async fn materialize_split_dflash_draft(
 fn split_draft_cached_or_fetch(draft: &DFlashDraft, target_layers: &[u32]) -> bool {
     let draft_for_fetch = draft.clone();
     let layers = target_layers.to_vec();
-    draft_cached_or_fetch(&dflash_draft_cache_path(draft), &draft.repo, async move {
-        let path = fetch_dflash_draft(&draft_for_fetch).await?;
-        tokio::task::spawn_blocking(move || {
-            verify_dflash_draft(&draft_for_fetch, path, |path| {
-                check_split_dflash_draft(path, &layers)
+    draft_cached_or_fetch(
+        &dflash_draft_cache_path(draft),
+        &draft_fetch_key(draft),
+        async move {
+            let path = fetch_dflash_draft(&draft_for_fetch).await?;
+            tokio::task::spawn_blocking(move || {
+                verify_dflash_draft(&draft_for_fetch, path, |path| {
+                    check_split_dflash_draft(path, &layers)
+                })
             })
-        })
-        .await
-        .context("join DFlash draft check")?
-    })
+            .await
+            .context("join DFlash draft check")?
+        },
+    )
 }
 
 fn resolve_split_dflash_draft(
@@ -265,7 +272,7 @@ fn resolve_split_dflash_draft(
                 "split DFlash draft unavailable, serving without speculation: {error:#}"
             );
             if error.downcast_ref::<CorruptDraft>().is_some() {
-                discard_cached_draft(&cache_path);
+                discard_cached_artifact(&cache_path);
             }
             None
         }
@@ -273,8 +280,8 @@ fn resolve_split_dflash_draft(
 }
 
 /// The pinned draft a split plan's source names, or `None` when the plan has
-/// no source. A source that does not pin an immutable commit and digest is
-/// refused, and the stage serves without speculation.
+/// no source. A source that does not pin an immutable commit, digest and size
+/// is refused, and the stage serves without speculation.
 fn split_dflash_pinned_draft(
     plan: &mut skippy_serving::split_dflash::SplitDFlashStage,
 ) -> Option<DFlashDraft> {
@@ -284,10 +291,10 @@ fn split_dflash_pinned_draft(
         revision: source.revision.clone(),
         file: source.file.clone(),
         sha256: source.sha256.clone(),
-        // Older planners send no size; the digest still decides.
-        bytes: source.bytes.unwrap_or(0),
+        bytes: source.bytes,
     };
-    let pinned = draft.revision.len() == 40
+    let pinned = draft.bytes > 0
+        && draft.revision.len() == 40
         && draft.revision.bytes().all(|byte| byte.is_ascii_hexdigit())
         && draft.sha256.len() == 64
         && draft.sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
@@ -298,12 +305,17 @@ fn split_dflash_pinned_draft(
     if !pinned {
         tracing::warn!(
             draft = %format!("{}/{}@{}", draft.repo, draft.file, draft.revision),
-            "split DFlash draft source is not pinned to a commit and digest; serving without speculation"
+            "split DFlash draft source is not pinned to a commit, digest and size; serving without speculation"
         );
         plan.draft_model_path = None;
         return None;
     }
     Some(draft)
+}
+
+/// Names one draft download: two drafts in one repo fetch independently.
+fn draft_fetch_key(draft: &DFlashDraft) -> String {
+    format!("{}/{}@{}", draft.repo, draft.file, draft.revision)
 }
 
 /// `true` when `path` exists. Otherwise starts `fetch` in the background,
@@ -364,7 +376,7 @@ async fn fetch_dflash_draft(draft: &DFlashDraft) -> Result<PathBuf> {
     )
 }
 
-/// Accepts `path` as `draft` only if its size (when pinned) and SHA-256 match
+/// Accepts `path` as `draft` only if its size and SHA-256 match
 /// and `check` accepts its header.
 fn verify_dflash_draft(
     draft: &DFlashDraft,
@@ -374,7 +386,7 @@ fn verify_dflash_draft(
     let bytes = std::fs::metadata(&path)
         .with_context(|| format!("read {}", path.display()))?
         .len();
-    if draft.bytes != 0 && bytes != draft.bytes {
+    if bytes != draft.bytes {
         return Err(CorruptDraft(format!(
             "{} is {bytes} bytes, expected {}",
             path.display(),
@@ -443,7 +455,7 @@ mod tests {
             revision: "a3d4fb1eff6f268cbbdf808042f6902cc17f5458".into(),
             file: "draft-Q8_0.gguf".into(),
             sha256: "b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1".into(),
-            bytes: Some(1_849_481_472),
+            bytes: 1_849_481_472,
         }
     }
 
@@ -519,6 +531,7 @@ mod tests {
             |source: &mut skippy_serving::split_dflash::SplitDFlashDraftSource| {
                 source.file = "../escape.gguf".into()
             },
+            |source: &mut skippy_serving::split_dflash::SplitDFlashDraftSource| source.bytes = 0,
         ] {
             let mut source = pinned_source();
             unpin(&mut source);
@@ -545,7 +558,7 @@ mod tests {
         #[cfg(not(unix))]
         std::fs::copy(&blob, &snapshot).unwrap();
 
-        discard_cached_draft(&snapshot);
+        discard_cached_artifact(&snapshot);
 
         assert!(std::fs::symlink_metadata(&snapshot).is_err());
         #[cfg(unix)]
@@ -605,9 +618,11 @@ mod tests {
         let cache = tempfile::tempdir().unwrap();
         let bad = cache.path().join("bad.json");
         std::fs::write(&bad, "{\"schema_version\": 1, \"pairings\": [{}]}").unwrap();
+        // An unusable cached index is removed, so a later load fetches it again.
         refresh_cached_dflash_pairing_index(&bad, "test/bad-index", async {
-            unreachable!("a cached index is never fetched")
+            unreachable!("no runtime, so no fetch")
         });
+        assert!(!bad.exists());
         let cached = cache.path().join("index.json");
         std::fs::copy(checked_in, &cached).unwrap();
         // No runtime and a fetch that must not run: the cache alone serves.
@@ -615,6 +630,21 @@ mod tests {
             unreachable!("a cached index is never fetched")
         });
         assert!(dflash_pairing_index_installed());
+    }
+
+    #[test]
+    fn drafts_in_one_repo_fetch_independently() {
+        let (_file, draft) = draft_with(b"draft");
+        let other = DFlashDraft {
+            file: "other.gguf".to_string(),
+            ..draft.clone()
+        };
+        let newer = DFlashDraft {
+            revision: "f".repeat(40),
+            ..draft.clone()
+        };
+        assert_ne!(draft_fetch_key(&draft), draft_fetch_key(&other));
+        assert_ne!(draft_fetch_key(&draft), draft_fetch_key(&newer));
     }
 
     #[tokio::test]
