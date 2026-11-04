@@ -160,8 +160,10 @@ fn request_order(question: &DecisionQuestion, prompt: &PromptQuestion, probs: &[
 struct Calibration {
     /// (`<type>` or `<type>.<bucket>`, temperature)
     temperatures: Vec<(String, f32)>,
-    /// (level count, biases by level)
-    score_bias: Vec<(usize, Vec<f32>)>,
+    /// (level count, level, bias); sparse so a hostile or corrupt metadata
+    /// count cannot drive an unbounded allocation, with last-wins overwrite
+    /// for repeated keys.
+    score_bias: Vec<(usize, usize, f32)>,
 }
 
 impl Calibration {
@@ -171,6 +173,7 @@ impl Calibration {
             if let Some(name) = key.strip_prefix("temperature.") {
                 if let Ok(temperature) = value.trim().parse::<f32>()
                     && temperature > 0.0
+                    && temperature.is_finite()
                 {
                     calibration
                         .temperatures
@@ -190,14 +193,14 @@ impl Calibration {
                 if level >= count {
                     continue;
                 }
-                let entry = match calibration.score_bias.iter_mut().find(|(n, _)| *n == count) {
-                    Some(entry) => entry,
-                    None => {
-                        calibration.score_bias.push((count, vec![0.0; count]));
-                        calibration.score_bias.last_mut().expect("just pushed")
-                    }
-                };
-                entry.1[level] = bias;
+                match calibration
+                    .score_bias
+                    .iter_mut()
+                    .find(|(n, level_, _)| *n == count && *level_ == level)
+                {
+                    Some(triple) => triple.2 = bias,
+                    None => calibration.score_bias.push((count, level, bias)),
+                }
             }
         }
         calibration
@@ -231,11 +234,19 @@ impl Calibration {
     fn distribution(&self, question: &DecisionQuestion, logits: &[f32]) -> Vec<f32> {
         let temperature = self.temperature(question);
         let mut logits = logits.to_vec();
-        if matches!(question.kind, DecisionQuestionKind::Score { .. })
-            && let Some((_, bias)) = self.score_bias.iter().find(|(n, _)| *n == logits.len())
-        {
-            for (logit, bias) in logits.iter_mut().zip(bias) {
-                *logit += bias;
+        if matches!(question.kind, DecisionQuestionKind::Score { .. }) {
+            // Only the triples whose level count matches this question's
+            // logits apply; a level beyond the logits is ignored so a
+            // corrupt count cannot panic the decision.
+            let logit_count = logits.len();
+            for (_, level, bias) in self
+                .score_bias
+                .iter()
+                .filter(|(count, _, _)| *count == logit_count)
+            {
+                if let Some(logit) = logits.get_mut(*level) {
+                    *logit += bias;
+                }
             }
         }
         let max = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
@@ -426,6 +437,7 @@ mod tests {
             });
         // the server answered input_tokens=330 for this request
         assert_eq!(output.input_tokens, 330);
+        assert_eq!(flat.len(), expected.len(), "probability count");
         for (index, (got, want)) in flat.iter().zip(&expected).enumerate() {
             assert!(
                 (got - want).abs() < 2e-3,

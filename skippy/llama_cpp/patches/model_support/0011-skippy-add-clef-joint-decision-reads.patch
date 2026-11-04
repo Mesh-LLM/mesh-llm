@@ -8,12 +8,12 @@ decision order, and read one score per option from the embeddings output
 in one micro-batch, as the upstream server does for clef.
 ---
  include/skippy.h        |   1 +
- include/skippy/clef.h   | 144 ++++++++++++
+ include/skippy/clef.h   | 144 +++++++++++
  include/skippy/common.h |   4 +-
  src/CMakeLists.txt      |  20 ++
  src/skippy/abi.cpp      |   1 +
- src/skippy/clef.cpp     | 505 ++++++++++++++++++++++++++++++++++++++++
- 6 files changed, 674 insertions(+), 1 deletion(-)
+ src/skippy/clef.cpp     | 517 ++++++++++++++++++++++++++++++++++++++++
+ 6 files changed, 686 insertions(+), 1 deletion(-)
  create mode 100644 include/skippy/clef.h
  create mode 100644 src/skippy/clef.cpp
 
@@ -31,7 +31,7 @@ index 9497734b7..48e0be2cf 100644
  #endif // SKIPPY_H
 diff --git a/include/skippy/clef.h b/include/skippy/clef.h
 new file mode 100644
-index 000000000..a2bb704e0
+index 000000000..cf13822ed
 --- /dev/null
 +++ b/include/skippy/clef.h
 @@ -0,0 +1,144 @@
@@ -253,10 +253,10 @@ index ed9825df3..7ad903ff5 100644
  #endif
 diff --git a/src/skippy/clef.cpp b/src/skippy/clef.cpp
 new file mode 100644
-index 000000000..6c16d9ba2
+index 000000000..6ccd39221
 --- /dev/null
 +++ b/src/skippy/clef.cpp
-@@ -0,0 +1,508 @@
+@@ -0,0 +1,517 @@
 +#include "skippy/clef.h"
 +
 +#include "skippy/errors.h"
@@ -400,7 +400,14 @@ index 000000000..6c16d9ba2
 +    if (val.is_object()) {
 +        common_json out = common_json::object();
 +        for (const auto & [key, item] : val.items()) {
-+            out[key] = replace_text(item, search, replace);
++            // Escape the marker in keys as well as values. When the escaped
++            // key would collide with an earlier entry, keep the original key:
++            // losing an entry is worse than leaving the marker in a key.
++            std::string escaped_key = key;
++            replace_all(escaped_key, search, replace);
++            const std::string & final_key =
++                    escaped_key != key && out.contains(escaped_key) ? key : escaped_key;
++            out[final_key] = replace_text(item, search, replace);
 +        }
 +        return out;
 +    }
@@ -485,7 +492,9 @@ index 000000000..6c16d9ba2
 +        inp_questions.push_back(question);
 +    }
 +
-+    // the template is given raw JSON values with sorted keys, and no marker in the input
++    // the template is given raw JSON values with sorted keys; the marker is
++    // escaped from every string and key (a rewritten key that would collide
++    // keeps its original form)
 +    common_json inp = common_json::object();
 +    inp["state"]     = body.at("state");
 +    inp["questions"] = inp_questions;
@@ -765,3 +774,6 @@ index 000000000..6c16d9ba2
 +        return skippy_success(out_error);
 +    });
 +}
+-- 
+2.56.0
+

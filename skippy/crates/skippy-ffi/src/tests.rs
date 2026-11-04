@@ -96,6 +96,7 @@ fn native_workload_feature_preserves_runtime_event_features() {
         crate::FEATURE_DEVICE_EVENTS,
         crate::FEATURE_DIAGNOSTIC_EVENTS,
         crate::FEATURE_UNLOAD_EVENTS,
+        crate::FEATURE_CLEF_DECISIONS,
     ] {
         assert_ne!(
             features & expected,

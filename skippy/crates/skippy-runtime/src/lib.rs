@@ -55,6 +55,7 @@ pub use dflash::{
     DFlashHealth, DFlashProposal, DFlashVariant, dflash_feature_identity, dflash_feature_layer,
     frame_has_dflash_features,
 };
+pub use error::NativeError;
 pub(crate) use error::ensure_ok;
 pub use gguf_writer::{
     ModelInfo, write_gguf_from_parts, write_gguf_from_parts_consuming,
