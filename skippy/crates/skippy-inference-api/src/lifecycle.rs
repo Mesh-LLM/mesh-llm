@@ -14,6 +14,19 @@ use crate::{common::Usage, errors::InferenceError};
 
 /// The canonical request correlation header used by the inference frontend.
 pub static REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
+/// The client's VRF key for an inference receipt, 64 hex digits. A serving
+/// node that issues receipts binds it into the turn, so the client is bound
+/// to its key before it sees what it will challenge.
+pub static RECEIPT_CLIENT_KEY_HEADER: HeaderName = HeaderName::from_static("x-receipt-client-key");
+/// The turn root of the receipt this request continues, 64 hex digits.
+pub static RECEIPT_PARENT_HEADER: HeaderName = HeaderName::from_static("x-receipt-parent");
+
+/// What a request asks a receipt to bind.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReceiptRequest {
+    pub client_key: [u8; 32],
+    pub parent: Option<[u8; 32]>,
+}
 
 /// A caller-supplied fresh, unpredictable per-request value. Presence alone
 /// buys equivocation resistance (a downstream recorder can no longer fabricate
@@ -42,6 +55,9 @@ pub struct InferenceLifecycleContext {
     pub request_id: RequestId,
     pub method: InferenceRequestMethod,
     pub route: InferenceFrontendRoute,
+    /// The receipt binding from [`RECEIPT_CLIENT_KEY_HEADER`] and
+    /// [`RECEIPT_PARENT_HEADER`].
+    pub receipt: Option<ReceiptRequest>,
 }
 
 impl InferenceLifecycleContext {
@@ -54,8 +70,28 @@ impl InferenceLifecycleContext {
             request_id,
             method,
             route,
+            receipt: None,
         }
     }
+
+    pub const fn with_receipt(mut self, receipt: Option<ReceiptRequest>) -> Self {
+        self.receipt = receipt;
+        self
+    }
+}
+
+/// The receipt binding a request asks for: a well-formed client key, and
+/// the parent turn root when it names a well-formed one.
+pub fn receipt_request_from_headers(headers: &axum::http::HeaderMap) -> Option<ReceiptRequest> {
+    let key = |name: &HeaderName| {
+        let text = headers.get(name)?.to_str().ok()?;
+        let bytes = hex::decode(text.trim()).ok()?;
+        <[u8; 32]>::try_from(bytes.as_slice()).ok()
+    };
+    Some(ReceiptRequest {
+        client_key: key(&RECEIPT_CLIENT_KEY_HEADER)?,
+        parent: key(&RECEIPT_PARENT_HEADER),
+    })
 }
 
 /// A bounded HTTP method classification for lifecycle metadata.

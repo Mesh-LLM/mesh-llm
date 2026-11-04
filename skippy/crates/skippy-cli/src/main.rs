@@ -101,7 +101,10 @@ async fn run_main(
     let native_options = runtime::resolve_options(cli.native_runtime)?;
     #[cfg(feature = "dynamic-native-runtime")]
     if matches!(&cli.command, Command::Serve(args) if !args.print_effective_config || args.public.config.is_none())
-        || matches!(&cli.command, Command::PlanSplit(_))
+        || matches!(
+            &cli.command,
+            Command::PlanSplit(_) | Command::AuditReceipt(_) | Command::RecheckReceipt(_)
+        )
     {
         runtime::prepare_native_runtime(&native_options, automatic_runtime).await?;
     }
@@ -124,6 +127,26 @@ async fn run_main(
         Command::Serve(args) => serve::run(*args).await,
         Command::Models { command } => skippy_commands::models::run_standalone(&command).await,
         Command::PlanSplit(args) => skippy_commands::split::run(args.into()),
+        Command::AuditReceipt(args) => {
+            let command: skippy_commands::receipts::AuditReceiptCommand = args.into();
+            tokio::task::spawn_blocking(move || {
+                skippy_commands::receipts::run(
+                    command,
+                    &skippy_commands::receipts::load_claimed_model,
+                )
+            })
+            .await?
+        }
+        Command::RecheckReceipt(args) => {
+            let command: skippy_commands::receipts::RecheckReceiptCommand = args.into();
+            tokio::task::spawn_blocking(move || {
+                skippy_commands::receipts::recheck(
+                    command,
+                    &skippy_commands::receipts::load_claimed_model,
+                )
+            })
+            .await?
+        }
         Command::Runtime { command } => {
             skippy_commands::runtime::run(
                 command.into(),

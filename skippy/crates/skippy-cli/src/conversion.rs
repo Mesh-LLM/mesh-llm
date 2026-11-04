@@ -128,6 +128,23 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
         native_mtp_min_tokens: openai_speculative.native_mtp.min_draft_tokens,
         speculative: openai_speculative,
     });
+    let signing_key = args
+        .receipts_signing_key
+        .as_deref()
+        .map(read_signing_key)
+        .transpose()?;
+    let receipts = (args.receipts || args.receipts_listen.is_some()).then(|| {
+        skippy_serving::receipts::ReceiptsOptions {
+            listen: args.receipts_listen,
+            allow_remote: args.receipts_allow_remote,
+            downstream: args.receipts_downstream.clone(),
+            claimed_model: args
+                .receipts_claimed_model
+                .clone()
+                .unwrap_or_else(|| config.model_id.clone()),
+            signing_key,
+        }
+    });
     let native_mtp_enabled = config.native_mtp_enabled;
     Ok(BinaryStageOptions {
         tuning: tuning.clone(),
@@ -154,6 +171,7 @@ pub fn binary_stage_options(args: ServeBinaryArgs) -> Result<BinaryStageOptions>
         split_dflash: None,
         openai,
         l3_manager: None,
+        receipts,
     })
 }
 
@@ -330,6 +348,21 @@ impl From<crate::cli::NativeRuntimeArgs> for skippy_api::native_runtime::NativeR
             selection: value.selection,
         }
     }
+}
+
+/// A receipts signing key file: 64 hex digits, the Ed25519 seed.
+fn read_signing_key(path: &std::path::Path) -> Result<[u8; 32]> {
+    let text = std::fs::read_to_string(path)
+        .with_context(|| format!("read receipts signing key {}", path.display()))?;
+    let bytes =
+        hex::decode(text.trim()).with_context(|| format!("{} is not hex", path.display()))?;
+    <[u8; 32]>::try_from(bytes.as_slice()).map_err(|_| {
+        anyhow::anyhow!(
+            "{} holds {} bytes; an Ed25519 seed has 32",
+            path.display(),
+            bytes.len()
+        )
+    })
 }
 
 #[cfg(test)]
@@ -662,5 +695,38 @@ mod tests {
         };
 
         assert!(error.contains("requires --draft-model-path"));
+    }
+
+    #[test]
+    fn a_later_stage_issues_receipts_without_an_api() {
+        let dir = tempfile::tempdir().expect("create temp directory");
+        let stage_path = dir.path().join("stage.json");
+        fs::write(
+            &stage_path,
+            serde_json::to_vec(&stage_config()).expect("serialize stage config"),
+        )
+        .expect("write stage config");
+        let parse = |flags: &[&str]| {
+            let mut args = vec![
+                "skippy",
+                "serve",
+                "--config",
+                stage_path.to_str().expect("UTF-8 stage path"),
+                "--stage-transport",
+                "binary",
+            ];
+            args.extend_from_slice(flags);
+            Cli::try_parse_from(args)
+        };
+
+        let cli = parse(&["--receipts", "--receipts-claimed-model", "m"]).expect("parse");
+        let options = binary_stage_options(binary_args(cli)).expect("resolve binary stage");
+        let receipts = options.receipts.expect("receipts on");
+        assert_eq!(receipts.listen, None);
+        assert_eq!(receipts.downstream, None);
+        assert_eq!(receipts.claimed_model, "m");
+
+        assert!(parse(&["--receipts-claimed-model", "m"]).is_err());
+        assert!(parse(&["--receipts", "--receipts-listen", "127.0.0.1:9501"]).is_err());
     }
 }

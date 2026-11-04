@@ -591,6 +591,7 @@ async fn real_multimodal_split_smoke_when_fixture_is_set() -> Result<()> {
             split_dflash: None,
             openai: None,
             l3_manager: None,
+            receipts: None,
         });
     // Large filtered GGUF slices can take several minutes to materialize on
     // macOS even after the native library is warm. This test is opt-in and

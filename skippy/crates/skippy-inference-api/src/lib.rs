@@ -74,10 +74,10 @@ pub use hooks::{
 pub use lifecycle::{
     InferenceBackendOperation, InferenceFailure, InferenceFrontendRoute, InferenceLifecycleContext,
     InferenceLifecycleEvent, InferenceLifecycleObserver, InferenceRejection,
-    InferenceRequestMethod, InferenceTerminalResult, InferenceUsage, REQUEST_ID_HEADER, RequestId,
-    generate_request_id, parse_client_nonce, parse_request_id, parse_request_id_header,
-    parse_single_client_nonce, parse_single_request_id, request_id_from_headers_or_generate,
-    request_id_response_header,
+    InferenceRequestMethod, InferenceTerminalResult, InferenceUsage, RECEIPT_CLIENT_KEY_HEADER,
+    RECEIPT_PARENT_HEADER, REQUEST_ID_HEADER, ReceiptRequest, RequestId, generate_request_id,
+    parse_client_nonce, parse_request_id, parse_request_id_header, parse_single_client_nonce,
+    parse_single_request_id, request_id_from_headers_or_generate, request_id_response_header,
 };
 pub use models::{ModelId, ModelIdError, ModelObject, ModelsResponse};
 pub use rerank::{RerankDocument, RerankRequest, RerankResponse, RerankResult};

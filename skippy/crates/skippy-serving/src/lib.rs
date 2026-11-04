@@ -12,6 +12,7 @@ pub mod kv_integration;
 pub mod kv_proto;
 mod listener;
 pub mod readiness;
+pub mod receipts;
 pub mod runtime_state;
 
 #[cfg(test)]
@@ -48,7 +49,7 @@ pub use embedded::{
     EmbeddedRuntimeOptions, EmbeddedRuntimeStatus, EmbeddedServerHandle, EmbeddedServerStatus,
     EmbeddedState, SkippyRuntimeHandle, start_binary_stage, start_embedded_openai,
     start_openai_backend, start_openai_backend_with_lifecycle_observer,
-    start_openai_backend_with_tokenizer,
+    start_openai_backend_with_routes, start_openai_backend_with_tokenizer,
     start_openai_backend_with_tokenizer_and_lifecycle_observer,
 };
 pub use frontend::{

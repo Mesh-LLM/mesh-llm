@@ -42,7 +42,8 @@ pub(in crate::frontend) enum GenerationStreamEvent {
     ReasoningDelta(String),
     ToolCalls(Value),
     Usage(Usage, Option<BTreeMap<String, Value>>),
-    Done(FinishReason),
+    /// The last event, with the turn's receipt when the request asked for one.
+    Done(FinishReason, Option<Value>),
 }
 
 /// Tracks what has already been sent for one streaming chat completion, and
@@ -271,6 +272,7 @@ pub(in crate::frontend) fn generation_event_to_chat_chunk(
             }],
             usage: None,
             timings: None,
+            receipt: None,
         }),
         GenerationStreamEvent::ToolCalls(tool_calls) => Ok(ChatCompletionChunk {
             id: skippy_inference_api::completion_id("chatcmpl"),
@@ -290,14 +292,16 @@ pub(in crate::frontend) fn generation_event_to_chat_chunk(
             }],
             usage: None,
             timings: None,
+            receipt: None,
         }),
         GenerationStreamEvent::Usage(usage, timings) => Ok(
             ChatCompletionChunk::usage_with_timings(model.to_string(), usage, timings),
         ),
-        GenerationStreamEvent::Done(reason) => Ok(ChatCompletionChunk::done_with_reason(
+        GenerationStreamEvent::Done(reason, receipt) => Ok(ChatCompletionChunk::done_with_reason(
             model.to_string(),
             reason,
-        )),
+        )
+        .with_receipt(receipt)),
     }
 }
 
@@ -316,8 +320,8 @@ pub(in crate::frontend) fn generation_event_to_completion_chunk(
             usage,
             timings,
         )),
-        GenerationStreamEvent::Done(reason) => {
-            Ok(CompletionChunk::done_with_reason(model.to_string(), reason))
+        GenerationStreamEvent::Done(reason, receipt) => {
+            Ok(CompletionChunk::done_with_reason(model.to_string(), reason).with_receipt(receipt))
         }
     }
 }
@@ -534,6 +538,7 @@ where
             eog_check_ms: self.metrics.eog_check_ms,
             token_logprobs,
             activation_wire: cache_stats.activation_wire,
+            receipt: cache_stats.receipt,
         })
     }
 

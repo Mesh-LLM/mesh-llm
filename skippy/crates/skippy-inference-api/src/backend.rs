@@ -77,6 +77,7 @@ pub struct InferenceRequestContext {
     trusted_agent_session: bool,
     execution_scope: Option<crate::InferenceExecutionScope>,
     execution_lease: Option<Arc<dyn crate::InferenceExecutionLease>>,
+    receipt: Option<crate::lifecycle::ReceiptRequest>,
 }
 
 impl InferenceRequestContext {
@@ -135,6 +136,18 @@ impl InferenceRequestContext {
         self.execution_scope
     }
 
+    /// Carry the receipt binding the request asked for.
+    pub fn with_receipt(mut self, receipt: Option<crate::lifecycle::ReceiptRequest>) -> Self {
+        self.receipt = receipt;
+        self
+    }
+
+    /// The receipt binding the request asked for: the client's VRF key and
+    /// the parent turn.
+    pub fn receipt(&self) -> Option<crate::lifecycle::ReceiptRequest> {
+        self.receipt
+    }
+
     /// Return the frontend request identifier when the caller supplied one.
     pub fn request_id(&self) -> Option<RequestId> {
         self.request_id
@@ -174,6 +187,7 @@ impl Default for InferenceRequestContext {
             trusted_agent_session: false,
             execution_scope: None,
             execution_lease: None,
+            receipt: None,
         }
     }
 }

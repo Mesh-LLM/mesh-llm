@@ -52,9 +52,19 @@ pub(in crate::frontend) struct InferenceGenerationIds {
     /// runtime-event adapter can correlate a generation under the same
     /// request root Task 11's OpenAI observer reserves.
     pub(in crate::frontend) frontend_request_id: Option<[u8; 16]>,
+    /// The inference-receipt binding the request asked for.
+    pub(in crate::frontend) receipt: Option<skippy_inference_api::ReceiptRequest>,
 }
 
 impl InferenceGenerationIds {
+    pub(in crate::frontend) fn with_receipt(
+        mut self,
+        receipt: Option<skippy_inference_api::ReceiptRequest>,
+    ) -> Self {
+        self.receipt = receipt;
+        self
+    }
+
     pub(in crate::frontend) fn new_with_trust(
         cache: InferenceCacheHints,
         agent_session_id: Option<&str>,
@@ -88,6 +98,7 @@ impl InferenceGenerationIds {
             agent_session_trusted: agent_session_trusted && agent_session_id.is_some(),
             cache,
             frontend_request_id,
+            receipt: None,
         }
     }
 
@@ -358,6 +369,8 @@ pub(in crate::frontend) struct GenerationCacheStats {
     pub(in crate::frontend) activation_wire: Option<super::ActivationWireStats>,
     /// The prompt prefix a split restored on every stage, on its stage 0.
     pub(in crate::frontend) split_prefix_cache: Option<super::SplitPrefixCacheStats>,
+    /// The turn's receipt, when the request asked for a bound one.
+    pub(in crate::frontend) receipt: Option<serde_json::Value>,
 }
 
 impl Default for GenerationCacheStats {
@@ -379,6 +392,7 @@ impl Default for GenerationCacheStats {
             token_logprobs: None,
             activation_wire: None,
             split_prefix_cache: None,
+            receipt: None,
         }
     }
 }

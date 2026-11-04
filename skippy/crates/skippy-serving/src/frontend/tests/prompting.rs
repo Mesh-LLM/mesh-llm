@@ -177,6 +177,7 @@ fn chat_response_from_parsed_message_separates_reasoning_content() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        receipt: None,
     };
     let parsed = ParsedChatMessage {
         content: Some("Final answer.".to_string()),
@@ -234,6 +235,7 @@ fn generated_text_timings_are_present_without_native_mtp() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        receipt: None,
     };
 
     let timings = output.timings().expect("standard timings");
@@ -275,6 +277,7 @@ fn generated_text_timings_report_standalone_speculative_totals() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        receipt: None,
     };
 
     let timings = output.timings().expect("standalone speculative timings");
@@ -332,6 +335,7 @@ fn generated_text_timings_prefer_composite_proposal_totals() {
         eog_check_ms: 0.0,
         token_logprobs: None,
         activation_wire: None,
+        receipt: None,
     };
 
     let timings = output.timings().expect("timings");
@@ -368,6 +372,7 @@ fn split_prefix_cache_hit_is_reported_in_timings() {
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
         token_logprobs: None,
+        receipt: None,
         activation_wire: None,
     };
 
@@ -806,6 +811,7 @@ fn generated_text_with_logprobs() -> GeneratedText {
             },
         ]),
         activation_wire: None,
+        receipt: None,
     }
 }
 
@@ -911,4 +917,38 @@ fn completion_response_reports_token_logprobs_in_legacy_shape() {
     plain.token_logprobs = None;
     let response = completion_response_from_generated_text("qwen".to_string(), &plain);
     assert_eq!(response.choices[0].logprobs, None);
+}
+
+#[test]
+fn a_bound_receipt_rides_in_the_response_and_the_last_chunk() {
+    let mut output = generated_text_with_logprobs();
+    let response = chat_response_from_generated_text("qwen".to_string(), &output, None);
+    assert_eq!(response.receipt, None);
+    output.receipt = Some(json!({"receipt_id": "r"}));
+    let response = chat_response_from_generated_text("qwen".to_string(), &output, None);
+    assert_eq!(response.receipt, output.receipt);
+    let response = completion_response_from_generated_text("qwen".to_string(), &output);
+    assert_eq!(response.receipt, output.receipt);
+    let parsed = ParsedChatMessage {
+        content: Some("Hi!".to_string()),
+        reasoning_content: None,
+        tool_calls: None,
+    };
+    let response = chat_response_from_generated_text("qwen".to_string(), &output, Some(parsed));
+    assert_eq!(response.receipt, output.receipt);
+
+    let done = generation_event_to_chat_chunk(
+        Ok(GenerationStreamEvent::Done(
+            FinishReason::Stop,
+            output.receipt.clone(),
+        )),
+        "qwen",
+    )
+    .unwrap();
+    assert_eq!(done.choices[0].finish_reason, Some(FinishReason::Stop));
+    assert_eq!(done.receipt, output.receipt);
+    let delta =
+        generation_event_to_chat_chunk(Ok(GenerationStreamEvent::Delta("Hi".to_string())), "qwen")
+            .unwrap();
+    assert_eq!(delta.receipt, None);
 }

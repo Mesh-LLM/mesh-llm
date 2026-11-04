@@ -5,12 +5,13 @@ use crate::{StageActivationCodec, StageActivationCodecPolicy};
 use super::{
     MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
     MAX_STAGE_DRY_SEQUENCE_BREAKERS, MAX_STAGE_LOGIT_BIAS, MAX_STAGE_PREDICTED_TOKENS,
-    MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES, MAX_STAGE_SIDEBAND_VALUES,
-    MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC, STAGE_LOGIT_BIAS_WIRE_BYTES,
-    STAGE_REPLY_STATS_FIELD_COUNT, STAGE_REPLY_STATS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES,
-    STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES, StageLogitBias, StageNativeMtpDraft,
-    StageReply, StageReplyStats, StageReplyWindow, StageSamplingConfig, StageStateHeader,
-    StageWireMessage, WireMessageKind, WireReplyKind,
+    MAX_STAGE_RECEIPTS_REPLY_BYTES, MAX_STAGE_RECEIPTS_REQUEST_BYTES, MAX_STAGE_SAMPLERS,
+    MAX_STAGE_SAMPLING_STRING_BYTES, MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES,
+    READY_MAGIC, STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_REPLY_STATS_FIELD_COUNT,
+    STAGE_REPLY_STATS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES, STAGE_STATE_VERSION,
+    STAGE_WIRE_FIXED_HEADER_BYTES, StageLogitBias, StageNativeMtpDraft, StageReply,
+    StageReplyStats, StageReplyWindow, StageSamplingConfig, StageStateHeader, StageWireMessage,
+    WireMessageKind, WireReplyKind,
     activation::{decode_activation_frame, encode_raw_activation_frame},
     invalid_data, invalid_input,
 };
@@ -187,9 +188,93 @@ pub fn send_reply_message(mut writer: impl Write, reply: &StageReply) -> io::Res
     Ok(())
 }
 
+/// The bound on the body a message kind carries in `raw_bytes`, and how
+/// its violations read.
+struct RawBytes {
+    max: usize,
+    mismatch: &'static str,
+    too_large: &'static str,
+    count_too_large: &'static str,
+    over_budget: &'static str,
+}
+
+impl RawBytes {
+    fn of(kind: WireMessageKind) -> Self {
+        if kind == WireMessageKind::Receipts {
+            Self {
+                max: MAX_STAGE_RECEIPTS_REQUEST_BYTES,
+                mismatch: "receipts request byte count mismatch",
+                too_large: "receipts request byte count exceeds maximum",
+                count_too_large: "receipts request byte count exceeds maximum",
+                over_budget: "receipts request byte count exceeds frame budget",
+            }
+        } else {
+            Self {
+                max: MAX_STAGE_STATE_IMPORT_BYTES,
+                mismatch: "state import raw byte count mismatch",
+                too_large: "state import raw byte count exceeds maximum",
+                count_too_large: "state import byte count exceeds maximum",
+                over_budget: "state import byte count exceeds frame budget",
+            }
+        }
+    }
+}
+
+/// Reply to a receipts request: `Ok` with a JSON body, or `Err` with why
+/// the stage could not commit or open.
+pub fn send_receipts_reply(mut writer: impl Write, reply: Result<&[u8], &str>) -> io::Result<()> {
+    let (status, body) = match reply {
+        Ok(body) => (0u32, body),
+        Err(reason) => (1u32, reason.as_bytes()),
+    };
+    if body.len() > MAX_STAGE_RECEIPTS_REPLY_BYTES {
+        return Err(invalid_input("receipts reply exceeds maximum"));
+    }
+    write_i32(&mut writer, WireReplyKind::Receipts as i32)?;
+    write_u32(&mut writer, status)?;
+    write_u32(
+        &mut writer,
+        u32::try_from(body.len()).map_err(|_| invalid_input("receipts reply exceeds maximum"))?,
+    )?;
+    writer.write_all(body)
+}
+
+/// Reads a receipts reply: the JSON body, or the reason the stage gave.
+/// The body grows with the bytes that arrive, so a declared length alone
+/// allocates nothing.
+pub fn recv_receipts_reply(mut reader: impl Read) -> io::Result<Result<Vec<u8>, String>> {
+    if WireReplyKind::try_from(read_i32(&mut reader)?)? != WireReplyKind::Receipts {
+        return Err(invalid_data("expected a receipts reply"));
+    }
+    let status = read_u32(&mut reader)?;
+    let len = usize::try_from(read_u32(&mut reader)?)
+        .map_err(|_| invalid_data("receipts reply exceeds maximum"))?;
+    if len > MAX_STAGE_RECEIPTS_REPLY_BYTES {
+        return Err(invalid_data("receipts reply exceeds maximum"));
+    }
+    let mut body = Vec::new();
+    let read = (&mut reader).take(len as u64).read_to_end(&mut body)?;
+    if read != len {
+        return Err(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "receipts reply ended early",
+        ));
+    }
+    match status {
+        0 => Ok(Ok(body)),
+        1 => Ok(Err(String::from_utf8_lossy(&body).into_owned())),
+        _ => Err(invalid_data("unknown receipts reply status")),
+    }
+}
+
 /// Decode and validate a typed reply before exposing its payload to the caller.
 pub fn recv_reply(mut reader: impl Read) -> io::Result<StageReply> {
     let kind = WireReplyKind::try_from(read_i32(&mut reader)?)?;
+    if kind == WireReplyKind::Receipts {
+        return Err(invalid_data(
+            "a receipts reply is read by recv_receipts_reply",
+        ));
+    }
     let predicted = read_i32(&mut reader)?;
     let predicted_count = checked_i32_len(
         read_i32(&mut reader)?,
@@ -410,14 +495,15 @@ pub fn write_stage_message(mut writer: impl Write, message: &StageWireMessage) -
     if message.kind == WireMessageKind::PrefillReadout {
         super::readout::write_tokens(&mut writer, &message.readout_tokens)?;
     }
-    if message.kind == WireMessageKind::StateImport {
-        let raw_byte_count = usize::try_from(message.token_count)
-            .map_err(|_| invalid_input("state import raw byte count mismatch"))?;
+    if message.kind.carries_raw_bytes() {
+        let limits = RawBytes::of(message.kind);
+        let raw_byte_count =
+            usize::try_from(message.token_count).map_err(|_| invalid_input(limits.mismatch))?;
         if raw_byte_count != message.raw_bytes.len() {
-            return Err(invalid_input("state import raw byte count mismatch"));
+            return Err(invalid_input(limits.mismatch));
         }
-        if raw_byte_count > MAX_STAGE_STATE_IMPORT_BYTES {
-            return Err(invalid_input("state import raw byte count exceeds maximum"));
+        if raw_byte_count > limits.max {
+            return Err(invalid_input(limits.too_large));
         }
         writer.write_all(&message.raw_bytes)?;
         return Ok(());
@@ -609,18 +695,19 @@ fn read_stage_message_inner(
             + position_sideband_count * std::mem::size_of::<i32>(),
         "sideband value count exceeds frame budget",
     )?;
-    if kind == WireMessageKind::StateImport {
+    if kind.carries_raw_bytes() {
+        let limits = RawBytes::of(kind);
         let raw_byte_count = checked_i32_len(
             token_count,
-            MAX_STAGE_STATE_IMPORT_BYTES,
+            limits.max,
             "negative wire count",
-            "state import byte count exceeds maximum",
+            limits.count_too_large,
         )?;
         admit_frame_bytes(
             &frame_budget,
             &mut frame_used,
             raw_byte_count,
-            "state import byte count exceeds frame budget",
+            limits.over_budget,
         )?;
         let mut raw_bytes = vec![0; raw_byte_count];
         reader.read_exact(&mut raw_bytes)?;

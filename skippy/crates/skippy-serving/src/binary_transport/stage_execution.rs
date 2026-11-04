@@ -358,6 +358,8 @@ pub(in crate::binary_transport) fn estimated_reply_wire_bytes(
         WireReplyKind::PredictedToken => 1,
         WireReplyKind::PredictedTokens => predicted_token_count,
         WireReplyKind::TokenScores => predicted_token_count + 1,
+        // a receipts reply is not a stage reply; it has its own frame
+        WireReplyKind::Receipts => 0,
     };
     REPLY_HEADER_BYTES + token_count * std::mem::size_of::<i32>() + STAGE_REPLY_STATS_WIRE_BYTES
 }
@@ -873,7 +875,8 @@ fn execute_binary_stage_message(
         | WireMessageKind::RestorePrefill
         | WireMessageKind::TryRestorePrefill
         | WireMessageKind::TryRestorePrefillDecode
-        | WireMessageKind::PredictionReturnOpen => {
+        | WireMessageKind::PredictionReturnOpen
+        | WireMessageKind::Receipts => {
             bail!("message kind is not executable")
         }
     }

@@ -64,6 +64,10 @@ pub enum Command {
     },
     /// Plan and admit a direct GGUF split for explicit worker endpoints.
     PlanSplit(PlanSplitArgs),
+    /// Send a chat request to a node serving with receipts, then audit the receipt.
+    AuditReceipt(AuditReceiptArgs),
+    /// Check an audit's evidence again from the file and the claimed GGUF alone.
+    RecheckReceipt(RecheckReceiptArgs),
     /// List, install, remove, or prune verified native runtime bundles.
     Runtime {
         #[command(subcommand)]
@@ -124,6 +128,31 @@ pub struct ServeBinaryArgs {
     pub worker_only: bool,
     #[arg(skip)]
     pub api_bind_addr: Option<SocketAddr>,
+    /// Issue verifiable inference receipts but serve no receipts API: a
+    /// later stage, which the stage before it reaches over the stage
+    /// connection. Opt-in: every weight matmul is recorded.
+    #[arg(long, group = "receipts_on")]
+    pub receipts: bool,
+    /// Issue receipts and serve the receipts API on this address. Opt-in:
+    /// every weight matmul is recorded.
+    #[arg(long, group = "receipts_on")]
+    pub receipts_listen: Option<SocketAddr>,
+    /// Allow a non-loopback --receipts-listen address. Openings carry
+    /// activations derived from prompts, so only expose them to auditors you
+    /// trust.
+    #[arg(long, requires = "receipts_on")]
+    pub receipts_allow_remote: bool,
+    /// Receipts API of the next stage, for example http://127.0.0.1:9502.
+    /// Without it, receipts reach the next stage over the stage connection.
+    #[arg(long, requires = "receipts_on")]
+    pub receipts_downstream: Option<String>,
+    /// Model named in receipts. Defaults to the stage model id.
+    #[arg(long, requires = "receipts_on")]
+    pub receipts_claimed_model: Option<String>,
+    /// File holding the hex Ed25519 seed that signs receipts. Without it,
+    /// the stage signs with a key made at startup.
+    #[arg(long, requires = "receipts_on")]
+    pub receipts_signing_key: Option<PathBuf>,
     #[arg(long, default_value_t = 4)]
     pub max_inflight: usize,
     #[arg(long)]
@@ -416,6 +445,71 @@ pub enum RuntimeCommand {
         #[arg(long)]
         release: Option<String>,
     },
+}
+
+#[derive(Parser)]
+pub struct AuditReceiptArgs {
+    /// OpenAI base URL of stage 0.
+    #[arg(long, default_value = "http://127.0.0.1:9337")]
+    pub api: String,
+    /// Receipts API of stage 0. Without it the audit opens the receipt on
+    /// the OpenAI API, which a Mesh node serves.
+    #[arg(long)]
+    pub receipts: Option<String>,
+    /// The GGUF the node claims to serve: a file here, or
+    /// `repo@revision/file` on Hugging Face, which the audit reads by range
+    /// without downloading the model.
+    #[arg(long)]
+    pub claimed_model: PathBuf,
+    #[arg(long, default_value = "Explain in two sentences why the sky is blue.")]
+    pub prompt: String,
+    #[arg(long, default_value_t = 32)]
+    pub max_tokens: u32,
+    /// Challenge this layer alone instead of random ones.
+    #[arg(long)]
+    pub layer: Option<u32>,
+    /// Times to compute each challenged layer for the client cost report.
+    #[arg(long, default_value_t = 1)]
+    pub timing_runs: u32,
+    /// Write the audit's evidence to this file, for `recheck-receipt`.
+    #[arg(long, conflicts_with = "layer")]
+    pub evidence: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+pub struct RecheckReceiptArgs {
+    /// Evidence that `audit-receipt --evidence` wrote.
+    #[arg(long)]
+    pub evidence: PathBuf,
+    /// The GGUF the receipt claims: a file here, or `repo@revision/file`
+    /// on Hugging Face. Defaults to the model the receipt names when that
+    /// is a Hugging Face file.
+    #[arg(long)]
+    pub claimed_model: Option<PathBuf>,
+}
+
+impl From<RecheckReceiptArgs> for skippy_commands::receipts::RecheckReceiptCommand {
+    fn from(args: RecheckReceiptArgs) -> Self {
+        Self {
+            evidence: args.evidence,
+            claimed_model: args.claimed_model,
+        }
+    }
+}
+
+impl From<AuditReceiptArgs> for skippy_commands::receipts::AuditReceiptCommand {
+    fn from(args: AuditReceiptArgs) -> Self {
+        Self {
+            api: args.api,
+            receipts: args.receipts,
+            claimed_model: args.claimed_model,
+            prompt: args.prompt,
+            max_tokens: args.max_tokens,
+            layer: args.layer,
+            timing_runs: args.timing_runs.max(1),
+            evidence: args.evidence,
+        }
+    }
 }
 
 #[derive(Parser)]

@@ -328,6 +328,7 @@ impl ResolvedSkippyConfig {
             telemetry_queue_capacity: telemetry.queue_capacity,
             telemetry_level: telemetry.level,
             session_lifecycle_observer: None,
+            receipts: None,
         })
     }
 

@@ -634,7 +634,7 @@ async fn chat_completions(
     if request.stream {
         let include_usage = request.include_usage();
         let model = request.model.clone();
-        let backend_context = request_context(context.request_id, trusted_agent_session, true);
+        let backend_context = request_context(&context, trusted_agent_session, true);
         let cancellation = backend_context.cancellation_token();
         let stream = call_backend_with_context(
             state.config.lifecycle_observer.clone(),
@@ -689,7 +689,7 @@ async fn chat_completions(
         }
         Ok(response)
     } else {
-        let backend_context = request_context(context.request_id, trusted_agent_session, false);
+        let backend_context = request_context(&context, trusted_agent_session, false);
         let response = call_backend_with_context(
             state.config.lifecycle_observer.clone(),
             &context,
@@ -759,7 +759,7 @@ async fn stream_responses(
     trusted_agent_session: bool,
 ) -> Result<Response, InferenceError> {
     let include_usage = request.include_usage();
-    let backend_context = request_context(context.request_id, trusted_agent_session, true);
+    let backend_context = request_context(context, trusted_agent_session, true);
     let cancellation = backend_context.cancellation_token();
     let state_machine = Arc::new(Mutex::new(ResponseSseState::new(request.model.clone())));
     let stream = call_backend_with_context(
@@ -812,7 +812,7 @@ async fn non_streaming_responses(
     request: ChatCompletionRequest,
     trusted_agent_session: bool,
 ) -> Result<Response, InferenceError> {
-    let backend_context = request_context(context.request_id, trusted_agent_session, false);
+    let backend_context = request_context(context, trusted_agent_session, false);
     let response = call_backend_with_context(
         state.config.lifecycle_observer.clone(),
         context,
@@ -1053,7 +1053,7 @@ async fn completions(
     request.validate()?;
     if request.stream {
         let include_usage = request.include_usage();
-        let backend_context = request_context(context.request_id, trusted_agent_session, true);
+        let backend_context = request_context(&context, trusted_agent_session, true);
         let cancellation = backend_context.cancellation_token();
         let stream = call_backend_with_context(
             state.config.lifecycle_observer.clone(),
@@ -1097,7 +1097,7 @@ async fn completions(
             }));
         Ok(sse_response(events, cancellation, lifecycle))
     } else {
-        let backend_context = request_context(context.request_id, trusted_agent_session, false);
+        let backend_context = request_context(&context, trusted_agent_session, false);
         let response = call_backend_with_context(
             state.config.lifecycle_observer.clone(),
             &context,
@@ -1205,11 +1205,12 @@ fn resolve_agent_session(
 }
 
 pub(crate) fn request_context(
-    request_id: RequestId,
+    lifecycle: &InferenceLifecycleContext,
     trusted_agent_session: bool,
     observe_stream_usage: bool,
 ) -> InferenceRequestContext {
-    let mut context = InferenceRequestContext::with_request_id(request_id);
+    let mut context = InferenceRequestContext::with_request_id(lifecycle.request_id)
+        .with_receipt(lifecycle.receipt);
     if trusted_agent_session {
         context = context.with_trusted_agent_session();
     }
@@ -1285,7 +1286,10 @@ async fn frontend_lifecycle_middleware(
         request_id,
         lifecycle_method(&method),
         lifecycle_route(&uri),
-    );
+    )
+    .with_receipt(crate::lifecycle::receipt_request_from_headers(
+        request.headers(),
+    ));
     request.extensions_mut().insert(request_id);
     request.extensions_mut().insert(context.clone());
     let mut lifecycle =

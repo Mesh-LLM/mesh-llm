@@ -72,11 +72,20 @@ impl StageOpenAiBackend {
     pub(super) fn generate_embedded_stage_zero_tokens(
         &self,
         request: EmbeddedStageZeroGeneration<'_>,
-        on_token: impl FnMut(i32) -> InferenceResult<TokenControl>,
+        mut on_token: impl FnMut(i32) -> InferenceResult<TokenControl>,
     ) -> InferenceResult<GenerationCacheStats> {
         if request.config.downstream.is_none() {
             return self.generate_embedded_request_locally(request, on_token);
         }
+        // a receipt names the last sampled token, which no ubatch computes,
+        // and ends at the last token fed
+        let final_token = std::cell::Cell::new(None);
+        let sampled = std::cell::Cell::new(0u32);
+        let on_token = |token| {
+            final_token.set(Some(token));
+            sampled.set(sampled.get().saturating_add(1));
+            on_token(token)
+        };
 
         let wire_sampling = wire_sampling_config(request.sampling);
         let session_id = request.ids.session_id;
@@ -2318,6 +2327,25 @@ impl StageOpenAiBackend {
         })();
 
         finish_generation_lifecycle(lifecycle, lifecycle_cancelled, result.is_ok());
+        if result.is_ok() {
+            cache_stats.receipt = crate::receipts::finish_stage_zero_turn(
+                &self.runtime,
+                request.ids.frontend_request_id,
+                request.ids.receipt,
+                request_id,
+                &session_key,
+                crate::receipts::TurnTokens {
+                    generation_start: u32::try_from(request.prompt_token_ids.len())
+                        .unwrap_or(u32::MAX),
+                    final_token: final_token.get(),
+                    sampled: sampled.get(),
+                    sampler: crate::receipts::sampler_statement(
+                        request.sampling,
+                        request.chat_sampling_metadata,
+                    ),
+                },
+            );
+        }
         self.finish_embedded_generation_session(&request, lane_pool, lane, &result, &session_key)?;
         result?;
         Ok(cache_stats)

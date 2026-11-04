@@ -77,6 +77,11 @@ pub struct RuntimeState {
     /// Split DFlash drafts a final stage owes stage 0 after an early verdict,
     /// by session.
     dflash_deferred_drafts: BTreeMap<String, DeferredDFlashDraft>,
+    /// Native sequence last bound to each session id, kept after the lane is
+    /// released so a receipt can still commit the session's turn.
+    receipt_sequences: BTreeMap<String, i32>,
+    /// Verifiable inference receipts, when the operator turned them on.
+    receipts: Option<Arc<crate::receipts::StageReceipts>>,
     #[cfg(test)]
     modelless_for_test: bool,
     /// Lets modelless tests exercise a split DFlash final stage.
@@ -268,6 +273,8 @@ impl RuntimeState {
             session_token_counts: BTreeMap::new(),
             sessions_reset_by_panic: BTreeSet::new(),
             dflash_deferred_drafts: BTreeMap::new(),
+            receipt_sequences: BTreeMap::new(),
+            receipts: None,
             session_resident_prefixes: BTreeMap::new(),
             session_lifecycle_observer: None,
             compute_meter: Arc::default(),
@@ -424,6 +431,8 @@ fn runtime_from_loaded_model(
         session_token_counts: BTreeMap::new(),
         sessions_reset_by_panic: BTreeSet::new(),
         dflash_deferred_drafts: BTreeMap::new(),
+        receipt_sequences: BTreeMap::new(),
+        receipts: None,
         session_resident_prefixes: BTreeMap::new(),
         session_lifecycle_observer,
         compute_meter: Arc::default(),
