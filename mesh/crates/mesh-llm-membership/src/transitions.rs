@@ -19,6 +19,14 @@ pub struct DirectPeerUpdate {
     pub admitted_count: usize,
 }
 
+/// Who relayed a transitive announcement, the owner it vouches for, and when
+/// it arrived.
+pub struct TransitiveMention {
+    pub bridge_id: EndpointId,
+    pub owner_summary: OwnershipSummary,
+    pub now_unix_ms: u64,
+}
+
 pub enum TransitivePeerUpdate {
     Ignored,
     Added(PeerInfo),
@@ -110,17 +118,19 @@ impl MembershipState {
     /// Apply a transitive announcement after version, demand and ownership checks.
     /// A bridge refreshes mention age, never direct proof-of-life or admission,
     /// and never rewrites a record that fresh direct proof-of-life still backs.
-    #[allow(clippy::too_many_arguments)]
     pub fn apply_accepted_transitive_peer(
         &mut self,
         local_id: EndpointId,
         id: EndpointId,
         addr: &EndpointAddr,
         ann: &PeerAnnouncement,
-        bridge_id: EndpointId,
-        owner_summary: OwnershipSummary,
-        now_unix_ms: u64,
+        mention: TransitiveMention,
     ) -> TransitivePeerUpdate {
+        let TransitiveMention {
+            bridge_id,
+            owner_summary,
+            now_unix_ms,
+        } = mention;
         if id == local_id
             || self
                 .dead_peers

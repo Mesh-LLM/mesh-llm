@@ -24,7 +24,7 @@ use mesh_llm_membership::announcements::{
     RebroadcastAnnouncements, peer_is_idle_transitive_client, version_allowed_for_rebroadcast,
 };
 
-use mesh_llm_membership::transitions::TransitivePeerUpdate;
+use mesh_llm_membership::transitions::{TransitiveMention, TransitivePeerUpdate};
 
 mod admission;
 
@@ -1243,9 +1243,11 @@ impl Node {
             id,
             addr,
             ann,
-            bridge_id,
-            owner_summary,
-            crate::mesh::current_time_unix_ms(),
+            TransitiveMention {
+                bridge_id,
+                owner_summary,
+                now_unix_ms: crate::mesh::current_time_unix_ms(),
+            },
         );
         match update {
             TransitivePeerUpdate::Ignored => {}

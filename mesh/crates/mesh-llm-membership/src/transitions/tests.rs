@@ -75,9 +75,11 @@ fn apply(state: &mut MembershipState, ann: &PeerAnnouncement) -> TransitivePeerU
         ann.addr.id,
         &ann.addr,
         ann,
-        test_endpoint_id(2),
-        OwnershipSummary::default(),
-        NOW,
+        TransitiveMention {
+            bridge_id: test_endpoint_id(2),
+            owner_summary: OwnershipSummary::default(),
+            now_unix_ms: NOW,
+        },
     )
 }
 
