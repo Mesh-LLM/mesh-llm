@@ -193,6 +193,7 @@ TRANSFORMED_TREE_TARGETS=(
   skippy-stage-plan-header-c
   skippy-stage-plan-header-cpp
   skippy-stage-slice-plan
+  skippy-verify-rollback
 )
 # Other native validation lanes reuse this build directory and may configure
 # private stage probes off. Reassert the checker contract after generation so

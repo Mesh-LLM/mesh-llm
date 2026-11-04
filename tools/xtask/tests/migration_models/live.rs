@@ -78,6 +78,19 @@ fn migration_models_frozen_manifests_match_the_checkout() -> TestResult {
                 .ok_or("product artifacts")?
                 .retain(|row| row["id"] != "family-laya-multilingual");
         }
+        if name == "skippy-correctness.json" {
+            // The split verify-rollback test added its own recurrent fixture to
+            // this suite; the dense fixture stays the suite default.
+            current["artifacts"]
+                .as_array_mut()
+                .ok_or("correctness artifacts")?
+                .retain(|row| row["id"] != "qwen35-q4-rollback-correctness");
+            assert_eq!(current["default_artifact_id"], "qwen3-q8-correctness");
+            current
+                .as_object_mut()
+                .ok_or("correctness manifest")?
+                .remove("default_artifact_id");
+        }
         if let Some(rows) = frozen["artifacts"].as_array_mut() {
             for row in rows {
                 if row["id"] == "qwen3-q8-correctness" {

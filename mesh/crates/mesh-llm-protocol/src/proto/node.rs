@@ -289,6 +289,10 @@ pub struct PeerAnnouncement {
     /// see `PluginKey`. At most 16, one per plugin.
     #[prost(message, repeated, tag = "53")]
     pub plugin_keys: ::prost::alloc::vec::Vec<PluginKey>,
+    /// Plugin keys this node has withdrawn; see `PluginKeyWithdrawal`. At most 16,
+    /// one per plugin.
+    #[prost(message, repeated, tag = "54")]
+    pub plugin_key_withdrawals: ::prost::alloc::vec::Vec<PluginKeyWithdrawal>,
 }
 /// A public key a plugin on this node signs with, bound to this node by the
 /// node's own key, so a peer's plugin can check what that plugin signed without
@@ -317,6 +321,42 @@ pub struct PluginKey {
     /// by this node's key over sig_input above
     #[prost(bytes = "vec", tag = "3")]
     pub binding_signature: ::prost::alloc::vec::Vec<u8>,
+    /// "ed25519"
+    #[prost(string, tag = "4")]
+    pub signature_algorithm: ::prost::alloc::string::String,
+}
+/// A node's signed statement that it no longer vouches for a plugin key it
+/// announced, so a peer's plugin stops honouring `key_id` at its next poll
+/// instead of waiting for the node's keys to age out, including when the node
+/// has since gone offline. Set when a plugin withdraws its key through the
+/// plugin protocol (`PluginKeyRequest` with an empty key). `key_id` is the
+/// withdrawn 32-byte Ed25519 public key. A receiver verifies
+/// `withdrawal_signature` with the withdrawing node's key (its `endpoint_id`)
+/// over:
+///
+///    sig_input = b"mesh-llm-plugin-key-withdrawal-v1:"
+///              || u64le(len(endpoint_id))          || endpoint_id
+///              || u64le(len(plugin))               || plugin
+///              || u64le(len(key_id))               || key_id
+///              || u64le(len(signature_algorithm))  || signature_algorithm
+///
+/// A withdrawal that does not verify is dropped on receipt. Like `PluginKey`, it
+/// rides only the sender's own entry and is not relayed. A receiver keeps a
+/// peer's withdrawals, one per plugin, after the peer leaves and across its
+/// restarts, until the peer announces the withdrawn key again, withdraws another
+/// key for that plugin, is rejected, or its entry is evicted (a receiver keeps
+/// those of at most 256 peers, dropping the longest-unrefreshed first).
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PluginKeyWithdrawal {
+    /// the plugin's name on this node
+    #[prost(string, tag = "1")]
+    pub plugin: ::prost::alloc::string::String,
+    /// the withdrawn public key, 32 bytes
+    #[prost(bytes = "vec", tag = "2")]
+    pub key_id: ::prost::alloc::vec::Vec<u8>,
+    /// by this node's key over sig_input above
+    #[prost(bytes = "vec", tag = "3")]
+    pub withdrawal_signature: ::prost::alloc::vec::Vec<u8>,
     /// "ed25519"
     #[prost(string, tag = "4")]
     pub signature_algorithm: ::prost::alloc::string::String,
