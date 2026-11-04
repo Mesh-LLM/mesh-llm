@@ -91,6 +91,18 @@ pub enum PluginSettingConstraint {
 pub(crate) fn validate_plugin_entries(entries: &[PluginConfigEntry]) -> DiagnosticResult {
     for (index, entry) in entries.iter().enumerate() {
         validate_plugin_startup(entry, index)?;
+        let mut names = BTreeSet::new();
+        for binding in &entry.operation_bindings {
+            binding.validate(&entry.name).map_err(|message| {
+                validation_diagnostic(&format!("plugin[{index}].operation_bindings"), message)
+            })?;
+            if !names.insert(&binding.name) {
+                return Err(validation_diagnostic(
+                    &format!("plugin[{index}].operation_bindings"),
+                    "binding names must be unique",
+                ));
+            }
+        }
         if let Some(grant) = &entry.openai_exchange_grant {
             grant.validate().map_err(|message| {
                 validation_diagnostic(
@@ -517,6 +529,7 @@ fn plugin_misplaced_key_diagnostics(raw_toml: Option<&str>) -> Vec<ConfigDiagnos
         "allow_peer_blocks",
         "allow_inference_observation",
         "openai_exchange_grant",
+        "operation_bindings",
         "command",
         "args",
         "url",
@@ -852,6 +865,7 @@ url = "udp://127.0.0.1:9000"
     #[test]
     fn plugin_web_ui_preference_resolves_declared_absent_and_explicit_choices() {
         let absent = crate::PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "blackboard".to_string(),
             enabled: Some(false),
             web_ui_enabled: None,

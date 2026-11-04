@@ -562,8 +562,6 @@ pub(crate) mod tests {
             plugin_origin_signature_supported: false,
             persistent_lane_marker_supported: false,
             advertised_model_throughput: vec![],
-            #[cfg(feature = "payments")]
-            lightning_offers: Default::default(),
             cache_affinity: None,
             display_rtt: None,
             selected_path: None,
@@ -705,8 +703,6 @@ pub(crate) mod tests {
             plugin_origin_signature_supported: false,
             persistent_lane_marker_supported: false,
             advertised_model_throughput: vec![],
-            #[cfg(feature = "payments")]
-            lightning_offers: Default::default(),
             cache_affinity: None,
             display_rtt: None,
             selected_path: None,
@@ -856,8 +852,6 @@ pub(crate) mod tests {
                 avg_tokens_per_second_milli: 13_400,
                 throughput_samples: 27,
             }],
-            #[cfg(feature = "payments")]
-            lightning_offers: Default::default(),
             cache_affinity: None,
             display_rtt: None,
             selected_path: None,
@@ -1006,6 +1000,7 @@ pub(crate) mod tests {
         let gossiped_model = "Remote-Model".to_string();
         let legacy_model = "Legacy-Model".to_string();
         let descriptor_with_metadata = crate::mesh::ServedModelDescriptor {
+            requires: Vec::new(),
             identity: crate::mesh::ServedModelIdentity {
                 model_name: gossiped_model.clone(),
                 ..Default::default()
@@ -1020,6 +1015,7 @@ pub(crate) mod tests {
             }),
         };
         let descriptor_without_metadata = crate::mesh::ServedModelDescriptor {
+            requires: Vec::new(),
             identity: crate::mesh::ServedModelIdentity {
                 model_name: legacy_model.clone(),
                 ..Default::default()
@@ -1084,6 +1080,7 @@ pub(crate) mod tests {
                 model_name: model_name.to_string(),
                 ..Default::default()
             },
+            requires: Vec::new(),
             capabilities_known: true,
             capabilities: crate::models::ModelCapabilities::default(),
             topology: None,
@@ -1117,6 +1114,7 @@ pub(crate) mod tests {
                             model_name: legacy_model.clone(),
                             ..Default::default()
                         },
+                        requires: Vec::new(),
                         capabilities_known: false,
                         capabilities: crate::models::ModelCapabilities::default(),
                         topology: None,
@@ -1164,6 +1162,7 @@ pub(crate) mod tests {
         let collector = RuntimeDataCollector::new();
         let model_name = "Shared-Model".to_string();
         let descriptor = crate::mesh::ServedModelDescriptor {
+            requires: Vec::new(),
             identity: crate::mesh::ServedModelIdentity {
                 model_name: model_name.clone(),
                 ..Default::default()
@@ -1302,6 +1301,7 @@ pub(crate) mod tests {
         let collector = RuntimeDataCollector::new();
         let model_name = "Qwen3VL-2B-Instruct-Q4_K_M".to_string();
         let descriptor = crate::mesh::ServedModelDescriptor {
+            requires: Vec::new(),
             identity: crate::mesh::ServedModelIdentity {
                 model_name: model_name.clone(),
                 source_kind: crate::mesh::ModelSourceKind::LocalGguf,
@@ -1352,6 +1352,7 @@ pub(crate) mod tests {
         let collector = RuntimeDataCollector::new();
         let model_name = "Qwen3VL-2B-Instruct-Q4_K_M".to_string();
         let descriptor = crate::mesh::ServedModelDescriptor {
+            requires: Vec::new(),
             identity: crate::mesh::ServedModelIdentity {
                 model_name: model_name.clone(),
                 source_kind: crate::mesh::ModelSourceKind::LocalGguf,
@@ -1401,6 +1402,7 @@ pub(crate) mod tests {
         let collector = RuntimeDataCollector::new();
         let model_name = "Qwen3VL-2B-Instruct-Q4_K_M".to_string();
         let descriptor = crate::mesh::ServedModelDescriptor {
+            requires: Vec::new(),
             identity: crate::mesh::ServedModelIdentity {
                 model_name: model_name.clone(),
                 source_kind: crate::mesh::ModelSourceKind::LocalGguf,

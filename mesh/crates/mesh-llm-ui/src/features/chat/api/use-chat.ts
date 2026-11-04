@@ -12,8 +12,6 @@ type UseMeshChatOptions = {
   systemPrompt?: string
   /** A node endpoint id: when set, requests go to that node only. */
   target?: string
-  /** Restrict this chat's requests to free hosts (`mesh_payment: free_only`). */
-  freeOnly?: boolean
   initialMessages: ThreadMessage[]
   onResponseMetadata?: (metadata: ChatResponseMetadata) => void
 }
@@ -36,7 +34,6 @@ export function useMeshChat({
   model,
   systemPrompt = '',
   target = '',
-  freeOnly = false,
   initialMessages,
   onResponseMetadata
 }: UseMeshChatOptions): UseChatReturn {
@@ -44,25 +41,16 @@ export function useMeshChat({
   const [currentModel] = useState(() => createMutableStringSource(model))
   const [currentSystemPrompt] = useState(() => createMutableStringSource(systemPrompt))
   const [currentTarget] = useState(() => createMutableStringSource(target))
-  const [currentFreeOnly] = useState(() => createMutableStringSource(freeOnly ? 'free_only' : ''))
 
   useLayoutEffect(() => {
     currentModel.setValue(model)
     currentSystemPrompt.setValue(systemPrompt)
     currentTarget.setValue(target)
-    currentFreeOnly.setValue(freeOnly ? 'free_only' : '')
-  }, [currentModel, currentSystemPrompt, currentTarget, currentFreeOnly, model, systemPrompt, target, freeOnly])
+  }, [currentModel, currentSystemPrompt, currentTarget, model, systemPrompt, target])
 
   const connection = useMemo(
-    () =>
-      createMeshConnectionAdapter(
-        currentModel,
-        onResponseMetadata,
-        currentSystemPrompt,
-        currentTarget,
-        currentFreeOnly
-      ),
-    [currentModel, currentSystemPrompt, currentTarget, currentFreeOnly, onResponseMetadata]
+    () => createMeshConnectionAdapter(currentModel, onResponseMetadata, currentSystemPrompt, currentTarget),
+    [currentModel, currentSystemPrompt, currentTarget, onResponseMetadata]
   )
   const hydratedMessages = useMemo(() => threadMessagesToUIMessages(initialMessages), [initialMessages])
   const chat = useChat({ threadId: conversationId, connection, initialMessages: hydratedMessages })

@@ -12,7 +12,7 @@ Start your local client with `mesh-llm client --auto`, then query its API:
 ```bash
 BASE_URL=http://127.0.0.1:9337/v1
 curl -fsS "$BASE_URL/models" | jq '
-  .data[] | {id, offers: .payment.offers}'
+  .data[] | {id, requires}'
 ```
 
 For the desired model, choose an offer's `provider_id`. The offer also reports
@@ -89,14 +89,12 @@ cannot attach this HTTP header, selecting only a model name does not pin a peer.
 These headers constrain local-user ingress routing. They never authorize an
 incoming peer request to hop to another peer.
 
-## Paid providers
+## Gated providers
 
-A provider pin does not bypass pricing, wallet availability, budgets, spending
-policy, or model/context eligibility. Use your own local buyer node with a usable
-wallet and explicit spending authorization; setting a header on a shared public
-HTTP gateway does not authorize that gateway to spend for you. See
-[Lightning payments](specs/lightning-payments.md) for wallet setup and policy.
-Keep free-only policy until you intentionally authorize paid inference.
+A provider pin does not bypass a plugin gate: a model that advertises `requires`
+channels is only routable when a local plugin serves them, and the serving
+node's exchange hook can still refuse the request (402/403). Setting a header
+on a shared public HTTP gateway does not authorize that gateway to act for you.
 
 Implementation and regression coverage live in
 `mesh-llm-host-runtime/src/network/openai/ingress.rs`, `request_parse.rs`, and
