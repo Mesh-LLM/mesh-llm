@@ -1036,6 +1036,7 @@ async fn download_exact_ref_bf16_shorthand_downloads_full_split_model() {
 #[tokio::test]
 #[serial]
 async fn show_model_variants_accepts_selected_quant_ref() {
+    let _catalog_guard = empty_catalog_guard();
     let fixture = load_gemma_live_fixture();
     let _siblings_guard = RepoSiblingEntriesOverrideGuard::set(Arc::new({
         let repo = fixture.repo.clone();

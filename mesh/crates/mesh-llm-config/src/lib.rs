@@ -4,6 +4,7 @@ mod env_overrides;
 mod hardware_validation;
 mod local_model_path;
 pub mod managed_models;
+pub mod memberships;
 mod model;
 mod model_validation;
 mod openai_exchange;
