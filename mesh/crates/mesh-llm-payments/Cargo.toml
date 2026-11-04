@@ -24,7 +24,7 @@ async-trait = "0.1"
 fs2 = "0.4"
 mesh-llm-payments-types = { path = "../mesh-llm-payments-types", version = "0.78.0" }
 mesh-llm-wallet = { path = "../mesh-llm-wallet", version = "0.78.0" }
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 serde.workspace = true
 serde_json.workspace = true
 tokio = { version = "1", features = ["sync", "time", "rt", "io-util"] }
