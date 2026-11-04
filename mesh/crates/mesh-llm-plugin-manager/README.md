@@ -11,3 +11,4 @@ authoring and release validation can pass a `.tar.gz` or `.zip` directly to
 boundary. It deliberately
 does not render CLI output; callers should render progress and status events in
 the host application.
+
