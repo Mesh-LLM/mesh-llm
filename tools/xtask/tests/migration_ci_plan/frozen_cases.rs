@@ -2,6 +2,7 @@
 
 use crate::support::{Run, Stage, TestResult, fixture_root, repository_root, text};
 use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fs;
 
 /// Plans are hashed by the caller after `jq -c .`; the goldens hold those
@@ -206,11 +207,27 @@ fn windows_catalog_changes_select_unit_row_without_product_builds() -> TestResul
     let metadata: Value =
         serde_json::from_slice(&fs::read(fixture_root().join("cargo-metadata.json"))?)?;
     let packages = metadata["packages"].as_array().ok_or("packages")?;
+    // The frozen corpus carries real manifest paths, so crates outside
+    // `crates/` (for example `tools/process-supervision`) keep their own.
+    let manifest_dirs = packages
+        .iter()
+        .filter_map(|package| {
+            let name = package["name"].as_str()?;
+            let directory = package["manifest_path"]
+                .as_str()?
+                .strip_prefix("/workspace/")?
+                .strip_suffix("/Cargo.toml")?;
+            Some((name, directory))
+        })
+        .collect::<BTreeMap<&str, &str>>();
     let workspace = packages
         .iter()
         .map(|package| {
             let name = package["name"].as_str().ok_or("package name")?;
-            Ok(serde_json::json!({"name": name, "path": format!("crates/{name}")}))
+            let path = manifest_dirs
+                .get(name)
+                .ok_or_else(|| format!("no manifest_path for {name}"))?;
+            Ok(serde_json::json!({"name": name, "path": path}))
         })
         .collect::<Result<Vec<_>, Box<dyn std::error::Error>>>()?;
     let stage = Stage::new("windows-catalog")?;
@@ -218,8 +235,11 @@ fn windows_catalog_changes_select_unit_row_without_product_builds() -> TestResul
     let case: Value =
         serde_json::from_slice(&fs::read(fixture_root().join("cases/runtime.json"))?)?;
     for name in crates {
+        let directory = manifest_dirs
+            .get(name)
+            .ok_or_else(|| format!("{name} is missing from the frozen cargo-metadata.json"))?;
         let mut input = case["input"].clone();
-        input["changed_files"] = serde_json::json!([format!("crates/{name}/src/lib.rs")]);
+        input["changed_files"] = serde_json::json!([format!("{directory}/src/lib.rs")]);
         input["affected_crates"] = serde_json::json!([name]);
         input["workspace_packages"] = Value::Array(workspace.clone());
         let bytes = serde_json::to_vec(&input)?;
