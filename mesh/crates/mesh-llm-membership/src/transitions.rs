@@ -110,6 +110,7 @@ impl MembershipState {
     /// Apply a transitive announcement after version, demand and ownership checks.
     /// A bridge refreshes mention age, never direct proof-of-life or admission,
     /// and never rewrites a record that fresh direct proof-of-life still backs.
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_accepted_transitive_peer(
         &mut self,
         local_id: EndpointId,
