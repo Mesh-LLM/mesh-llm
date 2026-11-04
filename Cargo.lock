@@ -4963,6 +4963,7 @@ dependencies = [
  "skippy-native-runtime",
  "skippy-package-format",
  "skippy-protocol",
+ "skippy-receipts",
  "skippy-runtime",
  "skippy-runtime-install",
  "skippy-serving",

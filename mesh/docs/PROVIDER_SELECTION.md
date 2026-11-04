@@ -89,6 +89,43 @@ cannot attach this HTTP header, selecting only a model name does not pin a peer.
 These headers constrain local-user ingress routing. They never authorize an
 incoming peer request to hop to another peer.
 
+## Require verifiable receipts
+
+Send `x-mesh-trust: receipts` to serve a chat completion only on a runtime
+that issues [inference receipts](../../skippy/docs/RECEIPTS.md): this node's
+own, or a peer that advertises receipts for the model. Your node then audits
+about one turn in ten from those peers, even when `[receipts] audit` is off,
+and blocks a peer that fails an audit.
+
+```bash
+curl -sS "$BASE_URL/chat/completions" \
+  -H 'Content-Type: application/json' \
+  -H 'x-mesh-trust: receipts' \
+  --data "$(jq -nc --arg model "$MODEL" '{
+    model: $model,
+    messages: [{role: "user", content: "Reply with a short greeting."}]
+  }')"
+```
+
+When no candidate serves the model with receipts, the request fails with
+HTTP 409 and the error code `trust_policy_unsatisfied`:
+
+```json
+{"error":{"message":"no candidate serves model 'Qwen3-4B-Q8_0' with receipts, which the request's trust policy requires","type":"invalid_request_error","code":"trust_policy_unsatisfied"}}
+```
+
+- Receipts cover `/v1/chat/completions` only. Other inference endpoints fail
+  with the same code under this policy.
+- `x-mesh-trust: any` is ordinary routing. An unknown tier, or an empty entry,
+  returns HTTP 400.
+- `x-mesh-target` and `x-mesh-exclude` still apply. A target that does not
+  serve the model with receipts is rejected with HTTP 409.
+- Virtual models, pipeline dispatch, and model-less requests reject the
+  policy.
+- An operator can make `receipts` the node default with
+  `[receipts] require = true`. A request then cannot ask for `any`: that
+  returns HTTP 400.
+
 ## Gated providers
 
 A provider pin does not bypass a plugin gate: a model that advertises `requires`

@@ -99,7 +99,7 @@ impl SkippyModelHandle {
             session_lifecycle_observer: Some(Arc::new(
                 runtime_events::SkippySessionRuntimeEventObserver::new(),
             )),
-            receipts: None,
+            receipts: options.receipts.clone(),
         };
         let embedded_args = options.embedded_openai.unwrap_or_else(|| {
             resolver::ResolvedEmbeddedOpenAiArgs::direct_single_stage_defaults(

@@ -248,6 +248,7 @@ pub(super) async fn start_local_laya_model(
             capabilities,
             workload_class: mesh::ModelWorkloadClass::Decision,
             thinking: None,
+            receipts: false,
             inner: LocalRuntimeBackendHandle::Dedicated {
                 model: super::local::DedicatedModel::Laya(model),
                 http,

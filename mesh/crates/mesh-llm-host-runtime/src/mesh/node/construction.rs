@@ -146,6 +146,7 @@ impl Node {
             model_source: Arc::new(Mutex::new(None)),
             serving_models: Arc::new(Mutex::new(Vec::new())),
             served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
+            receipt_models: Arc::default(),
             served_model_generations: Arc::new(Mutex::new(HashMap::new())),
             served_model_weights_ports: Arc::new(Mutex::new(HashMap::new())),
             model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),

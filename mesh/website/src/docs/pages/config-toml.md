@@ -68,6 +68,26 @@ mesh-llm plugins install Mesh-LLM/nwc-wallet-plugin Mesh-LLM/ln-payments-plugin
 A wallet plugin alone does not enable payments, and `pay-lightning` without a
 wallet refuses every wallet call.
 
+## Receipts
+
+Verifiable inference receipts for the models this node serves, alone or as
+the coordinator of a split.
+
+```toml
+[receipts]
+enabled = true
+```
+
+- `enabled` — when a request names a client key in `x-receipt-client-key`, the
+  node signs a receipt for the turn with its node key and returns it in the
+  response body (the `receipt` field, or the last stream chunk). The client can
+  then challenge it once on `POST /v1/receipts/open` and check the opening
+  against the claimed model. Off by default.
+- On a split, every stage records its part of the receipt, and the peers that
+  serve the later stages record theirs when the coordinator asks for it,
+  whatever their own setting. A peer that predates split receipts records
+  nothing, and the turns of that split get no receipt.
+
 ## Telemetry
 
 OpenTelemetry (OTLP) metrics export.

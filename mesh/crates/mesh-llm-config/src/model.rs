@@ -57,8 +57,35 @@ pub struct MeshConfig {
     pub models: Vec<ModelConfigEntry>,
     #[serde(rename = "plugin", default)]
     pub plugins: Vec<PluginConfigEntry>,
+    #[serde(default, skip_serializing_if = "ReceiptsConfig::is_default")]
+    pub receipts: ReceiptsConfig,
     #[serde(flatten, default)]
     pub extra: BTreeMap<String, toml::Value>,
+}
+
+/// `[receipts]`: verifiable inference receipts for the models this node
+/// serves (`mesh/docs/design/RECEIPTS.md`).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ReceiptsConfig {
+    /// Issue a receipt, signed with the node key, for every turn a client
+    /// asks one for, and open it when the client challenges it.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Audit about one in ten of the receipted turns peers serve this
+    /// node's clients, and block a peer whose audit fails for seven days.
+    #[serde(default)]
+    pub audit: bool,
+    /// Route this node's clients' chat completions only to runtimes that
+    /// issue receipts, and audit them: the node default of the `receipts`
+    /// request trust tier (`mesh/docs/design/TRUST_TIERS.md`).
+    #[serde(default)]
+    pub require: bool,
+}
+
+impl ReceiptsConfig {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -1227,6 +1254,8 @@ struct RawMeshConfig {
     models: Vec<ModelConfigEntry>,
     #[serde(rename = "plugin", default)]
     plugins: Vec<PluginConfigEntry>,
+    #[serde(default)]
+    receipts: ReceiptsConfig,
     #[serde(flatten, default)]
     extra: BTreeMap<String, toml::Value>,
 }
@@ -1347,6 +1376,7 @@ impl<'de> Deserialize<'de> for MeshConfig {
             runtime: raw.runtime,
             models: raw.models,
             plugins: raw.plugins,
+            receipts: raw.receipts,
             extra: raw.extra,
         })
     }

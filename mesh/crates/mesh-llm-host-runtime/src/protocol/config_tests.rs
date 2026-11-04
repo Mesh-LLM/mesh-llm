@@ -57,10 +57,16 @@ fn config_sync_full_config_roundtrip() {
             startup: Default::default(),
         }],
         logging: Default::default(),
+        receipts: mesh_llm_config::ReceiptsConfig {
+            enabled: true,
+            audit: true,
+            require: true,
+        },
         extra: Default::default(),
     };
     let snapshot = mesh_config_to_proto(&config);
     let restored = proto_config_to_mesh(&snapshot);
+    assert_eq!(restored.receipts, config.receipts);
     assert_eq!(restored.updates.check, Some(false));
     assert_eq!(restored.version, config.version);
     assert_eq!(restored.models.len(), 1);

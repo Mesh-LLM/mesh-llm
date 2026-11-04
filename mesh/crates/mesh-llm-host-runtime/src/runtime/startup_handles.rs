@@ -527,6 +527,7 @@ pub(super) async fn startup_register_loaded_runtime(
             context_length: Some(handle.context_length),
             capabilities: handle.capabilities,
             workload_class: handle.workload_class,
+            receipts: handle.receipts,
         },
     )
     .await;

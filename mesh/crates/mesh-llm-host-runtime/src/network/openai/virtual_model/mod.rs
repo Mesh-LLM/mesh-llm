@@ -196,11 +196,11 @@ pub(crate) async fn route_virtual_model_or_passthrough(
     {
         return Ok(tcp_stream);
     }
-    if super::ingress::mesh_routing_headers_requested(request) {
+    if super::ingress::mesh_routing_headers_requested(node, request).await {
         let write = proxy::send_error_observed(
             tcp_stream,
             409,
-            "x-mesh-target/x-mesh-exclude are not supported for virtual models",
+            "x-mesh-target, x-mesh-exclude and the receipts trust policy are not supported for virtual models",
             route_observer,
         )
         .await;

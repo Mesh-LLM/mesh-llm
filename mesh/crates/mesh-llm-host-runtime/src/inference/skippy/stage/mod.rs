@@ -417,7 +417,7 @@ impl StageControlState {
             last_stage_decode_batch: effective_load.last_stage_decode_batch,
             openai: None,
             l3_manager: crate::runtime::kv_disk_config::node_kv_disk_manager(),
-            receipts: None,
+            receipts: stage_receipts(&effective_load),
             compute_meter: Some(compute_meter.clone()),
             split_dflash: effective_load.dflash.clone(),
         });
@@ -624,6 +624,15 @@ fn load_claim_ref(load: &StageLoadRequest) -> LoadClaimRef {
         participant_set_hash: load.participant_set_hash.clone(),
         topology_hash: load.topology_hash.clone(),
     }
+}
+
+/// What a later stage of a split needs to record its part of the receipts
+/// stage 0 issues, when the coordinator asks for them. Stage 0 reaches it
+/// over a receipts connection to this stage's binary address, so it serves
+/// no receipts API, and it signs nothing: stage 0 signs each turn root.
+fn stage_receipts(load: &StageLoadRequest) -> Option<skippy_serving::receipts::ReceiptsOptions> {
+    load.issue_receipts
+        .then(|| skippy_serving::receipts::ReceiptsOptions::embedded(load.model_id.clone(), None))
 }
 
 pub(crate) fn stage_load_timeout(load: &StageLoadRequest) -> Duration {

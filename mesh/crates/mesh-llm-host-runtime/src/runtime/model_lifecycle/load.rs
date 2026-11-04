@@ -352,6 +352,7 @@ async fn finish_runtime_model_load(
             context_length: Some(handle.context_length),
             capabilities: handle.capabilities,
             workload_class: handle.workload_class,
+            receipts: handle.receipts,
         },
     )
     .await;

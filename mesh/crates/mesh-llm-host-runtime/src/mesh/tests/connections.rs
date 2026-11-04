@@ -325,6 +325,7 @@ fn stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         runtime_settings: Default::default(),
         native_mtp_enabled: true,
         dflash: None,
+        issue_receipts: false,
         shutdown_generation: 3,
         coordinator_term: 11,
         coordinator_id: None,
@@ -398,6 +399,7 @@ async fn make_test_node_with_requirements(
         model_source: Arc::new(Mutex::new(None)),
         serving_models: Arc::new(Mutex::new(Vec::new())),
         served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
+        receipt_models: Arc::default(),
         served_model_generations: Arc::new(Mutex::new(HashMap::new())),
         served_model_weights_ports: Arc::new(Mutex::new(HashMap::new())),
         model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
@@ -611,6 +613,7 @@ async fn set_serving_models_preserves_existing_known_descriptor_capabilities_whe
     node.set_serving_models(vec![vision_model.clone()]).await;
     node.upsert_served_model_descriptor(ServedModelDescriptor {
         requires: Vec::new(),
+        receipts: false,
         identity: ServedModelIdentity {
             model_name: vision_model.clone(),
             is_primary: true,

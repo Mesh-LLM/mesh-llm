@@ -410,11 +410,12 @@ impl SkippyModelHandle {
             ),
             &self.config.model_id,
         );
-        let server = skippy_serving::start_openai_backend_with_tokenizer_and_lifecycle_observer(
+        let server = skippy_serving::start_openai_backend_with_routes(
             bind_addr,
             self.backend(),
             tokenizer,
             lifecycle_observer,
+            self.runtime.receipts_router().unwrap_or_default(),
         );
         Ok(SkippyHttpHandle { port, server })
     }

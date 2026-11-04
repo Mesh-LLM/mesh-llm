@@ -155,6 +155,7 @@ pub(super) async fn start_local_speech_model(
             capabilities,
             workload_class: mesh::ModelWorkloadClass::SpeechRecognition,
             thinking: None,
+            receipts: false,
             inner: LocalRuntimeBackendHandle::Dedicated {
                 model: super::local::DedicatedModel::Speech(model),
                 http,

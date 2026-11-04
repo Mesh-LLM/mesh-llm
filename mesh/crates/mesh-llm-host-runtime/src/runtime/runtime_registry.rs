@@ -31,6 +31,8 @@ pub(super) struct RuntimeModelRegistration<'a> {
     pub context_length: Option<u32>,
     pub capabilities: models::ModelCapabilities,
     pub workload_class: mesh::ModelWorkloadClass,
+    /// The instance issues inference receipts.
+    pub receipts: bool,
 }
 
 pub(super) fn next_runtime_instance_id(next_sequence: &mut u64) -> String {
@@ -135,6 +137,7 @@ pub(super) async fn register_runtime_instance(
         context_length,
         capabilities,
         workload_class,
+        receipts,
     } = registration;
     let (was_empty, context_changed, next_context) = {
         let mut guard = registry.lock().await;
@@ -150,6 +153,7 @@ pub(super) async fn register_runtime_instance(
         set_advertised_model_context(node, model_name, next_context).await;
     }
     if was_empty {
+        node.set_issues_receipts(model_name, receipts);
         add_serving_assignment(node, primary_model_name, model_name).await;
         set_runtime_verified_served_model_capabilities(
             node,
