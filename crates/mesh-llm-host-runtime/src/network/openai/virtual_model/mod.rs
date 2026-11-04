@@ -544,9 +544,10 @@ async fn virtual_model_candidates(
 
     let mut candidates = Vec::new();
     for model_id in model_ids {
-        if !super::workload_routing::model_satisfies_request(&model_id, CHAT_PATH, &descriptors) {
-            continue;
-        }
+        // Eligibility is decided per concrete replica below, never from the
+        // aggregate descriptor pool: a legacy peer may serve this model with
+        // no descriptors at all, and an incompatible advertisement from
+        // another peer must not hide that replica.
         let descriptor =
             super::workload_routing::descriptor_for_request(&model_id, CHAT_PATH, &descriptors);
         let candidate_from = |target_node_id: Option<String>, context_length: Option<u32>| {
@@ -627,8 +628,14 @@ async fn virtual_model_candidates(
         // untargeted candidate when discovery found no host instance at all —
         // never when instances exist but every one was filtered out, or the
         // plugin's nested call would re-enter the ingress filter that just
-        // excluded them.
-        if !has_local_instance && !has_discovered_remote_host {
+        // excluded them. With no replica to consult, the aggregate
+        // advertisement is the only workload evidence: absent legacy metadata
+        // stays admissible, while a known-incompatible model must not be
+        // reintroduced through this fallback.
+        if !has_local_instance
+            && !has_discovered_remote_host
+            && super::workload_routing::model_satisfies_request(&model_id, CHAT_PATH, &descriptors)
+        {
             candidates.push(candidate_from(None, None));
         }
     }
@@ -841,6 +848,52 @@ mod tests {
                 .is_empty()
         );
         remote.endpoint.close().await;
+        node.endpoint.close().await;
+    }
+
+    #[tokio::test]
+    async fn chat_candidates_keep_descriptor_less_legacy_replica() {
+        use mesh::ModelWorkloadClass::Decision;
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+            .await
+            .unwrap();
+        let legacy_remote = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+            .await
+            .unwrap();
+        let modern_remote = mesh::Node::new_for_tests(mesh::NodeRole::Client)
+            .await
+            .unwrap();
+        // The newer peer advertises the shared name as a non-chat workload.
+        // Aggregate descriptors alone would reject the whole model here; the
+        // descriptor-less legacy replica must remain eligible for chat.
+        modern_remote
+            .set_served_model_descriptors(vec![workload_descriptor("shared", Decision)])
+            .await;
+        for remote in [&legacy_remote, &modern_remote] {
+            let mut announcement =
+                remote.build_local_announcement(remote.snapshot_local_announcement_data().await);
+            announcement.role = mesh::NodeRole::Host { http_port: 9337 };
+            announcement.serving_models = vec!["shared".into()];
+            announcement.hosted_models = Some(vec!["shared".into()]);
+            let mut peer = mesh::PeerInfo::from_announcement(
+                remote.id(),
+                remote.endpoint.addr(),
+                &announcement,
+                crate::crypto::OwnershipSummary::default(),
+            );
+            peer.admitted = true;
+            node.insert_test_peer(peer).await;
+        }
+        let candidates =
+            virtual_model_candidates(&node, vec!["shared".into()], &Default::default(), None).await;
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(
+            candidates[0].target_node_id,
+            Some(hex::encode(legacy_remote.id().as_bytes()))
+        );
+        for remote in [&legacy_remote, &modern_remote] {
+            remote.endpoint.close().await;
+        }
         node.endpoint.close().await;
     }
 
