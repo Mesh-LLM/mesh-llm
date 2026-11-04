@@ -32,6 +32,18 @@ pub(super) fn apply_runtime_controls_behavior(setting: &mut ConfigSettingSchema,
         }
         "telemetry.queue_size" => set_numeric(setting, Some(1.0), None, Some(1.0), None),
         "telemetry.prompt_shape_metrics" => set_static_options(setting),
+        "receipts.enabled" | "receipts.audit" | "receipts.require" | "receipts.offline" => {
+            set_static_options(setting);
+        }
+        "receipts.audit_one_in" => {
+            set_numeric(
+                setting,
+                Some(1.0),
+                Some(f64::from(crate::model::receipts::MAX_AUDIT_ONE_IN)),
+                Some(1.0),
+                None,
+            );
+        }
         "mesh_requirements.min_node_version" | "mesh_requirements.max_node_version" => {
             set_text_format(setting, ConfigTextFormat::Semver);
             push_non_empty_constraint(setting);

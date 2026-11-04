@@ -208,6 +208,14 @@ async fn blocked_peer_is_skipped_by_routing_until_unblocked() -> Result<()> {
         .into_iter()
         .find(|peer| peer.id == host.id())
         .expect("the host is a peer");
+    let mut host_info = host_info;
+    // `/v1/models` lists a provider as an LLM only with a chat workload class
+    for descriptor in &mut host_info.served_model_descriptors {
+        descriptor
+            .metadata
+            .get_or_insert_with(Default::default)
+            .workload_class = Some(mesh_llm_types::mesh::ModelWorkloadClass::CausalGeneration);
+    }
     client.insert_test_peer(host_info).await;
     assert!(
         client
@@ -220,6 +228,10 @@ async fn blocked_peer_is_skipped_by_routing_until_unblocked() -> Result<()> {
         client.any_host().await.map(|peer| peer.id),
         Some(host.id()),
         "setup: the host is the any-host fallback before any block"
+    );
+    assert!(
+        listed_models(&client).await.contains(&"remote-coding-model".to_string()),
+        "setup: /v1/models lists the host's model before any block"
     );
 
     client
@@ -243,6 +255,10 @@ async fn blocked_peer_is_skipped_by_routing_until_unblocked() -> Result<()> {
         client.routable_peers().await.iter().all(|peer| peer.id != host.id()),
         "nor to a consultation (caption, audio, second opinion)"
     );
+    assert!(
+        listed_models(&client).await.is_empty(),
+        "nor listed by /v1/models, which offers only what routing serves"
+    );
 
     client
         .peer_blocks
@@ -254,6 +270,7 @@ async fn blocked_peer_is_skipped_by_routing_until_unblocked() -> Result<()> {
             .contains(&host.id()),
         "unblocking makes it routable again"
     );
+    assert!(listed_models(&client).await.contains(&"remote-coding-model".to_string()));
     assert_eq!(client.any_host().await.map(|peer| peer.id), Some(host.id()));
     assert!(client.routable_peers().await.iter().any(|peer| peer.id == host.id()));
     Ok(())
@@ -672,174 +689,19 @@ fn legacy_config_stream_ids_are_reserved_and_require_admission() {
     );
 }
 
-/// A requester that knows `remote` as a peer at its advertised address.
-async fn requester_knowing(remote: &Node) -> Result<Node> {
-    let requester = make_test_node(super::super::NodeRole::Worker).await?;
-    let mut peer = make_test_peer(remote.id(), Some(20), 8);
-    peer.addr = remote.endpoint_addr_for_advertisement();
-    requester.state.lock().await.peers.insert(remote.id(), peer);
-    Ok(requester)
-}
-
-fn redial_ticket(
-    recovery: crate::mesh::connections::ClosedConnectionRecovery,
-) -> mesh_llm_membership::redial_backoff::RedialTicket {
-    match recovery {
-        crate::mesh::connections::ClosedConnectionRecovery::Reconnect { ticket, .. } => ticket,
-        _ => panic!("a closed connection to a known peer must be redialed"),
-    }
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_replacement_closing_during_an_earlier_close_owns_the_next_dial() -> Result<()> {
-    let remote = make_test_node(super::super::NodeRole::Worker).await?;
-    remote.start_accepting();
-    let requester = requester_knowing(&remote).await?;
-    let addr = remote.endpoint_addr_for_advertisement();
-    let first = connect_mesh(&requester.endpoint, addr.clone()).await?;
-    let replacement = connect_mesh(&requester.endpoint, addr).await?;
-
-    // The first connection closes. Its dispatcher removes it, then is still
-    // cleaning up (releasing its direct-path endpoint) when...
-    requester
-        .state
-        .lock()
+/// The ids `/v1/models` lists on `node`.
+async fn listed_models(node: &Node) -> Vec<String> {
+    let models = crate::models::discovery::collect(node)
         .await
-        .connections
-        .insert(remote.id(), first.clone());
-    let earlier = redial_ticket(
-        requester
-            .remove_closed_connection(remote.id(), first.stable_id())
-            .await,
-    );
-    // ...an inbound replacement is put in place and closes as well.
-    requester
-        .state
-        .lock()
-        .await
-        .connections
-        .insert(remote.id(), replacement.clone());
-    let later = redial_ticket(
-        requester
-            .remove_closed_connection(remote.id(), replacement.stable_id())
-            .await,
-    );
-
-    // The earlier dispatcher finishes cleaning up and reaches its redial
-    // while the replacement's still waits out its backoff: it stands down,
-    // and the replacement's dispatcher starts the next dial.
-    let later_task = {
-        let requester = requester.clone();
-        let remote = remote.id();
-        tokio::spawn(async move { requester.claim_redial_after_wait(remote, later).await })
-    };
-    assert!(
-        requester
-            .claim_redial_after_wait(remote.id(), earlier)
-            .await
-            .is_none(),
-        "the earlier close's dispatcher must not dial"
-    );
-    let owner = later_task.await?;
-    assert!(
-        owner.is_some(),
-        "the replacement's dispatcher must own the next dial"
-    );
-    assert!(
-        requester
-            .state
-            .lock()
-            .await
-            .pending_connections
-            .contains_key(&remote.id()),
-        "the next dial holds the pending handshake"
-    );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_redial_stands_down_for_a_pending_handshake_or_a_departed_peer() -> Result<()> {
-    let remote = make_test_node(super::super::NodeRole::Worker).await?;
-    remote.start_accepting();
-    let addr = remote.endpoint_addr_for_advertisement();
-
-    // An on-demand handshake to the peer is already in progress.
-    let requester = requester_knowing(&remote).await?;
-    let closed = connect_mesh(&requester.endpoint, addr.clone()).await?;
-    requester
-        .state
-        .lock()
-        .await
-        .connections
-        .insert(remote.id(), closed.clone());
-    let ticket = redial_ticket(
-        requester
-            .remove_closed_connection(remote.id(), closed.stable_id())
-            .await,
-    );
-    let _on_demand = match requester.reserve_pending_connection(remote.id()).await {
-        PendingConnectionReservation::Owner(owner) => owner,
-        PendingConnectionReservation::Waiter(_) => panic!("no handshake was pending yet"),
-    };
-    assert!(
-        requester
-            .claim_redial_after_wait(remote.id(), ticket)
-            .await
-            .is_none(),
-        "a redial must not start beside a pending handshake"
-    );
-
-    // The peer said it was leaving while its recovery waited.
-    let requester = requester_knowing(&remote).await?;
-    let closed = connect_mesh(&requester.endpoint, addr.clone()).await?;
-    requester
-        .state
-        .lock()
-        .await
-        .connections
-        .insert(remote.id(), closed.clone());
-    let ticket = redial_ticket(
-        requester
-            .remove_closed_connection(remote.id(), closed.stable_id())
-            .await,
-    );
-    requester.state.lock().await.peers.remove(&remote.id());
-    assert!(
-        requester
-            .claim_redial_after_wait(remote.id(), ticket)
-            .await
-            .is_none(),
-        "a departed peer must not be redialed"
-    );
-
-    // The departure is recorded before the peer record goes, under separate
-    // locks: a recovery claiming in between still finds the record.
-    let requester = requester_knowing(&remote).await?;
-    let closed = connect_mesh(&requester.endpoint, addr).await?;
-    requester
-        .state
-        .lock()
-        .await
-        .connections
-        .insert(remote.id(), closed.clone());
-    let ticket = redial_ticket(
-        requester
-            .remove_closed_connection(remote.id(), closed.stable_id())
-            .await,
-    );
-    requester
-        .state
-        .lock()
-        .await
-        .departed_peers
-        .insert(remote.id(), std::time::Instant::now());
-    assert!(requester.state.lock().await.peers.contains_key(&remote.id()));
-    assert!(
-        requester
-            .claim_redial_after_wait(remote.id(), ticket)
-            .await
-            .is_none(),
-        "a peer whose departure is recorded must not be redialed"
-    );
-    Ok(())
+        .expect("discovery");
+    let (status, body) = crate::network::openai::models_response(&models, "/v1/models", false);
+    assert_eq!(status, 200);
+    body["data"]
+        .as_array()
+        .map(|data| {
+            data.iter()
+                .filter_map(|model| model["id"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
 }

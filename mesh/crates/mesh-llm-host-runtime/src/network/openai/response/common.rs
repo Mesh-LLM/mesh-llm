@@ -36,6 +36,9 @@ pub(crate) struct RouteAttemptLoggingContext<'a> {
     /// attempt targets a remote peer this node is routing to (not serving).
     /// `None` on every attempt that isn't the `RemoteMesh` dispatch path.
     pub(in crate::network::openai) peer_capsule_id: Option<&'a PeerCapsuleIdSink>,
+    /// The trust policy of the request this attempt serves, decided once at
+    /// ingress: whether a turn a peer serves for it is audited.
+    pub(in crate::network::openai) trust: crate::network::request_trust::RequestTrust,
 }
 
 /// A single-slot, write-once-per-attempt side channel for the peer's

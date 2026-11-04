@@ -121,6 +121,7 @@ async fn route_observed(
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     };
     request.exchange_observation_id = observation_id;
     route_model_request(
