@@ -64,7 +64,11 @@ pub fn encode_activation_frame(
                 .iter()
                 .map(|bytes| f32::from_le_bytes(*bytes))
                 .collect::<Vec<_>>();
-            encoded.extend_from_slice(&encode_activation(codec, part_shape(part)?, &values)?);
+            encoded.extend_from_slice(&encode_activation(
+                codec,
+                part_shape(codec, part)?,
+                &values,
+            )?);
         } else {
             encoded.extend_from_slice(bytes);
         }
@@ -95,7 +99,7 @@ pub fn decode_activation_frame(
             .get(wire_offset..end)
             .ok_or_else(|| invalid_data("activation part wire range exceeds frame"))?;
         if part.ggml_type == GGML_TYPE_F32 {
-            for value in decode_activation(codec, part_shape(part)?, bytes)? {
+            for value in decode_activation(codec, part_shape(codec, part)?, bytes)? {
                 payload.extend_from_slice(&value.to_le_bytes());
             }
         } else {
@@ -164,11 +168,11 @@ fn codec_is_lossless(
             .iter()
             .map(|bytes| f32::from_le_bytes(*bytes))
             .collect::<Vec<_>>();
-        let encoded = match encode_activation(codec, part_shape(part)?, &values) {
+        let encoded = match encode_activation(codec, part_shape(codec, part)?, &values) {
             Ok(encoded) => encoded,
             Err(_) => return Ok(false),
         };
-        let decoded = match decode_activation(codec, part_shape(part)?, &encoded) {
+        let decoded = match decode_activation(codec, part_shape(codec, part)?, &encoded) {
             Ok(decoded) => decoded,
             Err(_) => return Ok(false),
         };
@@ -290,7 +294,23 @@ fn ggml_type_bytes(ggml_type: u32) -> io::Result<usize> {
     }
 }
 
-fn part_shape(part: &StageActivationPartDesc) -> io::Result<ActivationShape> {
+/// The row layout a codec encodes an F32 part with: rows run along the first
+/// dimension.
+///
+/// FP8 codecs share one scale across a row (or a 32-value block of it), so a
+/// row must hold a single token's values; otherwise a token's decoded values
+/// would depend on its neighbours, and a cached prefix could decode
+/// differently from the same tokens prefilled in another chunking. Every
+/// other dimension can carry the token axis; the first cannot.
+fn part_shape(
+    codec: StageActivationCodec,
+    part: &StageActivationPartDesc,
+) -> io::Result<ActivationShape> {
+    if codec.is_fp8() && part.token_axis == 0 {
+        return Err(invalid_data(
+            "FP8 activation codecs need the token axis outside the first dimension",
+        ));
+    }
     let elements = usize::try_from(part.payload_bytes)
         .map_err(|_| invalid_data("activation part byte count exceeds usize"))?
         .checked_div(4)
@@ -308,7 +328,7 @@ fn part_wire_bytes(
     part: &StageActivationPartDesc,
 ) -> io::Result<usize> {
     if part.ggml_type == GGML_TYPE_F32 {
-        encoded_len(codec, part_shape(part)?)
+        encoded_len(codec, part_shape(codec, part)?)
     } else {
         usize::try_from(part.payload_bytes)
             .map_err(|_| invalid_data("activation part byte count exceeds usize"))

@@ -523,12 +523,7 @@ mod tests {
         let frame = multipart_activation_frame(2);
         let i32_part = frame.desc.parts[1];
         let i32_start = usize::try_from(i32_part.payload_offset).unwrap();
-        for codec in [
-            crate::StageActivationCodec::RawF32V1,
-            crate::StageActivationCodec::F16RneV1,
-            crate::StageActivationCodec::Bf16RneV1,
-            crate::StageActivationCodec::S8RowF32RneV1,
-        ] {
+        for codec in crate::StageActivationCodec::ALL {
             let message = activation_message(&frame, codec);
             assert_eq!(
                 message.activation.len(),
@@ -544,6 +539,100 @@ mod tests {
                 &frame.payload[i32_start..],
                 "non-F32 parts must stay byte-exact for {codec:?}"
             );
+        }
+    }
+
+    /// One F32 part of `columns` values per token, tokens along `token_axis`.
+    fn f32_activation_frame(
+        columns: i64,
+        token_count: u32,
+        token_axis: i32,
+        values: &[f32],
+    ) -> StageActivationFrame {
+        let tokens = i64::from(token_count);
+        let dimensions = if token_axis == 0 {
+            [tokens, columns, 1, 1]
+        } else {
+            [columns, tokens, 1, 1]
+        };
+        let payload = values
+            .iter()
+            .flat_map(|value| value.to_le_bytes())
+            .collect::<Vec<_>>();
+        let bytes = u64::try_from(payload.len()).unwrap();
+        let inner = u64::try_from(dimensions[0]).unwrap() * 4;
+        StageActivationFrame {
+            desc: StageActivationDesc {
+                version: STAGE_ACTIVATION_FRAME_VERSION,
+                producer_stage_index: 0,
+                layer_start: 0,
+                layer_end: 1,
+                token_count,
+                sequence_count: 1,
+                payload_bytes: bytes,
+                frontier_identity: [0x11; STAGE_ACTIVATION_IDENTITY_BYTES],
+                parts: vec![StageActivationPartDesc {
+                    identity: [0x22; STAGE_ACTIVATION_IDENTITY_BYTES],
+                    ggml_type: 0,
+                    rank: 2,
+                    token_axis,
+                    flags: 0,
+                    dimensions,
+                    byte_strides: [4, inner, bytes, bytes],
+                    payload_offset: 0,
+                    payload_bytes: bytes,
+                }],
+            },
+            payload,
+        }
+    }
+
+    fn decoded_f32(codec: crate::StageActivationCodec, frame: &StageActivationFrame) -> Vec<f32> {
+        let encoded = encode_activation_frame(codec, &frame.desc, &frame.payload).unwrap();
+        decode_activation_frame(codec, &encoded)
+            .unwrap()
+            .payload
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes))
+            .collect()
+    }
+
+    #[test]
+    fn fp8_codecs_decode_each_token_independently_of_its_neighbours() {
+        // Token 0 is small; token 1 carries an outlier. A scale shared across
+        // tokens would quantize token 0 against the outlier.
+        let token0 = [0.01_f32; 32];
+        let mut token1 = [1.0_f32; 32];
+        token1[0] = 1000.0;
+        let both = token0.iter().chain(&token1).copied().collect::<Vec<_>>();
+        for codec in crate::StageActivationCodec::ALL
+            .into_iter()
+            .filter(|codec| codec.is_fp8())
+        {
+            let alone = decoded_f32(codec, &f32_activation_frame(32, 1, 1, &token0));
+            let together = decoded_f32(codec, &f32_activation_frame(32, 2, 1, &both));
+            assert_eq!(&together[..32], alone.as_slice(), "{codec:?}");
+        }
+    }
+
+    #[test]
+    fn fp8_codecs_refuse_parts_with_tokens_along_the_first_dimension() {
+        // Rows run along the first dimension, so with the token axis there one
+        // row, and its scale, would span several tokens.
+        let values = [0.01_f32, 1000.0, 0.02, 1.0];
+        let frame = f32_activation_frame(2, 2, 0, &values);
+        for codec in crate::StageActivationCodec::ALL {
+            if codec.is_fp8() {
+                assert_invalid_data(
+                    encode_activation_frame(codec, &frame.desc, &frame.payload),
+                    "FP8 activation codecs need the token axis outside the first dimension",
+                );
+                assert!(activation_frame_wire_bytes(codec, &frame.desc).is_err());
+            } else {
+                assert_eq!(decoded_f32(codec, &frame).len(), values.len(), "{codec:?}");
+            }
         }
     }
 

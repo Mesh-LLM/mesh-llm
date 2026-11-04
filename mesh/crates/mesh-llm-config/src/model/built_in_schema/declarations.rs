@@ -755,6 +755,19 @@ fn skippy_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
             &format!("{prefix}.prefill_chunk_schedule"),
             ConfigValueSchema::String,
         ),
+        basic_setting(
+            &format!("{prefix}.activation_codec"),
+            string_enum([
+            "lossless",
+            "f16",
+            "bf16",
+            "s8-row",
+            "fp8-e4m3-row",
+            "fp8-e4m3-block32",
+            "fp8-e5m2-row",
+            "f32",
+        ]),
+        ),
     ]
 }
 
