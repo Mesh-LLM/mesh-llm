@@ -112,18 +112,22 @@ fn served_refs_registered_against_a_real_gguf_keep_their_listed_id() {
             } else {
                 format!("{model_ref}#{profile}")
             };
-            let public =
-                public_model_id(model_ref, Some(&descriptor), profile);
+            let public = public_model_id(model_ref, Some(&descriptor), profile);
             assert_eq!(public, expected);
             // The listed id must parse back to the served ref the request
             // resolver routes on.
+            let internal = if profile.is_empty() {
+                model_ref.to_string()
+            } else {
+                format!("{model_ref}#{profile}")
+            };
             assert_eq!(
                 internal_model_for_public_id(
                     &public,
-                    std::slice::from_ref(&model_ref),
+                    std::slice::from_ref(&internal),
                     std::slice::from_ref(&descriptor)
                 ),
-                Some(model_ref)
+                Some(internal)
             );
         }
     }

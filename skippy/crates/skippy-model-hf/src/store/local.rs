@@ -881,10 +881,6 @@ mod tests {
             served.clear();
         }
     }
-        if let Ok(mut served) = served_model_refs().lock() {
-            served.clear();
-        }
-    }
 
     // SSL_CERT_FILE and SSL_CERT_DIR point the system root loading at an empty
     // file and directory on Linux; they are set on a child test process only.
