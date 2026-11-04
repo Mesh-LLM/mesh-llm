@@ -1152,7 +1152,6 @@ mod tests {
             // Local only, as the lifecycle tests are: without network, the
             // relay probes' DNS lookups keep the worker past its 5 s join.
             disable_iroh_relays: true,
-            bind_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
             ..EmbeddedServeConfig::default()
         })
         .await;
