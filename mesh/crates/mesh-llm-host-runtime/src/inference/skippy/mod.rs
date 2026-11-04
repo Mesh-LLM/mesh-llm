@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 mod certification;
 mod deployment;
+mod dflash_draft;
 pub(crate) mod diagnostics;
 mod hooks;
 mod loading;
@@ -21,6 +22,10 @@ mod package;
 mod projector;
 #[cfg(test)]
 mod resolver_host_tests;
+pub(crate) use dflash_draft::{
+    default_dflash_draft_cached, materialize_default_dflash_draft, materialize_split_dflash_draft,
+    split_dflash_draft_source,
+};
 use mesh_llm_skippy_adapter::config as resolver;
 pub(crate) use projector::materialize_projector_url;
 pub(crate) mod runtime_events;
@@ -87,8 +92,6 @@ pub(crate) use mesh_llm_skippy_adapter::{
     KvCachePolicy, SkippyDeviceDescriptor, SkippyModelLoadOptions, SkippyTelemetryOptions,
     single_stage_config,
 };
-#[cfg(test)]
-pub(crate) use package::write_test_package_v2_fixture;
 pub use package::{
     SkippyPackageIdentity, identity_from_layer_package, identity_from_package_v2,
     synthetic_direct_gguf_package,
@@ -97,10 +100,14 @@ pub(crate) use package::{
     direct_gguf_planning_manifest_from_identity, direct_gguf_source_paths, is_package_v2_ref,
     synthetic_content_addressed_gguf_package, synthetic_huggingface_gguf_package,
 };
+#[cfg(test)]
+pub(crate) use package::{
+    write_test_package_v2_fixture, write_test_package_v2_fixture_with_layers,
+};
 pub(crate) use resolver::{
     ResolvedEmbeddedOpenAiArgs, ResolvedSkippyConfig, SkippyConfigResolveRequest,
-    effective_safety_margin_bytes, resolve_skippy_config_for_selector,
-    resolve_skippy_config_for_selector_with_publisher_defaults,
+    effective_safety_margin_bytes, resolve_embedded_request_defaults,
+    resolve_skippy_config_for_selector, resolve_skippy_config_for_selector_with_publisher_defaults,
 };
 pub(crate) use skippy_api::family_policy;
 pub(crate) use skippy_api::family_policy::family_policy_for_stage_config;

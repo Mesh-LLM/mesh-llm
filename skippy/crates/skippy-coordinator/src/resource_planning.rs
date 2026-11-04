@@ -1,4 +1,6 @@
-use skippy_model_artifact::gguf::{GgufCompactMeta, GgufKvCacheQuant};
+use skippy_model_artifact::gguf::{
+    DEFAULT_RECURRENT_STATE_PLANES, GgufCompactMeta, GgufKvCacheQuant,
+};
 
 const DEFAULT_CONTEXT_LENGTH: u32 = 4096;
 const DEFAULT_PARALLEL_SLOTS: usize = 4;
@@ -78,6 +80,23 @@ pub struct RuntimeResourcePlan {
     pub breakdown: Option<RuntimeResourcePlanBreakdown>,
 }
 
+impl RuntimeResourcePlan {
+    /// Whether the weights, projector and any speculative draft fit the device
+    /// and the planned KV pool fits the budget left beside them. A plan at the
+    /// minimum context that still overruns its budget does not fit.
+    pub fn fits(&self) -> bool {
+        self.breakdown.is_none_or(|breakdown| {
+            let resident = breakdown
+                .model_bytes
+                .saturating_add(breakdown.projector_bytes)
+                .saturating_add(breakdown.speculative_bytes);
+            breakdown.measured_fit != Some(false)
+                && resident <= breakdown.vram_bytes
+                && breakdown.planned_kv_bytes <= breakdown.kv_budget_bytes
+        })
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeResourcePlanSource {
     ExplicitOverride,
@@ -106,6 +125,10 @@ pub struct RuntimeResourcePlanBreakdown {
     /// model has no projector). Reported separately from `model_bytes` so a
     /// fit can be read back from production logs.
     pub projector_bytes: u64,
+    /// Bytes a planned speculative draft holds beside the weights: its own
+    /// weights plus the extra recurrent rollback snapshots its verify windows
+    /// need (`0` without a draft).
+    pub speculative_bytes: u64,
     /// KV budget selected by the active planner. Static planning applies the
     /// 85% utilization tax; measured planning applies its utilization target
     /// and then subtracts the lane-scaled measured compute charge.
@@ -165,6 +188,23 @@ pub struct RuntimeResourcePlanInput<'a> {
     pub measured_buffers: Option<MeasuredBufferFootprint>,
 }
 
+/// A speculative draft that will attach to the planned model, charged to the
+/// same pool before context is sized.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PlannedSpeculativeDraft {
+    /// Draft weight bytes.
+    pub weight_bytes: u64,
+    /// Recurrent rollback depth (`n_rs_seq`) the target needs to verify the
+    /// draft's longest window in place.
+    pub recurrent_rollback_tokens: u32,
+    /// KV bytes the draft context holds per target-context token per lane.
+    /// The draft context is sized to the target's, so its KV grows with the
+    /// planned context and is charged beside the target's KV.
+    pub kv_bytes_per_token: u64,
+    /// Compute buffers the draft context holds beside its weights.
+    pub compute_bytes: u64,
+}
+
 /// Measured native buffer sizes from one context init, the ground truth the
 /// budget-driven planner charges in place of the KV-scaled tax.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -192,12 +232,30 @@ pub struct MeasuredBufferFootprint {
 /// the quant is decided upstream, and an explicit `--ctx-size` override
 /// bypasses context planning entirely.
 pub fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> RuntimeResourcePlan {
+    plan_runtime_resources_with_draft(input, None)
+}
+
+/// [`plan_runtime_resources`] with room held for a speculative draft, so a
+/// tight machine plans a shallower context instead of running out of memory.
+pub fn plan_runtime_resources_with_draft(
+    input: RuntimeResourcePlanInput<'_>,
+    draft: Option<PlannedSpeculativeDraft>,
+) -> RuntimeResourcePlan {
     let context_auto = input.ctx_size_override.is_none();
     let slots_auto = input.parallel_override.is_none();
     let slots = input
         .parallel_override
         .unwrap_or_else(planned_parallel_slots)
         .max(1);
+    let speculative_bytes = speculative_draft_bytes(input.metadata, slots, draft);
+    let draft_kv_bytes_per_token = draft.map_or(0, |draft| draft.kv_bytes_per_token);
+    let projector_bytes = input.projector_bytes;
+    // The draft is charged like the projector: resident beside the weights
+    // before any KV is allocated.
+    let input = RuntimeResourcePlanInput {
+        projector_bytes: projector_bytes.saturating_add(speculative_bytes),
+        ..input
+    };
     let estimated_kv_bytes_per_token = input
         .metadata
         .and_then(|metadata| {
@@ -206,7 +264,8 @@ pub fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> RuntimeRes
                 .kv_cache_bytes_per_token(metadata)
                 .map(|bytes| scale_by_layer_fraction(bytes, &input))
         })
-        .unwrap_or(0);
+        .unwrap_or(0)
+        .saturating_add(draft_kv_bytes_per_token);
     let estimated_kv_budget =
         usable_kv_cache_budget(input.vram_bytes, input.model_bytes, input.projector_bytes);
     let estimated_compute_charge =
@@ -229,7 +288,7 @@ pub fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> RuntimeRes
             RuntimeResourcePlanSource::ExplicitOverride,
             None,
         )
-    } else if let Some(measured) = measured_context_plan(&input, slots) {
+    } else if let Some(measured) = measured_context_plan(&input, slots, draft_kv_bytes_per_token) {
         (
             measured.context_length,
             measured.kv_budget_bytes,
@@ -240,7 +299,7 @@ pub fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> RuntimeRes
         )
     } else {
         (
-            planned_context_length(&input, slots),
+            planned_context_length(&input, slots, draft_kv_bytes_per_token),
             estimated_kv_budget,
             estimated_kv_bytes_per_token,
             estimated_compute_charge,
@@ -258,7 +317,8 @@ pub fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> RuntimeRes
         breakdown: Some(RuntimeResourcePlanBreakdown {
             vram_bytes: input.vram_bytes,
             model_bytes: input.model_bytes,
-            projector_bytes: input.projector_bytes,
+            projector_bytes,
+            speculative_bytes,
             kv_budget_bytes,
             planned_kv_bytes,
             kv_bytes_per_token,
@@ -273,7 +333,40 @@ pub fn plan_runtime_resources(input: RuntimeResourcePlanInput<'_>) -> RuntimeRes
     }
 }
 
-fn planned_context_length(input: &RuntimeResourcePlanInput<'_>, slots: usize) -> u32 {
+/// Draft weights and compute buffers plus the rollback snapshots beyond the
+/// default two that the draft's verify windows need: `rollback + 1`
+/// recurrent-state planes per native sequence instead of three, and a
+/// recurrent runtime keeps two native sequences per lane. The draft's KV is
+/// charged per token with the target's.
+fn speculative_draft_bytes(
+    metadata: Option<&GgufCompactMeta>,
+    slots: usize,
+    draft: Option<PlannedSpeculativeDraft>,
+) -> u64 {
+    let Some(draft) = draft else {
+        return 0;
+    };
+    let planes = u64::from(draft.recurrent_rollback_tokens).saturating_add(1);
+    let extra_planes = planes.saturating_sub(DEFAULT_RECURRENT_STATE_PLANES);
+    let native_sequences = (slots as u64).saturating_mul(2).max(2);
+    let rollback_bytes = metadata
+        .map_or(
+            0,
+            GgufCompactMeta::recurrent_plane_bytes_per_native_sequence,
+        )
+        .saturating_mul(extra_planes)
+        .saturating_mul(native_sequences);
+    draft
+        .weight_bytes
+        .saturating_add(draft.compute_bytes)
+        .saturating_add(rollback_bytes)
+}
+
+fn planned_context_length(
+    input: &RuntimeResourcePlanInput<'_>,
+    slots: usize,
+    draft_kv_bytes_per_token: u64,
+) -> u32 {
     let fallback_context = fallback_context_length(input);
     let Some(metadata) = input.metadata else {
         return fallback_context;
@@ -294,7 +387,8 @@ fn planned_context_length(input: &RuntimeResourcePlanInput<'_>, slots: usize) ->
 
     // In a pipeline-parallel split each stage only holds KV state for its
     // own layers.  Scale the per-token cost by the local layer fraction.
-    let kv_bytes_per_token = scale_by_layer_fraction(kv_bytes_per_token_full, input);
+    let kv_bytes_per_token = scale_by_layer_fraction(kv_bytes_per_token_full, input)
+        .saturating_add(draft_kv_bytes_per_token);
 
     let kv_budget =
         usable_kv_cache_budget(input.vram_bytes, input.model_bytes, input.projector_bytes);
@@ -424,6 +518,7 @@ struct MeasuredContextPlan {
 fn measured_context_plan(
     input: &RuntimeResourcePlanInput<'_>,
     resolved_lanes: usize,
+    draft_kv_bytes_per_token: u64,
 ) -> Option<MeasuredContextPlan> {
     let measured = input.measured_buffers?;
     if measured.context_length == 0 || measured.kv_bytes == 0 || measured.lane_count == 0 {
@@ -456,6 +551,7 @@ fn measured_context_plan(
     if kv_per_token == 0 {
         return None;
     }
+    let kv_per_token = kv_per_token + u128::from(draft_kv_bytes_per_token);
     let max_affordable = (budget / kv_per_token / u128::from(resolved_lanes.max(1) as u64))
         .min(u128::from(u32::MAX)) as u32;
     let minimum = MIN_AUTO_CONTEXT_LENGTH.min(native_context);

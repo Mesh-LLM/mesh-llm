@@ -12,9 +12,6 @@ import {
   extractPdfTextFromFile,
   isBrowserVisionModelLoaded
 } from '@/features/chat/api/attachment-preprocessing'
-import { usePaidRoutingQuery } from '@/features/chat/api/use-paid-routing-query'
-import { useModelPaymentsQuery } from '@/features/chat/api/use-model-payments-query'
-import { isOfferedForMode, priceLabel } from '@/features/chat/lib/model-prices'
 import { useModelsQuery } from '@/features/network/api/use-models-query'
 import { useStatusQuery } from '@/features/network/api/use-status-query'
 import { adaptModelsToSummary } from '@/features/network/api/models-adapter'
@@ -120,12 +117,6 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
   // blocks sending until it returns or the user picks something else.
   const [routingPreferences, setRoutingPreferences] = useState(loadChatRoutingPreferences)
   const model = routingPreferences.model === AUTO_MODEL_VALUE ? '' : routingPreferences.model
-  // The toggle is offered only when the wallet policy is confirmed able to pay. Otherwise (no
-  // wallet, loading, error, unreachable route) the UI says Free and every request is restricted
-  // to free hosts, so "Free" is enforced rather than assumed.
-  const paidRoutingQuery = usePaidRoutingQuery({ enabled: liveMode })
-  const paidRoutingAllowed = paidRoutingQuery.data === true && !paidRoutingQuery.isError
-  const freeOnly = !paidRoutingAllowed || routingPreferences.freeOnly
   const updateRoutingPreferences = useCallback((patch: Partial<ChatRoutingPreferences>) => {
     setRoutingPreferences((current) => {
       const next = { ...current, ...patch }
@@ -137,17 +128,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
     (value: string) => updateRoutingPreferences({ model: value === AUTO_MODEL_VALUE ? '' : value }),
     [updateRoutingPreferences]
   )
-  const setFreeOnly = useCallback(
-    (value: boolean) => updateRoutingPreferences({ freeOnly: value }),
-    [updateRoutingPreferences]
-  )
-  // Prices come from /v1/models. Free mode hides paid-only models; paid mode labels them with price.
-  const modelPayments = useModelPaymentsQuery({ enabled: liveMode }).data
-  const offeredModels = useMemo(
-    () => selectableModels.filter((item) => isOfferedForMode(modelPayments?.get(item.name), freeOnly)),
-    [freeOnly, modelPayments, selectableModels]
-  )
-  const modelExists = offeredModels.some((item) => item.name === model)
+  const modelExists = selectableModels.some((item) => item.name === model)
   const modelListKnown = !liveMode || modelsQuery.data != null || statusQuery.data != null
   const pickedModelUnavailable = model !== '' && !modelExists
   // selectedModelValue is what the dropdown shows; activeModelName is what we send on the wire —
@@ -190,7 +171,6 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
     setMessageModels,
     setSessionModel,
     setSessionTarget,
-    setSessionFreeOnly,
     setSystemPrompt,
     streamingConversationIds,
     systemPrompt,
@@ -288,14 +268,13 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
             }
           ]
         : []),
-      ...offeredModels.map((item) => ({
+      ...selectableModels.map((item) => ({
         value: item.name,
         label: item.displayName || item.name,
-        meta: freeOnly ? undefined : priceLabel(modelPayments?.get(item.name)),
         status: modelStatusBadge(item)
       }))
     ],
-    [displayModels, freeOnly, model, modelListKnown, modelPayments, offeredModels, pickedModelUnavailable]
+    [displayModels, model, modelListKnown, pickedModelUnavailable, selectableModels]
   )
   const canRetry = hasLastUserTurn(activeMessages.map((message) => ({ role: message.messageRole })))
 
@@ -412,10 +391,6 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
   useEffect(() => {
     setSessionModel(activeModelName)
   }, [activeModelName, setSessionModel])
-
-  useEffect(() => {
-    setSessionFreeOnly(freeOnly)
-  }, [freeOnly, setSessionFreeOnly])
 
   useEffect(() => {
     setSessionTarget(target ?? '')
@@ -571,8 +546,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
       conversationId = activeConversationKey || chatConversationId,
       // Taken at submit and carried with the request: attachment processing below can take
       // a while, and a target change during it must not reroute this prompt.
-      targetSnapshot = target ?? '',
-      freeOnlySnapshot = freeOnly
+      targetSnapshot = target ?? ''
     ) => {
       const promptSnapshot = submission.prompt
       const attachmentsSnapshot = [...submission.attachments]
@@ -617,7 +591,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
           }
         })
         setAttachmentProcessingStatus((current) => (current?.conversationId === ensuredConversationId ? null : current))
-        await chat.sendMessage(content, { body: { target: targetSnapshot, freeOnly: freeOnlySnapshot } })
+        await chat.sendMessage(content, { body: { target: targetSnapshot } })
       } catch (error) {
         setAttachmentProcessingStatus((current) => (current?.conversationId === ensuredConversationId ? null : current))
         const pendingSend = pendingSendRef.current
@@ -652,7 +626,6 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
       clearComposerDraft,
       clearStoppedConversation,
       ensureConversation,
-      freeOnly,
       setComposerDraft,
       target,
       updateThread
@@ -672,8 +645,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
         id: createQueuedSubmissionId(),
         timestamp: new Date().toISOString(),
         conversationId: composerConversationId,
-        target: target ?? '',
-        freeOnly
+        target: target ?? ''
       }
       setQueuedSubmissions((current) => {
         const next = [...current, queued]
@@ -693,7 +665,6 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
     composerConversationId,
     composerDraft,
     composerShouldQueue,
-    freeOnly,
     requestJumpToLatest,
     submitPromptNow,
     target
@@ -708,14 +679,7 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
 
     const nextSubmission = queuedSubmissions.find((submission) => submission.conversationId === chatConversationId)
     if (!nextSubmission) return
-    const effectiveFreeOnly = nextSubmission.freeOnly || !paidRoutingAllowed
-    if (
-      model !== '' &&
-      !selectableModels.some(
-        (item) => item.name === model && isOfferedForMode(modelPayments?.get(item.name), effectiveFreeOnly)
-      )
-    )
-      return
+    if (model !== '' && !selectableModels.some((item) => item.name === model)) return
 
     queueDrainInFlightRef.current = true
     setQueuedSubmissions((current) => {
@@ -728,23 +692,13 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
         await submitPromptNow(
           { prompt: nextSubmission.prompt, attachments: [...nextSubmission.attachments] },
           nextSubmission.conversationId,
-          nextSubmission.target,
-          effectiveFreeOnly
+          nextSubmission.target
         )
       } finally {
         queueDrainInFlightRef.current = false
       }
     })()
-  }, [
-    chatConversationId,
-    isStreaming,
-    model,
-    modelPayments,
-    paidRoutingAllowed,
-    queuedSubmissions,
-    selectableModels,
-    submitPromptNow
-  ])
+  }, [chatConversationId, isStreaming, model, queuedSubmissions, selectableModels, submitPromptNow])
 
   const removeQueuedSubmission = useCallback(
     (submissionId: string) => {
@@ -902,8 +856,6 @@ export function ChatPageContent({ data = CHAT_HARNESS, target, onClearTarget }: 
       modelOptions={options}
       selectedModelValue={selectedModelValue}
       onModelChange={setModel}
-      freeOnly={freeOnly}
-      onFreeOnlyChange={paidRoutingAllowed ? setFreeOnly : undefined}
       modelUnavailable={pickedModelUnavailable && modelListKnown}
       composerConversationId={composerConversationId}
       composerDraft={composerDraft}

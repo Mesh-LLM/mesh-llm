@@ -213,7 +213,7 @@ impl BufferedHttpRequest {
         self.method == "POST" && is_audio_upload_path(&self.client_path)
     }
 
-    /// Document bytes are media, not prompt text or model context.
+    /// Document and typed image uploads are media, not model context.
     pub fn is_document_ocr_request(&self) -> bool {
         self.method == "POST" && is_document_ocr_path(&self.client_path)
     }
@@ -706,7 +706,10 @@ fn is_audio_upload_path(path: &str) -> bool {
 }
 
 fn is_document_ocr_path(path: &str) -> bool {
-    path.split('?').next().unwrap_or(path) == "/mesh/v1/documents/ocr"
+    matches!(
+        path.split('?').next().unwrap_or(path),
+        "/mesh/v1/documents/ocr" | "/mesh/v1/images/similarity" | "/mesh/v1/images/depth"
+    )
 }
 
 fn finalize_forwarded_request(
@@ -1149,11 +1152,6 @@ fn request_requires_json_transform(path: &str, body: &[u8], plugin_manager_prese
 pub(super) fn parse_json_body_from_http_request(raw: &[u8]) -> Option<serde_json::Value> {
     let header_end = raw.windows(4).position(|window| window == b"\r\n\r\n")? + 4;
     serde_json::from_slice(&raw[header_end..]).ok()
-}
-
-pub fn is_models_list_request(method: &str, path: &str) -> bool {
-    let path = path.split('?').next().unwrap_or(path);
-    method == "GET" && (path == "/v1/models" || path == "/models")
 }
 
 /// Legacy lifecycle paths formerly handled by the peer-reachable OpenAI

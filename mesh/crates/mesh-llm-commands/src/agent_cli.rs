@@ -515,6 +515,7 @@ async fn check_mesh(
              Ensure at least one serving peer is available on the mesh."
         );
     }
+    model_inventory::enrich_from_mesh(client, &models_url, &mut models).await;
     models.report_fallbacks();
 
     let chosen = choose_requested_or_agent_model(&models.names, model, &mut child)?;
@@ -575,7 +576,7 @@ async fn fetch_mesh_models(
         .await
         .with_context(|| format!("Failed to parse model list from {models_url}"))?;
 
-    let models = ModelInventory::from_response(&body);
+    let mut models = ModelInventory::from_response(&body);
 
     if models.names.is_empty() {
         anyhow::bail!(
@@ -583,6 +584,7 @@ async fn fetch_mesh_models(
              Ensure at least one serving peer is available on the mesh."
         );
     }
+    model_inventory::enrich_from_mesh(client, models_url, &mut models).await;
     models.report_fallbacks();
 
     let chosen = if let Some(model) = requested_model {

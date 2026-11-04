@@ -4,116 +4,146 @@ title: Rust SDK
 
 # Rust SDK
 
-Use [`mesh-llm-sdk`](https://crates.io/crates/mesh-llm-sdk) for Rust applications. The default `client` feature is lightweight; enable `serving` when the app should manage local models and run an embedded node.
+Use [`mesh-llm-sdk`](https://crates.io/crates/mesh-llm-sdk) to embed one `MeshNode`.
+Its default `serving` feature includes the embedded node APIs. Select the role
+with `.client()`, `.serve_only()`, or `.serve()` (combined).
 
-## Install
-
-Client-only application:
+## Install and join
 
 ```toml
 [dependencies]
 anyhow = "1"
 mesh-llm-sdk = "{{ site.sdkVersion }}"
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-```
-
-Serving application:
-
-```toml
-[dependencies]
-anyhow = "1"
-mesh-llm-sdk = { version = "{{ site.sdkVersion }}", features = ["serving"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-Add the `console` feature when the app also packages the web console.
-
-## Connect as a client
-
-The direct mesh transport avoids requiring a local OpenAI-compatible HTTP listener:
-
 ```rust,no_run
-use mesh_llm_sdk::{ClientBuilder, InviteToken, OwnerKeypair};
+use mesh_llm_sdk::MeshNode;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let owner = OwnerKeypair::generate();
-    let invite = std::env::var("MESH_INVITE_TOKEN")?.parse::<InviteToken>()?;
-    let mut client = ClientBuilder::new(owner, invite)
-        .with_direct_mesh_transport()
-        .build()?;
-
-    client.join().await?;
-    let models = client.list_models().await?;
-    println!("models: {}", models.len());
-    // Stream chat or responses through the client inference API here.
-    client.disconnect().await;
+    let node = MeshNode::builder()
+        .client()
+        .auto_join_public_mesh()
+        .start()
+        .await?;
+    let llms = node.openai_client()?.models().await?;
+    println!("{llms}");
+    node.stop().await?;
     Ok(())
 }
 ```
 
-For public-mesh discovery, use `select_public_mesh(PublicMeshQuery { .. })` and build the client from the selected mesh. Keep the owner keypair stable across reconnects.
+For a private mesh, replace `.auto_join_public_mesh()` with `.join_token(token)`.
+Use `.owner_key(path)` when an owner keystore is required. Client mode does not
+load a native model-serving runtime. To serve local models, install a matching
+runtime explicitly, choose `.serve_only()` or `.serve()`, and add
+`.model("publisher/model:quant")`. Node startup never downloads a runtime
+implicitly. See [SDK overview](/docs/pages/sdk/).
 
-## Embed local serving
+The former thin client facade, `ClientBuilder`, and `client`/`node` feature split
+have been removed from this SDK. Migrate callers to the embedded `MeshNode`.
 
-Resolve or install the native runtime into an app-owned cache before starting a serving node:
+## Discover all mesh-advertised models
+
+`node.models()` queries the primary mesh inventory directly in process. It
+includes local and remote LLM, speech, embedding, decision and OCR models.
+`node.openai_client()?.models()` remains the LLM-only compatibility list.
 
 ```rust,no_run
-use mesh_llm_sdk::native_runtime::{
-    install_native_runtime, NativeRuntimeInstallOptions, RuntimeSelection,
-};
+use mesh_llm_sdk::models::{MeshModelQuery, ModelWorkloadClass};
 
-let outcome = install_native_runtime(NativeRuntimeInstallOptions {
-    selection: RuntimeSelection::Recommended,
-    cache_dir: Some(app_cache_dir.join("skippy-native-runtimes")),
-    bundle_dirs: vec![app_resources.join("meshllm-native-runtime")],
-    allow_download: false,
+let page = node.models().list(MeshModelQuery::default()).await?;
+let ocr = node.models().list(MeshModelQuery {
+    workload_class: Some(ModelWorkloadClass::DocumentOcr),
+    available: Some(true),
     ..Default::default()
-})
-.await?;
-println!("runtime: {}", outcome.runtime.path.display());
+}).await?;
+let details = node.models().get("org/model@revision#profile").await?;
+if let Some(cursor) = page.next_cursor {
+    let next = node.models().list(MeshModelQuery {
+        cursor: Some(cursor),
+        ..Default::default()
+    }).await?;
+}
 ```
 
-Then embed the node. This example serves a local model and joins a public mesh; replace `auto_join_public_mesh()` with `join_token(...)` for a private mesh:
+Pages contain typed `data` and `next_cursor`. Filters combine with AND; keep
+filters unchanged when continuing and restart if the snapshot expires. Metadata,
+capabilities, runtime context limits and thinking/payment observations stay with
+the provider that supplied them. Missing metadata means unknown. See
+[Mesh model discovery](/docs/pages/model-discovery/) for the complete contract.
+
+## Inference and OCR
+
+Compatibility inference uses the node's HTTP listener. `request` and `stream`
+preserve complete OpenAI-compatible bodies, including tools, multimodal content
+and response-format fields, and check HTTP success by default. Use
+`request_raw` or `stream_raw` when the application must inspect provider error
+responses. `OpenAiRequestError` retains `status_code`, `content_type` and `body`.
+Existing callers that relied on the former unchecked defaults must migrate to
+the explicit raw methods. A serve-only node rejects `openai_client()` at the
+SDK boundary.
+
+Upload document bytes to an advertised OCR model with the dedicated multipart
+method:
 
 ```rust,no_run
-use mesh_llm_sdk::MeshNode;
+use mesh_llm_sdk::documents::DocumentOcrOptions;
 
-let node = MeshNode::builder()
-    .serve()
-    .model("unsloth/Qwen3-0.6B-GGUF:Q4_K_M")
-    .auto_join_public_mesh()
-    .api_port(0)
-    .console_port(0)
-    .start()
-    .await?;
-
-let models = node.openai_client().models().await?;
-println!("served models: {models}");
-node.shutdown().await?;
+let mut options = DocumentOcrOptions::new("ocr-model");
+options.filename = "scan.pdf".into();
+options.content_type = "application/pdf".into();
+options.response_format = Some("markdown".into());
+let response = node.openai_client()?.document_ocr(pdf_bytes, options).await?;
+// Successful provider JSON, text, or Markdown remains intact.
+println!("{} {}", response.status_code, response.body);
 ```
 
-`MeshNode` also exposes `status()`, `api_base_url()`, `console_url()`, `invite_token()`, and an `openai_client()` for chat completions and responses. If the application supplies its own serving implementation, the lower-level `mesh-llm-api-server` API can bind a `ServingController`; most applications should start with `mesh-llm-sdk`.
+The file must be nonempty and at most 64 MiB. `max_pages`, when supplied, must
+be positive; formats are `json`, `text` and `markdown`. Transport and validation
+failures and provider HTTP errors return errors. `document_ocr_raw` preserves
+provider status, content type and body for application status handling.
 
-## Console assets
+## Memberships and live transcription
 
-Enable `console` and package the generated console directory with the application:
+`add_membership`, `remove_membership`, and `memberships` manage additional meshes
+without loading local models again. Each membership has its own identity,
+allowlist, peers and API port. The native model catalog above remains scoped to
+the node's primary mesh.
+
+`start_live_transcription` accepts `LiveTranscriptionOptions` and returns a
+session for sending signed 16-bit mono PCM, committing turns, reading transcript
+events, and stopping. The sample rate can be 8–96 kHz. Defaults use 16 kHz and
+server-side turn detection. Disabling turn detection enables explicit commit.
+
+Always call `stop`/`shutdown` as the application exits. `status`,
+`api_base_url`, `console_url` and `invite_token` expose node lifecycle details.
+Native catalog queries avoid HTTP; this does not mean the whole SDK lifecycle
+or inference transport is HTTP-free.
+
+Supply signed 16-bit mono PCM recorded at 16 kHz. Disable turn detection for
+explicit turn commits:
 
 ```rust,no_run
-let console = mesh_llm_sdk::console::start_file_console(
-    mesh_llm_sdk::console::ConsoleServerOptions {
-        asset_dir: app_resources.join("console"),
-        port: 0,
-        listen_all: false,
-    },
-)
-.await?;
-println!("console: {}", console.url());
+use mesh_llm_sdk::live_transcription::LiveTranscriptionOptions;
+
+let mut session = node.start_live_transcription(LiveTranscriptionOptions {
+    model: Some("speech-model".into()),
+    sample_rate: 16_000,
+    turn_detection: None,
+    ..Default::default()
+}).await?;
+session.send_audio(&pcm16_samples).await?;
+session.commit().await?;
+if let Some(event) = session.next_event().await {
+    println!("{event:?}");
+}
+let remaining_events = session.stop().await?;
+println!("{remaining_events:?}");
 ```
 
-Keep console hosting optional so client-only applications do not carry web assets.
-
-## Errors and shutdown
-
-Return `MeshApiError`/`anyhow::Error` to the application boundary, report download and serving progress, and always unload a served model before shutting down when requests may still be in flight. Use an app-owned cache and avoid sharing one mutable runtime directory between concurrent nodes.
+`send_audio_f32` accepts floating point samples. `stop()` consumes the session
+and returns remaining final events. Dropping the session on error closes its
+transport. Stop the node when the application exits.

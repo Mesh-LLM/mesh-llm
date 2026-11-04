@@ -47,6 +47,8 @@ pub(super) fn request_workload_class(path: &str) -> Option<ModelWorkloadClass> {
         "/v1/audio/speech" => Some(ModelWorkloadClass::SpeechSynthesis),
         "/v1/realtime" => Some(ModelWorkloadClass::SpeechRecognition),
         "/mesh/v1/documents/ocr" => Some(ModelWorkloadClass::DocumentOcr),
+        "/mesh/v1/images/similarity" => Some(ModelWorkloadClass::ImageTextSimilarity),
+        "/mesh/v1/images/depth" => Some(ModelWorkloadClass::DepthEstimation),
         _ => None,
     }
 }
@@ -156,7 +158,7 @@ pub(super) fn model_satisfies_workload_class(
 /// Require verified audio and a known audio-to-text class on the same
 /// descriptor: a generation model with an audio encoder, or a dedicated
 /// speech-recognition model.
-fn descriptor_supports_audio_upload(descriptor: &ServedModelDescriptor) -> bool {
+pub(crate) fn descriptor_supports_audio_upload(descriptor: &ServedModelDescriptor) -> bool {
     descriptor.capabilities_known
         && descriptor.capabilities.supports_audio_runtime()
         && matches!(
@@ -174,7 +176,7 @@ fn descriptor_supports_audio_upload(descriptor: &ServedModelDescriptor) -> bool 
 
 /// System One is a runtime-verified endpoint capability, independent of the
 /// model's primary workload class.
-fn descriptor_supports_system_one(descriptor: &ServedModelDescriptor) -> bool {
+pub(crate) fn descriptor_supports_system_one(descriptor: &ServedModelDescriptor) -> bool {
     descriptor.capabilities_known && descriptor.capabilities.supports_system_one_runtime()
 }
 
@@ -233,6 +235,39 @@ pub(super) fn descriptor_for_request<'a>(
     })
 }
 
+/// The one descriptor that serves `model` for the endpoint at `path`, or
+/// `None` when none does or more than one could have: a node can advertise a
+/// native embedding model and a chat plugin under one name, and a fact read
+/// from the wrong one would be attributed to a model that never ran. Exact
+/// `model_name` matches win over public-ID aliases, as in routing.
+pub(super) fn unambiguous_descriptor_for_request<'a>(
+    model: &str,
+    path: &str,
+    descriptors: &'a [ServedModelDescriptor],
+) -> Option<&'a ServedModelDescriptor> {
+    let serves = |descriptor: &&ServedModelDescriptor| {
+        model_satisfies_request(model, path, std::slice::from_ref(*descriptor))
+    };
+    let exact = descriptors
+        .iter()
+        .filter(|descriptor| descriptor.identity.model_name == model)
+        .filter(serves)
+        .collect::<Vec<_>>();
+    let candidates = if exact.is_empty() {
+        descriptors
+            .iter()
+            .filter(|descriptor| descriptor_matches_routable_name(descriptor, model))
+            .filter(serves)
+            .collect()
+    } else {
+        exact
+    };
+    match candidates.as_slice() {
+        [only] => Some(*only),
+        _ => None,
+    }
+}
+
 /// Infer binary upload requirements without interpreting file bytes as JSON.
 pub(super) fn request_media(
     path: &str,
@@ -244,7 +279,7 @@ pub(super) fn request_media(
             needs_audio: true,
             needs_vision: false,
         }
-    } else if is_document_ocr_path(path) {
+    } else if is_binary_task_path(path) {
         crate::network::router::MediaRequirements {
             has_media: true,
             needs_audio: false,
@@ -255,27 +290,12 @@ pub(super) fn request_media(
     }
 }
 
-/// Whether every advertisement of this model name serves document OCR.
-///
-/// `/v1/models` is the chat-compatible listing, so a local OCR-only plugin
-/// endpoint is deliberately absent from it. A peer advertises its plugin models
-/// by name, which would otherwise put an OCR-only model back on the list just
-/// because a different node hosts it. A name no descriptor claims stays listed:
-/// name-only advertisement is admitted for chat by default, exactly as
-/// `model_satisfies_workload_class` treats it.
-pub(crate) fn serves_only_document_ocr(model: &str, descriptors: &[ServedModelDescriptor]) -> bool {
-    let mut matching = descriptors
-        .iter()
-        .filter(|descriptor| descriptor_matches_routable_name(descriptor, model))
-        .peekable();
-    matching.peek().is_some()
-        && matching.all(|descriptor| {
-            descriptor
-                .metadata
-                .as_ref()
-                .and_then(|metadata| metadata.workload_class)
-                == Some(ModelWorkloadClass::DocumentOcr)
-        })
+/// Multipart tasks can select an automatic model without a JSON request body.
+pub(super) fn is_binary_task_path(path: &str) -> bool {
+    matches!(
+        path.split('?').next(),
+        Some("/mesh/v1/documents/ocr" | "/mesh/v1/images/similarity" | "/mesh/v1/images/depth")
+    )
 }
 
 /// Pick metadata from a descriptor that supports this request, not whichever

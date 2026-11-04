@@ -25,7 +25,7 @@ const ENCODER_DECODER_RUNTIME_LANES: u32 = 1;
 
 /// Launch arguments for an encoder-decoder stage whose config asks for four
 /// lanes while the loaded runtime serves one.
-fn encoder_decoder_openai_args() -> EmbeddedOpenAiArgs {
+pub(in crate::frontend) fn modelless_stage_openai_args() -> EmbeddedOpenAiArgs {
     let config = StageConfig {
         stage_id: "stage-0".to_string(),
         lane_count: CONFIGURED_LANES,
@@ -42,6 +42,7 @@ fn encoder_decoder_openai_args() -> EmbeddedOpenAiArgs {
         model_id: Some("encoder-decoder-fixture".to_string()),
         default_max_tokens: 16,
         request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        live_defaults_scope: 0,
         // The OpenAI default is `config.lane_count`, so an unset
         // `--generation-concurrency` on this stage arrives here as four.
         generation_concurrency: CONFIGURED_LANES as usize,
@@ -116,7 +117,7 @@ fn guard_refuses_concurrency_above_the_lane_bound_it_is_given() {
 #[test]
 /// The frontend must give the guard the runtime's bound, not the config's.
 fn encoder_decoder_admission_measures_concurrency_against_the_served_lane_count() {
-    let args = encoder_decoder_openai_args();
+    let args = modelless_stage_openai_args();
     let served_lanes = {
         let runtime = args
             .runtime
@@ -132,7 +133,7 @@ fn encoder_decoder_admission_measures_concurrency_against_the_served_lane_count(
         "fixture must be an encoder-decoder stage configured for four lanes on a one-lane runtime"
     );
 
-    let outcome = match embedded_openai_backend(encoder_decoder_openai_args()) {
+    let outcome = match embedded_openai_backend(modelless_stage_openai_args()) {
         Ok(_) => "admitted".to_string(),
         Err(error) => {
             let mut chain = error.to_string();

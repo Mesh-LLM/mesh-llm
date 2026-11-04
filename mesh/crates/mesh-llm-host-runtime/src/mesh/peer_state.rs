@@ -455,10 +455,11 @@ impl Node {
     /// requests directly.
     pub async fn models_being_served(&self) -> Vec<String> {
         let my_hosted_models = self.hosted_models.lock().await.clone();
-        let peer_data: Vec<_> = {
+        let mut peer_data: Vec<_> = {
             let state = self.state.lock().await;
             state.peers.values().cloned().collect()
         };
+        self.filter_model_requirements(&mut peer_data).await;
         let mut served = std::collections::HashSet::new();
         for s in &my_hosted_models {
             served.insert(s.clone());
@@ -476,10 +477,10 @@ impl Node {
     /// All host IDs serving a model, with a healthy hash-preferred host first.
     /// Paused peers are excluded; deprioritized peers remain spillover capacity.
     pub async fn hosts_for_model(&self, model: &str) -> Vec<EndpointId> {
+        let peers = self.routable_peers().await;
         let state = self.state.lock().await;
-        let mut hosts: Vec<(EndpointId, bool)> = state
-            .peers
-            .values()
+        let mut hosts: Vec<(EndpointId, bool)> = peers
+            .iter()
             .filter(|p| is_routing_eligible(p, &state))
             .filter(|p| routes_http_model(p, model))
             .filter_map(|p| {
@@ -530,22 +531,18 @@ impl Node {
     /// Find ANY host in the mesh (fallback when no model match). Peers the
     /// operator blocked are never returned.
     pub async fn any_host(&self) -> Option<PeerInfo> {
-        let now_ms = crate::network::peer_blocks::now_ms();
+        let peers = self.routable_peers().await;
         let state = self.state.lock().await;
-        state
-            .peers
-            .values()
-            .filter(|p| is_routing_eligible(p, &state))
-            .filter(|p| !self.peer_blocks.is_blocked(&p.id, now_ms))
-            .find(|p| !http_routable_models(p).is_empty())
-            .cloned()
+        peers.into_iter().find(|peer| {
+            is_routing_eligible(peer, &state) && !http_routable_models(peer).is_empty()
+        })
     }
 
     /// Build the current routing table from this node's view of the mesh.
     pub async fn routing_table(&self) -> RoutingTable {
         let my_hosted_models = self.hosted_models.lock().await.clone();
         let my_role = self.role.lock().await.clone();
-        let peer_data: Vec<_> = {
+        let mut peer_data: Vec<_> = {
             let state = self.state.lock().await;
             state
                 .peers
@@ -554,6 +551,7 @@ impl Node {
                 .cloned()
                 .collect()
         };
+        self.filter_model_requirements(&mut peer_data).await;
         let mut hosts = Vec::new();
 
         // Include self if we're serving through the local API proxy
@@ -611,6 +609,7 @@ impl Node {
         let now_ms = crate::network::peer_blocks::now_ms();
         let mut peers = self.peers().await;
         peers.retain(|peer| !self.peer_blocks.is_blocked(&peer.id, now_ms));
+        self.filter_model_requirements(&mut peers).await;
         peers
     }
 

@@ -1,67 +1,50 @@
-use std::ffi::c_char;
+//! Ergonomic aliases for the generated activation-frame ABI types.
 
-use crate::TensorRole;
+use crate::bindings;
 
-pub const ACTIVATION_FRAME_VERSION: u32 = 2;
-pub const ACTIVATION_BOUNDARY_DESC_VERSION: u32 = 2;
-pub const ACTIVATION_IDENTITY_BYTES: usize = 32;
-pub const ACTIVATION_MAX_DIMS: usize = 4;
-pub const ACTIVATION_MAX_PARTS: usize = 16;
-pub const ACTIVATION_PART_OPTIONAL: u32 = 1 << 0;
+pub const ACTIVATION_FRAME_VERSION: u32 = bindings::skippy::SKIPPY_ACTIVATION_FRAME_VERSION;
+pub const ACTIVATION_BOUNDARY_DESC_VERSION: u32 =
+    bindings::skippy::SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION;
+pub const ACTIVATION_IDENTITY_BYTES: usize =
+    bindings::skippy::SKIPPY_ACTIVATION_IDENTITY_BYTES as usize;
+pub const ACTIVATION_MAX_DIMS: usize = bindings::skippy::SKIPPY_ACTIVATION_MAX_DIMS as usize;
+pub const ACTIVATION_MAX_PARTS: usize = bindings::skippy::SKIPPY_ACTIVATION_MAX_PARTS as usize;
+pub const ACTIVATION_PART_OPTIONAL: u32 =
+    bindings::skippy::skippy_ffi_bridge_activation_part_optional;
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct TensorInfo {
-    pub name: *const c_char,
-    pub layer_index: i32,
-    pub role: TensorRole,
-    pub ggml_type: u32,
-    pub byte_size: u64,
-    pub element_count: u64,
+pub type TensorInfo = bindings::skippy::skippy_tensor_info;
+pub type ActivationPartDesc = bindings::skippy::skippy_activation_part_desc;
+
+#[allow(clippy::derivable_impls)]
+impl Default for ActivationPartDesc {
+    fn default() -> Self {
+        Self {
+            identity: [0; ACTIVATION_IDENTITY_BYTES],
+            ggml_type: 0,
+            rank: 0,
+            token_axis: 0,
+            flags: 0,
+            dimensions: [0; ACTIVATION_MAX_DIMS],
+            byte_strides: [0; ACTIVATION_MAX_DIMS],
+            payload_offset: 0,
+            payload_bytes: 0,
+        }
+    }
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ActivationPartDesc {
-    pub identity: [u8; ACTIVATION_IDENTITY_BYTES],
-    pub ggml_type: u32,
-    pub rank: u32,
-    pub token_axis: i32,
-    pub flags: u32,
-    pub dimensions: [i64; ACTIVATION_MAX_DIMS],
-    pub byte_strides: [u64; ACTIVATION_MAX_DIMS],
-    pub payload_offset: u64,
-    pub payload_bytes: u64,
+pub type ActivationDesc = bindings::skippy::skippy_activation_desc;
+pub type ActivationBoundaryDesc = bindings::skippy::skippy_activation_boundary_desc;
+
+#[allow(clippy::derivable_impls)]
+impl Default for ActivationBoundaryDesc {
+    fn default() -> Self {
+        Self {
+            version: ACTIVATION_BOUNDARY_DESC_VERSION,
+            part_count: 0,
+            frontier_identity: [0; ACTIVATION_IDENTITY_BYTES],
+            parts: [ActivationPartDesc::default(); ACTIVATION_MAX_PARTS],
+        }
+    }
 }
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct ActivationDesc {
-    pub version: u32,
-    pub producer_stage_index: i32,
-    pub layer_start: i32,
-    pub layer_end: i32,
-    pub token_count: u32,
-    pub sequence_count: u32,
-    pub part_count: u32,
-    pub reserved: u32,
-    pub payload_bytes: u64,
-    pub frontier_identity: [u8; ACTIVATION_IDENTITY_BYTES],
-    pub parts: [ActivationPartDesc; ACTIVATION_MAX_PARTS],
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct ActivationBoundaryDesc {
-    pub version: u32,
-    pub part_count: u32,
-    pub frontier_identity: [u8; ACTIVATION_IDENTITY_BYTES],
-    pub parts: [ActivationPartDesc; ACTIVATION_MAX_PARTS],
-}
-
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct LogitBias {
-    pub token_id: i32,
-    pub bias: f32,
-}
+pub type LogitBias = bindings::skippy::llama_logit_bias;

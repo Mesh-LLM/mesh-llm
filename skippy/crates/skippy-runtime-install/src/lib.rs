@@ -5,6 +5,8 @@ mod install;
 mod legacy_import;
 mod manifest;
 pub mod startup;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
 mod types;
 
 pub use discovery::{
@@ -741,6 +743,9 @@ mod tests {
 
     #[test]
     fn default_manifest_url_is_still_consulted_when_bundle_dirs_exist() {
+        crate::rerun_without_bundle_env!(
+            default_manifest_url_is_still_consulted_when_bundle_dirs_exist
+        );
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
@@ -777,6 +782,7 @@ mod tests {
 
     #[test]
     fn default_manifest_url_is_skipped_when_not_allowed() {
+        crate::rerun_without_bundle_env!(default_manifest_url_is_skipped_when_not_allowed);
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
@@ -793,6 +799,7 @@ mod tests {
 
     #[test]
     fn explicit_manifest_url_wins_over_env_and_default() {
+        crate::rerun_without_bundle_env!(explicit_manifest_url_wins_over_env_and_default);
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::set_var(
@@ -818,6 +825,7 @@ mod tests {
 
     #[test]
     fn env_manifest_url_wins_over_default() {
+        crate::rerun_without_bundle_env!(env_manifest_url_wins_over_default);
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::set_var(
@@ -840,6 +848,9 @@ mod tests {
 
     #[test]
     fn non_default_release_version_request_uses_versioned_release_url() {
+        crate::rerun_without_bundle_env!(
+            non_default_release_version_request_uses_versioned_release_url
+        );
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
@@ -883,6 +894,9 @@ mod tests {
 
     #[test]
     fn load_release_manifest_prefers_explicit_path_over_env_and_default() {
+        crate::rerun_without_bundle_env!(
+            load_release_manifest_prefers_explicit_path_over_env_and_default
+        );
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::set_var(
@@ -931,6 +945,7 @@ mod tests {
 
     #[test]
     fn installer_loads_published_v078_catalog_without_a_bundle() {
+        crate::rerun_without_bundle_env!(installer_loads_published_v078_catalog_without_a_bundle);
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../skippy-native-runtime/tests/fixtures/native-runtimes-v0.78.0.json");
         let options = NativeRuntimeManifestOptions {
@@ -1042,6 +1057,7 @@ mod tests {
 
     #[test]
     fn bundle_artifacts_are_merged_with_the_release_manifest() {
+        crate::rerun_without_bundle_env!(bundle_artifacts_are_merged_with_the_release_manifest);
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
@@ -1086,6 +1102,7 @@ mod tests {
 
     #[test]
     fn bundle_only_load_takes_release_identity_from_the_bundle() {
+        crate::rerun_without_bundle_env!(bundle_only_load_takes_release_identity_from_the_bundle);
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
@@ -1114,6 +1131,7 @@ mod tests {
 
     #[test]
     fn remote_fetch_failure_falls_back_to_bundles() {
+        crate::rerun_without_bundle_env!(remote_fetch_failure_falls_back_to_bundles);
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
@@ -1147,6 +1165,7 @@ mod tests {
 
     #[test]
     fn remote_fetch_failure_without_bundles_is_an_error() {
+        crate::rerun_without_bundle_env!(remote_fetch_failure_without_bundles_is_an_error);
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
@@ -1169,6 +1188,9 @@ mod tests {
 
     #[test]
     fn adjacent_windows_cpu_bundle_does_not_hide_a_remote_cuda_candidate() {
+        crate::rerun_without_bundle_env!(
+            adjacent_windows_cpu_bundle_does_not_hide_a_remote_cuda_candidate
+        );
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
@@ -1245,6 +1267,9 @@ mod tests {
 
     #[test]
     fn a_runtime_that_is_both_bundled_and_published_is_listed_once_and_served_from_the_bundle() {
+        crate::rerun_without_bundle_env!(
+            a_runtime_that_is_both_bundled_and_published_is_listed_once_and_served_from_the_bundle
+        );
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
@@ -1377,6 +1402,9 @@ mod tests {
 
     #[test]
     fn explicit_gpu_selection_failure_names_the_catalogs_and_the_rejected_candidates() {
+        crate::rerun_without_bundle_env!(
+            explicit_gpu_selection_failure_names_the_catalogs_and_the_rejected_candidates
+        );
         let _guard = MANIFEST_ENV_LOCK.lock().unwrap();
         unsafe {
             std::env::remove_var(NATIVE_RUNTIME_MANIFEST_URL_ENV);
@@ -1488,6 +1516,9 @@ mod tests {
 
     #[test]
     fn recommended_selection_sets_aside_other_platforms_instead_of_listing_them() {
+        crate::rerun_without_bundle_env!(
+            recommended_selection_sets_aside_other_platforms_instead_of_listing_them
+        );
         let temp = tempfile::tempdir().unwrap();
         let mut linux_cuda = windows_cuda_release_artifact();
         linux_cuda.id = "meshllm-native-runtime-linux-x86_64-cuda12".to_string();
@@ -1624,6 +1655,9 @@ mod tests {
 
     #[test]
     fn a_runtime_reached_through_two_bundle_directories_is_counted_as_a_bundle_duplicate() {
+        crate::rerun_without_bundle_env!(
+            a_runtime_reached_through_two_bundle_directories_is_counted_as_a_bundle_duplicate
+        );
         let temp = tempfile::tempdir().unwrap();
         let first = temp.path().join("native-runtimes/cpu");
         let second = temp.path().join("extra/cpu");

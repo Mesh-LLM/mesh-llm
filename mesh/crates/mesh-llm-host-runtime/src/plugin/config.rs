@@ -3,10 +3,7 @@ use super::installed::{
     configured_disabled_installed_plugin_summary, configured_external_plugin_spec,
 };
 use super::schema_validation::strict_plugin_schema_availability;
-use super::{
-    BLOBSTORE_PLUGIN_ID, PAYMENTS_PLUGIN_ID, PluginStartupOptions, PluginSummary,
-    RETIRED_WALLET_LEXE_PLUGIN_ID,
-};
+use super::{BLOBSTORE_PLUGIN_ID, PluginStartupOptions, PluginSummary};
 use crate::{
     MeshRequirementRejectReason, MeshRequirements, NodeVersionBounds, ProtocolGenerationBounds,
     ReleaseAttestationRequirement,
@@ -46,6 +43,13 @@ pub fn load_config(override_path: Option<&Path>) -> Result<MeshConfig> {
         MeshConfig::default()
     };
     apply_env_overrides(&mut config)?;
+    config.source_directory = Some(
+        std::path::absolute(&path)?
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf(),
+    );
+
     Ok(config)
 }
 
@@ -82,24 +86,46 @@ pub(crate) fn validate_config_with_installed_plugin_schemas(
     config: &MeshConfig,
     raw_toml: Option<&str>,
 ) -> Result<()> {
-    validate_config_with_plugin_schemas(config, raw_toml, strict_plugin_schema_availability)
+    validate_config_with_plugin_schemas(config, raw_toml, strict_plugin_schema_availability)?;
+    validate_model_providers(config)
+}
+
+fn validate_model_providers(config: &MeshConfig) -> Result<()> {
+    if config.models.iter().any(|model| model.provider.is_some()) {
+        resolve_plugins(
+            config,
+            PluginHostMode {
+                mesh_visibility: MeshVisibility::Private,
+            },
+        )?;
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_config_diagnostics_with_installed_plugin_schemas(
     config: &MeshConfig,
     raw_toml: Option<&str>,
 ) -> Vec<mesh_llm_config::ConfigDiagnostic> {
-    mesh_llm_config::validate_config_diagnostics_with_plugin_schemas(
+    let mut diagnostics = mesh_llm_config::validate_config_diagnostics_with_plugin_schemas(
         config,
         raw_toml,
         strict_plugin_schema_availability,
-    )
+    );
+    if let Err(error) = validate_model_providers(config) {
+        diagnostics.push(mesh_llm_config::ConfigDiagnostic::error(
+            mesh_llm_config::ConfigDiagnosticCode::InvalidValue,
+            mesh_llm_config::ConfigDiagnosticSource::Validation,
+            error.to_string(),
+        ));
+    }
+    diagnostics
 }
 
 pub(crate) fn mesh_requirements_config_to_runtime(
     config: &MeshRequirementsConfig,
 ) -> MeshRequirements {
     MeshRequirements {
+        require_signed_gossip: config.require_signed_gossip,
         node_version: NodeVersionBounds {
             min: config.min_node_version.clone(),
             max: config.max_node_version.clone(),
@@ -119,6 +145,7 @@ pub(crate) fn mesh_requirements_config_from_runtime(
     requirements: &MeshRequirements,
 ) -> MeshRequirementsConfig {
     MeshRequirementsConfig {
+        require_signed_gossip: requirements.require_signed_gossip,
         min_node_version: requirements.node_version.min.clone(),
         max_node_version: requirements.node_version.max.clone(),
         min_protocol_version: requirements.protocol_generation.min,
@@ -275,6 +302,7 @@ pub struct ResolvedPlugins {
 
 #[derive(Clone, Debug)]
 pub struct ExternalPluginSpec {
+    pub operation_bindings: Vec<mesh_llm_config::PluginOperationBinding>,
     pub openai_exchange_grant: Option<Box<mesh_llm_config::OpenAiExchangeGrant>>,
     pub name: String,
     pub command: String,
@@ -292,17 +320,29 @@ pub struct ExternalPluginSpec {
     pub installed_metadata: Option<mesh_llm_plugin_manager::InstalledPluginMetadata>,
 }
 
+impl ExternalPluginSpec {
+    /// Whether this entry launches a plugin process this host did not build in.
+    ///
+    /// `blobstore` is appended to the resolved list whenever it is enabled, and
+    /// this executable runs it itself. It cannot serve models in place of the
+    /// native runtime, so the startup fallback must not mistake it for an
+    /// external provider.
+    pub fn serves_models_itself(&self) -> bool {
+        self.name != BLOBSTORE_PLUGIN_ID && !self.command.trim().is_empty()
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct PluginHostMode {
     pub mesh_visibility: MeshVisibility,
 }
 
 pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Result<ResolvedPlugins> {
+    warn_once_about_retired_payment_config(config);
     let mut externals = Vec::new();
     let mut inactive = Vec::new();
     let mut names = BTreeMap::<String, ()>::new();
     let mut blobstore_enabled = true;
-    let mut payments_enabled = true;
     for entry in &config.plugins {
         if names.insert(entry.name.clone(), ()).is_some() {
             bail!("Duplicate plugin entry '{}'", entry.name);
@@ -311,29 +351,6 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
         if entry.name == BLOBSTORE_PLUGIN_ID {
             ensure_builtin_entry_only_toggles_enabled(entry)?;
             blobstore_enabled = enabled;
-            continue;
-        }
-        if entry.name == RETIRED_WALLET_LEXE_PLUGIN_ID {
-            // The built-in Lexe wallet was removed; keep old configs loading.
-            // An output event, not `tracing::warn!`: the runtime's default
-            // log filter drops host-runtime warnings, so users never saw it.
-            // Plugins are resolved more than once at startup; warn once.
-            static WARNED: std::sync::Once = std::sync::Once::new();
-            WARNED.call_once(|| {
-                let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Warning {
-                    message: format!(
-                        "Ignoring [[plugin]] '{RETIRED_WALLET_LEXE_PLUGIN_ID}': the built-in \
-                         Lexe wallet was removed; install the external `lexe-wallet` plugin \
-                         instead"
-                    ),
-                    context: None,
-                });
-            });
-            continue;
-        }
-        if entry.name == PAYMENTS_PLUGIN_ID {
-            ensure_builtin_entry_only_toggles_enabled(entry)?;
-            payments_enabled = enabled;
             continue;
         }
         if !enabled {
@@ -353,10 +370,46 @@ pub fn resolve_plugins(config: &MeshConfig, _host_mode: PluginHostMode) -> Resul
     if blobstore_enabled {
         externals.push(builtin_plugin_spec(BLOBSTORE_PLUGIN_ID, &[])?);
     }
-    if payments_enabled && payments_compiled_in() {
-        externals.push(in_process_builtin_spec(PAYMENTS_PLUGIN_ID));
+    for spec in &mut externals {
+        let models = config
+            .models
+            .iter()
+            .filter_map(|entry| entry.managed_model_config())
+            .map(|mut model| {
+                if let Some(directory) = &model.source.local_dir
+                    && directory.is_relative()
+                {
+                    let origin = config.source_directory.clone().map(Ok).unwrap_or_else(|| {
+                        config_path(None).and_then(|path| {
+                            Ok(std::path::absolute(path)?
+                                .parent()
+                                .unwrap_or(Path::new("."))
+                                .to_path_buf())
+                        })
+                    });
+                    model.source.local_dir = Some(origin?.join(directory));
+                }
+                Ok(model)
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|entry| entry.provider == spec.name)
+            .collect::<Vec<_>>();
+        spec.env.insert(
+            mesh_llm_plugin::models::CONFIG_ENV.into(),
+            serde_json::to_string(&models)?,
+        );
     }
-
+    if let Some(diagnostic) =
+        mesh_llm_config::managed_models::provider_diagnostics(config, |name| {
+            externals
+                .iter()
+                .any(|spec| spec.name == name && spec.serves_models_itself())
+        })
+        .first()
+    {
+        bail!("{}", diagnostic.message);
+    }
     Ok(ResolvedPlugins {
         externals,
         inactive,
@@ -379,29 +432,11 @@ fn ensure_builtin_entry_only_toggles_enabled(entry: &PluginConfigEntry) -> Resul
     Ok(())
 }
 
-/// Whether this build carries the payments engine. Forced per thread under
-/// test and defaults to "absent", so the many resolver tests that count plugins
-/// are independent of the cargo features the test binary was built with.
-#[cfg(not(test))]
-fn payments_compiled_in() -> bool {
-    cfg!(feature = "payments")
-}
-
-#[cfg(test)]
-fn payments_compiled_in() -> bool {
-    TEST_PAYMENTS_COMPILED_IN.with(|slot| slot.borrow().unwrap_or(false))
-}
-
-#[cfg(test)]
-thread_local! {
-    pub(super) static TEST_PAYMENTS_COMPILED_IN: std::cell::RefCell<Option<bool>> =
-        const { std::cell::RefCell::new(None) };
-}
-
 /// Spec for a builtin served as a task in this process: no command, so the
 /// plugin manager starts it from the runner supplied for its name.
 pub fn in_process_builtin_spec(name: &str) -> ExternalPluginSpec {
     ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         openai_exchange_grant: None,
         name: name.to_string(),
         command: String::new(),
@@ -437,6 +472,7 @@ pub fn builtin_plugin_spec(name: &str, plugin_args: &[String]) -> Result<Externa
     // `=` keeps an argument that starts with `-` bound to its flag.
     args.extend(plugin_args.iter().map(|arg| format!("--plugin-arg={arg}")));
     Ok(ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         openai_exchange_grant: None,
         name: name.to_string(),
         command,
@@ -460,3 +496,36 @@ pub fn bundled_cli_plugin_spec(_name: &str) -> Result<Option<ExternalPluginSpec>
 
 #[cfg(test)]
 mod tests;
+
+/// Paid inference left the node: a `[payments]` table or a `[[plugin]]`
+/// entry for the retired built-in `wallet-lexe` is parsed as unknown config
+/// (`extra`) or an ordinary missing plugin and does nothing. Say so once at
+/// start, as an output event (the default log filter drops host-runtime
+/// warnings), so the operator moves the settings to the payments plugin
+/// instead of discovering a silently unpaid node.
+fn warn_once_about_retired_payment_config(config: &MeshConfig) {
+    static WARNED: std::sync::Once = std::sync::Once::new();
+    let mut retired = Vec::new();
+    if config.extra.contains_key("payments") {
+        retired.push("the [payments] table".to_string());
+    }
+    if config
+        .plugins
+        .iter()
+        .any(|entry| entry.name == "wallet-lexe")
+    {
+        retired.push("the [[plugin]] entry name = \"wallet-lexe\"".to_string());
+    }
+    if retired.is_empty() {
+        return;
+    }
+    WARNED.call_once(|| {
+        let _ = mesh_llm_events::emit_event(mesh_llm_events::OutputEvent::Warning {
+            message: format!(
+                "config.toml still has {}: paid inference is no longer part of mesh-llm and these settings do nothing. Install a payments plugin and configure it there, then remove them.",
+                retired.join(" and ")
+            ),
+            context: None,
+        });
+    });
+}

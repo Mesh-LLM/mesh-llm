@@ -43,7 +43,6 @@ pub(crate) fn node_record_from_wire_ann(
         subprotocols: ann.subprotocols.clone(),
         admission_state: ann.inference_admission_state.unwrap_or_default(),
         throughput: ann.advertised_model_throughput.clone(),
-        lightning_offers: ann.lightning_offers.clone(),
         owner_attestation: ann.owner_attestation.clone(),
         genesis_policy: ann.genesis_policy.clone(),
         release_attestation: ann.release_attestation.clone(),
@@ -96,7 +95,6 @@ pub(crate) fn node_record_to_local(
         genesis_policy: record.genesis_policy.clone(),
         release_attestation: record.release_attestation.clone(),
         inference_admission_state: (record.admission_state != 0).then_some(record.admission_state),
-        lightning_offers: record.lightning_offers.clone(),
         ..Default::default()
     };
     let (_, mut local) = proto_ann_to_local(&ann)?;

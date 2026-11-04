@@ -388,8 +388,46 @@ impl HeldRecords {
             Ok(body) => body,
             Err(error) => return Ok(skipped(RecordSkip::Invalid(error))),
         };
+        Ok(self.admit_verified(local_id, sender, record, body, now_unix_ms))
+    }
+
+    /// Commit an already verified and decoded record. Callers can do expensive
+    /// signature work outside the membership lock, then recheck freshness and
+    /// sequence against the current state here. Never trust the snapshot used
+    /// to prepare a record: another exchange may have advanced it meanwhile.
+    pub fn admit_verified<T>(
+        &mut self,
+        local_id: EndpointId,
+        sender: EndpointId,
+        record: VerifiedRecord,
+        body: T,
+        now_unix_ms: u64,
+    ) -> RecordAdmission<T> {
+        let endpoint_id = record.endpoint_id();
+        let skipped = |reason| RecordAdmission::Skipped {
+            endpoint_id,
+            reason,
+        };
+        if record.kind != self.kind {
+            return skipped(RecordSkip::Invalid(RecordError::Decode));
+        }
+        if endpoint_id == local_id {
+            return skipped(RecordSkip::OwnRecord);
+        }
+        if endpoint_id != sender {
+            if !record.is_fresh_at(now_unix_ms) {
+                return skipped(RecordSkip::Expired);
+            }
+            if order_against_held(self.peers.get(&endpoint_id), &record.header, &record.signed)
+                == RecordOrdering::Superseded
+            {
+                return skipped(RecordSkip::Superseded);
+            }
+        } else if record.header.is_ahead_of(&self.kind, now_unix_ms) {
+            return skipped(RecordSkip::Expired);
+        }
         self.peers.insert(endpoint_id, record.clone());
-        Ok(RecordAdmission::Accepted { record, body })
+        RecordAdmission::Accepted { record, body }
     }
 
     /// This node's signed record for `body`. Re-signs only when the body

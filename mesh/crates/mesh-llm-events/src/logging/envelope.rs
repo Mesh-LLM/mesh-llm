@@ -72,7 +72,27 @@ impl CanonicalPresentationContext {
         match self.route.as_deref() {
             Some("health" | "healthz" | "readyz") => "probe",
             Some("models" | "management_get_models") => "model_listing",
-            Some("chat_completions" | "completions" | "responses") => "inference",
+            // Every surface that runs a model is inference, not just the chat
+            // shapes: a transcription, an OCR page or a depth map is the same
+            // operation from the operator's point of view.
+            Some(
+                "chat_completions"
+                | "completions"
+                | "responses"
+                | "embeddings"
+                | "rerank"
+                | "audio_speech"
+                | "audio_transcriptions"
+                | "audio_translations"
+                | "realtime"
+                | "decisions"
+                | "messages"
+                | "messages_count_tokens"
+                | "system_one"
+                | "document_ocr"
+                | "image_text_similarity"
+                | "depth_estimation",
+            ) => "inference",
             Some(
                 "management_get_status"
                 | "management_get_events"
@@ -110,6 +130,14 @@ fn bounded_context_value(value: &str) -> Option<String> {
     Some(value.to_owned())
 }
 
+/// The closed route vocabulary shared by the presentation envelope and the
+/// request-summary metadata.
+///
+/// Every label a producer can emit must appear here, or the field is silently
+/// dropped and the request reads as an unknown path in the console. The
+/// non-chat inference surface and the Mesh task contracts are listed
+/// explicitly for that reason; `mesh-llm-host-runtime`'s
+/// `logging::request_metadata` test asserts the two vocabularies agree.
 fn closed_route(value: &str) -> Option<String> {
     let value = value.trim();
     let accepted = matches!(
@@ -121,6 +149,19 @@ fn closed_route(value: &str) -> Option<String> {
             | "chat_completions"
             | "completions"
             | "responses"
+            | "embeddings"
+            | "rerank"
+            | "audio_speech"
+            | "audio_transcriptions"
+            | "audio_translations"
+            | "realtime"
+            | "decisions"
+            | "messages"
+            | "messages_count_tokens"
+            | "system_one"
+            | "document_ocr"
+            | "image_text_similarity"
+            | "depth_estimation"
             | "management_get_status"
             | "management_get_models"
             | "management_get_events"

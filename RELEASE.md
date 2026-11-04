@@ -339,8 +339,8 @@ opt-out, and `crates/mesh-llm-analytics/README.md` for the design.
 
 ## Rolling downloadable previews
 
-`rolling-preview.yml` dispatches the canonical Release workflow Tuesday and
-Friday at 03:23 UTC, or manually. Unique versions use
+`rolling-preview.yml` dispatches the canonical Release workflow on manual
+dispatch only (the schedule is commented out). Unique versions use
 `v<workspace-core>-preview.<run-id>.<attempt>`. It builds the full existing release
 matrix including bundled native runtimes, without publishing npm, crates.io,
 containers or downstream installers. Preview mode leaves main unchanged.

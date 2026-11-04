@@ -35,7 +35,7 @@ fn skippy_stage_subprotocols(
     }
     if stage_protocol_generation_supported {
         features.push(
-            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12.to_string(),
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V13.to_string(),
         );
     }
     if artifact_transfer_supported {
@@ -89,7 +89,7 @@ fn supports_decode_batch_policy(subprotocols: &[crate::proto::node::MeshSubproto
 /// Accept a stage generation only when one descriptor contains its entire bundle.
 fn supports_skippy_stage_generation(subprotocols: &[crate::proto::node::MeshSubprotocol]) -> bool {
     let required_features = [
-        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V13,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
@@ -307,10 +307,10 @@ fn descriptor_identity_to_proto(
         // `weights_digest` deliberately does NOT cross the gossip wire: it is
         // a hash of file bytes only THIS node can read, so a peer receiving
         // it over gossip could never verify it against anything -- it would
-        // be a claim, not a locally-checkable fact. A future exchange-event
-        // consumer could carry it to whoever actually served the exchange
-        // instead, but no such consumer exists in this crate today -- see
-        // `runtime/local.rs::set_local_model_weights_digest`'s doc comment.
+        // be a claim, not a locally-checkable fact. The serving node instead
+        // returns it per response to the peer that asked it to serve
+        // (`x-mesh-weights-digest`), which records it as that node's
+        // statement -- see `runtime/local.rs::set_local_model_weights_digest`.
     }
 }
 
@@ -394,6 +394,8 @@ fn local_workload_class_to_proto(workload: crate::mesh::ModelWorkloadClass) -> i
         Local::Decision => Proto::Decision as i32,
         Local::SpeechRecognition => Proto::SpeechRecognition as i32,
         Local::DocumentOcr => Proto::DocumentOcr as i32,
+        Local::ImageTextSimilarity => Proto::ImageTextSimilarity as i32,
+        Local::DepthEstimation => Proto::DepthEstimation as i32,
         // Preserve explicit denial when relaying metadata. Zero is the legacy
         // unspecified value and must not erase an unknown workload.
         Local::Unknown => -1,
@@ -414,6 +416,8 @@ fn proto_workload_class_to_local(value: i32) -> Option<crate::mesh::ModelWorkloa
         Ok(Proto::Decision) => Some(Local::Decision),
         Ok(Proto::SpeechRecognition) => Some(Local::SpeechRecognition),
         Ok(Proto::DocumentOcr) => Some(Local::DocumentOcr),
+        Ok(Proto::ImageTextSimilarity) => Some(Local::ImageTextSimilarity),
+        Ok(Proto::DepthEstimation) => Some(Local::DepthEstimation),
         Ok(Proto::Unspecified) => None,
         Err(_) => Some(Local::Unknown),
     }
@@ -823,6 +827,14 @@ pub(crate) fn local_ann_to_proto_ann(
         .map(|descriptor| crate::proto::node::ServedModelDescriptor {
             identity: Some(descriptor_identity_to_proto(&descriptor.identity)),
             capabilities_known: Some(descriptor.capabilities_known),
+            requires: descriptor
+                .requires
+                .iter()
+                .map(|r| crate::proto::node::ChannelRequirement {
+                    channel: r.channel.clone(),
+                    terms: r.terms.clone(),
+                })
+                .collect(),
             capabilities: Some(crate::proto::node::ModelCapabilities {
                 vision: local_capability_level_to_proto(descriptor.capabilities.vision),
                 reasoning: local_capability_level_to_proto(descriptor.capabilities.reasoning),
@@ -947,16 +959,6 @@ pub(crate) fn local_ann_to_proto_ann(
             subprotocols
         },
         inference_admission_state: ann.inference_admission_state.map(|state| state as i32),
-        lightning_offers: {
-            #[cfg(feature = "payments")]
-            {
-                super::payment_offers::encode(&ann.lightning_offers)
-            }
-            #[cfg(not(feature = "payments"))]
-            {
-                Vec::new()
-            }
-        },
         cache_affinity: ann
             .cache_affinity
             .as_ref()
@@ -968,6 +970,7 @@ pub(crate) fn local_ann_to_proto_ann(
         // Set only on this node's own entry, when the frame is written
         // (`attach_own_plugin_keys`); never relayed.
         plugin_keys: Vec::new(),
+        plugin_key_withdrawals: Vec::new(),
     }
 }
 
@@ -1242,8 +1245,6 @@ pub(crate) fn proto_ann_to_local(
         inference_admission_state: pa
             .inference_admission_state
             .and_then(|v| crate::proto::node::InferenceAdmissionState::try_from(v).ok()),
-        #[cfg(feature = "payments")]
-        lightning_offers: super::payment_offers::decode(&pa.lightning_offers)?,
         cache_affinity: pa
             .cache_affinity
             .as_ref()
@@ -1413,6 +1414,7 @@ fn legacy_proto_config_to_mesh(
         .plugins
         .iter()
         .map(|p| PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: p.name.clone(),
             enabled: p.enabled,
             web_ui_enabled: None,
@@ -1434,6 +1436,7 @@ fn legacy_proto_config_to_mesh(
         .map(|requirements| crate::plugin::mesh_requirements_config_from_runtime(&requirements))
         .unwrap_or_default();
     let mut config = MeshConfig {
+        source_directory: None,
         version: Some(snapshot.version),
         gpu: GpuConfig {
             host_ram_offload: None,
@@ -1450,7 +1453,6 @@ fn legacy_proto_config_to_mesh(
         models,
         plugins,
         logging: Default::default(),
-        payments: Default::default(),
         extra: Default::default(),
     };
     if let Some(mode) = snapshot

@@ -2,6 +2,19 @@ use crate::protocol::InboundGossip;
 use mesh_llm_membership::signed_record::{CACHE_AFFINITY_RECORD, NODE_RECORD, VerifiedRecord};
 use prost::Message;
 
+mod strict_policy {
+    use super::*;
+    include!("strict_signed_records.rs");
+}
+
+mod compatibility {
+    use super::*;
+    include!("signed_record_compatibility.rs");
+}
+
+#[path = "bounded_exchange.rs"]
+mod bounded_exchange;
+
 fn signing_key(seed: u8) -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
 }

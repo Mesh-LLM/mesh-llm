@@ -51,7 +51,7 @@ pub fn backend_devices() -> Result<Vec<BackendDevice>> {
             device_id: ptr::null(),
             memory_free: 0,
             memory_total: 0,
-            device_type: RawBackendDeviceType::Cpu,
+            type_: RawBackendDeviceType::Cpu,
             caps: 0,
         };
         let mut error = ptr::null_mut();
@@ -70,7 +70,7 @@ fn backend_device_from_raw(raw: RawBackendDevice) -> Result<BackendDevice> {
         device_id: c_string_optional(raw.device_id)?,
         memory_free: raw.memory_free,
         memory_total: raw.memory_total,
-        device_type: raw.device_type.into(),
+        device_type: raw.type_.into(),
         caps: raw.caps,
     })
 }

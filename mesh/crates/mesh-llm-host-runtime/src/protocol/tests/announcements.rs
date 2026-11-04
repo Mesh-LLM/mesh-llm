@@ -63,8 +63,6 @@ fn owner_fields_roundtrip_through_proto_announcement() {
         plugin_origin_signature_supported: true,
         persistent_lane_marker_supported: true,
         advertised_model_throughput: vec![],
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
         cache_affinity: None,
         latency_ms: None,
         latency_source: None,
@@ -107,7 +105,7 @@ fn owner_fields_roundtrip_through_proto_announcement() {
             .any(|feature| feature == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST)
     );
     assert!(skippy.features.iter().any(|feature| feature
-        == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12));
+        == skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V13));
     assert_eq!(
         proto_pa
             .owner_attestation
@@ -240,8 +238,6 @@ fn advertised_model_throughput_roundtrips_through_proto_announcement() {
                 throughput_samples: 99,
             },
         ],
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
         cache_affinity: Some(
             mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement {
                 salt,
@@ -450,8 +446,6 @@ fn inference_admission_state_roundtrips_through_proto_announcement() {
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
         cache_affinity: None,
         latency_ms: None,
         latency_source: None,
@@ -500,13 +494,13 @@ fn proto_announcement_without_required_generation_bundle_is_not_stage_compatible
     let peer_id = EndpointId::from(SecretKey::from_bytes(&[0xD0; 32]).public());
     for missing in [
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
-        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12,
+        skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V13,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
         skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
     ] {
         let features = [
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL,
-            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12,
+            skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V13,
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST,
             skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1,
         ]
@@ -546,7 +540,7 @@ fn partial_duplicate_stage_records_do_not_form_a_generation_bundle() {
                 major: skippy_protocol::STAGE_SUBPROTOCOL_MAJOR,
                 features: vec![
                     skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL.to_string(),
-                    skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V12
+                    skippy_protocol::STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V13
                         .to_string(),
                 ],
             },
@@ -715,8 +709,6 @@ fn test_proto_round_trip_with_bandwidth_and_tflops() {
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
         cache_affinity: None,
         latency_ms: None,
         latency_source: None,
@@ -1133,8 +1125,6 @@ fn claimed_log_head_test_announcement(
         latency_observer_id: None,
         inference_admission_state: None,
         claimed_log_head,
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
     }
 }
 
@@ -1250,8 +1240,6 @@ fn proto_announcement_without_claimed_log_head_decodes_as_absent() {
         latency_observer_id: None,
         inference_admission_state: None,
         claimed_log_head: None,
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
     };
     // Encode to wire bytes, then decode back — this is what an old peer's
     // message looks like on the wire when it has never set tag 51.

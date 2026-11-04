@@ -109,6 +109,18 @@ impl Node {
         nostr_pubkey: Option<&str>,
     ) -> Result<String> {
         if self.local_mesh_requirements.is_unrestricted() {
+            // SDK memberships have independent identities and no genesis
+            // requirements. The process's persisted policy belongs to its
+            // primary node, not to these additional meshes.
+            if !self.is_membership
+                && self
+                    .load_persisted_signed_genesis_policy()?
+                    .is_some_and(|signed| signed.policy.requirements.require_signed_gossip)
+            {
+                anyhow::bail!(
+                    "persisted mesh genesis policy requires signed gossip; keep --require-signed-gossip enabled or use a new node identity to create a different mesh"
+                );
+            }
             let mesh_id = generate_mesh_id(name, nostr_pubkey)?;
             self.set_mesh_id_force(mesh_id.clone()).await;
             return Ok(mesh_id);

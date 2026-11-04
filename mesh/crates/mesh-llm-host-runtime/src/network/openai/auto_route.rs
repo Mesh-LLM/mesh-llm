@@ -6,7 +6,7 @@
 //! should use that model instead of spending an agent turn on a target we just
 //! proved unhealthy or too small.
 
-pub(crate) mod payment_admission;
+pub(crate) mod readiness;
 
 use super::workload_routing;
 use crate::inference::election;
