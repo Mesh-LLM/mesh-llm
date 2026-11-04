@@ -164,6 +164,7 @@ pub(super) fn local_openai_backend(
         linear_proposal_ingress: None,
         kv: None,
         iteration_scheduler,
+        decision_calibration: None,
     })
 }
 

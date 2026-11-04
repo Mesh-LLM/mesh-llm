@@ -1259,6 +1259,7 @@ pub(super) fn hooks_test_backend(
         linear_proposal_ingress: None,
         kv: None,
         iteration_scheduler,
+        decision_calibration: None,
     }
 }
 

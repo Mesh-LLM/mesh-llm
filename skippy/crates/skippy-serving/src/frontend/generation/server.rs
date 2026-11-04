@@ -386,6 +386,29 @@ fn embedded_openai_backend_with_scheduler(
             args.telemetry.clone(),
         )?,
     };
+    let decision_calibration = args
+        .config
+        .model_path
+        .as_deref()
+        .or(args.config.materialized_path.as_deref())
+        .and_then(|path| {
+            skippy_runtime::decision::calibration::discover_beside_model(std::path::Path::new(path))
+        })
+        .map(|path| {
+            let calibration =
+                skippy_runtime::decision::calibration::DecisionCalibration::load(&path);
+            if let Ok(Some(calibration)) = calibration.as_ref() {
+                let mut attrs = lifecycle_attrs(&args.config);
+                attrs.insert("active".to_string(), calibration.is_active().into());
+                args.telemetry
+                    .emit("stage.decision_calibration_loaded", attrs);
+            }
+            calibration
+        })
+        .transpose()
+        .context("load decision calibration beside model")?
+        .flatten()
+        .map(std::sync::Arc::new);
     let backend: Arc<dyn InferenceBackend> = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
         workload: Default::default(),
@@ -445,6 +468,7 @@ fn embedded_openai_backend_with_scheduler(
         linear_proposal_ingress: args.linear_proposal_ingress,
         kv,
         iteration_scheduler,
+        decision_calibration,
     });
     let openai_guardrails = args
         .openai_guardrails

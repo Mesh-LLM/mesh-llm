@@ -452,6 +452,7 @@ mod tests {
             linear_proposal_ingress: Some(config),
             kv: None,
             iteration_scheduler,
+            decision_calibration: None,
         };
         let sampling = SamplingConfig::default();
         let ids = InferenceGenerationIds::new_with_trust(

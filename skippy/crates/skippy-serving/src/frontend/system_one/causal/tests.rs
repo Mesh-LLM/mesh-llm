@@ -74,7 +74,7 @@ fn out_of_order_completions_keep_answer_order_and_account_for_cache_preparation(
         cached_tokens: 2,
         cache_preparation_tokens: 4,
     };
-    let response = decision_response(request, &plan, results, preparation).unwrap();
+    let response = decision_response(request, &plan, results, preparation, None).unwrap();
     assert_eq!(response.usage.input_tokens, 15);
     assert_eq!(response.usage.cached_tokens, 5);
     assert_eq!(response.usage.output_tokens, 0);
@@ -162,7 +162,14 @@ fn malformed_or_duplicate_backend_results_fail_closed() {
             _ => results[1].0.candidate = Some(usize::MAX),
         }
         assert!(
-            decision_response(request, &plan, results, DecisionReadoutUsage::default()).is_err(),
+            decision_response(
+                request,
+                &plan,
+                results,
+                DecisionReadoutUsage::default(),
+                None
+            )
+            .is_err(),
             "defect {defect}"
         );
     }
@@ -188,4 +195,55 @@ fn context_admission_includes_teacher_forced_inputs_but_no_generated_token() {
     // The final prompt row supplies all single-token scores without decoding.
     assert!(validate_context(&plan, 3).is_ok());
     assert!(validate_context(&plan, 2).is_err());
+}
+
+/// Calibration scales per-kind log-probability scores before normalization and
+/// declares calibrated semantics; uncalibrated kinds in the same request keep
+/// their native semantics.
+#[test]
+fn calibration_temperature_scales_scores_and_labels_semantics() {
+    let (request, plan) = fixture();
+    let jobs = decision_jobs(&plan);
+    let results = vec![
+        (jobs[0].clone(), result(&[-1.0, -2.0])),
+        (jobs[1].clone(), result(&[-0.5])),
+        (jobs[2].clone(), result(&[-3.0])),
+    ];
+    let calibration: DecisionCalibration = serde_json::from_value(serde_json::json!({
+        "schema_version": "1",
+        "kinds": {"choice": 2.0}
+    }))
+    .unwrap();
+    let response = decision_response(
+        request,
+        &plan,
+        results,
+        DecisionReadoutUsage::default(),
+        Some(&calibration),
+    )
+    .unwrap();
+
+    // T=2 on scores [-1, -2]: softmax(-0.5, -1) puts 0.622 on A versus 0.731
+    // uncalibrated, and the evidence keeps the raw (unscaled) log-probabilities.
+    let serde_json::Value::Object(answers) = serde_json::to_value(response.answers).unwrap() else {
+        panic!("answers must be an object");
+    };
+    let p_a = answers["first"]["probabilities"]["A"].as_f64().unwrap();
+    assert!(
+        (p_a - 0.6224593).abs() < 1e-5,
+        "T=2 should put softmax(-0.5, -1) = 0.6225 on A, got {p_a}"
+    );
+    assert_eq!(
+        response.readouts["first"].probability_semantics,
+        CALIBRATED_SEMANTICS
+    );
+    assert_eq!(
+        response.readouts["first"].candidate_log_probabilities,
+        vec![-1.0, -2.0]
+    );
+    // Every question here is a choice question, so all carry calibrated semantics.
+    assert_eq!(
+        response.readouts["second"].probability_semantics,
+        CALIBRATED_SEMANTICS
+    );
 }

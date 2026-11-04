@@ -1,12 +1,34 @@
 //! Causal questions use independent, admitted scheduler sequences.
 
 use futures_util::{StreamExt, stream};
+use skippy_inference_api::system_one::SystemOneQuestion;
 use skippy_inference_api::system_one::{DecisionReadout, DecisionReadoutUsage};
 use skippy_inference_api::{
     CancellationToken, InferenceError, InferenceResult, SystemOneRequest, SystemOneResponse,
 };
 use skippy_runtime::DecisionOutput;
+use skippy_runtime::decision::calibration::DecisionCalibration;
 use skippy_runtime::decision::causal::{DecisionPlan, ReadoutMethod, normalize_candidate_scores};
+
+/// Probability semantics served when no calibration is applied.
+pub(super) const UNCALIBRATED_SEMANTICS: &str =
+    "relative_candidate_probability_not_calibrated_truth";
+/// Probability semantics served when temperature-scaled calibration is applied.
+pub(super) const CALIBRATED_SEMANTICS: &str = "calibrated_temperature_scaled_v1";
+
+/// Question kind for a plan question, used to pick its calibration temperature.
+fn question_kind<'a>(
+    request: &'a SystemOneRequest,
+    plan: &DecisionPlan,
+    question: usize,
+) -> Option<&'a str> {
+    let key = plan.questions.get(question)?.key.as_str();
+    match request.questions.get(key)? {
+        SystemOneQuestion::Noul { .. } => Some("noul"),
+        SystemOneQuestion::Choice { .. } => Some("choice"),
+        SystemOneQuestion::Score { .. } => Some("score"),
+    }
+}
 use std::sync::Arc;
 
 use crate::frontend::StageOpenAiBackend;
@@ -108,7 +130,13 @@ impl StageOpenAiBackend {
             executor.kv = None;
         }
         let results = executor.run_readout_jobs(jobs, &guard.0).await?;
-        decision_response(request, &plan, results, preparation.usage)
+        decision_response(
+            request,
+            &plan,
+            results,
+            preparation.usage,
+            self.decision_calibration.as_deref(),
+        )
     }
 
     /// Run a bounded set of readout jobs and drain admitted work after cancellation.
@@ -235,6 +263,7 @@ fn decision_response(
     plan: &DecisionPlan,
     results: Vec<(ReadoutJob, ReadoutResult)>,
     mut usage: DecisionReadoutUsage,
+    calibration: Option<&DecisionCalibration>,
 ) -> InferenceResult<SystemOneResponse> {
     let mut evidence = plan
         .questions
@@ -242,7 +271,7 @@ fn decision_response(
         .map(|question| DecisionReadout {
             method: question.method.as_str(),
             normalization: "sum_log_probabilities",
-            probability_semantics: "relative_candidate_probability_not_calibrated_truth",
+            probability_semantics: UNCALIBRATED_SEMANTICS,
             candidate_log_probabilities: vec![f64::NAN; question.candidates.len()],
             candidate_token_counts: question.candidates.iter().map(Vec::len).collect(),
             evaluated_tokens: 0,
@@ -256,11 +285,30 @@ fn decision_response(
     }
     let probabilities = evidence
         .iter()
-        .map(|entry| {
-            normalize_candidate_scores(&entry.candidate_log_probabilities)
-                .map_err(openai_backend_error)
+        .enumerate()
+        .map(|(question, entry)| {
+            // Temperature scaling is exact on log-probability scores:
+            // softmax(scores / T). Without calibration this is the identity path.
+            let temperature = calibration
+                .zip(question_kind(&request, plan, question))
+                .map_or(1.0, |(calibration, kind)| calibration.temperature(kind));
+            let scaled: Vec<f64> = entry
+                .candidate_log_probabilities
+                .iter()
+                .map(|score| score / temperature)
+                .collect();
+            normalize_candidate_scores(&scaled).map_err(openai_backend_error)
         })
         .collect::<InferenceResult<Vec<_>>>()?;
+    if let Some(calibration) = calibration {
+        for (question, entry) in evidence.iter_mut().enumerate() {
+            let temperature = question_kind(&request, plan, question)
+                .map_or(1.0, |kind| calibration.temperature(kind));
+            if temperature != 1.0 {
+                entry.probability_semantics = CALIBRATED_SEMANTICS;
+            }
+        }
+    }
     // Usage describes executed inputs, including independent candidate branches
     // and preparation, so cached inputs are a subset of input_tokens.
     let input_tokens = usage.evaluated_tokens.saturating_add(usage.cached_tokens);

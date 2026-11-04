@@ -87,6 +87,11 @@ pub(in crate::frontend) struct StageOpenAiBackend {
     pub(in crate::frontend) linear_proposal_ingress: Option<LinearProposalIngressConfig>,
     pub(in crate::frontend) kv: Option<Arc<KvStageIntegration>>,
     pub(in crate::frontend) iteration_scheduler: IterationScheduler,
+    /// Per-question-kind decision calibration (temperature scaling) discovered
+    /// beside the model artifact. `None` serves the backend's native
+    /// uncalibrated probabilities.
+    pub(in crate::frontend) decision_calibration:
+        Option<std::sync::Arc<skippy_runtime::decision::calibration::DecisionCalibration>>,
 }
 
 #[derive(Clone)]
