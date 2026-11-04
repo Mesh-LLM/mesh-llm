@@ -1401,7 +1401,7 @@ async fn send_auto_route_rejection(
         // backoff, so a request sent while a model loads still gets served.
         AutoRouteRejection::NoModelReady => response_outcome(
             503,
-            proxy::send_503_observed(
+            proxy::send_model_not_ready_observed(
                 tcp_stream,
                 "no model is ready to serve this request yet; retry shortly",
                 route_observer,
