@@ -116,6 +116,15 @@ the admission outcome. The optional `admission_denied` and
 including when delivery of a 403 or 503 response fails. Observer-copy loss
 changes evidence completeness without changing the execution outcome.
 
+A terminal event for an exchange that did not complete carries an additive
+`failure_class`: `payment_required` (a 402, including a peer's relayed one),
+`refused` (a policy denial, a failed required hook, another 4xx),
+`upstream_error` (a 5xx, a transport failure, a stream that ended before its
+body), `timeout` or `dropped`. It is absent on a completed exchange and on
+every other phase, so existing consumers read what they read before. `status`
+cannot say this alone: a stream cut after its 200 headers terminates with
+status 200.
+
 Terminal events preserve a bounded history of up to 16 prepared dispatches,
 their commitments, reported usage when available, and elapsed lifecycle time.
 Truncating the history marks evidence incomplete. Usage is reported data, never

@@ -5,8 +5,8 @@ use crate::mesh;
 use crate::network::openai::ServedModelHeaders;
 use crate::network::openai::transport as proxy;
 use crate::plugin::openai_exchange::{
-    ClientNonceSource, ExchangeUsage, OpenAiExchangeChannel, OpenAiExchangeDispatchPath,
-    OpenAiExchangeEnvelope, ServingProvenance,
+    ClientNonceSource, ExchangeFailureClass, ExchangeUsage, OpenAiExchangeChannel,
+    OpenAiExchangeDispatchPath, OpenAiExchangeEnvelope, ServingProvenance,
 };
 
 use super::{IngressRouteContext, twin_bracket_id};
@@ -23,6 +23,50 @@ pub(super) fn plugin_route_status(outcome: &proxy::RouteDispatchOutcome) -> Opti
         proxy::RouteDispatchOutcome::RespondedWithDigests { status_code, .. } => Some(status_code),
         proxy::RouteDispatchOutcome::FailedWithStatus { status_code, .. } => Some(status_code),
         proxy::RouteDispatchOutcome::Failed(_) | proxy::RouteDispatchOutcome::Dropped(_) => None,
+    }
+}
+
+/// The class a terminal event states for an exchange that did not complete,
+/// `None` for one that did. `plugin_route_status` cannot carry this alone: a
+/// stream cut after its 200 headers is a `FailedWithStatus` whose status is
+/// 200, and a timeout or dropped stream may have no status at all.
+pub(super) fn exchange_failure_class(
+    outcome: &proxy::RouteDispatchOutcome,
+) -> Option<ExchangeFailureClass> {
+    use ExchangeFailureClass::{Dropped, PaymentRequired, Refused, Timeout, UpstreamError};
+    match *outcome {
+        proxy::RouteDispatchOutcome::PolicyDenied { status_code: 402 } => Some(PaymentRequired),
+        proxy::RouteDispatchOutcome::PolicyDenied { .. }
+        | proxy::RouteDispatchOutcome::RequiredHookFailed => Some(Refused),
+        proxy::RouteDispatchOutcome::Responded(status)
+        | proxy::RouteDispatchOutcome::RespondedWithUsage {
+            status_code: status,
+            ..
+        }
+        | proxy::RouteDispatchOutcome::RespondedWithDigests {
+            status_code: status,
+            ..
+        } => failure_class_of_status(status),
+        proxy::RouteDispatchOutcome::FailedWithStatus {
+            status_code,
+            reason,
+        } => Some(if reason == "timeout" {
+            Timeout
+        } else {
+            failure_class_of_status(status_code).unwrap_or(UpstreamError)
+        }),
+        proxy::RouteDispatchOutcome::Failed(_) => Some(UpstreamError),
+        proxy::RouteDispatchOutcome::Dropped(_) => Some(Dropped),
+    }
+}
+
+fn failure_class_of_status(status: u16) -> Option<ExchangeFailureClass> {
+    match status {
+        ..=399 => None,
+        402 => Some(ExchangeFailureClass::PaymentRequired),
+        408 | 504 => Some(ExchangeFailureClass::Timeout),
+        400..=499 => Some(ExchangeFailureClass::Refused),
+        _ => Some(ExchangeFailureClass::UpstreamError),
     }
 }
 
@@ -252,7 +296,8 @@ pub(in crate::network::openai) async fn publish_raw_proxy_terminal(
         plugin_route_status(final_outcome),
         None,
         client_nonce.map(|(_, source)| source),
-    );
+    )
+    .with_failure_class(exchange_failure_class(final_outcome));
     envelope.nonce = client_nonce.map(|(nonce, _)| nonce.to_string());
     // Nothing was served on a 503 / `Failed` / `Dropped` outcome, so there is
     // no hardware or model identity to report — and no reason to pay the
@@ -408,7 +453,8 @@ pub(super) fn remote_delivered_terminal(
         facts.nonce_source,
         facts.peer_capsule_id,
     )
-    .with_twin_bracket_id(facts.twin_bracket_id);
+    .with_twin_bracket_id(facts.twin_bracket_id)
+    .with_failure_class(exchange_failure_class(outcome));
     if let Some(provenance) = serving_provenance_for_remote_mesh(
         facts.target,
         facts.observed_served_by_hex,

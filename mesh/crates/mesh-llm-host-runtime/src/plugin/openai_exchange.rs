@@ -326,6 +326,26 @@ pub enum CapsuleIdProvenance {
     PeerAsserted,
 }
 
+/// The class of a terminal exchange that did not complete. A coarse reason a
+/// record can state without content; the host's finer causes stay in its own
+/// logs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExchangeFailureClass {
+    /// A 402: the gate (or the peer's gate) wants payment first.
+    PaymentRequired,
+    /// Refused before or instead of serving: a policy denial, a failed
+    /// required hook, or another 4xx.
+    Refused,
+    /// The backend or route failed: a 5xx, a transport failure, or a stream
+    /// that ended before its body did.
+    UpstreamError,
+    /// A deadline expired (408, 504 or a route timeout).
+    Timeout,
+    /// The exchange ended with no answer: the client or stream went away.
+    Dropped,
+}
+
 /// The wire shape both dispatch paths publish on [`OPENAI_EXCHANGE_CHANNEL`].
 /// Deliberately independent of `skippy_inference_api`'s typed request/response —
 /// the raw-proxy path never has one — so one shape covers both paths without
@@ -438,6 +458,13 @@ pub struct OpenAiExchangeEnvelope {
     /// client's choice. `None` when the header is absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub twin_bracket_id: Option<String>,
+    /// Why this exchange did not complete, on a `Terminal` envelope only —
+    /// see [`ExchangeFailureClass`]. Absent on a completed exchange and on
+    /// every non-terminal envelope, so a consumer that predates the member
+    /// reads exactly what it read before. `status` alone cannot say this: a
+    /// stream cut after its 200 headers terminates with status 200.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_class: Option<ExchangeFailureClass>,
 }
 
 impl OpenAiExchangeEnvelope {
@@ -463,6 +490,7 @@ impl OpenAiExchangeEnvelope {
             tool_calls_digest: None,
             reasoning_digest: None,
             twin_bracket_id: None,
+            failure_class: None,
         }
     }
 
@@ -491,6 +519,7 @@ impl OpenAiExchangeEnvelope {
             tool_calls_digest: None,
             reasoning_digest: None,
             twin_bracket_id: None,
+            failure_class: None,
         }
     }
 
@@ -526,6 +555,14 @@ impl OpenAiExchangeEnvelope {
     #[must_use]
     pub fn with_request_digest(mut self, digest: String) -> Self {
         self.request_digest = Some(digest);
+        self
+    }
+
+    /// Attach the failure class of a terminal exchange that did not complete
+    /// (see [`failure_class`](Self::failure_class)); `None` leaves it absent.
+    #[must_use]
+    pub fn with_failure_class(mut self, failure_class: Option<ExchangeFailureClass>) -> Self {
+        self.failure_class = failure_class;
         self
     }
 
@@ -595,6 +632,7 @@ impl OpenAiExchangeEnvelope {
             tool_calls_digest: None,
             reasoning_digest: None,
             twin_bracket_id: None,
+            failure_class: None,
         }
     }
 
@@ -657,6 +695,7 @@ impl OpenAiExchangeEnvelope {
             tool_calls_digest: None,
             reasoning_digest: None,
             twin_bracket_id: None,
+            failure_class: None,
         }
     }
 }

@@ -656,6 +656,89 @@ fn plugin_route_status_maps_failed_with_status_and_omits_statusless_outcomes() {
     );
 }
 
+// A terminal event states why an exchange did not complete. `status` cannot
+// say it alone: a stream cut after its 200 headers is a `FailedWithStatus`
+// with status 200, and a drop or transport failure has no status at all.
+#[test]
+fn exchange_failure_class_names_every_way_an_exchange_does_not_complete() {
+    use crate::plugin::openai_exchange::ExchangeFailureClass::{
+        Dropped, PaymentRequired, Refused, Timeout, UpstreamError,
+    };
+    use proxy::RouteDispatchOutcome as O;
+    let digests = Default::default();
+    let cases = [
+        (O::PolicyDenied { status_code: 402 }, Some(PaymentRequired)),
+        (O::PolicyDenied { status_code: 403 }, Some(Refused)),
+        (O::RequiredHookFailed, Some(Refused)),
+        // A peer's 402 relayed to the client.
+        (O::Responded(402), Some(PaymentRequired)),
+        (
+            O::RespondedWithDigests {
+                status_code: 402,
+                output_digests: digests,
+            },
+            Some(PaymentRequired),
+        ),
+        (O::Responded(429), Some(Refused)),
+        (O::Responded(500), Some(UpstreamError)),
+        (O::Responded(504), Some(Timeout)),
+        (
+            O::FailedWithStatus {
+                status_code: 504,
+                reason: "timeout",
+            },
+            Some(Timeout),
+        ),
+        (
+            O::FailedWithStatus {
+                status_code: 200,
+                reason: "upstream_stream_incomplete",
+            },
+            Some(UpstreamError),
+        ),
+        (O::Failed("endpoint_transport_failed"), Some(UpstreamError)),
+        (O::Dropped("client_disconnected"), Some(Dropped)),
+        (O::Responded(200), None),
+        (
+            O::RespondedWithDigests {
+                status_code: 204,
+                output_digests: digests,
+            },
+            None,
+        ),
+    ];
+    for (outcome, want) in cases {
+        assert_eq!(exchange_failure_class(&outcome), want, "{outcome:?}");
+    }
+}
+
+#[test]
+fn failure_class_rides_the_terminal_envelope_as_an_additive_member() {
+    use crate::plugin::openai_exchange::{ExchangeFailureClass, OpenAiExchangeDispatchPath};
+    let served = OpenAiExchangeEnvelope::terminal(
+        "exch-served",
+        OpenAiExchangeDispatchPath::RawProxy,
+        "acme/model",
+        Some(200),
+        None,
+        None,
+    );
+    assert!(
+        serde_json::to_value(&served)
+            .unwrap()
+            .get("failure_class")
+            .is_none(),
+        "a completed exchange serializes exactly as before"
+    );
+    let refused = served
+        .clone()
+        .with_failure_class(Some(ExchangeFailureClass::PaymentRequired));
+    assert_eq!(
+        serde_json::to_value(&refused).unwrap()["failure_class"],
+        "payment_required"
+    );
+}
+
 #[test]
 fn plugin_route_success_records_one_attempt_and_one_terminal_outcome() {
     let (service, mut attachment) = plugin_lifecycle();

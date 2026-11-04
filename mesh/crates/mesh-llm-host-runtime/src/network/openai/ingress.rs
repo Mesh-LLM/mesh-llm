@@ -33,8 +33,8 @@ use exchange_events::{
 };
 #[cfg(test)]
 use exchange_events::{
-    exchange_output_digests_from_outcome, exchange_usage_from_outcome, plugin_route_status,
-    serving_provenance_for_model, serving_provenance_for_remote_mesh,
+    exchange_failure_class, exchange_output_digests_from_outcome, exchange_usage_from_outcome,
+    plugin_route_status, serving_provenance_for_model, serving_provenance_for_remote_mesh,
 };
 use missing_model::route_missing_local_model;
 #[cfg(test)]
