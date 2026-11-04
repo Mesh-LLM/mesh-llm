@@ -51,6 +51,17 @@ bindings, the OpenAI-exchange hook, model `requires`). The Lightning rail lives 
 [Mesh-LLM/ln-payments-plugin](https://github.com/Mesh-LLM/ln-payments-plugin);
 its README covers installation, pricing and spending policy.
 
+Install it together with one wallet plugin in a single command:
+
+```sh
+mesh-llm plugins install Mesh-LLM/lexe-wallet-plugin Mesh-LLM/ln-payments-plugin
+# or, for a Nostr Wallet Connect wallet:
+mesh-llm plugins install Mesh-LLM/nwc-wallet-plugin Mesh-LLM/ln-payments-plugin
+```
+
+A wallet plugin alone does not enable payments, and `pay-lightning` without a
+wallet refuses every wallet call.
+
 ## Telemetry
 
 OpenTelemetry (OTLP) metrics export.
