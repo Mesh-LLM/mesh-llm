@@ -1,4 +1,5 @@
 use super::fixture::Fixture;
+use super::rollout;
 use super::rollout::Issue;
 use serde_json::json;
 use std::fs;
@@ -22,6 +23,22 @@ fn migration_rollout_bootstrap_missing_binary_path_is_rejected() {
     let fixture = Fixture::new();
     fs::write(fixture.root.join("bootstrap.txt"), b"host=fixture\n").unwrap();
     fixture.change(|input| input["bootstrap"]["report"] = fixture.binding("bootstrap.txt"));
+    fixture.rejected(Issue::Bootstrap);
+}
+
+#[test]
+fn migration_rollout_bootstrap_accepts_host_triple_output() {
+    let fixture = Fixture::new();
+    // Given a build that named the host triple: <target>/fixture-host/debug/xtask.
+    fixture.bootstrap_under_host_directory("fixture-host");
+    rollout::validate_file(&fixture.input).expect("host-triple bootstrap output is accepted");
+}
+
+#[test]
+fn migration_rollout_bootstrap_rejects_another_triples_output() {
+    let fixture = Fixture::new();
+    // Given a cross build's output whose directory differs from the report host.
+    fixture.bootstrap_under_host_directory("aarch64-unknown-linux-gnu");
     fixture.rejected(Issue::Bootstrap);
 }
 

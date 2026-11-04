@@ -29,7 +29,7 @@ pub(super) fn validate(base: &Path, request: &Request) -> Checked<()> {
     };
     let binary = Path::new(field("binary_path")?);
     let target = Path::new(field("target_directory")?);
-    field("host")?;
+    let host = field("host")?;
     if !binary.is_absolute() || !target.is_absolute() {
         return Err(reject(Issue::Bootstrap, "bootstrap paths must be absolute"));
     }
@@ -39,7 +39,11 @@ pub(super) fn validate(base: &Path, request: &Request) -> Checked<()> {
     let target = target
         .canonicalize()
         .map_err(|error| reject(Issue::Bootstrap, error.to_string()))?;
-    if binary.parent().and_then(Path::parent) != Some(target.as_path()) {
+    let profile_parent = binary.parent().and_then(Path::parent);
+    let host_profile_parent = target.join(host);
+    if profile_parent != Some(target.as_path())
+        && profile_parent != Some(host_profile_parent.as_path())
+    {
         return Err(reject(
             Issue::Bootstrap,
             "binary is not directly below a Cargo target profile",

@@ -166,6 +166,31 @@ impl Fixture {
         fs::write(&self.input, serde_json::to_vec(&request).unwrap()).unwrap();
     }
 
+    /// Rebuilds the bootstrap evidence with the binary under an explicit
+    /// host-triple directory: `<target>/<host_directory>/debug/xtask`. The
+    /// report keeps `host=fixture-host`, so only `fixture-host` names an
+    /// accepted layout.
+    pub(super) fn bootstrap_under_host_directory(&self, host_directory: &str) {
+        let target = self.root.join("target").canonicalize().unwrap();
+        let binary = target.join(host_directory).join(if cfg!(windows) {
+            "debug/xtask.exe"
+        } else {
+            "debug/xtask"
+        });
+        fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        fs::write(&binary, b"inert fixture bytes; never executed").unwrap();
+        let report = format!(
+            "binary_path={}\ntarget_directory={}\nhost=fixture-host\n",
+            binary.display(),
+            target.display()
+        );
+        fs::write(self.root.join("bootstrap.txt"), report).unwrap();
+        self.change(|input| {
+            input["bootstrap"]["binary"] = self.binding(binary.to_str().unwrap());
+            input["bootstrap"]["report"] = self.binding("bootstrap.txt");
+        });
+    }
+
     pub(super) fn binding(&self, path: &str) -> Value {
         let bytes = fs::read(self.root.join(path)).unwrap();
         json!({"path": path, "sha256": hex::encode(Sha256::digest(bytes))})
