@@ -167,7 +167,7 @@ additive `failure_class` when the exchange did not complete:
 `payment_required` (a 402, including a peer's relayed one), `refused` (a
 policy denial, a failed required hook, another 4xx), `upstream_error` (a 5xx,
 a transport failure, a stream that ended before its body), `timeout` (a 408 or
-504, or a route timeout) or `dropped`. `status` cannot say this alone: a stream
+504) or `dropped`. `status` cannot say this alone: a stream
 cut after its 200 headers terminates with status 200.
 
 On those two paths an absent `failure_class` means the exchange completed. The

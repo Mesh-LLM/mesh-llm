@@ -30,8 +30,8 @@ pub(super) fn plugin_route_status(outcome: &proxy::RouteDispatchOutcome) -> Opti
 /// `None` for one that did. `plugin_route_status` cannot carry this alone: a
 /// stream cut after its 200 headers is a `FailedWithStatus` whose status is
 /// 200, and a dropped stream or transport failure has no status at all. A
-/// timeout is classed by its 408/504 status or by `FailedWithStatus`'s
-/// "timeout" reason, the only forms the routes emit today.
+/// timeout is classed by its 408/504 status; a plugin endpoint's connect
+/// timeout reaches this terminal as a 503 and classes as `upstream_error`.
 pub(super) fn exchange_failure_class(
     outcome: &proxy::RouteDispatchOutcome,
 ) -> Option<ExchangeFailureClass> {
@@ -49,6 +49,8 @@ pub(super) fn exchange_failure_class(
             status_code: status,
             ..
         } => failure_class_of_status(status),
+        // The "timeout" reason is the one `buffered_exchange` matches on; kept
+        // so a route that starts to emit it is classed rather than missed.
         proxy::RouteDispatchOutcome::FailedWithStatus {
             status_code,
             reason,
