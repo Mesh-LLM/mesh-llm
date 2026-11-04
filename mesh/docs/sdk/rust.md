@@ -31,7 +31,7 @@ async fn example(invite_token: String) -> anyhow::Result<()> {
         .await?;
     let model = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            if let Some(model) = node.models().await?.into_iter().find(|model| {
+            if let Some(model) = node.inference_models().await?.into_iter().find(|model| {
                 model.thinking_efforts.as_ref().is_some_and(|efforts| {
                     efforts.iter().any(|effort| effort == "high")
                 })

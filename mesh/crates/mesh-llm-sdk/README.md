@@ -125,7 +125,7 @@ async fn infer(invite_token: String) -> anyhow::Result<serde_json::Value> {
     // Discovery is asynchronous. Give peers time to advertise a suitable model.
     let model = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
-            let models = node.models().await?;
+            let models = node.inference_models().await?;
             if let Some(model) = models.into_iter().find(|model| {
                 model.thinking_efforts.as_ref().is_some_and(|efforts| {
                     efforts.iter().any(|effort| effort == "high")

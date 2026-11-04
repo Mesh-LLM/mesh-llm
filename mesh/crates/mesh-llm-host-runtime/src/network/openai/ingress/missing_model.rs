@@ -143,7 +143,6 @@ pub(super) async fn route_missing_local_model(
                 request,
                 proxy::RouteModelRequestContext {
                     local_execution_only: false,
-                    exchange_id: Some(&exchange_id),
                     required_tokens,
                     affinity: ctx.affinity,
                     route_observer,
@@ -212,7 +211,7 @@ async fn route_without_a_mesh_host(
         record_pre_routing_rejection(ctx, Some(model_name), 503).await;
         return response_outcome(
             503,
-            proxy::send_503_observed(
+            proxy::send_model_not_ready_observed(
                 tcp_stream,
                 &format!("model '{model_name}' is unavailable locally (loading or draining)"),
                 route_observer,
@@ -351,7 +350,7 @@ pub(super) async fn route_self_targeted_model(
     {
         return response_outcome(
             503,
-            proxy::send_503_observed(
+            proxy::send_model_not_ready_observed(
                 tcp_stream,
                 &format!("model '{model_name}' is unavailable locally (loading or draining)"),
                 route_observer,
@@ -386,12 +385,12 @@ async fn unavailable_locally(
     model_name: &str,
     excluded: &[iroh::EndpointId],
 ) -> bool {
-    if has_local_unavailable_candidates(ctx.targets, model_name) {
-        return true;
+    if excluded.contains(&ctx.node.id()) {
+        return false;
     }
-    !excluded.contains(&ctx.node.id())
-        && may_be_loading_here(ctx, model_name).await
-        && !plugin_serves_model(ctx, model_name).await
+    has_local_unavailable_candidates(ctx.targets, model_name)
+        || (may_be_loading_here(ctx, model_name).await
+            && !plugin_serves_model(ctx, model_name).await)
 }
 
 /// Whether this node's serving assignment names `model_name`. A first load has

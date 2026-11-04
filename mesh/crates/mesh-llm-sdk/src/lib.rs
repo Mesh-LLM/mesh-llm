@@ -27,7 +27,7 @@ pub mod live_transcription;
 ///     // Wait for a suitable local or remote model advertisement.
 ///     let model = tokio::time::timeout(Duration::from_secs(30), async {
 ///         loop {
-///             if let Some(model) = node.models().await?.into_iter().find(|model| {
+///             if let Some(model) = node.inference_models().await?.into_iter().find(|model| {
 ///                 model.thinking_efforts.as_ref().is_some_and(|efforts| {
 ///                     efforts.iter().any(|effort| effort == "high")
 ///                 })
@@ -97,13 +97,6 @@ pub mod native_runtime {
 #[cfg(feature = "serving")]
 pub mod plugin {
     pub use mesh_llm_host_runtime::plugin::run_plugin_process;
-}
-
-/// Payment control and data types for driving the engine's payments over
-/// its control API: policy, pricing, invoices and wallet status.
-#[cfg(feature = "payments")]
-pub mod payments {
-    pub use mesh_llm_payments::{control, invoice, ledger, pricing, wallet};
 }
 
 /// Node identity keys on disk.

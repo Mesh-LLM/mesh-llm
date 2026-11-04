@@ -73,7 +73,11 @@ impl MeshNode {
     /// Discover local and peer models, including their advertised effort levels.
     /// Each entry retains its exact provider and serving ID. This query uses
     /// in-process mesh state and makes no HTTP request.
-    pub async fn models(&self) -> anyhow::Result<Vec<crate::inference::Model>> {
+    ///
+    /// `MeshNode::models()` remains the paged [`crate::models::ModelCatalog`]
+    /// view over every advertised workload; this method returns the native
+    /// inference entries with their provider-bound targets.
+    pub async fn inference_models(&self) -> anyhow::Result<Vec<crate::inference::Model>> {
         self.handle.models().await
     }
 
