@@ -169,12 +169,14 @@ fn chat_response_from_parsed_message_separates_reasoning_content() {
         predicted_ms: 100.0,
         queue_wait_ms: 0.0,
         restore_ms: 0.0,
+        split_prefix_cache: None,
         text: "Checked facts first.</think>Final answer.".to_string(),
         finish_reason: FinishReason::Stop,
         detokenize_ms: 0.0,
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
         token_logprobs: None,
+        activation_wire: None,
     };
     let parsed = ParsedChatMessage {
         content: Some("Final answer.".to_string()),
@@ -224,12 +226,14 @@ fn generated_text_timings_are_present_without_native_mtp() {
         predicted_ms: 100.0,
         queue_wait_ms: 0.0,
         restore_ms: 0.0,
+        split_prefix_cache: None,
         text: "Paris".to_string(),
         finish_reason: FinishReason::Stop,
         detokenize_ms: 0.0,
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
         token_logprobs: None,
+        activation_wire: None,
     };
 
     let timings = output.timings().expect("standard timings");
@@ -263,12 +267,14 @@ fn generated_text_timings_report_standalone_speculative_totals() {
         predicted_ms: 100.0,
         queue_wait_ms: 0.0,
         restore_ms: 0.0,
+        split_prefix_cache: None,
         text: "Paris".to_string(),
         finish_reason: FinishReason::Stop,
         detokenize_ms: 0.0,
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
         token_logprobs: None,
+        activation_wire: None,
     };
 
     let timings = output.timings().expect("standalone speculative timings");
@@ -318,17 +324,72 @@ fn generated_text_timings_prefer_composite_proposal_totals() {
         predicted_ms: 100.0,
         queue_wait_ms: 0.0,
         restore_ms: 0.0,
+        split_prefix_cache: None,
         text: "ok".to_string(),
         finish_reason: FinishReason::Stop,
         detokenize_ms: 0.0,
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
         token_logprobs: None,
+        activation_wire: None,
     };
 
     let timings = output.timings().expect("timings");
     assert_eq!(timings.get("draft_n"), Some(&json!(4)));
     assert_eq!(timings.get("draft_n_accepted"), Some(&json!(4)));
+}
+
+#[test]
+fn split_prefix_cache_hit_is_reported_in_timings() {
+    // 3,456 tokens restored on both stages of a split, then 491 prefilled at
+    // 32 KiB a token (activation plus split DFlash feature rows).
+    let stats = SplitPrefixCacheStats::new(3_456, 2, 491 * 32_768, 491, 2560);
+    assert_eq!(stats.bytes_saved, 3_456 * 32_768);
+    let output = GeneratedText {
+        prompt_tokens: 3_948,
+        completion_tokens: 1,
+        cache_status: "hit",
+        cached_prompt_tokens: 3_456,
+        matched_prefix_tokens: 3_456,
+        suffix_prefill_tokens: 491,
+        cache_hit_kind: Some("chain_prefix"),
+        native_mtp_stats: NativeMtpStats::default(),
+        native_mtp_decode_telemetry: None,
+        verify_window_pipeline_stats: None,
+        speculative_stats: None,
+        prompt_ms: 20.0,
+        predicted_ms: 1.0,
+        queue_wait_ms: 0.0,
+        restore_ms: 0.0,
+        split_prefix_cache: Some(stats),
+        text: "ok".to_string(),
+        finish_reason: FinishReason::Stop,
+        detokenize_ms: 0.0,
+        text_emit_ms: 0.0,
+        eog_check_ms: 0.0,
+        token_logprobs: None,
+        activation_wire: None,
+    };
+
+    let timings = output.timings().expect("timings");
+    assert_eq!(timings.get("prefix_cache_hit_tokens"), Some(&json!(3_456)));
+    assert_eq!(timings.get("prefix_cache_hit_stages"), Some(&json!(2)));
+    assert_eq!(
+        timings.get("prefix_cache_prefill_bytes_sent"),
+        Some(&json!(491 * 32_768))
+    );
+    assert_eq!(
+        timings.get("prefix_cache_bytes_saved"),
+        Some(&json!(3_456 * 32_768))
+    );
+}
+
+#[test]
+fn split_prefix_cache_prices_a_full_hit_at_an_f32_row_per_hop() {
+    let stats = SplitPrefixCacheStats::new(100, 3, 0, 0, 2560);
+    assert_eq!(stats.bytes_saved, 100 * 2560 * 4 * 2);
+    let miss = SplitPrefixCacheStats::new(0, 0, 1_000, 10, 2560);
+    assert_eq!(miss.bytes_saved, 0);
 }
 
 #[test]
@@ -728,6 +789,7 @@ fn generated_text_with_logprobs() -> GeneratedText {
         predicted_ms: 0.0,
         queue_wait_ms: 0.0,
         restore_ms: 0.0,
+        split_prefix_cache: None,
         text: "Hi!".to_string(),
         finish_reason: FinishReason::Stop,
         detokenize_ms: 0.0,
@@ -743,7 +805,60 @@ fn generated_text_with_logprobs() -> GeneratedText {
                 top: Vec::new(),
             },
         ]),
+        activation_wire: None,
     }
+}
+
+#[test]
+fn timings_report_activation_wire_bytes_per_token() {
+    let mut output = generated_text_with_logprobs();
+    assert!(
+        !output
+            .timings()
+            .expect("timings")
+            .contains_key("activation_codec")
+    );
+    // 99 tokens prefilled; the last prompt token rides the first decode.
+    output.prompt_tokens = 100;
+    output.completion_tokens = 4;
+    output.activation_wire = Some(ActivationWireStats {
+        codec: "s8-row-f32-rne-v1",
+        prefill_bytes: 99 * 2564,
+        decode_bytes: 4 * 2564,
+        dflash_features: None,
+    });
+    let timings = output.timings().expect("timings");
+    assert_eq!(timings["activation_codec"], json!("s8-row-f32-rne-v1"));
+    assert_eq!(timings["activation_prefill_bytes"], json!(253_836));
+    assert_eq!(timings["activation_prefill_bytes_per_token"], json!(2564.0));
+    assert_eq!(timings["activation_decode_bytes"], json!(10_256));
+    assert_eq!(timings["activation_decode_bytes_per_token"], json!(2564.0));
+
+    // A prefix-cache hit forwards only the suffix.
+    output.suffix_prefill_tokens = 33;
+    let timings = output.timings().expect("timings");
+    assert_eq!(timings["activation_prefill_bytes_per_token"], json!(7692.0));
+    assert!(!timings.contains_key("dflash_feature_decode_bytes"));
+
+    // A split DFlash target also reports the draft's feature-row share.
+    output.suffix_prefill_tokens = 0;
+    if let Some(wire) = output.activation_wire.as_mut() {
+        wire.dflash_features = Some(SplitDFlashFeatureBytes {
+            prefill_bytes: 99 * 1360,
+            decode_bytes: 4 * 2720,
+        });
+    }
+    let timings = output.timings().expect("timings");
+    assert_eq!(timings["dflash_feature_prefill_bytes"], json!(134_640));
+    assert_eq!(
+        timings["dflash_feature_prefill_bytes_per_token"],
+        json!(1360.0)
+    );
+    assert_eq!(timings["dflash_feature_decode_bytes"], json!(10_880));
+    assert_eq!(
+        timings["dflash_feature_decode_bytes_per_token"],
+        json!(2720.0)
+    );
 }
 
 #[test]
