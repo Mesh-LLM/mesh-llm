@@ -375,6 +375,16 @@ impl LocalRequestMetricsWindow {
     }
 }
 
+fn routing_runtime_data_producer() -> crate::runtime_data::RuntimeDataProducer {
+    crate::runtime_data::RuntimeDataCollector::new().producer(
+        crate::runtime_data::RuntimeDataSource {
+            scope: "routing",
+            plugin_data_key: None,
+            plugin_endpoint_key: None,
+        },
+    )
+}
+
 impl Node {
     pub(crate) fn set_swarm_capture_recorder(
         &self,

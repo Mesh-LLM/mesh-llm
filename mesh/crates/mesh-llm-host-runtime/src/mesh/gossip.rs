@@ -10,7 +10,7 @@ use super::{
 };
 use crate::crypto::{OwnershipSummary, verify_node_ownership};
 use crate::mesh::peer_state::policy_accepts_peer;
-use crate::mesh::plugin_keys::BoundPluginKey;
+use crate::mesh::plugin_keys::Announced;
 use crate::mesh::requirements::current_time_unix_ms;
 use crate::mesh::stage_transport::PeerLifecycleCaptureEvent;
 use crate::protocol::{
@@ -78,7 +78,7 @@ pub(crate) struct JoinProbeSuccess {
     conn: Connection,
     announcements: Vec<(EndpointAddr, PeerAnnouncement)>,
     /// The candidate's verified plugin keys, stored only once it is admitted.
-    plugin_keys: Vec<BoundPluginKey>,
+    plugin_keys: Announced,
     rtt_ms: u32,
     elapsed: std::time::Duration,
 }
@@ -103,15 +103,15 @@ impl JoinProbeSuccess {
             },
             conn,
             announcements,
-            plugin_keys: Vec::new(),
+            plugin_keys: Announced::default(),
             rtt_ms,
             elapsed: std::time::Duration::from_millis(0),
         }
     }
 
     /// The plugin keys the candidate announced in its gossip.
-    pub(super) fn with_plugin_keys(mut self, plugin_keys: Vec<BoundPluginKey>) -> Self {
-        self.plugin_keys = plugin_keys;
+    pub(super) fn with_plugin_keys(mut self, plugin_keys: impl Into<Announced>) -> Self {
+        self.plugin_keys = plugin_keys.into();
         self
     }
 }
@@ -461,7 +461,7 @@ impl Node {
 
     pub(crate) async fn remove_disallowed_peer(&self, id: EndpointId) {
         let mut state = self.state.lock().await;
-        self.plugin_keys.set_peer(id, Vec::new());
+        self.plugin_keys.purge_peer(id);
         if let Some(admitted_count) = state.remove_disallowed_peer(id) {
             let _ = self.peer_change_tx.send(admitted_count);
         }
@@ -504,7 +504,7 @@ impl Node {
                 .policy_rejected_peers
                 .insert(id, owner_summary.status.clone());
         }
-        self.plugin_keys.set_peer(id, Vec::new());
+        self.plugin_keys.purge_peer(id);
         if let Some(admitted_count) = state.remove_disallowed_peer(id) {
             let _ = self.peer_change_tx.send(admitted_count);
         }
@@ -895,7 +895,7 @@ impl Node {
             protocol,
             &outbound,
             self.endpoint.id(),
-            &crate::mesh::plugin_keys::to_proto(&self.plugin_keys.own()),
+            &self.plugin_keys.own_announced(),
             &self.gossip_encoder,
             remote,
         )
@@ -988,7 +988,7 @@ impl Node {
             protocol,
             &outbound,
             self.endpoint.id(),
-            &crate::mesh::plugin_keys::to_proto(&self.plugin_keys.own()),
+            &self.plugin_keys.own_announced(),
             &self.gossip_encoder,
             remote,
         )
@@ -1020,18 +1020,19 @@ impl Node {
     pub(crate) async fn store_plugin_keys_if_admitted(
         &self,
         id: EndpointId,
-        keys: Vec<BoundPluginKey>,
+        announced: impl Into<Announced>,
     ) {
         let state = self.state.lock().await;
         if state.peers.get(&id).is_some_and(|peer| peer.is_admitted()) {
-            self.plugin_keys.set_peer(id, keys);
+            self.plugin_keys.set_peer(id, announced);
         }
     }
 
     pub(super) async fn remove_peer(&self, id: EndpointId, reason: MeshPeerRemovalReason) {
         let mut state = self.state.lock().await;
-        // A peer that leaves stops being listed with plugin keys.
-        self.plugin_keys.set_peer(id, Vec::new());
+        // A peer that leaves stops being listed with plugin keys; what it
+        // withdrew stays listed.
+        self.plugin_keys.forget_peer(id);
         if let Some(removed) = state.remove_peer(id) {
             let peer = removed.peer;
             let had_connection = removed.had_connection;
@@ -1098,7 +1099,7 @@ impl Node {
             );
             let mut state = self.state.lock().await;
             state.requirement_rejected_peers.insert(id);
-            self.plugin_keys.set_peer(id, Vec::new());
+            self.plugin_keys.purge_peer(id);
             if let Some(admitted_count) = state.remove_disallowed_peer(id) {
                 let _ = self.peer_change_tx.send(admitted_count);
             }
@@ -1294,7 +1295,7 @@ impl Node {
         if state.has_fresh_direct_admission(&id) {
             return false;
         }
-        self.plugin_keys.set_peer(id, Vec::new());
+        self.plugin_keys.purge_peer(id);
         if let Some(admitted_count) = state.remove_disallowed_peer(id) {
             let _ = self.peer_change_tx.send(admitted_count);
         }

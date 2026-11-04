@@ -1759,7 +1759,7 @@ fn plugin_keys_ride_only_the_senders_own_entry_and_are_verified() {
     )
     .expect("a valid frame decodes");
     assert_eq!(announcements.len(), 2);
-    assert_eq!(keys, vec![key]);
+    assert_eq!(keys.keys, vec![key]);
 
     // A key on the sender's entry that another node bound is dropped.
     frame.peers[0].plugin_keys = to_proto(&[bind(&other, "capsules", [5; 32])]);
@@ -1769,7 +1769,7 @@ fn plugin_keys_ride_only_the_senders_own_entry_and_are_verified() {
         &frame.encode_to_vec(),
     )
     .expect("a valid frame decodes");
-    assert!(keys.is_empty(), "a binding by another node never verifies");
+    assert!(keys.keys.is_empty(), "a binding by another node never verifies");
 }
 
 #[tokio::test]
@@ -1914,7 +1914,7 @@ fn a_gossip_frame_without_plugin_keys_decodes_with_no_sender_keys() {
     let (announcements, keys) =
         decode_gossip_payload_and_plugin_keys(ControlProtocol::ProtoV1, sender_id, &bytes)
             .expect("a frame without plugin keys decodes");
-    assert!(keys.is_empty(), "its sender has no plugin keys");
+    assert!(keys.keys.is_empty(), "its sender has no plugin keys");
     let plain = decode_gossip_payload(ControlProtocol::ProtoV1, sender_id, &bytes)
         .expect("the existing decoder reads it");
     assert_eq!(announcements.len(), 2);
@@ -1961,7 +1961,7 @@ fn a_gossip_frame_with_plugin_keys_decodes_to_the_same_announcements() {
         decode_gossip_payload_and_plugin_keys(ControlProtocol::ProtoV1, sender_id, &with)
             .expect("decodes with field 53");
     assert_eq!(format!("{announcements:?}"), format!("{before:?}"));
-    assert_eq!(keys, vec![key]);
+    assert_eq!(keys.keys, vec![key]);
 }
 
 /// A test node with a fixed node key, so a "restarted" node keeps its identity.
@@ -2101,6 +2101,59 @@ async fn a_plugin_key_through_its_lifecycle_as_a_peer_sees_it() {
     announce(&restarted, key(3).to_vec());
     gossip_once(&b, &restarted, "restarted, re-announced").await;
     assert_eq!(listed(&b, a_id), vec![bind(&a_secret, "capsules", key(3))]);
+}
+
+/// A host-signed withdrawal reaches a peer over real gossip, is listed with the
+/// withdrawn key, and stays listed after the withdrawing node goes offline, so
+/// a plugin forgets the key at its next poll rather than when it ages out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_withdrawn_plugin_key_stays_listed_as_withdrawn_when_its_host_goes_offline() {
+    use crate::mesh::plugin_keys::{bind, withdraw};
+    use crate::plugin::proto::PluginKeyRequest;
+
+    let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+        .verifying_key()
+        .to_bytes();
+    let a_secret = SecretKey::from_bytes(&[0x41; 32]);
+    let a = node_with_key(a_secret.clone()).await;
+    let b = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+    a.start_accepting();
+    b.start_accepting();
+    let a_id = a.id();
+
+    a.apply_plugin_key_request("capsules", PluginKeyRequest { public_key: key.to_vec() })
+        .expect("the key is announced");
+    gossip_once(&b, &a, "announced").await;
+    assert_eq!(
+        b.plugin_keys.peers().get(&a_id),
+        Some(&vec![bind(&a_secret, "capsules", key)])
+    );
+    assert!(b.plugin_keys.peer_withdrawals().is_empty());
+
+    a.apply_plugin_key_request("capsules", PluginKeyRequest { public_key: Vec::new() })
+        .expect("an empty key withdraws");
+    assert_eq!(
+        a.plugin_keys.own_withdrawals(),
+        vec![withdraw(&a_secret, "capsules", key)]
+    );
+    gossip_once(&b, &a, "withdrawn").await;
+    assert!(!b.plugin_keys.peers().contains_key(&a_id));
+    assert_eq!(
+        b.plugin_keys.peer_withdrawals().get(&a_id),
+        Some(&vec![withdraw(&a_secret, "capsules", key)])
+    );
+
+    // The host goes offline: its withdrawal is still listed.
+    b.remove_peer(a_id, super::MeshPeerRemovalReason::CleanShutdown)
+        .await;
+    assert!(b.plugin_keys.peers().is_empty());
+    assert_eq!(b.plugin_keys.peer_withdrawals().len(), 1);
+
+    // A peer that is rejected, rather than leaving, takes its withdrawals with it.
+    b.remove_disallowed_peer(a_id).await;
+    assert!(b.plugin_keys.peer_withdrawals().is_empty());
 }
 
 #[tokio::test]
