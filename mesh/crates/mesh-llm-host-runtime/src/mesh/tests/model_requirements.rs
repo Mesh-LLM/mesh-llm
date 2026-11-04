@@ -101,6 +101,8 @@ async fn requirements_round_trip_announce_gate_withdraw_and_local_bypass() {
     peer.role = NodeRole::Host { http_port: 9337 };
     peer.hosted_models_known = true;
     peer.hosted_models = vec!["gated".into(), "free".into()];
+    // A profile-suffixed hosted/served name rides its base descriptor.
+    peer.hosted_models.push("gated#alternate".into());
     peer.serving_models = peer.hosted_models.clone();
     peer.served_model_descriptors = ann.served_model_descriptors;
     // The catalog lists a provider as an LLM only with a chat workload class.
@@ -151,6 +153,11 @@ async fn requirements_round_trip_announce_gate_withdraw_and_local_bypass() {
     assert_eq!(availability, MeshModelAvailability::Unavailable);
     assert_eq!(requires[0]["channel"], "fixture.v1");
     assert_eq!(
+        catalog_entry(&buyer, "gated#alternate").await.0,
+        MeshModelAvailability::Unavailable,
+        "a profile-suffixed alias of a gated base is unavailable too"
+    );
+    assert_eq!(
         catalog_entry(&buyer, "free").await.0,
         MeshModelAvailability::Available
     );
@@ -181,7 +188,12 @@ async fn requirements_round_trip_announce_gate_withdraw_and_local_bypass() {
     assert_eq!(buyer.hosts_for_model("gated").await, vec![seller.id()]);
     assert_eq!(
         listed_llms(&buyer).await,
-        vec!["free".to_string(), "gated".to_string()]
+        vec![
+            "free".to_string(),
+            "gated".to_string(),
+            "gated#alternate".to_string()
+        ],
+        "declaring the channel restores the suffixed alias as well"
     );
     assert_eq!(
         catalog_entry(&buyer, "gated").await.0,

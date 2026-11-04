@@ -192,8 +192,14 @@ pub(crate) fn model_requires_unsupported_channel(
     model: &str,
     supported: &HashSet<String>,
 ) -> bool {
+    // A profile-suffixed served name (`gated#alternate`) rides its base
+    // descriptor (`gated`) the same way `insert_observations` maps it for the
+    // catalog, so the channel gate must match the base name too or the
+    // suffixed provider escapes it.
+    let base = model.rsplit_once('#').map_or(model, |(base, _)| base);
     peer.served_model_descriptors.iter().any(|d| {
         (d.identity.model_name == model
+            || d.identity.model_name == base
             || super::public_model_id_for_routable_model(peer, &d.identity.model_name) == model)
             && d.requires.iter().any(|ch| !supported.contains(&ch.channel))
     })
