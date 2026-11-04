@@ -30,6 +30,7 @@ fn reconcile_memory_plan_with_measurements(
                 .vram_bytes
                 .saturating_sub(breakdown.model_bytes)
                 .saturating_sub(breakdown.projector_bytes)
+                .saturating_sub(breakdown.speculative_bytes)
                 .saturating_sub(compute)
                 .saturating_sub(kv),
         ),
@@ -128,6 +129,7 @@ pub(super) fn emit_memory_plan_resolved(
                 memory_plan.vram_bytes = breakdown.vram_bytes,
                 memory_plan.model_bytes = breakdown.model_bytes,
                 memory_plan.projector_bytes = breakdown.projector_bytes,
+                memory_plan.speculative_bytes = breakdown.speculative_bytes,
                 memory_plan.kv_budget_bytes = breakdown.kv_budget_bytes,
                 memory_plan.planned_kv_bytes = breakdown.planned_kv_bytes,
                 memory_plan.kv_bytes_per_token = breakdown.kv_bytes_per_token,
@@ -260,6 +262,7 @@ mod tests {
             vram_bytes: 10_000,
             model_bytes: 2_000,
             projector_bytes: 0,
+            speculative_bytes: 0,
             kv_budget_bytes: 6_000,
             planned_kv_bytes: 4_000,
             kv_bytes_per_token: 4,
@@ -312,6 +315,7 @@ mod tests {
             vram_bytes: 16 * 1024 * 1024 * 1024,
             model_bytes: 3 * 1024 * 1024 * 1024,
             projector_bytes: 0,
+            speculative_bytes: 0,
             kv_budget_bytes: 0,
             planned_kv_bytes: 0,
             kv_bytes_per_token: 0,

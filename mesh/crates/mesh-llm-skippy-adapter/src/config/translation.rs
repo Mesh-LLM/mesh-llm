@@ -323,6 +323,7 @@ impl ResolvedSkippyConfig {
             } else {
                 MtpSource::Disabled
             },
+            recurrent_rollback_tokens: 0,
             metrics_otlp_grpc: telemetry.metrics_otlp_grpc.clone(),
             telemetry_queue_capacity: telemetry.queue_capacity,
             telemetry_level: telemetry.level,
@@ -379,7 +380,7 @@ impl ResolvedSkippyConfig {
             } else {
                 None
             },
-            speculative: self.speculative_decode_config(staged)?,
+            speculative: self.speculative_decode_config(),
             native_mtp_enabled: self.speculative.native_mtp_enabled,
             native_mtp_draft_model_path: if self.speculative.native_mtp_enabled {
                 self.speculative.draft_model_path.clone()
@@ -496,17 +497,20 @@ impl ResolvedSkippyConfig {
 }
 
 impl ResolvedSkippyConfig {
-    /// A DFlash draft reads hidden states from every target layer it was
-    /// trained on, so it needs the complete target on this node. A split
-    /// target serves without it unless the pairing policy fails closed.
-    fn speculative_decode_config(&self, staged: bool) -> Result<SpeculativeDecodeConfig> {
+    /// The decode plan stage 0 serves. A default DFlash draft that was never
+    /// fetched is dropped. A split target keeps its DFlash plan: the final
+    /// stage drafts, and every stage that owns one of the draft's target
+    /// layers forwards that layer's input with its activations.
+    fn speculative_decode_config(&self) -> SpeculativeDecodeConfig {
         let mut decode = self.speculative.decode.clone();
-        if staged && decode.dflash.take().is_some() {
-            if self.speculative.pairing_fault == "fail_closed" {
-                bail!("skippy DFlash drafts require the complete target model on one node");
-            }
+        let default_draft_missing = self.speculative.default_dflash.is_some()
+            && decode
+                .dflash
+                .as_ref()
+                .is_some_and(|dflash| !dflash.draft_model_path.is_file());
+        if default_draft_missing && decode.dflash.take().is_some() {
             decode.effective_strategy = "disabled".to_string();
         }
-        Ok(decode)
+        decode
     }
 }

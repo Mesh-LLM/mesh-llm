@@ -130,8 +130,10 @@ override its fields.
 given by `--draft-model-path` to the target model. The draft reads target
 hidden states, so it requires local serving of the complete target model, a
 DFlash GGUF trained for that target, and a runtime that exports the upstream
-draft-context API (not Windows builds). It drafts only for greedy requests
-that do not ask for logprobs; other requests decode normally. DSpark and
+draft-context API (not Windows builds). It drafts for greedy and sampled
+requests; requests that ask for logprobs decode normally. Block length adapts
+to measured verify cost and acceptance, up to `--dflash-max-tokens`;
+`SKIPPY_DFLASH_ADAPTIVE=0` is an off switch that pins blocks at the cap. DSpark and
 LiliCorr drafts are rejected. DFlash is opt-in: `--dflash-max-tokens` without
 `--speculative-strategy dflash` is an error, but a `--speculative-config` plan
 that already has a `dflash` field runs under `auto`.

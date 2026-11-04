@@ -687,9 +687,18 @@ pub(crate) fn greedy_linear_proposal_admitted(
             && sampling.frequency_penalty == 0.0
             && sampling.repeat_penalty == 1.0
             && sampling.logit_bias.is_empty());
-    if !greedy_equivalent {
-        return false;
-    }
+    greedy_equivalent && sampled_linear_proposal_admitted(chat_sampling_metadata)
+}
+
+/// Admission for token-match speculation verified by the native sampled
+/// verifier, under any sampling configuration.
+///
+/// That verifier samples each row in causal order with the request's own
+/// sampler, recording the row's input first, and stops at the first row whose
+/// sample differs from the proposal. Every committed token is therefore a draw
+/// from the target given exactly the tokens serial decoding would have seen,
+/// and no stateful sampler (RNG, penalties, grammar) absorbs a rejected token.
+pub(crate) fn sampled_linear_proposal_admitted(chat_sampling_metadata: Option<&str>) -> bool {
     match chat_sampling_metadata {
         None => true,
         Some(metadata) => serde_json::from_str::<serde_json::Value>(metadata).is_ok(),
@@ -947,6 +956,15 @@ mod tests {
             Some(r#"{"grammar":"root ::= value"}"#)
         ));
         assert!(!greedy_linear_proposal_admitted(&disabled, Some("{")));
+    }
+
+    #[test]
+    fn sampled_admission_accepts_any_sampler_but_rejects_malformed_metadata() {
+        assert!(sampled_linear_proposal_admitted(None));
+        assert!(sampled_linear_proposal_admitted(Some(
+            r#"{"grammar":"root ::= value"}"#
+        )));
+        assert!(!sampled_linear_proposal_admitted(Some("{")));
     }
 
     #[test]

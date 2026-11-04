@@ -5,6 +5,7 @@
 //! through the linear-proposal verifier: one batched target forward, commit
 //! through the first mismatch, then trim or retire the speculative suffix.
 
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use skippy_inference_api::{InferenceError, InferenceResult};
@@ -14,6 +15,10 @@ use crate::frontend::linear_proposal::{LinearProposalExecution, LinearProposalEx
 use crate::frontend::speculative::InferenceSpeculativeStats;
 use crate::frontend::util::openai_backend_error;
 
+use super::dflash_block_size::{
+    Acceptance, BlockCost, adaptive_enabled, choose_block, record_shared, record_shared_serial,
+    shared_model,
+};
 use super::token_generation::DecodeState;
 
 /// Outcome of one DFlash block attempt.
@@ -33,11 +38,123 @@ const MISS_LIMIT: u32 = 2;
 const FIRST_BACKOFF_TOKENS: usize = 4;
 const MAX_BACKOFF_TOKENS: usize = 64;
 
+/// Serial tokens decoded before an adaptive request that chose serial decoding
+/// probes with a short block again, so a change in the text can be noticed.
+const ADAPTIVE_PROBE_INTERVAL: usize = 16;
+const ADAPTIVE_PROBE_DRAFTS: usize = 2;
+
 /// Request-local DFlash bounds and counters.
 pub(super) struct DFlashDecodeState {
     max_draft_tokens: usize,
     backoff: DFlashBackoff,
+    adaptive: Option<AdaptiveBlocks>,
     pub(super) stats: InferenceSpeculativeStats,
+}
+
+/// Per-request state for block lengths chosen from measured cost.
+pub(in crate::frontend) struct AdaptiveBlocks {
+    draft_model_path: PathBuf,
+    cost: BlockCost,
+    acceptance: Acceptance,
+    windows: u64,
+    serial_since_probe: usize,
+    /// Set when this token was left to a serial step, so the next call can
+    /// time it.
+    serial_started: Option<Instant>,
+    /// Measured costs chose serial decoding and the next probe is not due.
+    paused: bool,
+}
+
+impl AdaptiveBlocks {
+    fn new(draft_model_path: PathBuf) -> Self {
+        let shared = shared_model(&draft_model_path);
+        Self {
+            draft_model_path,
+            cost: shared.cost,
+            acceptance: shared.acceptance.capped(),
+            windows: 0,
+            serial_since_probe: 0,
+            serial_started: None,
+            paused: false,
+        }
+    }
+
+    /// Block lengths for stage 0 of a split DFlash target, or `None` when
+    /// adaptive sizing is off. Costs there include the hops between stages,
+    /// so they are learned apart from the same draft serving one node.
+    pub(in crate::frontend) fn for_split(draft_model_path: &Path) -> Option<Self> {
+        let mut key = draft_model_path.as_os_str().to_owned();
+        key.push("#split");
+        adaptive_enabled().then(|| Self::new(PathBuf::from(key)))
+    }
+
+    /// Times the serial step that ran since the previous call, if one did.
+    pub(in crate::frontend) fn finish_serial_step(&mut self) {
+        let Some(started) = self.serial_started.take() else {
+            return;
+        };
+        let micros = started.elapsed().as_secs_f64() * 1_000_000.0;
+        self.cost.observe_serial(micros);
+        record_shared_serial(&self.draft_model_path, micros);
+    }
+
+    /// Drafts for the next window, or 0 to decode this token serially.
+    pub(in crate::frontend) fn next_drafts(&mut self, limit: usize) -> usize {
+        let drafts = self.choose_drafts(limit);
+        if drafts == 0 {
+            self.serial_started = Some(Instant::now());
+        }
+        drafts
+    }
+
+    /// Whether the next step will decode serially too unless costs change,
+    /// so no draft needs to be ready for it.
+    pub(in crate::frontend) fn drafting_paused(&self) -> bool {
+        self.paused
+    }
+
+    fn choose_drafts(&mut self, limit: usize) -> usize {
+        self.paused = false;
+        // Measure plain steps once a window has run, so serial decoding is
+        // weighed against a measured cost.
+        if self.windows > 0 && !self.cost.serial_measured() {
+            return 0;
+        }
+        let chosen = choose_block(&self.cost, &self.acceptance, limit, self.windows);
+        if chosen > 0 {
+            self.serial_since_probe = 0;
+            return chosen;
+        }
+        self.serial_since_probe += 1;
+        if self.serial_since_probe < ADAPTIVE_PROBE_INTERVAL {
+            self.paused = self.serial_since_probe + 1 < ADAPTIVE_PROBE_INTERVAL;
+            return 0;
+        }
+        self.serial_since_probe = 0;
+        ADAPTIVE_PROBE_DRAFTS.min(limit)
+    }
+
+    pub(in crate::frontend) fn record(
+        &mut self,
+        verify_rows: usize,
+        verify_micros: f64,
+        draft_micros: f64,
+        drafts: usize,
+        accepted: usize,
+    ) {
+        self.windows += 1;
+        self.cost.observe_verify(verify_rows, verify_micros);
+        self.cost.observe_draft(draft_micros);
+        self.acceptance.observe(drafts, accepted);
+        record_shared(
+            &self.draft_model_path,
+            verify_rows,
+            verify_micros,
+            draft_micros,
+            drafts,
+            accepted,
+        );
+    }
 }
 
 /// Per-request back-off from windows that accept nothing.
@@ -88,8 +205,9 @@ impl DFlashBackoff {
 }
 
 impl DFlashDecodeState {
-    /// DFlash commits by token equality, which is only a valid acceptance
-    /// test under greedy sampling. `speculation_admitted` also excludes
+    /// DFlash commits by token equality against rows the native verifier
+    /// samples in causal order, stopping at the first mismatch, which keeps
+    /// greedy and stochastic sampling exact. `speculation_admitted` excludes
     /// logprobs requests, whose rows past a rejection would not line up, and
     /// generation hooks need serial steps.
     fn for_request(
@@ -101,6 +219,8 @@ impl DFlashDecodeState {
         (speculation_admitted && !generation_hooks_active).then(|| Self {
             max_draft_tokens: dflash.max_draft_tokens.unwrap_or(usize::MAX),
             backoff: DFlashBackoff::default(),
+            adaptive: adaptive_enabled()
+                .then(|| AdaptiveBlocks::new(dflash.draft_model_path.clone())),
             stats: InferenceSpeculativeStats::default(),
         })
     }
@@ -189,12 +309,19 @@ impl StageOpenAiBackend {
         let Some(dflash) = state.dflash.as_mut() else {
             return Ok(DFlashSpanProgress::NotUsed);
         };
-        if dflash.backoff.take_serial_token() {
+        if let Some(adaptive) = dflash.adaptive.as_mut() {
+            adaptive.finish_serial_step();
+        }
+        // The adaptive chooser already weighs misses against serial steps.
+        if dflash.adaptive.is_none() && dflash.backoff.take_serial_token() {
             return Ok(DFlashSpanProgress::NotUsed);
         }
         let max_draft_tokens = dflash.max_draft_tokens;
         let remaining = (request.max_tokens as usize).saturating_sub(state.decoded_tokens);
-        let limit = dflash_block_limit(max_draft_tokens, remaining);
+        let mut limit = dflash_block_limit(max_draft_tokens, remaining);
+        if let Some(adaptive) = dflash.adaptive.as_mut() {
+            limit = adaptive.next_drafts(limit);
+        }
         if limit == 0 {
             return Ok(DFlashSpanProgress::NotUsed);
         }
@@ -208,8 +335,9 @@ impl StageOpenAiBackend {
                         .dflash_propose(&owned_session_id, anchor, limit)
                         .map_err(openai_backend_error)
                 })?;
+        let draft_micros = propose_started.elapsed().as_secs_f64() * 1_000_000.0;
         if let Some(dflash) = state.dflash.as_mut() {
-            dflash.stats.draft_propose_ms += propose_started.elapsed().as_secs_f64() * 1_000.0;
+            dflash.stats.draft_propose_ms += draft_micros / 1_000.0;
         }
         let Some(proposal) = proposal.filter(|proposal| !proposal.tokens.is_empty()) else {
             return Ok(DFlashSpanProgress::NotUsed);
@@ -256,6 +384,15 @@ impl StageOpenAiBackend {
                 &execution,
             );
             dflash.backoff.record_window(accepted);
+            if let Some(adaptive) = dflash.adaptive.as_mut() {
+                adaptive.record(
+                    verify_inputs.len(),
+                    (execution.verification_elapsed_us + execution.repair_elapsed_us) as f64,
+                    draft_micros,
+                    proposal.tokens.len(),
+                    accepted,
+                );
+            }
         }
         apply_committed_tokens(state, &execution)?;
         if execution.reached_stop || state.decoded_tokens >= request.max_tokens as usize {
@@ -300,6 +437,30 @@ mod tests {
     use crate::frontend::NativeMtpVerifyWindowDecision;
 
     #[test]
+    fn serial_choices_pause_drafting_until_a_probe_is_due() {
+        let mut blocks = AdaptiveBlocks::new(PathBuf::from("/test/serial-pause-draft.gguf"));
+        // Verify windows that cost far more than a serial step and accept
+        // nothing.
+        for rows in [3, 5, 3, 5] {
+            blocks.record(rows, 90_000.0, 0.0, rows - 1, 0);
+        }
+        blocks.cost.observe_serial(10_000.0);
+        blocks.cost.observe_serial(10_000.0);
+
+        let mut chosen = Vec::new();
+        for _ in 0..ADAPTIVE_PROBE_INTERVAL {
+            chosen.push((blocks.next_drafts(4), blocks.drafting_paused()));
+        }
+
+        // Serial steps keep the draft paused, except the one before the probe,
+        // which asks for the draft the probe verifies.
+        let serial = ADAPTIVE_PROBE_INTERVAL - 1;
+        assert!(chosen[..serial - 1].iter().all(|&step| step == (0, true)));
+        assert_eq!(chosen[serial - 1], (0, false));
+        assert_eq!(chosen[serial], (ADAPTIVE_PROBE_DRAFTS, false));
+    }
+
+    #[test]
     fn block_limit_leaves_the_last_token_to_a_serial_step() {
         assert_eq!(dflash_block_limit(15, 100), 15);
         assert_eq!(dflash_block_limit(15, 4), 3);
@@ -312,6 +473,7 @@ mod tests {
         let state = |max_draft_tokens| DFlashDecodeState {
             max_draft_tokens,
             backoff: DFlashBackoff::default(),
+            adaptive: None,
             stats: InferenceSpeculativeStats::default(),
         };
 

@@ -4,9 +4,12 @@ use std::thread::{self, ThreadId};
 use std::time::Duration;
 
 use skippy_ffi::{
-    SkippyRuntimeEventCategory, SkippyRuntimeEventEmitterKind, SkippyRuntimeEventFailureCode,
-    SkippyRuntimeEventKind, SkippyRuntimeEventProgressUnit, SkippyRuntimeEventV1, Status,
+    RUNTIME_EVENT_CATEGORY_MODEL_OPEN, RUNTIME_EVENT_EMITTER_OPEN_THREAD,
+    RUNTIME_EVENT_FAILURE_NONE, RUNTIME_EVENT_KIND_MODEL_OPEN_FAILED_HANDLED,
+    RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED, RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS,
+    RUNTIME_EVENT_PROGRESS_UNIT_STEPS,
 };
+use skippy_ffi::{SkippyRuntimeEventKind, SkippyRuntimeEventV1, Status};
 
 use super::observation::ModelOpenContradiction;
 use super::*;
@@ -17,9 +20,9 @@ fn raw_event(kind: SkippyRuntimeEventKind, sequence: u64) -> SkippyRuntimeEventV
     SkippyRuntimeEventV1 {
         abi_version: 1,
         struct_size: std::mem::size_of::<SkippyRuntimeEventV1>() as u32,
-        category: SkippyRuntimeEventCategory::MODEL_OPEN,
+        category: RUNTIME_EVENT_CATEGORY_MODEL_OPEN,
         kind,
-        emitter: SkippyRuntimeEventEmitterKind::OPEN_THREAD,
+        emitter: RUNTIME_EVENT_EMITTER_OPEN_THREAD,
         reserved0: 0,
         sequence,
         timestamp_mono_ns: sequence,
@@ -28,9 +31,9 @@ fn raw_event(kind: SkippyRuntimeEventKind, sequence: u64) -> SkippyRuntimeEventV
         session_id: 0,
         progress_current: sequence,
         progress_total: 10,
-        progress_unit: SkippyRuntimeEventProgressUnit::STEPS,
-        failure_code: SkippyRuntimeEventFailureCode::NONE,
-        status: Status::Ok,
+        progress_unit: RUNTIME_EVENT_PROGRESS_UNIT_STEPS,
+        failure_code: RUNTIME_EVENT_FAILURE_NONE,
+        status: Status::Ok as i32,
         reserved1: 0,
         detail_ptr: std::ptr::null(),
         detail_len: 0,
@@ -47,7 +50,7 @@ fn push(queue: &ModelOpenEventQueue, kind: SkippyRuntimeEventKind, sequence: u64
 }
 
 fn push_progress(queue: &ModelOpenEventQueue, sequence: u64) {
-    push(queue, SkippyRuntimeEventKind::MODEL_OPEN_PROGRESS, sequence);
+    push(queue, RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS, sequence);
 }
 
 fn sequence_reporter(seen: &Arc<Mutex<Vec<u64>>>) -> NativeModelOpenEventReporter {
@@ -154,7 +157,7 @@ fn final_drain_after_return_loses_nothing() {
     let _ = observe_model_open(OperationId(5), Some(events), |queue| {
         let queue = queue.expect("queue");
         (1..=40).for_each(|sequence| push_progress(&queue, sequence));
-        push(&queue, SkippyRuntimeEventKind::MODEL_OPEN_FINISHED, 41);
+        push(&queue, RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED, 41);
         Ok::<_, ()>(())
     });
 
@@ -219,7 +222,7 @@ fn finished_callback_with_failed_return_keeps_the_failure_and_reports_a_contradi
     let result = observe_model_open(OperationId(8), Some(events), |queue| {
         push(
             &queue.expect("queue"),
-            SkippyRuntimeEventKind::MODEL_OPEN_FINISHED,
+            RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED,
             1,
         );
         Err::<(), _>("native open failed")
@@ -241,7 +244,7 @@ fn failed_handled_callback_with_successful_return_keeps_the_success_and_reports_
     let result = observe_model_open(OperationId(9), Some(events), |queue| {
         push(
             &queue.expect("queue"),
-            SkippyRuntimeEventKind::MODEL_OPEN_FAILED_HANDLED,
+            RUNTIME_EVENT_KIND_MODEL_OPEN_FAILED_HANDLED,
             1,
         );
         Ok::<_, ()>("runtime")

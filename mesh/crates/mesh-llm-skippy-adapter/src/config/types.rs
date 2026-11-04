@@ -144,10 +144,19 @@ pub struct ResolvedSpeculativeConfig {
     pub draft_model_path: Option<PathBuf>,
     pub pairing_fault: String,
     pub draft_max_tokens: u32,
+    /// Whether the configuration set `draft_max_tokens`. An unset cap takes
+    /// the placement's default, which is shorter on a split.
+    pub draft_max_tokens_configured: bool,
     pub draft_min_tokens: u32,
     pub explicit: bool,
     pub draft_n_gpu_layers: Option<i32>,
     pub decode: SpeculativeDecodeConfig,
+    /// The known pairing whose draft the DFlash plan uses by default. The host
+    /// fetches that draft before loading, and drops the plan if it cannot.
+    pub default_dflash: Option<&'static super::dflash_catalog::DFlashPairing>,
+    /// The native MTP plan a default DFlash plan replaced, served instead when
+    /// the default draft is dropped.
+    pub native_mtp_fallback: Option<Box<ResolvedSpeculativeConfig>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
