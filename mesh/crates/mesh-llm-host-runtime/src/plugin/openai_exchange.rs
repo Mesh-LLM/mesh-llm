@@ -468,8 +468,8 @@ pub struct OpenAiExchangeEnvelope {
     pub failure_class: Option<ExchangeFailureClass>,
     /// The mesh node that asked, as lowercase hex of its endpoint id (the
     /// encoding `serving_provenance.requested_by_node_id` uses), on a
-    /// raw-proxy terminal for an exchange that did not complete. A served
-    /// exchange states it inside `serving_provenance`; a failed one carries no
+    /// raw-proxy terminal for an exchange that did not complete. A host-served
+    /// 2xx exchange states it inside `serving_provenance`; a failed one carries no
     /// provenance, so this is how a plugin learns who was refused or failed.
     /// Absent for a request that did not come over the mesh and on every
     /// other envelope.

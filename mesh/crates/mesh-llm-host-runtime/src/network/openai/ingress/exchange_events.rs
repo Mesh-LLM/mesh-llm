@@ -247,8 +247,9 @@ pub(in crate::network::openai) struct RawProxyTerminalFacts<'a> {
     pub(in crate::network::openai) request_digest: Option<&'a str>,
     /// The mesh node that asked, from the tunnel's authenticated remote id
     /// ([`IngressRouteContext::requested_by_node_id`]). Goes into the serving
-    /// provenance of a host-served exchange, and onto the envelope of one that
-    /// failed on any path.
+    /// provenance of a host-served exchange, and onto the envelope of a
+    /// raw-proxy exchange that failed (host-served or plugin-served); an
+    /// exchange a peer delivered takes `remote_delivered_terminal`, which has none.
     pub(in crate::network::openai) requested_by_node_id: Option<&'a str>,
     /// The request's stabilized `x-capsule-client-nonce` and who contributed
     /// it ([`request_client_nonce`]), as the `RemoteMesh` terminal reports it.

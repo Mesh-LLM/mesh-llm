@@ -90,7 +90,8 @@ struct IngressRouteContext<'a> {
     /// The mesh node that sent this request over the HTTP tunnel, hex-encoded,
     /// from the tunnel's QUIC-authenticated remote `EndpointId`. `None` for a
     /// request on this node's local API. Carried onto the host-served
-    /// terminal as `ServingProvenance.requested_by_node_id`.
+    /// terminal as `ServingProvenance.requested_by_node_id`, and onto the
+    /// envelope of a raw-proxy exchange that failed (host-served or plugin-served).
     requested_by_node_id: Option<String>,
     /// Explicit exchange channel for the remote-mesh and host-served publish
     /// pairs. When `None`, falls back to `plugin_manager` as the channel
@@ -1734,7 +1735,8 @@ async fn handle_api_proxy_connection_inner(
 
 /// A request that arrived over the mesh HTTP tunnel. `remote` is the tunnel's
 /// QUIC-authenticated peer, the node that asked; it is carried onto the
-/// host-served terminal as `requested_by_node_id`.
+/// host-served terminal as `requested_by_node_id`, and onto the terminal of a
+/// raw-proxy exchange that failed.
 pub(crate) async fn handle_remote_http_stream(
     node: mesh::Node,
     stream: ClientStream,
