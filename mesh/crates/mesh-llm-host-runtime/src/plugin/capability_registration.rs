@@ -5,11 +5,11 @@
 use std::collections::BTreeSet;
 use std::sync::Mutex;
 
-#[cfg(any(feature = "payments", test))]
+#[cfg(test)]
 use anyhow::{Result, anyhow};
 
 use super::PluginCapabilityProvider;
-#[cfg(any(feature = "payments", test))]
+#[cfg(test)]
 use super::PluginManager;
 
 #[derive(Default)]
@@ -24,7 +24,7 @@ impl CapabilityRegistration {
         }
     }
 
-    #[cfg(any(feature = "payments", test))]
+    #[cfg(test)]
     fn contains(&self, capability: &str) -> Result<bool> {
         Ok(self
             .0
@@ -34,7 +34,7 @@ impl CapabilityRegistration {
     }
 }
 
-#[cfg(any(feature = "payments", test))]
+#[cfg(test)]
 impl PluginManager {
     /// Whether a provider has declared this capability during this manager's
     /// lifetime. This does not authorize invocation; live provider selection
@@ -52,12 +52,12 @@ mod tests {
     #[test]
     fn registration_survives_health_report_removal_without_enabling_calls() -> Result<()> {
         let manager = PluginManager::for_test_summaries(Vec::new());
-        assert!(!manager.has_registered_capability("payments.v1")?);
+        assert!(!manager.has_registered_capability("example.v1")?);
         manager.publish_plugin_providers(
-            "external-payments",
+            "external-example",
             vec![PluginCapabilityProvider {
-                capability: "payments.v1".into(),
-                plugin_name: "external-payments".into(),
+                capability: "example.v1".into(),
+                plugin_name: "external-example".into(),
                 plugin_status: "ready".into(),
                 endpoint_id: None,
                 available: true,
@@ -65,10 +65,10 @@ mod tests {
             }],
         );
         manager
-            .plugin_summary_producer("external-payments")
-            .clear_plugin_reports("external-payments");
-        manager.publish_plugin_providers("external-payments", Vec::new());
-        assert!(manager.has_registered_capability("payments.v1")?);
+            .plugin_summary_producer("external-example")
+            .clear_plugin_reports("external-example");
+        manager.publish_plugin_providers("external-example", Vec::new());
+        assert!(manager.has_registered_capability("example.v1")?);
         assert!(
             manager
                 .inner
@@ -78,7 +78,7 @@ mod tests {
                 .is_empty()
         );
         let replacement = PluginManager::for_test_summaries(Vec::new());
-        assert!(!replacement.has_registered_capability("payments.v1")?);
+        assert!(!replacement.has_registered_capability("example.v1")?);
         Ok(())
     }
 }

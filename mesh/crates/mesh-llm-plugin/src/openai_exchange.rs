@@ -155,6 +155,13 @@ pub enum OpenAiAdmissionDecision {
 #[serde(deny_unknown_fields)]
 pub struct OpenAiExchangeDecision {
     pub decision: OpenAiAdmissionDecision,
+    /// HTTP status the host answers a `deny` with. Only `402` (the caller can
+    /// satisfy this plugin's gate — pay, present credit — and retry) and `403`
+    /// (never) are accepted; absent means `403`. Rejected on any other
+    /// decision. `response_headers` carry the gate's terms either way; the
+    /// host never reads them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default)]

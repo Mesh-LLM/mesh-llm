@@ -7,8 +7,6 @@ import {
   adaptModelsToSummary,
   chatLayout,
   loadChatState,
-  paidRoutingMock,
-  modelPaymentsMock,
   renderChatPage,
   scrollIntoViewMock,
   setMessageListDimensions,
@@ -195,11 +193,7 @@ describe('ChatPage', () => {
   })
 
   it('keeps a persisted model pick that is unavailable instead of switching to auto', async () => {
-    paidRoutingMock.allowed = true
-    window.localStorage.setItem(
-      'mesh-llm.chat.routing-preferences',
-      JSON.stringify({ model: 'gone-model', freeOnly: true })
-    )
+    window.localStorage.setItem('mesh-llm.chat.routing-preferences', JSON.stringify({ model: 'gone-model' }))
 
     renderChatPage()
 
@@ -207,42 +201,12 @@ describe('ChatPage', () => {
     expect(trigger).toHaveTextContent('gone-model')
     expect(trigger).not.toHaveTextContent('Mesh — automatic')
     expect(screen.getByRole('status')).toHaveTextContent('Picked model unavailable')
-    expect(screen.getByRole('button', { name: 'Free' })).toHaveAttribute('aria-pressed', 'true')
     window.localStorage.removeItem('mesh-llm.chat.routing-preferences')
   })
 
-  it('shows no payment switch when the node cannot pay', () => {
-    paidRoutingMock.allowed = false
-    window.localStorage.setItem('mesh-llm.chat.routing-preferences', JSON.stringify({ model: '', freeOnly: true }))
-
-    renderChatPage()
-
-    expect(screen.queryByRole('button', { name: /^(Free|Paid)$/ })).not.toBeInTheDocument()
-    window.localStorage.removeItem('mesh-llm.chat.routing-preferences')
-  })
-
-  it('persists the free-only toggle', async () => {
+  it('persists the model pick', async () => {
     const user = userEvent.setup()
-    paidRoutingMock.allowed = true
     window.localStorage.removeItem('mesh-llm.chat.routing-preferences')
-
-    renderChatPage()
-
-    await user.click(screen.getByRole('button', { name: 'Free' }))
-    expect(screen.getByRole('button', { name: 'Free' })).toHaveAttribute('aria-pressed', 'true')
-    expect(JSON.parse(window.localStorage.getItem('mesh-llm.chat.routing-preferences') ?? '{}')).toMatchObject({
-      freeOnly: true
-    })
-    window.localStorage.removeItem('mesh-llm.chat.routing-preferences')
-  })
-
-  it('hides paid-only models under Free and shows their price under Paid', async () => {
-    const user = userEvent.setup()
-    paidRoutingMock.allowed = true
-    window.localStorage.setItem('mesh-llm.chat.routing-preferences', JSON.stringify({ model: '', freeOnly: true }))
-    modelPaymentsMock.data = new Map([
-      ['peer-model', { freeAvailable: false, paidAvailable: true, outputMsatPerMillion: 1500 }]
-    ])
     vi.mocked(useModelsQuery).mockReturnValue({
       data: undefined,
       isFetching: false,
@@ -264,13 +228,10 @@ describe('ChatPage', () => {
     renderChatPage({ mode: 'live' })
 
     await user.click(screen.getByRole('combobox', { name: 'Select model' }))
-    expect(screen.queryByRole('option', { name: /peer-model/ })).not.toBeInTheDocument()
-    await user.keyboard('{Escape}')
-
-    await user.click(screen.getByRole('button', { name: 'Paid' }))
-    await user.click(screen.getByRole('combobox', { name: 'Select model' }))
-    expect(screen.getByRole('option', { name: /peer-model/ })).toHaveTextContent('from 1.5k msat/M out')
-    modelPaymentsMock.data = undefined
+    await user.click(screen.getByRole('option', { name: /peer-model/ }))
+    expect(JSON.parse(window.localStorage.getItem('mesh-llm.chat.routing-preferences') ?? '{}')).toMatchObject({
+      model: 'peer-model'
+    })
     window.localStorage.removeItem('mesh-llm.chat.routing-preferences')
   })
 

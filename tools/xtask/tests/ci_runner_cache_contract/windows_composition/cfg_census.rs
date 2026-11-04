@@ -746,18 +746,11 @@ fn every_current_windows_catalog_unit_owner_selects_the_native_planner_row() {
     }
 }
 #[test]
-fn wallet_dependency_closure_preserves_direct_domain_pr_routing_and_full_cadence() {
+fn retired_wallet_placeholder_keeps_direct_domain_pr_routing_and_full_cadence() {
     let plan = plan_for_workflow_owner("mesh-llm-wallet", "pr-ready");
     assert_eq!(
         plan["direct_crates"],
         serde_json::json!(["mesh-llm-wallet"])
-    );
-    assert!(
-        plan["affected_crates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|name| name == "mesh-llm-host-runtime")
     );
     assert!(
         plan["domains"]

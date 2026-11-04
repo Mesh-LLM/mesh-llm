@@ -11,14 +11,8 @@ mod parse_failure;
 mod request_normalize;
 pub(crate) mod request_parse;
 mod response;
-#[cfg(feature = "payments")]
-pub(crate) use response::ServedModelHeadRewrite;
 pub(crate) use response::ServedModelHeaders;
 pub(crate) use response::send_503;
-#[cfg(feature = "payments")]
-pub(crate) use response::send_error;
-#[cfg(feature = "payments")]
-pub(crate) use response::served_outcome_of_raw_response;
 pub(crate) mod response_adapter;
 mod response_quality;
 mod routing_rank;
@@ -27,13 +21,4 @@ mod tool_call_ids;
 pub(crate) mod transport;
 pub(crate) mod virtual_model;
 
-#[cfg(feature = "payments")]
-pub(crate) mod paid_exchange;
-mod payment_routing;
-
-#[cfg(feature = "payments")]
-pub(crate) use response::payment_recovery;
-
-#[cfg(all(test, feature = "payments"))]
-pub(crate) use response::paid::start as test_metered_start;
 pub(crate) mod workload_routing;

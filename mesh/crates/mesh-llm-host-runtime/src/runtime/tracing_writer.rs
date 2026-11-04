@@ -412,7 +412,6 @@ pub(super) fn runtime_tracing_subscriber()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive("mesh_inference=info".parse()?)
-                .add_directive("mesh_wallet=info".parse()?)
                 .add_directive("mesh_llm_host_runtime::mesh::node::ownership=warn".parse()?)
                 .add_directive("nostr_relay_pool=off".parse()?)
                 .add_directive("nostr_sdk=warn".parse()?)

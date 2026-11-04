@@ -9,7 +9,19 @@ use tokio::sync::oneshot;
 
 #[derive(Debug)]
 pub enum PluginMeshEvent {
+    BoundOperation {
+        plugin_id: String,
+        generation: u64,
+        request: mesh_llm_plugin::operation_binding::BoundOperationRequest,
+        response_tx: oneshot::Sender<mesh_llm_plugin::operation_binding::BoundOperationResponse>,
+    },
     /// Host-private identity services use the authenticated connection name.
+    ModelRequirementsWithdraw { plugin_id: String },
+    ModelRequirement {
+        plugin_id: String,
+        request: proto::ModelRequirementRequest,
+        response_tx: oneshot::Sender<Result<proto::ModelRequirementResponse, proto::ErrorResponse>>,
+    },
     IdentityService {
         plugin_id: String,
         request: proto::RpcRequest,

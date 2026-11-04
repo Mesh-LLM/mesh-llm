@@ -133,7 +133,7 @@ jobs:
       matrix:
         batch: ${{ fromJson(inputs.rust_tests_matrix) }}
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60
     defaults:
       run:
         shell: bash
@@ -175,7 +175,7 @@ jobs:
         uses: ./.github/actions/restore-sccache-seed
         with:
           allow_trusted_seed: ${{ needs.runner_policy.outputs.allow_trusted_sccache_seed }}
-          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
+          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-aaa36843-epoch-aaa36843-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
@@ -230,6 +230,16 @@ jobs:
         run: mkdir -p "$UI_DIR/dist" && printf '<html></html>' > "$UI_DIR/dist/index.html"
       - name: Prepare patched llama.cpp for static ABI verification
         run: scripts/prepare-llama.sh pinned
+      - name: Check bindgen-generated FFI bindings freshness
+        env:
+          # Regenerates src/bindings from the prepared headers and fails when
+          # the committed bindings drift. The selftest narrows one consumed
+          # native struct field in a copied header tree and requires the
+          # generated bindings to react, proving the check is a real layout
+          # gate. Requires libclang (LIBCLANG_PATH for non-standard installs).
+          SKIPPY_FFI_BINDGEN: check
+          SKIPPY_FFI_BINDGEN_SELFTEST: "1"
+        run: cargo check --locked -p skippy-ffi
       - name: Download immutable static ABI input
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -324,7 +334,7 @@ jobs:
     runs-on: ${{ needs.runner_policy.outputs.runner }}
     timeout-minutes: 60
     container:
-      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60
     defaults:
       run:
         shell: bash
@@ -366,7 +376,7 @@ jobs:
         uses: ./.github/actions/restore-sccache-seed
         with:
           allow_trusted_seed: ${{ needs.runner_policy.outputs.allow_trusted_sccache_seed }}
-          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
+          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-aaa36843-epoch-aaa36843-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}

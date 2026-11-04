@@ -228,6 +228,7 @@ pub(super) enum SplitParticipantExclusionReason {
     /// the operator has not lifted). Split stages receive the user's content,
     /// so a blocked peer is never a candidate.
     Blocked,
+    RequiresChannel,
     Client,
     MissingVram,
     MissingModelInterest,
@@ -244,6 +245,7 @@ impl SplitParticipantExclusionReason {
     pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::Blocked => "blocked",
+            Self::RequiresChannel => "requires_channel",
             Self::Client => "client",
             Self::MissingVram => "missing_vram",
             Self::MissingModelInterest => "missing_model_interest",
@@ -259,6 +261,7 @@ impl SplitParticipantExclusionReason {
 
     pub(super) const fn recommendation(self) -> &'static str {
         match self {
+            Self::RequiresChannel => "A required plugin channel is unavailable locally",
             Self::Blocked => {
                 "Unblock this peer, or remove the plugin block, to let it join split serving."
             }
@@ -506,9 +509,10 @@ fn split_participant_blocker(
 }
 
 pub(super) const fn split_participant_exclusion_reason_order()
--> [SplitParticipantExclusionReason; 11] {
+-> [SplitParticipantExclusionReason; 12] {
     [
         SplitParticipantExclusionReason::Blocked,
+        SplitParticipantExclusionReason::RequiresChannel,
         SplitParticipantExclusionReason::StageControlUnreachable,
         SplitParticipantExclusionReason::PackageManifestMismatch,
         SplitParticipantExclusionReason::UnverifiedLocalSource,
@@ -547,6 +551,15 @@ pub(super) async fn collect_split_participant_membership(
             excluded.push(SplitParticipantExclusion {
                 node_id: peer.id,
                 reason: SplitParticipantExclusionReason::Blocked,
+            });
+            continue;
+        }
+        if node.model_channels_unavailable(&peer, model_name).await
+            || node.model_channels_unavailable(&peer, model_ref).await
+        {
+            excluded.push(SplitParticipantExclusion {
+                node_id: peer.id,
+                reason: SplitParticipantExclusionReason::RequiresChannel,
             });
             continue;
         }
@@ -629,6 +642,15 @@ pub(super) async fn collect_split_participants(
             excluded.push(SplitParticipantExclusion {
                 node_id: peer.id,
                 reason: SplitParticipantExclusionReason::Blocked,
+            });
+            continue;
+        }
+        if node.model_channels_unavailable(&peer, model_name).await
+            || node.model_channels_unavailable(&peer, model_ref).await
+        {
+            excluded.push(SplitParticipantExclusion {
+                node_id: peer.id,
+                reason: SplitParticipantExclusionReason::RequiresChannel,
             });
             continue;
         }

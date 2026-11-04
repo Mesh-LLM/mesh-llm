@@ -203,6 +203,8 @@ impl Node {
             display_name: Arc::new(Mutex::new(None)),
             owner_attestation: Arc::new(Mutex::new(owner_runtime.owner_attestation)),
             plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
+            model_requirements: Default::default(),
+            unmatched_model_requirements: Default::default(),
             release_attestation: Arc::new(Mutex::new(None)),
             release_attestation_summary: Arc::new(Mutex::new(
                 crate::ReleaseAttestationSummary::default(),
@@ -227,14 +229,11 @@ impl Node {
                 crate::network::peer_blocks::PeerBlocks::for_this_node,
                 |identity| crate::network::peer_blocks::PeerBlocks::load(&identity.state_dir),
             ),
+            route_target_health: Arc::new(std::sync::OnceLock::new()),
             config_revision_tx: {
                 let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);
                 Arc::new(tx)
             },
-            #[cfg(feature = "payments")]
-            payments: Arc::new(tokio::sync::OnceCell::new()),
-            #[cfg(feature = "payments")]
-            payment_recovery: Arc::new(Mutex::new(None)),
             activity_policy_guard: policy.activity,
             public_mesh: policy.public_mesh,
             drain_timeout_secs: policy.drain_timeout_secs,
