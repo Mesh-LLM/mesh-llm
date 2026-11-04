@@ -9077,6 +9077,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "skippy-receipts"
+version = "0.79.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "blake3",
+ "curve25519-dalek 5.0.0",
+ "ed25519-dalek",
+ "half",
+ "hex",
+ "rand 0.10.2",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+]
+
+[[package]]
 name = "skippy-runtime"
 version = "0.79.0"
 dependencies = [
