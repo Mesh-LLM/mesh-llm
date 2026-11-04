@@ -14,8 +14,9 @@ use crate::{
     ModelTensorSourceV1, MtmdBitmap, MtmdContext, MtmdContextParams, MtmdDecoderPos,
     MtmdGenAudioInfo, MtmdHelperBitmapWrapper, MtmdHelperGenAudio, MtmdHelperGenAudioInput,
     MtmdHelperInitOpt, MtmdHelperVideo, MtmdInputChunkType, MtmdInputChunks, MtmdInputText,
-    NativeMtpDraft, NativeRuntimeLoadError, NgramCache, Opaque, RuntimeConfig, SamplingConfig,
-    Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
+    NativeMtpDraft, NativeRuntimeLoadError, NgramCache, Opaque, ReceiptAnchor, ReceiptGlueRequest,
+    ReceiptMemoryFn, ReceiptReplayStep, ReceiptStateFn, ReceiptUbatchFn, RuntimeConfig,
+    SamplingConfig, Session, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn,
     SkippyRuntimeEventReporterV1, StagePlan, StagePlanDescV1, StagePlanProfileDescV1,
     StagePlanStateDescV1, StagePlanStringRefV1, StagePlanValueDescV1, StagePlanValueKind,
     StagePlanner, StagePlannerConfigV1, Status, SystemOneSlot, TensorInfo, TokenLogprobs,
@@ -252,6 +253,24 @@ dynamic_symbols! {
     skippy_session_copy_output_activation_frame(session: *mut Session, token_count: usize, output_desc: *mut ActivationDesc, output_payload: *mut c_void, output_payload_capacity: usize, out_output_payload_bytes: *mut usize, out_error: *mut *mut Error) -> Status;
     skippy_session_last_token_signal(session: *mut Session, out_signal: *mut TokenSignal, out_error: *mut *mut Error) -> Status;
     skippy_session_take_token_logprobs(session: *mut Session, out_entries: *mut TokenLogprobs, capacity: usize, out_count: *mut usize, out_error: *mut *mut Error) -> Status;
+    skippy_model_set_receipt_recorder(model: *mut Model, on_ubatch: ReceiptUbatchFn, on_memory: ReceiptMemoryFn, user_data: *mut c_void, out_error: *mut *mut Error) -> Status;
+    skippy_model_release_receipt_scratch(model: *mut Model, out_error: *mut *mut Error) -> Status;
+    skippy_model_flush_receipt_recorder(model: *mut Model, out_error: *mut *mut Error) -> Status;
+    skippy_model_eval_receipt_glue(model: *mut Model, request: *const ReceiptGlueRequest, on_result: ReceiptUbatchFn, user_data: *mut c_void, out_error: *mut *mut Error) -> Status;
+    skippy_model_eval_receipt_region(model: *mut Model, request: *const ReceiptGlueRequest, on_result: ReceiptUbatchFn, user_data: *mut c_void, out_error: *mut *mut Error) -> Status;
+    skippy_model_eval_receipt_entry(model: *mut Model, tokens: *const i32, pos: *const i32, n_cols: i32, on_result: ReceiptUbatchFn, user_data: *mut c_void, out_error: *mut *mut Error) -> Status;
+    skippy_receipt_runtime_source() -> *const c_char;
+    skippy_receipt_stored_row_error(ggml_type: i32, stored: *const c_void, stored_len: usize, computed: *const f32, n: i64, stored_error: *mut f64, rounding_error: *mut f64, norm: *mut f64, out_error: *mut *mut Error) -> Status;
+    skippy_model_replay_receipt(model: *mut Model, seq: i32, layers: *const i32, n_layers: usize, steps: *const ReceiptReplayStep, n_steps: usize, on_capture: ReceiptUbatchFn, user_data: *mut c_void, out_error: *mut *mut Error) -> Status;
+    skippy_model_replay_receipt_committed(model: *mut Model, seq: i32, layers: *const i32, n_layers: usize, steps: *const ReceiptReplayStep, n_steps: usize, on_capture: ReceiptUbatchFn, user_data: *mut c_void, out_error: *mut *mut Error) -> Status;
+    skippy_model_replay_receipt_anchored(model: *mut Model, seq: i32, layers: *const i32, n_layers: usize, steps: *const ReceiptReplayStep, n_steps: usize, anchors: *const ReceiptAnchor, n_anchors: usize, on_capture: ReceiptUbatchFn, user_data: *mut c_void, out_error: *mut *mut Error) -> Status;
+    skippy_model_seed_receipt_replay(model: *mut Model, seq: i32, cells: *const u32, pos: *const i32, n_seeded: usize, n_cells: u32, out_error: *mut *mut Error) -> Status;
+    skippy_model_read_receipt_rows(model: *mut Model, layer: i32, seq: i32, cells: *const u32, n_cells: usize, on_rows: ReceiptUbatchFn, user_data: *mut c_void, out_error: *mut *mut Error) -> Status;
+    skippy_model_pin_receipt_cells(model: *mut Model, streams: *const u32, cells: *const u32, n_cells: usize, out_error: *mut *mut Error) -> Status;
+    skippy_model_receipt_kv_streams(model: *mut Model, out_streams: *mut u32, out_error: *mut *mut Error) -> Status;
+    skippy_model_set_receipt_state_observer(model: *mut Model, on_state: ReceiptStateFn, user_data: *mut c_void, out_recurrent: *mut bool, out_error: *mut *mut Error) -> Status;
+    skippy_model_arm_receipt_state(model: *mut Model, seq: i32, out_error: *mut *mut Error) -> Status;
+    skippy_model_seed_receipt_state(model: *mut Model, seq: i32, bytes: *const c_void, n_bytes: usize, out_error: *mut *mut Error) -> Status;
     skippy_session_signal_window(session: *mut Session, window_tokens: u32, out_window: *mut GenerationSignalWindow, out_error: *mut *mut Error) -> Status;
     skippy_trim_session(session: *mut Session, token_count: u64, out_error: *mut *mut Error) -> Status;
     skippy_retire_verify_checkpoint(session: *mut Session, token_start: u64, token_count: u64, out_error: *mut *mut Error) -> Status;

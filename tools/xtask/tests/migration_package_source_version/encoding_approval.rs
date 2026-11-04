@@ -44,12 +44,12 @@ const VALID_SOURCES: [(&str, &[u8], &[u8]); 2] = [
     (
         "workspace",
         include_bytes!("../../../../Cargo.toml"),
-        b"0.78.0\n",
+        b"0.79.0\n",
     ),
     (
         "abi",
         include_bytes!("../../../../skippy/crates/skippy-ffi/src/lib.rs"),
-        b"0.1.79\n",
+        b"0.1.81\n",
     ),
 ];
 
