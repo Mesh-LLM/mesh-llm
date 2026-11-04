@@ -1051,6 +1051,7 @@ fn test_probe_fallback_leaves_vram_untouched_on_macos() {
 #[test]
 #[serial(real_collector)]
 fn test_skippy_backend_error_uses_cpu_only_budget_without_legacy_fallback() {
+    skippy_runtime::test_support::require_native_runtime();
     skippy_devices::set_test_gpu_facts_result(Err(anyhow::anyhow!("boom")));
 
     let mut survey = HardwareSurvey::default();
@@ -1074,6 +1075,7 @@ fn test_skippy_backend_error_uses_cpu_only_budget_without_legacy_fallback() {
 #[test]
 #[serial(real_collector)]
 fn test_skippy_backend_empty_result_uses_cpu_only_budget_without_legacy_fallback() {
+    skippy_runtime::test_support::require_native_runtime();
     skippy_devices::set_test_gpu_facts_result(Ok(vec![]));
 
     let mut survey = HardwareSurvey::default();

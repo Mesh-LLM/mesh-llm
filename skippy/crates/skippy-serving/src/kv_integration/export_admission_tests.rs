@@ -29,7 +29,7 @@ fn pre_export_credit_transfers_once_and_releases_on_every_queue_terminal_path() 
             write_through_l3: false,
             l2_promotion_digest: None,
             l3_cost: None,
-            admission_credit: credit,
+            admission: super::RecordAdmission::Credit(credit),
         };
         let queued = AtomicU64::new(0);
         let dropped = AtomicU64::new(0);

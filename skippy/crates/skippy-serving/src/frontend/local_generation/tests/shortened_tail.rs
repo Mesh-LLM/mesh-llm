@@ -1,5 +1,6 @@
 //! Changed-tail follow-ups must reuse a nearby exact recurrent checkpoint.
 use super::*;
+use anyhow::Context;
 
 fn generate_chat_tail(backend: &StageOpenAiBackend, prompt: &[i32]) -> Result<(Vec<i32>, u32)> {
     generate_chat_tail_session(backend, prompt, "shortened-tail")
@@ -107,7 +108,18 @@ fn check_shortened_tail(demote: bool) -> Result<()> {
     let exports = kv
         .exact_state_records_queued
         .load(std::sync::atomic::Ordering::Relaxed);
-    if demote {
+    if kv.resident_recurrent_snapshots {
+        if demote && kv.records_lane_owned_recurrent() {
+            assert!(
+                exports > 0,
+                "evicted lanes must record an exact L1 fallback"
+            );
+        }
+        assert!(
+            kv.radix.lock().unwrap().stats().resident_entries > 0,
+            "idle lane eviction must preserve the shared resident prefix"
+        );
+    } else if demote {
         assert!(
             exports > 0,
             "eviction must offer checkpoints to lower tiers"
@@ -161,7 +173,8 @@ fn resident_hybrid_shortened_tail_preserves_concurrent_lanes() -> Result<()> {
         let prompts: Vec<Vec<i32>> = (0..lanes)
             .map(|lane| (1..=192).map(|token| token + 257 * lane as i32).collect())
             .collect();
-        generate_concurrent_tails(&warm, &prompts)?;
+        generate_concurrent_tails(&warm, &prompts)
+            .with_context(|| format!("initial concurrent tails, c={lanes}"))?;
         let changed: Vec<_> = prompts
             .iter()
             .map(|prompt| {
@@ -170,7 +183,8 @@ fn resident_hybrid_shortened_tail_preserves_concurrent_lanes() -> Result<()> {
                 changed
             })
             .collect();
-        let actual = generate_concurrent_tails(&warm, &changed)?;
+        let actual = generate_concurrent_tails(&warm, &changed)
+            .with_context(|| format!("changed concurrent tails, c={lanes}"))?;
         let (cold, _) = recurrent_test_backend("cold-tails", "cold-tails", 256, (32, 32), 8, 256)?;
         for (index, prompt) in changed.iter().enumerate() {
             assert_eq!(actual[index].1, 128, "c={lanes}, lane={index}");

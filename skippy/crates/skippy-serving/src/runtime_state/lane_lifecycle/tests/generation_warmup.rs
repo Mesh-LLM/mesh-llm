@@ -77,9 +77,12 @@ fn failed_warmup_discards_dirty_session_and_reclaims_native_lane() -> Result<()>
     lane.session.decode_step(token)?;
     assert_eq!(lane.session.token_count(), 1);
     // Exercise failure cleanup with a real, dirty native session. Both decode
-    // and reset errors reach this branch; neither may park the session again.
+    // and reset errors reach this branch with the lane already gone; neither
+    // may park the session again.
+    let index = lane.index;
+    drop(lane);
     let error = runtime
-        .finish_generation_warmup(lane, Err(anyhow::anyhow!("warmup reset failed")), true)
+        .finish_generation_warmup(Err(anyhow::anyhow!("warmup reset failed")), index, true)
         .unwrap_err();
     assert_eq!(error.to_string(), "warmup reset failed");
     assert!(runtime.idle_sessions.is_empty());

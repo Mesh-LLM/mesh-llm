@@ -50,6 +50,7 @@ fn capsules_entry(command: Option<&str>) -> PluginConfigEntry {
         web_ui_enabled: None,
         web_ui_primary_tab: None,
         allow_peer_blocks: None,
+        allow_inference_observation: None,
         openai_exchange_grant: None,
         command: command.map(str::to_string),
         args: Vec::new(),

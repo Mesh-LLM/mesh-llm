@@ -80,6 +80,17 @@ fn download(
     output: &Path,
     log_name: &str,
 ) -> DynResult<PathBuf> {
+    let log = output.join(log_name);
+    if std::env::var("HF_HUB_OFFLINE").as_deref() == Ok("1") {
+        let home = std::env::var_os("HF_HOME").ok_or("offline AgentX requires HF_HOME")?;
+        let path = offline_cached_path(Path::new(&home), repo, revision, file, dataset)?;
+        std::fs::write(
+            log.with_extension("stdout.log"),
+            format!("{}\n", path.display()),
+        )?;
+        std::fs::write(log.with_extension("stderr.log"), b"")?;
+        return Ok(path);
+    }
     let hf = root.join("skippy/evals/agentx/.venv/bin/hf");
     // Standard HF cache resolution reuses the host's blobs/snapshots and writes
     // only missing pins into that same mounted HF_HOME. Never use --local-dir.
@@ -103,7 +114,6 @@ fn download(
             "chat_template*",
         ]));
     }
-    let log = output.join(log_name);
     let mut spec = command::spec(root, hf.to_str().ok_or("hf path")?, &args)?;
     spec.environment.insert(
         "HF_HUB_OFFLINE".into(),
@@ -111,6 +121,70 @@ fn download(
     );
     command::run(&spec, 60, &log)?;
     cached_path(&std::fs::read_to_string(log.with_extension("stdout.log"))?)
+}
+
+fn offline_cached_path(
+    home: &Path,
+    repo: &str,
+    revision: &str,
+    file: &str,
+    dataset: bool,
+) -> DynResult<PathBuf> {
+    if !home.is_absolute()
+        || !revision.bytes().all(|byte| byte.is_ascii_hexdigit())
+        || revision.len() != 40
+        || repo.split('/').count() != 2
+        || repo
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == "..")
+    {
+        return Err("invalid pinned offline Hugging Face model reference".into());
+    }
+    let kind = if dataset { "datasets" } else { "models" };
+    let snapshot = home
+        .join("hub")
+        .join(format!("{kind}--{}", repo.replace('/', "--")))
+        .join("snapshots")
+        .join(revision);
+    if !file.is_empty() {
+        let relative = Path::new(file);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| matches!(component, std::path::Component::ParentDir))
+        {
+            return Err("invalid pinned offline Hugging Face file path".into());
+        }
+        let path = snapshot.join(relative);
+        if path.is_file() {
+            return Ok(path);
+        }
+        return Err(format!(
+            "pinned offline Hugging Face file is missing: {}",
+            path.display()
+        )
+        .into());
+    }
+    // All pinned AgentX models use the Qwen tokenizer bundle. A directory
+    // alone can be a partially downloaded snapshot, so check the common
+    // files the harness needs before accepting a read-only mount.
+    if [
+        "config.json",
+        "merges.txt",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "vocab.json",
+    ]
+    .iter()
+    .all(|name| snapshot.join(name).is_file())
+    {
+        return Ok(snapshot);
+    }
+    Err(format!(
+        "pinned offline tokenizer snapshot is missing: {}",
+        snapshot.display()
+    )
+    .into())
 }
 
 fn cached_path(stdout: &str) -> DynResult<PathBuf> {
@@ -245,5 +319,55 @@ mod tests {
         assert!(cached_path(&format!("{}\n{}", blob.display(), snapshot.display())).is_err());
         assert!(cached_path("relative/model.gguf").is_err());
         assert!(cached_path(cache.path().join("missing").to_str().unwrap()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn offline_snapshot_uses_pinned_read_only_cache_without_refs() {
+        let home = tempfile::tempdir().unwrap();
+        let revision = "851bf6e806efd8d0a36b00ddf55e13ccb7b8cd0a";
+        let snapshot = home
+            .path()
+            .join("hub/models--Qwen--Qwen3.5-4B/snapshots")
+            .join(revision);
+        std::fs::create_dir_all(&snapshot).unwrap();
+        let blob = home.path().join("tokenizer-blob");
+        std::fs::write(&blob, b"tokenizer").unwrap();
+        for name in [
+            "config.json",
+            "merges.txt",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "vocab.json",
+        ] {
+            std::os::unix::fs::symlink(&blob, snapshot.join(name)).unwrap();
+        }
+        assert_eq!(
+            offline_cached_path(home.path(), "Qwen/Qwen3.5-4B", revision, "", false).unwrap(),
+            snapshot
+        );
+        assert!(
+            offline_cached_path(home.path(), "Qwen/Qwen3.5-4B", revision, "../blob", false)
+                .is_err()
+        );
+        std::fs::remove_file(snapshot.join("tokenizer.json")).unwrap();
+        assert!(offline_cached_path(home.path(), "Qwen/Qwen3.5-4B", revision, "", false).is_err());
+        std::fs::create_dir_all(
+            home.path()
+                .join("hub/datasets--some--corpus/snapshots")
+                .join(revision),
+        )
+        .unwrap();
+        let dataset = home
+            .path()
+            .join("hub/datasets--some--corpus/snapshots")
+            .join(revision)
+            .join("traces.jsonl");
+        std::os::unix::fs::symlink(&blob, &dataset).unwrap();
+        assert_eq!(
+            offline_cached_path(home.path(), "some/corpus", revision, "traces.jsonl", true)
+                .unwrap(),
+            dataset
+        );
     }
 }

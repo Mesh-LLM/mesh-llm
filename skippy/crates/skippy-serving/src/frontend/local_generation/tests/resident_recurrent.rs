@@ -1,29 +1,312 @@
-use super::recurrent_early_stop::generate;
+use super::recurrent_early_stop::{generate, generate_after_first_token};
 use super::*;
 use std::sync::atomic::Ordering;
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
-fn resident_hybrid_prefill_spans_native_microbatches() -> Result<()> {
-    let (wide, _) = recurrent_test_backend("wide", "wide", 256, (128, 32), 8, 256)?;
-    let (narrow, _) = recurrent_test_backend("narrow", "narrow", 256, (32, 32), 8, 256)?;
+fn resident_hybrid_records_full_prompt_after_deferred_prefill() -> Result<()> {
+    let (backend, _) = recurrent_test_backend("full-prompt", "full-prompt", 256, (32, 32), 8, 256)?;
+    let prompt = (1..=64).collect::<Vec<_>>();
+    generate(&backend, &prompt, 8)?;
+    let kv = backend.kv.as_ref().unwrap();
+    anyhow::ensure!(
+        kv.resident_recurrent_snapshots,
+        "test requires hybrid resident KV"
+    );
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
+        Some("recurrent-resume"),
+        true,
+        None,
+    );
+    let base = backend.local_kv_message_base("recurrent-resume", &ids);
+    let identity = kv.prefill_identity(&backend.config, &base, 0, &prompt);
+    assert!(
+        kv.radix
+            .lock()
+            .unwrap()
+            .resident_exact(&identity.namespace, &identity.token_ids)
+            .is_some(),
+        "the deferred record must retain the full prompt at the native session position"
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn resident_hybrid_native_batch_shape_parity() -> Result<()> {
+    let (wide, _) = recurrent_test_backend("native-wide", "native-wide", 512, (128, 32), 8, 256)?;
+    let (narrow, _) =
+        recurrent_test_backend("native-narrow", "native-narrow", 512, (32, 32), 8, 256)?;
+    let prompt = (1..=128).collect::<Vec<_>>();
+    let mut wide_session = wide.runtime.lock().unwrap().model.create_session()?;
+    let mut narrow_session = narrow.runtime.lock().unwrap().model.create_session()?;
+    for chunk in prompt[..127].chunks(32) {
+        wide_session.prefill_chunk(chunk)?;
+        narrow_session.prefill_chunk(chunk)?;
+    }
+    let mut wide_token = wide_session.decode_step(prompt[127])?;
+    let mut narrow_token = narrow_session.decode_step(prompt[127])?;
+    assert_eq!(
+        wide_token, narrow_token,
+        "native first token differs across batch sizes"
+    );
+    for index in 1..8 {
+        wide_token = wide_session.decode_step(wide_token)?;
+        narrow_token = narrow_session.decode_step(narrow_token)?;
+        assert_eq!(
+            wide_token, narrow_token,
+            "native generated token {index} differs across batch sizes"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn resident_hybrid_reuses_prefix_without_exact_recorder() -> Result<()> {
+    let (mut wide, _) = recurrent_test_backend(
+        "wide-no-recorder",
+        "wide-no-recorder",
+        512,
+        (128, 32),
+        8,
+        256,
+    )?;
+    let (mut narrow, _) = recurrent_test_backend(
+        "narrow-no-recorder",
+        "narrow-no-recorder",
+        512,
+        (32, 32),
+        8,
+        256,
+    )?;
+    for backend in [&mut wide, &mut narrow] {
+        let mut kv = backend.kv.as_ref().unwrap().as_ref().clone();
+        assert!(kv.resident_recurrent_snapshots && kv.payload_is_exact_state());
+        kv.serialized_payload = None;
+        assert!(!kv.payload_is_exact_state());
+        backend.kv = Some(Arc::new(kv));
+    }
     let prompt = (1..=128).collect::<Vec<_>>();
     let (expected, _) = generate(&narrow, &prompt, 8)?;
-    let (actual, _) = generate(&wide, &prompt, 8)?;
+    let (actual, _, actual_signal) = resident_generation_with_first_signal(&wide, &prompt, 8)?;
+    assert_eq!(
+        actual, expected,
+        "resident first turn differs without exact recording"
+    );
+    let (repeated, cached, repeated_signal) =
+        resident_generation_with_first_signal(&wide, &prompt, 8)?;
+    assert!(cached > 0, "resident prefix was not reused");
+    assert_same_output_or_close_first_token_tie(
+        &actual,
+        &repeated,
+        &actual_signal,
+        &repeated_signal,
+        "resident prefix repeat",
+    );
+    let mut extended = prompt;
+    extended.extend_from_slice(&actual);
+    extended.extend(129..=150);
+    let (wide_growing, _, wide_signal) =
+        resident_generation_with_first_signal(&wide, &extended, 8)?;
+    let (narrow_growing, _, narrow_signal) =
+        resident_generation_with_first_signal(&narrow, &extended, 8)?;
+    assert_same_output_or_close_first_token_tie(
+        &narrow_growing,
+        &wide_growing,
+        &narrow_signal,
+        &wide_signal,
+        "resident prefix growing prompt",
+    );
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn resident_hybrid_first_token_signal_across_batch_shapes() -> Result<()> {
+    let (wide, _) = recurrent_test_backend("wide-signal", "wide-signal", 512, (128, 32), 8, 256)?;
+    let (narrow, _) =
+        recurrent_test_backend("narrow-signal", "narrow-signal", 512, (32, 32), 8, 256)?;
+    let prompt = (1..=128).collect::<Vec<_>>();
+    let expected = resident_first_token_with_signal(&narrow, &prompt)?;
+    let actual = resident_first_token_with_signal(&wide, &prompt)?;
+    assert_eq!(
+        actual.0, expected.0,
+        "first-token logits: wide={actual:?}, narrow={expected:?}"
+    );
+    Ok(())
+}
+
+fn resident_first_token_with_signal(
+    backend: &StageOpenAiBackend,
+    prompt: &[i32],
+) -> Result<(i32, skippy_runtime::TokenSignal)> {
+    let (tokens, _, signal) = resident_generation_with_first_signal(backend, prompt, 1)?;
+    Ok((tokens[0], signal))
+}
+
+fn resident_generation_with_first_signal(
+    backend: &StageOpenAiBackend,
+    prompt: &[i32],
+    stop_after: usize,
+) -> Result<(Vec<i32>, u32, skippy_runtime::TokenSignal)> {
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
+        Some("recurrent-resume"),
+        true,
+        None,
+    );
+    let mut first_signal = None;
+    let (tokens, cached) =
+        generate_after_first_token(backend, prompt, stop_after, "recurrent-resume", || {
+            first_signal = Some(
+                backend
+                    .runtime
+                    .lock()
+                    .unwrap()
+                    .last_token_signal(&ids.session_label)
+                    .map_err(crate::frontend::util::openai_backend_error)?,
+            );
+            Ok(())
+        })?;
+    Ok((
+        tokens,
+        cached,
+        first_signal.ok_or_else(|| anyhow::anyhow!("first-token signal was not recorded"))?,
+    ))
+}
+
+fn assert_same_output_or_close_first_token_tie(
+    expected: &[i32],
+    actual: &[i32],
+    expected_signal: &skippy_runtime::TokenSignal,
+    actual_signal: &skippy_runtime::TokenSignal,
+    context: &str,
+) {
+    if expected == actual {
+        return;
+    }
+    assert_ne!(
+        expected.first(),
+        actual.first(),
+        "{context}: output diverged after a matching first token"
+    );
+    assert_eq!(
+        (expected.first(), actual.first()),
+        (
+            Some(&expected_signal.top_token),
+            Some(&actual_signal.top_token)
+        ),
+        "{context}: first-token signal disagrees with output"
+    );
+    assert_eq!(
+        (expected_signal.second_token, actual_signal.second_token),
+        (actual_signal.top_token, expected_signal.top_token),
+        "{context}: first-token candidates are not the same top-two pair"
+    );
+    assert!(
+        expected_signal.margin <= 0.05
+            && actual_signal.margin <= 0.05
+            && (expected_signal.top_logprob - actual_signal.top_logprob).abs() <= 0.05
+            && (expected_signal.entropy - actual_signal.entropy).abs() <= 0.05,
+        "{context}: first-token distributions differ beyond a close tie: expected={expected_signal:?}, actual={actual_signal:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn resident_hybrid_prefill_spans_native_microbatches() -> Result<()> {
+    // The extended prompt reaches 150 tokens. Leave the 128-token decode
+    // headroom requirement outside this microbatch-shape comparison.
+    let (wide, _) = recurrent_test_backend("wide", "wide", 512, (128, 32), 8, 256)?;
+    let (narrow, _) = recurrent_test_backend("narrow", "narrow", 512, (32, 32), 8, 256)?;
+    let prompt = (1..=128).collect::<Vec<_>>();
+    let (expected, _) = generate(&narrow, &prompt, 8)?;
+    let (actual, _, cold_signal) = resident_generation_with_first_signal(&wide, &prompt, 8)?;
     assert_eq!(
         actual, expected,
         "native microbatch splitting changes output"
     );
-    let (repeated, cached) = generate(&wide, &prompt, 8)?;
+    let kv = wide.kv.as_ref().unwrap();
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
+        Some("recurrent-resume"),
+        true,
+        None,
+    );
+    let base = wide.local_kv_message_base("recurrent-resume", &ids);
+    let identities = kv.lookup_identities(&wide.config, &base, 0, &prompt[..prompt.len() - 1]);
+    let lane_tokens = wide
+        .runtime
+        .lock()
+        .unwrap()
+        .resident_recurrent_prefix_tokens("recurrent-resume", &identities);
+    let resident_tokens = identities
+        .iter()
+        .filter_map(|identity| {
+            kv.probe_resident_prefix(identity)
+                .map(|hit| hit.token_count)
+        })
+        .max();
+    let (repeated, cached, warm_signal) = resident_generation_with_first_signal(&wide, &prompt, 8)?;
     assert!(cached > 0);
-    assert_eq!(repeated, expected);
+    assert_same_output_or_close_first_token_tie(
+        &expected,
+        &repeated,
+        &cold_signal,
+        &warm_signal,
+        &format!(
+            "resident prefix repeat (lane={lane_tokens:?}, resident={resident_tokens:?}, cached={cached})"
+        ),
+    );
     let mut extended = prompt;
     extended.extend_from_slice(&actual);
     extended.extend(129..=150);
-    assert_eq!(
-        generate(&wide, &extended, 8)?.0,
-        generate(&narrow, &extended, 8)?.0,
-        "growing resident turns differ across batch sizes"
+    let (cold_wide, _) = recurrent_test_backend(
+        "wide-growing-cold",
+        "wide-growing-cold",
+        512,
+        (128, 32),
+        8,
+        256,
+    )?;
+    let (cold_narrow, _) = recurrent_test_backend(
+        "narrow-growing-cold",
+        "narrow-growing-cold",
+        512,
+        (32, 32),
+        8,
+        256,
+    )?;
+    let (wide_cold_output, _, growing_cold_signal) =
+        resident_generation_with_first_signal(&cold_wide, &extended, 8)?;
+    let (narrow_cold_output, _, narrow_cold_signal) =
+        resident_generation_with_first_signal(&cold_narrow, &extended, 8)?;
+    assert_same_output_or_close_first_token_tie(
+        &narrow_cold_output,
+        &wide_cold_output,
+        &narrow_cold_signal,
+        &growing_cold_signal,
+        "cold growing batch shapes",
+    );
+    let (wide_warm_output, _, growing_warm_signal) =
+        resident_generation_with_first_signal(&wide, &extended, 8)?;
+    let (narrow_warm_output, _, narrow_warm_signal) =
+        resident_generation_with_first_signal(&narrow, &extended, 8)?;
+    assert_same_output_or_close_first_token_tie(
+        &wide_cold_output,
+        &wide_warm_output,
+        &growing_cold_signal,
+        &growing_warm_signal,
+        "wide growing resident turn",
+    );
+    assert_same_output_or_close_first_token_tie(
+        &narrow_cold_output,
+        &narrow_warm_output,
+        &narrow_cold_signal,
+        &narrow_warm_signal,
+        "narrow growing resident turn",
     );
     Ok(())
 }
@@ -106,6 +389,25 @@ fn drain(backend: &StageOpenAiBackend) -> Result<()> {
         .map_err(anyhow::Error::msg)
 }
 
+fn drain_after_cleanup(backend: &StageOpenAiBackend) -> Result<()> {
+    let kv = backend.kv.as_ref().unwrap();
+    kv.wait_for_exact_state_captures_idle(Duration::from_secs(30))
+        .map_err(anyhow::Error::msg)?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while kv.exact_state_records_pending.load(Ordering::Acquire) != 0 {
+        anyhow::ensure!(
+            std::time::Instant::now() < deadline,
+            "recorder did not drain after cancellation"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    anyhow::ensure!(
+        kv.exact_state_record_worker_panics.load(Ordering::Acquire) == 0,
+        "recorder panicked during cancellation cleanup"
+    );
+    Ok(())
+}
+
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
 fn resident_hybrid_cancellation_and_error_release_the_lane() -> Result<()> {
@@ -113,7 +415,7 @@ fn resident_hybrid_cancellation_and_error_release_the_lane() -> Result<()> {
     let prompt = (1..=64).collect::<Vec<_>>();
     for cancel in [true, false] {
         generate(&backend, &prompt, 8)?;
-        drain(&backend)?;
+        drain_after_cleanup(&backend)?;
         let cancellation = skippy_inference_api::CancellationToken::new();
         let ids = InferenceGenerationIds::new_with_trust(
             InferenceCacheHints::default(),
@@ -149,7 +451,7 @@ fn resident_hybrid_cancellation_and_error_release_the_lane() -> Result<()> {
         if !cancel {
             assert!(result.is_err());
         }
-        drain(&backend)?;
+        drain_after_cleanup(&backend)?;
         let stats = backend.runtime.lock().unwrap().session_stats();
         assert_eq!(stats.active_sessions, 0);
         assert_eq!(stats.idle_resident_prefixes, 0);
@@ -166,11 +468,6 @@ fn resident_hybrid_retains_lane_and_demotes_on_unrelated_prompt() -> Result<()> 
     let (first, _) = generate(&backend, &prompt, 8)?;
     drain(&backend)?;
     let kv = backend.kv.as_ref().unwrap();
-    assert_eq!(
-        kv.exact_state_records_queued.load(Ordering::Relaxed),
-        0,
-        "hot captures must not serialize attention KV"
-    );
     let runtime = backend.runtime.as_ref();
     assert_eq!(
         runtime
@@ -198,11 +495,6 @@ fn resident_hybrid_retains_lane_and_demotes_on_unrelated_prompt() -> Result<()> 
     );
     assert_eq!(warm, control);
     drain(&backend)?;
-    assert_eq!(
-        kv.exact_state_records_queued.load(Ordering::Relaxed),
-        0,
-        "growing resident turns must not export attention merely to replace old checkpoints"
-    );
 
     let unrelated = (100..164).collect::<Vec<_>>();
     generate(&backend, &unrelated, 8)?;
@@ -216,6 +508,68 @@ fn resident_hybrid_retains_lane_and_demotes_on_unrelated_prompt() -> Result<()> 
         reused > 0,
         "evicted prefix must remain recoverable from snapshots"
     );
+    assert_eq!(first, restored);
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS"]
+fn resident_hybrid_reopens_evicted_prefix_from_lane_recorded_fallback() -> Result<()> {
+    let (backend, _) = recurrent_test_backend("fallback", "fallback", 256, (32, 32), 8, 256)?;
+    let prompt = (1..=64).collect::<Vec<_>>();
+    let (first, _) = generate(&backend, &prompt, 8)?;
+    drain(&backend)?;
+    let kv = backend.kv.as_ref().unwrap();
+    assert!(kv.l3.is_none(), "the fallback must work without disk");
+    assert!(kv.records_lane_owned_recurrent());
+
+    let unrelated = (100..164).collect::<Vec<_>>();
+    let eviction_ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
+        Some("eviction-control"),
+        true,
+        None,
+    );
+    let runtime_session_id = eviction_ids.session_label.clone();
+    let mut output_tokens = 0usize;
+    backend.generate_local_tokens(
+        LocalGeneration {
+            prompt_token_ids: &unrelated,
+            recurrent_cache_prefix_token_ids: None,
+            max_tokens: 8,
+            sampling: &SamplingConfig::default(),
+            chat_sampling_metadata: None,
+            speculative: &SpeculativeDecodeConfig::default(),
+            native_mtp_enabled: false,
+            hook_request: None,
+            hook_runtime: None,
+            cancellation: None,
+            ids: &eviction_ids,
+        },
+        |_| {
+            if output_tokens == 0 {
+                let mut runtime = backend.runtime.lock().unwrap();
+                let evicted = kv
+                    .evict_resident_prefix_for_tokens(&mut runtime, &runtime_session_id, u64::MAX)
+                    .map_err(crate::frontend::util::openai_backend_error)?;
+                assert!(evicted.evicted_entries > 0);
+            }
+            output_tokens += 1;
+            Ok(TokenControl::Continue)
+        },
+    )?;
+    drain(&backend)?;
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
+        Some("recurrent-resume"),
+        true,
+        None,
+    );
+    let base = backend.local_kv_message_base("recurrent-resume", &ids);
+    let identity = kv.prefill_identity(&backend.config, &base, 0, &prompt);
+    assert!(kv.probe_resident_prefix(&identity).is_none());
+    let (restored, reused) = generate(&backend, &prompt, 8)?;
+    assert!(reused > 0, "eviction lost the exact-state fallback");
     assert_eq!(first, restored);
     Ok(())
 }

@@ -89,6 +89,8 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
      peer_state| {
         let authenticated_peer = peer_state.load(Ordering::Acquire);
         Box::pin(async move {
+            let observation =
+                super::inference_observation::subscription::ConnectionSubscription::default();
             let result: Result<()> = async {
                 // Started by the first status publication, if any.
                 let mut status_lane = None;
@@ -180,6 +182,20 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                                         })
                                         .push(request_id, request);
                                 }
+                                Some(super::proto::envelope::Payload::SubscribeInferenceObservationRequest(_)) => {
+                                    super::inference_observation::subscription::spawn(
+                                        super::inference_observation::hub(),
+                                        super::inference_observation::subscription::SubscribeRequest {
+                                            plugin_name: plugin_name.clone(),
+                                            generation,
+                                            request_id,
+                                            runtime: runtime.clone(),
+                                            mesh_tx: mesh_tx.clone(),
+                                            outbound_tx: outbound_tx.clone(),
+                                            subscription: observation.clone(),
+                                        },
+                                    );
+                                }
                                 Some(super::proto::envelope::Payload::RpcRequest(request)) => {
                                     forward_plugin_request(
                                         plugin_name.clone(),
@@ -221,6 +237,7 @@ pub(crate) const CONNECTION_LOOP: ConnectionLoopFn =
                 Ok(())
             }
             .await;
+            observation.end(&super::inference_observation::hub());
 
             let was_active_runtime = {
                 let mut runtime = runtime.lock().await;

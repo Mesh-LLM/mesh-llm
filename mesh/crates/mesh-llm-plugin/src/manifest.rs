@@ -40,6 +40,7 @@ pub enum ManifestEntry {
     WebUi(proto::PluginWebUiManifest),
     OpenAiExchangeHook(proto::OpenAiExchangeHookManifest),
     PluginStatus(proto::PluginStatusManifest),
+    InferenceObservation(proto::InferenceObservationManifest),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -90,6 +91,9 @@ impl PluginManifestBuilder {
                 self.manifest.openai_exchange_hook = Some(Box::new(hook))
             }
             ManifestEntry::PluginStatus(status) => self.manifest.plugin_status = Some(status),
+            ManifestEntry::InferenceObservation(observation) => {
+                self.manifest.inference_observation = Some(observation)
+            }
         }
     }
 }

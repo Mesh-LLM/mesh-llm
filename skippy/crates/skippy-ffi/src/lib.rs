@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 74;
+pub const ABI_VERSION_PATCH: u32 = 76;
 
 // Propagate static native archive changes through Cargo dependency metadata so
 // final binaries are relinked after CMake rebuilds llama.cpp.
@@ -90,7 +90,9 @@ pub use state::{
     CACHEGEN_RECORD_F32, CACHEGEN_RECORD_F32_TRANSPOSED, CACHEGEN_RECORD_Q4_0,
     CACHEGEN_RECORD_Q8_0, CACHEGEN_RECORD_V1_ABI_VERSION, CacheGenRecordV1,
     KV_PAGE_CODEC_ISWA_COMPOSITE_V1, KV_PAGE_CODEC_SINGLE_V1, KV_PAGE_FLAG_HAS_K_IDX,
-    KV_PAGE_FLAG_V_TRANSPOSED, KvPageComponentDesc, KvPageDesc,
+    KV_PAGE_FLAG_V_TRANSPOSED, KvPageComponentDesc, KvPageDesc, KvPageSpan,
+    MEMORY_CACHE_FULL_STATE, MEMORY_CACHE_HOST_VISIBLE_KV, MEMORY_CACHE_KV_RECURRENT,
+    MEMORY_CACHE_RESIDENT, MEMORY_CACHE_RESIDENT_KV_RECURRENT,
 };
 
 #[cfg(not(feature = "dynamic-runtime"))]
@@ -129,11 +131,12 @@ pub use dynamic::{
     skippy_decode_step_frame_sampled_mtp, skippy_decode_step_sampled,
     skippy_decode_step_sampled_mtp, skippy_decode_step_sampled_mtp_fn, skippy_detokenize,
     skippy_error_free, skippy_export_full_state, skippy_export_kv_page,
-    skippy_export_recurrent_cache_state, skippy_export_recurrent_state, skippy_export_state,
-    skippy_import_cachegen_kv_page_v1, skippy_import_full_state, skippy_import_kv_page,
-    skippy_import_recurrent_cache_state, skippy_import_recurrent_state, skippy_import_state,
-    skippy_iteration_batch_sampled, skippy_laya_model_free, skippy_laya_model_info_v1,
-    skippy_laya_model_memory_v1, skippy_laya_model_open, skippy_laya_read, skippy_laya_tokenize,
+    skippy_export_kv_page_spans, skippy_export_recurrent_cache_state,
+    skippy_export_recurrent_state, skippy_export_state, skippy_import_cachegen_kv_page_v1,
+    skippy_import_full_state, skippy_import_kv_page, skippy_import_recurrent_cache_state,
+    skippy_import_recurrent_state, skippy_import_state, skippy_iteration_batch_sampled,
+    skippy_laya_model_free, skippy_laya_model_info_v1, skippy_laya_model_memory_v1,
+    skippy_laya_model_open, skippy_laya_read, skippy_laya_tokenize,
     skippy_model_attach_mtp_draft_model_fn, skippy_model_execution_epoch, skippy_model_free,
     skippy_model_info_free, skippy_model_info_open, skippy_model_info_tensor_at,
     skippy_model_info_tensor_count, skippy_model_input_activation_boundary,
@@ -196,11 +199,12 @@ pub use static_bindings::{
     skippy_decode_step_frame_sampled, skippy_decode_step_frame_sampled_mtp,
     skippy_decode_step_sampled, skippy_decode_step_sampled_mtp, skippy_detokenize,
     skippy_error_free, skippy_export_full_state, skippy_export_kv_page,
-    skippy_export_recurrent_cache_state, skippy_export_recurrent_state, skippy_export_state,
-    skippy_import_cachegen_kv_page_v1, skippy_import_full_state, skippy_import_kv_page,
-    skippy_import_recurrent_cache_state, skippy_import_recurrent_state, skippy_import_state,
-    skippy_iteration_batch_sampled, skippy_laya_model_free, skippy_laya_model_info_v1,
-    skippy_laya_model_memory_v1, skippy_laya_model_open, skippy_laya_read, skippy_laya_tokenize,
+    skippy_export_kv_page_spans, skippy_export_recurrent_cache_state,
+    skippy_export_recurrent_state, skippy_export_state, skippy_import_cachegen_kv_page_v1,
+    skippy_import_full_state, skippy_import_kv_page, skippy_import_recurrent_cache_state,
+    skippy_import_recurrent_state, skippy_import_state, skippy_iteration_batch_sampled,
+    skippy_laya_model_free, skippy_laya_model_info_v1, skippy_laya_model_memory_v1,
+    skippy_laya_model_open, skippy_laya_read, skippy_laya_tokenize,
     skippy_model_attach_mtp_draft_model, skippy_model_execution_epoch, skippy_model_free,
     skippy_model_info_free, skippy_model_info_open, skippy_model_info_tensor_at,
     skippy_model_info_tensor_count, skippy_model_input_activation_boundary,

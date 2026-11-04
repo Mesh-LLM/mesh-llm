@@ -355,11 +355,13 @@ impl L3CacheManager {
         candidate: EntryKey,
         growth_bytes: u64,
     ) -> Result<bool> {
-        let usage = self.inner.store.usage()?.used_bytes;
         let budget = self.inner.store.limits().budget_bytes;
         if budget == 0 {
             return Ok(true);
         }
+        // Admission needs physical bytes, not the manifest/segment inventory:
+        // parsing that inventory here makes every spill scale with the store.
+        let usage = self.inner.store.managed_usage_bytes()?;
         let bytes_to_free = usage.saturating_add(growth_bytes).saturating_sub(budget);
         if bytes_to_free == 0 {
             return Ok(true);
@@ -699,6 +701,23 @@ mod tests {
 
         assert_eq!(admitted, 1, "two stages reserved the same bytes");
         assert_eq!(manager.usage().unwrap().reserved_inflight_bytes, 0);
+    }
+
+    #[test]
+    fn write_admission_uses_byte_accounting_without_reading_inventory() {
+        for budget in [0, 1_000_000] {
+            let root = temp_root("admission-without-inventory");
+            let manager = L3CacheManager::acquire(&root, StoreLimits::new(budget, 0)).unwrap();
+            manager.store().managed_usage_bytes().unwrap();
+            let manifests = root.join("manifests");
+            fs::rename(&manifests, root.join("saved-manifests")).unwrap();
+            fs::write(&manifests, b"inventory unavailable").unwrap();
+
+            assert!(manager.benefit_prepare_write(0, 1).unwrap());
+            assert!(manager.usage().is_err());
+            drop(manager);
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[test]

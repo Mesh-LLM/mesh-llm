@@ -1,0 +1,182 @@
+From a300028d26b3bfe9b0dca0d3f9d98525efd13e53 Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Wed, 28 Oct 2026 15:25:29 +1100
+Subject: [PATCH] feat(skippy): lend hybrid attention cells to resident prefix
+ sequences
+
+The resident prefix cache refused recurrent memory outright, because a
+cache sequence made with seq_cp carries only attention cells and a hybrid
+model's recurrent state cannot be shared by tagging. That left hybrids
+copying their attention KV out on every lane switch.
+
+Report SKIPPY_MEMORY_CACHE_RESIDENT_KV_RECURRENT for hybrid memory whose
+attention cache is one unified stream (both halves, for interleaved
+caches), and resolve the resident-prefix memory to that attention half.
+save_prefix / restore_prefix / drop then tag attention cells in and out
+of cache sequences without copying; the recurrent state is the caller's
+snapshot, taken with skippy_export_recurrent_cache_state at the boundary
+and restored with skippy_import_recurrent_cache_state, which allocates a
+private recurrent cell for the restoring sequence. Cache sequence ids sit
+above n_seq_max, which the unified attention cache allows and the
+recurrent memory never sees. A pure recurrent memory still has nothing
+to lend and stays unsupported.
+
+Graph admission leaves the bit alone for recurrent state effects; a
+derived persistent effect still clears everything but full state.
+
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWeZ2oS1Nk7FaPpri4e
+---
+ include/skippy/state.h      |  8 ++++++++
+ src/llama-kv-cache.cpp      |  4 ++++
+ src/llama-kv-cache.h        |  4 ++++
+ src/skippy/state.cpp        | 11 +++++++++--
+ src/skippy/state_memory.cpp | 33 +++++++++++++++++++++++++++++++--
+ src/skippy/state_memory.h   |  2 ++
+ 6 files changed, 58 insertions(+), 4 deletions(-)
+
+diff --git a/include/skippy/state.h b/include/skippy/state.h
+index 6edcb4089..643ce276b 100644
+--- a/include/skippy/state.h
++++ b/include/skippy/state.h
+@@ -23,6 +23,14 @@ enum skippy_memory_cache_capability {
+      *  its name: unified memory sets it today; a discrete backend sets it the
+      *  day it places cells in mapped or managed memory. */
+     SKIPPY_MEMORY_CACHE_HOST_VISIBLE_KV = 1 << 3,
++    /** Hybrid memory whose attention cells can be shared between sequences
++     *  (one unified stream). A resident prefix is then the attention cells
++     *  tagged into a cache sequence plus a recurrent snapshot the caller
++     *  keeps; skippy_session_save_prefix / skippy_session_restore_prefix
++     *  act on the attention cache only, and the recurrent state travels
++     *  through skippy_export_recurrent_cache_state /
++     *  skippy_import_recurrent_cache_state. */
++    SKIPPY_MEMORY_CACHE_RESIDENT_KV_RECURRENT = 1 << 4,
+ };
+ 
+ /** @brief Returns complete cache representations admitted by the built graph and loaded memory.
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index 9982ad978..0324d13d9 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -1901,6 +1901,10 @@ bool llama_kv_cache::stage_kv_page_host_visible() const {
+     return !layers.empty();
+ }
+ 
++bool llama_kv_cache::stage_shares_cells() const {
++    return v_cells.size() == 1;
++}
++
+ bool llama_kv_cache::stage_export_kv_page_spans(
+         llama_seq_id seq_id,
+         int32_t layer_start,
+diff --git a/src/llama-kv-cache.h b/src/llama-kv-cache.h
+index 915ff6dc4..d2b2f282f 100644
+--- a/src/llama-kv-cache.h
++++ b/src/llama-kv-cache.h
+@@ -233,6 +233,10 @@ public:
+     // Every K/V/k_idx stream tensor lives in a host-addressable backend buffer.
+     bool stage_kv_page_host_visible() const;
+ 
++    // One unified stream: seq_cp shares cells by tagging, so prefixes can be
++    // made resident for other sequences without copying.
++    bool stage_shares_cells() const;
++
+     bool stage_import_kv_page(
+             llama_seq_id seq_id,
+             const skippy_kv_page_desc & desc,
+diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
+index af7af0670..f5886ac6c 100644
+--- a/src/skippy/state.cpp
++++ b/src/skippy/state.cpp
+@@ -899,8 +899,15 @@ static enum skippy_status skippy_get_resident_prefix_memory(
+         return out_error != nullptr && *out_error != nullptr ? (*out_error)->status : SKIPPY_STATUS_RUNTIME_ERROR;
+     }
+     if (recurrent != nullptr) {
+-        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "resident prefix cache is not enabled for recurrent memory");
+-        return SKIPPY_STATUS_UNSUPPORTED;
++        // A hybrid lends only its attention cells; the recurrent state is the
++        // caller's snapshot. A pure recurrent memory has nothing to lend.
++        llama_memory_t attention = skippy_memory_resident_attention(memory);
++        if (attention == nullptr) {
++            skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "resident prefix cache is not enabled for recurrent memory");
++            return SKIPPY_STATUS_UNSUPPORTED;
++        }
++        *out_memory = attention;
++        return SKIPPY_STATUS_OK;
+     }
+ 
+     *out_memory = memory;
+diff --git a/src/skippy/state_memory.cpp b/src/skippy/state_memory.cpp
+index de5bae9ed..3ac00cf68 100644
+--- a/src/skippy/state_memory.cpp
++++ b/src/skippy/state_memory.cpp
+@@ -84,6 +84,34 @@ uint32_t skippy_memory_host_visible_kv(llama_memory_t memory) {
+     return 0;
+ }
+ 
++// A hybrid memory can lend its attention cells to a cache sequence when the
++// attention cache is one unified stream. The recurrent half never shares; the
++// caller snapshots it. Both halves of an interleaved cache must share.
++uint32_t skippy_memory_resident_kv_recurrent(llama_memory_t memory) {
++    if (!skippy_memory_recurrent_adapter(memory)) {
++        return 0;
++    }
++    if (auto * iswa = skippy_memory_iswa_adapter(memory)) {
++        return iswa->get_base()->stage_shares_cells() && iswa->get_swa()->stage_shares_cells()
++                ? SKIPPY_MEMORY_CACHE_RESIDENT_KV_RECURRENT : 0;
++    }
++    if (auto * kv = skippy_memory_kv_adapter(memory)) {
++        return kv->stage_shares_cells() ? SKIPPY_MEMORY_CACHE_RESIDENT_KV_RECURRENT : 0;
++    }
++    return 0;
++}
++
++// The attention half of a hybrid memory, for resident prefix operations.
++llama_memory_t skippy_memory_resident_attention(llama_memory_t memory) {
++    if (!(skippy_memory_cache_capabilities(memory) & SKIPPY_MEMORY_CACHE_RESIDENT_KV_RECURRENT)) {
++        return nullptr;
++    }
++    if (auto * iswa = skippy_memory_iswa_adapter(memory)) {
++        return iswa;
++    }
++    return skippy_memory_kv_adapter(memory);
++}
++
+ uint32_t skippy_memory_cache_capabilities(llama_memory_t memory) {
+     if (!memory) {
+         return 0;
+@@ -103,7 +131,8 @@ uint32_t skippy_memory_cache_capabilities(llama_memory_t memory) {
+     if (type == typeid(llama_memory_hybrid) || type == typeid(llama_memory_hybrid_iswa)) {
+         return skippy_memory_recurrent_adapter(memory) &&
+                 (skippy_memory_kv_adapter(memory) || skippy_memory_iswa_adapter(memory))
+-                ? SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE | skippy_memory_host_visible_kv(memory)
++                ? SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE |
++                        skippy_memory_host_visible_kv(memory) | skippy_memory_resident_kv_recurrent(memory)
+                 : SKIPPY_MEMORY_CACHE_FULL_STATE;
+     }
+     // DSA/MSA memories include an indexer tier. Until a real-model resident
+@@ -129,7 +158,7 @@ uint32_t skippy_graph_cache_capabilities(const llm_graph_result & result) {
+     // A phase with no persistent effects adds no cache restrictions. It must
+     // not be confused with failed graph admission or unexported context state.
+     uint32_t supported = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT |
+-            SKIPPY_MEMORY_CACHE_FULL_STATE;
++            SKIPPY_MEMORY_CACHE_FULL_STATE | SKIPPY_MEMORY_CACHE_RESIDENT_KV_RECURRENT;
+     for (const auto & effect : effects) {
+         switch (effect.kind) {
+             case skippy_state_kind::kv_key:
+diff --git a/src/skippy/state_memory.h b/src/skippy/state_memory.h
+index 4696a894a..d50970b88 100644
+--- a/src/skippy/state_memory.h
++++ b/src/skippy/state_memory.h
+@@ -14,6 +14,8 @@ llama_kv_cache_iswa * skippy_memory_iswa_adapter(llama_memory_t memory);
+ llama_memory_recurrent * skippy_memory_recurrent_adapter(llama_memory_t memory);
+ uint32_t skippy_memory_cache_capabilities(llama_memory_t memory);
+ uint32_t skippy_memory_host_visible_kv(llama_memory_t memory);
++uint32_t skippy_memory_resident_kv_recurrent(llama_memory_t memory);
++llama_memory_t skippy_memory_resident_attention(llama_memory_t memory);
+ uint32_t skippy_graph_cache_capabilities(const llm_graph_result & result);
+ 
+ struct skippy_session;
+-- 
+2.43.0
+

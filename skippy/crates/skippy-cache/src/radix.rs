@@ -491,6 +491,57 @@ impl<R: Clone, E> UnifiedRadixCache<R, E> {
         })
     }
 
+    /// Like [`Self::peek_resident`], but only an entry whose stored tokens
+    /// are wholly contained in `tokens` qualifies, so `matched_tokens` always
+    /// equals the stored length. For a resident entry that carries state
+    /// valid only at its own boundary (a hybrid model's recurrent snapshot),
+    /// a sliced match would restore attention for a position whose
+    /// recurrent state nobody holds.
+    pub fn peek_resident_contained(
+        &self,
+        namespace: &str,
+        tokens: &[i32],
+    ) -> Option<RadixMatch<R>> {
+        let root = self.roots.get(namespace)?;
+        let stored_tokens = resident_contained_prefix(root, tokens)?;
+        let entry = node_at(root, &stored_tokens)?
+            .components
+            .resident
+            .as_ref()?;
+        Some(RadixMatch {
+            matched_tokens: stored_tokens.len(),
+            stored_tokens,
+            logical_bytes: entry.logical_bytes,
+            active_refs: entry.active_refs,
+            value: entry.value.clone(),
+        })
+    }
+
+    /// [`Self::acquire_resident`] restricted the way
+    /// [`Self::peek_resident_contained`] is.
+    pub fn acquire_resident_contained(
+        &mut self,
+        namespace: &str,
+        tokens: &[i32],
+    ) -> Option<RadixMatch<R>> {
+        self.clock = self.clock.saturating_add(1);
+        let root = self.roots.get_mut(namespace)?;
+        let stored_tokens = resident_contained_prefix(root, tokens)?;
+        let entry = node_at_mut(root, &stored_tokens)?
+            .components
+            .resident
+            .as_mut()?;
+        entry.last_used = self.clock;
+        entry.active_refs = entry.active_refs.saturating_add(1);
+        Some(RadixMatch {
+            matched_tokens: stored_tokens.len(),
+            stored_tokens,
+            logical_bytes: entry.logical_bytes,
+            active_refs: entry.active_refs,
+            value: entry.value.clone(),
+        })
+    }
+
     pub fn acquire_resident(&mut self, namespace: &str, tokens: &[i32]) -> Option<RadixMatch<R>> {
         self.clock = self.clock.saturating_add(1);
         let root = self.roots.get_mut(namespace)?;
@@ -802,6 +853,34 @@ fn resident_backing_prefix<R, E>(
         best = Some((consumed, stored_tokens));
     }
     best.filter(|(matched, _)| *matched > 0)
+}
+
+/// The deepest resident entry whose stored tokens are a prefix of `tokens`.
+/// No slicing: a node reached only part-way along its edge, or any
+/// descendant past the query, does not count.
+fn resident_contained_prefix<R, E>(root: &RadixNode<R, E>, tokens: &[i32]) -> Option<Vec<i32>> {
+    let mut node = root;
+    let mut remaining = tokens;
+    let mut path = Vec::new();
+    let mut best = None;
+
+    while let Some(first) = remaining.first() {
+        let Some(child) = node.children.get(first) else {
+            break;
+        };
+        let common = common_prefix_len(&child.edge, remaining);
+        if common < child.edge.len() {
+            break;
+        }
+        remaining = &remaining[common..];
+        path.extend_from_slice(&child.edge);
+        node = child;
+        if node.components.resident.is_some() {
+            best = Some(path.clone());
+        }
+    }
+
+    best.filter(|stored| !stored.is_empty())
 }
 
 fn nearest_resident_descendant<R, E>(
@@ -1247,6 +1326,46 @@ mod tests {
             .expect("shorter query resident hit");
         assert_eq!(shorter.matched_tokens, 2);
         assert_eq!(shorter.stored_tokens, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn contained_resident_lookup_never_slices_an_entry() {
+        let mut cache = UnifiedRadixCache::<&str, &str>::new();
+        cache
+            .insert_resident("model-a", &[1, 2], 20, "boundary")
+            .unwrap();
+        cache
+            .insert_resident("model-a", &[1, 2, 3, 4], 40, "long")
+            .unwrap();
+
+        // Slicing lookup reuses the long entry for a query that diverges
+        // inside it; the contained lookup falls back to the boundary that is
+        // wholly inside the query.
+        assert_eq!(
+            cache.peek_resident("model-a", &[1, 2, 3, 9]).unwrap().value,
+            "long"
+        );
+        let contained = cache
+            .peek_resident_contained("model-a", &[1, 2, 3, 9])
+            .expect("the shorter boundary is contained");
+        assert_eq!(contained.value, "boundary");
+        assert_eq!(contained.matched_tokens, 2);
+        assert_eq!(contained.stored_tokens, vec![1, 2]);
+
+        // A query shorter than every entry is a miss, where the slicing
+        // lookup would hand back the long entry.
+        assert!(cache.peek_resident("model-a", &[1]).is_some());
+        assert!(cache.peek_resident_contained("model-a", &[1]).is_none());
+
+        // A query covering an entry exactly, or extending past it, matches
+        // the deepest contained entry with its full stored length.
+        let exact = cache
+            .acquire_resident_contained("model-a", &[1, 2, 3, 4, 5])
+            .expect("the long entry is contained");
+        assert_eq!(exact.value, "long");
+        assert_eq!(exact.matched_tokens, 4);
+        assert_eq!(exact.active_refs, 1);
+        assert!(cache.release_resident("model-a", &[1, 2, 3, 4]));
     }
 
     #[test]

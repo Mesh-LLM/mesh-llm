@@ -5,10 +5,11 @@ use skippy_cache::cachegen::archive::{
     CacheGenArchive, ComponentLayout, PageLayout, RecordKind, ValidatedArchive, ValueType,
     decode_page, encode_page, validate_archive,
 };
-use skippy_ffi::{CacheGenRecordV1, KvPageDesc as RawKvPageDesc};
+use skippy_ffi::{CacheGenRecordV1, KvPageDesc as RawKvPageDesc, KvPageSpan as RawKvPageSpan};
 
 use crate::error::{ensure_ok, free_error};
 use crate::session::StageSession;
+use crate::types::{KvPageSpan, KvPageSpans};
 use crate::{
     GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_Q4_0, GGML_TYPE_Q8_0, KV_PAGE_FLAG_V_TRANSPOSED,
 };
@@ -344,6 +345,81 @@ impl StageSession {
             desc: desc.into(),
             payload,
         })
+    }
+
+    /// Describe a page as spans into this session's own cells, without a
+    /// copy. `Ok(None)` means the loaded memory is not host visible, so the
+    /// caller falls back to `export_kv_page`. See [`KvPageSpans`] for the
+    /// validity window the spans carry.
+    pub fn kv_page_spans(
+        &mut self,
+        layer_start: i32,
+        layer_end: i32,
+        token_start: u64,
+        token_count: u64,
+    ) -> Result<Option<KvPageSpans>> {
+        let mut desc = RawKvPageDesc::default();
+        let mut count = 0usize;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_export_kv_page_spans(
+                self.raw,
+                layer_start,
+                layer_end,
+                token_start,
+                token_count,
+                &mut desc,
+                ptr::null_mut(),
+                0,
+                &mut count,
+                &mut error,
+            )
+        };
+        match status {
+            Status::Unsupported => {
+                free_error(error);
+                return Ok(None);
+            }
+            Status::BufferTooSmall | Status::Ok => free_error(error),
+            _ => ensure_ok(status, error)?,
+        }
+
+        let mut raw_spans = vec![RawKvPageSpan::default(); count];
+        let mut written = 0usize;
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_export_kv_page_spans(
+                self.raw,
+                layer_start,
+                layer_end,
+                token_start,
+                token_count,
+                &mut desc,
+                raw_spans.as_mut_ptr(),
+                raw_spans.len(),
+                &mut written,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        raw_spans.truncate(written);
+        let spans = KvPageSpans {
+            desc: desc.into(),
+            spans: raw_spans
+                .iter()
+                .map(|span| KvPageSpan {
+                    data: span.data.cast(),
+                    bytes: span.bytes,
+                })
+                .collect(),
+        };
+        ensure!(
+            spans.byte_len() as u64 == spans.desc.payload_bytes,
+            "KV page spans cover {} bytes but the descriptor declares {}",
+            spans.byte_len(),
+            spans.desc.payload_bytes
+        );
+        Ok(Some(spans))
     }
 
     pub fn export_kv_page_into(

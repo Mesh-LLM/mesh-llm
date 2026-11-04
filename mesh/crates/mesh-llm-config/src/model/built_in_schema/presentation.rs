@@ -914,6 +914,15 @@ fn model_and_plugin_presentation(rendered: &str) -> Option<SettingPresentation> 
             )
             .hint("toggle"),
         ),
+        "plugin.<plugin-name>.allow_inference_observation" => Some(
+            sp(
+                "Local inference observation",
+                "Let the plugin follow what this node executes: requests, timing and token counts, never prompts or answers. Off unless turned on.",
+                PLUGIN_HOST_CATEGORY,
+                18,
+            )
+            .hint("toggle"),
+        ),
         "plugin.<plugin-name>.url" => Some(
             sp(
                 "Base URL",
