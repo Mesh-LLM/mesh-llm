@@ -225,6 +225,60 @@ fn stage_transport_is_limited_to_topology_participants() {
     ));
 }
 
+#[test]
+fn stage_transport_edge_check_rejects_non_predecessor_participants() {
+    // Three-stage topology: the owner of a later stage is an admitted run
+    // participant but holds no transport edge into the middle stage.
+    let stage0 = make_test_endpoint_id(0xb1);
+    let stage1 = make_test_endpoint_id(0xb2);
+    let stage2 = make_test_endpoint_id(0xb3);
+    let assignment = |stage_id: &str, stage_index: u32, node_id: EndpointId| StageAssignment {
+        stage_id: stage_id.to_string(),
+        stage_index,
+        node_id,
+        layer_start: stage_index,
+        layer_end: stage_index + 1,
+        endpoint: StageEndpoint {
+            bind_addr: String::new(),
+        },
+    };
+    let topology = StageTopologyInstance {
+        topology_id: "topology-b".to_string(),
+        run_id: "run-b".to_string(),
+        model_id: "model-b".to_string(),
+        package_ref: String::new(),
+        manifest_sha256: String::new(),
+        admissions: Default::default(),
+        stages: vec![
+            assignment("stage-0", 0, stage0),
+            assignment("stage-1", 1, stage1),
+            assignment("stage-2", 2, stage2),
+        ],
+    };
+    let allowed = |requester: EndpointId, stage_id: &str| {
+        stage_transport_allowed_by_topology(
+            std::slice::from_ref(&topology),
+            requester,
+            &skippy_protocol::proto::stage::StageTransportOpen {
+                r#gen: skippy_protocol::STAGE_PROTOCOL_GENERATION,
+                requester_id: requester.as_bytes().to_vec(),
+                topology_id: "topology-b".to_string(),
+                run_id: "run-b".to_string(),
+                stage_id: stage_id.to_string(),
+            },
+        )
+    };
+    // The assigned predecessor (coordinator) and the final stage's return
+    // edge into stage 0 are the only edges into each stage.
+    assert!(allowed(stage0, "stage-1"));
+    assert!(allowed(stage1, "stage-2"));
+    assert!(allowed(stage2, "stage-0"));
+    // A participant without an edge into the target stage is rejected.
+    assert!(!allowed(stage2, "stage-1"));
+    assert!(!allowed(stage0, "stage-2"));
+    assert!(!allowed(stage1, "stage-1"));
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn artifact_transfer_stream_uses_mesh_subprotocol_and_rejects_dedicated_alpn() -> Result<()> {
@@ -859,6 +913,36 @@ async fn stage_transport_bridge_publish_aborts_handle_when_reservation_was_stopp
 }
 
 #[tokio::test]
+async fn non_coordinator_stop_of_absent_stage_preserves_transport_bridge() -> Result<()> {
+    let node = make_test_node(super::NodeRole::Worker).await?;
+    let key = stage_runtime_status_key("absent-topology", "absent-run", "absent-stage");
+    let owner = node.reserve_stage_transport_bridge_for_test(key.clone()).await;
+    let handle = tokio::spawn(std::future::pending::<()>());
+    assert!(node.publish_stage_transport_bridge(key.clone(), owner, handle).await);
+    let control = crate::inference::skippy::spawn_stage_control_loop(Default::default());
+    *node.stage_control_tx.lock().await = Some(control.sender());
+
+    node.authorize_resolve_and_execute_stage_control(
+        make_test_endpoint_id(0xD1),
+        "Stop",
+        crate::inference::skippy::StageControlRequest::Stop(
+            crate::inference::skippy::StageStopRequest {
+                topology_id: "absent-topology".into(),
+                run_id: "absent-run".into(),
+                stage_id: "absent-stage".into(),
+                coordinator_term: 1,
+                shutdown_generation: 1,
+            },
+        ),
+    ).await?;
+
+    assert!(node.stage_transport_bridge_is_running(&key).await);
+    node.stop_stage_transport_bridge("absent-topology", "absent-run", "absent-stage").await;
+    control.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
 async fn stage_transport_bridge_cleanup_removes_only_owning_reservation() -> Result<()> {
     let node = make_test_node(super::NodeRole::Worker).await?;
     let key = stage_runtime_status_key("topology-cleanup", "run-cleanup", "stage-cleanup");
@@ -955,4 +1039,241 @@ fn partial_artifact_guard_preserves_disarmed_installed_file() {
     }
 
     assert!(path.exists());
+}
+
+// #2207: the inbound stage transport tunnel must authorize the authenticated
+// peer against the exact requested edge of the active topology before
+// bridging raw bytes to the local binary listener.
+
+/// A local TCP "binary listener" that echoes every received chunk and
+/// records them in order. Accepts concurrent connections the way a stage
+/// serving socket does: each bridged stage transport becomes its own
+/// connection.
+async fn spawn_stage_echo_listener() -> (String, tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bind_addr = listener.local_addr().unwrap().to_string();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return;
+            };
+            let tx = tx.clone();
+            tokio::spawn(async move {
+                stream.set_nodelay(true).unwrap();
+                let mut chunk = [0u8; 4096];
+                while let Ok(n) = stream.read(&mut chunk).await {
+                    if n == 0 {
+                        break;
+                    }
+                    let taken = chunk[..n].to_vec();
+                    if stream.write_all(&taken).await.is_err() || tx.send(taken).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    (bind_addr, rx)
+}
+
+/// Wait until `expected` has been received by the binary listener, or fail
+/// with `label` after the deadline.
+async fn wait_for_listener_bytes(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>,
+    expected: &[u8],
+    label: &str,
+) {
+    let mut seen = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while seen.len() < expected.len() && std::time::Instant::now() < deadline {
+        match tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await {
+            Ok(Some(chunk)) => seen.extend_from_slice(&chunk),
+            Ok(None) | Err(_) => break,
+        }
+    }
+    let reached = seen.as_slice().windows(expected.len()).any(|w| w == expected);
+    assert!(
+        reached,
+        "{label}: binary listener never received the probe bytes (saw {seen:?})"
+    );
+}
+
+async fn probe_stage_transport(
+    opener: &Node,
+    target: EndpointId,
+    stage_id: &str,
+    probe: &[u8],
+) -> Option<Vec<u8>> {
+    let (mut send, mut recv) = opener
+        .open_stage_transport_stream(target, "topology-edge", "run-edge", stage_id)
+        .await
+        .ok()?;
+    if send.write_all(probe).await.is_err() {
+        return None;
+    }
+    let _ = send.finish();
+    let mut echoed = Vec::new();
+    let mut buf = [0u8; 4096];
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        while echoed.len() < probe.len() {
+            match recv.read(&mut buf).await {
+                Ok(Some(0)) | Ok(None) => break,
+                Ok(Some(n)) => echoed.extend_from_slice(&buf[..n]),
+                Err(_) => break,
+            }
+        }
+    })
+    .await;
+    Some(echoed)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[serial]
+async fn stage_transport_only_admits_assigned_edges_of_the_target_stage() -> Result<()> {
+    use base64::Engine as _;
+    use std::collections::HashMap;
+    use std::net::{IpAddr, Ipv4Addr};
+
+    // The victim hosts stage-1; the coordinator hosts stage-0; the intruder
+    // hosts the final stage-2 and knows the current stage identifiers.
+    let relay_urls = Vec::new();
+    let relay_auths = HashMap::new();
+    let config_dir = tempfile::tempdir().expect("isolated payment config");
+    let (victim, channels) = Node::start(
+        super::NodeRole::Client,
+        super::RelayConfig {
+            urls: &relay_urls,
+            auths: &relay_auths,
+            policy: super::RelayPolicy::Disabled,
+        },
+        super::QuicBindSelection {
+            ip: Some(IpAddr::V4(Ipv4Addr::LOCALHOST)),
+            port: Some(0),
+        },
+        Some(0.0),
+        false,
+        None,
+        None,
+        crate::MeshRequirements::unrestricted(),
+    )
+    .await
+    .expect("start stage-1 victim node");
+    // Isolated fixtures: never the operator's own config state.
+    *victim.config_state.lock().await =
+        crate::runtime::config_state::ConfigState::load(&config_dir.path().join("config.toml"))
+            .expect("isolated config state");
+
+    let coordinator = make_test_node(super::NodeRole::Worker).await?;
+    let intruder = make_test_node(super::NodeRole::Worker).await?;
+    let victim_id = victim.id();
+    let coordinator_id = coordinator.id();
+    let intruder_id = intruder.id();
+
+    // The raw "binary listener" endpoints the tunnel may bridge into.
+    let (stage1_bind, mut stage1_captured) = spawn_stage_echo_listener().await;
+    let (stage0_bind, mut stage0_captured) = spawn_stage_echo_listener().await;
+
+    let assignment =
+        |stage_id: &str, stage_index: u32, node_id: EndpointId| StageAssignment {
+            stage_id: stage_id.to_string(),
+            stage_index,
+            node_id,
+            layer_start: stage_index,
+            layer_end: stage_index + 1,
+            endpoint: StageEndpoint {
+                bind_addr: String::new(),
+            },
+        };
+    let topology = StageTopologyInstance {
+        topology_id: "topology-edge".to_string(),
+        run_id: "run-edge".to_string(),
+        model_id: "skippy-model-edge".to_string(),
+        package_ref: String::new(),
+        manifest_sha256: String::new(),
+        admissions: Default::default(),
+        stages: vec![
+            assignment("stage-0", 0, coordinator_id),
+            assignment("stage-1", 1, victim_id),
+            assignment("stage-2", 2, intruder_id),
+        ],
+    };
+
+    let mesh_id = "stage-edge-authz-mesh".to_string();
+    victim.set_mesh_id(mesh_id.clone()).await;
+    coordinator.set_mesh_id(mesh_id.clone()).await;
+    intruder.set_mesh_id(mesh_id).await;
+    victim.start_accepting();
+    coordinator.start_accepting();
+    intruder.start_accepting();
+
+    let invite = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .encode(serde_json::to_vec(&victim.endpoint.addr())?);
+    coordinator.join(&invite).await?;
+    intruder.join(&invite).await?;
+    wait_for_peer(&coordinator, victim_id).await;
+    wait_for_peer(&victim, coordinator_id).await;
+    wait_for_peer(&intruder, victim_id).await;
+    wait_for_peer(&victim, intruder_id).await;
+
+    victim
+        .register_stage_transport_alias("topology-edge", "run-edge", "stage-1", &stage1_bind)
+        .await;
+    victim
+        .register_stage_transport_alias("topology-edge", "run-edge", "stage-0", &stage0_bind)
+        .await;
+    victim.record_stage_topology(topology).await;
+
+    // Drive the production tunnel task exactly as the runtime does.
+    let tunnel = crate::network::tunnel::Manager::start(
+        victim.clone(),
+        channels.rpc,
+        channels.http,
+        channels.stage,
+    )
+    .await
+    .expect("start tunnel manager");
+    drop(tunnel);
+
+    // Control: the stage-0 owner is the target stage's assigned predecessor
+    // and must keep reaching its binary listener.
+    let coordinator_echo =
+        probe_stage_transport(&coordinator, victim_id, "stage-1", b"coordinator-probe").await;
+    assert_eq!(
+        coordinator_echo.as_deref(),
+        Some(b"coordinator-probe".as_slice()),
+        "the assigned predecessor (coordinator) must reach the target stage binary listener"
+    );
+    wait_for_listener_bytes(&mut stage1_captured, b"coordinator-probe", "stage-1 control")
+        .await;
+
+    // #2207: the intruder is an admitted mesh peer holding the current
+    // stage identifiers, but it is neither the coordinator nor the target
+    // stage's predecessor. Its stream must not be bridged into the binary
+    // listener. With the pre-fix authorization (any assigned stage of the
+    // run), the probe bytes reach the listener and the probe reads them
+    // back, so this assertion fails until the edge check lands.
+    let intruder_echo =
+        probe_stage_transport(&intruder, victim_id, "stage-1", b"intruder-probe").await;
+    assert_ne!(
+        intruder_echo.as_deref(),
+        Some(b"intruder-probe".as_slice()),
+        "admitted non-participant obtained a raw transport connection to stage-1: its bytes were bridged into the stage-1 binary listener"
+    );
+
+    // Control: the final stage keeps reaching stage-0's prediction return
+    // endpoint.
+    let return_echo =
+        probe_stage_transport(&intruder, victim_id, "stage-0", b"return-probe").await;
+    assert_eq!(
+        return_echo.as_deref(),
+        Some(b"return-probe".as_slice()),
+        "the final stage must reach stage-0's prediction return endpoint"
+    );
+    wait_for_listener_bytes(&mut stage0_captured, b"return-probe", "stage-0 return control")
+        .await;
+
+    Ok(())
 }

@@ -101,7 +101,17 @@ impl RuntimeConfig {
 }
 
 pub(crate) fn config_path_override() -> Option<std::path::PathBuf> {
-    std::env::var_os(MESH_LLM_CONFIG_ENV).map(std::path::PathBuf::from)
+    resolve_config_path_override(std::env::var_os(MESH_LLM_CONFIG_ENV))
+}
+
+/// An empty value (what a systemd `Environment=MESH_LLM_CONFIG=` line sets)
+/// means no override, so the default config file still loads.
+fn resolve_config_path_override(
+    environment: Option<std::ffi::OsString>,
+) -> Option<std::path::PathBuf> {
+    environment
+        .filter(|path| !path.is_empty())
+        .map(std::path::PathBuf::from)
 }
 
 /// Applies every declared `MESH_LLM_*` config environment override to
@@ -437,6 +447,16 @@ mod tests {
         for named in ["production", "event-disabled", "off"] {
             assert!(message.contains(named), "rejection must name {named}");
         }
+    }
+
+    #[test]
+    fn an_empty_config_path_is_no_override() {
+        assert_eq!(resolve_config_path_override(None), None);
+        assert_eq!(resolve_config_path_override(Some("".into())), None);
+        assert_eq!(
+            resolve_config_path_override(Some("/etc/mesh-llm/config.toml".into())),
+            Some(std::path::PathBuf::from("/etc/mesh-llm/config.toml"))
+        );
     }
 
     #[test]

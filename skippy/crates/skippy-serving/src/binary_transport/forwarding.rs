@@ -168,6 +168,7 @@ mod tests {
             direct_io: false,
             main_gpu: None,
             split_mode: skippy_protocol::SplitMode::Auto,
+            host_expert_layers: None,
             cache_type_k: "f16".to_string(),
             cache_type_v: "f16".to_string(),
             flash_attn_type: FlashAttentionType::Auto,
@@ -182,6 +183,7 @@ mod tests {
             load_mode: LoadMode::RuntimeSlice,
             bind_addr: "127.0.0.1:0".to_string(),
             upstream: Some(PeerConfig {
+                persistent_lane_marker: false,
                 stage_id: "stage-0".to_string(),
                 stage_index: 0,
                 endpoint: "tcp://127.0.0.1:19000".to_string(),

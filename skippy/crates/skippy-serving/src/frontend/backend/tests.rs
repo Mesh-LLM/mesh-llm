@@ -1235,7 +1235,7 @@ pub(super) fn hooks_test_backend(
         telemetry,
         model_id: "hooks-test-model".to_string(),
         default_max_tokens: 16,
-        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        request_defaults: EmbeddedOpenAiRequestDefaults::default().into(),
         thinking: None,
         ctx_size: 128,
         mode: InferenceBackendMode::LocalRuntime,
@@ -1294,6 +1294,7 @@ fn non_chat_topology_guard_rejects_staged_and_filtered_models() {
 
     let mut downstream = full_config.clone();
     downstream.downstream = Some(skippy_protocol::PeerConfig {
+        persistent_lane_marker: false,
         stage_id: "stage-1".to_string(),
         stage_index: 1,
         endpoint: "127.0.0.1:0".to_string(),
@@ -1302,6 +1303,7 @@ fn non_chat_topology_guard_rejects_staged_and_filtered_models() {
 
     let mut upstream = full_config.clone();
     upstream.upstream = Some(skippy_protocol::PeerConfig {
+        persistent_lane_marker: false,
         stage_id: "stage-previous".to_string(),
         stage_index: 0,
         endpoint: "127.0.0.1:0".to_string(),
@@ -1812,6 +1814,7 @@ fn openai_identity_attrs_omit_the_frontend_request_uuid_without_one() {
 fn embedded_forward_seam_emits_error_event_on_write_failure() {
     let mut config = identity_config();
     config.downstream = Some(skippy_protocol::PeerConfig {
+        persistent_lane_marker: false,
         stage_id: "stage-2".to_string(),
         stage_index: 2,
         endpoint: "10.0.0.3:50052".to_string(),
@@ -1877,6 +1880,7 @@ fn embedded_forward_seam_emits_error_event_on_write_failure() {
 fn embedded_forward_seam_emits_nothing_on_success() {
     let mut config = identity_config();
     config.downstream = Some(skippy_protocol::PeerConfig {
+        persistent_lane_marker: false,
         stage_id: "stage-2".to_string(),
         stage_index: 2,
         endpoint: "10.0.0.3:50052".to_string(),
@@ -1919,6 +1923,7 @@ fn lane_checkout_connect_failure_emits_connect_event() {
         .unwrap();
     let mut config = identity_config();
     config.downstream = Some(skippy_protocol::PeerConfig {
+        persistent_lane_marker: false,
         stage_id: "stage-2".to_string(),
         stage_index: 2,
         endpoint: refusal_port

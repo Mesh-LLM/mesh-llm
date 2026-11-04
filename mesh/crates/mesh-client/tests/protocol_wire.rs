@@ -9,7 +9,7 @@ use mesh_client::proto::node::{
     RouteTableRequest, SignedMeshGenesisPolicy,
 };
 use mesh_client::protocol::{
-    ALPN_CONTROL_V1, ALPN_V0, ALPN_V1, ControlFrameError, ControlProtocol, MAX_CONTROL_FRAME_BYTES,
+    ALPN_CONTROL_V2, ALPN_V0, ALPN_V1, ControlFrameError, ControlProtocol, MAX_CONTROL_FRAME_BYTES,
     NODE_PROTOCOL_GENERATION, STREAM_CONFIG_PUSH, STREAM_CONFIG_SUBSCRIBE, STREAM_GOSSIP,
     STREAM_PEER_DOWN, STREAM_PEER_LEAVING, STREAM_ROUTE_REQUEST, STREAM_SUBPROTOCOL,
     STREAM_TUNNEL_MAP, decode_control_frame, decode_legacy_tunnel_map_frame,
@@ -35,7 +35,7 @@ fn alpn_v1_is_correct() {
 
 #[test]
 fn control_alpn_is_correct() {
-    assert_eq!(ALPN_CONTROL_V1, b"mesh-llm-control/1");
+    assert_eq!(ALPN_CONTROL_V2, b"mesh-llm-control/2");
 }
 
 // ── ControlProtocol ─────────────────────────────────────────────────────────
@@ -147,6 +147,7 @@ fn mesh_requirements_signed_policy_proto() -> SignedMeshGenesisPolicy {
             origin_owner_id: "owner-123".into(),
             created_at_unix_ms: 1_717_171_717_000,
             requirements: Some(MeshRequirements {
+                require_signed_gossip: false,
                 node_version: Some(NodeVersionBounds {
                     min: Some("0.65.0".into()),
                     max: Some("0.65.2".into()),

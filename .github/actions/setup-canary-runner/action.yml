@@ -1,5 +1,5 @@
 name: Set up canary certification runner
-description: Verify preinstalled arm64 Metal tooling; never install tools.
+description: Verify preinstalled arm64 tooling for the runner's platform (Metal on macOS, CUDA on Linux); never install tools.
 inputs:
   require-agent:
     description: Verify the Goose executable for a changed-pin candidate build.
@@ -13,7 +13,8 @@ runs:
       git config --local user.name "mesh-llama-canary-bot"
       git config --local user.email "llama-canary-bot@meshllm.invalid"
     shell: bash
-  - name: Verify runner toolchain
+  - name: Verify runner toolchain (macOS)
+    if: runner.os == 'macOS'
     run: |
       set -euo pipefail
       export RUSTUP_AUTO_INSTALL=0
@@ -51,6 +52,65 @@ runs:
         exit 1
       fi
     shell: bash
+  - name: Verify runner toolchain (Linux)
+    if: runner.os == 'Linux'
+    run: |
+      set -euo pipefail
+      export RUSTUP_AUTO_INSTALL=0
+      echo "RUSTUP_AUTO_INSTALL=0" >> "$GITHUB_ENV"
+      missing=0
+      for cmd in cargo rustc just sccache jq python3 uv cmake ninja hf git-lfs clang ld.lld pkg-config git; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+          echo "missing on family-certify image: $cmd" >&2
+          missing=1
+        fi
+      done
+      # Mirror the macOS policy: prefer the pinned major (llvm-22), then accept
+      # any system LLVM that provides Clang LibTooling, newest first.
+      llvm_ok() {
+        [[ -n "$1" && -x "$1/bin/clang" && -f "$1/lib/cmake/clang/ClangConfig.cmake" ]]
+      }
+      llvm_prefix=""
+      if llvm_ok /usr/lib/llvm-22; then
+        llvm_prefix=/usr/lib/llvm-22
+      else
+        for candidate in $(ls -d /usr/lib/llvm-* 2>/dev/null | sort -V -r); do
+          if llvm_ok "$candidate"; then
+            llvm_prefix="$candidate"
+            break
+          fi
+        done
+      fi
+      if [[ -z "$llvm_prefix" ]]; then
+        echo "no system LLVM with Clang LibTooling is installed on the family-certify image" >&2
+        missing=1
+      else
+        echo "SKIPPY_REWRITER_LLVM_PREFIX=$llvm_prefix" >> "$GITHUB_ENV"
+      fi
+      # The stage backend on Linux is CUDA; the image must carry a working
+      # toolkit and driver, and the architecture list feeds the llama.cpp build.
+      if ! command -v nvidia-smi >/dev/null 2>&1 || ! nvidia-smi >/dev/null 2>&1; then
+        echo "family-certify Linux image has no functional NVIDIA driver" >&2
+        missing=1
+      fi
+      if ! command -v nvcc >/dev/null 2>&1; then
+        echo "missing on family-certify image: nvcc" >&2
+        missing=1
+      elif [[ -z "${SKIPPY_CUDA_ARCHITECTURES:-}" ]]; then
+        cuda_arch="$(scripts/detect-cuda-arch.sh)" || {
+          echo "could not detect CUDA architectures on the family-certify image" >&2
+          missing=1
+        }
+        if [[ -n "${cuda_arch:-}" ]]; then
+          echo "SKIPPY_CUDA_ARCHITECTURES=$cuda_arch" >> "$GITHUB_ENV"
+        fi
+      fi
+      git lfs install --force
+      if (( missing == 1 )); then
+        echo "bake the missing tools into the family-certify runner image; this job installs nothing" >&2
+        exit 1
+      fi
+    shell: bash
   - name: Verify changed-pin agent executable
     if: ${{ inputs.require-agent == 'true' }}
     run: |
@@ -74,7 +134,8 @@ runs:
       fi
       echo "goose version: $goose_version"
     shell: bash
-  - name: Isolate compiler cache identity
+  - name: Isolate compiler cache identity (macOS)
+    if: runner.os == 'macOS'
     run: |
       set -euo pipefail
       SCCACHE_DIR="${SCCACHE_DIR:-$HOME/Library/Caches/mesh-llm/sccache/llama-canary-arm64}"
@@ -93,4 +154,22 @@ runs:
       echo "SCCACHE_C_CUSTOM_CACHE_BUSTER=$cache_buster" >> "$GITHUB_ENV"
       # prepare-automation's macOS accelerator setup starts the job-owned
       # cache server before its first compiler probe.
+    shell: bash
+  - name: Isolate compiler cache identity (Linux)
+    if: runner.os == 'Linux'
+    run: |
+      set -euo pipefail
+      SCCACHE_DIR="${SCCACHE_DIR:-${XDG_CACHE_HOME:-$HOME/.cache}/mesh-llm/sccache/llama-canary-aarch64}"
+      export SCCACHE_DIR
+      echo "SCCACHE_DIR=$SCCACHE_DIR" >> "$GITHUB_ENV"
+      mkdir -p "$SCCACHE_DIR"
+      cache_buster="$({
+        printf '%s\n' 'platform=linux' 'architecture=aarch64' 'backend=cuda' 'profile=release'
+        printf 'cuda-architectures=%s\n' "${SKIPPY_CUDA_ARCHITECTURES:-}"
+        rustc -vV
+        cc --version
+        nvcc --version
+        git -C "${CANARY_SOURCE_ROOT:-$PWD}" ls-files -s -- .cargo/config.toml scripts/build-llama.sh scripts/package-native-runtime.sh skippy/scripts/build-llama.sh skippy/scripts/package-native-runtime.sh skippy/llama_cpp/upstream.txt skippy/llama_cpp/patches
+      } | sha256sum | awk '{print $1}')"
+      echo "SCCACHE_C_CUSTOM_CACHE_BUSTER=$cache_buster" >> "$GITHUB_ENV"
     shell: bash

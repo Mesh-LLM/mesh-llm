@@ -382,6 +382,20 @@ impl RuntimeState {
         session.export_kv_page(layer_start, layer_end, token_start, token_count)
     }
 
+    /// Bytes [`Self::export_kv_page`] would allocate, without copying state.
+    pub fn kv_page_size(
+        &mut self,
+        session_id: &str,
+        token_start: u64,
+        token_count: u64,
+    ) -> Result<u64> {
+        self.validate_export_range(session_id, token_start, token_count)?;
+        let layer_start = i32::try_from(self.model_layer_start())?;
+        let layer_end = i32::try_from(self.model_layer_end())?;
+        self.session(session_id)?
+            .kv_page_size(layer_start, layer_end, token_start, token_count)
+    }
+
     pub fn probe_kv_page(
         &mut self,
         session_id: &str,

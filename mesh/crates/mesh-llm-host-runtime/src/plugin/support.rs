@@ -1,5 +1,5 @@
 use super::{ToolSummary, proto};
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use rmcp::model::ServerConfig;
 use serde::Serialize;
 
@@ -17,29 +17,55 @@ pub(crate) fn parse_optional_json(raw: &str) -> Result<Option<serde_json::Value>
     }
 }
 
+/// A plugin answered a host request with a JSON-RPC error. The code tells a
+/// route whether the caller did something wrong or the plugin did, so it has
+/// to survive the trip out of the plugin layer as a value, not as text.
+#[derive(Debug)]
+pub(crate) struct PluginRpcFailure {
+    pub(crate) code: i32,
+}
+
+impl std::fmt::Display for PluginRpcFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "plugin JSON-RPC error {}", self.code)
+    }
+}
+
+impl std::error::Error for PluginRpcFailure {}
+
+/// The plugin did not answer within its deadline. Unlike a transport failure
+/// the request did reach the plugin, so sending it again would start the same
+/// work a second time in a fresh process.
+#[derive(Debug)]
+pub(crate) struct PluginTimeout {
+    pub(crate) plugin_name: String,
+}
+
+impl std::fmt::Display for PluginTimeout {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "Plugin '{}' timed out", self.plugin_name)
+    }
+}
+
+impl std::error::Error for PluginTimeout {}
+
 pub(crate) fn plugin_error(
     plugin_name: &str,
     method: &str,
     err: &proto::ErrorResponse,
 ) -> anyhow::Error {
-    if err.data_json.trim().is_empty() {
-        anyhow!(
+    let detail = if err.data_json.trim().is_empty() {
+        format!(
             "Plugin '{}' failed '{}' (code {}): {}",
-            plugin_name,
-            method,
-            err.code,
-            err.message
+            plugin_name, method, err.code, err.message
         )
     } else {
-        anyhow!(
+        format!(
             "Plugin '{}' failed '{}' (code {}): {} ({})",
-            plugin_name,
-            method,
-            err.code,
-            err.message,
-            err.data_json
+            plugin_name, method, err.code, err.message, err.data_json
         )
-    }
+    };
+    anyhow::Error::new(PluginRpcFailure { code: err.code }).context(detail)
 }
 
 pub(crate) fn summarize_capabilities(server_info: &ServerConfig, extra: &[String]) -> Vec<String> {

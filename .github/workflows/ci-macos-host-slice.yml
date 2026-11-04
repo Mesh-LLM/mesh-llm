@@ -111,7 +111,7 @@ jobs:
     needs: runner_policy
     if: ${{ inputs.hosts_matrix != '[]' }}
     runs-on: ${{ needs.runner_policy.outputs.runner_macos }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: ${{ inputs.fail_fast }}
       max-parallel: ${{ inputs.max_parallel }}

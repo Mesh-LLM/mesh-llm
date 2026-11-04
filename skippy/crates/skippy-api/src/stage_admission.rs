@@ -207,7 +207,6 @@ fn kv_graph_state<'a>(
             match effect.kind {
                 Kind::KvKey | Kind::KvValue => kv = true,
                 Kind::RecurrentConv | Kind::RecurrentSsm => recurrent = true,
-                Kind::DerivedPersistent => return "full-state",
             }
         }
         if recurrent {

@@ -408,10 +408,13 @@ mod tests {
                     ],
                 }),
                 web_ui: None,
+                operation_bindings: Vec::new(),
+                peer_blocks: false,
             }),
             last_protocol_version: None,
             last_status: None,
             last_error: None,
+            verified_sha256: None,
         };
 
         let PluginSchemaAvailability::Available(schema) = plugin_schema_from_metadata(&metadata)

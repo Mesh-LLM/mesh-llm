@@ -15,17 +15,6 @@ mod stream_adapters;
 #[cfg(test)]
 mod workload_admission_tests;
 
-pub(crate) fn advertisable_routes(
-    routes: Vec<crate::plugin::VirtualModelRoute>,
-    concrete_models: &[String],
-) -> Vec<crate::plugin::VirtualModelRoute> {
-    let has_candidates = !concrete_models.is_empty();
-    routes
-        .into_iter()
-        .filter(|route| !route.requires_candidates || has_candidates)
-        .collect()
-}
-
 #[derive(Clone)]
 pub(crate) struct InferenceRpcBridge {
     api_port: u16,
@@ -563,6 +552,10 @@ async fn virtual_model_candidates(
     model_ids.sort();
     model_ids.dedup();
 
+    // Plugin-served models are advertised by name and dispatched by endpoint
+    // protocol, so they are the only local evidence for an id `hosted_models`
+    // does not list.
+    let plugin_descriptors = node.plugin_inference_descriptors().await;
     let mut candidates = Vec::new();
     for model_id in model_ids {
         if !super::workload_routing::model_satisfies_request(&model_id, CHAT_PATH, &descriptors) {
@@ -610,18 +603,7 @@ async fn virtual_model_candidates(
 
         let discovered_hosts = node.hosts_for_model(&model_id).await;
         let has_discovered_remote_host = !discovered_hosts.is_empty();
-        // MoA workers call peers without the payment protocol, so a peer that
-        // charges for this model answers 402 and, because 402 is not a
-        // retryable replica error, takes the whole worker down even when a free
-        // replica exists. Keep the committee on free replicas until
-        // committee-level payment is designed (#2059) — the candidate path's
-        // half of the retired MoA self-fill exclusion (#2097).
-        let mut remote_hosts = crate::network::openai::payment_routing::exclude_paid_hosts(
-            node,
-            &model_id,
-            discovered_hosts,
-        )
-        .await;
+        let mut remote_hosts = discovered_hosts;
         // Explicitly pinned nested calls fail closed on a blocked peer. Do not
         // offer it as a virtual-model candidate in the first place, or it can
         // become the direct route's non-retryable first choice.
@@ -644,14 +626,34 @@ async fn virtual_model_candidates(
             }
         }
 
-        // Plugin-backed inference models have no mesh endpoint. Keep one
-        // untargeted candidate when discovery found no host instance at all —
-        // never when instances exist but every one was filtered out, or the
-        // plugin's nested call would re-enter the ingress filter that just
-        // excluded them. A local model still loading is not plugin-backed:
-        // its nested call would get 404 until the load finishes.
+        // Plugin-backed inference models have no mesh endpoint, and
+        // `hosted_models` lists native instances only, so a plugin-served id
+        // never has a local instance to match. Keep one untargeted candidate
+        // when discovery found no host at all -- never when instances exist but
+        // every one was filtered out, or the plugin's nested call would
+        // re-enter the ingress filter that just excluded them.
+        //
+        // The exception is a host filtered out on *workload class*: it cannot
+        // serve this request at all, so it must not hide the local plugin that
+        // serves the requested class (ndizazzo [P2], PR #2560). Requiring a
+        // matching plugin descriptor -- rather than model-level admission,
+        // which treats an absent descriptor as a legacy name-only chat
+        // advertisement -- keeps a name no plugin serves, such as a paid-only
+        // replica, out of the committee entirely.
+        //
+        // A model still loading locally is not plugin-backed either: its
+        // nested call would get 404 until the load finishes (#2674).
+        let plugin_serves_model = super::workload_routing::descriptor_for_request(
+            &model_id,
+            CHAT_PATH,
+            &plugin_descriptors,
+        )
+        .is_some();
         let loading_locally = local_assignments.iter().any(|local| local == &model_id);
-        if !has_local_instance && !has_discovered_remote_host && !loading_locally {
+        if !has_local_instance
+            && !loading_locally
+            && (!has_discovered_remote_host || plugin_serves_model)
+        {
             candidates.push(candidate_from(None, None));
         }
     }
@@ -725,34 +727,6 @@ fn translated_json_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn route(model_id: &str, requires_candidates: bool) -> crate::plugin::VirtualModelRoute {
-        crate::plugin::VirtualModelRoute {
-            plugin_name: "test-plugin".into(),
-            model_id: model_id.into(),
-            handler: "handle".into(),
-            input_modalities: vec!["text".into()],
-            output_modalities: vec!["text".into()],
-            supports_tools: false,
-            supports_streaming: false,
-            requires_candidates,
-            progress_lines: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn candidate_dependent_routes_are_advertised_only_when_candidates_exist() {
-        let routes = vec![route("standalone", false), route("dependent", true)];
-
-        assert_eq!(
-            advertisable_routes(routes.clone(), &[]),
-            vec![route("standalone", false)]
-        );
-        assert_eq!(
-            advertisable_routes(routes.clone(), &["concrete".into()]),
-            routes
-        );
-    }
 
     #[test]
     fn virtual_response_headers_cannot_override_http_framing() {
@@ -837,155 +811,5 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(found, vec![("plugin-model", None)]);
         node.endpoint.close().await;
-    }
-
-    /// The candidate path's half of #2097: a replica that charges for the
-    /// model must not be offered to the committee, and must not be swapped for
-    /// an untargeted candidate that re-enters the ingress that filtered it.
-    #[cfg(feature = "payments")]
-    #[tokio::test]
-    async fn paid_replicas_are_not_offered_as_virtual_model_candidates() {
-        let node = crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Client)
-            .await
-            .expect("test node must start");
-        let free = replica_node().await;
-        let paid = replica_node().await;
-        advertise_replica(&node, &free, "paid-model", None).await;
-        advertise_replica(&node, &paid, "paid-model", Some(replica_price())).await;
-        assert_eq!(
-            node.hosts_for_model("paid-model").await.len(),
-            2,
-            "both replicas must be discovered before the payment filter runs"
-        );
-
-        let candidates = virtual_model_candidates(
-            &node,
-            vec!["paid-model".to_string()],
-            &Default::default(),
-            None,
-        )
-        .await;
-
-        let targets = candidates
-            .iter()
-            .map(|candidate| candidate.target_node_id.clone())
-            .collect::<Vec<_>>();
-        assert_eq!(
-            targets,
-            vec![Some(hex::encode(free.id().as_bytes()))],
-            "only the free replica may be offered as a candidate"
-        );
-        free.endpoint.close().await;
-        paid.endpoint.close().await;
-        node.endpoint.close().await;
-    }
-
-    #[cfg(feature = "payments")]
-    #[tokio::test]
-    async fn blocked_replica_is_not_offered_as_a_direct_fallback_candidate() {
-        let node = crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Client)
-            .await
-            .expect("test node must start");
-        let blocked = replica_node().await;
-        let healthy = replica_node().await;
-        advertise_replica(&node, &blocked, "small-model", None).await;
-        advertise_replica(&node, &healthy, "small-model", None).await;
-        node.peer_blocks
-            .block(
-                &blocked.id(),
-                crate::network::peer_blocks::BlockLength::UntilUndone,
-                crate::network::peer_blocks::Requester::Operator,
-                None,
-                crate::network::peer_blocks::now_ms(),
-            )
-            .expect("block peer");
-        let candidates =
-            virtual_model_candidates(&node, vec!["small-model".into()], &Default::default(), None)
-                .await;
-        assert_eq!(candidates.len(), 1);
-        assert_eq!(
-            candidates[0].target_node_id,
-            Some(hex::encode(healthy.id().as_bytes()))
-        );
-        blocked.endpoint.close().await;
-        healthy.endpoint.close().await;
-        node.endpoint.close().await;
-    }
-
-    /// Every replica paid: the model drops out of the candidate set entirely.
-    /// An untargeted candidate here would route the nested call straight back
-    /// to the paid peer the filter exists to avoid.
-    #[cfg(feature = "payments")]
-    #[tokio::test]
-    async fn a_model_served_only_by_a_paid_replica_yields_no_candidate() {
-        let node = crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Client)
-            .await
-            .expect("test node must start");
-        let paid = replica_node().await;
-        advertise_replica(&node, &paid, "paid-only-model", Some(replica_price())).await;
-        assert_eq!(node.hosts_for_model("paid-only-model").await.len(), 1);
-
-        let candidates = virtual_model_candidates(
-            &node,
-            vec!["paid-only-model".to_string()],
-            &Default::default(),
-            None,
-        )
-        .await;
-
-        assert!(
-            candidates.is_empty(),
-            "a paid-only model must yield no candidate: {candidates:?}"
-        );
-        paid.endpoint.close().await;
-        node.endpoint.close().await;
-    }
-
-    #[cfg(feature = "payments")]
-    async fn replica_node() -> crate::mesh::Node {
-        crate::mesh::Node::new_for_tests(crate::mesh::NodeRole::Client)
-            .await
-            .expect("replica node must start")
-    }
-
-    #[cfg(feature = "payments")]
-    fn replica_price() -> mesh_llm_payments_types::pricing::Pricing {
-        mesh_llm_payments_types::pricing::Pricing {
-            input_msat_per_million: 1,
-            output_msat_per_million: 1,
-            cache_discount_percent: 0,
-        }
-    }
-
-    /// Advertise `replica` to `node` as an HTTP host serving `model`, priced
-    /// when `price` is given.
-    #[cfg(feature = "payments")]
-    async fn advertise_replica(
-        node: &crate::mesh::Node,
-        replica: &crate::mesh::Node,
-        model: &str,
-        price: Option<mesh_llm_payments_types::pricing::Pricing>,
-    ) {
-        let mut announcement =
-            replica.build_local_announcement(replica.snapshot_local_announcement_data().await);
-        announcement.role = crate::mesh::NodeRole::Host { http_port: 9337 };
-        announcement.serving_models = vec![model.to_string()];
-        announcement.hosted_models = Some(vec![model.to_string()]);
-        if let Some(price) = price {
-            announcement
-                .lightning_offers
-                .insert(model.to_string(), price);
-        }
-        // `insert_test_peer` marks liveness observed, which
-        // `hosts_for_model` requires; the conversion from an announcement
-        // leaves the peer unadmitted, so admit it the way gossip would.
-        let mut peer = crate::mesh::PeerInfo::from_announcement(
-            replica.id(),
-            replica.endpoint.addr(),
-            &announcement,
-            crate::crypto::OwnershipSummary::default(),
-        );
-        peer.admitted = true;
-        node.insert_test_peer(peer).await;
     }
 }

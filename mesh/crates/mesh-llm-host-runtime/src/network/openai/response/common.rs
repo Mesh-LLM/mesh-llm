@@ -25,12 +25,6 @@ pub(in crate::network::openai::response) fn sse_data_frame_is_openai_error(data:
 
 #[derive(Clone, Copy)]
 pub(crate) struct RouteAttemptLoggingContext<'a> {
-    // Populated for observability on every route attempt but only consumed by
-    // the paid-settlement path. Gating the field would cascade cfgs through
-    // ~30 ingress/transport call sites, so it stays present and is simply
-    // unread when wallets are compiled out.
-    #[cfg_attr(not(feature = "payments"), allow(dead_code))]
-    pub(in crate::network::openai) exchange_id: Option<&'a str>,
     pub(in crate::network::openai) request_id: RequestId,
     pub(in crate::network::openai) retry_policy: ResponseRetryPolicy,
     pub(in crate::network::openai) response_adapter: ResponseAdapter,
@@ -55,8 +49,19 @@ pub(crate) struct RouteAttemptLoggingContext<'a> {
 /// per-connection tokio task, and a type reachable from an `.await` point
 /// must stay `Send`, which `RefCell` is not. The lock is never held across
 /// an `.await`.
+///
+/// It also keeps the peer's served-model response headers
+/// (`served_model_headers`), read at the same point and cleared with it
+/// before each attempt, so a retry never inherits the previous peer's model.
+/// All of these are the peer's own unverified statements.
 #[derive(Default)]
-pub(crate) struct PeerCapsuleIdSink(std::sync::Mutex<Option<String>>);
+pub(crate) struct PeerCapsuleIdSink(std::sync::Mutex<PeerResponseMarkers>);
+
+#[derive(Default)]
+struct PeerResponseMarkers {
+    capsule_id: Option<String>,
+    served_model: super::ServedModelHeaders,
+}
 
 impl PeerCapsuleIdSink {
     pub(crate) fn new() -> Self {
@@ -64,11 +69,24 @@ impl PeerCapsuleIdSink {
     }
 
     pub(in crate::network::openai) fn set(&self, value: String) {
-        *self.0.lock().unwrap() = Some(value);
+        self.0.lock().unwrap().capsule_id = Some(value);
     }
 
     pub(crate) fn take(&self) -> Option<String> {
-        self.0.lock().unwrap().take()
+        self.0.lock().unwrap().capsule_id.take()
+    }
+
+    pub(in crate::network::openai) fn set_served_model(&self, value: super::ServedModelHeaders) {
+        self.0.lock().unwrap().served_model = value;
+    }
+
+    pub(crate) fn take_served_model(&self) -> super::ServedModelHeaders {
+        std::mem::take(&mut self.0.lock().unwrap().served_model)
+    }
+
+    /// Drop every value, before a new attempt records its own.
+    pub(in crate::network::openai) fn clear(&self) {
+        *self.0.lock().unwrap() = PeerResponseMarkers::default();
     }
 }
 
@@ -117,6 +135,12 @@ pub(in crate::network::openai) enum RouteAttemptResult {
     RetryableTimeout,
     RetryableUnavailable,
     RetryableContextOverflow,
+    /// The peer answered 402 before any body was relayed: a gate plugin on
+    /// that host says this caller cannot pass right now (pay, present
+    /// credit, ...). Generic to the host — the terms travel in the peer's
+    /// response headers, which the host never reads. Another host may let
+    /// the same request through, so the fan-out tries the next one.
+    RetryableGateUnsatisfied,
     RetryableResponseQuality(ResponseQualityFailure),
     CommittedStreamFailure {
         status_code: u16,
@@ -128,6 +152,8 @@ pub(in crate::network::openai) enum RouteAttemptResult {
 pub(in crate::network::openai) struct ResponseRetryPolicy {
     pub(in crate::network::openai) context_overflow: bool,
     pub(in crate::network::openai) response_quality: bool,
+    /// Try the next host on a 402 instead of relaying it.
+    pub(in crate::network::openai) gate_unsatisfied: bool,
 }
 
 impl ResponseRetryPolicy {
@@ -135,8 +161,26 @@ impl ResponseRetryPolicy {
         Self {
             context_overflow: available,
             response_quality: available,
+            gate_unsatisfied: available,
         }
     }
+}
+
+/// Decides, from the probed headers alone and before a byte reaches the
+/// client, whether this attempt should move on to the next target. Every
+/// relay path calls it first so an uncommitted 402 or context overflow never
+/// leaks to the client while another host could still serve the request.
+pub(in crate::network::openai::response) fn retry_before_relay(
+    probe: &super::probe::ResponseProbe,
+    retry_policy: ResponseRetryPolicy,
+) -> Option<RouteAttemptResult> {
+    if retry_policy.context_overflow && probe.retryable_context_overflow {
+        return Some(RouteAttemptResult::RetryableContextOverflow);
+    }
+    if retry_policy.gate_unsatisfied && probe.status_code == 402 {
+        return Some(RouteAttemptResult::RetryableGateUnsatisfied);
+    }
+    None
 }
 
 pub(in crate::network::openai) fn route_attempt_result_label(
@@ -147,6 +191,7 @@ pub(in crate::network::openai) fn route_attempt_result_label(
         RouteAttemptResult::RetryableTimeout => "retryable_timeout",
         RouteAttemptResult::RetryableUnavailable => "retryable_unavailable",
         RouteAttemptResult::RetryableContextOverflow => "retryable_context_overflow",
+        RouteAttemptResult::RetryableGateUnsatisfied => "retryable_gate_unsatisfied",
         RouteAttemptResult::RetryableResponseQuality(_) => "retryable_response_quality",
         RouteAttemptResult::CommittedStreamFailure { .. } => "committed_stream_failure",
         RouteAttemptResult::ClientDisconnected => "client_disconnected",
@@ -163,7 +208,11 @@ pub(in crate::network::openai) fn target_health_outcome_for_attempt(
         RouteAttemptResult::Delivered { status_code, .. } if (500..600).contains(status_code) => {
             TargetHealthOutcome::Unavailable
         }
+        RouteAttemptResult::Delivered { status_code, .. } if *status_code == 402 => {
+            TargetHealthOutcome::GateUnsatisfied
+        }
         RouteAttemptResult::Delivered { .. } => TargetHealthOutcome::Rejected,
+        RouteAttemptResult::RetryableGateUnsatisfied => TargetHealthOutcome::GateUnsatisfied,
         RouteAttemptResult::RetryableTimeout => TargetHealthOutcome::Timeout,
         RouteAttemptResult::RetryableUnavailable => TargetHealthOutcome::Unavailable,
         RouteAttemptResult::RetryableContextOverflow => TargetHealthOutcome::ContextOverflow,
@@ -337,6 +386,9 @@ pub(in crate::network::openai) fn attempt_outcome_for_result(
         RouteAttemptResult::RetryableContextOverflow => {
             crate::network::metrics::AttemptOutcome::ContextOverflow
         }
+        RouteAttemptResult::RetryableGateUnsatisfied => {
+            crate::network::metrics::AttemptOutcome::Rejected
+        }
         RouteAttemptResult::RetryableResponseQuality(_) => {
             crate::network::metrics::AttemptOutcome::Rejected
         }
@@ -374,6 +426,49 @@ pub(in crate::network::openai) fn request_service_for_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn probe(status_code: u16) -> super::super::probe::ResponseProbe {
+        super::super::probe::ResponseProbe {
+            buffered: Vec::new(),
+            header_end: 0,
+            status_code,
+            retryable_context_overflow: false,
+        }
+    }
+
+    #[test]
+    fn a_402_moves_to_the_next_host_before_relay_only_while_one_exists() {
+        let more_hosts = ResponseRetryPolicy::next_target_available(true);
+        let last_host = ResponseRetryPolicy::next_target_available(false);
+        assert_eq!(
+            retry_before_relay(&probe(402), more_hosts),
+            Some(RouteAttemptResult::RetryableGateUnsatisfied)
+        );
+        // The last host's 402 is relayed: the client sees the gate's own
+        // verdict and headers, never a synthesized error.
+        assert_eq!(retry_before_relay(&probe(402), last_host), None);
+        for status in [200, 400, 401, 403, 429, 500, 503] {
+            assert_eq!(
+                retry_before_relay(&probe(status), more_hosts),
+                None,
+                "{status}"
+            );
+        }
+        // Either shape of the verdict caches the (model, host) pair.
+        assert_eq!(
+            target_health_outcome_for_attempt(&RouteAttemptResult::RetryableGateUnsatisfied),
+            TargetHealthOutcome::GateUnsatisfied
+        );
+        assert_eq!(
+            target_health_outcome_for_attempt(&RouteAttemptResult::Delivered {
+                status_code: 402,
+                usage: None,
+                cache_cost: None,
+                output_digests: Default::default(),
+            }),
+            TargetHealthOutcome::GateUnsatisfied
+        );
+    }
     use crate::network::openai::response_quality::ResponseQualityFailure;
     use std::time::Duration;
 

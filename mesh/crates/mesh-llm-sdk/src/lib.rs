@@ -4,7 +4,13 @@
 pub mod embedded_node;
 
 #[cfg(feature = "serving")]
+pub mod documents;
+
+#[cfg(feature = "serving")]
 pub mod live_transcription;
+
+#[cfg(feature = "serving")]
+pub mod models;
 
 #[cfg(feature = "serving")]
 pub use embedded_node::{
@@ -39,13 +45,6 @@ pub mod native_runtime {
 #[cfg(feature = "serving")]
 pub mod plugin {
     pub use mesh_llm_host_runtime::plugin::run_plugin_process;
-}
-
-/// Payment control and data types for driving the engine's payments over
-/// its control API: policy, pricing, invoices and wallet status.
-#[cfg(feature = "payments")]
-pub mod payments {
-    pub use mesh_llm_payments::{control, invoice, ledger, pricing, wallet};
 }
 
 /// Node identity keys on disk.

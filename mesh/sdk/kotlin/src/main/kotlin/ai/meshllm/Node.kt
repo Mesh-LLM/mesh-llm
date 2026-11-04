@@ -14,6 +14,7 @@ import uniffi.mesh_ffi.MeshNodeHandleInterface
 import uniffi.mesh_ffi.OpenAiStreamEventNative
 import uniffi.mesh_ffi.OpenAiStreamListener
 import uniffi.mesh_ffi.createNode
+import uniffi.mesh_ffi.createNodeConfigJson
 
 /** The three supported embedded-node roles. */
 enum class NodeMode(val wireValue: String) {
@@ -38,7 +39,16 @@ data class OpenAIResponse(
     val body: String,
 ) {
     fun json(): JsonElement = Json.parseToJsonElement(body)
+
+    /** Preserve raw response details while allowing explicit HTTP status checks. */
+    fun errorForStatus(): OpenAIResponse {
+        if (statusCode.toInt() !in 200..299) throw OpenAIRequestException(statusCode, body)
+        return this
+    }
 }
+
+class OpenAIRequestException(val statusCode: UShort, val body: String) :
+    RuntimeException("OpenAI-compatible request failed with HTTP $statusCode: $body")
 
 sealed class OpenAIStreamEvent {
     data class Started(
@@ -67,7 +77,24 @@ class OpenAIStreamException(
 
 /** A real embedded Mesh LLM node with mesh inference and optional local serving. */
 class Node internal constructor(private val handle: MeshNodeHandleInterface) {
+    companion object {
+        /** Pass the complete snake_case Rust config to native defaults/validation. */
+        fun fromConfig(config: JsonObject): Node = fromConfig(config, ::createNodeConfigJson)
+
+        internal fun fromConfig(config: JsonObject, create: (String) -> MeshNodeHandleInterface): Node =
+            Node(create(config.toString()))
+    }
+
     val inference = Inference(handle)
+    val models = Models(
+        listJson = { query -> withContext(Dispatchers.IO) { handle.meshModelsJson(query) } },
+        modelJson = { id -> withContext(Dispatchers.IO) { handle.meshModelJson(id) } },
+    )
+    private val membershipControls = Memberships(
+        addJson = { config -> withContext(Dispatchers.IO) { handle.addMembershipJson(config) } },
+        removeNative = { name -> withContext(Dispatchers.IO) { handle.removeMembership(name) } },
+        listJson = { withContext(Dispatchers.IO) { handle.membershipsJson() } },
+    )
 
     constructor(
         mode: NodeMode = NodeMode.CLIENT,
@@ -96,18 +123,46 @@ class Node internal constructor(private val handle: MeshNodeHandleInterface) {
 
     suspend fun joinToken(token: String): Unit = withContext(Dispatchers.IO) { handle.joinToken(token) }
 
+    suspend fun startLiveTranscription(options: LiveTranscriptionOptions = LiveTranscriptionOptions()): LiveTranscription {
+        val live = withContext(Dispatchers.IO) { handle.startLiveTranscriptionJson(options.json()) }
+        return LiveTranscription(
+            audio = { samples -> withContext(Dispatchers.IO) { live.sendAudio(samples) } },
+            floatAudio = { samples -> withContext(Dispatchers.IO) { live.sendAudioF32(samples) } },
+            commitNative = { withContext(Dispatchers.IO) { live.commit() } },
+            eventJson = { withContext(Dispatchers.IO) { live.nextEventJson() } },
+            stopJson = { withContext(Dispatchers.IO) { live.stopJson() } },
+            closeNative = { live.closeAudio() },
+        )
+    }
+
+    suspend fun addMembership(config: MeshMembershipConfig): MeshMembershipStatus = membershipControls.add(config)
+
+    suspend fun removeMembership(name: String): Boolean = membershipControls.remove(name)
+
+    suspend fun memberships(): List<MeshMembershipStatus> = membershipControls.list()
+
     class Inference(private val handle: MeshNodeHandleInterface) {
         suspend fun listModels(): List<Model> = withContext(Dispatchers.IO) {
             handle.inferenceListModels().map { Model(it.id, it.name, it.contextLength) }
         }
 
-        suspend fun request(path: String, body: JsonObject): OpenAIResponse =
-            requestJson(path, body.toString())
+        /** Submit PDF/image bytes through protocol-aware Mesh OCR routing. */
+        suspend fun documentOcr(file: ByteArray, options: DocumentOcrOptions,
+                               raiseForStatus: Boolean = true): OpenAIResponse =
+            withContext(Dispatchers.IO) {
+                val response = handle.documentOcr(file, options.json())
+                val result = OpenAIResponse(response.statusCode, response.contentType, response.body)
+                if (raiseForStatus) result.errorForStatus() else result
+            }
 
-        suspend fun requestJson(path: String, bodyJson: String): OpenAIResponse =
+        suspend fun request(path: String, body: JsonObject, raiseForStatus: Boolean = true): OpenAIResponse =
+            requestJson(path, body.toString(), raiseForStatus)
+
+        suspend fun requestJson(path: String, bodyJson: String, raiseForStatus: Boolean = true): OpenAIResponse =
             withContext(Dispatchers.IO) {
                 val response = handle.openaiRequest(path, bodyJson)
-                OpenAIResponse(response.statusCode, response.contentType, response.body)
+                val result = OpenAIResponse(response.statusCode, response.contentType, response.body)
+                if (raiseForStatus) result.errorForStatus() else result
             }
 
         suspend fun chatCompletions(body: JsonObject): OpenAIResponse =

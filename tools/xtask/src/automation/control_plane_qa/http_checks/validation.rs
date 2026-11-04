@@ -10,7 +10,7 @@ pub(super) fn privacy(bytes: &[u8]) -> Result<(), String> {
                 .any(|(key, value)| key == "control_endpoint" || leaked(value)),
             serde_json::Value::Array(values) => values.iter().any(leaked),
             serde_json::Value::String(value) => {
-                value.contains("mesh-llm-control/1") || value.contains("control://")
+                value.contains("mesh-llm-control/") || value.contains("control://")
             }
             serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
                 false
@@ -51,4 +51,16 @@ pub(super) fn scan(response: &Response) -> Result<(), String> {
         drop(entry.metadata);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::privacy;
+
+    #[test]
+    fn privacy_rejects_legacy_and_current_control_alpns() {
+        assert!(privacy(br#"{"nested":["mesh-llm-control/1"]}"#).is_err());
+        assert!(privacy(br#"{"nested":["mesh-llm-control/2"]}"#).is_err());
+        assert!(privacy(br#"{"nested":["mesh-llm/1"]}"#).is_ok());
+    }
 }

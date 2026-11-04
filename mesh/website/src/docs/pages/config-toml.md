@@ -45,17 +45,22 @@ bind           = "[::]:7447"   # Mesh owner-control listen address
 
 ## Payments
 
-Which wallet plugin backs paid inference. Spending policy and prices are set
-with `mesh-llm wallet` and stored in the payment ledger, not here.
+Paid inference is not part of the node and has no `config.toml` section. Payment
+rails are ordinary plugins that use the generic seams described above (operation
+bindings, the OpenAI-exchange hook, model `requires`). The Lightning rail lives in
+[Mesh-LLM/ln-payments-plugin](https://github.com/Mesh-LLM/ln-payments-plugin);
+its README covers installation, pricing and spending policy.
 
-```toml
-[payments]
-wallet = "wallet-nwc" # Plugin name of the wallet to use
+Install it together with one wallet plugin in a single command:
+
+```sh
+mesh-llm plugins install Mesh-LLM/lexe-wallet-plugin Mesh-LLM/ln-payments-plugin
+# or, for a Nostr Wallet Connect wallet:
+mesh-llm plugins install Mesh-LLM/nwc-wallet-plugin Mesh-LLM/ln-payments-plugin
 ```
 
-- `wallet` — plugin name of the `wallet.v1` provider. When unset, mesh-llm uses
-  the only running wallet plugin (for example the external `lexe-wallet`). Once a wallet has been used, the payment ledger is pinned to it;
-  switching requires `mesh-llm wallet unpin` while the node is stopped.
+A wallet plugin alone does not enable payments, and `pay-lightning` without a
+wallet refuses every wallet call.
 
 ## Telemetry
 

@@ -6,10 +6,11 @@ use reqwest::Client;
 use sha2::Digest;
 
 use crate::{
-    archive::{ExtractedPluginArchive, extract_plugin_archive},
+    archive::{ExtractedPluginArchive, stage_plugin_archive},
     catalog::PluginCatalog,
+    catalog_pin::CatalogPin,
     github::{GitHubReleaseAsset, GitHubReleaseClient},
-    select_plugin_asset,
+    infer_plugin_asset, select_plugin_asset,
     source_ref::{
         GitHubPluginSource, PluginInstallRef, PluginVersion, is_valid_name, parse_install_ref,
     },
@@ -33,7 +34,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PluginProgressEvent {
     ResolvingCatalog {
         name: String,
@@ -58,14 +59,19 @@ pub enum PluginProgressEvent {
     Extracting {
         asset: String,
     },
+    /// A package landed: it is in place and recorded. Emitted before anything
+    /// else is attempted, so what `installed` was granted (its manifest's
+    /// access requests) can be disclosed even when a later step fails.
     Installed {
-        name: String,
-        version: String,
+        installed: Box<InstalledPluginMetadata>,
     },
+    /// Like `Installed`, replacing version `from`.
     Updated {
-        name: String,
+        installed: Box<InstalledPluginMetadata>,
         from: String,
-        to: String,
+        /// The metadata the replaced version was installed with, so the
+        /// access the operator accepted then can be compared with now.
+        previous: Box<InstalledPluginMetadata>,
     },
     AlreadyCurrent {
         name: String,
@@ -159,11 +165,11 @@ pub fn install_plugin_archive(
         last_protocol_version: current.as_ref().and_then(|item| item.last_protocol_version),
         last_status: current.as_ref().and_then(|item| item.last_status.clone()),
         last_error: None,
+        verified_sha256: None,
     };
     store.save(&metadata)?;
     progress.report(PluginProgressEvent::Installed {
-        name: metadata.name.clone(),
-        version: metadata.installed_version.clone(),
+        installed: Box::new(metadata.clone()),
     });
     Ok(InstallOutcome {
         metadata,
@@ -180,13 +186,14 @@ pub(crate) fn extract_for_install(
     name: &str,
     options: &PluginInstallOptions,
 ) -> Result<ExtractedPluginArchive> {
-    extract_plugin_archive(
+    let staged = stage_plugin_archive(
         archive_path,
         archive_ext,
         options.target.executable_suffix(),
         name,
         &options.install_root,
-    )
+    )?;
+    staged.commit()
 }
 
 fn local_archive_ext(path: &std::path::Path) -> Result<ArchiveExt> {
@@ -238,6 +245,7 @@ pub async fn update_plugin(
         plugin_name: current.name.clone(),
         source,
         version: None,
+        pin: None,
     };
     install_resolved_plugin(resolved, options, progress, Some(current)).await
 }
@@ -245,7 +253,14 @@ pub async fn update_plugin(
 struct ResolvedInstallSource {
     plugin_name: String,
     source: GitHubPluginSource,
+    /// The release to resolve: the catalog pin for a catalog install, the
+    /// `@version` the operator named for a GitHub reference, or `None` for
+    /// that repository's latest.
     version: Option<PluginVersion>,
+    /// The catalog entry's pin, present only for a catalog install. A GitHub
+    /// reference names no catalog entry, so there is nothing to bind it to.
+    /// When this is set, `version` is the pin's own version.
+    pin: Option<CatalogPin>,
 }
 
 async fn resolve_install_source(
@@ -262,16 +277,20 @@ async fn resolve_install_source(
                 .find_exact(&name)
                 .with_context(|| format!("plugin '{name}' was not found in the catalog"))?;
             let source = GitHubPluginSource::from_url(&entry.github_url)?;
+            let pin = CatalogPin::for_entry(entry, options.target.triple())?;
+            pin.ensure_matches_request(version.as_ref())?;
             Ok(ResolvedInstallSource {
                 plugin_name: entry.name.clone(),
                 source,
-                version,
+                version: Some(pin.version().clone()),
+                pin: Some(pin),
             })
         }
         PluginInstallRef::GitHub { source, version } => Ok(ResolvedInstallSource {
-            plugin_name: source.repo.clone(),
+            plugin_name: source.plugin_name().to_string(),
             source,
             version,
+            pin: None,
         }),
     }
 }
@@ -290,6 +309,9 @@ async fn install_resolved_plugin(
         .resolve_release(&resolved.source, resolved.version.as_ref())
         .await?;
 
+    if let Some(pin) = resolved.pin.as_ref() {
+        pin.ensure_release_is_pinned(&release.tag_name)?;
+    }
     if let Some(current) = &current
         && current.installed_version == release.tag_name
     {
@@ -307,16 +329,43 @@ async fn install_resolved_plugin(
         target: options.target.triple().to_string(),
     });
     let asset_names = release.asset_names();
-    let selected = select_plugin_asset(
+    let release_version = PluginVersion::new(release.tag_name.clone())?;
+    let mut resolved = resolved;
+    let selected = match select_plugin_asset(
         &resolved.plugin_name,
-        Some(&PluginVersion::new(release.tag_name.clone())?),
+        Some(&release_version),
         &options.target,
         &asset_names,
-    )?;
+    ) {
+        Ok(selected) => selected,
+        // A direct GitHub reference names a repository, and repositories are
+        // conventionally `<name>-plugin`. When the release assets carry a
+        // different plugin name, take that name from the assets. Catalog and
+        // update installs already know the plugin name, so they never infer.
+        Err(error) if resolved.pin.is_none() && current.is_none() => {
+            let Some((name, selected)) =
+                infer_plugin_asset(&release_version, &options.target, &asset_names)
+            else {
+                return Err(error);
+            };
+            resolved.plugin_name = name;
+            selected
+        }
+        Err(error) => return Err(error),
+    };
     let asset = release
         .asset_by_name(&selected.name)
         .with_context(|| format!("selected asset '{}' missing from release", selected.name))?;
-    let archive_path = download_asset(release_client.http_client(), asset, progress).await?;
+    if let Some(pin) = resolved.pin.as_ref() {
+        pin.ensure_reported_digest_agrees(&asset.name, reported_asset_sha256(asset)?.as_deref())?;
+    }
+    let (archive_path, verified_sha256) = download_asset(
+        release_client.http_client(),
+        asset,
+        resolved.pin.as_ref(),
+        progress,
+    )
+    .await?;
 
     progress.report(PluginProgressEvent::Extracting {
         asset: asset.name.clone(),
@@ -336,19 +385,19 @@ async fn install_resolved_plugin(
         &options.target,
         extracted,
         current.as_ref(),
+        Some(verified_sha256),
     );
     PluginStore::new(&options.store_root).save(&metadata)?;
 
     if let Some(current) = current {
         progress.report(PluginProgressEvent::Updated {
-            name: metadata.name.clone(),
-            from: current.installed_version,
-            to: metadata.installed_version.clone(),
+            installed: Box::new(metadata.clone()),
+            from: current.installed_version.clone(),
+            previous: Box::new(current),
         });
     } else {
         progress.report(PluginProgressEvent::Installed {
-            name: metadata.name.clone(),
-            version: metadata.installed_version.clone(),
+            installed: Box::new(metadata.clone()),
         });
     }
 
@@ -365,6 +414,7 @@ fn build_installed_metadata(
     target: &PluginTarget,
     extracted: ExtractedPluginArchive,
     current: Option<&InstalledPluginMetadata>,
+    verified_sha256: Option<String>,
 ) -> InstalledPluginMetadata {
     InstalledPluginMetadata {
         name: resolved.plugin_name.clone(),
@@ -379,15 +429,20 @@ fn build_installed_metadata(
         last_protocol_version: current.and_then(|metadata| metadata.last_protocol_version),
         last_status: current.and_then(|metadata| metadata.last_status.clone()),
         last_error: None,
+        verified_sha256,
     }
 }
 
+/// Download the asset and verify it against the catalog pin when there is one,
+/// and against the digest GitHub reports when there is not. Returns the archive
+/// path and the digest the bytes were verified against.
 async fn download_asset(
     client: &Client,
     asset: &GitHubReleaseAsset,
+    pin: Option<&CatalogPin>,
     progress: &mut impl PluginProgressReporter,
-) -> Result<PathBuf> {
-    required_plugin_asset_sha256(asset)?;
+) -> Result<(PathBuf, String)> {
+    let expected_sha256 = expected_asset_sha256(asset, pin)?;
     progress.report(PluginProgressEvent::DownloadStarted {
         asset: asset.name.clone(),
         total_bytes: asset.size,
@@ -425,34 +480,21 @@ async fn download_asset(
     }
     temp.flush()
         .with_context(|| format!("flush plugin asset temp file {}", temp.path().display()))?;
-    verify_plugin_asset_checksum(asset, hasher)?;
+    verify_asset_sha256(&asset.name, &expected_sha256, hasher)?;
     let (_file, path) = temp.keep().context("persist plugin asset temp path")?;
     progress.report(PluginProgressEvent::DownloadFinished {
         asset: asset.name.clone(),
     });
-    Ok(path)
+    Ok((path, expected_sha256))
 }
 
-/// Check a downloaded archive against GitHub's reported digest. A default
-/// plugin is never downloaded; its pin is checked on the bundled copy
-/// (`crate::bundled::install_bundled_default`).
-fn verify_plugin_asset_checksum(asset: &GitHubReleaseAsset, hasher: sha2::Sha256) -> Result<()> {
-    let expected = required_plugin_asset_sha256(asset)?;
-    let actual = hex::encode(hasher.finalize());
-    if actual != expected {
-        bail!(
-            "plugin asset checksum mismatch for {}: expected {expected}, got {actual}",
-            asset.name
-        );
-    }
-    Ok(())
-}
-
-fn required_plugin_asset_sha256(asset: &GitHubReleaseAsset) -> Result<String> {
-    let digest = asset
-        .digest
-        .as_deref()
-        .with_context(|| format!("plugin asset {} is missing a GitHub digest", asset.name))?;
+/// The digest GitHub reports for an asset, normalized to lowercase hex. GitHub
+/// reports it on the same mutable release object as the asset itself, so on a
+/// pinned install it is a cross-check and never the authority.
+fn reported_asset_sha256(asset: &GitHubReleaseAsset) -> Result<Option<String>> {
+    let Some(digest) = asset.digest.as_deref() else {
+        return Ok(None);
+    };
     let Some(sha256) = digest.trim().strip_prefix("sha256:") else {
         bail!("plugin asset {} digest must use sha256", asset.name);
     };
@@ -460,7 +502,31 @@ fn required_plugin_asset_sha256(asset: &GitHubReleaseAsset) -> Result<String> {
     if sha256.len() != 64 || !sha256.chars().all(|ch| ch.is_ascii_hexdigit()) {
         bail!("plugin asset {} has an invalid sha256 digest", asset.name);
     }
-    Ok(sha256)
+    Ok(Some(sha256))
+}
+
+fn required_plugin_asset_sha256(asset: &GitHubReleaseAsset) -> Result<String> {
+    reported_asset_sha256(asset)?
+        .with_context(|| format!("plugin asset {} is missing a GitHub digest", asset.name))
+}
+
+/// The digest a downloaded archive must match. A catalog install matches the
+/// catalog's pin: the digest GitHub reports describes whatever the release
+/// holds now, and whoever controls the repository can rewrite both. A GitHub
+/// reference names no catalog entry, so GitHub's own digest is all there is.
+fn expected_asset_sha256(asset: &GitHubReleaseAsset, pin: Option<&CatalogPin>) -> Result<String> {
+    match pin {
+        Some(pin) => Ok(pin.sha256().to_string()),
+        None => required_plugin_asset_sha256(asset),
+    }
+}
+
+fn verify_asset_sha256(asset_name: &str, expected: &str, hasher: sha2::Sha256) -> Result<()> {
+    let actual = hex::encode(hasher.finalize());
+    if actual != expected {
+        bail!("plugin asset checksum mismatch for {asset_name}: expected {expected}, got {actual}");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -472,6 +538,7 @@ mod tests {
 
     use super::*;
     use crate::ArchiveExt;
+    use crate::archive::extract_plugin_archive;
     use crate::store::{
         InstalledPluginApplyMode, InstalledPluginConditionOperator, InstalledPluginConditionValue,
         InstalledPluginConditionalDisable, InstalledPluginConfigSchema,
@@ -508,6 +575,8 @@ mod tests {
     fn packaged_manifest_fixture() -> Vec<u8> {
         serde_json::to_vec_pretty(&InstalledPluginManifestMetadata {
             openai_exchange_hook: None,
+            operation_bindings: Vec::new(),
+            peer_blocks: false,
             config_schema: Some(InstalledPluginConfigSchema {
                 plugin_name: "demo".to_string(),
                 schema_version: SUPPORTED_PLUGIN_SCHEMA_VERSION,
@@ -704,6 +773,7 @@ mod tests {
             plugin_name: "demo".to_string(),
             source: GitHubPluginSource::from_url("https://github.com/mesh-llm/demo").unwrap(),
             version: None,
+            pin: None,
         };
         let asset = GitHubReleaseAsset {
             name: "demo-v1.0.0-aarch64-apple-darwin.tar.gz".to_string(),
@@ -718,6 +788,7 @@ mod tests {
             &asset,
             &PluginTarget::from_os_arch("macos", "aarch64").unwrap(),
             extracted,
+            None,
             None,
         );
         let store = PluginStore::new(&store_root);
@@ -833,8 +904,8 @@ mod tests {
         assert!(PluginStore::new(&options.store_root).load("demo").is_ok());
         assert!(matches!(
             events.last(),
-            Some(PluginProgressEvent::Installed { name, version })
-                if name == "demo" && version == "0.1.0-dev"
+            Some(PluginProgressEvent::Installed { installed })
+                if installed.name == "demo" && installed.installed_version == "0.1.0-dev"
         ));
     }
 
@@ -850,8 +921,40 @@ mod tests {
         let mut hasher = sha2::Sha256::new();
         hasher.update(b"modified plugin archive");
 
-        let error = verify_plugin_asset_checksum(&asset, hasher)
+        let error = verify_asset_sha256(&asset.name, &expected, hasher)
             .expect_err("modified plugin asset must fail verification");
+        assert!(error.to_string().contains("checksum mismatch"), "{error:?}");
+    }
+
+    /// The attack the catalog pin exists for. The release was rewritten, so
+    /// GitHub's own digest describes the replaced bytes and only the catalog
+    /// still names the reviewed archive.
+    #[test]
+    fn a_pinned_install_verifies_the_catalog_digest_not_githubs() {
+        let replaced = hex::encode(sha2::Sha256::digest(b"replaced plugin archive"));
+        let asset = GitHubReleaseAsset {
+            name: "demo.tar.gz".to_string(),
+            browser_download_url: "https://example.invalid/demo.tar.gz".to_string(),
+            size: None,
+            digest: Some(format!("sha256:{replaced}")),
+        };
+        let pin = CatalogPin::for_entry(&pinned_catalog_entry(), "aarch64-apple-darwin").unwrap();
+
+        assert_eq!(
+            expected_asset_sha256(&asset, Some(&pin)).unwrap(),
+            pin.sha256(),
+            "a pinned install must not accept the digest a rewritten release reports"
+        );
+        assert_eq!(expected_asset_sha256(&asset, None).unwrap(), replaced);
+
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(b"replaced plugin archive");
+        let error = verify_asset_sha256(
+            &asset.name,
+            &expected_asset_sha256(&asset, Some(&pin)).unwrap(),
+            hasher,
+        )
+        .expect_err("the replaced archive must fail the catalog pin");
         assert!(error.to_string().contains("checksum mismatch"), "{error:?}");
     }
 
@@ -921,5 +1024,148 @@ mod tests {
             );
             assert!(outcome.metadata.executable_path().is_file(), "{os}/{arch}");
         }
+    }
+
+    #[test]
+    fn a_plugin_toml_that_names_another_plugin_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let options = options_for(temp.path(), "linux", "x86_64");
+        let archive_path = temp
+            .path()
+            .join("demo-0.1.0-x86_64-unknown-linux-gnu.tar.gz");
+        write_tar_gz(
+            &archive_path,
+            "demo",
+            &[("plugin.toml", b"name = \"other\""), ("demo", b"")],
+        )
+        .unwrap();
+        let error = install_plugin_archive(
+            "demo",
+            "0.1.0",
+            &archive_path,
+            &options,
+            &mut |_event: PluginProgressEvent| {},
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("names 'other'"), "{error:#}");
+        assert!(
+            PluginStore::new(&options.store_root)
+                .load_optional("demo")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    use std::{
+        io::{BufRead, BufReader, Write},
+        net::TcpListener,
+        thread,
+        time::Duration,
+    };
+
+    /// A catalog entry that pins `v1.0.0` and one platform digest.
+    const PINNED_CATALOG_LINE: &str = r#"{"name":"demo","description":"Demo","github_url":"https://github.com/mesh-llm/demo","author_email":"dev@example.com","author_name":"Mesh LLM","version":"v1.0.0","sha256":{"aarch64-apple-darwin":"abababababababababababababababababababababababababababababababab"}}"#;
+
+    /// The shape every entry in the live catalog has today: no pin at all.
+    const UNPINNED_CATALOG_LINE: &str = r#"{"name":"demo","description":"Demo","github_url":"https://github.com/mesh-llm/demo","author_email":"dev@example.com","author_name":"Mesh LLM"}"#;
+
+    fn pinned_catalog_entry() -> crate::catalog::CatalogEntry {
+        crate::catalog::PluginCatalog::parse_jsonl(PINNED_CATALOG_LINE)
+            .unwrap()
+            .find_exact("demo")
+            .unwrap()
+            .clone()
+    }
+
+    /// Serve `body` as the plugin catalog from a one-shot local server, so a
+    /// resolution test never reaches the live dataset.
+    fn serve_catalog(body: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/plugins.jsonl", listener.local_addr().unwrap());
+        thread::spawn(move || {
+            if let Ok((mut socket, _)) = listener.accept() {
+                let mut request = BufReader::new(match socket.try_clone() {
+                    Ok(clone) => clone,
+                    Err(_) => return,
+                });
+                let mut line = String::new();
+                let _ = request.read_line(&mut line);
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/x-ndjson\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(response.as_bytes());
+                let _ = socket.flush();
+            }
+        });
+        url
+    }
+
+    /// Resolve a bare catalog name against a catalog served from a local
+    /// one-shot server, and report what release the install would resolve.
+    /// The catalog fetch is the only network call this makes.
+    fn resolve_catalog_name(
+        name: &str,
+        catalog_body: &'static str,
+        root: &std::path::Path,
+    ) -> Result<(String, Option<String>), String> {
+        let options = PluginInstallOptions {
+            store_root: root.join("store"),
+            install_root: root.join("installed"),
+            catalog_url: serve_catalog(catalog_body),
+            target: PluginTarget::from_os_arch("macos", "aarch64").unwrap(),
+            bundled_plugins_dir: None,
+        };
+        let parsed = parse_install_ref(name).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let resolved = runtime.block_on(async move {
+                resolve_install_source(parsed, &options, &mut |_event| {})
+                    .await
+                    .map(|resolved| {
+                        (
+                            resolved.plugin_name,
+                            resolved.version.map(|version| version.as_str().to_string()),
+                        )
+                    })
+            });
+            let _ = sender.send(resolved);
+        });
+        receiver
+            .recv_timeout(Duration::from_secs(30))
+            .expect("catalog resolution returned")
+            .map_err(|error| format!("{error:#}"))
+    }
+
+    #[test]
+    fn a_named_install_binds_the_catalog_pinned_version_instead_of_latest() {
+        let temp = TempDir::new().unwrap();
+        let (plugin_name, version) = resolve_catalog_name("demo", PINNED_CATALOG_LINE, temp.path())
+            .expect("a pinned entry resolves");
+
+        assert_eq!(plugin_name, "demo");
+        assert_eq!(
+            version,
+            Some("v1.0.0".to_string()),
+            "the catalog pin must resolve that tag; no version sends the install to GitHub's mutable releases/latest"
+        );
+    }
+
+    /// The live catalog ships entries with no `version` and no `sha256`, so
+    /// this is what an install of one of those names does now.
+    #[test]
+    fn a_named_install_of_an_unpinned_entry_resolves_nothing() {
+        let temp = TempDir::new().unwrap();
+        let error = resolve_catalog_name("demo", UNPINNED_CATALOG_LINE, temp.path())
+            .expect_err("an entry with no pin must not resolve to a moving release");
+        assert!(error.contains("demo' pins no version"), "{error}");
+        assert!(
+            !std::path::Path::new(&temp.path().join("installed")).exists(),
+            "a refused install must leave nothing behind"
+        );
     }
 }

@@ -4,6 +4,7 @@ use super::*;
 #[serial]
 async fn control_plane_api_apply_config_rejects_gpu_assignment_conflict_before_owner_roundtrip() {
     let state = build_test_mesh_api().await;
+    seed_owner_control_token(&state).await;
     let (addr, handle) = spawn_management_test_server(state).await;
 
     let mut config =
@@ -18,7 +19,10 @@ async fn control_plane_api_apply_config_rejects_gpu_assignment_conflict_before_o
 
     let apply_response = send_management_request(
         addr,
-        management_post_request("/api/runtime/control/apply-config", &apply_request_body),
+        management_post_request_with_owner_control(
+            "/api/runtime/control/apply-config",
+            &apply_request_body,
+        ),
     )
     .await;
     let apply_body = json_body(&apply_response);

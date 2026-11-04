@@ -696,7 +696,7 @@ fn test_staged_binary_version_must_match_release() {
     permissions.set_mode(0o755);
     std::fs::set_permissions(&binary, permissions).unwrap();
 
-    verify_staged_mesh_binary_version(&dir, "0.68.0").unwrap();
+    crate::text_file_busy::retry(|| verify_staged_mesh_binary_version(&dir, "0.68.0")).unwrap();
     let err = verify_staged_mesh_binary_version(&dir, "0.69.0").unwrap_err();
     assert!(
         err.to_string()

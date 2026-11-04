@@ -96,6 +96,24 @@ impl PluginManifestBuilder {
             }
         }
     }
+
+    /// Request a provider connection by capability (see [`operation_binding`]).
+    pub fn operation_binding(mut self, binding: proto::OperationBindingManifest) -> Self {
+        self.grant_requests_mut().operation_bindings.push(binding);
+        self
+    }
+
+    /// Ask for permission to block and unblock routing to peers.
+    pub fn peer_blocks(mut self) -> Self {
+        self.grant_requests_mut().peer_blocks = true;
+        self
+    }
+
+    fn grant_requests_mut(&mut self) -> &mut proto::PluginGrantRequests {
+        self.manifest
+            .grant_requests
+            .get_or_insert_with(|| Box::new(proto::PluginGrantRequests::default()))
+    }
 }
 
 pub fn plugin_manifest() -> PluginManifestBuilder {
@@ -337,6 +355,27 @@ pub fn constraint_requires(key: impl Into<String>) -> proto::PluginConfigConstra
     }
 }
 
+/// A provider connection requested by capability; see `OperationBindingManifest`.
+pub fn operation_binding<I, S>(
+    name: impl Into<String>,
+    capability: impl Into<String>,
+    setup_operation: impl Into<String>,
+    operations: I,
+    setup_directory: bool,
+) -> proto::OperationBindingManifest
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    proto::OperationBindingManifest {
+        name: name.into(),
+        capability: capability.into(),
+        setup_operation: setup_operation.into(),
+        operations: operations.into_iter().map(Into::into).collect(),
+        setup_directory,
+    }
+}
+
 pub fn package_manifest_json(manifest: &proto::PluginManifest) -> Result<String> {
     let packaged = PackagedPluginManifest::try_from(manifest)?;
     Ok(serde_json::to_string_pretty(&packaged)?)
@@ -360,6 +399,10 @@ struct PackagedPluginManifest {
     openai_exchange_hook: Option<proto::OpenAiExchangeHookManifest>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     web_ui: Option<PackagedPluginWebUi>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    operation_bindings: Vec<proto::OperationBindingManifest>,
+    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
+    peer_blocks: bool,
 }
 
 impl TryFrom<&proto::PluginManifest> for PackagedPluginManifest {
@@ -382,6 +425,15 @@ impl TryFrom<&proto::PluginManifest> for PackagedPluginManifest {
         }
         Ok(Self {
             openai_exchange_hook: value.openai_exchange_hook.as_deref().cloned(),
+            operation_bindings: value
+                .grant_requests
+                .as_deref()
+                .map(|requests| requests.operation_bindings.clone())
+                .unwrap_or_default(),
+            peer_blocks: value
+                .grant_requests
+                .as_deref()
+                .is_some_and(|requests| requests.peer_blocks),
             config_schema,
             web_ui,
         })
@@ -796,7 +848,19 @@ impl PackagedPluginConstraint {
 }
 
 pub fn mesh_channel(name: impl Into<String>) -> ManifestEntry {
-    ManifestEntry::MeshChannel(proto::MeshChannelManifest { name: name.into() })
+    ManifestEntry::MeshChannel(proto::MeshChannelManifest {
+        name: name.into(),
+        local: false,
+    })
+}
+
+/// A channel this plugin publishes on to the other plugins on its node only
+/// (see [`crate::host_capabilities::LOCAL_CHANNELS`]).
+pub fn local_channel(name: impl Into<String>) -> ManifestEntry {
+    ManifestEntry::MeshChannel(proto::MeshChannelManifest {
+        name: name.into(),
+        local: true,
+    })
 }
 
 pub fn mesh_event_subscription(kind: proto::mesh_event::Kind) -> ManifestEntry {
@@ -1028,6 +1092,7 @@ pub fn operation<Input: JsonSchema>(
             input_schema_json: schema_json::<Input>(),
             output_schema_json: None,
             title: None,
+            timeout_secs: None,
         },
     }
 }
@@ -1040,6 +1105,14 @@ impl OperationBuilder {
 
     pub fn output_schema<Output: JsonSchema>(mut self) -> Self {
         self.inner.output_schema_json = Some(schema_json::<Output>());
+        self
+    }
+
+    /// How long the host may wait for this operation before it gives up on it.
+    /// Without this the host applies its default request deadline; `0` asks the
+    /// host to wait as long as the caller does.
+    pub fn timeout_secs(mut self, secs: u32) -> Self {
+        self.inner.timeout_secs = Some(secs);
         self
     }
 }
@@ -1932,5 +2005,40 @@ mod tests {
             error_chain_contains(&error, "unknown plugin config apply mode"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_local_channel_needs_the_host_capability() {
+        let local = crate::plugin_manifest()
+            .item(local_channel("payment.lifecycle.v1"))
+            .build();
+        let message = crate::host_capabilities::unsupported_requirement(Some(&local), |_| false)
+            .expect("refused");
+        assert!(message.contains("local_channels.v1"), "{message}");
+        assert!(
+            crate::host_capabilities::unsupported_requirement(Some(&local), |capability| {
+                capability == crate::host_capabilities::LOCAL_CHANNELS
+            })
+            .is_none()
+        );
+        let mesh = crate::plugin_manifest()
+            .item(mesh_channel("pay.ln.v1"))
+            .build();
+        assert!(
+            crate::host_capabilities::unsupported_requirement(Some(&mesh), |_| false).is_none()
+        );
+    }
+
+    #[test]
+    fn local_channel_declares_the_channel_local_and_mesh_channel_does_not() {
+        let ManifestEntry::MeshChannel(local) = local_channel("payment.lifecycle.v1") else {
+            panic!("local_channel is a mesh channel entry");
+        };
+        assert!(local.local);
+        assert_eq!(local.name, "payment.lifecycle.v1");
+        let ManifestEntry::MeshChannel(mesh) = mesh_channel("pay.ln.v1") else {
+            panic!("mesh_channel is a mesh channel entry");
+        };
+        assert!(!mesh.local);
     }
 }

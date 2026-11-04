@@ -30,6 +30,9 @@ use crate::ConfigValueSource;
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct MeshConfig {
+    /// Runtime origin used to resolve paths without rewriting persisted values.
+    #[serde(skip)]
+    pub source_directory: Option<std::path::PathBuf>,
     #[serde(default)]
     pub version: Option<u32>,
     #[serde(default)]
@@ -54,26 +57,8 @@ pub struct MeshConfig {
     pub models: Vec<ModelConfigEntry>,
     #[serde(rename = "plugin", default)]
     pub plugins: Vec<PluginConfigEntry>,
-    #[serde(default, skip_serializing_if = "PaymentsConfig::is_default")]
-    pub payments: PaymentsConfig,
     #[serde(flatten, default)]
     pub extra: BTreeMap<String, toml::Value>,
-}
-
-/// `[payments]`: which wallet backs paid inference. Spending policy and
-/// prices live in the payment ledger, not here.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct PaymentsConfig {
-    /// Plugin name of the `wallet.v1` provider to use. When unset the host
-    /// uses the only running wallet plugin.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wallet: Option<String>,
-}
-
-impl PaymentsConfig {
-    pub fn is_default(&self) -> bool {
-        *self == Self::default()
-    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -302,6 +287,9 @@ impl NativeRuntimeConfig {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct MeshRequirementsConfig {
+    /// Require origin-signed relayed peer records in newly created meshes.
+    #[serde(default)]
+    pub require_signed_gossip: bool,
     #[serde(default)]
     pub min_node_version: Option<String>,
     #[serde(default)]
@@ -349,6 +337,12 @@ pub struct ModelConfigDefaults {
 #[derive(Clone, Debug, Default)]
 pub struct ModelConfigEntry {
     pub model: String,
+    pub provider: Option<String>,
+    pub variant: Option<String>,
+    pub options: BTreeMap<String, toml::Value>,
+    pub provider_request_defaults: BTreeMap<String, toml::Value>,
+    pub lifecycle: crate::managed_models::ModelLifecycle,
+    pub source: crate::managed_models::ModelSource,
     pub mmproj: Option<String>,
     pub ctx_size: Option<u32>,
     pub gpu_id: Option<String>,
@@ -377,6 +371,7 @@ impl Serialize for ModelConfigEntry {
     {
         let mut state = serializer.serialize_struct("ModelConfigEntry", 19)?;
         state.serialize_field("model", &self.model)?;
+        self.serialize_model_management(&mut state)?;
         if let Some(value) = &self.mmproj {
             state.serialize_field("mmproj", value)?;
         }
@@ -1226,8 +1221,6 @@ struct RawMeshConfig {
     models: Vec<ModelConfigEntry>,
     #[serde(rename = "plugin", default)]
     plugins: Vec<PluginConfigEntry>,
-    #[serde(default)]
-    payments: PaymentsConfig,
     #[serde(flatten, default)]
     extra: BTreeMap<String, toml::Value>,
 }
@@ -1273,8 +1266,18 @@ struct RawModelConfigDefaults {
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
-struct RawModelConfigEntry {
+pub(crate) struct RawModelConfigEntry {
     model: String,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    variant: Option<String>,
+    #[serde(default)]
+    options: BTreeMap<String, toml::Value>,
+    #[serde(default)]
+    lifecycle: crate::managed_models::ModelLifecycle,
+    #[serde(default)]
+    source: crate::managed_models::ModelSource,
     #[serde(default)]
     mmproj: Option<String>,
     #[serde(default)]
@@ -1306,11 +1309,16 @@ struct RawModelConfigEntry {
     #[serde(default)]
     speculative: Option<SpeculativeConfig>,
     #[serde(default)]
-    request_defaults: Option<RequestDefaultsConfig>,
+    request_defaults: Option<toml::Value>,
     #[serde(default)]
     multimodal: Option<MultimodalConfig>,
     #[serde(default)]
     advanced: Option<AdvancedConfig>,
+    /// Keys a `[[models]]` row sets that the row struct does not know. Kept
+    /// out of `ModelConfigEntry` on purpose; validation warns about them
+    /// (see `unknown_fields::unknown_model_row_field_diagnostics`).
+    #[serde(flatten, default)]
+    pub(crate) extra: BTreeMap<String, toml::Value>,
 }
 
 impl<'de> Deserialize<'de> for MeshConfig {
@@ -1321,6 +1329,7 @@ impl<'de> Deserialize<'de> for MeshConfig {
         let raw = RawMeshConfig::deserialize(deserializer)?;
         Ok(Self {
             version: raw.version,
+            source_directory: None,
             gpu: raw.gpu,
             mesh_requirements: raw.mesh_requirements,
             owner_control: raw.owner_control,
@@ -1332,7 +1341,6 @@ impl<'de> Deserialize<'de> for MeshConfig {
             runtime: raw.runtime,
             models: raw.models,
             plugins: raw.plugins,
-            payments: raw.payments,
             extra: raw.extra,
         })
     }
@@ -1353,8 +1361,18 @@ impl<'de> Deserialize<'de> for ModelConfigEntry {
     where
         D: serde::Deserializer<'de>,
     {
-        let raw = RawModelConfigEntry::deserialize(deserializer)?;
-        Ok(Self::from_raw(raw))
+        let mut raw = RawModelConfigEntry::deserialize(deserializer)?;
+        let request_defaults = raw.request_defaults.take();
+        let mut model = Self::from_raw(raw);
+        if let Some(value) = request_defaults {
+            if model.provider.is_some() {
+                model.provider_request_defaults =
+                    value.try_into().map_err(serde::de::Error::custom)?;
+            } else {
+                model.request_defaults = Some(value.try_into().map_err(serde::de::Error::custom)?);
+            }
+        }
+        Ok(model)
     }
 }
 
@@ -1409,6 +1427,13 @@ impl ModelConfigEntry {
 
         Self {
             model: raw.model,
+            provider: raw.provider,
+            variant: raw.variant,
+            options: raw.options,
+            provider_request_defaults: Default::default(),
+            lifecycle: raw.lifecycle,
+            source: raw.source,
+
             mmproj: multimodal
                 .as_ref()
                 .and_then(|config| config.mmproj.clone())
@@ -1440,7 +1465,7 @@ impl ModelConfigEntry {
             topology: raw.topology,
             skippy: raw.skippy,
             speculative: raw.speculative,
-            request_defaults: raw.request_defaults,
+            request_defaults: None,
             multimodal,
             advanced: raw.advanced,
             gpu_id_from_legacy_shim,
@@ -1785,6 +1810,9 @@ impl Default for LoggingConfig {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PluginConfigEntry {
+    /// Explicit local-service permissions. Installing a plugin grants nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operation_bindings: Vec<crate::PluginOperationBinding>,
     pub name: String,
     #[serde(default)]
     pub enabled: Option<bool>,

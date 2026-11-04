@@ -44,6 +44,8 @@ pub struct SingleStageOptions {
     pub direct_io: bool,
     pub main_gpu: Option<u32>,
     pub split_mode: skippy_protocol::SplitMode,
+    /// Operator policy for host-resident routed experts.
+    pub host_experts: skippy_protocol::HostExpertPolicy,
     pub cache_type_k: String,
     pub cache_type_v: String,
     pub flash_attn_type: FlashAttentionType,
@@ -88,6 +90,7 @@ impl SingleStageOptions {
             direct_io: false,
             main_gpu: None,
             split_mode: skippy_protocol::SplitMode::Auto,
+            host_experts: skippy_protocol::HostExpertPolicy::default(),
             cache_type_k: kv.cache_type_k().to_string(),
             cache_type_v: kv.cache_type_v().to_string(),
             flash_attn_type: crate::kv_cache::effective_flash_attention(kv.cache_type_v()),
@@ -189,6 +192,11 @@ pub fn single_stage_config(
         direct_io: options.direct_io,
         main_gpu: options.main_gpu,
         split_mode: options.split_mode,
+        host_expert_layers: skippy_protocol::HostExpertLayers::for_stage(
+            layer_start,
+            layer_end,
+            options.host_experts,
+        ),
         cache_type_k: options.cache_type_k.clone(),
         cache_type_v: options.cache_type_v.clone(),
         flash_attn_type: options.flash_attn_type,

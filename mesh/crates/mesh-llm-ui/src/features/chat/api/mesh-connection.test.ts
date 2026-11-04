@@ -207,25 +207,6 @@ describe('createMeshConnectionAdapter', () => {
     expect(headersOf(1)).not.toHaveProperty('x-mesh-target')
   })
 
-  it('adds mesh_payment free_only when free-only is set, honouring the submitted value', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockImplementation(async () => new Response(createSSEStream(['data: [DONE]\n']), { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
-    const paymentMode = { value: 'free_only' }
-    const adapter = createMeshConnectionAdapter('model-a', undefined, undefined, undefined, paymentMode)
-
-    for await (const _chunk of adapter.connect(createMessages(), undefined, undefined)) void _chunk
-    paymentMode.value = ''
-    for await (const _chunk of adapter.connect(createMessages(), undefined, undefined)) void _chunk
-    for await (const _chunk of adapter.connect(createMessages(), { freeOnly: true }, undefined)) void _chunk
-
-    const bodyOf = (call: number) => JSON.parse(fetchMock.mock.calls[call]?.[1]?.body as string)
-    expect(bodyOf(0).mesh_payment).toEqual({ mode: 'free_only' })
-    expect(bodyOf(1)).not.toHaveProperty('mesh_payment')
-    expect(bodyOf(2).mesh_payment).toEqual({ mode: 'free_only' })
-  })
-
   it('emits first-class reasoning deltas before visible text', async () => {
     const fetchMock = vi
       .fn()
@@ -542,7 +523,70 @@ describe('createMeshConnectionAdapter', () => {
       name: 'ApiError',
       status: 503,
       body: 'Backend exploded',
-      message: 'Chat request failed: 503'
+      message: 'Backend exploded'
+    })
+  })
+
+  it('surfaces the server reason when a decision-only model is rejected with 422', async () => {
+    const reason = 'no served model advertises the required CausalGeneration workload'
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: { message: reason, type: 'invalid_request_error', param: null, code: 'unprocessable_content' }
+        }),
+        { status: 422, statusText: 'Unprocessable Entity', headers: { 'Content-Type': 'application/json' } }
+      )
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('meshllm/laya-multilingual-F16-GGUF:F16')
+    const iterator = adapter.connect(createMessages(), undefined, undefined)[Symbol.asyncIterator]()
+
+    expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+
+    await expect(iterator.next()).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 422,
+      body: reason,
+      message: reason
+    })
+  })
+
+  it.each([
+    { label: 'prefix-matching server reason', reason: 'HTTP 422: model is unavailable' },
+    { label: 'server reason identical to the fallback', reason: 'HTTP 422: Unprocessable Entity' }
+  ])('surfaces a $label', async ({ reason }) => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(reason, { status: 422, statusText: 'Unprocessable Entity' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('model-a')
+    const iterator = adapter.connect(createMessages(), undefined, undefined)[Symbol.asyncIterator]()
+
+    expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+
+    await expect(iterator.next()).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 422,
+      body: reason,
+      message: reason
+    })
+  })
+
+  it('keeps the generic status message when the failure body carries no reason', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('', { status: 500, statusText: 'Internal Server Error' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const adapter = createMeshConnectionAdapter('model-a')
+    const iterator = adapter.connect(createMessages(), undefined, undefined)[Symbol.asyncIterator]()
+
+    expect((await iterator.next()).value).toMatchObject({ type: EventType.RUN_STARTED })
+
+    await expect(iterator.next()).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 500,
+      message: 'Chat request failed: 500'
     })
   })
 

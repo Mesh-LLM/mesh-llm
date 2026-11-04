@@ -39,9 +39,13 @@ fi
 mkdir -p "$output_dir"
 archive="skippy-${version}-${target}-cli.tar.gz"
 COPYFILE_DISABLE=1 tar -czf "$output_dir/$archive" -C "$input_dir" "$binary" "$binary.sha256" host-imports.json
+# Write the canonical '<sha256>  <archive-name>' line ourselves: Git Bash's
+# sha256sum on the Windows runner marks binary mode as '<sha256> *<name>',
+# which the release's checksum verification rejects.
 if command -v sha256sum >/dev/null 2>&1; then
-    (cd "$output_dir" && sha256sum "$archive") > "$output_dir/$archive.sha256"
+    digest="$(sha256sum "$output_dir/$archive" | awk '{print tolower($1)}')"
 else
-    (cd "$output_dir" && shasum -a 256 "$archive") > "$output_dir/$archive.sha256"
+    digest="$(shasum -a 256 "$output_dir/$archive" | awk '{print tolower($1)}')"
 fi
+printf '%s  %s\n' "$digest" "$archive" > "$output_dir/$archive.sha256"
 echo "$output_dir/$archive"

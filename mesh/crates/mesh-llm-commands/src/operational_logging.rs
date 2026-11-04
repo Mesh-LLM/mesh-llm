@@ -74,9 +74,12 @@ impl CommandDispatchBoundary {
         let mut summary = command_summary(command).map(|value| value.as_str().to_owned());
         if let Some(summary_value) = summary.as_mut() {
             for (present, marker) in [
-                (!cli.join.is_empty(), " --join [REDACTED]"),
-                (!cli.relay.is_empty(), " --root-relay [REDACTED]"),
-                (!cli.relay_auth.is_empty(), " --relay-auth [REDACTED]"),
+                (!cli.joining.join.is_empty(), " --join [REDACTED]"),
+                (!cli.network.relay.is_empty(), " --root-relay [REDACTED]"),
+                (
+                    !cli.network.relay_auth.is_empty(),
+                    " --relay-auth [REDACTED]",
+                ),
             ] {
                 if present && !summary_value.contains(marker) {
                     summary_value.push_str(marker);
@@ -140,7 +143,6 @@ pub fn command_family(command: &Command) -> CliCommandFamily {
         Command::Update { .. } | Command::Setup { .. } | Command::Uninstall { .. } => {
             CliCommandFamily::Installation
         }
-        Command::Wallet { .. } => CliCommandFamily::Wallet,
         Command::Gpus { .. } => CliCommandFamily::Hardware,
         Command::Serve
         | Command::Client
@@ -255,6 +257,8 @@ mod tests {
         let command = Command::Load {
             name: "private-model.gguf?token=private-token".to_string(),
             port: 41731,
+            ctx_size: None,
+            parallel: None,
         };
         let events = lifecycle_events(&command, &Ok(()));
         assert_eq!(
@@ -341,6 +345,8 @@ mod tests {
         let boundary = CommandDispatchBoundary::start(&Command::Load {
             name: "model.gguf".to_string(),
             port: 9337,
+            ctx_size: None,
+            parallel: None,
         });
         boundary.finish(&Ok(()));
         assert_eq!(sink.take_events().len(), 2);
@@ -360,6 +366,8 @@ mod tests {
         let boundary = CommandDispatchBoundary::start(&Command::Load {
             name: "private-model.gguf".to_string(),
             port: 41731,
+            ctx_size: None,
+            parallel: None,
         });
         boundary.finish(&Err(anyhow!("private dispatch failure")));
         assert!(cli_operational_audit_bridge().is_none());
@@ -411,6 +419,8 @@ mod tests {
         let boundary = CommandDispatchBoundary::start(&Command::Load {
             name: "model.gguf".to_owned(),
             port: 9337,
+            ctx_size: None,
+            parallel: None,
         });
         boundary.finish(&Ok(()));
         assert_eq!(

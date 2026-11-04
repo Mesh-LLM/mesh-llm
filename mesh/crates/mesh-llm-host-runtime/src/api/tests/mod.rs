@@ -10,7 +10,7 @@ use mesh_client::proto::node::{
     OwnerControlError, OwnerControlErrorCode, OwnerControlGetConfigResponse, OwnerControlResponse,
 };
 use mesh_llm_plugin::MeshVisibility;
-use mesh_llm_protocol::{ALPN_CONTROL_V1, decode_owner_control_envelope, write_len_prefixed};
+use mesh_llm_protocol::{ALPN_CONTROL_V2, decode_owner_control_envelope, write_len_prefixed};
 use prost::Message;
 use rmcp::model::ErrorCode;
 use serde_json::json;
@@ -66,9 +66,12 @@ impl Drop for HomeEnvGuard {
 
 mod apply_config_diagnostics;
 mod apply_config_validation_authority;
+mod kv_cache_csrf;
 mod logs_api_routes;
 mod management_request_id;
 mod network_diagnostics;
+mod owner_control_identity;
+mod owner_control_route_negatives;
 mod runtime_config;
 mod runtime_config_validation_authority;
 mod runtime_control_state;
@@ -88,6 +91,7 @@ include!("model_targets.rs");
 include!("wakeable_inventory.rs");
 include!("status_metrics.rs");
 include!("openai_smoke.rs");
+include!("plugin_call_transport.rs");
 include!("ui_routes.rs");
 include!("runtime_events_v1.rs");
 include!("runtime_capabilities_parity.rs");

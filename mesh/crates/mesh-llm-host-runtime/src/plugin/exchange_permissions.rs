@@ -159,11 +159,13 @@ mod tests {
             ..Default::default()
         };
         let spec = ExternalPluginSpec {
+            operation_bindings: Vec::new(),
             name: "deferred-observer".into(),
             command: "must-not-start-deferred-observer".into(),
             args: Vec::new(),
             url: None,
             env: Default::default(),
+            settings: Default::default(),
             startup: super::super::PluginStartupOptions {
                 lazy_start: true,
                 ..Default::default()

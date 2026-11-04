@@ -39,6 +39,10 @@ message Envelope {
     SubscribeInferenceObservationRequest subscribe_inference_observation_request = 38;
     SubscribeInferenceObservationResponse subscribe_inference_observation_response = 39;
     InferenceObservationBatch inference_observation_batch = 40;
+    PrepareModelAssetsRequest prepare_model_assets_request = 41;
+    PrepareModelAssetsResponse prepare_model_assets_response = 42;
+    ModelRequirementRequest model_requirement_request = 43;
+    ModelRequirementResponse model_requirement_response = 44;
   }
 }
 
@@ -55,6 +59,10 @@ message InitializeRequest {
   string host_version = 2;
   string host_info_json = 3;
   MeshVisibility mesh_visibility = 4;
+  // JSON object of the operator's `[plugin.settings]` for this plugin,
+  // validated against its `config_schema`. Empty from a host older than this
+  // field, and for a plugin the operator gave no settings to.
+  string settings_json = 6;
   // Optional host features this host implements (see
   // `mesh_llm_plugin::host_capabilities`). A plugin checks one before using
   // the feature it names, so it fails clearly against an older host, which
@@ -128,6 +136,8 @@ message MeshEvent {
 message RpcRequest {
   string method = 1;
   string params_json = 2;
+  // Host-assigned parent call identity, echoed by invocation_callbacks.v1 plugins.
+  optional uint64 invocation_id = 3;
 }
 
 message RpcResponse {
@@ -137,6 +147,7 @@ message RpcResponse {
 message RpcNotification {
   string method = 1;
   string params_json = 2;
+  optional uint64 invocation_id = 3;
 }
 
 message ChannelMessage {
@@ -154,6 +165,13 @@ message MeshChannelFrame {
   string plugin_id = 1;
   string message_id = 2;
   ChannelMessage message = 3;
+  // Signed with the source endpoint key; the signature covers this expiry and
+  // every other frame field except `origin_signature`.
+  uint64 expires_at_unix_ms = 4;
+  // Covers a prost re-encoding of the decoded frame with this field cleared.
+  // Relayed only through peers advertising plugin-origin-signature; legacy
+  // relays are skipped because they discard these fields. Destinations verify it.
+  bytes origin_signature = 5;
 }
 
 message BulkTransferMessage {
@@ -186,6 +204,13 @@ message MeshBulkFrame {
   string plugin_id = 1;
   string message_id = 2;
   BulkTransferMessage message = 3;
+  // Signed with the source endpoint key; the signature covers this expiry and
+  // every other frame field except `origin_signature`.
+  uint64 expires_at_unix_ms = 4;
+  // Covers a prost re-encoding of the decoded frame with this field cleared.
+  // Relayed only through peers advertising plugin-origin-signature; legacy
+  // relays are skipped because they discard these fields. Destinations verify it.
+  bytes origin_signature = 5;
 }
 
 message PluginManifest {
@@ -212,6 +237,10 @@ message PluginManifest {
   // `SubscribeInferenceObservationRequest`. Declarations are not grants: the
   // operator also sets `allow_inference_observation = true` for the plugin.
   optional InferenceObservationManifest inference_observation = 16;
+  // Local provider connections this plugin needs, chosen by capability. An
+  // installed package's requests are granted at install; a `[[plugin]]`
+  // `operation_bindings` entry in the operator config replaces them.
+  optional PluginGrantRequests grant_requests = 17;
 }
 
 message InferenceObservationManifest {
@@ -523,6 +552,15 @@ message PluginConfigRequiresConstraint {
 
 message MeshChannelManifest {
   string name = 1;
+  // This plugin publishes on the channel to the other plugins on its own
+  // node, never to the mesh: the host delivers its channel messages on it to
+  // every other local plugin that declares the channel, as it delivers its
+  // own local broadcasts (empty `source_peer_id`), and sends none to a peer.
+  // Bulk transfers on it are dropped and mesh streams on it are refused.
+  // Handled only by a host listing the `local_channels.v1` capability; a
+  // host without it would send the messages to the mesh, so a plugin checks
+  // the capability before publishing.
+  bool local = 2;
 }
 
 message MeshEventSubscriptionManifest {
@@ -544,6 +582,7 @@ message InvokeServiceRequest {
   ServiceKind kind = 1;
   string service_name = 2;
   string input_json = 3;
+  optional uint64 invocation_id = 4;
 }
 
 message InvokeServiceResponse {
@@ -557,6 +596,10 @@ message OperationManifest {
   string input_schema_json = 3;
   optional string output_schema_json = 4;
   optional string title = 5;
+  // Wall-clock seconds this operation may take before the host gives up on
+  // it. Unset means the host's default request deadline; 0 means the host
+  // waits for this operation for as long as the caller does.
+  optional uint32 timeout_secs = 6;
 }
 
 message ResourceManifest {
@@ -825,6 +868,43 @@ message OpenAiExchangeHookManifest {
   uint64 max_delegation_ttl_secs = 19;
 }
 
+// What an installed package asks the host for. Granted at install; the
+// operator's `[[plugin]]` entry replaces or removes each grant.
+message PluginGrantRequests {
+  // Provider connections this plugin needs, chosen by capability.
+  repeated OperationBindingManifest operation_bindings = 1;
+  // This plugin asks to block/unblock routing to peers.
+  bool peer_blocks = 2;
+}
+
+// A provider connection requested by capability (for example `storage.v1`).
+// The host resolves it to the single running plugin serving that capability.
+message OperationBindingManifest {
+  string name = 1;
+  string capability = 2;
+  string setup_operation = 3;
+  repeated string operations = 4;
+  // Setup takes `{"directory": <absolute base the caller owns>}` from the
+  // caller; the host dispatches `{"directory": "<base>/<provider plugin name>"}`
+  // (created owner-only), so each provider keeps separate state and the
+  // caller never learns which provider it was bound to.
+  bool setup_directory = 5;
+}
+
+// Replaces this plugin's requirements for one exact advertised model id.
+// Empty requires withdraws. The host authenticates the plugin name
+// and accepts only channels declared by that plugin's initialized manifest.
+message ModelRequirementRequest {
+  string model = 1;
+  repeated ChannelRequirement requires = 2;
+}
+message ModelRequirementResponse {}
+
+message ChannelRequirement {
+  string channel = 1;
+  bytes terms = 2;
+}
+
 // A plugin asks for the local inference observation feed: what this node's
 // own inference frontends execute, requests from peers included, and never
 // work this node only forwards. Handled only by a host listing the
@@ -949,3 +1029,7 @@ message InferenceObservationLoss {
   uint64 first_lost_sequence = 1;
   uint64 lost_events = 2;
 }
+
+// Provider plans are authorized against host-selected model configuration.
+message PrepareModelAssetsRequest { string plan_json = 1; }
+message PrepareModelAssetsResponse { string assets_json = 1; }

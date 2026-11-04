@@ -85,9 +85,10 @@ mod connectivity;
 mod direct_path;
 mod direct_rescue;
 mod gossip;
-mod heartbeat;
+pub(crate) mod heartbeat;
 mod host_role_claims;
 pub(crate) mod model_identity;
+mod model_requirements;
 mod node;
 mod node_identity;
 mod node_requirements;
@@ -170,13 +171,13 @@ pub use node::{
     LocalRequestMetricsSnapshot, Node, RouteEntry, RoutingTable, detect_local_fit_bytes,
 };
 pub(crate) use node::{
-    MembershipEntry, MembershipNodeConfig, PeerDownReport, membership_token_endpoint,
-    peer_down_endpoint_id,
+    MembershipEntry, MembershipNodeConfig, PeerDownReport, StartupResolution,
+    membership_token_endpoint, peer_down_endpoint_id,
 };
 pub(crate) use peer_state::{
     ClaimedLogHead, ControlListenerLifecycle, DEAD_PEER_TTL, PEER_STALE_SECS, http_routable_models,
-    peer_has_observed_liveness, resolve_peer_leaving, routable_models, routes_http_model,
-    routes_model,
+    peer_has_observed_liveness, public_model_id_for_routable_model, resolve_peer_leaving,
+    routable_models, routes_http_model, routes_model,
 };
 #[expect(
     unused_imports,
@@ -214,6 +215,3 @@ pub(crate) mod tests;
 
 #[cfg(test)]
 mod public_identity_tests;
-
-#[cfg(feature = "payments")]
-pub(crate) mod payments;

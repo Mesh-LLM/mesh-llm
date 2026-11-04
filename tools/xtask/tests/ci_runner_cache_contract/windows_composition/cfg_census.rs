@@ -17,7 +17,6 @@ const UNVERIFIED: &[&str] = &[
     "skippy-hf-hub",
     // Native HF publication input custody and model FIFO fixtures need Windows qualification.
     "skippy-model-package",
-    "mesh-llm-routing",
     "skippy-model",
     "skippy-package-builder",
     "skippy-quantize",
@@ -378,11 +377,11 @@ fn windows_unit_resolver_outputs_keep_shared_macos_owners_and_windows_only_plugi
     let environment = step.get("env").unwrap();
     assert_eq!(
         environment.get("WINDOWS_TEST_CRATES").and_then(Node::text),
-        Some("${{ steps.windows_packages.outputs.crates }}")
+        Some("${{ steps.windows_test_packages.outputs.windows_crates }}")
     );
     assert_eq!(
         environment.get("TEST_CRATES").and_then(Node::text),
-        Some("${{ steps.packages.outputs.crates }}")
+        Some("${{ steps.windows_test_packages.outputs.crates }}")
     );
     let run = step.get("run").and_then(Node::text).unwrap();
     for token in [
@@ -531,7 +530,7 @@ fn dynamic_request(document: &Node) -> Result<(&str, Vec<String>), String> {
         .get("env")
         .and_then(|env| env.get("WINDOWS_DYNAMIC_TEST_CRATES"))
         .and_then(Node::text)
-        != Some("${{ steps.windows_dynamic_packages.outputs.crates }}")
+        != Some("${{ steps.windows_test_packages.outputs.windows_dynamic_crates }}")
     {
         return Err("dynamic Windows loop must consume its resolver output".into());
     }
@@ -679,7 +678,7 @@ fn windows_dynamic_loop_mutations_refuse_detached_output_and_unfeatured_executio
     assert!(dynamic_request(&workflow_yaml::parse(&source).unwrap()).is_ok());
     for (before, after) in [
         (
-            "WINDOWS_DYNAMIC_TEST_CRATES: ${{ steps.windows_dynamic_packages.outputs.crates }}",
+            "WINDOWS_DYNAMIC_TEST_CRATES: ${{ steps.windows_test_packages.outputs.windows_dynamic_crates }}",
             "WINDOWS_DYNAMIC_TEST_CRATES: ${{ steps.packages.outputs.crates }}",
         ),
         (
@@ -744,18 +743,11 @@ fn every_current_windows_catalog_unit_owner_selects_the_native_planner_row() {
     }
 }
 #[test]
-fn wallet_dependency_closure_preserves_direct_domain_pr_routing_and_full_cadence() {
+fn retired_wallet_placeholder_keeps_direct_domain_pr_routing_and_full_cadence() {
     let plan = plan_for_workflow_owner("mesh-llm-wallet", "pr-ready");
     assert_eq!(
         plan["direct_crates"],
         serde_json::json!(["mesh-llm-wallet"])
-    );
-    assert!(
-        plan["affected_crates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|name| name == "mesh-llm-host-runtime")
     );
     assert!(
         plan["domains"]
