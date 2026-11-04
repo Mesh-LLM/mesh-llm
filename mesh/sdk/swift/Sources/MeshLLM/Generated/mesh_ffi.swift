@@ -1182,11 +1182,21 @@ public struct ModelNative: Equatable, Hashable {
     public var id: String
     public var name: String
     public var contextLength: UInt32?
+    /**
+     * Effort strings the serving provider observed in the loaded chat
+     * template, in its reported order. `None` is unknown — an older provider
+     * or an unprobed model — and an empty list is a known "no effort levels".
+     */
     public var thinkingEfforts: [String]?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, name: String, contextLength: UInt32?, thinkingEfforts: [String]?) {
+    public init(id: String, name: String, contextLength: UInt32?,
+        /**
+         * Effort strings the serving provider observed in the loaded chat
+         * template, in its reported order. `None` is unknown — an older provider
+         * or an unprobed model — and an empty list is a known "no effort levels".
+         */thinkingEfforts: [String]?) {
         self.id = id
         self.name = name
         self.contextLength = contextLength
@@ -2414,6 +2424,9 @@ fileprivate struct FfiConverterOptionSequenceString: FfiConverterRustBuffer {
     }
 }
 
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceInt16: FfiConverterRustBuffer {
     typealias SwiftType = [Int16]
 
