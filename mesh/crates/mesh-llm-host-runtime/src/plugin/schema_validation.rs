@@ -408,6 +408,8 @@ mod tests {
                     ],
                 }),
                 web_ui: None,
+                operation_bindings: Vec::new(),
+                peer_blocks: false,
             }),
             last_protocol_version: None,
             last_status: None,

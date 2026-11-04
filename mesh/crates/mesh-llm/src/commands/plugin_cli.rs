@@ -164,6 +164,7 @@ fn resolve_installed_cli_plugin(command: &str) -> Result<Option<plugin::External
         );
     }
     Ok(Some(plugin::ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         openai_exchange_grant: None,
         name: metadata.name.clone(),
         command: executable.display().to_string(),

@@ -143,7 +143,6 @@ pub(super) async fn route_missing_local_model(
                 request,
                 proxy::RouteModelRequestContext {
                     local_execution_only: false,
-                    exchange_id: Some(&exchange_id),
                     required_tokens,
                     affinity: ctx.affinity,
                     route_observer,
