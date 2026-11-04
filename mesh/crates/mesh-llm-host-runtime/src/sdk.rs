@@ -1112,6 +1112,10 @@ mod tests {
             api_port,
             console_port,
             startup_timeout: Duration::from_secs(30),
+            // Local only, as the sibling lifecycle tests are: without network,
+            // the relay probes' DNS lookups keep the worker past its 5 s join.
+            discovery_mode: EmbeddedMeshDiscoveryMode::Mdns,
+            disable_iroh_relays: true,
             ..EmbeddedServeConfig::default()
         })
         .await
