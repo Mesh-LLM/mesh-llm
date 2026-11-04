@@ -170,6 +170,23 @@ start and must be validated separately. Do not expose an unauthenticated gateway
 to the LAN or Internet to work around this limitation. Do not disable TLS or
 authentication on an existing shared provider.
 
+### Can I share only some of the provider's models?
+
+Yes. List the model IDs to share in the plugin entry's `models`:
+
+```toml
+[[plugin]]
+name = "openai-endpoint"
+url = "http://127.0.0.1:8888/v1"
+models = ["deepseek-v4-1-flash"]
+```
+
+Mesh does not advertise the other models the provider lists, and it does not
+route requests for them to this endpoint, even when a request names one. Use
+the exact IDs from the provider's `/v1/models`. A model the provider adds later
+stays hidden until you add it to the list. Without `models`, Mesh shares every
+model the provider lists. Restart Mesh after you change the list.
+
 ### Why is the plugin healthy but my model missing?
 
 Plugin-process health and upstream readiness are separate. Check in this order:
@@ -179,6 +196,7 @@ Plugin-process health and upstream readiness are separate. Check in this order:
    `data` with model IDs? A 401/403 indicates authentication; a 404 often means a
    wrong base path; connection refused usually means wrong port or stopped server.
 3. Mesh `http://127.0.0.1:9337/v1/models`: allow time for health checks/discovery.
+   If the plugin entry sets `models`, only the IDs in that list appear.
 4. Completion: use the exact listed ID and a chat-capable model. A model listing
    alone does not prove generation; loading or a missing chat template can fail.
    An `https://` upstream may pass discovery but fail generation: this host

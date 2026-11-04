@@ -2117,6 +2117,7 @@ mod tests {
                 command: Some("invalid-blobstore-command".to_owned()),
                 args: Vec::new(),
                 url: None,
+                models: None,
                 settings: Default::default(),
                 startup: Default::default(),
             }],

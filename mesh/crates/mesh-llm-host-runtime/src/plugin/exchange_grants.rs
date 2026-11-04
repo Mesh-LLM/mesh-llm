@@ -215,6 +215,7 @@ mod tests {
             },
             web_ui_enabled: None,
             web_ui_primary_tab: None,
+            endpoint_models: None,
             installed_metadata: None,
             openai_exchange_grant: grant.map(Box::new),
         };
@@ -249,6 +250,7 @@ mod tests {
             let mut config = MeshConfig::default();
             config.plugins.push(crate::plugin::PluginConfigEntry {
                 operation_bindings: Vec::new(),
+                models: None,
                 name: "pay".into(),
                 enabled,
                 web_ui_enabled: None,
@@ -424,6 +426,7 @@ mod tests {
             },
             web_ui_enabled: None,
             web_ui_primary_tab: None,
+            endpoint_models: None,
             installed_metadata: None,
             openai_exchange_grant: Some(Box::new(original.clone())),
         };
