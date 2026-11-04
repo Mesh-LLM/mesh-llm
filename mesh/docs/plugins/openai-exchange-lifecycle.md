@@ -170,6 +170,12 @@ a transport failure, a stream that ended before its body), `timeout` (a 408 or
 504) or `dropped`. `status` cannot say this alone: a stream
 cut after its 200 headers terminates with status 200.
 
+On a `raw_proxy` terminal that carries a `failure_class`, `requested_by_node_id`
+names the asking mesh node (lowercase hex, the encoding
+`serving_provenance.requested_by_node_id` uses), so a plugin can tell who was
+refused or failed; a failed exchange has no serving provenance to carry it. It
+is absent for a request that did not come over the mesh.
+
 On those two paths an absent `failure_class` means the exchange completed. The
 `typed_frontend` path does not set the field, so there its absence says
 nothing; the lifecycle service's `exchange_finished` callbacks do not carry

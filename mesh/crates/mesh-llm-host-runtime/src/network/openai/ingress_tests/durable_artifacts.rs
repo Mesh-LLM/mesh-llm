@@ -258,6 +258,7 @@ async fn publish_raw_proxy_terminal_states_the_failure_class() {
     use crate::plugin::openai_exchange::ExchangeFailureClass;
     let node = node_with_hardware_and_descriptor("test-model").await;
     let mut classes = Vec::new();
+    let mut asked = Vec::new();
     for outcome in [
         proxy::RouteDispatchOutcome::PolicyDenied { status_code: 402 },
         proxy::RouteDispatchOutcome::FailedWithStatus {
@@ -276,11 +277,14 @@ async fn publish_raw_proxy_terminal_states_the_failure_class() {
             RawProxyTerminalFacts {
                 served_locally: false,
                 request_digest: None,
-                ..Default::default()
+                requested_by_node_id: Some("abcd"),
+                client_nonce: None,
             },
         )
         .await;
-        classes.push(channel.events()[0].failure_class);
+        let event = channel.events()[0].clone();
+        asked.push(event.requested_by_node_id);
+        classes.push(event.failure_class);
     }
     assert_eq!(
         classes,
@@ -289,6 +293,11 @@ async fn publish_raw_proxy_terminal_states_the_failure_class() {
             Some(ExchangeFailureClass::UpstreamError),
             None
         ]
+    );
+    // The asker is named on a failed exchange, and only on one.
+    assert_eq!(
+        asked,
+        [Some("abcd".to_string()), Some("abcd".to_string()), None]
     );
 }
 

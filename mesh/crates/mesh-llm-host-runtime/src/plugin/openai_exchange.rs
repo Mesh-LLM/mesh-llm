@@ -466,6 +466,15 @@ pub struct OpenAiExchangeEnvelope {
     /// headers terminates with status 200.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_class: Option<ExchangeFailureClass>,
+    /// The mesh node that asked, as lowercase hex of its endpoint id (the
+    /// encoding `serving_provenance.requested_by_node_id` uses), on a
+    /// raw-proxy terminal for an exchange that did not complete. A served
+    /// exchange states it inside `serving_provenance`; a failed one carries no
+    /// provenance, so this is how a plugin learns who was refused or failed.
+    /// Absent for a request that did not come over the mesh and on every
+    /// other envelope.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_by_node_id: Option<String>,
 }
 
 impl OpenAiExchangeEnvelope {
@@ -492,6 +501,7 @@ impl OpenAiExchangeEnvelope {
             reasoning_digest: None,
             twin_bracket_id: None,
             failure_class: None,
+            requested_by_node_id: None,
         }
     }
 
@@ -521,6 +531,7 @@ impl OpenAiExchangeEnvelope {
             reasoning_digest: None,
             twin_bracket_id: None,
             failure_class: None,
+            requested_by_node_id: None,
         }
     }
 
@@ -564,6 +575,15 @@ impl OpenAiExchangeEnvelope {
     #[must_use]
     pub fn with_failure_class(mut self, failure_class: Option<ExchangeFailureClass>) -> Self {
         self.failure_class = failure_class;
+        self
+    }
+
+    /// Attach the asking mesh node (see
+    /// [`requested_by_node_id`](Self::requested_by_node_id)); `None` leaves it
+    /// absent.
+    #[must_use]
+    pub fn with_requested_by_node_id(mut self, requested_by_node_id: Option<&str>) -> Self {
+        self.requested_by_node_id = requested_by_node_id.map(str::to_string);
         self
     }
 
@@ -634,6 +654,7 @@ impl OpenAiExchangeEnvelope {
             reasoning_digest: None,
             twin_bracket_id: None,
             failure_class: None,
+            requested_by_node_id: None,
         }
     }
 
@@ -697,6 +718,7 @@ impl OpenAiExchangeEnvelope {
             reasoning_digest: None,
             twin_bracket_id: None,
             failure_class: None,
+            requested_by_node_id: None,
         }
     }
 }

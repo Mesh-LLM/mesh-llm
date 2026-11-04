@@ -246,7 +246,9 @@ pub(in crate::network::openai) struct RawProxyTerminalFacts<'a> {
     /// Canonical digest of the real request body the host dispatched.
     pub(in crate::network::openai) request_digest: Option<&'a str>,
     /// The mesh node that asked, from the tunnel's authenticated remote id
-    /// ([`IngressRouteContext::requested_by_node_id`]). Host-served only.
+    /// ([`IngressRouteContext::requested_by_node_id`]). Goes into the serving
+    /// provenance of a host-served exchange, and onto the envelope of one that
+    /// failed on any path.
     pub(in crate::network::openai) requested_by_node_id: Option<&'a str>,
     /// The request's stabilized `x-capsule-client-nonce` and who contributed
     /// it ([`request_client_nonce`]), as the `RemoteMesh` terminal reports it.
@@ -302,6 +304,12 @@ pub(in crate::network::openai) async fn publish_raw_proxy_terminal(
         client_nonce.map(|(_, source)| source),
     )
     .with_failure_class(exchange_failure_class(final_outcome));
+    // A failed exchange has no serving provenance to name the asker in, so
+    // it is stated here, only for the exchanges that failed: the same value
+    // a served one already gives plugins inside its provenance.
+    if envelope.failure_class.is_some() {
+        envelope = envelope.with_requested_by_node_id(requested_by_node_id);
+    }
     envelope.nonce = client_nonce.map(|(nonce, _)| nonce.to_string());
     // Nothing was served on a 503 / `Failed` / `Dropped` outcome, so there is
     // no hardware or model identity to report — and no reason to pay the

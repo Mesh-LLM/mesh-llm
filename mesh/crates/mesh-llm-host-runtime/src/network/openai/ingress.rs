@@ -943,7 +943,7 @@ async fn try_route_plugin_model(
                 RawProxyTerminalFacts {
                     served_locally: false, // plugin-served: never this node's own hardware/weights
                     request_digest: request_digest.as_deref(),
-                    requested_by_node_id: None, // no host-served provenance block on this path
+                    requested_by_node_id: ctx.requested_by_node_id.as_deref(), // named on a failed exchange only; no provenance block on this path
                     client_nonce: None,
                 },
             )
