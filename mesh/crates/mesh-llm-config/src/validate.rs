@@ -373,6 +373,9 @@ where
     diagnostics.extend(crate::unknown_fields::unknown_model_row_field_diagnostics(
         raw_toml,
     ));
+    diagnostics.extend(crate::unknown_fields::unknown_receipts_field_diagnostics(
+        raw_toml,
+    ));
     diagnostics.extend(validate_plugin_entries_strict(
         &config.plugins,
         raw_toml,

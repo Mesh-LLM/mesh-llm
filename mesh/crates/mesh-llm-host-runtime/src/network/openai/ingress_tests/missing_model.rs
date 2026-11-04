@@ -73,6 +73,7 @@ async fn missing_local_model_response_with_targets(
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     };
     let ctx = IngressRouteContext {
         node,

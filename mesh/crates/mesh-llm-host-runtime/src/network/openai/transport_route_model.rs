@@ -1,5 +1,8 @@
 #[path = "transport_route_exhaustion.rs"]
 mod exhaustion;
+#[path = "transport_route_trust.rs"]
+mod trust;
+use trust::{finish_unserved_route_model_request, trust_policy_refuses};
 
 use super::super::exchange_admission::SelectedRouteAdmission;
 use super::*;
@@ -110,6 +113,8 @@ struct RouteModelState {
     attempts: usize,
     timeout_attempts: usize,
     refreshed: bool,
+    /// The request's trust policy refused a candidate when its turn came.
+    refused_by_trust_policy: bool,
 }
 
 enum RouteModelDisposition {
@@ -155,20 +160,23 @@ async fn execution_candidates(
     targets: &election::ModelTargets,
     local_execution_only: bool,
 ) -> Vec<election::InferenceTarget> {
+    let path = &request.client_path;
     if local_execution_only {
         let local = targets
             .candidates(model)
             .into_iter()
             .filter(|target| matches!(target, election::InferenceTarget::Local(_)))
             .collect::<Vec<_>>();
-        super::super::workload_routing::eligible_targets(node, model, &request.client_path, &local)
-            .await
+        let eligible =
+            super::super::workload_routing::eligible_targets(node, model, path, &local).await;
+        crate::network::request_trust::permitted(node, request.trust, model, path, eligible).await
     } else {
         super::super::workload_routing::ingress_candidates(
             node,
             model,
-            &request.client_path,
+            path,
             targets,
+            request.trust,
         )
         .await
     }
@@ -185,9 +193,13 @@ struct PreparedModelCandidates {
     ordered_candidates: Vec<election::InferenceTarget>,
 }
 
-struct ModelRouteRejection {
-    status: u16,
-    reason: String,
+enum ModelRouteRejection {
+    Status {
+        status: u16,
+        reason: String,
+    },
+    /// No candidate may serve the request under its trust policy.
+    TrustPolicy(crate::network::request_trust::Unsatisfied),
 }
 
 impl ModelRouteRejection {
@@ -196,11 +208,17 @@ impl ModelRouteRejection {
         stream: ClientStream,
         observer: OpenAiRouteObserver<'_>,
     ) -> RouteDispatchOutcome {
-        let result = match self.status {
-            503 => send_503_observed(stream, &self.reason, observer).await,
-            status => send_error_observed(stream, status, &self.reason, observer).await,
+        let (status, reason) = match self {
+            Self::Status { status, reason } => (status, reason),
+            Self::TrustPolicy(rejection) => {
+                return super::super::trust_policy::answer(stream, rejection, observer).await;
+            }
         };
-        response_outcome(self.status, result)
+        let result = match status {
+            503 => send_503_observed(stream, &reason, observer).await,
+            status => send_error_observed(stream, status, &reason, observer).await,
+        };
+        response_outcome(status, result)
     }
 }
 
@@ -217,11 +235,19 @@ async fn prepare_model_candidates(
 ) -> Result<PreparedModelCandidates, ModelRouteRejection> {
     let candidates =
         execution_candidates(node, model, request, targets, local_execution_only).await;
+    // The pool holds only candidates the request's trust policy permits. If
+    // that leaves none, the policy is why, not context or health.
+    if candidates.is_empty()
+        && let Some(rejection) = super::super::trust_policy::no_candidate(request, model)
+    {
+        record_route_model_unavailable(node, model, 0);
+        return Err(ModelRouteRejection::TrustPolicy(rejection));
+    }
     let ranked = rank_targets_by_context(node, model, required_tokens, &candidates).await;
     let ordered_candidates = affinity.route_eligible_candidates(model, &ranked.ordered);
     if ordered_candidates.is_empty() {
         record_route_model_unavailable(node, model, 0);
-        return Err(ModelRouteRejection {
+        return Err(ModelRouteRejection::Status {
             status: 503,
             reason: no_context_eligible_target_reason(model, required_tokens),
         });
@@ -293,6 +319,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         attempts: 0,
         timeout_attempts: 0,
         refreshed: false,
+        refused_by_trust_policy: false,
     };
     // `request.raw` was already stabilized at ingress (finalize_forwarded_request
     // resolves the capsule client nonce once, before target selection), so every
@@ -300,6 +327,9 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     // the identical nonce instead of letting each target's frontend mint its own.
     let forwarding_raw = request.raw.as_slice();
     for (idx, target) in ordered.into_iter().enumerate() {
+        if trust_policy_refuses(&node, request, model, &target, &mut state).await {
+            continue;
+        }
         // A prior attempt in this same loop may have probed a response,
         // recorded ITS peer's `X-Capsule-Id` into the sink, and then still
         // been classified retryable (e.g. context overflow) -- drain that
@@ -345,6 +375,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
                 route_observer,
                 served_by: served_by_header,
                 peer_capsule_id,
+                trust: request.trust,
             },
         )
         .await;
@@ -398,9 +429,10 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         }
     }
 
-    exhaustion::finish_exhausted_route_model_request(
+    finish_unserved_route_model_request(
         &node,
         tcp_stream,
+        request,
         model,
         total_targets,
         &state,
@@ -909,6 +941,7 @@ mod tests {
             attempts: 1,
             timeout_attempts: 0,
             refreshed: false,
+            refused_by_trust_policy: false,
         };
         (node, affinity, target, selection, state)
     }
@@ -1226,6 +1259,7 @@ mod tests {
             response_adapter: ResponseAdapter::None,
             correlation_id: None,
             exchange_observation_id: None,
+            trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
         };
 
         let outcome = route_model_request(
@@ -1408,6 +1442,7 @@ mod tests {
             response_adapter: ResponseAdapter::None,
             correlation_id: None,
             exchange_observation_id: None,
+            trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
         };
 
         let outcome = route_model_request(

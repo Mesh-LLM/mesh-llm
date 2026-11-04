@@ -493,3 +493,11 @@ fn stage_load_proto_roundtrip_preserves_every_split_activation_codec() {
         );
     }
 }
+
+#[test]
+fn a_stage_load_carries_the_receipts_request() {
+    let mut load = stage_load_request();
+    assert!(!stage_load_from_proto(stage_load_to_proto(load.clone())).unwrap().issue_receipts);
+    load.issue_receipts = true;
+    assert!(stage_load_from_proto(stage_load_to_proto(load)).unwrap().issue_receipts);
+}

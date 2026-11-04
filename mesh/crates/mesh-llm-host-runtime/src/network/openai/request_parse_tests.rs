@@ -422,6 +422,7 @@ fn public_model_alias_rewrites_request_to_internal_model_name() {
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     };
 
     rewrite_public_model_alias(&mut request, &models, &descriptors);
@@ -945,6 +946,7 @@ fn test_rewrite_model_field_updates_body_and_content_length() {
             response_adapter: ResponseAdapter::None,
             correlation_id: None,
             exchange_observation_id: None,
+            trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
         };
 
     rewrite_model_field(&mut request, "SmolLM2-135M-Instruct-Q8_0");
@@ -992,6 +994,7 @@ fn artifact_media_kind_is_closed_to_parsed_openai_json_routes() {
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     };
 
     assert_eq!(
@@ -1242,6 +1245,7 @@ fn request_with_raw(raw: &[u8]) -> BufferedHttpRequest {
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     }
 }
 

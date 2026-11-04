@@ -11,6 +11,7 @@ mod pipeline;
 mod pipeline_adapter;
 pub(crate) mod prepared_dispatch;
 mod probe;
+mod receipt_watch;
 mod relay;
 mod routing;
 mod send;

@@ -196,6 +196,9 @@ pub(crate) async fn route_virtual_model_or_passthrough(
     {
         return Ok(tcp_stream);
     }
+    if let Some(rejection) = super::trust_policy::unprovable(request, "a virtual model") {
+        return Err(super::trust_policy::answer(tcp_stream, rejection, route_observer).await);
+    }
     if super::ingress::mesh_routing_headers_requested(request) {
         let write = proxy::send_error_observed(
             tcp_stream,

@@ -7,6 +7,11 @@ use super::*;
 /// dispatch. Each stage either hands the stream to the next one or writes a
 /// terminal response and returns -- this function owns the single terminal
 /// lifecycle event for the request no matter which stage ends it.
+///
+/// `trust_decided` is what deciding the request's trust policy came to when
+/// the request was read (`trust_policy::decide`). A request whose policy
+/// this node cannot read is answered before any stage sees it; one on an
+/// endpoint its policy does not cover, once the control paths have had it.
 #[allow(clippy::cognitive_complexity)]
 pub(super) async fn handle_buffered_api_request(
     tcp_stream: ClientStream,
@@ -14,6 +19,7 @@ pub(super) async fn handle_buffered_api_request(
     ctx: ProxyConnectionContext<'_>,
     source_addr: Option<std::net::SocketAddr>,
     ingress_type: crate::runtime::IngressType,
+    trust_decided: Result<(), crate::network::request_trust::Unsatisfied>,
 ) {
     // Claim the parent at host OpenAI ingress. All downstream dispatch sees
     // only a metadata observer; this scope remains the sole terminal owner.
@@ -50,6 +56,15 @@ pub(super) async fn handle_buffered_api_request(
     if exchange.is_some() {
         request.mark_raw_lifecycle_owned();
     }
+    if let Err(rejection) = trust_decided {
+        let observer = lifecycle.route_observer();
+        let outcome =
+            trust_routing::reject_unrouted(tcp_stream, &ctx.route, &request, rejection, observer)
+                .await;
+        finish_exchange(&mut exchange, outcome).await;
+        lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
+        return;
+    }
 
     let tcp_stream =
         match maybe_handle_control_request(tcp_stream, &request, &ctx, lifecycle.route_observer())
@@ -62,6 +77,19 @@ pub(super) async fn handle_buffered_api_request(
             }
             Err(tcp_stream) => tcp_stream,
         };
+
+    // Every inference path below runs under the request's trust policy, so
+    // an endpoint the policy does not cover ends here, whatever would have
+    // served it: a peer, a plugin, a virtual model.
+    if let Some(rejection) = trust_policy::uncovered(&request) {
+        let observer = lifecycle.route_observer();
+        let outcome =
+            trust_routing::reject_unrouted(tcp_stream, &ctx.route, &request, rejection, observer)
+                .await;
+        finish_exchange(&mut exchange, outcome).await;
+        lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
+        return;
+    }
 
     let callable = callable_models(ctx.route.targets);
     let descriptors = ctx.route.node.all_served_model_descriptors().await;

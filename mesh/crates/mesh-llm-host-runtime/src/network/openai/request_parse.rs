@@ -185,6 +185,11 @@ pub struct BufferedHttpRequest {
     pub correlation_id: Option<String>,
     /// Host-only observation join key; never accepted from an HTTP header.
     pub exchange_observation_id: Option<String>,
+    /// The trust policy the request runs under. Reading a request decides
+    /// nothing; the ingress that read it does, once
+    /// (`network::openai::trust_policy::decide`), and until then nothing
+    /// may serve the request.
+    pub(crate) trust: crate::network::request_trust::RequestTrust,
 }
 
 impl BufferedHttpRequest {
@@ -521,6 +526,7 @@ where
         request_id: parsed.request_id,
         correlation_id: parsed.correlation_id,
         exchange_observation_id: None,
+        trust: Default::default(),
     })
 }
 

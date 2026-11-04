@@ -70,11 +70,20 @@ pub(super) async fn route_missing_local_model(
     }
 
     // Try remote mesh first.
-    match resolve_remote_mesh_route(ctx, model_name, target, excluded).await {
+    let (trust, path) = (request.trust, request.client_path.as_str());
+    match resolve_remote_mesh_route(ctx, model_name, target, excluded, trust, path).await {
         RemoteMeshRoute::TargetUnavailable {
             target_hex,
             blocked,
         } => {
+            // Under a trust policy the pinned peer is no candidate when it
+            // does not qualify, whether or not it serves the model: the
+            // answer carries the policy's code.
+            if let Some(rejection) = trust_policy::no_candidate(request, model_name) {
+                let model = Some(model_name);
+                return trust_routing::reject(tcp_stream, ctx, model, rejection, route_observer)
+                    .await;
+            }
             // Fail closed: never substitute another peer for an explicitly
             // named `x-mesh-target` that doesn't (or no longer) serve this
             // model -- that would silently defeat the live-twin check the
@@ -205,6 +214,14 @@ async fn route_without_a_mesh_host(
     excluded: &[iroh::EndpointId],
     route_observer: OpenAiRouteObserver<'_>,
 ) -> proxy::RouteDispatchOutcome {
+    // What is left below is a model still loading here, the exclusion
+    // answer, a plugin and a 404. None of them serves a request whose trust
+    // policy requires receipts, and each would name the wrong reason: no
+    // candidate that qualifies is why this request stops.
+    if let Some(rejection) = trust_policy::no_candidate(request, model_name) {
+        let model = Some(model_name);
+        return trust_routing::reject(tcp_stream, ctx, model, rejection, route_observer).await;
+    }
     // Return 503 while the model loads or drains here so clients can retry;
     // return 404 only when the model truly doesn't exist anywhere.
     if unavailable_locally(ctx, model_name, excluded).await {
@@ -296,6 +313,13 @@ pub(super) async fn route_self_targeted_model(
     route_observer: OpenAiRouteObserver<'_>,
 ) -> proxy::RouteDispatchOutcome {
     let self_id = ctx.node.id();
+    // No runtime of this node qualifies for the request, or the caller would
+    // have routed to it; a plugin does not, and "still loading" would invite
+    // a retry that proves nothing about receipts.
+    if let Some(rejection) = trust_policy::no_candidate(request, model_name) {
+        let model = Some(model_name);
+        return trust_routing::reject(tcp_stream, ctx, model, rejection, route_observer).await;
+    }
     if let Some(plugin_manager) = ctx.plugin_manager {
         match plugin_manager
             .inference_endpoint_for_request(model_name, &request.client_path)

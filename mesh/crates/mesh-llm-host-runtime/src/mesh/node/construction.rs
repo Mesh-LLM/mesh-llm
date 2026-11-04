@@ -147,6 +147,7 @@ impl Node {
             model_source: Arc::new(Mutex::new(None)),
             serving_models: Arc::new(Mutex::new(Vec::new())),
             served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
+            receipt_models: Arc::default(),
             served_model_generations: Arc::new(Mutex::new(HashMap::new())),
             served_model_weights_ports: Arc::new(Mutex::new(HashMap::new())),
             model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
@@ -231,6 +232,7 @@ impl Node {
                 crate::network::peer_blocks::PeerBlocks::for_this_node,
                 |identity| crate::network::peer_blocks::PeerBlocks::load(&identity.state_dir),
             ),
+            receipt_audits: Arc::default(),
             route_target_health: Arc::new(std::sync::OnceLock::new()),
             config_revision_tx: {
                 let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);

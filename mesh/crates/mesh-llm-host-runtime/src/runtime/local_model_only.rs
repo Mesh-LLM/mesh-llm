@@ -271,6 +271,8 @@ async fn run_local_model_only_inner(
         },
     );
     let launch = LocalOpenAiModelStartSpec {
+        // no mesh node here: receipts, if on, are signed by a key made at load
+        receipts_signing_key: None,
         live_request_defaults: Arc::new(
             crate::runtime::live_request_defaults::LiveRequestDefaults::new(),
         ),

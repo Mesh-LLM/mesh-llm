@@ -61,6 +61,7 @@ fn config_sync_noop_apply_skips_disk_write() {
         }],
         plugins: vec![],
         logging: Default::default(),
+        receipts: Default::default(),
         extra: Default::default(),
     };
 

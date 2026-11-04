@@ -49,6 +49,8 @@ use mesh_llm_events::logging::identifiers::RequestId;
 
 const REMOTE_UNCOMMITTED_RETRIES: usize = 1;
 
+#[path = "transport_mesh_route_trust.rs"]
+mod mesh_route_trust;
 #[path = "transport_route_model.rs"]
 mod route_model;
 pub(crate) use route_model::RouteModelRequestContext;
@@ -310,6 +312,8 @@ enum MeshRequestFailure {
     UnsupportedWorkload,
     ModelUnavailable(String),
     NoHostsAvailable,
+    /// No host may serve the request under its trust policy.
+    TrustPolicy(crate::network::request_trust::Unsatisfied),
 }
 
 struct MeshAttemptState {
@@ -317,6 +321,8 @@ struct MeshAttemptState {
     attempts: usize,
     last_retryable: bool,
     refreshed: bool,
+    /// The request's trust policy refused a host when its turn came.
+    refused_by_trust_policy: bool,
 }
 
 enum MeshAttemptDisposition {
@@ -326,6 +332,9 @@ enum MeshAttemptDisposition {
 
 enum MeshRouteResult {
     Exhausted(ClientStream),
+    /// No host was contacted: none still qualified under the request's
+    /// trust policy when its turn came.
+    RefusedByTrustPolicy(ClientStream),
     Finished(RouteAttemptResult),
 }
 
@@ -418,9 +427,17 @@ pub async fn handle_mesh_request(
             return;
         }
     };
+    // The one trust policy decision of the request. This proxy serves every
+    // request through a peer, so the decision comes before anything else.
+    let trust_decided = super::trust_policy::decide(&node, &mut request, false).await;
     // The parsed host ingress owns the parent. Downstream route code receives
     // only the attachment's metadata observer and cannot terminalize it.
     let mut lifecycle = attach_request_logging(&mut request, source_addr);
+    if let Err(rejection) = trust_decided {
+        super::trust_policy::reject_and_finish(&node, tcp_stream, &request, rejection, lifecycle)
+            .await;
+        return;
+    }
     if node.swarm_capture_enabled() {
         node.capture_http_request(crate::mesh::HttpCaptureEvent {
             event: "openai_ingress_http_request",
@@ -439,6 +456,11 @@ pub async fn handle_mesh_request(
     else {
         return;
     };
+    if let Some(rejection) = super::trust_policy::uncovered(&request) {
+        super::trust_policy::reject_and_finish(&node, tcp_stream, &request, rejection, lifecycle)
+            .await;
+        return;
+    }
 
     // Manifest-declared virtual models run through their owning plugin.
     // Tokenization remains a direct capability RPC.
@@ -508,6 +530,9 @@ pub async fn handle_mesh_request(
                 )
                 .await;
                 crate::logging::TerminalOutcome::Failed("mesh_route_exhausted".into())
+            }
+            MeshRouteResult::RefusedByTrustPolicy(tcp_stream) => {
+                mesh_route_trust::answer_refused(tcp_stream, &request, &plan, route_observer).await
             }
             MeshRouteResult::Finished(result) => terminal_outcome_for_mesh_route_result(result),
         }
@@ -594,6 +619,11 @@ async fn build_mesh_request_plan(
         // request error, so answer with the no-hosts path the resolver uses.
         return Err(MeshRequestFailure::NoHostsAvailable);
     }
+    // Only the hosts the request's trust policy permits enter the plan.
+    let model = effective_model.as_deref();
+    let resolved_hosts = super::trust_policy::permitted_hosts(node, request, model, resolved_hosts)
+        .await
+        .map_err(MeshRequestFailure::TrustPolicy)?;
 
     let mut prepared = prepare_mesh_targets(
         request,
@@ -770,6 +800,15 @@ async fn handle_mesh_request_failure(
             )
             .await;
         }
+        MeshRequestFailure::TrustPolicy(rejection) => {
+            node.record_routed_request(
+                request.model_name.as_deref(),
+                0,
+                crate::network::metrics::RequestOutcome::Unavailable,
+            );
+            let stream = tcp_stream.take().unwrap();
+            super::trust_policy::answer(stream, rejection, route_observer).await;
+        }
     }
     release_request_objects(node, &request.request_object_request_ids).await;
 }
@@ -791,8 +830,13 @@ async fn route_mesh_request_attempts(
         attempts: 0,
         last_retryable: false,
         refreshed: false,
+        refused_by_trust_policy: false,
     };
     for (idx, target_host) in target_hosts.iter().enumerate() {
+        let host = *target_host;
+        if mesh_route_trust::host_refused(node, request, effective_model, host, &mut state).await {
+            continue;
+        }
         transfer_mesh_reservation(reservation.as_mut(), *target_host);
         state.attempts += 1;
         let attempt_started = Instant::now();
@@ -818,6 +862,7 @@ async fn route_mesh_request_attempts(
                 // this fan-out has no plugin-channel pair to attach a peer
                 // capsule id to.
                 peer_capsule_id: None,
+                trust: request.trust,
             },
         )
         .await;
@@ -848,21 +893,7 @@ async fn route_mesh_request_attempts(
             MeshAttemptDisposition::Return(result) => return MeshRouteResult::Finished(result),
         }
     }
-    if state.last_retryable {
-        tracing::warn!("All hosts failed for model {:?}", effective_model);
-        if let Some(key) = auto_session_key {
-            tracing::debug!(
-                "auto: all hosts failed for cached model, forgetting session {key:016x}"
-            );
-            affinity.forget_auto_model(key);
-        }
-    }
-    node.record_routed_request(
-        effective_model,
-        state.attempts,
-        crate::network::metrics::RequestOutcome::Unavailable,
-    );
-    MeshRouteResult::Exhausted(tcp_stream)
+    mesh_route_trust::unserved(node, tcp_stream, plan, &state, affinity)
 }
 
 fn reserve_mesh_request_target(
@@ -1131,6 +1162,7 @@ fn terminal_outcome_for_mesh_request_failure(
         MeshRequestFailure::NoHostsAvailable => {
             crate::logging::TerminalOutcome::Failed("no_hosts_available".into())
         }
+        MeshRequestFailure::TrustPolicy(_) => mesh_route_trust::unplanned_terminal_outcome(),
     }
 }
 
@@ -1610,6 +1642,9 @@ pub(crate) struct RouteTargetContext<'a> {
     pub(crate) request_id: RequestId,
     pub(crate) response_adapter: ResponseAdapter,
     pub(crate) route_observer: OpenAiRouteObserver<'a>,
+    /// The trust policy of the request. This route takes whatever target it
+    /// is given, so it serves no request whose policy requires receipts.
+    pub(crate) trust: crate::network::request_trust::RequestTrust,
 }
 
 /// Routes a request to its elected local or remote inference target.
@@ -1624,10 +1659,26 @@ pub async fn route_to_target(
     prefetched: &[u8],
     context: RouteTargetContext<'_>,
 ) -> RouteDispatchOutcome {
+    let what = "a route to one elected target";
+    if let Some(rejection) = super::trust_policy::unprovable_under(context.trust, what) {
+        return super::trust_policy::answer(tcp_stream, rejection, context.route_observer).await;
+    }
+    route_to_elected_target(node, tcp_stream, model, target, prefetched, context).await
+}
+
+async fn route_to_elected_target(
+    node: mesh::Node,
+    tcp_stream: ClientStream,
+    model: Option<&str>,
+    target: election::InferenceTarget,
+    prefetched: &[u8],
+    context: RouteTargetContext<'_>,
+) -> RouteDispatchOutcome {
     let RouteTargetContext {
         request_id,
         response_adapter,
         route_observer,
+        trust,
     } = context;
     let route_started = Instant::now();
     let mut tcp_stream = tcp_stream;
@@ -1648,6 +1699,7 @@ pub async fn route_to_target(
             route_observer,
             served_by: None,
             peer_capsule_id: None,
+            trust,
         },
     )
     .await;
@@ -1779,6 +1831,7 @@ pub async fn route_http_endpoint_request(
             route_observer,
             served_by: None,
             peer_capsule_id: None,
+            trust: request.trust,
         },
     )
     .await;

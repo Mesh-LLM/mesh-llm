@@ -68,6 +68,7 @@ async fn a_model_rejected_before_routing_is_counted_in_request_telemetry() {
         response_adapter: proxy::ResponseAdapter::OpenAiChatCompletionsJson,
         correlation_id: None,
         exchange_observation_id: None,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     };
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

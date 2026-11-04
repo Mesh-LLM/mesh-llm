@@ -90,6 +90,7 @@ pub(super) fn stage_load_request(load_mode: LoadMode) -> skippy::StageLoadReques
         runtime_settings: Default::default(),
         native_mtp_enabled: true,
         dflash: None,
+        issue_receipts: false,
         shutdown_generation: 1,
         coordinator_term: 1,
         coordinator_id: None,
@@ -1081,6 +1082,7 @@ max_tokens = 222
     .expect("test mesh config should parse");
     let model_bytes = fs::metadata(&model_path).unwrap().len();
     let spec = LocalOpenAiModelStartSpec {
+        receipts_signing_key: None,
         live_request_defaults: std::sync::Arc::new(
             crate::runtime::live_request_defaults::LiveRequestDefaults::new(),
         ),
@@ -1134,6 +1136,7 @@ max_tokens = 222
     write_fake_gguf_model(&cli_model_path);
     let cli_model_bytes = fs::metadata(&cli_model_path).unwrap().len();
     let cli_spec = LocalOpenAiModelStartSpec {
+        receipts_signing_key: None,
         live_request_defaults: std::sync::Arc::new(
             crate::runtime::live_request_defaults::LiveRequestDefaults::new(),
         ),
@@ -1182,6 +1185,7 @@ max_tokens = 222
 fn runtime_verified_served_model_descriptor_preserves_identity_and_updates_capabilities() {
     let existing = mesh::ServedModelDescriptor {
         requires: Vec::new(),
+        receipts: false,
         identity: mesh::ServedModelIdentity {
             model_name: "Qwen3VL-2B-Instruct-Q4_K_M".into(),
             is_primary: false,

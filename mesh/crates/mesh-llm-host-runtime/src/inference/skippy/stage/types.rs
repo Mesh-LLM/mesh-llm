@@ -107,6 +107,8 @@ pub(crate) struct StageLoadRequest {
     pub(crate) native_mtp_enabled: bool,
     /// This stage's part in a split DFlash plan.
     pub(crate) dflash: Option<skippy_serving::split_dflash::SplitDFlashStage>,
+    /// Record this stage's part of the inference receipts stage 0 issues.
+    pub(crate) issue_receipts: bool,
     pub(crate) shutdown_generation: u64,
     pub(crate) coordinator_term: u64,
     pub(crate) coordinator_id: Option<iroh::EndpointId>,

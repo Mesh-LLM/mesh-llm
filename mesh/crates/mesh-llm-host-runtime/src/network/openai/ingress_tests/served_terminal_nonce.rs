@@ -35,9 +35,12 @@ fn client_request(nonce: Option<&str>) -> Vec<u8> {
 async fn ingress(raw: &[u8]) -> proxy::BufferedHttpRequest {
     let (mut client, mut server) = tokio::io::duplex(64 * 1024);
     client.write_all(raw).await.expect("write request");
-    proxy::read_http_request(&mut server)
+    let mut request = proxy::read_http_request(&mut server)
         .await
-        .expect("parse request")
+        .expect("parse request");
+    // ingress decides the trust policy of what it reads; this one has none
+    request.trust = crate::network::request_trust::RequestTrust::UNRESTRICTED;
+    request
 }
 
 /// A connected loopback socket pair: the route writes its response into the

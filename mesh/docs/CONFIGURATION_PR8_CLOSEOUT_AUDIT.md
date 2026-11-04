@@ -36,6 +36,7 @@ schema row or stale manifest row from passing review:
 `mesh_requirements.require_release_attestation`, `mesh_requirements.release_signer_keys`,
 `mesh_requirements.require_signed_gossip`,
 `owner_control.bind`, `owner_control.advertise_addr`, `payments.wallet`,
+`receipts.enabled`, `receipts.audit`, `receipts.require`, `receipts.offline`,
 `telemetry.enabled`,
 `telemetry.service_name`, `telemetry.endpoint`, `telemetry.headers`,
 `telemetry.export_interval_secs`, `telemetry.queue_size`,

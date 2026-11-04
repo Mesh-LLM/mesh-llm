@@ -530,6 +530,7 @@ pub(super) async fn startup_register_loaded_runtime(
             port: handle.port,
             capabilities: handle.capabilities,
             workload_class: handle.workload_class,
+            receipts: handle.receipts,
         },
     )
     .await;

@@ -1,8 +1,10 @@
 use super::*;
 mod logging;
 mod native_runtime;
+mod receipts;
 
 use self::native_runtime::native_runtime_presentation;
+use self::receipts::{RECEIPTS_CATEGORY, receipts_presentation};
 
 use self::logging::{is_advanced_logging_category, logging_presentation};
 
@@ -124,6 +126,7 @@ fn setting_presentation_for_path(rendered: &str) -> Option<SettingPresentation> 
         .or_else(|| kv_disk_presentation(rendered))
         .or_else(|| gpu_setting_presentation(rendered))
         .or_else(|| process_setting_presentation(rendered))
+        .or_else(|| receipts_presentation(rendered))
         .or_else(|| native_runtime_presentation(rendered))
         .or_else(|| runtime_defaults_presentation(rendered))
         .or_else(|| generation_defaults_presentation(rendered))
@@ -1134,6 +1137,9 @@ fn fallback_category_for_path(rendered: &str) -> Option<CategoryPresentation> {
     }
     if rendered.starts_with("owner_control.") {
         return Some(NETWORK_CATEGORY);
+    }
+    if rendered.starts_with("receipts.") {
+        return Some(RECEIPTS_CATEGORY);
     }
     if rendered.starts_with("mesh_requirements.") {
         return Some(ATTESTATION_CATEGORY);

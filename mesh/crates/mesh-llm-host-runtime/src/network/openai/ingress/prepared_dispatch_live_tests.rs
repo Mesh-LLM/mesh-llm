@@ -140,6 +140,7 @@ async fn installed_lifecycle_pipeline_admits_each_prepared_dispatch_and_never_fa
                     .route_observer(),
                 served_by: None,
                 peer_capsule_id: None,
+                trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
             },
         )
         .await;

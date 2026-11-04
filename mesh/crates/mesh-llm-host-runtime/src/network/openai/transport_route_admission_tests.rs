@@ -120,6 +120,7 @@ async fn route_observed(
         response_adapter: ResponseAdapter::None,
         correlation_id: None,
         exchange_observation_id: None,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     };
     request.exchange_observation_id = observation_id;
     route_model_request(
