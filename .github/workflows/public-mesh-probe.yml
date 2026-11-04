@@ -101,7 +101,7 @@ jobs:
             "repos/${GITHUB_REPOSITORY}/actions/workflows/public-mesh-probe.yml/runs?event=schedule&status=completed&per_page=20" \
             --jq '[.workflow_runs[] | select(.id != '"${GITHUB_RUN_ID}"') | .conclusion]')"
           previous_state="$(jq -r 'if length == 0 then "none" elif .[0] == "success" then "ok" else "failed" end' <<<"$previous")"
-          prior_failures="$(jq -r '[.[] | if . == "success" then 0 else 1 end] | reduce .[] as $f ({n:0, stop:false}; if .stop or $f == 0 then .stop = true else .n += 1 end) | .n' <<<"$previous")"
+          prior_failures="$(jq -r '[.[] | select(. != "cancelled") | if . == "success" then 0 else 1 end] | reduce .[] as $f ({n:0, stop:false}; if .stop or $f == 0 then .stop = true else .n += 1 end) | .n' <<<"$previous")"
           if [[ "$CURRENT_STATE" == "failed" ]]; then
             consecutive=$((prior_failures + 1))
           else
