@@ -79,17 +79,25 @@ tokens of one turn. For those, a pass shows that:
 - the response is the text of the tokens that the receipt names.
 - at two positions per picked layer, the attention of one head agrees with
   the committed K and V rows, within loose tolerances.
+- when the turn continued a cached prefix, the same things hold at two
+  positions of the prefix, except the check of the sampled token.
+- the prompt is part of the text of the tokens before the response, the
+  tokens of a cached prefix included.
 
 A pass does not show these things:
 
 - The positions and layers that the challenge did not pick. The check is a
   sample.
-- The cached prefix. When a turn continues a cached prefix, the audit
-  prints a note. The tokens of the prefix and their computation are
-  outside the audit.
+- Most of a cached prefix. The challenge picks two of its positions. A
+  node that changed one token of a long prefix is caught with a small
+  probability.
 - A sampling draw near a boundary. The audit replays the draw of a sampled
-  turn within the tie band. A node can steer a draw only when its uniform
-  is that close to the boundary between two tokens.
+  turn within the draw band, 0.01% of the root mean square of the logits.
+  A node can steer a draw only when its uniform is that close to the
+  boundary between two tokens.
+- The end tag of a reasoning budget. The audit replays which tokens the
+  budget forced, with the tags that the node states. It does not derive
+  the tags from the chat template. The report shows them.
 - A seed that the node chose. When the request fixed no seed, the replay
   shows only that the node followed the seed that it states.
 - Exact attention. A change within the tolerances passes.
@@ -110,13 +118,22 @@ The full list, with the threat model, is in
   when `[receipts] enabled` is on.
 - The weights are F32, F16, BF16, Q8_0, Q4_0, Q5_0, IQ4_NL, IQ4_XS or a
   K-quant from Q2_K to Q6_K. Dense and MoE models are supported.
-- The backend is the CPU, CUDA or Vulkan. A Vulkan stage with a recorder
-  accumulates its matmuls in f32, which makes prefill slower. A receipt
-  from a stage on another backend, for example Metal or ROCm, gets no
-  audit, because the auditor has no rounding profiles for it. A Mesh node
-  does not advertise receipts for a runtime on such a backend.
+- The backend is the CPU or CUDA. A stage on another backend (Vulkan,
+  Metal or ROCm) issues no receipts: its recorder does not start, the
+  stage serves normally, and `skippy serve` prints one warning,
+  `Receipts stay off for this model stage`, with the reason. The auditor
+  has no rounding profiles for those backends, so a receipt that names
+  one gets no audit. A Mesh node does not advertise receipts for a
+  runtime on such a backend. Vulkan lost its profiles on 2026-11-10: an
+  honest Vulkan node with Q4_K_M weights on an integrated GPU passed 2 of
+  16 audits.
 - The model uses flash attention. A stage with a transposed V cache gets
   no receipt.
+- The KV cache stores f16 rows, which is the default. A stage with a
+  quantized KV cache (`cache_type_k` or `cache_type_v` of q8_0 or q4_0)
+  issues no receipts, and a Mesh node does not advertise receipts for it.
+  A layer package can name a quantized cache as its default. Set both
+  cache types to f16 to get receipts.
 - The KV cache can be unified, or it can keep one stream per sequence.
 - The receipt classifier must accept the graph. See
   [Troubleshooting](#a-turn-gets-no-receipt) for the reasons that it can
@@ -128,9 +145,11 @@ The full list, with the threat model, is in
   draft, so the receipt covers the trunk and not the head.
 - A hybrid model, for example Qwen3.5, issues receipts. See
   [Hybrid memory](#hybrid-memory).
-- A quantized KV cache (q8_0) issues receipts.
-- On a hybrid stage, and on a stage with a q8_0 KV cache, a turn that
-  continues a cached prefix gets no receipt.
+- On a hybrid stage, a turn that continues a cached prefix gets no
+  receipt.
+- A turn that continues a cached prefix gets no receipt when the stage
+  cannot replay a position of the prefix. See
+  [The cached prefix](#the-cached-prefix).
 - A turn with image tokens gets no receipt.
 - A model that has recurrent memory and no attention issues no receipts. A
   standalone stage with such a model stops at startup when receipts are
@@ -250,6 +269,31 @@ sampler. A thinking model gets a default reasoning budget from the server.
 So a request with temperature 0 gets a `sampled` statement unless it also
 sends `"reasoning_budget": -1`.
 
+A turn with a reasoning budget states the budget, and what the runtime
+built the sampler of the budget from, in the `reasoning` field: the tag
+that starts the reasoning, the tags that end it, and the text that the
+chat template placed after the prompt. For a model that reasons between
+`<think>` and `</think>`, the two fields look like this example:
+
+```json
+"reasoning_budget": 512,
+"reasoning": {
+  "start": "<think>",
+  "ends": ["</think>"],
+  "prefill": "<|im_start|>assistant\n"
+}
+```
+
+The sampler forces the end tag when the reasoning uses the budget up. An
+auditor replays the sampler from these texts and the tokens of the turn,
+so it knows which tokens were forced. The rule is in
+[Reasoning budget](../../mesh/docs/design/RECEIPTS.md#reasoning-budget).
+
+Today the runtime builds that sampler only for a chat that has a grammar.
+A chat without a grammar enforces no budget, and its statement has
+`"reasoning": null`. The audit then judges every token of the turn by the
+usual rule.
+
 A sampled turn that gets a receipt draws each token by the rule
 `indexed-v1`, and the statement names the rule in `draw`. The uniform of a
 token is a function of the seed and of the position of the token, and the
@@ -307,6 +351,37 @@ A replay runs only the turn, on top of the KV cells that the turn read.
 The receipt binds those cells by a prefix root, and an opening copies them
 from the live cache. So an opening fails after another request wrote one
 of those cells.
+
+### The cached prefix
+
+A challenge also picks two positions of the cached prefix. The stage did
+not compute them in the turn. For every KV cell it keeps the leaf hashes
+of the position and the recorded ubatch that wrote the cell. It opens a
+picked position by a replay of that one ubatch, on top of the cells below
+it. Another request, or a cache sequence, may have computed the prefix.
+The stage that holds layer 0 sends the tokens of the whole prefix with the
+opening, and the receipt binds their digest.
+
+What this costs an operator:
+
+- Memory. The leaf hashes are about 2.3 kB per position for a stage of 36
+  layers, less than 2% of the K and V rows. A stage after the first also
+  keeps the input rows of each ubatch, at most 1 GiB. Past that it drops
+  the oldest ubatch.
+- Time. An opening of a cached turn also replays up to two ubatches of the
+  prefix. On a CPU stage that can take seconds for a ubatch of 512 tokens.
+  The time is not measured yet.
+
+A turn gets no receipt when the stage cannot replay its prefix:
+
+- after a state load, a context shift or a compaction;
+- when a ubatch that the recorder could not record wrote a cell of the
+  prefix;
+- when the prefix holds cells of two requests;
+- when the ubatch of a prefix cell is past the 1 GiB of input rows;
+- on a stage with recurrent state.
+
+The log line names the cause after `the turn's cached prefix is unknown`.
 
 Each stage pins the cells of a bound turn for 12 seconds, so a later
 request writes other cells while the cache has room. After the opening,
@@ -368,11 +443,14 @@ skippy audit-receipt \
 | `--top-k K` | The default of the node | Top-k of a sampled turn. Needs `--temperature` |
 | `--min-p P` | The default of the node | Min-p of a sampled turn. Needs `--temperature` |
 | `--seed N` | Random | The seed of a sampled turn, above 0. Needs `--temperature` |
+| `--reasoning-budget N` | No limit | The reasoning tokens that the request allows a thinking model. Where the runtime enforces the budget, the node forces the end of the reasoning when they run out, and the audit replays which tokens it forced |
 | `--output json` | Text | Print the report as JSON |
 
 The command sends the request to the first model that `GET /v1/models`
 lists. It asks for greedy decoding: temperature 0 and
-`"reasoning_budget": -1`.
+`"reasoning_budget": -1`. With `--reasoning-budget N` it sends that
+budget instead, and the statement of the node is then `sampled` also at
+temperature 0.
 
 Without `--receipts`, the command takes the receipt from the response and
 opens it with `POST /v1/receipts/open` on the OpenAI address. The challenge
@@ -418,15 +496,20 @@ checks:
    The stages cover every layer of the claimed GGUF from 0, in order. The
    layer count comes from the metadata of the GGUF, not from the receipt.
 2. **Request.** The receipt has the id of the request, and the sampler
-   statement does not contradict the request. Without `--temperature`,
-   `audit-receipt` asks for greedy decoding, so a receipt whose sampler is
-   not `greedy` fails. With it, the statement must name the temperature,
-   the filters and the seed of the request.
+   statement does not contradict the request. Without `--temperature`
+   and `--reasoning-budget`, `audit-receipt` asks for greedy decoding, so
+   a receipt whose sampler is not `greedy` fails. With them, the statement
+   must name the temperature, the filters, the seed and the reasoning
+   budget of the request.
 3. **Opening.** The signature of the node covers the bytes of the opening
    and the challenge that it answers. The opening holds exactly the stages,
    layers and positions of the challenge, with nothing twice and nothing
    extra. Every opened leaf is in the tree of its stage. Where one stage
-   hands over to the next, both stages open the same residual leaf.
+   hands over to the next, both stages open the same residual leaf. A
+   picked position of a cached prefix is in no tree of the turn. The stage
+   opens every leaf hash that it committed for the position, and those
+   must be in the prefix tree of the receipt. The tokens of the prefix
+   must hash to the digest in the receipt.
 4. **Values.** Every opened value is finite and has the length that the
    claimed GGUF gives. The checks below read only values that passed
    checks 3 and 4.
@@ -475,15 +558,27 @@ Notes on the checks:
   failed.
 - In check 8, a sampled turn must take a token that its stated `top_k`,
   `top_p`, `min_p` and temperature keep. A turn with penalties, DRY, XTC,
-  typical or top-n-sigma sampling, mirostat, a grammar or a reasoning
-  budget gets no token judgement. Its logits are still checked.
+  typical or top-n-sigma sampling, mirostat or a grammar gets no token
+  judgement. Its logits are still checked.
 - In check 8, the audit replays the draw of a sampled turn whose statement
   names the `indexed-v1` rule. The report shows how many draws pick the
-  sampled token, and how many do so only within the tie band. More than
-  one such draw in four positions is flagged, not failed. A draw that does
-  not pick the sampled token fails the audit, and the evidence shows it.
-  A turn with a dynamic temperature or `ignore_eos`, and a model with
-  suppressed tokens, get no replay.
+  sampled token, and how many do so only within the draw band. The draw
+  band is 0.01% of the root mean square of the logits that the node
+  opened. More than one such draw in four positions is flagged, not
+  failed. A draw that does not pick the sampled token fails the audit, and
+  the evidence shows it. A turn with a dynamic temperature or
+  `ignore_eos`, and a model with suppressed tokens, get no replay. A turn
+  at temperature 0 draws nothing.
+- In check 8, the audit replays the reasoning budget of a turn that states
+  one. A token that the budget forced must be the forced token: the end
+  tag of the reasoning, one token at a time. Every other token is judged
+  as usual. The report has a line `reasoning budget of N tokens, from
+  ... to ... as the node states them: forced M of the checked tokens`,
+  and the JSON report has the stated tags in `head.verdict.reasoning` and
+  the forced token of a position in `forced`. The tags are the statement
+  of the node. Compare them with the chat template of the model if you
+  know it. A statement with a tag of more than 256 bytes, more than 8 end
+  tags or a prefill of more than 1,024 bytes leaves the tokens unjudged.
 - When the request set no seed, the report has a note: the draws were
   replayed with the seed that the node chose.
 - The head key is a file that only its owner can read. When a check with
@@ -493,10 +588,10 @@ Notes on the checks:
 - In check 9, a layer whose attention the check cannot follow gives a
   `could not check:` line. If nothing failed, the outcome is then
   `NO AUDIT`. That says nothing about the node.
-- When a turn continues a cached prefix, the report has the note `not
-  checked: the turn continued a cached prefix of N positions, whose tokens
-  and computation are outside this audit`. The prompt check does not run
-  for such a turn.
+- When a turn continues a cached prefix, the challenge picks two positions
+  of the prefix in every picked layer, and the prompt check reads the
+  tokens of the prefix and of the turn. The report line is `prompt is in
+  the tokens of the cached prefix (N positions) and the receipt`.
 
 ### A pass
 
@@ -693,7 +788,7 @@ Use `--output json` for a report that a program can read. Every report has
 | `opening_error` | Why the signed opening is defective |
 | `request_errors` | How the receipt contradicts the request |
 | `anchors`, `head`, `tokens` | Each is one of `{"verdict": ...}`, `{"node_fault": "..."}` or `{"unavailable": "..."}` |
-| `tokens.verdict.prompt_ok` | `null` when the turn continued a cached prefix |
+| `tokens.verdict.prompt_ok` | Whether the prompt is in the text of the tokens before the response: the tokens of the cached prefix, then the prompt tokens of the turn |
 
 A `NO AUDIT` report has `outcome`, `pass`, `receipt_id` and `reason`. A
 `NO ANSWER` report also has `request`, which is `open` or `rows`.
@@ -839,6 +934,31 @@ When the GGUF is a Hugging Face file, the receipt names the model as
 `repo@commit/file`. A client can then audit the turn without a copy of the
 model. A split GGUF is named by its first shard.
 
+Serve the model with a Hugging Face identity. A node that serves a file
+from a local path (`--gguf <path>`) names the model
+`local-gguf/sha256-...`. No client can fetch what that name stands for.
+So every audit of such a model ends as `no audit`, the node does not
+advertise the `receipts` flag for it, and a request with
+`x-mesh-trust: receipts` does not reach it. Use one of these instead:
+
+- Name the model by its Hugging Face reference, so that the node serves
+  it from its Hugging Face cache:
+  `--model unsloth/Qwen3-4B-GGUF@<commit>/Qwen3-4B-Q8_0.gguf`.
+- If you have the file and it is not in a cache, put it in a Hugging Face
+  cache layout, point `HF_HUB_CACHE` at it, and name the model by the
+  same reference. The node reads the repository and the commit from the
+  path. This layout worked in the two-node test of 2026-11-10:
+
+  ```text
+  hub/models--unsloth--Qwen3-4B-GGUF/
+    blobs/<sha256 of the file>
+    snapshots/<commit>/Qwen3-4B-Q8_0.gguf -> ../../blobs/<sha256>
+    refs/main        (holds the commit)
+  ```
+
+  The bytes must be the bytes of that commit on Hugging Face. An auditor
+  reads the weights from Hugging Face, so other bytes fail the audit.
+
 On a split, the coordinator asks every later stage to record its part. It
 commits and opens that part over the stage connection, across peers.
 
@@ -858,11 +978,13 @@ serving node can thus give an honest node strikes.
 
 A node advertises a model with receipts only when all of these are true:
 
-- the loaded runtime issues receipts, because its recorder started.
-- the backend of the runtime has rounding profiles: the CPU, CUDA or
-  Vulkan.
+- the loaded runtime issues receipts, because its recorder started. The
+  recorder does not start on a stage with a quantized KV cache, or on a
+  backend other than the CPU and CUDA.
+- the backend of the runtime has rounding profiles: the CPU or CUDA.
 - the model serves chat completions.
 - every instance of the model issues receipts.
+- the receipts name a file of a Hugging Face repository at a commit.
 - no stage of the model runs on another node.
 
 If `enabled` is on and the node advertises a model without receipts, the
@@ -900,7 +1022,10 @@ peer advertises receipts, send it a request that requires them:
 ### Configure the client node
 
 Use one of these keys on the node that sends requests for its clients.
-Both apply without a restart.
+The node reads them from its loaded configuration for each request. A
+change that you apply through owner control takes effect at the next
+request. An edit of the TOML file takes effect when you start the node
+again: the node does not watch the file.
 
 ```toml
 [receipts]
@@ -934,8 +1059,18 @@ by range, and checks the opening on the CPU.
 ### Name the model so that the node can audit it
 
 The node audits a turn only when it can tie the model name of the request
-to a Hugging Face file without the word of the peer. Use one of these
-forms in the `model` field of the request:
+to a Hugging Face file without the word of the peer. The forms below are
+the names that the auditor can tie to a file. They are not all names that
+a node routes. In a two-node test on 2026-11-10, a request through a
+second node reached the peer only with the id that the peer advertises,
+`repo@commit:selector` (for example
+`unsloth/Qwen3-4B-GGUF@<commit>:Q8_0`). `GET /v1/models` on the client
+node lists that id. The other forms route when this node knows the name,
+for example from its loaded catalog. A receipt names the model in one
+more way, `repo@commit/file`.
+
+The forms that the auditor can tie to a file, in the `model` field of the
+request:
 
 | Form | Example |
 |---|---|
@@ -1111,6 +1246,8 @@ A stage admits a challenge before it replays anything:
 
 - at most 4 layers, in increasing order.
 - 1 to 4 increasing positions per layer, inside the turn.
+- before them, at most 2 positions of the cached prefix, the same in every
+  layer.
 - at most 4 head positions.
 - at most 2 attention picks per layer, each at a picked position.
 
@@ -1198,17 +1335,21 @@ places:
 | `the response carried no receipt` | Receipts are off on the node, or the turn got none, and the command has no `--receipts` | Start the stages with the receipts flags. Pass `--receipts` to the audit |
 | `op ... is not in the receipt op table` | The graph uses a ggml op that the classifier does not know | Serve this model without receipts. Report the op |
 | `the V cache is stored transposed; receipts need flash attention` | Flash attention is off | Turn flash attention on |
+| `no audit covers a quantized KV cache` | A KV cache type of the stage is q8_0 or q4_0. Such a stage also logs `receipts stay off for this stage` when it starts, and then no response carries a receipt | Set both KV cache types of the stage to f16 |
+| `an audit covers CPU and CUDA alone` | The stage runs on Vulkan, Metal, ROCm or another backend without rounding profiles. It logs `receipts stay off for this stage` when it starts, and no response carries a receipt | Serve on the CPU or CUDA |
 | `which nothing commits` | A layer reads a value from another layer that is not the residual stream | Serve this model without receipts |
 | `more than receipts leave unchecked` | Token-mixing ops read more than 1% of the weight bytes of the layer directly | Serve this model without receipts |
 | `token mixing reaches the layer output without a weight matmul` | The classifier cannot bound a token-mixing region | Serve this model without receipts |
 | `a token whose positions are not a text token's cannot be receipted` | The turn has image tokens | None. Such a turn gets no receipt |
 | `a ubatch of embeddings cannot be receipted` | Stage 0 got embeddings and not tokens as its input | None |
 | `a token shared by several sequences cannot be receipted` | One ubatch token belongs to more than one sequence | None |
-| `the sequence's KV cells were loaded from saved state` | The stage restored a state. A hybrid stage and a stage with a q8_0 KV cache do this for a cached prefix | None. The next turn that starts at position 0 gets a receipt |
+| `the sequence's KV cells were loaded from saved state` | The stage restored a state. A hybrid stage does this for a cached prefix | None. The next turn that starts at position 0 gets a receipt |
 | `the sequence's positions were shifted` | A context shift moved the positions of the sequence | None |
 | `the KV cache was compacted` | A compaction moved the cells | None |
 | `the sequence took KV cells from another sequence mid-turn` | A copy between sequences occurred after the turn started | None |
-| `the turn's cached prefix is unknown` | The stage does not know what a cell of the prefix holds | None. The next turn that starts at position 0 gets a receipt |
+| `the turn's cached prefix is unknown` | The stage does not know what a cell of the prefix holds, or cannot replay the ubatch that wrote it. The text after it gives the cause | None. The next turn that starts at position 0 gets a receipt. See [The cached prefix](#the-cached-prefix) |
+| `the ubatch that wrote position N of the cached prefix is no longer held` | A stage after the first dropped the input rows of that ubatch, past 1 GiB | None |
+| `a stage with recurrent state cannot open the cached prefix of a turn` | A hybrid stage continued a sequence that it kept | None |
 | `the recurrent state the turn started from is unknown` | A hybrid stage could not read the state | Read the stage log for the native error |
 | `the turn recorded nothing` | No ubatch of the turn was recorded. The text after it gives the cause | Use the cause in the text |
 | `the stage keeps ... bytes of receipts that can still be challenged` | The receipts that clients can still challenge fill the 64 MiB | Send fewer bound requests at one time |
@@ -1231,11 +1372,11 @@ Two errors stop a stage at startup:
 | A connection error, or an HTTP status, before a receipt line | The command could not send the chat request, or Hugging Face is out of reach | Make sure that `--api` is correct and that the network works |
 | `the node lists no model` | `GET /v1/models` on `--api` is empty | Wait until the model is loaded |
 | `got no receipt:` | The turn got no receipt | See [A turn gets no receipt](#a-turn-gets-no-receipt) |
-| `the receipt is version N, and this verifier checks version 6` | The node and the auditor are different releases | Use the same release on both sides |
+| `the receipt is version N, and this verifier checks version 7` | The node and the auditor are different releases | Use the same release on both sides |
 | `the node ran ..., and this verifier runs ...` | The Skippy ABI or the llama.cpp build differs | Use the same release on both sides |
-| `no rounding profiles for backend ... yet` | A stage ran on Metal, ROCm or another backend without profiles | None. Such a stage cannot be audited |
+| `ran on backend ..., whose rounding no profile models` | A stage ran on Vulkan, Metal, ROCm or another backend without profiles | None. Such a stage cannot be audited. A current node issues no receipts on such a backend |
 | `no rounding profile for ... weights` | A stage multiplies a weight type without a profile, for example q4_1 or q5_1 | None |
-| `stored rows of type ..., which this verifier does not check` | The KV cache has a type other than f32, f16, q4_0 or q8_0 | None |
+| `stored KV rows of type ...: an audit covers a cache of f16 or f32 rows` | A stage has a quantized KV cache | None. A current node issues no receipts with such a cache |
 | `no reference decoding of ... output weights` | The auditor cannot decode the type of the output matrix | None |
 | `this client cannot audit this model: ...; that is not a verdict on the node` | The claimed GGUF is over a limit of the auditor, or it is not a GGUF that the runtime loads | None |
 | `names ..., not repo@commit/file on Hugging Face` | `recheck-receipt` has no `--claimed-model`, and the receipt does not name a pinned Hugging Face file | Pass `--claimed-model` |
@@ -1286,7 +1427,7 @@ that key. A Mesh node signs with the key of its mesh identity.
 
 ## Upgrade and compatibility
 
-- **Receipt version.** This build writes and checks receipt version 6. An
+- **Receipt version.** This build writes and checks receipt version 7. An
   auditor gives `NO AUDIT` for another version.
 - **Runtime.** A bound receipt names the runtime: the `skippy-abi` version
   (0.1.81 in this build), the llama.cpp commit and a hash of the patch
@@ -1329,23 +1470,34 @@ tables, and the numbers of earlier builds, are in
 
 - The serving budget is decode at most 3% slower and prefill at most 10%
   slower than with receipts off.
-- Decode: TO UPDATE.
-- Prefill was about 4% slower on 2026-11-09: about 13,000 tok/s with
-  receipts on, against about 13,500 tok/s with receipts off.
+- On 2026-11-10, on one RTX 5090, decode was about 1.5% slower with
+  receipts on: 200.3 tok/s on, against 203.4 tok/s off, over 14 rounds.
+  That is inside the run-to-run noise of the arm without receipts. The
+  decode rate depends on the idle states of the processor, so measure it
+  on your hardware.
+- Prefill was about 3% slower in the same rounds: 14,880 tok/s with
+  receipts on, against 15,308 tok/s with receipts off.
 - On CUDA, the recorder hashes the committed values on the GPU and copies
   digests. Other backends copy the values to the host.
 - A stage with a recorder uses the dense-mask attention and not the
   per-sequence row lists. A stage that serves more than one sequence from
   a unified cache pays for this in decode.
-- Vulkan, Metal and more than one lane were not measured on this build.
+- A Vulkan stage does not record. On 2026-11-10, prefill on Vulkan was 2.4
+  to 2.5 times slower with a recorder, before Vulkan lost its receipts.
+- Metal and more than one lane were not measured on this build.
 
 **Openings.**
 
 - An opening replays only the ubatches that hold a challenged position.
   It does not replay from the first position of the conversation.
-- An opening takes 0.15 to 0.25 s for a short turn, and 2.1 to 2.3 s for a
-  turn of 15,000 or 31,000 fresh tokens. A turn that continues a cached
-  prefix opens in 0.19 s.
+- On an RTX 5090, an opening takes 0.2 to 0.3 s for a short turn, and 1.6
+  to 2.3 s for a turn of 30,000 fresh tokens. A turn that continues a
+  cached prefix also replays up to two ubatches of the prefix. It opens
+  in 0.2 to 0.3 s at a prefix of 1,900 positions, and in 1.2 to 1.5 s at
+  28,700.
+- On a CPU stage, a short turn opens in about 1 s, and a turn that
+  continues a prefix of 1,900 positions in 5 to 7.5 s. That is inside the
+  10-second window, with less room than a fresh short turn has.
 - Replays run one at a time in a second context of the stage model. The
   context holds only the KV cells that the replay uses. The stage frees it
   after 60 seconds without a replay.
@@ -1370,9 +1522,12 @@ tables, and the numbers of earlier builds, are in
 
 - The limits that are still open are in
   [Open limitations](../../mesh/docs/design/RECEIPTS.md#open-limitations).
-  The most important ones for an operator: the cached prefix is not
-  checked, a sampling draw is replayed only within the tie band, and
-  attention is a loose check.
+  The most important ones for an operator: only CPU and CUDA stages are
+  audited, attention is a loose check, an audit checks two positions of a
+  cached prefix, and the tags of a reasoning budget are the statement of
+  the node.
+- `GET /v1/models` on a Mesh client node still lists the model of a peer
+  that the node blocked. A request for it then gets 404.
 - The attention combination check is looser at long contexts, because the
   CUDA prefill kernel accumulates in f16. The check of the two drawn
   blocks stays exact.

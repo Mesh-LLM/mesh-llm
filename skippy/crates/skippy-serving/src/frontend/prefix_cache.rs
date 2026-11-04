@@ -791,6 +791,7 @@ impl StageOpenAiBackend {
         if request.prompt_token_ids.is_empty()
             || !kv.should_lookup()
             || !request_allows_exact_replay(request)
+            || self.receipts_forbid_generated_token_reuse()
         {
             return Ok(None);
         }
@@ -896,7 +897,10 @@ impl StageOpenAiBackend {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(None);
         };
-        if request.prompt_token_ids.is_empty() || !kv.should_lookup() {
+        if request.prompt_token_ids.is_empty()
+            || !kv.should_lookup()
+            || self.receipts_forbid_generated_token_reuse()
+        {
             return Ok(None);
         }
         let timer = PhaseTimer::start();

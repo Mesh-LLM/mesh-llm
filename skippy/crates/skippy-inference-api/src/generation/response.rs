@@ -17,6 +17,9 @@ pub struct GenerationResponse {
     pub usage: Usage,
 
     pub timings: Option<BTreeMap<String, Value>>,
+    /// The turn's inference receipt, when the request asked for one with
+    /// `x-receipt-client-key` and the serving node issues receipts.
+    pub receipt: Option<Value>,
     /// Response attestation metadata consumed by the frontend header adapter.
     pub capsule_marker: Option<CapsuleMarker>,
     /// Host-minted exchange identity shared with the terminal hook and frontend.
@@ -75,6 +78,7 @@ impl GenerationResponse {
             }],
             usage,
             timings: None,
+            receipt: None,
             capsule_marker: None,
             exchange_id: None,
         }
@@ -103,6 +107,7 @@ impl GenerationResponse {
             choices,
             usage,
             timings,
+            receipt: None,
             capsule_marker: None,
             exchange_id: None,
         }
@@ -143,6 +148,8 @@ pub struct GenerationEvent {
     pub usage: Option<Usage>,
 
     pub timings: Option<BTreeMap<String, Value>>,
+    /// The turn's inference receipt, on the last event of a turn that has one.
+    pub receipt: Option<Value>,
 }
 
 impl GenerationEvent {
@@ -164,6 +171,7 @@ impl GenerationEvent {
             }],
             usage: None,
             timings: None,
+            receipt: None,
         }
     }
 
@@ -185,6 +193,7 @@ impl GenerationEvent {
             }],
             usage: None,
             timings: None,
+            receipt: None,
         }
     }
 
@@ -210,6 +219,7 @@ impl GenerationEvent {
             }],
             usage: None,
             timings: None,
+            receipt: None,
         }
     }
 
@@ -221,6 +231,7 @@ impl GenerationEvent {
             choices: Vec::new(),
             usage: Some(usage),
             timings: None,
+            receipt: None,
         }
     }
 

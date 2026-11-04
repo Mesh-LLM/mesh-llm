@@ -13,7 +13,12 @@ use crate::{GenerationSignalWindow, NativeMtpDraft, SamplingConfig, TokenLogprob
 
 const EMPTY_CHAT_GRAMMAR_METADATA: &str = r#"{"grammar":""}"#;
 
-fn chat_sampling_metadata_for_native(metadata_json: &str) -> &str {
+/// The chat metadata the native sampler is configured with, of the metadata
+/// a chat template renders. A turn without a grammar is configured with
+/// the grammar field alone, so its sampler is built without the reasoning
+/// tags and the generation prompt. Whoever states what a turn's sampler
+/// was built from must read the metadata through this.
+pub fn chat_sampling_metadata_for_native(metadata_json: &str) -> &str {
     // Template metadata can contain a large serialized PEG response parser,
     // but native sampling only consults grammar fields. The renderer emits
     // compact JSON, so an empty top-level grammar can use the minimal

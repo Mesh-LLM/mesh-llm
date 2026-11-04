@@ -10,6 +10,7 @@ mod generation_commit_batcher;
 mod generation_flow;
 mod generation_receipt;
 mod guardrails;
+mod inference_receipts;
 pub(crate) mod iteration_scheduler;
 mod linear_proposal;
 mod local_generation;

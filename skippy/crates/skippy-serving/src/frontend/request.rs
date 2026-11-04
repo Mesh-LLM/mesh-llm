@@ -1649,6 +1649,7 @@ pub(super) fn sampling_config(
         samplers,
         reasoning_budget: ReasoningBudget::Unrestricted,
         top_logprobs: None,
+        indexed_draw: false,
     })
 }
 
@@ -1961,6 +1962,10 @@ pub(super) fn wire_sampling_config(sampling: &SamplingConfig) -> Option<WireSamp
             0
         }) | (if sampling.ignore_eos {
             sampling_flags::IGNORE_EOS
+        } else {
+            0
+        }) | (if sampling.indexed_draw {
+            sampling_flags::INDEXED_DRAW
         } else {
             0
         }),

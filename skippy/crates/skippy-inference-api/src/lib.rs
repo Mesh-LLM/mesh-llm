@@ -17,6 +17,7 @@ pub mod http_exchange;
 pub mod lifecycle;
 pub mod models;
 pub mod realtime;
+pub mod receipts;
 mod request_lifecycle;
 pub mod rerank;
 pub mod responses;
@@ -80,6 +81,9 @@ pub use lifecycle::{
     request_id_response_header,
 };
 pub use models::{ModelId, ModelIdError, ModelObject, ModelsResponse};
+pub use receipts::{
+    RECEIPT_CLIENT_KEY_HEADER, RECEIPT_PARENT_HEADER, RECEIPT_SEED_HEADER, ReceiptRequest,
+};
 pub use rerank::{RerankDocument, RerankRequest, RerankResponse, RerankResult};
 pub use responses::{
     NormalizationOutcome, ResponseAdapterMode, ResponsesRequest, StreamUsage,

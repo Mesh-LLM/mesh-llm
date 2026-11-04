@@ -32,6 +32,8 @@ const UNVERIFIED: &[&str] = &[
     "trajectory-reader",
     // The sparse GGUF copy has Unix and Windows positional file I/O; Windows runtime proof is pending.
     "skippy-receipts",
+    // The head key file is created owner-only on Unix; Windows runtime proof is pending.
+    "skippy-receipt-audit",
 ];
 
 fn predicate(tokens: TokenStream) -> bool {

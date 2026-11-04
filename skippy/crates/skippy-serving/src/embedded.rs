@@ -98,6 +98,8 @@ pub struct EmbeddedRuntimeOptions {
     /// Optional session-lifecycle observer, attached to the loaded
     /// `RuntimeState` at construction (plan task 12, §8.7).
     pub session_lifecycle_observer: Option<Arc<dyn crate::runtime_state::SessionLifecycleObserver>>,
+    /// Issue inference receipts for the turns this runtime serves.
+    pub receipts: Option<crate::receipts::ReceiptsOptions>,
 }
 
 pub struct SkippyRuntimeHandle {
@@ -215,6 +217,9 @@ impl SkippyRuntimeHandle {
             options.session_lifecycle_observer.clone(),
         )?
         .with_context(|| format!("stage {} requires model_path", options.config.stage_id))?;
+        if let Some(receipts) = options.receipts {
+            crate::receipts::start(receipts, &options.config, runtime.clone())?;
+        }
         telemetry.emit(
             "stage.embedded_runtime_ready",
             lifecycle_attrs(&options.config),
@@ -257,6 +262,9 @@ impl SkippyRuntimeHandle {
             options.session_lifecycle_observer.clone(),
         )?
         .with_context(|| format!("stage {} requires model_path", options.config.stage_id))?;
+        if let Some(receipts) = options.receipts {
+            crate::receipts::start(receipts, &options.config, runtime.clone())?;
+        }
         telemetry.emit(
             "stage.embedded_runtime_ready",
             lifecycle_attrs(&options.config),
@@ -279,6 +287,18 @@ impl SkippyRuntimeHandle {
 
     pub fn runtime(&self) -> Arc<Mutex<RuntimeState>> {
         self.runtime.clone()
+    }
+
+    /// The receipts route for the OpenAI surface, when this runtime issues
+    /// receipts ([`crate::receipts::client_router`]).
+    pub fn receipts_router(&self) -> Option<Router> {
+        crate::receipts::client_router(&self.runtime)
+    }
+
+    /// The backend this runtime's receipts name, when it issues receipts
+    /// ([`crate::receipts::backend_name`]).
+    pub fn receipts_backend(&self) -> Option<String> {
+        crate::receipts::backend_name(&self.runtime)
     }
 
     pub fn telemetry(&self) -> Telemetry {
@@ -517,8 +537,27 @@ pub fn start_openai_backend_with_tokenizer_and_lifecycle_observer(
     tokenizer: TokenizerCapability,
     lifecycle_observer: Option<Arc<dyn InferenceLifecycleObserver>>,
 ) -> EmbeddedServerHandle {
+    start_openai_backend_with_routes(
+        bind_addr,
+        backend,
+        tokenizer,
+        lifecycle_observer,
+        Router::new(),
+    )
+}
+
+/// [`start_openai_backend_with_tokenizer_and_lifecycle_observer`] with
+/// `routes` merged in, such as [`SkippyRuntimeHandle::receipts_router`].
+pub fn start_openai_backend_with_routes(
+    bind_addr: SocketAddr,
+    backend: Arc<dyn InferenceBackend>,
+    tokenizer: TokenizerCapability,
+    lifecycle_observer: Option<Arc<dyn InferenceLifecycleObserver>>,
+    routes: Router,
+) -> EmbeddedServerHandle {
     let router = openai_backend_router_with_lifecycle_observer(backend, lifecycle_observer)
-        .merge(tokenizer_http_router(tokenizer));
+        .merge(tokenizer_http_router(tokenizer))
+        .merge(routes);
     spawn_openai_backend(bind_addr, router)
 }
 
