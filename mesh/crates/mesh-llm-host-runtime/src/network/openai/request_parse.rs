@@ -197,6 +197,11 @@ pub struct BufferedHttpRequest {
     /// from the rewritten name sent every automatic request down the
     /// named-model local-first path).
     pub automatic_route: bool,
+    /// The trust policy the request runs under. Reading a request decides
+    /// nothing; the ingress that read it does, once
+    /// (`network::openai::trust_policy::decide`), and until then nothing
+    /// may serve the request.
+    pub(crate) trust: crate::network::request_trust::RequestTrust,
 }
 
 impl BufferedHttpRequest {
@@ -565,6 +570,7 @@ where
         correlation_id: parsed.correlation_id,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: Default::default(),
     })
 }
 

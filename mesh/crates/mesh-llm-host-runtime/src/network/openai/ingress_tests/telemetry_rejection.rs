@@ -69,6 +69,7 @@ async fn a_model_rejected_before_routing_is_counted_in_request_telemetry() {
         correlation_id: None,
         exchange_observation_id: None,
         automatic_route: false,
+        trust: crate::network::request_trust::RequestTrust::UNRESTRICTED,
     };
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")

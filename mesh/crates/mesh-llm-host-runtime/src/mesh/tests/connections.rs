@@ -325,6 +325,7 @@ fn stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         runtime_settings: Default::default(),
         native_mtp_enabled: true,
         dflash: None,
+        issue_receipts: false,
         shutdown_generation: 3,
         coordinator_term: 11,
         coordinator_id: None,
@@ -411,6 +412,7 @@ async fn make_configured_test_node(
         model_source: Arc::new(Mutex::new(None)),
         serving_models: Arc::new(Mutex::new(Vec::new())),
         served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
+        receipt_models: Arc::default(),
         served_model_generations: Arc::new(Mutex::new(HashMap::new())),
         served_model_weights_ports: Arc::new(Mutex::new(HashMap::new())),
         model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
@@ -483,6 +485,7 @@ async fn make_configured_test_node(
         config_state: Arc::new(tokio::sync::Mutex::new(config_state)),
         live_request_defaults,
         peer_blocks: crate::network::peer_blocks::PeerBlocks::in_memory(),
+        receipt_audits: Arc::default(),
         route_target_health: Arc::new(std::sync::OnceLock::new()),
         plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
         model_requirements: Default::default(),
@@ -631,6 +634,7 @@ async fn set_serving_models_preserves_existing_known_descriptor_capabilities_whe
     node.set_serving_models(vec![vision_model.clone()]).await;
     node.upsert_served_model_descriptor(ServedModelDescriptor {
         requires: Vec::new(),
+        receipts: false,
         identity: ServedModelIdentity {
             model_name: vision_model.clone(),
             is_primary: true,

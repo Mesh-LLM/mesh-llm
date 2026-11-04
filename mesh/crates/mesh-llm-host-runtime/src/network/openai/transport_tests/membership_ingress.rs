@@ -123,6 +123,7 @@ async fn membership_routes_only_among_its_own_mesh() {
                 MODEL,
                 "/v1/chat/completions",
                 &targets,
+                crate::network::request_trust::RequestTrust::UNRESTRICTED,
             )
             .await
         }

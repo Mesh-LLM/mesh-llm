@@ -106,6 +106,7 @@ pub(super) fn minimal_valid_config() -> MeshConfig {
         models: vec![],
         plugins: vec![],
         logging: Default::default(),
+        receipts: Default::default(),
         extra: Default::default(),
     }
 }

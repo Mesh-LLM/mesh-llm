@@ -355,6 +355,7 @@ async fn finish_runtime_model_load(
             port: handle.port,
             capabilities: handle.capabilities,
             workload_class: handle.workload_class,
+            receipts: handle.receipts,
         },
     )
     .await;

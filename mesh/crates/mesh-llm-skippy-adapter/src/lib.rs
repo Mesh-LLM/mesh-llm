@@ -5,6 +5,7 @@ pub mod config;
 pub mod hash_cache;
 mod load_options;
 pub mod package;
+pub mod receipts;
 mod stage;
 pub use load_options::{SkippyDeviceDescriptor, SkippyModelLoadOptions, SkippyTelemetryOptions};
 pub use skippy_api::family_policy;

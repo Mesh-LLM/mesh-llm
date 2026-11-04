@@ -208,6 +208,14 @@ async fn blocked_peer_is_skipped_by_routing_until_unblocked() -> Result<()> {
         .into_iter()
         .find(|peer| peer.id == host.id())
         .expect("the host is a peer");
+    let mut host_info = host_info;
+    // `/v1/models` lists a provider as an LLM only with a chat workload class
+    for descriptor in &mut host_info.served_model_descriptors {
+        descriptor
+            .metadata
+            .get_or_insert_with(Default::default)
+            .workload_class = Some(mesh_llm_types::mesh::ModelWorkloadClass::CausalGeneration);
+    }
     client.insert_test_peer(host_info).await;
     assert!(
         client
@@ -220,6 +228,10 @@ async fn blocked_peer_is_skipped_by_routing_until_unblocked() -> Result<()> {
         client.any_host().await.map(|peer| peer.id),
         Some(host.id()),
         "setup: the host is the any-host fallback before any block"
+    );
+    assert!(
+        listed_models(&client).await.contains(&"remote-coding-model".to_string()),
+        "setup: /v1/models lists the host's model before any block"
     );
 
     client
@@ -243,6 +255,10 @@ async fn blocked_peer_is_skipped_by_routing_until_unblocked() -> Result<()> {
         client.routable_peers().await.iter().all(|peer| peer.id != host.id()),
         "nor to a consultation (caption, audio, second opinion)"
     );
+    assert!(
+        listed_models(&client).await.is_empty(),
+        "nor listed by /v1/models, which offers only what routing serves"
+    );
 
     client
         .peer_blocks
@@ -254,6 +270,7 @@ async fn blocked_peer_is_skipped_by_routing_until_unblocked() -> Result<()> {
             .contains(&host.id()),
         "unblocking makes it routable again"
     );
+    assert!(listed_models(&client).await.contains(&"remote-coding-model".to_string()));
     assert_eq!(client.any_host().await.map(|peer| peer.id), Some(host.id()));
     assert!(client.routable_peers().await.iter().any(|peer| peer.id == host.id()));
     Ok(())
@@ -670,4 +687,21 @@ fn legacy_config_stream_ids_are_reserved_and_require_admission() {
         !stream_allowed_before_admission(STREAM_CONFIG_PUSH, TrustPolicy::Off),
         "reserved STREAM_CONFIG_PUSH (0x0c) must not bypass admission"
     );
+}
+
+/// The ids `/v1/models` lists on `node`.
+async fn listed_models(node: &Node) -> Vec<String> {
+    let models = crate::models::discovery::collect(node)
+        .await
+        .expect("discovery");
+    let (status, body) = crate::network::openai::models_response(&models, "/v1/models", false);
+    assert_eq!(status, 200);
+    body["data"]
+        .as_array()
+        .map(|data| {
+            data.iter()
+                .filter_map(|model| model["id"].as_str().map(str::to_owned))
+                .collect()
+        })
+        .unwrap_or_default()
 }

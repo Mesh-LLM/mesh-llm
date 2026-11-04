@@ -43,6 +43,7 @@ fn legacy_descriptor_from_identity(
         capabilities: crate::models::ModelCapabilities::default(),
         topology: None,
         metadata: None,
+        receipts: false,
     }
 }
 
@@ -105,6 +106,7 @@ fn proto_descriptor_to_local(
             .metadata
             .as_ref()
             .map(proto_model_metadata_to_local),
+        receipts: descriptor.receipts.unwrap_or(false),
     })
 }
 
@@ -350,5 +352,24 @@ mod tests {
             descriptor.metadata.as_ref().unwrap().workload_class,
             Some(crate::mesh::ModelWorkloadClass::Embedding)
         );
+    }
+
+    /// A peer serving with receipts says so; one that does not, or an older
+    /// peer that never sends the field, reads as serving without them.
+    #[test]
+    fn the_receipts_flag_survives_the_wire_and_defaults_off() {
+        let identity = node::ServedModelIdentity {
+            model_name: "m".to_string(),
+            ..Default::default()
+        };
+        for (sent, read) in [(Some(true), true), (Some(false), false), (None, false)] {
+            let descriptor = node::ServedModelDescriptor {
+                identity: Some(identity.clone()),
+                receipts: sent,
+                ..Default::default()
+            };
+            let local = proto_descriptor_to_local(&descriptor).unwrap();
+            assert_eq!(local.receipts, read);
+        }
     }
 }
