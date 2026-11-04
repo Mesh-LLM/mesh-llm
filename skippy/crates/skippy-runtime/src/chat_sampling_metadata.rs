@@ -72,7 +72,10 @@ impl ReasoningFields {
 /// is `metadata_json` and whose reasoning budget is `budget_tokens`:
 /// negative for no limit, `None` when the chat passes no sampling
 /// configuration, in which case the native side enforces no budget.
-pub(crate) fn chat_sampling_metadata_for_native(
+///
+/// Whoever states what a turn's sampler was built from, as a receipt
+/// does, must read the metadata through this.
+pub fn chat_sampling_metadata_for_native(
     metadata_json: &str,
     budget_tokens: Option<i32>,
 ) -> Cow<'_, str> {

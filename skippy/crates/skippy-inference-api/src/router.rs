@@ -636,7 +636,7 @@ async fn completions(
     request.validate()?;
     if request.stream {
         let include_usage = request.include_usage();
-        let backend_context = request_context(context.request_id, trusted_agent_session, true);
+        let backend_context = request_context(&context, trusted_agent_session, true);
         let cancellation = backend_context.cancellation_token();
         let stream = call_backend_with_context(
             state.config.lifecycle_observer.clone(),
@@ -680,7 +680,7 @@ async fn completions(
             }));
         Ok(sse_response(events, cancellation, lifecycle))
     } else {
-        let backend_context = request_context(context.request_id, trusted_agent_session, false);
+        let backend_context = request_context(&context, trusted_agent_session, false);
         let response = call_backend_with_context(
             state.config.lifecycle_observer.clone(),
             &context,
@@ -788,11 +788,12 @@ fn resolve_agent_session(
 }
 
 pub(crate) fn request_context(
-    request_id: RequestId,
+    lifecycle: &InferenceLifecycleContext,
     trusted_agent_session: bool,
     observe_stream_usage: bool,
 ) -> InferenceRequestContext {
-    let mut context = InferenceRequestContext::with_request_id(request_id);
+    let mut context = InferenceRequestContext::with_request_id(lifecycle.request_id)
+        .with_receipt(lifecycle.receipt);
     if trusted_agent_session {
         context = context.with_trusted_agent_session();
     }
@@ -868,7 +869,10 @@ async fn frontend_lifecycle_middleware(
         request_id,
         lifecycle_method(&method),
         lifecycle_route(&uri),
-    );
+    )
+    .with_receipt(crate::receipts::ReceiptRequest::from_headers(
+        request.headers(),
+    ));
     request.extensions_mut().insert(request_id);
     request.extensions_mut().insert(context.clone());
     let mut lifecycle =

@@ -233,6 +233,7 @@ mod tests {
                 telemetry_queue_capacity: 0,
                 telemetry_level: skippy_serving::telemetry::TelemetryLevel::Off,
                 session_lifecycle_observer: None,
+                receipts: None,
             },
             open_events: ModelOpenEvents::Disabled,
             hooks_factory: None,

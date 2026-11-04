@@ -181,6 +181,7 @@ impl LocalOpenAiOptions {
                     telemetry_queue_capacity: self.telemetry_queue_capacity,
                     telemetry_level: self.telemetry_level,
                     session_lifecycle_observer: None,
+                    receipts: None,
                 },
                 openai,
                 open_events: self

@@ -90,10 +90,17 @@ pub fn huggingface_xet_cache_dir() -> PathBuf {
 }
 
 pub fn application_cache_dir() -> PathBuf {
+    user_application_cache_dir()
+        .unwrap_or_else(|| std::env::temp_dir().join("mesh-llm-cache").join("mesh-llm"))
+}
+
+/// The application's directory under the user's own cache directory, or
+/// `None` when the process has no home or cache directory. Unlike
+/// [`application_cache_dir`], never under the shared temporary directory.
+pub fn user_application_cache_dir() -> Option<PathBuf> {
     dirs::cache_dir()
         .or_else(|| dirs::home_dir().map(|home| home.join(".cache")))
-        .unwrap_or_else(|| std::env::temp_dir().join("mesh-llm-cache"))
-        .join("mesh-llm")
+        .map(|dir| dir.join("mesh-llm"))
 }
 
 pub fn prepare_download_directories() -> Result<PreparedDownloadDirectories> {

@@ -123,6 +123,7 @@ impl StageOpenAiBackend {
             )));
         }
         sampling.resolve_reasoning_budget(max_tokens);
+        self.prepare_receipt_draw(&mut sampling, &ids, prompt.chat_parse_metadata.as_deref());
         // This is an optional cache candidate. The already-rendered prompt is
         // valid even when its second, assistant-marker-free rendering cannot
         // be tokenized, so bypass the candidate rather than failing the chat

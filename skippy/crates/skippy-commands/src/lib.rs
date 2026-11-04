@@ -8,5 +8,6 @@
 pub mod console;
 pub mod models;
 pub mod prompt;
+pub mod receipts;
 pub mod runtime;
 pub mod split;

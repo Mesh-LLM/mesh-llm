@@ -38,6 +38,7 @@ pub use activation::{
     DecodeFrameBatchRequest, IterationBatchPhase, IterationBatchRequest, PartialBatchExecution,
 };
 pub use capability_probe::{CapabilityReport, probe_capabilities};
+pub use chat_sampling_metadata::chat_sampling_metadata_for_native;
 pub use checkpoint::{CheckpointQuantization, is_safetensors_checkpoint};
 pub use clef::{ClefModel, ClefModelInfo};
 pub use config::{

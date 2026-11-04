@@ -19,6 +19,7 @@ use crate::binary_transport::{
     forwarded_stage_message_timed, run_binary_stage_message, write_stage_message_conditioned,
 };
 use crate::frontend::embedded_execution::{StaleWindowDiscard, VerifyRetirement};
+use crate::frontend::inference_receipts::SampledTokens;
 use crate::frontend::request::wire_sampling_config;
 use crate::frontend::speculative::{
     InferenceSpeculativeStats, classify_verify_window_with_threshold,
@@ -77,6 +78,8 @@ impl StageOpenAiBackend {
         if request.config.downstream.is_none() {
             return self.generate_embedded_request_locally(request, on_token);
         }
+        let inference_receipt_tokens = SampledTokens::default();
+        let on_token = inference_receipt_tokens.observing(on_token);
 
         let wire_sampling = wire_sampling_config(request.sampling);
         let session_id = request.ids.session_id;
@@ -2296,6 +2299,10 @@ impl StageOpenAiBackend {
         })();
 
         finish_generation_lifecycle(lifecycle, lifecycle_cancelled, result.is_ok());
+        if result.is_ok() {
+            cache_stats.receipt =
+                self.finish_split_receipt_turn(&request, &session_key, &inference_receipt_tokens);
+        }
         self.finish_embedded_generation_session(&request, lane_pool, lane, &result, &session_key)?;
         result?;
         Ok(cache_stats)

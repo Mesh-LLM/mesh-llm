@@ -425,6 +425,8 @@ pub(in crate::frontend) struct GeneratedText {
     pub(in crate::frontend) eog_check_ms: f64,
     /// One entry per completion token, when the request asked for logprobs.
     pub(in crate::frontend) token_logprobs: Option<Vec<GeneratedTokenLogprob>>,
+    /// The turn's receipt, when the request asked for a bound one.
+    pub(in crate::frontend) receipt: Option<Value>,
     pub(in crate::frontend) activation_wire: Option<ActivationWireStats>,
     /// Filled in once the generation finishes, and handed to the stats
     /// observer after admission has been timed. `None` when no observer is

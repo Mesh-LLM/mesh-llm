@@ -113,6 +113,11 @@ message LoadStage {
   // its target layers capture that layer's input and forward it with their
   // activations; the final stage drafts. Older stages ignore it.
   optional StageDFlashPlan dflash = 54;
+  // Record this stage's part of inference receipts, which stage 0 issues.
+  // Stage 0 commits and opens it over a receipts connection to this
+  // stage's binary address. Older stages ignore it, and their turns get no
+  // receipt.
+  bool issue_receipts = 55;
 }
 
 message StageDFlashPlan {

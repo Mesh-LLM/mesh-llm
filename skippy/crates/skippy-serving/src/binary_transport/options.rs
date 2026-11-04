@@ -42,6 +42,8 @@ pub struct BinaryStageOptions {
     pub l3_manager: Option<skippy_cache::L3CacheManager>,
     /// This stage's part in a split DFlash plan.
     pub split_dflash: Option<crate::split_dflash::SplitDFlashStage>,
+    /// Opt-in verifiable inference receipts. `None` leaves them off.
+    pub receipts: Option<crate::receipts::ReceiptsOptions>,
 }
 
 #[derive(Clone)]

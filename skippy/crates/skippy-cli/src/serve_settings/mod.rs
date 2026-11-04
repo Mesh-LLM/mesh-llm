@@ -437,6 +437,9 @@ pub fn section(name: &str) -> &'static str {
     if name.starts_with("downstream-wire-") {
         return "network";
     }
+    if crate::receipts::is_serve_setting(name) {
+        return "distributed";
+    }
     if name.contains("speculative") || name.starts_with("draft-") || name.starts_with("native-mtp-")
     {
         return "speculative";

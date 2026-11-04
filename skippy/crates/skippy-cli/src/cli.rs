@@ -64,6 +64,10 @@ pub enum Command {
     },
     /// Plan and admit a direct GGUF split for explicit worker endpoints.
     PlanSplit(PlanSplitArgs),
+    /// Send a chat request to a node serving with receipts, then audit the receipt.
+    AuditReceipt(crate::receipts::AuditReceiptArgs),
+    /// Check an audit's evidence again from the file and the claimed GGUF alone.
+    RecheckReceipt(crate::receipts::RecheckReceiptArgs),
     /// List, install, remove, or prune verified native runtime bundles.
     Runtime {
         #[command(subcommand)]
@@ -124,6 +128,8 @@ pub struct ServeBinaryArgs {
     pub worker_only: bool,
     #[arg(skip)]
     pub api_bind_addr: Option<SocketAddr>,
+    #[command(flatten)]
+    pub receipts: crate::receipts::ServeReceiptsArgs,
     #[arg(long, default_value_t = 4)]
     pub max_inflight: usize,
     #[arg(long)]
