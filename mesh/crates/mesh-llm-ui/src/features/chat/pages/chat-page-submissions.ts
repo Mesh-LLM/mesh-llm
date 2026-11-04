@@ -2,14 +2,13 @@ import { createChatDraftConversationId } from '@/features/chat/api/chat-session-
 
 export type ComposerSubmission = { prompt: string; attachments: File[] }
 export type ConversationComposerDraft = ComposerSubmission
-/** `target` is the node the prompt was submitted to ('' routes as usual) and `freeOnly` its
- *  payment restriction, both kept so a change while it waits doesn't reroute or unrestrict it. */
+/** `target` is the node the prompt was submitted to ('' routes as usual), kept so a change
+ *  while it waits doesn't reroute it. */
 export type QueuedSubmission = ComposerSubmission & {
   id: string
   timestamp: string
   conversationId: string
   target: string
-  freeOnly: boolean
 }
 export type FailedSubmission = ComposerSubmission & {
   id: string

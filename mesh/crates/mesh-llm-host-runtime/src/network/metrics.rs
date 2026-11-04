@@ -18,6 +18,10 @@ pub(crate) use mesh_llm_membership::advertised_throughput::{
     sanitize_model_throughput_hints,
 };
 
+#[path = "metrics/throughput_window.rs"]
+mod throughput_window;
+use throughput_window::{RecentThroughput, ThroughputWindow};
+
 const METRICS_TTL: Duration = Duration::from_secs(60 * 60);
 const MAX_TRACKED_MODELS: usize = 128;
 const MAX_TARGETS_PER_MODEL: usize = 16;
@@ -371,6 +375,28 @@ impl RoutingMetrics {
         outcome: AttemptOutcome,
         completion_tokens: Option<u64>,
     ) {
+        self.record_attempt_at(
+            Instant::now(),
+            model,
+            target,
+            queue_wait,
+            attempt_time,
+            outcome,
+            completion_tokens,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_attempt_at(
+        &self,
+        now: Instant,
+        model: Option<&str>,
+        target: AttemptTarget,
+        queue_wait: Duration,
+        attempt_time: Duration,
+        outcome: AttemptOutcome,
+        completion_tokens: Option<u64>,
+    ) {
         let queue_wait_ms = duration_millis(queue_wait);
         let attempt_ms = duration_millis(attempt_time);
         let target_key = target.key();
@@ -385,7 +411,6 @@ impl RoutingMetrics {
         );
 
         if let Some(model) = normalized_model_name(model) {
-            let now = Instant::now();
             let shard_index = self.shard_index(model);
             let mut shard = self.shards[shard_index].lock().unwrap();
             shard.record_attempt(
@@ -442,22 +467,23 @@ impl RoutingMetrics {
 
     /// Cheap per-model throughput lookup for routing decisions.
     ///
-    /// Returns `(avg_tokens_per_second, throughput_samples)` if the model has
-    /// observed throughput, `None` if the model is unknown or has never
-    /// recorded a token-bearing attempt. Avoids the per-call HashMap
+    /// Returns `(avg_tokens_per_second, throughput_samples)` over the samples
+    /// still inside the evidence window, `None` if the model is unknown or no
+    /// token-bearing attempt is recent enough. Avoids the per-call HashMap
     /// allocation that [`model_snapshots`](Self::model_snapshots) does —
     /// callers in the routing hot path can poll this once per candidate
     /// without rebuilding every model's full snapshot.
     pub fn tps_for_model(&self, model: &str) -> Option<(f64, u64)> {
+        self.tps_for_model_at(model, Instant::now())
+    }
+
+    fn tps_for_model_at(&self, model: &str, now: Instant) -> Option<(f64, u64)> {
         let shard_index = self.shard_index(model);
         let shard = self.shards[shard_index].lock().unwrap();
         let metrics = shard.models.get(model)?;
-        let samples = metrics.throughput_samples;
-        if samples == 0 {
-            return None;
-        }
-        let tps = average_milli(metrics.throughput_tps_milli_sum, samples)?;
-        Some((tps, samples))
+        let recent = metrics.recent_throughput.recent(now);
+        let tps = average_milli(recent.tps_milli_sum, recent.samples)?;
+        Some((tps, recent.samples))
     }
 
     /// Return bounded local-throughput hints that this node can safely advertise.
@@ -465,11 +491,19 @@ impl RoutingMetrics {
     /// Only local targets for currently hosted models are included. Remote and
     /// endpoint observations are measurements this node made while routing, not
     /// proof of this node's serving speed, so they are intentionally excluded.
+    /// Only samples still inside the evidence window count.
     pub(crate) fn advertisable_model_throughput(
         &self,
         hosted_models: &[String],
     ) -> Vec<ModelThroughputHint> {
-        let now = Instant::now();
+        self.advertisable_model_throughput_at(hosted_models, Instant::now())
+    }
+
+    fn advertisable_model_throughput_at(
+        &self,
+        hosted_models: &[String],
+        now: Instant,
+    ) -> Vec<ModelThroughputHint> {
         let mut seen = HashSet::new();
         let mut hints = Vec::new();
 
@@ -486,21 +520,14 @@ impl RoutingMetrics {
                 continue;
             };
 
-            let mut tps_milli_sum = 0_u64;
-            let mut samples = 0_u64;
-            for (target, target_metrics) in &metrics.targets {
-                if target.kind != TargetKind::Local || target_metrics.throughput_samples == 0 {
-                    continue;
-                }
-                tps_milli_sum =
-                    tps_milli_sum.saturating_add(target_metrics.throughput_tps_milli_sum);
-                samples = samples.saturating_add(target_metrics.throughput_samples);
-            }
-
-            if samples == 0 {
-                continue;
-            }
-            let Some(avg_tokens_per_second_milli) = average_milli_raw(tps_milli_sum, samples)
+            let recent = metrics
+                .targets
+                .iter()
+                .filter(|(target, _)| target.kind == TargetKind::Local)
+                .map(|(_, target_metrics)| target_metrics.recent_throughput.recent(now))
+                .fold(RecentThroughput::default(), RecentThroughput::add);
+            let Some(avg_tokens_per_second_milli) =
+                average_milli_raw(recent.tps_milli_sum, recent.samples)
             else {
                 continue;
             };
@@ -508,7 +535,7 @@ impl RoutingMetrics {
                 model_name: model.to_string(),
                 avg_tokens_per_second_milli: avg_tokens_per_second_milli
                     .min(MAX_ADVERTISED_TPS_MILLI),
-                throughput_samples: samples.min(MAX_ADVERTISED_THROUGHPUT_SAMPLES),
+                throughput_samples: recent.samples.min(MAX_ADVERTISED_THROUGHPUT_SAMPLES),
             });
             if hints.len() >= MAX_ADVERTISED_MODEL_THROUGHPUT_HINTS {
                 break;
@@ -518,28 +545,33 @@ impl RoutingMetrics {
         sanitize_model_throughput_hints(hints)
     }
 
+    /// This node's own observation of `target` for `model`, over the samples
+    /// still inside the evidence window.
     pub(crate) fn throughput_hint_for_target(
         &self,
         model: &str,
         target: AttemptTarget,
     ) -> Option<ModelThroughputHint> {
-        let now = Instant::now();
+        self.throughput_hint_for_target_at(model, target, Instant::now())
+    }
+
+    fn throughput_hint_for_target_at(
+        &self,
+        model: &str,
+        target: AttemptTarget,
+        now: Instant,
+    ) -> Option<ModelThroughputHint> {
         let shard_index = self.shard_index(model);
         let mut shard = self.shards[shard_index].lock().unwrap();
         shard.compact(now, &self.config);
         let metrics = shard.models.get(model)?;
         let target = target.key();
-        let metrics = metrics.targets.get(&target)?;
-        let samples = metrics.throughput_samples;
-        if samples == 0 {
-            return None;
-        }
-        let avg_tokens_per_second_milli =
-            average_milli_raw(metrics.throughput_tps_milli_sum, samples)?;
+        let recent = metrics.targets.get(&target)?.recent_throughput.recent(now);
+        let avg_tokens_per_second_milli = average_milli_raw(recent.tps_milli_sum, recent.samples)?;
         Some(ModelThroughputHint {
             model_name: model.to_string(),
             avg_tokens_per_second_milli,
-            throughput_samples: samples,
+            throughput_samples: recent.samples,
         })
     }
 
@@ -878,6 +910,8 @@ struct ModelMetrics {
     completion_tokens_observed: u64,
     throughput_tps_milli_sum: u64,
     throughput_samples: u64,
+    /// What routing reads; the two cumulative fields above stay diagnostic.
+    recent_throughput: ThroughputWindow,
     targets: HashMap<TargetKey, TargetMetrics>,
 }
 
@@ -899,6 +933,7 @@ impl Default for ModelMetrics {
             completion_tokens_observed: 0,
             throughput_tps_milli_sum: 0,
             throughput_samples: 0,
+            recent_throughput: ThroughputWindow::default(),
             targets: HashMap::new(),
         }
     }
@@ -923,6 +958,7 @@ impl ModelMetrics {
                         self.throughput_tps_milli_sum =
                             self.throughput_tps_milli_sum.saturating_add(tps_milli);
                         self.throughput_samples += 1;
+                        self.recent_throughput.record(record.now, tps_milli);
                     }
                 }
             }
@@ -939,6 +975,7 @@ impl ModelMetrics {
         let metrics = self.targets.entry(record.target).or_default();
         metrics.last_updated = record.now;
         metrics.record(
+            record.now,
             record.queue_wait_ms,
             record.attempt_ms,
             record.outcome,
@@ -1051,6 +1088,8 @@ struct TargetMetrics {
     completion_tokens_observed: u64,
     throughput_tps_milli_sum: u64,
     throughput_samples: u64,
+    /// What routing reads; the two cumulative fields above stay diagnostic.
+    recent_throughput: ThroughputWindow,
 }
 
 impl Default for TargetMetrics {
@@ -1068,6 +1107,7 @@ impl Default for TargetMetrics {
             completion_tokens_observed: 0,
             throughput_tps_milli_sum: 0,
             throughput_samples: 0,
+            recent_throughput: ThroughputWindow::default(),
         }
     }
 }
@@ -1075,6 +1115,7 @@ impl Default for TargetMetrics {
 impl TargetMetrics {
     fn record(
         &mut self,
+        now: Instant,
         queue_wait_ms: u64,
         attempt_ms: u64,
         outcome: AttemptOutcome,
@@ -1095,6 +1136,7 @@ impl TargetMetrics {
                         self.throughput_tps_milli_sum =
                             self.throughput_tps_milli_sum.saturating_add(tps_milli);
                         self.throughput_samples += 1;
+                        self.recent_throughput.record(now, tps_milli);
                     }
                 }
             }
@@ -1547,6 +1589,216 @@ mod tests {
         assert_eq!(hints[0].model_name, "qwen");
         assert_eq!(hints[0].avg_tokens_per_second_milli, 42_000);
         assert_eq!(hints[0].throughput_samples, 1);
+    }
+
+    fn record_at(
+        metrics: &RoutingMetrics,
+        now: Instant,
+        target: &AttemptTarget,
+        attempt_time: Duration,
+        outcome: AttemptOutcome,
+        completion_tokens: Option<u64>,
+    ) {
+        metrics.record_attempt_at(
+            now,
+            Some("qwen"),
+            target.clone(),
+            Duration::from_millis(2),
+            attempt_time,
+            outcome,
+            completion_tokens,
+        );
+    }
+
+    /// The reproducer from #2771: one success at 100 tokens/s, then a timeout
+    /// every ten minutes. The timeouts keep the target active past the
+    /// one-hour TTL, but its throughput credit ends with the evidence window
+    /// for local ranking, peer ranking and the advertised hint alike, while
+    /// the cumulative counters still record the sample.
+    #[test]
+    fn throughput_credit_expires_while_failures_keep_the_target_active() {
+        let metrics = RoutingMetrics::new();
+        let target = AttemptTarget::Local("127.0.0.1:9337".into());
+        let hosted = vec!["qwen".to_string()];
+        let start = Instant::now();
+        let second = Duration::from_secs(1);
+        record_at(
+            &metrics,
+            start,
+            &target,
+            second,
+            AttemptOutcome::Success,
+            Some(100),
+        );
+        for minutes in (10..=70).step_by(10) {
+            let now = start + Duration::from_secs(minutes * 60);
+            record_at(
+                &metrics,
+                now,
+                &target,
+                second,
+                AttemptOutcome::Timeout,
+                None,
+            );
+        }
+
+        let at_limit = start + throughput_window::THROUGHPUT_EVIDENCE_MAX_AGE;
+        assert_eq!(metrics.tps_for_model_at("qwen", at_limit), Some((100.0, 1)));
+        let hint = metrics
+            .throughput_hint_for_target_at("qwen", target.clone(), at_limit)
+            .expect("the sample is still inside the window");
+        assert_eq!(
+            (hint.avg_tokens_per_second_milli, hint.throughput_samples),
+            (100_000, 1)
+        );
+
+        let after = start + Duration::from_secs(70 * 60);
+        assert_eq!(metrics.tps_for_model_at("qwen", after), None);
+        assert!(
+            metrics
+                .throughput_hint_for_target_at("qwen", target, after)
+                .is_none()
+        );
+        assert!(
+            metrics
+                .advertisable_model_throughput_at(&hosted, after)
+                .is_empty()
+        );
+
+        let snapshot = &metrics.model_snapshots()["qwen"];
+        assert_eq!(snapshot.throughput_samples, 1);
+        assert_eq!(snapshot.attempt_timeout_count, 7);
+    }
+
+    /// Attempts that carry no valid sample never refresh the evidence.
+    #[test]
+    fn attempts_without_a_valid_sample_do_not_refresh_throughput_evidence() {
+        let metrics = RoutingMetrics::new();
+        let target = AttemptTarget::Local("127.0.0.1:9337".into());
+        let start = Instant::now();
+        let second = Duration::from_secs(1);
+        record_at(
+            &metrics,
+            start,
+            &target,
+            second,
+            AttemptOutcome::Success,
+            Some(100),
+        );
+
+        let late = start + Duration::from_secs(14 * 60);
+        record_at(
+            &metrics,
+            late,
+            &target,
+            second,
+            AttemptOutcome::Success,
+            None,
+        );
+        record_at(
+            &metrics,
+            late,
+            &target,
+            second,
+            AttemptOutcome::Success,
+            Some(0),
+        );
+        record_at(
+            &metrics,
+            late,
+            &target,
+            Duration::ZERO,
+            AttemptOutcome::Success,
+            Some(50),
+        );
+        for outcome in [
+            AttemptOutcome::Rejected,
+            AttemptOutcome::Unavailable,
+            AttemptOutcome::ContextOverflow,
+        ] {
+            record_at(&metrics, late, &target, second, outcome, Some(50));
+        }
+
+        let after = start + throughput_window::THROUGHPUT_EVIDENCE_MAX_AGE + second;
+        assert_eq!(metrics.tps_for_model_at("qwen", after), None);
+        assert!(
+            metrics
+                .throughput_hint_for_target_at("qwen", target, after)
+                .is_none()
+        );
+    }
+
+    /// A new valid sample restores the credit on its own: the expired ones
+    /// neither weigh on the average nor count toward the sample threshold.
+    #[test]
+    fn a_new_sample_restores_throughput_evidence_without_expired_samples() {
+        let metrics = RoutingMetrics::new();
+        let target = AttemptTarget::Local("127.0.0.1:9337".into());
+        let hosted = vec!["qwen".to_string()];
+        let start = Instant::now();
+        let second = Duration::from_secs(1);
+        for _ in 0..3 {
+            record_at(
+                &metrics,
+                start,
+                &target,
+                second,
+                AttemptOutcome::Success,
+                Some(100),
+            );
+        }
+
+        let later = start + Duration::from_secs(20 * 60);
+        record_at(
+            &metrics,
+            later,
+            &target,
+            second,
+            AttemptOutcome::Success,
+            Some(40),
+        );
+
+        assert_eq!(metrics.tps_for_model_at("qwen", later), Some((40.0, 1)));
+        let hint = metrics
+            .throughput_hint_for_target_at("qwen", target, later)
+            .expect("the new sample is evidence");
+        assert_eq!(
+            (hint.avg_tokens_per_second_milli, hint.throughput_samples),
+            (40_000, 1)
+        );
+        let advertised = metrics.advertisable_model_throughput_at(&hosted, later);
+        assert_eq!(advertised.len(), 1);
+        assert_eq!(advertised[0].throughput_samples, 1);
+        assert_eq!(metrics.model_snapshots()["qwen"].throughput_samples, 4);
+    }
+
+    /// A serving instance on another port is another target: it starts with
+    /// no evidence of its own.
+    #[test]
+    fn throughput_evidence_stays_with_its_target() {
+        let metrics = RoutingMetrics::new();
+        let old_target = AttemptTarget::Local("127.0.0.1:9337".into());
+        let new_target = AttemptTarget::Local("127.0.0.1:9338".into());
+        let now = Instant::now();
+        record_at(
+            &metrics,
+            now,
+            &old_target,
+            Duration::from_secs(1),
+            AttemptOutcome::Success,
+            Some(100),
+        );
+
+        assert!(
+            metrics
+                .throughput_hint_for_target_at("qwen", old_target, now)
+                .is_some()
+        );
+        assert!(
+            metrics
+                .throughput_hint_for_target_at("qwen", new_target, now)
+                .is_none()
+        );
     }
 
     #[test]

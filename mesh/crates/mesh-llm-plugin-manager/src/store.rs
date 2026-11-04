@@ -30,10 +30,28 @@ pub const SUPPORTED_PLUGIN_SCHEMA_VERSION: u32 = 1;
 pub struct InstalledPluginManifestMetadata {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub openai_exchange_hook: Option<InstalledOpenAiExchangeAccess>,
+    /// Provider connections the package asks for, by capability. Granted at
+    /// install; an operator `operation_bindings` entry replaces them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operation_bindings: Vec<InstalledOperationBindingRequest>,
+    /// The package asks to block/unblock routing to peers.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub peer_blocks: bool,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub config_schema: Option<InstalledPluginConfigSchema>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub web_ui: Option<InstalledPluginWebUiMetadata>,
+}
+
+/// A provider connection requested by capability (see `OperationBindingManifest`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct InstalledOperationBindingRequest {
+    pub name: String,
+    pub capability: String,
+    pub setup_operation: String,
+    pub operations: Vec<String>,
+    pub setup_directory: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -543,6 +561,8 @@ mod tests {
             default_managed: false,
             manifest: Some(InstalledPluginManifestMetadata {
                 openai_exchange_hook: None,
+                operation_bindings: Vec::new(),
+                peer_blocks: false,
                 config_schema: Some(InstalledPluginConfigSchema {
                     plugin_name: name.to_string(),
                     schema_version: SUPPORTED_PLUGIN_SCHEMA_VERSION,

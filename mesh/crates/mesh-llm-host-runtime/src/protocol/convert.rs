@@ -827,6 +827,14 @@ pub(crate) fn local_ann_to_proto_ann(
         .map(|descriptor| crate::proto::node::ServedModelDescriptor {
             identity: Some(descriptor_identity_to_proto(&descriptor.identity)),
             capabilities_known: Some(descriptor.capabilities_known),
+            requires: descriptor
+                .requires
+                .iter()
+                .map(|r| crate::proto::node::ChannelRequirement {
+                    channel: r.channel.clone(),
+                    terms: r.terms.clone(),
+                })
+                .collect(),
             capabilities: Some(crate::proto::node::ModelCapabilities {
                 vision: local_capability_level_to_proto(descriptor.capabilities.vision),
                 reasoning: local_capability_level_to_proto(descriptor.capabilities.reasoning),
@@ -951,16 +959,6 @@ pub(crate) fn local_ann_to_proto_ann(
             subprotocols
         },
         inference_admission_state: ann.inference_admission_state.map(|state| state as i32),
-        lightning_offers: {
-            #[cfg(feature = "payments")]
-            {
-                super::payment_offers::encode(&ann.lightning_offers)
-            }
-            #[cfg(not(feature = "payments"))]
-            {
-                Vec::new()
-            }
-        },
         cache_affinity: ann
             .cache_affinity
             .as_ref()
@@ -1246,8 +1244,6 @@ pub(crate) fn proto_ann_to_local(
         inference_admission_state: pa
             .inference_admission_state
             .and_then(|v| crate::proto::node::InferenceAdmissionState::try_from(v).ok()),
-        #[cfg(feature = "payments")]
-        lightning_offers: super::payment_offers::decode(&pa.lightning_offers)?,
         cache_affinity: pa
             .cache_affinity
             .as_ref()
@@ -1417,6 +1413,7 @@ fn legacy_proto_config_to_mesh(
         .plugins
         .iter()
         .map(|p| PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: p.name.clone(),
             enabled: p.enabled,
             web_ui_enabled: None,
@@ -1455,7 +1452,6 @@ fn legacy_proto_config_to_mesh(
         models,
         plugins,
         logging: Default::default(),
-        payments: Default::default(),
         extra: Default::default(),
     };
     if let Some(mode) = snapshot

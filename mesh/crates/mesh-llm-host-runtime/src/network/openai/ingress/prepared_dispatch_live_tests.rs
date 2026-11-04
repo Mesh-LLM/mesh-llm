@@ -15,6 +15,7 @@ async fn select_policy(host: &mut LiveHost, deny_model: &str, virtual_echo: bool
         args.push("--virtual-echo".into());
     }
     let spec = ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         name: "openai-exchange-observer".into(),
         command: host
             .installed_metadata
@@ -131,7 +132,6 @@ async fn installed_lifecycle_pipeline_admits_each_prepared_dispatch_and_never_fa
             &host.node,
             &nonce,
             response::RouteAttemptLoggingContext {
-                exchange_id: None,
                 request_id,
                 response_adapter: crate::network::openai::request_normalize::ResponseAdapter::None,
                 retry_policy: response::ResponseRetryPolicy::next_target_available(false),
@@ -162,7 +162,10 @@ async fn installed_lifecycle_pipeline_admits_each_prepared_dispatch_and_never_fa
             ));
             session.finish("completed").await;
         } else {
-            assert_eq!(result, response::PipelineProxyResult::PolicyDenied);
+            assert_eq!(
+                result,
+                response::PipelineProxyResult::PolicyDenied { status_code: 403 }
+            );
             assert!(wire.starts_with(b"HTTP/1.1 403 "));
             session.finish("policy_denied").await;
         }

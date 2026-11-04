@@ -27,8 +27,23 @@ replacement connection, including when grants were added after startup.
 The optional manifest `openai_exchange_hook` names a handler and requests
 endpoints, phases, permissions, and resource limits. The private
 `ServiceKind::OpenaiExchange` invokes that handler with JSON. A manifest cannot
-grant itself access. The operator supplies `[plugin.openai_exchange_grant]` for
-that configured plugin. An ordinary install with no grant receives no events,
+grant itself access; access comes from one of two operator decisions:
+
+- **Installation consent.** `mesh-llm plugins install` prints the full request
+  (endpoints, phases, prompt/content access, identity bundle, signing
+  delegation) before and as the package lands, and installing it grants exactly
+  that request. The accepted request is recorded with the installed version in
+  the plugin store. An update is accepted by running it, so an update that
+  asks for more than the version it replaces is called out line by line at
+  landing instead of being widened quietly.
+- **Configuration grant.** A `[plugin.openai_exchange_grant]` table on the
+  plugin's `[[plugin]]` entry replaces the installed request: it can narrow
+  it, widen it, or (an empty grant) remove it. Only this entry can grant access
+  to a plugin that is configured without being installed from a package.
+
+Revocation is either `plugins disable`/`plugins delete`, or a configuration
+grant narrower than the installed request. A plugin that is installed but has
+neither an installed request nor a configuration grant receives no events,
 bodies, identity bundle, or delegation authority.
 
 Supported endpoint names are `chat_completions`, `completions`, and `responses`.
@@ -37,7 +52,11 @@ The first phase precedes downstream dispatch. The selected phase observes the
 effective request after core defaults and transformations, immediately before
 backend dispatch. The terminal phase reports the outcome, including denial,
 validation failure, cancellation, timeout, backend failure, and successful end.
-A request denied before selection has no selected phase.
+A request denied before selection has no selected phase. On a mesh route the
+selected phase names the backend in `target` and, for a remote peer, carries
+`target_peer_id`: the peer's endpoint id as lowercase hex, the same encoding the
+serving node's `request_received` and terminal events use for
+`requested_by_node_id`. It is absent for a local or URL backend.
 
 Both sides explicitly list allowed endpoints, phases, and headers. Independent
 booleans control `request_body`, `effective_request_body`, `response_body`,
