@@ -3,7 +3,7 @@ import type { UIMessage, ModelMessage, StreamChunk } from '@tanstack/ai'
 import { EventType } from '@tanstack/ai'
 
 import { env } from '@/lib/env'
-import { ApiError, parseApiErrorBody } from '@/lib/api/errors'
+import { apiErrorReason, ApiError, parseApiErrorBody, type ParsedApiErrorBody } from '@/lib/api/errors'
 import { getClientId } from '@/lib/api/client-id'
 import { generateRequestId } from '@/lib/api/request-id'
 import type { ChatSSEEvent } from '@/lib/api/types'
@@ -86,6 +86,17 @@ const MODEL_ROUTE_RETRY_DELAY_MS = 500
 // and adds a safety margin. Keep the compacted retry below 3.5K prompt tokens
 // so it can fit Apple's 4K context window with that margin.
 const CONTEXT_COMPACTION_RETRY_BODY_BYTES = 14_000
+
+/**
+ * A failed chat request keeps the node's own reason as its message: the
+ * management API already words `error.message` for an operator, and the page
+ * renders this message. The status-only fallback is for a body that carried
+ * nothing.
+ */
+function chatRequestError(response: Response, errorBody: ParsedApiErrorBody): ApiError {
+  const message = apiErrorReason(errorBody) ?? `Chat request failed: ${response.status}`
+  return new ApiError(response.status, errorBody.body, message)
+}
 
 function isModelRouteNotFound(status: number, body: string): boolean {
   if (status !== 404) return false
@@ -243,8 +254,7 @@ async function* runConnect(
   abortSignal?: AbortSignal,
   onResponseMetadata?: (metadata: ChatResponseMetadata) => void,
   systemPrompt = '',
-  target = '',
-  paymentMode = ''
+  target = ''
 ): AsyncGenerator<StreamChunk> {
   const clientId = getClientId()
   const requestId = generateRequestId()
@@ -266,7 +276,6 @@ async function* runConnect(
       attachmentUploadCache
     )
     for (let attempt = 0; ; attempt += 1) {
-      if (paymentMode === 'free_only') requestBody = withFreeOnlyPayment(requestBody)
       response = await fetch(`${env.managementApiUrl}/api/responses`, {
         method: 'POST',
         headers: chatRequestHeaders(target),
@@ -277,17 +286,17 @@ async function* runConnect(
       if (response.ok) break
 
       const errorBody = await parseApiErrorBody(response)
-      const shouldRetryModelRoute = attempt === 0 && isModelRouteNotFound(response.status, errorBody)
+      const shouldRetryModelRoute = attempt === 0 && isModelRouteNotFound(response.status, errorBody.body)
       if (shouldRetryModelRoute) {
         const retryAllowed = await waitForModelRouteRetry(abortSignal)
         if (abortSignal?.aborted) return
         if (!retryAllowed) {
-          throw new ApiError(response.status, errorBody, `Chat request failed: ${response.status}`)
+          throw chatRequestError(response, errorBody)
         }
         continue
       }
 
-      const shouldCompactContext = attempt === 0 && isContextRouteUnavailable(response.status, errorBody)
+      const shouldCompactContext = attempt === 0 && isContextRouteUnavailable(response.status, errorBody.body)
       if (shouldCompactContext) {
         const compactedBody = await compactResponsesInput(
           messages,
@@ -303,7 +312,7 @@ async function* runConnect(
         }
       }
 
-      throw new ApiError(response.status, errorBody, `Chat request failed: ${response.status}`)
+      throw chatRequestError(response, errorBody)
     }
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') return
@@ -403,26 +412,11 @@ function submittedTarget(data: Record<string, unknown> | undefined): string | un
   return typeof target === 'string' ? target : undefined
 }
 
-/** The node folds a request's `mesh_payment` into its own spending policy and can only narrow it,
- *  so `free_only` here keeps this request off paid hosts without touching the node's policy. */
-export function withFreeOnlyPayment<T extends object>(body: T): T & { mesh_payment: { mode: 'free_only' } } {
-  return { ...body, mesh_payment: { mode: 'free_only' } }
-}
-
-/** Free-only taken at submit (`sendMessage(content, { body: { freeOnly } })`) wins over the current
- *  setting, matching how a submitted target works. */
-function submittedPaymentMode(data: Record<string, unknown> | undefined): string | undefined {
-  const freeOnly = data?.freeOnly
-  if (typeof freeOnly !== 'boolean') return undefined
-  return freeOnly ? 'free_only' : ''
-}
-
 export function createMeshConnectionAdapter(
   model: StringSource,
   onResponseMetadata?: (metadata: ChatResponseMetadata) => void,
   systemPrompt?: StringSource,
-  target?: StringSource,
-  paymentMode?: StringSource
+  target?: StringSource
 ): ConnectConnectionAdapter {
   return {
     connect: (_messages, _data, abortSignal) =>
@@ -432,8 +426,7 @@ export function createMeshConnectionAdapter(
         abortSignal,
         onResponseMetadata,
         resolveOptionalString(systemPrompt),
-        submittedTarget(_data) ?? resolveOptionalString(target),
-        submittedPaymentMode(_data) ?? resolveOptionalString(paymentMode)
+        submittedTarget(_data) ?? resolveOptionalString(target)
       )
   }
 }

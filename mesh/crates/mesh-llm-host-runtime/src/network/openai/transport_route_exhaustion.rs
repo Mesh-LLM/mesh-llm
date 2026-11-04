@@ -23,13 +23,8 @@ pub(super) async fn finish_exhausted_route_model_request(
     route_observer: OpenAiRouteObserver<'_>,
 ) -> RouteDispatchOutcome {
     let status = state.exhausted_status();
-    let result = send_error_observed(
-        tcp_stream,
-        status,
-        &format!("all {} target(s) for model '{model}' failed", total_targets),
-        route_observer,
-    )
-    .await;
+    let reason = format!("all {} target(s) for model '{model}' failed", total_targets);
+    let result = send_error_observed(tcp_stream, status, &reason, route_observer).await;
     record_route_model_unavailable(node, model, state.attempts);
     tracing::warn!(
         model = model,
@@ -45,7 +40,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exhausted_timeouts_return_gateway_timeout_without_reclassifying_mixed_failures() {
+    fn exhausted_status_preserves_timeout_classification() {
         for (attempts, timeout_attempts, expected) in [
             (0, 0, 503),
             (1, 1, 504),

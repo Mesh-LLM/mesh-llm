@@ -130,11 +130,11 @@ pub fn install_bundled_default(
         last_protocol_version: current.as_ref().and_then(|item| item.last_protocol_version),
         last_status: current.as_ref().and_then(|item| item.last_status.clone()),
         last_error: None,
+        verified_sha256: Some(digest),
     };
     store.save(&metadata)?;
     progress.report(PluginProgressEvent::Installed {
-        name: metadata.name.clone(),
-        version: metadata.installed_version.clone(),
+        installed: Box::new(metadata.clone()),
     });
     Ok(Some(InstallOutcome {
         metadata,

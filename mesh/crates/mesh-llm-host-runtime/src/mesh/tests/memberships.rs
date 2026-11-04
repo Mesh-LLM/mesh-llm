@@ -71,6 +71,53 @@ async fn peer_ids(node: &Node) -> HashSet<EndpointId> {
     node.peers().await.into_iter().map(|peer| peer.id).collect()
 }
 
+#[tokio::test]
+async fn gossip_verification_work_is_isolated_between_memberships() -> Result<()> {
+    use crate::protocol::InboundGossip;
+
+    let owner = test_owner_keypair(0x51, 0x52);
+    let node = owned_node(&owner, &[&owner]).await?;
+    let busy = named_membership_of(&node, "busy", &[&owner]).await?;
+    let other = named_membership_of(&node, "other", &[&owner]).await?;
+    let sender = make_test_node(super::super::NodeRole::Worker).await?;
+    let record = sender
+        .collect_outbound_gossip()
+        .await
+        .signed_records
+        .remove(0);
+    let frame = |records| InboundGossip {
+        announcements: Vec::new(),
+        signed_records: records,
+        signed_cache_affinity: Vec::new(),
+    };
+
+    // Invalid records still consume the authenticated sender's work quota.
+    // Keep this below the frame byte limit and avoid expensive cryptography.
+    let mut invalid = record.clone();
+    invalid.signed.clear();
+    assert!(
+        busy.prepare_gossip_records(sender.id(), &mut frame(vec![invalid; 4096]))
+            .await
+            .is_some()
+    );
+    assert!(
+        busy.prepare_gossip_records(sender.id(), &mut frame(vec![record.clone()]))
+            .await
+            .is_none()
+    );
+    for independent in [&node, &other] {
+        let prepared = independent
+            .prepare_gossip_records(sender.id(), &mut frame(vec![record.clone()]))
+            .await
+            .expect("another mesh must retain its verification allowance");
+        assert_eq!(prepared.nodes.len(), 1);
+    }
+    node.close_memberships().await;
+    node.close_endpoint().await;
+    sender.close_endpoint().await;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_membership_keeps_its_peers_apart_from_the_nodes_own() -> Result<()> {
     let me = test_owner_keypair(0x51, 0x52);
@@ -102,7 +149,19 @@ async fn a_membership_admits_only_its_own_allowlist() -> Result<()> {
 
     // Trusted by the node itself, but not on the membership's allowlist.
     let my_other_node = owned_node(&me, &[&me]).await?;
-    let _ = my_other_node.join(&membership.invite_token().await).await;
+    // Exercise owner admission over the bound loopback socket. Invite-token
+    // addresses depend on iroh's asynchronous address discovery; discarding a
+    // failed dial would leave this test waiting for a rejection of a peer the
+    // membership never saw.
+    let socket = membership
+        .endpoint
+        .bound_sockets()
+        .into_iter()
+        .find(|addr| addr.is_ipv4())
+        .expect("membership binds an IPv4 socket");
+    assert!(socket.ip().is_loopback());
+    let address = EndpointAddr::new(membership.id()).with_ip_addr(socket);
+    let dial_result = my_other_node.connect_to_peer(address).await;
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while !membership
             .state
@@ -115,7 +174,9 @@ async fn a_membership_admits_only_its_own_allowlist() -> Result<()> {
         }
     })
     .await
-    .expect("the membership should refuse an owner its allowlist lacks");
+    .unwrap_or_else(|_| {
+        panic!("membership must record its owner-policy rejection: {dial_result:?}")
+    });
     assert!(peer_ids(&membership).await.is_empty());
     assert!(peer_ids(&node).await.is_empty());
     Ok(())
@@ -270,6 +331,15 @@ async fn a_membership_refuses_a_peer_announcing_another_mesh() -> Result<()> {
     let _ = elsewhere.join(&membership.invite_token().await).await;
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     assert!(!peer_ids(&membership).await.contains(&elsewhere.id()));
+    assert!(
+        !membership
+            .state
+            .lock()
+            .await
+            .node_records
+            .contains(&elsewhere.id()),
+        "a rejected mesh must not seed the membership's signed records"
+    );
 
     // A node not yet in any mesh is welcome, and adopts this one.
     let newcomer = owned_node(&me, &[&me]).await?;

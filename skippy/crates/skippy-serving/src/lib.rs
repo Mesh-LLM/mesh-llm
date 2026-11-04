@@ -38,6 +38,7 @@ mod legacy_scheduler_absence_tests {
 }
 pub mod serving_hooks;
 pub mod settings;
+pub mod split_dflash;
 pub mod telemetry;
 pub mod thinking_probe;
 pub mod tokenizer;
@@ -52,15 +53,19 @@ pub use embedded::{
 };
 pub use frontend::{
     CONTEXT_BUDGET_MAX_TOKENS, DECODE_BATCH_HEADROOM_TOKENS, DEFAULT_EMBEDDED_MAX_TOKENS,
-    DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, EmbeddedOpenAiArgs, EmbeddedOpenAiBackend,
-    EmbeddedOpenAiRequestDefaults, EmbeddedReasoningBudget, EmbeddedReasoningEnabled,
-    EmbeddedReasoningFormat, InferenceGuardrailsConfig, InferenceGuardrailsStatus,
-    InferenceGuardrailsTarget, LayaSystemOneBackend, LinearProposal, LinearProposalDiscardReason,
-    LinearProposalDisposition, LinearProposalIngress, LinearProposalQuery, LinearProposalReceipt,
-    LinearProposalSourceOutcome, LinearProposalSourceResponse, LinearProposalSourceTelemetry,
-    NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,
-    OpaqueProposalDecisionId, SpeculativeDecodeConfig, SpeechRecognitionBackend, SpeechTranscriber,
-    VerifyWindowConfig, embedded_openai_backend,
+    DEFAULT_GENERATION_ADMISSION_TIMEOUT_SECS, DFLASH_STRATEGY, DFlashDraftAttachFailed,
+    DFlashProposalConfig, EmbeddedOpenAiArgs, EmbeddedOpenAiBackend, EmbeddedOpenAiRequestDefaults,
+    EmbeddedReasoningBudget, EmbeddedReasoningEnabled, EmbeddedReasoningFormat,
+    InferenceGuardrailsConfig, InferenceGuardrailsStatus, InferenceGuardrailsTarget,
+    LayaSystemOneBackend, LinearProposal, LinearProposalDiscardReason, LinearProposalDisposition,
+    LinearProposalIngress, LinearProposalQuery, LinearProposalReceipt, LinearProposalSourceOutcome,
+    LinearProposalSourceResponse, LinearProposalSourceTelemetry, NativeMtpProposalConfig,
+    NgramExtensionConfig, NgramProposalConfig, NgramProposerKind, OpaqueProposalDecisionId,
+    PreviousRequestDefaults, SpeculativeDecodeConfig, SpeechRecognitionBackend, SpeechTranscriber,
+    VerifyWindowConfig, capture_live_request_defaults, embedded_openai_backend,
+    replace_live_request_defaults, restore_live_request_defaults,
 };
+#[cfg(feature = "test-support")]
+pub use frontend::{RegisteredRequestDefaultsProbe, register_request_defaults_probe};
 pub use skippy_protocol::StageConfig;
 pub use tokenizer::{MAX_TOKENIZE_TOKENS, TokenizerCapability, TokenizerCapabilityError};

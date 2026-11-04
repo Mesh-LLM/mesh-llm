@@ -50,7 +50,7 @@ fn control_plane_fallback_no_silent_downgrade_on_alpn_mismatch() {
 
     let err = options.configured_endpoint_failure(
         OwnerControlErrorCode::ControlUnsupported,
-        "remote endpoint did not negotiate mesh-llm-control/1",
+        "remote endpoint did not negotiate mesh-llm-control/2",
     );
 
     assert_eq!(err.code, OwnerControlErrorCode::ControlUnsupported);

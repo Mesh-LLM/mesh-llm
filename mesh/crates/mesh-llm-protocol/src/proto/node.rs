@@ -11,12 +11,13 @@ pub struct GossipFrame {
     pub sender_id: ::prost::alloc::vec::Vec<u8>,
     /// Node records signed by the node they describe and relayed byte-for-byte.
     /// Additive: older nodes ignore this field and keep reading `peers`, which
-    /// newer nodes still populate for them.
+    /// newer nodes still populate in compatibility meshes. Strict meshes retain
+    /// only the authenticated sender's unsigned entry for hop-local metadata.
     #[prost(message, repeated, tag = "4")]
     pub signed_records: ::prost::alloc::vec::Vec<SignedNodeRecord>,
     /// Cache-affinity evidence signed by the node it describes, relayed
     /// byte-for-byte alongside its node record. Additive: older nodes keep
-    /// reading PeerAnnouncement.cache_affinity, which newer nodes still send.
+    /// reading PeerAnnouncement.cache_affinity in compatibility meshes.
     #[prost(message, repeated, tag = "5")]
     pub signed_cache_affinity: ::prost::alloc::vec::Vec<SignedCacheAffinity>,
 }
@@ -115,8 +116,6 @@ pub struct NodeRecord {
     pub admission_state: i32,
     #[prost(message, repeated, tag = "21")]
     pub throughput: ::prost::alloc::vec::Vec<AdvertisedModelThroughput>,
-    #[prost(message, repeated, tag = "22")]
-    pub lightning_offers: ::prost::alloc::vec::Vec<LightningOffer>,
     #[prost(message, optional, tag = "23")]
     pub owner_attestation: ::core::option::Option<SignedNodeOwnership>,
     #[prost(message, optional, tag = "24")]
@@ -276,8 +275,6 @@ pub struct PeerAnnouncement {
     /// verify independently.
     #[prost(message, optional, tag = "51")]
     pub claimed_log_head: ::core::option::Option<ClaimedLogHead>,
-    #[prost(message, repeated, tag = "52")]
-    pub lightning_offers: ::prost::alloc::vec::Vec<LightningOffer>,
     /// Public keys plugins on this node sign with, each bound to this node's key;
     /// see `PluginKey`. At most 16, one per plugin.
     #[prost(message, repeated, tag = "53")]
@@ -382,25 +379,6 @@ pub struct ClaimedLogHead {
     #[prost(string, tag = "6")]
     pub signature_algorithm: ::prost::alloc::string::String,
 }
-/// Presence means payment is required for this exact model, protocol v1.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
-pub struct LightningOffer {
-    #[prost(string, tag = "1")]
-    pub model: ::prost::alloc::string::String,
-    #[prost(uint64, tag = "2")]
-    pub input_msat_per_million: u64,
-    #[prost(uint64, tag = "3")]
-    pub output_msat_per_million: u64,
-    #[prost(uint64, tag = "4")]
-    pub minimum_invoice_msat: u64,
-    /// Percentage discount for backend-reported cached input (0 = full price).
-    #[prost(uint32, tag = "5")]
-    pub cache_discount_percent: u32,
-    /// Payment protocol the seller accepts payment over (3 = metered v3).
-    /// Absent (0) on releases before v3; buyers skip such paid offers.
-    #[prost(uint32, tag = "6")]
-    pub payment_protocol: u32,
-}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SignedMeshGenesisPolicy {
     #[prost(uint32, tag = "1")]
@@ -435,6 +413,9 @@ pub struct MeshRequirements {
     pub protocol_generation: ::core::option::Option<ProtocolGenerationBounds>,
     #[prost(message, optional, tag = "3")]
     pub release_attestation: ::core::option::Option<ReleaseAttestationRequirement>,
+    /// Opt-in strict relay authentication; bound into the policy hash.
+    #[prost(bool, tag = "4")]
+    pub require_signed_gossip: bool,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NodeVersionBounds {
@@ -692,6 +673,15 @@ pub struct ServedModelDescriptor {
     pub capabilities_known: ::core::option::Option<bool>,
     #[prost(message, optional, tag = "5")]
     pub metadata: ::core::option::Option<ServedModelMetadata>,
+    #[prost(message, repeated, tag = "6")]
+    pub requires: ::prost::alloc::vec::Vec<ChannelRequirement>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ChannelRequirement {
+    #[prost(string, tag = "1")]
+    pub channel: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", tag = "2")]
+    pub terms: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ServedModelMetadata {
@@ -1159,6 +1149,25 @@ pub struct OwnerControlApplyConfigRequest {
     pub expected_revision: u64,
     #[prost(message, optional, tag = "4")]
     pub config: ::core::option::Option<NodeConfigSnapshot>,
+    /// separate approval for each plugin whose command executable changes
+    #[prost(message, repeated, tag = "5")]
+    pub plugin_command_approvals: ::prost::alloc::vec::Vec<OwnerControlPluginCommandApproval>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlPluginCommandApproval {
+    #[prost(string, tag = "1")]
+    pub plugin: ::prost::alloc::string::String,
+    /// exact new command executable
+    #[prost(string, tag = "2")]
+    pub command: ::prost::alloc::string::String,
+    /// exact approved arguments; required for changes
+    #[prost(message, optional, tag = "3")]
+    pub invocation: ::core::option::Option<OwnerControlPluginArguments>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct OwnerControlPluginArguments {
+    #[prost(string, repeated, tag = "1")]
+    pub args: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct OwnerControlApplyConfigResponse {
@@ -1460,6 +1469,9 @@ pub enum ModelWorkloadClass {
     SpeechSynthesis = 5,
     Decision = 6,
     SpeechRecognition = 7,
+    DocumentOcr = 8,
+    ImageTextSimilarity = 9,
+    DepthEstimation = 10,
 }
 impl ModelWorkloadClass {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -1476,6 +1488,9 @@ impl ModelWorkloadClass {
             Self::SpeechSynthesis => "MODEL_WORKLOAD_CLASS_SPEECH_SYNTHESIS",
             Self::Decision => "MODEL_WORKLOAD_CLASS_DECISION",
             Self::SpeechRecognition => "MODEL_WORKLOAD_CLASS_SPEECH_RECOGNITION",
+            Self::DocumentOcr => "MODEL_WORKLOAD_CLASS_DOCUMENT_OCR",
+            Self::ImageTextSimilarity => "MODEL_WORKLOAD_CLASS_IMAGE_TEXT_SIMILARITY",
+            Self::DepthEstimation => "MODEL_WORKLOAD_CLASS_DEPTH_ESTIMATION",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -1489,6 +1504,9 @@ impl ModelWorkloadClass {
             "MODEL_WORKLOAD_CLASS_SPEECH_SYNTHESIS" => Some(Self::SpeechSynthesis),
             "MODEL_WORKLOAD_CLASS_DECISION" => Some(Self::Decision),
             "MODEL_WORKLOAD_CLASS_SPEECH_RECOGNITION" => Some(Self::SpeechRecognition),
+            "MODEL_WORKLOAD_CLASS_DOCUMENT_OCR" => Some(Self::DocumentOcr),
+            "MODEL_WORKLOAD_CLASS_IMAGE_TEXT_SIMILARITY" => Some(Self::ImageTextSimilarity),
+            "MODEL_WORKLOAD_CLASS_DEPTH_ESTIMATION" => Some(Self::DepthEstimation),
             _ => None,
         }
     }

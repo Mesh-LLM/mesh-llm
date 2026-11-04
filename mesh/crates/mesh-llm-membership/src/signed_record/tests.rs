@@ -4,6 +4,52 @@ use prost::Message;
 
 const NOW: u64 = 10 * NODE_RECORD.max_age_ms;
 
+#[test]
+fn verified_commit_rechecks_a_concurrent_newer_record_and_expiry() {
+    let mut held = HeldRecords::new(NODE_RECORD);
+    let slow = sign(7, NOW, "slow");
+    let fast = sign(8, NOW, "fast");
+    assert!(matches!(
+        held.admit_verified(id(9), id(2), fast, (), NOW),
+        RecordAdmission::Accepted { .. }
+    ));
+    assert!(matches!(
+        held.admit_verified(id(9), id(2), slow, (), NOW),
+        RecordAdmission::Skipped {
+            reason: RecordSkip::Superseded,
+            ..
+        }
+    ));
+    let expired_while_waiting = sign(9, NOW, "expired");
+    assert!(matches!(
+        held.admit_verified(
+            id(9),
+            id(2),
+            expired_while_waiting,
+            (),
+            NOW + NODE_RECORD.max_age_ms + 1
+        ),
+        RecordAdmission::Skipped {
+            reason: RecordSkip::Expired,
+            ..
+        }
+    ));
+    assert_eq!(held.get(&id(1)).unwrap().header().seq, 8);
+}
+
+#[test]
+fn verified_commit_does_not_cross_record_domains() {
+    let mut cache = HeldRecords::new(CACHE_AFFINITY_RECORD);
+    assert!(matches!(
+        cache.admit_verified(id(9), id(1), sign(1, NOW, "node"), (), NOW),
+        RecordAdmission::Skipped {
+            reason: RecordSkip::Invalid(RecordError::Decode),
+            ..
+        }
+    ));
+    assert!(cache.is_empty());
+}
+
 fn key(seed: u8) -> SigningKey {
     SigningKey::from_bytes(&[seed; 32])
 }

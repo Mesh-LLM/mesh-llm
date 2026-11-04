@@ -7,6 +7,7 @@ fn split_participants_are_still_converging(message: &str) -> bool {
         || message.contains("at least two stage participants")
         || message.contains("split_capacity_shortfall")
         || message.contains("canonical coordinator")
+        || message.contains("coordinator lease was superseded")
         || (message.contains("split topology lock stage")
             && message.contains("matched 0 eligible nodes"))
 }
@@ -23,6 +24,15 @@ fn split_control_transport_failed(message: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn superseded_coordinator_lease_is_retryable() {
+        // A newer coordinator took the model while this one loaded; the retry
+        // finds it elected and stands by instead of failing the launch.
+        assert!(is_retryable_split_start_failure(
+            "split coordinator lease was superseded before stage 0 of model loaded: stale coordinator term 1 < 2"
+        ));
+    }
 
     #[test]
     fn participant_shortage_is_retryable() {

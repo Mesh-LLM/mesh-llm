@@ -39,6 +39,7 @@ export default [
     description: "Use Mesh through OpenAI-compatible clients and model-serving features.",
     links: [
       ["OpenAI-compatible API", "/docs/pages/openai-compatible-api/"],
+      ["Mesh model discovery", "/docs/pages/model-discovery/"],
       ["Decisions API", "/docs/pages/decisions-api/"],
       ["System One API", "/docs/pages/system-one-api/"],
       ["Automatic routing", "/docs/pages/automatic-routing/"],
@@ -114,6 +115,7 @@ export default [
     description: "API reference, CLI commands, testing, and technical reference documentation.",
     links: [
       ["API reference", "/docs/pages/api-reference/"],
+      ["Mesh model discovery", "/docs/pages/model-discovery/"],
       ["Local logging API", "/docs/pages/logging-api/"],
       ["Crate API reference", "/crates/"],
       ["Skippy native API", "/docs/pages/skippy-api/"],

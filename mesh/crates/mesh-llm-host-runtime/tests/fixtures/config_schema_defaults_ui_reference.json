@@ -8,6 +8,13 @@
       }
     },
     {
+      "canonical_path": "defaults.hardware.cpu_moe",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
       "canonical_path": "defaults.hardware.device",
       "support": "supported",
       "source": {
@@ -72,6 +79,13 @@
     },
     {
       "canonical_path": "defaults.hardware.model_path",
+      "support": "supported",
+      "source": {
+        "kind": "built_in"
+      }
+    },
+    {
+      "canonical_path": "defaults.hardware.n_cpu_moe",
       "support": "supported",
       "source": {
         "kind": "built_in"

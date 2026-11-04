@@ -139,6 +139,10 @@ pub fn validate_config_diagnostics(config: &MeshConfig) -> Vec<ConfigDiagnostic>
 
     validate_duplicate_model_entries(&config.models, config.defaults.as_ref(), &mut diagnostics);
 
+    diagnostics.extend(crate::unknown_fields::unknown_top_level_field_diagnostics(
+        config,
+    ));
+
     let existing_paths: std::collections::BTreeSet<String> = diagnostics
         .iter()
         .filter_map(|diagnostic| diagnostic.path.as_ref().map(ConfigPath::render))
@@ -366,6 +370,9 @@ where
     F: FnMut(&str) -> PluginSchemaAvailability,
 {
     let mut diagnostics = validate_config_diagnostics(config);
+    diagnostics.extend(crate::unknown_fields::unknown_model_row_field_diagnostics(
+        raw_toml,
+    ));
     diagnostics.extend(validate_plugin_entries_strict(
         &config.plugins,
         raw_toml,

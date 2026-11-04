@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
 
 use crate::{
+    plugin_toml::read_plugin_toml,
     store::{
         InstalledPluginManifestMetadata, InstalledPluginWebUiMetadata,
         InstalledPluginWebUiValidation, InstalledPluginWebUiValidationStatus,
@@ -25,13 +26,42 @@ pub struct ExtractedPluginArchive {
     pub manifest: Option<InstalledPluginManifestMetadata>,
 }
 
-pub fn extract_plugin_archive(
+/// A plugin archive extracted and validated in a staging directory, not yet
+/// in place. What the installer must know before it commits (the plugins the
+/// package requires) is readable here; `commit` replaces the installed
+/// directory, and dropping it instead leaves the install as it was.
+pub struct StagedPluginArchive {
+    staging: tempfile::TempDir,
+    extracted_root: PathBuf,
+    install_dir: PathBuf,
+    plugin_name: String,
+    pub manifest: Option<InstalledPluginManifestMetadata>,
+}
+
+impl StagedPluginArchive {
+    /// Put the staged package in place of any installed one.
+    pub fn commit(self) -> Result<ExtractedPluginArchive> {
+        let final_dir = self.install_dir.join(&self.plugin_name);
+        fs::create_dir_all(&self.install_dir)
+            .with_context(|| format!("create plugin install dir {}", self.install_dir.display()))?;
+        replace_plugin_dir(&self.extracted_root, &final_dir, &self.plugin_name)?;
+        drop(self.staging);
+        Ok(ExtractedPluginArchive {
+            install_path: final_dir,
+            manifest: self.manifest,
+        })
+    }
+}
+
+/// Extract `archive_path` to staging and validate it as plugin `plugin_name`,
+/// without touching `install_dir`.
+pub fn stage_plugin_archive(
     archive_path: &Path,
     archive_ext: ArchiveExt,
     executable_suffix: &str,
     plugin_name: &str,
     install_dir: &Path,
-) -> Result<ExtractedPluginArchive> {
+) -> Result<StagedPluginArchive> {
     let staging = tempfile::Builder::new()
         .prefix("mesh-plugin-extract-")
         .tempdir()
@@ -45,14 +75,35 @@ pub fn extract_plugin_archive(
     let extracted_root = find_plugin_root(staging.path(), plugin_name)?;
     validate_plugin_root(&extracted_root, plugin_name, executable_suffix)?;
     let manifest = load_packaged_manifest(&extracted_root, plugin_name)?;
-    let final_dir = install_dir.join(plugin_name);
-    fs::create_dir_all(install_dir)
-        .with_context(|| format!("create plugin install dir {}", install_dir.display()))?;
-    replace_plugin_dir(&extracted_root, &final_dir, plugin_name)?;
-    Ok(ExtractedPluginArchive {
-        install_path: final_dir,
+    read_plugin_toml(&extracted_root, plugin_name)?;
+    Ok(StagedPluginArchive {
+        staging,
+        extracted_root,
+        install_dir: install_dir.to_path_buf(),
+        plugin_name: plugin_name.to_string(),
         manifest,
     })
+}
+
+/// Stage and commit in one step: extract, validate, and put in place. Product
+/// code goes through `install::extract_for_install`, which checks the staged
+/// package against the installed plugins before committing it.
+#[cfg(test)]
+pub fn extract_plugin_archive(
+    archive_path: &Path,
+    archive_ext: ArchiveExt,
+    executable_suffix: &str,
+    plugin_name: &str,
+    install_dir: &Path,
+) -> Result<ExtractedPluginArchive> {
+    stage_plugin_archive(
+        archive_path,
+        archive_ext,
+        executable_suffix,
+        plugin_name,
+        install_dir,
+    )?
+    .commit()
 }
 
 fn load_packaged_manifest(
@@ -303,6 +354,14 @@ fn validate_packaged_manifest(
     manifest: &InstalledPluginManifestMetadata,
     plugin_name: &str,
 ) -> Result<()> {
+    for binding in &manifest.operation_bindings {
+        validate_binding_request(binding, plugin_name).map_err(|reason| {
+            anyhow::anyhow!(
+                "plugin '{plugin_name}' manifest binding '{}': {reason}",
+                binding.name
+            )
+        })?;
+    }
     let Some(schema) = &manifest.config_schema else {
         return Ok(());
     };
@@ -418,6 +477,11 @@ fn validate_plugin_root(
     }
     let executable = plugin_dir.join(format!("{plugin_name}{executable_suffix}"));
     if !executable.exists() {
+        if let Some(hint) =
+            crate::package_identity::mismatch_hint(plugin_dir, plugin_name, executable_suffix)
+        {
+            bail!("{hint}");
+        }
         bail!(
             "installed plugin is missing executable {}",
             executable.display()
@@ -644,6 +708,8 @@ mod tests {
         let executable_name = format!("demo{}", std::env::consts::EXE_SUFFIX);
         let manifest = serde_json::to_vec_pretty(&InstalledPluginManifestMetadata {
             openai_exchange_hook: None,
+            operation_bindings: Vec::new(),
+            peer_blocks: false,
             config_schema: Some(InstalledPluginConfigSchema {
                 plugin_name: "demo".to_string(),
                 schema_version: SUPPORTED_PLUGIN_SCHEMA_VERSION + 1,
@@ -704,6 +770,8 @@ mod tests {
         let executable_name = format!("demo{}", std::env::consts::EXE_SUFFIX);
         let manifest = serde_json::to_vec_pretty(&InstalledPluginManifestMetadata {
             openai_exchange_hook: None,
+            operation_bindings: Vec::new(),
+            peer_blocks: false,
             config_schema: Some(InstalledPluginConfigSchema {
                 plugin_name: "demo".to_string(),
                 schema_version: SUPPORTED_PLUGIN_SCHEMA_VERSION,
@@ -1154,5 +1222,73 @@ mod tests {
             InstalledPluginWebUiValidationStatus::Invalid
         );
         assert!(web_ui.validation.reason.unwrap().contains("escapes"));
+    }
+}
+
+/// The bounds the host's binding registry enforces at node start, applied while
+/// the archive is still staged, so a package the node would refuse to boot with
+/// never lands in the store.
+fn validate_binding_request(
+    binding: &crate::store::InstalledOperationBindingRequest,
+    plugin_name: &str,
+) -> std::result::Result<(), String> {
+    let identifier_ok = |value: &str| !value.trim().is_empty() && value.len() <= 256;
+    if !identifier_ok(&binding.name)
+        || !identifier_ok(&binding.capability)
+        || !identifier_ok(&binding.setup_operation)
+    {
+        return Err("binding identifiers must contain 1–256 bytes".into());
+    }
+    if binding.capability == plugin_name {
+        return Err("self bindings are not permitted".into());
+    }
+    if binding.operations.is_empty() || binding.operations.len() > 64 {
+        return Err("bindings require 1–64 allowed operations".into());
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for operation in &binding.operations {
+        if !identifier_ok(operation)
+            || operation == &binding.setup_operation
+            || !seen.insert(operation.as_str())
+        {
+            return Err("allowed operations must be unique, bounded and exclude setup".into());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod binding_request_bounds_tests {
+    use super::validate_binding_request;
+    use crate::store::InstalledOperationBindingRequest;
+
+    fn request(operations: Vec<String>) -> InstalledOperationBindingRequest {
+        InstalledOperationBindingRequest {
+            name: "store".into(),
+            capability: "storage.v1".into(),
+            setup_operation: "open".into(),
+            operations,
+            setup_directory: false,
+        }
+    }
+
+    #[test]
+    fn a_manifest_binding_is_refused_at_stage_when_the_registry_would_refuse_it() {
+        assert!(validate_binding_request(&request(vec!["read".into()]), "demo").is_ok());
+        let too_many = (0..65).map(|i| format!("op{i}")).collect();
+        assert_eq!(
+            validate_binding_request(&request(too_many), "demo"),
+            Err("bindings require 1–64 allowed operations".into())
+        );
+        assert!(validate_binding_request(&request(vec![]), "demo").is_err());
+        assert!(validate_binding_request(&request(vec!["open".into()]), "demo").is_err());
+        assert!(validate_binding_request(&request(vec!["a".into(), "a".into()]), "demo").is_err());
+        let mut long = request(vec!["read".into()]);
+        long.capability = "c".repeat(257);
+        assert!(validate_binding_request(&long, "demo").is_err());
+        assert_eq!(
+            validate_binding_request(&request(vec!["read".into()]), "storage.v1"),
+            Err("self bindings are not permitted".into())
+        );
     }
 }

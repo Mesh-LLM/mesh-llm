@@ -6,6 +6,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::{mpsc, oneshot};
 
+mod model_assets;
+
 use crate::{
     PROTOCOL_VERSION,
     helpers::{channel_message, json_channel_message},
@@ -56,6 +58,7 @@ pub struct PluginContext<'a> {
     pub(crate) outbound_tx: mpsc::Sender<proto::Envelope>,
     pub(crate) pending_host_responses: PendingHostResponses,
     pub(crate) plugin_id: String,
+    pub(crate) invocation_id: Option<u64>,
     /// What the host listed in its `InitializeRequest`.
     pub(crate) host_capabilities: Arc<[String]>,
     pub(crate) inference_observation: crate::inference_observation::FeedSlot,
@@ -72,6 +75,7 @@ impl<'a> PluginContext<'a> {
             outbound_tx,
             pending_host_responses,
             plugin_id,
+            invocation_id: None,
             host_capabilities: Arc::from([]),
             inference_observation: Default::default(),
             _marker: PhantomData,
@@ -83,6 +87,7 @@ impl<'a> PluginContext<'a> {
             outbound_tx: self.outbound_tx.clone(),
             pending_host_responses: self.pending_host_responses.clone(),
             plugin_id: self.plugin_id.clone(),
+            invocation_id: self.invocation_id,
             host_capabilities: self.host_capabilities.clone(),
             inference_observation: self.inference_observation.clone(),
             _marker: PhantomData,
@@ -99,6 +104,11 @@ impl<'a> PluginContext<'a> {
 
     pub(crate) fn with_host_capabilities(mut self, host_capabilities: Arc<[String]>) -> Self {
         self.host_capabilities = host_capabilities;
+        self
+    }
+
+    pub(crate) fn with_invocation_id(mut self, invocation_id: Option<u64>) -> Self {
+        self.invocation_id = invocation_id;
         self
     }
 
@@ -170,6 +180,7 @@ impl<'a> PluginContext<'a> {
     {
         self.send_payload(
             proto::envelope::Payload::RpcNotification(proto::RpcNotification {
+                invocation_id: self.invocation_id,
                 method: method.to_string(),
                 params_json: serde_json::to_string(&params)?,
             }),
@@ -191,6 +202,7 @@ impl<'a> PluginContext<'a> {
 
         self.send_payload(
             proto::envelope::Payload::RpcRequest(proto::RpcRequest {
+                invocation_id: self.invocation_id,
                 method: method.to_string(),
                 params_json: serde_json::to_string(&params)?,
             }),
@@ -289,6 +301,45 @@ impl<'a> PluginContext<'a> {
             Some(proto::envelope::Payload::PeerBlockResponse(response)) => Ok(response),
             Some(proto::envelope::Payload::ErrorResponse(error)) => bail!(error.message),
             _ => bail!("Host returned an unexpected peer block response"),
+        }
+    }
+
+    /// Replace this plugin's required channels for `model`; empty withdraws.
+    /// Only channels declared by this plugin may be required. Older hosts fail
+    /// immediately, before a request is sent.
+    pub async fn require_channels_for_model(
+        &mut self,
+        model: &str,
+        channels: &[(&str, &[u8])],
+    ) -> Result<()> {
+        if !self.host_supports(crate::host_capabilities::MODEL_REQUIREMENTS) {
+            bail!("host does not support model_requirements.v1");
+        }
+        let request_id = next_host_request_id();
+        let (tx, rx) = oneshot::channel();
+        insert_pending_host_response(&self.pending_host_responses, request_id, tx);
+        let mut guard =
+            PendingHostResponseGuard::new(request_id, self.pending_host_responses.clone());
+        self.send_payload(
+            proto::envelope::Payload::ModelRequirementRequest(proto::ModelRequirementRequest {
+                model: model.to_string(),
+                requires: channels
+                    .iter()
+                    .map(|(channel, terms)| proto::ChannelRequirement {
+                        channel: (*channel).to_string(),
+                        terms: terms.to_vec(),
+                    })
+                    .collect(),
+            }),
+            request_id,
+        )
+        .await?;
+        let response = tokio::time::timeout(PEER_BLOCK_REQUEST_TIMEOUT, rx).await???;
+        guard.disarm();
+        match response.payload {
+            Some(proto::envelope::Payload::ModelRequirementResponse(_)) => Ok(()),
+            Some(proto::envelope::Payload::ErrorResponse(error)) => bail!(error.message),
+            _ => bail!("Host returned an unexpected model requirement response"),
         }
     }
 
@@ -562,6 +613,85 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
+    #[tokio::test]
+    async fn owned_invocation_context_echoes_id_on_callbacks() {
+        let (context, mut outbound, pending) =
+            context(&[crate::host_capabilities::INVOCATION_CALLBACKS]);
+        let mut context = context.with_invocation_id(Some(73)).owned();
+        context
+            .notify_host("notifications/message", serde_json::json!({}))
+            .await
+            .unwrap();
+        let notification = outbound.recv().await.unwrap();
+        let Some(proto::envelope::Payload::RpcNotification(notification)) = notification.payload
+        else {
+            panic!("expected notification");
+        };
+        assert_eq!(notification.invocation_id, Some(73));
+
+        let callback = tokio::spawn(async move {
+            context
+                .request_host::<_, serde_json::Value>("roots/list", serde_json::json!({}))
+                .await
+        });
+        let request = outbound.recv().await.unwrap();
+        let Some(proto::envelope::Payload::RpcRequest(rpc)) = request.payload else {
+            panic!("expected request");
+        };
+        assert_eq!(rpc.invocation_id, Some(73));
+        remove_pending_host_response(&pending, request.request_id)
+            .unwrap()
+            .send(Ok(proto::Envelope {
+                payload: Some(proto::envelope::Payload::RpcResponse(proto::RpcResponse {
+                    result_json: "{}".into(),
+                })),
+                ..Default::default()
+            }))
+            .unwrap();
+        callback.await.unwrap().unwrap();
+    }
+
+    #[test]
+    fn invocation_ids_survive_protobuf_roundtrip_and_legacy_defaults() {
+        use prost::Message;
+        let request = proto::RpcRequest {
+            method: "roots/list".into(),
+            params_json: "{}".into(),
+            invocation_id: Some(91),
+        };
+        assert_eq!(
+            proto::RpcRequest::decode(request.encode_to_vec().as_slice())
+                .unwrap()
+                .invocation_id,
+            Some(91)
+        );
+        let notification = proto::RpcNotification {
+            method: "notifications/message".into(),
+            params_json: "{}".into(),
+            invocation_id: Some(92),
+        };
+        assert_eq!(
+            proto::RpcNotification::decode(notification.encode_to_vec().as_slice())
+                .unwrap()
+                .invocation_id,
+            Some(92)
+        );
+        let service = proto::InvokeServiceRequest {
+            invocation_id: Some(93),
+            ..Default::default()
+        };
+        assert_eq!(
+            proto::InvokeServiceRequest::decode(service.encode_to_vec().as_slice())
+                .unwrap()
+                .invocation_id,
+            Some(93)
+        );
+        assert_eq!(
+            proto::RpcRequest::decode(&[][..]).unwrap().invocation_id,
+            None
+        );
+    }
+
     fn context(
         host_capabilities: &[&str],
     ) -> (
@@ -574,6 +704,49 @@ mod tests {
         let context = PluginContext::new("demo".into(), outbound_tx, pending.clone())
             .with_host_capabilities(host_capabilities.iter().map(|c| c.to_string()).collect());
         (context, outbound_rx, pending)
+    }
+
+    #[tokio::test]
+    async fn model_requirements_reject_older_hosts_without_sending() {
+        let (mut context, mut outbound, pending) = context(&[]);
+        assert!(
+            context
+                .require_channels_for_model("model", &[("gate.v1", &[])])
+                .await
+                .is_err()
+        );
+        assert!(outbound.try_recv().is_err());
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn model_requirements_preserve_opaque_terms_and_handle_response() {
+        let (mut context, mut outbound, pending) =
+            context(&[crate::host_capabilities::MODEL_REQUIREMENTS]);
+        let host = tokio::spawn(async move {
+            let envelope = outbound.recv().await.unwrap();
+            let Some(proto::envelope::Payload::ModelRequirementRequest(request)) = envelope.payload
+            else {
+                panic!("requirement request");
+            };
+            assert_eq!(request.model, "model");
+            assert_eq!(request.requires[0].channel, "gate.v1");
+            assert_eq!(request.requires[0].terms, vec![0, 255]);
+            let sender = remove_pending_host_response(&pending, envelope.request_id).unwrap();
+            sender
+                .send(Ok(proto::Envelope {
+                    payload: Some(proto::envelope::Payload::ModelRequirementResponse(
+                        proto::ModelRequirementResponse {},
+                    )),
+                    ..Default::default()
+                }))
+                .unwrap();
+        });
+        context
+            .require_channels_for_model("model", &[("gate.v1", &[0, 255])])
+            .await
+            .unwrap();
+        host.await.unwrap();
     }
 
     #[tokio::test]

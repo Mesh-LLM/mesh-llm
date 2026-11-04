@@ -23,24 +23,27 @@ fn run_family_reader_fixture() -> Result<(), Box<dyn std::error::Error>> {
     assert!(path("REPLAY_JSON")?.is_file());
     assert!(path("REPLAY_ENV")?.is_file());
     let marker = path("REPLAY_FIXTURE_MARKER")?;
+    let pending_marker = marker.with_extension("pending");
     let control: (String, i32) =
         serde_json::from_slice(&fs::read(root.join("reader-control.json"))?)?;
     let (mode, status) = control;
     if mode == "hang" {
         let mut descendant = Command::new("/bin/sleep").arg("60").spawn()?;
         fs::write(
-            marker,
+            &pending_marker,
             serde_json::to_vec(&serde_json::json!({
                 "reader":std::process::id(),"descendant":descendant.id()
             }))?,
         )?;
+        fs::rename(&pending_marker, &marker)?;
         let _status = descendant.wait()?;
         return Err("hanging reader descendant exited before owned cleanup".into());
     }
     fs::write(
-        marker,
+        &pending_marker,
         serde_json::to_vec(&serde_json::json!({"reader":std::process::id()}))?,
     )?;
+    fs::rename(&pending_marker, &marker)?;
 
     if status != 0 {
         std::process::exit(status);

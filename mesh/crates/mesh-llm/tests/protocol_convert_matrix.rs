@@ -61,6 +61,7 @@ fn signed_release_attestation() -> ReleaseBuildAttestation {
 
 fn restricted_requirements() -> MeshRequirements {
     MeshRequirements {
+        require_signed_gossip: false,
         node_version: NodeVersionBounds {
             min: Some("0.65.0".into()),
             max: Some("0.65.2".into()),
@@ -345,6 +346,7 @@ fn mesh_requirements_genesis_policy_roundtrips() {
         "owner-123",
         1_717_171_717_000,
         MeshRequirements {
+            require_signed_gossip: false,
             node_version: NodeVersionBounds {
                 min: Some("0.65.0".into()),
                 max: Some("0.65.9".into()),

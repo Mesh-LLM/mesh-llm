@@ -7,11 +7,13 @@ use tokio::time::{Duration, Instant};
 
 fn observer() -> ExternalPlugin {
     plugin_for_spec(super::super::ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         name: "observer".into(),
         command: "unused".into(),
         args: Vec::new(),
         url: None,
         env: Default::default(),
+        settings: Default::default(),
         startup: Default::default(),
         web_ui_enabled: None,
         web_ui_primary_tab: None,
@@ -27,6 +29,7 @@ async fn install_replacement(
 ) -> mpsc::Receiver<proto::Envelope> {
     let (outbound_tx, outbound_rx) = mpsc::channel(4);
     *plugin.runtime.lock().await = Some(PluginRuntime {
+        managed_models: Vec::new(),
         generation: 8,
         authenticated_peer: authenticated,
         initialized_lifecycle: None,

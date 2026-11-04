@@ -79,7 +79,48 @@ fn claude_code_default_request_surface_translates() {
             .iter()
             .map(|message| message.role.as_str())
             .collect::<Vec<_>>(),
-        vec!["system", "user", "system"]
+        vec!["system", "user"]
+    );
+    let Some(MessageContent::Text(system)) = chat.messages[0].content.as_ref() else {
+        panic!("the folded system turn must stay a single text message");
+    };
+    assert!(system.contains("You are a Claude agent, built on Anthropic's Claude Agent SDK."));
+    assert!(
+        system.contains("Today's date is 2026-09-26."),
+        "the inline system turn is folded into the leading system message, got {system:?}"
+    );
+}
+
+#[test]
+fn inline_system_turns_fold_into_the_leading_system_message_in_order() {
+    let chat = chat_request_from(json!({
+        "model": "m",
+        "max_tokens": 20,
+        "system": "You are terse.",
+        "messages": [
+            {"role": "user", "content": "Say ok."},
+            {"role": "system", "content": "Environment: macOS."},
+            {"role": "assistant", "content": "ok"},
+            {"role": "system", "content": [
+                {"type": "text", "text": "Today is Monday."},
+                {"type": "text", "text": "Stay terse."}
+            ]}
+        ]
+    }));
+
+    assert_eq!(
+        chat.messages
+            .iter()
+            .map(|message| message.role.as_str())
+            .collect::<Vec<_>>(),
+        vec!["system", "user", "assistant"]
+    );
+    let Some(MessageContent::Text(system)) = chat.messages[0].content.as_ref() else {
+        panic!("folded system content must be one text message");
+    };
+    assert_eq!(
+        system,
+        "You are terse.\nEnvironment: macOS.\nToday is Monday.\nStay terse."
     );
 }
 

@@ -13,6 +13,8 @@ mod gguf;
 #[path = "source_plan/gguf_tests.rs"]
 mod gguf_tests;
 use super::canary_receipts::placement;
+#[path = "source_plan/payload_identity.rs"]
+mod payload_identity;
 #[cfg(test)]
 #[path = "source_plan/placement_tests.rs"]
 mod placement_tests;

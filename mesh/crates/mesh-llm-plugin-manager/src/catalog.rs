@@ -13,17 +13,17 @@ pub struct CatalogEntry {
     pub github_url: String,
     pub author_email: String,
     pub author_name: String,
-    /// The release tag this entry pins, such as `v0.1.0`. Optional for an
-    /// ordinary install; required for a default install.
+    /// The release tag this entry pins, such as `v0.1.0`. Required to install
+    /// the entry by name; only search and discovery work without it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// SHA-256 of that release's archive, keyed by target triple, as
-    /// lowercase hex. A default install refuses an archive that doesn't match.
+    /// lowercase hex. An install refuses an archive that doesn't match.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub sha256: BTreeMap<String, String>,
 }
 
-/// The exact release a default install must fetch for one platform.
+/// The exact release an install of a catalog entry must fetch for one platform.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PinnedRelease<'a> {
     pub version: &'a str,
@@ -31,19 +31,20 @@ pub struct PinnedRelease<'a> {
 }
 
 impl CatalogEntry {
-    /// The pin a default install of this entry uses on `target`. A default is
-    /// installed without anyone choosing it, so an entry that pins no version,
-    /// or no checksum for this platform, is refused rather than trusted.
+    /// The pin every install of this entry uses on `target`. Nothing else
+    /// fixes what a name means: a release and its assets are rewritable by
+    /// whoever holds the repository, so an entry that pins no version, or no
+    /// checksum for this platform, is refused rather than trusted.
     pub fn pinned_release(&self, target: &str) -> Result<PinnedRelease<'_>> {
         let Some(version) = self.version.as_deref() else {
             bail!(
-                "catalog entry '{}' pins no version; a default install needs one",
+                "catalog entry '{}' pins no version; a catalog install needs one",
                 self.name
             );
         };
         let Some(sha256) = self.sha256.get(target) else {
             bail!(
-                "catalog entry '{}' has no sha256 for {target}; refusing a default install",
+                "catalog entry '{}' has no sha256 for {target}; refusing the install",
                 self.name
             );
         };

@@ -53,6 +53,7 @@ pub(super) fn apply_runtime_controls_behavior(setting: &mut ConfigSettingSchema,
             );
         }
         "mesh_requirements.require_release_attestation" => set_static_options(setting),
+        "mesh_requirements.require_signed_gossip" => set_static_options(setting),
         "mesh_requirements.release_signer_keys" => {
             set_text_format(setting, ConfigTextFormat::Ed25519Key);
             control_behavior_mut(setting)

@@ -331,3 +331,39 @@ fn pre_accept_policy_uses_profile_with_inherited_defaults() {
         Some(&effective_profile)
     ));
 }
+
+#[test]
+fn provider_entries_do_not_conflict_with_native_default_path_or_cli_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let model_path = dir.path().join("native.gguf");
+    std::fs::write(&model_path, b"gguf").unwrap();
+    let config = plugin::MeshConfig {
+        defaults: Some(plugin::ModelConfigDefaults {
+            hardware: Some(plugin::HardwareConfig {
+                model_path: Some(model_path.to_string_lossy().into_owned()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
+        models: vec![
+            plugin::ModelConfigEntry {
+                model: "native".into(),
+                ..Default::default()
+            },
+            plugin::ModelConfigEntry {
+                model: "provider".into(),
+                provider: Some("onnx".into()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let specs =
+        build_startup_model_specs(&runtime_options_for_test(&["mesh-llm"]), &config).unwrap();
+    assert_eq!(specs.len(), 1);
+    assert_eq!(specs[0].model_ref, model_path);
+    let options = runtime_options_for_test(&["mesh-llm", "--model", "provider"]);
+    let specs = build_startup_model_specs(&options, &config).unwrap();
+    assert_eq!(specs.len(), 1);
+    assert!(!specs[0].resolve_pinned_gpu);
+}

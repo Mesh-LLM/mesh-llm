@@ -88,6 +88,7 @@ pub(super) fn test_dir() -> PathBuf {
 
 pub(super) fn minimal_valid_config() -> MeshConfig {
     MeshConfig {
+        source_directory: None,
         version: Some(1),
         gpu: GpuConfig {
             host_ram_offload: None,
@@ -104,7 +105,6 @@ pub(super) fn minimal_valid_config() -> MeshConfig {
         models: vec![],
         plugins: vec![],
         logging: Default::default(),
-        payments: Default::default(),
         extra: Default::default(),
     }
 }
@@ -126,10 +126,13 @@ pub(super) fn installed_plugin_metadata(
             openai_exchange_hook: None,
             config_schema: schema,
             web_ui: None,
+            operation_bindings: Vec::new(),
+            peer_blocks: false,
         }),
         last_protocol_version: Some(1),
         last_status: Some("installed".to_string()),
         last_error: None,
+        verified_sha256: None,
     }
 }
 

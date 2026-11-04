@@ -76,6 +76,15 @@ pub struct PluginInitializeRequest {
     /// Empty for a host older than this field.
     #[serde(default)]
     pub host_capabilities: Vec<String>,
+    /// The operator's `[plugin.settings]` for this plugin as a JSON object,
+    /// validated against the manifest's `config_schema`. `"{}"` when the
+    /// operator set nothing or the host is older than this field.
+    #[serde(default = "empty_settings_json")]
+    pub settings_json: String,
+}
+
+fn empty_settings_json() -> String {
+    "{}".to_string()
 }
 
 impl From<proto::InitializeRequest> for PluginInitializeRequest {
@@ -86,7 +95,17 @@ impl From<proto::InitializeRequest> for PluginInitializeRequest {
             host_info_json: value.host_info_json,
             mesh_visibility: MeshVisibility::from_proto(value.mesh_visibility),
             host_capabilities: value.host_capabilities,
+            settings_json: settings_json_or_default(value.settings_json),
         }
+    }
+}
+
+/// An older host sends nothing here; a plugin should see an empty object.
+fn settings_json_or_default(settings_json: String) -> String {
+    if settings_json.trim().is_empty() {
+        "{}".to_string()
+    } else {
+        settings_json
     }
 }
 
@@ -1024,23 +1043,27 @@ impl PluginRuntime {
             Arc::from(request.host_capabilities.clone());
         let mut plugin = state.plugin.clone().write_owned().await;
         let mut context = Self::context(&state);
-        if let Some(message) = crate::host_capabilities::unsupported_requirement(
+        let mut init_result = match crate::host_capabilities::unsupported_requirement(
             plugin.manifest().as_ref(),
             |capability| context.host_supports(capability),
         ) {
-            Self::write_payload(
-                &state,
-                request_id,
-                proto::envelope::Payload::ErrorResponse(
-                    PluginError::invalid_request(message).into_error_response(),
-                ),
+            Some(message) => Err(PluginError::invalid_request(message)),
+            None => {
+                plugin
+                    .initialize(PluginInitializeRequest::from(request), &mut context)
+                    .await
+            }
+        };
+        // `initialize` may change the manifest, and the manifest sent in the
+        // response is the one the host acts on, so check that one too.
+        if init_result.is_ok()
+            && let Some(message) = crate::host_capabilities::unsupported_requirement(
+                plugin.manifest().as_ref(),
+                |capability| context.host_supports(capability),
             )
-            .await?;
-            return Ok(false);
+        {
+            init_result = Err(PluginError::invalid_request(message));
         }
-        let init_result = plugin
-            .initialize(PluginInitializeRequest::from(request), &mut context)
-            .await;
         if let Err(err) = init_result {
             Self::write_payload(
                 &state,
@@ -1059,7 +1082,17 @@ impl PluginRuntime {
                 plugin_protocol_version: PROTOCOL_VERSION,
                 plugin_version: plugin.plugin_version(),
                 server_info_json: serde_json::to_string(&plugin.server_info())?,
-                capabilities: plugin.capabilities(),
+                capabilities: {
+                    let mut capabilities = plugin.capabilities();
+                    if context.host_supports(crate::host_capabilities::INVOCATION_CALLBACKS)
+                        && !capabilities
+                            .iter()
+                            .any(|value| value == crate::host_capabilities::INVOCATION_CALLBACKS)
+                    {
+                        capabilities.push(crate::host_capabilities::INVOCATION_CALLBACKS.into());
+                    }
+                    capabilities
+                },
                 manifest: plugin.manifest(),
             }),
         )
@@ -1121,7 +1154,7 @@ impl PluginRuntime {
         request: proto::RpcRequest,
     ) -> proto::envelope::Payload {
         let mut plugin = Self::plugin_for_request(state).await;
-        let mut context = Self::context(state);
+        let mut context = Self::context(state).with_invocation_id(request.invocation_id);
         match plugin.handle_rpc(request, &mut context).await {
             Ok(payload) => payload,
             Err(err) => proto::envelope::Payload::ErrorResponse(err.into_error_response()),
@@ -1133,7 +1166,7 @@ impl PluginRuntime {
         request: proto::InvokeServiceRequest,
     ) -> proto::envelope::Payload {
         let mut plugin = Self::plugin_for_request(state).await;
-        let mut context = Self::context(state);
+        let mut context = Self::context(state).with_invocation_id(request.invocation_id);
         match plugin.invoke_service(request, &mut context).await {
             Ok(Some(response)) => proto::envelope::Payload::InvokeServiceResponse(response),
             Ok(None) => proto::envelope::Payload::ErrorResponse(
@@ -1165,7 +1198,7 @@ impl PluginRuntime {
         notification: proto::RpcNotification,
     ) -> Result<bool> {
         let mut plugin = Self::plugin_for_request(state).await;
-        let mut context = Self::context(state);
+        let mut context = Self::context(state).with_invocation_id(notification.invocation_id);
         plugin
             .on_rpc_notification(notification, &mut context)
             .await?;
@@ -1368,6 +1401,7 @@ mod tests {
         let response = plugin
             .handle_rpc(
                 proto::RpcRequest {
+                    invocation_id: None,
                     method: method.into(),
                     params_json: params.to_string(),
                 },
@@ -1454,6 +1488,7 @@ mod tests {
         let op = plugin
             .invoke_service(
                 proto::InvokeServiceRequest {
+                    invocation_id: None,
                     kind: proto::ServiceKind::Operation as i32,
                     service_name: "echo".into(),
                     input_json: json!({ "message": "hello" }).to_string(),
@@ -1471,6 +1506,7 @@ mod tests {
         let prompt = plugin
             .invoke_service(
                 proto::InvokeServiceRequest {
+                    invocation_id: None,
                     kind: proto::ServiceKind::Prompt as i32,
                     service_name: "brief".into(),
                     input_json: serde_json::to_string(&GetPromptRequestParams::new("brief"))
@@ -1487,6 +1523,7 @@ mod tests {
         let resource = plugin
             .invoke_service(
                 proto::InvokeServiceRequest {
+                    invocation_id: None,
                     kind: proto::ServiceKind::Resource as i32,
                     service_name: "demo://state".into(),
                     input_json: serde_json::to_string(&ReadResourceRequestParams::new(
@@ -1506,6 +1543,7 @@ mod tests {
         let completion = plugin
             .invoke_service(
                 proto::InvokeServiceRequest {
+                    invocation_id: None,
                     kind: proto::ServiceKind::Completion as i32,
                     service_name: "brief".into(),
                     input_json: serde_json::to_string(&CompleteRequestParams::new(
@@ -1560,6 +1598,7 @@ mod tests {
         let response = plugin
             .invoke_service(
                 proto::InvokeServiceRequest {
+                    invocation_id: None,
                     kind: proto::ServiceKind::VirtualModel as i32,
                     service_name: "chat".into(),
                     input_json: json!({"request": {"model": "virtual-demo"}}).to_string(),
@@ -1619,6 +1658,7 @@ mod tests {
                 request_id: 1,
                 payload: Some(proto::envelope::Payload::InvokeServiceRequest(
                     proto::InvokeServiceRequest {
+                        invocation_id: None,
                         kind: proto::ServiceKind::Operation as i32,
                         service_name: "slow".into(),
                         input_json: "{}".into(),
@@ -1707,6 +1747,7 @@ mod tests {
                     request_id,
                     payload: Some(proto::envelope::Payload::InvokeServiceRequest(
                         proto::InvokeServiceRequest {
+                            invocation_id: None,
                             kind: proto::ServiceKind::Operation as i32,
                             service_name: "barrier".into(),
                             input_json: "{}".into(),
@@ -1961,6 +2002,77 @@ mod tests {
         assert_eq!(response.node_id, "a".repeat(64));
         assert_eq!(response.binding_signature, vec![9; 64]);
 
+        runtime.abort();
+    }
+
+    /// A plugin whose manifest gains a local channel only while it initializes.
+    #[derive(Clone)]
+    struct LateLocalChannel {
+        declared: bool,
+    }
+
+    #[crate::async_trait]
+    impl Plugin for LateLocalChannel {
+        fn plugin_id(&self) -> &str {
+            "demo"
+        }
+        fn plugin_version(&self) -> String {
+            "1.0.0".into()
+        }
+        fn server_info(&self) -> ServerConfig {
+            plugin_server_info("demo", "1.0.0", "Demo", "Demo plugin", None::<String>)
+        }
+        fn manifest(&self) -> Option<proto::PluginManifest> {
+            self.declared.then(|| {
+                crate::plugin_manifest()
+                    .item(crate::local_channel("payment.lifecycle.v1"))
+                    .build()
+            })
+        }
+        async fn initialize(
+            &mut self,
+            _request: PluginInitializeRequest,
+            _context: &mut PluginContext<'_>,
+        ) -> crate::PluginResult<()> {
+            self.declared = true;
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_local_channel_declared_during_initialize_is_refused_without_host_support() {
+        let (plugin_stream, host_stream) = tokio::net::UnixStream::pair().unwrap();
+        let runtime = tokio::spawn(PluginRuntime::run_with_stream(
+            LateLocalChannel { declared: false },
+            LocalStream::Unix(plugin_stream),
+        ));
+        let mut host_stream = LocalStream::Unix(host_stream);
+        write_envelope(
+            &mut host_stream,
+            &proto::Envelope {
+                protocol_version: PROTOCOL_VERSION,
+                plugin_id: "demo".into(),
+                request_id: 1,
+                payload: Some(proto::envelope::Payload::InitializeRequest(
+                    proto::InitializeRequest {
+                        host_protocol_version: PROTOCOL_VERSION,
+                        host_capabilities: Vec::new(),
+                        ..Default::default()
+                    },
+                )),
+            },
+        )
+        .await
+        .unwrap();
+        let response = timeout(Duration::from_secs(1), read_envelope(&mut host_stream))
+            .await
+            .expect("initialize response")
+            .unwrap();
+        let Some(proto::envelope::Payload::ErrorResponse(error)) = response.payload else {
+            panic!("expected a refusal, got {:?}", response.payload);
+        };
+        assert!(error.message.contains("local_channels.v1"), "{error:?}");
         runtime.abort();
     }
 

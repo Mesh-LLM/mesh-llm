@@ -1,7 +1,5 @@
 use super::super::config::{MeshConfig, PluginConfigEntry, resolve_plugins};
-use super::super::{
-    BLOBSTORE_PLUGIN_ID, MeshVisibility, PAYMENTS_PLUGIN_ID, PluginHostMode, PluginManager,
-};
+use super::super::{BLOBSTORE_PLUGIN_ID, MeshVisibility, PluginHostMode, PluginManager};
 use super::*;
 use mesh_llm_plugin_manager::InstalledPluginManifestMetadata;
 use tokio::sync::mpsc;
@@ -29,10 +27,13 @@ fn installed_capsules(store_root: &Path, enabled: bool) -> InstalledPluginMetada
             openai_exchange_hook: None,
             config_schema: None,
             web_ui: None,
+            operation_bindings: Vec::new(),
+            peer_blocks: false,
         }),
         last_protocol_version: Some(1),
         last_status: Some("installed".to_string()),
         last_error: None,
+        verified_sha256: None,
     };
     std::fs::create_dir_all(&metadata.install_path).expect("install dir");
     std::fs::write(metadata.executable_path(), b"").expect("plugin executable");
@@ -45,6 +46,7 @@ fn installed_capsules(store_root: &Path, enabled: bool) -> InstalledPluginMetada
 /// A settings-only `[[plugin]] name = "capsules"` entry: no command, no url.
 fn capsules_entry(command: Option<&str>) -> PluginConfigEntry {
     PluginConfigEntry {
+        operation_bindings: Vec::new(),
         name: "capsules".into(),
         enabled: None,
         web_ui_enabled: None,
@@ -62,6 +64,7 @@ fn capsules_entry(command: Option<&str>) -> PluginConfigEntry {
 
 fn builtin_off(name: &str) -> PluginConfigEntry {
     PluginConfigEntry {
+        operation_bindings: Vec::new(),
         name: name.into(),
         enabled: Some(false),
         ..capsules_entry(None)
@@ -84,11 +87,7 @@ fn settings_only_entry_stays_off_after_plugins_disable() {
 async fn stays_off_after_plugins_disable(store: &Path) {
     let metadata = installed_capsules(store, false);
     let config = MeshConfig {
-        plugins: vec![
-            capsules_entry(None),
-            builtin_off(BLOBSTORE_PLUGIN_ID),
-            builtin_off(PAYMENTS_PLUGIN_ID),
-        ],
+        plugins: vec![capsules_entry(None), builtin_off(BLOBSTORE_PLUGIN_ID)],
         ..MeshConfig::default()
     };
 
@@ -260,4 +259,31 @@ fn explicit_installed_command_still_runs_when_the_store_copy_is_disabled() {
     assert_eq!(spec.command, command);
     assert!(!spec.startup.optional, "explicit commands remain required");
     assert_eq!(spec.installed_metadata, Some(metadata));
+}
+
+/// `[plugin.settings]` are validated and shown in the console; the launch spec
+/// is what carries them to the process.
+#[test]
+#[serial_test::serial]
+fn configured_plugin_settings_reach_the_launch_spec() {
+    let store = tempfile::TempDir::new().expect("plugin store");
+    let mut entry = capsules_entry(Some("/opt/capsules/bin"));
+    entry.settings = [(
+        "greeting".to_string(),
+        toml::Value::String("marker-7f3a".to_string()),
+    )]
+    .into_iter()
+    .collect();
+
+    let resolved = with_plugin_dir(store.path(), || configured_external_plugin_spec(&entry))
+        .expect("entry resolves");
+
+    let ConfiguredExternalPlugin::Active(spec) = resolved else {
+        panic!("an enabled entry with a command is active");
+    };
+    assert_eq!(
+        spec.settings.get("greeting"),
+        Some(&serde_json::json!("marker-7f3a")),
+        "[plugin.settings] were dropped from the spec the plugin is started from"
+    );
 }

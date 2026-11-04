@@ -964,6 +964,7 @@ mod tests {
                         entry.canonical_path.as_str(),
                         "version"
                             | "gpu.assignment"
+                            | "mesh_requirements.require_signed_gossip"
                             | "owner_control.advertise_addr"
                             | "runtime.debug"
                             | "runtime.listen_all"
@@ -1013,10 +1014,13 @@ mod tests {
                     openai_exchange_hook: None,
                     config_schema: None,
                     web_ui: None,
+                    operation_bindings: Vec::new(),
+                    peer_blocks: false,
                 }),
                 last_protocol_version: None,
                 last_status: None,
                 last_error: None,
+                verified_sha256: None,
             }],
         )
         .expect("schema aggregation should succeed")
@@ -1295,10 +1299,13 @@ mod tests {
                         }],
                     }),
                     web_ui: None,
+                    operation_bindings: Vec::new(),
+                    peer_blocks: false,
                 }),
                 last_protocol_version: None,
                 last_status: None,
                 last_error: None,
+                verified_sha256: None,
             }],
         )
         .expect("schema aggregation should succeed");
@@ -1349,10 +1356,13 @@ mod tests {
                     settings,
                 }),
                 web_ui: None,
+                operation_bindings: Vec::new(),
+                peer_blocks: false,
             }),
             last_protocol_version: None,
             last_status: None,
             last_error: None,
+            verified_sha256: None,
         }
     }
 }

@@ -44,24 +44,55 @@ pub(super) fn scan_layer_package_metadata(
     None
 }
 
-pub(super) fn runtime_model_planning_bytes(model_path: &Path) -> Result<u64> {
+pub(super) struct RuntimeModelSizing {
+    pub(super) model_bytes: u64,
+    pub(super) compact_meta: Option<models::gguf::GgufCompactMeta>,
+}
+
+pub(super) fn runtime_model_sizing(model_path: &Path) -> Result<RuntimeModelSizing> {
     if model_path.join("model-package.json").is_file() {
-        return Ok(skippy::identity_from_package_v2(model_path)?.source_model_bytes);
+        let package = skippy::identity_from_package_v2(model_path)?;
+        let compact_meta = scan_layer_package_metadata(&package);
+        return Ok(runtime_model_sizing_from_metadata(
+            package.source_model_bytes,
+            compact_meta,
+        ));
     }
     let package_ref = model_path.to_string_lossy().to_string();
     if skippy::is_layer_package_ref(&package_ref) {
-        return Ok(skippy::identity_from_layer_package(&package_ref)?.source_model_bytes);
+        let package = skippy::identity_from_layer_package(&package_ref)?;
+        let compact_meta = scan_layer_package_metadata(&package);
+        return Ok(runtime_model_sizing_from_metadata(
+            package.source_model_bytes,
+            compact_meta,
+        ));
     }
     let weight_bytes = election::total_model_bytes(model_path);
+    let compact_meta = models::gguf::scan_gguf_compact_meta(model_path);
+    Ok(runtime_model_sizing_from_metadata(
+        weight_bytes,
+        compact_meta,
+    ))
+}
+
+fn runtime_model_sizing_from_metadata(
+    weight_bytes: u64,
+    compact_meta: Option<models::gguf::GgufCompactMeta>,
+) -> RuntimeModelSizing {
     // A Laya model holds a worst-case read reserve on top of its weights; the
     // capacity ledger reserves from this, so charge it here.
-    Ok(match models::gguf::scan_gguf_compact_meta(model_path) {
-        Some(meta) if super::local_laya::is_laya(Some(&meta)) => {
-            super::local_laya::laya_resident_bytes(weight_bytes, &meta)
+    let model_bytes = match compact_meta.as_ref() {
+        Some(meta) if super::local_laya::is_laya(Some(meta)) => {
+            super::local_laya::laya_resident_bytes(weight_bytes, meta)
         }
         _ => weight_bytes,
-    })
+    };
+    RuntimeModelSizing {
+        model_bytes,
+        compact_meta,
+    }
 }
+
 pub(super) async fn split_runtime_compact_meta(
     package: &skippy::SkippyPackageIdentity,
 ) -> Result<models::gguf::GgufCompactMeta> {
@@ -197,6 +228,7 @@ pub(super) enum SplitParticipantExclusionReason {
     /// the operator has not lifted). Split stages receive the user's content,
     /// so a blocked peer is never a candidate.
     Blocked,
+    RequiresChannel,
     Client,
     MissingVram,
     MissingModelInterest,
@@ -213,6 +245,7 @@ impl SplitParticipantExclusionReason {
     pub(super) const fn as_str(self) -> &'static str {
         match self {
             Self::Blocked => "blocked",
+            Self::RequiresChannel => "requires_channel",
             Self::Client => "client",
             Self::MissingVram => "missing_vram",
             Self::MissingModelInterest => "missing_model_interest",
@@ -228,6 +261,7 @@ impl SplitParticipantExclusionReason {
 
     pub(super) const fn recommendation(self) -> &'static str {
         match self {
+            Self::RequiresChannel => "A required plugin channel is unavailable locally",
             Self::Blocked => {
                 "Unblock this peer, or remove the plugin block, to let it join split serving."
             }
@@ -475,9 +509,10 @@ fn split_participant_blocker(
 }
 
 pub(super) const fn split_participant_exclusion_reason_order()
--> [SplitParticipantExclusionReason; 11] {
+-> [SplitParticipantExclusionReason; 12] {
     [
         SplitParticipantExclusionReason::Blocked,
+        SplitParticipantExclusionReason::RequiresChannel,
         SplitParticipantExclusionReason::StageControlUnreachable,
         SplitParticipantExclusionReason::PackageManifestMismatch,
         SplitParticipantExclusionReason::UnverifiedLocalSource,
@@ -516,6 +551,15 @@ pub(super) async fn collect_split_participant_membership(
             excluded.push(SplitParticipantExclusion {
                 node_id: peer.id,
                 reason: SplitParticipantExclusionReason::Blocked,
+            });
+            continue;
+        }
+        if node.model_channels_unavailable(&peer, model_name).await
+            || node.model_channels_unavailable(&peer, model_ref).await
+        {
+            excluded.push(SplitParticipantExclusion {
+                node_id: peer.id,
+                reason: SplitParticipantExclusionReason::RequiresChannel,
             });
             continue;
         }
@@ -598,6 +642,15 @@ pub(super) async fn collect_split_participants(
             excluded.push(SplitParticipantExclusion {
                 node_id: peer.id,
                 reason: SplitParticipantExclusionReason::Blocked,
+            });
+            continue;
+        }
+        if node.model_channels_unavailable(&peer, model_name).await
+            || node.model_channels_unavailable(&peer, model_ref).await
+        {
+            excluded.push(SplitParticipantExclusion {
+                node_id: peer.id,
+                reason: SplitParticipantExclusionReason::RequiresChannel,
             });
             continue;
         }

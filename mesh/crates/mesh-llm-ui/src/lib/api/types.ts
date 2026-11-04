@@ -54,10 +54,19 @@ export interface ModelCapabilities {
   [capability: string]: boolean | undefined
 }
 
+/**
+ * The primary inference contract a warm model's runtime advertises, as the
+ * model endpoints admit against it. A plain string because a newer node can
+ * advertise a class this console has never seen; callers must treat anything
+ * they do not recognise as not chat-capable.
+ */
+export type ModelWorkloadClass = string
+
 export interface MeshModelRaw {
   name: string
   display_name?: string
   status: 'warm' | 'cold'
+  workload_class?: ModelWorkloadClass
   size_gb?: number
   node_count: number
   mesh_vram_gb?: number

@@ -7,7 +7,10 @@ use crate::static_bindings;
 
 use crate::Opaque;
 #[cfg(not(feature = "dynamic-runtime"))]
-use crate::{LlamaPerfContextFn, SkippyDecodeStepSampledMtpFn, SkippyModelAttachMtpDraftModelFn};
+use crate::{
+    LlamaPerfContextData, LlamaPerfContextFn, SkippyDecodeStepSampledMtpFn,
+    SkippyModelAttachMtpDraftModelFn,
+};
 
 #[cfg(not(feature = "dynamic-runtime"))]
 /// Mark the statically linked native runtime as already available.
@@ -96,7 +99,7 @@ pub unsafe fn llama_model_is_recurrent(model: *const Opaque) -> Option<bool> {
     }
     #[cfg(not(feature = "dynamic-runtime"))]
     {
-        Some(unsafe { static_bindings::llama_model_is_recurrent(model) })
+        Some(unsafe { static_bindings::llama_model_is_recurrent(model.cast()) })
     }
 }
 
@@ -116,7 +119,7 @@ pub unsafe fn llama_model_is_hybrid(model: *const Opaque) -> Option<bool> {
     }
     #[cfg(not(feature = "dynamic-runtime"))]
     {
-        Some(unsafe { static_bindings::llama_model_is_hybrid(model) })
+        Some(unsafe { static_bindings::llama_model_is_hybrid(model.cast()) })
     }
 }
 
@@ -151,7 +154,7 @@ pub unsafe fn llama_model_meta_val_str(model: *const Opaque, key: &str) -> Optio
         #[cfg(not(feature = "dynamic-runtime"))]
         let written = unsafe {
             static_bindings::llama_model_meta_val_str(
-                model,
+                model.cast(),
                 key.as_ptr(),
                 buf.as_mut_ptr().cast::<c_char>(),
                 buf.len(),
@@ -186,7 +189,7 @@ pub unsafe fn llama_model_is_diffusion(model: *const Opaque) -> Option<bool> {
     }
     #[cfg(not(feature = "dynamic-runtime"))]
     {
-        Some(unsafe { static_bindings::llama_model_is_diffusion(model) })
+        Some(unsafe { static_bindings::llama_model_is_diffusion(model.cast()) })
     }
 }
 
@@ -222,5 +225,10 @@ pub fn skippy_decode_step_sampled_mtp_fn() -> Option<SkippyDecodeStepSampledMtpF
 /// at link time or the build fails, so the counters are always available.
 #[cfg(not(feature = "dynamic-runtime"))]
 pub fn llama_perf_context_optional() -> Option<LlamaPerfContextFn> {
-    Some(static_bindings::llama_perf_context)
+    // The generated declaration names `*const llama_context`; the facade
+    // keeps the historical `*mut Opaque` signature, so adapt at the boundary.
+    unsafe extern "C" fn perf_context_shim(ctx: *mut Opaque) -> LlamaPerfContextData {
+        unsafe { static_bindings::llama_perf_context(ctx.cast()) }
+    }
+    Some(perf_context_shim)
 }
