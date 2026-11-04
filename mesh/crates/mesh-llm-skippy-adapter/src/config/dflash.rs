@@ -34,8 +34,13 @@ pub(super) struct DFlashSelection<'a> {
     pub(super) draft_model_path: Option<&'a Path>,
 }
 
-/// The DFlash draft to attach, or `None` when DFlash does not apply.
-pub(super) fn select_dflash_draft<'a>(selection: &DFlashSelection<'a>) -> Result<Option<&'a Path>> {
+/// The DFlash draft to attach, or `None` when DFlash does not apply. With
+/// `package_dflash`, the package's `dflash` strategy supplies the draft when
+/// the configuration names none.
+pub(super) fn select_dflash_draft<'a>(
+    selection: &DFlashSelection<'a>,
+    package_dflash: bool,
+) -> Result<Option<&'a Path>> {
     if selection.strategy != DFLASH_STRATEGY {
         return Ok(None);
     }
@@ -43,6 +48,9 @@ pub(super) fn select_dflash_draft<'a>(selection: &DFlashSelection<'a>) -> Result
         bail!(
             "skippy speculative.strategy = \"dflash\" conflicts with speculative.mode = \"disabled\""
         );
+    }
+    if package_dflash && selection.draft_model_path.is_none() {
+        return Ok(None);
     }
     let Some(path) = selection
         .draft_model_path
@@ -85,10 +93,10 @@ pub(super) fn choose_dflash_draft(
     explicit: &DFlashSelection<'_>,
     default: &DFlashDefaultSelection<'_>,
 ) -> Result<Option<(PathBuf, Option<DefaultDFlash>)>> {
-    if let Some(path) = select_dflash_draft(explicit)? {
+    let package_dflash = package_selects_dflash(default.package_generation, explicit.strategy);
+    if let Some(path) = select_dflash_draft(explicit, package_dflash)? {
         return Ok(Some((path.to_path_buf(), None)));
     }
-    let package_dflash = package_selects_dflash(default.package_generation, explicit.strategy);
     if (explicit.strategy != "auto" && !package_dflash)
         || explicit.mode != "auto"
         || explicit.draft_model_path.is_some()
@@ -203,12 +211,12 @@ mod tests {
         let dflash = dflash_file.path().to_path_buf();
 
         assert_eq!(
-            select_dflash_draft(&selection("dflash", Some(&dflash))).unwrap(),
+            select_dflash_draft(&selection("dflash", Some(&dflash)), false).unwrap(),
             Some(dflash.as_path())
         );
         for strategy in ["auto", "mtp", "disabled"] {
             assert_eq!(
-                select_dflash_draft(&selection(strategy, Some(&dflash))).unwrap(),
+                select_dflash_draft(&selection(strategy, Some(&dflash)), false).unwrap(),
                 None,
                 "{strategy}"
             );
@@ -220,8 +228,20 @@ mod tests {
         let ordinary_file = temp_model_file_with_architecture("qwen3");
         let ordinary = ordinary_file.path().to_path_buf();
 
-        assert!(select_dflash_draft(&selection("dflash", None)).is_err());
-        assert!(select_dflash_draft(&selection("dflash", Some(&ordinary))).is_err());
+        assert!(select_dflash_draft(&selection("dflash", None), false).is_err());
+        assert!(select_dflash_draft(&selection("dflash", Some(&ordinary)), false).is_err());
+        // A package `dflash` strategy supplies the draft, but a configured
+        // draft must still be a DFlash draft, and `disabled` still conflicts.
+        assert_eq!(
+            select_dflash_draft(&selection("dflash", None), true).unwrap(),
+            None
+        );
+        assert!(select_dflash_draft(&selection("dflash", Some(&ordinary)), true).is_err());
+        let disabled = DFlashSelection {
+            mode: "disabled",
+            ..selection("dflash", None)
+        };
+        assert!(select_dflash_draft(&disabled, true).is_err());
     }
 
     #[test]

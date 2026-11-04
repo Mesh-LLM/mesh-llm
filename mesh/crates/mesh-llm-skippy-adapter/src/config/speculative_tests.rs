@@ -1531,6 +1531,28 @@ fn a_package_declared_dflash_proposer_wins_over_the_index() {
 }
 
 #[test]
+fn naming_dflash_selects_a_package_strategy_named_dflash() {
+    let _index = with_test_pairings(vec![index_pairing("meshllm/indexed", DFlashBackends::All)]);
+    let (_directory, model_path) = default_dflash_target();
+    let mut package = package_with_dflash(&[("meshllm/package", DFlashBackends::All)]);
+    let speculative = package.speculative_decoding.as_mut().unwrap();
+    let strategy = speculative.strategies.remove("draft").unwrap();
+    speculative
+        .strategies
+        .insert("dflash".to_string(), strategy);
+    speculative.default = "dflash".to_string();
+    let meta = target_meta("qwen35", 64, 5120, 0);
+    let resolved = resolve_package_dflash(
+        "[defaults.speculative]\nstrategy = \"dflash\"",
+        &model_path,
+        &meta,
+        Some(&package),
+    );
+    assert_eq!(default_repo(&resolved).as_deref(), Some("meshllm/package"));
+    assert_eq!(resolved.speculative.decode.effective_strategy, "dflash");
+}
+
+#[test]
 fn a_package_dflash_proposer_for_another_backend_serves_without_dflash() {
     let _index = with_test_pairings(vec![index_pairing("meshllm/indexed", DFlashBackends::All)]);
     let (_directory, model_path) = default_dflash_target();
