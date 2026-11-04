@@ -574,7 +574,8 @@ impl OpenAiExchangeEnvelope {
     /// (see [`failure_class`](Self::failure_class)); `None` leaves it absent.
     #[must_use]
     pub fn with_failure_class(mut self, failure_class: Option<ExchangeFailureClass>) -> Self {
-        self.failure_class = failure_class;
+        // Terminal only, as the field's contract says.
+        self.failure_class = failure_class.filter(|_| self.phase == OpenAiExchangePhase::Terminal);
         self
     }
 

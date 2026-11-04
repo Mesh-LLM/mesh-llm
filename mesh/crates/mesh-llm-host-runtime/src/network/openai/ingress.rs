@@ -1913,6 +1913,10 @@ pub(crate) fn callable_models(targets: &election::ModelTargets) -> Vec<String> {
 mod durable_artifacts;
 
 #[cfg(test)]
+#[path = "ingress_tests/failure_class.rs"]
+mod failure_class;
+
+#[cfg(test)]
 #[path = "ingress_tests/automatic_routing.rs"]
 mod automatic_routing;
 
