@@ -1598,3 +1598,85 @@ fn native_mtp_is_preferred_only_when_no_pairing_exists() {
     assert!(resolved.speculative.native_mtp_enabled);
     assert_eq!(resolved.speculative.decode.effective_strategy, "native-mtp");
 }
+
+/// The published index (`index.json` at the pinned revision, checked in as
+/// `skippy/evals/dflash-pairings/index.json`, or the copy
+/// `DFLASH_PAIRING_INDEX_FIXTURE` names) resolves every default-on target on
+/// this backend to the plan the bootstrap table resolves.
+#[test]
+fn the_published_index_resolves_every_default_as_the_table_does() {
+    let path = std::env::var_os("DFLASH_PAIRING_INDEX_FIXTURE").map_or_else(
+        || {
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../../skippy/evals/dflash-pairings/index.json")
+        },
+        std::path::PathBuf::from,
+    );
+    let index = super::dflash_catalog::load_dflash_pairing_index(&path).unwrap();
+    let metal = cfg!(target_os = "macos");
+    let (_plain_directory, plain) = default_dflash_target();
+    let (_mtp_directory, with_mtp) = native_mtp_target();
+    let targets = [
+        (
+            &plain,
+            named(target_meta("qwen35", 32, 4096, 0), "Qwen3.5-9B"),
+            Some("AtomicChat/Qwen3.5-9B-DFlash-GGUF"),
+        ),
+        (
+            &plain,
+            named(target_meta("qwen35", 64, 5120, 0), "Qwen3.6-27B"),
+            Some("AtomicChat/Qwen3.6-27B-DFlash-GGUF"),
+        ),
+        (
+            &with_mtp,
+            qwen38_27b_meta(),
+            Some("z-lab/Qwen3.8-27B-DFlash2-GGUF"),
+        ),
+        (
+            &plain,
+            named(target_meta("qwen35moe", 40, 2048, 256), "Qwen3.6-35B-A3B"),
+            Some(if metal {
+                "Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp"
+            } else {
+                "aminya/Qwen3.6-35B-A3B-DFlash2-GGUF"
+            }),
+        ),
+        (
+            &plain,
+            named(target_meta("qwen3next", 48, 2048, 512), "Qwen3-Coder-Next"),
+            metal.then_some("AtomicChat/Qwen3-Coder-Next-DFlash-GGUF"),
+        ),
+    ];
+    for (model_path, meta, expected) in targets {
+        let resolve = |pairings: Vec<DFlashPairing>| {
+            let _pairings = with_test_pairings(pairings);
+            resolve_default_dflash("", model_path, &meta).speculative
+        };
+        let from_index = resolve(index.pairings.clone());
+        let from_table = resolve(super::dflash_catalog::bootstrap_pairings());
+        assert_eq!(
+            from_index.default_dflash, from_table.default_dflash,
+            "{meta:?}"
+        );
+        assert_eq!(
+            from_index.decode.dflash, from_table.decode.dflash,
+            "{meta:?}"
+        );
+        assert_eq!(
+            from_index.decode.effective_strategy, from_table.decode.effective_strategy,
+            "{meta:?}"
+        );
+        assert_eq!(
+            from_index.draft_max_tokens, from_table.draft_max_tokens,
+            "{meta:?}"
+        );
+        let repo = from_index
+            .default_dflash
+            .as_ref()
+            .map(|chosen| chosen.pairing.draft.repo.as_str());
+        assert_eq!(repo, expected, "{meta:?}");
+        if expected.is_some() {
+            assert_eq!(from_index.decode.effective_strategy, "dflash", "{meta:?}");
+        }
+    }
+}

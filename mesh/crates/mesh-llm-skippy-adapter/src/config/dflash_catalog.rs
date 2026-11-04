@@ -143,7 +143,7 @@ pub struct DefaultDFlash {
 /// [`DFLASH_PAIRING_INDEX_REVISION`] pins it; the index then carries these
 /// pairings (`skippy/evals/dflash-pairings/index.json` is generated from this
 /// table).
-fn bootstrap_pairings() -> Vec<DFlashPairing> {
+pub(super) fn bootstrap_pairings() -> Vec<DFlashPairing> {
     vec![
         // Qwen3.5-9B; the draft reads target layers 2..=30 at width 4096.
         DFlashPairing {
@@ -584,6 +584,101 @@ mod tests {
         );
         let index = load_dflash_pairing_index(Path::new(INDEX_PATH)).unwrap();
         assert_eq!(index.pairings, bootstrap_pairings());
+    }
+
+    /// Every target the bootstrap table pairs by default, named as its GGUF
+    /// names it: Qwen3.5-9B, Qwen3.6-27B, Qwen3.8-27B (with its NextN block),
+    /// Qwen3.6-35B-A3B and Qwen3-Coder-Next.
+    fn default_targets() -> Vec<(&'static str, GgufCompactMeta)> {
+        let mut qwen38 = named(target_meta("qwen35", 65, 5120, 0), "Qwen3.8-27B");
+        qwen38.nextn_predict_layers = 1;
+        vec![
+            (
+                "Qwen3.5-9B",
+                named(target_meta("qwen35", 32, 4096, 0), "Qwen3.5-9B"),
+            ),
+            (
+                "Qwen3.6-27B",
+                named(target_meta("qwen35", 64, 5120, 0), "Qwen3.6-27B"),
+            ),
+            ("Qwen3.8-27B", qwen38),
+            (
+                "Qwen3.6-35B-A3B",
+                named(target_meta("qwen35moe", 40, 2048, 256), "Qwen3.6-35B-A3B"),
+            ),
+            (
+                "Qwen3-Coder-Next",
+                named(target_meta("qwen3next", 48, 2048, 512), "Qwen3-Coder-Next"),
+            ),
+        ]
+    }
+
+    /// The published index: the checked-in copy of `index.json` at
+    /// [`DFLASH_PAIRING_INDEX_REVISION`], or the file
+    /// `DFLASH_PAIRING_INDEX_FIXTURE` names (a fresh download, say).
+    fn published_index() -> DFlashPairingIndex {
+        let path = std::env::var_os("DFLASH_PAIRING_INDEX_FIXTURE")
+            .map_or_else(|| PathBuf::from(INDEX_PATH), PathBuf::from);
+        load_dflash_pairing_index(&path).unwrap()
+    }
+
+    #[test]
+    fn the_published_index_pairs_every_default_target_as_the_table_does() {
+        let index = published_index();
+        let table = bootstrap_pairings();
+        for (model, meta) in default_targets() {
+            for metal in [true, false] {
+                assert_eq!(
+                    pairing_in(&index.pairings, &meta, metal),
+                    pairing_in(&table, &meta, metal),
+                    "{model}, metal = {metal}"
+                );
+                let _index = with_test_pairings(index.pairings.clone());
+                let from_index = pairing_for_target(&meta, metal);
+                drop(_index);
+                let _table = with_test_pairings(table.clone());
+                assert_eq!(
+                    from_index,
+                    pairing_for_target(&meta, metal),
+                    "{model}, metal = {metal}"
+                );
+            }
+        }
+
+        let repo = |model: &str, metal| {
+            let (_, meta) = default_targets()
+                .into_iter()
+                .find(|(name, _)| *name == model)
+                .unwrap();
+            pairing_in(&index.pairings, &meta, metal).map(|pairing| pairing.draft.repo.clone())
+        };
+        for metal in [true, false] {
+            assert_eq!(
+                repo("Qwen3.5-9B", metal).as_deref(),
+                Some("AtomicChat/Qwen3.5-9B-DFlash-GGUF")
+            );
+            assert_eq!(
+                repo("Qwen3.6-27B", metal).as_deref(),
+                Some("AtomicChat/Qwen3.6-27B-DFlash-GGUF")
+            );
+            assert_eq!(
+                repo("Qwen3.8-27B", metal).as_deref(),
+                Some("z-lab/Qwen3.8-27B-DFlash2-GGUF")
+            );
+        }
+        assert_eq!(
+            repo("Qwen3.6-35B-A3B", false).as_deref(),
+            Some("aminya/Qwen3.6-35B-A3B-DFlash2-GGUF")
+        );
+        assert_eq!(
+            repo("Qwen3.6-35B-A3B", true).as_deref(),
+            Some("Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp")
+        );
+        assert_eq!(
+            repo("Qwen3-Coder-Next", true).as_deref(),
+            Some("AtomicChat/Qwen3-Coder-Next-DFlash-GGUF")
+        );
+        assert_eq!(repo("Qwen3-Coder-Next", false), None);
     }
 
     #[test]
