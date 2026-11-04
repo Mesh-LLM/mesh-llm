@@ -1161,7 +1161,7 @@ async fn stage_transport_only_admits_assigned_edges_of_the_target_stage() -> Res
     )
     .await
     .expect("start stage-1 victim node");
-    // These are free-routing fixtures, not the operator's configured wallet.
+    // Isolated fixtures: never the operator's own config state.
     *victim.config_state.lock().await =
         crate::runtime::config_state::ConfigState::load(&config_dir.path().join("config.toml"))
             .expect("isolated config state");

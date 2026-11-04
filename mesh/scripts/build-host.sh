@@ -120,8 +120,7 @@ fi
 
 stamp_build_version
 
-# `payments` is the ledger and external `wallet.v1` plugin adapter.
-host_features="web-ui,dynamic-native-runtime,payments"
+host_features="web-ui,dynamic-native-runtime"
 cargo_args=(build --locked -p mesh-llm --bin mesh-llm --no-default-features \
     --features "$host_features")
 if [[ "$BUILD_PROFILE" == "release" ]]; then

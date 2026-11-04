@@ -6,11 +6,11 @@ use reqwest::Client;
 use sha2::Digest;
 
 use crate::{
-    archive::{ExtractedPluginArchive, extract_plugin_archive},
+    archive::{ExtractedPluginArchive, stage_plugin_archive},
     catalog::PluginCatalog,
     catalog_pin::CatalogPin,
     github::{GitHubReleaseAsset, GitHubReleaseClient},
-    select_plugin_asset,
+    infer_plugin_asset, select_plugin_asset,
     source_ref::{
         GitHubPluginSource, PluginInstallRef, PluginVersion, is_valid_name, parse_install_ref,
     },
@@ -34,7 +34,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PluginProgressEvent {
     ResolvingCatalog {
         name: String,
@@ -59,14 +59,19 @@ pub enum PluginProgressEvent {
     Extracting {
         asset: String,
     },
+    /// A package landed: it is in place and recorded. Emitted before anything
+    /// else is attempted, so what `installed` was granted (its manifest's
+    /// access requests) can be disclosed even when a later step fails.
     Installed {
-        name: String,
-        version: String,
+        installed: Box<InstalledPluginMetadata>,
     },
+    /// Like `Installed`, replacing version `from`.
     Updated {
-        name: String,
+        installed: Box<InstalledPluginMetadata>,
         from: String,
-        to: String,
+        /// The metadata the replaced version was installed with, so the
+        /// access the operator accepted then can be compared with now.
+        previous: Box<InstalledPluginMetadata>,
     },
     AlreadyCurrent {
         name: String,
@@ -164,8 +169,7 @@ pub fn install_plugin_archive(
     };
     store.save(&metadata)?;
     progress.report(PluginProgressEvent::Installed {
-        name: metadata.name.clone(),
-        version: metadata.installed_version.clone(),
+        installed: Box::new(metadata.clone()),
     });
     Ok(InstallOutcome {
         metadata,
@@ -182,13 +186,14 @@ pub(crate) fn extract_for_install(
     name: &str,
     options: &PluginInstallOptions,
 ) -> Result<ExtractedPluginArchive> {
-    extract_plugin_archive(
+    let staged = stage_plugin_archive(
         archive_path,
         archive_ext,
         options.target.executable_suffix(),
         name,
         &options.install_root,
-    )
+    )?;
+    staged.commit()
 }
 
 fn local_archive_ext(path: &std::path::Path) -> Result<ArchiveExt> {
@@ -282,7 +287,7 @@ async fn resolve_install_source(
             })
         }
         PluginInstallRef::GitHub { source, version } => Ok(ResolvedInstallSource {
-            plugin_name: source.repo.clone(),
+            plugin_name: source.plugin_name().to_string(),
             source,
             version,
             pin: None,
@@ -324,12 +329,30 @@ async fn install_resolved_plugin(
         target: options.target.triple().to_string(),
     });
     let asset_names = release.asset_names();
-    let selected = select_plugin_asset(
+    let release_version = PluginVersion::new(release.tag_name.clone())?;
+    let mut resolved = resolved;
+    let selected = match select_plugin_asset(
         &resolved.plugin_name,
-        Some(&PluginVersion::new(release.tag_name.clone())?),
+        Some(&release_version),
         &options.target,
         &asset_names,
-    )?;
+    ) {
+        Ok(selected) => selected,
+        // A direct GitHub reference names a repository, and repositories are
+        // conventionally `<name>-plugin`. When the release assets carry a
+        // different plugin name, take that name from the assets. Catalog and
+        // update installs already know the plugin name, so they never infer.
+        Err(error) if resolved.pin.is_none() && current.is_none() => {
+            let Some((name, selected)) =
+                infer_plugin_asset(&release_version, &options.target, &asset_names)
+            else {
+                return Err(error);
+            };
+            resolved.plugin_name = name;
+            selected
+        }
+        Err(error) => return Err(error),
+    };
     let asset = release
         .asset_by_name(&selected.name)
         .with_context(|| format!("selected asset '{}' missing from release", selected.name))?;
@@ -368,14 +391,13 @@ async fn install_resolved_plugin(
 
     if let Some(current) = current {
         progress.report(PluginProgressEvent::Updated {
-            name: metadata.name.clone(),
-            from: current.installed_version,
-            to: metadata.installed_version.clone(),
+            installed: Box::new(metadata.clone()),
+            from: current.installed_version.clone(),
+            previous: Box::new(current),
         });
     } else {
         progress.report(PluginProgressEvent::Installed {
-            name: metadata.name.clone(),
-            version: metadata.installed_version.clone(),
+            installed: Box::new(metadata.clone()),
         });
     }
 
@@ -516,6 +538,7 @@ mod tests {
 
     use super::*;
     use crate::ArchiveExt;
+    use crate::archive::extract_plugin_archive;
     use crate::store::{
         InstalledPluginApplyMode, InstalledPluginConditionOperator, InstalledPluginConditionValue,
         InstalledPluginConditionalDisable, InstalledPluginConfigSchema,
@@ -552,6 +575,8 @@ mod tests {
     fn packaged_manifest_fixture() -> Vec<u8> {
         serde_json::to_vec_pretty(&InstalledPluginManifestMetadata {
             openai_exchange_hook: None,
+            operation_bindings: Vec::new(),
+            peer_blocks: false,
             config_schema: Some(InstalledPluginConfigSchema {
                 plugin_name: "demo".to_string(),
                 schema_version: SUPPORTED_PLUGIN_SCHEMA_VERSION,
@@ -879,8 +904,8 @@ mod tests {
         assert!(PluginStore::new(&options.store_root).load("demo").is_ok());
         assert!(matches!(
             events.last(),
-            Some(PluginProgressEvent::Installed { name, version })
-                if name == "demo" && version == "0.1.0-dev"
+            Some(PluginProgressEvent::Installed { installed })
+                if installed.name == "demo" && installed.installed_version == "0.1.0-dev"
         ));
     }
 
@@ -999,6 +1024,36 @@ mod tests {
             );
             assert!(outcome.metadata.executable_path().is_file(), "{os}/{arch}");
         }
+    }
+
+    #[test]
+    fn a_plugin_toml_that_names_another_plugin_is_refused() {
+        let temp = tempfile::tempdir().unwrap();
+        let options = options_for(temp.path(), "linux", "x86_64");
+        let archive_path = temp
+            .path()
+            .join("demo-0.1.0-x86_64-unknown-linux-gnu.tar.gz");
+        write_tar_gz(
+            &archive_path,
+            "demo",
+            &[("plugin.toml", b"name = \"other\""), ("demo", b"")],
+        )
+        .unwrap();
+        let error = install_plugin_archive(
+            "demo",
+            "0.1.0",
+            &archive_path,
+            &options,
+            &mut |_event: PluginProgressEvent| {},
+        )
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("names 'other'"), "{error:#}");
+        assert!(
+            PluginStore::new(&options.store_root)
+                .load_optional("demo")
+                .unwrap()
+                .is_none()
+        );
     }
 
     use std::{

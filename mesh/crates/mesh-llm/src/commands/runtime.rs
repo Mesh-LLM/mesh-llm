@@ -7,6 +7,7 @@ use mesh_llm_cli::runtime::RuntimeCommand;
 use mesh_llm_cli::{BinaryFlavor, MeshGuardrailCliMode};
 use mesh_llm_commands::runtime_native::NativeRuntimeConfigSelection;
 use mesh_llm_host_runtime::command_support::plugin::{MeshConfig, load_config};
+use mesh_llm_system::local_http::local_http_client_builder;
 
 mod owner_control_http;
 use owner_control_http::post_runtime_payload;
@@ -361,7 +362,7 @@ pub(crate) async fn run_control_apply_config(
 }
 
 pub(crate) async fn run_drop(model_name: &str, port: u16) -> Result<()> {
-    let client = reqwest::Client::builder()
+    let client = local_http_client_builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
     let encoded = percent_encode_path_segment(model_name);
@@ -425,7 +426,7 @@ pub(crate) async fn send_load_request(
     token: &str,
     timeout: std::time::Duration,
 ) -> Result<()> {
-    let client = reqwest::Client::builder()
+    let client = local_http_client_builder()
         .connect_timeout(timeout.min(std::time::Duration::from_secs(5)))
         .timeout(timeout)
         .build()?;
@@ -541,7 +542,7 @@ fn percent_encode_path_segment(s: &str) -> String {
 }
 
 pub(crate) async fn run_status(port: u16) -> Result<()> {
-    let client = reqwest::Client::builder()
+    let client = local_http_client_builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
     let runtime_body = fetch_runtime_payload(&client, port, "/api/runtime").await?;
@@ -596,7 +597,7 @@ pub(crate) async fn run_status(port: u16) -> Result<()> {
 }
 
 pub(crate) async fn run_control_bootstrap(port: u16, json: bool) -> Result<()> {
-    let client = reqwest::Client::builder()
+    let client = local_http_client_builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()?;
     let payload = fetch_runtime_payload(&client, port, "/api/runtime/control-bootstrap").await?;
@@ -1015,7 +1016,6 @@ mod tests {
             logging: Default::default(),
             defaults: None,
             runtime: Default::default(),
-            payments: Default::default(),
             extra: Default::default(),
         };
 

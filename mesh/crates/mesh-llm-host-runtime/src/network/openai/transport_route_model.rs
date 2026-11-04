@@ -8,7 +8,6 @@ use crate::network::reservations::RoutingReservation;
 pub(crate) struct RouteModelRequestContext<'a> {
     /// Peer ingress may execute local targets only, never discover a fallback peer.
     pub(crate) local_execution_only: bool,
-    pub(crate) exchange_id: Option<&'a str>,
     pub(crate) required_tokens: Option<u32>,
     pub(crate) affinity: &'a AffinityRouter,
     pub(crate) route_observer: OpenAiRouteObserver<'a>,
@@ -80,7 +79,6 @@ pub async fn route_model_request(
         model,
         request,
         local_execution_only: context.local_execution_only,
-        exchange_id: context.exchange_id,
         required_tokens: context.required_tokens,
         affinity: context.affinity,
         route_observer: context.route_observer,
@@ -98,7 +96,6 @@ struct RouteModelRequestArgs<'a> {
     targets: &'a election::ModelTargets,
     model: &'a str,
     request: &'a BufferedHttpRequest,
-    exchange_id: Option<&'a str>,
     required_tokens: Option<u32>,
     affinity: &'a AffinityRouter,
     route_observer: OpenAiRouteObserver<'a>,
@@ -112,17 +109,12 @@ struct RouteModelState {
     attempts: usize,
     timeout_attempts: usize,
     refreshed: bool,
-    /// Number of attempts that refused to serve without payment.
-    payment_required_attempts: usize,
 }
 
 enum RouteModelDisposition {
     Continue,
     Return(RouteDispatchOutcome),
 }
-
-/// A peer's refusal to serve an unpaid request.
-const PAYMENT_REQUIRED_STATUS: u16 = 402;
 
 fn no_context_eligible_target_reason(model: &str, required_tokens: Option<u32>) -> String {
     match required_tokens {
@@ -190,7 +182,6 @@ fn clear_peer_capsule(sink: Option<&PeerCapsuleIdSink>) {
 struct PreparedModelCandidates {
     ranked: RankedCandidates<election::InferenceTarget>,
     ordered_candidates: Vec<election::InferenceTarget>,
-    payment_ranked: bool,
 }
 
 struct ModelRouteRejection {
@@ -212,7 +203,7 @@ impl ModelRouteRejection {
     }
 }
 
-/// Prepare the context/payment/health eligible candidates before affinity and
+/// Prepare the context/health eligible candidates before affinity and
 /// reservation selection. A rejection carries the existing HTTP error boundary.
 async fn prepare_model_candidates(
     node: &mesh::Node,
@@ -225,19 +216,7 @@ async fn prepare_model_candidates(
 ) -> Result<PreparedModelCandidates, ModelRouteRejection> {
     let candidates =
         execution_candidates(node, model, request, targets, local_execution_only).await;
-    let mut ranked = rank_targets_by_context(node, model, required_tokens, &candidates).await;
-    let payment_ranked = crate::network::openai::payment_routing::rank(
-        node,
-        model,
-        u64::from(request.completion_tokens.unwrap_or(256)),
-        &mut ranked,
-        request.body_json.as_ref(),
-    )
-    .await
-    .map_err(|reason| ModelRouteRejection {
-        status: 402,
-        reason: reason.into(),
-    })?;
+    let ranked = rank_targets_by_context(node, model, required_tokens, &candidates).await;
     let ordered_candidates = affinity.route_eligible_candidates(model, &ranked.ordered);
     if ordered_candidates.is_empty() {
         record_route_model_unavailable(node, model, 0);
@@ -249,7 +228,6 @@ async fn prepare_model_candidates(
     Ok(PreparedModelCandidates {
         ranked,
         ordered_candidates,
-        payment_ranked,
     })
 }
 
@@ -262,7 +240,6 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         request,
         local_execution_only,
         required_tokens,
-        exchange_id,
         affinity,
         route_observer,
         served_by_header,
@@ -274,7 +251,6 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
     let PreparedModelCandidates {
         ranked,
         ordered_candidates,
-        payment_ranked,
     } = match prepare_model_candidates(
         &node,
         targets,
@@ -293,16 +269,8 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
 
     let affinity_body = super::super::workload_routing::affinity_body(request);
     let prefix_hash = crate::network::affinity::cache_prefix_hash(affinity_body);
-    let cache_candidates = super::super::payment_routing::cache_candidates(
-        payment_ranked,
-        &ranked,
-        &ordered_candidates,
-    );
-
     let cache_target =
-        cache_target_for_request(&node, affinity, model, prefix_hash, cache_candidates).await;
-    let cache_target =
-        super::super::payment_routing::prefer_price_tier(payment_ranked, &ranked, cache_target);
+        cache_target_for_request(&node, affinity, model, prefix_hash, &ordered_candidates).await;
     let Some(ReservedModelRoute {
         selection,
         ordered,
@@ -324,7 +292,6 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         attempts: 0,
         timeout_attempts: 0,
         refreshed: false,
-        payment_required_attempts: 0,
     };
     // `request.raw` was already stabilized at ingress (finalize_forwarded_request
     // resolves the capsule client nonce once, before target selection), so every
@@ -342,8 +309,7 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         reservation.transfer_to(&target);
         state.attempts += 1;
         let attempt_started = Instant::now();
-        let retry_policy =
-            ResponseRetryPolicy::model_route_attempt(idx + 1 < total_targets, total_targets > 1);
+        let retry_policy = ResponseRetryPolicy::next_target_available(idx + 1 < total_targets);
         if let Some(outcome) = super::super::exchange_admission::admit_selected_route(
             &node,
             &mut tcp_stream,
@@ -365,7 +331,6 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
             forwarding_raw,
             retry_policy,
             RouteAttemptLoggingContext {
-                exchange_id,
                 request_id: request.request_id,
                 retry_policy,
                 response_adapter: request.response_adapter,
@@ -544,6 +509,10 @@ fn handle_route_model_attempt_result(
         RouteAttemptResult::RetryableContextOverflow => {
             handle_retryable_route_model_context(target)
         }
+        RouteAttemptResult::RetryableGateUnsatisfied => {
+            tracing::info!("Target {target:?} answered 402 (gate unsatisfied), trying next");
+            RouteModelDisposition::Continue
+        }
         RouteAttemptResult::RetryableResponseQuality(failure) => {
             handle_retryable_route_model_response_quality(target, failure)
         }
@@ -552,9 +521,6 @@ fn handle_route_model_attempt_result(
         }
         RouteAttemptResult::RetryableUnavailable => {
             handle_retryable_route_model_unavailable(node, target, state)
-        }
-        RouteAttemptResult::RetryablePaymentRequired => {
-            handle_retryable_route_model_payment_required(node, target, state)
         }
         RouteAttemptResult::CommittedStreamFailure { status_code } => {
             RouteModelDisposition::Return(RouteDispatchOutcome::FailedWithStatus {
@@ -699,18 +665,6 @@ fn handle_retryable_route_model_timeout(
     spawn_mesh_refresh_once(node, &mut state.refreshed);
     tracing::warn!("Target {target:?} timed out, trying next");
     RouteModelDisposition::Continue
-}
-
-/// A replica declined to serve without payment. Record the refusal so a model
-/// whose every replica charges still reports 402 rather than an unavailable-mesh
-/// error, then move on to a replica that will serve (#2059).
-fn handle_retryable_route_model_payment_required(
-    node: &mesh::Node,
-    target: &election::InferenceTarget,
-    state: &mut RouteModelState,
-) -> RouteModelDisposition {
-    state.payment_required_attempts += 1;
-    handle_retryable_route_model_unavailable(node, target, state)
 }
 
 fn handle_retryable_route_model_unavailable(
@@ -944,7 +898,6 @@ mod tests {
             attempts: 1,
             timeout_attempts: 0,
             refreshed: false,
-            payment_required_attempts: 0,
         };
         (node, affinity, target, selection, state)
     }
@@ -1272,7 +1225,6 @@ mod tests {
             &request,
             RouteModelRequestContext {
                 local_execution_only: false,
-                exchange_id: None,
                 required_tokens: None,
                 affinity: &affinity,
                 route_observer: OpenAiRouteObserver::default(),
@@ -1455,7 +1407,6 @@ mod tests {
             &request,
             RouteModelRequestContext {
                 local_execution_only: false,
-                exchange_id: None,
                 required_tokens: None,
                 affinity: &affinity,
                 route_observer: OpenAiRouteObserver::default(),
@@ -1481,36 +1432,35 @@ mod tests {
         )
     }
 
-    fn paid_replica_body() -> &'static str {
-        r#"{"error":{"message":"this provider requires the Lightning payment protocol","type":"payment_required"}}"#
+    fn gated_replica_body() -> &'static str {
+        r#"{"error":{"message":"a gate plugin on this host refused the request","type":"gate_unsatisfied"}}"#
     }
 
     fn served_completion_body() -> &'static str {
         r#"{"id":"c1","model":"qwen","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#
     }
 
-    /// #2059, the failover half. A replica that answers an unpaid nested MoA
-    /// call with 402 is refusing *this* serving endpoint, not the request: a
-    /// free replica of the same model can still serve it. The route loop treats
-    /// a peer timeout, unavailability and context-overflow 400 as
-    /// "try the next target", but a delivered 402 was returned to the caller
-    /// directly, so the committee silently lost the worker.
+    /// #2059, the failover half. A replica whose gate plugin answers 402 is
+    /// refusing *this* serving endpoint, not the request: another replica of
+    /// the same model can still serve it. The route loop treats a peer
+    /// timeout, unavailability and context-overflow 400 as "try the next
+    /// target"; a 402 before any relayed byte gets the same treatment.
     #[tokio::test]
-    async fn a_replica_that_requires_payment_fails_over_to_the_free_standby() {
+    async fn a_replica_whose_gate_refuses_fails_over_to_the_next_replica() {
         let (outcome, raw_response, backend_attempts) = route_across_mock_backends(&[
-            (402, paid_replica_body()),
+            (402, gated_replica_body()),
             (200, served_completion_body()),
         ])
         .await;
 
         assert_eq!(
             backend_attempts, 2,
-            "the paid backend must be tried before the free standby"
+            "the gated backend must be tried before the standby"
         );
 
         assert!(
             raw_response.starts_with("HTTP/1.1 200"),
-            "the free standby must have served the request, client saw: {raw_response}"
+            "the standby must have served the request, client saw: {raw_response}"
         );
         assert!(
             matches!(
@@ -1524,19 +1474,19 @@ mod tests {
         );
     }
 
-    /// The other half of the same decision: when no unpaid replica exists the
-    /// client must still be told the model requires payment. Failing over must
-    /// not launder a genuine 402 into an unavailable-model error.
+    /// The other half of the same decision: when no other replica exists the
+    /// client must still see the gate's 402 — with the terms the gate put in
+    /// its response — not an unavailable-model error.
     #[tokio::test]
-    async fn a_model_served_only_by_a_paying_replica_still_reports_402() {
+    async fn a_model_served_only_by_a_gated_replica_still_relays_the_402() {
         let (outcome, raw_response, backend_attempts) =
-            route_across_mock_backends(&[(402, paid_replica_body())]).await;
+            route_across_mock_backends(&[(402, gated_replica_body())]).await;
 
         assert_eq!(backend_attempts, 1, "the only backend must be attempted");
 
         assert!(
             raw_response.starts_with("HTTP/1.1 402"),
-            "the payment requirement must reach the client, client saw: {raw_response}"
+            "the gate's 402 must reach the client, client saw: {raw_response}"
         );
         assert!(
             matches!(
