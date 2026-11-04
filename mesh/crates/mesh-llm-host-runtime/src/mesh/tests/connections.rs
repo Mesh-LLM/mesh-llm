@@ -379,6 +379,7 @@ async fn make_test_node_with_requirements(
     let node = Node {
         gossip_verification: Arc::default(),
         gossip_encoder: Arc::default(),
+        native_inference: Default::default(),
         adopted_membership_file: None,
         identity_state_dir: None,
         full_model_only: false,

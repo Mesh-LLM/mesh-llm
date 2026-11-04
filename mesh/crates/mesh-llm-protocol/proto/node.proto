@@ -1,6 +1,13 @@
 syntax = "proto3";
 package meshllm.node.v1;
 
+// Native chat request/response envelope; payload_json contains typed inference data, never HTTP.
+message NativeChatFrame {
+  uint32 generation = 1;
+  bytes payload_json = 2;
+  optional string error = 3;
+}
+
 // Stream 0x01 — Gossip
 message GossipFrame {
   uint32 gen = 1;
@@ -372,6 +379,19 @@ message AdvertisedModelThroughput {
   string model_name = 1;
   uint64 avg_tokens_per_second_milli = 2;
   uint64 throughput_samples = 3;
+  // Wall-clock time of the newest sample behind the average, set by the node
+  // that measured it and never rewritten when the hint is relayed.
+  optional uint64 observed_at_unix_ms = 4;
+  // How long the measuring node keeps a sample as evidence.
+  optional uint32 window_ms = 5;
+  // What the average measures.
+  optional ThroughputMeasurementKind kind = 6;
+}
+
+enum ThroughputMeasurementKind {
+  THROUGHPUT_MEASUREMENT_KIND_UNSPECIFIED = 0;
+  // Completion tokens over the whole routed attempt's duration.
+  THROUGHPUT_MEASUREMENT_KIND_END_TO_END_ATTEMPT = 1;
 }
 
 message CacheAffinityAdvertisement {
@@ -486,6 +506,12 @@ message ServedModelMetadata {
   optional uint32 expert_count = 11;
   optional uint32 active_expert_count = 12;
   optional ModelWorkloadClass workload_class = 13;
+  // Wrapper retains the distinction between an unprobed runtime and no observed levels.
+  optional ThinkingEfforts thinking_efforts = 14;
+}
+
+message ThinkingEfforts {
+  repeated string values = 1;
 }
 
 enum ModelWorkloadClass {

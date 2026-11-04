@@ -375,6 +375,7 @@ fn stage_load_proto_carries_a_split_dflash_plan() {
             revision: "a3d4fb1eff6f268cbbdf808042f6902cc17f5458".into(),
             file: "Qwen3.6-27B-DFlash.Q8_0.gguf".into(),
             sha256: "b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1".into(),
+            bytes: 1_849_481_472,
         }),
     };
     load.dflash = Some(plan.clone());

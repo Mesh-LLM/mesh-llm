@@ -1494,6 +1494,7 @@ fn stage_dflash_to_proto(
                 revision: source.revision.clone(),
                 file: source.file.clone(),
                 sha256: source.sha256.clone(),
+                bytes: source.bytes,
             }
         }),
     }
@@ -1514,6 +1515,7 @@ fn stage_dflash_from_proto(
                 revision: source.revision,
                 file: source.file,
                 sha256: source.sha256,
+                bytes: source.bytes,
             }
         }),
     }

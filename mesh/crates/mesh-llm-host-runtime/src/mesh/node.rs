@@ -76,6 +76,7 @@ pub struct RouteEntry {
 
 #[derive(Clone)]
 pub struct Node {
+    pub(crate) native_inference: Arc<super::native_inference::NativeInferenceState>,
     pub(crate) endpoint: Endpoint,
     pub(crate) endpoint_secret_key: SecretKey,
     pub(crate) public_addr: Option<stun::PublicAddr>,
@@ -373,16 +374,6 @@ impl LocalRequestMetricsWindow {
             }
         }
     }
-}
-
-fn routing_runtime_data_producer() -> crate::runtime_data::RuntimeDataProducer {
-    crate::runtime_data::RuntimeDataCollector::new().producer(
-        crate::runtime_data::RuntimeDataSource {
-            scope: "routing",
-            plugin_data_key: None,
-            plugin_endpoint_key: None,
-        },
-    )
 }
 
 impl Node {
@@ -891,6 +882,7 @@ impl Node {
             tunnel_tx,
             tunnel_http_tx,
             stage_transport_tx,
+            native_inference: Default::default(),
             stage_control_tx: Arc::new(Mutex::new(None)),
             stage_control_lifecycle: Arc::new(Mutex::new(None)),
             stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),
@@ -1016,49 +1008,6 @@ impl Node {
             crate::plugin::proto::mesh_event::Kind::LocalAccepting
         } else {
             crate::plugin::proto::mesh_event::Kind::LocalStandby
-        }
-    }
-
-    pub(crate) async fn broadcast_existing_mesh_snapshot(
-        &self,
-        plugin_manager: &crate::plugin::PluginManager,
-        peers: Vec<PeerInfo>,
-    ) {
-        let _ = plugin_manager
-            .broadcast_mesh_event(
-                self.build_mesh_event(self.plugin_manager_local_kind(), None, String::new())
-                    .await,
-            )
-            .await;
-        if self.mesh_id().await.is_some() {
-            let _ = plugin_manager
-                .broadcast_mesh_event(
-                    self.build_mesh_event(
-                        crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
-                        None,
-                        String::new(),
-                    )
-                    .await,
-                )
-                .await;
-        }
-        for peer in peers {
-            if let Err(err) = plugin_manager
-                .broadcast_mesh_event(
-                    self.build_mesh_event(
-                        crate::plugin::proto::mesh_event::Kind::PeerUp,
-                        Some(peer_info_to_mesh_peer(&peer)),
-                        String::new(),
-                    )
-                    .await,
-                )
-                .await
-            {
-                tracing::debug!(
-                    "Failed to send existing peer snapshot to plugins for {}: {err}",
-                    peer.id.fmt_short()
-                );
-            }
         }
     }
 
@@ -1389,11 +1338,15 @@ impl Node {
         peer_id: EndpointId,
         model_name: &str,
     ) -> Option<crate::network::metrics::ModelThroughputHint> {
+        // Only a hint whose measuring node says when it measured, recently
+        // enough, is evidence; an older peer's hint ranks as unmeasured.
+        let now_unix_ms = current_time_unix_ms();
         let state = self.state.lock().await;
         state.peers.get(&peer_id).and_then(|peer| {
             peer.advertised_model_throughput
                 .iter()
                 .find(|hint| hint.model_name == model_name)
+                .filter(|hint| hint.is_fresh_at(now_unix_ms))
                 .cloned()
         })
     }
@@ -1549,6 +1502,7 @@ impl Node {
             let state = self.state.lock().await;
             state.peers.values().cloned().collect::<Vec<_>>()
         };
+        plugin_manager.expect_mesh_snapshots();
         *self.plugin_manager.lock().await = Some(plugin_manager.clone());
         self.broadcast_existing_mesh_snapshot(&plugin_manager, peers)
             .await;

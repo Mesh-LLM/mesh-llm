@@ -1588,9 +1588,12 @@ the warmer container image and toolchain epoch. Production runtime rows
 explicitly skip seed restoration after three verified CPU warm samples observed
 zero reuse in run `34272984200/1`.
 The warmer's `just ci-sccache-seed-build` recipe covers the dominant
-`mesh-llm` Clippy graph, the release-profile backend-neutral `mesh-llm` host
+`mesh-llm` Clippy graph, the `xtask` Clippy graph that a tooling-only Clippy
+batch checks on its own, the release-profile backend-neutral `mesh-llm` host
 graph, and the isolated `mesh-llm-cli` test graph used by the Rust-test matrix;
-its `Justfile` and `just/**` inputs are part of the exact seed key.
+its `Justfile` and `just/**` inputs are part of the exact seed key. Without the
+`xtask` graph such a batch restored the seed, was held to the warm floor and
+reached about 10%.
 `ci/runner-images.json` and `cargo xtool ci-ops runner-identity check` make the
 current image, native epoch, compiler-seed and SDK Rust identities auditable
 without changing execution. The native `migration_ci_operations` contracts
