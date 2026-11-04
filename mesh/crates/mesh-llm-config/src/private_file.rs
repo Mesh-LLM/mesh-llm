@@ -255,6 +255,9 @@ fn create_temp(
     ))
 }
 
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod acl_tests;
+
 #[cfg(unix)]
 mod platform {
     use std::fs;
