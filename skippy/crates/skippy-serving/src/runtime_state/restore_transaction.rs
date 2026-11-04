@@ -108,6 +108,7 @@ impl RuntimeState {
             }
         }
         self.session_token_counts.remove(session_id);
+        self.dflash_deferred_drafts.remove(session_id);
         self.session_resident_prefixes.remove(session_id);
     }
 }

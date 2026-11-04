@@ -142,7 +142,7 @@ impl StageOpenAiBackend {
             if prefill_token_count > 0 {
                 let prefill_tokens = &request.prompt_token_ids[..prefill_token_count];
                 if self.kv.is_some() {
-                    cache_stats.status = if request.native_mtp_enabled {
+                    cache_stats.status = if !prefix_restore::prefix_restore_allowed(&request) {
                         "bypass_native_mtp"
                     } else {
                         "miss"
@@ -241,7 +241,9 @@ impl StageOpenAiBackend {
                     })?;
                     let stage0_timer = PhaseTimer::start();
                     let pending_prefill_replies_before = pending_prefill_replies;
-                    let mut output = if prefix_restore_allowed {
+                    // A stage-0 activation hit skips stage 0's compute, which
+                    // also produces the split DFlash feature rows it forwards.
+                    let mut output = if prefix_restore_allowed && !request.split_dflash() {
                         self.restore_embedded_stage0_prefill(
                             &session_key,
                             request.ids,
@@ -364,6 +366,10 @@ impl StageOpenAiBackend {
                         prefill_output_activation_bytes.saturating_add(output.payload.len());
                     prefill_forward_activation_bytes =
                         prefill_forward_activation_bytes.saturating_add(forwarded.activation.len());
+                    request.record_forwarded_features(
+                        true,
+                        skippy_runtime::dflash_feature_payload_bytes(&output),
+                    );
                     let write_timer = PhaseTimer::start();
                     crate::frontend::backend::write_downstream_or_emit_forward_error(
                         &self.telemetry,
@@ -697,7 +703,16 @@ impl StageOpenAiBackend {
                     .identity(request.config.activation_codec),
                 prefill_bytes: prefill_forward_activation_bytes,
                 decode_bytes: 0,
+                dflash_features: None,
             });
+            cache_stats.split_prefix_cache = Some(prefix_restore::split_prefix_cache_stats(
+                cache_stats.cached_prompt_tokens,
+                &prefill_chain_cache_stats,
+                prefill_chain_restored_tokens,
+                prefill_forward_activation_bytes,
+                prefill_token_count,
+                request.activation_width,
+            ));
             self.emit_openai_phase("stage.openai_prefill", prefill_timer, prefill_attrs);
 
             let message = generation_config_message(
@@ -2027,6 +2042,7 @@ impl StageOpenAiBackend {
                     decode_output_activation_bytes.saturating_add(output.payload.len());
                 decode_forward_activation_bytes = decode_forward_activation_bytes
                     .saturating_add(forwarded.message.activation.len());
+                request.record_forwarded_features(false, forwarded.dflash_feature_bytes);
                 let write_timer = PhaseTimer::start();
                 crate::frontend::backend::write_downstream_or_emit_forward_error(
                     &self.telemetry,

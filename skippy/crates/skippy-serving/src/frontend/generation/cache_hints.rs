@@ -267,6 +267,8 @@ pub(in crate::frontend) struct GenerationCacheStats {
     pub(in crate::frontend) token_logprobs: Option<Vec<skippy_runtime::TokenLogprobs>>,
     /// Activation bytes stage 0 sent downstream, on a split.
     pub(in crate::frontend) activation_wire: Option<super::ActivationWireStats>,
+    /// The prompt prefix a split restored on every stage, on its stage 0.
+    pub(in crate::frontend) split_prefix_cache: Option<super::SplitPrefixCacheStats>,
 }
 
 impl Default for GenerationCacheStats {
@@ -287,6 +289,7 @@ impl Default for GenerationCacheStats {
             restore_ms: 0.0,
             token_logprobs: None,
             activation_wire: None,
+            split_prefix_cache: None,
         }
     }
 }

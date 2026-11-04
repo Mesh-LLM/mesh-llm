@@ -88,6 +88,7 @@ pub(super) fn reply_window_for_message(
     if message.kind == skippy_protocol::binary::WireMessageKind::VerifyWindow {
         StageReplyWindow {
             window_id: message.state.seq_id,
+            draft_follows: false,
         }
     } else {
         Default::default()

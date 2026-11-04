@@ -7,7 +7,10 @@
 //! drives the decode loop as it does for split native MTP: it sends drafted
 //! blocks as verify windows, commits through the first mismatch, and rolls
 //! every stage back to the committed position. The final stage drafts the next
-//! block right after each decode or verify and returns it on the reply. Unless
+//! block right after each decode or verify and returns it on the reply. On a
+//! verify window it answers with the verdict first and sends the draft in a
+//! second reply, so stage 0 commits and streams the window's tokens while the
+//! draft runs (`SKIPPY_DFLASH_EARLY_VERDICT=0` turns that off). Unless
 //! `SKIPPY_DFLASH_ADAPTIVE=0`, stage 0 verifies as much of each block as its
 //! measured window and serial-step times favour, down to a serial step.
 

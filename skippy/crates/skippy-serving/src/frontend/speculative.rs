@@ -927,6 +927,24 @@ impl InferenceSpeculativeStats {
                 "dflash_draft_context_resets".to_string(),
                 json!(counts.draft_context_resets),
             );
+            // The final stage's draft time: per block it drafted, and the
+            // feature-row injection part of it.
+            if counts.drafts > 0 {
+                let drafts = counts.drafts as f64;
+                timings.insert("dflash_drafts".to_string(), json!(counts.drafts));
+                timings.insert(
+                    "dflash_draft_ms".to_string(),
+                    json!(counts.draft_us as f64 / 1_000.0),
+                );
+                timings.insert(
+                    "dflash_draft_ms_per_window".to_string(),
+                    json!(counts.draft_us as f64 / 1_000.0 / drafts),
+                );
+                timings.insert(
+                    "dflash_ingest_ms_per_window".to_string(),
+                    json!(counts.ingest_us as f64 / 1_000.0 / drafts),
+                );
+            }
             // How verify windows were held for rollback: in place through the
             // recurrent snapshots, or in a host checkpoint (copy and replay).
             if let Some(stage0) = counts.stage0_rollbacks {
