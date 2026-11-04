@@ -34,6 +34,8 @@ const UNVERIFIED: &[&str] = &[
     "runner-cleanup",
     // Extracted native reader has Unix regular-file admission branches; Windows runtime proof is pending.
     "trajectory-reader",
+    // The sparse GGUF copy has Unix and Windows positional file I/O; Windows runtime proof is pending.
+    "skippy-receipts",
 ];
 
 fn predicate(tokens: TokenStream) -> bool {
