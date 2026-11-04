@@ -101,6 +101,7 @@ pub(super) fn plugin_spec(
         startup: Default::default(),
         web_ui_enabled,
         web_ui_primary_tab: None,
+        endpoint_models: None,
         installed_metadata: Some(installed_metadata_with_web_ui(
             temp_dir.path().to_path_buf(),
             validation_status,
@@ -165,6 +166,7 @@ pub(crate) fn in_process_plugin(
         startup: Default::default(),
         web_ui_enabled: None,
         web_ui_primary_tab: None,
+        endpoint_models: None,
         installed_metadata: None,
     });
     plugin.in_process = Some(runner);
@@ -483,6 +485,7 @@ fn configured_plugin_url_is_normalized_before_child_env_export() {
             command: Some("mesh-llm-plugin-demo".into()),
             args: Vec::new(),
             url: Some("\u{2003}https://plugin.example.test/v1\u{2003}".into()),
+            models: None,
             settings: BTreeMap::new(),
             startup: Default::default(),
         }],

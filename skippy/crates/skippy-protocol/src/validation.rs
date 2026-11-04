@@ -388,7 +388,10 @@ fn validate_activation_codec(value: i32) -> Result<(), StageFrameError> {
         Ok(proto::stage::StageActivationCodec::RawF32V1)
         | Ok(proto::stage::StageActivationCodec::F16RneV1)
         | Ok(proto::stage::StageActivationCodec::Bf16RneV1)
-        | Ok(proto::stage::StageActivationCodec::S8RowF32RneV1) => Ok(()),
+        | Ok(proto::stage::StageActivationCodec::S8RowF32RneV1)
+        | Ok(proto::stage::StageActivationCodec::Fp8E4m3RowF32RneV1)
+        | Ok(proto::stage::StageActivationCodec::Fp8E4m3Block32E8m0RneV1)
+        | Ok(proto::stage::StageActivationCodec::Fp8E5m2RowF32RneV1) => Ok(()),
         _ => Err(StageFrameError::InvalidActivationCodec { got: value }),
     }
 }

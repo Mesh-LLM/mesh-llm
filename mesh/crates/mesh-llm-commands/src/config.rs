@@ -1,4 +1,6 @@
 use anyhow::{Context, Result, bail};
+mod memberships;
+pub use memberships::run_memberships_validate;
 use mesh_llm_cli::Cli;
 use mesh_llm_config::{
     ConfigDiagnostic, ConfigDiagnosticCode, ConfigDiagnosticSchemaSource, ConfigDiagnosticSeverity,

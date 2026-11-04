@@ -386,11 +386,15 @@ mod tests {
         let _hf_home = EnvRestore::capture("HF_HOME");
         let _hf_cache = EnvRestore::capture("HF_HUB_CACHE");
         let _huggingface_cache = EnvRestore::capture("HUGGINGFACE_HUB_CACHE");
+        let _xdg_cache = EnvRestore::capture("XDG_CACHE_HOME");
 
         let temp = tempfile::tempdir().unwrap();
         // SAFETY: the enclosing test contract is `#[serial]`, so this process
         // environment mutation cannot race another test.
         unsafe { std::env::set_var("HF_HOME", temp.path()) };
+        // SAFETY: the enclosing test contract is `#[serial]`, so this process
+        // environment mutation cannot race another test.
+        unsafe { std::env::set_var("XDG_CACHE_HOME", temp.path().join("mesh-cache")) };
         // SAFETY: the enclosing test contract is `#[serial]`, so this process
         // environment mutation cannot race another test.
         unsafe { std::env::remove_var("HF_HUB_CACHE") };

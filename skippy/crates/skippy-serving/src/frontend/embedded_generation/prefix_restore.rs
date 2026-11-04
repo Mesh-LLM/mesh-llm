@@ -22,7 +22,11 @@ impl StageOpenAiBackend {
         wire_sampling: Option<WireSamplingConfig>,
         cache_stats: &mut GenerationCacheStats,
     ) -> InferenceResult<EmbeddedPrefixRestore> {
-        let allowed = !request.native_mtp_enabled;
+        // A native MTP head keeps sidecar state that a restore cannot rebuild,
+        // so native MTP prefills in full. A split DFlash draft also rides the
+        // native MTP flag, but its final stage drafts again from the rows
+        // decoded after the restore point, so it can take a restored prefix.
+        let allowed = prefix_restore_allowed(request);
         let started = Instant::now();
         let mut chain_cache_restored = false;
         let mut chain_restored_tokens = 0usize;
@@ -43,7 +47,10 @@ impl StageOpenAiBackend {
                 .emit("stage.openai_kv_lookup_decision", attrs);
         }
 
-        if allowed && request.max_tokens > 0 && request.draft.is_none() {
+        // The replay, first-token and fused restore paths decode without the
+        // split DFlash flag, so a split DFlash request takes the chain prefix
+        // restore below and decodes as usual.
+        if allowed && request.max_tokens > 0 && request.draft.is_none() && !request.split_dflash() {
             let current = *request
                 .prompt_token_ids
                 .last()
@@ -128,5 +135,54 @@ impl StageOpenAiBackend {
             chain_cache_stats,
             fused_first_decode,
         })
+    }
+}
+
+/// Whether a split generation may restore a cached prompt prefix.
+pub(super) fn prefix_restore_allowed(request: &EmbeddedStageZeroGeneration<'_>) -> bool {
+    restore_allowed(request.native_mtp_enabled, request.split_dflash())
+}
+
+fn restore_allowed(native_mtp_enabled: bool, split_dflash: bool) -> bool {
+    !native_mtp_enabled || split_dflash
+}
+
+/// What a split's prompt-prefix restore saved stage 0, for the response
+/// timings: tokens restored on every stage, how many stages hit, and the
+/// activation bytes stage 0 still forwarded for the suffix it prefilled.
+pub(super) fn split_prefix_cache_stats(
+    cached_prompt_tokens: u32,
+    chain_stats: &StageReplyStats,
+    chain_restored_tokens: usize,
+    forwarded_bytes: usize,
+    prefill_token_count: usize,
+    activation_width: i32,
+) -> SplitPrefixCacheStats {
+    SplitPrefixCacheStats::new(
+        usize::try_from(cached_prompt_tokens).unwrap_or(usize::MAX),
+        crate::frontend::prefix_cache::chain_prefix_cache_savings(
+            chain_stats,
+            chain_restored_tokens,
+            activation_width,
+        )
+        .hit_stage_count,
+        forwarded_bytes,
+        prefill_token_count.saturating_sub(chain_restored_tokens),
+        activation_width,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::restore_allowed;
+
+    #[test]
+    fn split_dflash_restores_a_prefix_and_native_mtp_does_not() {
+        assert!(restore_allowed(false, false));
+        assert!(
+            restore_allowed(true, true),
+            "split DFlash rides the MTP flag"
+        );
+        assert!(!restore_allowed(true, false), "native MTP sidecar state");
     }
 }

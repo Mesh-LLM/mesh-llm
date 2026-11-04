@@ -669,7 +669,7 @@ pub(super) struct InferenceSpeculativeStats {
     pub(super) adaptive_window_enabled: bool,
     /// A split DFlash final stage's `(feature rows missing, draft context
     /// resets)` for this session; `None` when not drafting with one.
-    pub(super) split_dflash_health: Option<(i64, i64)>,
+    pub(super) split_dflash_health: Option<super::generation::SplitDFlashCounts>,
 }
 
 /// Request-local, cache-based N-gram proposer. It mirrors only committed
@@ -918,12 +918,53 @@ impl InferenceSpeculativeStats {
             "verify_window_downstream_wait_ms".to_string(),
             json!(self.primary_verify_downstream_wait_ms),
         );
-        if let Some((rows_missing, resets)) = self.split_dflash_health {
+        if let Some(counts) = self.split_dflash_health {
             timings.insert(
                 "dflash_feature_rows_missing".to_string(),
-                json!(rows_missing),
+                json!(counts.feature_rows_missing),
             );
-            timings.insert("dflash_draft_context_resets".to_string(), json!(resets));
+            timings.insert(
+                "dflash_draft_context_resets".to_string(),
+                json!(counts.draft_context_resets),
+            );
+            // The final stage's draft time: per block it drafted, and the
+            // feature-row injection part of it.
+            if counts.drafts > 0 {
+                let drafts = counts.drafts as f64;
+                timings.insert("dflash_drafts".to_string(), json!(counts.drafts));
+                timings.insert(
+                    "dflash_draft_ms".to_string(),
+                    json!(counts.draft_us as f64 / 1_000.0),
+                );
+                timings.insert(
+                    "dflash_draft_ms_per_window".to_string(),
+                    json!(counts.draft_us as f64 / 1_000.0 / drafts),
+                );
+                timings.insert(
+                    "dflash_ingest_ms_per_window".to_string(),
+                    json!(counts.ingest_us as f64 / 1_000.0 / drafts),
+                );
+            }
+            // How verify windows were held for rollback: in place through the
+            // recurrent snapshots, or in a host checkpoint (copy and replay).
+            if let Some(stage0) = counts.stage0_rollbacks {
+                timings.insert(
+                    "verify_rollback_stage0_in_place".to_string(),
+                    json!(stage0.in_place),
+                );
+                timings.insert(
+                    "verify_rollback_stage0_checkpointed".to_string(),
+                    json!(stage0.checkpointed),
+                );
+            }
+            timings.insert(
+                "verify_rollback_downstream_in_place_max".to_string(),
+                json!(counts.downstream_rollbacks_in_place),
+            );
+            timings.insert(
+                "verify_rollback_downstream_checkpointed_max".to_string(),
+                json!(counts.downstream_rollbacks_checkpointed),
+            );
         }
     }
 

@@ -6,7 +6,7 @@
 
 pub const SKIPPY_ABI_VERSION_MAJOR: u32 = 0;
 pub const SKIPPY_ABI_VERSION_MINOR: u32 = 1;
-pub const SKIPPY_ABI_VERSION_PATCH: u32 = 76;
+pub const SKIPPY_ABI_VERSION_PATCH: u32 = 77;
 pub const SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_MAX_LOGIT_BIAS: u32 = 256;
 pub const SKIPPY_MAX_SAMPLERS: u32 = 16;
@@ -1494,6 +1494,15 @@ unsafe extern "C" {
         session: *mut skippy_session,
         token_start: u64,
         token_count: u64,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Reports how this session's verify windows were held for rollback\n since it was created or last reset: in place through the recurrent\n rollback snapshots, or in a host checkpoint. A window counts once its\n storage is final, so both counts only grow: a checkpointed window when it\n opens, an in-place window when it is retired or trimmed. A window first\n held in place and later checkpointed because another decode landed on it\n counts as checkpointed."]
+    pub fn skippy_session_verify_rollback_counts(
+        session: *const skippy_session,
+        out_in_place: *mut u64,
+        out_checkpointed: *mut u64,
         out_error: *mut *mut skippy_error,
     ) -> skippy_status;
 }

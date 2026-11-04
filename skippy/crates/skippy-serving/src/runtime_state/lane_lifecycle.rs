@@ -138,6 +138,9 @@ impl RuntimeState {
     /// `failed to find a memory slot` errors on subsequent admissions.
     pub fn drop_session_timed(&mut self, session_id: &str) -> Result<RuntimeSessionDropStats> {
         self.forget_reset_session(session_id);
+        // A draft owed after an early verdict dies with its session, including
+        // when the connection failed before the draft was sent.
+        self.dflash_deferred_drafts.remove(session_id);
         let reset_started = Instant::now();
         let mut reset_session = false;
         let preserved_resident_prefix = false;

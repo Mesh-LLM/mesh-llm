@@ -1,6 +1,7 @@
 mod cache_hints;
 mod concurrency;
 mod draft_runner;
+mod execution;
 mod incremental_text;
 mod live_request_defaults;
 mod parsing;
@@ -40,6 +41,7 @@ pub(in crate::frontend) use cache_hints::{
 };
 pub(in crate::frontend) use concurrency::*;
 pub(in crate::frontend) use draft_runner::*;
+pub(in crate::frontend) use execution::{generation_ids, run_blocking_generation_worker};
 #[cfg(test)]
 pub(in crate::frontend) use incremental_text::recorded_fixture;
 pub(in crate::frontend) use parsing::*;

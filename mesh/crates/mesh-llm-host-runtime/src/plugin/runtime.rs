@@ -109,6 +109,12 @@ impl ExternalPlugin {
         self.spec.openai_exchange_grant.as_deref()
     }
 
+    /// The models the operator allows this plugin's inference endpoints to
+    /// expose, or `None` to expose every model they list.
+    pub(crate) fn endpoint_models(&self) -> Option<&[String]> {
+        self.spec.endpoint_models.as_deref()
+    }
+
     pub(crate) fn installed_metadata(
         &self,
     ) -> Option<&mesh_llm_plugin_manager::InstalledPluginMetadata> {
