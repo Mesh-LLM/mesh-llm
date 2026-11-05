@@ -229,7 +229,6 @@ fn mesh_routing_unsupported_dispatch_kind_does_not_flag_virtual_dispatch() {
     let request = dispatch_kind_request(Some("mesh"), proxy::ResponseAdapter::None);
     let decision = AutoRouteDecision {
         effective_model: Some("mesh".to_owned()),
-        classification: None,
         required_tokens: None,
     };
     assert_eq!(
@@ -242,36 +241,6 @@ fn mesh_routing_unsupported_dispatch_kind_does_not_flag_virtual_dispatch() {
     );
 }
 
-/// Regression (CodeRabbit + ndizazzo P1, PR #1671 round 2): same gap for
-/// pipeline dispatch, which also runs before `route_request`.
-#[test]
-fn mesh_routing_unsupported_dispatch_kind_flags_pipeline_dispatch() {
-    use crate::network::router::{Category, Classification, Complexity};
-
-    let request = dispatch_kind_request(
-        Some("local/only-model:Q4_K_M"),
-        proxy::ResponseAdapter::None,
-    );
-    let decision = AutoRouteDecision {
-        effective_model: Some("local/only-model:Q4_K_M".to_owned()),
-        classification: Some(Classification {
-            category: Category::Code,
-            complexity: Complexity::Deep,
-            needs_tools: true,
-            has_media_inputs: false,
-        }),
-        required_tokens: None,
-    };
-    assert_eq!(
-        mesh_routing_unsupported_dispatch_kind(
-            &request,
-            &decision,
-            decision.effective_model.as_deref()
-        ),
-        Some("pipeline")
-    );
-}
-
 /// Regression (CodeRabbit, PR #1671 round 1/2): the model-less fallback
 /// (no `model` in the request at all) also bypasses `route_request`'s
 /// model-bearing branch and must not silently ignore a routing header.
@@ -280,7 +249,6 @@ fn mesh_routing_unsupported_dispatch_kind_flags_model_less_dispatch() {
     let request = dispatch_kind_request(None, proxy::ResponseAdapter::None);
     let decision = AutoRouteDecision {
         effective_model: None,
-        classification: None,
         required_tokens: None,
     };
     assert_eq!(
@@ -299,7 +267,6 @@ fn mesh_routing_unsupported_dispatch_kind_is_none_for_ordinary_dispatch() {
     );
     let decision = AutoRouteDecision {
         effective_model: Some("local/only-model:Q4_K_M".to_owned()),
-        classification: None,
         required_tokens: None,
     };
     assert_eq!(
@@ -353,7 +320,6 @@ async fn enforce_mesh_routing_headers_before_dispatch_rejects_malformed_header_w
     };
     let decision = AutoRouteDecision {
         effective_model: None,
-        classification: None,
         required_tokens: None,
     };
 

@@ -1180,15 +1180,6 @@ fn is_tokenize_request(method: &str, path: &str) -> bool {
     method == "POST" && path == "/v1/tokenize"
 }
 
-pub fn pipeline_request_supported(path: &str, body: &serde_json::Value) -> bool {
-    let path = path.split('?').next().unwrap_or(path);
-    path == "/v1/chat/completions"
-        && body
-            .get("messages")
-            .map(|messages| messages.is_array())
-            .unwrap_or(false)
-}
-
 pub fn rewrite_public_model_alias(
     request: &mut BufferedHttpRequest,
     models: &[String],

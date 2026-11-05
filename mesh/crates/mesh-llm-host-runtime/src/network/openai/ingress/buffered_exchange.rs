@@ -160,23 +160,7 @@ pub(super) async fn handle_buffered_api_request(
         VirtualModelInterceptResult::NotVirtual(stream) => stream,
     };
 
-    let mut tcp_stream = tcp_stream;
-    if let Some(outcome) = try_pipeline_route(
-        &mut tcp_stream,
-        &mut request,
-        &ctx.route,
-        &decision,
-        routing_model.as_deref(),
-        lifecycle.route_observer(),
-    )
-    .await
-    {
-        proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;
-        finish_exchange(&mut exchange, outcome).await;
-        lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
-        return;
-    }
-
+    let tcp_stream = tcp_stream;
     let outcome = {
         let route_observer = lifecycle.route_observer();
         route_request(

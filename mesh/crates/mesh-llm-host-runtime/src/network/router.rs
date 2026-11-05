@@ -1,9 +1,8 @@
 #[cfg(test)]
 use mesh_llm_types::router::strip_split_suffix;
-/// Smart model router — classifies requests and picks the best model.
+/// Model selection from structural requirements and advertised capabilities.
 pub use mesh_llm_types::router::{
-    Category, Classification, Complexity, MediaRequirements, classify, media_requirements,
-    strip_split_suffix_owned,
+    Classification, MediaRequirements, classify, media_requirements, strip_split_suffix_owned,
 };
 
 pub(crate) fn model_satisfies_media_requirements(
@@ -97,11 +96,8 @@ const EXPLORATION_PROBABILITY: f64 = 0.15;
 /// Pick the best model for a classified request using gossiped capabilities
 /// and locally observed throughput.
 ///
-/// Filtering:
-///   - `needs_tools` → prefer models with `tool_use != None`
-///   - `Reasoning`   → prefer models with `reasoning != None`
-///   - `Image`       → prefer models with `vision != None`
-///   - anything else → no capability filter
+/// Declared tool requirements prefer tool-capable models. Media compatibility
+/// is checked structurally before selection; prompt keywords have no effect.
 ///
 /// Falls back to all models if the filter matches nothing. Then biases
 /// toward larger models by partitioning single-digit-B names to the
@@ -122,21 +118,10 @@ pub fn pick_model_classified<'a>(
     }
 
     // Capability filter based on what the request needs.
-    let filtered: Vec<&RoutingCandidate<'a>> = match classification.category {
-        _ if classification.needs_tools => available_models
-            .iter()
-            .filter(|c| c.caps.tool_use != CapabilityLevel::None)
-            .collect(),
-        Category::Reasoning => available_models
-            .iter()
-            .filter(|c| c.caps.reasoning != CapabilityLevel::None)
-            .collect(),
-        Category::Image => available_models
-            .iter()
-            .filter(|c| c.caps.vision != CapabilityLevel::None)
-            .collect(),
-        _ => Vec::new(),
-    };
+    let filtered: Vec<&RoutingCandidate<'a>> = available_models
+        .iter()
+        .filter(|c| !classification.needs_tools || c.caps.tool_use != CapabilityLevel::None)
+        .collect();
 
     // Fall back to all models if the filter matched nothing.
     let candidates: Vec<&RoutingCandidate<'a>> = if filtered.is_empty() {
@@ -317,37 +302,7 @@ mod tests {
             "messages": [{"role": "user", "content": "Run the tests and check the output"}],
             "tools": [{"type": "function", "function": {"name": "bash"}}]
         });
-        assert_eq!(classify(&body).category, Category::ToolCall);
-    }
-
-    #[test]
-    fn test_classify_code() {
-        let body = json!({
-            "messages": [
-                {"role": "user", "content": "Write a Python function to implement binary search and debug any issues"}
-            ]
-        });
-        assert_eq!(classify(&body).category, Category::Code);
-    }
-
-    #[test]
-    fn test_classify_reasoning() {
-        let body = json!({
-            "messages": [
-                {"role": "user", "content": "Prove that the square root of 2 is irrational. Explain step by step."}
-            ]
-        });
-        assert_eq!(classify(&body).category, Category::Reasoning);
-    }
-
-    #[test]
-    fn test_classify_creative() {
-        let body = json!({
-            "messages": [
-                {"role": "user", "content": "Write a story about a robot who learns to paint"}
-            ]
-        });
-        assert_eq!(classify(&body).category, Category::Creative);
+        assert!(classify(&body).needs_tools);
     }
 
     #[test]
@@ -358,21 +313,8 @@ mod tests {
             ]
         });
         let cl = classify(&body);
-        assert_eq!(cl.category, Category::Chat);
-        assert_eq!(cl.complexity, Complexity::Quick); // short simple question
         assert!(!cl.needs_tools);
         assert!(!cl.has_media_inputs);
-    }
-
-    #[test]
-    fn test_classify_deep_analysis() {
-        let body = json!({
-            "messages": [
-                {"role": "user", "content": "Design a system architecture for a distributed database with strong consistency guarantees. Provide a detailed analysis of the trade-offs between CAP theorem constraints and explain how to handle network partitions in depth."}
-            ]
-        });
-        let cl = classify(&body);
-        assert_eq!(cl.complexity, Complexity::Deep);
     }
 
     #[test]
@@ -383,7 +325,6 @@ mod tests {
             "tools": [{"type": "function", "function": {"name": "bash"}}]
         });
         let cl = classify(&body);
-        assert_eq!(cl.category, Category::Code);
         assert!(cl.needs_tools);
     }
 
@@ -427,7 +368,6 @@ mod tests {
         });
         let cl = classify(&body);
         assert!(cl.needs_tools);
-        assert!(matches!(cl.category, Category::Code | Category::ToolCall));
     }
 
     #[test]
@@ -462,17 +402,6 @@ mod tests {
         });
         let cl = classify(&body);
         assert!(cl.needs_tools);
-    }
-
-    #[test]
-    fn test_classify_system_prompt_code() {
-        let body = json!({
-            "messages": [
-                {"role": "system", "content": "You are a senior developer and coding assistant."},
-                {"role": "user", "content": "Help me with this."}
-            ]
-        });
-        assert_eq!(classify(&body).category, Category::Code);
     }
 
     #[test]
@@ -625,61 +554,11 @@ mod tests {
             RoutingCandidate::unscored("tool-model", tool_caps),
         ];
         let cl = Classification {
-            category: Category::Code,
-            complexity: Complexity::Moderate,
             needs_tools: true,
             has_media_inputs: false,
         };
         let result = pick_model_classified(&cl, &available);
         assert_eq!(result, Some("tool-model"));
-    }
-
-    #[test]
-    fn test_pick_reasoning_filters_by_capability() {
-        use crate::models::{CapabilityLevel, ModelCapabilities};
-
-        let reasoning_caps = ModelCapabilities {
-            reasoning: CapabilityLevel::Supported,
-            ..Default::default()
-        };
-        let no_caps = ModelCapabilities::default();
-
-        let available = vec![
-            RoutingCandidate::unscored("chat-model", no_caps),
-            RoutingCandidate::unscored("reasoning-model", reasoning_caps),
-        ];
-        let cl = Classification {
-            category: Category::Reasoning,
-            complexity: Complexity::Moderate,
-            needs_tools: false,
-            has_media_inputs: false,
-        };
-        let result = pick_model_classified(&cl, &available);
-        assert_eq!(result, Some("reasoning-model"));
-    }
-
-    #[test]
-    fn test_pick_vision_filters_by_capability() {
-        use crate::models::{CapabilityLevel, ModelCapabilities};
-
-        let vision_caps = ModelCapabilities {
-            vision: CapabilityLevel::Supported,
-            ..Default::default()
-        };
-        let no_caps = ModelCapabilities::default();
-
-        let available = vec![
-            RoutingCandidate::unscored("text-model", no_caps),
-            RoutingCandidate::unscored("vision-model", vision_caps),
-        ];
-        let cl = Classification {
-            category: Category::Image,
-            complexity: Complexity::Moderate,
-            needs_tools: false,
-            has_media_inputs: true,
-        };
-        let result = pick_model_classified(&cl, &available);
-        assert_eq!(result, Some("vision-model"));
     }
 
     #[test]
@@ -692,8 +571,6 @@ mod tests {
             RoutingCandidate::unscored("model-b", no_caps),
         ];
         let cl = Classification {
-            category: Category::Code,
-            complexity: Complexity::Moderate,
             needs_tools: true,
             has_media_inputs: false,
         };
@@ -706,8 +583,6 @@ mod tests {
     fn test_pick_empty_returns_none() {
         let available: Vec<RoutingCandidate<'_>> = vec![];
         let cl = Classification {
-            category: Category::Chat,
-            complexity: Complexity::Moderate,
             needs_tools: false,
             has_media_inputs: false,
         };
@@ -723,8 +598,6 @@ mod tests {
             ModelCapabilities::default(),
         )];
         let cl = Classification {
-            category: Category::Chat,
-            complexity: Complexity::Moderate,
             needs_tools: false,
             has_media_inputs: false,
         };
@@ -741,8 +614,6 @@ mod tests {
             RoutingCandidate::unscored("model-b", no_caps),
         ];
         let cl = Classification {
-            category: Category::Chat,
-            complexity: Complexity::Moderate,
             needs_tools: false,
             has_media_inputs: false,
         };
@@ -814,8 +685,6 @@ mod tests {
             RoutingCandidate::unscored("Qwen3-Coder-Next-Q4_K_M", no_caps),
         ];
         let cl = Classification {
-            category: Category::Chat,
-            complexity: Complexity::Moderate,
             needs_tools: false,
             has_media_inputs: false,
         };
@@ -842,8 +711,6 @@ mod tests {
         misleading_small_name.parameter_count_b = Some(32.0);
         let available = vec![misleading_big_name, misleading_small_name];
         let cl = Classification {
-            category: Category::Chat,
-            complexity: Complexity::Moderate,
             needs_tools: false,
             has_media_inputs: false,
         };
@@ -864,8 +731,6 @@ mod tests {
             RoutingCandidate::unscored("Qwen3.5-9B-Q4_K_M", no_caps),
         ];
         let cl = Classification {
-            category: Category::Chat,
-            complexity: Complexity::Moderate,
             needs_tools: false,
             has_media_inputs: false,
         };
@@ -887,8 +752,6 @@ mod tests {
             RoutingCandidate::unscored("Qwen3-Coder-Next-Q4_K_M", no_caps),
         ];
         let cl = Classification {
-            category: Category::Chat,
-            complexity: Complexity::Moderate,
             needs_tools: false,
             has_media_inputs: false,
         };
@@ -931,8 +794,6 @@ mod tests {
     fn count_picks(available: &[RoutingCandidate<'_>], iterations: usize) -> HashMapCounts {
         use std::collections::HashMap;
         let cl = Classification {
-            category: Category::Chat,
-            complexity: Complexity::Moderate,
             needs_tools: false,
             has_media_inputs: false,
         };

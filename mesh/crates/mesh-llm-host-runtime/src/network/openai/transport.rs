@@ -26,9 +26,8 @@ pub use super::request_parse::{
     rewrite_model_field, rewrite_public_model_alias,
 };
 pub(crate) use super::response::{
-    PeerCapsuleIdSink, PipelineCapsuleNonce, PipelineProxyResult, ServedByNodeIdSink,
-    append_safe_header, is_valid_header_name, pipeline_proxy_local, send_400_observed,
-    send_409_observed, send_503_observed, send_error_observed,
+    PeerCapsuleIdSink, ServedByNodeIdSink, append_safe_header, is_valid_header_name,
+    send_400_observed, send_409_observed, send_503_observed, send_error_observed,
     send_json_with_status_and_headers_observed, send_model_not_ready_observed,
 };
 pub(crate) use super::routing_rank::request_budget_tokens_from_parts;
@@ -1328,9 +1327,7 @@ async fn resolve_auto_model_request(args: AutoModelRequestArgs<'_>) -> AutoModel
     let picked = router::pick_model_classified(&cl, &available).map(str::to_string);
     if let Some(name) = picked.as_deref() {
         tracing::info!(
-            "router: {:?}/{:?} tools={} media={} → {name}",
-            cl.category,
-            cl.complexity,
+            "router: tools={} media={} → {name}",
             cl.needs_tools,
             cl.has_media_inputs
         );
