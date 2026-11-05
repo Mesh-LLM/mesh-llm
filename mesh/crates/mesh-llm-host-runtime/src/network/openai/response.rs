@@ -7,8 +7,6 @@ mod dispatch;
 mod external_endpoint;
 mod json_adaptation;
 mod models;
-mod pipeline;
-mod pipeline_adapter;
 pub(crate) mod prepared_dispatch;
 mod probe;
 mod relay;
@@ -27,7 +25,6 @@ pub(super) use common::{
 };
 pub(super) use external_endpoint::route_http_endpoint_attempt;
 pub(crate) use models::{error_response as model_error_response, models_response};
-pub(crate) use pipeline::{PipelineCapsuleNonce, PipelineProxyResult, pipeline_proxy_local};
 pub(super) use routing::{route_local_attempt, route_remote_attempt};
 pub(crate) use send::{
     append_safe_header, is_valid_header_name, send_400, send_400_observed, send_409_observed,

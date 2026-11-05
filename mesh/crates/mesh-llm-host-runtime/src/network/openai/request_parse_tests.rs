@@ -495,25 +495,6 @@ async fn tokenizer_identity_is_not_alias_rewritten() {
     assert!(request.body_json.is_none());
     assert!(!request.body_json_attempted);
 }
-#[test]
-fn test_pipeline_request_supported_chat_completions() {
-    let body = serde_json::json!({"messages":[{"role":"user","content":"hi"}]});
-    assert!(pipeline_request_supported(
-        "/v1/chat/completions?stream=1",
-        &body
-    ));
-}
-
-#[test]
-fn test_pipeline_request_supported_rejects_other_endpoint() {
-    let body = serde_json::json!({"messages":[{"role":"user","content":"hi"}]});
-    assert!(!pipeline_request_supported("/v1/responses", &body));
-}
-#[test]
-fn test_pipeline_request_supported_rejects_missing_messages() {
-    let body = serde_json::json!({"input":"hi"});
-    assert!(!pipeline_request_supported("/v1/chat/completions", &body));
-}
 
 #[test]
 fn legacy_lifecycle_paths_are_rejected_even_with_query_strings() {

@@ -41,7 +41,7 @@ use missing_model::route_missing_local_model;
 use missing_model::{has_local_unavailable_candidates, route_self_targeted_model};
 use rejection_telemetry::record_pre_routing_rejection;
 
-use crate::inference::{election, pipeline};
+use crate::inference::election;
 use crate::logging::{CallerPathType, OpenAiLifecycleAttachment, OpenAiRouteObserver};
 use crate::mesh;
 use crate::network::affinity;
@@ -66,7 +66,6 @@ use mesh_llm_events::{OutputEvent, emit_event};
 enum AutoRouteResolution {
     Continue {
         effective_model: Option<String>,
-        classification: Option<router::Classification>,
     },
     MediaUnsupported,
     WorkloadUnsupported(mesh::ModelWorkloadClass),
@@ -111,7 +110,6 @@ struct ProxyConnectionContext<'a> {
 
 struct AutoRouteDecision {
     effective_model: Option<String>,
-    classification: Option<router::Classification>,
     required_tokens: Option<u32>,
 }
 
@@ -239,7 +237,6 @@ fn explicit_model_route(
     }
     AutoRouteResolution::Continue {
         effective_model: Some(model.to_owned()),
-        classification: None,
     }
 }
 
@@ -317,7 +314,6 @@ async fn resolve_auto_routed_model(
     if body_json.is_none() && requested_workload.is_none() {
         return AutoRouteResolution::Continue {
             effective_model: None,
-            classification: None,
         };
     }
 
@@ -340,7 +336,6 @@ async fn resolve_auto_routed_model(
         automatic::ServingMode::PluginOverride if plugin_override_available => {
             return AutoRouteResolution::Continue {
                 effective_model: Some(automatic::DIRECTIVE.to_string()),
-                classification: None,
             };
         }
         automatic::ServingMode::PluginOverride => tracing::debug!(
@@ -375,8 +370,6 @@ async fn resolve_auto_routed_model(
 
     let classification = body_json.map_or_else(
         || router::Classification {
-            category: router::Category::Chat,
-            complexity: router::Complexity::Quick,
             needs_tools: false,
             has_media_inputs: is_audio_upload_path(&request.client_path)
                 || is_document_ocr_path(&request.client_path),
@@ -385,19 +378,11 @@ async fn resolve_auto_routed_model(
     );
 
     let effective_model = router::pick_model_classified(&classification, &available).map(|name| {
-        tracing::info!(
-            "router: {:?}/{:?} tools={} → {name}",
-            classification.category,
-            classification.complexity,
-            classification.needs_tools
-        );
+        tracing::info!("router: tools={} → {name}", classification.needs_tools);
         name.to_string()
     });
 
-    AutoRouteResolution::Continue {
-        effective_model,
-        classification: Some(classification),
-    }
+    AutoRouteResolution::Continue { effective_model }
 }
 
 /// Check workload-aware ingress readiness, including remote and local-startup fallbacks.
@@ -488,118 +473,6 @@ fn maybe_enable_auto_route_hooks(
     if let Some(model) = effective_model.filter(|name| !automatic::is_directive(name)) {
         proxy::rewrite_model_field(request, model);
     }
-}
-
-async fn try_pipeline_proxy(
-    node: &mesh::Node,
-    tcp_stream: &mut ClientStream,
-    request: &mut proxy::BufferedHttpRequest,
-    targets: &election::ModelTargets,
-    strong_name: &str,
-    route_observer: OpenAiRouteObserver<'_>,
-) -> Option<proxy::RouteDispatchOutcome> {
-    let (planner_name, planner_port, strong_port) = pipeline_local_ports(targets, strong_name)?;
-
-    request.ensure_body_json();
-    let Some(body_json) = request.body_json.clone() else {
-        warn_pipeline_fallback(strong_name);
-        return None;
-    };
-
-    // The pipeline proxy rebuilds the outbound strong-model request from the
-    // parsed JSON body rather than forwarding `request.raw` byte-for-byte, so
-    // the capsule nonce stabilized at ingress would otherwise be dropped. Read
-    // it back off `raw` and thread it onto the strong-model call so the
-    // downstream response echoes the same value the client expects.
-    let (client_nonce, nonce_origin) = request.capsule_nonce_headers();
-    let capsule_nonce = proxy::PipelineCapsuleNonce {
-        client_nonce,
-        nonce_origin,
-        observation_id: request.exchange_observation_id.clone(),
-        exchange_id: Some(request.request_id.as_uuid().to_string()),
-    };
-
-    tracing::info!("pipeline: {planner_name} (plan) → {strong_name} (execute)");
-    let result = proxy::pipeline_proxy_local(
-        tcp_stream,
-        &request.path,
-        body_json,
-        planner_port,
-        &planner_name,
-        strong_port,
-        node,
-        &capsule_nonce,
-        super::response::RouteAttemptLoggingContext {
-            request_id: request.request_id,
-            response_adapter: request.response_adapter,
-            retry_policy: super::response::ResponseRetryPolicy::next_target_available(false),
-            route_observer,
-            served_by: None,
-            peer_capsule_id: None,
-        },
-    )
-    .await;
-    match result {
-        proxy::PipelineProxyResult::PolicyDenied { status_code } => {
-            Some(proxy::RouteDispatchOutcome::PolicyDenied { status_code })
-        }
-        proxy::PipelineProxyResult::RequiredHookFailed => {
-            Some(proxy::RouteDispatchOutcome::RequiredHookFailed)
-        }
-        proxy::PipelineProxyResult::Responded(status) => {
-            Some(proxy::RouteDispatchOutcome::Responded(status))
-        }
-        proxy::PipelineProxyResult::RespondedWithUsage { status_code, usage } => {
-            Some(proxy::RouteDispatchOutcome::RespondedWithUsage {
-                status_code,
-                usage,
-                // The pipeline (planner+strong-model) proxy path does not yet
-                // forward response-body output digests; the primary
-                // host-served path (`route_model_request`) does. Honest
-                // absence here until the pipeline path threads them too.
-                output_digests: Default::default(),
-            })
-        }
-        proxy::PipelineProxyResult::Dropped => Some(proxy::RouteDispatchOutcome::Dropped(
-            "pipeline_response_write_failed",
-        )),
-        proxy::PipelineProxyResult::FallbackToDirect => {
-            warn_pipeline_fallback(strong_name);
-            None
-        }
-    }
-}
-
-fn pipeline_local_ports(
-    targets: &election::ModelTargets,
-    strong_name: &str,
-) -> Option<(String, u16, u16)> {
-    let (planner_name, planner_port) = targets
-        .targets
-        .iter()
-        .find(|(name, target_vec)| {
-            *name != strong_name
-                && target_vec
-                    .iter()
-                    .any(|target| matches!(target, election::InferenceTarget::Local(_)))
-        })
-        .and_then(|(name, target_vec)| {
-            target_vec.iter().find_map(|target| match target {
-                election::InferenceTarget::Local(port) => Some((name.clone(), *port)),
-                _ => None,
-            })
-        })?;
-    let strong_port = targets.targets.get(strong_name).and_then(|target_vec| {
-        target_vec.iter().find_map(|target| match target {
-            election::InferenceTarget::Local(port) => Some(*port),
-            _ => None,
-        })
-    })?;
-    Some((planner_name, planner_port, strong_port))
-}
-
-fn warn_pipeline_fallback(strong_name: &str) {
-    tracing::warn!("pipeline: falling back to direct proxy for {strong_name}");
 }
 
 /// Dispatch to a local plugin endpoint when it is the only route for this
@@ -1308,17 +1181,13 @@ async fn prepare_auto_route_decision(
     )
     .await
     {
-        AutoRouteResolution::Continue {
-            effective_model,
-            classification,
-        } => {
+        AutoRouteResolution::Continue { effective_model } => {
             maybe_enable_auto_route_hooks(request, effective_model.as_deref());
             if let Some(name) = effective_model.as_ref() {
                 ctx.node.record_request(name);
             }
             Ok(AutoRouteDecision {
                 effective_model,
-                classification,
                 required_tokens,
             })
         }
@@ -1418,27 +1287,6 @@ async fn maybe_handle_control_request(
     Err(tcp_stream)
 }
 
-fn pipeline_route_model<'a>(
-    request: &proxy::BufferedHttpRequest,
-    decision: &AutoRouteDecision,
-    routing_model: Option<&'a str>,
-) -> Option<&'a str> {
-    let use_pipeline = decision
-        .classification
-        .as_ref()
-        .map(pipeline::should_pipeline)
-        .unwrap_or(false)
-        && matches!(
-            request.response_adapter,
-            proxy::ResponseAdapter::None
-                | proxy::ResponseAdapter::OpenAiChatCompletionsJson
-                | proxy::ResponseAdapter::OpenAiChatCompletionsStream
-                | proxy::ResponseAdapter::AnthropicMessagesJson
-                | proxy::ResponseAdapter::AnthropicMessagesStream
-        );
-    use_pipeline.then_some(routing_model).flatten()
-}
-
 /// Which non-`route_request` dispatch kind, if any, this request will take —
 /// each one bypasses `route_request`'s own header enforcement entirely, so a
 /// caller holding `x-mesh-target`/`x-mesh-exclude` must reject before
@@ -1451,13 +1299,11 @@ fn pipeline_route_model<'a>(
 /// Virtual models are deliberately not covered here. Their manifest-backed
 /// dispatch stage rejects routing headers before invoking the owning plugin.
 fn mesh_routing_unsupported_dispatch_kind(
-    request: &proxy::BufferedHttpRequest,
+    _request: &proxy::BufferedHttpRequest,
     decision: &AutoRouteDecision,
-    routing_model: Option<&str>,
+    _routing_model: Option<&str>,
 ) -> Option<&'static str> {
-    if pipeline_route_model(request, decision, routing_model).is_some() {
-        Some("pipeline")
-    } else if decision.effective_model.is_none() {
+    if decision.effective_model.is_none() {
         Some("no model specified")
     } else {
         None
@@ -1466,7 +1312,7 @@ fn mesh_routing_unsupported_dispatch_kind(
 
 /// Enforce `x-mesh-target`/`x-mesh-exclude` before ANY dispatch decision is
 /// made -- not just the ordinary model-bearing path inside `route_request`.
-/// Pipeline and the model-less fallback both run before `route_request` ever
+/// The model-less fallback runs before `route_request` ever
 /// parses the headers, so a malformed header on one of those paths used to
 /// reach whatever status that dispatch kind happens to fail with instead of
 /// 400, and a *valid* header was silently ignored rather than being honored
@@ -1540,26 +1386,6 @@ async fn admit_buffered_api_request(
         &ctx.route.node.activity_policy_guard,
         ingress_type,
         lifecycle.route_observer(),
-    )
-    .await
-}
-
-async fn try_pipeline_route(
-    tcp_stream: &mut ClientStream,
-    request: &mut proxy::BufferedHttpRequest,
-    ctx: &IngressRouteContext<'_>,
-    decision: &AutoRouteDecision,
-    routing_model: Option<&str>,
-    route_observer: OpenAiRouteObserver<'_>,
-) -> Option<proxy::RouteDispatchOutcome> {
-    let strong_name = pipeline_route_model(request, decision, routing_model)?;
-    try_pipeline_proxy(
-        ctx.node,
-        tcp_stream,
-        request,
-        ctx.targets,
-        strong_name,
-        route_observer,
     )
     .await
 }

@@ -982,7 +982,7 @@ async fn test_api_proxy_integration_expect_continue() {
 // Was timing-dependent — expected the proxy to preserve a 1s inter-chunk delay,
 // but the proxy delivers both chunks immediately. The streaming delivery behavior
 // is already covered by test_api_proxy_translates_streaming_responses_events_incrementally
-// and test_api_proxy_integration_pipeline_streaming_response_arrives_incrementally.
+// and test_api_proxy_integration_agent_stream_arrives_incrementally.
 
 #[tokio::test]
 async fn test_api_proxy_translates_streaming_responses_events_incrementally() {
@@ -1145,9 +1145,8 @@ data: {"#,
 }
 
 #[tokio::test]
-async fn test_api_proxy_integration_pipeline_fallback_uses_direct_proxy() {
-    // Pipeline fallback test: when only one model is available, auto routes
-    // to it directly without attempting a pipeline plan.
+async fn test_api_proxy_integration_agent_request_uses_one_model() {
+    // Core routes agent requests directly to one concrete model.
     let strong_model = "Qwen2.5-Coder-32B-Instruct-Q4_K_M";
     let body = json!({
         "model": "auto",
@@ -1158,8 +1157,6 @@ async fn test_api_proxy_integration_pipeline_fallback_uses_direct_proxy() {
             {"type": "function", "function": {"name": "bash", "parameters": {"type": "object", "properties": {}}}}
         ]
     });
-    let classification = router::classify(&body);
-    assert!(pipeline::should_pipeline(&classification));
 
     let (strong_port, strong_rx, strong_handle) = spawn_capturing_upstream(r#"{"ok":true}"#).await;
 
@@ -1197,7 +1194,7 @@ async fn test_api_proxy_integration_pipeline_fallback_uses_direct_proxy() {
 
 #[tokio::test]
 async fn test_api_proxy_integration_pipeline_streaming_response_arrives_incrementally() {
-    // With a single model, pipeline is skipped (needs 2 local models).
+    // Structural tool requirements must not introduce a planning call.
     // This tests that a streaming agentic request still gets proxied correctly.
     let model = "Qwen2.5-Coder-32B-Instruct-Q4_K_M";
     let body = json!({
@@ -1210,8 +1207,6 @@ async fn test_api_proxy_integration_pipeline_streaming_response_arrives_incremen
             {"type": "function", "function": {"name": "bash", "parameters": {"type": "object", "properties": {}}}}
         ]
     });
-    let classification = router::classify(&body);
-    assert!(pipeline::should_pipeline(&classification));
 
     let (port, _rx, handle) = spawn_streaming_upstream(
         "text/event-stream",

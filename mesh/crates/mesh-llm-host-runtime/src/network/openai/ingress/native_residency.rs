@@ -15,7 +15,6 @@ pub(super) fn named_model_route(
     {
         AutoRouteResolution::Continue {
             effective_model: Some(model.to_owned()),
-            classification: None,
         }
     } else {
         explicit_model_route(request, model, descriptors)
