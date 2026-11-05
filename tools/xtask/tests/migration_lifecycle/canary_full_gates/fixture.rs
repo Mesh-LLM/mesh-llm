@@ -144,7 +144,7 @@ fi"#,
             .split_once("# Legacy workload automation selection ends.")
             .unwrap()
             .0;
-        let admission_marker = "if [[ ! \"$HARNESS_MODE\" =~ ^(repair|verify|repair-build|verify-build|pinned-build)$ ]]; then\n";
+        let admission_marker = "if [[ ! \"$HARNESS_MODE\" =~ ^(repair|verify|repair-build|verify-build|pinned-build|native-build)$ ]]; then\n";
         let admission_body = source
             .split_once(admission_marker)
             .unwrap()
@@ -168,6 +168,7 @@ JINJA_PROJECT="$TRUSTED_ROOT/ci/llama-canary/jinja"
 PIN_FILE="$ROOT/skippy/llama_cpp/upstream.txt"
 UPSTREAM_SHA={sha}
 LLAMA_STAGE_BUILD_DIR="$ROOT/native"
+LLAMA_STAGE_BACKEND=metal
 STATE_DIR="$ROOT"
 SYSTEMONE_SMOKE_DIR="$ROOT/target/skippy-system-one-smoke"
 PREPARE_LOG="$ROOT/prepare.log"

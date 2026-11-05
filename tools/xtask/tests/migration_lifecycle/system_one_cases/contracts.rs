@@ -206,7 +206,12 @@ if run_cases_against_stage contract family-qwen3-dense "$PWD/{file}" contract 12
 }
 
 fn document(path: &str) -> Node {
-    workflow_yaml::parse(&source(path)).unwrap()
+    let source = source(path);
+    if path == ".github/workflows/llama-canary-family-pass.yml" {
+        workflow_yaml::parse_resolved_aliases(&source).unwrap()
+    } else {
+        workflow_yaml::parse(&source).unwrap()
+    }
 }
 fn text<'a>(node: &'a Node, key: &str) -> &'a str {
     node.get(key).and_then(Node::text).unwrap()
@@ -355,6 +360,7 @@ materialize_verification_tree
 BUILD_LOG="$ROOT/build.log"
 STATE_DIR="$ROOT"
 HARNESS_MODE=verify-build
+LLAMA_STAGE_BACKEND=metal
 lipo() {{ printf 'arm64\n'; }}
 run_verification_logged() {{
  local label="$1"

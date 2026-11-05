@@ -24,14 +24,6 @@ on:
         description: Run the complete family roster even when the pin is unchanged
         type: boolean
         default: false
-      platform:
-        description: Certification platform pool — auto picks Linux when a family-certify runner is online, otherwise macOS
-        type: choice
-        options:
-          - auto
-          - macos
-          - linux
-        default: auto
 permissions:
   contents: read
   actions: read
@@ -53,10 +45,10 @@ jobs:
       certify: ${{ steps.resolve.outputs.certify }}
       mode: ${{ steps.resolve.outputs.mode }}
       publish_selected: ${{ steps.resolve.outputs.publish_selected }}
-      platform: ${{ steps.select_platform.outputs.platform }}
-      runner_profile: ${{ steps.select_platform.outputs.runner_profile }}
       runner_labels_128: ${{ steps.select_platform.outputs.runner_labels_128 }}
       runner_labels_256: ${{ steps.select_platform.outputs.runner_labels_256 }}
+      runner_labels_macos: ${{ steps.select_platform.outputs.runner_labels_macos }}
+      runner_labels_linux: ${{ steps.select_platform.outputs.runner_labels_linux }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -68,53 +60,15 @@ jobs:
           runner-profile: hosted-bare
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
-      - name: Select certification platform
+      - name: Select managed memory pools and native producers
         id: select_platform
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PLATFORM_INPUT: ${{ inputs.platform || 'auto' }}
         run: |
           set -euo pipefail
-          # One pass certifies on exactly one platform: the build produces a
-          # single native package and every self-hosted job must restore
-          # binaries that run on it. The platform is therefore chosen here,
-          # once, and the whole pass shares the emitted runner label sets.
-          platform=macos
-          if [[ -z "$PLATFORM_INPUT" ]]; then
-            PLATFORM_INPUT=auto
-          fi
-          if [[ "$PLATFORM_INPUT" == auto ]]; then
-            # Prefer the larger Linux certify pool when at least one matching
-            # runner is online. API failure keeps the macOS default rather
-            # than failing the certify.
-            runners_json="$(curl -fsS --max-time 15 -H "Authorization: Bearer ${GH_TOKEN:?}" \
-              "${GITHUB_API_URL:-https://api.github.com}/repos/${GITHUB_REPOSITORY}/actions/runners?per_page=100" 2>/dev/null || true)"
-            if [[ -n "$runners_json" ]]; then
-              linux_online="$(jq '[.runners[]
-                  | select(.status == "online"
-                    and (([.labels[].name] | index("family-certify")) != null)
-                    and (([.labels[].name] | index("accelerator-memory-128plus")) != null)
-                    and (([.labels[].name] | index("Linux")) != null))
-                ] | length' <<<"$runners_json" 2>/dev/null || true)"
-              if [[ "$linux_online" =~ ^[0-9]+$ ]] && (( linux_online > 0 )); then
-                platform=linux
-              fi
-            fi
-          elif [[ "$PLATFORM_INPUT" == linux || "$PLATFORM_INPUT" == macos ]]; then
-            platform="$PLATFORM_INPUT"
-          else
-            echo "unsupported platform: $PLATFORM_INPUT" >&2
-            exit 1
-          fi
-          case "$platform" in
-            macos) os_label=macOS; runner_profile=preinstalled-macos ;;
-            linux) os_label=Linux; runner_profile=preinstalled-linux ;;
-          esac
           {
-            echo "platform=$platform"
-            echo "runner_profile=$runner_profile"
-            echo "runner_labels_128=[\"self-hosted\", \"$os_label\", \"ARM64\", \"jy-managed\", \"family-certify\", \"accelerator-memory-128plus\"]"
-            echo "runner_labels_256=[\"self-hosted\", \"macOS\", \"ARM64\", \"jy-managed\", \"family-certify\", \"accelerator-memory-256plus\"]"
+            echo 'runner_labels_128=["self-hosted", "ARM64", "jy-managed", "family-certify", "accelerator-memory-128plus"]'
+            echo 'runner_labels_256=["self-hosted", "ARM64", "jy-managed", "family-certify", "accelerator-memory-256plus"]'
+            echo 'runner_labels_macos=["self-hosted", "macOS", "ARM64", "jy-managed", "family-certify", "accelerator-memory-128plus"]'
+            echo 'runner_labels_linux=["self-hosted", "Linux", "ARM64", "jy-managed", "family-certify", "accelerator-memory-128plus"]'
           } >> "$GITHUB_OUTPUT"
       - name: Select newest upstream release or prerelease, or explicit commit
         id: upstream
@@ -203,7 +157,7 @@ jobs:
           SCCACHE_GHA_ENABLED: 'false'
           SCCACHE_MULTILEVEL_CHAIN: disk
         with:
-          runner-profile: ${{ needs.resolve.outputs.runner_profile }}
+          runner-profile: ${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - uses: ./.github/actions/use-canary-cache
@@ -252,7 +206,8 @@ jobs:
     with:
       runner_labels_128: ${{ needs.resolve.outputs.runner_labels_128 }}
       runner_labels_256: ${{ needs.resolve.outputs.runner_labels_256 }}
-      runner_profile: ${{ needs.resolve.outputs.runner_profile }}
+      runner_labels_macos: ${{ needs.resolve.outputs.runner_labels_macos }}
+      runner_labels_linux: ${{ needs.resolve.outputs.runner_labels_linux }}
       source: ${{ needs.resolve.outputs.source }}
       upstream: ${{ needs.resolve.outputs.upstream }}
       mesh_source: ${{ needs.resolve.outputs.mesh_source }}
@@ -266,7 +221,8 @@ jobs:
     with:
       runner_labels_128: ${{ needs.resolve.outputs.runner_labels_128 }}
       runner_labels_256: ${{ needs.resolve.outputs.runner_labels_256 }}
-      runner_profile: ${{ needs.resolve.outputs.runner_profile }}
+      runner_labels_macos: ${{ needs.resolve.outputs.runner_labels_macos }}
+      runner_labels_linux: ${{ needs.resolve.outputs.runner_labels_linux }}
       source: ${{ needs.resolve.outputs.source }}
       upstream: ${{ needs.resolve.outputs.upstream }}
       mesh_source: ${{ needs.resolve.outputs.mesh_source }}
@@ -325,7 +281,8 @@ jobs:
     with:
       runner_labels_128: ${{ needs.resolve.outputs.runner_labels_128 }}
       runner_labels_256: ${{ needs.resolve.outputs.runner_labels_256 }}
-      runner_profile: ${{ needs.resolve.outputs.runner_profile }}
+      runner_labels_macos: ${{ needs.resolve.outputs.runner_labels_macos }}
+      runner_labels_linux: ${{ needs.resolve.outputs.runner_labels_linux }}
       source: ${{ needs.resolve.outputs.source }}
       upstream: ${{ needs.resolve.outputs.upstream }}
       pass_id: repair-2
@@ -342,7 +299,8 @@ jobs:
     with:
       runner_labels_128: ${{ needs.resolve.outputs.runner_labels_128 }}
       runner_labels_256: ${{ needs.resolve.outputs.runner_labels_256 }}
-      runner_profile: ${{ needs.resolve.outputs.runner_profile }}
+      runner_labels_macos: ${{ needs.resolve.outputs.runner_labels_macos }}
+      runner_labels_linux: ${{ needs.resolve.outputs.runner_labels_linux }}
       source: ${{ needs.resolve.outputs.source }}
       upstream: ${{ needs.resolve.outputs.upstream }}
       pass_id: verify-2
@@ -384,7 +342,8 @@ jobs:
     with:
       runner_labels_128: ${{ needs.resolve.outputs.runner_labels_128 }}
       runner_labels_256: ${{ needs.resolve.outputs.runner_labels_256 }}
-      runner_profile: ${{ needs.resolve.outputs.runner_profile }}
+      runner_labels_macos: ${{ needs.resolve.outputs.runner_labels_macos }}
+      runner_labels_linux: ${{ needs.resolve.outputs.runner_labels_linux }}
       source: ${{ needs.resolve.outputs.source }}
       upstream: ${{ needs.resolve.outputs.upstream }}
       pass_id: repair-3
@@ -401,7 +360,8 @@ jobs:
     with:
       runner_labels_128: ${{ needs.resolve.outputs.runner_labels_128 }}
       runner_labels_256: ${{ needs.resolve.outputs.runner_labels_256 }}
-      runner_profile: ${{ needs.resolve.outputs.runner_profile }}
+      runner_labels_macos: ${{ needs.resolve.outputs.runner_labels_macos }}
+      runner_labels_linux: ${{ needs.resolve.outputs.runner_labels_linux }}
       source: ${{ needs.resolve.outputs.source }}
       upstream: ${{ needs.resolve.outputs.upstream }}
       pass_id: verify-3

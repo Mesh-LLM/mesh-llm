@@ -1,5 +1,6 @@
-//! Parse arm64 Mach-O imports without executing an untrusted package binary.
+//! Inspect native arm64 imports without executing an untrusted package binary.
 use crate::command::DynResult;
+use goblin::elf::{Elf, header};
 use std::io::{Read, Seek, SeekFrom};
 
 fn read_at(
@@ -33,6 +34,9 @@ fn u64be(bytes: &[u8]) -> u64 {
 pub(super) fn inspect(reader: &mut (impl Read + Seek), start: u64, length: u64) -> DynResult<()> {
     let mut prefix = [0; 8];
     read_at(reader, start, length, 0, &mut prefix)?;
+    if prefix.starts_with(b"\x7fELF") {
+        return elf(reader, start, length);
+    }
     let magic = u32be(&prefix[..4]);
     match magic {
         0xcafebabe | 0xcafebabf => {
@@ -67,6 +71,40 @@ pub(super) fn inspect(reader: &mut (impl Read + Seek), start: u64, length: u64) 
         }
         _ => thin(reader, start, length),
     }
+}
+
+fn elf(reader: &mut (impl Read + Seek), start: u64, length: u64) -> DynResult<()> {
+    const MAX_ELF_BYTES: u64 = 512 * 1024 * 1024;
+    if length > MAX_ELF_BYTES {
+        return Err("certification ELF exceeds inspection bound".into());
+    }
+    let mut bytes = vec![0; usize::try_from(length)?];
+    read_at(reader, start, length, 0, &mut bytes)?;
+    let image = Elf::parse(&bytes)?;
+    if !image.is_64
+        || !image.little_endian
+        || image.header.e_machine != header::EM_AARCH64
+        || !matches!(image.header.e_type, header::ET_EXEC | header::ET_DYN)
+    {
+        return Err("not an arm64 Linux ELF executable".into());
+    }
+    if image.interpreter.is_some_and(|path| {
+        path != "/lib/ld-linux-aarch64.so.1" && path != "/lib64/ld-linux-aarch64.so.1"
+    }) || !image.rpaths.is_empty()
+        || !image.runpaths.is_empty()
+    {
+        return Err("ELF executable uses an unapproved loader or search path".into());
+    }
+    for library in image.libraries {
+        if library.is_empty()
+            || !library
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._+-".contains(&byte))
+        {
+            return Err("unsafe ELF dynamic dependency".into());
+        }
+    }
+    Ok(())
 }
 
 fn thin(reader: &mut (impl Read + Seek), start: u64, length: u64) -> DynResult<()> {
@@ -157,4 +195,28 @@ pub(super) fn test_binary(bytes: &[u8]) -> DynResult<std::path::PathBuf> {
         return Err("expected exactly one prebuilt skippy_serving library-test artifact".into());
     }
     Ok(selected.remove(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn arm64_elf() -> Vec<u8> {
+        let mut bytes = vec![0; 64];
+        bytes[..16].copy_from_slice(b"\x7fELF\x02\x01\x01\0\0\0\0\0\0\0\0\0");
+        bytes[16..18].copy_from_slice(&2_u16.to_le_bytes());
+        bytes[18..20].copy_from_slice(&header::EM_AARCH64.to_le_bytes());
+        bytes[20..24].copy_from_slice(&1_u32.to_le_bytes());
+        bytes[52..54].copy_from_slice(&64_u16.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn elf_accepts_arm64_and_rejects_foreign_architecture() {
+        let mut bytes = arm64_elf();
+        assert!(inspect(&mut Cursor::new(&bytes), 0, bytes.len() as u64).is_ok());
+        bytes[18..20].copy_from_slice(&header::EM_X86_64.to_le_bytes());
+        assert!(inspect(&mut Cursor::new(&bytes), 0, bytes.len() as u64).is_err());
+    }
 }

@@ -51,11 +51,13 @@ pub(crate) fn verify_package(
     let plan_bytes = std::fs::read(package.join("plan.json"))?;
     let plan = plan_from_captured(&plan_bytes, &identity)?;
 
-    if !identity
-        .get("schema")
-        .is_some_and(|schema| schema.as_u64() == Some(3))
-        || identity.get("platform").and_then(Value::as_str) != Some("macos-arm64-metal")
-    {
+    let platform = identity.get("platform").and_then(Value::as_str);
+    let schema = identity.get("schema").and_then(Value::as_u64);
+    if !matches!(
+        (schema, platform),
+        (Some(3), Some("macos-arm64-metal" | "linux-arm64-cuda"))
+            | (Some(4), Some("macos-arm64-metal+linux-arm64-cuda"))
+    ) {
         return Err(package_identity_error("unknown build identity"));
     }
 
@@ -99,6 +101,20 @@ pub(crate) fn verify_package(
 
     for (name, key) in ARTIFACTS {
         verify_artifact(package, &identity, name, key)?;
+    }
+    if schema == Some(4) {
+        verify_artifact(
+            package,
+            &identity,
+            "linux-binaries.tar",
+            "linux_binaries_sha256",
+        )?;
+        verify_artifact(
+            package,
+            &identity,
+            "linux-workload-oracles.tar",
+            "linux_workload_oracles_sha256",
+        )?;
     }
     if optional_digest(&identity, "summary_sha256")?.is_some() {
         verify_artifact(package, &identity, "upstream-summary.md", "summary_sha256")?;

@@ -119,7 +119,7 @@ fn admission(job: &Node, consumer: &str) -> DynResult<()> {
 mod tests {
     use super::*;
     fn workflow() -> Node {
-        super::super::workflow_yaml::parse(include_str!(
+        super::super::workflow_yaml::parse_resolved_aliases(include_str!(
             "../../../../../.github/workflows/llama-canary-family-pass.yml"
         ))
         .unwrap()

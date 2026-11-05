@@ -281,6 +281,20 @@ pub(super) fn binaries(path: &Path) -> DynResult<()> {
     Ok(())
 }
 
+pub(super) fn binaries_for(path: &Path, linux: bool) -> DynResult<()> {
+    binaries(path)?;
+    let mut file = File::open(path)?;
+    for member in scan(&mut file)?.values() {
+        file.seek(SeekFrom::Start(member.start))?;
+        let mut magic = [0; 4];
+        file.read_exact(&mut magic)?;
+        if magic.starts_with(b"\x7fELF") != linux {
+            return Err("certification executable format differs from platform identity".into());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[path = "archive_stream_tests.rs"]
 mod stream_tests;

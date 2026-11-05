@@ -22,18 +22,28 @@ pub(super) fn check(workflows: &BTreeMap<String, Node>) -> DynResult<()> {
         build,
         "github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main'",
     )?;
-    build_handoffs(build)?;
+    build_handoffs(build, "macOS")?;
+    let linux = h::job(document, "build_linux")?;
+    h::needs(linux, &["build"])?;
+    h::binding(
+        h::member(linux, "env")?,
+        "NATIVE_BUILD_MODE",
+        "native-build",
+    )?;
+    build_handoffs(linux, "Linux")?;
+    let combine = h::job(document, "combine")?;
+    h::needs(combine, &["build", "build_linux"])?;
     worker(h::job(document, "family")?)?;
     let aggregate = h::job(document, "aggregate")?;
     super::canary_execution::aggregate(aggregate)?;
-    h::needs(aggregate, &["build", "family"])?;
+    h::needs(aggregate, &["combine", "family"])?;
     h::condition(
         aggregate,
-        "${{ !cancelled() && needs.build.result == 'success' }}",
+        "${{ !cancelled() && needs.combine.result == 'success' }}",
     )?;
     let (_, admission) = h::step(h::steps(aggregate)?, "id", "aggregate")?;
     let env = h::member(admission, "env")?;
-    h::binding(env, "IDENTITY", "${{ needs.build.outputs.identity }}")?;
+    h::binding(env, "IDENTITY", "${{ needs.combine.outputs.identity }}")?;
     h::binding(env, "FAMILY_RESULT", "${{ needs.family.result }}")?;
     classified_outputs(aggregate, "aggregate")?;
     classified_outputs(h::job(document, "reconcile")?, "reconcile")?;
@@ -78,7 +88,7 @@ fn classified_outputs(job: &Node, id: &str) -> DynResult<()> {
         )
     };
     let identity = format!(
-        "llama-family-{kind}-${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}-${{{{ inputs.pass_id }}}}-${{{{ needs.build.outputs.identity }}}}"
+        "llama-family-{kind}-${{{{ github.run_id }}}}-${{{{ github.run_attempt }}}}-${{{{ inputs.pass_id }}}}-${{{{ needs.combine.outputs.identity }}}}"
     );
     h::binding(outputs, "feedback", &identity)?;
     let steps = h::steps(job)?;
@@ -100,7 +110,7 @@ fn classified_outputs(job: &Node, id: &str) -> DynResult<()> {
 
 fn classified_recheck(document: &Node) -> DynResult<()> {
     let retry = h::job(document, "retry_family")?;
-    h::needs(retry, &["build", "aggregate"])?;
+    h::needs(retry, &["combine", "aggregate"])?;
     h::condition(
         retry,
         "${{ !cancelled() && needs.aggregate.outputs.state == 'infrastructure_retryable' }}",
@@ -113,11 +123,11 @@ fn classified_recheck(document: &Node) -> DynResult<()> {
     h::binding(
         h::member(retry, "env")?,
         "IDENTITY",
-        "${{ needs.build.outputs.identity }}",
+        "${{ needs.combine.outputs.identity }}",
     )?;
     super::canary_execution::retry_worker(retry)?;
     let reconcile = h::job(document, "reconcile")?;
-    h::needs(reconcile, &["build", "aggregate", "retry_family"])?;
+    h::needs(reconcile, &["combine", "aggregate", "retry_family"])?;
     h::condition(
         reconcile,
         "${{ !cancelled() && needs.aggregate.outputs.state == 'infrastructure_retryable' }}",
@@ -132,7 +142,7 @@ fn classified_recheck(document: &Node) -> DynResult<()> {
     h::binding(
         h::member(command, "env")?,
         "IDENTITY",
-        "${{ needs.build.outputs.identity }}",
+        "${{ needs.combine.outputs.identity }}",
     )?;
     h::binding(
         h::member(command, "env")?,
@@ -165,7 +175,7 @@ fn reconciliation_downloads(steps: &[Node], execute: usize) -> DynResult<()> {
     for (key, identity, path) in [
         (
             "name",
-            "${{ needs.build.outputs.package }}",
+            "${{ needs.combine.outputs.package }}",
             "${{ runner.temp }}/reconcile-input",
         ),
         (
@@ -175,7 +185,7 @@ fn reconciliation_downloads(steps: &[Node], execute: usize) -> DynResult<()> {
         ),
         (
             "pattern",
-            "llama-family-retry-${{ github.run_id }}-${{ needs.build.outputs.identity }}-*-${{ inputs.pass_id }}-*",
+            "llama-family-retry-${{ github.run_id }}-${{ needs.combine.outputs.identity }}-*-${{ inputs.pass_id }}-*",
             "${{ runner.temp }}/retry-evidence",
         ),
     ] {
@@ -184,7 +194,7 @@ fn reconciliation_downloads(steps: &[Node], execute: usize) -> DynResult<()> {
     Ok(())
 }
 
-fn build_handoffs(build: &Node) -> DynResult<()> {
+fn build_handoffs(build: &Node, platform: &str) -> DynResult<()> {
     let steps = h::steps(build)?;
     let controller = h::checkout(steps, "${{ inputs.source }}", None)?;
     let selected = h::checkout(steps, "${{ inputs.mesh_source }}", Some("canary-source"))?;
@@ -196,14 +206,14 @@ fn build_handoffs(build: &Node) -> DynResult<()> {
     h::before(prepare, execute)?;
     let env = h::member(command, "env")?;
     for (key, value) in [
-        ("CANARY_HARNESS_MODE", "${{ inputs.mode }}"),
+        ("CANARY_HARNESS_MODE", "${{ env.NATIVE_BUILD_MODE }}"),
         ("CANARY_PASS_ID", "${{ inputs.pass_id }}"),
         ("UPSTREAM_SHA_INPUT", "${{ inputs.upstream }}"),
         (
             "CANARY_PREVIOUS_IDENTITY",
-            "${{ inputs.previous_identity }}",
+            "${{ env.NATIVE_PREVIOUS_IDENTITY }}",
         ),
-        ("CANARY_CANDIDATE_SHA", "${{ inputs.previous_head }}"),
+        ("CANARY_CANDIDATE_SHA", "${{ env.NATIVE_PREVIOUS_HEAD }}"),
         (
             "CANARY_BUILD_SOURCE_REVISION",
             "${{ inputs.mesh_source || inputs.source }}",
@@ -218,11 +228,11 @@ fn build_handoffs(build: &Node) -> DynResult<()> {
         ),
         (
             "CANARY_PREVIOUS_PACKAGE",
-            "${{ inputs.previous_package != '' && format('{0}/canary-previous-{1}', runner.temp, inputs.pass_id) || '' }}",
+            "${{ env.NATIVE_PREVIOUS_PACKAGE != '' && format('{0}/canary-previous-{1}', runner.temp, inputs.pass_id) || '' }}",
         ),
         (
             "CANARY_PREVIOUS_FEEDBACK",
-            "${{ inputs.previous_feedback != '' && format('{0}/canary-feedback-{1}', runner.temp, inputs.pass_id) || '' }}",
+            "${{ env.NATIVE_PREVIOUS_FEEDBACK != '' && format('{0}/canary-feedback-{1}', runner.temp, inputs.pass_id) || '' }}",
         ),
     ] {
         h::binding(env, key, value)?;
@@ -259,23 +269,27 @@ fn build_handoffs(build: &Node) -> DynResult<()> {
         h::binding(outputs, key, value)?;
     }
     let package = "llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ steps.build.outputs.identity_sha256 }}";
-    h::binding(outputs, "package", package)?;
+    h::binding(outputs, "package", &format!("{package}-{platform}"))?;
     let (upload, step) = h::step(steps, "id", "upload_package")?;
     h::before(execute, upload)?;
-    h::binding(h::member(step, "with")?, "name", package)
+    h::binding(
+        h::member(step, "with")?,
+        "name",
+        &format!("{package}-${{{{ runner.os }}}}"),
+    )
 }
 
 fn worker(job: &Node) -> DynResult<()> {
-    h::needs(job, &["build"])?;
+    h::needs(job, &["combine"])?;
     let strategy = h::member(job, "strategy")?;
     h::binding(
         strategy,
         "matrix",
-        "${{ fromJSON(needs.build.outputs.matrix) }}",
+        "${{ fromJSON(needs.combine.outputs.matrix) }}",
     )?;
     h::binding(strategy, "fail-fast", "false")?;
     let env = h::member(job, "env")?;
-    h::binding(env, "IDENTITY", "${{ needs.build.outputs.identity }}")?;
+    h::binding(env, "IDENTITY", "${{ needs.combine.outputs.identity }}")?;
     h::binding(
         env,
         "CANARY_SOURCE_ROOT",
@@ -308,7 +322,7 @@ fn worker(job: &Node) -> DynResult<()> {
     h::binding(
         h::member(download.1, "with")?,
         "name",
-        "${{ needs.build.outputs.package }}",
+        "${{ needs.combine.outputs.package }}",
     )?;
     h::binding(h::member(download.1, "with")?, "path", "${{ env.PACKAGE }}")?;
     h::before(download.0, restore)?;
@@ -356,7 +370,7 @@ fn worker(job: &Node) -> DynResult<()> {
 mod tests {
     use super::*;
     fn document() -> Node {
-        super::super::workflow_yaml::parse(include_str!(
+        super::super::workflow_yaml::parse_resolved_aliases(include_str!(
             "../../../../../.github/workflows/llama-canary-family-pass.yml"
         ))
         .unwrap()
@@ -384,7 +398,7 @@ mod tests {
             ),
             (
                 vec!["jobs", "family", "env", "IDENTITY"],
-                "${{ needs.build.outputs.head }}",
+                "${{ needs.combine.outputs.head }}",
             ),
             (
                 vec!["jobs", "family", "strategy", "matrix"],
@@ -452,11 +466,11 @@ mod tests {
             (vec!["jobs", "retry_family", "if"], "true"),
             (
                 vec!["jobs", "retry_family", "strategy", "matrix"],
-                "${{ needs.build.outputs.matrix }}",
+                "${{ needs.combine.outputs.matrix }}",
             ),
             (
                 vec!["jobs", "retry_family", "env", "IDENTITY"],
-                "${{ needs.build.outputs.head }}",
+                "${{ needs.combine.outputs.head }}",
             ),
             (vec!["jobs", "reconcile", "if"], "true"),
         ] {

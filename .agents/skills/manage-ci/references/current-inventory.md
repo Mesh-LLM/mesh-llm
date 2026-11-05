@@ -190,10 +190,10 @@ read before selecting: the feed is ordered by creation time, so a draft created
 long ago but published recently is on a late page, and the 180-second budget and
 1000-page ceiling bound the walk. It records the release kind, publication time,
 tag and commit in the Actions summary and rejects lookup failures or tag movement
-without falling back to `master`. The hosted upstream and platform-selection
-steps receive the workflow's read-only GitHub token through `GH_TOKEN`.
-It cannot list repository runners, so `platform=auto` falls back to macOS;
-Linux requires explicit `platform=linux`. Workers receive no GitHub token.
+without falling back to `master`. The hosted upstream selection step receives
+the workflow's read-only GitHub token through `GH_TOKEN`.
+Runner placement uses managed memory labels without a runner API query. Workers
+receive no GitHub token.
 Fixed read-only GraphQL queries fetch metadata without release assets, and
 REST resolves the selected tag. The lookup
 has a 180-second total budget, 1 MiB per response and a 1000-page ceiling;
@@ -283,7 +283,8 @@ pipeline. Packages bind both the controller and selected base; changed candidate
 must be direct children of that base with an admitted bundle. Certify modes still
 reject upstream overrides and preserve the selected commit unchanged.
 
-`llama-canary-family-pass.yml` owns the reusable build → family matrix → hosted
+`llama-canary-family-pass.yml` owns the reusable macOS build → Linux native
+build → hosted package combination → memory-tier family matrix → hosted
 aggregate. The protected controller prepares automation and invokes `canary-receipts build`
 with frozen controller/selected revisions, pass identity, budgets and previous-package admission.
 Package Git probes capture exact raw stdout with a 4 MiB ceiling before parsing
@@ -305,9 +306,10 @@ builds, generated-family validation, smoke, and split-roster checks. It validate
 the immutable HF cache before compilation and exports a candidate Git bundle,
 one-family-per-shard plan, five arm64 certification binaries, a prebuilt
 multimodal library-test executable, and the run-scoped CPU workload oracle
-closure built by `just skippy-workload-oracles-build`. Static Metal resources
-are embedded; an unpackaged non-system dylib makes the handoff fail. SHA-256
-digests bind all handoff bytes to the candidate, main base, run/attempt, and
+closure built by `just skippy-workload-oracles-build` on each OS. Static Metal
+resources are embedded; an unpackaged non-system dylib or unsafe Linux ELF
+loader path makes the handoff fail. SHA-256 digests bind both native payloads
+to the candidate, main base, run/attempt, and
 pass identity.
 The native generator defaults to 600 seconds per whole-source rewriter pass,
 independently of its 60-second Git command budget. `--timeout` overrides both.
@@ -887,13 +889,12 @@ builds and long test phases. Remote cache configuration is preserved. It never
 stops the default host server. Canary toolchain
 verification only sets cache identity; accelerator setup owns server startup.
 
-Persistent canary preflight, build, family and infrastructure-retry jobs use
-resolver-selected macOS or Linux profiles. Managed labels retain `self-hosted`,
-`ARM64`, `jy-managed` and `family-certify`. The selected OS applies to
-preflight/build and the `accelerator-memory-128plus` tier; the 256-plus tier
-remains macOS-only. The macOS JY policies select Apple M1 Ultra 128 GiB and
-Apple M3 Ultra 256 GiB with mounted model storage; both carry 128-plus, and only
-the M3 carries 256-plus. Runner groups allow only the two canary workflows at
+Persistent canary jobs use the profile matching their runner OS. Managed labels
+retain `self-hosted`, `ARM64`, `jy-managed` and `family-certify`. Preflight and
+family jobs request only their memory tier; the two native producers also
+request their OS. The JY policies select eligible hardware with mounted model
+storage, and only eligible 256 GiB hosts carry the 256-plus label. Runner groups
+allow only the two canary workflows at
 protected `main` references. Jobs queue if managed capacity is absent.
 These jobs run `setup-canary-runner` before `prepare-automation` with the
 resolver-selected `preinstalled-macos` or `preinstalled-linux` profile.
