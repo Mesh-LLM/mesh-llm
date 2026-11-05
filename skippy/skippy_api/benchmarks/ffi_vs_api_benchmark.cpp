@@ -23,6 +23,7 @@
 #include "llama/model_inventory.h"
 #include "llama/stage_chain.h"
 #include "normalize.h"
+#include "recurrent_rollback.h"
 #include "rerank.h"
 #include "runtime.h"
 #include "stage_load.h"
@@ -1596,23 +1597,27 @@ BENCHMARK(causal_scores_ffi)->Name("causal_scores/FFI")->Arg(64)->UseRealTime();
 BENCHMARK(causal_scores_api)->Name("causal_scores/API")->Arg(64)->UseRealTime();
 
 // ---------------------------------------------------------------------------
-// expert_placement: routed-expert host placement knob (patch 0013).
+// Staged-open knobs: routed-expert host placement (patch 0013) and the
+// recurrent rollback depth (patch 0015).
 //
-// FFI hand-assembles the skippy_runtime_config - including the
-// host_expert_layer_start/end pair - and opens through skippy_model_open;
-// API sets StageSpec::host_experts and opens through StagedModel::open. Both
-// sides open the same planned stage with the same block range and embed the
-// same window, so the ratio isolates the boundary, and the byte-identical
-// gate proves the knob crosses it without changing outputs. Dense fixtures
-// have no ffn_*_exps tensors, so placement is inert on them; positive
-// routed-expert coverage needs a MoE GGUF.
+// FFI hand-assembles the skippy_runtime_config - including the knob fields -
+// and opens through skippy_model_open; API sets the matching StageSpec
+// member and opens through StagedModel::open. Both sides open the same
+// planned stage and read the same window, so the ratio isolates the
+// boundary, and the byte-identical gate proves each knob crosses it without
+// changing outputs. Dense fixtures have no ffn_*_exps tensors and no
+// recurrent state, so both knobs are inert on them; positive coverage needs
+// a MoE / recurrent GGUF.
 // ---------------------------------------------------------------------------
 
-class ExpertPlacementBench {
+class StagedKnobBench {
 public:
-    ExpertPlacementBench() = default;
-    ExpertPlacementBench(const ExpertPlacementBench&) = delete;
-    ExpertPlacementBench& operator=(const ExpertPlacementBench&) = delete;
+    StagedKnobBench() = default;
+    StagedKnobBench(const StagedKnobBench&) = delete;
+    StagedKnobBench& operator=(const StagedKnobBench&) = delete;
+
+    enum class Knob { kHostExperts, kRollbackDepth };
+    explicit StagedKnobBench(Knob knob) noexcept : knob_{knob} {}
 
     [[nodiscard]] bool setup(const std::string& path, std::string& error) {
         path_ = path;
@@ -1636,7 +1641,12 @@ public:
         }
         lease_ = std::move(*lease);
         spec_ = skippy::llama::own(lease_.configs.front());
-        spec_.host_experts = skippy::LayerRange{0, layers_};
+        if (knob_ == Knob::kHostExperts) {
+            spec_.host_experts = skippy::LayerRange{0, layers_};
+        } else {
+            // One snapshot per speculative window token, at the window cap.
+            spec_.recurrent_rollback = skippy::RollbackTokens::from_planned(64);
+        }
 
         auto source = skippy::llama::StagedModel::open(path, spec_);
         if (!source) {
@@ -1687,8 +1697,13 @@ public:
         config.stage_index = spec_.stage_index;
         config.layer_start = spec_.layers.start;
         config.layer_end = spec_.layers.end;
-        config.host_expert_layer_start = 0;
-        config.host_expert_layer_end = layers_;
+        if (knob_ == Knob::kHostExperts) {
+            config.host_expert_layer_start = 0;
+            config.host_expert_layer_end = layers_;
+        } else {
+            // Matches the API arm's RollbackTokens::from_planned(64).
+            config.recurrent_rollback_tokens = 64;
+        }
         config.ctx_size = 512;
         config.n_batch = 512;
         config.n_ubatch = 512;
@@ -1851,17 +1866,19 @@ private:
     Scores api_scores_{};
     Scores reference_{};
     std::int32_t layers_ = 0;
+    Knob knob_ = Knob::kHostExperts;
 };
 
-/// Shared setup + agreement gates, then the timed placed-open + readout loop.
-void expert_placement_body(benchmark::State& state, bool use_ffi) {
+/// Shared setup + agreement gates, then the timed knob-open + readout loop.
+void staged_open_knob_body(benchmark::State& state, bool use_ffi, StagedKnobBench::Knob knob,
+                           std::string_view case_name) {
     const char* variable = std::getenv("SKIPPY_BENCH_MODEL");
     if (variable == nullptr || *variable == '\0') {
         state.SkipWithError("SKIPPY_BENCH_MODEL is not set");
         return;
     }
 
-    ExpertPlacementBench bench;
+    StagedKnobBench bench{knob};
     std::string error;
     if (!bench.setup(variable, error)) {
         state.SkipWithError(error.c_str());
@@ -1877,7 +1894,7 @@ void expert_placement_body(benchmark::State& state, bool use_ffi) {
                            bench.reference().size() * sizeof(float)) == 0;
     };
     if (!bench.step_ffi(error) || !bench.step_api(error) || !same()) {
-        state.SkipWithError(error.empty() ? "expert_placement sides disagree" : error.c_str());
+        state.SkipWithError(error.empty() ? std::string{case_name} + " sides disagree" : error);
         return;
     }
 
@@ -1889,8 +1906,8 @@ void expert_placement_body(benchmark::State& state, bool use_ffi) {
     }
     // A mid-run divergence must fail the row, not just the first iteration.
     if (!bench.step_ffi(error) || !bench.step_api(error) || !same()) {
-        state.SkipWithError(error.empty() ? "expert_placement sides diverged during the run"
-                                          : error.c_str());
+        state.SkipWithError(
+            error.empty() ? std::string{case_name} + " sides diverged during the run" : error);
         return;
     }
 
@@ -1898,11 +1915,25 @@ void expert_placement_body(benchmark::State& state, bool use_ffi) {
     state.SetLabel(std::to_string(bench.layers()) + " blocks, knob on");
 }
 
-void expert_placement_ffi(benchmark::State& state) { expert_placement_body(state, true); }
-void expert_placement_api(benchmark::State& state) { expert_placement_body(state, false); }
+void expert_placement_ffi(benchmark::State& state) {
+    staged_open_knob_body(state, true, StagedKnobBench::Knob::kHostExperts, "expert_placement");
+}
+void expert_placement_api(benchmark::State& state) {
+    staged_open_knob_body(state, false, StagedKnobBench::Knob::kHostExperts, "expert_placement");
+}
 
 BENCHMARK(expert_placement_ffi)->Name("expert_placement/FFI")->UseRealTime();
 BENCHMARK(expert_placement_api)->Name("expert_placement/API")->UseRealTime();
+
+void rollback_depth_ffi(benchmark::State& state) {
+    staged_open_knob_body(state, true, StagedKnobBench::Knob::kRollbackDepth, "rollback_depth");
+}
+void rollback_depth_api(benchmark::State& state) {
+    staged_open_knob_body(state, false, StagedKnobBench::Knob::kRollbackDepth, "rollback_depth");
+}
+
+BENCHMARK(rollback_depth_ffi)->Name("rollback_depth/FFI")->UseRealTime();
+BENCHMARK(rollback_depth_api)->Name("rollback_depth/API")->UseRealTime();
 
 // Our own main so a missing model is one line on stderr, and the llama-free
 // benchmarks still run: BatchBuild and Normalize need no GGUF.

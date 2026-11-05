@@ -309,6 +309,27 @@ impl Runtime {
         Ok(StagedModel { runtime: self, handle: result.model })
     }
 
+    /// Opens stage `index` of a `stages`-way split with `rollback` planned
+    /// rollback snapshots per sequence for in-place speculative verify
+    /// (patch 0015): how many prior recurrent states the context keeps so a
+    /// rejected draft rewinds without a refill. The depth is clamped into
+    /// the loader's [2, 64] window, and `None` keeps the native default (2).
+    /// Dense models ignore the knob; only recurrent/hybrid families read it.
+    pub fn load_stage_with_rollback_depth(
+        &self,
+        path: &str,
+        stages: u32,
+        index: u32,
+        rollback: Option<u32>,
+    ) -> Result<StagedModel<'_>, StageError> {
+        let depth = rollback.unwrap_or(0);
+        let result = self.lock().pin_mut().load_staged_model_rollback(path, stages, index, depth);
+        if !result.ok || result.model.is_null() {
+            return Err(StageError::Rejected(result.error));
+        }
+        Ok(StagedModel { runtime: self, handle: result.model })
+    }
+
     /// Checks that the stages of `path` form one contiguous, handover-clean chain.
     pub fn validate_stage_chain(&self, path: &str, stages: u32) -> Result<(), ChainError> {
         let result = self.lock().validate_chain(path, stages);

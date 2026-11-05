@@ -15,6 +15,8 @@
 
 #include "stage_plan.h"
 
+#include "recurrent_rollback.h"
+
 #include <cstdint>
 #include <expected>
 #include <string>
@@ -64,6 +66,12 @@ struct StageLoadConfig {
         /// open` validates it and refuses to forward a range the native
         /// loader would silently drop.
         LayerRange host_experts;
+        /// Caller policy, never plan output: rollback snapshots the recurrent
+        /// state context keeps per sequence for in-place speculative verify
+        /// (patch 0015), sized from the caller's speculative plan. Clamped to
+        /// [2, 64] by construction; the default (2) matches the native field
+        /// left at 0. `SKIPPY_RS_SEQ` still overrides either, natively.
+        RollbackTokens recurrent_rollback;
         std::string execution_contract;
         std::vector<std::string> resident_identities;
         std::vector<std::string> import_identities;

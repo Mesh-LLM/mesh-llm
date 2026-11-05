@@ -305,6 +305,18 @@ pub mod ffi {
             host_end: i32,
         ) -> StagedModelResult;
 
+        /// Opens stage `index` of `stages` with `rollback` planned rollback
+        /// snapshots per sequence for speculative verify (patch 0015); the
+        /// value is clamped into the loader's [2, 64] window, and 0 keeps
+        /// the native default (2).
+        fn load_staged_model_rollback(
+            self: Pin<&mut Bridge>,
+            path: &str,
+            stages: u32,
+            index: u32,
+            rollback: u32,
+        ) -> StagedModelResult;
+
         /// Opens a session on a stage.
         fn create_staged_session(self: Pin<&mut Bridge>, model: &StagedModel) -> StagedSessionResult;
 

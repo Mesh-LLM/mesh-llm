@@ -334,6 +334,28 @@ fn host_expert_placement_matches_a_plain_staged_open_on_dense_models() {
 }
 
 #[test]
+fn rollback_depth_matches_a_plain_staged_open_on_dense_models() {
+    // Patch 0015: a deeper rollback window must not change what a dense
+    // model computes - the knob sizes speculative-verify snapshots, never
+    // the arithmetic. 65 also proves the [2, 64] clamp lets an oversized
+    // plan open instead of being rejected at the boundary.
+    let Some(path) = model_path("SKIPPY_TEST_CAUSAL") else { return };
+    let runtime = Runtime::new().unwrap();
+
+    let plain = runtime.load_stage(&path, 1, 0).expect("plain stage");
+    let mut plain_session = plain.create_session().unwrap();
+    let tokens = [Token(1), Token(2), Token(3)];
+    let selected = [Token(2), Token(1), Token(3)];
+    let reference = plain_session.read_selected_log_probs(&tokens, &selected).expect("plain readout");
+
+    let deep = runtime.load_stage_with_rollback_depth(&path, 1, 0, Some(65)).expect("deep rollback stage");
+    let mut deep_session = deep.create_session().unwrap();
+    let deep_scores = deep_session.read_selected_log_probs(&tokens, &selected).expect("deep readout");
+
+    assert_eq!(reference, deep_scores);
+}
+
+#[test]
 fn host_expert_placement_rejects_malformed_ranges_with_a_reason() {
     // The native loader silently drops a malformed placement range; the
     // facade must reject it with the rule it broke instead.
