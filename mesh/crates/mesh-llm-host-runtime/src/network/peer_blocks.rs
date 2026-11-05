@@ -13,6 +13,10 @@
 //! re-blocking over a plugin's block takes it over. Every change is published
 //! once as a [`RoutingChoice`] on [`ROUTING_CHOICE_CHANNEL`] to the local
 //! plugins that declare it. The host keeps no ranking and no history.
+//!
+//! When `[receipts] audit` is on, a peer whose receipt audit fails is blocked
+//! for seven days with `receipts` as its requester and the failure, with
+//! the path of its evidence, as its reason.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -51,6 +55,9 @@ pub(crate) enum BlockLength {
 pub(crate) enum Requester {
     Operator,
     Plugin(String),
+    /// This node's receipt audits, after a peer's audit failed
+    /// (`network::receipt_audit`).
+    Receipts,
 }
 
 impl fmt::Display for Requester {
@@ -58,6 +65,7 @@ impl fmt::Display for Requester {
         match self {
             Self::Operator => f.write_str("operator"),
             Self::Plugin(id) => write!(f, "plugin:{id}"),
+            Self::Receipts => f.write_str("receipts"),
         }
     }
 }
@@ -74,6 +82,7 @@ impl<'de> Deserialize<'de> for Requester {
         match text.strip_prefix("plugin:") {
             Some(id) if !id.is_empty() => Ok(Self::Plugin(id.to_string())),
             _ if text == "operator" => Ok(Self::Operator),
+            _ if text == "receipts" => Ok(Self::Receipts),
             _ => Err(serde::de::Error::custom(format!(
                 "unknown requester `{text}`"
             ))),

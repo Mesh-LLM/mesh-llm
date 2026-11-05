@@ -159,6 +159,10 @@ pub struct CompletionResponse {
     pub usage: Usage,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timings: Option<BTreeMap<String, Value>>,
+    /// The turn's inference receipt, when the request asked for one with
+    /// `x-receipt-client-key` and the serving node issues receipts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<Value>,
 }
 
 impl CompletionResponse {
@@ -185,11 +189,17 @@ impl CompletionResponse {
             }],
             usage,
             timings: None,
+            receipt: None,
         }
     }
 
     pub fn with_timings(mut self, timings: Option<BTreeMap<String, Value>>) -> Self {
         self.timings = timings;
+        self
+    }
+
+    pub fn with_receipt(mut self, receipt: Option<Value>) -> Self {
+        self.receipt = receipt;
         self
     }
 }
@@ -241,6 +251,10 @@ pub struct CompletionChunk {
     pub usage: Option<Usage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timings: Option<BTreeMap<String, Value>>,
+    /// The turn's inference receipt, when the request asked for one with
+    /// `x-receipt-client-key` and the serving node issues receipts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<Value>,
 }
 
 impl CompletionChunk {
@@ -258,6 +272,7 @@ impl CompletionChunk {
             }],
             usage: None,
             timings: None,
+            receipt: None,
         }
     }
 
@@ -279,6 +294,7 @@ impl CompletionChunk {
             }],
             usage: None,
             timings: None,
+            receipt: None,
         }
     }
 
@@ -291,6 +307,7 @@ impl CompletionChunk {
             choices: Vec::new(),
             usage: Some(usage),
             timings: None,
+            receipt: None,
         }
     }
 
@@ -303,6 +320,11 @@ impl CompletionChunk {
             timings,
             ..Self::usage(model, usage)
         }
+    }
+
+    pub fn with_receipt(mut self, receipt: Option<Value>) -> Self {
+        self.receipt = receipt;
+        self
     }
 }
 

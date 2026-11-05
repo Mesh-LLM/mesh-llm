@@ -30,6 +30,10 @@ impl HttpResponseByteTap {
     pub(super) fn execution_outcome(&self, outcome: &str) {
         self.observer.execution_outcome(outcome);
     }
+    /// Whether this tap reports to `observer`.
+    pub(super) fn observes(&self, observer: &Arc<dyn WireBytesObserver>) -> bool {
+        Arc::ptr_eq(&self.observer, observer)
+    }
     pub(super) fn new(observer: Arc<dyn WireBytesObserver>) -> Self {
         Self {
             framing: Framing::Headers(Vec::new()),

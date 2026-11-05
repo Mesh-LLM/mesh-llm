@@ -1085,7 +1085,7 @@ fn terminal_frames_are_delivered_after_the_request_is_cancelled() {
     );
 
     sender
-        .send_terminal(Ok(GenerationStreamEvent::Done(FinishReason::Stop)))
+        .send_terminal(Ok(GenerationStreamEvent::Done(FinishReason::Stop, None)))
         .expect("terminal frames must still reach a live, cancelled-but-draining receiver");
 
     let received = rx
@@ -1093,7 +1093,7 @@ fn terminal_frames_are_delivered_after_the_request_is_cancelled() {
         .expect("the terminal frame must be enqueued, not silently swallowed");
     assert!(matches!(
         received,
-        Ok(GenerationStreamEvent::Done(FinishReason::Stop))
+        Ok(GenerationStreamEvent::Done(FinishReason::Stop, None))
     ));
 
     let send_result = sender.send(
@@ -1176,7 +1176,7 @@ fn terminal_frames_are_dropped_once_the_receiver_is_proven_unreachable() {
     );
 
     let started = Instant::now();
-    let terminal = sender.send_terminal(Ok(GenerationStreamEvent::Done(FinishReason::Stop)));
+    let terminal = sender.send_terminal(Ok(GenerationStreamEvent::Done(FinishReason::Stop, None)));
     let elapsed = started.elapsed();
 
     assert!(

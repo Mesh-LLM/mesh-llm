@@ -378,6 +378,7 @@ publish_crates=(
     skippy-package-format
     skippy-model
     skippy-protocol
+    skippy-receipts
     skippy-native-runtime
     mesh-llm-config
     mesh-llm-plugin

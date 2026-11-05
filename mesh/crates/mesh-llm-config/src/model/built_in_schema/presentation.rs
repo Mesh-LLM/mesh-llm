@@ -50,6 +50,12 @@ const ANALYTICS_CATEGORY: CategoryPresentation = CategoryPresentation {
     summary: "Anonymous usage reporting to the mesh-llm maintainers",
     order: 50,
 };
+const RECEIPTS_CATEGORY: CategoryPresentation = CategoryPresentation {
+    id: "receipts",
+    label: "Receipts",
+    summary: "Verifiable inference receipts for the models this node serves",
+    order: 65,
+};
 const RUNTIME_POLICY_CATEGORY: CategoryPresentation = CategoryPresentation {
     id: "runtime-policy",
     label: "Runtime Policy",
@@ -124,6 +130,7 @@ fn setting_presentation_for_path(rendered: &str) -> Option<SettingPresentation> 
         .or_else(|| kv_disk_presentation(rendered))
         .or_else(|| gpu_setting_presentation(rendered))
         .or_else(|| process_setting_presentation(rendered))
+        .or_else(|| receipts_presentation(rendered))
         .or_else(|| native_runtime_presentation(rendered))
         .or_else(|| runtime_defaults_presentation(rendered))
         .or_else(|| generation_defaults_presentation(rendered))
@@ -417,6 +424,30 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
         )
         .placeholder("ed25519:<64 hex characters>")
         .hint("text")),
+        _ => None,
+    }
+}
+
+fn receipts_presentation(rendered: &str) -> Option<SettingPresentation> {
+    match rendered {
+        "receipts.enabled" => Some(sp(
+            "Issue receipts",
+            "Sign a receipt with the node key for every turn a client asks one for, so the client can audit that the claimed model served it.",
+            RECEIPTS_CATEGORY,
+            10,
+        )),
+        "receipts.audit" => Some(sp(
+            "Audit peers' receipts",
+            "Audit about one in ten of the turns peers serve with receipts, reading the claimed model from Hugging Face, and block a peer whose audit fails for seven days.",
+            RECEIPTS_CATEGORY,
+            20,
+        )),
+        "receipts.require" => Some(sp(
+            "Require receipts",
+            "Route this node's chat completions only to models served with receipts, and audit them. Requests for other endpoints fail.",
+            RECEIPTS_CATEGORY,
+            30,
+        )),
         _ => None,
     }
 }
@@ -1134,6 +1165,9 @@ fn fallback_category_for_path(rendered: &str) -> Option<CategoryPresentation> {
     }
     if rendered.starts_with("owner_control.") {
         return Some(NETWORK_CATEGORY);
+    }
+    if rendered.starts_with("receipts.") {
+        return Some(RECEIPTS_CATEGORY);
     }
     if rendered.starts_with("mesh_requirements.") {
         return Some(ATTESTATION_CATEGORY);

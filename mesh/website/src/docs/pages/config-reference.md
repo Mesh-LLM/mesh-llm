@@ -88,6 +88,9 @@ produces a clear startup error rather than a partial start.
 | `mesh_requirements.release_signer_keys` | array of string | `[]`; when non-empty, only those signer keys admit peers | node-level | process restart | wired | none |
 | `owner_control.bind` | socket address | unset (auto); e.g. `[::]:7447` | node-level | process restart | wired | none |
 | `owner_control.advertise_addr` | socket address | unset (auto-detected) | node-level | process restart | wired | none |
+| `receipts.enabled` | boolean | `false`; `true` signs an inference receipt with the node key for every turn a client asks one for (`x-receipt-client-key`) on a model this node serves alone or coordinates as a split, and opens it on `POST /v1/receipts/open` | node-level | process restart | wired | none |
+| `receipts.audit` | boolean | `false`; `true` names a fresh receipt key on every chat completion this node forwards for a local client, audits about one in ten of the receipted turns against the claimed Hugging Face GGUF, and blocks a peer whose audit fails for seven days, keeping the evidence under `receipt-evidence/` in the node's state directory | node-level | process restart | wired | none |
+| `receipts.require` | boolean | `false`; `true` routes the chat completions this node's clients send only to models served with receipts, here or on a peer that advertises them, audits those turns even with `receipts.audit` off, and fails a request with `trust_policy_unsatisfied` when no such route exists. Other inference endpoints fail too: receipts cover chat completions only. A request narrows the policy with `x-mesh-trust: receipts` | node-level | process restart | wired | none |
 | `telemetry.enabled` | boolean | `false` | node-level | process restart | wired | none |
 | `telemetry.service_name` | string | `mesh-llm` | node-level | process restart | wired | none |
 | `telemetry.endpoint` | URL | unset | node-level | process restart | wired | none |

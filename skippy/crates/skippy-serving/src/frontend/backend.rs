@@ -1955,7 +1955,10 @@ impl StageOpenAiBackend {
                     {
                         return;
                     }
-                    let _ = sender.send_terminal(Ok(GenerationStreamEvent::Done(finish_reason)));
+                    let _ = sender.send_terminal(Ok(GenerationStreamEvent::Done(
+                        finish_reason,
+                        output.receipt.take(),
+                    )));
                 }
                 Err(error) => {
                     backend.observe_generation_failed();

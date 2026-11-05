@@ -118,6 +118,7 @@ pub(super) async fn handle_buffered_api_request(
         &request,
         &decision,
         routing_model.as_deref(),
+        crate::network::request_trust::node_requires_receipts(ctx.route.node).await,
         lifecycle.route_observer(),
     )
     .await

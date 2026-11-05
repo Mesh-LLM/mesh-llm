@@ -422,6 +422,7 @@ fn delta_chunk(
         }],
         usage: None,
         timings: None,
+        receipt: None,
     }
 }
 

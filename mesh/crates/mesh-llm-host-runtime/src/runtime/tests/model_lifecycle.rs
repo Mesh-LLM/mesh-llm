@@ -449,6 +449,7 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
             port: 0,
             capabilities: vision_capabilities,
             workload_class: mesh::ModelWorkloadClass::CausalGeneration,
+            receipts: false,
         },
     )
     .await;
@@ -465,6 +466,7 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
             port: 0,
             capabilities: models::ModelCapabilities::default(),
             workload_class: mesh::ModelWorkloadClass::Embedding,
+            receipts: false,
         },
     )
     .await;
@@ -641,4 +643,40 @@ fn load_failure_reaches_waiting_callers_with_its_whole_cause_chain() {
         reported.contains("not within the file bounds"),
         "{reported}"
     );
+}
+
+#[tokio::test]
+async fn a_runtime_that_issues_receipts_is_advertised_with_them() {
+    let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+        .await
+        .expect("test node should initialize");
+    let registry = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+    for (model_name, receipts) in [("Receipted", true), ("Plain", false)] {
+        register_runtime_instance(
+            &registry,
+            &node,
+            RuntimeModelRegistration {
+                primary_model_name: "Receipted",
+                model_name,
+                instance_id: model_name,
+                context_length: Some(4096),
+                capabilities: models::ModelCapabilities::default(),
+                workload_class: mesh::ModelWorkloadClass::CausalGeneration,
+                receipts,
+            },
+        )
+        .await;
+    }
+    let advertised = |descriptors: Vec<mesh::ServedModelDescriptor>| {
+        descriptors
+            .into_iter()
+            .map(|d| (d.identity.model_name, d.receipts))
+            .collect::<HashMap<_, _>>()
+    };
+    let gossiped = advertised(node.local_descriptors_with_plugins().await);
+    assert_eq!(gossiped.get("Receipted"), Some(&true));
+    assert_eq!(gossiped.get("Plain"), Some(&false));
+
+    node.remove_served_model_descriptor("Receipted").await;
+    assert!(!node.receipt_models.lock().unwrap().contains("Receipted"));
 }

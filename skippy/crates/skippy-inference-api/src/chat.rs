@@ -316,6 +316,10 @@ pub struct ChatCompletionResponse {
     pub usage: Usage,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timings: Option<BTreeMap<String, Value>>,
+    /// The turn's inference receipt, when the request asked for one with
+    /// `x-receipt-client-key` and the serving node issues receipts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<Value>,
     /// Rung-ladder response-leg marker, minted by
     /// [`crate::hooks::InferenceHookPolicy::capsule_marker_for_response`]. Never
     /// serialized into the OpenAI-shaped JSON body — a real `X-Capsule-Id`
@@ -390,6 +394,7 @@ impl ChatCompletionResponse {
             }],
             usage,
             timings: None,
+            receipt: None,
             capsule_marker: None,
             exchange_id: None,
         }
@@ -419,6 +424,7 @@ impl ChatCompletionResponse {
             choices,
             usage,
             timings,
+            receipt: None,
             capsule_marker: None,
             exchange_id: None,
         }
@@ -426,6 +432,11 @@ impl ChatCompletionResponse {
 
     pub fn with_timings(mut self, timings: Option<BTreeMap<String, Value>>) -> Self {
         self.timings = timings;
+        self
+    }
+
+    pub fn with_receipt(mut self, receipt: Option<Value>) -> Self {
+        self.receipt = receipt;
         self
     }
 }
@@ -460,6 +471,10 @@ pub struct ChatCompletionChunk {
     pub usage: Option<Usage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timings: Option<BTreeMap<String, Value>>,
+    /// The turn's inference receipt, when the request asked for one with
+    /// `x-receipt-client-key` and the serving node issues receipts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<Value>,
 }
 
 impl ChatCompletionChunk {
@@ -482,6 +497,7 @@ impl ChatCompletionChunk {
             }],
             usage: None,
             timings: None,
+            receipt: None,
         }
     }
 
@@ -504,6 +520,7 @@ impl ChatCompletionChunk {
             }],
             usage: None,
             timings: None,
+            receipt: None,
         }
     }
 
@@ -530,6 +547,7 @@ impl ChatCompletionChunk {
             }],
             usage: None,
             timings: None,
+            receipt: None,
         }
     }
 
@@ -542,6 +560,7 @@ impl ChatCompletionChunk {
             choices: Vec::new(),
             usage: Some(usage),
             timings: None,
+            receipt: None,
         }
     }
 
@@ -554,6 +573,11 @@ impl ChatCompletionChunk {
             timings,
             ..Self::usage(model, usage)
         }
+    }
+
+    pub fn with_receipt(mut self, receipt: Option<Value>) -> Self {
+        self.receipt = receipt;
+        self
     }
 }
 
@@ -596,6 +620,28 @@ mod tests {
         let value = serde_json::to_value(chunk).unwrap();
         assert_eq!(value["usage"]["prompt_tokens"], json!(3));
         assert_eq!(value["timings"]["cache_restore_ms"], json!(2.5));
+    }
+
+    #[test]
+    fn the_receipt_rides_only_when_there_is_one() {
+        let done = ChatCompletionChunk::done("model");
+        assert!(
+            serde_json::to_value(&done)
+                .unwrap()
+                .get("receipt")
+                .is_none()
+        );
+        let done = done.with_receipt(Some(json!({"receipt_id": "r"})));
+        assert_eq!(
+            serde_json::to_value(done).unwrap()["receipt"]["receipt_id"],
+            "r"
+        );
+        let response = ChatCompletionResponse::new("model", "text", Usage::new(1, 1))
+            .with_receipt(Some(json!({"receipt_id": "r"})));
+        assert_eq!(
+            serde_json::to_value(response).unwrap()["receipt"]["receipt_id"],
+            "r"
+        );
     }
 
     use super::*;

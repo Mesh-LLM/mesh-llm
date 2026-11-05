@@ -60,6 +60,10 @@ pub struct ServedModelDescriptor {
     pub topology: Option<ModelTopology>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<ServedModelMetadata>,
+    /// This node issues inference receipts for the model, so a client can
+    /// audit the turns it serves.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub receipts: bool,
 }
 
 /// Opaque protocol terms belonging to a plugin mesh channel.
@@ -253,6 +257,7 @@ pub fn infer_served_model_descriptors(
             };
             ServedModelDescriptor {
                 requires: Vec::new(),
+                receipts: false,
                 identity,
                 capabilities_known: false,
                 capabilities: ModelCapabilities::default(),

@@ -437,6 +437,9 @@ pub fn section(name: &str) -> &'static str {
     if name.starts_with("downstream-wire-") {
         return "network";
     }
+    if name.starts_with("receipts-") {
+        return "distributed";
+    }
     if name.contains("speculative") || name.starts_with("draft-") || name.starts_with("native-mtp-")
     {
         return "speculative";

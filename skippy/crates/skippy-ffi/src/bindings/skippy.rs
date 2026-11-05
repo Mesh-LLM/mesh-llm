@@ -6,7 +6,7 @@
 
 pub const SKIPPY_ABI_VERSION_MAJOR: u32 = 0;
 pub const SKIPPY_ABI_VERSION_MINOR: u32 = 1;
-pub const SKIPPY_ABI_VERSION_PATCH: u32 = 78;
+pub const SKIPPY_ABI_VERSION_PATCH: u32 = 91;
 pub const SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_MAX_LOGIT_BIAS: u32 = 256;
 pub const SKIPPY_MAX_SAMPLERS: u32 = 16;
@@ -1807,6 +1807,456 @@ unsafe extern "C" {
         out_count: *mut usize,
         out_error: *mut *mut skippy_error,
     ) -> skippy_status;
+}
+#[repr(u32)]
+#[doc = " @brief A per-layer tensor reported by the recorder, a replay or a glue evaluation."]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum skippy_receipt_tensor_kind {
+    #[doc = " Residual stream entering the layer; layer == layer_end is the stage output."]
+    Residual = 0,
+    #[doc = " A per-token value entering a token-mixing region."]
+    MixingInput = 1,
+    #[doc = " A row written to a KV cache, as stored and in the cache's type. A glue\n evaluation reports the f32 row before it is stored instead."]
+    MixingStored = 2,
+    #[doc = " A value leaving a token-mixing region."]
+    MixingOutput = 3,
+    #[doc = " Replay and glue evaluation: the input of a weight matmul."]
+    MatmulInput = 4,
+    #[doc = " Replay: the output of a weight matmul."]
+    MatmulOutput = 5,
+    #[doc = " Replay and glue evaluation: the expert of every slot of an expert matmul, I32."]
+    ExpertIds = 6,
+    #[doc = " Replay: the output of a selection (ARGSORT, TOP_K) made by glue, I32."]
+    Selection = 7,
+    #[doc = " Glue evaluation: the scores a selection ranks."]
+    SelectionScores = 8,
+    #[doc = " Replay of a final stage that replays its last layer: the logits of\n the ubatch's output rows, F32, with layer == layer_end."]
+    Logits = 9,
+    #[doc = " The state a recurrent token-mixing op reads before the ubatch, F32.\n Column s is the state of the ubatch's s-th sequence, whose tokens are\n the s-th run of n_tokens / n_cols tokens. A region evaluation takes\n one column: the state before its first position."]
+    MixingState = 10,
+    #[doc = " Region evaluation: the state the op writes back after the tokens,\n F32, with the index of the MIXING_STATE it replaces."]
+    MixingStateOut = 11,
+}
+#[repr(u32)]
+#[doc = " @brief Flags of a reported tensor."]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum skippy_receipt_tensor_flag {
+    #[doc = " MATMUL_*: the matmul's output reaches a selection before any other\n weight matmul, so an auditor checks all of its rows."]
+    Router = 1,
+}
+#[doc = " @brief One reported tensor, column per token."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_receipt_tensor {
+    pub layer: i32,
+    #[doc = " A skippy_receipt_tensor_kind."]
+    pub kind: i32,
+    #[doc = " Ordinal among the layer's tensors of this kind, in graph order.\n MATMUL_INPUT, MATMUL_OUTPUT and EXPERT_IDS share their matmul's\n ordinal; SELECTION and SELECTION_SCORES share their selection's."]
+    pub index: i32,
+    #[doc = " ggml type of the values: F32, I32, or the cache type of a stored row."]
+    pub ggml_type: i32,
+    #[doc = " skippy_receipt_tensor_flag bits."]
+    pub flags: i32,
+    #[doc = " Elements per column."]
+    pub len: i64,
+    #[doc = " Bytes per column."]
+    pub row_bytes: i64,
+    #[doc = " Number of columns: the ubatch's token count, or its output-row count when\n the layer keeps only output rows (the last layer of a final stage)."]
+    pub n_cols: i64,
+    #[doc = " Column j at `values + j * row_bytes`, or NULL when `digests` is set."]
+    pub values: *const ::std::os::raw::c_void,
+    #[doc = " MATMUL_* and EXPERT_IDS: the weight's tensor name. Otherwise the graph node's name, for diagnostics."]
+    pub name: *const ::std::os::raw::c_char,
+    #[doc = " While serving on a device that can hash: per column, the 32-byte BLAKE3\n hash of its `row_bytes` bytes, computed on the device so the values\n never reach the host. `values` is NULL then. NULL otherwise."]
+    pub digests: *const u8,
+}
+#[repr(u32)]
+#[doc = " @brief Which positions an attention op's queries read."]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum skippy_receipt_attention_window_kind {
+    #[doc = " Every earlier position, and its own."]
+    Causal = 0,
+    #[doc = " The last `window` positions up to its own."]
+    Sliding = 1,
+    #[doc = " Earlier positions in its own chunk of `window` positions."]
+    Chunked = 2,
+}
+#[doc = " @brief One attention op of a reported layer.\n\n Says which of the layer's committed values the op reads and writes, and\n how it combines them: `output = softmax(scale * q k^T, softcapped, over\n the window) v` per query head, with K and V heads shared by\n `n_head / n_head_kv` query heads. Values are head-major: head h of a\n column is its elements `h * head_dim` to `(h + 1) * head_dim`."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_receipt_attention {
+    pub layer: i32,
+    #[doc = " Non-NULL when the attention check cannot follow the op: the reason. Nothing else is set."]
+    pub error: *const ::std::os::raw::c_char,
+    #[doc = " Indices of q among the MIXING_INPUT values, K and V among the MIXING_STORED rows, and the output among the MIXING_OUTPUT values."]
+    pub q_input: i32,
+    pub k_store: i32,
+    pub v_store: i32,
+    pub output: i32,
+    pub n_head: i32,
+    pub n_head_kv: i32,
+    pub head_dim_k: i32,
+    pub head_dim_v: i32,
+    #[doc = " Multiplies q k."]
+    pub scale: f32,
+    #[doc = " Nonzero: a logit x becomes `softcap * tanh(x / softcap)`."]
+    pub softcap: f32,
+    #[doc = " A skippy_receipt_attention_window_kind, and its size."]
+    pub window_kind: i32,
+    pub window: i32,
+    #[doc = " Per query head, a logit that only adds to the softmax's denominator, or NULL."]
+    pub sinks: *const f32,
+    #[doc = " Index among the MIXING_INPUT values of a gate that multiplies the\n output, value by value, before it leaves the token-mixing region; or -1.\n `output` is then the gated value."]
+    pub output_gate: i32,
+    #[doc = " Nonzero: before the gate, each head of the output is rotated in chunks\n of this many values, value i of a chunk becoming\n `sum_k output_rotation[i * output_rotation_n + k] * value k` (llama.cpp\n rotates V before a quantized KV cache stores it)."]
+    pub output_rotation_n: i32,
+    pub output_rotation: *const f32,
+    #[doc = " A ggml type the kernel rounds each head of q to before its dot with K,\n or -1: GGML_TYPE_Q8_0 (8-bit blocks of 32 values) for a quantized K\n cache, as the CPU and CUDA kernels do."]
+    pub q_rounding: i32,
+}
+#[doc = " @brief One computed ubatch.\n\n The tensor values and stage input rows of a ubatch reported by the\n recorder stay valid until the callback for the next ubatch returns, or the\n recorder is removed or replaced, so a caller can hash them while the next\n ubatch computes. Every other pointer is valid only during the callback."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_receipt_ubatch {
+    #[doc = " Replay step index, or -1 while serving."]
+    pub step: i64,
+    pub n_tokens: i32,
+    #[doc = " Per column: token id, sequence, position, output flag, and KV cell."]
+    pub token: *const i32,
+    pub seq: *const i32,
+    pub pos: *const i32,
+    pub output: *const i8,
+    pub cell: *const u32,
+    #[doc = " KV cells the attention graph covered."]
+    pub n_kv: u32,
+    #[doc = " Stage input rows (a stage after the first), or NULL. Row j at `input + j * input_row_bytes`."]
+    pub input: *const ::std::os::raw::c_void,
+    pub input_row_bytes: i64,
+    #[doc = " ggml type of the input rows."]
+    pub input_type: i32,
+    pub n_tensors: usize,
+    pub tensors: *const skippy_receipt_tensor,
+    #[doc = " Non-NULL when the ubatch cannot be receipted: the reason. Nothing else is set."]
+    pub error: *const ::std::os::raw::c_char,
+    #[doc = " Glue evaluation: weights read inside token-mixing regions, which nothing checks."]
+    pub n_unchecked_weights: usize,
+    pub unchecked_weights: *const *const ::std::os::raw::c_char,
+    #[doc = " Replay and glue evaluation: the attention ops of the reported layers."]
+    pub n_attention: usize,
+    pub attention: *const skippy_receipt_attention,
+}
+#[repr(u32)]
+#[doc = " @brief KV-cache operations that the recorder reports."]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum skippy_receipt_memory_op {
+    #[doc = " Every sequence lost all its cells."]
+    Clear = 0,
+    #[doc = " Cells of `seq` (every sequence if -1) in positions [p0, p1) were removed; p1 < 0 means no end."]
+    SeqRm = 1,
+    #[doc = " Cells of `seq` in [p0, p1) were shared with `seq_dst`."]
+    SeqCp = 2,
+    #[doc = " Every sequence except `seq` lost its cells."]
+    SeqKeep = 3,
+    #[doc = " Positions of `seq` in [p0, p1) were shifted or divided."]
+    SeqShift = 4,
+    #[doc = " Cells of `seq` (every sequence if -1) were loaded from saved state."]
+    StateRead = 5,
+    #[doc = " Cells moved to close gaps."]
+    Compact = 6,
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_receipt_memory_event {
+    #[doc = " A skippy_receipt_memory_op."]
+    pub op: i32,
+    pub seq: i32,
+    pub seq_dst: i32,
+    pub p0: i32,
+    pub p1: i32,
+}
+pub type skippy_receipt_ubatch_fn = ::std::option::Option<
+    unsafe extern "C" fn(
+        user_data: *mut ::std::os::raw::c_void,
+        ubatch: *const skippy_receipt_ubatch,
+    ),
+>;
+pub type skippy_receipt_memory_fn = ::std::option::Option<
+    unsafe extern "C" fn(
+        user_data: *mut ::std::os::raw::c_void,
+        event: *const skippy_receipt_memory_event,
+    ),
+>;
+unsafe extern "C" {
+    #[doc = " @brief Installs or, with both callbacks NULL, removes the receipt recorder.\n\n The memory callback runs on the thread that changes the KV cache. On a\n device that copies asynchronously, a ubatch's values reach the host while\n later ubatches compute, and the ubatch is reported late: on the decoding\n thread two ubatches later, before the next memory event, or on the thread\n that calls skippy_model_flush_receipt_recorder(). Otherwise each ubatch is\n reported on the decoding thread as soon as it is computed. Reports always\n arrive in the order the ubatches and memory events happened. The recorder\n marks the committed tensors as graph outputs, which keeps them\n alive and may disable some kernel fusions; replay marks the same tensors.\n The stage needs a plain KV cache, unified or with a stream per sequence\n (skippy_model_receipt_kv_streams()), and flash attention, so V rows are\n stored untransposed."]
+    pub fn skippy_model_set_receipt_recorder(
+        model: *mut skippy_model,
+        on_ubatch: skippy_receipt_ubatch_fn,
+        on_memory: skippy_receipt_memory_fn,
+        user_data: *mut ::std::os::raw::c_void,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Reports the ubatches the recorder still holds back, if any.\n\n Call it before reading what the recorder reported, for example to commit\n a turn: the last ubatches of a turn are otherwise reported only with later\n ubatches or the next memory event. It waits for their values to reach the\n host. Safe to call from any thread, and when no recorder is installed."]
+    pub fn skippy_model_flush_receipt_recorder(
+        model: *mut skippy_model,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+#[repr(u32)]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum skippy_receipt_replay_kind {
+    #[doc = " Decode one recorded ubatch."]
+    Decode = 0,
+    #[doc = " Remove positions [p0, p1) of the replayed sequence (p1 < 0: no end)."]
+    SeqRm = 1,
+}
+#[doc = " @brief One replay step. A decode step has the fields of a recorded ubatch."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_receipt_replay_step {
+    #[doc = " A skippy_receipt_replay_kind."]
+    pub kind: i32,
+    pub n_tokens: i32,
+    pub token: *const i32,
+    pub seq: *const i32,
+    pub pos: *const i32,
+    pub output: *const i8,
+    pub cell: *const u32,
+    pub n_kv: u32,
+    pub input: *const ::std::os::raw::c_void,
+    pub input_row_bytes: i64,
+    pub input_type: i32,
+    #[doc = " SEQ_RM range."]
+    pub p0: i32,
+    pub p1: i32,
+    #[doc = " Nonzero to report this step's tensors through the capture callback."]
+    pub capture: i32,
+}
+unsafe extern "C" {
+    #[doc = " @brief Replays one sequence in the model's scratch context.\n\n The scratch context is created on first use with the stage context's\n parameters and room for the KV cells the steps use, not the stage's whole\n context. It is kept until skippy_model_release_receipt_scratch(), and a\n later replay that needs more cells creates it again. A replay of the\n sequence skippy_model_seed_receipt_replay() seeded last starts from the\n seeded cells, which must cover the cells its steps use; any other starts\n from an empty cache. After every decode step, the columns of sequences\n other than `seq` are removed. A captured step reports, for each\n of the `n_layers` sorted `layers`, the layer's committed tensors, its\n weight matmuls' inputs, outputs and experts, its selections, and the\n residual leaving it. Every step stops computing once those are done, so\n later layers and the output head are skipped and their values are\n undefined."]
+    pub fn skippy_model_replay_receipt(
+        model: *mut skippy_model,
+        seq: i32,
+        layers: *const i32,
+        n_layers: usize,
+        steps: *const skippy_receipt_replay_step,
+        n_steps: usize,
+        on_capture: skippy_receipt_ubatch_fn,
+        user_data: *mut ::std::os::raw::c_void,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Replays like skippy_model_replay_receipt(), reporting only the committed tensors.\n\n A captured step reports, for each of the `layers`, the tensors the\n recorder commits (the residual entering it, its token-mixing values and\n the residual leaving it) and a final stage's logits, and no matmul or\n selection. The recorder marks the same tensors, so a backend fuses the\n layer's ops as it did when serving, and the committed values are\n reproduced bit for bit even where the extra tensors of a full replay\n keep a backend from fusing them."]
+    pub fn skippy_model_replay_receipt_committed(
+        model: *mut skippy_model,
+        seq: i32,
+        layers: *const i32,
+        n_layers: usize,
+        steps: *const skippy_receipt_replay_step,
+        n_steps: usize,
+        on_capture: skippy_receipt_ubatch_fn,
+        user_data: *mut ::std::os::raw::c_void,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+#[doc = " @brief A committed value an anchored replay writes into one token's column."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_receipt_anchor {
+    #[doc = " The decode step, as an index into the replay's steps."]
+    pub step: usize,
+    #[doc = " The token: its sequence and position in that step."]
+    pub seq: i32,
+    pub pos: i32,
+    pub layer: i32,
+    #[doc = " RESIDUAL, the residual entering `layer`, or MIXING_OUTPUT."]
+    pub kind: i32,
+    pub index: i32,
+    #[doc = " f32 elements of the column."]
+    pub len: i64,
+    pub values: *const f32,
+}
+unsafe extern "C" {
+    #[doc = " @brief Replays like skippy_model_replay_receipt(), from committed values at anchored tokens.\n\n As soon as a step computes the residual entering an anchored layer, or one\n of its token-mixing outputs, the anchor's values replace the token's\n column, before anything reads it. The matmuls and selections the replay\n reports for the anchored tokens then follow from the committed values,\n even where this replay computes the layers before them, or the context\n the token-mixing ops read, differently from the turn: a backend fuses\n fewer ops when more tensors are reported. Every anchor's layer must be\n one of `layers`, and its step a decode step."]
+    pub fn skippy_model_replay_receipt_anchored(
+        model: *mut skippy_model,
+        seq: i32,
+        layers: *const i32,
+        n_layers: usize,
+        steps: *const skippy_receipt_replay_step,
+        n_steps: usize,
+        anchors: *const skippy_receipt_anchor,
+        n_anchors: usize,
+        on_capture: skippy_receipt_ubatch_fn,
+        user_data: *mut ::std::os::raw::c_void,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Seeds the next receipt replay of `seq` with cells of the stage context.\n\n Copies the K and V rows of `cells` from the stage context's KV cache into\n the same cells of the scratch context, which is made to hold `n_cells`\n cells, and marks them there as positions `pos` of `seq`. A turn that\n continued a sequence, or started from a cached prefix, then replays only\n its own ubatches on top of the prefix it attended to. Fails, seeding\n nothing, unless every cell holds position `pos[i]` in the stage context,\n or no sequence holds it any more; the sequences sharing it there do not\n matter. A freed cell keeps its rows until a ubatch writes it, which the\n recorder reports, so the caller checks its rows from what it recorded.\n Models with more than one position per token cannot seed a freed cell.\n The caller keeps the stage context idle during the call. The seed lasts\n until the next replay or seeding."]
+    pub fn skippy_model_seed_receipt_replay(
+        model: *mut skippy_model,
+        seq: i32,
+        cells: *const u32,
+        pos: *const i32,
+        n_seeded: usize,
+        n_cells: u32,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Reads the rows the stage context stored in some KV cells for one layer.\n\n Calls `on_rows` once with a ubatch of `n_cells` columns, cell j holding\n `cells[j]` of the stream of `seq`, whose tensors are the MIXING_STORED\n rows of `layer`, by index, read from the stage context's cache exactly as\n the recorder commits them. The recorder must be installed and the stage\n context must have computed a ubatch since, so its graph names the layer's\n cache rows. The caller keeps the stage context idle during the call."]
+    pub fn skippy_model_read_receipt_rows(
+        model: *mut skippy_model,
+        layer: i32,
+        seq: i32,
+        cells: *const u32,
+        n_cells: usize,
+        on_rows: skippy_receipt_ubatch_fn,
+        user_data: *mut ::std::os::raw::c_void,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Pins the KV cells a recent turn's opening may still read.\n\n Replaces the pinned cells of the stage context with `cells`, cell i in\n stream `streams[i]`; none when `n_cells` is 0. While a pinned cell is\n empty, which it is once its sequences free it, the stage context places\n ubatches in other cells, and uses it only when a ubatch fits nowhere else.\n A pin costs no memory: it keeps the rows of a finished turn readable for\n its challenge window while the cache has room. Safe while the stage context computes: a\n ubatch is placed with the cells pinned before it or after it."]
+    pub fn skippy_model_pin_receipt_cells(
+        model: *mut skippy_model,
+        streams: *const u32,
+        cells: *const u32,
+        n_cells: usize,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+#[doc = " @brief Receives a sequence's recurrent state before a turn of it.\n\n `bytes` holds the recurrent state of `seq` in the stage context, as\n llama_state_seq_get_data_ext() writes it with\n LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY, before the first ubatch of the turn\n computes. It is null, with `n_bytes` 0, when the state could not be\n exported. Valid for the call only."]
+pub type skippy_receipt_state_fn = ::std::option::Option<
+    unsafe extern "C" fn(
+        user_data: *mut ::std::os::raw::c_void,
+        seq: i32,
+        bytes: *const ::std::os::raw::c_void,
+        n_bytes: usize,
+    ),
+>;
+unsafe extern "C" {
+    #[doc = " @brief Reports the recurrent state each turn of a sequence starts from.\n\n A replay cannot recompute a recurrent layer's state from the turn's own\n ubatches, so for a hybrid model, whose attention layers use a plain KV\n cache and whose other layers keep recurrent state (the gated delta net,\n Mamba), the recorder installed by skippy_model_set_receipt_recorder()\n calls `on_state` on the decoding thread before the first ubatch of each\n turn, after it reports the ubatches before it. `bytes` is null when the\n state cannot be read, and is valid only during the call. A turn starts\n at a sequence's first ubatch, after the sequence is removed whole, and\n after skippy_model_arm_receipt_state().\n Sets `*out_recurrent` to whether the model has hybrid memory; without\n it `on_state` is never called. A null `on_state` stops the reports."]
+    pub fn skippy_model_set_receipt_state_observer(
+        model: *mut skippy_model,
+        on_state: skippy_receipt_state_fn,
+        user_data: *mut ::std::os::raw::c_void,
+        out_recurrent: *mut bool,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Starts a new turn of `seq` for the receipt state observer.\n\n Its next ubatch reports the sequence's recurrent state first. Safe while\n the stage context computes."]
+    pub fn skippy_model_arm_receipt_state(
+        model: *mut skippy_model,
+        seq: i32,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Seeds the next receipt replay of `seq` with recurrent state.\n\n Imports `bytes`, a state the observer reported, into `seq` of the\n scratch context, after skippy_model_seed_receipt_replay() seeded its KV\n cells (possibly none). The replay then starts its first ubatch from the\n state the turn started from. The seed lasts until the next replay or\n seeding."]
+    pub fn skippy_model_seed_receipt_state(
+        model: *mut skippy_model,
+        seq: i32,
+        bytes: *const ::std::os::raw::c_void,
+        n_bytes: usize,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Reports how the stage context's KV cache lays out its cells.\n\n Writes the number of streams: 1 for a unified cache, which every\n sequence shares, or one per sequence, stream s holding the cells of\n sequence s. The cells the recorder reports, a replay places, a seed\n copies and a pin holds are indices in the stream of their sequence. A\n `seq_cp` between sequences of different streams copies the source's\n whole stream into the destination's."]
+    pub fn skippy_model_receipt_kv_streams(
+        model: *mut skippy_model,
+        out_streams: *mut u32,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Frees the scratch context that receipt replays run in.\n\n The next replay creates it again. When a replay is running, the context\n is kept and the call still succeeds."]
+    pub fn skippy_model_release_receipt_scratch(
+        model: *mut skippy_model,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+#[doc = " @brief A value a glue evaluation uses instead of computing it."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_receipt_glue_value {
+    #[doc = " MATMUL_OUTPUT, MIXING_OUTPUT or SELECTION."]
+    pub kind: i32,
+    pub index: i32,
+    #[doc = " F32, or I32 for SELECTION."]
+    pub ggml_type: i32,
+    #[doc = " Elements per column. Column j at `values + j * len` elements."]
+    pub len: i64,
+    pub values: *const ::std::os::raw::c_void,
+}
+#[doc = " @brief Opened values of one layer at a few positions."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_receipt_glue_request {
+    pub layer: i32,
+    pub n_cols: i32,
+    #[doc = " Per column: the position."]
+    pub pos: *const i32,
+    #[doc = " Residual stream entering the layer. Column j at `residual + j * residual_len`."]
+    pub residual: *const f32,
+    pub residual_len: i64,
+    #[doc = " One value for every weight matmul output, token-mixing output and selection of the layer."]
+    pub n_values: usize,
+    pub values: *const skippy_receipt_glue_value,
+}
+unsafe extern "C" {
+    #[doc = " @brief Evaluates the glue of one layer on opened values.\n\n The model must hold `layer`; an auditor loads a stage of that layer alone.\n Each column is computed as its own sequence at its position, starting\n from the opened residual. Every weight matmul, token-mixing output and\n selection takes the given value instead of being computed, so the\n layer's large weights are never read. `on_result` is called once with the\n computed values: weight matmul inputs and experts, token-mixing inputs,\n KV rows before storage, selection scores, the residual leaving the layer,\n and the weights read inside token-mixing regions."]
+    pub fn skippy_model_eval_receipt_glue(
+        model: *mut skippy_model,
+        request: *const skippy_receipt_glue_request,
+        on_result: skippy_receipt_ubatch_fn,
+        user_data: *mut ::std::os::raw::c_void,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Evaluates the recurrent token mixing of one layer on opened values.\n\n The model must hold `layer`, as for skippy_model_eval_receipt_glue(). The\n columns are consecutive positions of one sequence, computed in one\n ubatch. Every MIXING_INPUT of the layer takes the given value, each\n MIXING_STATE the given state (one column), and the weight matmuls compute\n nothing; the token mixing reads no residual, so it may be zeros.\n `on_result` is called once with the MIXING_OUTPUT values the\n token-mixing ops compute from them and the MIXING_STATE_OUT states they\n leave. A layer whose token mixing reads a KV cache, or keeps no\n recurrent state, is refused."]
+    pub fn skippy_model_eval_receipt_region(
+        model: *mut skippy_model,
+        request: *const skippy_receipt_glue_request,
+        on_result: skippy_receipt_ubatch_fn,
+        user_data: *mut ::std::os::raw::c_void,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Computes the residual entering layer 0 for tokens at positions.\n\n The model must hold layer 0. Each of the `n_cols` columns is its own\n sequence of one token. `on_result` is called once with the RESIDUAL\n tensor of layer 0, a column per token, as the stage computes it from the\n token embedding."]
+    pub fn skippy_model_eval_receipt_entry(
+        model: *mut skippy_model,
+        tokens: *const i32,
+        pos: *const i32,
+        n_cols: i32,
+        on_result: skippy_receipt_ubatch_fn,
+        user_data: *mut ::std::os::raw::c_void,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Compares a stored KV row with the f32 row an auditor computed.\n\n Sets `stored_error` to the L2 distance between the dequantized stored row\n and `computed`, `rounding_error` to the distance between `computed` and\n its own round trip through `ggml_type`, and `norm` to the L2 norm of\n `computed`. An honestly stored row is about one rounding error away."]
+    pub fn skippy_receipt_stored_row_error(
+        ggml_type: i32,
+        stored: *const ::std::os::raw::c_void,
+        computed: *const f32,
+        n: i64,
+        stored_error: *mut f64,
+        rounding_error: *mut f64,
+        norm: *mut f64,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Names the source the runtime was built from.\n\n `llama.cpp <upstream commit> patches <patch queue digest>`, as the\n prepared llama.cpp checkout recorded them when the library was built, or\n `unknown` for a checkout without that record. A receipt names it, so an\n auditor knows whether its own runtime computes like the node's."]
+    pub fn skippy_receipt_runtime_source() -> *const ::std::os::raw::c_char;
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
