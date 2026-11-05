@@ -96,6 +96,10 @@ async fn main() -> anyhow::Result<()> {
                     .map_err(|error| {
                         mesh_llm_plugin::PluginError::invalid_request(error.to_string())
                     })?;
+                    // Finish the filesystem write before fault injection can exit.
+                    file.flush().await.map_err(|error| {
+                        mesh_llm_plugin::PluginError::invalid_request(error.to_string())
+                    })?;
                 }
                 if std::env::var("MESH_LLM_EXEMPLAR_FAULT").as_deref()
                     == Ok("disconnect_on_response_stream")
@@ -163,6 +167,10 @@ async fn main() -> anyhow::Result<()> {
                     })?;
                     line.push(b'\n');
                     file.write_all(&line).await.map_err(|e| {
+                        mesh_llm_plugin::PluginError::invalid_request(e.to_string())
+                    })?;
+                    // The event acknowledgement must follow the completed log write.
+                    file.flush().await.map_err(|e| {
                         mesh_llm_plugin::PluginError::invalid_request(e.to_string())
                     })?;
                 }
