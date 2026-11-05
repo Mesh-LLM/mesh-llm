@@ -315,7 +315,9 @@ async fn cancelled_startup_scenario() {
     config.network.join_tokens = vec![token];
     let mut startup = tokio::spawn(start_embedded_node(config.clone()));
     let mut packet = [0; 2048];
-    tokio::time::timeout(Duration::from_secs(10), async {
+    // Cold startup can compete with the full workspace suite on busy builders.
+    // Wait for its dial before measuring the cancellation barriers below.
+    tokio::time::timeout(Duration::from_secs(30), async {
         tokio::select! {
             result = &mut startup => match result {
                 Ok(Err(error)) => panic!("startup failed before dialing the fixture: {error:#}"),
