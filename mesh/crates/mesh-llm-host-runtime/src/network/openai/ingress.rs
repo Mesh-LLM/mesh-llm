@@ -1,3 +1,6 @@
+mod automatic_dispatch;
+#[cfg(test)]
+mod automatic_dispatch_tests;
 mod native_residency;
 use native_residency::route_request;
 mod buffered_exchange;
@@ -92,6 +95,8 @@ struct IngressRouteContext<'a> {
     /// terminal as `ServingProvenance.requested_by_node_id`, and onto the
     /// envelope of a raw-proxy exchange that failed (host-served or plugin-served).
     requested_by_node_id: Option<String>,
+    /// Host-only handoff for an automatic route exhausted before commitment.
+    automatic_retry: Option<&'a super::automatic_retry::AutomaticRetryHandoff>,
     /// Explicit exchange channel for the remote-mesh and host-served publish
     /// pairs. When `None`, falls back to `plugin_manager` as the channel
     /// (production path). Set to `Some` in tests to inject a recording double,
@@ -469,7 +474,7 @@ fn maybe_enable_auto_route_hooks(
     }
     proxy::inject_skippy_hooks_flag(&mut request.raw, true);
     // The directive itself is not a model. PluginOverride mode keeps it in the body
-    // for the MoA gateway; only a resolved concrete model gets written back.
+    // for the installed virtual-model plugin; only a resolved concrete model gets written back.
     if let Some(model) = effective_model.filter(|name| !automatic::is_directive(name)) {
         proxy::rewrite_model_field(request, model);
     }
@@ -1049,6 +1054,7 @@ async fn route_prepared_request(
             request,
             proxy::RouteModelRequestContext {
                 local_execution_only,
+                automatic_retry: ctx.automatic_retry,
                 required_tokens,
                 affinity: ctx.affinity,
                 route_observer,
@@ -1146,16 +1152,27 @@ fn prepare_cache_routing_body(
 /// satisfy the media inputs or workload class of the request. Side-effects:
 /// enables auto route hooks on the buffered request if a model is selected,
 /// and records the model hit on the node for activity tracking.
+#[cfg(test)]
 async fn prepare_auto_route_decision(
     request: &mut proxy::BufferedHttpRequest,
     ctx: &IngressRouteContext<'_>,
     descriptors: &[crate::mesh::ServedModelDescriptor],
 ) -> Result<AutoRouteDecision, AutoRouteRejection> {
+    prepare_auto_route_decision_with_mode(request, ctx, descriptors, false).await
+}
+
+async fn prepare_auto_route_decision_with_mode(
+    request: &mut proxy::BufferedHttpRequest,
+    ctx: &IngressRouteContext<'_>,
+    descriptors: &[crate::mesh::ServedModelDescriptor],
+    single_model_only: bool,
+) -> Result<AutoRouteDecision, AutoRouteRejection> {
     let required_tokens = proxy::request_context_budget(request);
-    let plugin_override_available = if request
-        .model_name
-        .as_deref()
-        .is_some_and(automatic::is_directive)
+    let plugin_override_available = if !single_model_only
+        && request
+            .model_name
+            .as_deref()
+            .is_some_and(automatic::is_directive)
     {
         match ctx.plugin_manager {
             Some(manager) => manager
@@ -1537,6 +1554,7 @@ async fn handle_api_proxy_connection_inner(
                 affinity: &affinity,
                 plugin_manager: plugin_manager.as_ref(),
                 requested_by_node_id: requested_by.map(|id| hex::encode(id.as_bytes())),
+                automatic_retry: None,
                 #[cfg(test)]
                 exchange_channel: None,
             };

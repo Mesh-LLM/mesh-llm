@@ -42,8 +42,7 @@ pub(crate) enum SingleModelReason {
     StreamRequested,
     /// The request named no model, so it never opted into plugin override serving.
     ModelUnspecified,
-    /// The endpoint is not chat-shaped, so a plugin override has no messages to
-    /// fan out.
+    /// The endpoint does not supply the buffered chat body required by overrides.
     NonChatRequest,
 }
 
@@ -59,7 +58,7 @@ impl SingleModelReason {
     }
 }
 
-/// The forwarded endpoint a plugin override needs in order to fan out.
+/// The forwarded endpoint accepted by the buffered chat override seam.
 ///
 /// Overrides receive chat-completion bodies with a `messages` array.
 /// `/v1/completions` has a `prompt`, not `messages`, and stays on core routing.
@@ -223,7 +222,7 @@ mod tests {
     #[test]
     fn model_less_request_takes_a_single_model() {
         // No `model` field means the client never opted into plugin override
-        // serving, so it must not silently pay plugin override latency and cost.
+        // serving, so it stays on the core routing path.
         let mut body = text_request();
         body.as_object_mut().unwrap().remove("model");
         assert_eq!(
@@ -244,10 +243,8 @@ mod tests {
 
     #[test]
     fn a_non_chat_endpoint_takes_a_single_model() {
-        // `/v1/completions` carries `prompt`, not `messages`. A plugin override has
-        // nothing to fan out, and letting one convene would reject with
-        // "MoA requires a non-empty `messages` array" a request shape that
-        // `model=auto` used to serve from one concrete model.
+        // `/v1/completions` carries `prompt`, not the buffered `messages` body
+        // accepted by the override seam. Keep it on core routing.
         let body = json!({ "model": DIRECTIVE, "prompt": "once upon a time" });
         assert_eq!(
             serving_mode(AutomaticRequest {

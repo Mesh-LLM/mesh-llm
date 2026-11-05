@@ -145,6 +145,7 @@ concrete model id, an OpenAI-compatible JSON body, and an optional timeout:
 ```rust
 HostInferenceRequest {
     model_id: String,
+    single_model_only: bool,
     target_node_id: Option<String>,
     request: serde_json::Value,
     timeout_ms: Option<u64>,
@@ -184,6 +185,7 @@ async fn handle_mesh_agent(
     let response = context
         .infer(HostInferenceRequest {
             model_id: candidate.model_id.clone(),
+            single_model_only: false,
             target_node_id: candidate.target_node_id.clone(),
             request: invocation.request,
             timeout_ms: Some(60_000),
@@ -207,9 +209,23 @@ automatic single-model directive independently of any plugin. An installed
 plugin can override non-streaming text chat, while streaming and media use
 core routing. Operator-blocked peers are omitted from candidate snapshots.
 
-V1 host inference accepts only concrete model ids. It rejects built-in aliases
-and all virtual model ids, including the caller, so a plugin cannot recurse.
-Virtual-to-virtual composition can be added later with an explicit hop budget.
+Host inference accepts concrete model ids by default. `single_model_only`
+defaults to `false` when omitted, preserving existing plugin JSON requests.
+Set it to `true` to allow `model_id: "mesh"` (or the deprecated `"auto"`
+alias): the host resolves that directive through core single-model routing,
+without re-entering an installed virtual-model override. Normal eligibility,
+placement affinity, admission, health, and pre-response failover still apply.
+All other registered virtual model ids, including the caller, remain rejected;
+this flag does not enable virtual-to-virtual composition.
+
+The bypass is host-internal: the RPC bridge registers a random, one-use request
+identity for its loopback call and revokes it when the call ends. An ordinary
+HTTP caller cannot disable overrides by adding `single_model_only` to its JSON
+or inventing an `x-request-id`. No mesh wire fields are changed. Older hosts
+ignore the additive JSON field and continue rejecting nested directives, so a
+plugin requiring this feature must use a host version that implements it.
+Rust plugin source using a `HostInferenceRequest` literal must initialize the
+new field when updating the SDK.
 
 ## Routing And Affinity Hooks
 

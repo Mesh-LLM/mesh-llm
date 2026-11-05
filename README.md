@@ -116,7 +116,7 @@ mesh-llm serve --auto --headless
 | Run a big model with splits | `mesh-llm serve --model hf://meshllm/<repo>@<rev> --split` | [docs/SKIPPY_SPLITS.md](skippy/docs/SKIPPY_SPLITS.md) |
 | Run DeepSeek V4 and other ds4 models with DwarfStar | `mesh-llm plugins install Mesh-LLM/ds4-plugin` | [Setup and configuration](mesh/docs/plugins/dwarfstar.md) |
 | Attach a Flash-MoE SSD backend | `mesh-llm serve` with `[[plugin]] name = "flash-moe"` | [docs/plugins/flash-moe.md](mesh/docs/plugins/flash-moe.md) |
-| Automatically select a compatible model | `curl ... -d '{"model":"mesh", ...}'` | [docs/design/MOA_GATEWAY.md](mesh/docs/design/MOA_GATEWAY.md) |
+| Automatically select a compatible model | `curl ... -d '{"model":"mesh", ...}'` | [docs/plugins/virtual-models.md](mesh/docs/plugins/virtual-models.md) |
 | Use Goose, OpenCode, Claude Code, or Pi | `mesh-llm goose`, `mesh-llm opencode`, `mesh-llm claude`, `mesh-llm pi` | [docs/AGENTS.md](mesh/docs/AGENTS.md) |
 | Build or contribute | `just build` | [CONTRIBUTING.md](CONTRIBUTING.md) |
 

@@ -31,20 +31,21 @@ impl InferenceRpcBridge {
         }
     }
 
-    async fn infer(&self, params_json: &str) -> Result<RpcResult, proto::ErrorResponse> {
+    pub(crate) async fn infer(&self, params_json: &str) -> Result<RpcResult, proto::ErrorResponse> {
         let mut request: HostInferenceRequest = serde_json::from_str(params_json)
             .map_err(|error| invalid_params(format!("invalid inference request: {error}")))?;
         let model_id = request.model_id.trim().to_string();
         if model_id.is_empty() {
             return Err(invalid_params("model_id is required"));
         }
-        if super::automatic::is_directive(&model_id)
-            || self
-                .plugins
-                .virtual_model_for_model(&model_id)
-                .await
-                .map_err(internal)?
-                .is_some()
+        if (super::automatic::is_directive(&model_id) && !request.single_model_only)
+            || (!super::automatic::is_directive(&model_id)
+                && self
+                    .plugins
+                    .virtual_model_for_model(&model_id)
+                    .await
+                    .map_err(internal)?
+                    .is_some())
         {
             return Err(invalid_params(format!(
                 "nested inference cannot target virtual model '{}'",
@@ -60,6 +61,9 @@ impl InferenceRpcBridge {
         let timeout = std::time::Duration::from_millis(
             request.timeout_ms.unwrap_or(60_000).clamp(1, 300_000),
         );
+        let capability = request
+            .single_model_only
+            .then(super::nested_inference::SingleModelCapability::new);
         let mut request_builder = self
             .client
             .post(format!(
@@ -68,6 +72,12 @@ impl InferenceRpcBridge {
             ))
             .timeout(timeout)
             .json(&request.request);
+        if let Some(capability) = capability.as_ref() {
+            request_builder = request_builder.header(
+                "x-request-id",
+                capability.request_id().as_uuid().to_string(),
+            );
+        }
         if let Some(target_node_id) = request.target_node_id {
             request_builder =
                 request_builder.header(super::request_parse::MESH_TARGET_HEADER, target_node_id);

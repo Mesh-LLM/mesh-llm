@@ -531,6 +531,7 @@ async fn api_proxy_tokenizer_route_ignores_generation_context_budget() {
         affinity: &affinity,
         plugin_manager: None,
         requested_by_node_id: None,
+        automatic_retry: None,
         exchange_channel: None,
     };
     let raw_before_decision = request.raw.clone();
@@ -1259,6 +1260,7 @@ async fn route_missing_local_model_enters_remote_mesh_branch_when_peer_serves_mo
         // Inject the recording double so both publish calls are observable
         // even though plugin_manager is None.
         requested_by_node_id: None,
+        automatic_retry: None,
         exchange_channel: Some(&recording),
     };
     let lifecycle = OpenAiLifecycleAttachment::unowned();
@@ -1429,6 +1431,7 @@ async fn route_missing_local_model_sidecar_generated_nonce_origin_sets_sidecar_f
         affinity: &affinity,
         plugin_manager: None,
         requested_by_node_id: None,
+        automatic_retry: None,
         exchange_channel: Some(&recording),
     };
     let lifecycle = OpenAiLifecycleAttachment::unowned();
@@ -1507,6 +1510,7 @@ fn remote_mesh_test_ctx<'a>(
         affinity,
         plugin_manager: None,
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     }
@@ -1987,6 +1991,7 @@ async fn route_self_targeted_model_attempts_a_registered_plugin_instead_of_faili
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -2069,6 +2074,7 @@ async fn route_missing_local_model_excluding_self_blocks_local_plugin_fallback()
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -2356,6 +2362,7 @@ async fn route_missing_local_model_remote_mesh_terminal_carries_the_real_request
         affinity: &affinity,
         plugin_manager: None,
         requested_by_node_id: None,
+        automatic_retry: None,
         exchange_channel: Some(&recording),
     };
     let lifecycle = OpenAiLifecycleAttachment::unowned();
@@ -2807,6 +2814,7 @@ async fn shared_plugin_model_name_stays_admitted_for_chat_and_ocr() {
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -2861,6 +2869,7 @@ async fn chat_still_rejected_for_model_served_only_by_an_ocr_endpoint() {
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -3001,6 +3010,7 @@ async fn local_plugin_serves_a_shared_model_name_no_mesh_candidate_admits() {
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -3074,6 +3084,7 @@ async fn mesh_candidate_that_admits_the_request_still_wins_over_the_plugin() {
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -3153,6 +3164,7 @@ async fn local_plugin_serves_a_name_whose_only_peer_candidate_is_ocr_only() {
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -3261,6 +3273,7 @@ async fn peer_ingress_ignores_a_remote_candidate_it_cannot_forward() {
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -3348,6 +3361,7 @@ async fn excluded_peer_does_not_suppress_the_local_plugin() {
         affinity: &affinity,
         plugin_manager: Some(&plugin_manager),
         requested_by_node_id: None,
+        automatic_retry: None,
         #[cfg(test)]
         exchange_channel: None,
     };
@@ -3431,6 +3445,7 @@ async fn native_cold_plugin_fallback_works_for_local_peer_and_failed_loads() {
             affinity: &affinity,
             plugin_manager: Some(&plugin_manager),
             requested_by_node_id: None,
+            automatic_retry: None,
             #[cfg(test)]
             exchange_channel: None,
         };

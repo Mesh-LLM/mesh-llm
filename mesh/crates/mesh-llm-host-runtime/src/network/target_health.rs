@@ -33,6 +33,10 @@ pub(crate) enum TargetHealthOutcome {
     /// right now. Cached per (model, target) so routing skips it while an
     /// alternative exists; a later success clears it.
     GateUnsatisfied,
+    /// A healthy host is busy; short cooldown without reputation penalty.
+    Shedding {
+        retry_after: Duration,
+    },
     ClientDisconnected,
 }
 
@@ -164,6 +168,18 @@ impl TargetHealth {
             TargetHealthOutcome::Timeout | TargetHealthOutcome::Unavailable => {
                 state.record_failure(key.clone(), now, self.config);
                 state.record_reputation_penalty(key, now, 1, self.config);
+            }
+            TargetHealthOutcome::Shedding { retry_after } => {
+                let failures = state.entries.get(&key).map_or(0, |entry| entry.failures);
+                state.entries.insert(
+                    key.clone(),
+                    TargetEntry {
+                        failures,
+                        cool_until: now + retry_after.min(Duration::from_secs(30)),
+                    },
+                );
+                state.touch_key(&key);
+                state.prune_over_capacity(self.config.max_entries);
             }
             TargetHealthOutcome::GateUnsatisfied => {
                 state.record_gate_cooldown(key, now, self.config);
@@ -494,6 +510,31 @@ mod tests {
 
     fn local(port: u16) -> InferenceTarget {
         InferenceTarget::Local(port)
+    }
+
+    #[test]
+    fn shedding_cools_only_that_placement_without_reputation_penalty() {
+        let health = TargetHealth::new();
+        let target = InferenceTarget::Local(9337);
+        health.record_outcome(
+            Some("big"),
+            &target,
+            TargetHealthOutcome::Shedding {
+                retry_after: Duration::from_secs(7),
+            },
+        );
+        assert!(
+            health
+                .strict_eligible_candidates("big", std::slice::from_ref(&target))
+                .is_empty()
+        );
+        assert_eq!(
+            health.strict_eligible_candidates("small", std::slice::from_ref(&target)),
+            vec![target.clone()]
+        );
+        let state = health.inner.lock().unwrap();
+        assert!(state.reputation.is_empty());
+        assert_eq!(state.entries.values().next().unwrap().failures, 0);
     }
 
     #[test]

@@ -3,7 +3,7 @@ use super::*;
 
 /// Drive one buffered OpenAI-shaped request through every ingress stage in
 /// order: control-plane/admission gates, auto-route resolution, mesh routing
-/// header enforcement, virtual-model dispatch, pipeline, and finally `route_request`'s ordinary
+/// header enforcement, virtual-model dispatch, and finally `route_request`'s ordinary
 /// dispatch. Each stage either hands the stream to the next one or writes a
 /// terminal response and returns -- this function owns the single terminal
 /// lifecycle event for the request no matter which stage ends it.
@@ -94,7 +94,20 @@ pub(super) async fn handle_buffered_api_request(
         return;
     }
 
-    let decision = match prepare_auto_route_decision(&mut request, &ctx.route, &descriptors).await {
+    // Retain directive intent before resolution rewrites the concrete body.
+    let automatic_single_model = request
+        .model_name
+        .as_deref()
+        .is_some_and(automatic::is_directive);
+    let single_model_only = super::super::nested_inference::consume(request.request_id);
+    let decision = match prepare_auto_route_decision_with_mode(
+        &mut request,
+        &ctx.route,
+        &descriptors,
+        single_model_only,
+    )
+    .await
+    {
         Ok(decision) => decision,
         Err(rejection) => {
             let outcome = send_auto_route_rejection(
@@ -112,7 +125,7 @@ pub(super) async fn handle_buffered_api_request(
         }
     };
 
-    let routing_model = decision.effective_model.clone();
+    let mut routing_model = decision.effective_model.clone();
     let tcp_stream = match enforce_mesh_routing_headers_before_dispatch(
         tcp_stream,
         &request,
@@ -163,16 +176,28 @@ pub(super) async fn handle_buffered_api_request(
     let tcp_stream = tcp_stream;
     let outcome = {
         let route_observer = lifecycle.route_observer();
-        route_request(
-            false,
-            tcp_stream,
-            &mut request,
-            &ctx.route,
-            routing_model.as_deref(),
-            decision.required_tokens,
-            route_observer,
-        )
-        .await
+        if automatic_single_model {
+            automatic_dispatch::dispatch(
+                tcp_stream,
+                &mut request,
+                &ctx.route,
+                &mut routing_model,
+                decision.required_tokens,
+                route_observer,
+            )
+            .await
+        } else {
+            route_request(
+                false,
+                tcp_stream,
+                &mut request,
+                &ctx.route,
+                routing_model.as_deref(),
+                decision.required_tokens,
+                route_observer,
+            )
+            .await
+        }
     };
     if let Some(model) = routing_model.as_deref()
         && !request.is_tokenize_request()
