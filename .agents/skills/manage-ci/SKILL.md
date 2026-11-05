@@ -499,6 +499,13 @@ checked-in expiry are the maintainer-controlled approval boundary.
   per-package feature-isolated builds otherwise retain large DWARF-bearing
   dependency variants and test executables on the same hosted disk. Keep the
   warmer and consumers aligned, and change the cache epoch with this policy.
+- The trusted seed also builds the isolated default-feature `xtask` Clippy
+  graph with `--all-targets`, independently of the product graph. Scope the
+  seed's test-debug override to its test-build command so Clippy retains the
+  consumer's profile. Seed compatibility keys include the root and workspace
+  package Cargo manifests and the warmer workflow's build configuration as well
+  as the image, lockfile and recipe inputs. Keep the publisher, consumers and
+  runner-image catalog aligned.
 - macOS compiler-cache bootstrap must use a job-owned Unix socket before any
   compiler probe. Eagerly start its server in every cache mode; parallel compiler
   clients must not race to initialize a newly allocated socket. Export

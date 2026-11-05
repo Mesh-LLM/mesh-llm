@@ -143,16 +143,22 @@ async fn collect_local(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
 }
 
 async fn collect_peers(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshModel>) {
-    let peers = {
+    let (peers, liveness): (Vec<_>, Vec<_>) = {
         let state = node.state.lock().await;
         state
             .peers
             .values()
             .filter(|peer| peer.is_admitted())
             .map(|peer| (peer.clone(), state.peer_has_observed_liveness(peer)))
-            .collect::<Vec<_>>()
+            .unzip()
     };
-    for (peer, live) in peers {
+    // Listing follows routing. A model that requires a plugin channel no local
+    // plugin declares is never routed to (`routing_table`, `routable_peers`),
+    // so its provider is listed as unavailable here: `/v1/models` drops it,
+    // while the catalog keeps the advertisement and its `requires` so a
+    // consumer can see what the node is missing.
+    let supported_channels = node.supported_model_channels(&peers).await;
+    for (peer, live) in peers.into_iter().zip(liveness) {
         let mut names: BTreeSet<_> = peer.serving_models.iter().cloned().collect();
         names.extend(peer.hosted_models.iter().cloned());
         names.extend(
@@ -168,7 +174,10 @@ async fn collect_peers(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
             )
         );
         for name in names {
-            let available = live && !paused && mesh::routes_http_model(&peer, &name);
+            let available = live
+                && !paused
+                && mesh::routes_http_model(&peer, &name)
+                && !mesh::model_requires_unsupported_channel(&peer, &name, &supported_channels);
             insert_observations(
                 catalog,
                 &name,
