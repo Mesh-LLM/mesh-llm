@@ -15,6 +15,10 @@ pub const MAX_STAGE_PREDICTED_TOKENS: usize = 262_144;
 pub const MAX_STAGE_SIDEBAND_VALUES: usize = 1_048_576;
 pub const MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_STAGE_STATE_IMPORT_BYTES: usize = 512 * 1024 * 1024;
+/// A receipts request: a JSON commit or challenge.
+pub const MAX_STAGE_RECEIPTS_REQUEST_BYTES: usize = 1024 * 1024;
+/// A receipts reply: commitments, or an opening with its replayed values.
+pub const MAX_STAGE_RECEIPTS_REPLY_BYTES: usize = 512 * 1024 * 1024;
 pub const MAX_STAGE_ACTIVATION_BYTES: usize = 512 * 1024 * 1024;
 pub const MAX_STAGE_DECODED_ACTIVATION_BYTES: usize = 512 * 1024 * 1024;
 pub const STAGE_ACTIVATION_FRAME_VERSION: u32 = 2;
@@ -58,6 +62,9 @@ pub enum WireMessageKind {
     TryRestorePrefillDecode = 18,
     TrimSession = 19,
     PredictionReturnOpen = 20,
+    /// A receipts commit or open for this stage and every later one; the
+    /// body is in `raw_bytes`, and the reply is a [`WireReplyKind::Receipts`].
+    Receipts = 25,
 }
 
 impl WireMessageKind {
@@ -83,6 +90,16 @@ impl WireMessageKind {
                 | Self::PrefillFinalEmbd
                 | Self::DecodeReplayFinalEmbd
         )
+    }
+
+    pub fn is_receipts(self) -> bool {
+        matches!(self, Self::Receipts)
+    }
+
+    /// Kinds whose body is opaque bytes in `raw_bytes`, counted by
+    /// `token_count`.
+    pub fn carries_raw_bytes(self) -> bool {
+        matches!(self, Self::StateImport | Self::Receipts)
     }
 
     pub fn is_session_control(self) -> bool {
@@ -150,6 +167,7 @@ impl TryFrom<i32> for WireMessageKind {
             22 => Ok(Self::RetireVerifyWindow),
             23 => Ok(Self::DiscardStaleWindows),
             24 => Ok(Self::PrefillReadout),
+            25 => Ok(Self::Receipts),
             _ => Err(invalid_data("unknown stage message kind")),
         }
     }
@@ -162,6 +180,8 @@ pub enum WireReplyKind {
     PredictedToken = 2,
     PredictedTokens = 3,
     TokenScores = 4,
+    /// The body of a receipts reply ([`super::send_receipts_reply`]).
+    Receipts = 5,
 }
 
 impl TryFrom<i32> for WireReplyKind {
@@ -174,6 +194,7 @@ impl TryFrom<i32> for WireReplyKind {
             2 => Ok(Self::PredictedToken),
             3 => Ok(Self::PredictedTokens),
             4 => Ok(Self::TokenScores),
+            5 => Ok(Self::Receipts),
             _ => Err(invalid_data("unknown stage reply kind")),
         }
     }
@@ -464,6 +485,7 @@ impl StageStateHeader {
             || kind.is_verify_retirement()
             || kind.is_stale_window_discard()
             || kind.is_generation_control()
+            || kind.is_receipts()
         {
             return true;
         }
@@ -598,7 +620,7 @@ impl StageWireMessage {
     }
 
     fn payload_wire_bytes(&self) -> usize {
-        if self.kind == WireMessageKind::StateImport {
+        if self.kind.carries_raw_bytes() {
             return self.raw_bytes.len();
         }
         self.tokens
@@ -624,6 +646,26 @@ impl StageWireMessage {
 
     pub fn stop() -> Self {
         Self::stop_with_identity(0, 0)
+    }
+
+    /// A receipts request with a JSON `body`, for the stage that receives it
+    /// and every later one.
+    pub fn receipts(body: Vec<u8>) -> Self {
+        Self {
+            kind: WireMessageKind::Receipts,
+            pos_start: 0,
+            token_count: i32::try_from(body.len()).unwrap_or(i32::MAX),
+            state: StageStateHeader::new(WireMessageKind::Receipts),
+            request_id: 0,
+            session_id: 0,
+            sampling: None,
+            chat_sampling_metadata: None,
+            tokens: Vec::new(),
+            positions: Vec::new(),
+            activation: Vec::new(),
+            readout_tokens: Vec::new(),
+            raw_bytes: body,
+        }
     }
 
     /// Construct a stop request bound to the specified stage and session identity.
@@ -958,6 +1000,7 @@ fn expected_phase(kind: WireMessageKind) -> WireStagePhase {
         || kind.is_verify_retirement()
         || kind.is_generation_control()
         || kind.is_prefix_cache_control()
+        || kind.is_receipts()
     {
         WireStagePhase::Prefill
     } else if kind.is_decode_replay() {

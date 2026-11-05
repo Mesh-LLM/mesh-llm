@@ -768,6 +768,15 @@ impl StageOpenAiBackend {
         Ok(recorded_state || recorded_replay.is_some())
     }
 
+    /// A stage that issues receipts does not reuse tokens an earlier turn
+    /// generated: a turn's receipt covers only what the turn computed, and
+    /// those tokens would sit in its cached prefix instead.
+    fn issues_receipts(&self) -> bool {
+        crate::runtime_state::panic_recovery::lock_runtime(&self.runtime)
+            .receipts()
+            .is_some()
+    }
+
     pub(super) fn try_restore_embedded_split_exact_replay(
         &self,
         request: &EmbeddedStageZeroGeneration<'_>,
@@ -780,6 +789,7 @@ impl StageOpenAiBackend {
         if request.prompt_token_ids.is_empty()
             || !kv.should_lookup()
             || !request_allows_exact_replay(request)
+            || self.issues_receipts()
         {
             return Ok(None);
         }
@@ -885,7 +895,7 @@ impl StageOpenAiBackend {
         let Some(kv) = self.kv.as_ref() else {
             return Ok(None);
         };
-        if request.prompt_token_ids.is_empty() || !kv.should_lookup() {
+        if request.prompt_token_ids.is_empty() || !kv.should_lookup() || self.issues_receipts() {
             return Ok(None);
         }
         let timer = PhaseTimer::start();

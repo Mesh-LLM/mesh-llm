@@ -825,6 +825,7 @@ impl RuntimeState {
             // A reused lane starts this session's DFlash counters over.
             lane_session.session.dflash_reset_health();
             self.sessions.insert(session_id.to_string(), lane_session);
+            self.note_receipt_sequence(session_id);
             // Every active session must have a tracked position from the
             // moment it activates (both a fresh and a reused idle lane start
             // at native position 0), so `canonical_session_position` is

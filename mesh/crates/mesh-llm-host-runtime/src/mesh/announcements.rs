@@ -229,6 +229,10 @@ impl Node {
 
     pub(crate) async fn local_descriptors_with_plugins(&self) -> Vec<ServedModelDescriptor> {
         let mut descriptors = self.served_model_descriptors.lock().await.clone();
+        let receipt_models = self.receipt_models.lock().unwrap().clone();
+        for descriptor in &mut descriptors {
+            descriptor.receipts = receipt_models.contains(&descriptor.identity.model_name);
+        }
         descriptors.extend(self.plugin_inference_descriptors().await);
         descriptors
     }

@@ -240,6 +240,13 @@ pub(in crate::network::openai) async fn route_remote_attempt(
         served_by,
         peer_capsule_id,
     } = logging;
+    // a local client's chat completion names this node's receipt key when
+    // it audits its peers' receipts
+    let watch = match tcp_stream.is_mesh_peer() {
+        false => crate::network::receipt_audit::watch(node, host_id, prefetched).await,
+        true => None,
+    };
+    let prefetched = watch.as_ref().map_or(prefetched, |w| w.request.as_slice());
     let (mut quic_send, mut quic_recv) = match node.open_http_tunnel(host_id).await {
         Ok(tunnel) => tunnel,
         Err(err) => {
@@ -258,7 +265,10 @@ pub(in crate::network::openai) async fn route_remote_attempt(
         return RouteAttemptResult::RetryableUnavailable;
     }
 
-    route_remote_attempt_after_forward(
+    if let Some(watch) = &watch {
+        tcp_stream.observe(watch.observer.clone());
+    }
+    let result = route_remote_attempt_after_forward(
         tcp_stream,
         &mut quic_recv,
         host_id,
@@ -269,7 +279,11 @@ pub(in crate::network::openai) async fn route_remote_attempt(
         peer_capsule_id,
         route_observer,
     )
-    .await
+    .await;
+    if let Some(watch) = &watch {
+        tcp_stream.stop_observing(&watch.observer);
+    }
+    result
 }
 
 async fn forward_peer_request(

@@ -395,6 +395,7 @@ impl Node {
             serving_models: self.serving_models.clone(),
             startup_models_resolving: self.startup_models_resolving.clone(),
             served_model_descriptors: self.served_model_descriptors.clone(),
+            receipt_models: self.receipt_models.clone(),
             served_model_generations: self.served_model_generations.clone(),
             served_model_weights_ports: self.served_model_weights_ports.clone(),
             model_runtime_descriptors: self.model_runtime_descriptors.clone(),

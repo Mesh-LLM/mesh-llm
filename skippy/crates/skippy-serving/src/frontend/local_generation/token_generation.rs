@@ -428,7 +428,13 @@ impl StageOpenAiBackend {
             receipt_request_id,
             receipt_session_id,
         );
+        // a receipt names the last sampled token, which no ubatch computes,
+        // and ends at the last token fed
+        let final_token = std::cell::Cell::new(None);
+        let sampled = std::cell::Cell::new(0u32);
         let mut emit_token = |token_id| {
+            final_token.set(Some(token_id));
+            sampled.set(sampled.get().saturating_add(1));
             if let Some(observation) = receipt_observation.as_ref()
                 && let Some(observation) = observation.borrow_mut().as_mut()
             {
@@ -509,6 +515,14 @@ impl StageOpenAiBackend {
             Ok(())
         });
         let generation_succeeded = result.is_ok();
+        if generation_succeeded {
+            cache_stats.receipt = self.finish_local_receipt_turn(
+                &request,
+                &session_id,
+                final_token.get(),
+                sampled.get(),
+            );
+        }
         if receipt_cancelled {
             lifecycle.mark_cancelled();
         }

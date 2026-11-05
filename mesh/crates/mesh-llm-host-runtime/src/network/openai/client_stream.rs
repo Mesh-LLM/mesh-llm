@@ -109,6 +109,31 @@ impl ClientStream {
         }
     }
 
+    /// Observe the bytes written from here on with `observer` too, until
+    /// [`Self::stop_observing`].
+    pub(crate) fn observe(&mut self, observer: Arc<dyn WireBytesObserver>) {
+        let original = std::mem::replace(self, Self::Null);
+        *self = original.with_wire_bytes_observer(observer);
+    }
+
+    /// Stop observing with `observer`, wherever a later wrapper put its
+    /// layer. The observer is finished as cancelled unless the response it
+    /// saw already ended.
+    pub(crate) fn stop_observing(&mut self, observer: &Arc<dyn WireBytesObserver>) {
+        match self {
+            Self::Observed { tap, .. } if tap.observes(observer) => {
+                let Self::Observed { stream, .. } = std::mem::replace(self, Self::Null) else {
+                    unreachable!("matched above");
+                };
+                *self = *stream;
+            }
+            Self::Observed { stream, .. } | Self::Metadata { stream, .. } => {
+                stream.stop_observing(observer);
+            }
+            _ => {}
+        }
+    }
+
     /// Mark upstream timeout/cancellation explicitly before transport shutdown.
     pub(crate) fn finish_wire_bytes(&mut self, incomplete: WireBytesIncomplete) {
         match self {

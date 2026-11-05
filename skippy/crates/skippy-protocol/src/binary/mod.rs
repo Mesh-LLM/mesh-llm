@@ -14,26 +14,28 @@ pub use activation::{
 pub use activation_codec::f16_bits::{f16_bits_to_f32, f32_to_f16_bits};
 pub use codec::{
     read_stage_message, read_stage_message_for_codec, read_stage_message_for_codec_policy,
-    read_stage_message_for_codec_policy_with_frame_budget, recv_ready, recv_reply, send_ready,
-    send_reply_ack, send_reply_ack_with_stats, send_reply_message, send_reply_predicted,
-    send_reply_predicted_tokens_with_stats, send_reply_predicted_tokens_with_window_and_stats,
-    send_reply_predicted_with_stats, send_reply_predicted_with_tokens_and_stats,
-    send_reply_predicted_with_tokens_window_and_stats, write_stage_message,
+    read_stage_message_for_codec_policy_with_frame_budget, recv_ready, recv_receipts_reply,
+    recv_reply, send_ready, send_receipts_reply, send_reply_ack, send_reply_ack_with_stats,
+    send_reply_message, send_reply_predicted, send_reply_predicted_tokens_with_stats,
+    send_reply_predicted_tokens_with_window_and_stats, send_reply_predicted_with_stats,
+    send_reply_predicted_with_tokens_and_stats, send_reply_predicted_with_tokens_window_and_stats,
+    write_stage_message,
 };
 pub use types::sampling_flags;
 pub use types::{
     LLAMA_TOKEN_NULL, MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_ACTIVATION_DIMS,
     MAX_STAGE_ACTIVATION_PARTS, MAX_STAGE_CHAT_SAMPLING_METADATA_BYTES,
     MAX_STAGE_DECODED_ACTIVATION_BYTES, MAX_STAGE_DRY_SEQUENCE_BREAKERS, MAX_STAGE_LOGIT_BIAS,
-    MAX_STAGE_PREDICTED_TOKENS, MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES,
-    MAX_STAGE_SIDEBAND_VALUES, MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC,
-    STAGE_ACTIVATION_FRAME_VERSION, STAGE_ACTIVATION_IDENTITY_BYTES,
-    STAGE_ACTIVATION_PART_OPTIONAL, STAGE_LOGIT_BIAS_WIRE_BYTES, STAGE_REPLY_STATS_FIELD_COUNT,
-    STAGE_REPLY_STATS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES, STAGE_STATE_HEADER_BYTES,
-    STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES, StageActivationDesc, StageActivationFrame,
-    StageActivationPartDesc, StageLogitBias, StageNativeMtpDraft, StageReply, StageReplyStats,
-    StageReplyWindow, StageRequestEpoch, StageSamplingConfig, StageStateHeader, StageWireMessage,
-    WireMessageKind, WireReplyKind, WireStagePhase, state_flags,
+    MAX_STAGE_PREDICTED_TOKENS, MAX_STAGE_RECEIPTS_REPLY_BYTES, MAX_STAGE_RECEIPTS_REQUEST_BYTES,
+    MAX_STAGE_SAMPLERS, MAX_STAGE_SAMPLING_STRING_BYTES, MAX_STAGE_SIDEBAND_VALUES,
+    MAX_STAGE_STATE_IMPORT_BYTES, READY_MAGIC, STAGE_ACTIVATION_FRAME_VERSION,
+    STAGE_ACTIVATION_IDENTITY_BYTES, STAGE_ACTIVATION_PART_OPTIONAL, STAGE_LOGIT_BIAS_WIRE_BYTES,
+    STAGE_REPLY_STATS_FIELD_COUNT, STAGE_REPLY_STATS_WIRE_BYTES, STAGE_SAMPLING_CONFIG_BASE_BYTES,
+    STAGE_STATE_HEADER_BYTES, STAGE_STATE_VERSION, STAGE_WIRE_FIXED_HEADER_BYTES,
+    StageActivationDesc, StageActivationFrame, StageActivationPartDesc, StageLogitBias,
+    StageNativeMtpDraft, StageReply, StageReplyStats, StageReplyWindow, StageRequestEpoch,
+    StageSamplingConfig, StageStateHeader, StageWireMessage, WireMessageKind, WireReplyKind,
+    WireStagePhase, state_flags,
 };
 
 pub(crate) fn invalid_data(message: &'static str) -> std::io::Error {
@@ -1275,6 +1277,38 @@ mod tests {
         assert_eq!(decoded.session_id, 29);
         assert!(decoded.tokens.is_empty());
         assert!(decoded.activation.is_empty());
+    }
+
+    /// A receipts request carries its JSON body, and its reply is read
+    /// only as a receipts reply.
+    #[test]
+    fn receipts_messages_round_trip() {
+        let message = StageWireMessage::receipts(br#"{"commit":{}}"#.to_vec());
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &message).unwrap();
+        let decoded = read_stage_message(Cursor::new(bytes), 2048).unwrap();
+        assert_eq!(decoded.kind, WireMessageKind::Receipts);
+        assert_eq!(decoded.raw_bytes, br#"{"commit":{}}"#.to_vec());
+
+        let mut reply = Vec::new();
+        send_receipts_reply(&mut reply, Ok(b"[1]")).unwrap();
+        assert_eq!(
+            recv_receipts_reply(Cursor::new(reply.clone())).unwrap(),
+            Ok(b"[1]".to_vec())
+        );
+        assert!(recv_reply(Cursor::new(reply.clone())).is_err());
+        reply.truncate(reply.len() - 1);
+        assert!(recv_receipts_reply(Cursor::new(reply)).is_err());
+
+        let mut refused = Vec::new();
+        send_receipts_reply(&mut refused, Err("no turn")).unwrap();
+        assert_eq!(
+            recv_receipts_reply(Cursor::new(refused)).unwrap(),
+            Err("no turn".to_owned())
+        );
+        let mut ack = Vec::new();
+        send_reply_ack(&mut ack).unwrap();
+        assert!(recv_receipts_reply(Cursor::new(ack)).is_err());
     }
 
     /// State imports preserve the exact exported byte payload.
