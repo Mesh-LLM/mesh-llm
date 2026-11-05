@@ -1142,6 +1142,62 @@ mod tests {
         handle.stop().await.expect("stop embedded mesh client");
     }
 
+    /// Starts a client node that times out at once and returns the startup
+    /// error with the time until the worker was stopped and joined.
+    async fn stop_during_startup(relay: Option<String>) -> (String, Duration) {
+        let started = Instant::now();
+        let startup = start_embedded_serve(EmbeddedServeConfig {
+            mode: EmbeddedMeshNodeMode::Client,
+            api_port: free_local_port(),
+            console_port: free_local_port(),
+            startup_timeout: Duration::from_millis(1),
+            disable_iroh_relays: relay.is_none(),
+            relay: relay.into_iter().collect(),
+            bind_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
+            ..EmbeddedServeConfig::default()
+        })
+        .await;
+        let elapsed = started.elapsed();
+        match startup {
+            Ok(handle) => {
+                let _ = handle.stop().await;
+                panic!(
+                    "embedded startup must not report ready before its worker signals readiness"
+                );
+            }
+            Err(error) => (format!("{error:#}"), elapsed),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial_test::serial]
+    async fn embedded_startup_timeout_does_not_wait_out_the_relay_connection() {
+        // Without relays the node skips its relay and net report waits; the
+        // stop time there is this machine's baseline.
+        let (_, baseline) = stop_during_startup(None).await;
+
+        // A relay that accepts connections but never answers holds startup in
+        // those waits (5 s and the net report's 3 s) on any machine.
+        let relay = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let relay_url = format!("http://{}", relay.local_addr().unwrap());
+        let (message, elapsed) = stop_during_startup(Some(relay_url)).await;
+        drop(relay);
+
+        assert!(
+            message.contains("timed out waiting for the embedded mesh runtime to become ready"),
+            "startup must end in its own timeout, not an earlier failure: {message}"
+        );
+        assert!(
+            !message.contains("waiting for embedded mesh runtime thread to exit"),
+            "a stop during the relay wait must end the worker in time: {message}"
+        );
+        // Either wait left running adds at least two seconds.
+        assert!(
+            elapsed < baseline + Duration::from_secs(2),
+            "stopping took {elapsed:?}, {baseline:?} without relays"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial_test::serial]
     async fn embedded_startup_times_out_and_cleans_up_worker() {
