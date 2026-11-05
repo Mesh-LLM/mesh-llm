@@ -891,6 +891,7 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
         lease_until_unix_ms: stage.load.lease_until_unix_ms,
         compute_busy_nanos: compute.busy_nanos,
         compute_operations: compute.operations,
+        compute_decode_tokens: compute.decode_tokens,
         dflash_target_layers: server.split_dflash_target_layers.clone(),
     }
 }
@@ -934,6 +935,7 @@ fn stopped_status(stop: &StageStopRequest) -> StageStatusSnapshot {
         lease_until_unix_ms: 0,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        compute_decode_tokens: 0,
         dflash_target_layers: None,
     }
 }
@@ -983,6 +985,7 @@ fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatu
         lease_until_unix_ms: load.lease_until_unix_ms,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        compute_decode_tokens: 0,
         dflash_target_layers: None,
     }
 }

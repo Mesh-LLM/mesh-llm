@@ -1101,6 +1101,7 @@ async fn seed_runtime_data_api_state(state: &MeshApi) {
             lease_until_unix_ms: 999_999,
             compute_busy_nanos: 0,
             compute_operations: 0,
+            compute_decode_tokens: 0,
             dflash_target_layers: None,
         },
     )
