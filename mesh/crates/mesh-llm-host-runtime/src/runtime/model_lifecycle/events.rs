@@ -11,7 +11,7 @@
 //!
 //! One load operation uses a root reservation (owns the `ModelAvailability`
 //! terminal) plus a child reservation (owns the `ModelLoading` terminal).
-//! Native model-load completion resolves only the child; `model_available`
+//! Native model-load completion resolves only the children; `model_available`
 //! is a separate, later call from Rust code after serving surfaces are
 //! usable, per the plan's "native completion MUST NOT imply availability"
 //! invariant.
@@ -339,7 +339,8 @@ impl LoadOperation {
 
     /// §8.2 `model resolution completed` -- called once the model's source
     /// (local path / remote catalog ref) is resolved, before any native
-    /// load work begins. Resolves only the `prep` child's terminal.
+    /// load work begins (the startup load reaches it only through
+    /// `native_load_completed`). Resolves only the `prep` child's terminal.
     ///
     /// Also resolves §8.2's DISTINCT `model preparation completed` bullet
     /// on the separate `ready` child, right here: in every call site this
@@ -423,12 +424,17 @@ impl LoadOperation {
         }
     }
 
-    /// Native model load completed. Resolves only the `load` child's
-    /// terminal; the root (public availability) is intentionally untouched.
+    /// Native model load completed. Resolves the `load` child's terminal;
+    /// the root (public availability) is intentionally untouched.
     /// Also emits `ModelAvailability::NativeModelLoaded` (§8.4, a distinct
     /// required event from this family, StateTransition class) on the root
     /// -- native completion informs, but never decides, availability.
+    ///
+    /// A loaded model was resolved and prepared, so a caller that never
+    /// reported it (the startup load) settles `prep`/`ready` here as
+    /// completed rather than dropping them into `terminal_not_delivered`.
     pub(crate) fn native_load_completed(mut self, model: &str) -> AvailabilityOperation {
+        self.resolution_completed(model);
         if let Some(load) = self.load.take() {
             let _ =
                 load.ingress()
@@ -1000,6 +1006,33 @@ mod tests {
         engine.drain();
         assert_eq!(engine.occupied_count(), 0);
         clear_runtime_event_engine();
+    }
+
+    /// A successful load reports preparation as completed, never as
+    /// `terminal_not_delivered`, whether or not the caller reported
+    /// resolution first (the startup load does not; the runtime load does).
+    #[test]
+    #[serial_test::serial(runtime_event_engine_state)]
+    fn successful_load_settles_preparation_as_completed() {
+        for report_resolution in [false, true] {
+            let engine = install_test_engine();
+            let mut op = LoadOperation::begin("org/model");
+            if report_resolution {
+                op.resolution_completed("org/model");
+            }
+            let availability = op.native_load_completed("org/model");
+            engine.drain();
+            assert_eq!(engine.occupied_count(), 1, "the root stays open");
+            availability.model_available("org/model");
+            let kinds = engine.published_kinds();
+            let count = |kind: &str| kinds.iter().filter(|k| **k == kind).count();
+            assert_eq!(count("model_resolution_completed"), 1, "{kinds:?}");
+            assert_eq!(count("model_preparation_completed"), 1, "{kinds:?}");
+            assert_eq!(count("model_resolution_failed"), 0, "{kinds:?}");
+            assert_eq!(count("model_preparation_failed"), 0, "{kinds:?}");
+            assert_eq!(engine.occupied_count(), 0);
+            clear_runtime_event_engine();
+        }
     }
 
     #[test]
