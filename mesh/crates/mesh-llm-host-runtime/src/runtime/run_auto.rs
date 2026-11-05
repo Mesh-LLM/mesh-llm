@@ -197,14 +197,16 @@ pub(crate) async fn run_embedded_runtime(mut options: EmbeddedRuntimeOptions) ->
     let control_rx = options.control_rx.take();
     let embedded_readiness_tx = options.embedded_readiness_tx.take();
     let options = options_from_embedded_options(options);
-    run_runtime_cli(
-        options,
-        Some(surface),
-        None,
-        control_rx,
-        embedded_readiness_tx,
+    crate::sdk::embedded_shutdown::stopped_during_startup_is_ok(
+        run_runtime_cli(
+            options,
+            Some(surface),
+            None,
+            control_rx,
+            embedded_readiness_tx,
+        )
+        .await,
     )
-    .await
 }
 
 pub(super) fn options_from_embedded_options(embedded: EmbeddedRuntimeOptions) -> RuntimeOptions {
