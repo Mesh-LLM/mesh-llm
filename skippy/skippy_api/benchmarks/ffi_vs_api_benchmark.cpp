@@ -1595,6 +1595,315 @@ BENCHMARK(stage_chain_api)->Name("stage_chain/API")->UseRealTime();
 BENCHMARK(causal_scores_ffi)->Name("causal_scores/FFI")->Arg(64)->UseRealTime();
 BENCHMARK(causal_scores_api)->Name("causal_scores/API")->Arg(64)->UseRealTime();
 
+// ---------------------------------------------------------------------------
+// expert_placement: routed-expert host placement knob (patch 0013).
+//
+// FFI hand-assembles the skippy_runtime_config - including the
+// host_expert_layer_start/end pair - and opens through skippy_model_open;
+// API sets StageSpec::host_experts and opens through StagedModel::open. Both
+// sides open the same planned stage with the same block range and embed the
+// same window, so the ratio isolates the boundary, and the byte-identical
+// gate proves the knob crosses it without changing outputs. Dense fixtures
+// have no ffn_*_exps tensors, so placement is inert on them; positive
+// routed-expert coverage needs a MoE GGUF.
+// ---------------------------------------------------------------------------
+
+class ExpertPlacementBench {
+public:
+    ExpertPlacementBench() = default;
+    ExpertPlacementBench(const ExpertPlacementBench&) = delete;
+    ExpertPlacementBench& operator=(const ExpertPlacementBench&) = delete;
+
+    [[nodiscard]] bool setup(const std::string& path, std::string& error) {
+        path_ = path;
+        auto inventory = skippy::probe::read_inventory(path);
+        if (!inventory) {
+            error = "gguf: " + inventory.error();
+            return false;
+        }
+        layers_ = skippy::probe::layer_count_from(*inventory);
+        if (layers_ < 1) {
+            error = "model has no layers";
+            return false;
+        }
+
+        ranges_ = {skippy::LayerRange{0, layers_}};
+        skippy::llama::LlamaBackend backend;
+        auto lease = backend.plan_model_stages(path, ranges_);
+        if (!lease) {
+            error = "plan: " + lease.error().message;
+            return false;
+        }
+        lease_ = std::move(*lease);
+        spec_ = skippy::llama::own(lease_.configs.front());
+        spec_.host_experts = skippy::LayerRange{0, layers_};
+
+        auto source = skippy::llama::StagedModel::open(path, spec_);
+        if (!source) {
+            error = "source open: " + source.error().message;
+            return false;
+        }
+        token_source_.emplace(std::move(*source));
+        if (!skippy_model_supports_causal_readout(token_source_->native())) {
+            error = "model does not support causal readout; point SKIPPY_BENCH_MODEL at a "
+                    "causal decoder";
+            return false;
+        }
+        if (!tokenise(error)) return false;
+
+        auto session = token_source_->create_session();
+        if (!session) {
+            error = "source session: " + session.error().message;
+            return false;
+        }
+        if (!read_through(*session, fed_count(), reference_, error)) return false;
+        return true;
+    }
+
+    /// One placed open + readout on the raw C ABI, knob set by hand.
+    [[nodiscard]] bool step_ffi(std::string& error) {
+        std::vector<const char*> residents;
+        residents.reserve(spec_.resident_identities.size());
+        for (const std::string& value : spec_.resident_identities)
+            residents.push_back(value.c_str());
+        std::vector<const char*> imports;
+        imports.reserve(spec_.import_identities.size());
+        for (const std::string& value : spec_.import_identities)
+            imports.push_back(value.c_str());
+        std::vector<const char*> import_bindings;
+        import_bindings.reserve(spec_.import_bindings.size());
+        for (const std::string& value : spec_.import_bindings)
+            import_bindings.push_back(value.c_str());
+        std::vector<const char*> exports;
+        exports.reserve(spec_.export_identities.size());
+        for (const std::string& value : spec_.export_identities)
+            exports.push_back(value.c_str());
+        std::vector<const char*> export_bindings;
+        export_bindings.reserve(spec_.export_bindings.size());
+        for (const std::string& value : spec_.export_bindings)
+            export_bindings.push_back(value.c_str());
+
+        auto config = skippy_runtime_config_default();
+        config.stage_index = spec_.stage_index;
+        config.layer_start = spec_.layers.start;
+        config.layer_end = spec_.layers.end;
+        config.host_expert_layer_start = 0;
+        config.host_expert_layer_end = layers_;
+        config.ctx_size = 512;
+        config.n_batch = 512;
+        config.n_ubatch = 512;
+        config.n_gpu_layers = 999;
+        config.load_mode = SKIPPY_LOAD_MODE_LAYER_PACKAGE;
+        config.execution_contract = spec_.execution_contract.c_str();
+        config.resident_tensor_names = residents.data();
+        config.resident_tensor_name_count = residents.size();
+        config.activation_import_identities = imports.empty() ? nullptr : imports.data();
+        config.activation_import_identity_count = imports.size();
+        config.activation_import_bindings =
+            import_bindings.empty() ? nullptr : import_bindings.data();
+        config.activation_export_identities = exports.empty() ? nullptr : exports.data();
+        config.activation_export_identity_count = exports.size();
+        config.activation_export_bindings =
+            export_bindings.empty() ? nullptr : export_bindings.data();
+
+        skippy_error* failure = nullptr;
+        skippy_model* model = nullptr;
+        if (skippy_model_open(path_.c_str(), &config, &model, &failure) != SKIPPY_STATUS_OK) {
+            error = describe(SKIPPY_STATUS_ERROR, failure);
+            return false;
+        }
+        skippy_session* session = nullptr;
+        if (skippy_session_create(model, &session, &failure) != SKIPPY_STATUS_OK) {
+            error = describe(SKIPPY_STATUS_ERROR, failure);
+            (void)skippy_model_free(model, nullptr);
+            return false;
+        }
+        const bool read = read_raw(session, fed_count(), ffi_scores_, error);
+        (void)skippy_session_free(session, nullptr);
+        (void)skippy_model_free(model, nullptr);
+        return read;
+    }
+
+    /// One placed open + readout through the facade.
+    [[nodiscard]] bool step_api(std::string& error) {
+        auto model = skippy::llama::StagedModel::open(path_, spec_);
+        if (!model) {
+            error = "api open: " + model.error().message;
+            return false;
+        }
+        auto session = model->create_session();
+        if (!session) {
+            error = "api session: " + session.error().message;
+            return false;
+        }
+        return read_through(*session, fed_count(), api_scores_, error);
+    }
+
+    [[nodiscard]] std::span<const float> reference() const noexcept {
+        return {reference_.data(), selected_.size()};
+    }
+    [[nodiscard]] std::span<const float> api_scores() const noexcept {
+        return {api_scores_.data(), selected_.size()};
+    }
+    [[nodiscard]] std::span<const float> ffi_scores() const noexcept {
+        return {ffi_scores_.data(), selected_.size()};
+    }
+    [[nodiscard]] std::size_t fed_count() const noexcept {
+        return std::min(fed_.size(), static_cast<std::size_t>(kFedWindow));
+    }
+    [[nodiscard]] std::size_t layers() const noexcept { return static_cast<std::size_t>(layers_); }
+
+private:
+    using Scores = std::array<float, skippy::detail::max_selected_tokens>;
+
+    [[nodiscard]] bool read_raw(skippy_session* session, std::size_t fed_count, Scores& out,
+                                std::string& error) {
+        skippy_error* failure = nullptr;
+        if (skippy_session_reset(session, &failure) != SKIPPY_STATUS_OK) {
+            error = describe(SKIPPY_STATUS_ERROR, failure);
+            return false;
+        }
+        skippy_token_score_request score{
+            .token_ids = reinterpret_cast<const llama_token*>(selected_.data()),
+            .token_count = selected_.size(),
+            .out_log_probabilities = out.data(),
+        };
+        skippy_iteration_request request{
+            .session = session,
+            .token_ids = reinterpret_cast<const llama_token*>(fed_.data()),
+            .token_count = fed_count,
+            .positions = nullptr,
+            .position_count = 0,
+            .sampling = nullptr,
+            .input_desc = nullptr,
+            .input_payload = nullptr,
+            .sample_last = false,
+            .readout = &score,
+        };
+        std::size_t sampled = 0;
+        failure = nullptr;
+        if (skippy_iteration_batch_sampled(&request, 1, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                           nullptr, 0, &sampled, &failure) != SKIPPY_STATUS_OK) {
+            error = describe(SKIPPY_STATUS_ERROR, failure);
+            return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool read_through(skippy::llama::StagedSession& session, std::size_t fed_count,
+                                    Scores& out, std::string& error) {
+        if (const auto cleared = session.reset(); !cleared) {
+            error = "reset: " + cleared.error().message;
+            return false;
+        }
+        std::span<float> window{out.data(), selected_.size()};
+        const auto read = skippy::llama::read_selected_log_probs(
+            session, std::span<const skippy::Token>{fed_.data(), fed_count},
+            std::span<const skippy::Token>{selected_.data(), selected_.size()}, window);
+        if (!read) {
+            error = "read: " + read.error().message;
+            return false;
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool tokenise(std::string& error) {
+        std::vector<llama_token> native(kMaxTokens);
+        const std::string text = Harness::text(4096);
+        std::size_t count = 0;
+        skippy_error* failure = nullptr;
+        auto status = skippy_tokenize(token_source_->native(), text.c_str(), true, native.data(),
+                                      native.size(), &count, &failure);
+        if (status == SKIPPY_STATUS_BUFFER_TOO_SMALL) {
+            if (failure != nullptr) skippy_error_free(failure);
+            native.resize(count);
+            failure = nullptr;
+            status = skippy_tokenize(token_source_->native(), text.c_str(), true, native.data(),
+                                     native.size(), &count, &failure);
+        }
+        if (status != SKIPPY_STATUS_OK) {
+            error = describe(status, failure);
+            return false;
+        }
+        if (count < kMinTokens) {
+            error = "corpus tokenised to only " + std::to_string(count) + " tokens";
+            return false;
+        }
+        fed_.resize(count);
+        std::memcpy(fed_.data(), native.data(), count * sizeof(llama_token));
+        constexpr std::size_t kSelected = 8;
+        selected_.assign(fed_.begin(), fed_.begin() + static_cast<std::ptrdiff_t>(kSelected));
+        return true;
+    }
+
+    static constexpr std::size_t kMaxTokens = 4096;
+    static constexpr std::size_t kMinTokens = 64;
+    static constexpr std::size_t kFedWindow = 64;
+
+    std::string path_;
+    std::vector<skippy::LayerRange> ranges_;
+    skippy::llama::PlanLease lease_;
+    skippy::llama::StageSpec spec_;
+    std::optional<skippy::llama::StagedModel> token_source_;
+    std::vector<skippy::Token> fed_;
+    std::vector<skippy::Token> selected_;
+    Scores ffi_scores_{};
+    Scores api_scores_{};
+    Scores reference_{};
+    std::int32_t layers_ = 0;
+};
+
+/// Shared setup + agreement gates, then the timed placed-open + readout loop.
+void expert_placement_body(benchmark::State& state, bool use_ffi) {
+    const char* variable = std::getenv("SKIPPY_BENCH_MODEL");
+    if (variable == nullptr || *variable == '\0') {
+        state.SkipWithError("SKIPPY_BENCH_MODEL is not set");
+        return;
+    }
+
+    ExpertPlacementBench bench;
+    std::string error;
+    if (!bench.setup(variable, error)) {
+        state.SkipWithError(error.c_str());
+        return;
+    }
+
+    // Gates first: with the knob on, both arms must reproduce the reference
+    // readout byte for byte, or the ratio would compare different work.
+    const auto same = [&bench]() {
+        return std::memcmp(bench.ffi_scores().data(), bench.api_scores().data(),
+                           bench.reference().size() * sizeof(float)) == 0 &&
+               std::memcmp(bench.api_scores().data(), bench.reference().data(),
+                           bench.reference().size() * sizeof(float)) == 0;
+    };
+    if (!bench.step_ffi(error) || !bench.step_api(error) || !same()) {
+        state.SkipWithError(error.empty() ? "expert_placement sides disagree" : error.c_str());
+        return;
+    }
+
+    for (auto _ : state) {
+        if (!(use_ffi ? bench.step_ffi(error) : bench.step_api(error))) {
+            state.SkipWithError(error.c_str());
+            return;
+        }
+    }
+    // A mid-run divergence must fail the row, not just the first iteration.
+    if (!bench.step_ffi(error) || !bench.step_api(error) || !same()) {
+        state.SkipWithError(error.empty() ? "expert_placement sides diverged during the run"
+                                          : error.c_str());
+        return;
+    }
+
+    state.SetItemsProcessed(state.iterations() * static_cast<std::int64_t>(bench.fed_count()));
+    state.SetLabel(std::to_string(bench.layers()) + " blocks, knob on");
+}
+
+void expert_placement_ffi(benchmark::State& state) { expert_placement_body(state, true); }
+void expert_placement_api(benchmark::State& state) { expert_placement_body(state, false); }
+
+BENCHMARK(expert_placement_ffi)->Name("expert_placement/FFI")->UseRealTime();
+BENCHMARK(expert_placement_api)->Name("expert_placement/API")->UseRealTime();
+
 // Our own main so a missing model is one line on stderr, and the llama-free
 // benchmarks still run: BatchBuild and Normalize need no GGUF.
 int main(int argc, char** argv) {

@@ -575,6 +575,13 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
   live. Rule: the gate loads the plugin by absolute path, refuses to run when
   it is missing, and proves liveness first — `-list-checks` must name one of
   the plugin's own checks before any file is checked.
+- **A staged open refuses embed.** `skippy_session_embed` on a stage loaded through
+  `skippy_model_open` fails with "non-chat workloads currently require a full model" —
+  symptom first seen as an `expert_placement` benchmark skip on a causal GGUF. Cause: embed is
+  a non-chat workload the staged path does not own; the workload a staged causal model *does*
+  support is the unsampled readout (`read_selected_log_probs` / `skippy_iteration_batch_sampled`
+  readout). Rule: a benchmark section over staged opens gates on causal readout, and the placed
+  open itself belongs inside the timed step — the open is the operation the placement knob moves.
 - **A fixture that passes against stubs proves nothing about the gate.** Symptom: `skippy-no-mutex`
   forbade `std::once_flag`, `LlamaBackend::LlamaBackend` declared one with no NOLINT, and the gate
   reported zero findings. Cause: fixtures compile with `-I stubs`, where the name is literally
@@ -582,6 +589,16 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
   over `getQualifiedNameAsString()` anchored on `std::(…)$` never matches. Rule: TYPE-RULES §1
   "born red on the real artefact" — the first fixture is the tree's own violation, run on the gate's
   toolchain, and `std::` names are matched with `hasName`/`hasAnyName`.
+
+- **A staged open admits the causal readout workload, not embed.** The 0013
+  harness first gated its placed-open A/B on `skippy_session_embed`; every
+  iteration died with `ERROR OCCURRED: 'non-chat workloads currently require a
+  full model'` because the staged loader opens the readout path for a slice,
+  and embed is a whole-model workload. Cause: the workload an open admits is a
+  property of the stage program, not of the session calls you make on it, and
+  no mocked test sees it. Rule: gate staged-open rows on
+  `read_selected_log_probs` (the workload the stage program admits); embed
+  gates belong to whole-model `Model` benches.
 
 ## Where things stand
 

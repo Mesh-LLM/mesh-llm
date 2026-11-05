@@ -1,5 +1,7 @@
 #include "llama/staged.h"
 
+#include "host_experts.h"
+
 #include <algorithm>
 #include <iterator>
 #include <utility>
@@ -76,10 +78,26 @@ std::expected<StagedModel, StagedFailure> StagedModel::open(const std::string& p
     for (const std::string& value : spec.export_bindings)
         export_bindings.push_back(value.c_str());
 
+    // The native loader silently drops a placement range that fails its
+    // guards, so the facade validates first and refuses to forward one —
+    // a caller bug must not look like a decision to keep experts on the
+    // accelerator.
+    const auto placement = skippy::host_expert_placement(spec.host_experts);
+    if (!placement) {
+        return std::unexpected(StagedFailure{
+            .status = static_cast<int>(SKIPPY_STATUS_INVALID_ARGUMENT),
+            .message = skippy::describe(placement.error()),
+        });
+    }
+
     auto config = skippy_runtime_config_default();
     config.stage_index = spec.stage_index;
     config.layer_start = spec.layers.start;
     config.layer_end = spec.layers.end;
+    if (placement->has_value()) {
+        config.host_expert_layer_start = (*placement)->start;
+        config.host_expert_layer_end = (*placement)->end;
+    }
     config.ctx_size = 512;
     config.n_batch = 512;
     config.n_ubatch = 512;

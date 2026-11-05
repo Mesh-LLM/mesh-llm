@@ -414,6 +414,51 @@ StagedModelResult Bridge::load_staged_model(rust::Str path, std::uint32_t stages
     });
 }
 
+StagedModelResult Bridge::load_staged_model_host_experts(rust::Str path, std::uint32_t stages,
+                                                         std::uint32_t index,
+                                                         std::int32_t host_start,
+                                                         std::int32_t host_end) noexcept {
+    return guarded_message<StagedModelResult>(
+        "load_staged_model_host_experts", [&]() -> StagedModelResult {
+            StagedModelResult result{};
+            result.ok = false;
+
+            const std::string model_path(path);
+            auto inventory = skippy::probe::cached_inventory(model_path);
+            if (!inventory) {
+                result.error = rust::String::lossy(inventory.error());
+                return result;
+            }
+            const auto layers = skippy::probe::layer_count_from(*inventory);
+            const auto ranges = split_layers(layers, stages);
+            if (!ranges) {
+                result.error = rust::String::lossy(ranges.error());
+                return result;
+            }
+            if (index >= ranges->size()) {
+                result.error = rust::String::lossy("stage index is out of range");
+                return result;
+            }
+
+            auto lease =
+                skippy::llama::plan_model_stages(impl_->runtime.backend(), model_path, *ranges);
+            if (!lease) {
+                result.error = rust::String::lossy(lease.error().message);
+                return result;
+            }
+            auto spec = skippy::llama::own(lease->configs[index]);
+            spec.host_experts = skippy::LayerRange{host_start, host_end};
+            auto model = skippy::llama::StagedModel::open(model_path, spec);
+            if (!model) {
+                result.error = rust::String::lossy(model.error().message);
+                return result;
+            }
+            result.ok = true;
+            result.model = std::make_unique<StagedModel>(std::move(*model));
+            return result;
+        });
+}
+
 StagedSessionResult Bridge::create_staged_session(const StagedModel& model) noexcept {
     return guarded_message<StagedSessionResult>(
         "create_staged_session", [&]() -> StagedSessionResult {

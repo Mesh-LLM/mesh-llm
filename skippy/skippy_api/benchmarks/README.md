@@ -18,6 +18,7 @@ google-benchmark report.
 | `RerankBatch` | B separate `skippy_session_rerank` calls | `rerank_batch` — one query, B documents, one decode |
 | `stage_chain` | *row pending: the gate compares identical inputs; must compare the C-ABI chain's terminal frame against `StageChain::prefill`'s before timing* | `StageChain` prefill |
 | `causal_scores` | `skippy_session_reset` + `skippy_iteration_batch_sampled` readout (patch 0011) | `StagedSession::reset` + `read_selected_log_probs` (façade) |
+| `expert_placement` | hand-built `skippy_runtime_config` with `host_expert_layer_start/end` + placed open + readout (patch 0013) | `StageSpec::host_experts` through `StagedModel::open` + readout (façade) |
 
 Both sides link the *same* patched llama.cpp build, load the same GGUF, and run
 with the same geometry (`n_ctx = n_batch = n_ubatch = 512`, one sequence, all
@@ -149,6 +150,10 @@ re-reading the same window each iteration):
 |---|---:|---:|---|
 | `causal_scores/64` | 11.000 ms | 11.012 ms | tie (0.999x) |
 | `causal_scores/64` min | 10.888 ms | 10.823 ms | tie (+0.6%) |
+| `expert_placement/64` | 160.011 ms | 160.569 ms | tie (0.997x) |
+| `expert_placement/64` min | 150.380 ms | 157.008 ms | old faster (0.958x) |
+| `expert_placement` | 160.011 ms | 160.569 ms | tie (0.997x) |
+| `expert_placement` min | 150.380 ms | 157.008 ms | tie (-4.2%) |
 
 The causal row is a budget row (class B: no old path existed before patch
 0011, so the FFI arm is the cheapest correct reference — the direct C-ABI

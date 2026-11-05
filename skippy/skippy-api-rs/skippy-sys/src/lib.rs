@@ -294,6 +294,17 @@ pub mod ffi {
         /// Opens stage `index` of `stages` over the model at `path`.
         fn load_staged_model(self: Pin<&mut Bridge>, path: &str, stages: u32, index: u32) -> StagedModelResult;
 
+        /// Opens stage `index` of `stages` with routed-expert blocks
+        /// `[host_start, host_end)` placed in host memory (patch 0013).
+        fn load_staged_model_host_experts(
+            self: Pin<&mut Bridge>,
+            path: &str,
+            stages: u32,
+            index: u32,
+            host_start: i32,
+            host_end: i32,
+        ) -> StagedModelResult;
+
         /// Opens a session on a stage.
         fn create_staged_session(self: Pin<&mut Bridge>, model: &StagedModel) -> StagedSessionResult;
 

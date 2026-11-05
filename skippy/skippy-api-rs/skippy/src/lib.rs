@@ -289,6 +289,26 @@ impl Runtime {
         Ok(StagedModel { runtime: self, handle: result.model })
     }
 
+    /// Opens stage `index` of a `stages`-way split with routed-expert blocks
+    /// `host_experts` placed in host memory (patch 0013): the range's
+    /// `ffn_*_exps` tensors load on the CPU so a accelerator-bound context
+    /// can keep routing through them. `None` leaves every expert on the
+    /// accelerator. A malformed range is rejected with the rule it broke.
+    pub fn load_stage_with_host_experts(
+        &self,
+        path: &str,
+        stages: u32,
+        index: u32,
+        host_experts: Option<(i32, i32)>,
+    ) -> Result<StagedModel<'_>, StageError> {
+        let (start, end) = host_experts.unwrap_or((0, 0));
+        let result = self.lock().pin_mut().load_staged_model_host_experts(path, stages, index, start, end);
+        if !result.ok || result.model.is_null() {
+            return Err(StageError::Rejected(result.error));
+        }
+        Ok(StagedModel { runtime: self, handle: result.model })
+    }
+
     /// Checks that the stages of `path` form one contiguous, handover-clean chain.
     pub fn validate_stage_chain(&self, path: &str, stages: u32) -> Result<(), ChainError> {
         let result = self.lock().validate_chain(path, stages);

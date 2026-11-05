@@ -96,6 +96,13 @@ public:
     [[nodiscard]] StagedModelResult load_staged_model(rust::Str path, std::uint32_t stages,
                                                       std::uint32_t index) noexcept;
 
+    /// Opens stage `index` of `stages` with routed-expert blocks
+    /// `[host_start, host_end)` placed in host memory (patch 0013); a range
+    /// that fails the loader's guards is rejected with the rule it broke.
+    [[nodiscard]] StagedModelResult
+    load_staged_model_host_experts(rust::Str path, std::uint32_t stages, std::uint32_t index,
+                                   std::int32_t host_start, std::int32_t host_end) noexcept;
+
     /// Opens a session on a stage.
     [[nodiscard]] StagedSessionResult create_staged_session(const StagedModel& model) noexcept;
 

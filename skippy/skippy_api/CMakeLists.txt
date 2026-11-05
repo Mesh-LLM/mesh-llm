@@ -69,6 +69,7 @@ add_library(skippy_core STATIC
     src/runtime.cpp
     src/normalize.cpp
     src/selected_log_probs.cpp
+    src/host_experts.cpp
     src/stage_plan.cpp
     src/execution_contract.cpp
     src/family.cpp
@@ -173,6 +174,7 @@ if(SKIPPY_API_BUILD_TESTS)
       tests/batch_test.cpp
       tests/normalize_test.cpp
       tests/selected_log_probs_test.cpp
+      tests/host_experts_test.cpp
       tests/workload_test.cpp
       tests/rerank_template_test.cpp
       tests/rerank_prompt_test.cpp

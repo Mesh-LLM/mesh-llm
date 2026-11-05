@@ -313,6 +313,51 @@ fn causal_readout_reads_bounded_unsampled_scores() {
 }
 
 #[test]
+fn host_expert_placement_matches_a_plain_staged_open_on_dense_models() {
+    // Patch 0013: a placed open and a plain open must produce identical
+    // readouts on a dense model - the knob may change where routed experts
+    // live, never what the model computes.
+    let Some(path) = model_path("SKIPPY_TEST_CAUSAL") else { return };
+    let runtime = Runtime::new().unwrap();
+
+    let plain = runtime.load_stage(&path, 1, 0).expect("plain stage");
+    let mut plain_session = plain.create_session().unwrap();
+    let tokens = [Token(1), Token(2), Token(3)];
+    let selected = [Token(2), Token(1), Token(3)];
+    let reference = plain_session.read_selected_log_probs(&tokens, &selected).expect("plain readout");
+
+    let placed = runtime.load_stage_with_host_experts(&path, 1, 0, Some((0, 64))).expect("placed stage");
+    let mut placed_session = placed.create_session().unwrap();
+    let placed_scores = placed_session.read_selected_log_probs(&tokens, &selected).expect("placed readout");
+
+    assert_eq!(reference, placed_scores);
+}
+
+#[test]
+fn host_expert_placement_rejects_malformed_ranges_with_a_reason() {
+    // The native loader silently drops a malformed placement range; the
+    // facade must reject it with the rule it broke instead.
+    let Some(path) = model_path("SKIPPY_TEST_CAUSAL") else { return };
+    let runtime = Runtime::new().unwrap();
+
+    let negative = runtime.load_stage_with_host_experts(&path, 1, 0, Some((-1, 4)));
+    let inverted = runtime.load_stage_with_host_experts(&path, 1, 0, Some((8, 4)));
+    let overspan = runtime.load_stage_with_host_experts(&path, 1, 0, Some((0, 4097)));
+
+    for rejected in [negative, inverted, overspan] {
+        match rejected {
+            Ok(_) => panic!("malformed placement must not open"),
+            Err(error) => {
+                assert!(!error.to_string().is_empty(), "a refusal carries a reason");
+            }
+        }
+    }
+
+    // An empty range is a valid "off", not an error.
+    runtime.load_stage_with_host_experts(&path, 1, 0, None).expect("no placement is a valid open");
+}
+
+#[test]
 fn a_causal_decoder_is_not_a_reranker() {
     // llama_model_n_cls_out defaults to 1, so its raw value is not a presence
     // test: ungated, every decoder-only chat GGUF reads as a one-output

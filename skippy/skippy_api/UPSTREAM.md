@@ -152,3 +152,12 @@ Result: zero crashes, zero ASan reports, all cases rejected with diagnostics
 except the wrap-to-zero family — which parses and trips UBSan at
 `ggml.c:1289` (the entry above). Data-section truncations (metadata complete)
 legitimately parse because `no_alloc` never reads data.
+
+- `skippy_apply_host_expert_placement` silently drops a malformed block range
+  (negative start, inverted end, span past the cap): the caller cannot tell a
+  placed range from a dropped knob. A status return — or an
+  `out_placed_blocks` — would let ABI consumers reject caller bugs instead of
+  guessing; the facade re-validates at its boundary for exactly this reason
+  (patch 0013 port). Positive routed-expert coverage also needs a MoE GGUF
+  fixture; every local bench model is dense, so the knob is inert where it is
+  measured today.

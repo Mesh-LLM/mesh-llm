@@ -59,6 +59,11 @@ struct StageLoadConfig {
     struct Spec {
         std::int32_t stage_index = 0;
         LayerRange layers;
+        /// Caller policy, never plan output: the blocks whose routed experts
+        /// (patch 0013) load into host memory. Empty means off. `StagedModel::
+        /// open` validates it and refuses to forward a range the native
+        /// loader would silently drop.
+        LayerRange host_experts;
         std::string execution_contract;
         std::vector<std::string> resident_identities;
         std::vector<std::string> import_identities;

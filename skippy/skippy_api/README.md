@@ -76,6 +76,7 @@ in `benchmarks/cases.txt`; "—" means nothing ports into the façade.
 | patch | what it is | what ported |
 |---|---|---|
 | 0011 causal token score readouts | unsampled `skippy_iteration_batch_sampled` readout, `skippy_session_reset` | `include/selected_log_probs.h` (pure, 256-bound log-softmax), `llama/causal_readout.h` (`read_selected_log_probs`), `StagedSession::reset`, Rust `StagedSession::read_selected_log_probs` |
+| 0013 routed-expert host placement | `skippy_runtime_config.host_expert_layer_start/end`, block-range → tensor-override placement | `include/host_experts.h` (pure range validation, 4096-block cap), `StageSpec::host_experts`, `StagedModel::open` threads the pair, Rust `load_stage_with_host_experts`; plain `Model` loads keep no placement (raw-llama reference path) |
 
 ## Checkpoint workflow
 
