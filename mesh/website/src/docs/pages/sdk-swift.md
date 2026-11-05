@@ -150,7 +150,8 @@ disabled, call `commit()` to end the turn explicitly:
 
 ```swift
 let session = try await node.startLiveTranscription(LiveTranscriptionOptions(
-    model: "speech-model", sampleRate: 16000, turnDetection: nil))
+    model: "speech-model", sampleRate: 16000, turnDetection: nil,
+    stepMs: 400, tentative: true))
 do {
     try await session.sendAudio(pcm16Samples)
     try await session.commit()
@@ -168,6 +169,21 @@ do {
 `sendAudioF32` accepts floating point samples. Defaults use 16 kHz and server-side
 turn detection. `stop()` returns remaining final events; `close()` abandons the
 session. Stop the node when the application exits.
+
+`stepMs` accepts 200 to 5000 ms; `nil` keeps the node's 1000 ms default.
+Shorter steps run more transcription passes. `tentative` defaults to `false`.
+
+Confirmed deltas are append-only. Recognition errors in confirmed text cannot
+be corrected by later passes or the completed event. Shorter transcription
+intervals do not guarantee better recognition accuracy.
+
+Native transcription failures end the session after an error event. Start a
+new session to retry. Request-validation errors may leave the session open.
+
+Each `tentative` event replaces the previous unconfirmed text for its `itemId`;
+empty text clears it. Append `delta` text to the confirmed transcript and let
+`completed` replace the whole turn, including tentative text. Read events
+concurrently with microphone input.
 
 ## Full embedded-node configuration
 

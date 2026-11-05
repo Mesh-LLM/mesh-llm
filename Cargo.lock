@@ -5194,6 +5194,7 @@ dependencies = [
  "rustls-native-certs",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "skippy-runtime-install",
  "tokio",
  "tokio-tungstenite 0.29.0",

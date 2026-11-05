@@ -2255,16 +2255,18 @@ applies to a PR until it is merged. No hosted execution is recorded here.
 ## External Python SDK source preparation
 
 The checkout action, admission descriptor and Python-tooling policy use SDK
-commit `85226c50a68a13b48f40fe25e70eb85814e67457`; update all three together.
+commit `0357f19f02cc3c2769ab46b0299af027e07049c1`, unchanged from origin/main;
+update all three together only when admitting a compatible replacement.
 Laya product readiness and Decisions smoke discovery query
 `/mesh/v1/models?workload_class=decision&available=true`, since compatibility
 model lists contain only LLMs. The golden and response checks remain required.
 
-The current checkpoint includes typed Mesh model discovery, OCR uploads,
-membership/live-session controls, full node configuration and native-runtime
-management. Its generated bindings were produced from the coordinated Mesh
-implementation recorded in the SDK's `sdk-inputs.json`; keep that source
-checkpoint synchronized with native API changes.
+The current admitted checkpoint retains thinking-effort metadata. Speech parity
+is blocked pending a combined external checkpoint preserving that capability
+and adding live transcription with bindings regenerated against the current
+native API. The divergent speech checkpoint `acaf6fe9` is not admitted and must
+not replace the current pin. Python speech examples in this extraction are
+draft, unshippable guidance. No external SDK changes are part of this work.
 
 The Python SDK package, generated Python bindings and four genuine compatibility
 and embedding clients are owned by `Mesh-LLM/mesh-llm-python-sdk`. Mesh admits the
@@ -2283,7 +2285,9 @@ is unchanged. For local `just ci-automation-contracts` or `just ci-validate`, se
 `MESH_PYTHON_SDK_SOURCE` to the exact admitted checkout first; the local recipe
 inherits that input and does not acquire external source. The source-dependent
 `migration_repository` and `migration_lifecycle` fixtures use that same input.
-The [SDK checkpoint](required-sdk-python/sdk-source.json) is published; fresh anonymous restore and native source admission passed.
+The [SDK checkpoint](required-sdk-python/sdk-source.json) and manifest digest
+remain unchanged from origin/main. Current-source native binding admission and
+five-language parity remain unverified.
 Hosted restore remains unqualified. A passing source contract or mock FFI test does not qualify the native
 bridge, model serving or real client requests.
 

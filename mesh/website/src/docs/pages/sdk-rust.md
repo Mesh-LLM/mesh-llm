@@ -133,6 +133,8 @@ let mut session = node.start_live_transcription(LiveTranscriptionOptions {
     model: Some("speech-model".into()),
     sample_rate: 16_000,
     turn_detection: None,
+    step_ms: Some(400),
+    tentative: true,
     ..Default::default()
 }).await?;
 session.send_audio(&pcm16_samples).await?;
@@ -147,3 +149,18 @@ println!("{remaining_events:?}");
 `send_audio_f32` accepts floating point samples. `stop()` consumes the session
 and returns remaining final events. Dropping the session on error closes its
 transport. Stop the node when the application exits.
+
+`step_ms` accepts 200 to 5000 ms; `None` keeps the node's 1000 ms default.
+Shorter steps run more transcription passes. `tentative` defaults to `false`.
+
+Confirmed deltas are append-only. Recognition errors in confirmed text cannot
+be corrected by later passes or the completed event. Shorter transcription
+intervals do not guarantee better recognition accuracy.
+
+Native transcription failures end the session after an error event. Start a
+new session to retry. Request-validation errors may leave the session open.
+
+Each `Tentative` event replaces the previous unconfirmed text for its `item_id`;
+empty text clears it. Append `Delta` text to the confirmed transcript and let
+`Completed` replace the whole turn, including tentative text. Read events
+concurrently with microphone input.
