@@ -37,14 +37,16 @@ mod output_tokens;
 mod record_worker;
 mod records;
 mod resident_offload;
+mod tier_metrics;
 use record_worker::ExactStateRecordWorker;
 mod resident_prefix;
 
 pub use lifecycle::{KvLifecycleEvent, KvLifecycleObserver};
 pub use records::{
     AttachedPage, ExactStateRecord, ExactStateRestore, LookupBatchOutcome, PrefillKvIdentity,
-    RecordPageOutcome, ResidentActivationRecord, ResidentActivationRestore, ResidentPrefixRecord,
-    ResidentPrefixRestore,
+    RecordPageOutcome, ResidentActivationRecord, ResidentActivationRestore, ResidentMissDiagnosis,
+    ResidentMissReason, ResidentPrefixRecord, ResidentPrefixRestore, ResidentRecordOutcome,
+    ResidentRecordSkip,
 };
 pub use resident_prefix::{ResidentCapacityDecision, ResidentPrefixEviction};
 
@@ -616,6 +618,7 @@ impl KvStageIntegration {
     }
 
     pub(crate) fn notify_kv_lifecycle(&self, event: KvLifecycleEvent) {
+        tier_metrics::record_lifecycle(event);
         if let Some(observer) = self.kv_lifecycle_observer.as_ref() {
             observer.observe(event);
         }

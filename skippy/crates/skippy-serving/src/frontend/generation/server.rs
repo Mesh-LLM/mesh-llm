@@ -1,3 +1,4 @@
+use super::http_request_span::openai_http_telemetry;
 use super::request_defaults::EmbeddedOpenAiRequestDefaults;
 use crate::binary_transport::PredictionReturnHub;
 use crate::binary_transport::WireCondition;
@@ -11,7 +12,6 @@ use crate::frontend::generation::GenerationConcurrencyController;
 use crate::frontend::generation::GenerationServiceEstimator;
 use crate::frontend::generation::InferenceBackendMode;
 use crate::frontend::generation::PersistentStageLanePool;
-use crate::frontend::generation::PhaseTimer;
 use crate::frontend::generation::StageOpenAiBackend;
 use crate::frontend::generation::attach_native_mtp_draft_model;
 use crate::frontend::generation::ensure_generation_concurrency_fits_lanes;
@@ -27,8 +27,8 @@ use crate::listener::bind_serve_listener;
 use crate::runtime_state::RuntimeState;
 use crate::runtime_state::{loaded_memory_cache_capabilities, loaded_model_state_kind};
 use crate::telemetry::Telemetry;
+use crate::telemetry::active_span::{ActiveSpan, SpanLevel};
 use crate::telemetry::lifecycle_attrs;
-use crate::telemetry::now_unix_nanos;
 use crate::thinking_probe::ThinkingProbeInputs;
 use crate::thinking_probe::emit_probe_status;
 use crate::thinking_probe::native_renderer_identity;
@@ -39,12 +39,7 @@ use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
 use axum::Router;
-use axum::body::Body;
-use axum::extract::State;
-use axum::http::Request;
 use axum::middleware;
-use axum::middleware::Next;
-use axum::response::Response;
 use serde_json::Value;
 use serde_json::json;
 use skippy_inference_api::InferenceBackend;
@@ -226,6 +221,13 @@ fn embedded_openai_backend_with_scheduler(
     args: EmbeddedOpenAiArgs,
     iteration_scheduler: Option<IterationScheduler>,
 ) -> Result<EmbeddedOpenAiBackend> {
+    // Startup work (prewarm, cache wiring, scheduler start) nests here.
+    let setup = ActiveSpan::start(
+        Some(&args.telemetry),
+        "stage.openai_server_setup",
+        SpanLevel::Summary,
+    );
+    let _setup = setup.enter();
     if args.prefill_chunk_size == 0 {
         bail!("--prefill-chunk-size must be greater than zero");
     }
@@ -327,6 +329,7 @@ fn embedded_openai_backend_with_scheduler(
     );
     args.telemetry
         .emit("stage.openai_server_start", server_start_attrs);
+    args.telemetry.record_resources("server_start");
     prewarm_generation_sessions(
         &args.runtime,
         args.generation_concurrency,
@@ -549,34 +552,6 @@ pub(in crate::frontend) fn instrumented_openai_router(
             telemetry,
             openai_http_telemetry,
         ))
-}
-
-pub(in crate::frontend) async fn openai_http_telemetry(
-    State(telemetry): State<Telemetry>,
-    request: Request<Body>,
-    next: Next,
-) -> Response {
-    let timer = PhaseTimer::start();
-    let method = request.method().to_string();
-    let path = request.uri().path().to_string();
-    let response = next.run(request).await;
-    let status = response.status().as_u16();
-    let mut attrs = BTreeMap::from([
-        ("llama_stage.http_method".to_string(), json!(method)),
-        ("llama_stage.http_path".to_string(), json!(path)),
-        ("llama_stage.http_status".to_string(), json!(status)),
-    ]);
-    attrs.insert(
-        "llama_stage.elapsed_ms".to_string(),
-        json!(timer.elapsed_ms()),
-    );
-    telemetry.emit_span(
-        "stage.openai_http_request",
-        attrs,
-        timer.start_unix_nanos,
-        now_unix_nanos() as u64,
-    );
-    response
 }
 
 /// Readiness cannot be printed for a socket whose bind failed. A writer error

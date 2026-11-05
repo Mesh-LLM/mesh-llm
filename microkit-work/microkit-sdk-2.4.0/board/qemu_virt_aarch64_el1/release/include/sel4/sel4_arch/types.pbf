@@ -1,0 +1,86 @@
+--
+-- Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+--
+-- SPDX-License-Identifier: BSD-2-Clause
+--
+       
+       
+       
+base 64
+block VMFault {
+    padding 576
+    field IP 64
+    field Addr 64
+    field PrefetchFault 64
+    field FSR 64
+    padding 60
+    field seL4_FaultType 4
+}
+block NullFault {
+    padding 832
+    padding 60
+    field seL4_FaultType 4
+}
+block CapFault {
+    padding 384
+    field IP 64
+    field Addr 64
+    field InRecvPhase 64
+    field LookupFailureType 64
+    -- these vary according to LookupFailureType
+    field MR4 64
+    field MR5 64
+    field MR6 64
+    padding 60
+    field seL4_FaultType 4
+}
+block UnknownSyscall {
+    field X0 64
+    field X1 64
+    field X2 64
+    field X3 64
+    field X4 64
+    field X5 64
+    field X6 64
+    field X7 64
+    field FaultIP 64
+    field SP 64
+    field LR 64
+    field SPSR 64
+    field Syscall 64
+    padding 60
+    field seL4_FaultType 4
+}
+block UserException {
+    padding 512
+    field FaultIP 64
+    field Stack 64
+    field SPSR 64
+    field Number 64
+    field Code 64
+    padding 60
+    field seL4_FaultType 4
+}
+block Timeout {
+    padding 704
+    field data 64
+    field consumed 64
+    padding 60
+    field seL4_FaultType 4
+}
+--
+-- Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+--
+-- SPDX-License-Identifier: BSD-2-Clause
+--
+-- this file contains types shared between libsel4 and the kernel
+tagged_union seL4_Fault seL4_FaultType {
+    -- generic faults
+    tag NullFault 0
+    tag CapFault 1
+    tag UnknownSyscall 2
+    tag UserException 3
+    tag Timeout 5
+    -- arch specific faults
+    tag VMFault 6
+}

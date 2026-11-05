@@ -1,5 +1,6 @@
 mod iteration_execution;
 
+use crate::native_timing::native_call;
 use iteration_execution::{exporting_stage_requires_one_request, frame_has_optional_parts};
 
 use std::ffi::c_void;
@@ -112,7 +113,7 @@ impl StageSession {
         let mut error = ptr::null_mut();
         let status = unsafe {
             if positions.is_empty() {
-                skippy_ffi::skippy_prefill_chunk_frame(
+                native_call!(skippy_prefill_chunk_frame(
                     self.raw,
                     token_ids.as_ptr(),
                     token_ids.len(),
@@ -123,9 +124,9 @@ impl StageSession {
                     output_payload.len(),
                     &mut output_bytes,
                     &mut error,
-                )
+                ))
             } else {
-                skippy_ffi::skippy_prefill_chunk_frame_with_positions(
+                native_call!(skippy_prefill_chunk_frame_with_positions(
                     self.raw,
                     token_ids.as_ptr(),
                     token_ids.len(),
@@ -138,7 +139,7 @@ impl StageSession {
                     output_payload.len(),
                     &mut output_bytes,
                     &mut error,
-                )
+                ))
             }
         };
         if status == Status::BufferTooSmall && output_bytes > output_payload.len() {
@@ -218,7 +219,7 @@ impl StageSession {
         let mut error = ptr::null_mut();
         let status = unsafe {
             if positions.is_empty() {
-                skippy_ffi::skippy_prefill_chunk_frame_sampled(
+                native_call!(skippy_prefill_chunk_frame_sampled(
                     self.raw,
                     token_ids.as_ptr(),
                     token_ids.len(),
@@ -231,9 +232,9 @@ impl StageSession {
                     &mut output_bytes,
                     &mut predicted_token,
                     &mut error,
-                )
+                ))
             } else {
-                skippy_ffi::skippy_prefill_chunk_frame_sampled_with_positions(
+                native_call!(skippy_prefill_chunk_frame_sampled_with_positions(
                     self.raw,
                     token_ids.as_ptr(),
                     token_ids.len(),
@@ -248,7 +249,7 @@ impl StageSession {
                     &mut output_bytes,
                     &mut predicted_token,
                     &mut error,
-                )
+                ))
             }
         };
         if status == Status::BufferTooSmall && output_bytes > output_payload.len() {
@@ -343,7 +344,7 @@ impl StageSession {
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
         let status = unsafe {
-            skippy_ffi::skippy_decode_step_frame_sampled(
+            native_call!(skippy_decode_step_frame_sampled(
                 self.raw,
                 token_id,
                 sampling_ptr,
@@ -355,7 +356,7 @@ impl StageSession {
                 &mut output_bytes,
                 &mut predicted_token,
                 &mut error,
-            )
+            ))
         };
         if status == Status::BufferTooSmall && output_bytes > output_payload.len() {
             free_error(error);
@@ -392,7 +393,7 @@ impl StageSession {
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
         let status = unsafe {
-            skippy_ffi::skippy_decode_step_frame_sampled_mtp(
+            native_call!(skippy_decode_step_frame_sampled_mtp(
                 self.raw,
                 token_id,
                 sampling_ptr,
@@ -406,7 +407,7 @@ impl StageSession {
                 max_draft_tokens.min(skippy_ffi::NATIVE_MTP_MAX_DRAFT_TOKENS),
                 &mut mtp_draft,
                 &mut error,
-            )
+            ))
         };
         if status == Status::BufferTooSmall && output_bytes > output_payload.len() {
             free_error(error);
@@ -494,7 +495,7 @@ impl StageSession {
         let mut predicted_tokens = vec![0_i32; requests.len()];
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_decode_step_frame_batch_sampled(
+            native_call!(skippy_decode_step_frame_batch_sampled(
                 sessions.as_ptr(),
                 token_ids.as_ptr(),
                 sampling.as_ptr(),
@@ -508,7 +509,7 @@ impl StageSession {
                 predicted_tokens.len(),
                 requests.len(),
                 &mut error,
-            )
+            ))
         };
         if status == Status::BufferTooSmall {
             free_error(error);
@@ -677,7 +678,7 @@ impl StageSession {
             .as_ref()
             .map_or(ptr::null(), |sampling| sampling as *const RawSamplingConfig);
         let status = unsafe {
-            skippy_ffi::skippy_verify_tokens_frame_sampled(
+            native_call!(skippy_verify_tokens_frame_sampled(
                 self.raw,
                 token_ids.as_ptr(),
                 token_ids.len(),
@@ -694,7 +695,7 @@ impl StageSession {
                 max_draft_tokens.min(skippy_ffi::NATIVE_MTP_MAX_DRAFT_TOKENS),
                 &mut output_draft,
                 &mut error,
-            )
+            ))
         };
         if status == Status::BufferTooSmall && output_bytes > output_payload.len() {
             free_error(error);
@@ -749,7 +750,7 @@ impl StageSession {
         let mut output_bytes = 0usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_session_copy_output_activation_frame(
+            native_call!(skippy_session_copy_output_activation_frame(
                 self.raw,
                 token_count,
                 &mut output_desc,
@@ -757,7 +758,7 @@ impl StageSession {
                 output_payload.len(),
                 &mut output_bytes,
                 &mut error,
-            )
+            ))
         };
         if status == Status::BufferTooSmall && output_bytes > output_payload.len() {
             free_error(error);
@@ -776,12 +777,12 @@ impl StageSession {
         let mut predicted = 0_i32;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_session_sample_current(
+            native_call!(skippy_session_sample_current(
                 self.raw,
                 sampling_ptr,
                 &mut predicted,
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error)?;
         Ok(predicted)

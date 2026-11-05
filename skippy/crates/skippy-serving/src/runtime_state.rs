@@ -14,7 +14,7 @@ use skippy_runtime::{
     ModelStateKind, ModelWorkload, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeKvPage,
     RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, SpeechAudio, SpeechSynthesisConfig,
     SplitMode as RuntimeSplitMode, StageModel, StageSession, TokenLogprobs, TokenSignal,
-    WorkloadInfo, parse_cache_type,
+    VerifyRollback, WorkloadInfo, parse_cache_type,
 };
 
 mod context_capacity;
@@ -37,6 +37,7 @@ pub struct RuntimeLaunchOverrides {
     pub n_threads: Option<usize>,
     pub n_threads_batch: Option<usize>,
     pub mtp_source: MtpSource,
+    pub verify_rollback: VerifyRollback,
 }
 
 pub struct RuntimeState {
@@ -542,6 +543,7 @@ fn runtime_config_from_stage_config(
             skippy_protocol::GlmDsaPolicy::V1 => RuntimeGlmDsaPolicy::V1,
         },
         mtp_source: overrides.mtp_source,
+        verify_rollback: overrides.verify_rollback,
         resident_tensor_names: config.resident_tensor_names.clone(),
         execution_contract: config.execution_contract.clone(),
         activation_import_identities: config.activation_import_identities.clone(),
@@ -600,7 +602,7 @@ mod tests {
     };
     use skippy_runtime::{
         ActivationFrame, CheckpointQuantization, FlashAttentionType as RuntimeFlashAttentionType,
-        ModelWorkload, MtpSource, RuntimeConfig, SamplingConfig, StageModel,
+        ModelWorkload, MtpSource, RuntimeConfig, SamplingConfig, StageModel, VerifyRollback,
     };
 
     use super::{
@@ -765,6 +767,7 @@ mod tests {
             n_threads: Some(8),
             n_threads_batch: Some(4),
             mtp_source: MtpSource::External,
+            verify_rollback: VerifyRollback::None,
         };
 
         let runtime_config = runtime_config_from_stage_config(&config, &overrides).unwrap();
@@ -785,6 +788,7 @@ mod tests {
             RuntimeFlashAttentionType::Enabled
         );
         assert_eq!(runtime_config.mtp_source, MtpSource::External);
+        assert_eq!(runtime_config.verify_rollback, VerifyRollback::None);
     }
 
     #[test]

@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+ Copyright 2021, Breakaway Consulting Pty. Ltd.
+
+ SPDX-License-Identifier: BSD-2-Clause
+-->
+<system>
+    <protection_domain name="restarter" priority="254">
+        <program_image path="restarter.elf" />
+        <protection_domain name="crasher" priority="253" id="1">
+            <program_image path="crasher.elf" />
+        </protection_domain>
+        <protection_domain name="hello" priority="1" id="2">
+            <program_image path="hello.elf" />
+        </protection_domain>
+    </protection_domain>
+</system>

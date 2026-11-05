@@ -118,6 +118,10 @@ impl InferenceBackendMode {
 pub(in crate::frontend) struct PhaseTimer {
     pub(in crate::frontend) start_unix_nanos: u64,
     pub(in crate::frontend) start_instant: Instant,
+    /// The phase's span, placed under whatever was active when it started.
+    /// Entered only through the backend's `enter_openai_*` helpers, which
+    /// skip phases the telemetry level will not export.
+    pub(in crate::frontend) frame: crate::telemetry::trace_context::Frame,
 }
 
 impl PhaseTimer {
@@ -125,6 +129,7 @@ impl PhaseTimer {
         Self {
             start_unix_nanos: now_unix_nanos() as u64,
             start_instant: Instant::now(),
+            frame: crate::telemetry::trace_context::Frame::child(),
         }
     }
 
@@ -156,6 +161,8 @@ pub(in crate::frontend) struct PreparedTextPrompt {
 pub(in crate::frontend) struct LocalGeneration<'a> {
     pub(in crate::frontend) prompt_token_ids: &'a [i32],
     pub(in crate::frontend) recurrent_cache_prefix_token_ids: Option<&'a [i32]>,
+    /// Prompt tokens every request with the same system messages shares.
+    pub(in crate::frontend) shared_system_prefix_tokens: Option<usize>,
     pub(in crate::frontend) max_tokens: u32,
     pub(in crate::frontend) sampling: &'a SamplingConfig,
     pub(in crate::frontend) chat_sampling_metadata: Option<&'a str>,

@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+ Copyright 2024, UNSW
+
+ SPDX-License-Identifier: BSD-2-Clause
+-->
+<system>
+    <memory_region name="timer" size="0x10_000" phys_addr="0xffd0f000" />
+
+    <protection_domain name="timer">
+        <program_image path="timer.elf" />
+        <map mr="timer" vaddr="0x2_000_000" perms="rw" cached="false" setvar_vaddr="timer_regs" />
+        <irq irq="42" id="0" trigger="edge" />
+    </protection_domain>
+</system>

@@ -10,7 +10,7 @@ use axum::Router;
 use skippy_config::validate_config;
 use skippy_inference_api::{InferenceBackend, InferenceFrontendConfig, InferenceLifecycleObserver};
 use skippy_protocol::{StageConfig, StageTopology};
-use skippy_runtime::{ActivationBoundaryDesc, MtpSource, WorkloadInfo};
+use skippy_runtime::{ActivationBoundaryDesc, MtpSource, VerifyRollback, WorkloadInfo};
 use tokio::{sync::oneshot, task::JoinHandle};
 
 use crate::{
@@ -20,7 +20,11 @@ use crate::{
         RuntimeLaunchOverrides, RuntimeSessionStats, RuntimeState, load_runtime_with_overrides,
         load_runtime_with_overrides_and_open_events,
     },
-    telemetry::{Telemetry, TelemetryLevel, TelemetryStats, lifecycle_attrs, now_unix_nanos},
+    telemetry::{
+        Telemetry, TelemetryLevel, TelemetryStats,
+        active_span::{ActiveSpan, SpanLevel},
+        lifecycle_attrs, now_unix_nanos,
+    },
     tokenizer::{TokenizerCapability, TokenizerCapabilityError, tokenizer_http_router},
 };
 
@@ -79,6 +83,9 @@ pub struct EmbeddedRuntimeOptions {
     pub n_threads: Option<usize>,
     pub n_threads_batch: Option<usize>,
     pub mtp_source: MtpSource,
+    /// How far verify windows rewind recurrent state in place; see
+    /// [`VerifyRollback::for_drafting`].
+    pub verify_rollback: VerifyRollback,
     pub metrics_otlp_grpc: Option<String>,
     pub telemetry_queue_capacity: usize,
     pub telemetry_level: TelemetryLevel,
@@ -187,6 +194,12 @@ impl SkippyRuntimeHandle {
             options.config.clone(),
             options.telemetry_level,
         );
+        let load = ActiveSpan::start(
+            Some(&telemetry),
+            "stage.embedded_runtime_load",
+            SpanLevel::Summary,
+        );
+        let entered = load.enter();
         telemetry.emit(
             "stage.embedded_runtime_load_start",
             lifecycle_attrs(&options.config),
@@ -197,6 +210,7 @@ impl SkippyRuntimeHandle {
                 n_threads: options.n_threads,
                 n_threads_batch: options.n_threads_batch,
                 mtp_source: options.mtp_source,
+                verify_rollback: options.verify_rollback,
             },
             options.session_lifecycle_observer.clone(),
         )?
@@ -205,6 +219,10 @@ impl SkippyRuntimeHandle {
             "stage.embedded_runtime_ready",
             lifecycle_attrs(&options.config),
         );
+        telemetry.record_resources("runtime_ready");
+        crate::telemetry::log_events::mark_serving();
+        drop(entered);
+        load.end();
         Ok(Self::ready(
             options.config,
             options.topology,
@@ -227,6 +245,12 @@ impl SkippyRuntimeHandle {
             options.config.clone(),
             options.telemetry_level,
         );
+        let load = ActiveSpan::start(
+            Some(&telemetry),
+            "stage.embedded_runtime_load",
+            SpanLevel::Summary,
+        );
+        let entered = load.enter();
         telemetry.emit(
             "stage.embedded_runtime_load_start",
             lifecycle_attrs(&options.config),
@@ -237,6 +261,7 @@ impl SkippyRuntimeHandle {
                 n_threads: options.n_threads,
                 n_threads_batch: options.n_threads_batch,
                 mtp_source: options.mtp_source,
+                verify_rollback: options.verify_rollback,
             },
             model_open_events.as_ref(),
             options.session_lifecycle_observer.clone(),
@@ -246,6 +271,10 @@ impl SkippyRuntimeHandle {
             "stage.embedded_runtime_ready",
             lifecycle_attrs(&options.config),
         );
+        telemetry.record_resources("runtime_ready");
+        crate::telemetry::log_events::mark_serving();
+        drop(entered);
+        load.end();
         Ok(Self::ready(
             options.config,
             options.topology,
@@ -331,6 +360,7 @@ impl SkippyRuntimeHandle {
             "stage.embedded_runtime_stopped",
             lifecycle_attrs(&self.config),
         );
+        self.telemetry.finish_process();
     }
 }
 

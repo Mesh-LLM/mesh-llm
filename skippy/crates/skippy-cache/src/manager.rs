@@ -467,6 +467,17 @@ impl L3CacheManager {
         Ok(self.inner.activity.snapshot(Some(&usage)))
     }
 
+    /// `activity` without its manifest scan: evictions and corrupt entries
+    /// come from the store's running counters, as `usage` reports them.
+    pub fn activity_without_inventory(&self) -> L3ActivitySnapshot {
+        let pressure = self.inner.store.pressure();
+        L3ActivitySnapshot {
+            evictions: pressure.evicted_manifests,
+            corrupt_entries: pressure.quarantined_objects,
+            ..self.inner.activity.snapshot(None)
+        }
+    }
+
     pub fn inventory(&self) -> Result<Vec<L3InventoryEntry>> {
         let mut inventory = self
             .inner
@@ -718,6 +729,34 @@ mod tests {
             drop(manager);
             fs::remove_dir_all(root).unwrap();
         }
+    }
+
+    #[test]
+    fn activity_without_inventory_matches_activity() {
+        let root = temp_root("activity-counters");
+        let manager = L3CacheManager::acquire(&root, StoreLimits::new(1_000_000, 0)).unwrap();
+        let stage = manager.tier("state".to_string(), 4);
+        stage
+            .spill(
+                "namespace",
+                &[1, 2, 3],
+                &ExactStatePayload::full_state(b"state".to_vec()),
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            manager.activity_without_inventory(),
+            manager.activity().unwrap()
+        );
+
+        let manifests = root.join("manifests");
+        fs::rename(&manifests, root.join("saved-manifests")).unwrap();
+        fs::write(&manifests, b"inventory unavailable").unwrap();
+        assert!(manager.activity().is_err());
+        assert_eq!(manager.activity_without_inventory().writes, 1);
+        drop((stage, manager));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

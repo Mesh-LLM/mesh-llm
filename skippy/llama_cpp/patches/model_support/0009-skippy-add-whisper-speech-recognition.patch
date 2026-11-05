@@ -1,4 +1,4 @@
-From 708ffe886e3d4d8dbd25abcaa8ae3162348aca56 Mon Sep 17 00:00:00 2001
+From 48dac859c751ca83024d6714ab4fbd7abb4e2005 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 22 Oct 2026 17:15:05 +1100
 Subject: [PATCH] skippy: add Whisper speech recognition
@@ -14,12 +14,12 @@ call, so calls on one model may run concurrently. Runtimes built without
 whisper.cpp export the same symbols, leave
 SKIPPY_FEATURE_SPEECH_RECOGNITION clear, and report UNSUPPORTED.
 
-Bumps the Skippy ABI to 0.1.72.
+Bumps the Skippy ABI to 0.1.73.
 ---
  include/skippy.h        |   1 +
  include/skippy/asr.h    | 172 +++++++++++++++
  include/skippy/common.h |   4 +-
- src/CMakeLists.txt      |  37 +++
+ src/CMakeLists.txt      |  37 ++++
  src/skippy/abi.cpp      |   6 +-
  src/skippy/asr.cpp      | 465 ++++++++++++++++++++++++++++++++++++++++
  6 files changed, 683 insertions(+), 2 deletions(-)
@@ -27,10 +27,10 @@ Bumps the Skippy ABI to 0.1.72.
  create mode 100644 src/skippy/asr.cpp
 
 diff --git a/include/skippy.h b/include/skippy.h
-index ac091dd24..4e33847d9 100644
+index a1d73ac5a..fb2e80806 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
-@@ -27,5 +27,6 @@
+@@ -28,5 +28,6 @@
  #include "skippy/workloads.h"
  #include "skippy/system_one.h"
  #include "skippy/laya.h"
@@ -216,15 +216,15 @@ index 000000000..99d4a1094
 +
 +#endif // SKIPPY_ASR_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 5180a2531..53326a4e7 100644
+index 4b29d611c..db4f73017 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 71
-+#define SKIPPY_ABI_VERSION_PATCH 72
+-#define SKIPPY_ABI_VERSION_PATCH 72
++#define SKIPPY_ABI_VERSION_PATCH 73
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -234,14 +234,14 @@ index 5180a2531..53326a4e7 100644
  #define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)
 +/** @brief Full-model speech recognition (`skippy/asr.h`). */
 +#define SKIPPY_FEATURE_SPEECH_RECOGNITION     (UINT64_C(1) << 41)
+ /** @brief Native span and GPU command timing callbacks (`skippy/tracing.h`). */
+ #define SKIPPY_FEATURE_NATIVE_TRACING         (UINT64_C(1) << 42)
  
- enum skippy_status {
-     SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 93803e031..78e2c01f3 100644
+index ee9f87274..e9333a468 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -95,6 +95,7 @@ add_library(llama
+@@ -101,6 +101,7 @@ add_library(llama
              skippy/system_one.cpp
              skippy/laya.cpp
              ../tools/laya/laya.cpp
@@ -249,7 +249,7 @@ index 93803e031..78e2c01f3 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -121,6 +122,10 @@ set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h .
+@@ -127,6 +128,10 @@ set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h .
  set_source_files_properties(${LLAMA_MODELS_SOURCES}
      PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
  
@@ -260,7 +260,7 @@ index 93803e031..78e2c01f3 100644
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  
  target_include_directories(llama PRIVATE . ../common ../tools/laya ${CMAKE_CURRENT_BINARY_DIR})
-@@ -167,6 +172,38 @@ if (LLAMA_LLGUIDANCE)
+@@ -173,6 +178,38 @@ if (LLAMA_LLGUIDANCE)
  endif()
  
  
@@ -300,15 +300,15 @@ index 93803e031..78e2c01f3 100644
      target_compile_definitions(llama PRIVATE LLAMA_STAGE_BUILD_TESTS)
  
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index f806cdbdc..ed9825df3 100644
+index 276dbb8c4..d3fa8bba3 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
-@@ -48,7 +48,11 @@ uint64_t skippy_abi_features(void) {
-            SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
+@@ -49,7 +49,11 @@ uint64_t skippy_abi_features(void) {
             SKIPPY_FEATURE_SYSTEM_ONE |
             SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
--           SKIPPY_FEATURE_LAYA_DECISIONS;
-+           SKIPPY_FEATURE_LAYA_DECISIONS |
+            SKIPPY_FEATURE_LAYA_DECISIONS |
+-           SKIPPY_FEATURE_NATIVE_TRACING;
++           SKIPPY_FEATURE_NATIVE_TRACING |
 +#if defined(SKIPPY_HAS_WHISPER)
 +           SKIPPY_FEATURE_SPEECH_RECOGNITION |
 +#endif
@@ -788,5 +788,5 @@ index 000000000..680549066
 +    delete result;
 +}
 -- 
-2.56.0
+2.43.0
 

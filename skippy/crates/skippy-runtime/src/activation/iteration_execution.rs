@@ -186,7 +186,7 @@ impl StageSession {
         let mut sampled_output_count = 0_usize;
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_iteration_batch_sampled(
+            native_call!(skippy_iteration_batch_sampled(
                 raw_requests.as_ptr(),
                 raw_requests.len(),
                 output_descs.as_mut_ptr(),
@@ -198,7 +198,7 @@ impl StageSession {
                 predicted_tokens.len(),
                 &mut sampled_output_count,
                 &mut error,
-            )
+            ))
         };
         if status == Status::BufferTooSmall
             && output_bytes

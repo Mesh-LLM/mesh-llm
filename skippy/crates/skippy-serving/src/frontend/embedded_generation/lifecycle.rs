@@ -363,6 +363,7 @@ impl StageOpenAiBackend {
             LocalGeneration {
                 prompt_token_ids: request.prompt_token_ids,
                 recurrent_cache_prefix_token_ids: None,
+                shared_system_prefix_tokens: None,
                 max_tokens: request.max_tokens,
                 sampling: request.sampling,
                 chat_sampling_metadata: request.chat_sampling_metadata,

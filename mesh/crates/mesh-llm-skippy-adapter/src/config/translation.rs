@@ -2,7 +2,7 @@ use std::{io::Read, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode};
-use skippy_runtime::MtpSource;
+use skippy_runtime::{MtpSource, VerifyRollback};
 use skippy_serving::{
     DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedOpenAiRequestDefaults, EmbeddedRuntimeOptions,
     SpeculativeDecodeConfig,
@@ -224,6 +224,10 @@ impl ResolvedSkippyConfig {
             } else {
                 MtpSource::Disabled
             },
+            verify_rollback: VerifyRollback::for_drafting(
+                self.speculative.native_mtp_enabled
+                    || self.speculative_mode_for_embedded(false) != "disabled",
+            ),
             metrics_otlp_grpc: telemetry.metrics_otlp_grpc.clone(),
             telemetry_queue_capacity: telemetry.queue_capacity,
             telemetry_level: telemetry.level,

@@ -693,11 +693,23 @@ impl KvStageIntegration {
             location.clone()
         } else {
             match l3.locate_longest(&identity.namespace, durable_token_ids, MAX_PREFIX_PROBES) {
-                Ok(Some(location)) => location,
+                Ok(Some(location)) => {
+                    super::tier_metrics::record_lookup(
+                        crate::telemetry::log_events::KvTier::L3,
+                        Some(location.token_count),
+                    );
+                    location
+                }
                 // Nothing stored, or a corrupt / identity-mismatched entry.
                 // Either way the miss path is the safe one; the tier has
                 // recorded the reason for the status surface.
-                Ok(None) | Err(_) => return Ok(None),
+                Ok(None) | Err(_) => {
+                    super::tier_metrics::record_lookup(
+                        crate::telemetry::log_events::KvTier::L3,
+                        None,
+                    );
+                    return Ok(None);
+                }
             }
         };
         // L3 remains the authority for L2: locate and validate the current

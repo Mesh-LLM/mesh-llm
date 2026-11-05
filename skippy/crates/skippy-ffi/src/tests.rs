@@ -48,6 +48,91 @@ fn selected_token_readout_matches_c_iteration_layout() {
     assert!(!runtime_abi_supported(version(0, 1, 73)));
 }
 
+/// The GPU command timing record matches the C struct's size and offsets.
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn gpu_command_timing_matches_c_layout() {
+    assert_eq!(size_of::<crate::SkippyGpuCommandTimingV1>(), 184);
+    assert_eq!(align_of::<crate::SkippyGpuCommandTimingV1>(), 8);
+    assert_eq!(offset_of!(crate::SkippyGpuCommandTimingV1, tag), 8);
+    assert_eq!(
+        offset_of!(crate::SkippyGpuCommandTimingV1, backend_name),
+        16
+    );
+    assert_eq!(offset_of!(crate::SkippyGpuCommandTimingV1, context_id), 24);
+    assert_eq!(offset_of!(crate::SkippyGpuCommandTimingV1, status), 44);
+    assert_eq!(
+        offset_of!(crate::SkippyGpuCommandTimingV1, encode_start_unix_ns),
+        48
+    );
+    assert_eq!(
+        offset_of!(crate::SkippyGpuCommandTimingV1, execute_end_unix_ns),
+        72
+    );
+    // Op classes, appended: an older runtime's record ends at 80.
+    assert_eq!(offset_of!(crate::SkippyGpuCommandTimingV1, op_class), 80);
+    assert_eq!(offset_of!(crate::SkippyGpuCommandTimingV1, layer), 88);
+    assert_eq!(
+        offset_of!(crate::SkippyGpuCommandTimingV1, split_by_class),
+        92
+    );
+    assert_eq!(
+        offset_of!(crate::SkippyGpuCommandTimingV1, attention_kv_cells),
+        96
+    );
+    assert_eq!(
+        offset_of!(crate::SkippyGpuCommandTimingV1, attention_row_list_nodes),
+        104
+    );
+    assert_eq!(
+        offset_of!(crate::SkippyGpuCommandTimingV1, attention_flash_nodes),
+        108
+    );
+    assert_eq!(
+        offset_of!(crate::SkippyGpuCommandTimingV1, attention_nodes),
+        112
+    );
+    assert_eq!(
+        offset_of!(crate::SkippyGpuCommandTimingV1, other_nodes),
+        128
+    );
+    assert_eq!(
+        offset_of!(crate::SkippyGpuCommandTimingV1, attention_bytes),
+        136
+    );
+    assert_eq!(
+        offset_of!(crate::SkippyGpuCommandTimingV1, other_bytes),
+        168
+    );
+    // Recurrent state counts, appended: an older runtime's record ends at 176.
+    assert_eq!(
+        offset_of!(crate::SkippyGpuCommandTimingV1, recurrent_states),
+        176
+    );
+    assert_eq!(
+        offset_of!(crate::SkippyGpuCommandTimingV1, recurrent_states_carried),
+        180
+    );
+    assert_eq!(crate::FEATURE_NATIVE_TRACING, 1_u64 << 42);
+}
+
+/// The native span record matches the C struct's size and offsets.
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn native_span_matches_c_layout() {
+    assert_eq!(size_of::<crate::SkippyNativeSpanV1>(), 72);
+    assert_eq!(align_of::<crate::SkippyNativeSpanV1>(), 8);
+    assert_eq!(offset_of!(crate::SkippyNativeSpanV1, id), 8);
+    assert_eq!(offset_of!(crate::SkippyNativeSpanV1, parent), 16);
+    assert_eq!(offset_of!(crate::SkippyNativeSpanV1, name), 24);
+    assert_eq!(offset_of!(crate::SkippyNativeSpanV1, detail), 32);
+    assert_eq!(offset_of!(crate::SkippyNativeSpanV1, start_unix_ns), 40);
+    assert_eq!(offset_of!(crate::SkippyNativeSpanV1, end_unix_ns), 48);
+    assert_eq!(offset_of!(crate::SkippyNativeSpanV1, value_name), 56);
+    assert_eq!(offset_of!(crate::SkippyNativeSpanV1, value), 64);
+    assert_eq!(crate::NATIVE_SPAN_ID_BIT, 1_u64 << 63);
+}
+
 #[test]
 /// Runtime-event families must never masquerade as full-model workload support.
 fn workload_feature_is_distinct_from_runtime_event_features() {

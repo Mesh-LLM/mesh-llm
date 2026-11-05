@@ -1,4 +1,5 @@
 use super::*;
+use crate::kv_integration::{KvLifecycleEvent, ResidentMissDiagnosis, ResidentMissReason};
 
 impl StageOpenAiBackend {
     #[allow(clippy::too_many_arguments)]
@@ -148,12 +149,21 @@ impl StageOpenAiBackend {
                         );
                         self.telemetry
                             .emit("stage.openai_kv_lookup_decision", attrs);
+                        kv.notify_kv_lifecycle(KvLifecycleEvent::CacheLookupHit {
+                            matched_tokens: restored.token_count,
+                            resident_entries: restored.entries,
+                        });
                     }
                     Ok(None) => {
+                        let miss = kv.diagnose_resident_miss(identities);
                         let mut attrs = self.openai_attrs(ids);
                         attrs.insert("skippy.kv.decision".to_string(), json!("miss"));
+                        insert_resident_miss_attrs(&mut attrs, prefill_tokens.len(), miss);
                         self.telemetry
                             .emit("stage.openai_kv_lookup_decision", attrs);
+                        if miss.reason != ResidentMissReason::LookupOff {
+                            kv.notify_kv_lifecycle(KvLifecycleEvent::CacheLookupMiss);
+                        }
                     }
                     Err(error) => {
                         let mut attrs = self.openai_attrs(ids);
@@ -364,4 +374,32 @@ impl StageOpenAiBackend {
         self.telemetry
             .emit("stage.openai_kv_lookup_decision", attrs);
     }
+}
+
+fn insert_resident_miss_attrs(
+    attrs: &mut BTreeMap<String, serde_json::Value>,
+    prompt_tokens: usize,
+    miss: ResidentMissDiagnosis,
+) {
+    attrs.insert(
+        "skippy.kv.miss_reason".to_string(),
+        json!(miss.reason.as_str()),
+    );
+    attrs.insert("skippy.kv.prompt_tokens".to_string(), json!(prompt_tokens));
+    attrs.insert(
+        "skippy.kv.resident_entries".to_string(),
+        json!(miss.resident_entries),
+    );
+    attrs.insert(
+        "skippy.kv.shared_prefix_tokens".to_string(),
+        json!(miss.shared_prefix_tokens),
+    );
+    attrs.insert(
+        "skippy.kv.stored_prefix_tokens".to_string(),
+        json!(miss.stored_prefix_tokens),
+    );
+    attrs.insert(
+        "skippy.kv.checkpoint_prefix_tokens".to_string(),
+        json!(miss.checkpoint_prefix_tokens),
+    );
 }

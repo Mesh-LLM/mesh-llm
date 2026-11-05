@@ -464,6 +464,7 @@ mod tests {
         let request = LocalGeneration {
             prompt_token_ids: &prompt_token_ids,
             recurrent_cache_prefix_token_ids: None,
+            shared_system_prefix_tokens: None,
             max_tokens: 5,
             sampling: &sampling,
             chat_sampling_metadata: None,

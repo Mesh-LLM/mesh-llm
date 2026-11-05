@@ -1,3 +1,4 @@
+use crate::native_timing::native_call;
 use std::collections::BTreeMap;
 use std::ffi::CString;
 use std::path::{Path, PathBuf};
@@ -260,8 +261,13 @@ fn plan_gguf_stage_runtime_plans_impl(
     };
     let mut planner = ptr::null_mut();
     let mut error = ptr::null_mut();
-    let status =
-        unsafe { skippy_ffi::skippy_stage_planner_create_v1(&config, &mut planner, &mut error) };
+    let status = unsafe {
+        native_call!(skippy_stage_planner_create_v1(
+            &config,
+            &mut planner,
+            &mut error
+        ))
+    };
     if let Err(error) = ensure_ok(status, error).context("create native stage planner") {
         if !planner.is_null() {
             unsafe { skippy_ffi::skippy_stage_planner_free(planner) };
@@ -285,11 +291,11 @@ fn plan_gguf_stage_runtime_plans_impl(
             .collect::<Vec<_>>();
         let mut error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_stage_plan_validate_chain_v1(
+            native_call!(skippy_stage_plan_validate_chain_v1(
                 plan_ptrs.as_ptr(),
                 plan_ptrs.len(),
                 &mut error,
-            )
+            ))
         };
         ensure_ok(status, error).context("validate native stage plan chain")?;
     }
@@ -434,14 +440,16 @@ fn hash_len_prefixed(hash: &mut Sha256, value: &[u8]) {
 fn realize_plan(planner: &Planner, layer_start: u32, layer_end: u32) -> Result<Plan> {
     let mut plan = ptr::null_mut();
     let mut error = ptr::null_mut();
+    let layer_start = i32::try_from(layer_start).context("stage layer start exceeds i32")?;
+    let layer_end = i32::try_from(layer_end).context("stage layer end exceeds i32")?;
     let status = unsafe {
-        skippy_ffi::skippy_stage_planner_realize_v1(
+        native_call!(skippy_stage_planner_realize_v1(
             planner.0,
-            i32::try_from(layer_start).context("stage layer start exceeds i32")?,
-            i32::try_from(layer_end).context("stage layer end exceeds i32")?,
+            layer_start,
+            layer_end,
             &mut plan,
             &mut error,
-        )
+        ))
     };
     if let Err(error) = ensure_ok(status, error).context("realize native stage plan") {
         if !plan.is_null() {

@@ -1,7 +1,8 @@
 use skippy_ffi::{
     FEATURE_DEVICE_EVENTS, FEATURE_DIAGNOSTIC_EVENTS, FEATURE_KV_EVENTS, FEATURE_LAYA_DECISIONS,
-    FEATURE_MODEL_LOAD_EVENTS_V2, FEATURE_NON_CHAT_WORKLOADS, FEATURE_RUNTIME_EVENT_REPORTER,
-    FEATURE_RUNTIME_EVENTS, FEATURE_SPEECH_RECOGNITION, FEATURE_UNLOAD_EVENTS,
+    FEATURE_MODEL_LOAD_EVENTS_V2, FEATURE_NATIVE_TRACING, FEATURE_NON_CHAT_WORKLOADS,
+    FEATURE_RUNTIME_EVENT_REPORTER, FEATURE_RUNTIME_EVENTS, FEATURE_SPEECH_RECOGNITION,
+    FEATURE_UNLOAD_EVENTS,
 };
 
 use crate::logging::write_native_log_note;
@@ -12,7 +13,7 @@ use crate::runtime_events::abi_features_bitmask;
 /// specific family, and is reported once rather than disabling anything.
 /// It tracks the highest `FEATURE_*` bit `skippy_ffi` defines, family or
 /// not: a bit this build names is not reserved to a future one.
-const MAX_KNOWN_FEATURE_BIT: u32 = 41;
+const MAX_KNOWN_FEATURE_BIT: u32 = 42;
 
 struct FamilySpec {
     bit: u64,
@@ -99,6 +100,15 @@ const FAMILIES: &[FamilySpec] = &[
             b"skippy_asr_result_language\0",
             b"skippy_asr_result_duration_seconds\0",
             b"skippy_asr_result_free\0",
+        ],
+    },
+    FamilySpec {
+        bit: FEATURE_NATIVE_TRACING,
+        name: "native_tracing",
+        required_symbols: &[
+            b"skippy_set_native_span_callback\0",
+            b"skippy_set_gpu_command_timing_callback\0",
+            b"skippy_set_trace_tag\0",
         ],
     },
 ];

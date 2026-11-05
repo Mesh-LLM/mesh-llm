@@ -52,6 +52,20 @@ pub struct InferenceOptions {
 }
 
 impl InferenceOptions {
+    /// How far verify windows rewind recurrent state in place: the default
+    /// when this frontend drafts (native MTP, an N-gram proposer or a draft
+    /// model), none when it never does.
+    pub fn verify_rollback(
+        &self,
+        mtp_source: skippy_runtime::MtpSource,
+    ) -> skippy_runtime::VerifyRollback {
+        skippy_runtime::VerifyRollback::for_drafting(
+            mtp_source != skippy_runtime::MtpSource::Disabled
+                || self.speculative.ngram.is_some()
+                || self.draft_model_path.is_some(),
+        )
+    }
+
     pub fn direct_single_stage_defaults(
         model_id: String,
         default_max_tokens: u32,

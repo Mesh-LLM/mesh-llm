@@ -28,6 +28,12 @@ pub const FEATURE_LAYA_DECISIONS: u64 = 1 << 40;
 /// Full-model speech recognition (`skippy/asr.h`); clear in runtimes built
 /// without whisper.cpp.
 pub const FEATURE_SPEECH_RECOGNITION: u64 = 1 << 41;
+/// Native span and GPU command timing callbacks (`skippy/tracing.h`).
+pub const FEATURE_NATIVE_TRACING: u64 = 1 << 42;
+pub const NATIVE_SPAN_V1_ABI_VERSION: u32 = 1;
+/// Set in every native span id, so span ids never collide with caller tags.
+pub const NATIVE_SPAN_ID_BIT: u64 = 1 << 63;
+pub const GPU_COMMAND_TIMING_V1_ABI_VERSION: u32 = 1;
 pub const MODEL_TENSOR_SOURCE_V1_ABI_VERSION: u32 = 1;
 pub const WORKLOAD_INFO_V1_ABI_VERSION: u32 = 1;
 pub const LAYA_INFO_V1_ABI_VERSION: u32 = 1;
@@ -485,6 +491,93 @@ pub struct SkippyRuntimeEventReporterV1 {
     pub user_data: *mut c_void,
 }
 
+/// One finished phase of native work (`skippy/tracing.h`). Times are Unix
+/// nanoseconds.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SkippyNativeSpanV1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    /// Process-unique and nonzero, with [`NATIVE_SPAN_ID_BIT`] set.
+    pub id: u64,
+    /// The enclosing native span's id, else the thread's trace tag, else 0.
+    pub parent: u64,
+    /// Dotted span name with static storage, such as `"llama.graph_compute"`.
+    pub name: *const c_char,
+    /// Null, or what the span worked on; valid only during the callback.
+    pub detail: *const c_char,
+    pub start_unix_ns: i64,
+    pub end_unix_ns: i64,
+    /// Null, or the name of one measured quantity with static storage.
+    pub value_name: *const c_char,
+    pub value: i64,
+}
+
+pub type SkippyNativeSpanCallback =
+    Option<unsafe extern "C" fn(span: *const SkippyNativeSpanV1, user_data: *mut c_void)>;
+pub type SkippySetNativeSpanCallbackFn =
+    unsafe extern "C" fn(callback: SkippyNativeSpanCallback, user_data: *mut c_void) -> Status;
+
+/// One unit of device work, such as a Metal command buffer
+/// (`skippy/tracing.h`). Times are Unix nanoseconds; 0 when unobserved.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct SkippyGpuCommandTimingV1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    pub tag: u64,
+    /// Backend registry name with static storage, such as `"MTL"`.
+    pub backend_name: *const c_char,
+    pub context_id: u32,
+    pub compute_index: u32,
+    pub command_index: u32,
+    pub command_count: u32,
+    pub node_count: u32,
+    pub status: i32,
+    pub encode_start_unix_ns: i64,
+    pub encode_end_unix_ns: i64,
+    pub execute_start_unix_ns: i64,
+    pub execute_end_unix_ns: i64,
+    /// `"attention"`, `"matmul"`, `"recurrent"`, `"kv_write"`, `"other"` or
+    /// `"mixed"`, with static storage. Runtimes that predate op classes end
+    /// the record before this field; `struct_size` says which it is.
+    pub op_class: *const c_char,
+    /// The model layer of the command's first layer-named node; -1 when unknown.
+    pub layer: i32,
+    /// 1 when the backend split the graph at op class boundaries.
+    pub split_by_class: u32,
+    pub attention_kv_cells: u32,
+    pub attention_queries: u32,
+    pub attention_row_list_nodes: u32,
+    /// Attention nodes that are flash attention; unfused attention has none.
+    pub attention_flash_nodes: u32,
+    pub attention_nodes: u32,
+    pub matmul_nodes: u32,
+    pub recurrent_nodes: u32,
+    pub kv_write_nodes: u32,
+    pub other_nodes: u32,
+    pub attention_bytes: u64,
+    pub matmul_bytes: u64,
+    pub recurrent_bytes: u64,
+    pub kv_write_bytes: u64,
+    pub other_bytes: u64,
+    /// The most recurrent states one gather reads: the states of the batch's
+    /// sequences and every state between them. Runtimes that predate it end
+    /// the record before this field.
+    pub recurrent_states: u32,
+    /// The most gathered states a copy writes back unchanged because no
+    /// sequence in the batch owns them.
+    pub recurrent_states_carried: u32,
+}
+
+pub type SkippyGpuCommandTimingCallback =
+    Option<unsafe extern "C" fn(timing: *const SkippyGpuCommandTimingV1, user_data: *mut c_void)>;
+pub type SkippySetGpuCommandTimingCallbackFn = unsafe extern "C" fn(
+    callback: SkippyGpuCommandTimingCallback,
+    user_data: *mut c_void,
+) -> Status;
+pub type SkippySetTraceTagFn = unsafe extern "C" fn(tag: u64);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(i32)]
 pub enum Status {
@@ -597,6 +690,7 @@ pub struct RuntimeConfig {
     pub activation_export_identity_count: usize,
     pub activation_export_bindings: *const *const c_char,
     pub mtp_source: MtpSource,
+    pub verify_rollback_tokens: u32,
     pub selected_backend_device: *const c_char,
     pub glm_dsa_policy_profile: i32,
     pub glm_dsa_policy_flags: u32,

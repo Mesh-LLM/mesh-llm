@@ -251,6 +251,7 @@ fn open_full_model(path: &Path, ctx_size: u32, n_gpu_layers: i32) -> Result<Stag
             glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
 
             mtp_source: MtpSource::Disabled,
+            verify_rollback: skippy_runtime::VerifyRollback::default(),
             resident_tensor_names: Vec::new(),
             execution_contract: String::new(),
             activation_import_identities: Vec::new(),

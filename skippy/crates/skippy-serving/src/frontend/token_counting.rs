@@ -23,11 +23,11 @@ impl StageOpenAiBackend {
             ));
         }
         let backend = self.clone();
-        tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(crate::telemetry::trace_context::propagate(move || {
             let tokens = backend.tokenize(&prompt.text)?;
             u32::try_from(tokens.len())
                 .map_err(|_| InferenceError::internal("token count overflow"))
-        })
+        }))
         .await
         .map_err(|error| InferenceError::backend(error.to_string()))?
     }

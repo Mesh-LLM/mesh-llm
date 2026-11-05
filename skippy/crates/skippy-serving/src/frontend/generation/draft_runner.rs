@@ -11,7 +11,7 @@ use skippy_runtime::RuntimeConfig;
 use skippy_runtime::RuntimeLoadMode;
 use skippy_runtime::StageModel;
 use skippy_runtime::StageSession;
-use skippy_runtime::{ModelInfo, MtpSource};
+use skippy_runtime::{ModelInfo, MtpSource, VerifyRollback};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -290,6 +290,7 @@ pub(in crate::frontend) fn draft_runtime_config(
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
         mtp_source,
+        verify_rollback: VerifyRollback::default(),
         resident_tensor_names: Vec::new(),
         execution_contract: String::new(),
         activation_import_identities: Vec::new(),

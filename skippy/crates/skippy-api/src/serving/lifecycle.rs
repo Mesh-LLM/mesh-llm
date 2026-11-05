@@ -199,6 +199,26 @@ impl LoadedModelBackend {
 mod tests {
     use super::*;
 
+    #[test]
+    fn only_a_drafting_frontend_keeps_verify_rollback_snapshots() {
+        use skippy_runtime::{MtpSource, VerifyRollback};
+        let mut openai =
+            InferenceOptions::direct_single_stage_defaults("model".to_string(), 32, 1, false);
+        assert_eq!(
+            openai.verify_rollback(MtpSource::Disabled),
+            VerifyRollback::None
+        );
+        assert_eq!(
+            openai.verify_rollback(MtpSource::Integrated),
+            VerifyRollback::default()
+        );
+        openai.draft_model_path = Some("draft.gguf".into());
+        assert_eq!(
+            openai.verify_rollback(MtpSource::Disabled),
+            VerifyRollback::default()
+        );
+    }
+
     fn request() -> ModelLoadRequest {
         let config: StageConfig = serde_json::from_value(skippy_config::example_config()).unwrap();
         ModelLoadRequest {
@@ -214,6 +234,7 @@ mod tests {
                 n_threads: None,
                 n_threads_batch: None,
                 mtp_source: skippy_runtime::MtpSource::Disabled,
+                verify_rollback: skippy_runtime::VerifyRollback::None,
                 metrics_otlp_grpc: None,
                 telemetry_queue_capacity: 0,
                 telemetry_level: skippy_serving::telemetry::TelemetryLevel::Off,

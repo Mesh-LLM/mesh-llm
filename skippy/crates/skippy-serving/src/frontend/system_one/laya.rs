@@ -38,9 +38,9 @@ impl InferenceBackend for LayaSystemOneBackend {
 
     async fn system_one(&self, request: SystemOneRequest) -> InferenceResult<SystemOneResponse> {
         let backend = self.clone();
-        task::spawn_blocking(move || {
+        task::spawn_blocking(crate::telemetry::trace_context::propagate(move || {
             run_on_model(backend.model.as_ref(), &backend.model_id, request)
-        })
+        }))
         .await
         .map_err(|error| {
             InferenceError::backend(format!("System One execution task failed: {error}"))

@@ -160,6 +160,7 @@ fn failed_long_l3_import_rolls_back_then_reuses_the_short_native_owner() -> Resu
         LocalGeneration {
             prompt_token_ids: &prompt,
             recurrent_cache_prefix_token_ids: None,
+            shared_system_prefix_tokens: None,
             max_tokens: 1,
             sampling: &sampling,
             chat_sampling_metadata: None,

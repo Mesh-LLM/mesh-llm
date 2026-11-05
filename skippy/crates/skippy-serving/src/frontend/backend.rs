@@ -1,5 +1,6 @@
 mod completion_exchange;
 mod exchange_hooks;
+mod phase_spans;
 mod prepared_exchange;
 #[cfg(test)]
 mod prepared_exchange_tests;
@@ -902,10 +903,10 @@ where
     F: FnOnce(skippy_inference_api::CancellationToken) -> T + Send + 'static,
     P: Send + 'static,
 {
-    task::spawn_blocking(move || {
+    task::spawn_blocking(crate::telemetry::trace_context::propagate(move || {
         let _permit = permit;
         work(context.cancellation_token())
-    })
+    }))
     .await
 }
 
@@ -952,6 +953,7 @@ impl InferenceBackend for StageOpenAiBackend {
             &context,
         );
         let request_timer = PhaseTimer::start();
+        let _request = self.enter_openai_summary_task(&request_timer);
         self.chat_completion_with_prepared_hooks_for_exchange(
             request,
             None,
@@ -966,9 +968,11 @@ impl InferenceBackend for StageOpenAiBackend {
                 let template_options = chat_template_options(&request, &request_defaults)?;
                 let parse_chat_output = chat_output_parser_required(&request, &template_options);
                 let template_timer = PhaseTimer::start();
+                let templating = self.enter_openai_phase_task(&template_timer);
                 let prompt = self
                     .prepare_chat_prompt_offloaded(&request, template_options.clone())
                     .await?;
+                drop(templating);
                 let mut template_attrs = self.openai_attrs(&ids);
                 template_attrs.insert(
                     "llama_stage.openai_operation".to_string(),
@@ -1116,9 +1120,11 @@ impl InferenceBackend for StageOpenAiBackend {
                 let parse_chat_output = chat_output_parser_required(&request, &template_options);
                 let emit_reasoning = template_exposes_reasoning(&template_options);
                 let template_timer = PhaseTimer::start();
+                let templating = self.enter_openai_phase_task(&template_timer);
                 let prompt = self
                     .prepare_chat_prompt_offloaded(&request, template_options)
                     .await?;
+                drop(templating);
                 let mut template_attrs = self.openai_attrs(&ids);
                 template_attrs.insert(
                     "llama_stage.openai_operation".to_string(),
@@ -1202,6 +1208,7 @@ impl InferenceBackend for StageOpenAiBackend {
             &context,
         );
         let request_timer = PhaseTimer::start();
+        let _request = self.enter_openai_summary_task(&request_timer);
         self.ensure_model(&request.model)?;
         let (request_defaults, defaults_diagnostics) =
             resolve_completion_request_defaults(&request, &self.request_defaults);
@@ -1385,7 +1392,10 @@ impl InferenceBackend for StageOpenAiBackend {
         let model = request.model.clone();
         let encoding_format = request.encoding_format.clone();
         let backend = self.clone();
-        let token_inputs = task::spawn_blocking(move || backend.prepare_embedding_inputs(request))
+        let token_inputs =
+            task::spawn_blocking(crate::telemetry::trace_context::propagate(move || {
+                backend.prepare_embedding_inputs(request)
+            }))
             .await
             .map_err(|error| {
                 InferenceError::backend(format!("embedding tokenization task failed: {error}"))
@@ -1689,34 +1699,6 @@ impl StageOpenAiBackend {
         );
     }
 
-    pub(super) fn emit_openai_phase(
-        &self,
-        name: &str,
-        timer: PhaseTimer,
-        mut attrs: BTreeMap<String, Value>,
-    ) -> f64 {
-        let elapsed_ms = timer.elapsed_ms();
-        attrs.insert("llama_stage.elapsed_ms".to_string(), json!(elapsed_ms));
-        let end = now_unix_nanos() as u64;
-        self.telemetry
-            .emit_debug_span(name, attrs, timer.start_unix_nanos, end);
-        elapsed_ms
-    }
-
-    pub(super) fn emit_openai_summary(
-        &self,
-        name: &str,
-        timer: PhaseTimer,
-        mut attrs: BTreeMap<String, Value>,
-    ) -> f64 {
-        let elapsed_ms = timer.elapsed_ms();
-        attrs.insert("llama_stage.elapsed_ms".to_string(), json!(elapsed_ms));
-        let end = now_unix_nanos() as u64;
-        self.telemetry
-            .emit_span(name, attrs, timer.start_unix_nanos, end);
-        elapsed_ms
-    }
-
     pub(super) fn ensure_model(&self, requested: &str) -> InferenceResult<()> {
         ensure_requested_model(&self.model_id, requested)
     }
@@ -1737,11 +1719,11 @@ impl StageOpenAiBackend {
         } else {
             let backend = self.clone();
             let ids_for_tokenize = ids.clone();
-            task::spawn_blocking(move || {
+            task::spawn_blocking(crate::telemetry::trace_context::propagate(move || {
                 let prepared =
                     backend.prepare_text_prompt(&prompt, max_tokens, &ids_for_tokenize)?;
                 Ok::<_, InferenceError>((prompt, Some(prepared)))
-            })
+            }))
             .await
             .map_err(|error| {
                 InferenceError::backend(format!("prompt tokenization task failed: {error}"))
@@ -1832,11 +1814,11 @@ impl StageOpenAiBackend {
         } else {
             let backend = self.clone();
             let ids_for_tokenize = ids.clone();
-            task::spawn_blocking(move || {
+            task::spawn_blocking(crate::telemetry::trace_context::propagate(move || {
                 let prepared =
                     backend.prepare_text_prompt(&prompt, max_tokens, &ids_for_tokenize)?;
                 Ok::<_, InferenceError>((prompt, Some(prepared)))
-            })
+            }))
             .await
             .map_err(|error| {
                 InferenceError::backend(format!("prompt tokenization task failed: {error}"))
@@ -1902,7 +1884,7 @@ impl StageOpenAiBackend {
             } else {
                 None
             };
-        task::spawn_blocking(move || {
+        task::spawn_blocking(crate::telemetry::trace_context::propagate(move || {
             let _session_permit = session_permit;
             let _permit = permit;
             let result = backend.generate_text(
@@ -1974,7 +1956,7 @@ impl StageOpenAiBackend {
                     let _ = sender.send_terminal(Err(error));
                 }
             }
-        });
+        }));
         Ok(Box::pin(stream::unfold(rx, |mut rx| async {
             rx.recv().await.map(|item| (item, rx))
         })))

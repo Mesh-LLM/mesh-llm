@@ -73,29 +73,32 @@ impl StageOpenAiBackend {
         super::validate_request_fields(&request, &self.model_id)?;
         let decision = super::decision_request(&request)?;
         let scheduler = self.iteration_scheduler.clone();
-        let plan = tokio::task::spawn_blocking(move || {
-            let reader = scheduler.execute_runtime("decision-plan", |runtime| {
-                Ok(runtime
-                    .model
-                    .supports_causal_readout()
-                    .then(|| runtime.model.reader()))
-            })?;
-            let Some(reader) = reader else {
-                return Ok(None);
-            };
-            // Vocabulary reads must not occupy the scheduler worker or runtime
-            // lock: a request may tokenize up to 64 prompts and 1,664 labels.
-            DecisionPlan::for_reader(&reader, &decision)
-                .map(Some)
-                .map_err(|error| InferenceError::invalid_request(error.to_string()))
-        })
-        .await
-        .map_err(|error| openai_backend_error(error.into()))??;
+        let plan =
+            tokio::task::spawn_blocking(crate::telemetry::trace_context::propagate(move || {
+                let reader = scheduler.execute_runtime("decision-plan", |runtime| {
+                    Ok(runtime
+                        .model
+                        .supports_causal_readout()
+                        .then(|| runtime.model.reader()))
+                })?;
+                let Some(reader) = reader else {
+                    return Ok(None);
+                };
+                // Vocabulary reads must not occupy the scheduler worker or runtime
+                // lock: a request may tokenize up to 64 prompts and 1,664 labels.
+                DecisionPlan::for_reader(&reader, &decision)
+                    .map(Some)
+                    .map_err(|error| InferenceError::invalid_request(error.to_string()))
+            }))
+            .await
+            .map_err(|error| openai_backend_error(error.into()))??;
         let Some(plan) = plan else {
             let backend = self.clone();
-            return tokio::task::spawn_blocking(move || backend.run_system_one(request))
-                .await
-                .map_err(|error| openai_backend_error(error.into()))?;
+            return tokio::task::spawn_blocking(crate::telemetry::trace_context::propagate(
+                move || backend.run_system_one(request),
+            ))
+            .await
+            .map_err(|error| openai_backend_error(error.into()))?;
         };
         validate_context(&plan, self.ctx_size)?;
         let guard = CancelOnDrop(CancellationToken::new());
@@ -163,10 +166,10 @@ impl StageOpenAiBackend {
             .await?;
         let backend = self.clone();
         let cancellation = cancellation.clone();
-        tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(crate::telemetry::trace_context::propagate(move || {
             let _permit = permit;
             sequence::execute(&backend, &job, &ids, &cancellation)
-        })
+        }))
         .await
         .map_err(|error| ReadoutFailure::from(openai_backend_error(error.into())))?
     }
