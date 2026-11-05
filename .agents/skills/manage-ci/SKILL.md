@@ -866,6 +866,9 @@ just ci-validate
 
 Also run what applies:
 
+- `just test-all` when a change alters which tests or build options CI invokes
+  or changes the `test-all` recipe itself. Other CI-only edits do not require
+  the full workspace gate.
 - `just ci-shellcheck <changed-script>...` for changed shell scripts or
   substantial embedded Bash.
 - `just ci-crate-lists` for routing,
