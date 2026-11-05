@@ -5,6 +5,7 @@ pub(crate) use skippy_ffi::TensorRole;
 mod activation;
 mod capability_probe;
 mod checkpoint;
+pub mod clef;
 mod config;
 pub mod decision;
 mod devices;
@@ -37,6 +38,7 @@ pub use activation::{
 };
 pub use capability_probe::{CapabilityReport, probe_capabilities};
 pub use checkpoint::{CheckpointQuantization, is_safetensors_checkpoint};
+pub use clef::{ClefModel, ClefModelInfo};
 pub use config::{
     FlashAttentionType, GGML_TYPE_F16, GGML_TYPE_F32, GGML_TYPE_I32, GGML_TYPE_Q4_0,
     GGML_TYPE_Q8_0, GlmDsaPolicy, HostExpertLayers, LLAMA_SERVER_DEFAULT_N_BATCH,
@@ -49,10 +51,12 @@ pub use decision::{
 };
 pub use devices::{BackendDevice, BackendDeviceType, backend_devices};
 pub use dflash::{
-    DFLASH_BORROWED_TARGET_TENSOR, DFlashDraftInfo, DFlashDraftOptions, DFlashFeatureRows,
-    DFlashHealth, DFlashProposal, DFlashVariant, dflash_feature_identity, dflash_feature_layer,
+    DFLASH_BORROWED_TARGET_TENSOR, DFlashDraftInfo, DFlashDraftOptions, DFlashDraftStats,
+    DFlashFeatureEncoding, DFlashFeatureRows, DFlashHealth, DFlashProposal, DFlashVariant,
+    dflash_feature_identity, dflash_feature_layer, dflash_feature_payload_bytes,
     frame_has_dflash_features,
 };
+pub use error::NativeError;
 pub(crate) use error::ensure_ok;
 pub use gguf_writer::{
     ModelInfo, write_gguf_from_parts, write_gguf_from_parts_consuming,
@@ -84,7 +88,7 @@ pub use runtime_events::{
     OperationId, RecordRejection, RuntimeEvent, RuntimeEventCategory, RuntimeEventEmitterKind,
     RuntimeEventFailureCode, RuntimeEventKind, RuntimeEventProgressUnit, next_operation_id,
 };
-pub use session::{DecodeBatchRequest, StageSession};
+pub use session::{DecodeBatchRequest, StageSession, VerifyRollbackCounts};
 pub use skippy_ffi::LoadMode as RuntimeLoadMode;
 pub use skippy_ffi::MAX_DRY_SEQUENCE_BREAKER_BYTES;
 pub use skippy_ffi::{

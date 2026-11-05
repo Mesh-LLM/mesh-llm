@@ -105,7 +105,7 @@ same Rust crate.
 
 ## ABI Contract
 
-The staged ABI is versioned as `0.1.76`. The patch header in
+The staged ABI is versioned as `0.1.78`. The patch header in
 `skippy/llama_cpp/patches/` and the Rust constants in
 `skippy/crates/skippy-ffi/src/lib.rs` are the source of truth, so keep this README
 aligned with those files instead of treating it as canonical prose.
@@ -304,6 +304,7 @@ hook currently bound by this crate.
 | `skippy_session_configure_chat_sampling` | Configures session-local sampling with llama.cpp chat metadata so tool-call grammars constrain generated tokens. |
 | `skippy_session_free` | Releases a session handle. |
 | `skippy_trim_session` | Trims session state to a token count. |
+| `skippy_session_verify_rollback_counts` | Reports how many verify windows the session held in place and how many in a host checkpoint since it was reset. |
 
 ### Model open from parts
 

@@ -178,13 +178,6 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
-        path: "payments.wallet",
-        status: WiringStatus::Wired,
-        owner: "n/a",
-        reason: "",
-        behavior: WiringBehavior::None,
-    },
-    WiringEntry {
         path: "telemetry.enabled",
         status: WiringStatus::Wired,
         owner: "n/a",
@@ -1127,6 +1120,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
+        path: "skippy.activation_codec",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
         path: "speculative.strategy",
         status: WiringStatus::Wired,
         owner: "n/a",
@@ -1736,6 +1736,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         behavior: WiringBehavior::None,
     },
     WiringEntry {
+        path: "plugin.<name>.operation_bindings",
+        status: WiringStatus::Wired,
+        owner: "n/a",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
         path: "plugin.<name>.allow_inference_observation",
         status: WiringStatus::Wired,
         owner: "n/a",
@@ -1760,6 +1767,13 @@ pub const WIRING_MANIFEST: &[WiringEntry] = &[
         path: "plugin.<name>.url",
         status: WiringStatus::Wired,
         owner: "PR8",
+        reason: "",
+        behavior: WiringBehavior::None,
+    },
+    WiringEntry {
+        path: "plugin.<name>.models",
+        status: WiringStatus::Wired,
+        owner: "n/a",
         reason: "",
         behavior: WiringBehavior::None,
     },

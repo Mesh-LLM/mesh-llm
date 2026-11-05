@@ -178,6 +178,13 @@ pub(crate) async fn run_cli(
     legacy_warning: Option<String>,
 ) -> Result<()> {
     initialize_runtime_entrypoint()?;
+    if options.memberships_config.is_some() {
+        anyhow::ensure!(
+            explicit_surface == Some(RuntimeSurface::Serve),
+            "configured memberships require serve"
+        );
+        return super::shared_serving::configured::run(&options).await;
+    }
     run_runtime_cli(options, explicit_surface, legacy_warning, None, None).await
 }
 
@@ -679,62 +686,6 @@ pub(super) async fn store_benchmark_metrics(
     *fp16_arc.lock().await = result.and_then(|r| r.compute_tflops_fp16.clone());
 }
 
-#[expect(
-    clippy::cognitive_complexity,
-    reason = "release attestation loading logs missing, valid, and invalid embedded states before advertising the result"
-)]
-pub(super) async fn attach_local_release_attestation(node: &mesh::Node) -> Result<()> {
-    let loaded = match release_attestation::load_for_current_binary() {
-        Ok(loaded) => loaded,
-        Err(error) => {
-            tracing::warn!(
-                error = %error,
-                "failed to load local embedded release attestation; continuing without advertising one"
-            );
-            return Ok(());
-        }
-    };
-    node.set_release_attestation_report(loaded.summary.clone(), loaded.attestation.clone())
-        .await;
-    match loaded.summary.status {
-        crate::ReleaseAttestationStatus::Missing => {
-            tracing::info!(
-                path = %loaded.binary_path.display(),
-                "no embedded release attestation found for local binary"
-            );
-            return Ok(());
-        }
-        crate::ReleaseAttestationStatus::Valid => {}
-        crate::ReleaseAttestationStatus::Invalid => {
-            tracing::warn!(
-                path = %loaded.binary_path.display(),
-                error = %loaded.summary.error.as_deref().unwrap_or("unknown release attestation error"),
-                "local binary has an invalid embedded release attestation; continuing without advertising one"
-            );
-            return Ok(());
-        }
-    }
-    let Some(attestation) = loaded.attestation else {
-        tracing::warn!(
-            path = %loaded.binary_path.display(),
-            "embedded release attestation verified but no release attestation payload was produced"
-        );
-        return Ok(());
-    };
-    let attestation_hash = attestation.canonical_hash_hex().ok();
-    if loaded.summary.verified {
-        tracing::info!(
-            path = %loaded.binary_path.display(),
-            signer_key_id = %attestation.signer_key_id,
-            attestation_hash = attestation_hash.as_deref().unwrap_or("unknown"),
-            "loaded local embedded release attestation"
-        );
-    }
-    node.set_release_attestation_report(loaded.summary, Some(attestation))
-        .await;
-    Ok(())
-}
-
 /// Install the model-intent channel on `node` and return the receiver the
 /// runtime control loop drains.
 async fn install_run_auto_model_intent_channel(
@@ -906,6 +857,8 @@ pub(super) fn spawn_node_benchmark_task(node: &mesh::Node, bin_dir: &Path) {
     });
 }
 
+/// Start the ordinary node, attach its binary proof before accepting peers,
+/// and install its stage-control and plugin services with startup failure cleanup.
 pub(super) async fn start_run_auto_node_and_plugins(
     options: &RuntimeOptions,
     config: &plugin::MeshConfig,
@@ -949,7 +902,8 @@ pub(super) async fn start_run_auto_node_and_plugins(
     )
     .await?;
     node.set_swarm_capture_recorder(swarm_capture);
-    attach_local_release_attestation(&node).await?;
+    release_attestation::attach_to_node(&node, release_attestation::load_for_current_binary())
+        .await;
     node.set_stage_control_handle(skippy::spawn_stage_control_loop(skippy_telemetry_options(
         options,
     )))
@@ -977,9 +931,6 @@ pub(super) async fn start_run_auto_node_and_plugins(
     let mut moa_spec = plugin::in_process_builtin_spec(plugin::MOA_PLUGIN_ID);
     moa_spec.startup.optional = false;
     resolved_plugins.externals.push(moa_spec);
-    #[cfg(feature = "payments")]
-    let in_process = crate::network::payments::in_process_plugins(&node);
-    #[cfg(not(feature = "payments"))]
     let in_process = plugin::InProcessPlugins::default();
     let moa_runner: plugin::InProcessPluginRunner =
         std::sync::Arc::new(|stream| Box::pin(mesh_llm_moa_plugin::run(stream)));
@@ -1005,8 +956,6 @@ pub(super) async fn start_run_auto_node_and_plugins(
         .await;
     node.install_plugin_manager_with_exchange_grants(plugin_manager.clone())
         .await?;
-    #[cfg(feature = "payments")]
-    crate::network::payments::spawn_payment_recovery(&node).await;
     node.start_plugin_channel_forwarder(plugin_mesh_rx);
     Ok((node, channels, plugin_manager))
 }
@@ -2157,6 +2106,7 @@ mod tests {
         clear_runtime_event_engine();
         let config = MeshConfig {
             plugins: vec![PluginConfigEntry {
+                operation_bindings: Vec::new(),
                 name: BLOBSTORE_PLUGIN_ID.to_owned(),
                 enabled: Some(true),
                 web_ui_enabled: None,
@@ -2167,6 +2117,7 @@ mod tests {
                 command: Some("invalid-blobstore-command".to_owned()),
                 args: Vec::new(),
                 url: None,
+                models: None,
                 settings: Default::default(),
                 startup: Default::default(),
             }],

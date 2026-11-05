@@ -138,9 +138,10 @@ pub struct MeshModelProvider {
     /// Controls probed on this provider; absence means unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<serde_json::Value>,
-    /// Descriptive advertised economics, never a binding quote or authorization.
+    /// Plugin channels this provider requires, with the terms its plugin
+    /// attached, republished verbatim. The host does not interpret them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub payment: Option<serde_json::Value>,
+    pub requires: Option<serde_json::Value>,
 }
 
 #[cfg(test)]

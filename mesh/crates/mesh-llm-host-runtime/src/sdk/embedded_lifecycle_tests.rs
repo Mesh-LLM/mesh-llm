@@ -152,6 +152,7 @@ fn isolated<F: std::future::Future<Output = ()>>(name: &str, scenario: fn() -> F
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
     drop(listener);
+    let home = temp.path().join("home");
     let mut child = Command::new(executable)
         .args([
             "--exact",
@@ -169,6 +170,12 @@ fn isolated<F: std::future::Future<Output = ()>>(name: &str, scenario: fn() -> F
         .env("HF_XET_CACHE", temp.path().join("hf/xet"))
         .env("MESH_LLM_RUNTIME_ROOT", temp.path().join("runtime"))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        // The node keeps its state under ~/.mesh-llm; keep it out of the real
+        // home, which may also be read-only or missing. `dirs::home_dir()`
+        // ignores HOME on Windows, hence the test home and key path too.
+        .env("HOME", &home)
+        .env("MESH_LLM_TEST_HOME", &home)
+        .env("MESH_LLM_NODE_KEY_PATH", home.join(".mesh-llm").join("key"))
         .env_remove("HF_TOKEN")
         .env_remove("HUGGING_FACE_HUB_TOKEN")
         .stdout(Stdio::from(log.try_clone().unwrap()))

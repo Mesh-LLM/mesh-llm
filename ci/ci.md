@@ -65,6 +65,27 @@ digests without moving production aliases; consumer binding does not require
 promotion. This admission does not establish source-present API coverage,
 which still requires the protected-main executor rollout and real PR runs.
 
+### Libclang-capable CPU image
+
+The dedicated `public-cpu-libclang` image entry binds the compiler-seed
+cohort: the `rust-tests`, `rust-clippy`, `linux-host`,
+`safetensors-runtime-smoke`, `compiler-seed-publisher` and
+`runtime-seed-canary` consumer roles, the `linux-cpu` runtime row, and the
+compiler seed, which rolls forward to
+`mesh-llm-sccache-seed-linux-x86_64-img-aaa36843-epoch-aaa36843-v3-`. The
+image is the reviewed `libclang-dev` toolchain addition over `public-cpu`; it
+exists so `skippy-ffi`'s bindgen freshness gate (which dlopens libclang through
+clang-sys) runs with the tool baked in instead of a job-time install. Its
+immutable multi-architecture CPU index is
+`sha256:aaa3684385c53d0e41d67011da0a101e8a84420de490375f1e3ce5efb4ba7e60`;
+the previous `public-cpu` image remains admitted for the consumers that stay
+on it (including release-compose and SDK roles). Runner-images main run
+`41541864277`, attempt 3, successfully staged and verified AMD64/ARM64 CPU
+candidates at producer `45e0c35a191cc7026fb1b9a24700cc1b40be7ca6` and Mesh
+source `06f6347323552d07bdeffdb1bc1aba2808c26519`. Native
+`runner-identity bind` retained the complete cohort bytes under
+`ci/runner-image-evidence/032e84ac5046e246959adc937c125cf63c33da11fa2b6a2dda18a44032190153.json`.
+
 The L2 planner action and all five lane summaries now invoke Rust `ci plan`
 and `ci validate-lane` through the narrow `ci-controller` executable that
 `prepare-ci-controller` builds. Other automation uses `prepare-automation`'s
@@ -174,12 +195,13 @@ This is the checked-in implementation. Normative rules live in
 and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 
 The affected-crate fallback roster in `scripts/affected-crates.sh` includes
-`mesh-llm-moa-plugin` and `mesh-llm-wallet` alongside their related workspace
-crates; `just ci-crate-lists` checks it against workspace membership. The
-publish chain orders `mesh-llm-plugin` before `mesh-llm-wallet` and
-`mesh-llm-payments`, including optional dependencies. It also publishes
-`mesh-mixture-of-agents` before `mesh-llm-moa-plugin`, and both before
-`mesh-llm-host-runtime`.
+`mesh-llm-moa-plugin` alongside its related workspace crates;
+`just ci-crate-lists` checks it against workspace membership. The publish
+chain publishes `mesh-mixture-of-agents` before `mesh-llm-moa-plugin`, and
+both before `mesh-llm-host-runtime`. The Lightning payment crates
+(`mesh-llm-wallet`, `mesh-llm-payments-types`, `mesh-llm-payments`,
+`mesh-llm-pay-lightning`) live in `Mesh-LLM/ln-payments-plugin` and are not
+part of this workspace or its publish chain.
 
 ## Entry points
 
@@ -264,8 +286,11 @@ release's kind, publication time, tag and SHA in the summary, because the feed
 is ordered by creation time and a draft created long ago but published recently
 sits on a late page. It peels the selected tag to an exact commit. API errors,
 missing releases and moving tags fail before hardware work;
-there is no `master` fallback. Public API reads use the workflow's read-only
-token only in that selection step. Fixed read-only GraphQL queries fetch metadata
+there is no `master` fallback. The hosted upstream and platform-selection
+steps receive the workflow's read-only token via `GH_TOKEN`; workers remain
+credential-free. That token cannot list repository runners, so `platform=auto`
+falls back to macOS; use explicit `platform=linux` to select Linux.
+Fixed read-only GraphQL queries fetch metadata
 without assets; REST resolves the tag. A 180-second total budget, 1 MiB response
 cap and 1000-page ceiling bound the lookup; incomplete pagination fails without
 choosing a partial result. An explicit full `upstream_sha` remains a deliberate override;
@@ -310,8 +335,8 @@ stops without invoking Goose and denies publication.
 
 Manual `mesh_ref` dispatches accept an explicitly trusted same-repository branch
 or full commit SHA. Resolution freezes the SHA once, requires it to be reachable
-from a repository branch, and reads its existing llama.cpp pin. `upstream_sha`
-cannot be combined with this input. Keep the Actions workflow ref on `main`.
+from a repository branch, and reads its existing llama.cpp pin. In certification
+modes, `upstream_sha` cannot be combined with this input. Keep the Actions workflow ref on `main`.
 The default `mesh_action=certify` runs one complete pass without repair or
 publication. Explicit `mesh_action=certify-and-publish` runs that pass, then a
 fresh independent build and complete family pass on the same frozen commit.
@@ -330,6 +355,21 @@ Python callers remain unchanged; metadata is not environment readiness. The pack
 reject any changed source identity. This is an operator-authorized trusted-code
 path on persistent lab machines, not isolation for untrusted PRs or fork code.
 Leaving `mesh_ref` empty preserves scheduled and upstream-upgrade behavior.
+
+Explicit `mesh_action=upgrade` instead upgrades from the selected branch. It
+requires an exact lowercase 40-hex `upstream_sha` different from that branch's pin.
+The controller remains on protected `main`; the frozen selected SHA becomes the
+repair base. Candidate bundles, workers, retries and independent verification
+retain that base and the separate controller identity. The normal bounded repair
+loop must complete a candidate family pass and a fresh independent family pass
+on the same changed commit before the hosted publisher opens a PR. Certification
+modes retain their unchanged-source requirements.
+
+```sh
+gh workflow run llama-upstream-canary.yml --ref main \
+  -f mesh_ref=TRUSTED_REPAIR_BRANCH -f mesh_action=upgrade \
+  -f upstream_sha=FULL_UPSTREAM_COMMIT_SHA
+```
 
 To certify a recovered branch without publication:
 
@@ -1564,8 +1604,12 @@ explicitly skip seed restoration after three verified CPU warm samples observed
 zero reuse in run `34272984200/1`.
 The warmer's `just ci-sccache-seed-build` recipe covers the dominant
 `mesh-llm` Clippy graph, the release-profile backend-neutral `mesh-llm` host
-graph, and the isolated `mesh-llm-cli` test graph used by the Rust-test matrix;
-its `Justfile` and `just/**` inputs are part of the exact seed key.
+graph, the isolated `mesh-llm-cli` test graph used by the Rust-test matrix,
+and the isolated default-feature `xtask` Clippy graph with all targets. The
+test-debug override applies only to the test build so both Clippy graphs retain
+their consumers' profiles. Root and workspace package Cargo manifests and the
+warmer workflow, along with `Justfile` and `just/**`, are part of the exact
+seed key.
 `ci/runner-images.json` and `cargo xtool ci-ops runner-identity check` make the
 current image, native epoch, compiler-seed and SDK Rust identities auditable
 without changing execution. The native `migration_ci_operations` contracts

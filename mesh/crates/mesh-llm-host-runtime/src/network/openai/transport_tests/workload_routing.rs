@@ -472,7 +472,6 @@ async fn host_dispatch_rejects_local_legacy_target_without_capable_replicas() {
             &request,
             RouteModelRequestContext {
                 local_execution_only: false,
-                exchange_id: None,
                 required_tokens: None,
                 affinity: &affinity,
                 served_by_header: None,

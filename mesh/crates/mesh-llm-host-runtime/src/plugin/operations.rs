@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TransportReplay {
     Allow,
-    #[cfg(any(feature = "payments", test))]
+    #[cfg(test)]
     Never,
 }
 

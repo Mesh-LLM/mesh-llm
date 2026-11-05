@@ -71,6 +71,8 @@ async fn send_json_with_status_and_headers_inner(
     let status = match code {
         200 => "OK",
         400 => "Bad Request",
+        402 => "Payment Required",
+        403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
         410 => "Gone",
@@ -100,13 +102,6 @@ async fn send_json_with_status_and_headers_inner(
 
 pub async fn send_400(stream: ClientStream, msg: &str) -> std::io::Result<()> {
     send_openai_error(stream, 400, msg, None).await
-}
-
-// Currently reached only by the paid-ingress rejection path; compiled out with
-// wallets. Ungate if a wallet-free caller needs a bare error response.
-#[cfg(feature = "payments")]
-pub async fn send_error(stream: ClientStream, code: u16, msg: &str) -> std::io::Result<()> {
-    send_openai_error(stream, code, msg, None).await
 }
 
 /// Write a locally generated bounded OpenAI JSON error and record the exact
@@ -146,15 +141,58 @@ pub(crate) async fn send_503_observed(
     send_error_observed(stream, 503, reason, route_observer).await
 }
 
+/// Seconds a client is told to wait (`Retry-After`) before retrying a model
+/// that is not ready here yet.
+const MODEL_NOT_READY_RETRY_AFTER_SECS: u32 = 5;
+
+/// Stable OpenAI error `code` for a model that is not ready here yet: the
+/// startup models still resolving, a first load or reload, a drain, or `auto`
+/// with no model ready. Other 503s keep `service_unavailable`.
+const MODEL_NOT_READY_ERROR_CODE: &str = "model_not_ready";
+
+/// 503 for a model that is not ready here yet, with `Retry-After` and the
+/// stable `model_not_ready` code so clients can tell it from other outages.
+pub(crate) async fn send_model_not_ready_observed(
+    stream: ClientStream,
+    reason: &str,
+    route_observer: OpenAiRouteObserver<'_>,
+) -> std::io::Result<()> {
+    tracing::warn!("503 → client: {reason}");
+    send_openai_error_with(
+        stream,
+        503,
+        reason,
+        Some(MODEL_NOT_READY_ERROR_CODE),
+        Some(MODEL_NOT_READY_RETRY_AFTER_SECS),
+        Some(route_observer),
+    )
+    .await
+}
+
 async fn send_openai_error(
+    stream: ClientStream,
+    code: u16,
+    msg: &str,
+    route_observer: Option<OpenAiRouteObserver<'_>>,
+) -> std::io::Result<()> {
+    let retry_after_secs = (code == 429).then_some(5);
+    send_openai_error_with(stream, code, msg, None, retry_after_secs, route_observer).await
+}
+
+/// `error_code` replaces the status's default OpenAI `code`; the Anthropic
+/// shape has no code field and keeps only the header.
+async fn send_openai_error_with(
     mut stream: ClientStream,
     code: u16,
     msg: &str,
+    error_code: Option<&str>,
+    retry_after_secs: Option<u32>,
     route_observer: Option<OpenAiRouteObserver<'_>>,
 ) -> std::io::Result<()> {
     let status = match code {
         200 => "OK",
         401 => "Unauthorized",
+        402 => "Payment Required",
         403 => "Forbidden",
         404 => "Not Found",
         410 => "Gone",
@@ -172,7 +210,7 @@ async fn send_openai_error(
         let kind = match code {
             400 | 422 => "invalid_request_error",
             401 => "authentication_error",
-            403 => "permission_error",
+            402 | 403 => "permission_error",
             404 => "not_found_error",
             413 => "request_too_large",
             429 => "rate_limit_error",
@@ -183,13 +221,15 @@ async fn send_openai_error(
             &serde_json::json!({"type":"error", "error":{"type":kind,"message":msg}}),
         )?
     } else {
-        openai_error_body(code, msg)
+        openai_error_body(
+            code,
+            msg,
+            error_code.unwrap_or(openai_error_code_for_status(code)),
+        )
     };
-    let retry_after = if code == 429 {
-        "Retry-After: 5\r\n"
-    } else {
-        ""
-    };
+    let retry_after = retry_after_secs
+        .map(|secs| format!("Retry-After: {secs}\r\n"))
+        .unwrap_or_default();
     let resp = format!(
         "HTTP/1.1 {code} {status}\r\nContent-Type: application/json\r\n{retry_after}Content-Length: {}\r\n\r\n{}",
         body.len(),
@@ -208,12 +248,12 @@ pub async fn send_503(stream: ClientStream, reason: &str) -> std::io::Result<()>
     send_openai_error(stream, 503, reason, None).await
 }
 
-fn openai_error_body(status_code: u16, message: &str) -> Vec<u8> {
+fn openai_error_body(status_code: u16, message: &str, error_code: &str) -> Vec<u8> {
     let status =
         http::StatusCode::from_u16(status_code).unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR);
     let kind = openai_error_kind_for_status(status_code);
     let error = skippy_inference_api::InferenceError::from_kind(status, kind, message)
-        .with_code(openai_error_code_for_status(status_code));
+        .with_code(error_code);
     serde_json::to_vec(&error.body()).expect("serializing JSON error response should not fail")
 }
 
@@ -300,22 +340,6 @@ mod tests {
         assert_eq!(buf.matches("\r\n").count(), 1);
     }
 
-    #[cfg(feature = "payments")]
-    #[tokio::test]
-    async fn test_send_error_429_includes_retry_after() {
-        let response = capture_proxy_error_response(|stream| async move {
-            super::send_error(stream, 429, "model not available").await
-        })
-        .await;
-        let body = response_json_body(&response);
-
-        assert!(response.starts_with("HTTP/1.1 429 Too Many Requests\r\n"));
-        assert!(response.contains("Retry-After: 5\r\n"));
-        assert_eq!(body["error"]["message"], "model not available");
-        assert_eq!(body["error"]["type"], "rate_limit_error");
-        assert_eq!(body["error"]["code"], "rate_limit_exceeded");
-    }
-
     #[tokio::test]
     async fn test_send_503_uses_openai_error_shape() {
         let response = capture_proxy_error_response(|stream| async move {
@@ -325,6 +349,7 @@ mod tests {
         let body = response_json_body(&response);
 
         assert!(response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"));
+        assert!(!response.contains("Retry-After"));
         assert_eq!(
             body["error"]["message"],
             "skippy ABI call failed: Unsupported"

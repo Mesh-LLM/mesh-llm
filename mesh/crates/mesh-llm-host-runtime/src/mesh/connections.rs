@@ -62,6 +62,20 @@ pub(crate) enum ClosedConnectionRecovery {
     AlreadyReplaced,
 }
 
+/// Independent serving attachments expose no model lifecycle, artifacts,
+/// plugin bridge, or stage-control channel, including to an admitted peer.
+pub(crate) fn full_model_attachment_stream(stream_type: u8) -> bool {
+    matches!(
+        stream_type,
+        STREAM_GOSSIP
+            | STREAM_TUNNEL_HTTP
+            | STREAM_ROUTE_REQUEST
+            | STREAM_PEER_DOWN
+            | STREAM_PEER_LEAVING
+            | STREAM_DIRECT_PATH_REQUEST
+    )
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct QuicBindSelection {
     pub ip: Option<IpAddr>,
@@ -1101,6 +1115,7 @@ impl Node {
         slot: Option<tokio::sync::OwnedSemaphorePermit>,
     ) {
         match stream_type {
+            STREAM_NATIVE_CHAT => self.spawn_native_chat_stream(remote, send, recv),
             STREAM_GOSSIP => self.spawn_gossip_stream(remote, protocol, send, recv, slot),
             STREAM_TUNNEL_MAP => self.spawn_tunnel_map_stream(remote, protocol, recv),
             STREAM_ROUTE_REQUEST => {

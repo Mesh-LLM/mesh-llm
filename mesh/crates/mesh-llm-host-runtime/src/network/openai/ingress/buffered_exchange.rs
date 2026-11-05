@@ -245,6 +245,15 @@ async fn begin_exchange(
         ctx.route.requested_by_node_id.is_some(),
     );
     event["node_endpoint_id"] = serde_json::json!(ctx.route.node.id().to_string());
+    if let Some(peer) = ctx.route.requested_by_node_id.as_deref() {
+        // The QUIC-authenticated mesh peer that sent this request, lowercase
+        // hex — the identity a gate plugin keys its own per-peer state on at
+        // admission time. Same name and value as the host-served terminal's
+        // `serving_provenance.requested_by_node_id`, so one key pairs the two
+        // phases. Never an HTTP header: it comes from the tunnel connection's
+        // `remote_id()`, so nothing the request carries can set or spoof it.
+        event["requested_by_node_id"] = serde_json::json!(peer);
+    }
     event["emission_boundary"] = serde_json::json!("socket_write_accept");
     event["dispatch_path"] = serde_json::json!(if ctx.route.requested_by_node_id.is_some() {
         "remote_mesh"
@@ -265,7 +274,7 @@ async fn begin_exchange(
         )
         .await;
         proxy::release_request_objects(ctx.route.node, &request.request_object_request_ids).await;
-        let outcome = rejection_delivery_outcome(result.denied, written);
+        let outcome = rejection_delivery_outcome(status, written);
         if matches!(outcome, proxy::RouteDispatchOutcome::Dropped(_)) {
             session.observer().execution_outcome("client_cancelled");
         }
@@ -277,15 +286,13 @@ async fn begin_exchange(
 }
 
 fn rejection_delivery_outcome(
-    denied: bool,
+    status: u16,
     written: std::io::Result<()>,
 ) -> proxy::RouteDispatchOutcome {
     if written.is_err() {
         proxy::RouteDispatchOutcome::Dropped("plugin_admission_response_write_failed")
-    } else if denied {
-        proxy::RouteDispatchOutcome::PolicyDenied
     } else {
-        proxy::RouteDispatchOutcome::RequiredHookFailed
+        proxy::RouteDispatchOutcome::admission_rejected(status)
     }
 }
 
@@ -302,7 +309,7 @@ async fn finish_exchange(
 
 fn exchange_outcome(outcome: proxy::RouteDispatchOutcome) -> &'static str {
     match outcome {
-        proxy::RouteDispatchOutcome::PolicyDenied => "policy_denied",
+        proxy::RouteDispatchOutcome::PolicyDenied { .. } => "policy_denied",
         proxy::RouteDispatchOutcome::RequiredHookFailed => "internal_hook_failure",
         proxy::RouteDispatchOutcome::Responded(200..=299)
         | proxy::RouteDispatchOutcome::RespondedWithUsage {
@@ -368,9 +375,10 @@ mod tests {
                 .unwrap();
             let (mut stream, _) = listener.accept().await.unwrap();
             stream.shutdown().await.unwrap();
+            let status = if denied { 403 } else { 503 };
             let written = proxy::send_error_observed(
                 stream.into(),
-                if denied { 403 } else { 503 },
+                status,
                 "rejected",
                 lifecycle.route_observer(),
             )
@@ -379,7 +387,7 @@ mod tests {
                 written.is_err(),
                 "locally shut down socket cannot deliver denial"
             );
-            let outcome = rejection_delivery_outcome(denied, written);
+            let outcome = rejection_delivery_outcome(status, written);
             assert_eq!(exchange_outcome(outcome), "client_cancelled");
             lifecycle.terminal(terminal_outcome_for_dispatch(outcome));
             drop(lifecycle);

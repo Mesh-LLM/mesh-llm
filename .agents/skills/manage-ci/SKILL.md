@@ -140,8 +140,10 @@ not need to contain the dependency manifest.
 checks repository Python tooling. Its typed policy is
 `ci/python-tooling-policy.json`: exact external dependency inputs, source pins,
 and executable invocation exceptions must retain their documented owners and
-reviewed occurrence counts. The census includes tracked and new nonignored
-files, including hidden directories. Python sources, shebangs, unapproved
+reviewed occurrence counts. Platform-specific runner prerequisite lists require
+separate exact entries; listing an interpreter as a prerequisite does not
+authorize executing or installing it. The census includes tracked and new
+nonignored files, including hidden directories. Python sources, shebangs, unapproved
 package inputs and direct interpreter invocations fail validation. Archived
 receipts and documentation examples remain data. Literal process checks are
 bounded static analysis; native caller tests must continue to reject the
@@ -497,6 +499,13 @@ checked-in expiry are the maintainer-controlled approval boundary.
   per-package feature-isolated builds otherwise retain large DWARF-bearing
   dependency variants and test executables on the same hosted disk. Keep the
   warmer and consumers aligned, and change the cache epoch with this policy.
+- The trusted seed also builds the isolated default-feature `xtask` Clippy
+  graph with `--all-targets`, independently of the product graph. Scope the
+  seed's test-debug override to its test-build command so Clippy retains the
+  consumer's profile. Seed compatibility keys include the root and workspace
+  package Cargo manifests and the warmer workflow's build configuration as well
+  as the image, lockfile and recipe inputs. Keep the publisher, consumers and
+  runner-image catalog aligned.
 - macOS compiler-cache bootstrap must use a job-owned Unix socket before any
   compiler probe. Eagerly start its server in every cache mode; parallel compiler
   clients must not race to initialize a newly allocated socket. Export
@@ -700,8 +709,13 @@ override; `mesh_ref` defaults to certify-only; explicit `mesh_action=certify-and
 adds independent verification and publication of the unchanged selected commit. Upstream release
 qualification never replaces the complete candidate and independent family
 passes required before publishing an upgrade PR. Only the hosted upstream
-selection step may receive the read-only GitHub token for public upstream API
-reads; workers and repair agents remain credential-free.
+selection and platform-selection steps may receive the read-only GitHub token;
+workers and repair agents remain credential-free. That token can read public
+upstream metadata but cannot list repository runners: the runner API requires
+[repository Administration read access](https://docs.github.com/en/rest/actions/self-hosted-runners#list-self-hosted-runners-for-a-repository).
+With the current token, `platform=auto` falls back to macOS; use explicit
+`platform=linux` to select Linux. Do not rely on automatic Linux availability
+selection or add an administrator credential to repair workers.
 
 Each candidate build owns one complete native CTest pass. The initial native
 build may compile tests without executing them; after fresh annotation
@@ -738,7 +752,13 @@ existing pin and patches without repair. Default `mesh_action=certify` does not
 publish. Explicit `mesh_action=certify-and-publish` requires a complete candidate
 pass and a fresh independent build and complete family pass on the same frozen
 selected commit before publishing that exact commit as a PR to main. It never
-changes the selected pin or invokes coding repair. Selected build scripts
+changes the selected pin or invokes coding repair. Explicit `mesh_action=upgrade`
+instead requires a full lowercase `upstream_sha` and admits a changed-pin repair
+from the frozen selected branch. Keep the controller on protected main and bind
+the selected revision as the candidate's base through build, bundle, worker,
+retry and verification handoffs. An upgrade must target a different pin; it uses
+the normal bounded repair loop, two complete green passes, and hosted PR
+publication. Certify modes continue to reject upstream overrides. Selected build scripts
 and battery code execute on persistent lab runners, so operators must choose
 trusted revisions; a main controller does not sandbox that source.
 

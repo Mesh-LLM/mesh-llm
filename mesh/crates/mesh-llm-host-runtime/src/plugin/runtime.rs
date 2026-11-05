@@ -1,5 +1,7 @@
+mod bound_operation;
 mod default_plugin_policy;
 mod request;
+mod request_dispatch;
 
 use super::config::{ExternalPluginSpec, PluginHostMode};
 use super::plugin_manifest_overview;
@@ -38,6 +40,9 @@ mod restart_tests;
 mod settings_tests;
 mod shutdown;
 mod socket_auth;
+mod start_announce;
+#[cfg(test)]
+mod start_announce_tests;
 pub(crate) mod status_publication;
 
 use self::default_plugin_policy::restrict_default_plugin;
@@ -63,6 +68,13 @@ pub(crate) struct ExternalPlugin {
     runtime_data_producer: RuntimeDataProducer,
     restart_lock: Arc<Mutex<()>>,
     stopping: AtomicBool,
+    /// Set when a node takes this plugin's manager
+    /// ([`Self::expect_mesh_snapshots`]). The node sends every plugin its
+    /// mesh snapshot then, which covers the starts before it; any later start
+    /// (a restart, or a lazy plugin's first start) tells the node, which
+    /// sends that plugin the snapshot again. Without a node (the plugin CLI)
+    /// there is no snapshot to wait for.
+    announce_starts: AtomicBool,
     next_request_id: AtomicU64,
     next_generation: AtomicU64,
     /// Serves this plugin as a task in this process instead of a child.
@@ -72,6 +84,9 @@ pub(crate) struct ExternalPlugin {
 pub(crate) struct PluginRuntime {
     pub(crate) managed_models: Vec<mesh_llm_plugin::models::ManagedModelConfig>,
     pub(crate) generation: u64,
+    /// Its start finished: initialized and, after `spawn`, given the mesh
+    /// snapshot. Only a started runtime takes `ensure_running`'s fast path.
+    pub(crate) started: bool,
     pub(crate) authenticated_peer: bool,
     pub(crate) initialized_lifecycle: Option<Box<proto::OpenAiExchangeHookManifest>>,
     /// What this generation's manifest says about `/api/status`.
@@ -105,6 +120,12 @@ impl ExternalPlugin {
     }
     pub fn exchange_grant(&self) -> Option<&mesh_llm_config::OpenAiExchangeGrant> {
         self.spec.openai_exchange_grant.as_deref()
+    }
+
+    /// The models the operator allows this plugin's inference endpoints to
+    /// expose, or `None` to expose every model they list.
+    pub(crate) fn endpoint_models(&self) -> Option<&[String]> {
+        self.spec.endpoint_models.as_deref()
     }
 
     pub(crate) fn installed_metadata(
@@ -156,18 +177,16 @@ impl ExternalPlugin {
             runtime_data_producer,
             restart_lock: Arc::new(Mutex::new(())),
             stopping: AtomicBool::new(false),
+            announce_starts: AtomicBool::new(false),
             next_request_id: AtomicU64::new(1),
             next_generation: AtomicU64::new(1),
             in_process,
         };
         if spec.startup.lazy_start {
             plugin.mark_deferred().await;
-            return Ok(plugin);
-        }
-        if let Err(err) = plugin.ensure_running().await {
-            if plugin.is_disabled().await {
-                return Ok(plugin);
-            }
+        } else if let Err(err) = plugin.ensure_running().await
+            && !plugin.is_disabled().await
+        {
             return Err(err);
         }
         Ok(plugin)
@@ -332,6 +351,7 @@ impl ExternalPlugin {
         *self.runtime.lock().await = Some(PluginRuntime {
             managed_models,
             generation,
+            started: false,
             authenticated_peer,
             initialized_lifecycle: None,
             status_declaration: StatusDeclaration::Pending,
@@ -364,13 +384,16 @@ impl ExternalPlugin {
                     mesh_visibility: proto_mesh_visibility(self.host_mode.mesh_visibility),
                     settings_json,
                     host_capabilities: vec![
+                        mesh_llm_plugin::operation_binding::CAPABILITY.to_string(),
                         mesh_llm_plugin::host_capabilities::INVOCATION_CALLBACKS.to_string(),
+                        mesh_llm_plugin::host_capabilities::MODEL_REQUIREMENTS.to_string(),
                         mesh_llm_plugin::models::ASSET_CAPABILITY.to_string(),
                         mesh_llm_plugin::host_capabilities::PEER_BLOCKS.to_string(),
                         mesh_llm_plugin::host_capabilities::OPENAI_EXCHANGE.to_string(),
                         mesh_llm_plugin::host_capabilities::PLUGIN_KEYS.to_string(),
                         mesh_llm_plugin::host_capabilities::PLUGIN_STATUS.to_string(),
                         mesh_llm_plugin::host_capabilities::LOCAL_INFERENCE_OBSERVATION.to_string(),
+                        mesh_llm_plugin::host_capabilities::LOCAL_CHANNELS.to_string(),
                     ],
                 }),
                 Some(self.spec.startup.init_timeout()),
@@ -540,13 +563,22 @@ impl ExternalPlugin {
         if let Some(reason) = self.disabled_reason().await {
             bail!("Plugin '{}' is disabled: {}", self.spec.name, reason);
         }
-        if self.runtime.lock().await.is_some() {
+        // A start in progress holds the restart lock until its process has
+        // the mesh snapshot (`announce_started`): a caller that finds the
+        // lock taken waits for it rather than reach the process first. The
+        // guard is held while the runtime is checked, so no start can begin
+        // in between (the restart lock is always taken before the runtime's).
+        if let Ok(_no_start_in_progress) = self.restart_lock.try_lock()
+            && self.runtime_started().await == Some(true)
+        {
             return Ok(());
         }
         let _guard = self.restart_lock.lock().await;
         self.reject_shutdown()?;
-        if self.runtime.lock().await.is_some() {
-            return Ok(());
+        match self.runtime_started().await {
+            Some(true) => return Ok(()),
+            Some(false) => self.discard_unfinished_start().await,
+            None => {}
         }
 
         self.authenticated_peer.store(false, Ordering::Release);
@@ -601,7 +633,21 @@ impl ExternalPlugin {
             .finish_initialize(generation, outbound_tx, pending)
             .await
         {
-            Ok(()) => Ok(()),
+            Ok(()) if !self.announce_starts.load(Ordering::Acquire) => {
+                self.mark_started(generation).await;
+                Ok(())
+            }
+            Ok(()) => match self.announce_started(generation).await {
+                Ok(()) => {
+                    self.mark_started(generation).await;
+                    Ok(())
+                }
+                Err(error) => {
+                    self.handle_runtime_failure(Some(generation), error.to_string())
+                        .await;
+                    Err(error)
+                }
+            },
             Err(error) => {
                 if self.is_disabled().await {
                     return Ok(());
@@ -880,66 +926,6 @@ impl ExternalPlugin {
         ))
     }
 
-    async fn request_once(
-        &self,
-        generation: u64,
-        outbound_tx: mpsc::Sender<proto::Envelope>,
-        pending: Arc<Mutex<HashMap<u64, oneshot::Sender<Result<proto::Envelope>>>>>,
-        payload: proto::envelope::Payload,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<proto::Envelope> {
-        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
-        let (tx, rx) = oneshot::channel();
-        pending.lock().await.insert(request_id, tx);
-
-        let envelope = proto::Envelope {
-            protocol_version: PROTOCOL_VERSION,
-            plugin_id: self.spec.name.clone(),
-            request_id,
-            payload: Some(payload),
-        };
-
-        if let Err(_send_err) = outbound_tx.send(envelope).await {
-            pending.lock().await.remove(&request_id);
-            self.handle_runtime_failure(
-                Some(generation),
-                format!("Plugin '{}' is not accepting requests", self.spec.name),
-            )
-            .await;
-            bail!("Plugin '{}' is not accepting requests", self.spec.name);
-        }
-
-        let response = match timeout {
-            Some(timeout) => match tokio::time::timeout(timeout, rx).await {
-                Ok(response) => response,
-                Err(_) => {
-                    pending.lock().await.remove(&request_id);
-                    self.handle_runtime_failure(
-                        Some(generation),
-                        format!("Plugin '{}' timed out", self.spec.name),
-                    )
-                    .await;
-                    return Err(anyhow::Error::new(PluginTimeout {
-                        plugin_name: self.spec.name.clone(),
-                    }));
-                }
-            },
-            None => rx.await,
-        };
-
-        match response {
-            Ok(resp) => resp,
-            Err(_recv_err) => {
-                self.handle_runtime_failure(
-                    Some(generation),
-                    format!("Plugin '{}' dropped the response channel", self.spec.name),
-                )
-                .await;
-                bail!("Plugin '{}' dropped the response channel", self.spec.name);
-            }
-        }
-    }
-
     async fn handle_runtime_failure(&self, generation: Option<u64>, reason: String) {
         let reason = crate::logging::policy::redact_urls_in_text(&reason);
         let failed_runtime = {
@@ -1085,7 +1071,3 @@ fn plugin_web_ui_asset_root(spec: &ExternalPluginSpec) -> Option<PathBuf> {
 #[cfg(test)]
 #[path = "runtime/tests.rs"]
 pub(crate) mod tests;
-
-#[cfg(all(test, feature = "payments"))]
-#[path = "runtime/payment_failure_tests.rs"]
-mod payment_failure_tests;

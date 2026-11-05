@@ -4,16 +4,6 @@
 #![allow(non_upper_case_globals)]
 #![allow(unpredictable_function_pointer_comparisons)]
 
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct ggml_context {
-    _unused: [u8; 0],
-}
-#[repr(C)]
-#[derive(Debug, Copy, Clone)]
-pub struct ggml_cgraph {
-    _unused: [u8; 0],
-}
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum ggml_type {
@@ -367,21 +357,6 @@ pub enum llama_context_type {
     Default = 0,
     Mtp = 1,
 }
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct llama_token_data {
-    pub id: llama_token,
-    pub logit: f32,
-    pub p: f32,
-}
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct llama_token_data_array {
-    pub data: *mut llama_token_data,
-    pub size: usize,
-    pub selected: i64,
-    pub sorted: bool,
-}
 pub type llama_progress_callback = ::std::option::Option<
     unsafe extern "C" fn(progress: f32, user_data: *mut ::std::os::raw::c_void) -> bool,
 >;
@@ -639,65 +614,10 @@ unsafe extern "C" {
 unsafe extern "C" {
     pub fn llama_vocab_mask(vocab: *const llama_vocab) -> llama_token;
 }
-pub type llama_sampler_context_t = *mut ::std::os::raw::c_void;
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct llama_sampler_data {
-    pub logits: *mut ggml_tensor,
-    pub probs: *mut ggml_tensor,
-    pub sampled: *mut ggml_tensor,
-    pub candidates: *mut ggml_tensor,
-}
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct llama_sampler_i {
-    pub name: ::std::option::Option<
-        unsafe extern "C" fn(smpl: *const llama_sampler) -> *const ::std::os::raw::c_char,
-    >,
-    pub accept:
-        ::std::option::Option<unsafe extern "C" fn(smpl: *mut llama_sampler, token: llama_token)>,
-    pub apply: ::std::option::Option<
-        unsafe extern "C" fn(smpl: *mut llama_sampler, cur_p: *mut llama_token_data_array),
-    >,
-    pub reset: ::std::option::Option<unsafe extern "C" fn(smpl: *mut llama_sampler)>,
-    pub clone: ::std::option::Option<
-        unsafe extern "C" fn(smpl: *const llama_sampler) -> *mut llama_sampler,
-    >,
-    pub free: ::std::option::Option<unsafe extern "C" fn(smpl: *mut llama_sampler)>,
-    pub backend_init: ::std::option::Option<
-        unsafe extern "C" fn(
-            smpl: *mut llama_sampler,
-            buft: ggml_backend_buffer_type_t,
-            n_outputs_max_per_seq: u32,
-        ) -> bool,
-    >,
-    pub backend_accept: ::std::option::Option<
-        unsafe extern "C" fn(
-            smpl: *mut llama_sampler,
-            ctx: *mut ggml_context,
-            gf: *mut ggml_cgraph,
-            selected_token: *mut ggml_tensor,
-        ),
-    >,
-    pub backend_apply: ::std::option::Option<
-        unsafe extern "C" fn(
-            smpl: *mut llama_sampler,
-            ctx: *mut ggml_context,
-            gf: *mut ggml_cgraph,
-            data: *mut llama_sampler_data,
-        ),
-    >,
-    pub backend_set_input: ::std::option::Option<unsafe extern "C" fn(smpl: *mut llama_sampler)>,
-    pub backend_reset: ::std::option::Option<unsafe extern "C" fn(smpl: *mut llama_sampler)>,
-    pub copy_state: ::std::option::Option<
-        unsafe extern "C" fn(src: *const llama_sampler, dst: *mut llama_sampler),
-    >,
-}
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct llama_sampler {
-    pub iface: *mut llama_sampler_i,
-    pub ctx: llama_sampler_context_t,
+    pub _address: u8,
 }
 unsafe extern "C" {
     pub fn llama_log_set(log_callback: ggml_log_callback, user_data: *mut ::std::os::raw::c_void);

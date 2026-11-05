@@ -4,7 +4,20 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[path = "../src/fixture_paths.rs"]
+mod fixture_paths;
+
 type TestResult = Result<(), Box<dyn Error>>;
+
+#[test]
+fn migration_bootstrap_fixtures_share_cargos_binary_profile() -> TestResult {
+    let binary = Path::new(env!("CARGO_BIN_EXE_xtask")).canonicalize()?;
+    let profile = fixture_paths::target_profile_dir();
+    let resolved_profile = profile.canonicalize()?;
+    assert_eq!(binary.parent(), Some(resolved_profile.as_path()));
+    assert_eq!(fixture_paths::examples_dir(), profile.join("examples"));
+    Ok(())
+}
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -53,6 +53,7 @@ fn feature_bits_match_the_generated_header_values() {
     );
     assert_eq!(crate::FEATURE_STAGE_PLAN, 1 << 17);
     assert_eq!(crate::FEATURE_SPEECH_RECOGNITION, 1 << 41);
+    assert_eq!(crate::FEATURE_CLEF_DECISIONS, 1 << 42);
 }
 
 #[test]
@@ -71,6 +72,14 @@ fn versioned_descriptors_advertise_their_native_abi_size() {
         crate::LayaInfoV1::default().struct_size as usize,
         std::mem::size_of::<crate::LayaInfoV1>()
     );
+    assert_eq!(
+        crate::CLEF_INFO_V1_ABI_VERSION,
+        crate::bindings::skippy::SKIPPY_CLEF_INFO_V1_ABI_VERSION
+    );
+    assert_eq!(
+        crate::ClefInfoV1::default().struct_size as usize,
+        std::mem::size_of::<crate::ClefInfoV1>()
+    );
 }
 
 /// The linked native library must advertise the same independent feature bits.
@@ -87,6 +96,7 @@ fn native_workload_feature_preserves_runtime_event_features() {
         crate::FEATURE_DEVICE_EVENTS,
         crate::FEATURE_DIAGNOSTIC_EVENTS,
         crate::FEATURE_UNLOAD_EVENTS,
+        crate::FEATURE_CLEF_DECISIONS,
     ] {
         assert_ne!(
             features & expected,

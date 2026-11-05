@@ -7,6 +7,7 @@ use tokio::time::{Duration, Instant};
 
 fn observer() -> ExternalPlugin {
     plugin_for_spec(super::super::ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         name: "observer".into(),
         command: "unused".into(),
         args: Vec::new(),
@@ -16,6 +17,7 @@ fn observer() -> ExternalPlugin {
         startup: Default::default(),
         web_ui_enabled: None,
         web_ui_primary_tab: None,
+        endpoint_models: None,
         installed_metadata: None,
         // Model the original ungranted spec with permissions applied later.
         openai_exchange_grant: None,
@@ -30,6 +32,7 @@ async fn install_replacement(
     *plugin.runtime.lock().await = Some(PluginRuntime {
         managed_models: Vec::new(),
         generation: 8,
+        started: true,
         authenticated_peer: authenticated,
         initialized_lifecycle: None,
         status_declaration: Default::default(),

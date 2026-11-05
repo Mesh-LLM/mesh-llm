@@ -116,56 +116,6 @@ fn resolves_default_builtin_plugins() {
     assert!(resolved.inactive.is_empty());
 }
 
-/// A stanza for the removed built-in Lexe wallet.
-fn wallet_entry(enabled: Option<bool>) -> PluginConfigEntry {
-    PluginConfigEntry {
-        name: RETIRED_WALLET_LEXE_PLUGIN_ID.into(),
-        enabled,
-        web_ui_enabled: None,
-        web_ui_primary_tab: None,
-        allow_peer_blocks: None,
-        allow_inference_observation: None,
-        openai_exchange_grant: None,
-        command: None,
-        args: Vec::new(),
-        url: None,
-        settings: Default::default(),
-        startup: Default::default(),
-    }
-}
-
-#[test]
-#[serial_test::serial]
-fn builtin_payments_is_served_in_process_and_can_be_switched_off() {
-    super::config::TEST_PAYMENTS_COMPILED_IN.with(|slot| *slot.borrow_mut() = Some(true));
-    let resolved = resolve_plugins(&MeshConfig::default(), private_host_mode()).unwrap();
-    let payments = resolved
-        .externals
-        .iter()
-        .find(|spec| spec.name == PAYMENTS_PLUGIN_ID)
-        .expect("payments builtin registered");
-    assert!(
-        payments.command.is_empty(),
-        "served in-process, not re-exec'd"
-    );
-    assert!(payments.startup.optional);
-
-    let mut entry = wallet_entry(Some(false));
-    entry.name = PAYMENTS_PLUGIN_ID.into();
-    let config = MeshConfig {
-        plugins: vec![entry],
-        ..MeshConfig::default()
-    };
-    let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
-    super::config::TEST_PAYMENTS_COMPILED_IN.with(|slot| *slot.borrow_mut() = None);
-    assert!(
-        resolved
-            .externals
-            .iter()
-            .all(|spec| spec.name != PAYMENTS_PLUGIN_ID)
-    );
-}
-
 #[test]
 fn builtin_plugin_arguments_follow_the_plugin_flag() {
     let spec = super::config::builtin_plugin_spec(
@@ -197,45 +147,21 @@ async fn builtin_plugin_without_arguments_refuses_them() {
 
 #[test]
 #[serial_test::serial]
-fn retired_builtin_wallet_stanza_is_ignored() {
-    // The built-in Lexe wallet was removed; an old stanza must not break
-    // startup, whatever it sets, and registers nothing.
-    let mut with_command = wallet_entry(Some(true));
-    with_command.command = Some("/opt/wallets/my-wallet".into());
-    for entry in [
-        wallet_entry(Some(true)),
-        wallet_entry(Some(false)),
-        wallet_entry(None),
-        with_command,
-    ] {
-        let config = MeshConfig {
-            plugins: vec![entry],
-            defaults: None,
-            ..MeshConfig::default()
-        };
-        let resolved = resolve_plugins(&config, private_host_mode())
-            .expect("a retired stanza must not break startup");
-        assert_eq!(resolved.externals.len(), 1);
-        assert_eq!(resolved.externals[0].name, BLOBSTORE_PLUGIN_ID);
-        assert!(resolved.inactive.is_empty());
-    }
-}
-
-#[test]
-#[serial_test::serial]
-fn external_wallet_plugin_is_an_ordinary_plugin() {
+fn external_capability_plugin_is_an_ordinary_plugin() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
-            name: "lexe-wallet".into(),
+            operation_bindings: Vec::new(),
+            name: "vault-provider".into(),
             enabled: Some(true),
             web_ui_enabled: None,
             web_ui_primary_tab: None,
             allow_peer_blocks: None,
             allow_inference_observation: None,
             openai_exchange_grant: None,
-            command: Some("/opt/wallets/lexe-wallet".into()),
+            command: Some("/opt/plugins/vault-provider".into()),
             args: Vec::new(),
             url: None,
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -244,7 +170,7 @@ fn external_wallet_plugin_is_an_ordinary_plugin() {
     };
     let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
     let names: Vec<_> = resolved.externals.iter().map(|s| s.name.as_str()).collect();
-    assert_eq!(names, ["lexe-wallet", BLOBSTORE_PLUGIN_ID]);
+    assert_eq!(names, ["vault-provider", BLOBSTORE_PLUGIN_ID]);
     assert!(!resolved.externals[0].startup.optional);
 }
 
@@ -253,6 +179,7 @@ fn external_wallet_plugin_is_an_ordinary_plugin() {
 fn external_plugin_can_be_configured() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "demo".into(),
             enabled: Some(true),
             web_ui_enabled: None,
@@ -263,6 +190,7 @@ fn external_plugin_can_be_configured() {
             command: Some("mesh-llm-plugin-demo".into()),
             args: vec!["--stdio".into()],
             url: None,
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -274,13 +202,70 @@ fn external_plugin_can_be_configured() {
     assert_eq!(resolved.externals[0].name, "demo");
     assert_eq!(resolved.externals[0].command, "mesh-llm-plugin-demo");
     assert_eq!(resolved.externals[0].args, ["--stdio"]);
+    assert_eq!(resolved.externals[0].endpoint_models, None);
     assert_eq!(resolved.externals[1].name, BLOBSTORE_PLUGIN_ID);
     assert!(resolved.inactive.is_empty());
 }
 
 #[test]
+#[serial_test::serial]
+fn external_plugin_carries_its_endpoint_model_allowlist() {
+    let config: MeshConfig = toml::from_str(
+        r#"
+[[plugin]]
+name = "openai-endpoint"
+command = "mesh-llm-plugin-openai-endpoint"
+url = "http://127.0.0.1:8888/v1"
+models = ["deepseek-v4-1-flash"]
+"#,
+    )
+    .unwrap();
+    let resolved = resolve_plugins(&config, private_host_mode()).unwrap();
+    assert_eq!(resolved.externals[0].name, "openai-endpoint");
+    assert_eq!(
+        resolved.externals[0].endpoint_models.as_deref(),
+        Some(&["deepseek-v4-1-flash".to_string()][..])
+    );
+}
+
+/// A minimal built-in plugin stanza used as a template by the tests below.
+fn wallet_entry(enabled: Option<bool>) -> PluginConfigEntry {
+    PluginConfigEntry {
+        name: "wallet".into(),
+        enabled,
+        web_ui_enabled: None,
+        web_ui_primary_tab: None,
+        allow_peer_blocks: None,
+        allow_inference_observation: None,
+        openai_exchange_grant: None,
+        operation_bindings: Vec::new(),
+        command: None,
+        args: Vec::new(),
+        url: None,
+        models: None,
+        settings: Default::default(),
+        startup: Default::default(),
+    }
+}
+
+#[test]
+fn builtin_plugin_entry_rejects_an_endpoint_model_allowlist() {
+    let mut entry = wallet_entry(Some(true));
+    entry.name = BLOBSTORE_PLUGIN_ID.into();
+    entry.models = Some(vec!["anything".into()]);
+    let config = MeshConfig {
+        plugins: vec![entry],
+        ..MeshConfig::default()
+    };
+    let error = resolve_plugins(&config, private_host_mode())
+        .expect_err("a built-in plugin exposes no endpoint models to restrict");
+    assert!(error.to_string().contains("only `enabled` may be set"));
+}
+
+#[test]
 fn failed_plugin_summary_redacts_urls_before_serialization() {
     let spec = ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         openai_exchange_grant: None,
         name: "remote".into(),
         command: "mesh-llm-plugin-remote".into(),
@@ -294,6 +279,7 @@ fn failed_plugin_summary_redacts_urls_before_serialization() {
         },
         web_ui_enabled: None,
         web_ui_primary_tab: None,
+        endpoint_models: None,
         installed_metadata: None,
     };
     let error = anyhow::anyhow!(
@@ -313,6 +299,7 @@ fn failed_plugin_summary_redacts_urls_before_serialization() {
 fn blobstore_can_be_disabled() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: BLOBSTORE_PLUGIN_ID.into(),
             enabled: Some(false),
             web_ui_enabled: None,
@@ -323,6 +310,7 @@ fn blobstore_can_be_disabled() {
             command: None,
             args: Vec::new(),
             url: None,
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -339,6 +327,7 @@ fn blobstore_can_be_disabled() {
 fn external_plugin_can_be_enabled_with_url() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "endpoint-plugin".into(),
             enabled: Some(true),
             web_ui_enabled: None,
@@ -349,6 +338,7 @@ fn external_plugin_can_be_enabled_with_url() {
             command: Some("endpoint-plugin".into()),
             args: Vec::new(),
             url: Some("http://gpu-box:8000/v1".into()),
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -370,6 +360,7 @@ fn external_plugin_can_be_enabled_with_url() {
 fn external_plugin_rejects_url_that_is_empty_after_normalization() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "endpoint-plugin".into(),
             enabled: Some(true),
             web_ui_enabled: None,
@@ -380,6 +371,7 @@ fn external_plugin_rejects_url_that_is_empty_after_normalization() {
             command: Some("endpoint-plugin".into()),
             args: Vec::new(),
             url: Some("\u{2003}\t\n".into()),
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -397,6 +389,7 @@ fn remote_plugin_control_url_is_rejected_without_authentication() {
     let raw_url = "\u{2003}tcp://user:secret@127.0.0.1:19091/control?token=private\u{2003}";
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "remote-plugin".into(),
             enabled: Some(true),
             web_ui_enabled: None,
@@ -407,6 +400,7 @@ fn remote_plugin_control_url_is_rejected_without_authentication() {
             command: None,
             args: Vec::new(),
             url: Some(raw_url.into()),
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -429,6 +423,7 @@ fn remote_plugin_control_url_is_rejected_without_authentication() {
 fn external_plugin_can_be_enabled_with_command_args() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "endpoint-plugin".into(),
             enabled: Some(true),
             web_ui_enabled: None,
@@ -439,6 +434,7 @@ fn external_plugin_can_be_enabled_with_command_args() {
             command: Some("/opt/plugins/endpoint-plugin".into()),
             args: vec!["--verbose".into()],
             url: None,
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -459,6 +455,7 @@ fn external_plugin_can_be_enabled_with_command_args() {
 fn external_plugin_ignores_disabled_entry_without_install() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "endpoint-plugin".into(),
             enabled: Some(false),
             web_ui_enabled: None,
@@ -469,6 +466,7 @@ fn external_plugin_ignores_disabled_entry_without_install() {
             command: None,
             args: Vec::new(),
             url: Some("http://gpu-box:8000/v1".into()),
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -500,6 +498,7 @@ fn default_builtins_are_resolved_on_public_meshes() {
 fn resolves_external_plugin() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "demo".into(),
             enabled: Some(true),
             web_ui_enabled: None,
@@ -510,6 +509,7 @@ fn resolves_external_plugin() {
             command: Some("/tmp/demo".into()),
             args: vec!["--flag".into()],
             url: None,
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
@@ -527,6 +527,7 @@ fn resolves_external_plugin() {
 async fn plugin_load_failure_keeps_declared_web_ui_metadata() {
     let specs = ResolvedPlugins {
         externals: vec![ExternalPluginSpec {
+            operation_bindings: Vec::new(),
             openai_exchange_grant: None,
             name: "demo".into(),
             command: "mesh-llm-definitely-missing-plugin-binary".into(),
@@ -540,6 +541,7 @@ async fn plugin_load_failure_keeps_declared_web_ui_metadata() {
             },
             web_ui_enabled: None,
             web_ui_primary_tab: None,
+            endpoint_models: None,
             installed_metadata: Some(installed_metadata_with_web_ui(
                 InstalledPluginWebUiValidationStatus::Valid,
                 Some("web"),

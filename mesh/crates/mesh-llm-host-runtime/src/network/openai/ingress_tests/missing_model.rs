@@ -12,9 +12,41 @@ async fn missing_local_model_status(
     target: Option<iroh::EndpointId>,
     excluded: &[iroh::EndpointId],
 ) -> String {
+    missing_local_model_response(node, model, target, excluded)
+        .await
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_owned()
+}
+
+/// The whole response behind `missing_local_model_status`.
+async fn missing_local_model_response(
+    node: &mesh::Node,
+    model: &str,
+    target: Option<iroh::EndpointId>,
+    excluded: &[iroh::EndpointId],
+) -> String {
+    missing_local_model_response_with_targets(
+        node,
+        &election::ModelTargets::default(),
+        model,
+        target,
+        excluded,
+    )
+    .await
+}
+
+/// The same, with this node's election targets given.
+async fn missing_local_model_response_with_targets(
+    node: &mesh::Node,
+    targets: &election::ModelTargets,
+    model: &str,
+    target: Option<iroh::EndpointId>,
+    excluded: &[iroh::EndpointId],
+) -> String {
     use tokio::io::AsyncReadExt;
 
-    let targets = election::ModelTargets::default();
     let affinity = affinity::AffinityRouter::new();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
@@ -44,7 +76,7 @@ async fn missing_local_model_status(
     };
     let ctx = IngressRouteContext {
         node,
-        targets: &targets,
+        targets,
         affinity: &affinity,
         plugin_manager: None,
         requested_by_node_id: None,
@@ -68,11 +100,21 @@ async fn missing_local_model_status(
         .read_to_end(&mut response)
         .await
         .expect("read response");
-    String::from_utf8_lossy(&response)
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+/// Headers and the OpenAI error `code` of a raw response.
+fn retry_after_and_error_code(response: &str) -> (Option<&str>, String) {
+    let (head, body) = response.split_once("\r\n\r\n").expect("header end");
+    let retry_after = head
         .lines()
-        .next()
+        .find_map(|line| line.strip_prefix("Retry-After: "));
+    let body: serde_json::Value = serde_json::from_str(body).expect("JSON error body");
+    let code = body["error"]["code"]
+        .as_str()
         .unwrap_or_default()
-        .to_owned()
+        .to_owned();
+    (retry_after, code)
 }
 
 /// A model's first load has a serving assignment but no target yet. Naming it
@@ -305,6 +347,128 @@ async fn route_missing_local_model_keeps_the_exclusion_409_while_the_startup_mod
         )
         .await,
         "HTTP/1.1 409 Conflict"
+    );
+    node.endpoint.close().await;
+}
+
+/// A 503 for a model still loading here tells the client when to retry and
+/// why, untargeted and self-targeted, with the interval the docs state. A
+/// name still unknown once the startup models resolve keeps its plain 404.
+#[tokio::test]
+async fn route_missing_local_model_tells_clients_when_to_retry_a_loading_model() {
+    let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+        .await
+        .expect("test node");
+    node.set_startup_resolution(mesh::StartupResolution::AnyName)
+        .await;
+    for target in [None, Some(node.id())] {
+        let response =
+            missing_local_model_response(&node, "local-gguf/sha256-abc", target, &[]).await;
+        assert!(
+            response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+            "{response}"
+        );
+        assert_eq!(
+            retry_after_and_error_code(&response),
+            (Some("5"), "model_not_ready".to_owned()),
+            "target {target:?}"
+        );
+    }
+
+    node.set_startup_resolution(mesh::StartupResolution::Done)
+        .await;
+    let response = missing_local_model_response(&node, "local-gguf/sha256-abc", None, &[]).await;
+    assert!(
+        response.starts_with("HTTP/1.1 404 Not Found\r\n"),
+        "{response}"
+    );
+    assert_eq!(
+        retry_after_and_error_code(&response),
+        (None, "model_not_found".to_owned())
+    );
+    node.endpoint.close().await;
+}
+
+/// `auto` with no model ready yet answers the same retryable 503.
+#[tokio::test]
+async fn auto_route_with_no_model_ready_tells_clients_when_to_retry() {
+    use tokio::io::AsyncReadExt;
+
+    let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+        .await
+        .expect("test node");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback listener");
+    let addr = listener.local_addr().expect("local addr");
+    let (client_side, server_side) = tokio::join!(tokio::net::TcpStream::connect(addr), async {
+        listener.accept().await.map(|(stream, _)| stream)
+    });
+    let mut client_side = client_side.expect("connect client side");
+    send_auto_route_rejection(
+        server_side.expect("accept server side").into(),
+        AutoRouteRejection::NoModelReady,
+        &node,
+        &[],
+        "/v1/chat/completions",
+        OpenAiRouteObserver::default(),
+    )
+    .await;
+
+    let mut response = Vec::new();
+    client_side
+        .read_to_end(&mut response)
+        .await
+        .expect("read response");
+    let response = String::from_utf8_lossy(&response);
+    assert!(
+        response.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+        "{response}"
+    );
+    assert_eq!(
+        retry_after_and_error_code(&response),
+        (Some("5"), "model_not_ready".to_owned())
+    );
+    node.endpoint.close().await;
+}
+
+/// A model whose local copies are all down (draining, reloading) gives a
+/// client that excluded this node the exclusion 409, like the other loading
+/// cases: the retryable 503 is only for clients this node could serve.
+#[tokio::test]
+async fn route_missing_local_model_keeps_the_exclusion_409_when_local_copies_are_down() {
+    let node = mesh::Node::new_for_tests(crate::mesh::NodeRole::Worker)
+        .await
+        .expect("test node");
+    let mut targets = election::ModelTargets::default();
+    targets.targets.insert(
+        "draining-model".to_string(),
+        vec![election::InferenceTarget::None],
+    );
+
+    let excluded = missing_local_model_response_with_targets(
+        &node,
+        &targets,
+        "draining-model",
+        None,
+        &[node.id()],
+    )
+    .await;
+    assert!(
+        excluded.starts_with("HTTP/1.1 409 Conflict\r\n"),
+        "{excluded}"
+    );
+
+    let retryable =
+        missing_local_model_response_with_targets(&node, &targets, "draining-model", None, &[])
+            .await;
+    assert!(
+        retryable.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+        "{retryable}"
+    );
+    assert_eq!(
+        retry_after_and_error_code(&retryable),
+        (Some("5"), "model_not_ready".to_owned())
     );
     node.endpoint.close().await;
 }

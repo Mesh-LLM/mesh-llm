@@ -16,7 +16,6 @@ workspace = true
 
 [dependencies]
 skippy-commands = { path = "../../../skippy/crates/skippy-commands", version = "0.78.0" }
-mesh-llm-payments = { path = "../mesh-llm-payments", version = "0.78.0" }
 anyhow.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6.0.0"

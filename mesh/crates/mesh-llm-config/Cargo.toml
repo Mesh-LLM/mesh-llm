@@ -11,6 +11,7 @@ homepage = "https://github.com/Mesh-LLM/mesh-llm"
 workspace = true
 
 [dependencies]
+serde_json = { workspace = true }
 anyhow = { workspace = true }
 skippy-native-runtime = { path = "../../../skippy/crates/skippy-native-runtime", version = "0.78.0" }
 mesh-llm-types = { path = "../mesh-llm-types", version = "0.78.0"  }
@@ -35,6 +36,5 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [dev-dependencies]
-serde_json = { workspace = true }
 serial_test = "4"
 tempfile = "3"

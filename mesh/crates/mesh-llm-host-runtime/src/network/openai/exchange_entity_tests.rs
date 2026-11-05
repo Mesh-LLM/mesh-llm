@@ -131,7 +131,7 @@ async fn incomplete_effective_chunked_entity_cannot_silently_skip_admission() {
             &request,
             Some("m"),
             "external",
-            SelectedRouteTarget::Url("http://127.0.0.1:1"),
+            SelectedRouteTarget::Mesh(&crate::inference::election::InferenceTarget::Local(1)),
             None,
             1,
         )

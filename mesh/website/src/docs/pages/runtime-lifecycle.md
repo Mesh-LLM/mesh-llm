@@ -251,6 +251,10 @@ otherwise temporarily unable to admit work returns a service-unavailable
 response (`503`, `service_unavailable`). Clients may retry temporary
 unavailability after policy or lifecycle state changes.
 
+A model this node is still loading (startup resolution, a first load or a
+reload, or `auto` before any model is ready) returns `503` with the stable code
+`model_not_ready` and a `Retry-After: 5` header.
+
 ## Mixed versions and security boundary
 
 Public mesh compatibility remains additive: older and newer nodes can join,

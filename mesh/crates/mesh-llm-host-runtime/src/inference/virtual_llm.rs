@@ -211,7 +211,7 @@ async fn peer_model_with_capability(
     peer_id: iroh::EndpointId,
     predicate: impl Fn(&crate::mesh::ServedModelDescriptor) -> bool,
 ) -> String {
-    let peers = node.peers().await;
+    let peers = node.routable_peers().await;
     peers
         .iter()
         .find(|p| p.id == peer_id)

@@ -45,6 +45,7 @@ pub(crate) const STREAM_CONFIG_SUBSCRIBE: u8 = 0x0b;
 pub(crate) const STREAM_CONFIG_PUSH: u8 = 0x0c;
 pub(crate) const STREAM_SUBPROTOCOL: u8 = 0x0d;
 pub(crate) const STREAM_DIRECT_PATH_REQUEST: u8 = 0x0e;
+pub(crate) const STREAM_NATIVE_CHAT: u8 = 0x0f;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ControlProtocol {
@@ -137,13 +138,20 @@ pub(crate) async fn write_gossip_payload(
     protocol: ControlProtocol,
     outbound: &OutboundGossip,
     sender_id: EndpointId,
-    own_plugin_keys: &[crate::proto::node::PluginKey],
+    own_plugin_keys: &crate::mesh::plugin_keys::Announced,
     encoder: &GossipFrameEncoder,
     remote: EndpointId,
 ) -> Result<()> {
     let _ = protocol;
     let mut frame = build_gossip_frame(&outbound.announcements, sender_id);
-    attach_own_plugin_keys(&mut frame, own_plugin_keys);
+    attach_own_plugin_keys(
+        &mut frame,
+        &crate::mesh::plugin_keys::to_proto(&own_plugin_keys.keys),
+    );
+    attach_own_plugin_key_withdrawals(
+        &mut frame,
+        &crate::mesh::plugin_keys::withdrawals_to_proto(&own_plugin_keys.withdrawals),
+    );
     frame.signed_records = outbound.signed_records.clone();
     frame.signed_cache_affinity = outbound.signed_cache_affinity.clone();
     write_len_prefixed(send, &encoder.encode(frame, remote)?).await?;
@@ -166,10 +174,27 @@ pub(crate) fn attach_own_plugin_keys(
     }
 }
 
-/// A gossip exchange's announcements, and the sender's verified plugin keys.
+/// This node's own plugin key withdrawals go on its own entry only, like its
+/// keys (`attach_own_plugin_keys`).
+pub(crate) fn attach_own_plugin_key_withdrawals(
+    frame: &mut crate::proto::node::GossipFrame,
+    own_withdrawals: &[crate::proto::node::PluginKeyWithdrawal],
+) {
+    let sender = frame.sender_id.clone();
+    if let Some(own) = frame
+        .peers
+        .iter_mut()
+        .find(|peer| peer.endpoint_id == sender)
+    {
+        own.plugin_key_withdrawals = own_withdrawals.to_vec();
+    }
+}
+
+/// A gossip exchange's announcements, and the sender's verified plugin keys
+/// and withdrawals.
 pub(crate) type GossipWithPluginKeys = (
     Vec<(EndpointAddr, PeerAnnouncement)>,
-    Vec<crate::mesh::plugin_keys::BoundPluginKey>,
+    crate::mesh::plugin_keys::Announced,
 );
 
 /// [`decode_gossip_frame`], plus the plugin keys on the sender's own entry
@@ -178,18 +203,24 @@ pub(crate) fn decode_gossip_frame_and_plugin_keys(
     protocol: ControlProtocol,
     remote: EndpointId,
     buf: &[u8],
-) -> Result<(InboundGossip, Vec<crate::mesh::plugin_keys::BoundPluginKey>)> {
+) -> Result<(InboundGossip, crate::mesh::plugin_keys::Announced)> {
     let inbound = decode_gossip_frame(protocol, remote, buf)?;
     // The frame decoded and validated above; read the sender's own entry again.
     let frame = crate::proto::node::GossipFrame::decode(buf)
         .map_err(|e| anyhow::anyhow!("gossip decode from {}: {e}", remote.fmt_short()))?;
-    let keys = frame
+    let announced = frame
         .peers
         .iter()
         .find(|peer| peer.endpoint_id.as_slice() == remote.as_bytes())
-        .map(|own| crate::mesh::plugin_keys::verified_from_proto(&remote, &own.plugin_keys))
+        .map(|own| crate::mesh::plugin_keys::Announced {
+            keys: crate::mesh::plugin_keys::verified_from_proto(&remote, &own.plugin_keys),
+            withdrawals: crate::mesh::plugin_keys::verified_withdrawals_from_proto(
+                &remote,
+                &own.plugin_key_withdrawals,
+            ),
+        })
         .unwrap_or_default();
-    Ok((inbound, keys))
+    Ok((inbound, announced))
 }
 
 pub(crate) fn decode_gossip_frame(
@@ -278,6 +309,3 @@ pub(crate) fn decode_control_frame<T: ValidateControlFrame>(
 
 #[cfg(test)]
 pub(crate) mod tests;
-
-#[cfg(feature = "payments")]
-mod payment_offers;

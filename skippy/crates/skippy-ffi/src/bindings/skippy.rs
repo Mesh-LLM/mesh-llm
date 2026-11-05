@@ -6,7 +6,12 @@
 
 pub const SKIPPY_ABI_VERSION_MAJOR: u32 = 0;
 pub const SKIPPY_ABI_VERSION_MINOR: u32 = 1;
-pub const SKIPPY_ABI_VERSION_PATCH: u32 = 76;
+pub const SKIPPY_ABI_VERSION_PATCH: u32 = 78;
+pub const SKIPPY_ACTIVATION_FRAME_VERSION: u32 = 2;
+pub const SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION: u32 = 2;
+pub const SKIPPY_ACTIVATION_IDENTITY_BYTES: u32 = 32;
+pub const SKIPPY_ACTIVATION_MAX_DIMS: u32 = 4;
+pub const SKIPPY_ACTIVATION_MAX_PARTS: u32 = 16;
 pub const SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_MAX_LOGIT_BIAS: u32 = 256;
 pub const SKIPPY_MAX_SAMPLERS: u32 = 16;
@@ -29,11 +34,6 @@ pub const SKIPPY_STAGE_PLAN_PROFILE_DESC_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_STAGE_PLAN_STATE_DESC_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_STAGE_PLAN_MAX_DIMS: u32 = 4;
-pub const SKIPPY_ACTIVATION_FRAME_VERSION: u32 = 2;
-pub const SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION: u32 = 2;
-pub const SKIPPY_ACTIVATION_IDENTITY_BYTES: u32 = 32;
-pub const SKIPPY_ACTIVATION_MAX_DIMS: u32 = 4;
-pub const SKIPPY_ACTIVATION_MAX_PARTS: u32 = 16;
 pub const SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS: u32 = 8;
 pub const SKIPPY_CACHEGEN_RECORD_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_MAX_TOP_LOGPROBS: u32 = 20;
@@ -42,6 +42,7 @@ pub const SKIPPY_LAYA_INFO_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_LAYA_QTYPE_COUNT: u32 = 3;
 pub const SKIPPY_LAYA_MEMORY_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_LAYA_MAX_SEQUENCE_TOKENS: u32 = 4096;
+pub const SKIPPY_CLEF_INFO_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_ASR_INFO_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_ASR_SEGMENT_V1_ABI_VERSION: u32 = 1;
@@ -135,6 +136,45 @@ unsafe extern "C" {
 unsafe extern "C" {
     #[doc = " @brief Releases an error returned through an `out_error` parameter."]
     pub fn skippy_error_free(error: *mut skippy_error);
+}
+#[doc = " @brief One typed tensor in a stage-frontier frame."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_activation_part_desc {
+    pub identity: [u8; 32usize],
+    pub ggml_type: u32,
+    pub rank: u32,
+    pub token_axis: i32,
+    pub flags: u32,
+    pub dimensions: [i64; 4usize],
+    pub byte_strides: [u64; 4usize],
+    pub payload_offset: u64,
+    pub payload_bytes: u64,
+}
+#[doc = " @brief Stable, graph-observed multipart contract at one stage edge."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_activation_boundary_desc {
+    pub version: u32,
+    pub part_count: u32,
+    pub frontier_identity: [u8; 32usize],
+    pub parts: [skippy_activation_part_desc; 16usize],
+}
+#[doc = " @brief Metadata for an activation payload passed between staged runtimes."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_activation_desc {
+    pub version: u32,
+    pub producer_stage_index: i32,
+    pub layer_start: i32,
+    pub layer_end: i32,
+    pub token_count: u32,
+    pub sequence_count: u32,
+    pub part_count: u32,
+    pub reserved: u32,
+    pub payload_bytes: u64,
+    pub frontier_identity: [u8; 32usize],
+    pub parts: [skippy_activation_part_desc; 16usize],
 }
 pub type skippy_runtime_event_category = u32;
 pub const SKIPPY_RUNTIME_EVENT_CATEGORY_MODEL_OPEN: _bindgen_ty_1 = 1;
@@ -957,45 +997,6 @@ unsafe extern "C" {
         out_error: *mut *mut skippy_error,
     ) -> skippy_status;
 }
-#[doc = " @brief One typed tensor in a stage-frontier frame."]
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct skippy_activation_part_desc {
-    pub identity: [u8; 32usize],
-    pub ggml_type: u32,
-    pub rank: u32,
-    pub token_axis: i32,
-    pub flags: u32,
-    pub dimensions: [i64; 4usize],
-    pub byte_strides: [u64; 4usize],
-    pub payload_offset: u64,
-    pub payload_bytes: u64,
-}
-#[doc = " @brief Stable, graph-observed multipart contract at one stage edge."]
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct skippy_activation_boundary_desc {
-    pub version: u32,
-    pub part_count: u32,
-    pub frontier_identity: [u8; 32usize],
-    pub parts: [skippy_activation_part_desc; 16usize],
-}
-#[doc = " @brief Metadata for an activation payload passed between staged runtimes."]
-#[repr(C)]
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct skippy_activation_desc {
-    pub version: u32,
-    pub producer_stage_index: i32,
-    pub layer_start: i32,
-    pub layer_end: i32,
-    pub token_count: u32,
-    pub sequence_count: u32,
-    pub part_count: u32,
-    pub reserved: u32,
-    pub payload_bytes: u64,
-    pub frontier_identity: [u8; 32usize],
-    pub parts: [skippy_activation_part_desc; 16usize],
-}
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct skippy_ngram_cache {
@@ -1494,6 +1495,15 @@ unsafe extern "C" {
         session: *mut skippy_session,
         token_start: u64,
         token_count: u64,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Reports how this session's verify windows were held for rollback\n since it was created or last reset: in place through the recurrent\n rollback snapshots, or in a host checkpoint. A window counts once its\n storage is final, so both counts only grow: a checkpointed window when it\n opens, an in-place window when it is retired or trimmed. A window first\n held in place and later checkpointed because another decode landed on it\n counts as checkpointed."]
+    pub fn skippy_session_verify_rollback_counts(
+        session: *const skippy_session,
+        out_in_place: *mut u64,
+        out_checkpointed: *mut u64,
         out_error: *mut *mut skippy_error,
     ) -> skippy_status;
 }
@@ -2032,6 +2042,100 @@ unsafe extern "C" {
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
+pub struct skippy_clef_model {
+    _unused: [u8; 0],
+}
+#[repr(u32)]
+#[doc = " @brief Decision-order marks assigned to prompt tokens, as the head reads them."]
+#[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
+pub enum skippy_clef_order {
+    None = 0,
+    QuestionNoul = 1,
+    QuestionChoice = 2,
+    QuestionScore = 3,
+    Option = 4,
+}
+#[doc = " @brief Sizes and budgets of an opened Clef model."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_clef_info_v1 {
+    pub struct_size: u32,
+    pub abi_version: u32,
+    #[doc = "< tokens one read may span: the smallest of the context, batch and micro-batch"]
+    pub n_ctx: i32,
+    pub n_embd: i32,
+    pub n_layer: i32,
+    pub n_vocab: i32,
+    pub parameter_count: i64,
+    #[doc = "< weight bytes as loaded"]
+    pub model_bytes: u64,
+    #[doc = " Number of `<arch>.decision.*` metadata entries, see `skippy_clef_model_decision_metadata`."]
+    pub decision_metadata_count: u32,
+    #[doc = " `<arch>.decision.type`, NUL-terminated and truncated to the field."]
+    pub decision_type: [::std::os::raw::c_char; 32usize],
+}
+unsafe extern "C" {
+    #[doc = " @brief Opens a Clef GGUF with an embeddings-mode context; not a `skippy_model`.\n\n `n_ctx` bounds the tokens of one request and sizes the single micro-batch\n that reads it. `n_gpu_layers` follows llama.cpp (negative offloads all\n layers). Fails with SKIPPY_STATUS_MODEL_ERROR when the GGUF is not a Clef\n decision model or has no `systemone` chat template."]
+    pub fn skippy_clef_model_open(
+        model_path: *const ::std::os::raw::c_char,
+        n_ctx: i32,
+        n_threads: i32,
+        n_gpu_layers: i32,
+        out_model: *mut *mut skippy_clef_model,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Releases a model returned by `skippy_clef_model_open`."]
+    pub fn skippy_clef_model_free(model: *mut skippy_clef_model);
+}
+unsafe extern "C" {
+    #[doc = " @brief Reports the model's sizes, decision type, and metadata count.\n\n `out_info` must be initialized with its `struct_size` and `abi_version`."]
+    pub fn skippy_clef_model_info_v1(
+        model: *const skippy_clef_model,
+        out_info: *mut skippy_clef_info_v1,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Reads one `<arch>.decision.*` GGUF metadata entry by index.\n\n `out_key` receives the key suffix after `<arch>.decision.` (for example\n `temperature.choice.3_5` or `score_bias.5.2`) and `out_value` its string\n value; both are NUL-terminated and truncated to their capacities. Indices\n run over `decision_metadata_count` of `skippy_clef_info_v1`."]
+    pub fn skippy_clef_model_decision_metadata(
+        model: *const skippy_clef_model,
+        index: u32,
+        out_key: *mut ::std::os::raw::c_char,
+        key_capacity: usize,
+        out_value: *mut ::std::os::raw::c_char,
+        value_capacity: usize,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Plans the prompt of a request: token ids with their decision order.\n\n `request_json` is `{\"state\": ..., \"questions\": [{\"id\", \"type\",\n \"instructions\", \"options\": [{\"key\", \"description\"}]}]}` with the questions\n and options in the order the caller wants the scores back. The runtime\n sorts object keys, escapes the Clef marker in the input, renders the\n `systemone` template, splits on the separator, and tokenizes each piece on\n its own without special tokens. Returns SKIPPY_STATUS_BUFFER_TOO_SMALL with\n `out_token_count` set to the required length when `capacity` is short."]
+    pub fn skippy_clef_plan(
+        model: *const skippy_clef_model,
+        request_json: *const ::std::os::raw::c_char,
+        request_len: usize,
+        out_tokens: *mut i32,
+        out_orders: *mut i32,
+        capacity: usize,
+        out_token_count: *mut usize,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Scores every option of every question of a request in one pass.\n\n Plans the prompt like `skippy_clef_plan`, decodes it in one micro-batch,\n and writes one raw score per option in prompt order to `out_scores`. The\n head reports an unusable decision order as NaN, which fails the read with\n SKIPPY_STATUS_RUNTIME_ERROR. Calls are serialized per model. Returns\n SKIPPY_STATUS_BUFFER_TOO_SMALL with `out_score_count` set when `capacity`\n is short, and SKIPPY_STATUS_INVALID_ARGUMENT when the prompt exceeds `n_ctx`."]
+    pub fn skippy_clef_read(
+        model: *mut skippy_clef_model,
+        request_json: *const ::std::os::raw::c_char,
+        request_len: usize,
+        out_scores: *mut f32,
+        capacity: usize,
+        out_score_count: *mut usize,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub struct skippy_asr_model {
     _unused: [u8; 0],
 }
@@ -2176,4 +2280,5 @@ pub const skippy_ffi_bridge_feature_system_one: u64 = 274877906944;
 pub const skippy_ffi_bridge_feature_cachegen_kv_page: u64 = 549755813888;
 pub const skippy_ffi_bridge_feature_laya_decisions: u64 = 1099511627776;
 pub const skippy_ffi_bridge_feature_speech_recognition: u64 = 2199023255552;
+pub const skippy_ffi_bridge_feature_clef_decisions: u64 = 4398046511104;
 pub const skippy_ffi_bridge_activation_part_optional: u32 = 1;

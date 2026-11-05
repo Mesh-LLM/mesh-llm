@@ -49,7 +49,7 @@ data class MeshModelProvider(
     val metadata: JsonElement?,
     val runtime: MeshModelRuntime?,
     val thinking: JsonElement?,
-    val payment: JsonElement?,
+    val requires: JsonElement?,
 )
 
 /** String-valued kinds and workloads preserve advertisements from newer peers. */
@@ -102,7 +102,7 @@ class Models internal constructor(
                 runtime.optional("context_length")?.jsonPrimitive?.long,
                 runtime.getValue("ready").jsonPrimitive.boolean,
             )
-        }, value.optional("thinking"), value.optional("payment"),
+        }, value.optional("thinking"), value.optional("requires"),
     )
 }
 

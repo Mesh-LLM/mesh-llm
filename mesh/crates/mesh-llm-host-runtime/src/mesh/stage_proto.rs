@@ -706,6 +706,15 @@ fn stage_activation_codec_to_proto(
         skippy_protocol::StageActivationCodec::S8RowF32RneV1 => {
             skippy_stage_proto::StageActivationCodec::S8RowF32RneV1
         }
+        skippy_protocol::StageActivationCodec::Fp8E4m3RowF32RneV1 => {
+            skippy_stage_proto::StageActivationCodec::Fp8E4m3RowF32RneV1
+        }
+        skippy_protocol::StageActivationCodec::Fp8E4m3Block32E8m0RneV1 => {
+            skippy_stage_proto::StageActivationCodec::Fp8E4m3Block32E8m0RneV1
+        }
+        skippy_protocol::StageActivationCodec::Fp8E5m2RowF32RneV1 => {
+            skippy_stage_proto::StageActivationCodec::Fp8E5m2RowF32RneV1
+        }
     }
 }
 
@@ -724,6 +733,15 @@ fn stage_activation_codec_from_proto(
         }
         Ok(skippy_stage_proto::StageActivationCodec::S8RowF32RneV1) => {
             Ok(skippy_protocol::StageActivationCodec::S8RowF32RneV1)
+        }
+        Ok(skippy_stage_proto::StageActivationCodec::Fp8E4m3RowF32RneV1) => {
+            Ok(skippy_protocol::StageActivationCodec::Fp8E4m3RowF32RneV1)
+        }
+        Ok(skippy_stage_proto::StageActivationCodec::Fp8E4m3Block32E8m0RneV1) => {
+            Ok(skippy_protocol::StageActivationCodec::Fp8E4m3Block32E8m0RneV1)
+        }
+        Ok(skippy_stage_proto::StageActivationCodec::Fp8E5m2RowF32RneV1) => {
+            Ok(skippy_protocol::StageActivationCodec::Fp8E5m2RowF32RneV1)
         }
         _ => anyhow::bail!("unsupported generation-11 activation codec {value}"),
     }
@@ -1476,6 +1494,7 @@ fn stage_dflash_to_proto(
                 revision: source.revision.clone(),
                 file: source.file.clone(),
                 sha256: source.sha256.clone(),
+                bytes: source.bytes,
             }
         }),
     }
@@ -1496,6 +1515,7 @@ fn stage_dflash_from_proto(
                 revision: source.revision,
                 file: source.file,
                 sha256: source.sha256,
+                bytes: source.bytes,
             }
         }),
     }

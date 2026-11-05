@@ -1,7 +1,8 @@
 use skippy_ffi::{
-    FEATURE_DEVICE_EVENTS, FEATURE_DIAGNOSTIC_EVENTS, FEATURE_KV_EVENTS, FEATURE_LAYA_DECISIONS,
-    FEATURE_MODEL_LOAD_EVENTS_V2, FEATURE_NON_CHAT_WORKLOADS, FEATURE_RUNTIME_EVENT_REPORTER,
-    FEATURE_RUNTIME_EVENTS, FEATURE_SPEECH_RECOGNITION, FEATURE_UNLOAD_EVENTS,
+    FEATURE_CLEF_DECISIONS, FEATURE_DEVICE_EVENTS, FEATURE_DIAGNOSTIC_EVENTS, FEATURE_KV_EVENTS,
+    FEATURE_LAYA_DECISIONS, FEATURE_MODEL_LOAD_EVENTS_V2, FEATURE_NON_CHAT_WORKLOADS,
+    FEATURE_RUNTIME_EVENT_REPORTER, FEATURE_RUNTIME_EVENTS, FEATURE_SPEECH_RECOGNITION,
+    FEATURE_UNLOAD_EVENTS,
 };
 
 use crate::logging::write_native_log_note;
@@ -12,7 +13,7 @@ use crate::runtime_events::abi_features_bitmask;
 /// specific family, and is reported once rather than disabling anything.
 /// It tracks the highest `FEATURE_*` bit `skippy_ffi` defines, family or
 /// not: a bit this build names is not reserved to a future one.
-const MAX_KNOWN_FEATURE_BIT: u32 = 41;
+const MAX_KNOWN_FEATURE_BIT: u32 = 42;
 
 struct FamilySpec {
     bit: u64,
@@ -82,6 +83,18 @@ const FAMILIES: &[FamilySpec] = &[
             b"skippy_laya_model_memory_v1\0",
             b"skippy_laya_tokenize\0",
             b"skippy_laya_read\0",
+        ],
+    },
+    FamilySpec {
+        bit: FEATURE_CLEF_DECISIONS,
+        name: "clef_decisions",
+        required_symbols: &[
+            b"skippy_clef_model_open\0",
+            b"skippy_clef_model_free\0",
+            b"skippy_clef_model_info_v1\0",
+            b"skippy_clef_model_decision_metadata\0",
+            b"skippy_clef_plan\0",
+            b"skippy_clef_read\0",
         ],
     },
     FamilySpec {

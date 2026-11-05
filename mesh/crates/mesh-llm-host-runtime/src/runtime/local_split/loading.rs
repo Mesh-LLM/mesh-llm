@@ -2,9 +2,9 @@ use super::activation_edge::{required_boundary, validate_activation_edge};
 use super::attestation::{split_stage_source_is_ready, strict_ready_status_matches};
 use super::{
     LocalRuntimeBackendHandle, LocalRuntimeModelHandle, OpenAiGuardrailPolicyHandle,
-    RuntimeSliceStagePlan, SplitGenerationCleanup, SplitRuntimeGenerationHandle,
-    SplitTopologyGeneration, alloc_local_port, pinned_stage_device, split_participant_labels,
-    split_stage_plan_labels, stop_split_generation,
+    RuntimeSliceStagePlan, SplitActivationCodec, SplitGenerationCleanup,
+    SplitRuntimeGenerationHandle, SplitTopologyGeneration, alloc_local_port, pinned_stage_device,
+    split_participant_labels, split_stage_plan_labels, stop_split_generation,
 };
 use crate::inference::skippy;
 use crate::mesh;
@@ -208,6 +208,34 @@ pub(super) fn configured_stage_lifecycle_intervals(
                 .unwrap_or(DEFAULT_STAGE_HEALTH_INTERVAL.as_millis() as u64),
         ),
     }
+}
+
+/// The activation codec a split generation runs with: `skippy.activation_codec`
+/// on the model, else in `[defaults.skippy]`, else f16
+/// ([`SplitActivationCodec::DEFAULT`]). Config validation rejects unknown
+/// values; one that slips through runs the default.
+pub(super) fn configured_split_activation_codec(
+    mesh_config: &plugin::MeshConfig,
+    config_model_id: Option<&str>,
+) -> SplitActivationCodec {
+    let model = config_model_id
+        .and_then(|selector| model_skippy_config(mesh_config, selector))
+        .and_then(|config| config.activation_codec.as_deref());
+    let defaults = mesh_config
+        .defaults
+        .as_ref()
+        .and_then(|defaults| defaults.skippy.as_ref())
+        .and_then(|config| config.activation_codec.as_deref());
+    let Some(value) = model.or(defaults) else {
+        return SplitActivationCodec::DEFAULT;
+    };
+    SplitActivationCodec::from_setting(value).unwrap_or_else(|| {
+        tracing::warn!(
+            activation_codec = value,
+            "unknown skippy.activation_codec; split activations use the f16 default"
+        );
+        SplitActivationCodec::DEFAULT
+    })
 }
 
 fn model_skippy_config<'a>(
@@ -937,7 +965,7 @@ pub(super) async fn split_generation_load_settings<'a>(
     split_generation_load_settings_with(spec, SplitDefaultDraft::FromCache).await
 }
 
-/// Where a split load takes a catalog default DFlash draft from.
+/// Where a split load takes a default DFlash draft from.
 pub(super) enum SplitDefaultDraft {
     /// The local Hugging Face cache, checked against the pinned digest.
     FromCache,
@@ -959,6 +987,7 @@ pub(super) async fn split_generation_load_settings_with<'a>(
         .first()
         .context("split topology did not produce stage 0")?;
     let load_mode = split_generation_load_mode(spec.package);
+    crate::inference::skippy::refresh_dflash_pairing_index();
     let mut resolved = skippy::resolve_skippy_config_for_selector_with_publisher_defaults(
         skippy::SkippyConfigResolveRequest {
             mesh_config: spec.mesh_config,
@@ -1100,10 +1129,10 @@ fn split_dflash_fallback(
 /// [`SplitGenerationLoadSettings::settle_split_dflash`] learns whether it has
 /// one. A copy here that fails its checks is removed and drops the default.
 async fn materialize_split_default_dflash(resolved: &mut skippy::ResolvedSkippyConfig) {
-    let Some(pairing) = resolved.speculative.default_dflash else {
+    let Some(chosen) = resolved.speculative.default_dflash.as_ref() else {
         return;
     };
-    if crate::inference::skippy::default_dflash_draft_cached(pairing) {
+    if crate::inference::skippy::default_dflash_draft_cached(chosen) {
         crate::inference::skippy::materialize_default_dflash_draft(resolved).await;
     }
 }
@@ -1134,6 +1163,7 @@ pub(super) fn split_dflash_final_stage_charge(
     config_model_id: Option<&str>,
     package: &skippy::SkippyPackageIdentity,
 ) -> SplitDFlashFinalStageCharge {
+    crate::inference::skippy::refresh_dflash_pairing_index();
     let resolved = match skippy::resolve_skippy_config_for_selector_with_publisher_defaults(
         request,
         config_model_id,
@@ -1146,8 +1176,8 @@ pub(super) fn split_dflash_final_stage_charge(
         return SplitDFlashFinalStageCharge::default();
     };
     let draft_path = &dflash.draft_model_path;
-    let draft_bytes = match resolved.speculative.default_dflash {
-        Some(pairing) => pairing.draft.bytes,
+    let draft_bytes = match resolved.speculative.default_dflash.as_ref() {
+        Some(chosen) => chosen.pairing.draft.bytes,
         None => std::fs::metadata(draft_path).map_or(0, |meta| meta.len()),
     };
     SplitDFlashFinalStageCharge {
@@ -1187,12 +1217,13 @@ pub(super) fn split_dflash_max_draft_tokens(cap: Option<usize>, configured: bool
 
 /// The split DFlash plan for the resolved DFlash decode plan, or `None` when
 /// it has none, and stage 0's DFlash decode plan in `embedded_openai`.
-/// Without a configured cap the split drafts short blocks. A catalog default
-/// travels with its pinned source so the final stage fetches and checks its
-/// own copy rather than looking for this node's cache path; its target layers
-/// come from the final stage when this node has no copy. A configured draft
-/// is a path, read here; one whose target layers cannot be read leaves the
-/// split serving without speculation.
+/// Without a configured cap the split drafts short blocks. A default draft
+/// (from the package, the pairing index or the bootstrap table) travels with
+/// its pinned source so the final stage fetches and checks its own copy
+/// rather than looking for this node's cache path; its target layers come
+/// from the final stage when this node has no copy. A configured draft is a
+/// path, read here; one whose target layers cannot be read leaves the split
+/// serving without speculation.
 fn split_dflash_plan(
     resolved: &skippy::ResolvedSkippyConfig,
     embedded_openai: &mut skippy::ResolvedEmbeddedOpenAiArgs,
@@ -1204,9 +1235,9 @@ fn split_dflash_plan(
         dflash.max_draft_tokens,
         speculative.draft_max_tokens_configured,
     );
-    let pairing = speculative.default_dflash;
+    let chosen = speculative.default_dflash.as_ref();
     let local = dflash.draft_model_path.is_file();
-    let plan = match (local, pairing) {
+    let plan = match (local, chosen) {
         (false, Some(_)) => Ok(skippy_serving::split_dflash::SplitDFlashStage {
             max_draft_tokens: dflash.max_draft_tokens,
             draft_n_gpu_layers: speculative.draft_n_gpu_layers,
@@ -1220,7 +1251,7 @@ fn split_dflash_plan(
     };
     match plan {
         Ok(mut plan) => {
-            plan.draft_source = pairing.map(crate::inference::skippy::split_dflash_draft_source);
+            plan.draft_source = chosen.map(crate::inference::skippy::split_dflash_draft_source);
             plan.draft_device = decode.draft_device.clone();
             dflash.target_layers = plan.target_layers.clone();
             tracing::info!(

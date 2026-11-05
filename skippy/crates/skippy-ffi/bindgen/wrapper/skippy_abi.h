@@ -20,6 +20,8 @@
  * macOS, Linux, and Windows toolchains.
  */
 
+/* Bindgen must see the concrete descriptor before runtime.h forwards it. */
+#include "skippy/activation.h"
 #include "skippy.h"
 
 #include <stdint.h>
@@ -40,6 +42,7 @@ static const uint64_t skippy_ffi_bridge_feature_cachegen_kv_page = SKIPPY_FEATUR
 static const uint64_t skippy_ffi_bridge_feature_laya_decisions = SKIPPY_FEATURE_LAYA_DECISIONS;
 static const uint64_t skippy_ffi_bridge_feature_speech_recognition =
     SKIPPY_FEATURE_SPEECH_RECOGNITION;
+static const uint64_t skippy_ffi_bridge_feature_clef_decisions = SKIPPY_FEATURE_CLEF_DECISIONS;
 
 /* Same cast-form macro bridge as the feature bits above. */
 static const uint32_t skippy_ffi_bridge_activation_part_optional = SKIPPY_ACTIVATION_PART_OPTIONAL;

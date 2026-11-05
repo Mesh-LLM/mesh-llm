@@ -1,5 +1,7 @@
 use mesh_llm_membership::announcements::{apply_transitive_ann, peer_meaningfully_changed};
 
+const NOW: u64 = 1_800_000_000_000;
+
 #[test]
 pub(crate) fn test_merge_none_to_some() {
     let mut existing = test_peer(None);
@@ -10,6 +12,7 @@ pub(crate) fn test_merge_none_to_some() {
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert_eq!(existing.first_joined_mesh_ts, Some(100));
@@ -25,6 +28,7 @@ pub(crate) fn test_merge_some_to_none_keeps_existing() {
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert_eq!(existing.first_joined_mesh_ts, Some(100));
@@ -40,6 +44,7 @@ pub(crate) fn test_merge_earlier_incoming_wins() {
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert_eq!(existing.first_joined_mesh_ts, Some(100));
@@ -55,6 +60,7 @@ pub(crate) fn test_merge_later_incoming_loses() {
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert_eq!(existing.first_joined_mesh_ts, Some(100));
@@ -70,6 +76,7 @@ pub(crate) fn test_merge_equal_values_unchanged() {
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert_eq!(existing.first_joined_mesh_ts, Some(100));
@@ -159,6 +166,7 @@ pub(crate) fn test_transitive_merge_rejects_replayed_cache_advertisement() {
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     let retained = existing.cache_affinity.expect("cache advertisement");
@@ -200,8 +208,8 @@ pub(crate) async fn test_direct_merge_accepts_only_newer_cache_advertisements() 
 
 /// Issue #2213: routing state learned directly from a peer must not be
 /// replaced by what some other node says about it. Direct admission is the
-/// only provenance that authorizes models, role, capacity, policy, and
-/// payment offers; a bridge may refresh mention age, never the record.
+/// only provenance that authorizes models, role, capacity, and policy; a
+/// bridge may refresh mention age, never the record.
 #[tokio::test]
 pub(crate) async fn transitive_announcement_cannot_replace_direct_routing_metadata() {
     let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
@@ -220,15 +228,6 @@ pub(crate) async fn transitive_announcement_cannot_replace_direct_routing_metada
     direct.vram_bytes = 16 * 1024 * 1024 * 1024;
     direct.mesh_id = Some("direct-mesh".into());
     direct.mesh_policy_hash = Some("direct-policy".into());
-    #[cfg(feature = "payments")]
-    direct.lightning_offers.insert(
-        model.into(),
-        mesh_llm_payments_types::pricing::Pricing {
-            input_msat_per_million: 500,
-            output_msat_per_million: 1500,
-            cache_discount_percent: 0,
-        },
-    );
     node.add_peer(peer_id, direct_addr.clone(), &direct, None)
         .await;
 
@@ -257,8 +256,6 @@ pub(crate) async fn transitive_announcement_cannot_replace_direct_routing_metada
     relayed.vram_bytes = 2 * 1024 * 1024 * 1024;
     relayed.mesh_id = Some("relayed-mesh".into());
     relayed.mesh_policy_hash = Some("relayed-policy".into());
-    #[cfg(feature = "payments")]
-    relayed.lightning_offers.clear();
     node.update_transitive_peer(peer_id, &direct_addr, &relayed, bridge_id)
         .await;
 
@@ -299,13 +296,6 @@ pub(crate) async fn transitive_announcement_cannot_replace_direct_routing_metada
         peer.mesh_policy_hash, direct.mesh_policy_hash,
         "relay must not replace policy"
     );
-    drop(state);
-
-    #[cfg(feature = "payments")]
-    assert!(
-        node.peer_payment_offer(peer_id, model).await.is_some(),
-        "relay must not replace payment offers"
-    );
 }
 
 #[test]
@@ -319,6 +309,7 @@ pub(crate) fn test_apply_transitive_ann_refreshes_explicit_model_interests() {
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert_eq!(
@@ -339,6 +330,7 @@ pub(crate) fn test_apply_transitive_ann_refreshes_stage_status_list_support() {
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert!(existing.stage_status_list_supported);
@@ -356,6 +348,7 @@ pub(crate) fn test_apply_transitive_ann_cannot_promote_stage_protocol_generation
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert!(!existing.stage_protocol_generation_supported);
@@ -373,6 +366,7 @@ pub(crate) fn test_apply_transitive_ann_preserves_direct_stage_protocol_generati
         &test_addr(0x33),
         &old_relay_ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert!(existing.stage_protocol_generation_supported);
@@ -390,6 +384,7 @@ pub(crate) fn test_apply_transitive_ann_cannot_promote_local_gguf_content_id_sup
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert!(!existing.local_gguf_content_id_supported);
@@ -407,6 +402,7 @@ pub(crate) fn test_apply_transitive_ann_preserves_direct_local_gguf_content_id_s
         &test_addr(0x33),
         &old_relay_ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert!(existing.local_gguf_content_id_supported);
@@ -490,6 +486,7 @@ pub(crate) fn test_apply_transitive_ann_refreshes_advertised_model_throughput() 
         model_name: "qwen".to_string(),
         avg_tokens_per_second_milli: 35_000,
         throughput_samples: 4,
+        measurement: None,
     }];
 
     apply_transitive_ann(
@@ -497,6 +494,7 @@ pub(crate) fn test_apply_transitive_ann_refreshes_advertised_model_throughput() 
         &test_addr(0x33),
         &ann,
         test_endpoint_id(0xee),
+        NOW,
     );
 
     assert_eq!(
@@ -583,6 +581,7 @@ pub(crate) async fn test_add_peer_refreshes_advertised_model_throughput() {
         model_name: "qwen".to_string(),
         avg_tokens_per_second_milli: 20_000,
         throughput_samples: 2,
+        measurement: None,
     }];
 
     node.add_peer(peer_id, addr.clone(), &ann, None).await;
@@ -595,6 +594,57 @@ pub(crate) async fn test_add_peer_refreshes_advertised_model_throughput() {
     assert_eq!(
         peer.advertised_model_throughput,
         ann.advertised_model_throughput
+    );
+}
+
+/// A peer's throughput hint ranks only while its measuring node says it is
+/// recent; an older peer's hint, which carries no measurement, never does.
+#[tokio::test]
+pub(crate) async fn test_peer_throughput_hint_counts_only_while_fresh() {
+    use crate::network::metrics::{
+        ModelThroughputHint, ThroughputMeasurement, ThroughputMeasurementKind,
+    };
+    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
+    let peer_id = test_endpoint_id(0x47);
+    let addr = test_addr(0x47);
+    let now = crate::mesh::current_time_unix_ms();
+    let window_ms = 15 * 60 * 1000;
+    let hint = |model: &str, measurement| ModelThroughputHint {
+        model_name: model.to_string(),
+        avg_tokens_per_second_milli: 30_000,
+        throughput_samples: 5,
+        measurement,
+    };
+    let measured = |age_ms: u64| {
+        Some(ThroughputMeasurement {
+            observed_at_unix_ms: now - age_ms,
+            window_ms,
+            kind: ThroughputMeasurementKind::EndToEndAttempt,
+        })
+    };
+    let mut ann = test_announcement(Some(100));
+    ann.advertised_model_throughput = vec![
+        hint("fresh", measured(60_000)),
+        hint("stale", measured(window_ms + 60_000)),
+        hint("legacy", None),
+    ];
+
+    node.add_peer(peer_id, addr, &ann, None).await;
+
+    assert!(
+        node.peer_model_throughput_hint(peer_id, "fresh")
+            .await
+            .is_some()
+    );
+    assert!(
+        node.peer_model_throughput_hint(peer_id, "stale")
+            .await
+            .is_none()
+    );
+    assert!(
+        node.peer_model_throughput_hint(peer_id, "legacy")
+            .await
+            .is_none()
     );
 }
 
@@ -629,52 +679,6 @@ fn cache_advertisement(
         ttl_ms: 120_000,
         entries: Vec::new(),
     }
-}
-
-/// A relay must not override economics learned directly from an admitted seller.
-#[cfg(feature = "payments")]
-#[tokio::test]
-pub(crate) async fn direct_paid_offer_survives_unpriced_transitive_announcement() {
-    let node = Node::new_for_tests(NodeRole::Worker).await.unwrap();
-    let seller = test_endpoint_id(0x4b);
-    let addr = test_addr(0x4b);
-    let bridge = test_endpoint_id(0xec);
-    let model = "unsloth/Qwen3.8-Flash-Next-GGUF@766911a6b7369840a91dbcd95f9f997acaab6cd6:UD-Q4_K_XL";
-    let mut direct = test_announcement(Some(100));
-    direct.addr = addr.clone();
-    direct.role = NodeRole::Host { http_port: 9337 };
-    direct.version = Some("0.78.1".into());
-    direct.hosted_models = Some(vec![model.into()]);
-    direct.serving_models = vec![model.into()];
-    direct.lightning_offers.insert(model.into(), mesh_llm_payments_types::pricing::Pricing {
-        input_msat_per_million: 500,
-        output_msat_per_million: 1500,
-            cache_discount_percent: 0,
-    });
-    node.add_peer(seller, addr.clone(), &direct, None).await;
-    assert!(node.peer_payment_offer(seller, model).await.is_some());
-    let direct_seen = {
-        let state = node.state.lock().await;
-        let peer = state.peers.get(&seller).unwrap();
-        assert!(peer.is_admitted());
-        assert!(crate::mesh::peer_state::routes_http_model(peer, model));
-        peer.last_seen
-    };
-    let mut relayed = direct.clone();
-    relayed.lightning_offers.clear();
-    node.update_transitive_peer(seller, &addr, &relayed, bridge).await;
-    assert!(node.peer_payment_offer(seller, model).await.is_some());
-    {
-        let state = node.state.lock().await;
-        let peer = state.peers.get(&seller).unwrap();
-        assert!(peer.is_admitted());
-        assert!(crate::mesh::peer_state::routes_http_model(peer, model));
-        assert_eq!(peer.last_seen, direct_seen);
-    }
-    direct.lightning_offers.clear();
-    node.add_peer(seller, addr, &direct, None).await;
-    assert!(node.peer_payment_offer(seller, model).await.is_none());
-    node.endpoint.close().await;
 }
 
 /// The other half of the #2213 gate: once direct proof-of-life goes stale the

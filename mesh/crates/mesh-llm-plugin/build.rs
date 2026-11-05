@@ -36,6 +36,12 @@ fn compile_proto() {
 
     let mut config = prost_build::Config::new();
     config.boxed(".meshllm.plugin.v1.PluginManifest.openai_exchange_hook");
+    config.boxed(".meshllm.plugin.v1.PluginManifest.grant_requests");
+    // `InitializeRequest` carries the whole manifest; every other frame is small.
+    config.type_attribute(
+        ".meshllm.plugin.v1.Envelope.payload",
+        "#[allow(clippy::large_enum_variant)]",
+    );
     config.type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]");
     config
         .compile_protos(&["proto/plugin.proto"], &["proto"])

@@ -124,6 +124,15 @@ pub(super) struct LocalRuntimeModelHandle {
 }
 
 impl LocalRuntimeModelHandle {
+    pub(super) fn inference_backend(
+        &self,
+    ) -> Option<Arc<dyn skippy_inference_api::InferenceBackend>> {
+        match &self.inner {
+            LocalRuntimeBackendHandle::Skippy { model, .. } => Some(model.backend()),
+            LocalRuntimeBackendHandle::Dedicated { .. } => None,
+        }
+    }
+
     pub(super) fn pid(&self) -> u32 {
         match &self.inner {
             LocalRuntimeBackendHandle::Skippy { .. }
@@ -750,6 +759,7 @@ pub(super) fn runtime_verified_served_model_descriptor(
             local_file_name: Some(format!("{model_name}.gguf")),
             ..Default::default()
         },
+        requires: Vec::new(),
         capabilities_known: false,
         capabilities: models::ModelCapabilities::default(),
         topology: None,
@@ -1110,6 +1120,8 @@ pub(super) async fn start_local_openai_model(
         planning_profile: spec.planning_profile,
         measured_buffers: measured_buffers_footprint(&measurement_key),
     };
+    // Choose from the published DFlash pairing index once it is cached.
+    crate::inference::skippy::refresh_dflash_pairing_index();
     // Only a direct GGUF load keeps a DFlash draft (package loads are staged).
     let default_dflash_draft = package
         .is_none()
@@ -1685,6 +1697,7 @@ mod tests {
 
         // Pre-seed a descriptor so the function takes the overwrite branch.
         node.upsert_served_model_descriptor(mesh::ServedModelDescriptor {
+            requires: Vec::new(),
             identity: mesh::ServedModelIdentity {
                 model_name: model_name.to_string(),
                 source_kind: mesh::ModelSourceKind::LocalGguf,

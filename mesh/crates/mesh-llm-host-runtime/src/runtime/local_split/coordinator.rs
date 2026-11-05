@@ -1,4 +1,5 @@
-use super::loading::stage_health_ticks;
+use super::activation_codec::SplitActivationCodec;
+use super::loading::{configured_split_activation_codec, stage_health_ticks};
 use super::recovery::{
     SplitLossRecoveryDecision, SplitWithdrawGraceAction,
     split_active_stage_nodes_pending_eligibility, split_connected_node_ids,
@@ -66,13 +67,19 @@ impl SplitTopologyGeneration {
             participants,
             stages,
             admissions: BTreeMap::new(),
-            activation_codec: skippy_protocol::StageActivationCodec::default(),
-            // New split generations negotiate a lossless codec per realized
-            // activation frame. RawF32 remains the mandatory fallback, so
-            // frames only compact when their complete payload (including
-            // sidebands) round-trips exactly through BF16 or F16.
-            activation_codec_policy: skippy_protocol::StageActivationCodecPolicy::AutoLosslessV1,
+            activation_codec: SplitActivationCodec::DEFAULT.codec,
+            activation_codec_policy: SplitActivationCodec::DEFAULT.policy,
         }
+    }
+
+    /// Run this generation with `choice` on every hop. The codec rides each
+    /// stage's load request and the topology hash, so all stages of one
+    /// generation use the coordinator's choice. Every stage-generation-13
+    /// peer decodes every codec, so no choice needs a capability check.
+    pub(super) fn with_activation_codec(mut self, choice: SplitActivationCodec) -> Self {
+        self.activation_codec = choice.codec;
+        self.activation_codec_policy = choice.policy;
+        self
     }
 
     pub(super) fn with_admissions(
@@ -710,6 +717,10 @@ impl SplitTopologyCoordinator {
             "split runtime needs at least two stage participants"
         );
         SplitTopologyGeneration::new(topology_id, run_id, generation, participants, stages)
+            .with_activation_codec(configured_split_activation_codec(
+                &self.mesh_config,
+                self.config_model_id.as_deref(),
+            ))
             .with_admissions(admissions)
     }
 
@@ -1209,6 +1220,10 @@ impl SplitTopologyCoordinator {
         let stages = planned.stages;
         let participants = split_participants_for_stages(&self.active.participants, &stages);
         SplitTopologyGeneration::new(topology_id, run_id, generation, participants, stages)
+            .with_activation_codec(configured_split_activation_codec(
+                &self.mesh_config,
+                self.config_model_id.as_deref(),
+            ))
             .with_admissions(admissions)
     }
 }

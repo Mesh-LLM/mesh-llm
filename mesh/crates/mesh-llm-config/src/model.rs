@@ -57,26 +57,8 @@ pub struct MeshConfig {
     pub models: Vec<ModelConfigEntry>,
     #[serde(rename = "plugin", default)]
     pub plugins: Vec<PluginConfigEntry>,
-    #[serde(default, skip_serializing_if = "PaymentsConfig::is_default")]
-    pub payments: PaymentsConfig,
     #[serde(flatten, default)]
     pub extra: BTreeMap<String, toml::Value>,
-}
-
-/// `[payments]`: which wallet backs paid inference. Spending policy and
-/// prices live in the payment ledger, not here.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-pub struct PaymentsConfig {
-    /// Plugin name of the `wallet.v1` provider to use. When unset the host
-    /// uses the only running wallet plugin.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wallet: Option<String>,
-}
-
-impl PaymentsConfig {
-    pub fn is_default(&self) -> bool {
-        *self == Self::default()
-    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -706,6 +688,12 @@ pub struct SkippyConfig {
     pub prefill_chunk_size: Option<u32>,
     #[serde(default)]
     pub prefill_chunk_schedule: Option<String>,
+    /// Wire codec for activations between split stages: `f16` (the
+    /// default), `lossless`, `bf16`, `s8-row`, `fp8-e4m3-row`,
+    /// `fp8-e4m3-block32`, `fp8-e5m2-row`, or `f32`. The split's coordinator
+    /// decides; every stage receives its choice in the stage load.
+    #[serde(default)]
+    pub activation_codec: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1239,8 +1227,6 @@ struct RawMeshConfig {
     models: Vec<ModelConfigEntry>,
     #[serde(rename = "plugin", default)]
     plugins: Vec<PluginConfigEntry>,
-    #[serde(default)]
-    payments: PaymentsConfig,
     #[serde(flatten, default)]
     extra: BTreeMap<String, toml::Value>,
 }
@@ -1361,7 +1347,6 @@ impl<'de> Deserialize<'de> for MeshConfig {
             runtime: raw.runtime,
             models: raw.models,
             plugins: raw.plugins,
-            payments: raw.payments,
             extra: raw.extra,
         })
     }
@@ -1831,6 +1816,9 @@ impl Default for LoggingConfig {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct PluginConfigEntry {
+    /// Explicit local-service permissions. Installing a plugin grants nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operation_bindings: Vec<crate::PluginOperationBinding>,
     pub name: String,
     #[serde(default)]
     pub enabled: Option<bool>,
@@ -1857,6 +1845,11 @@ pub struct PluginConfigEntry {
     /// Optional URL passed to the plugin as `MESH_LLM_PLUGIN_URL`.
     #[serde(default)]
     pub url: Option<String>,
+    /// Upstream models this plugin's inference endpoints may expose. Unset
+    /// exposes every model the endpoint lists; models left out are neither
+    /// advertised nor routed to the endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub settings: BTreeMap<String, toml::Value>,
     #[serde(default, skip_serializing_if = "PluginStartupConfig::is_default")]
