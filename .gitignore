@@ -69,3 +69,6 @@ mesh/sdk/swift/Generated/MeshLLMFFI.xcframework/
 
 # Generated UI dependencies left at their pre-split location.
 /crates/mesh-llm-ui/node_modules/
+
+# Local seL4 Microkit experiments (see #2866 review)
+microkit-work/
