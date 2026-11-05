@@ -1,12 +1,17 @@
 # MeshLLM CI topology
 
-Linux Rust-test jobs disable test-profile debug information with
-`CARGO_PROFILE_TEST_DEBUG=0`, preserving complete package tests, debug
-assertions and overflow checks. This reduces the dependency variants and
-linked test executables retained across feature-isolated package invocations.
-The shared compiler seed warmer uses the same test setting. Cache epoch `v4`
-starts a fresh namespace. Batch jobs record filesystem space before each
-package and retained target/compiler-cache sizes even when tests fail.
+All workflows disable Rust debug information with workflow- or job-level
+`CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`,
+`CARGO_PROFILE_RELEASE_DEBUG=0` and `CARGO_PROFILE_BENCH_DEBUG=0`.
+Each reusable workflow sets these values because caller workflow environments
+do not propagate through `workflow_call`. The Linux test, client and Fly Docker
+builders set the same environment inside their Rust build stages. Compiler-seed
+publishers and consumers use matching settings. Local development defaults,
+complete package tests, debug assertions and overflow checks are preserved.
+Cache epoch `v5` starts a fresh namespace. Batch jobs record filesystem space
+before each package and retained target/compiler-cache sizes even when tests fail.
+The upstream canary sets the environment in each executing job and its reusable
+family-pass workflow separately.
 
 ## Standalone C++ API qualification
 
@@ -1606,8 +1611,8 @@ The warmer's `just ci-sccache-seed-build` recipe covers the dominant
 `mesh-llm` Clippy graph, the release-profile backend-neutral `mesh-llm` host
 graph, the isolated `mesh-llm-cli` test graph used by the Rust-test matrix,
 and the isolated default-feature `xtask` Clippy graph with all targets. The
-test-debug override applies only to the test build so both Clippy graphs retain
-their consumers' profiles. Root and workspace package Cargo manifests and the
+workflow-level debug-information overrides apply to every seed profile and its
+consumers. Root and workspace package Cargo manifests and the
 warmer workflow, along with `Justfile` and `just/**`, are part of the exact
 seed key.
 `ci/runner-images.json` and `cargo xtool ci-ops runner-identity check` make the

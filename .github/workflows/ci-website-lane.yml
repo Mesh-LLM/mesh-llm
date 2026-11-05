@@ -46,6 +46,12 @@ concurrency:
   group: ci-website-${{ inputs.supersession_key || inputs.source_sha }}
   cancel-in-progress: ${{ inputs.original_event_name == 'pull_request' }}
 
+env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_BENCH_DEBUG: "0"
+
 jobs:
   authority_source:
     name: Freeze protected automation source
