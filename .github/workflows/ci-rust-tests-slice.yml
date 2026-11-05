@@ -70,12 +70,15 @@ permissions:
   packages: read
 
 env:
-  CACHE_NAMESPACE: mesh-llm
-  CARGO_INCREMENTAL: "0"
   # Retained dependency variants and integration-test executables must fit
   # alongside the runner image and compiler seed on the hosted disk.
   # This leaves debug assertions, overflow checks and all test targets enabled.
+  CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_BENCH_DEBUG: "0"
+  CACHE_NAMESPACE: mesh-llm
+  CARGO_INCREMENTAL: "0"
   SCCACHE_GHA_ENABLED: "false"
   # libtest gives every test thread the std default of 2 MiB. The Mesh daemon
   # reserves 8 MiB for its application and Tokio threads

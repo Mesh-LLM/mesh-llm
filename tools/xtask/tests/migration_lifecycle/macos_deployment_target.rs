@@ -143,7 +143,12 @@ fn actual_just_facade_exports_default_empty_and_explicit_override() {
     }
 }
 fn load(path: &str) -> Node {
-    workflow_yaml::parse(&fs::read_to_string(root().join(path)).unwrap()).unwrap()
+    let source = fs::read_to_string(root().join(path)).unwrap();
+    if path == ".github/workflows/llama-canary-family-pass.yml" {
+        workflow_yaml::parse_resolved_aliases(&source).unwrap()
+    } else {
+        workflow_yaml::parse(&source).unwrap()
+    }
 }
 fn text<'a>(node: &'a Node, key: &str) -> &'a str {
     node.get(key).and_then(Node::text).unwrap_or("")

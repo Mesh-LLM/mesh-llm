@@ -299,7 +299,7 @@ run_verification_logged() { shift 2; "$@"; }
 validate_agent_manifest_changes() { printf '%s\n' manifest >> "$INERT_ROOT/order"; }
 run_full_build() { scripts/inert-build.sh; }
 run_certification() { printf '%s\n' certify >> "$INERT_ROOT/order"; }
-run_early_metal_certification() { printf '%s\n' early >> "$INERT_ROOT/order"; }
+run_early_native_certification() { printf '%s\n' early >> "$INERT_ROOT/order"; }
 controller_parity_inventory() { printf '%s\n' inventory >> "$INERT_ROOT/order"; }
 "#,
         "run_candidate_gates",
