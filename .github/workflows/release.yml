@@ -45,6 +45,10 @@ permissions:
   packages: read
 
 env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_BENCH_DEBUG: "0"
   # Compiled into release binaries by `mesh-llm-analytics`. Unset in forks and
   # in local builds, which then report no usage data at all. See
   # website/src/docs/pages/analytics.md.

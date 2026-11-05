@@ -1,12 +1,17 @@
 # MeshLLM CI topology
 
-Linux Rust-test jobs disable test-profile debug information with
-`CARGO_PROFILE_TEST_DEBUG=0`, preserving complete package tests, debug
-assertions and overflow checks. This reduces the dependency variants and
-linked test executables retained across feature-isolated package invocations.
-The shared compiler seed warmer uses the same test setting. Cache epoch `v4`
-starts a fresh namespace. Batch jobs record filesystem space before each
-package and retained target/compiler-cache sizes even when tests fail.
+All workflows disable Rust debug information with workflow- or job-level
+`CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`,
+`CARGO_PROFILE_RELEASE_DEBUG=0` and `CARGO_PROFILE_BENCH_DEBUG=0`.
+Each reusable workflow sets these values because caller workflow environments
+do not propagate through `workflow_call`. The Linux test, client and Fly Docker
+builders set the same environment inside their Rust build stages. Compiler-seed
+publishers and consumers use matching settings. Local development defaults,
+complete package tests, debug assertions and overflow checks are preserved.
+Cache epoch `v5` starts a fresh namespace. Batch jobs record filesystem space
+before each package and retained target/compiler-cache sizes even when tests fail.
+The upstream canary sets the environment in each executing job and its reusable
+family-pass workflow separately.
 
 ## Standalone C++ API qualification
 
@@ -443,9 +448,13 @@ name breaking ties. Balanced shard membership remains unchanged. This puts
 small models first in the canary's one-family-per-job matrix; parallel runner
 availability can still change actual start and completion order.
 
+The native build adapter keeps arch/lipo and OSX CMake options on macOS only;
+Linux uses its selected CUDA backend with the ordinary shell.
+
 Partial reruns reuse the successful producer's exact identity digest from the
-same workflow run, retaining its original attempt. Family artifacts include
-that digest and their worker attempt; aggregation downloads all attempts for
+same run even when native producer attempts differ. Combination retains the
+macOS producer's attempt and rejects either producer from a future attempt.
+Family artifacts include that digest and their worker attempt; aggregation downloads all attempts for
 that identity and pass, then selects the latest receipt per family. Newer
 failures supersede older successes; duplicate same-attempt receipts, missing
 families, foreign identities, and out-of-range attempts fail closed. The matrix
@@ -1609,8 +1618,8 @@ The warmer's `just ci-sccache-seed-build` recipe covers the dominant
 `mesh-llm` Clippy graph, the release-profile backend-neutral `mesh-llm` host
 graph, the isolated `mesh-llm-cli` test graph used by the Rust-test matrix,
 and the isolated default-feature `xtask` Clippy graph with all targets. The
-test-debug override applies only to the test build so both Clippy graphs retain
-their consumers' profiles. Root and workspace package Cargo manifests and the
+workflow-level debug-information overrides apply to every seed profile and its
+consumers. Root and workspace package Cargo manifests and the
 warmer workflow, along with `Justfile` and `just/**`, are part of the exact
 seed key.
 `ci/runner-images.json` and `cargo xtool ci-ops runner-identity check` make the

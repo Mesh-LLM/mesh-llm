@@ -85,6 +85,11 @@ fn elf(reader: &mut (impl Read + Seek), start: u64, length: u64) -> DynResult<()
         || !image.little_endian
         || image.header.e_machine != header::EM_AARCH64
         || !matches!(image.header.e_type, header::ET_EXEC | header::ET_DYN)
+        || image.entry == 0
+        || !image
+            .program_headers
+            .iter()
+            .any(|segment| segment.p_type == goblin::elf::program_header::PT_LOAD)
     {
         return Err("not an arm64 Linux ELF executable".into());
     }
@@ -202,21 +207,20 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
-    fn arm64_elf() -> Vec<u8> {
-        let mut bytes = vec![0; 64];
-        bytes[..16].copy_from_slice(b"\x7fELF\x02\x01\x01\0\0\0\0\0\0\0\0\0");
-        bytes[16..18].copy_from_slice(&2_u16.to_le_bytes());
-        bytes[18..20].copy_from_slice(&header::EM_AARCH64.to_le_bytes());
-        bytes[20..24].copy_from_slice(&1_u32.to_le_bytes());
-        bytes[52..54].copy_from_slice(&64_u16.to_le_bytes());
-        bytes
-    }
-
     #[test]
     fn elf_accepts_arm64_and_rejects_foreign_architecture() {
-        let mut bytes = arm64_elf();
+        let mut bytes = super::super::tests::elf_bytes();
         assert!(inspect(&mut Cursor::new(&bytes), 0, bytes.len() as u64).is_ok());
         bytes[18..20].copy_from_slice(&header::EM_X86_64.to_le_bytes());
         assert!(inspect(&mut Cursor::new(&bytes), 0, bytes.len() as u64).is_err());
+    }
+
+    #[test]
+    fn elf_refuses_missing_entry_point_or_loadable_segment() {
+        for (offset, length) in [(24, 8), (64, 4), (56, 2)] {
+            let mut bytes = super::super::tests::elf_bytes();
+            bytes[offset..offset + length].fill(0);
+            assert!(inspect(&mut Cursor::new(&bytes), 0, bytes.len() as u64).is_err());
+        }
     }
 }

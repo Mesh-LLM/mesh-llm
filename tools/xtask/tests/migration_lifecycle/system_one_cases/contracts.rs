@@ -340,6 +340,12 @@ fn actual_canary_build_qualification_and_verification_relocation_preserve_requir
     let verification = verification.canonicalize().unwrap();
     let materialize = function(&script, "materialize_verification_tree", "run_prepare");
     let full_build = function(&script, "run_full_build", "run_certification");
+    fs::create_dir_all(root.join("scripts/lib")).unwrap();
+    fs::write(
+        root.join("scripts/lib/llama-canary-native-build.sh"),
+        source("scripts/lib/llama-canary-native-build.sh"),
+    )
+    .unwrap();
     let caller = format!(
         r#"set -euo pipefail
 ROOT="$PWD"

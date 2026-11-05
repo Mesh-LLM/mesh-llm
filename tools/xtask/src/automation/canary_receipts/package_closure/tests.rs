@@ -3,7 +3,7 @@ use crate::automation::canary_receipts::Digest;
 use serde_json::json;
 use std::{fs, io::Cursor, path::Path};
 
-fn executable_bytes(import: &str) -> Vec<u8> {
+pub(super) fn executable_bytes(import: &str) -> Vec<u8> {
     let size = (24 + import.len() + 1).div_ceil(8) * 8;
     let mut bytes = vec![0; 32 + size];
     for (offset, value) in [
@@ -22,15 +22,34 @@ fn executable_bytes(import: &str) -> Vec<u8> {
     bytes
 }
 
-fn native_executable_bytes() -> Vec<u8> {
+pub(super) fn elf_bytes() -> Vec<u8> {
+    let mut bytes = vec![0; 120];
+    bytes[..16].copy_from_slice(b"\x7fELF\x02\x01\x01\0\0\0\0\0\0\0\0\0");
+    bytes[16..18].copy_from_slice(&2_u16.to_le_bytes());
+    bytes[18..20].copy_from_slice(&goblin::elf::header::EM_AARCH64.to_le_bytes());
+    bytes[20..24].copy_from_slice(&1_u32.to_le_bytes());
+    for (offset, value) in [
+        (24, 0x400000_u64),
+        (32, 64),
+        (80, 0x400000),
+        (88, 0x400000),
+        (96, 120),
+        (104, 120),
+        (112, 4096),
+    ] {
+        bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+    }
+    for (offset, value) in [(52, 64_u16), (54, 56), (56, 1)] {
+        bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
+    }
+    bytes[64..68].copy_from_slice(&goblin::elf::program_header::PT_LOAD.to_le_bytes());
+    bytes[68..72].copy_from_slice(&5_u32.to_le_bytes());
+    bytes
+}
+
+pub(super) fn native_executable_bytes() -> Vec<u8> {
     if cfg!(target_os = "linux") {
-        let mut bytes = vec![0; 64];
-        bytes[..16].copy_from_slice(b"\x7fELF\x02\x01\x01\0\0\0\0\0\0\0\0\0");
-        bytes[16..18].copy_from_slice(&2_u16.to_le_bytes());
-        bytes[18..20].copy_from_slice(&goblin::elf::header::EM_AARCH64.to_le_bytes());
-        bytes[20..24].copy_from_slice(&1_u32.to_le_bytes());
-        bytes[52..54].copy_from_slice(&64_u16.to_le_bytes());
-        bytes
+        elf_bytes()
     } else {
         executable_bytes("/usr/lib/libSystem.B.dylib")
     }
@@ -232,6 +251,16 @@ pub(super) fn workload_tar(
     mutate: impl FnOnce(&mut serde_json::Value),
 ) -> Vec<u8> {
     let binary = native_executable_bytes();
+    workload_tar_for(candidate, native, candidate_time, &binary, mutate)
+}
+
+pub(super) fn workload_tar_for(
+    candidate: &str,
+    native: &str,
+    candidate_time: u64,
+    binary: &[u8],
+    mutate: impl FnOnce(&mut serde_json::Value),
+) -> Vec<u8> {
     let stamp = format!("stamp-version=3\npatched-sha={native}\nbackend=cpu\nlink-mode=static\n")
         .into_bytes();
     let mut producer = json!({"schema_version":1,"source":{"head":candidate,"worktree_sha256":Digest::of_bytes(b"")},"files":{}});
@@ -251,7 +280,7 @@ pub(super) fn workload_tar(
         let data = if key == "native_stamp" {
             &stamp
         } else {
-            &binary
+            binary
         };
         producer["files"][key] = json!({"path":name,"sha256":Digest::of_bytes(data)});
         tar_member(

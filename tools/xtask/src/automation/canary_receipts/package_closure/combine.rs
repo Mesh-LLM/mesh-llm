@@ -53,13 +53,14 @@ pub(super) fn run(input: &Input) -> DynResult<Value> {
     }
     archive::binaries_for(&mac.join("binaries.tar"), false)?;
     archive::binaries_for(&linux.join("binaries.tar"), true)?;
+    // Each verified producer may come from an earlier attempt of this run.
+    // Retain the macOS attempt in the combined identity; all source fields match.
     for key in [
         "candidate",
         "base",
         "branch",
         "pass_id",
         "run_id",
-        "run_attempt",
         "controller",
         "mesh_source",
         "manifest_sha256",

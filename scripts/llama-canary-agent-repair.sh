@@ -725,26 +725,11 @@ run_prepare() {
 }
 
 run_full_build() {
-  local archive arches jinja_environment jinja_python
   : > "$BUILD_LOG"
-  jinja_environment="$STATE_DIR/jinja-env"
-  jinja_python="${SKIPPY_WORKLOAD_SDK_PYTHON:-python3}"
   echo "trusted candidate gate: build" | tee -a "$BUILD_LOG"
-  run_verification_logged "complete patched llama.cpp build" "$BUILD_LOG" env \
-    LLAMA_STAGE_UPSTREAM_TESTS=ON UV_PROJECT_ENVIRONMENT="$jinja_environment" \
-    uv run --locked --no-python-downloads --python "$jinja_python" --project "$JINJA_PROJECT" -- \
-    arch -arm64 bash scripts/build-llama.sh --build-only -DCMAKE_OSX_ARCHITECTURES=arm64 -DGGML_METAL_EMBED_LIBRARY=ON \
-    || return 1
-  archive="$LLAMA_STAGE_BUILD_DIR/src/libllama.a"
-  arches="$(lipo -archs "$archive" 2>/dev/null || true)"
-  if [[ "$arches" != "arm64" ]]; then
-    echo "candidate native archive must be arm64, got: ${arches:-missing}" | tee -a "$BUILD_LOG" >&2
-    return 1
-  fi
-  run_verification_logged "generated model-family patch check" "$BUILD_LOG" \
-    env UV_PROJECT_ENVIRONMENT="$jinja_environment" \
-    uv run --locked --no-python-downloads --python "$jinja_python" --project "$JINJA_PROJECT" -- \
-    arch -arm64 bash scripts/check-skippy-generated-family-patch.sh --full-native-suite || return 1
+  # shellcheck source=scripts/lib/llama-canary-native-build.sh
+  source "$TRUSTED_ROOT/scripts/lib/llama-canary-native-build.sh"
+  run_canary_native_build || return 1
   run_verification_logged "stage runtime crate build" "$BUILD_LOG" \
     cargo build -p skippy-runtime -p skippy-cli -p skippy-package-builder -p skippy-correctness -p skippy-topology --bins \
     || return 1

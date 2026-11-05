@@ -47,7 +47,7 @@ impl Fixture {
         for directory in [
             "tools",
             "tmp",
-            "scripts",
+            "scripts/lib",
             "skippy/llama_cpp",
             ".deps/llama.cpp",
             "native/src",
@@ -60,6 +60,15 @@ impl Fixture {
         )
         .unwrap();
         fs::write(root.join("native/src/libllama.a"), b"inert archive bytes").unwrap();
+        fs::copy(
+            repository().join("scripts/lib/llama-canary-native-build.sh"),
+            root.join("scripts/lib/llama-canary-native-build.sh"),
+        )
+        .unwrap();
+        executable(
+            &root.join("tools/uname"),
+            "#!/bin/bash\nprintf '%s\\n' \"${INERT_OS:-Darwin}\"\n",
+        );
         let path = std::env::var_os("PATH").expect("prepared jq prerequisite");
         let jq = std::env::split_paths(&path)
             .map(|directory| directory.join("jq"))
@@ -117,11 +126,15 @@ if [[ "$INERT_FAIL" == '{label}' ]]; then exit 17; fi
             "tools/uv",
             "uv",
             r#"printf '%s\0' "$UV_PROJECT_ENVIRONMENT" > "$INERT_ROOT/uv-environment-$count"
-if [[ ${12} == scripts/build-llama.sh ]]; then
+shift 8
+if [[ $1 == arch ]]; then shift 2; fi
+[[ $1 == bash ]] || exit 93
+shift
+if [[ $1 == scripts/build-llama.sh ]]; then
   printf '%s' "$LLAMA_STAGE_UPSTREAM_TESTS" > "$INERT_ROOT/upstream-tests"
 else
-  [[ ${12} == scripts/check-skippy-generated-family-patch.sh ]] || exit 92
-  /bin/bash "${@:12}"
+  [[ $1 == scripts/check-skippy-generated-family-patch.sh ]] || exit 92
+  /bin/bash "$@"
 fi"#,
         );
         self.tool("tools/lipo", "archive", "printf '%s\\n' \"$INERT_ARCHIVE\"");

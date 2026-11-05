@@ -8,41 +8,93 @@ use super::{
 
 #[test]
 fn combined_native_package_keeps_one_candidate_identity() {
-    if cfg!(target_os = "linux") {
-        return;
-    }
     if isolated("combined_native_package_keeps_one_candidate_identity") {
         return;
     }
-    let fixture = Fixture::new();
-    let (mac, mac_digest) = fixture.pack();
-    let linux = fixture.directory.path().join("linux-package");
-    fs::create_dir(&linux).unwrap();
-    for entry in fs::read_dir(&mac).unwrap() {
-        let entry = entry.unwrap();
-        fs::copy(entry.path(), linux.join(entry.file_name())).unwrap();
+    for (mac_attempt, linux_attempt, current_attempt) in
+        [(1, 1, 1), (1, 2, 2), (2, 1, 2), (1, 3, 2), (3, 1, 2)]
+    {
+        let mut fixture = Fixture::new();
+        fixture.context.run_attempt = mac_attempt.to_string();
+        let (package, _) = fixture.pack();
+        let mac = native_producer(&fixture, &package, "macos-arm64-metal", mac_attempt);
+        let linux = native_producer(&fixture, &package, "linux-arm64-cuda", linux_attempt);
+        let output = fixture.directory.path().join("combined-package");
+        let mut context = fixture.context.clone();
+        context.run_attempt = current_attempt.to_string();
+        let result = combine::run(&combine::Input {
+            context: context.clone(),
+            mac_package: mac.clone(),
+            mac_identity_sha256: Digest::of_file(&mac.join("identity.json")).unwrap(),
+            linux_package: linux.clone(),
+            linux_identity_sha256: Digest::of_file(&linux.join("identity.json")).unwrap(),
+            output: output.clone(),
+        });
+        if linux_attempt > current_attempt || mac_attempt > current_attempt {
+            assert!(result.is_err());
+            assert!(!output.exists());
+            continue;
+        }
+        let result = result.unwrap();
+        assert_eq!(result["candidate"], fixture.base);
+        let combined: serde_json::Value =
+            serde_json::from_slice(&fs::read(output.join("identity.json")).unwrap()).unwrap();
+        assert_eq!(combined["run_attempt"], mac_attempt.to_string());
+        assert!(output.join("linux-binaries.tar").is_file());
+        assert!(output.join("linux-workload-oracles.tar").is_file());
+        let consumer = fixture.consumer();
+        restoring::restore(&restoring::Input {
+            context,
+            root: consumer.clone(),
+            package: output,
+            identity_sha256: Digest::try_from(
+                result["identity_sha256"].as_str().unwrap().to_owned(),
+            )
+            .unwrap(),
+        })
+        .unwrap();
+        assert_eq!(
+            fs::read(consumer.join("target/debug/skippy")).unwrap(),
+            tests::native_executable_bytes()
+        );
+        assert_eq!(
+            fs::read(consumer.join(".deps/canary-workload-oracles/cargo/debug/skippy")).unwrap(),
+            tests::native_executable_bytes()
+        );
     }
-    let mut elf = vec![0; 64];
-    elf[..16].copy_from_slice(b"\x7fELF\x02\x01\x01\0\0\0\0\0\0\0\0\0");
-    elf[16..18].copy_from_slice(&2_u16.to_le_bytes());
-    elf[18..20].copy_from_slice(&goblin::elf::header::EM_AARCH64.to_le_bytes());
-    elf[20..24].copy_from_slice(&1_u32.to_le_bytes());
-    elf[52..54].copy_from_slice(&64_u16.to_le_bytes());
-    fs::remove_file(linux.join("binaries.tar")).unwrap();
+}
+
+fn native_producer(fixture: &Fixture, package: &Path, platform: &str, attempt: u32) -> PathBuf {
+    let output = fixture.directory.path().join(platform);
+    fs::create_dir(&output).unwrap();
+    for entry in fs::read_dir(package).unwrap() {
+        let entry = entry.unwrap();
+        fs::copy(entry.path(), output.join(entry.file_name())).unwrap();
+    }
+    let binary = if platform == "linux-arm64-cuda" {
+        tests::elf_bytes()
+    } else {
+        tests::executable_bytes("/usr/lib/libSystem.B.dylib")
+    };
+    fs::remove_file(output.join("binaries.tar")).unwrap();
     archive_write::write(
-        &linux.join("binaries.tar"),
+        &output.join("binaries.tar"),
         archive::BINARIES
             .into_iter()
             .map(|name| archive_write::Input {
                 name: name.into(),
-                content: archive_write::Content::Bytes(elf.clone()),
-                digest: Digest::of_bytes(&elf),
+                content: archive_write::Content::Bytes(binary.clone()),
+                digest: Digest::of_bytes(&binary),
                 executable: true,
             })
             .collect(),
     )
     .unwrap();
-    let linux_bundle = linux.join("llama-source.bundle");
+    let mut workloads =
+        tests::workload_tar_for(&fixture.base, &fixture.native, 200, &binary, |_| {});
+    workloads.extend_from_slice(&[0; 1024]);
+    fs::write(output.join("workload-oracles.tar"), workloads).unwrap();
+    let linux_bundle = output.join("llama-source.bundle");
     fs::remove_file(&linux_bundle).unwrap();
     process::git(
         &fixture.root.join(".deps/llama.cpp"),
@@ -56,28 +108,19 @@ fn combined_native_package_keeps_one_candidate_identity() {
     )
     .unwrap();
     let mut identity: serde_json::Value =
-        serde_json::from_slice(&fs::read(linux.join("identity.json")).unwrap()).unwrap();
-    identity["platform"] = json!("linux-arm64-cuda");
-    identity["binaries_sha256"] = json!(Digest::of_file(&linux.join("binaries.tar")).unwrap());
+        serde_json::from_slice(&fs::read(output.join("identity.json")).unwrap()).unwrap();
+    identity["platform"] = json!(platform);
+    identity["run_attempt"] = json!(attempt.to_string());
+    identity["binaries_sha256"] = json!(Digest::of_file(&output.join("binaries.tar")).unwrap());
+    identity["workload_oracles_sha256"] =
+        json!(Digest::of_file(&output.join("workload-oracles.tar")).unwrap());
     identity["llama_bundle_sha256"] = json!(Digest::of_file(&linux_bundle).unwrap());
     fs::write(
-        linux.join("identity.json"),
+        output.join("identity.json"),
         serde_json::to_vec_pretty(&identity).unwrap(),
     )
     .unwrap();
-    let output = fixture.directory.path().join("combined-package");
-    let result = combine::run(&combine::Input {
-        context: fixture.context.clone(),
-        mac_package: mac,
-        mac_identity_sha256: mac_digest,
-        linux_package: linux.clone(),
-        linux_identity_sha256: Digest::of_file(&linux.join("identity.json")).unwrap(),
-        output: output.clone(),
-    })
-    .unwrap();
-    assert_eq!(result["candidate"], fixture.base);
-    assert!(output.join("linux-binaries.tar").is_file());
-    assert!(output.join("linux-workload-oracles.tar").is_file());
+    output
 }
 use crate::automation::canary_receipts::Digest;
 use serde_json::json;

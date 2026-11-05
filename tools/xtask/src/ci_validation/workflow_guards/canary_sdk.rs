@@ -54,6 +54,7 @@ const PREPARATION_SELECTORS: &[&str] = &[
 pub(super) fn check(document: &Node) -> DynResult<()> {
     for (job, consumer) in [
         ("build", "build"),
+        ("build_linux", "build"),
         ("family", "certify"),
         ("retry_family", "certify"),
     ] {
@@ -143,7 +144,7 @@ mod tests {
     }
     #[test]
     fn every_job_refuses_missing_duplicate_late_or_untrusted_preparation() {
-        for job in ["build", "family", "retry_family"] {
+        for job in ["build", "build_linux", "family", "retry_family"] {
             for mode in ["missing", "duplicate", "late", "before-checkout"] {
                 let mut document = workflow();
                 let steps = steps(&mut document, job);
@@ -168,7 +169,7 @@ mod tests {
     }
     #[test]
     fn every_job_refuses_skips_failure_bypass_profile_and_environment_substitution() {
-        for job in ["build", "family", "retry_family"] {
+        for job in ["build", "build_linux", "family", "retry_family"] {
             for (key, value) in [
                 ("if", Node::Scalar("false".into())),
                 ("continue-on-error", Node::Scalar("true".into())),
@@ -206,7 +207,7 @@ mod tests {
     }
     #[test]
     fn every_job_refuses_consumer_or_job_interpreter_override() {
-        for job in ["build", "family", "retry_family"] {
+        for job in ["build", "build_linux", "family", "retry_family"] {
             for at_job in [true, false] {
                 let mut document = workflow();
                 let owner = h::mutable(h::mutable(&mut document, "jobs"), job);
@@ -220,7 +221,11 @@ mod tests {
                         .iter_mut()
                         .find(|step| {
                             field(step, "id")
-                                == Some(if job == "build" { "build" } else { "certify" })
+                                == Some(if job.starts_with("build") {
+                                    "build"
+                                } else {
+                                    "certify"
+                                })
                         })
                         .unwrap()
                 };
@@ -239,7 +244,7 @@ mod tests {
     #[test]
     fn explicit_embedding_and_literal_fail_closed_setting_are_admitted() {
         let mut document = workflow();
-        for job in ["build", "family", "retry_family"] {
+        for job in ["build", "build_linux", "family", "retry_family"] {
             let step = steps(&mut document, job)
                 .iter_mut()
                 .find(|step| field(step, "uses") == Some(ACTION))
@@ -256,7 +261,7 @@ mod tests {
     #[test]
     fn unrelated_preparation_metadata_is_admitted_in_every_job() {
         let mut document = workflow();
-        for job in ["build", "family", "retry_family"] {
+        for job in ["build", "build_linux", "family", "retry_family"] {
             let step = steps(&mut document, job)
                 .iter_mut()
                 .find(|step| field(step, "uses") == Some(ACTION))

@@ -29,6 +29,10 @@ COPY mesh/crates/mesh-llm-ui/ ./
 RUN VITE_APP_VERSION="${VITE_APP_VERSION:-$(node -p 'JSON.parse(require("fs").readFileSync("package.json", "utf8")).version')}" pnpm run build
 
 FROM debian:bookworm-slim AS builder
+ENV CARGO_PROFILE_DEV_DEBUG=0 \
+    CARGO_PROFILE_TEST_DEBUG=0 \
+    CARGO_PROFILE_RELEASE_DEBUG=0 \
+    CARGO_PROFILE_BENCH_DEBUG=0
 ARG TARGETARCH
 ARG SCCACHE_VERSION=0.16.0
 RUN --mount=type=cache,id=mesh-llm-apt-lists-debian-bookworm-${TARGETARCH},target=/var/lib/apt/lists,sharing=locked \
