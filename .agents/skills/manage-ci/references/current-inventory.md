@@ -1152,10 +1152,12 @@ untrusted input, not an authority or correctness boundary. Linux Clippy,
 Rust-test and host jobs restore one bounded trusted sccache seed
 instead of per-row Cargo target archives. The protected warmer's
 `just ci-sccache-seed-build` recipe covers the dominant `mesh-llm` Clippy graph,
-the `xtask` Clippy graph checked by tooling-only Clippy batches, and the
-isolated `mesh-llm-cli` test graph used by the Rust-test matrix. Depot
-selections cannot restore that
-seed through their cross-trust cache proxy. Its exact key fingerprints the
+the isolated `mesh-llm-cli` test graph, and the isolated default-feature `xtask`
+Clippy graph with all targets. Only the test-build command disables test debug
+information; Clippy keeps the same profile as its consumer. The shared key also
+hashes the root and workspace package Cargo manifests and the warmer workflow
+so feature and profile changes invalidate the seed. Depot selections cannot
+restore that seed through their cross-trust cache proxy. Its exact key fingerprints the
 warmer image and toolchain epoch. Native-runtime rows explicitly remain cold
 after three verified warm samples observed zero reuse. These four high-fanout families disable per-object GHA
 publication on every provider. Exact Linux static ABI, Swift ABI, macOS Metal unit ABI,
