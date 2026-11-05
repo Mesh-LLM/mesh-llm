@@ -25,6 +25,12 @@ const UNVERIFIED: &[&str] = &[
     "skippy-serving",
     "skippy-api",
     "skippy-cli",
+    // Receipts: the head-key file takes a Unix 0600 mode and the sparse model
+    // copy has unix/windows positioned-IO arms. skippy-commands shares the
+    // split-serving siblings' pending Windows proof; skippy-receipts is pure
+    // Rust with portable tests and can join the Windows unit row once run there.
+    "skippy-commands",
+    "skippy-receipts",
     "xtask",
     // Extracted native reader has Unix regular-file admission branches; Windows runtime proof is pending.
     "trajectory-reader",
