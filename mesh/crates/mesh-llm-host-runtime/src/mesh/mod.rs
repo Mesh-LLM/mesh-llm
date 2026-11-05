@@ -121,6 +121,7 @@ use model_identity::*;
 // Main's openai::model_names calls this through the mesh:: path; keep the
 // pub(crate) surface stable across the model_identity move.
 pub(crate) use model_identity::public_model_id_from_identity;
+pub(crate) use model_requirements::model_requires_unsupported_channel;
 use node_identity::*;
 #[cfg(test)]
 use operational_logging::capture_mesh_operational_audits;

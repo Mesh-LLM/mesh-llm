@@ -12,6 +12,8 @@ mod request_normalize;
 pub(crate) mod request_parse;
 mod response;
 pub(crate) use response::ServedModelHeaders;
+#[cfg(test)]
+pub(crate) use response::models_response;
 pub(crate) use response::send_503;
 pub(crate) mod response_adapter;
 mod response_quality;
