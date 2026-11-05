@@ -817,6 +817,7 @@ pub(crate) async fn start_in_process_plugin_manager(
 
 include!("basic.rs");
 include!("nested_single_model.rs");
+include!("automatic_spill.rs");
 include!("routing.rs");
 
 #[cfg(feature = "claude-code-integration")]
