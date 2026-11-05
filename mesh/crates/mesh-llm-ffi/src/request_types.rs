@@ -3,6 +3,10 @@ pub struct ModelNative {
     pub id: String,
     pub name: String,
     pub context_length: Option<u32>,
+    /// Effort strings the serving provider observed in the loaded chat
+    /// template, in its reported order. `None` is unknown — an older provider
+    /// or an unprobed model — and an empty list is a known "no effort levels".
+    pub thinking_efforts: Option<Vec<String>>,
 }
 
 #[derive(uniffi::Record)]

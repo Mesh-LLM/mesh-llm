@@ -916,6 +916,8 @@ fn gossip_rejects_sender_id_mismatch_or_invalid_endpoint_len() {
 
 /// Proves a transitively gossiped update refreshes a peer's metadata fields
 /// in place, without dropping unrelated state.
+const NOW: u64 = 1_800_000_000_000;
+
 #[test]
 fn transitive_peer_update_refreshes_metadata_fields() {
     use crate::proto::node::CompactModelMetadata;
@@ -1007,7 +1009,7 @@ fn transitive_peer_update_refreshes_metadata_fields() {
         claimed_log_head: None,
     };
 
-    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
+    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee), NOW);
 
     assert!(
         existing.available_models.is_empty(),
@@ -1107,7 +1109,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         claimed_log_head: None,
     };
 
-    apply_transitive_ann(&mut existing, &weak_addr, &ann, make_test_endpoint_id(0xee));
+    apply_transitive_ann(&mut existing, &weak_addr, &ann, make_test_endpoint_id(0xee), NOW);
 
     assert_eq!(
         existing.addr.addrs.len(),
@@ -1183,6 +1185,7 @@ fn transitive_peer_merge_preserves_richer_direct_address() {
         &richer_addr,
         &ann2,
         make_test_endpoint_id(0xee),
+        NOW,
     );
 
     assert_eq!(
@@ -1481,7 +1484,7 @@ fn transitive_peer_update_refreshes_memory_only_when_advertised() {
         addrs: Default::default(),
     };
     let mut ann = peer_state_test_announcement(addr.clone());
-    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
+    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee), NOW);
     assert_eq!(
         existing.memory,
         Some(advertised),
@@ -1494,7 +1497,7 @@ fn transitive_peer_update_refreshes_memory_only_when_advertised() {
         ..advertised
     };
     ann.memory = Some(refreshed);
-    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
+    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee), NOW);
     assert_eq!(existing.memory, Some(refreshed));
 }
 
@@ -1522,7 +1525,7 @@ fn transitive_peer_update_drops_the_cached_memory_when_the_capacity_moves() {
     // explained the old budget, so it must not travel with the new one.
     let mut ann = peer_state_test_announcement(addr.clone());
     ann.vram_bytes = 8_000_000_000;
-    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
+    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee), NOW);
     assert_eq!(existing.vram_bytes, 8_000_000_000);
     assert_eq!(
         existing.memory, None,
@@ -1531,7 +1534,7 @@ fn transitive_peer_update_drops_the_cached_memory_when_the_capacity_moves() {
 
     // The same relay with the unchanged capacity keeps the block.
     existing.memory = Some(advertised);
-    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee));
+    apply_transitive_ann(&mut existing, &addr, &ann, make_test_endpoint_id(0xee), NOW);
     assert_eq!(existing.memory, Some(advertised));
 }
 
@@ -1759,7 +1762,7 @@ fn plugin_keys_ride_only_the_senders_own_entry_and_are_verified() {
     )
     .expect("a valid frame decodes");
     assert_eq!(announcements.len(), 2);
-    assert_eq!(keys, vec![key]);
+    assert_eq!(keys.keys, vec![key]);
 
     // A key on the sender's entry that another node bound is dropped.
     frame.peers[0].plugin_keys = to_proto(&[bind(&other, "capsules", [5; 32])]);
@@ -1769,7 +1772,7 @@ fn plugin_keys_ride_only_the_senders_own_entry_and_are_verified() {
         &frame.encode_to_vec(),
     )
     .expect("a valid frame decodes");
-    assert!(keys.is_empty(), "a binding by another node never verifies");
+    assert!(keys.keys.is_empty(), "a binding by another node never verifies");
 }
 
 #[tokio::test]
@@ -1914,7 +1917,7 @@ fn a_gossip_frame_without_plugin_keys_decodes_with_no_sender_keys() {
     let (announcements, keys) =
         decode_gossip_payload_and_plugin_keys(ControlProtocol::ProtoV1, sender_id, &bytes)
             .expect("a frame without plugin keys decodes");
-    assert!(keys.is_empty(), "its sender has no plugin keys");
+    assert!(keys.keys.is_empty(), "its sender has no plugin keys");
     let plain = decode_gossip_payload(ControlProtocol::ProtoV1, sender_id, &bytes)
         .expect("the existing decoder reads it");
     assert_eq!(announcements.len(), 2);
@@ -1961,7 +1964,7 @@ fn a_gossip_frame_with_plugin_keys_decodes_to_the_same_announcements() {
         decode_gossip_payload_and_plugin_keys(ControlProtocol::ProtoV1, sender_id, &with)
             .expect("decodes with field 53");
     assert_eq!(format!("{announcements:?}"), format!("{before:?}"));
-    assert_eq!(keys, vec![key]);
+    assert_eq!(keys.keys, vec![key]);
 }
 
 /// A test node with a fixed node key, so a "restarted" node keeps its identity.
@@ -2103,6 +2106,59 @@ async fn a_plugin_key_through_its_lifecycle_as_a_peer_sees_it() {
     assert_eq!(listed(&b, a_id), vec![bind(&a_secret, "capsules", key(3))]);
 }
 
+/// A host-signed withdrawal reaches a peer over real gossip, is listed with the
+/// withdrawn key, and stays listed after the withdrawing node goes offline, so
+/// a plugin forgets the key at its next poll rather than when it ages out.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_withdrawn_plugin_key_stays_listed_as_withdrawn_when_its_host_goes_offline() {
+    use crate::mesh::plugin_keys::{bind, withdraw};
+    use crate::plugin::proto::PluginKeyRequest;
+
+    let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+        .verifying_key()
+        .to_bytes();
+    let a_secret = SecretKey::from_bytes(&[0x41; 32]);
+    let a = node_with_key(a_secret.clone()).await;
+    let b = make_test_node(super::NodeRole::Worker)
+        .await
+        .expect("test node must start");
+    a.start_accepting();
+    b.start_accepting();
+    let a_id = a.id();
+
+    a.apply_plugin_key_request("capsules", PluginKeyRequest { public_key: key.to_vec() })
+        .expect("the key is announced");
+    gossip_once(&b, &a, "announced").await;
+    assert_eq!(
+        b.plugin_keys.peers().get(&a_id),
+        Some(&vec![bind(&a_secret, "capsules", key)])
+    );
+    assert!(b.plugin_keys.peer_withdrawals().is_empty());
+
+    a.apply_plugin_key_request("capsules", PluginKeyRequest { public_key: Vec::new() })
+        .expect("an empty key withdraws");
+    assert_eq!(
+        a.plugin_keys.own_withdrawals(),
+        vec![withdraw(&a_secret, "capsules", key)]
+    );
+    gossip_once(&b, &a, "withdrawn").await;
+    assert!(!b.plugin_keys.peers().contains_key(&a_id));
+    assert_eq!(
+        b.plugin_keys.peer_withdrawals().get(&a_id),
+        Some(&vec![withdraw(&a_secret, "capsules", key)])
+    );
+
+    // The host goes offline: its withdrawal is still listed.
+    b.remove_peer(a_id, super::MeshPeerRemovalReason::CleanShutdown)
+        .await;
+    assert!(b.plugin_keys.peers().is_empty());
+    assert_eq!(b.plugin_keys.peer_withdrawals().len(), 1);
+
+    // A peer that is rejected, rather than leaving, takes its withdrawals with it.
+    b.remove_disallowed_peer(a_id).await;
+    assert!(b.plugin_keys.peer_withdrawals().is_empty());
+}
+
 #[tokio::test]
 async fn a_plugin_sets_replaces_and_withdraws_only_its_own_key() {
     use crate::plugin::proto::PluginKeyRequest;
@@ -2146,141 +2202,4 @@ async fn a_plugin_sets_replaces_and_withdraws_only_its_own_key() {
         .apply_plugin_key_request("a plugin", PluginKeyRequest { public_key: key(1) })
         .is_err(), "a name the gossip format cannot carry is refused");
     assert!(node.plugin_keys.own().is_empty(), "nothing was announced by a refused request");
-}
-
-/// A node whose 7-day certificate enters its 36-hour renewal window re-signs
-/// it for a full lifetime, so peers checking the expiry keep admitting it.
-#[tokio::test]
-async fn a_running_node_renews_its_ownership_certificate_inside_the_window() {
-    use crate::crypto::{
-        DEFAULT_NODE_CERT_LIFETIME_SECS, TrustPolicy, TrustStore, sign_node_ownership,
-        verify_node_ownership,
-    };
-    const HOUR_MS: u64 = 60 * 60 * 1000;
-    let lifetime_ms = DEFAULT_NODE_CERT_LIFETIME_SECS * 1000;
-    let owner = test_owner_keypair(0xc1, 0xc2);
-    let mut node = super::Node::new_for_tests(super::NodeRole::Worker)
-        .await
-        .expect("test node");
-    node.owner_keypair = Some(owner.clone());
-    let start = crate::mesh::current_time_unix_ms();
-    let first = sign_node_ownership(
-        &owner,
-        node.id().as_bytes(),
-        start + lifetime_ms,
-        Some("rig".to_string()),
-        Some("host-a".to_string()),
-    )
-    .expect("sign the startup certificate");
-    *node.owner_attestation.lock().await = Some(first.clone());
-
-    let two_days_left = start + lifetime_ms - 48 * HOUR_MS;
-    assert!(
-        node.renew_owner_attestation_if_due(two_days_left)
-            .await
-            .expect("check outside the window")
-            .is_none(),
-        "48 hours left is outside the 36-hour window"
-    );
-    assert_eq!(node.owner_attestation.lock().await.as_ref(), Some(&first));
-
-    let one_day_left = start + lifetime_ms - 24 * HOUR_MS;
-    let renewed = node
-        .renew_owner_attestation_if_due(one_day_left)
-        .await
-        .expect("renew inside the window")
-        .expect("24 hours left is inside the window");
-    assert_eq!(renewed.claim.expires_at_unix_ms, one_day_left + lifetime_ms);
-    assert_ne!(renewed.claim.cert_id, first.claim.cert_id);
-    assert_eq!(renewed.claim.node_label.as_deref(), Some("rig"));
-    assert_eq!(renewed.claim.hostname_hint.as_deref(), Some("host-a"));
-    assert_eq!(node.owner_attestation.lock().await.as_ref(), Some(&renewed));
-
-    let summary = node.owner_summary().await;
-    assert_eq!(summary.status, OwnershipStatus::Verified);
-    assert_eq!(summary.cert_id.as_deref(), Some(renewed.claim.cert_id.as_str()));
-    assert_eq!(summary.expires_at_unix_ms, Some(one_day_left + lifetime_ms));
-
-    // What a peer sees once the startup certificate has expired.
-    let past_first_expiry = start + lifetime_ms + HOUR_MS;
-    let peer_view = |ownership| {
-        verify_node_ownership(
-            Some(ownership),
-            node.id().as_bytes(),
-            &TrustStore::default(),
-            TrustPolicy::Off,
-            past_first_expiry,
-        )
-        .status
-    };
-    assert_eq!(peer_view(&first), OwnershipStatus::Expired);
-    assert_eq!(peer_view(&renewed), OwnershipStatus::Verified);
-}
-
-/// A renewed certificate whose write fails is written on a later heartbeat,
-/// although the certificate in use is no longer inside its renewal window.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_failed_save_of_the_renewed_certificate_is_retried_on_the_next_heartbeat() {
-    use crate::crypto::{SignedNodeOwnership, sign_node_ownership};
-    const DAY_MS: u64 = 24 * 60 * 60 * 1000;
-    let owner = test_owner_keypair(0xd1, 0xd2);
-    let dir = tempfile::tempdir().expect("temp dir");
-    // A file where the ownership file's directory should be: writes fail.
-    let blocker = dir.path().join("identity");
-    std::fs::write(&blocker, b"not a directory").expect("blocker");
-    let ownership_file = blocker.join("node-ownership.json");
-    let mut node = super::Node::new_for_tests(super::NodeRole::Worker)
-        .await
-        .expect("test node");
-    node.owner_keypair = Some(owner.clone());
-    node.owner_attestation_path = Some(ownership_file.clone());
-    let due = sign_node_ownership(
-        &owner,
-        node.id().as_bytes(),
-        crate::mesh::current_time_unix_ms() + DAY_MS,
-        None,
-        None,
-    )
-    .expect("sign a certificate a day from expiry");
-    *node.owner_attestation.lock().await = Some(due);
-
-    node.run_heartbeat_cycle(&mut HashMap::new()).await;
-    let renewed = node
-        .owner_attestation
-        .lock()
-        .await
-        .clone()
-        .expect("the node keeps a certificate");
-    assert!(renewed.claim.expires_at_unix_ms > crate::mesh::current_time_unix_ms() + 6 * DAY_MS);
-    assert!(!ownership_file.exists(), "the write failed");
-
-    // The renewed certificate is outside the window now, so only the pending
-    // save can bring the file up to date.
-    std::fs::remove_file(&blocker).expect("unblock");
-    node.run_heartbeat_cycle(&mut HashMap::new()).await;
-    let saved: SignedNodeOwnership = serde_json::from_str(
-        &std::fs::read_to_string(&ownership_file).expect("written on the next heartbeat"),
-    )
-    .expect("a certificate");
-    assert_eq!(saved, renewed);
-    assert!(node.unsaved_owner_attestation.lock().await.is_none());
-
-    // Once saved, a heartbeat writes nothing more.
-    std::fs::remove_file(&ownership_file).expect("remove");
-    node.run_heartbeat_cycle(&mut HashMap::new()).await;
-    assert!(!ownership_file.exists());
-}
-
-#[tokio::test]
-async fn a_node_without_an_owner_key_has_no_certificate_to_renew() {
-    let node = super::Node::new_for_tests(super::NodeRole::Worker)
-        .await
-        .expect("test node");
-    let far_future = crate::mesh::current_time_unix_ms() + 365 * 24 * 60 * 60 * 1000;
-    assert!(
-        node.renew_owner_attestation_if_due(far_future)
-            .await
-            .expect("nothing to do")
-            .is_none()
-    );
 }

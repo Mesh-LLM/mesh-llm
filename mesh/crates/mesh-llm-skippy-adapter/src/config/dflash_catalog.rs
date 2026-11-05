@@ -4,211 +4,372 @@
 //! every quant of a model gets the same draft. Each draft is pinned to a
 //! Hugging Face revision and SHA-256; the host fetches it into the Hugging Face
 //! cache on first load and serves without speculation if it cannot.
+//!
+//! The default draft comes from, in order: the layer package's own `dflash`
+//! proposer, the pairing index published on Hugging Face at the revision this
+//! release pins, and, until that index is published and cached, the bootstrap
+//! table compiled in here.
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, LazyLock, RwLock};
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use hf_hub::RepoTypeModel;
 use skippy_model_artifact::gguf::{
     GgufCompactMeta, scan_gguf_compact_meta, scan_gguf_dflash_target_layers,
     scan_gguf_vocab_token_count,
 };
 use skippy_model_hf::store::local::huggingface_snapshot_path;
+pub use skippy_package_format::{
+    DFlashBackends, DFlashDraft, DFlashPairing, DFlashPairingIndex, DFlashTarget,
+};
+use skippy_runtime::package::PackageGenerationInfo;
 
-/// GGUF metadata that identifies a target model.
-#[derive(Debug, PartialEq, Eq)]
-pub struct DFlashTarget {
-    pub architecture: &'static str,
-    /// Executable decoder layers, excluding NextN/MTP blocks.
-    pub layer_count: u32,
-    pub embedding_length: u32,
-    /// Routed experts; `0` for a dense model.
-    pub expert_count: u32,
-    /// Model family named in `general.basename` (else `general.name`), for
-    /// targets that share a shape. With a family, the name must carry it.
-    /// Without one, the pairing yields to a same-shape pairing whose family
-    /// the name carries, so a GGUF with no name keeps the older default.
-    pub family: Option<&'static str>,
-}
+/// The Hugging Face repo that publishes the DFlash pairing index.
+pub const DFLASH_PAIRING_INDEX_REPO: &str = "meshllm/dflash-pairings";
+/// The index file in [`DFLASH_PAIRING_INDEX_REPO`].
+pub const DFLASH_PAIRING_INDEX_FILE: &str = "index.json";
+/// The one index commit this release trusts.
+pub const DFLASH_PAIRING_INDEX_REVISION: Option<&str> =
+    Some("91c1cb2cc50f4087ac73a7a74b01670a18015059");
 
-/// A DFlash draft pinned on Hugging Face.
-#[derive(Debug, PartialEq, Eq)]
-pub struct DFlashDraftSource {
+/// A pairing index file pinned to one commit of a Hugging Face repo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DFlashPairingIndexPin {
     pub repo: &'static str,
     pub revision: &'static str,
     pub file: &'static str,
-    pub sha256: &'static str,
-    /// File size, which the memory plan charges before the draft is fetched.
-    pub bytes: u64,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct DFlashPairing {
-    pub target: DFlashTarget,
-    pub draft: DFlashDraftSource,
-    /// Most draft tokens per block the draft can propose (its block size - 1).
-    pub max_draft_tokens: u32,
-    /// The backends this pairing is the default on.
-    pub backends: Backends,
+impl DFlashPairingIndexPin {
+    /// The index this release trusts, once it is published.
+    pub fn shipped() -> Option<Self> {
+        DFLASH_PAIRING_INDEX_REVISION.map(|revision| Self {
+            repo: DFLASH_PAIRING_INDEX_REPO,
+            revision,
+            file: DFLASH_PAIRING_INDEX_FILE,
+        })
+    }
+
+    /// Where the Hugging Face cache keeps the index once fetched.
+    pub fn cache_path(&self) -> PathBuf {
+        huggingface_snapshot_path(self.repo, RepoTypeModel, self.revision).join(self.file)
+    }
 }
 
-/// Where a pairing applies, so one target can default to a different draft
-/// per backend.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub enum Backends {
-    All,
-    Metal,
-    NotMetal,
+/// Reads and validates a pairing index file.
+pub fn load_dflash_pairing_index(path: &Path) -> Result<DFlashPairingIndex> {
+    let json = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    DFlashPairingIndex::from_json(&json)
+        .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))
 }
 
-pub(super) const DFLASH_PAIRINGS: &[DFlashPairing] = &[
-    // Qwen3.5-9B; the draft reads target layers 2..=30 at width 4096.
-    DFlashPairing {
-        target: DFlashTarget {
-            architecture: "qwen35",
-            layer_count: 32,
-            embedding_length: 4096,
-            expert_count: 0,
-            family: None,
+static INSTALLED_INDEX: RwLock<Option<Arc<Vec<DFlashPairing>>>> = RwLock::new(None);
+static BOOTSTRAP_PAIRINGS: LazyLock<Arc<Vec<DFlashPairing>>> =
+    LazyLock::new(|| Arc::new(bootstrap_pairings()));
+
+/// Makes `index` the source of default pairings for later loads, in place of
+/// the bootstrap table.
+pub fn install_dflash_pairing_index(index: DFlashPairingIndex) {
+    if let Ok(mut installed) = INSTALLED_INDEX.write() {
+        *installed = Some(Arc::new(index.pairings));
+    }
+}
+
+/// Whether a pairing index has been installed.
+pub fn dflash_pairing_index_installed() -> bool {
+    INSTALLED_INDEX
+        .read()
+        .is_ok_and(|installed| installed.is_some())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Pairings a test resolves against instead of the process-wide source.
+    static TEST_PAIRINGS: std::cell::RefCell<Option<Arc<Vec<DFlashPairing>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Resolves on this thread against `pairings` until the guard drops.
+#[cfg(test)]
+pub(super) fn with_test_pairings(pairings: Vec<DFlashPairing>) -> impl Drop {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_PAIRINGS.with(|cell| cell.borrow_mut().take());
+        }
+    }
+    TEST_PAIRINGS.with(|cell| *cell.borrow_mut() = Some(Arc::new(pairings)));
+    Reset
+}
+
+/// The pairings plain GGUF loads default from: the installed index, else the
+/// bootstrap table.
+fn active_pairings() -> Arc<Vec<DFlashPairing>> {
+    #[cfg(test)]
+    if let Some(pairings) = TEST_PAIRINGS.with(|cell| cell.borrow().clone()) {
+        return pairings;
+    }
+    INSTALLED_INDEX
+        .read()
+        .ok()
+        .and_then(|installed| installed.clone())
+        .unwrap_or_else(|| BOOTSTRAP_PAIRINGS.clone())
+}
+
+/// Where a default DFlash draft was chosen from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DFlashPairingSource {
+    /// The layer package's `dflash` proposer.
+    Package,
+    /// The published pairing index, or the bootstrap table until it is cached.
+    Catalog,
+}
+
+/// A draft chosen by default, with the target it must fit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefaultDFlash {
+    pub pairing: DFlashPairing,
+    /// The target layers a package proposer declares the draft reads; the
+    /// draft's header must name exactly these.
+    pub target_layers: Option<Vec<u32>>,
+    pub source: DFlashPairingSource,
+}
+
+/// The pairings this release ships, used only until the published index is
+/// cached.
+///
+/// TODO: delete once `meshllm/dflash-pairings` is published and
+/// [`DFLASH_PAIRING_INDEX_REVISION`] pins it; the index then carries these
+/// pairings (`skippy/evals/dflash-pairings/index.json` is generated from this
+/// table).
+pub(super) fn bootstrap_pairings() -> Vec<DFlashPairing> {
+    vec![
+        // Qwen3.5-9B; the draft reads target layers 2..=30 at width 4096.
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "qwen35".to_string(),
+                layer_count: 32,
+                embedding_length: 4096,
+                expert_count: 0,
+                family: None,
+            },
+            draft: DFlashDraft {
+                repo: "AtomicChat/Qwen3.5-9B-DFlash-GGUF".to_string(),
+                revision: "c7c69923d77a9aa0004b410d3a7a3dbb64591d41".to_string(),
+                file: "Qwen3.5-9B-DFlash.Q8_0.gguf".to_string(),
+                sha256: "27b9d18e605aea9c50ef506e4b63921e0dc624cc91c63c60617a8295f153d436"
+                    .to_string(),
+                bytes: 1_383_768_224,
+            },
+            max_draft_tokens: 15,
+            backends: DFlashBackends::All,
         },
-        draft: DFlashDraftSource {
-            repo: "AtomicChat/Qwen3.5-9B-DFlash-GGUF",
-            revision: "c7c69923d77a9aa0004b410d3a7a3dbb64591d41",
-            file: "Qwen3.5-9B-DFlash.Q8_0.gguf",
-            sha256: "27b9d18e605aea9c50ef506e4b63921e0dc624cc91c63c60617a8295f153d436",
-            bytes: 1_383_768_224,
+        // Qwen3.6-27B; the draft reads target layers 2..=62 at width 5120.
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "qwen35".to_string(),
+                layer_count: 64,
+                embedding_length: 5120,
+                expert_count: 0,
+                family: None,
+            },
+            draft: DFlashDraft {
+                repo: "AtomicChat/Qwen3.6-27B-DFlash-GGUF".to_string(),
+                revision: "a3d4fb1eff6f268cbbdf808042f6902cc17f5458".to_string(),
+                file: "Qwen3.6-27B-DFlash.Q8_0.gguf".to_string(),
+                sha256: "b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1"
+                    .to_string(),
+                bytes: 1_849_481_472,
+            },
+            max_draft_tokens: 15,
+            backends: DFlashBackends::All,
         },
-        max_draft_tokens: 15,
-        backends: Backends::All,
-    },
-    // Qwen3.6-27B; the draft reads target layers 2..=62 at width 5120.
-    DFlashPairing {
-        target: DFlashTarget {
-            architecture: "qwen35",
-            layer_count: 64,
-            embedding_length: 5120,
-            expert_count: 0,
-            family: None,
+        // Qwen3.8-27B has Qwen3.6-27B's shape (its NextN block is not executed), so
+        // only the name tells them apart. A DFlash2 draft reading target layers
+        // 6..=62 at width 5120. It replaces the default native MTP: greedy chat
+        // decodes 44.0 tok/s on a DGX Spark (20.4 MTP, 12.7 off) and 77.0 on an
+        // M3 Ultra (39.0 MTP, 31.2 off); agentic coding on the Spark 28.7 (16.5
+        // MTP). Sampled at T=0.7, MTP is slower than plain decoding on both.
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "qwen35".to_string(),
+                layer_count: 64,
+                embedding_length: 5120,
+                expert_count: 0,
+                family: Some("Qwen3.8".to_string()),
+            },
+            draft: DFlashDraft {
+                repo: "z-lab/Qwen3.8-27B-DFlash2-GGUF".to_string(),
+                revision: "2d9571f8ce46e151f61c6499c99dee6079e1d610".to_string(),
+                file: "Qwen3.8-27B-DFlash2-Q8_0.gguf".to_string(),
+                sha256: "c18e800daedc59ca68fd13b6a856d795746af6d399a9279ac6a277d1d422f87e"
+                    .to_string(),
+                bytes: 2_056_414_816,
+            },
+            max_draft_tokens: 7,
+            backends: DFlashBackends::All,
         },
-        draft: DFlashDraftSource {
-            repo: "AtomicChat/Qwen3.6-27B-DFlash-GGUF",
-            revision: "a3d4fb1eff6f268cbbdf808042f6902cc17f5458",
-            file: "Qwen3.6-27B-DFlash.Q8_0.gguf",
-            sha256: "b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1",
-            bytes: 1_849_481_472,
+        // Qwen3.6-35B-A3B; a DFlash2 draft (8-token blocks with a path selector)
+        // reading target layers 2..=38 at width 2048. On a DGX Spark it decodes
+        // 107.6 tok/s adaptive against 102.6 for the original DFlash draft.
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "qwen35moe".to_string(),
+                layer_count: 40,
+                embedding_length: 2048,
+                expert_count: 256,
+                family: None,
+            },
+            draft: DFlashDraft {
+                repo: "aminya/Qwen3.6-35B-A3B-DFlash2-GGUF".to_string(),
+                revision: "1e26e3499d865b9d2fc55e019d65b3f0e8ab6846".to_string(),
+                file: "Qwen3.6-35B-A3B-DFlash2-Q8_0.gguf".to_string(),
+                sha256: "69bc81f5344dfeb67bcfc09277dd9617500fca1823f72e6e08d5df92e73a8b44"
+                    .to_string(),
+                bytes: 570_468_544,
+            },
+            max_draft_tokens: 7,
+            backends: DFlashBackends::NotMetal,
         },
-        max_draft_tokens: 15,
-        backends: Backends::All,
-    },
-    // Qwen3.8-27B has Qwen3.6-27B's shape (its NextN block is not executed), so
-    // only the name tells them apart. A DFlash2 draft reading target layers
-    // 6..=62 at width 5120. It replaces the default native MTP: greedy chat
-    // decodes 44.0 tok/s on a DGX Spark (20.4 MTP, 12.7 off) and 77.0 on an
-    // M3 Ultra (39.0 MTP, 31.2 off); agentic coding on the Spark 28.7 (16.5
-    // MTP). Sampled at T=0.7, MTP is slower than plain decoding on both.
-    DFlashPairing {
-        target: DFlashTarget {
-            architecture: "qwen35",
-            layer_count: 64,
-            embedding_length: 5120,
-            expert_count: 0,
-            family: Some("Qwen3.8"),
+        // Qwen3.6-35B-A3B under Metal keeps the original DFlash draft: at cap 6 an
+        // M3 Ultra decodes 168.5 tok/s with it against 160.9 with DFlash2.
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "qwen35moe".to_string(),
+                layer_count: 40,
+                embedding_length: 2048,
+                expert_count: 256,
+                family: None,
+            },
+            draft: DFlashDraft {
+                repo: "Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp".to_string(),
+                revision: "2aa57b642f211d2639083954c5b66d9c1ee503fc".to_string(),
+                file: "Qwen3.6-35B-A3B-DFlash-Q8_0.gguf".to_string(),
+                sha256: "724ac8a102763e0d896cd49bf558fdf5bfdb146ec9f7097d18b035e4a95eac3f"
+                    .to_string(),
+                bytes: 421_060_800,
+            },
+            max_draft_tokens: 15,
+            backends: DFlashBackends::Metal,
         },
-        draft: DFlashDraftSource {
-            repo: "z-lab/Qwen3.8-27B-DFlash2-GGUF",
-            revision: "2d9571f8ce46e151f61c6499c99dee6079e1d610",
-            file: "Qwen3.8-27B-DFlash2-Q8_0.gguf",
-            sha256: "c18e800daedc59ca68fd13b6a856d795746af6d399a9279ac6a277d1d422f87e",
-            bytes: 2_056_414_816,
+        // Qwen3-Coder-Next; the draft reads target layers 4..=44 at width 2048.
+        // With 512 experts, verifying 8 rows costs 2.4 decode steps on a DGX Spark
+        // (1.15 for Qwen3.5-9B), and every block size measured slower than plain
+        // decoding there (59 tok/s off; 38-55 with DFlash). An M3 Ultra gains 1.12x.
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "qwen3next".to_string(),
+                layer_count: 48,
+                embedding_length: 2048,
+                expert_count: 512,
+                family: None,
+            },
+            draft: DFlashDraft {
+                repo: "AtomicChat/Qwen3-Coder-Next-DFlash-GGUF".to_string(),
+                revision: "f5b4c9d2511678f75a41b3d3de5d9e379dd88768".to_string(),
+                file: "Qwen3-Coder-Next-DFlash.Q8_0.gguf".to_string(),
+                sha256: "139081af2f9f634b3b8bce8f75a0449f92bcb75ae7a2e32abaf1bcdf6f4a7952"
+                    .to_string(),
+                bytes: 509_674_720,
+            },
+            max_draft_tokens: 15,
+            backends: DFlashBackends::Metal,
         },
-        max_draft_tokens: 7,
-        backends: Backends::All,
-    },
-    // Qwen3.6-35B-A3B; a DFlash2 draft (8-token blocks with a path selector)
-    // reading target layers 2..=38 at width 2048. On a DGX Spark it decodes
-    // 107.6 tok/s adaptive against 102.6 for the original DFlash draft.
-    DFlashPairing {
-        target: DFlashTarget {
-            architecture: "qwen35moe",
-            layer_count: 40,
-            embedding_length: 2048,
-            expert_count: 256,
-            family: None,
-        },
-        draft: DFlashDraftSource {
-            repo: "aminya/Qwen3.6-35B-A3B-DFlash2-GGUF",
-            revision: "1e26e3499d865b9d2fc55e019d65b3f0e8ab6846",
-            file: "Qwen3.6-35B-A3B-DFlash2-Q8_0.gguf",
-            sha256: "69bc81f5344dfeb67bcfc09277dd9617500fca1823f72e6e08d5df92e73a8b44",
-            bytes: 570_468_544,
-        },
-        max_draft_tokens: 7,
-        backends: Backends::NotMetal,
-    },
-    // Qwen3.6-35B-A3B under Metal keeps the original DFlash draft: at cap 6 an
-    // M3 Ultra decodes 168.5 tok/s with it against 160.9 with DFlash2.
-    DFlashPairing {
-        target: DFlashTarget {
-            architecture: "qwen35moe",
-            layer_count: 40,
-            embedding_length: 2048,
-            expert_count: 256,
-            family: None,
-        },
-        draft: DFlashDraftSource {
-            repo: "Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp",
-            revision: "2aa57b642f211d2639083954c5b66d9c1ee503fc",
-            file: "Qwen3.6-35B-A3B-DFlash-Q8_0.gguf",
-            sha256: "724ac8a102763e0d896cd49bf558fdf5bfdb146ec9f7097d18b035e4a95eac3f",
-            bytes: 421_060_800,
-        },
-        max_draft_tokens: 15,
-        backends: Backends::Metal,
-    },
-    // Qwen3-Coder-Next; the draft reads target layers 4..=44 at width 2048.
-    // With 512 experts, verifying 8 rows costs 2.4 decode steps on a DGX Spark
-    // (1.15 for Qwen3.5-9B), and every block size measured slower than plain
-    // decoding there (59 tok/s off; 38-55 with DFlash). An M3 Ultra gains 1.12x.
-    DFlashPairing {
-        target: DFlashTarget {
-            architecture: "qwen3next",
-            layer_count: 48,
-            embedding_length: 2048,
-            expert_count: 512,
-            family: None,
-        },
-        draft: DFlashDraftSource {
-            repo: "AtomicChat/Qwen3-Coder-Next-DFlash-GGUF",
-            revision: "f5b4c9d2511678f75a41b3d3de5d9e379dd88768",
-            file: "Qwen3-Coder-Next-DFlash.Q8_0.gguf",
-            sha256: "139081af2f9f634b3b8bce8f75a0449f92bcb75ae7a2e32abaf1bcdf6f4a7952",
-            bytes: 509_674_720,
-        },
-        max_draft_tokens: 15,
-        backends: Backends::Metal,
-    },
-];
+    ]
+}
 
 /// The known pairing for the target `meta` describes on this backend.
-pub(super) fn pairing_for_target(
+pub(super) fn pairing_for_target(meta: &GgufCompactMeta, metal: bool) -> Option<DefaultDFlash> {
+    pairing_in(&active_pairings(), meta, metal).map(|pairing| DefaultDFlash {
+        pairing: pairing.clone(),
+        target_layers: None,
+        source: DFlashPairingSource::Catalog,
+    })
+}
+
+fn pairing_in<'a>(
+    pairings: &'a [DFlashPairing],
     meta: &GgufCompactMeta,
     metal: bool,
-) -> Option<&'static DFlashPairing> {
+) -> Option<&'a DFlashPairing> {
     let name = meta.model_name().unwrap_or_default();
-    DFLASH_PAIRINGS.iter().find(|pairing| {
-        pairing.target.matches_shape(meta)
-            && pairing.applies_on(metal)
-            && match pairing.target.family {
+    pairings.iter().find(|pairing| {
+        matches_shape(&pairing.target, meta)
+            && pairing.backends.applies_on(metal)
+            && match pairing.target.family.as_deref() {
                 Some(family) => names_family(name, family),
-                None => !DFLASH_PAIRINGS.iter().any(|other| {
+                None => !pairings.iter().any(|other| {
                     other.target.same_shape(&pairing.target)
                         && other
                             .target
                             .family
+                            .as_deref()
                             .is_some_and(|family| names_family(name, family))
                 }),
             }
     })
+}
+
+/// The draft a layer package declares for `requested_strategy` (`auto` meaning
+/// the package default) on this backend: the first proposer of a `dflash`
+/// strategy whose backends apply. `None` when that strategy is not `dflash`,
+/// no proposer applies here, or the target's shape is unknown.
+pub(super) fn package_pairing(
+    generation: &PackageGenerationInfo,
+    requested_strategy: &str,
+    meta: Option<&GgufCompactMeta>,
+    metal: bool,
+) -> Option<DefaultDFlash> {
+    let speculative = generation.speculative_decoding.as_ref()?;
+    let name = match requested_strategy {
+        "auto" => speculative.default.as_str(),
+        name => name,
+    };
+    let strategy = speculative.strategies.get(name)?;
+    if strategy.strategy_type != "dflash" {
+        return None;
+    }
+    let proposer = strategy
+        .proposers
+        .iter()
+        .filter_map(|name| speculative.proposers.get(name)?.dflash.as_ref())
+        .find(|proposer| proposer.backends.applies_on(metal))?;
+    let meta = meta?;
+    Some(DefaultDFlash {
+        pairing: DFlashPairing {
+            target: DFlashTarget {
+                architecture: meta.architecture.clone(),
+                layer_count: meta.executable_layer_count()?,
+                embedding_length: meta.embedding_size,
+                expert_count: meta.expert_count,
+                family: None,
+            },
+            draft: proposer.draft.clone(),
+            max_draft_tokens: proposer.max_draft_tokens,
+            backends: proposer.backends,
+        },
+        target_layers: Some(proposer.target_layers.clone()),
+        source: DFlashPairingSource::Package,
+    })
+}
+
+/// Whether a package's selected strategy is `dflash`, so the package, not the
+/// catalog, decides the draft.
+pub(super) fn package_selects_dflash(
+    generation: Option<&PackageGenerationInfo>,
+    requested_strategy: &str,
+) -> bool {
+    generation
+        .and_then(|generation| generation.speculative_decoding.as_ref())
+        .and_then(|speculative| {
+            let name = match requested_strategy {
+                "auto" => speculative.default.as_str(),
+                name => name,
+            };
+            speculative.strategies.get(name)
+        })
+        .is_some_and(|strategy| strategy.strategy_type == "dflash")
 }
 
 /// Whether `name` carries `family` as a whole token, ignoring case, so
@@ -230,61 +391,24 @@ pub(super) fn default_dflash_max_draft_tokens(metal: bool) -> u32 {
     if metal { 6 } else { 15 }
 }
 
-impl DFlashPairing {
-    /// Whether this pairing is a default on the given backend.
-    fn applies_on(&self, metal: bool) -> bool {
-        match self.backends {
-            Backends::All => true,
-            Backends::Metal => metal,
-            Backends::NotMetal => !metal,
-        }
-    }
+fn matches_shape(target: &DFlashTarget, meta: &GgufCompactMeta) -> bool {
+    meta.architecture == target.architecture
+        && meta.executable_layer_count() == Some(target.layer_count)
+        && meta.embedding_size == target.embedding_length
+        && meta.expert_count == target.expert_count
 }
 
-impl DFlashTarget {
-    fn matches_shape(&self, meta: &GgufCompactMeta) -> bool {
-        meta.architecture == self.architecture
-            && meta.executable_layer_count() == Some(self.layer_count)
-            && meta.embedding_size == self.embedding_length
-            && meta.expert_count == self.expert_count
-    }
-
-    fn same_shape(&self, other: &DFlashTarget) -> bool {
-        self.architecture == other.architecture
-            && self.layer_count == other.layer_count
-            && self.embedding_length == other.embedding_length
-            && self.expert_count == other.expert_count
-    }
+/// Where the Hugging Face cache keeps `draft` once fetched.
+pub fn dflash_draft_cache_path(draft: &DFlashDraft) -> PathBuf {
+    huggingface_snapshot_path(&draft.repo, RepoTypeModel, &draft.revision).join(&draft.file)
 }
 
-impl DFlashDraftSource {
-    /// Where the Hugging Face cache keeps this draft once fetched.
-    pub fn cache_path(&self) -> PathBuf {
-        huggingface_snapshot_path(self.repo, RepoTypeModel, self.revision).join(self.file)
-    }
-}
-
-impl DFlashPairing {
-    /// The catalog pairing whose draft is `file` in `repo` at `revision` with
-    /// `sha256`, so a split stage fetches only drafts this node pins too.
-    pub fn for_draft(
-        repo: &str,
-        revision: &str,
-        file: &str,
-        sha256: &str,
-    ) -> Option<&'static DFlashPairing> {
-        DFLASH_PAIRINGS.iter().find(|pairing| {
-            let draft = &pairing.draft;
-            draft.repo == repo
-                && draft.revision == revision
-                && draft.file == file
-                && draft.sha256 == sha256
-        })
-    }
-
+impl DefaultDFlash {
     /// Refuses a draft that cannot read this target: it must be a DFlash GGUF
-    /// as wide as the target and read only layers the target has.
+    /// as wide as the target that reads only layers the target has, and
+    /// exactly the layers a package proposer declares.
     pub fn check_draft(&self, path: &Path) -> Result<()> {
+        let target = &self.pairing.target;
         let Some(meta) = scan_gguf_compact_meta(path) else {
             bail!("{} is not a readable GGUF", path.display());
         };
@@ -294,20 +418,23 @@ impl DFlashPairing {
             meta.architecture
         );
         ensure!(
-            meta.embedding_size == self.target.embedding_length,
+            meta.embedding_size == target.embedding_length,
             "draft hidden size {} does not match target hidden size {}",
             meta.embedding_size,
-            self.target.embedding_length
+            target.embedding_length
         );
         let layers = scan_gguf_dflash_target_layers(path).unwrap_or_default();
         ensure!(!layers.is_empty(), "draft names no target layers");
-        if let Some(layer) = layers
-            .iter()
-            .find(|&&layer| layer >= self.target.layer_count)
-        {
+        if let Some(layer) = layers.iter().find(|&&layer| layer >= target.layer_count) {
             bail!(
                 "draft reads target layer {layer}, but the target has {} layers",
-                self.target.layer_count
+                target.layer_count
+            );
+        }
+        if let Some(declared) = &self.target_layers {
+            ensure!(
+                &layers == declared,
+                "draft reads target layers {layers:?}, but the package declares {declared:?}"
             );
         }
         Ok(())
@@ -329,6 +456,28 @@ impl DFlashPairing {
         );
         Ok(())
     }
+}
+
+/// Refuses a split final stage's draft unless it is a DFlash GGUF reading
+/// exactly the target layers the plan forwards. A plan from a planner without
+/// its own copy forwards no layers yet; the draft must then name some, and the
+/// final stage reports them back to the planner.
+pub fn check_split_dflash_draft(path: &Path, target_layers: &[u32]) -> Result<()> {
+    let Some(meta) = scan_gguf_compact_meta(path) else {
+        bail!("{} is not a readable GGUF", path.display());
+    };
+    ensure!(
+        meta.architecture == "dflash",
+        "draft architecture is {}, expected dflash",
+        meta.architecture
+    );
+    let layers = scan_gguf_dflash_target_layers(path).unwrap_or_default();
+    ensure!(!layers.is_empty(), "draft names no target layers");
+    ensure!(
+        target_layers.is_empty() || layers == target_layers,
+        "draft reads target layers {layers:?}, but the plan forwards {target_layers:?}"
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -358,7 +507,7 @@ mod tests {
 
     #[test]
     fn a_draft_with_another_vocabulary_is_refused() {
-        let pairing = &DFLASH_PAIRINGS[0];
+        let pairing = catalog_default(bootstrap_pairings().remove(0));
         let target = vocabulary_file(5);
         let same = vocabulary_file(5);
         let other = vocabulary_file(6);
@@ -402,33 +551,160 @@ mod tests {
         file
     }
 
+    fn repo(meta: &GgufCompactMeta, metal: bool) -> Option<String> {
+        pairing_in(&bootstrap_pairings(), meta, metal).map(|pairing| pairing.draft.repo.clone())
+    }
+
+    const INDEX_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../skippy/evals/dflash-pairings/index.json"
+    );
+
+    /// The bootstrap table as the index `meshllm/dflash-pairings` publishes.
+    fn generated_index_json() -> String {
+        let index = DFlashPairingIndex {
+            schema_version: skippy_package_format::DFLASH_PAIRING_INDEX_SCHEMA_VERSION,
+            pairings: bootstrap_pairings(),
+        };
+        serde_json::to_string_pretty(&index).unwrap() + "\n"
+    }
+
+    /// `UPDATE_DFLASH_PAIRINGS_INDEX=1` rewrites the checked-in index from
+    /// the bootstrap table.
+    #[test]
+    fn the_checked_in_index_is_the_bootstrap_table() {
+        let generated = generated_index_json();
+        if std::env::var_os("UPDATE_DFLASH_PAIRINGS_INDEX").is_some() {
+            std::fs::write(INDEX_PATH, &generated).unwrap();
+        }
+        let checked_in = std::fs::read_to_string(INDEX_PATH).unwrap();
+        assert_eq!(
+            checked_in, generated,
+            "regenerate with UPDATE_DFLASH_PAIRINGS_INDEX=1 cargo test -p mesh-llm-skippy-adapter the_checked_in_index"
+        );
+        let index = load_dflash_pairing_index(Path::new(INDEX_PATH)).unwrap();
+        assert_eq!(index.pairings, bootstrap_pairings());
+    }
+
+    /// Every target the bootstrap table pairs by default, named as its GGUF
+    /// names it: Qwen3.5-9B, Qwen3.6-27B, Qwen3.8-27B (with its NextN block),
+    /// Qwen3.6-35B-A3B and Qwen3-Coder-Next.
+    fn default_targets() -> Vec<(&'static str, GgufCompactMeta)> {
+        let mut qwen38 = named(target_meta("qwen35", 65, 5120, 0), "Qwen3.8-27B");
+        qwen38.nextn_predict_layers = 1;
+        vec![
+            (
+                "Qwen3.5-9B",
+                named(target_meta("qwen35", 32, 4096, 0), "Qwen3.5-9B"),
+            ),
+            (
+                "Qwen3.6-27B",
+                named(target_meta("qwen35", 64, 5120, 0), "Qwen3.6-27B"),
+            ),
+            ("Qwen3.8-27B", qwen38),
+            (
+                "Qwen3.6-35B-A3B",
+                named(target_meta("qwen35moe", 40, 2048, 256), "Qwen3.6-35B-A3B"),
+            ),
+            (
+                "Qwen3-Coder-Next",
+                named(target_meta("qwen3next", 48, 2048, 512), "Qwen3-Coder-Next"),
+            ),
+        ]
+    }
+
+    /// The published index: the checked-in copy of `index.json` at
+    /// [`DFLASH_PAIRING_INDEX_REVISION`], or the file
+    /// `DFLASH_PAIRING_INDEX_FIXTURE` names (a fresh download, say).
+    fn published_index() -> DFlashPairingIndex {
+        let path = std::env::var_os("DFLASH_PAIRING_INDEX_FIXTURE")
+            .map_or_else(|| PathBuf::from(INDEX_PATH), PathBuf::from);
+        load_dflash_pairing_index(&path).unwrap()
+    }
+
+    #[test]
+    fn the_published_index_pairs_every_default_target_as_the_table_does() {
+        let index = published_index();
+        let table = bootstrap_pairings();
+        for (model, meta) in default_targets() {
+            for metal in [true, false] {
+                assert_eq!(
+                    pairing_in(&index.pairings, &meta, metal),
+                    pairing_in(&table, &meta, metal),
+                    "{model}, metal = {metal}"
+                );
+                let _index = with_test_pairings(index.pairings.clone());
+                let from_index = pairing_for_target(&meta, metal);
+                drop(_index);
+                let _table = with_test_pairings(table.clone());
+                assert_eq!(
+                    from_index,
+                    pairing_for_target(&meta, metal),
+                    "{model}, metal = {metal}"
+                );
+            }
+        }
+
+        let repo = |model: &str, metal| {
+            let (_, meta) = default_targets()
+                .into_iter()
+                .find(|(name, _)| *name == model)
+                .unwrap();
+            pairing_in(&index.pairings, &meta, metal).map(|pairing| pairing.draft.repo.clone())
+        };
+        for metal in [true, false] {
+            assert_eq!(
+                repo("Qwen3.5-9B", metal).as_deref(),
+                Some("AtomicChat/Qwen3.5-9B-DFlash-GGUF")
+            );
+            assert_eq!(
+                repo("Qwen3.6-27B", metal).as_deref(),
+                Some("AtomicChat/Qwen3.6-27B-DFlash-GGUF")
+            );
+            assert_eq!(
+                repo("Qwen3.8-27B", metal).as_deref(),
+                Some("z-lab/Qwen3.8-27B-DFlash2-GGUF")
+            );
+        }
+        assert_eq!(
+            repo("Qwen3.6-35B-A3B", false).as_deref(),
+            Some("aminya/Qwen3.6-35B-A3B-DFlash2-GGUF")
+        );
+        assert_eq!(
+            repo("Qwen3.6-35B-A3B", true).as_deref(),
+            Some("Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp")
+        );
+        assert_eq!(
+            repo("Qwen3-Coder-Next", true).as_deref(),
+            Some("AtomicChat/Qwen3-Coder-Next-DFlash-GGUF")
+        );
+        assert_eq!(repo("Qwen3-Coder-Next", false), None);
+    }
+
     #[test]
     fn targets_match_by_metadata_whatever_the_quant() {
-        let repos = |meta: &GgufCompactMeta| pairing_for_target(meta, false).map(|p| p.draft.repo);
         assert_eq!(
-            repos(&target_meta("qwen35", 32, 4096, 0)),
+            repo(&target_meta("qwen35", 32, 4096, 0), false).as_deref(),
             Some("AtomicChat/Qwen3.5-9B-DFlash-GGUF")
         );
         assert_eq!(
-            repos(&target_meta("qwen35", 64, 5120, 0)),
+            repo(&target_meta("qwen35", 64, 5120, 0), false).as_deref(),
             Some("AtomicChat/Qwen3.6-27B-DFlash-GGUF")
         );
         assert_eq!(
-            repos(&target_meta("qwen35moe", 40, 2048, 256)),
+            repo(&target_meta("qwen35moe", 40, 2048, 256), false).as_deref(),
             Some("aminya/Qwen3.6-35B-A3B-DFlash2-GGUF")
         );
         // A NextN block appended to the trunk is not a decoder layer.
         let mut with_mtp = target_meta("qwen35", 33, 4096, 0);
         with_mtp.nextn_predict_layers = 1;
-        assert!(pairing_for_target(&with_mtp, false).is_some());
+        assert!(repo(&with_mtp, false).is_some());
     }
 
     #[test]
     fn qwen38_and_qwen36_27b_share_a_shape_and_are_told_apart_by_name() {
         const QWEN36: &str = "AtomicChat/Qwen3.6-27B-DFlash-GGUF";
         const QWEN38: &str = "z-lab/Qwen3.8-27B-DFlash2-GGUF";
-        let repo =
-            |meta: &GgufCompactMeta, metal| pairing_for_target(meta, metal).map(|p| p.draft.repo);
         let with_mtp = |mut meta: GgufCompactMeta| {
             meta.layer_count += 1;
             meta.nextn_predict_layers = 1;
@@ -438,10 +714,15 @@ mod tests {
 
         let qwen38 = with_mtp(named(dense.clone(), "Qwen3.8-27B"));
         for metal in [true, false] {
-            assert_eq!(repo(&qwen38, metal), Some(QWEN38));
+            assert_eq!(repo(&qwen38, metal).as_deref(), Some(QWEN38));
         }
-        let qwen38 = pairing_for_target(&qwen38, false).unwrap();
-        assert_eq!(qwen38.max_draft_tokens, 7);
+        let pairings = bootstrap_pairings();
+        assert_eq!(
+            pairing_in(&pairings, &qwen38, false)
+                .unwrap()
+                .max_draft_tokens,
+            7
+        );
 
         for meta in [
             dense.clone(),
@@ -450,31 +731,17 @@ mod tests {
             named(dense.clone(), "Huihui-Qwen3.6-27B-abliterated"),
             named(dense.clone(), "Qwen3.8x-27B"),
         ] {
-            assert_eq!(repo(&meta, false), Some(QWEN36), "{meta:?}");
+            assert_eq!(repo(&meta, false).as_deref(), Some(QWEN36), "{meta:?}");
         }
 
         // Only `general.name` set: still Qwen3.8, never the Qwen3.6 draft.
         let mut name_only = dense.clone();
         name_only.name = Some("qwen3.8 27B Instruct".to_string());
-        assert_eq!(repo(&name_only, false), Some(QWEN38));
+        assert_eq!(repo(&name_only, false).as_deref(), Some(QWEN38));
         // `general.basename` wins over `general.name`.
         let mut basename_first = named(dense, "Qwen3.6-27B");
         basename_first.name = Some("Qwen3.8-27B".to_string());
-        assert_eq!(repo(&basename_first, false), Some(QWEN36));
-    }
-
-    #[test]
-    fn a_pinned_draft_finds_its_pairing_and_nothing_else_does() {
-        for pairing in DFLASH_PAIRINGS {
-            let draft = &pairing.draft;
-            let found =
-                DFlashPairing::for_draft(draft.repo, draft.revision, draft.file, draft.sha256)
-                    .expect("catalog draft");
-            assert_eq!(found.draft, *draft);
-        }
-        let draft = &DFLASH_PAIRINGS[0].draft;
-        assert!(DFlashPairing::for_draft(draft.repo, "main", draft.file, draft.sha256).is_none());
-        assert!(DFlashPairing::for_draft(draft.repo, draft.revision, draft.file, "00").is_none());
+        assert_eq!(repo(&basename_first, false).as_deref(), Some(QWEN36));
     }
 
     #[test]
@@ -497,21 +764,19 @@ mod tests {
 
     #[test]
     fn drafts_are_chosen_per_backend() {
-        let repo =
-            |meta: &GgufCompactMeta, metal| pairing_for_target(meta, metal).map(|p| p.draft.repo);
         let coder = target_meta("qwen3next", 48, 2048, 512);
         assert_eq!(
-            repo(&coder, true),
+            repo(&coder, true).as_deref(),
             Some("AtomicChat/Qwen3-Coder-Next-DFlash-GGUF")
         );
         assert_eq!(repo(&coder, false), None);
         let moe = target_meta("qwen35moe", 40, 2048, 256);
         assert_eq!(
-            repo(&moe, false),
+            repo(&moe, false).as_deref(),
             Some("aminya/Qwen3.6-35B-A3B-DFlash2-GGUF")
         );
         assert_eq!(
-            repo(&moe, true),
+            repo(&moe, true).as_deref(),
             Some("Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp")
         );
         for dense in [
@@ -530,21 +795,23 @@ mod tests {
             target_meta("qwen35moe", 40, 2048, 128),
             target_meta("qwen3", 32, 4096, 0),
         ] {
-            assert_eq!(pairing_for_target(&meta, false), None, "{meta:?}");
-            assert_eq!(pairing_for_target(&meta, true), None, "{meta:?}");
+            assert_eq!(repo(&meta, false), None, "{meta:?}");
+            assert_eq!(repo(&meta, true), None, "{meta:?}");
         }
     }
 
     #[test]
     fn every_draft_is_pinned_to_a_commit_and_digest() {
-        for pairing in DFLASH_PAIRINGS {
+        DFlashPairingIndex {
+            schema_version: skippy_package_format::DFLASH_PAIRING_INDEX_SCHEMA_VERSION,
+            pairings: bootstrap_pairings(),
+        }
+        .validate()
+        .unwrap();
+        for pairing in bootstrap_pairings() {
             let draft = &pairing.draft;
-            assert_eq!(draft.revision.len(), 40, "{}", draft.repo);
-            assert_eq!(draft.sha256.len(), 64, "{}", draft.repo);
-            assert!(draft.bytes > 0, "{}", draft.repo);
             assert!(
-                draft
-                    .cache_path()
+                dflash_draft_cache_path(draft)
                     .ends_with(format!("snapshots/{}/{}", draft.revision, draft.file)),
                 "{}",
                 draft.repo
@@ -560,16 +827,25 @@ mod tests {
 
     #[test]
     fn every_draft_cap_fits_its_block() {
-        let moe = pairing_for_target(&target_meta("qwen35moe", 40, 2048, 256), false).unwrap();
+        let pairings = bootstrap_pairings();
+        let moe = pairing_in(&pairings, &target_meta("qwen35moe", 40, 2048, 256), false).unwrap();
         assert_eq!(moe.max_draft_tokens, 7);
-        for pairing in DFLASH_PAIRINGS {
+        for pairing in &pairings {
             assert!((1..=15).contains(&pairing.max_draft_tokens));
+        }
+    }
+
+    fn catalog_default(pairing: DFlashPairing) -> DefaultDFlash {
+        DefaultDFlash {
+            pairing,
+            target_layers: None,
+            source: DFlashPairingSource::Catalog,
         }
     }
 
     #[test]
     fn a_draft_must_fit_its_target() {
-        let pairing = &DFLASH_PAIRINGS[0];
+        let mut pairing = catalog_default(bootstrap_pairings().remove(0));
         let fits = draft_file("dflash", 4096, &[2, 6, 10, 14, 18, 22, 26, 30]);
         pairing.check_draft(fits.path()).unwrap();
 
@@ -582,5 +858,110 @@ mod tests {
             let error = pairing.check_draft(draft.path()).unwrap_err().to_string();
             assert!(error.contains(reason), "{error}");
         }
+
+        // A package proposer's declared target layers must be the draft's.
+        pairing.target_layers = Some(vec![2, 30]);
+        let error = pairing.check_draft(fits.path()).unwrap_err().to_string();
+        assert!(error.contains("package declares"), "{error}");
+        pairing.target_layers = Some(vec![2, 6, 10, 14, 18, 22, 26, 30]);
+        pairing.check_draft(fits.path()).unwrap();
+    }
+
+    #[test]
+    fn a_split_draft_must_read_the_layers_the_plan_forwards() {
+        let draft = draft_file("dflash", 5120, &[2, 62]);
+        check_split_dflash_draft(draft.path(), &[2, 62]).unwrap();
+        assert!(check_split_dflash_draft(draft.path(), &[2, 30]).is_err());
+        let ordinary = draft_file("qwen35", 5120, &[2, 62]);
+        assert!(check_split_dflash_draft(ordinary.path(), &[2, 62]).is_err());
+        // A planner without its own copy forwards no layers; the final stage
+        // reports the draft's.
+        check_split_dflash_draft(draft.path(), &[]).unwrap();
+        let no_layers = draft_file("dflash", 5120, &[]);
+        assert!(check_split_dflash_draft(no_layers.path(), &[]).is_err());
+    }
+
+    fn index_pairing(repo: &str, backends: DFlashBackends) -> DFlashPairing {
+        let mut pairing = bootstrap_pairings().remove(0);
+        pairing.draft.repo = repo.to_string();
+        pairing.backends = backends;
+        pairing
+    }
+
+    #[test]
+    fn an_index_entry_is_used_for_a_plain_gguf() {
+        let _pairings = with_test_pairings(vec![index_pairing(
+            "meshllm/indexed-draft",
+            DFlashBackends::All,
+        )]);
+        let chosen = pairing_for_target(&target_meta("qwen35", 32, 4096, 0), false).unwrap();
+        assert_eq!(chosen.pairing.draft.repo, "meshllm/indexed-draft");
+        assert_eq!(chosen.source, DFlashPairingSource::Catalog);
+        // The index replaces the bootstrap table outright.
+        assert!(pairing_for_target(&target_meta("qwen35", 64, 5120, 0), false).is_none());
+    }
+
+    #[test]
+    fn an_index_backend_policy_is_respected() {
+        let _pairings = with_test_pairings(vec![
+            index_pairing("meshllm/metal-draft", DFlashBackends::Metal),
+            index_pairing("meshllm/cuda-draft", DFlashBackends::NotMetal),
+        ]);
+        let meta = target_meta("qwen35", 32, 4096, 0);
+        let repo = |metal| pairing_for_target(&meta, metal).map(|chosen| chosen.pairing.draft.repo);
+        assert_eq!(repo(true).as_deref(), Some("meshllm/metal-draft"));
+        assert_eq!(repo(false).as_deref(), Some("meshllm/cuda-draft"));
+
+        let _pairings = with_test_pairings(vec![index_pairing(
+            "meshllm/metal-draft",
+            DFlashBackends::Metal,
+        )]);
+        assert!(pairing_for_target(&meta, false).is_none());
+    }
+
+    #[test]
+    fn a_cached_index_loads_from_the_hugging_face_cache_offline() {
+        let cache = tempfile::tempdir().unwrap();
+        let path = cache
+            .path()
+            .join("models--meshllm--dflash-pairings/snapshots/0123456789abcdef0123456789abcdef01234567/index.json");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut index = DFlashPairingIndex {
+            schema_version: 1,
+            pairings: vec![index_pairing("meshllm/cached-draft", DFlashBackends::All)],
+        };
+        std::fs::write(&path, serde_json::to_string(&index).unwrap()).unwrap();
+        let loaded = load_dflash_pairing_index(&path).unwrap();
+        assert_eq!(loaded, index);
+        let pairings = loaded.pairings;
+        assert_eq!(
+            pairing_in(&pairings, &target_meta("qwen35", 32, 4096, 0), false)
+                .map(|pairing| pairing.draft.repo.as_str()),
+            Some("meshllm/cached-draft")
+        );
+
+        // An index with a malformed digest is refused whole.
+        index.pairings[0].draft.sha256 = "not-a-digest".to_string();
+        std::fs::write(&path, serde_json::to_string(&index).unwrap()).unwrap();
+        let error = load_dflash_pairing_index(&path).unwrap_err().to_string();
+        assert!(error.contains("sha256"), "{error}");
+    }
+
+    #[test]
+    fn the_index_is_pinned_to_one_revision_of_its_repo() {
+        assert_eq!(DFLASH_PAIRING_INDEX_REPO, "meshllm/dflash-pairings");
+        assert_eq!(DFLASH_PAIRING_INDEX_FILE, "index.json");
+        if let Some(revision) = DFLASH_PAIRING_INDEX_REVISION {
+            assert_eq!(revision.len(), 40);
+            assert!(revision.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        }
+        let pin = DFlashPairingIndexPin {
+            repo: DFLASH_PAIRING_INDEX_REPO,
+            revision: "0123456789abcdef0123456789abcdef01234567",
+            file: DFLASH_PAIRING_INDEX_FILE,
+        };
+        assert!(pin.cache_path().ends_with(
+            "models--meshllm--dflash-pairings/snapshots/0123456789abcdef0123456789abcdef01234567/index.json"
+        ));
     }
 }

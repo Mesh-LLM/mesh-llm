@@ -851,6 +851,7 @@ pub(crate) mod tests {
                 model_name: "Qwen/Qwen3-Coder".into(),
                 avg_tokens_per_second_milli: 13_400,
                 throughput_samples: 27,
+                measurement: None,
             }],
             cache_affinity: None,
             display_rtt: None,

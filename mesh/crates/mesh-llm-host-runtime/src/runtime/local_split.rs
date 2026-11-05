@@ -1,3 +1,4 @@
+mod activation_codec;
 mod activation_edge;
 mod attestation;
 mod auto_balance;
@@ -45,6 +46,7 @@ const SPLIT_PARTICIPANT_STABLE_FOR: Duration = Duration::from_secs(2);
 const SPLIT_INITIAL_SHUTDOWN_GENERATION: u64 = 1;
 const SPLIT_COORDINATOR_LEASE_SECS: u64 = 4 * 60 * 60;
 
+use activation_codec::SplitActivationCodec;
 use coordinator::{
     SplitTopologyCoordinator, SplitTopologyGeneration, spawn_split_topology_coordinator,
     stop_split_generation,
@@ -273,6 +275,10 @@ pub(super) async fn start_runtime_split_model(
         planned_participants,
         stages,
     )
+    .with_activation_codec(loading::configured_split_activation_codec(
+        spec.mesh_config,
+        spec.config_model_id,
+    ))
     .with_admissions(stage_admissions)?;
     let mut loaded = load_split_runtime_generation(SplitGenerationLoadSpec {
         node: spec.node,

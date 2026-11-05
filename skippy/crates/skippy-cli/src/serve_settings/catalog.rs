@@ -838,7 +838,7 @@ pub const OPTIONS: &[OptionSpec] = &[
         "distributed",
         "activation_codec",
         Kind::Text,
-        "Stage activation codec: raw-f32-v1, f16-rne-v1, bf16-rne-v1, s8-row-f32-rne-v1",
+        "Stage activation codec: raw-f32-v1, f16-rne-v1, bf16-rne-v1, s8-row-f32-rne-v1, fp8-e4m3-row-f32-rne-v1, fp8-e4m3-block32-e8m0-rne-v1, fp8-e5m2-row-f32-rne-v1",
     ),
     option(
         "activation-codec-policy",

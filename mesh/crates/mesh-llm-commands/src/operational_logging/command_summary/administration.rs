@@ -24,9 +24,14 @@ pub(super) fn format_gpus(
 }
 
 pub(super) fn format_config(command: &mesh_llm_cli::ConfigCommand, assembly: &mut SummaryAssembly) {
-    let mesh_llm_cli::ConfigCommand::Validate { config_path, json } = command;
+    let mesh_llm_cli::ConfigCommand::Validate {
+        config_path,
+        memberships_config,
+        json,
+    } = command;
     assembly.command.push_str(" config validate");
     assembly.redact("--config-path", config_path.is_some());
+    assembly.redact("--memberships-config", memberships_config.is_some());
     assembly.flag("json", *json);
 }
 

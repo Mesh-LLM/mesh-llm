@@ -354,6 +354,14 @@ fn plugin_entry_settings() -> Vec<ConfigSettingSchema> {
             },
         ),
         plugin_setting(&format!("{plugin_prefix}.url"), ConfigValueSchema::Url),
+        // Resolved into the plugin launch spec, so a change applies when the
+        // node restarts.
+        plugin_setting(
+            &format!("{plugin_prefix}.models"),
+            ConfigValueSchema::Array {
+                items: Box::new(ConfigValueSchema::String),
+            },
+        ),
         plugin_setting(
             &format!("{plugin_prefix}.startup.connect_timeout_secs"),
             ConfigValueSchema::Integer,
@@ -766,6 +774,19 @@ fn skippy_settings(prefix: &str) -> Vec<ConfigSettingSchema> {
         basic_setting(
             &format!("{prefix}.prefill_chunk_schedule"),
             ConfigValueSchema::String,
+        ),
+        basic_setting(
+            &format!("{prefix}.activation_codec"),
+            string_enum([
+            "lossless",
+            "f16",
+            "bf16",
+            "s8-row",
+            "fp8-e4m3-row",
+            "fp8-e4m3-block32",
+            "fp8-e5m2-row",
+            "f32",
+        ]),
         ),
     ]
 }

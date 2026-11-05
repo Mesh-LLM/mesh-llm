@@ -38,6 +38,7 @@ use crate::frontend::generation::generation_event_to_completion_chunk;
 use crate::frontend::generation::generation_predicted_wait_error;
 use crate::frontend::generation::generation_queue_timeout_error;
 use crate::frontend::generation::template_exposes_reasoning;
+use crate::frontend::generation::{generation_ids, run_blocking_generation_worker};
 use crate::frontend::request::{
     apply_chat_request_defaults, apply_completion_request_defaults, chat_sampling_config,
     chat_template_options, completion_sampling_config, ensure_chat_runtime_features_supported,
@@ -882,39 +883,6 @@ pub(super) fn write_downstream_or_emit_forward_error(
     })
 }
 
-fn generation_ids(
-    cache: InferenceCacheHints,
-    agent_session_id: Option<&str>,
-    context: &InferenceRequestContext,
-) -> InferenceGenerationIds {
-    let frontend_request_id = context
-        .request_id()
-        .map(|request_id| request_id.as_uuid().into_bytes());
-    InferenceGenerationIds::new_with_trust(
-        cache,
-        agent_session_id,
-        context.has_trusted_agent_session(),
-        frontend_request_id,
-    )
-}
-
-pub(in crate::frontend) async fn run_blocking_generation_worker<T, F, P>(
-    permit: P,
-    context: InferenceRequestContext,
-    work: F,
-) -> Result<T, task::JoinError>
-where
-    T: Send + 'static,
-    F: FnOnce(skippy_inference_api::CancellationToken) -> T + Send + 'static,
-    P: Send + 'static,
-{
-    task::spawn_blocking(move || {
-        let _permit = permit;
-        work(context.cancellation_token())
-    })
-    .await
-}
-
 #[async_trait]
 impl InferenceBackend for StageOpenAiBackend {
     fn http_exchange_policy(
@@ -947,6 +915,8 @@ impl InferenceBackend for StageOpenAiBackend {
             .await
     }
 
+    /// Validate and prepare a chat request, then generate with its trusted execution context.
+    /// The context's scope follows prompt preparation, native request IDs and cache selection.
     async fn chat_completion_with_context(
         &self,
         request: ChatCompletionRequest,
@@ -973,7 +943,11 @@ impl InferenceBackend for StageOpenAiBackend {
                 let parse_chat_output = chat_output_parser_required(&request, &template_options);
                 let template_timer = PhaseTimer::start();
                 let prompt = self
-                    .prepare_chat_prompt_offloaded(&request, template_options.clone())
+                    .prepare_chat_prompt_offloaded(
+                        &request,
+                        template_options.clone(),
+                        context.clone(),
+                    )
                     .await?;
                 let mut template_attrs = self.openai_attrs(&ids);
                 template_attrs.insert(
@@ -1095,6 +1069,8 @@ impl InferenceBackend for StageOpenAiBackend {
         .await
     }
 
+    /// Prepare a chat stream with the caller's cancellation and execution scope.
+    /// The native worker retains the context while producing bounded response events.
     async fn chat_completion_stream(
         &self,
         request: ChatCompletionRequest,
@@ -1123,7 +1099,7 @@ impl InferenceBackend for StageOpenAiBackend {
                 let emit_reasoning = template_exposes_reasoning(&template_options);
                 let template_timer = PhaseTimer::start();
                 let prompt = self
-                    .prepare_chat_prompt_offloaded(&request, template_options)
+                    .prepare_chat_prompt_offloaded(&request, template_options, context.clone())
                     .await?;
                 let mut template_attrs = self.openai_attrs(&ids);
                 template_attrs.insert(
@@ -1391,11 +1367,13 @@ impl InferenceBackend for StageOpenAiBackend {
         let model = request.model.clone();
         let encoding_format = request.encoding_format.clone();
         let backend = self.clone();
-        let token_inputs = task::spawn_blocking(move || backend.prepare_embedding_inputs(request))
-            .await
-            .map_err(|error| {
-                InferenceError::backend(format!("embedding tokenization task failed: {error}"))
-            })??;
+        let token_inputs = run_blocking_generation_worker((), context.clone(), move |_| {
+            backend.prepare_embedding_inputs(request)
+        })
+        .await
+        .map_err(|error| {
+            InferenceError::backend(format!("embedding tokenization task failed: {error}"))
+        })??;
         let prompt_tokens = token_inputs.iter().map(Vec::len).sum::<usize>();
         let max_input_tokens = token_inputs.iter().map(Vec::len).max().unwrap_or_default();
         let ids = generation_ids(InferenceCacheHints::default(), None, &context);
@@ -1728,6 +1706,8 @@ impl StageOpenAiBackend {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Prepare and admit a generation, retaining context and permits in its blocking worker.
+    /// Cancellation returns an error while worker-owned leases prevent premature capacity reuse.
     async fn run_generation(
         &self,
         prompt: PreparedGenerationPrompt,
@@ -1743,7 +1723,7 @@ impl StageOpenAiBackend {
         } else {
             let backend = self.clone();
             let ids_for_tokenize = ids.clone();
-            task::spawn_blocking(move || {
+            run_blocking_generation_worker((), context.clone(), move |_| {
                 let prepared =
                     backend.prepare_text_prompt(&prompt, max_tokens, &ids_for_tokenize)?;
                 Ok::<_, InferenceError>((prompt, Some(prepared)))
@@ -1820,6 +1800,8 @@ impl StageOpenAiBackend {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Admit streaming generation and retain context and permits in the native worker.
+    /// Forward bounded output events and preserve cancellation through stream delivery.
     async fn run_generation_stream(
         &self,
         prompt: PreparedGenerationPrompt,
@@ -1838,7 +1820,7 @@ impl StageOpenAiBackend {
         } else {
             let backend = self.clone();
             let ids_for_tokenize = ids.clone();
-            task::spawn_blocking(move || {
+            run_blocking_generation_worker((), context.clone(), move |_| {
                 let prepared =
                     backend.prepare_text_prompt(&prompt, max_tokens, &ids_for_tokenize)?;
                 Ok::<_, InferenceError>((prompt, Some(prepared)))

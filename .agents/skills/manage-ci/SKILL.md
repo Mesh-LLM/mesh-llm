@@ -137,8 +137,10 @@ not need to contain the dependency manifest.
 checks repository Python tooling. Its typed policy is
 `ci/python-tooling-policy.json`: exact external dependency inputs, source pins,
 and executable invocation exceptions must retain their documented owners and
-reviewed occurrence counts. The census includes tracked and new nonignored
-files, including hidden directories. Python sources, shebangs, unapproved
+reviewed occurrence counts. Platform-specific runner prerequisite lists require
+separate exact entries; listing an interpreter as a prerequisite does not
+authorize executing or installing it. The census includes tracked and new
+nonignored files, including hidden directories. Python sources, shebangs, unapproved
 package inputs and direct interpreter invocations fail validation. Archived
 receipts and documentation examples remain data. Literal process checks are
 bounded static analysis; native caller tests must continue to reject the
@@ -494,6 +496,13 @@ checked-in expiry are the maintainer-controlled approval boundary.
   per-package feature-isolated builds otherwise retain large DWARF-bearing
   dependency variants and test executables on the same hosted disk. Keep the
   warmer and consumers aligned, and change the cache epoch with this policy.
+- The trusted seed also builds the isolated default-feature `xtask` Clippy
+  graph with `--all-targets`, independently of the product graph. Scope the
+  seed's test-debug override to its test-build command so Clippy retains the
+  consumer's profile. Seed compatibility keys include the root and workspace
+  package Cargo manifests and the warmer workflow's build configuration as well
+  as the image, lockfile and recipe inputs. Keep the publisher, consumers and
+  runner-image catalog aligned.
 - macOS compiler-cache bootstrap must use a job-owned Unix socket before any
   compiler probe. Eagerly start its server in every cache mode; parallel compiler
   clients must not race to initialize a newly allocated socket. Export

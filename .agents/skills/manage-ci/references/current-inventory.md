@@ -897,6 +897,11 @@ without installing either. Hosted profiles retain their existing installers.
 The build prepares controller automation before the locked Python SDK
 environment, so SDK source admission uses the initialized automation binary.
 
+The macOS and Linux tool-presence loops in `setup-canary-runner` have separate
+exact, single-occurrence entries in `ci/python-tooling-policy.json`. Both check
+for preinstalled `python3` and `uv`; these prerequisite lists neither execute
+Python nor install tools.
+
 ### A pinned digest is a frozen artifact
 
 `mesh-llm-runner-images` HEAD says nothing about what is inside the digest a
@@ -1146,10 +1151,13 @@ namespace under `ci/DEPOT_PR_RISK_EXCEPTION.md`. That namespace is treated as
 untrusted input, not an authority or correctness boundary. Linux Clippy,
 Rust-test and host jobs restore one bounded trusted sccache seed
 instead of per-row Cargo target archives. The protected warmer's
-`just ci-sccache-seed-build` recipe covers the dominant `mesh-llm` Clippy graph
-and the isolated `mesh-llm-cli` test graph used by the Rust-test matrix. Depot
-selections cannot restore that
-seed through their cross-trust cache proxy. Its exact key fingerprints the
+`just ci-sccache-seed-build` recipe covers the dominant `mesh-llm` Clippy graph,
+the isolated `mesh-llm-cli` test graph, and the isolated default-feature `xtask`
+Clippy graph with all targets. Only the test-build command disables test debug
+information; Clippy keeps the same profile as its consumer. The shared key also
+hashes the root and workspace package Cargo manifests and the warmer workflow
+so feature and profile changes invalidate the seed. Depot selections cannot
+restore that seed through their cross-trust cache proxy. Its exact key fingerprints the
 warmer image and toolchain epoch. Native-runtime rows explicitly remain cold
 after three verified warm samples observed zero reuse. These four high-fanout families disable per-object GHA
 publication on every provider. Exact Linux static ABI, Swift ABI, macOS Metal unit ABI,

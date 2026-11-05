@@ -14,7 +14,7 @@ pub(super) fn apply_skippy_behavior(setting: &mut ConfigSettingSchema, prefix: &
             push_non_empty_constraint(setting);
         }
         "source_policy" => set_static_options(setting),
-        "prefill_chunking" => set_static_options(setting),
+        "prefill_chunking" | "activation_codec" => set_static_options(setting),
         "openai_frontend_mode" => set_static_unavailable(
             setting,
             "OpenAI frontend override wiring is intentionally rejected on the built-in schema surface.",

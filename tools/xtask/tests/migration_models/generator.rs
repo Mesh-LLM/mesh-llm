@@ -190,6 +190,17 @@ fn migration_models_generator_writes_legacy_projection_bytes() -> TestResult {
             "\"skippy-ci-smoke\"\n      ],",
             "\"skippy-ci-smoke\",\n        \"skippy-system-one-smoke\"\n      ],",
         );
+        // The correctness suite names its dense fixture as the default, since
+        // the split verify-rollback test added a second artifact to it.
+        let expected_text = if path.ends_with("/skippy-correctness.json") {
+            expected_text.replacen(
+                "\n  ]\n}",
+                "\n  ],\n  \"default_artifact_id\": \"qwen3-q8-correctness\"\n}",
+                1,
+            )
+        } else {
+            expected_text
+        };
         assert_eq!(stage.read(path)?, expected_text, "{path}");
     }
     // When/Then: a fresh projection passes the check silently.

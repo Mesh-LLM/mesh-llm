@@ -1,6 +1,13 @@
 syntax = "proto3";
 package meshllm.node.v1;
 
+// Native chat request/response envelope; payload_json contains typed inference data, never HTTP.
+message NativeChatFrame {
+  uint32 generation = 1;
+  bytes payload_json = 2;
+  optional string error = 3;
+}
+
 // Stream 0x01 — Gossip
 message GossipFrame {
   uint32 gen = 1;
@@ -160,6 +167,9 @@ message PeerAnnouncement {
   // Public keys plugins on this node sign with, each bound to this node's key;
   // see `PluginKey`. At most 16, one per plugin.
   repeated PluginKey plugin_keys = 53;
+  // Plugin keys this node has withdrawn; see `PluginKeyWithdrawal`. At most 16,
+  // one per plugin.
+  repeated PluginKeyWithdrawal plugin_key_withdrawals = 54;
 }
 
 // A public key a plugin on this node signs with, bound to this node by the
@@ -182,6 +192,34 @@ message PluginKey {
   string plugin = 1;                 // the plugin's name on this node
   bytes public_key = 2;              // exactly 32 bytes (Ed25519)
   bytes binding_signature = 3;       // by this node's key over sig_input above
+  string signature_algorithm = 4;    // "ed25519"
+}
+
+// A node's signed statement that it no longer vouches for a plugin key it
+// announced, so a peer's plugin stops honouring `key_id` at its next poll
+// instead of waiting for the node's keys to age out, including when the node
+// has since gone offline. Set when a plugin withdraws its key through the
+// plugin protocol (`PluginKeyRequest` with an empty key). `key_id` is the
+// withdrawn 32-byte Ed25519 public key. A receiver verifies
+// `withdrawal_signature` with the withdrawing node's key (its `endpoint_id`)
+// over:
+//
+//   sig_input = b"mesh-llm-plugin-key-withdrawal-v1:"
+//             || u64le(len(endpoint_id))          || endpoint_id
+//             || u64le(len(plugin))               || plugin
+//             || u64le(len(key_id))               || key_id
+//             || u64le(len(signature_algorithm))  || signature_algorithm
+//
+// A withdrawal that does not verify is dropped on receipt. Like `PluginKey`, it
+// rides only the sender's own entry and is not relayed. A receiver keeps a
+// peer's withdrawals, one per plugin, after the peer leaves and across its
+// restarts, until the peer announces the withdrawn key again, withdraws another
+// key for that plugin, is rejected, or its entry is evicted (a receiver keeps
+// those of at most 256 peers, dropping the longest-unrefreshed first).
+message PluginKeyWithdrawal {
+  string plugin = 1;                 // the plugin's name on this node
+  bytes key_id = 2;                  // the withdrawn public key, 32 bytes
+  bytes withdrawal_signature = 3;    // by this node's key over sig_input above
   string signature_algorithm = 4;    // "ed25519"
 }
 
@@ -341,6 +379,19 @@ message AdvertisedModelThroughput {
   string model_name = 1;
   uint64 avg_tokens_per_second_milli = 2;
   uint64 throughput_samples = 3;
+  // Wall-clock time of the newest sample behind the average, set by the node
+  // that measured it and never rewritten when the hint is relayed.
+  optional uint64 observed_at_unix_ms = 4;
+  // How long the measuring node keeps a sample as evidence.
+  optional uint32 window_ms = 5;
+  // What the average measures.
+  optional ThroughputMeasurementKind kind = 6;
+}
+
+enum ThroughputMeasurementKind {
+  THROUGHPUT_MEASUREMENT_KIND_UNSPECIFIED = 0;
+  // Completion tokens over the whole routed attempt's duration.
+  THROUGHPUT_MEASUREMENT_KIND_END_TO_END_ATTEMPT = 1;
 }
 
 message CacheAffinityAdvertisement {
@@ -455,6 +506,12 @@ message ServedModelMetadata {
   optional uint32 expert_count = 11;
   optional uint32 active_expert_count = 12;
   optional ModelWorkloadClass workload_class = 13;
+  // Wrapper retains the distinction between an unprobed runtime and no observed levels.
+  optional ThinkingEfforts thinking_efforts = 14;
+}
+
+message ThinkingEfforts {
+  repeated string values = 1;
 }
 
 enum ModelWorkloadClass {
