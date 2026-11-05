@@ -170,6 +170,7 @@ pub fn apply_transitive_ann(
     addr: &EndpointAddr,
     ann: &PeerAnnouncement,
     bridge_id: EndpointId,
+    now_unix_ms: u64,
 ) -> bool {
     let ann_hosted_models = ann.hosted_models.clone().unwrap_or_default();
     existing.mesh_id = ann.mesh_id.clone();
@@ -243,7 +244,15 @@ pub fn apply_transitive_ann(
     // peer itself. A transitive announcer is not authoritative in either
     // direction, so it may neither promote nor clear them. Direct announcements
     // update both fields authoritatively.
-    existing.advertised_model_throughput = ann.advertised_model_throughput.clone();
+    // A relay may not make the peer's throughput evidence older, undated,
+    // shorter-lived, or spoil a still-fresh hint with one no receiver would
+    // accept.
+    existing.advertised_model_throughput =
+        crate::advertised_throughput::merge_relayed_throughput_hints(
+            &existing.advertised_model_throughput,
+            &ann.advertised_model_throughput,
+            now_unix_ms,
+        );
     crate::merge_advertisement(
         &mut existing.cache_affinity,
         ann.cache_affinity.as_ref(),

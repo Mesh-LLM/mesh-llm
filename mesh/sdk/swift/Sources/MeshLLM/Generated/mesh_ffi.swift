@@ -1182,13 +1182,25 @@ public struct ModelNative: Equatable, Hashable {
     public var id: String
     public var name: String
     public var contextLength: UInt32?
+    /**
+     * Effort strings the serving provider observed in the loaded chat
+     * template, in its reported order. `None` is unknown — an older provider
+     * or an unprobed model — and an empty list is a known "no effort levels".
+     */
+    public var thinkingEfforts: [String]?
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(id: String, name: String, contextLength: UInt32?) {
+    public init(id: String, name: String, contextLength: UInt32?,
+        /**
+         * Effort strings the serving provider observed in the loaded chat
+         * template, in its reported order. `None` is unknown — an older provider
+         * or an unprobed model — and an empty list is a known "no effort levels".
+         */thinkingEfforts: [String]?) {
         self.id = id
         self.name = name
         self.contextLength = contextLength
+        self.thinkingEfforts = thinkingEfforts
     }
 
 
@@ -1209,7 +1221,8 @@ public struct FfiConverterTypeModelNative: FfiConverterRustBuffer {
             try ModelNative(
                 id: FfiConverterString.read(from: &buf),
                 name: FfiConverterString.read(from: &buf),
-                contextLength: FfiConverterOptionUInt32.read(from: &buf)
+                contextLength: FfiConverterOptionUInt32.read(from: &buf),
+                thinkingEfforts: FfiConverterOptionSequenceString.read(from: &buf)
         )
     }
 
@@ -1217,6 +1230,7 @@ public struct FfiConverterTypeModelNative: FfiConverterRustBuffer {
         FfiConverterString.write(value.id, into: &buf)
         FfiConverterString.write(value.name, into: &buf)
         FfiConverterOptionUInt32.write(value.contextLength, into: &buf)
+        FfiConverterOptionSequenceString.write(value.thinkingEfforts, into: &buf)
     }
 }
 
@@ -2381,6 +2395,30 @@ fileprivate struct FfiConverterOptionCallbackInterfaceNativeRuntimeProgressListe
         switch try readInt(&buf) as Int8 {
         case 0: return nil
         case 1: return try FfiConverterCallbackInterfaceNativeRuntimeProgressListener.read(from: &buf)
+        default: throw UniffiInternalError.unexpectedOptionalTag
+        }
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterOptionSequenceString: FfiConverterRustBuffer {
+    typealias SwiftType = [String]?
+
+    public static func write(_ value: SwiftType, into buf: inout [UInt8]) {
+        guard let value = value else {
+            writeInt(&buf, Int8(0))
+            return
+        }
+        writeInt(&buf, Int8(1))
+        FfiConverterSequenceString.write(value, into: &buf)
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> SwiftType {
+        switch try readInt(&buf) as Int8 {
+        case 0: return nil
+        case 1: return try FfiConverterSequenceString.read(from: &buf)
         default: throw UniffiInternalError.unexpectedOptionalTag
         }
     }

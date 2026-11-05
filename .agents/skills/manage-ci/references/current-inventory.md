@@ -1151,8 +1151,9 @@ namespace under `ci/DEPOT_PR_RISK_EXCEPTION.md`. That namespace is treated as
 untrusted input, not an authority or correctness boundary. Linux Clippy,
 Rust-test and host jobs restore one bounded trusted sccache seed
 instead of per-row Cargo target archives. The protected warmer's
-`just ci-sccache-seed-build` recipe covers the dominant `mesh-llm` Clippy graph
-and the isolated `mesh-llm-cli` test graph used by the Rust-test matrix. Depot
+`just ci-sccache-seed-build` recipe covers the dominant `mesh-llm` Clippy graph,
+the `xtask` Clippy graph checked by tooling-only Clippy batches, and the
+isolated `mesh-llm-cli` test graph used by the Rust-test matrix. Depot
 selections cannot restore that
 seed through their cross-trust cache proxy. Its exact key fingerprints the
 warmer image and toolchain epoch. Native-runtime rows explicitly remain cold

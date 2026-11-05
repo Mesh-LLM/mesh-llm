@@ -38,6 +38,27 @@ old in-memory owner keypair constructor and `Client` class are removed.
 `node.inference.streamChatCompletions(bodyJson)` and `streamResponses(bodyJson)`
 return SSE flows. See [runtime artifacts](../SDK.md#native-runtime-artifacts).
 
+## Thinking effort levels
+
+`listModels()` returns each model with the effort strings the provider observed
+in its loaded chat template:
+
+```kotlin
+val model = node.inference.listModels()
+    .firstOrNull { it.thinkingEfforts?.contains("high") == true }
+if (model != null) {
+    val response = node.inference.chatCompletions(
+        Json.parseToJsonElement(
+            """{"model":"${model.id}","messages":[{"role":"user","content":"Explain lock ordering."}],"reasoning_effort":"high"}"""
+        ).jsonObject
+    )
+}
+```
+
+`thinkingEfforts` is `null` when the provider is older or has not probed the
+model, and empty when the template exposes no effort levels. The list is an
+observation of the template, not a guarantee that generation obeys it.
+
 ## Discover advertised models
 
 `node.models` queries the embedded mesh directly, including all advertised

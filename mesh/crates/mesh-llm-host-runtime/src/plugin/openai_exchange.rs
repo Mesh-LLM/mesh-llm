@@ -326,6 +326,26 @@ pub enum CapsuleIdProvenance {
     PeerAsserted,
 }
 
+/// The class of a terminal exchange that did not complete. A coarse reason a
+/// record can state without content; the host's finer causes stay in its own
+/// logs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExchangeFailureClass {
+    /// A 402: the gate (or the peer's gate) wants payment first.
+    PaymentRequired,
+    /// Refused before or instead of serving: a policy denial, a failed
+    /// required hook, or another 4xx.
+    Refused,
+    /// The backend or route failed: a 5xx, a transport failure, or a stream
+    /// that ended before its body did.
+    UpstreamError,
+    /// A deadline expired (408, 504 or a route timeout).
+    Timeout,
+    /// The exchange ended with no answer: the client or stream went away.
+    Dropped,
+}
+
 /// The wire shape both dispatch paths publish on [`OPENAI_EXCHANGE_CHANNEL`].
 /// Deliberately independent of `skippy_inference_api`'s typed request/response —
 /// the raw-proxy path never has one — so one shape covers both paths without
@@ -438,6 +458,23 @@ pub struct OpenAiExchangeEnvelope {
     /// client's choice. `None` when the header is absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub twin_bracket_id: Option<String>,
+    /// Why this exchange did not complete, on a `Terminal` envelope the
+    /// raw-proxy and remote-mesh paths publish — see [`ExchangeFailureClass`].
+    /// Absent there when the exchange completed. The typed-frontend path does
+    /// not set it, so on that path absence says nothing, and no other phase
+    /// carries it. `status` alone cannot say this: a stream cut after its 200
+    /// headers terminates with status 200.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_class: Option<ExchangeFailureClass>,
+    /// The mesh node that asked, as lowercase hex of its endpoint id (the
+    /// encoding `serving_provenance.requested_by_node_id` uses), on a
+    /// raw-proxy terminal for an exchange that did not complete. A host-served
+    /// 2xx exchange states it inside `serving_provenance`; a failed one carries no
+    /// provenance, so this is how a plugin learns who was refused or failed.
+    /// Absent for a request that did not come over the mesh and on every
+    /// other envelope.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_by_node_id: Option<String>,
 }
 
 impl OpenAiExchangeEnvelope {
@@ -463,6 +500,8 @@ impl OpenAiExchangeEnvelope {
             tool_calls_digest: None,
             reasoning_digest: None,
             twin_bracket_id: None,
+            failure_class: None,
+            requested_by_node_id: None,
         }
     }
 
@@ -491,6 +530,8 @@ impl OpenAiExchangeEnvelope {
             tool_calls_digest: None,
             reasoning_digest: None,
             twin_bracket_id: None,
+            failure_class: None,
+            requested_by_node_id: None,
         }
     }
 
@@ -526,6 +567,24 @@ impl OpenAiExchangeEnvelope {
     #[must_use]
     pub fn with_request_digest(mut self, digest: String) -> Self {
         self.request_digest = Some(digest);
+        self
+    }
+
+    /// Attach the failure class of a terminal exchange that did not complete
+    /// (see [`failure_class`](Self::failure_class)); `None` leaves it absent.
+    #[must_use]
+    pub fn with_failure_class(mut self, failure_class: Option<ExchangeFailureClass>) -> Self {
+        // Terminal only, as the field's contract says.
+        self.failure_class = failure_class.filter(|_| self.phase == OpenAiExchangePhase::Terminal);
+        self
+    }
+
+    /// Attach the asking mesh node (see
+    /// [`requested_by_node_id`](Self::requested_by_node_id)); `None` leaves it
+    /// absent.
+    #[must_use]
+    pub fn with_requested_by_node_id(mut self, requested_by_node_id: Option<&str>) -> Self {
+        self.requested_by_node_id = requested_by_node_id.map(str::to_string);
         self
     }
 
@@ -595,6 +654,8 @@ impl OpenAiExchangeEnvelope {
             tool_calls_digest: None,
             reasoning_digest: None,
             twin_bracket_id: None,
+            failure_class: None,
+            requested_by_node_id: None,
         }
     }
 
@@ -657,6 +718,8 @@ impl OpenAiExchangeEnvelope {
             tool_calls_digest: None,
             reasoning_digest: None,
             twin_bracket_id: None,
+            failure_class: None,
+            requested_by_node_id: None,
         }
     }
 }

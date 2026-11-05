@@ -22,7 +22,7 @@ mod projector;
 mod resolver_host_tests;
 pub(crate) use dflash_draft::{
     default_dflash_draft_cached, materialize_default_dflash_draft, materialize_split_dflash_draft,
-    split_dflash_draft_source,
+    refresh_dflash_pairing_index, split_dflash_draft_source,
 };
 use mesh_llm_skippy_adapter::config as resolver;
 pub(crate) use projector::materialize_projector_url;

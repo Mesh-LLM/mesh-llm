@@ -415,7 +415,7 @@ fn trusted_caller_exceptions_preserve_explicit_native_cache_decisions() {
 }
 
 #[test]
-fn current_seed_recipe_compiles_host_clippy_and_cli_test_dependencies() {
+fn current_seed_recipe_compiles_host_and_xtask_clippy_and_cli_test_dependencies() {
     let source = fs::read_to_string(root().join("just/ci.just")).unwrap();
     let body = source.split_once("\nci-sccache-seed-build:\n").unwrap().1;
     let commands: Vec<_> = body
@@ -427,6 +427,7 @@ fn current_seed_recipe_compiles_host_clippy_and_cli_test_dependencies() {
         commands,
         [
             "cargo clippy --locked -p mesh-llm --all-targets -- -D warnings",
+            "cargo clippy --locked -p xtask --all-targets -- -D warnings",
             "cargo build --release --locked -p mesh-llm --bin mesh-llm --no-default-features --features web-ui,dynamic-native-runtime",
             "cargo test --locked -p mesh-llm-cli --no-run",
         ]

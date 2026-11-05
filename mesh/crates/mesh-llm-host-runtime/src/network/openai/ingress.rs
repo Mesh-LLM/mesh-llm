@@ -33,8 +33,8 @@ use exchange_events::{
 };
 #[cfg(test)]
 use exchange_events::{
-    exchange_output_digests_from_outcome, exchange_usage_from_outcome, plugin_route_status,
-    serving_provenance_for_model, serving_provenance_for_remote_mesh,
+    exchange_failure_class, exchange_output_digests_from_outcome, exchange_usage_from_outcome,
+    plugin_route_status, serving_provenance_for_model, serving_provenance_for_remote_mesh,
 };
 use missing_model::route_missing_local_model;
 #[cfg(test)]
@@ -90,7 +90,8 @@ struct IngressRouteContext<'a> {
     /// The mesh node that sent this request over the HTTP tunnel, hex-encoded,
     /// from the tunnel's QUIC-authenticated remote `EndpointId`. `None` for a
     /// request on this node's local API. Carried onto the host-served
-    /// terminal as `ServingProvenance.requested_by_node_id`.
+    /// terminal as `ServingProvenance.requested_by_node_id`, and onto the
+    /// envelope of a raw-proxy exchange that failed (host-served or plugin-served).
     requested_by_node_id: Option<String>,
     /// Explicit exchange channel for the remote-mesh and host-served publish
     /// pairs. When `None`, falls back to `plugin_manager` as the channel
@@ -943,7 +944,7 @@ async fn try_route_plugin_model(
                 RawProxyTerminalFacts {
                     served_locally: false, // plugin-served: never this node's own hardware/weights
                     request_digest: request_digest.as_deref(),
-                    requested_by_node_id: None, // no host-served provenance block on this path
+                    requested_by_node_id: ctx.requested_by_node_id.as_deref(), // named on a failed exchange only; no provenance block on this path
                     client_nonce: None,
                 },
             )
@@ -1734,7 +1735,8 @@ async fn handle_api_proxy_connection_inner(
 
 /// A request that arrived over the mesh HTTP tunnel. `remote` is the tunnel's
 /// QUIC-authenticated peer, the node that asked; it is carried onto the
-/// host-served terminal as `requested_by_node_id`.
+/// host-served terminal as `requested_by_node_id`, and onto the terminal of a
+/// raw-proxy exchange that failed.
 pub(crate) async fn handle_remote_http_stream(
     node: mesh::Node,
     stream: ClientStream,
@@ -1909,6 +1911,10 @@ pub(crate) fn callable_models(targets: &election::ModelTargets) -> Vec<String> {
 #[cfg(test)]
 #[path = "ingress_tests/durable_artifacts.rs"]
 mod durable_artifacts;
+
+#[cfg(test)]
+#[path = "ingress_tests/failure_class.rs"]
+mod failure_class;
 
 #[cfg(test)]
 #[path = "ingress_tests/automatic_routing.rs"]

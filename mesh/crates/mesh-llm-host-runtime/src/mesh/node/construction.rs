@@ -194,6 +194,7 @@ impl Node {
             tunnel_tx,
             tunnel_http_tx,
             stage_transport_tx,
+            native_inference: Default::default(),
             stage_control_tx: Arc::new(Mutex::new(None)),
             stage_control_lifecycle: Arc::new(Mutex::new(None)),
             stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),

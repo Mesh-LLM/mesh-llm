@@ -334,11 +334,19 @@ fn proto_identity_to_local(
     }
 }
 
+#[cfg(test)]
+mod thinking_efforts;
+
 /// Encode optional serving metadata without inventing a class for legacy models.
 fn local_model_metadata_to_proto(
     metadata: &crate::mesh::ServedModelMetadata,
 ) -> crate::proto::node::ServedModelMetadata {
     crate::proto::node::ServedModelMetadata {
+        thinking_efforts: metadata.thinking_efforts.as_ref().map(|values| {
+            crate::proto::node::ThinkingEfforts {
+                values: values.clone(),
+            }
+        }),
         workload_class: metadata.workload_class.map(local_workload_class_to_proto),
         architecture: metadata.architecture.clone(),
         parameter_size: metadata.parameter_size.clone(),
@@ -360,6 +368,10 @@ fn proto_model_metadata_to_local(
     metadata: &crate::proto::node::ServedModelMetadata,
 ) -> crate::mesh::ServedModelMetadata {
     crate::mesh::ServedModelMetadata {
+        thinking_efforts: metadata
+            .thinking_efforts
+            .as_ref()
+            .map(|efforts| efforts.values.clone()),
         // Keep an explicit unknown descriptor: dropping it can re-enable the
         // legacy model-name fallback elsewhere in routing and gossip.
         workload_class: metadata
@@ -694,20 +706,47 @@ pub(crate) fn proto_role_to_local(role_int: i32, http_port: Option<u32>) -> Node
 fn local_throughput_hint_to_proto(
     hint: &crate::network::metrics::ModelThroughputHint,
 ) -> crate::proto::node::AdvertisedModelThroughput {
+    use crate::network::metrics::ThroughputMeasurementKind as Kind;
+    use crate::proto::node::ThroughputMeasurementKind as WireKind;
+    let measurement = hint.measurement.as_ref();
     crate::proto::node::AdvertisedModelThroughput {
         model_name: hint.model_name.clone(),
         avg_tokens_per_second_milli: hint.avg_tokens_per_second_milli,
         throughput_samples: hint.throughput_samples,
+        observed_at_unix_ms: measurement.map(|measurement| measurement.observed_at_unix_ms),
+        window_ms: measurement
+            .map(|measurement| u32::try_from(measurement.window_ms).unwrap_or(u32::MAX)),
+        kind: measurement.map(|measurement| match measurement.kind {
+            Kind::EndToEndAttempt => WireKind::EndToEndAttempt as i32,
+            Kind::Unknown => WireKind::Unspecified as i32,
+        }),
     }
 }
 
+/// The measurement travels as three optional fields; it exists only when the
+/// time and the window are both present (an older sender sends neither). A
+/// missing or unrecognised kind reads as unknown.
 fn proto_throughput_hint_to_local(
     hint: &crate::proto::node::AdvertisedModelThroughput,
 ) -> crate::network::metrics::ModelThroughputHint {
+    use crate::network::metrics::{ThroughputMeasurement, ThroughputMeasurementKind as Kind};
+    use crate::proto::node::ThroughputMeasurementKind as WireKind;
+    let measurement =
+        hint.observed_at_unix_ms
+            .zip(hint.window_ms)
+            .map(|(observed_at_unix_ms, window_ms)| ThroughputMeasurement {
+                observed_at_unix_ms,
+                window_ms: u64::from(window_ms),
+                kind: match hint.kind.and_then(|kind| WireKind::try_from(kind).ok()) {
+                    Some(WireKind::EndToEndAttempt) => Kind::EndToEndAttempt,
+                    Some(WireKind::Unspecified) | None => Kind::Unknown,
+                },
+            });
     crate::network::metrics::ModelThroughputHint {
         model_name: hint.model_name.clone(),
         avg_tokens_per_second_milli: hint.avg_tokens_per_second_milli,
         throughput_samples: hint.throughput_samples,
+        measurement,
     }
 }
 
@@ -1502,6 +1541,44 @@ pub(crate) fn proto_route_table_to_local(table: &crate::proto::node::RouteTable)
 mod tests {
     use super::*;
     use crate::mesh::requirements::peer_release_attestation_status;
+
+    /// An older sender's hint has no measurement; a time without a window is
+    /// not a measurement either; an unrecognised kind reads as unknown.
+    #[test]
+    fn throughput_measurement_needs_its_time_and_window_from_the_wire() {
+        use crate::network::metrics::ThroughputMeasurementKind as Kind;
+        let legacy = crate::proto::node::AdvertisedModelThroughput {
+            model_name: "qwen".to_string(),
+            avg_tokens_per_second_milli: 42_000,
+            throughput_samples: 7,
+            ..Default::default()
+        };
+        assert_eq!(proto_throughput_hint_to_local(&legacy).measurement, None);
+
+        let time_only = crate::proto::node::AdvertisedModelThroughput {
+            observed_at_unix_ms: Some(1_800_000_000_000),
+            ..legacy.clone()
+        };
+        assert_eq!(proto_throughput_hint_to_local(&time_only).measurement, None);
+
+        for (kind, expected) in [
+            (None, Kind::Unknown),
+            (Some(0), Kind::Unknown),
+            (Some(1), Kind::EndToEndAttempt),
+            (Some(77), Kind::Unknown),
+        ] {
+            let hint = crate::proto::node::AdvertisedModelThroughput {
+                observed_at_unix_ms: Some(1_800_000_000_000),
+                window_ms: Some(900_000),
+                kind,
+                ..legacy.clone()
+            };
+            let measurement = proto_throughput_hint_to_local(&hint)
+                .measurement
+                .expect("time and window make a measurement");
+            assert_eq!(measurement.kind, expected, "wire kind {kind:?}");
+        }
+    }
 
     #[test]
     /// Preserve every supported workload class across protobuf announcement conversion.
