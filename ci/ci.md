@@ -286,8 +286,11 @@ release's kind, publication time, tag and SHA in the summary, because the feed
 is ordered by creation time and a draft created long ago but published recently
 sits on a late page. It peels the selected tag to an exact commit. API errors,
 missing releases and moving tags fail before hardware work;
-there is no `master` fallback. Public API reads use the workflow's read-only
-token only in that selection step. Fixed read-only GraphQL queries fetch metadata
+there is no `master` fallback. The hosted upstream and platform-selection
+steps receive the workflow's read-only token via `GH_TOKEN`; workers remain
+credential-free. That token cannot list repository runners, so `platform=auto`
+falls back to macOS; use explicit `platform=linux` to select Linux.
+Fixed read-only GraphQL queries fetch metadata
 without assets; REST resolves the tag. A 180-second total budget, 1 MiB response
 cap and 1000-page ceiling bound the lookup; incomplete pagination fails without
 choosing a partial result. An explicit full `upstream_sha` remains a deliberate override;
@@ -332,8 +335,8 @@ stops without invoking Goose and denies publication.
 
 Manual `mesh_ref` dispatches accept an explicitly trusted same-repository branch
 or full commit SHA. Resolution freezes the SHA once, requires it to be reachable
-from a repository branch, and reads its existing llama.cpp pin. `upstream_sha`
-cannot be combined with this input. Keep the Actions workflow ref on `main`.
+from a repository branch, and reads its existing llama.cpp pin. In certification
+modes, `upstream_sha` cannot be combined with this input. Keep the Actions workflow ref on `main`.
 The default `mesh_action=certify` runs one complete pass without repair or
 publication. Explicit `mesh_action=certify-and-publish` runs that pass, then a
 fresh independent build and complete family pass on the same frozen commit.
@@ -352,6 +355,21 @@ Python callers remain unchanged; metadata is not environment readiness. The pack
 reject any changed source identity. This is an operator-authorized trusted-code
 path on persistent lab machines, not isolation for untrusted PRs or fork code.
 Leaving `mesh_ref` empty preserves scheduled and upstream-upgrade behavior.
+
+Explicit `mesh_action=upgrade` instead upgrades from the selected branch. It
+requires an exact lowercase 40-hex `upstream_sha` different from that branch's pin.
+The controller remains on protected `main`; the frozen selected SHA becomes the
+repair base. Candidate bundles, workers, retries and independent verification
+retain that base and the separate controller identity. The normal bounded repair
+loop must complete a candidate family pass and a fresh independent family pass
+on the same changed commit before the hosted publisher opens a PR. Certification
+modes retain their unchanged-source requirements.
+
+```sh
+gh workflow run llama-upstream-canary.yml --ref main \
+  -f mesh_ref=TRUSTED_REPAIR_BRANCH -f mesh_action=upgrade \
+  -f upstream_sha=FULL_UPSTREAM_COMMIT_SHA
+```
 
 To certify a recovered branch without publication:
 
@@ -1586,8 +1604,12 @@ explicitly skip seed restoration after three verified CPU warm samples observed
 zero reuse in run `34272984200/1`.
 The warmer's `just ci-sccache-seed-build` recipe covers the dominant
 `mesh-llm` Clippy graph, the release-profile backend-neutral `mesh-llm` host
-graph, and the isolated `mesh-llm-cli` test graph used by the Rust-test matrix;
-its `Justfile` and `just/**` inputs are part of the exact seed key.
+graph, the isolated `mesh-llm-cli` test graph used by the Rust-test matrix,
+and the isolated default-feature `xtask` Clippy graph with all targets. The
+test-debug override applies only to the test build so both Clippy graphs retain
+their consumers' profiles. Root and workspace package Cargo manifests and the
+warmer workflow, along with `Justfile` and `just/**`, are part of the exact
+seed key.
 `ci/runner-images.json` and `cargo xtool ci-ops runner-identity check` make the
 current image, native epoch, compiler-seed and SDK Rust identities auditable
 without changing execution. The native `migration_ci_operations` contracts
@@ -1845,7 +1867,8 @@ Full-session replay contract: [configuration and qualification](agentic-replay-n
 
 Persistent canary preflight, build, family and retry jobs check provisioned tools
 before automation compilation or SDK dependency preparation. Their
-`preinstalled-macos` bootstrap profile skips Rust, Just and Homebrew installers,
+resolver-selected `preinstalled-macos` or `preinstalled-linux` bootstrap profile
+skips installers,
 disables Rustup automatic toolchain installation, and fails early with the name
 of a missing prerequisite. Tool provisioning is external to certification.
 The hosted profiles keep their existing installation behavior. Locked SDK

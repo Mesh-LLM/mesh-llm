@@ -33,6 +33,8 @@ impl InferenceBackend for StageOpenAiBackend {
             .await
     }
 
+    /// Validate and prepare a generation with its trusted execution context.
+    /// Keep the scope through prompt preparation, native request IDs and cache selection.
     async fn chat_completion_with_context(
         &self,
         request: GenerationRequest,
@@ -59,7 +61,11 @@ impl InferenceBackend for StageOpenAiBackend {
                 let parse_chat_output = chat_output_parser_required(&request, &template_options);
                 let template_timer = PhaseTimer::start();
                 let prompt = self
-                    .prepare_chat_prompt_offloaded(&request, template_options.clone())
+                    .prepare_chat_prompt_offloaded(
+                        &request,
+                        template_options.clone(),
+                        context.clone(),
+                    )
                     .await?;
                 let mut template_attrs = self.openai_attrs(&ids);
                 template_attrs.insert(
@@ -181,6 +187,8 @@ impl InferenceBackend for StageOpenAiBackend {
         .await
     }
 
+    /// Prepare a generation stream with the caller's cancellation and execution scope.
+    /// Retain the context in the native worker while producing bounded response events.
     async fn chat_completion_stream(
         &self,
         request: GenerationRequest,
@@ -209,7 +217,7 @@ impl InferenceBackend for StageOpenAiBackend {
                 let emit_reasoning = template_exposes_reasoning(&template_options);
                 let template_timer = PhaseTimer::start();
                 let prompt = self
-                    .prepare_chat_prompt_offloaded(&request, template_options)
+                    .prepare_chat_prompt_offloaded(&request, template_options, context.clone())
                     .await?;
                 let mut template_attrs = self.openai_attrs(&ids);
                 template_attrs.insert(
@@ -477,11 +485,13 @@ impl InferenceBackend for StageOpenAiBackend {
         let model = request.model.clone();
         let encoding_format = request.encoding_format.clone();
         let backend = self.clone();
-        let token_inputs = task::spawn_blocking(move || backend.prepare_embedding_inputs(request))
-            .await
-            .map_err(|error| {
-                InferenceError::backend(format!("embedding tokenization task failed: {error}"))
-            })??;
+        let token_inputs = run_blocking_generation_worker((), context.clone(), move |_| {
+            backend.prepare_embedding_inputs(request)
+        })
+        .await
+        .map_err(|error| {
+            InferenceError::backend(format!("embedding tokenization task failed: {error}"))
+        })??;
         let prompt_tokens = token_inputs.iter().map(Vec::len).sum::<usize>();
         let max_input_tokens = token_inputs.iter().map(Vec::len).max().unwrap_or_default();
         let ids = generation_ids(InferenceCacheHints::default(), None, &context);

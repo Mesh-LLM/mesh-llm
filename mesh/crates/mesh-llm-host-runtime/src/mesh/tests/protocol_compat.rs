@@ -375,6 +375,7 @@ fn stage_load_proto_carries_a_split_dflash_plan() {
             revision: "a3d4fb1eff6f268cbbdf808042f6902cc17f5458".into(),
             file: "Qwen3.6-27B-DFlash.Q8_0.gguf".into(),
             sha256: "b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1".into(),
+            bytes: 1_849_481_472,
         }),
     };
     load.dflash = Some(plan.clone());
@@ -426,4 +427,30 @@ fn a_split_dflash_plan_from_an_older_planner_keeps_its_draft_path() {
         plan.draft_model_path.as_deref(),
         Some(std::path::Path::new("/models/draft-dflash.gguf"))
     );
+}
+
+#[test]
+fn stage_load_proto_roundtrip_preserves_every_split_activation_codec() {
+    use skippy_protocol::{StageActivationCodec as Codec, StageActivationCodecPolicy as Policy};
+    for (codec, policy) in [
+        (Codec::RawF32V1, Policy::AutoLosslessV1),
+        (Codec::RawF32V1, Policy::Fixed),
+        (Codec::F16RneV1, Policy::Fixed),
+        (Codec::Bf16RneV1, Policy::Fixed),
+        (Codec::S8RowF32RneV1, Policy::Fixed),
+        (Codec::Fp8E4m3RowF32RneV1, Policy::Fixed),
+        (Codec::Fp8E4m3Block32E8m0RneV1, Policy::Fixed),
+        (Codec::Fp8E5m2RowF32RneV1, Policy::Fixed),
+    ] {
+        let mut load = stage_load_request();
+        load.activation_codec = codec;
+        load.activation_codec_policy = policy;
+
+        let decoded = stage_load_from_proto(stage_load_to_proto(load)).unwrap();
+
+        assert_eq!(
+            (decoded.activation_codec, decoded.activation_codec_policy),
+            (codec, policy)
+        );
+    }
 }

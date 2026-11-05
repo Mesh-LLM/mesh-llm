@@ -4,6 +4,7 @@ mod env_overrides;
 mod hardware_validation;
 mod local_model_path;
 pub mod managed_models;
+pub mod memberships;
 mod model;
 mod model_validation;
 mod openai_exchange;
@@ -1015,6 +1016,10 @@ gpu_id = "pci:0000:65:00.0"
             ),
             ("PluginConfigEditor::url", vec!["plugin.<plugin-name>.url"]),
             (
+                "PluginConfigEditor::models",
+                vec!["plugin.<plugin-name>.models"],
+            ),
+            (
                 "PluginConfigEditor::connect_timeout_secs",
                 vec!["plugin.<plugin-name>.startup.connect_timeout_secs"],
             ),
@@ -1159,10 +1164,11 @@ gpu_id = "pci:0000:65:00.0"
             "source_directory", // runtime origin, skipped by config serialization
             "lifecycle_log_parser_override",
             "download_override",
-            "models",
-            "plugins",
             "settings",
         ];
+        // The `[[models]]` and `[[plugin]]` lists hold entries, not leaves; a
+        // field of the same name elsewhere is an ordinary leaf.
+        let ignored_lists = [("MeshConfig", "models"), ("MeshConfig", "plugins")];
 
         let mut total = 0usize;
         for (name, multiplier) in occurrences.iter() {
@@ -1170,6 +1176,7 @@ gpu_id = "pci:0000:65:00.0"
                 .into_iter()
                 .filter(|(field, ty)| {
                     !ignored.contains(&field.as_str())
+                        && !ignored_lists.contains(&(*name, field.as_str()))
                         && !is_legacy_flat_model_field(name, field)
                         && !nested
                             .iter()

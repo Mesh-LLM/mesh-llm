@@ -159,6 +159,29 @@ and dispatches. Each author's accumulated annotations remain within 4096 bytes;
 discarding excess metadata marks evidence incomplete without breaking HTTP
 emission.
 
+### Why an exchange did not complete (`failure_class`)
+
+On the `openai.exchange.v1` channel, the `terminal` envelope that the
+raw-proxy (`raw_proxy`) and mesh-routed (`remote_mesh`) paths publish carries an
+additive `failure_class` when the exchange did not complete:
+`payment_required` (a 402, including a peer's relayed one), `refused` (a
+policy denial, a failed required hook, another 4xx), `upstream_error` (a 5xx,
+a transport failure, a stream that ended before its body), `timeout` (a 408 or
+504) or `dropped`. `status` cannot say this alone: a stream
+cut after its 200 headers terminates with status 200.
+
+On a `raw_proxy` terminal that carries a `failure_class`, `requested_by_node_id`
+names the asking mesh node (lowercase hex, the encoding
+`serving_provenance.requested_by_node_id` uses), so a plugin can tell who was
+refused or failed; a failed exchange has no serving provenance to carry it. It
+is absent for a request that did not come over the mesh.
+
+On those two paths an absent `failure_class` means the exchange completed. The
+`typed_frontend` path does not set the field, so there its absence says
+nothing; the lifecycle service's `exchange_finished` callbacks do not carry
+it. Other phases never carry it, so existing consumers read what they read
+before.
+
 ### Client-marked pairs (`twin_bracket_id`)
 
 A client can mark two or more exchanges as one pair it sent to different nodes

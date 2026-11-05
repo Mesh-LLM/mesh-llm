@@ -32,6 +32,7 @@
     "path+file:///workspace/crates/mesh-client#mesh-llm-client@0.76.1",
     "path+file:///workspace/crates/mesh-llm-protocol#0.76.1",
     "path+file:///workspace/crates/mesh-llm-routing#0.76.1",
+    "path+file:///workspace/tools/process-supervision#0.76.1",
     "path+file:///workspace/crates/mesh-llm-guardrails#0.76.1",
     "path+file:///workspace/crates/mesh-llm-log-store#0.76.1",
     "path+file:///workspace/crates/mesh-llm-node#0.76.1",
@@ -1468,6 +1469,22 @@
         },
         {
           "name": "serde_json"
+        }
+      ]
+    },
+    {
+      "id": "path+file:///workspace/tools/process-supervision#0.76.1",
+      "name": "process-supervision",
+      "manifest_path": "/workspace/tools/process-supervision/Cargo.toml",
+      "dependencies": [
+        {
+          "name": "thiserror"
+        },
+        {
+          "name": "libc"
+        },
+        {
+          "name": "windows-sys"
         }
       ]
     },

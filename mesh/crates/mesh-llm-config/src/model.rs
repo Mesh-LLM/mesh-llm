@@ -688,6 +688,12 @@ pub struct SkippyConfig {
     pub prefill_chunk_size: Option<u32>,
     #[serde(default)]
     pub prefill_chunk_schedule: Option<String>,
+    /// Wire codec for activations between split stages: `f16` (the
+    /// default), `lossless`, `bf16`, `s8-row`, `fp8-e4m3-row`,
+    /// `fp8-e4m3-block32`, `fp8-e5m2-row`, or `f32`. The split's coordinator
+    /// decides; every stage receives its choice in the stage load.
+    #[serde(default)]
+    pub activation_codec: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1839,6 +1845,11 @@ pub struct PluginConfigEntry {
     /// Optional URL passed to the plugin as `MESH_LLM_PLUGIN_URL`.
     #[serde(default)]
     pub url: Option<String>,
+    /// Upstream models this plugin's inference endpoints may expose. Unset
+    /// exposes every model the endpoint lists; models left out are neither
+    /// advertised nor routed to the endpoint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub settings: BTreeMap<String, toml::Value>,
     #[serde(default, skip_serializing_if = "PluginStartupConfig::is_default")]

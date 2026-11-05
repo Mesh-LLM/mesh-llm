@@ -111,6 +111,22 @@ mesh-llm serve --model Qwen3-0.6B-Q4_K_M
 mesh-llm client --auto
 ```
 
+### Serve one model across independent meshes
+
+```sh
+mesh-llm config validate --memberships-config ./memberships.toml
+mesh-llm serve --gguf /models/model.gguf --memberships-config ./memberships.toml
+```
+
+The manifest defines independent memberships and one shared model execution
+budget. This launch requires exactly one local GGUF. `--ctx-size` and
+`--parallel` override the manifest's context size and concurrency; topology and
+GPU offload settings belong in the manifest. Repeated `--join` still supplies
+bootstrap peers for one mesh.
+
+See [One model across independent meshes](/docs/pages/shared-serving/) for the
+manifest format, effective trust policy, supported flags, and local controls.
+
 ## Runtime lifecycle and modes
 
 Bare `mesh-llm serve` is valid. It starts the durable API, console, mesh,
@@ -711,6 +727,7 @@ Usage:
 mesh-llm config validate
 mesh-llm config validate --config-path ~/.mesh-llm/config.toml
 mesh-llm config validate --config-path ./mesh.toml --json
+mesh-llm config validate --memberships-config ./memberships.toml
 ```
 
 Switches:
@@ -719,6 +736,9 @@ Switches:
   mesh-llm uses the global `--config` path, then `MESH_LLM_CONFIG`, then
   `~/.mesh-llm/config.toml`.
 - `--json`: print a machine-readable validation report.
+- `--memberships-config <PATH>`: validate a local memberships manifest instead
+  of the ordinary configuration. Cannot be combined with `--config-path`.
+  Checks schema and limits without reading token/trust files or loading a model.
 
 The JSON report uses this shape:
 

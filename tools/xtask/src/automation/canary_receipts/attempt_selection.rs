@@ -184,11 +184,14 @@ fn select_final(
         return Err("green attempt has contradictory selection outputs".into());
     }
     let candidate = decision::Candidate::from_outputs(&selected.outputs)?;
+    if changed && !mesh_source.is_empty() && candidate.head == mesh_source {
+        return Err("selected upgrade did not produce a changed candidate".into());
+    }
     if publish_selected && attempts.selected_verification()? != candidate {
         return Err("selected publication does not match the independent verifier".into());
     }
-    if !mesh_source.is_empty() {
-        if changed || candidate.head != mesh_source {
+    if !mesh_source.is_empty() && !changed {
+        if candidate.head != mesh_source {
             return Err("selected MeshLLM revision certification failed".into());
         }
         return Ok(if publish_selected {

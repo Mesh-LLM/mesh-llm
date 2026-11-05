@@ -1,5 +1,5 @@
 use super::*;
-use crate::frontend::backend::run_blocking_generation_worker;
+use crate::frontend::generation::run_blocking_generation_worker;
 use skippy_inference_api::chat::ChatCompletionRequest;
 use std::sync::atomic::AtomicBool;
 

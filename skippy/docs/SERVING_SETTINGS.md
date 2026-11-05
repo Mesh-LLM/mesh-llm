@@ -373,7 +373,7 @@ with their runtime purpose; existing controls follow in the same sections.
 
 | CLI flag | TOML key | Purpose |
 |---|---|---|
-| `--activation-codec` | `activation_codec` | Stage activation codec: raw-f32-v1, f16-rne-v1, bf16-rne-v1, s8-row-f32-rne-v1 |
+| `--activation-codec` | `activation_codec` | Stage activation codec: raw-f32-v1, f16-rne-v1, bf16-rne-v1, s8-row-f32-rne-v1, fp8-e4m3-row-f32-rne-v1, fp8-e4m3-block32-e8m0-rne-v1, fp8-e5m2-row-f32-rne-v1 |
 | `--activation-codec-policy` | `activation_codec_policy` | Stage activation policy: fixed or auto-lossless-v1 |
 | `--config` | `config` | See `skippy serve --help` for values and defaults. |
 | `--topology` | `topology` | See `skippy serve --help` for values and defaults. |

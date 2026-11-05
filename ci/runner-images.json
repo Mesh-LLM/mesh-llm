@@ -859,6 +859,11 @@
     "key_prefix": "mesh-llm-sccache-seed-linux-x86_64-img-aaa36843-epoch-aaa36843-v3-",
     "recipe_inputs": [
       "Cargo.lock",
+      "Cargo.toml",
+      "mesh/crates/*/Cargo.toml",
+      "skippy/crates/*/Cargo.toml",
+      "tools/*/Cargo.toml",
+      ".github/workflows/cache-warm-sccache.yml",
       ".github/cache-version.txt",
       ".cargo/config.toml",
       "scripts/cargo-linker",

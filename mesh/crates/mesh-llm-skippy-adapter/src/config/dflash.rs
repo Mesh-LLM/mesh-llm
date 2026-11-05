@@ -2,12 +2,15 @@
 //!
 //! A DFlash draft reads target hidden states, so it is not an ordinary draft
 //! model: the architecture pairing check would always reject it. It is chosen
-//! explicitly with `speculative.strategy = "dflash"` and a draft, or by default
-//! under `auto` when the target is one of the known pairings in
-//! [`super::dflash_catalog`] and nothing else in the configuration speaks for
-//! speculation. Native MTP that is on only because the target carries NextN
-//! layers yields to a known pairing, and serves if the draft is dropped. A
-//! DFlash draft named as an ordinary draft under `auto` still fails pairing.
+//! explicitly with `speculative.strategy = "dflash"` and a draft. Otherwise,
+//! under `auto` with nothing else in the configuration speaking for
+//! speculation, a layer package that declares speculation decides: its
+//! `dflash` strategy's draft, or none. A target without package speculation
+//! defaults to its pairing in [`super::dflash_catalog`] (the published index,
+//! else the bootstrap table). Native MTP that is on only because the target
+//! carries NextN layers yields to a pairing, and serves if the draft is
+//! dropped. A DFlash draft named as an ordinary draft under `auto` still fails
+//! pairing.
 
 use std::path::{Path, PathBuf};
 
@@ -16,7 +19,12 @@ use skippy_api::speculative::is_dflash_draft;
 use skippy_model_artifact::gguf::{GgufCompactMeta, scan_gguf_compact_meta};
 use skippy_serving::{DFLASH_STRATEGY, DFlashProposalConfig, SpeculativeDecodeConfig};
 
-use super::dflash_catalog::{DFlashPairing, default_dflash_max_draft_tokens, pairing_for_target};
+use skippy_runtime::package::PackageGenerationInfo;
+
+use super::dflash_catalog::{
+    DefaultDFlash, default_dflash_max_draft_tokens, package_pairing, package_selects_dflash,
+    pairing_for_target,
+};
 use super::types::ResolvedSpeculativeConfig;
 
 /// What the resolver already decided before choosing DFlash.
@@ -26,8 +34,13 @@ pub(super) struct DFlashSelection<'a> {
     pub(super) draft_model_path: Option<&'a Path>,
 }
 
-/// The DFlash draft to attach, or `None` when DFlash does not apply.
-pub(super) fn select_dflash_draft<'a>(selection: &DFlashSelection<'a>) -> Result<Option<&'a Path>> {
+/// The DFlash draft to attach, or `None` when DFlash does not apply. With
+/// `package_dflash`, the package's `dflash` strategy supplies the draft when
+/// the configuration names none.
+pub(super) fn select_dflash_draft<'a>(
+    selection: &DFlashSelection<'a>,
+    package_dflash: bool,
+) -> Result<Option<&'a Path>> {
     if selection.strategy != DFLASH_STRATEGY {
         return Ok(None);
     }
@@ -35,6 +48,9 @@ pub(super) fn select_dflash_draft<'a>(selection: &DFlashSelection<'a>) -> Result
         bail!(
             "skippy speculative.strategy = \"dflash\" conflicts with speculative.mode = \"disabled\""
         );
+    }
+    if package_dflash && selection.draft_model_path.is_none() {
+        return Ok(None);
     }
     let Some(path) = selection
         .draft_model_path
@@ -63,54 +79,71 @@ pub(super) struct DFlashDefaultSelection<'a> {
     /// Native MTP is on and was configured, declared, or cannot yield.
     pub(super) native_mtp_decides: bool,
     pub(super) has_ngram_settings: bool,
-    pub(super) package_declares_speculation: bool,
+    pub(super) package_generation: Option<&'a PackageGenerationInfo>,
     pub(super) target_meta: Option<&'a GgufCompactMeta>,
     pub(super) model_path: &'a Path,
 }
 
-/// The DFlash draft to attach and, when it was chosen by default, its known
-/// pairing. An explicit DFlash draft wins; otherwise a known target defaults
-/// to its draft unless the configuration, the package, or another proposer
-/// already decides.
+/// The DFlash draft to attach and, when it was chosen by default, where it
+/// comes from. An explicit DFlash draft wins; then a package's own `dflash`
+/// strategy (also when the configuration names it); then, for a target whose
+/// package declares no speculation, its catalog pairing. Nothing defaults when
+/// the configuration or another proposer already decides.
 pub(super) fn choose_dflash_draft(
     explicit: &DFlashSelection<'_>,
     default: &DFlashDefaultSelection<'_>,
-) -> Result<Option<(PathBuf, Option<&'static DFlashPairing>)>> {
-    if let Some(path) = select_dflash_draft(explicit)? {
+) -> Result<Option<(PathBuf, Option<DefaultDFlash>)>> {
+    let package_dflash = package_selects_dflash(default.package_generation, explicit.strategy);
+    if let Some(path) = select_dflash_draft(explicit, package_dflash)? {
         return Ok(Some((path.to_path_buf(), None)));
     }
-    if explicit.strategy != "auto"
+    if (explicit.strategy != "auto" && !package_dflash)
         || explicit.mode != "auto"
         || explicit.draft_model_path.is_some()
         || !default.auto_defaults_enabled
         || !default.draft_context_available
         || default.native_mtp_decides
         || default.has_ngram_settings
-        || default.package_declares_speculation
     {
         return Ok(None);
     }
     let metal = cfg!(target_os = "macos");
-    let pairing = match default.target_meta {
-        Some(meta) => pairing_for_target(meta, metal),
-        None => scan_gguf_compact_meta(default.model_path)
-            .as_ref()
-            .and_then(|meta| pairing_for_target(meta, metal)),
+    let scanned;
+    let meta = match default.target_meta {
+        Some(meta) => Some(meta),
+        None => {
+            scanned = scan_gguf_compact_meta(default.model_path);
+            scanned.as_ref()
+        }
     };
-    Ok(pairing.map(|pairing| (pairing.draft.cache_path(), Some(pairing))))
+    let chosen = match default.package_generation {
+        // A package that declares speculation decides, DFlash or not.
+        Some(generation) if generation.speculative_decoding.is_some() => {
+            package_pairing(generation, explicit.strategy, meta, metal)
+        }
+        _ => meta.and_then(|meta| pairing_for_target(meta, metal)),
+    };
+    Ok(chosen.map(|chosen| {
+        (
+            super::dflash_catalog::dflash_draft_cache_path(&chosen.pairing.draft),
+            Some(chosen),
+        )
+    }))
 }
 
 /// A configured cap wins; otherwise the backend default, held to what a
 /// default draft's block can propose.
 pub(super) fn dflash_max_draft_tokens(
     configured: u32,
-    default_pairing: Option<&DFlashPairing>,
+    default_pairing: Option<&DefaultDFlash>,
 ) -> u32 {
     if configured > 0 {
         return configured;
     }
     let backend = default_dflash_max_draft_tokens(cfg!(target_os = "macos"));
-    default_pairing.map_or(backend, |pairing| backend.min(pairing.max_draft_tokens))
+    default_pairing.map_or(backend, |chosen| {
+        backend.min(chosen.pairing.max_draft_tokens)
+    })
 }
 
 impl ResolvedSpeculativeConfig {
@@ -178,12 +211,12 @@ mod tests {
         let dflash = dflash_file.path().to_path_buf();
 
         assert_eq!(
-            select_dflash_draft(&selection("dflash", Some(&dflash))).unwrap(),
+            select_dflash_draft(&selection("dflash", Some(&dflash)), false).unwrap(),
             Some(dflash.as_path())
         );
         for strategy in ["auto", "mtp", "disabled"] {
             assert_eq!(
-                select_dflash_draft(&selection(strategy, Some(&dflash))).unwrap(),
+                select_dflash_draft(&selection(strategy, Some(&dflash)), false).unwrap(),
                 None,
                 "{strategy}"
             );
@@ -195,8 +228,20 @@ mod tests {
         let ordinary_file = temp_model_file_with_architecture("qwen3");
         let ordinary = ordinary_file.path().to_path_buf();
 
-        assert!(select_dflash_draft(&selection("dflash", None)).is_err());
-        assert!(select_dflash_draft(&selection("dflash", Some(&ordinary))).is_err());
+        assert!(select_dflash_draft(&selection("dflash", None), false).is_err());
+        assert!(select_dflash_draft(&selection("dflash", Some(&ordinary)), false).is_err());
+        // A package `dflash` strategy supplies the draft, but a configured
+        // draft must still be a DFlash draft, and `disabled` still conflicts.
+        assert_eq!(
+            select_dflash_draft(&selection("dflash", None), true).unwrap(),
+            None
+        );
+        assert!(select_dflash_draft(&selection("dflash", Some(&ordinary)), true).is_err());
+        let disabled = DFlashSelection {
+            mode: "disabled",
+            ..selection("dflash", None)
+        };
+        assert!(select_dflash_draft(&disabled, true).is_err());
     }
 
     #[test]
@@ -223,7 +268,7 @@ mod tests {
                     draft_context_available,
                     native_mtp_decides: false,
                     has_ngram_settings: false,
-                    package_declares_speculation: false,
+                    package_generation: None,
                     target_meta: Some(&meta),
                     model_path: Path::new("/m/Qwen3.5-9B-Q4_K_M.gguf"),
                 },

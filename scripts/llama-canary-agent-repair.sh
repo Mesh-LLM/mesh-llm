@@ -25,14 +25,23 @@ JINJA_PROJECT="$TRUSTED_ROOT/ci/llama-canary/jinja"
 source "$ROOT/scripts/lib/macos-deployment-target.sh"
 HARNESS_MODE="${CANARY_HARNESS_MODE:-repair}"
 if [[ -n "${CANARY_MESH_SOURCE:-}" ]]; then
-  if [[ "$HARNESS_MODE" != pinned-build ]]; then
-    echo "selected MeshLLM source requires certify-only pinned-build mode" >&2
+  if [[ ! "$HARNESS_MODE" =~ ^(pinned-build|repair-build|verify-build)$ ]]; then
+    echo "selected MeshLLM source requires a protected controller build mode" >&2
     exit 1
   fi
   ROOT="${CANARY_SOURCE_ROOT:?selected source checkout required}"
   if [[ "$(git -C "$ROOT" rev-parse HEAD)" != "$CANARY_MESH_SOURCE" ]]; then
     echo "selected MeshLLM checkout does not match frozen revision" >&2
     exit 1
+  fi
+  if [[ "$HARNESS_MODE" != pinned-build ]]; then
+    for identity_key in user.name user.email; do
+      identity_value="$(git -C "$TRUSTED_ROOT" config --local --get "$identity_key")" || {
+        echo "trusted controller Git identity is missing: $identity_key" >&2
+        exit 1
+      }
+      git -C "$ROOT" config --local "$identity_key" "$identity_value"
+    done
   fi
 fi
 UPSTREAM_SHA="${1:-${UPSTREAM_SHA_INPUT:-latest}}"
@@ -649,6 +658,9 @@ load_candidate_bundle() {
   fi
   git fetch "$input_bundle" "refs/heads/${candidate_branch}"
   CERTIFIED_SHA="$expected_head"
+  if [[ "$ROOT" != "$TRUSTED_ROOT" ]]; then
+    git -C "$TRUSTED_ROOT" fetch --no-tags "$ROOT" "$CERTIFIED_SHA"
+  fi
   CANDIDATE_BASE_HEAD="$(git rev-parse "${CERTIFIED_SHA}^")"
   VERIFICATION_TREE="$(git rev-parse "${CERTIFIED_SHA}^{tree}")"
 }

@@ -16,6 +16,7 @@ async fn running_observer() -> (Arc<ExternalPlugin>, mpsc::Receiver<super::proto
         startup: Default::default(),
         web_ui_enabled: None,
         web_ui_primary_tab: None,
+        endpoint_models: None,
         installed_metadata: None,
         openai_exchange_grant: None,
     }));
@@ -23,6 +24,7 @@ async fn running_observer() -> (Arc<ExternalPlugin>, mpsc::Receiver<super::proto
     *plugin.runtime.lock().await = Some(PluginRuntime {
         managed_models: Vec::new(),
         generation: 7,
+        started: true,
         authenticated_peer: true,
         initialized_lifecycle: Some(Box::new(
             mesh_llm_plugin::openai_exchange::openai_exchange_hook("observe"),

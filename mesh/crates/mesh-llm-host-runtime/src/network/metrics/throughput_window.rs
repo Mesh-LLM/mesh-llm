@@ -24,6 +24,11 @@ pub(super) const THROUGHPUT_EVIDENCE_MAX_SAMPLES: usize = 32;
 pub(super) struct RecentThroughput {
     pub(super) tps_milli_sum: u64,
     pub(super) samples: u64,
+    /// When the newest of those samples was observed.
+    pub(super) newest: Option<Instant>,
+    /// When the oldest of them was observed: the average stops being evidence
+    /// once this one expires.
+    pub(super) oldest: Option<Instant>,
 }
 
 impl RecentThroughput {
@@ -31,6 +36,8 @@ impl RecentThroughput {
         Self {
             tps_milli_sum: self.tps_milli_sum.saturating_add(other.tps_milli_sum),
             samples: self.samples.saturating_add(other.samples),
+            newest: self.newest.max(other.newest),
+            oldest: [self.oldest, other.oldest].into_iter().flatten().min(),
         }
     }
 }
@@ -65,12 +72,17 @@ impl ThroughputWindow {
         self.samples
             .iter()
             .filter(|(observed, _)| is_fresh(*observed, now))
-            .fold(RecentThroughput::default(), |recent, (_, tps_milli)| {
-                recent.add(RecentThroughput {
-                    tps_milli_sum: *tps_milli,
-                    samples: 1,
-                })
-            })
+            .fold(
+                RecentThroughput::default(),
+                |recent, (observed, tps_milli)| {
+                    recent.add(RecentThroughput {
+                        tps_milli_sum: *tps_milli,
+                        samples: 1,
+                        newest: Some(*observed),
+                        oldest: Some(*observed),
+                    })
+                },
+            )
     }
 
     fn expire(&mut self, now: Instant) {
@@ -105,7 +117,9 @@ mod tests {
             window.recent(at_limit),
             RecentThroughput {
                 tps_milli_sum: 100_000,
-                samples: 1
+                samples: 1,
+                newest: Some(start),
+                oldest: Some(start),
             }
         );
         let past_limit = at_limit + Duration::from_nanos(1);
@@ -132,7 +146,9 @@ mod tests {
             window.recent(later),
             RecentThroughput {
                 tps_milli_sum: 40_000,
-                samples: 1
+                samples: 1,
+                newest: Some(later),
+                oldest: Some(later),
             }
         );
         assert_eq!(window.samples.len(), 1, "the expired sample is dropped");
@@ -150,6 +166,8 @@ mod tests {
         let newest = (100 - THROUGHPUT_EVIDENCE_MAX_SAMPLES as u64)..100;
         assert_eq!(recent.samples, THROUGHPUT_EVIDENCE_MAX_SAMPLES as u64);
         assert_eq!(recent.tps_milli_sum, newest.map(|i| i * 1_000).sum::<u64>());
+        assert_eq!(recent.newest, Some(start + Duration::from_millis(99)));
+        assert_eq!(recent.oldest, Some(start + Duration::from_millis(68)));
         assert_eq!(window.samples.len(), THROUGHPUT_EVIDENCE_MAX_SAMPLES);
     }
 

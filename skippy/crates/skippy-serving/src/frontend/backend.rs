@@ -39,6 +39,7 @@ use crate::frontend::generation::generation_predicted_wait_error;
 use crate::frontend::generation::generation_queue_timeout_error;
 use crate::frontend::generation::generation_response_from_generated_text;
 use crate::frontend::generation::template_exposes_reasoning;
+use crate::frontend::generation::{generation_ids, run_blocking_generation_worker};
 use crate::frontend::request::{
     apply_chat_request_defaults, apply_completion_request_defaults, chat_sampling_config,
     chat_template_options, completion_sampling_config, ensure_chat_runtime_features_supported,
@@ -883,39 +884,6 @@ pub(super) fn write_downstream_or_emit_forward_error(
     })
 }
 
-fn generation_ids(
-    cache: InferenceCacheHints,
-    agent_session_id: Option<&str>,
-    context: &InferenceRequestContext,
-) -> InferenceGenerationIds {
-    let frontend_request_id = context
-        .request_id()
-        .map(|request_id| request_id.as_uuid().into_bytes());
-    InferenceGenerationIds::new_with_trust(
-        cache,
-        agent_session_id,
-        context.has_trusted_agent_session(),
-        frontend_request_id,
-    )
-}
-
-pub(in crate::frontend) async fn run_blocking_generation_worker<T, F, P>(
-    permit: P,
-    context: InferenceRequestContext,
-    work: F,
-) -> Result<T, task::JoinError>
-where
-    T: Send + 'static,
-    F: FnOnce(skippy_inference_api::CancellationToken) -> T + Send + 'static,
-    P: Send + 'static,
-{
-    task::spawn_blocking(move || {
-        let _permit = permit;
-        work(context.cancellation_token())
-    })
-    .await
-}
-
 impl StageOpenAiBackend {
     /// Admit generation work subject to concurrency, queue, token-budget and cancellation gates.
     pub(in crate::frontend) async fn acquire_generation_admission(
@@ -1079,6 +1047,8 @@ impl StageOpenAiBackend {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Prepare and admit a generation, retaining context and permits in its blocking worker.
+    /// Cancellation returns an error while worker-owned leases prevent premature capacity reuse.
     async fn run_generation(
         &self,
         prompt: PreparedGenerationPrompt,
@@ -1094,7 +1064,7 @@ impl StageOpenAiBackend {
         } else {
             let backend = self.clone();
             let ids_for_tokenize = ids.clone();
-            task::spawn_blocking(move || {
+            run_blocking_generation_worker((), context.clone(), move |_| {
                 let prepared =
                     backend.prepare_text_prompt(&prompt, max_tokens, &ids_for_tokenize)?;
                 Ok::<_, InferenceError>((prompt, Some(prepared)))
@@ -1171,6 +1141,8 @@ impl StageOpenAiBackend {
     }
 
     #[allow(clippy::too_many_arguments)]
+    /// Admit streaming generation and retain context and permits in the native worker.
+    /// Forward bounded output events and preserve cancellation through stream delivery.
     async fn run_generation_stream(
         &self,
         prompt: PreparedGenerationPrompt,
@@ -1189,7 +1161,7 @@ impl StageOpenAiBackend {
         } else {
             let backend = self.clone();
             let ids_for_tokenize = ids.clone();
-            task::spawn_blocking(move || {
+            run_blocking_generation_worker((), context.clone(), move |_| {
                 let prepared =
                     backend.prepare_text_prompt(&prompt, max_tokens, &ids_for_tokenize)?;
                 Ok::<_, InferenceError>((prompt, Some(prepared)))

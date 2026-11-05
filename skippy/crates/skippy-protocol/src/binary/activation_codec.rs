@@ -2,6 +2,8 @@ use std::io;
 
 use crate::StageActivationCodec;
 
+mod fp8;
+
 use super::{
     invalid_data,
     types::{MAX_STAGE_ACTIVATION_BYTES, MAX_STAGE_DECODED_ACTIVATION_BYTES},
@@ -83,6 +85,18 @@ pub(crate) fn encode_activation(
             validate_finite(values)?;
             encode_s8_rows(shape, values)
         }
+        StageActivationCodec::Fp8E4m3RowF32RneV1 => {
+            validate_finite(values)?;
+            fp8::encode_rows(fp8::E4M3, shape, values)
+        }
+        StageActivationCodec::Fp8E5m2RowF32RneV1 => {
+            validate_finite(values)?;
+            fp8::encode_rows(fp8::E5M2, shape, values)
+        }
+        StageActivationCodec::Fp8E4m3Block32E8m0RneV1 => {
+            validate_finite(values)?;
+            fp8::encode_blocks(fp8::E4M3, shape, values)
+        }
     }
 }
 
@@ -98,6 +112,11 @@ pub(crate) fn decode_activation(
         StageActivationCodec::F16RneV1 => decode_f16(payload, elements),
         StageActivationCodec::Bf16RneV1 => decode_bf16(payload, elements),
         StageActivationCodec::S8RowF32RneV1 => decode_s8_rows(shape, payload),
+        StageActivationCodec::Fp8E4m3RowF32RneV1 => fp8::decode_rows(fp8::E4M3, shape, payload),
+        StageActivationCodec::Fp8E5m2RowF32RneV1 => fp8::decode_rows(fp8::E5M2, shape, payload),
+        StageActivationCodec::Fp8E4m3Block32E8m0RneV1 => {
+            fp8::decode_blocks(fp8::E4M3, shape, payload)
+        }
     }
 }
 
@@ -118,6 +137,10 @@ pub(crate) fn encoded_len(
                 .ok_or_else(|| invalid_data("S8 row byte count overflow"))?;
             checked_wire_bytes(rows, row_bytes)
         }
+        StageActivationCodec::Fp8E4m3RowF32RneV1 | StageActivationCodec::Fp8E5m2RowF32RneV1 => {
+            fp8::row_encoded_len(shape)
+        }
+        StageActivationCodec::Fp8E4m3Block32E8m0RneV1 => fp8::block_encoded_len(shape),
     }
 }
 
@@ -633,6 +656,9 @@ mod tests {
             StageActivationCodec::F16RneV1,
             StageActivationCodec::Bf16RneV1,
             StageActivationCodec::S8RowF32RneV1,
+            StageActivationCodec::Fp8E4m3RowF32RneV1,
+            StageActivationCodec::Fp8E5m2RowF32RneV1,
+            StageActivationCodec::Fp8E4m3Block32E8m0RneV1,
         ] {
             assert_invalid(
                 encode_activation(codec, shape, &[f32::NAN]),

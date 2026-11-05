@@ -1077,6 +1077,7 @@ impl StageOpenAiBackend {
             request.activation_width,
         )
         .map_err(openai_backend_error)?;
+        request.record_forwarded_features(false, forwarded.dflash_feature_bytes);
         let write_timer = PhaseTimer::start();
         write_stage_message_conditioned(
             &mut *downstream,

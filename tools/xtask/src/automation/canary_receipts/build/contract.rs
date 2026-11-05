@@ -61,8 +61,8 @@ impl Input {
         }
         if !self.mesh_source.is_empty() {
             revision_valid(&self.mesh_source)?;
-            if self.mesh_source != self.selected_revision || !matches!(self.mode, Mode::Pinned) {
-                return Err("selected source requires unchanged pinned-build".into());
+            if self.mesh_source != self.selected_revision {
+                return Err("selected source must match the frozen build base".into());
             }
         } else if self.selected_revision != self.controller_revision {
             return Err("ordinary canary source must match the frozen controller revision".into());

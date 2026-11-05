@@ -166,13 +166,13 @@ fn resolve_speculative(
             draft_context_available: DFLASH_DRAFT_CONTEXT_AVAILABLE,
             native_mtp_decides: native_mtp_enabled && !mtp_yields,
             has_ngram_settings: ngram_min > 0 || ngram_max > 0,
-            package_declares_speculation: package_generation
-                .is_some_and(|generation| generation.speculative_decoding.is_some()),
+            package_generation,
             target_meta,
             model_path,
         },
     )? {
-        let draft_max_tokens = dflash_max_draft_tokens(configured_draft_max_tokens, default_dflash);
+        let draft_max_tokens =
+            dflash_max_draft_tokens(configured_draft_max_tokens, default_dflash.as_ref());
         let base = resolve_decode_config(DecodeResolutionInput {
             requested_strategy: "disabled",
             native_mtp_enabled: false,
@@ -735,6 +735,10 @@ fn package_decode_config(
                 Some(ngram_proposer_config(Some(extender))?),
             )
         }
+        // The DFlash draft is chosen with the catalog defaults; a package
+        // `dflash` strategy with no draft for this backend serves without
+        // speculation.
+        "dflash" => return Ok(None),
         other => bail!("package speculative strategy {strategy_name} has unsupported type {other}"),
     };
     let extension = strategy.extension_policy.as_ref().map(extension_config);
