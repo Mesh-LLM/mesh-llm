@@ -37,6 +37,7 @@ struct StagedModelResult;
 struct StagedSessionResult;
 struct ChainResult;
 struct ChainRunResult;
+struct ReadoutResult;
 struct StagedEmbedResult;
 enum class ModelFamily : ::std::uint8_t;
 struct EncodeResult;
@@ -102,6 +103,13 @@ public:
     [[nodiscard]] StagedEmbedResult staged_embed(StagedSession& session,
                                                  rust::Slice<const std::int32_t> tokens,
                                                  rust::Slice<float> output) noexcept;
+
+    /// Reads bounded, unsampled log probabilities for `selected` tokens from
+    /// the final row after feeding `tokens` (patch 0011). Never samples and
+    /// never changes sampler history.
+    [[nodiscard]] ReadoutResult staged_readout(StagedSession& session,
+                                               rust::Slice<const std::int32_t> tokens,
+                                               rust::Slice<const std::int32_t> selected) noexcept;
 
     /// Plans `ranges` (start/end pairs) and opens one stage per range.
     [[nodiscard]] ChainResult open_chain(rust::Str path,

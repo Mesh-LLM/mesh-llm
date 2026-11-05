@@ -289,6 +289,30 @@ fn reranker_is_classified_as_rank_pooled_with_one_classifier_output() {
 }
 
 #[test]
+fn causal_readout_reads_bounded_unsampled_scores() {
+    // Patch 0011: a decoder-only stage reads selected final-row log
+    // probabilities without sampling. Scores are finite, non-positive log
+    // probabilities, and selections beyond the bounded maximum or empty
+    // selections are rejected.
+    let Some(path) = model_path("SKIPPY_TEST_CAUSAL") else { return };
+    let runtime = Runtime::new().unwrap();
+    let model = runtime.load_stage(&path, 1, 0).expect("whole-model stage");
+    let mut session = model.create_session().unwrap();
+
+    let tokens = [Token(1), Token(2), Token(3)];
+    let selected = [Token(2), Token(1), Token(3)];
+    let scores = session.read_selected_log_probs(&tokens, &selected).expect("readout");
+
+    assert_eq!(scores.len(), 3);
+    assert!(scores.iter().all(|score| score.is_finite()));
+    assert!(scores.iter().all(|score| *score <= 0.0));
+
+    let oversized: Vec<Token> = vec![Token(1); 257];
+    assert!(session.read_selected_log_probs(&tokens, &oversized).is_err());
+    assert!(session.read_selected_log_probs(&tokens, &[]).is_err());
+}
+
+#[test]
 fn a_causal_decoder_is_not_a_reranker() {
     // llama_model_n_cls_out defaults to 1, so its raw value is not a presence
     // test: ungated, every decoder-only chat GGUF reads as a one-output

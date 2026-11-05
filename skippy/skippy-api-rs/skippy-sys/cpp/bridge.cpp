@@ -8,9 +8,11 @@
 #include "encode.h"
 #include "family.h"
 #include "llama/backend.h"
+#include "llama/causal_readout.h"
 #include "llama/model_inventory.h"
 #include "llama/stage_planner.h"
 #include "rerank.h"
+#include "selected_log_probs.h"
 #include "types.h"
 #include "workload.h"
 #include "workload_error.h"
@@ -426,6 +428,39 @@ StagedSessionResult Bridge::create_staged_session(const StagedModel& model) noex
             result.session = std::make_unique<StagedSession>(std::move(*session));
             return result;
         });
+}
+
+ReadoutResult Bridge::staged_readout(StagedSession& session, rust::Slice<const std::int32_t> tokens,
+                                     rust::Slice<const std::int32_t> selected) noexcept {
+    return guarded_message<ReadoutResult>("staged_readout", [&]() -> ReadoutResult {
+        ReadoutResult result{};
+        result.ok = false;
+
+        // Scoped enums: convert the int32 wire values once, at this boundary.
+        std::vector<skippy::Token> fed;
+        fed.reserve(tokens.size());
+        for (const std::int32_t token : tokens)
+            fed.push_back(static_cast<skippy::Token>(token));
+        std::vector<skippy::Token> ids;
+        ids.reserve(selected.size());
+        for (const std::int32_t token : selected)
+            ids.push_back(static_cast<skippy::Token>(token));
+
+        float scores[skippy::detail::max_selected_tokens];
+        const auto read = skippy::llama::read_selected_log_probs(
+            session.get(), fed, ids, std::span<float>(scores, ids.size()));
+        if (!read) {
+            result.status = read.error().status;
+            result.error = rust::String::lossy(read.error().message);
+            return result;
+        }
+        result.scores.reserve(ids.size());
+        for (std::size_t index = 0; index < ids.size(); ++index) {
+            result.scores.push_back(scores[index]);
+        }
+        result.ok = true;
+        return result;
+    });
 }
 
 StagedEmbedResult Bridge::staged_embed(StagedSession& session,

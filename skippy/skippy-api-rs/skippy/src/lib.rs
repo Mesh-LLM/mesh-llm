@@ -348,6 +348,16 @@ impl StagedSession<'_> {
         let result = self.model.runtime.lock().pin_mut().staged_embed(self.handle.pin_mut(), &native, output);
         if result.ok { Ok(result.dimensions) } else { Err(StageError::Rejected(result.error)) }
     }
+
+    /// Reads bounded, unsampled conditional log probabilities for `selected`
+    /// tokens from the final row after feeding `tokens` (patch 0011). Never
+    /// samples a token and never changes sampler history.
+    pub fn read_selected_log_probs(&mut self, tokens: &[Token], selected: &[Token]) -> Result<Vec<f32>, StageError> {
+        let fed: Vec<i32> = tokens.iter().map(|token| token.0).collect();
+        let ids: Vec<i32> = selected.iter().map(|token| token.0).collect();
+        let result = self.model.runtime.lock().pin_mut().staged_readout(self.handle.pin_mut(), &fed, &ids);
+        if result.ok { Ok(result.scores) } else { Err(StageError::Rejected(result.error)) }
+    }
 }
 
 /// Why a stage could not be opened or used.

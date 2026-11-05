@@ -216,6 +216,15 @@ pub mod ffi {
         dimensions: usize,
     }
 
+    /// Selected log-probability readout from a staged session (patch 0011).
+    #[derive(Debug)]
+    struct ReadoutResult {
+        ok: bool,
+        error: String,
+        status: i32,
+        scores: Vec<f32>,
+    }
+
     /// Outcome of validating a stage chain.
     #[derive(Debug)]
     struct ChainValidation {
@@ -295,6 +304,15 @@ pub mod ffi {
             tokens: &[i32],
             output: &mut [f32],
         ) -> StagedEmbedResult;
+
+        /// Reads bounded, unsampled log probabilities for `selected` tokens
+        /// from the final row after feeding `tokens` (patch 0011).
+        fn staged_readout(
+            self: Pin<&mut Bridge>,
+            session: Pin<&mut StagedSession>,
+            tokens: &[i32],
+            selected: &[i32],
+        ) -> ReadoutResult;
 
         /// Reads the model's family from its GGUF architecture.
         fn model_family(self: &Bridge, path: &str) -> ModelFamily;

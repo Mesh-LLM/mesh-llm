@@ -131,4 +131,11 @@ StagedSession::embed(std::span<const llama_token> tokens, std::span<float> outpu
     return static_cast<std::uint32_t>(written);
 }
 
+std::expected<void, StagedFailure> StagedSession::reset() {
+    skippy_error* error = nullptr;
+    const skippy_status status = skippy_session_reset(session_, &error);
+    if (status != SKIPPY_STATUS_OK) return std::unexpected(failure(status, error));
+    return {};
+}
+
 } // namespace skippy::llama

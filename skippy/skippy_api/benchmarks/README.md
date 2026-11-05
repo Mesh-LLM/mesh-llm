@@ -17,6 +17,7 @@ google-benchmark report.
 | `BatchEmbed` | B separate `skippy_session_embed` calls | `embed_batch` — B sequences, one decode |
 | `RerankBatch` | B separate `skippy_session_rerank` calls | `rerank_batch` — one query, B documents, one decode |
 | `stage_chain` | *row pending: the gate compares identical inputs; must compare the C-ABI chain's terminal frame against `StageChain::prefill`'s before timing* | `StageChain` prefill |
+| `causal_scores` | `skippy_session_reset` + `skippy_iteration_batch_sampled` readout (patch 0011) | `StagedSession::reset` + `read_selected_log_probs` (façade) |
 
 Both sides link the *same* patched llama.cpp build, load the same GGUF, and run
 with the same geometry (`n_ctx = n_batch = n_ubatch = 512`, one sequence, all
@@ -137,6 +138,22 @@ With `bge-reranker-v2-m3-Q4_K_M` (438 MB):
 | `SessionCreate` | 3.5 µs | 2.3 µs | 1.5x |
 | `SessionCreateCold` | 3.5 µs | 4.50 ms | old wins ~1 300x |
 | `ModelLoad` | 262.9 ms | 263.4 ms | tie |
+
+With `qwen2.5-0.5b-instruct-Q4_K_M` (400 MB, 24 layers, staged as one layer
+package; 64 fed tokens, 8 selected log-probs per iteration, arm64 release,
+15 interleaved repetitions, the gate comparing the selected log-probs
+byte-identically before and after the timed loop, both arms resetting and
+re-reading the same window each iteration):
+
+| benchmark | old FFI | new API | |
+|---|---:|---:|---|
+| `causal_scores/64` | 11.000 ms | 11.012 ms | tie (0.999x) |
+| `causal_scores/64` min | 10.888 ms | 10.823 ms | tie (+0.6%) |
+
+The causal row is a budget row (class B: no old path existed before patch
+0011, so the FFI arm is the cheapest correct reference — the direct C-ABI
+readout — rather than a replaced call). The decode owns the cost; the façade
+boundary is unmeasurable at this window.
 
 ## Reading the numbers
 

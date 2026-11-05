@@ -1,8 +1,8 @@
 # skippy_api
 
 A C++23 façade over the patched llama.cpp stage runtime for the non-chat
-workloads — embedding, reranking, and encoder prompt — with no chat or
-generation paths in it.
+workloads — embedding, reranking, encoder prompt, and bounded causal
+log-prob readouts — with no chat or generation paths in it.
 
 ```
 include/            public headers; the only part consumers include
@@ -12,6 +12,7 @@ include/            public headers; the only part consumers include
   embed.h             embed() and embed_batch()
   rerank.h            rerank() and rerank_batch()
   encode.h            encode_prompt()
+  selected_log_probs.h  bounded selected-token log-probs (patch 0011 pure half)
   llama/              the only code that includes llama.h
 src/                implementations
 tests/              mocked unit tests (no llama)
@@ -67,11 +68,20 @@ them writes, across layers 0-23, `recurrent=false`. Same model, stage `[0,12)`:
 48 effects and a frontier of 1 value. BERT-family models report no state
 effects at all — they hold no KV — which is the correct answer, not a gap.
 
+## Patch coverage
+
+What each patch in `skippy/llama_cpp/patches` contributed here. Verdicts live
+in `benchmarks/cases.txt`; "—" means nothing ports into the façade.
+
+| patch | what it is | what ported |
+|---|---|---|
+| 0011 causal token score readouts | unsampled `skippy_iteration_batch_sampled` readout, `skippy_session_reset` | `include/selected_log_probs.h` (pure, 256-bound log-softmax), `llama/causal_readout.h` (`read_selected_log_probs`), `StagedSession::reset`, Rust `StagedSession::read_selected_log_probs` |
+
 ## Checkpoint workflow
 
 ```bash
-just skippy-api-verify <embed.gguf> <reranker.gguf>   # format, tidy, tests
-just skippy-api-checkpoint "feat(skippy-api): ..." <embed.gguf> <reranker.gguf>
+just skippy-api-verify <embed.gguf> <reranker.gguf> <causal.gguf>   # format, tidy, tests
+just skippy-api-checkpoint "feat(skippy-api): ..." <embed.gguf> <reranker.gguf> <causal.gguf>
 ```
 
 `verify` is the gate CI-equivalent for this tree; `checkpoint` runs it, stages

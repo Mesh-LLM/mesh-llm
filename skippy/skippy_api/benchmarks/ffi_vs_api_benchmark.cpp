@@ -19,6 +19,7 @@
 #include "embed.h"
 #include "llama/backend.h"
 #include "llama/batch.h"
+#include "llama/causal_readout.h"
 #include "llama/model_inventory.h"
 #include "llama/stage_chain.h"
 #include "normalize.h"
@@ -30,6 +31,7 @@
 
 #include "llama.h"
 #include "skippy.h"
+#include "skippy/execution.h"
 #include "skippy/runtime.h"
 #include "skippy/tokenization.h"
 #include "skippy/workloads.h"
@@ -1276,6 +1278,245 @@ void stage_chain_body(benchmark::State& state, bool use_ffi) {
 void stage_chain_ffi(benchmark::State& state) { stage_chain_body(state, true); }
 void stage_chain_api(benchmark::State& state) { stage_chain_body(state, false); }
 
+// ---------------------------------------------------------------------------
+// causal_scores: bounded, unsampled selected-token log-probs (patch 0011).
+//
+// FFI is the direct C ABI — skippy_iteration_batch_sampled with a token score
+// request, the cheapest correct reference. API is the facade's
+// read_selected_log_probs. Both sides open through the same planned
+// layer-package config and reset + read the same window each iteration, so
+// what is left in the difference is the boundary itself. The pair refuses to
+// time unless both sides produce byte-identical scores.
+// ---------------------------------------------------------------------------
+
+class CausalReadoutBench {
+public:
+    CausalReadoutBench() = default;
+    ~CausalReadoutBench() {
+        if (ffi_session_ != nullptr) (void)skippy_session_free(ffi_session_, nullptr);
+    }
+    CausalReadoutBench(const CausalReadoutBench&) = delete;
+    CausalReadoutBench& operator=(const CausalReadoutBench&) = delete;
+
+    [[nodiscard]] bool open(const std::string& path, std::string& error) {
+        auto inventory = skippy::probe::read_inventory(path);
+        if (!inventory) {
+            error = "gguf: " + inventory.error();
+            return false;
+        }
+        const auto layers = skippy::probe::layer_count_from(*inventory);
+        if (layers < 1) {
+            error = "model has no layers";
+            return false;
+        }
+        ranges_ = {skippy::LayerRange{0, layers}};
+
+        skippy::llama::LlamaBackend backend;
+        auto lease = backend.plan_model_stages(path, ranges_);
+        if (!lease) {
+            error = "plan: " + lease.error().message;
+            return false;
+        }
+        lease_ = std::move(*lease);
+        const skippy::llama::StageSpec spec = skippy::llama::own(lease_.configs.front());
+
+        // Same planned open on both sides: the load path is not the boundary
+        // under test, and sharing it removes it from the ratio.
+        auto ffi_model = skippy::llama::StagedModel::open(path, spec);
+        if (!ffi_model) {
+            error = "ffi open: " + ffi_model.error().message;
+            return false;
+        }
+        if (!skippy_model_supports_causal_readout(ffi_model->native())) {
+            error = "model does not support causal readout; point SKIPPY_BENCH_MODEL at a causal "
+                    "decoder";
+            return false;
+        }
+        ffi_model_.emplace(std::move(*ffi_model));
+
+        skippy_error* failure = nullptr;
+        if (skippy_session_create(ffi_model_->native(), &ffi_session_, &failure) !=
+            SKIPPY_STATUS_OK) {
+            error = "ffi session: " + describe(SKIPPY_STATUS_ERROR, failure);
+            ffi_session_ = nullptr;
+            return false;
+        }
+
+        auto api_model = skippy::llama::StagedModel::open(path, spec);
+        if (!api_model) {
+            error = "api open: " + api_model.error().message;
+            return false;
+        }
+        api_model_.emplace(std::move(*api_model));
+        auto api_session = api_model_->create_session();
+        if (!api_session) {
+            error = "api session: " + api_session.error().message;
+            return false;
+        }
+        api_session_.emplace(std::move(*api_session));
+
+        if (!tokenise(error)) return false;
+        return true;
+    }
+
+    /// One readout on the raw C ABI: reset, feed `fed`, read the selection.
+    [[nodiscard]] bool read_ffi(std::size_t fed_count, std::string& error) {
+        skippy_error* failure = nullptr;
+        if (skippy_session_reset(ffi_session_, &failure) != SKIPPY_STATUS_OK) {
+            error = describe(SKIPPY_STATUS_ERROR, failure);
+            return false;
+        }
+        skippy_token_score_request score{
+            /*token_ids=*/reinterpret_cast<const llama_token*>(selected_.data()),
+            /*token_count=*/selected_.size(),
+            /*out_log_probabilities=*/ffi_scores_.data(),
+        };
+        skippy_iteration_request request{
+            /*session=*/ffi_session_,
+            /*token_ids=*/reinterpret_cast<const llama_token*>(fed_.data()),
+            /*token_count=*/fed_count,
+            /*positions=*/nullptr,
+            /*position_count=*/0,
+            /*sampling=*/nullptr,
+            /*input_desc=*/nullptr,
+            /*input_payload=*/nullptr,
+            /*sample_last=*/false,
+            /*readout=*/&score,
+        };
+        std::size_t sampled = 0;
+        failure = nullptr;
+        if (skippy_iteration_batch_sampled(&request, 1, nullptr, nullptr, nullptr, nullptr, nullptr,
+                                           nullptr, 0, &sampled, &failure) != SKIPPY_STATUS_OK) {
+            error = describe(SKIPPY_STATUS_ERROR, failure);
+            return false;
+        }
+        return true;
+    }
+
+    /// One readout through the facade: reset, feed `fed`, read the selection.
+    [[nodiscard]] bool read_api(std::size_t fed_count, std::string& error) {
+        if (const auto cleared = api_session_->reset(); !cleared) {
+            error = "api reset: " + cleared.error().message;
+            return false;
+        }
+        const auto read = skippy::llama::read_selected_log_probs(
+            *api_session_, std::span<const skippy::Token>{fed_.data(), fed_count}, selected_,
+            api_scores_);
+        if (!read) {
+            error = "api read: " + read.error().message;
+            return false;
+        }
+        return true;
+    }
+
+    /// The scores the API side last produced, for the byte-identical gate.
+    [[nodiscard]] std::span<const float> api_scores() const noexcept {
+        return {api_scores_.data(), selected_.size()};
+    }
+    /// The scores the FFI side last produced, for the byte-identical gate.
+    [[nodiscard]] std::span<const float> ffi_scores() const noexcept {
+        return {ffi_scores_.data(), selected_.size()};
+    }
+    [[nodiscard]] std::size_t selection_size() const noexcept { return selected_.size(); }
+    [[nodiscard]] std::size_t fed_available() const noexcept { return fed_.size(); }
+
+private:
+    [[nodiscard]] bool tokenise(std::string& error) {
+        std::vector<llama_token> native(kMaxTokens);
+        const std::string text = Harness::text(4096);
+        std::size_t count = 0;
+        skippy_error* failure = nullptr;
+        auto status = skippy_tokenize(ffi_model_->native(), text.c_str(), true, native.data(),
+                                      native.size(), &count, &failure);
+        if (status == SKIPPY_STATUS_BUFFER_TOO_SMALL) {
+            if (failure != nullptr) skippy_error_free(failure);
+            native.resize(count);
+            failure = nullptr;
+            status = skippy_tokenize(ffi_model_->native(), text.c_str(), true, native.data(),
+                                     native.size(), &count, &failure);
+        }
+        if (status != SKIPPY_STATUS_OK) {
+            error = describe(status, failure);
+            return false;
+        }
+        if (count < static_cast<std::size_t>(kMaxTokens)) {
+            error = "corpus tokenised to only " + std::to_string(count) + " tokens";
+            return false;
+        }
+        fed_.resize(count);
+        std::memcpy(fed_.data(), native.data(), count * sizeof(llama_token));
+        // Selected tokens come from the fed window, so they are in-vocabulary
+        // by construction and within the native bound by construction.
+        constexpr std::size_t kSelected = 8;
+        selected_.assign(fed_.begin(), fed_.begin() + static_cast<std::ptrdiff_t>(kSelected));
+        return true;
+    }
+
+    std::vector<skippy::LayerRange> ranges_;
+    skippy::llama::PlanLease lease_;
+    std::optional<skippy::llama::StagedModel> ffi_model_;
+    std::optional<skippy::llama::StagedModel> api_model_;
+    skippy_session* ffi_session_ = nullptr;
+    std::optional<skippy::llama::StagedSession> api_session_;
+    std::vector<skippy::Token> fed_;
+    std::vector<skippy::Token> selected_;
+    std::array<float, skippy::detail::max_selected_tokens> ffi_scores_{};
+    std::array<float, skippy::detail::max_selected_tokens> api_scores_{};
+};
+
+/// Shared setup + agreement gate, then the timed reset+read loop per side.
+void causal_scores_body(benchmark::State& state, bool use_ffi) {
+    const char* variable = std::getenv("SKIPPY_BENCH_MODEL");
+    if (variable == nullptr || *variable == '\0') {
+        state.SkipWithError("SKIPPY_BENCH_MODEL is not set");
+        return;
+    }
+
+    CausalReadoutBench bench;
+    std::string error;
+    if (!bench.open(variable, error)) {
+        state.SkipWithError(error.c_str());
+        return;
+    }
+    const std::size_t fed_count =
+        std::min(static_cast<std::size_t>(state.range(0)), bench.fed_available());
+
+    // Gate first: byte-identical scores, or the ratio would compare
+    // different work.
+    if (!bench.read_ffi(fed_count, error) || !bench.read_api(fed_count, error)) {
+        state.SkipWithError(error.c_str());
+        return;
+    }
+    if (std::memcmp(bench.ffi_scores().data(), bench.api_scores().data(),
+                    bench.selection_size() * sizeof(float)) != 0) {
+        state.SkipWithError("causal_scores sides disagree on the selected log-probs");
+        return;
+    }
+
+    for (auto _ : state) {
+        if (!(use_ffi ? bench.read_ffi(fed_count, error) : bench.read_api(fed_count, error))) {
+            state.SkipWithError(error.c_str());
+            return;
+        }
+    }
+    // A mid-run divergence must fail the row, not just the first iteration.
+    if (!bench.read_ffi(fed_count, error) || !bench.read_api(fed_count, error)) {
+        state.SkipWithError(error.c_str());
+        return;
+    }
+    if (std::memcmp(bench.ffi_scores().data(), bench.api_scores().data(),
+                    bench.selection_size() * sizeof(float)) != 0) {
+        state.SkipWithError("causal_scores sides diverged during the run");
+        return;
+    }
+
+    state.SetItemsProcessed(state.iterations() * static_cast<std::int64_t>(fed_count));
+    state.SetLabel(std::to_string(bench.selection_size()) + " selected");
+}
+
+void causal_scores_ffi(benchmark::State& state) { causal_scores_body(state, true); }
+void causal_scores_api(benchmark::State& state) { causal_scores_body(state, false); }
+
 void token_args(benchmark::internal::Benchmark* benchmark) {
     benchmark->Arg(1)->Arg(2)->Arg(8)->Arg(32)->Arg(128)->Arg(512)->UseRealTime();
 }
@@ -1350,6 +1591,9 @@ BENCHMARK_TEMPLATE(Rerank, false)->Name("Rerank/API")->UseRealTime();
 
 BENCHMARK(stage_chain_ffi)->Name("stage_chain/FFI")->UseRealTime();
 BENCHMARK(stage_chain_api)->Name("stage_chain/API")->UseRealTime();
+
+BENCHMARK(causal_scores_ffi)->Name("causal_scores/FFI")->Arg(64)->UseRealTime();
+BENCHMARK(causal_scores_api)->Name("causal_scores/API")->Arg(64)->UseRealTime();
 
 // Our own main so a missing model is one line on stderr, and the llama-free
 // benchmarks still run: BatchBuild and Normalize need no GGUF.
