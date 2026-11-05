@@ -35,6 +35,7 @@ pub(crate) fn served_model_metadata_for_path(
             let kv_head_count = meta.effective_kv_head_count();
             crate::mesh::ServedModelMetadata {
                 thinking_efforts: None,
+                output_modalities: Vec::new(),
                 workload_class: None,
                 architecture: non_empty(meta.architecture),
                 parameter_size,

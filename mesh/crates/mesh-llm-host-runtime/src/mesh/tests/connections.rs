@@ -472,7 +472,7 @@ async fn make_test_node_with_requirements(
         route_target_health: Arc::new(std::sync::OnceLock::new()),
         plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
         model_requirements: Default::default(),
-            unmatched_model_requirements: Default::default(),
+        unmatched_model_requirements: Default::default(),
         config_revision_tx: {
             let (tx, _rx) = tokio::sync::watch::channel(0u64);
             Arc::new(tx)
@@ -602,9 +602,9 @@ async fn host_role_claim_transitions_regossip_to_connected_peer() -> Result<()> 
     Ok(())
 }
 
-#[tokio::test]
-async fn set_serving_models_preserves_existing_known_descriptor_capabilities_when_adding_model()
--> Result<()> {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn set_serving_models_preserves_and_gossips_capabilities_and_output_modalities() -> Result<()>
+{
     let node = make_test_node(super::NodeRole::Worker).await?;
     let vision_model = "Qwen3VL-2B-Instruct-Q4_K_M".to_string();
     let text_model = "Qwen3-8B-Q4_K_M".to_string();
@@ -626,7 +626,10 @@ async fn set_serving_models_preserves_existing_known_descriptor_capabilities_whe
             ..Default::default()
         },
         topology: None,
-        metadata: None,
+        metadata: Some(ServedModelMetadata {
+            output_modalities: vec!["text".into(), "image".into()],
+            ..Default::default()
+        }),
     })
     .await;
 
@@ -650,6 +653,10 @@ async fn set_serving_models_preserves_existing_known_descriptor_capabilities_whe
         crate::models::CapabilityLevel::Supported
     );
     assert!(vision.capabilities.multimodal);
+    assert_eq!(
+        vision.metadata.as_ref().unwrap().output_modalities,
+        ["text", "image"]
+    );
 
     let text = descriptors
         .iter()
@@ -661,6 +668,57 @@ async fn set_serving_models_preserves_existing_known_descriptor_capabilities_whe
         text.capabilities,
         crate::models::ModelCapabilities::default()
     );
+
+    let peer = make_test_node(super::NodeRole::Client).await?;
+    node.set_mesh_id("output-modalities-gossip-test".to_string())
+        .await;
+    peer.set_mesh_id("output-modalities-gossip-test".to_string())
+        .await;
+    node.start_accepting();
+    peer.start_accepting();
+    peer.join(&node.invite_token().await).await?;
+    let remote =
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                if let Some(remote) = peer.peers().await.into_iter().find(|remote| {
+                    remote.id == node.id() && remote.served_model_descriptors.len() == 2
+                }) {
+                    break remote;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("peer should receive both served descriptors through QUIC gossip");
+    let advertised = remote
+        .served_model_descriptors
+        .iter()
+        .find(|descriptor| descriptor.identity.model_name == vision_model)
+        .expect("descriptor should arrive through QUIC gossip");
+    assert_eq!(
+        advertised.metadata.as_ref().unwrap().output_modalities,
+        ["text", "image"]
+    );
+    assert!(advertised.capabilities_known);
+    assert!(advertised.capabilities.multimodal);
+    assert_eq!(
+        advertised.capabilities.vision,
+        crate::models::CapabilityLevel::Supported
+    );
+    let advertised_text = remote
+        .served_model_descriptors
+        .iter()
+        .find(|descriptor| descriptor.identity.model_name == text_model)
+        .unwrap();
+    assert!(
+        advertised_text
+            .metadata
+            .as_ref()
+            .is_none_or(|metadata| metadata.output_modalities.is_empty())
+    );
+    assert_eq!(advertised_text.capabilities, text.capabilities);
+    node.close_endpoint().await;
+    peer.close_endpoint().await;
 
     Ok(())
 }

@@ -9,13 +9,16 @@ final class ModelsTests: XCTestCase {
             XCTAssertEqual(query["workload_class"] as? String, "document_ocr")
             XCTAssertEqual(query["available"] as? Bool, false)
             XCTAssertEqual(query["cursor"] as? String, "opaque")
-            return #"{"data":[{"id":"ocr","display_name":"OCR","kind":"model","workload_class":"document_ocr","availability":"unavailable","operations":["document_ocr"],"providers":[{"provider_id":"peer","local":false,"available":false,"operations":["document_ocr"],"runtime":{"model_name":"ocr","ready":false},"metadata":{"architecture":"future"}}]}],"next_cursor":"next"}"#
+            return #"{"data":[{"id":"ocr","display_name":"OCR","kind":"model","workload_class":"document_ocr","availability":"unavailable","operations":["document_ocr"],"providers":[{"provider_id":"peer","local":false,"available":false,"operations":["document_ocr"],"runtime":{"model_name":"ocr","ready":false},"metadata":{"architecture":"future","output_modalities":["text","image","future"]}}]}],"next_cursor":"next"}"#
         }, modelJSON: { _ in XCTFail("list must not invoke lookup"); return "{}" })
         let page = try await models.list(MeshModelQuery(workloadClass: "document_ocr", available: false, cursor: "opaque"))
         XCTAssertEqual(page.nextCursor, "next")
         XCTAssertEqual(page.data.first?.providers.first?.providerId, "peer")
         XCTAssertNil(page.data.first?.providers.first?.runtime?.contextLength)
-        XCTAssertEqual(page.data.first?.providers.first?.metadata, .object(["architecture": .string("future")]))
+        XCTAssertEqual(page.data.first?.providers.first?.metadata, .object([
+            "architecture": .string("future"),
+            "output_modalities": .array([.string("text"), .string("image"), .string("future")])
+        ]))
     }
 
     func testExactLookupSurfacesNativeUnknownWorkloadsAndMissingMetadata() async throws {

@@ -108,6 +108,46 @@ fn model(name: &str, class: ModelWorkloadClass) -> MeshModel {
 }
 
 #[test]
+fn output_discovery_preserves_conflicting_provider_declarations() {
+    let mut catalog = BTreeMap::new();
+    for (provider_id, outputs) in [
+        ("text-provider", vec!["text".to_string()]),
+        (
+            "image-provider",
+            vec!["text".to_string(), "image".to_string()],
+        ),
+        ("legacy-provider", Vec::new()),
+    ] {
+        let mut descriptor = descriptor("shared", ModelWorkloadClass::CausalGeneration);
+        descriptor.metadata.as_mut().unwrap().output_modalities = outputs.clone();
+        insert_observations(
+            &mut catalog,
+            "shared",
+            &[descriptor],
+            &[],
+            &ProviderContext {
+                provider_id,
+                local: false,
+                available: true,
+                endpoint: None,
+            },
+        );
+    }
+    let shared = finish_model(catalog.into_values().next().unwrap());
+    assert!(shared.metadata.is_none());
+    assert_eq!(shared.providers.len(), 3);
+    for provider in shared.providers {
+        let outputs = &provider.metadata.as_ref().unwrap().output_modalities;
+        match provider.provider_id.as_str() {
+            "text-provider" => assert_eq!(outputs, &["text"]),
+            "image-provider" => assert_eq!(outputs, &["text", "image"]),
+            "legacy-provider" => assert!(outputs.is_empty()),
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
 fn discovery_keeps_all_workloads_and_unknown_metadata() {
     let mut models = vec![
         model("llm", ModelWorkloadClass::CausalGeneration),
