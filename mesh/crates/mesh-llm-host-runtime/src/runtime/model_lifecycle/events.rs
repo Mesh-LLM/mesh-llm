@@ -1002,6 +1002,31 @@ mod tests {
         clear_runtime_event_engine();
     }
 
+    /// A successful load reports preparation as completed, never as
+    /// `terminal_not_delivered`, whether or not the caller reported
+    /// resolution first (the startup load does not; the runtime load does).
+    #[test]
+    #[serial_test::serial(runtime_event_engine_state)]
+    fn successful_load_settles_preparation_as_completed() {
+        for report_resolution in [false, true] {
+            let engine = install_test_engine();
+            let mut op = LoadOperation::begin("org/model");
+            if report_resolution {
+                op.resolution_completed("org/model");
+            }
+            op.native_load_completed("org/model")
+                .model_available("org/model");
+            let kinds = engine.published_kinds();
+            let count = |kind: &str| kinds.iter().filter(|k| **k == kind).count();
+            assert_eq!(count("model_resolution_completed"), 1, "{kinds:?}");
+            assert_eq!(count("model_preparation_completed"), 1, "{kinds:?}");
+            assert_eq!(count("model_resolution_failed"), 0, "{kinds:?}");
+            assert_eq!(count("model_preparation_failed"), 0, "{kinds:?}");
+            assert_eq!(engine.occupied_count(), 0);
+            clear_runtime_event_engine();
+        }
+    }
+
     #[test]
     #[serial_test::serial(runtime_event_engine_state)]
     fn unload_forced_does_not_prevent_normal_completion() {
