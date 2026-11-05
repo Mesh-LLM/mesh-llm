@@ -15,6 +15,19 @@ async fn nested_single_model_directive_bypasses_installed_override() {
         manager.clone(),
     )
     .await;
+    // Neither client-supplied JSON nor a guessed request identity grants the
+    // host-internal bypass. Ordinary ingress must still invoke the plugin.
+    let body = json!({
+        "model":"mesh", "single_model_only":true,
+        "messages":[{"role":"user","content":"hello"}]
+    }).to_string();
+    let wire = format!(
+        "POST /v1/chat/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nx-request-id: {}\r\nContent-Length: {}\r\n\r\n{body}",
+        uuid::Uuid::new_v4(), body.len()
+    );
+    let ordinary = send_request_and_read_response(address, vec![wire.into_bytes()]).await;
+    assert!(ordinary.starts_with("HTTP/1.1 200"), "{ordinary}");
+    assert!(ordinary.contains("plugin-worker"), "{ordinary}");
     let bridge = InferenceRpcBridge::new(address.port(), manager);
     let legacy = json!({"model_id":"mesh", "request":{"messages":[]}});
     assert!(bridge.infer(&legacy.to_string()).await.is_err());

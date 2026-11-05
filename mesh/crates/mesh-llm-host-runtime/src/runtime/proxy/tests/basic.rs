@@ -1385,7 +1385,7 @@ async fn anthropic_ingress_rejects_unsupported_fields_with_anthropic_error() {
 }
 
 #[tokio::test]
-async fn anthropic_upstream_unavailable_exhaustion_uses_overloaded_error_envelope() {
+async fn anthropic_upstream_empty_error_keeps_status_and_error_envelope() {
     let (port, _request, upstream) = spawn_status_upstream("502 Bad Gateway", "").await;
     let (addr, proxy) = spawn_api_proxy_test_harness(local_targets(&[("test", port)])).await;
     let body =
@@ -1396,11 +1396,11 @@ async fn anthropic_upstream_unavailable_exhaustion_uses_overloaded_error_envelop
         body.len()
     );
     let response = send_request_and_read_response(addr, vec![request.into_bytes()]).await;
-    assert!(response.starts_with("HTTP/1.1 503"), "{response}");
+    assert!(response.starts_with("HTTP/1.1 502"), "{response}");
     let error: serde_json::Value =
         serde_json::from_str(response.split_once("\r\n\r\n").unwrap().1).unwrap();
     assert_eq!(error["type"], "error");
-    assert_eq!(error["error"]["type"], "overloaded_error");
+    assert_eq!(error["error"]["type"], "api_error");
     proxy.abort();
     upstream.await.unwrap();
 }

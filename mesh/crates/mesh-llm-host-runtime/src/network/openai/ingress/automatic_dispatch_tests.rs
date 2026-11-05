@@ -178,7 +178,7 @@ async fn automatic_timeout_exhaustion_never_spills_to_another_model() {
 
 #[tokio::test]
 async fn named_model_never_spills_to_another_model() {
-    dispatch_fixture(429, 503, 2, false).await;
+    dispatch_fixture(429, 429, 2, false).await;
 }
 
 #[tokio::test]
