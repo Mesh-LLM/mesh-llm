@@ -150,8 +150,8 @@ fn recipe(source: &str, targets: &[String]) -> DynResult<()> {
         && git < test)
         || !commands[target].contains("$1 == \"target_directory\"")
         || !commands[binary].contains("$1 == \"binary_path\"")
-        || !commands[fixture]
-            .contains(r"${binary%[/\\]*}/examples/swift_privacy_lint_fixture$fixture_suffix")
+        || commands[fixture]
+            != r#"export SPV_ADAPTER_FIXTURE="${binary%[/\\]*}/examples/swift_privacy_lint_fixture$fixture_suffix""#
     {
         return Err("fixtures must follow actual bootstrap target and inert build".into());
     }

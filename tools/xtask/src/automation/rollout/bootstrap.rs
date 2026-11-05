@@ -30,6 +30,12 @@ pub(super) fn validate(base: &Path, request: &Request) -> Checked<()> {
     let binary = Path::new(field("binary_path")?);
     let target = Path::new(field("target_directory")?);
     let host = field("host")?;
+    if Path::new(host).file_name() != Some(std::ffi::OsStr::new(host)) {
+        return Err(reject(
+            Issue::Bootstrap,
+            "host must be a single directory name",
+        ));
+    }
     if !binary.is_absolute() || !target.is_absolute() {
         return Err(reject(Issue::Bootstrap, "bootstrap paths must be absolute"));
     }
