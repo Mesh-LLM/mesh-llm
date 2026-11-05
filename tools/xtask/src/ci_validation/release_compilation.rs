@@ -76,6 +76,7 @@ fn cargo_step(job: &Node, step: &Node) -> bool {
         "cargo ",
         "scripts/release-version.sh",
         "scripts/publish-crates.sh",
+        "scripts/release-notes-generate.sh",
     ]
     .iter()
     .any(|marker| executable.contains(marker))
