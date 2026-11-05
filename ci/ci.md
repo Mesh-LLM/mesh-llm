@@ -194,11 +194,10 @@ This is the checked-in implementation. Normative rules live in
 `.agents/skills/manage-ci/references/current-inventory.md`; the design record
 and acceptance criteria are in `.omo/specs/pr-ci-optimization.md`.
 
-The affected-crate fallback roster in `scripts/affected-crates.sh` includes
-`mesh-llm-moa-plugin` alongside its related workspace crates;
-`just ci-crate-lists` checks it against workspace membership. The publish
-chain publishes `mesh-mixture-of-agents` before `mesh-llm-moa-plugin`, and
-both before `mesh-llm-host-runtime`. The Lightning payment crates
+The affected-crate fallback roster in `scripts/affected-crates.sh` is checked
+against workspace membership by `just ci-crate-lists`. MoA is being extracted
+to `Mesh-LLM/moa-plugin` and is no longer in the workspace publish chain.
+The Lightning payment crates
 (`mesh-llm-wallet`, `mesh-llm-payments-types`, `mesh-llm-payments`,
 `mesh-llm-pay-lightning`) live in `Mesh-LLM/ln-payments-plugin` and are not
 part of this workspace or its publish chain.
