@@ -56,7 +56,8 @@ async fn collect_local(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
     let descriptors = node.served_model_descriptors().await;
     let runtimes = node.model_runtime_descriptors.lock().await.clone();
     let hosted = node.hosted_models().await;
-    let endpoints = match node.plugin_manager().await {
+    let plugin_manager = node.plugin_manager().await;
+    let endpoints = match &plugin_manager {
         Some(manager) => manager.inference_endpoints().await?,
         None => Vec::new(),
     };
@@ -107,6 +108,13 @@ async fn collect_local(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
     }
     {
         for endpoint in endpoints {
+            let output_modalities = if let Some(manager) = &plugin_manager {
+                manager
+                    .endpoint_output_modalities(&endpoint.plugin_name, &endpoint.endpoint_id)
+                    .await
+            } else {
+                BTreeMap::new()
+            };
             let class = if endpoint.protocol.as_deref() == Some("document_ocr_v1") {
                 ModelWorkloadClass::DocumentOcr
             } else {
@@ -120,6 +128,10 @@ async fn collect_local(node: &mesh::Node, catalog: &mut BTreeMap<String, MeshMod
                     },
                     metadata: Some(mesh::ServedModelMetadata {
                         workload_class: Some(class),
+                        output_modalities: output_modalities
+                            .get(&name)
+                            .cloned()
+                            .unwrap_or_default(),
                         ..Default::default()
                     }),
                     ..Default::default()

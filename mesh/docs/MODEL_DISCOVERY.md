@@ -96,6 +96,24 @@ where available. Missing facts mean unknown. In particular:
 - An OCR provider and an LLM provider sharing an ID retain separate workload
   evidence. Their operations are not interchangeable.
 
+`metadata.output_modalities` advertises output formats, for example
+`["text", "image"]`. It is independent of vision/audio input capabilities and
+does not change request routing or choose whether a prompt should generate an
+image. Missing or empty values mean unknown, including advertisements from
+older peers. Future modality names are preserved. Read each provider's value;
+model-level metadata is present only when every provider agrees.
+
+For a provider from a rich model lookup, read the list as follows. The currently
+pinned Python SDK does not yet expose rich discovery.
+
+| SDK | Read advertised output modalities |
+|---|---|
+| Rust | `provider.metadata.as_ref().map(\|metadata\| &metadata.output_modalities)` |
+| Node.js | `provider.metadata?.output_modalities` |
+| Python | Pending rich discovery support in the currently pinned SDK. |
+| Swift | `if case let .object(metadata)? = provider.metadata { print(metadata["output_modalities"] as Any) }` |
+| Kotlin | `provider.metadata?.jsonObject?.get("output_modalities")` (import `kotlinx.serialization.json.jsonObject`) |
+
 ## Compatibility model endpoints
 
 `GET /v1/models` (also `/models`) defaults to the OpenAI shape:

@@ -4,6 +4,8 @@ import {
   MAX_CHAT_CONVERSATIONS,
   MAX_CHAT_MESSAGE_BODY_CHARS,
   MAX_CHAT_THREAD_MESSAGES,
+  MAX_GENERATED_IMAGE_HISTORY_CHARS,
+  MAX_GENERATED_IMAGE_MESSAGE_BODY_CHARS,
   clearChatState,
   loadChatState,
   saveChatState,
@@ -318,6 +320,113 @@ describe('chat-storage', () => {
     const saved = await loadChatState('live')
     expect(saved?.threads['live-1']).toHaveLength(MAX_CHAT_THREAD_MESSAGES)
     expect(saved?.threads['live-1']?.at(-1)?.body.length).toBeLessThanOrEqual(MAX_CHAT_MESSAGE_BODY_CHARS)
+  })
+
+  it.each(['png', 'jpeg', 'webp'])(
+    'retains a generated %s image through saving, reload and conversation switches',
+    async (format) => {
+      const body = `Here is your cat.\n\n![Generated cat](data:image/${format};base64,${'YWJj'.repeat(32_768)})`
+      expect(body.length).toBeGreaterThan(MAX_CHAT_MESSAGE_BODY_CHARS)
+      const state = buildState('image-chat', 'Generated cat')
+      const other = buildState('other-chat', 'Other conversation')
+      state.conversations.push(...other.conversations)
+      state.conversationGroups[0]!.conversationIds.push('other-chat')
+      state.threads['image-chat'] = [{ id: 'cat', messageRole: 'assistant', timestamp: 'Now', body }]
+      state.threads['other-chat'] = []
+      await saveChatState('live', state)
+
+      // Exercise serialized storage rather than retaining the in-memory source object.
+      mockStore.set(LIVE_STATE_KEY, JSON.parse(JSON.stringify(mockStore.get(LIVE_STATE_KEY))))
+      localStorage.clear()
+      const reloaded = (await loadChatState('live'))!
+      expect(reloaded.threads['image-chat']?.[0]?.body).toBe(body)
+      reloaded.activeConversationId = 'other-chat'
+      await saveChatState('live', reloaded)
+      const switched = (await loadChatState('live'))!
+      switched.activeConversationId = 'image-chat'
+      await saveChatState('live', switched)
+      expect((await loadChatState('live'))?.threads['image-chat']?.[0]?.body).toBe(body)
+    }
+  )
+
+  it('bounds generated-image messages and keeps the ordinary user/text limits', () => {
+    const imageBody = `![Generated image](data:image/png;base64,${'A'.repeat(MAX_GENERATED_IMAGE_MESSAGE_BODY_CHARS)})`
+    const messages: ThreadMessage[] = [
+      { id: 'oversized-image', messageRole: 'assistant', timestamp: 'Now', body: imageBody },
+      { id: 'user-image', messageRole: 'user', timestamp: 'Now', body: imageBody.slice(0, 30_000) + ')' },
+      { id: 'ordinary-text', messageRole: 'assistant', timestamp: 'Now', body: 'x'.repeat(30_000) }
+    ]
+
+    const trimmed = trimThreadMessages(messages)
+    expect(trimmed[0]?.body).toBe('[Generated image omitted from local history]')
+    expect(trimmed[0]?.body).not.toContain('base64')
+    for (const message of trimmed.slice(1)) {
+      expect(message.body.length).toBeLessThanOrEqual(MAX_CHAT_MESSAGE_BODY_CHARS)
+      expect(message.body).toContain('Message truncated in local history')
+    }
+  })
+
+  it('removes complete image bytes from quota recovery snapshots instead of truncating their data URL', async () => {
+    const body = `Caption.\n\n![Image](data:image/png;base64,${'YWJj'.repeat(32_768)})`
+    const state = buildState('image-chat', 'Image')
+    state.threads['image-chat'] = [{ id: 'image', messageRole: 'assistant', timestamp: 'Now', body }]
+    const originalSetItem = Storage.prototype.setItem
+    const setItem = vi.spyOn(Storage.prototype, 'setItem')
+    setItem.mockImplementation(function (this: Storage, key: string, value: string) {
+      const envelope = JSON.parse(value) as StoredChatStateEnvelope
+      if (key === LIVE_LOCAL_STORAGE_KEY && !envelope.recovery) {
+        throw new DOMException('Quota exceeded', 'QuotaExceededError')
+      }
+      return Reflect.apply(originalSetItem, this, [key, value])
+    })
+
+    try {
+      await saveChatState('live', state)
+    } finally {
+      setItem.mockRestore()
+    }
+
+    const recovery = JSON.parse(localStorage.getItem(LIVE_LOCAL_STORAGE_KEY)!) as StoredChatStateEnvelope
+    expect(recovery.recovery).toBe(true)
+    expect(recovery.state.threads['image-chat']?.[0]?.body).toBe('Caption.\n\n[Image omitted from local history]')
+    expect((mockStore.get(LIVE_STATE_KEY) as StoredChatStateEnvelope).state.threads['image-chat']?.[0]?.body).toBe(body)
+  })
+
+  it('budgets generated-image history across chats while preserving their newest complete images', async () => {
+    const imageMessage = (id: string, alt = id): ThreadMessage => {
+      const prefix = `Caption for ${id}.\n\n![${alt}](data:image/png;base64,`
+      const body = prefix + 'A'.repeat(MAX_GENERATED_IMAGE_MESSAGE_BODY_CHARS - prefix.length - 1) + ')'
+      return { id, messageRole: 'assistant', timestamp: 'Now', body }
+    }
+    const state = buildState('new-chat', 'Newest chat')
+    const older = buildState('old-chat', 'Older chat')
+    state.conversations.push(...older.conversations)
+    state.threads['new-chat'] = [imageMessage('new-1'), imageMessage('new-2'), imageMessage('new-3')]
+    state.threads['old-chat'] = [imageMessage('old-1', ''), imageMessage('old-2')]
+    const originalOldBody = state.threads['old-chat'][0]!.body
+
+    await saveChatState('live', state)
+    localStorage.clear()
+    const saved = (await loadChatState('live'))!
+    const retainedImages = Object.values(saved.threads)
+      .flat()
+      .filter((message) => message.body.includes('data:image/'))
+    expect(retainedImages.map((message) => message.id)).toEqual(['new-1', 'new-2', 'new-3', 'old-2'])
+    expect(retainedImages.reduce((chars, message) => chars + message.body.length, 0)).toBe(
+      MAX_GENERATED_IMAGE_HISTORY_CHARS
+    )
+    for (const message of retainedImages) {
+      expect(message.body).toBe(
+        state.threads[message.id.startsWith('new') ? 'new-chat' : 'old-chat']!.find(
+          (original) => original.id === message.id
+        )!.body
+      )
+    }
+    expect(saved.threads['old-chat']![0]!.body).toBe(
+      'Caption for old-1.\n\n[Generated image omitted from local history]'
+    )
+    expect(state.threads['old-chat'][0]!.body).toBe(originalOldBody)
+    expect(saved.activeConversationId).toBe('new-chat')
   })
 
   it('clears only the requested scope record', async () => {

@@ -1,6 +1,7 @@
 import type { UIMessage, ModelMessage, MessagePart, ContentPart } from '@tanstack/ai'
 import type { ResponsesRequest, ResponsesInputMessage, ResponsesInputContentBlock } from '@/lib/api/types'
 import { uploadAttachment } from '@/features/chat/api/upload-attachment'
+import { summarizeGeneratedImages } from '@/features/chat/lib/generated-images'
 
 /** Reuse in-flight and completed blob uploads while constructing retry bodies. */
 export type AttachmentUploadCache = Map<string, Promise<string>>
@@ -45,6 +46,14 @@ async function uploadDataSource(
 
 function isUIMessage(msg: UIMessage | ModelMessage): msg is UIMessage {
   return 'parts' in msg
+}
+
+function summarizeAssistantImages(content: ResponsesInputMessage['content']): ResponsesInputMessage['content'] {
+  return typeof content === 'string'
+    ? summarizeGeneratedImages(content)
+    : content.map((block) =>
+        block.type === 'input_text' ? { ...block, text: summarizeGeneratedImages(block.text) } : block
+      )
 }
 
 async function partToContentBlock(
@@ -131,7 +140,8 @@ async function convertUIMessage(
     await Promise.all(msg.parts.map((part) => partToContentBlock(part, clientId, requestId, uploadCache)))
   ).filter((b): b is ResponsesInputContentBlock => b !== null)
   if (content.length === 0) return null
-  return { role, content: content.length === 1 && content[0]?.type === 'input_text' ? content[0].text : content }
+  const inputContent = content.length === 1 && content[0]?.type === 'input_text' ? content[0].text : content
+  return { role, content: role === 'assistant' ? summarizeAssistantImages(inputContent) : inputContent }
 }
 
 async function convertModelMessage(
@@ -147,7 +157,7 @@ async function convertModelMessage(
 
   if (typeof msg.content === 'string') {
     if (msg.content.length === 0) return null
-    return { role, content: msg.content }
+    return { role, content: role === 'assistant' ? summarizeAssistantImages(msg.content) : msg.content }
   }
 
   const content: ResponsesInputContentBlock[] = (
@@ -155,7 +165,8 @@ async function convertModelMessage(
   ).filter((b): b is ResponsesInputContentBlock => b !== null)
 
   if (content.length === 0) return null
-  return { role, content: content.length === 1 && content[0]?.type === 'input_text' ? content[0].text : content }
+  const inputContent = content.length === 1 && content[0]?.type === 'input_text' ? content[0].text : content
+  return { role, content: role === 'assistant' ? summarizeAssistantImages(inputContent) : inputContent }
 }
 
 export async function buildResponsesInput(

@@ -775,6 +775,9 @@ pub struct ServedModelMetadata {
     /// Wrapper retains the distinction between an unprobed runtime and no observed levels.
     #[prost(message, optional, tag = "14")]
     pub thinking_efforts: ::core::option::Option<ThinkingEfforts>,
+    /// Provider-declared outputs; absent/empty means unknown, never text-only.
+    #[prost(string, repeated, tag = "15")]
+    pub output_modalities: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ThinkingEfforts {

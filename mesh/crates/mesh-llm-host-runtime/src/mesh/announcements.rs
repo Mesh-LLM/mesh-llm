@@ -192,39 +192,44 @@ impl Node {
         let Ok(endpoints) = plugin_manager.inference_endpoints().await else {
             return Vec::new();
         };
-        endpoints
-            .into_iter()
-            .flat_map(|endpoint| {
-                let workload_class = crate::plugin::inference_routing::endpoint_workload_class(
-                    endpoint.protocol.as_deref(),
-                );
-                endpoint
-                    .models
-                    .into_iter()
-                    .map(move |model_name| ServedModelDescriptor {
-                        identity: ServedModelIdentity {
-                            model_name,
-                            ..Default::default()
-                        },
-                        capabilities_known: true,
-                        capabilities: crate::models::ModelCapabilities {
-                            audio: if workload_class
-                                == crate::mesh::ModelWorkloadClass::SpeechRecognition
-                            {
-                                crate::models::CapabilityLevel::Supported
-                            } else {
-                                crate::models::CapabilityLevel::None
-                            },
-                            ..Default::default()
-                        },
-                        metadata: Some(ServedModelMetadata {
-                            workload_class: Some(workload_class),
-                            ..Default::default()
-                        }),
+        let mut descriptors = Vec::new();
+        for endpoint in endpoints {
+            let output_modalities = plugin_manager
+                .endpoint_output_modalities(&endpoint.plugin_name, &endpoint.endpoint_id)
+                .await;
+            let workload_class = crate::plugin::inference_routing::endpoint_workload_class(
+                endpoint.protocol.as_deref(),
+            );
+            descriptors.extend(endpoint.models.into_iter().map(move |model_name| {
+                ServedModelDescriptor {
+                    metadata: Some(ServedModelMetadata {
+                        workload_class: Some(workload_class),
+                        output_modalities: output_modalities
+                            .get(&model_name)
+                            .cloned()
+                            .unwrap_or_default(),
                         ..Default::default()
-                    })
-            })
-            .collect()
+                    }),
+                    identity: ServedModelIdentity {
+                        model_name,
+                        ..Default::default()
+                    },
+                    capabilities_known: true,
+                    capabilities: crate::models::ModelCapabilities {
+                        audio: if workload_class
+                            == crate::mesh::ModelWorkloadClass::SpeechRecognition
+                        {
+                            crate::models::CapabilityLevel::Supported
+                        } else {
+                            crate::models::CapabilityLevel::None
+                        },
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }
+            }));
+        }
+        descriptors
     }
 
     pub(crate) async fn local_descriptors_with_plugins(&self) -> Vec<ServedModelDescriptor> {

@@ -164,6 +164,75 @@ describe('chat math rendering', () => {
     expect(screen.queryByRole('link', { name: 'unsafe' })).not.toBeInTheDocument()
   })
 
+  it.each(['png', 'jpeg', 'webp'])('renders an inline generated %s image in an assistant response', (format) => {
+    const imageUrl = `data:image/${format};base64,aGVsbG8=`
+    render(
+      <MessageRow
+        messageRole="assistant"
+        body={`Here is your cat.\n\n![Generated cat](${imageUrl})`}
+        timestamp="12:11"
+        model="image-demo"
+      />
+    )
+
+    expect(screen.getByText('Here is your cat.')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: 'Generated cat' })).toHaveAttribute('src', imageUrl)
+  })
+
+  it('hides large incomplete image bytes during streaming and renders the image when its destination closes', () => {
+    const imageUrl = `data:image/png;base64,${'YWJj'.repeat(32_768)}`
+    const partialBody = `Here is the image.\n\n![Generated image](${imageUrl}`
+    const { container, rerender } = render(
+      <MessageRow messageRole="assistant" body={partialBody} timestamp="12:11" state="streaming" />
+    )
+
+    expect(container).toHaveTextContent('Here is the image.')
+    expect(container).toHaveTextContent('[Generated image]')
+    expect(container).not.toHaveTextContent('base64')
+    expect(container).not.toHaveTextContent('YWJj')
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+
+    rerender(<MessageRow messageRole="assistant" body={`${partialBody})`} timestamp="12:11" state="streaming" />)
+    expect(screen.getByRole('img', { name: 'Generated image' })).toHaveAttribute('src', imageUrl)
+    expect(container).not.toHaveTextContent('YWJj')
+  })
+
+  it('keeps a stopped incomplete image readable without showing its encoded pixels', () => {
+    const { container } = render(
+      <MessageRow
+        messageRole="assistant"
+        body={`Caption.\n\n![Interrupted image](data:image/webp;base64,${'YWJj'.repeat(32_768)}`}
+        timestamp="12:11"
+        state="stopped"
+      />
+    )
+
+    expect(container).toHaveTextContent('Caption.')
+    expect(container).toHaveTextContent('[Interrupted image]')
+    expect(container).not.toHaveTextContent('base64')
+    expect(container).not.toHaveTextContent('YWJj')
+    expect(screen.queryByRole('img')).not.toBeInTheDocument()
+  })
+
+  it('keeps data URLs blocked in links and non-raster image sources', () => {
+    const { container } = render(
+      <MarkdownMessage
+        content={[
+          '[image link](data:image/png;base64,aGVsbG8=)',
+          '![SVG](data:image/svg+xml;base64,PHN2Zz48L3N2Zz4=)',
+          '![HTML](data:text/html;base64,PHNjcmlwdD4=)',
+          '![Malformed](data:image/png;base64,invalid!)',
+          '![Script](javascript:alert%281%29)'
+        ].join('\n\n')}
+      />
+    )
+
+    expect(container.querySelector('a[href^="data:"]')).not.toBeInTheDocument()
+    for (const image of container.querySelectorAll('img')) {
+      expect(image.getAttribute('src') || '').toBe('')
+    }
+  })
+
   it('does not opt into raw HTML rendering', () => {
     const { container } = render(<MarkdownMessage content={'<img src="x" onerror="alert(1)" /> **safe text**'} />)
 
