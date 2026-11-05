@@ -14,7 +14,7 @@ const PINS: [&str; 2] = [
     "skippy/llama_cpp/upstream.txt",
 ];
 const GRAMMAR: Grammar = Grammar {
-    usage: "repository selected-ref --ref REF --expected-origin URL --event workflow_dispatch [--repository PATH] [--upstream SHA] [--action certify|certify-and-publish] [--github-output PATH --summary PATH] [--timeout-secs SECONDS]",
+    usage: "repository selected-ref --ref REF --expected-origin URL --event workflow_dispatch [--repository PATH] [--upstream SHA] [--action certify|certify-and-publish|upgrade] [--github-output PATH --summary PATH] [--timeout-secs SECONDS]",
     values: &[
         "--ref",
         "--expected-origin",
@@ -57,10 +57,12 @@ pub(crate) fn run(
         return Err("selected-ref accepts named inputs only".into());
     }
     let reference = parsed.last("--ref").ok_or("selected ref missing")?;
-    let publish_selected = match parsed.last("--action").unwrap_or("certify") {
+    let action = parsed.last("--action").unwrap_or("certify");
+    let publish_selected = match action {
         "certify" => false,
         "certify-and-publish" => true,
-        _ => return Err("selected action must be certify or certify-and-publish".into()),
+        "upgrade" => false,
+        _ => return Err("selected action must be certify, certify-and-publish or upgrade".into()),
     };
     let expected = parsed
         .last("--expected-origin")
@@ -68,7 +70,12 @@ pub(crate) fn run(
     if parsed.last("--event") != Some("workflow_dispatch") {
         return Err("selected source requires an explicit manual dispatch".into());
     }
-    if !parsed.last("--upstream").unwrap_or("").is_empty() {
+    let upstream = parsed.last("--upstream").unwrap_or("");
+    if action == "upgrade" {
+        if !sha(upstream) {
+            return Err("selected upgrade requires an exact lowercase 40-hex upstream SHA".into());
+        }
+    } else if !upstream.is_empty() {
         return Err("selected ref cannot override its existing upstream pin".into());
     }
     if reference.is_empty()
@@ -99,6 +106,14 @@ pub(crate) fn run(
     interrupt.finish()?;
     let mut selected = result?;
     selected.publish_selected = publish_selected;
+    if action == "upgrade" {
+        if selected.upstream == upstream {
+            return Err("selected upgrade must change the existing upstream pin".into());
+        }
+        selected.upstream = upstream.to_owned();
+        selected.changed = "true";
+        selected.mode = "repair-build";
+    }
     publish(
         &selected,
         parsed.last("--github-output"),
@@ -207,12 +222,19 @@ fn publish(selected: &Selection, output: Option<&str>, summary: Option<&str>) ->
     match (output, summary) {
         (Some(output), Some(summary)) => {
             let values = format!(
-                "source={}\nmesh_source={}\nupstream={}\nchanged=false\nmode=pinned-build\ncertify=true\npublish_selected={}\n",
-                selected.source, selected.mesh_source, selected.upstream, selected.publish_selected
+                "source={}\nmesh_source={}\nupstream={}\nchanged={}\nmode={}\ncertify=true\npublish_selected={}\n",
+                selected.source,
+                selected.mesh_source,
+                selected.upstream,
+                selected.changed,
+                selected.mode,
+                selected.publish_selected
             );
             let receipt = format!(
-                "{} MeshLLM revision: `{}`\n\nExisting llama.cpp pin: `{}`\n",
-                if selected.publish_selected {
+                "{} MeshLLM revision: `{}`\n\nllama.cpp target: `{}`\n",
+                if selected.changed == "true" {
+                    "Upgrade from"
+                } else if selected.publish_selected {
                     "Certify and publish"
                 } else {
                     "Certify-only"

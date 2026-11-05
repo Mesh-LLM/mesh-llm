@@ -63,10 +63,13 @@ preparation may use step-local Cargo home and target directories outside the
 measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
 
-Persistent macOS canary jobs use the `preinstalled-macos` automation profile.
-Preflight and build require `[self-hosted, macOS, ARM64, jy-managed,
-family-certify, accelerator-memory-128plus]`; family and infrastructure-retry
-jobs replace the final label with the controller's `matrix.memory_tier`.
+Persistent canary jobs use the resolver-selected `preinstalled-macos` or
+`preinstalled-linux` automation profile. Preflight and build require
+`[self-hosted, <selected OS>, ARM64, jy-managed, family-certify,
+accelerator-memory-128plus]`. Family and infrastructure-retry jobs consume the
+controller's memory tier: 128-tier labels follow the selected platform, while
+256-tier labels remain on macOS. Backend selection uses Metal on macOS and
+CUDA on Linux; the Linux image must carry a working driver and toolkit.
 JY owns machine eligibility through attribute selectors: macOS Apple M1 Ultra
 with exactly 128 GiB or Apple M3 Ultra with exactly 256 GiB, with mounted model
 storage. Never select a node name. The JY runner groups must allow only these
@@ -76,7 +79,7 @@ unavailable managed capacity queues rather than falling back to another pool.
 They check runner prerequisites before compiling automation or preparing SDK
 dependencies and fail if any are absent. Tool installation and upgrades belong
 to runner provisioning: never invoke Rust, Just, or Homebrew installers from
-this profile. Keep job-owned compiler-cache startup and linker verification.
+these profiles. Keep job-owned compiler-cache startup and linker verification.
 
 Automation is compiled at most once per run and platform for product-source
 work, never once per job. Each platform lane has one `product_automation_*`
@@ -706,8 +709,13 @@ override; `mesh_ref` defaults to certify-only; explicit `mesh_action=certify-and
 adds independent verification and publication of the unchanged selected commit. Upstream release
 qualification never replaces the complete candidate and independent family
 passes required before publishing an upgrade PR. Only the hosted upstream
-selection step may receive the read-only GitHub token for public upstream API
-reads; workers and repair agents remain credential-free.
+selection and platform-selection steps may receive the read-only GitHub token;
+workers and repair agents remain credential-free. That token can read public
+upstream metadata but cannot list repository runners: the runner API requires
+[repository Administration read access](https://docs.github.com/en/rest/actions/self-hosted-runners#list-self-hosted-runners-for-a-repository).
+With the current token, `platform=auto` falls back to macOS; use explicit
+`platform=linux` to select Linux. Do not rely on automatic Linux availability
+selection or add an administrator credential to repair workers.
 
 Each candidate build owns one complete native CTest pass. The initial native
 build may compile tests without executing them; after fresh annotation
@@ -744,7 +752,13 @@ existing pin and patches without repair. Default `mesh_action=certify` does not
 publish. Explicit `mesh_action=certify-and-publish` requires a complete candidate
 pass and a fresh independent build and complete family pass on the same frozen
 selected commit before publishing that exact commit as a PR to main. It never
-changes the selected pin or invokes coding repair. Selected build scripts
+changes the selected pin or invokes coding repair. Explicit `mesh_action=upgrade`
+instead requires a full lowercase `upstream_sha` and admits a changed-pin repair
+from the frozen selected branch. Keep the controller on protected main and bind
+the selected revision as the candidate's base through build, bundle, worker,
+retry and verification handoffs. An upgrade must target a different pin; it uses
+the normal bounded repair loop, two complete green passes, and hosted PR
+publication. Certify modes continue to reject upstream overrides. Selected build scripts
 and battery code execute on persistent lab runners, so operators must choose
 trusted revisions; a main controller does not sandbox that source.
 

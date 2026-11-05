@@ -5,18 +5,19 @@ on:
   workflow_dispatch:
     inputs:
       mesh_ref:
-        description: Trusted same-repository branch or full commit to certify as-is (no repair)
+        description: Trusted same-repository branch or full commit to certify or use as an upgrade base
         type: string
         default: ''
       mesh_action:
-        description: Certify only, or independently verify and publish the exact selected Mesh commit
+        description: Certify the selected commit, certify and publish it, or upgrade its upstream pin
         type: choice
         options:
           - certify
           - certify-and-publish
+          - upgrade
         default: certify
       upstream_sha:
-        description: Optional exact upstream commit (defaults to newest release or prerelease)
+        description: Exact upstream commit; required for selected-source upgrade, otherwise defaults to newest release or prerelease
         type: string
         default: ''
       force_certify:
@@ -506,6 +507,7 @@ jobs:
           IDENTITY: ${{ needs.result.outputs.identity }}
           CANARY_CONTROLLER_SHA: ${{ needs.resolve.outputs.source }}
           CANARY_MESH_SOURCE: ${{ needs.resolve.outputs.mesh_source }}
+          CANARY_CHANGED: ${{ needs.resolve.outputs.changed }}
         run: |
           set -euo pipefail
           if [[ -n "$CANARY_MESH_SOURCE" ]]; then
@@ -516,10 +518,10 @@ jobs:
             --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
             --arg controller_revision "$CANARY_CONTROLLER_SHA" --arg selected_source "$CANARY_MESH_SOURCE" \
             --arg repository "$GITHUB_REPOSITORY" \
-            --arg source_root "$GITHUB_WORKSPACE" \
+            --arg source_root "$GITHUB_WORKSPACE" --arg changed "$CANARY_CHANGED" \
             '{package:$package,identity_sha256:$identity_sha256,run_id:$run_id,run_attempt:$run_attempt,
               controller_revision:$controller_revision,selected_source:$selected_source,repository:$repository,
-              source_root:(if $selected_source == "" then null else $source_root end)}' > "$input"
+              source_root:(if $selected_source == "" or $changed == "true" then null else $source_root end)}' > "$input"
           "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts publication --input "$input"
       - name: Publish ready pull request
         id: publish
