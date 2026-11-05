@@ -57,6 +57,11 @@ jobs:
       runner_profile: ${{ steps.select_platform.outputs.runner_profile }}
       runner_labels_128: ${{ steps.select_platform.outputs.runner_labels_128 }}
       runner_labels_256: ${{ steps.select_platform.outputs.runner_labels_256 }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_BENCH_DEBUG: "0"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -183,6 +188,10 @@ jobs:
     runs-on: ${{ fromJSON(needs.resolve.outputs.runner_labels_128) }}
     timeout-minutes: 180
     env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_BENCH_DEBUG: "0"
       CANARY_SOURCE_ROOT: ${{ github.workspace }}${{ needs.resolve.outputs.mesh_source != '' && '/canary-source' || '' }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -294,6 +303,11 @@ jobs:
       identity: ${{ steps.select.outputs.identity }}
       head: ${{ steps.select.outputs.head }}
       branch: ${{ steps.select.outputs.branch }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_BENCH_DEBUG: "0"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -356,6 +370,11 @@ jobs:
     if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.attempt_1.outputs.state == 'repairable' }}
     runs-on: ubuntu-24.04
     outputs: *attempt_outputs
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_BENCH_DEBUG: "0"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -415,6 +434,11 @@ jobs:
     if: ${{ !cancelled() && needs.resolve.outputs.changed == 'true' && needs.attempt_2.outputs.state == 'repairable' }}
     runs-on: ubuntu-24.04
     outputs: *attempt_outputs
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_BENCH_DEBUG: "0"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -446,6 +470,11 @@ jobs:
       head: ${{ steps.result.outputs.head }}
       branch: ${{ steps.result.outputs.branch }}
       publish: ${{ steps.result.outputs.publish }}
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_BENCH_DEBUG: "0"
     steps:
       - name: Require successful protected source resolution before checkout
         env:
@@ -488,6 +517,11 @@ jobs:
     if: ${{ !cancelled() && needs.resolve.result == 'success' && needs.result.result == 'success' && needs.result.outputs.publish == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_BENCH_DEBUG: "0"
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -544,6 +578,11 @@ jobs:
       actions: read
       contents: read
       issues: write
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+      CARGO_PROFILE_RELEASE_DEBUG: "0"
+      CARGO_PROFILE_BENCH_DEBUG: "0"
     steps:
       - name: Reconcile consecutive-failure alert
         continue-on-error: true

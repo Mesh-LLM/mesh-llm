@@ -1,11 +1,16 @@
 # MeshLLM CI inventory
 
-Linux Rust-test batches and the SafeTensors smoke set
-`CARGO_PROFILE_TEST_DEBUG=0` at reusable-workflow scope; the trusted sccache
-warmer uses the same setting for its test graph. Complete package tests,
-assertions and overflow checks remain enabled. Cache epoch `v4` invalidates
-the previous namespace. Batch jobs report filesystem space before each package
-and target/compiler-cache sizes after the test step, including failures.
+Every workflow disables Rust debug information for the dev, test, release and
+bench profiles through workflow- or job-level `CARGO_PROFILE_<PROFILE>_DEBUG=0`.
+Reusable workflows set their own environment, and the Linux test, client and
+Fly Docker builders set the same values inside their Rust build stages.
+The trusted compiler-seed warmer uses the same settings as consumers.
+The upstream canary sets them in each executing job; its reusable family-pass
+workflow declares its own workflow environment.
+Local development defaults, complete package tests, assertions and overflow
+checks are preserved. Cache epoch `v5` invalidates the previous namespace.
+Batch jobs report filesystem space before each package and target/compiler-cache
+sizes after the test step, including failures.
 
 The standalone C++ facade paths `skippy/skippy_api/**` and
 `skippy/skippy-api-rs/**` have additive tooling ownership. Their catalog-only
@@ -1162,8 +1167,8 @@ Rust-test and host jobs restore one bounded trusted sccache seed
 instead of per-row Cargo target archives. The protected warmer's
 `just ci-sccache-seed-build` recipe covers the dominant `mesh-llm` Clippy graph,
 the isolated `mesh-llm-cli` test graph, and the isolated default-feature `xtask`
-Clippy graph with all targets. Only the test-build command disables test debug
-information; Clippy keeps the same profile as its consumer. The shared key also
+Clippy graph with all targets. Every profile disables debug information in the
+warmer and its consumers. The shared key also
 hashes the root and workspace package Cargo manifests and the warmer workflow
 so feature and profile changes invalidate the seed. Depot selections cannot
 restore that seed through their cross-trust cache proxy. Its exact key fingerprints the

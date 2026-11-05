@@ -493,16 +493,19 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Cache contract
 
-- Linux Rust-test jobs and the trusted compiler seed's test build disable
-  Cargo test-profile debug information (`CARGO_PROFILE_TEST_DEBUG=0`). Keep
-  debug assertions, overflow checks and complete package test coverage. The
-  per-package feature-isolated builds otherwise retain large DWARF-bearing
-  dependency variants and test executables on the same hosted disk. Keep the
-  warmer and consumers aligned, and change the cache epoch with this policy.
+- Disable Rust debug information in every CI workflow with workflow- or job-level
+  `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`,
+  `CARGO_PROFILE_RELEASE_DEBUG=0`, and `CARGO_PROFILE_BENCH_DEBUG=0`.
+  Reusable workflows declare these themselves because caller workflow
+  environments do not propagate through `workflow_call`. Docker build stages
+  declare the same environment before invoking Cargo. Keep local development
+  defaults, debug assertions, overflow checks and complete test coverage.
+  Keep compiler-seed publishers and consumers aligned, and change the cache
+  epoch with this policy.
 - The trusted seed also builds the isolated default-feature `xtask` Clippy
-  graph with `--all-targets`, independently of the product graph. Scope the
-  seed's test-debug override to its test-build command so Clippy retains the
-  consumer's profile. Seed compatibility keys include the root and workspace
+  graph with `--all-targets`, independently of the product graph. All seed
+  builds use the same debug-information settings as their consumers.
+  Seed compatibility keys include the root and workspace
   package Cargo manifests and the warmer workflow's build configuration as well
   as the image, lockfile and recipe inputs. Keep the publisher, consumers and
   runner-image catalog aligned.
