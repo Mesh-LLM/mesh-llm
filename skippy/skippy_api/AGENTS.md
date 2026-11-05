@@ -575,13 +575,6 @@ just skippy-llama-api-planner-probe <model.gguf>      # plan/probe a model
   live. Rule: the gate loads the plugin by absolute path, refuses to run when
   it is missing, and proves liveness first — `-list-checks` must name one of
   the plugin's own checks before any file is checked.
-- **A staged open refuses embed.** `skippy_session_embed` on a stage loaded through
-  `skippy_model_open` fails with "non-chat workloads currently require a full model" —
-  symptom first seen as an `expert_placement` benchmark skip on a causal GGUF. Cause: embed is
-  a non-chat workload the staged path does not own; the workload a staged causal model *does*
-  support is the unsampled readout (`read_selected_log_probs` / `skippy_iteration_batch_sampled`
-  readout). Rule: a benchmark section over staged opens gates on causal readout, and the placed
-  open itself belongs inside the timed step — the open is the operation the placement knob moves.
 - **A fixture that passes against stubs proves nothing about the gate.** Symptom: `skippy-no-mutex`
   forbade `std::once_flag`, `LlamaBackend::LlamaBackend` declared one with no NOLINT, and the gate
   reported zero findings. Cause: fixtures compile with `-I stubs`, where the name is literally

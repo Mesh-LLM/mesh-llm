@@ -152,12 +152,10 @@ re-reading the same window each iteration):
 | `causal_scores/64` min | 10.888 ms | 10.823 ms | tie (+0.6%) |
 | `expert_placement/64` | 160.011 ms | 160.569 ms | tie (0.997x) |
 | `expert_placement/64` min | 150.380 ms | 157.008 ms | old faster (0.958x) |
+| `rollback_depth` | 157.305 ms | 158.035 ms | tie (0.995x) |
+| `rollback_depth` min | 149.510 ms | 147.963 ms | tie (1.010x) |
 | `Argmax/Select/151936` | 76.706 us | 60.327 us | new faster (1.272x) |
 | `Argmax/Eligible` | 6.8 ns | 7.0 ns | tie (0.970x) |
-| `Argmax/Select/151936` | 76.706 us | 60.327 us | new faster (1.272x) |
-| `Argmax/Eligible` | 6.8 ns | 7.0 ns | tie (0.970x) |
-| `expert_placement` | 160.011 ms | 160.569 ms | tie (0.997x) |
-| `expert_placement` min | 150.380 ms | 157.008 ms | tie (-4.2%) |
 
 The causal row is a budget row (class B: no old path existed before patch
 0011, so the FFI arm is the cheapest correct reference — the direct C-ABI
