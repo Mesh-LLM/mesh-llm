@@ -816,7 +816,7 @@ pub struct ModelCapabilities {
     pub multimodal: bool,
     #[prost(enumeration = "CapabilityLevel", tag = "6")]
     pub audio: i32,
-    /// Loaded backend support for the typed POST /systemone contract.
+    /// Loaded backend support for the typed POST /v1/systemone contract.
     #[prost(enumeration = "CapabilityLevel", tag = "7")]
     pub system_one: i32,
 }

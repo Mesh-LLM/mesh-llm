@@ -224,7 +224,7 @@ impl BufferedHttpRequest {
         self.method == "POST"
             && matches!(
                 self.client_path.split('?').next(),
-                Some("/systemone" | "/v1/decisions")
+                Some("/v1/systemone" | "/systemone" | "/v1/decisions")
             )
     }
 

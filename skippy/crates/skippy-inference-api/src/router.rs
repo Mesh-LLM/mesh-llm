@@ -317,6 +317,7 @@ pub fn router_for_with_config(
             "/v1/messages/count_tokens",
             post(crate::anthropic::messages_count_tokens),
         )
+        .route("/v1/systemone", post(system_one))
         .route("/systemone", post(system_one))
         .method_not_allowed_fallback(method_not_allowed)
         .fallback(not_found)
@@ -1368,7 +1369,7 @@ fn lifecycle_route(uri: &Uri) -> InferenceFrontendRoute {
         "/v1/decisions" => InferenceFrontendRoute::Decisions,
         "/v1/messages/count_tokens" => InferenceFrontendRoute::MessagesCountTokens,
         "/v1/messages" => InferenceFrontendRoute::Messages,
-        "/systemone" => InferenceFrontendRoute::SystemOne,
+        "/v1/systemone" | "/systemone" => InferenceFrontendRoute::SystemOne,
         "/v1/realtime" => InferenceFrontendRoute::Realtime,
         _ => InferenceFrontendRoute::Unknown,
     }

@@ -238,7 +238,7 @@ pub trait InferenceBackend: Send + Sync + 'static {
 
     async fn system_one(&self, _request: SystemOneRequest) -> InferenceResult<SystemOneResponse> {
         Err(InferenceError::unsupported(
-            "/systemone is not supported by this backend",
+            "/v1/systemone is not supported by this backend",
         ))
     }
 

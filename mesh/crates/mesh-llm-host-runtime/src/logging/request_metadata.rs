@@ -115,7 +115,7 @@ impl RequestSummaryMetadata {
             "/v1/responses" => Some("responses"),
             "/v1/messages" => Some("messages"),
             "/v1/messages/count_tokens" => Some("messages_count_tokens"),
-            "/systemone" => Some("system_one"),
+            "/v1/systemone" | "/systemone" => Some("system_one"),
             "/v1/decisions" => Some("decisions"),
             // Mesh task contracts live outside `/v1/`, which is reserved for
             // OpenAI-shaped endpoints. An admitted task request that reaches no
@@ -384,6 +384,7 @@ mod tests {
             "/v1/responses",
             "/v1/messages",
             "/v1/messages/count_tokens",
+            "/v1/systemone",
             "/systemone",
             "/v1/decisions",
             "/mesh/v1/documents/ocr",
