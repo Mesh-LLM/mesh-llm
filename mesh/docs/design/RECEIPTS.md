@@ -455,6 +455,22 @@ activations did (truncation); neither has been seen through `skippy serve`
 yet, and both sit far above the honest error, so they add no leniency a
 substituted quant could use.
 
+**Metal recording cost (M5 Max, release host).** The same split, a
+1,620-token prompt with a fresh prefix per request and 64 generated tokens,
+five to six requests per arm, arms alternated: without receipts, prefill
+1.16 to 1.25 s and decode 89 to 91 tokens/s; with the recorder installed,
+prefill 1.42 to 1.47 s (1.2 times) and decode 26 to 27 tokens/s (3.4 times
+slower). A request without a client key costs the same, since the recorder
+records every ubatch. A sample of the decode thread puts 81% of its time in
+the recorder's device-side staging copies: one `ggml_metal_cpy_tensor_async`
+per receipt tensor per ubatch, each taking a command buffer from the queue,
+whose pool runs dry, so each copy waits for an earlier one to complete on the
+GPU. Hashing runs on the recorder thread and does not show on the decode
+thread. Batching a ubatch's copies into one command buffer, or reading the
+shared buffers after the step's own synchronization instead of staging them,
+is the open fix; until then a Metal node pays the decode cost on every
+request while receipts are on.
+
 **ARM CPU (DGX Spark, Neon with i8mm and SVE).** The CPU profile matches as on
 x86: `e` ≤ 4e-7 for q4_K, q4_0 (repacked) and q8_0, and ≤ 9e-7 for q4_1 with
 the quirk above.
@@ -944,6 +960,10 @@ Not yet measured or built (see [RECEIPTS_PLAN.md](RECEIPTS_PLAN.md) for the buil
   M4 converts activations and dequantized weights to f16 (`f16_weights` in
   a standalone replica, not yet through `skippy serve`). Each needs a
   served run before Metal nodes of that generation count as covered.
+- Metal decode with the recorder installed is 3.4 times slower on an M5 Max
+  (command-buffer acquisition in the per-tensor staging copies, see the Metal
+  recording cost above), for every request, bound or not. Batch the copies
+  or read the shared buffers after the step's synchronization.
 - Draft-model speculation: `--draft-model-path` loaded the draft but never
   proposed in standalone `skippy serve` (`draft_n` stayed 0), so only native
   MTP rollback was measured.
