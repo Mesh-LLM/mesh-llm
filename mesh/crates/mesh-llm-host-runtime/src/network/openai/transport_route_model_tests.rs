@@ -798,3 +798,39 @@ async fn a_model_served_only_by_a_gated_replica_still_relays_the_402() {
         "expected a terminal 402, got {outcome:?}"
     );
 }
+
+#[test]
+fn automatic_reservation_never_restores_all_cooling_placements() {
+    let affinity = AffinityRouter::with_config(true, true);
+    let ranked = RankedCandidates {
+        ordered: vec![election::InferenceTarget::Local(9001)],
+        equivalent_prefix: 1,
+    };
+    // The candidate snapshot was healthy before the asynchronous cache lookup.
+    assert_eq!(
+        affinity.route_strict_eligible_candidates("qwen", &ranked.ordered),
+        ranked.ordered
+    );
+    affinity.record_target_outcome(
+        Some("qwen"),
+        &ranked.ordered[0],
+        TargetHealthOutcome::Shedding {
+            retry_after: std::time::Duration::from_secs(30),
+        },
+    );
+    for cache_target in [None, Some(ranked.ordered[0].clone())] {
+        assert!(
+            select_and_reserve_model_route_with_health(
+                &election::ModelTargets::default(),
+                &ranked,
+                "qwen",
+                None,
+                &affinity,
+                cache_target,
+                true,
+            )
+            .is_none()
+        );
+        assert_eq!(affinity.stats_snapshot().reservation_active, 0);
+    }
+}

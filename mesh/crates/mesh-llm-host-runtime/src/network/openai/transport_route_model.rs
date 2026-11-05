@@ -334,12 +334,9 @@ async fn route_model_request_inner(args: RouteModelRequestArgs<'_>) -> RouteDisp
         reservation.transfer_to(&target);
         state.attempts += 1;
         let attempt_started = Instant::now();
-        let mut retry_policy = ResponseRetryPolicy::next_target_available(
+        let retry_policy = ResponseRetryPolicy::next_target_available(
             idx + 1 < total_targets || automatic_retry.is_some(),
         );
-        // The model-route loop owns exhaustion even on the final placement.
-        // Other direct relay paths retain their existing final-response policy.
-        retry_policy.availability = true;
         if let Some(outcome) = super::super::exchange_admission::admit_selected_route(
             &node,
             &mut tcp_stream,
