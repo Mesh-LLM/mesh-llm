@@ -288,14 +288,14 @@ async fn auto_route_candidate_pool<'a>(
     Ok(auto_route::pool_for_ready_models(&available, &ready_models))
 }
 
-/// Admit explicit workloads or select a compatible automatic route, preserving committee mode.
+/// Admit explicit workloads or select a compatible automatic route, preserving plugin override mode.
 #[allow(clippy::too_many_arguments)]
 async fn resolve_auto_routed_model(
     node: &mesh::Node,
     request: &mut proxy::BufferedHttpRequest,
     targets: &election::ModelTargets,
     plugin_manager: Option<&crate::plugin::PluginManager>,
-    committee_available: bool,
+    plugin_override_available: bool,
     descriptors: &[crate::mesh::ServedModelDescriptor],
     required_tokens: Option<u32>,
     affinity: &affinity::AffinityRouter,
@@ -329,26 +329,22 @@ async fn resolve_auto_routed_model(
             automatic::serving_mode(automatic::AutomaticRequest {
                 model: request.model_name.as_deref(),
                 // The forwarded path: `/v1/responses` has already been normalised onto
-                // chat completions by this point, so it stays committee-eligible.
+                // chat completions by this point, so it stays plugin override-eligible.
                 path: &request.path,
                 body,
             })
         },
     );
     match mode {
-        // Committee mode keeps the directive as the effective model only when
-        // the built-in MoA plugin is registered. Bare hosts and focused test
-        // harnesses may intentionally omit built-ins; in that case, preserve
-        // the directive's historical single-model fallback instead of trying
-        // to route the virtual id as though it were concrete.
-        automatic::ServingMode::Committee if committee_available => {
+        // Preserve the directive only for an explicitly installed virtual-model plugin.
+        automatic::ServingMode::PluginOverride if plugin_override_available => {
             return AutoRouteResolution::Continue {
                 effective_model: Some(automatic::DIRECTIVE.to_string()),
                 classification: None,
             };
         }
-        automatic::ServingMode::Committee => tracing::debug!(
-            "automatic routing: MoA virtual model is unavailable; serving from a single model"
+        automatic::ServingMode::PluginOverride => tracing::debug!(
+            "automatic routing: plugin override is unavailable; serving from a single model"
         ),
         // Single-model mode falls through to the capability-, readiness- and
         // affinity-aware selection below.
@@ -487,7 +483,7 @@ fn maybe_enable_auto_route_hooks(
         return;
     }
     proxy::inject_skippy_hooks_flag(&mut request.raw, true);
-    // The directive itself is not a model. Committee mode keeps it in the body
+    // The directive itself is not a model. PluginOverride mode keeps it in the body
     // for the MoA gateway; only a resolved concrete model gets written back.
     if let Some(model) = effective_model.filter(|name| !automatic::is_directive(name)) {
         proxy::rewrite_model_field(request, model);
@@ -1283,7 +1279,7 @@ async fn prepare_auto_route_decision(
     descriptors: &[crate::mesh::ServedModelDescriptor],
 ) -> Result<AutoRouteDecision, AutoRouteRejection> {
     let required_tokens = proxy::request_context_budget(request);
-    let committee_available = if request
+    let plugin_override_available = if request
         .model_name
         .as_deref()
         .is_some_and(automatic::is_directive)
@@ -1305,7 +1301,7 @@ async fn prepare_auto_route_decision(
         request,
         ctx.targets,
         ctx.plugin_manager,
-        committee_available,
+        plugin_override_available,
         descriptors,
         required_tokens,
         ctx.affinity,

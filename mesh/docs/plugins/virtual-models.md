@@ -201,13 +201,11 @@ async fn handle_mesh_agent(
 }
 ```
 
-The built-in implementation in `crates/mesh-llm-moa-plugin/src/lib.rs` is the
-complete conformance example.
-The host marks a candidate `deprioritized` when its peer advertises reduced
-inference readiness. The built-in plugin ranks ready placements first and
-retains eligible standbys for a direct answer if the first pinned placement
-fails with a retryable transport or availability error. Operator-blocked peers
-are omitted from the candidate snapshot.
+The optional `Mesh-LLM/moa-plugin` is being extracted from core; its previous
+implementation is preserved at `3c90d58d9`. Core advertises `mesh` as an
+automatic single-model directive independently of any plugin. An installed
+plugin can override non-streaming text chat, while streaming and media use
+core routing. Operator-blocked peers are omitted from candidate snapshots.
 
 V1 host inference accepts only concrete model ids. It rejects built-in aliases
 and all virtual model ids, including the caller, so a plugin cannot recurse.
@@ -295,32 +293,9 @@ admission, role, hardware, serving-model truth, or the host's core
 cache-affinity evidence. Direct-peer-only propagation should be the default;
 transitive propagation requires an explicitly reviewed schema and bound.
 
-## MoA Migration
+## Optional MoA plugin
 
-Move the existing `model: "mesh"` MoA implementation behind this interface as
-the first in-process conformance plugin. MoA exercises parallel nested
-inference, candidate snapshots, partial failure, cancellation, streaming
-fan-in, and aggregate usage before later plugins add session and tool semantics.
-
-Migrate without changing the public model id:
-
-1. add the registry and buffered nested-inference path;
-2. register an in-process `mesh-moa` plugin through the existing in-process
-   plugin loader;
-3. adapt the current orchestrator behind its virtual-model handler and run
-   response/error parity tests;
-4. switch `model: "mesh"` dispatch to the registry;
-5. remove the special ingress intercept only after streaming, cancellation,
-   and usage accounting have parity.
-
-The host advertises `mesh` from healthy plugin registration. The MoA plugin
-does not directly mutate gossip. Its nested calls choose concrete models, then
-host or plugin-ranked affinity chooses an eligible placement for each model.
-
-## Delivery Order
-
-1. Add manifest types, builders, validation, and registry projection.
-2. Add buffered host-to-plugin invocation and plugin-to-host inference.
-3. Add bounded affinity-rank and namespaced gossip-extension contracts.
-4. Move the built-in MoA path behind the contract as a conformance test.
-5. Add negotiated streaming, cancellation, and aggregate usage.
+Mixture-of-Agents is being extracted to `Mesh-LLM/moa-plugin`, not installed
+by default. Generic in-process plugins remain supported for contract tests.
+A healthy plugin registration can override the core `mesh` directive only
+for eligible non-streaming text chat requests.

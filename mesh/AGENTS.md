@@ -86,7 +86,6 @@ SDK and API surface:
 - `mesh-llm-sdk/` — Rust SDK facade for clients and embedded serving.
 - `mesh-llm-api-server/`, `mesh-llm-api-client/` — public Rust SDK APIs for embedding nodes / client-only use.
 - `mesh-llm-ffi/`, `mesh-llm-nodejs/` — FFI bindings and Node.js native addon.
-- `mesh-mixture-of-agents/` — Mixture-of-Agents fan-out/arbitration engine.
 
 Tools and benchmarks:
 
