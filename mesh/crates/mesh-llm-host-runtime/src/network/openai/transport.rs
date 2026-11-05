@@ -953,6 +953,7 @@ fn proxy_result_metadata(result: &RouteAttemptResult) -> (Option<u16>, Option<&'
         RouteAttemptResult::RetryableTimeout => (None, Some("timeout")),
         RouteAttemptResult::RetryableUnavailable => (None, Some("unavailable")),
         RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableShedding { .. }
         | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_) => (None, Some("rejected")),
         RouteAttemptResult::CommittedStreamFailure { status_code } => {
@@ -1024,6 +1025,7 @@ fn handle_mesh_attempt_result(
             })
         }
         RouteAttemptResult::RetryableContextOverflow => handle_retryable_context_overflow(context),
+        RouteAttemptResult::RetryableShedding { .. } => MeshAttemptDisposition::Continue,
         RouteAttemptResult::RetryableGateUnsatisfied => handle_retryable_gate_unsatisfied(context),
         RouteAttemptResult::RetryableResponseQuality(failure) => {
             handle_retryable_mesh_response_quality(context, failure)
@@ -1096,6 +1098,7 @@ fn terminal_outcome_for_mesh_route_result(
             crate::logging::TerminalOutcome::Cancelled(Some("client_disconnected".into()))
         }
         RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableShedding { .. }
         | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableTimeout
@@ -1694,6 +1697,7 @@ pub async fn route_to_target(
             response_outcome(504, result)
         }
         RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableShedding { .. }
         | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableUnavailable => {
@@ -1812,6 +1816,7 @@ pub async fn route_http_endpoint_request(
         }
         RouteAttemptResult::RetryableTimeout
         | RouteAttemptResult::RetryableContextOverflow
+        | RouteAttemptResult::RetryableShedding { .. }
         | RouteAttemptResult::RetryableGateUnsatisfied
         | RouteAttemptResult::RetryableResponseQuality(_)
         | RouteAttemptResult::RetryableUnavailable => {

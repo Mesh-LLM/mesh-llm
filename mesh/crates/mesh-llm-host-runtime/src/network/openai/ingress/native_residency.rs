@@ -338,6 +338,7 @@ mod tests {
             affinity: &affinity,
             plugin_manager: None,
             requested_by_node_id: None,
+            automatic_retry: None,
             exchange_channel: None,
         };
         let ready = ready_targets(&ctx, "cold", "/v1/chat/completions", false, &[])

@@ -2,7 +2,7 @@
 //!
 //! These cover the decision `resolve_auto_routed_model` makes *before* any
 //! model is contacted: whether a request that asked for automatic routing
-//! convenes a plugin_override or is served by one capability-selected model.
+//! uses an installed plugin override or one capability-selected model.
 
 use crate::inference::election;
 use crate::mesh;
@@ -499,7 +499,7 @@ async fn plain_text_directive_stays_on_the_plugin_override() {
     )
     .await;
 
-    // The directive must survive resolution so the MoA gateway picks it up.
+    // The directive must survive resolution so the installed virtual-model plugin receives it.
     match resolution {
         AutoRouteResolution::Continue {
             effective_model, ..
@@ -607,8 +607,7 @@ async fn deprecated_alias_behaves_exactly_like_the_directive() {
 
 #[tokio::test]
 async fn streaming_directive_resolves_to_a_single_model() {
-    // A plugin_override cannot stream: workers are called non-streaming and the SSE
-    // is synthesised afterwards. A client asking to stream gets one model.
+    // The override seam accepts only buffered chat bodies. Streaming stays in core.
     let (node, targets) = node_serving(&["text-model", "other-text-model"]).await;
     let descriptors = vec![
         descriptor("text-model", false, false),
@@ -651,7 +650,7 @@ async fn streaming_directive_resolves_to_a_single_model() {
 
 #[tokio::test]
 async fn model_less_request_resolves_to_a_single_model() {
-    // A client that named nothing never opted into plugin_override cost.
+    // A client that named nothing never opted into a plugin override.
     let (node, targets) = node_serving(&["text-model", "other-text-model"]).await;
     let descriptors = vec![
         descriptor("text-model", false, false),
@@ -668,7 +667,7 @@ async fn model_less_request_resolves_to_a_single_model() {
             assert_ne!(
                 model,
                 automatic::DIRECTIVE,
-                "a model-less request must not silently convene a plugin_override"
+                "a model-less request must not silently invoke a plugin override"
             );
         }
         AutoRouteResolution::WorkloadUnsupported(workload) => {
@@ -815,8 +814,8 @@ async fn image_request_selects_a_vision_model_served_only_by_a_peer() {
 
 #[tokio::test]
 async fn text_request_still_is_eligible_for_plugin_override_across_two_nodes() {
-    // Two models, one local and one remote: enough for a plugin_override, and the
-    // directive must survive resolution so the MoA gateway forms one.
+    // Model placement does not change override eligibility. Preserve the
+    // directive for the installed virtual-model plugin.
     let (node, targets) = two_node_mesh("local-text-model", "remote-text-model", false).await;
     let descriptors = vec![
         descriptor("local-text-model", false, false),
@@ -991,8 +990,7 @@ async fn a_single_model_decision_is_written_into_the_forwarded_body() {
 
 #[tokio::test]
 async fn plugin_override_mode_keeps_the_directive_in_the_forwarded_body() {
-    // The MoA gateway self-gates on the body's model, so plugin_override mode must
-    // not have the directive rewritten away.
+    // Preserve the directive so the installed virtual-model plugin can claim it.
     let (node, targets) = node_serving(&["text-model", "other-text-model"]).await;
     let descriptors = vec![
         descriptor("text-model", false, false),
@@ -1063,7 +1061,7 @@ async fn a_non_chat_endpoint_resolves_to_a_single_model() {
             assert_ne!(
                 model,
                 automatic::DIRECTIVE,
-                "a non-chat request must not convene a plugin_override it cannot fan out"
+                "a non-chat request must not invoke the buffered chat override"
             );
         }
         AutoRouteResolution::WorkloadUnsupported(workload) => {
