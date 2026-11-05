@@ -14,7 +14,7 @@ use skippy_runtime::{
     ModelStateKind, ModelWorkload, MtpSource, NativeMtpDraft, RuntimeConfig, RuntimeKvPage,
     RuntimeKvPageDesc, RuntimeLoadMode, SamplingConfig, SpeechAudio, SpeechSynthesisConfig,
     SplitMode as RuntimeSplitMode, StageModel, StageSession, TokenLogprobs, TokenSignal,
-    WorkloadInfo, parse_cache_type,
+    VerifyRollback, WorkloadInfo, parse_cache_type,
 };
 
 mod context_capacity;
@@ -681,7 +681,7 @@ mod tests {
     };
     use skippy_runtime::{
         ActivationFrame, CheckpointQuantization, FlashAttentionType as RuntimeFlashAttentionType,
-        ModelWorkload, MtpSource, RuntimeConfig, SamplingConfig, StageModel,
+        ModelWorkload, MtpSource, RuntimeConfig, SamplingConfig, StageModel, VerifyRollback,
     };
 
     use super::{

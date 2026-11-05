@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Copyright 2026, UNSW
+
+    SPDX-License-Identifier: BSD-2-Clause
+-->
+<system>
+    <!-- This element is used to declare the list of domains, to give
+         each domain a human-readable name. -->
+    <domains>
+        <!-- The first domain contains the Microkit Monitor PD, but can contain others. -->
+        <domain name="monitor" id="0" />
+        <!-- You give each domain a name and its domain id. -->
+        <domain name="emitter" id="1" />
+        <!-- The domain ID is optional and can be auto-assigned if desired.
+             It will be assigned to the smallest unused ID, and must be less
+             than KernelNumDomains. -->
+        <domain name="collector" />
+
+        <!-- This is a domain schedule. Note that the same domain can appear twice
+             in the schedule.
+             Also supports optional attributes "start_index" and "index_shift".
+         -->
+        <domain_schedule>
+            <schedule_entry domain="monitor" duration="6000 us" />
+            <schedule_entry domain="emitter" duration="8000 us" />
+            <schedule_entry domain="collector" duration="2000 us" />
+            <!-- This element is optional, and is implicitly there anyway. -->
+            <schedule_end_marker />
+        </domain_schedule>
+    </domains>
+
+    <protection_domain name="emitter" domain="emitter">
+        <program_image path="emitter.elf" />
+    </protection_domain>
+
+    <protection_domain name="collector" domain="collector">
+        <program_image path="collector.elf" />
+    </protection_domain>
+
+    <channel>
+        <end pd="emitter" id="0" />
+        <end pd="collector" id="0" notify="false" />
+    </channel>
+</system>

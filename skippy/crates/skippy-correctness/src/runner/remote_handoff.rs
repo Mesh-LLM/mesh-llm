@@ -316,6 +316,7 @@ fn open_full_model(args: &RemoteHandoffArgs, lane_count: u32) -> Result<StageMod
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
         mtp_source: MtpSource::Disabled,
+        verify_rollback: skippy_runtime::VerifyRollback::default(),
         resident_tensor_names: Vec::new(),
         execution_contract: String::new(),
         activation_import_identities: Vec::new(),

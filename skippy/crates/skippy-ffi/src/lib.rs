@@ -52,11 +52,12 @@ pub use abi::{
     FEATURE_BACKEND_DEVICES, FEATURE_CACHEGEN_KV_PAGE, FEATURE_CLEF_DECISIONS,
     FEATURE_DEVICE_EVENTS, FEATURE_DIAGNOSTIC_EVENTS, FEATURE_ITERATION_BATCH, FEATURE_KV_EVENTS,
     FEATURE_LAYA_DECISIONS, FEATURE_MODEL_LOAD_EVENTS_V2, FEATURE_MODEL_SOURCE,
-    FEATURE_MTP_MULTIMODAL, FEATURE_NATIVE_MTP_N1, FEATURE_NGRAM_CACHE_DRAFT,
-    FEATURE_NON_CHAT_WORKLOADS, FEATURE_RUNTIME_EVENT_REPORTER, FEATURE_RUNTIME_EVENTS,
-    FEATURE_SPEECH_RECOGNITION, FEATURE_STAGE_PLAN, FEATURE_SYSTEM_ONE, FEATURE_UNLOAD_EVENTS,
-    IterationRequest, LAYA_INFO_V1_ABI_VERSION, LAYA_MEMORY_V1_ABI_VERSION, LAYA_QTYPE_COUNT,
-    LayaInfoV1, LayaMemoryV1, LayaModel, LayaSequence, LlamaLogCallback, LlamaPerfContextData,
+    FEATURE_MTP_MULTIMODAL, FEATURE_NATIVE_MTP_N1, FEATURE_NATIVE_TRACING,
+    FEATURE_NGRAM_CACHE_DRAFT, FEATURE_NON_CHAT_WORKLOADS, FEATURE_RUNTIME_EVENT_REPORTER,
+    FEATURE_RUNTIME_EVENTS, FEATURE_SPEECH_RECOGNITION, FEATURE_STAGE_PLAN, FEATURE_SYSTEM_ONE,
+    FEATURE_UNLOAD_EVENTS, GPU_COMMAND_TIMING_V1_ABI_VERSION, IterationRequest,
+    LAYA_INFO_V1_ABI_VERSION, LAYA_MEMORY_V1_ABI_VERSION, LAYA_QTYPE_COUNT, LayaInfoV1,
+    LayaMemoryV1, LayaModel, LayaSequence, LlamaLogCallback, LlamaPerfContextData,
     LlamaPerfContextFn, LoadMode, MODEL_TENSOR_SOURCE_V1_ABI_VERSION, Model, ModelImatrixEntryV1,
     ModelInfo, ModelReadTensorF32Callback, ModelTensorSourceV1, MtmdProgressCallback, MtpSource,
     NgramCache, Opaque, RuntimeConfig, Session, SkippyDecodeStepSampledMtpFn,
@@ -220,7 +221,9 @@ pub use dynamic::{
 
 #[cfg(feature = "dynamic-runtime")]
 pub use dynamic::{
-    skippy_clear_runtime_event_reporter_fn, skippy_set_runtime_event_reporter_fn, symbol_present,
+    skippy_clear_runtime_event_reporter_fn, skippy_set_gpu_command_timing_callback_fn,
+    skippy_set_native_span_callback_fn, skippy_set_runtime_event_reporter_fn,
+    skippy_set_trace_tag_fn, symbol_present,
 };
 
 #[cfg(not(feature = "dynamic-runtime"))]

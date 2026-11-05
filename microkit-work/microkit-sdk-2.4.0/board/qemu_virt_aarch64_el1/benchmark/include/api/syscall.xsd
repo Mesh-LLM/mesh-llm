@@ -1,0 +1,71 @@
+<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+<!--
+     Copyright 2020, Data61, CSIRO (ABN 41 687 119 230)
+
+     SPDX-License-Identifier: BSD-2-Clause
+-->
+
+    <xsd:annotation>
+        <xsd:documentation xml:lang="en">
+            Syscall number generator schema.
+        </xsd:documentation>
+    </xsd:annotation>
+
+    <xsd:element name="syscalls" type="SyscallListType" />
+
+    <xsd:complexType name="SyscallListType">
+        <xsd:sequence>
+            <xsd:element name="api-master" type="ApiType" />
+            <xsd:element name="api-mcs" type="ApiType" />
+            <xsd:element name="debug" type="DebugType" />
+        </xsd:sequence>
+    </xsd:complexType>
+
+    <xsd:complexType name="ApiType">
+        <xsd:sequence>
+            <xsd:element name="config" minOccurs="1" maxOccurs="unbounded" type="ConfigType" />
+        </xsd:sequence>
+    </xsd:complexType>
+
+    <xsd:complexType name="DebugType">
+        <xsd:sequence>
+            <xsd:element name="config" type="ConfigType" maxOccurs="unbounded"/>
+        </xsd:sequence>
+    </xsd:complexType>
+
+    <xsd:complexType name="ConfigType" >
+        <xsd:sequence>
+            <xsd:element name="condition" minOccurs="0" maxOccurs="1" type="Unary"/>
+            <xsd:element name="syscall" minOccurs="1" maxOccurs="unbounded" type="SyscallType"/>
+        </xsd:sequence>
+    </xsd:complexType>
+
+    <xsd:group name="ConfigGroup">
+        <xsd:choice>
+            <xsd:element name="and" type="N-ary" />
+            <xsd:element name="or" type="N-ary" />
+            <xsd:element name="not" type="Unary" />
+            <xsd:element name="config">
+                <xsd:complexType>
+                        <xsd:attribute name="var" type="xsd:string" use="required"/>
+                </xsd:complexType>
+            </xsd:element>
+        </xsd:choice>
+    </xsd:group>
+
+  <xsd:complexType name="Unary">
+        <xsd:group ref="ConfigGroup"/>
+  </xsd:complexType>
+
+  <xsd:complexType name="N-ary">
+    <xsd:sequence>
+            <xsd:group ref="ConfigGroup" minOccurs="2" maxOccurs="unbounded"/>
+    </xsd:sequence>
+  </xsd:complexType>
+
+    <xsd:complexType name="SyscallType">
+        <xsd:attribute name="name" type="xsd:string" />
+    </xsd:complexType>
+
+
+</xsd:schema>

@@ -447,6 +447,32 @@ pub fn skippy_clear_runtime_event_reporter_fn() -> Option<SkippyClearRuntimeEven
     })
 }
 
+pub fn skippy_set_gpu_command_timing_callback_fn()
+-> Option<crate::SkippySetGpuCommandTimingCallbackFn> {
+    static CACHE: OnceLock<Option<crate::SkippySetGpuCommandTimingCallbackFn>> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        symbols().lookup_optional::<crate::SkippySetGpuCommandTimingCallbackFn>(
+            b"skippy_set_gpu_command_timing_callback\0",
+        )
+    })
+}
+
+pub fn skippy_set_native_span_callback_fn() -> Option<crate::SkippySetNativeSpanCallbackFn> {
+    static CACHE: OnceLock<Option<crate::SkippySetNativeSpanCallbackFn>> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        symbols().lookup_optional::<crate::SkippySetNativeSpanCallbackFn>(
+            b"skippy_set_native_span_callback\0",
+        )
+    })
+}
+
+pub fn skippy_set_trace_tag_fn() -> Option<crate::SkippySetTraceTagFn> {
+    static CACHE: OnceLock<Option<crate::SkippySetTraceTagFn>> = OnceLock::new();
+    *CACHE.get_or_init(|| {
+        symbols().lookup_optional::<crate::SkippySetTraceTagFn>(b"skippy_set_trace_tag\0")
+    })
+}
+
 pub fn skippy_abi_features_optional() -> Option<SkippyAbiFeaturesFn> {
     static CACHE: OnceLock<Option<SkippyAbiFeaturesFn>> = OnceLock::new();
     *CACHE

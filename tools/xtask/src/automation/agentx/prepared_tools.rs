@@ -203,6 +203,10 @@ pub(super) struct Tools {
     /// None preserves the product's automatic lane plan independently of offered C.
     pub diagnostic_generation_lanes: Option<u32>,
     pub diagnostic_cpu: bool,
+    /// Debug Skippy telemetry to a per-cell OTLP JSON file. It perturbs
+    /// timing, so the campaign is scoped as a diagnostic and never published.
+    #[serde(default)]
+    pub diagnostic_telemetry: bool,
     pub cell_seconds: u64,
 }
 impl Tools {

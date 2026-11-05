@@ -23,6 +23,15 @@ For an admitted resident representation:
   Recurrent state can resume only at a saved checkpoint whose entire token
   path is a prefix of the request. A longer recurrent checkpoint cannot be
   truncated to an arbitrary common-prefix length.
+- A recurrent prefill therefore exports up to three checkpoints, one per
+  distinct boundary: the message history before the assistant turn, which the
+  next turn of the same conversation shares; the leading system messages up to
+  where the first user's text begins, which every conversation with those
+  system messages shares, however long its first message; and the stride-grid
+  boundary one to two strides below the prompt's end, for prompts that share
+  an earlier part without a system message. A boundary shorter than the
+  cache's minimum prefix is neither split at nor recorded. Identical system
+  messages map to one cached checkpoint.
 
 This follows SGLang's radix ownership model: token paths identify shared KV
 blocks, while recurrent state has separate checkpoint ownership. It is an
@@ -111,6 +120,28 @@ guide](KV_CACHE_DISK.md) for persistent store controls.
 OpenAI response. Generation telemetry also reports cache status, matched prefix
 length, suffix-prefill tokens, and hit kind. A match identifies reusable state;
 it is not proof that generated tokens are correct.
+
+A resident miss says why on its `stage.openai_kv_lookup_decision` event:
+`skippy.kv.miss_reason` is `empty_cache`, `no_shared_prefix`,
+`no_checkpoint_on_path` (stored prefixes share `skippy.kv.shared_prefix_tokens`
+with the prompt, but no recurrent checkpoint is a whole prefix of it),
+`below_min_tokens`, `not_restored` or `lookup_off`. Beside it are the prompt's
+length, the cache's entry count, the length of the stored sequence that shares
+the most tokens (`skippy.kv.stored_prefix_tokens`) and the longest checkpoint
+on the prompt's path (`skippy.kv.checkpoint_prefix_tokens`). The lookup is also
+the L1 `skippy.kv.lookup` event.
+
+Each recurrent checkpoint reports a `stage.openai_kv_record_decision`:
+`skippy.kv.decision` is the boundary (`chat_prefix_checkpoint`,
+`system_prefix_checkpoint`, `shared_prefill_checkpoint`, `final_prefill_state`
+or `post_decode_checkpoint`)
+followed by `_recorded`, `_already_cached`, `_skipped` or `_error`, with
+`skippy.kv.checkpoint_token_count`. A skip names its `skippy.kv.skip_reason`.
+At debug level, a `checkpoint_boundary` decision shows the deferred prefill's
+candidate boundaries (`skippy.kv.chat_checkpoint_tokens`,
+`skippy.kv.system_checkpoint_tokens`, `skippy.kv.shared_checkpoint_tokens`) and
+those it exports, in prompt order
+(`skippy.kv.checkpoint_kinds`).
 
 Validate cold, repeated, changed-tail, and lane-pressure requests separately.
 Use uninterrupted continuations as the correctness reference for restored and

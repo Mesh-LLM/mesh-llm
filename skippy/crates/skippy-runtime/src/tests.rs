@@ -120,6 +120,7 @@ mod tests {
             activation_export_identities: Vec::new(),
             activation_export_bindings: Vec::new(),
             mtp_source: MtpSource::Disabled,
+            verify_rollback: crate::VerifyRollback::default(),
             resident_tensor_names: Vec::new(),
             kv_offload: None,
             kv_unified: None,

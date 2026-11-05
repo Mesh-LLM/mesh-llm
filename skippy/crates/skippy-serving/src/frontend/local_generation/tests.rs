@@ -299,6 +299,7 @@ fn recurrent_post_decode_checkpoint_reuses_a_growing_prompt() -> Result<()> {
         LocalGeneration {
             prompt_token_ids: &first_prompt,
             recurrent_cache_prefix_token_ids: None,
+            shared_system_prefix_tokens: None,
             max_tokens: 2,
             sampling: &sampling,
             chat_sampling_metadata: None,
@@ -360,6 +361,7 @@ fn recurrent_post_decode_checkpoint_reuses_a_growing_prompt() -> Result<()> {
         LocalGeneration {
             prompt_token_ids: &second_prompt,
             recurrent_cache_prefix_token_ids: None,
+            shared_system_prefix_tokens: None,
             max_tokens: 1,
             sampling: &sampling,
             chat_sampling_metadata: None,
@@ -737,6 +739,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         LocalGeneration {
             prompt_token_ids: &prompt_token_ids,
             recurrent_cache_prefix_token_ids: None,
+            shared_system_prefix_tokens: None,
             max_tokens: 1,
             sampling: &sampling,
             chat_sampling_metadata: None,
@@ -792,6 +795,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         LocalGeneration {
             prompt_token_ids: &prompt_token_ids,
             recurrent_cache_prefix_token_ids: None,
+            shared_system_prefix_tokens: None,
             max_tokens: 1,
             sampling: &sampling,
             chat_sampling_metadata: None,

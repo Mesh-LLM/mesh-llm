@@ -380,6 +380,7 @@ fn run_binary_chain(args: BinaryChainConfig) -> Result<BinaryChainResult> {
         batch_max_tokens: None,
         glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
         mtp_source: MtpSource::Disabled,
+        verify_rollback: skippy_runtime::VerifyRollback::default(),
         resident_tensor_names: runtime_plans[0].resident_tensor_names.clone(),
         execution_contract: runtime_plans[0].execution_contract.clone(),
         activation_import_identities: runtime_plans[0].activation_import_identities.clone(),

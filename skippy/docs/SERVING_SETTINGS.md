@@ -407,6 +407,171 @@ with their runtime purpose; existing controls follow in the same sections.
 | `--telemetry-level` | `telemetry_level` | See `skippy serve --help` for values and defaults. |
 | `--startup-timeout-secs` | `startup_timeout_secs` | See `skippy serve --help` for values and defaults. |
 
+Two local telemetry sinks need no collector and are enabled by environment
+rather than settings. `SKIPPY_TELEMETRY_STDERR=1` writes Skippy's own event
+JSON to stderr. `SKIPPY_TELEMETRY_OTLP_FILE=/path/trace.otlp.jsonl` appends
+OTLP/JSON trace requests, one per line, in the OpenTelemetry file-exporter
+format that collectors and trace viewers ingest. Either raises an `off` level
+to `debug` but never lowers an explicit level, so pass
+`--telemetry-level debug` for scheduler-iteration spans under `serve`.
+
+A process exports one trace. The `skippy.process` root span is written at
+graceful shutdown (SIGINT or SIGTERM), and everything else nests under it:
+
+```text
+skippy.process
+├── stage.embedded_runtime_load        model open; native.* load calls (debug)
+│   ├── native.skippy_set_native_span_callback   the first traced call installs tracing
+│   │   └── mtl.library_init / mtl.library_compile / mtl.pipeline_cache_open
+│   └── native.skippy_model_open_with_events
+│       └── skippy.backend_init / llama.model_load / llama.context_init
+│           └── llama.sched_reserve / llama.graph_reserve
+├── stage.openai_server_setup          prewarm and cache wiring
+├── stage.scheduler                    the scheduler worker, for its lifetime
+│   ├── stage.scheduler_iteration      one planned step (debug), linked to its requests
+│   └── stage.scheduler_feature_iteration   one direct batch (debug), linked likewise
+└── stage.openai_http_request          one per request; a stream ends with its body
+    └── stage.openai_request_summary / chat_template / tokenize / generation_admit
+        └── stage.openai_generation_summary
+            └── stage.openai_scheduler_generation | prefill | decode | decode_token
+                └── native.*           native calls made for this request (debug)
+                    ├── skippy.* / llama.*     host phases inside the call (debug)
+                    └── mtl.command_buffer     GPU work the call submitted (debug)
+                        └── mtl.encode / mtl.queue / mtl.execute
+```
+
+Each span's resource names the part of the system it belongs to as
+`service.name`, within `service.namespace` `skippy`, so viewers that colour a
+trace by service colour it by component: `skippy` (process lifecycle),
+`skippy-http`, `skippy-scheduler`, `skippy-decode`, `skippy-kv`,
+`skippy-transport`, `skippy-native` (`native.*` ABI calls), `skippy-runtime`
+(the native runtime's `skippy.*` phases), `llama`, `metal-compile` and
+`metal-gpu`. They remain one trace.
+
+Point events such as `stage.embedded_runtime_ready` become span events on the
+span that was active when they fired. Batched scheduler work belongs to every
+request it served, so it sits under `stage.scheduler` and carries span links to
+those requests rather than one parent. A debug-level trace of a long benchmark
+holds every iteration and native call; open a short run in a trace viewer, and
+query the file directly for long ones.
+
+At debug level a native call's span is filled by the native runtime's own
+spans, so its time is accounted for phase by phase. A decode step shows
+`skippy.decode_prepare` or `skippy.batch_prepare`, then `llama.decode` with
+`llama.batch_init`, `llama.memory_init_batch`, `llama.output_reserve` and, per
+ubatch, `llama.process_ubatch` (detail `build` or `reuse`, for graph reuse)
+holding `llama.memory_apply`, `llama.graph_build`, `llama.graph_alloc`,
+`llama.set_inputs` and `llama.graph_compute` (encoding and submitting the
+graph), then `llama.output_extract` and, for recurrent and hybrid models,
+`llama.recurrent_sync`. `llama.synchronize` is the host waiting for the
+device, and `skippy.sample` and `skippy.token_logprobs` follow. Phase spans
+carry `skippy.native.detail` and one measured value such as
+`skippy.native.tokens` or `skippy.native.nodes`. Compilation appears where it
+happens: `mtl.library_compile` per kernel library and `mtl.pipeline_cache_open`
+while the Metal device initialises, under the tracing install or the root
+when it ran before anything was traced, and `mtl.pipeline_compile` (detail:
+the pipeline) the first time a graph uses a kernel variant, under the
+`llama.graph_compute` or native call that needed it.
+
+Other native work is named too. Model load splits into `llama.gguf_open`,
+`llama.load_hparams`, `llama.load_vocab` and `llama.load_tensors` with
+`llama.load_tensor_data`, and context creation into `llama.backend_init`,
+`llama.memory_create`, `llama.sched_reserve` and `llama.graph_reserve`, with
+`mtl.buffer_alloc`, `mtl.buffer_map` and `mtl.residency_set` beneath them.
+KV and recurrent state operations appear as `llama.kv_*` and
+`llama.recurrent_*` (clear, `seq_rm`, `seq_cp`, `seq_keep`, `seq_add`, state
+read and write), with `llama.kv_page_export`, `llama.kv_page_import`,
+`llama.state_seq_save` and `llama.state_seq_restore`. Sampling shows
+`llama.sampler_apply` per sampler (detail: its name), `llama.grammar_apply`
+and `llama.grammar_accept`; `llama.tokenize` shows tokenization. On Metal,
+`mtl.wait` is the wait on the last command buffer, `mtl.copy_out` queues an
+output copy, `mtl.upload` and `mtl.download` are blocking copies to private
+buffers, and `mtl.graph_optimize` is the backend reordering a new graph.
+
+Between native calls, the scheduler names its own waits: `stage.scheduler_idle`
+(no work queued), `stage.scheduler_coalesce` (a direct batch held open for up
+to 2 ms for more sessions, with the target, the queue before and after, and
+whether it timed out), `stage.scheduler_cache_defer`, `stage.scheduler_interval`
+and `stage.runtime_lock_wait`. A planned step adds `stage.scheduler_plan`,
+`stage.scheduler_session_setup` and `stage.scheduler_complete`; a direct batch
+adds `stage.scheduler_align` and `stage.scheduler_reply`, and a cache-aware
+runtime operation is the span `stage.scheduler_feature_runtime`.
+
+On Metal, each command buffer a native call submits becomes a
+`mtl.command_buffer` span under that call, from the start of its CPU encode
+to the end of its GPU execution, split into `mtl.encode`, `mtl.queue`
+(committed, waiting for the GPU) and `mtl.execute`. Gaps between `mtl.execute`
+spans are time the GPU sat idle. Attributes give
+`skippy.gpu.encode_ms`, `skippy.gpu.queue_ms`, `skippy.gpu.execute_ms`,
+`skippy.gpu.node_count`, and `skippy.gpu.context_id` with
+`skippy.gpu.compute_index`. Apple GPUs time command buffers, not individual
+kernels; for per-kernel timing, capture one graph for Xcode. The compute index
+counts the way `GGML_METAL_CAPTURE_COMPUTE` does, so to capture the graph a
+span shows, rerun the same workload with
+`METAL_CAPTURE_ENABLED=1 GGML_METAL_CAPTURE_COMPUTE=<compute_index>` and open
+`/tmp/perf-metal-<pid>.gputrace`. Every Metal context counts separately, and
+the first to reach that index is the one captured.
+
+Debug telemetry also samples resource gauges, every 250 ms by default
+(`SKIPPY_TELEMETRY_METRICS_INTERVAL_MS`), and exports them as OTLP metrics to
+the same `--metrics-otlp-grpc` endpoint and, when
+`SKIPPY_TELEMETRY_OTLP_METRICS_FILE` names a file, appends them there in the
+same JSON-lines format as the trace file. They cover:
+
+| Gauge | Meaning |
+|---|---|
+| `process.cpu.utilization` | CPU seconds per second, by `cpu.mode` (`user`, `system`); 1 is one core |
+| `process.memory.usage`, `skippy.process.memory.footprint`, `skippy.process.memory.wired` | Resident, charged (Metal buffers included on macOS) and wired memory |
+| `skippy.process.pageins`, `skippy.process.disk.read` | Pages and bytes read from disk per second, such as mapped weights |
+| `system.memory.usage`, `system.memory.limit` | System memory by `system.memory.state` (macOS: free, active, inactive, wired, compressed) |
+| `skippy.system.swap.used`, `skippy.system.memory.pressure`, `skippy.system.paging` | Swap in use, macOS pressure (1, 2, 4) and page-in/out and swap-in/out rates |
+| `skippy.gpu.busy`, `skippy.gpu.command_buffers`, `skippy.gpu.queue_wait` | GPU execution time per wall second, command buffers per second, and the mean wait before the GPU starts one |
+| `skippy.gpu.memory.usage`, `skippy.gpu.memory.limit` | Memory the device has allocated, and its recommended working set, by `device` |
+| `skippy.gpu.input_bytes` | Bytes GPU commands read per second, by `op_class` (`attention`, `matmul`, `recurrent`, `kv_write`, `other`): gathers from and row writes into a cache count only their rows, and attention only the K/V rows it addresses |
+| `skippy.gpu.class_busy` | GPU execution time per wall second by `op_class`, only from graphs split by class (`GGML_METAL_OP_PROFILE=1`) |
+| `skippy.attention.kv_cells`, `skippy.attention.queries` | The most KV cells one attention query addressed in the interval (its row list, or the whole K/V span), and the most query rows one attention node processed |
+| `skippy.recurrent.states`, `skippy.recurrent.states_carried` | The most recurrent states one step gathered in the interval (the states of the batch's sequences and every state between them), and the most of those copied back unchanged; carried states are memory traffic no sequence in the batch needed |
+| `skippy.runtime.busy`, `skippy.decode.tokens` | Runtime lock-held native time per wall second, and decode tokens per second |
+| `skippy.scheduler.running`, `.waiting`, `.batch_size`, `skippy.kv.used_cells` | The scheduler's queue and KV occupancy as of its latest step |
+| `skippy.telemetry.dropped` | Spans, native spans and GPU records lost to full queues |
+
+With prefix caching enabled, the KV cache tiers of
+[the prompt cache](PROMPT_CACHE.md) add their pressure and misses. L1 is the
+resident radix cache over the native KV pool, with recurrent checkpoints in
+host RAM; L2 is the optional host-RAM mirror of L3 fills; L3 is the durable
+store. Each tier's `skippy.kv.<tier>.lookups` gives lookups per second by
+`result` (`hit`, `miss`), and `skippy.kv.<tier>.miss_ratio` the share of the
+interval's lookups that missed.
+
+| Gauge | Meaning |
+|---|---|
+| `skippy.kv.l1.pool.limit`, `skippy.kv.l1.pool.utilization` | Cells in the shared native KV pool, and the share in use by requests and retained prefixes |
+| `skippy.kv.l1.entries`, `.tokens`, `.pinned_tokens` | Retained prefixes, their tokens (a shared prefix once per entry), and those a restore holds |
+| `skippy.kv.l1.recurrent.usage`, `.limit`, `.utilization` | Recurrent checkpoint RAM against its budget |
+| `skippy.kv.l1.evictions`, `skippy.kv.l1.evicted_tokens` | Evictions per second by `component` (`attention`, `recurrent`), and the tokens they release |
+| `skippy.kv.l1.hit_tokens`, `skippy.kv.l1.restored_tokens` | Prompt tokens matched by hits, and tokens restored onto requests, per second |
+| `skippy.kv.l1.admission_shortfalls` | Admissions per second left below the free-space watermark after evicting all they could; each one's size is its `skippy.kv.admission_shortfall` event |
+| `skippy.kv.l2.usage`, `.limit`, `.utilization`, `.entries` | L2 bytes against its budget |
+| `skippy.kv.l2.inserts`, `.evictions`, `.refusals` | L2 admissions, budget evictions and verification refusals per second |
+| `skippy.kv.l3.usage`, `.limit`, `.utilization`, `.reserved`, `.filesystem.available` | L3 bytes against its budget (a zero limit is unlimited), bytes reserved by writes in flight, and free space on its filesystem |
+| `skippy.kv.l3.fills`, `.writes`, `.io`, `.evictions`, `.corrupt` | L3 restores, writes, bytes by `direction`, budget evictions and quarantined objects per second |
+| `skippy.kv.record_queue.records`, `.bytes`, `.dropped` | Exact-state records waiting to publish to L1 and write through to L3, and those dropped because the queue was full |
+
+The GPU gauges come from native tracing's command buffer timings, so they
+need a runtime with `SKIPPY_FEATURE_NATIVE_TRACING`. A `skippy.resources`
+event with the same readings, keyed `skippy.resources.*`, marks chosen points
+in the trace: `runtime_ready`, `server_start`, each request's `request_start`
+and `request_response`, and `shutdown`. It includes each tier's cumulative
+hits and misses and how much it holds.
+
+Telemetry also reports log-based events, such as cache lookups and evictions
+by tier, compute-buffer reserves and pipeline compiles while serving, and
+attention path changes, to the same endpoint and, when
+`SKIPPY_TELEMETRY_OTLP_LOGS_FILE` names a file, to that file. Command buffer
+spans say what their graph nodes did by op class, and `GGML_METAL_OP_PROFILE=1`
+splits graphs so the GPU times each class alone. See
+[the telemetry events reference](TELEMETRY_EVENTS.md).
+
 ### [network]
 
 | CLI flag | TOML key | Purpose |

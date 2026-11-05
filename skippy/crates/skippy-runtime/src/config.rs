@@ -1,4 +1,5 @@
 use std::ffi::CString;
+use std::num::NonZeroU32;
 use std::ptr;
 
 use anyhow::{Context, Result, anyhow};
@@ -49,6 +50,47 @@ impl MtpSource {
             Self::Integrated => RawMtpSource::Integrated,
             Self::External => RawMtpSource::External,
         }
+    }
+}
+
+/// How far a verify window may rewind recurrent and hybrid state in place,
+/// without restoring a checkpoint. Each token keeps another snapshot of every
+/// recurrent state, which every decode step writes, so a session that never
+/// verifies drafts reserves none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VerifyRollback {
+    /// The session never verifies drafts.
+    None,
+    /// Verify windows of up to this many tokens rewind in place.
+    InPlace(NonZeroU32),
+}
+
+impl VerifyRollback {
+    /// What every load reserved before loads said whether they verify drafts:
+    /// native `SKIPPY_VERIFY_ROLLBACK_TOKENS_DEFAULT`.
+    pub const DEFAULT_IN_PLACE: Self = Self::InPlace(NonZeroU32::new(2).unwrap());
+
+    /// The default in-place rollback for a session that verifies drafts.
+    pub const fn for_drafting(verifies_drafts: bool) -> Self {
+        if verifies_drafts {
+            Self::DEFAULT_IN_PLACE
+        } else {
+            Self::None
+        }
+    }
+
+    pub const fn tokens(self) -> u32 {
+        match self {
+            Self::None => 0,
+            Self::InPlace(tokens) => tokens.get(),
+        }
+    }
+}
+
+/// A load that does not say keeps the rollback every load reserved before.
+impl Default for VerifyRollback {
+    fn default() -> Self {
+        Self::DEFAULT_IN_PLACE
     }
 }
 
@@ -104,6 +146,7 @@ pub struct RuntimeConfig {
     pub batch_max_tokens: Option<u32>,
     pub glm_dsa_policy: GlmDsaPolicy,
     pub mtp_source: MtpSource,
+    pub verify_rollback: VerifyRollback,
     /// Exact native tensor names admitted for this stage. An empty set means
     /// an unsplit full-model load; split stages have no range-based fallback.
     pub resident_tensor_names: Vec<String>,
@@ -373,6 +416,7 @@ impl RuntimeConfig {
                 activation_export_identity_count: activation_export_identity_ptrs.len(),
                 activation_export_bindings: slice_ptr(&activation_export_binding_ptrs),
                 mtp_source: self.mtp_source.as_raw(),
+                verify_rollback_tokens: self.verify_rollback.tokens(),
                 selected_backend_device: selected_backend_device_ptr,
                 glm_dsa_policy_profile: match self.glm_dsa_policy {
                     GlmDsaPolicy::Auto => 0,
@@ -464,6 +508,7 @@ impl RuntimeConfig {
             self.is_source_stage(),
             self.is_terminal_stage(),
             self.mtp_source,
+            self.verify_rollback.tokens(),
             self.resident_tensor_names.len(),
             self.checkpoint_quantization,
             self.host_expert_layers
@@ -524,6 +569,7 @@ impl Default for RuntimeConfig {
             batch_max_tokens: None,
             glm_dsa_policy: GlmDsaPolicy::Auto,
             mtp_source: MtpSource::Disabled,
+            verify_rollback: VerifyRollback::default(),
             resident_tensor_names: Vec::new(),
             execution_contract: String::new(),
             activation_import_identities: Vec::new(),
@@ -973,6 +1019,26 @@ mod tests {
             512 * 1024 * 1024
         );
         assert_eq!(raw.raw.glm_dsa_compact_flash_min_kv, 1);
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_config_raw_carries_the_verify_rollback() -> anyhow::Result<()> {
+        assert_eq!(
+            RuntimeConfig::default()
+                .as_raw()?
+                .raw
+                .verify_rollback_tokens,
+            2
+        );
+        for (verifies_drafts, expected) in [(true, 2), (false, 0)] {
+            let raw = RuntimeConfig {
+                verify_rollback: VerifyRollback::for_drafting(verifies_drafts),
+                ..RuntimeConfig::default()
+            }
+            .as_raw()?;
+            assert_eq!(raw.raw.verify_rollback_tokens, expected);
+        }
         Ok(())
     }
 

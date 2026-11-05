@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+ Copyright 2021, Breakaway Consulting Pty. Ltd.
+
+ SPDX-License-Identifier: BSD-2-Clause
+-->
+<system>
+
+    <memory_region name="eth_outer_output" size="0x200_000" page_size="0x200_000" />
+    <memory_region name="eth_outer_input" size="0x200_000" page_size="0x200_000" />
+
+    <memory_region name="eth_inner_output" size="0x200_000" page_size="0x200_000" />
+    <memory_region name="eth_inner_input" size="0x200_000" page_size="0x200_000" />
+
+    <memory_region name="paddinga" size="0x2_000"/>
+    <memory_region name="ring_buffer_inner" size="0x1_000" />
+    <memory_region name="paddingb" size="0x2_000"/>
+    <memory_region name="ring_buffer_outer" size="0x1000" />
+
+    <memory_region name="packet_buffer_inner" size="0x200_000" page_size="0x200_000" />
+    <memory_region name="packet_buffer_outer" size="0x200_000" page_size="0x200_000" />
+
+
+    <!-- There are  11 GPTs in total.
+        6 GPTs are in the AMDA subsyste, and there are another 5 GPTs in the
+        LSIO subsystem.
+        It is likely that a dedicated GPT can be mapped directly where required, however
+        to demonstrate sharing a GPT, we use GPT0 in a GPT sharing protection domain.
+    -->
+    <memory_region name="lsio_gpt0_clk" size="0x1_000" phys_addr="0x5d540000" />
+    <memory_region name="lsio_gpt1_clk" size="0x1_000" phys_addr="0x5d550000" />
+    <memory_region name="lsio_gpt2_clk" size="0x1_000" phys_addr="0x5d560000" />
+    <memory_region name="lsio_gpt3_clk" size="0x1_000" phys_addr="0x5d570000" />
+    <memory_region name="lsio_gpt4_clk" size="0x1_000" phys_addr="0x5d580000" />
+
+    <memory_region name="lsio_gpt0" size="0x1_000" phys_addr="0x5d140000" />
+    <memory_region name="lsio_gpt1" size="0x1_000" phys_addr="0x5d150000" />
+    <memory_region name="lsio_gpt2" size="0x1_000" phys_addr="0x5d160000" />
+    <memory_region name="lsio_gpt3" size="0x1_000" phys_addr="0x5d170000" />
+    <memory_region name="lsio_gpt4" size="0x1_000" phys_addr="0x5d180000" />
+
+    <memory_region name="eth0" size="0x10_000" phys_addr="0x5b040000" />
+    <memory_region name="eth1" size="0x10_000" phys_addr="0x5b050000" />
+
+    <memory_region name="eth_clk" size="0x1_000" phys_addr="0x5b200000" />
+
+    <protection_domain name="gpt" priority="254">
+        <program_image path="gpt.elf" />
+        <map mr="lsio_gpt0" vaddr="0x2_000_000" perms="rw" cached="false" setvar_vaddr="gpt_regs" />
+        <map mr="lsio_gpt0_clk" vaddr="0x2_200_000" perms="rw" cached="false" setvar_vaddr="gpt_regs_clk" />
+
+        <irq irq="112" id="3" />
+    </protection_domain>
+
+    <protection_domain name="eth_outer" priority="99" budget="1_000" period="100_000">
+        <program_image path="eth.elf" />
+        <map mr="ring_buffer_outer" vaddr="0x3_000_000" perms="rw" cached="false" setvar_vaddr="ring_buffer_vaddr" />
+        <map mr="packet_buffer_outer" vaddr="0x2_400_000" perms="rw" cached="true" setvar_vaddr="packet_buffer_vaddr" />
+        <map mr="eth0" vaddr="0x2_000_000" perms="rw" cached="false"/>
+        <map mr="eth_clk" vaddr="0x2_200_000" perms="rw" cached="false"/>
+
+        <map mr="eth_outer_output" vaddr="0x3_600_000" perms="rw" setvar_vaddr="output_buffer_vaddr" />
+        <map mr="eth_outer_input" vaddr="0x3_a00_000" perms="rw" setvar_vaddr="input_buffer_vaddr" />
+
+        <irq irq="290" id="3" /> <!-- ethernet interrupt -->
+
+        <setvar symbol="ring_buffer_paddr" region_paddr="ring_buffer_outer" />
+        <setvar symbol="packet_buffer_paddr" region_paddr="packet_buffer_outer" />
+    </protection_domain>
+
+    <protection_domain name="eth_inner" priority="99">
+        <program_image path="eth.elf" />
+        <map mr="ring_buffer_inner" vaddr="0x3000000" perms="rw" cached="false" setvar_vaddr="ring_buffer_vaddr" />
+        <map mr="packet_buffer_inner" vaddr="0x2400000" perms="rw" cached="true" setvar_vaddr="packet_buffer_vaddr" />
+        <map mr="eth1" vaddr="0x2000000" perms="rw" cached="false" />
+        <map mr="eth_clk" vaddr="0x2200000" perms="rw" cached="false" />
+
+        <map mr="eth_inner_output" vaddr="0x3600000" perms="rw" setvar_vaddr="output_buffer_vaddr" />
+        <map mr="eth_inner_input" vaddr="0x3a00000" perms="rw" setvar_vaddr="input_buffer_vaddr" />
+
+        <irq irq="294" id="3" />
+
+        <setvar symbol="ring_buffer_paddr" region_paddr="ring_buffer_inner" />
+        <setvar symbol="packet_buffer_paddr" region_paddr="packet_buffer_inner" />
+    </protection_domain>
+
+    <protection_domain name="pass" priority="100">
+        <program_image path="pass.elf" />
+
+        <map mr="eth_outer_output" vaddr="0x2000000" perms="rw" setvar_vaddr="outer_input_vaddr" />
+        <map mr="eth_outer_input" vaddr="0x2400000" perms="rw" setvar_vaddr="outer_output_vaddr"/>
+        <map mr="eth_inner_output" vaddr="0x2800000" perms="rw" setvar_vaddr="inner_input_vaddr"/>
+        <map mr="eth_inner_input" vaddr="0x2c00000" perms="rw" setvar_vaddr="inner_output_vaddr"/>
+
+    </protection_domain>
+
+    <channel>
+        <end pd="gpt" id="1" />
+        <end pd="pass" id="0" pp="true" />
+    </channel>
+
+    <channel>
+        <end pd="eth_outer" id="1" />
+        <end pd="pass" id="1" />
+    </channel>
+
+    <channel>
+        <end pd="eth_outer" id="2" />
+        <end pd="pass" id="2" />
+    </channel>
+
+    <channel>
+        <end pd="eth_inner" id="1" />
+        <end pd="pass" id="3" />
+    </channel>
+
+    <channel>
+        <end pd="eth_inner" id="2" />
+        <end pd="pass" id="4" />
+    </channel>
+
+</system>

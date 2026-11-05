@@ -2,7 +2,7 @@ use std::{io::Read, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use skippy_protocol::{LoadMode, StageConfig, StageKvCacheConfig, StageKvCacheMode};
-use skippy_runtime::MtpSource;
+use skippy_runtime::{MtpSource, VerifyRollback};
 use skippy_serving::{
     DEFAULT_EMBEDDED_MAX_TOKENS, EmbeddedOpenAiRequestDefaults, EmbeddedRuntimeOptions,
     SpeculativeDecodeConfig,

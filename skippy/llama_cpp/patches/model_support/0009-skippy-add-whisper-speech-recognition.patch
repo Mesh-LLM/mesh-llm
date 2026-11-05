@@ -14,7 +14,7 @@ call, so calls on one model may run concurrently. Runtimes built without
 whisper.cpp export the same symbols, leave
 SKIPPY_FEATURE_SPEECH_RECOGNITION clear, and report UNSUPPORTED.
 
-Bumps the Skippy ABI to 0.1.72.
+Bumps the Skippy ABI to 0.1.73.
 ---
  include/skippy.h                         |   1 +
  include/skippy/asr.h                     | 172 +++++++++
@@ -31,10 +31,10 @@ Bumps the Skippy ABI to 0.1.72.
  create mode 100644 src/skippy/tests/asr_decode_boundary.cpp
 
 diff --git a/include/skippy.h b/include/skippy.h
-index ac091dd24..4e33847d9 100644
+index a1d73ac5a..fb2e80806 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
-@@ -27,5 +27,6 @@
+@@ -28,5 +28,6 @@
  #include "skippy/workloads.h"
  #include "skippy/system_one.h"
  #include "skippy/laya.h"
@@ -238,9 +238,9 @@ index 54c87b6f2..4214d0b89 100644
  #define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)
 +/** @brief Full-model speech recognition (`skippy/asr.h`). */
 +#define SKIPPY_FEATURE_SPEECH_RECOGNITION     (UINT64_C(1) << 41)
+ /** @brief Native span and GPU command timing callbacks (`skippy/tracing.h`). */
+ #define SKIPPY_FEATURE_NATIVE_TRACING         (UINT64_C(1) << 42)
  
- enum skippy_status {
-     SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index f43b87266..deb634e8a 100644
 --- a/src/CMakeLists.txt
@@ -318,15 +318,15 @@ index f43b87266..deb634e8a 100644
      file(MAKE_DIRECTORY "${MTP_WIDTH_FIXTURE_DIR}")
      add_test(NAME skippy_generate_mtp_width COMMAND skippy-model-fixture-generator
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index f806cdbdc..ed9825df3 100644
+index 276dbb8c4..d3fa8bba3 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
-@@ -48,7 +48,11 @@ uint64_t skippy_abi_features(void) {
-            SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
+@@ -49,7 +49,11 @@ uint64_t skippy_abi_features(void) {
             SKIPPY_FEATURE_SYSTEM_ONE |
             SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
--           SKIPPY_FEATURE_LAYA_DECISIONS;
-+           SKIPPY_FEATURE_LAYA_DECISIONS |
+            SKIPPY_FEATURE_LAYA_DECISIONS |
+-           SKIPPY_FEATURE_NATIVE_TRACING;
++           SKIPPY_FEATURE_NATIVE_TRACING |
 +#if defined(SKIPPY_HAS_WHISPER)
 +           SKIPPY_FEATURE_SPEECH_RECOGNITION |
 +#endif
@@ -931,5 +931,5 @@ index 000000000..a5b1ff113
 +    return 0;
 +}
 -- 
-2.56.0
+2.43.0
 

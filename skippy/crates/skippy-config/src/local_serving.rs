@@ -1,7 +1,9 @@
 //! Shared single-machine serving defaults used by Skippy and Mesh.
 
 pub const CTX_SIZE: u32 = 4096;
-pub const BATCH: u32 = 512;
+/// llama-server's batch: concurrent prompts that arrive together prefill in one
+/// iteration, instead of one at a time while the requests already decoding wait.
+pub const BATCH: u32 = 2048;
 pub const UBATCH: u32 = 512;
 // Automatic local serving uses the shared KV planner; this remains the
 // fallback for callers that construct a stage without model metadata.
@@ -44,13 +46,13 @@ pub struct ThroughputProfileDefaults {
 pub fn throughput_profile_defaults(policy: &str) -> ThroughputProfileDefaults {
     match policy {
         "throughput" => ThroughputProfileDefaults {
-            batch: Some(BATCH * 2),
+            batch: Some(UBATCH * 2),
             ubatch: Some(UBATCH * 2),
             parallel: Some(2),
             continuous_batching: Some("true".to_string()),
         },
         "saver" => ThroughputProfileDefaults {
-            batch: Some(BATCH / 2),
+            batch: Some(UBATCH / 2),
             ubatch: Some(UBATCH / 2),
             parallel: Some(1),
             continuous_batching: Some("false".to_string()),
@@ -70,14 +72,14 @@ mod tests {
 
     #[test]
     fn throughput_profiles_preserve_mesh_tuning_behavior() {
-        for (name, batch, parallel, continuous) in [
-            ("balanced", 512, 4, "auto"),
-            ("throughput", 1024, 2, "true"),
-            ("saver", 256, 1, "false"),
+        for (name, batch, ubatch, parallel, continuous) in [
+            ("balanced", 2048, 512, 4, "auto"),
+            ("throughput", 1024, 1024, 2, "true"),
+            ("saver", 256, 256, 1, "false"),
         ] {
             let profile = throughput_profile_defaults(name);
             assert_eq!(profile.batch, Some(batch));
-            assert_eq!(profile.ubatch, Some(batch));
+            assert_eq!(profile.ubatch, Some(ubatch));
             assert_eq!(profile.parallel, Some(parallel));
             assert_eq!(profile.continuous_batching.as_deref(), Some(continuous));
         }

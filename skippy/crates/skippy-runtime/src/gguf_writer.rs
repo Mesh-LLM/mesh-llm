@@ -1,3 +1,4 @@
+use crate::native_timing::native_call;
 use std::ffi::CStr;
 use std::path::Path;
 use std::ptr;
@@ -20,7 +21,7 @@ impl ModelInfo {
         let mut raw = ptr::null_mut();
         let mut error = ptr::null_mut();
         let status =
-            unsafe { skippy_ffi::skippy_model_info_open(path.as_ptr(), &mut raw, &mut error) };
+            unsafe { native_call!(skippy_model_info_open(path.as_ptr(), &mut raw, &mut error)) };
         ensure_ok(status, error)?;
         if raw.is_null() {
             return Err(anyhow!("skippy_model_info_open returned a null handle"));
@@ -129,19 +130,19 @@ fn write_gguf_from_parts_impl(
     let mut error = ptr::null_mut();
     let status = unsafe {
         if consume_inputs {
-            skippy_ffi::skippy_write_gguf_from_parts_consuming(
+            native_call!(skippy_write_gguf_from_parts_consuming(
                 input_ptrs.as_ptr(),
                 input_ptrs.len(),
                 output_path.as_ptr(),
                 &mut error,
-            )
+            ))
         } else {
-            skippy_ffi::skippy_write_gguf_from_parts(
+            native_call!(skippy_write_gguf_from_parts(
                 input_ptrs.as_ptr(),
                 input_ptrs.len(),
                 output_path.as_ptr(),
                 &mut error,
-            )
+            ))
         }
     };
     ensure_ok(status, error)
@@ -168,12 +169,12 @@ pub fn write_gguf_metadata_from_parts(
     let output_path = path_to_cstring(output_path.as_ref(), "output path")?;
     let mut error = ptr::null_mut();
     let status = unsafe {
-        skippy_ffi::skippy_write_gguf_metadata_from_parts(
+        native_call!(skippy_write_gguf_metadata_from_parts(
             input_ptrs.as_ptr(),
             input_ptrs.len(),
             output_path.as_ptr(),
             &mut error,
-        )
+        ))
     };
     ensure_ok(status, error)
 }

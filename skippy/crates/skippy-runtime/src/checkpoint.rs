@@ -1,3 +1,4 @@
+use crate::native_timing::native_call;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::fs;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -444,7 +445,7 @@ pub(crate) fn open_safetensors(
     // SAFETY: metadata and callback state remain alive until the synchronous native open returns;
     // output pointers are valid and the configuration owns its backing C strings.
     let status = unsafe {
-        skippy_ffi::skippy_model_open_from_source(
+        native_call!(skippy_model_open_from_source(
             callback_state.checkpoint.metadata_gguf().as_ptr().cast(),
             callback_state.checkpoint.metadata_gguf().len(),
             &callback_source,
@@ -452,7 +453,7 @@ pub(crate) fn open_safetensors(
             &raw_config.raw,
             &mut raw,
             &mut error,
-        )
+        ))
     };
     ensure_ok(status, error)?;
     if raw.is_null() {

@@ -114,6 +114,15 @@ const FAMILIES: &[FamilySpec] = &[
             b"skippy_asr_result_free\0",
         ],
     },
+    FamilySpec {
+        bit: FEATURE_NATIVE_TRACING,
+        name: "native_tracing",
+        required_symbols: &[
+            b"skippy_set_native_span_callback\0",
+            b"skippy_set_gpu_command_timing_callback\0",
+            b"skippy_set_trace_tag\0",
+        ],
+    },
 ];
 
 /// Confirmed-family bitmask plus the bounded set of health messages this

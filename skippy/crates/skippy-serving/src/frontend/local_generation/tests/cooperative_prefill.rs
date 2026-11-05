@@ -136,6 +136,7 @@ fn resident_checkpoint_prefill_yields_to_decode_and_cancels_without_losing_check
             LocalGeneration {
                 prompt_token_ids: &worker_prompt,
                 recurrent_cache_prefix_token_ids: Some(&worker_prompt[..64]),
+                shared_system_prefix_tokens: None,
                 max_tokens: 1,
                 sampling: &sampling,
                 chat_sampling_metadata: None,

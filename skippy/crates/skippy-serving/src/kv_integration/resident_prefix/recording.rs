@@ -8,11 +8,23 @@ impl KvStageIntegration {
         identity: &PrefillKvIdentity,
         token_ids: &[i32],
     ) -> Result<Option<ResidentPrefixRecord>> {
-        let Some((token_count, layers)) =
-            self.resident_capture_boundary(runtime, session_id, identity, token_ids)?
-        else {
-            return Ok(None);
-        };
+        self.record_resident_prefix_outcome(runtime, session_id, identity, token_ids)
+            .map(ResidentRecordOutcome::into_record)
+    }
+
+    /// Record a resident prefix, saying why when none is kept.
+    pub fn record_resident_prefix_outcome(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        identity: &PrefillKvIdentity,
+        token_ids: &[i32],
+    ) -> Result<ResidentRecordOutcome> {
+        let (token_count, layers) =
+            match self.resident_capture_boundary(runtime, session_id, identity, token_ids)? {
+                Ok(boundary) => boundary,
+                Err(skip) => return Ok(ResidentRecordOutcome::Skipped(skip)),
+            };
         let tokens = &identity.token_ids[..token_count];
         let mut radix = self
             .radix
@@ -20,7 +32,7 @@ impl KvStageIntegration {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut sequences = lock_resident_sequences(&self.resident_sequences);
         if let Some(existing) = radix.resident_exact(&identity.namespace, tokens) {
-            return Ok(Some(resident_record(
+            return Ok(ResidentRecordOutcome::Recorded(resident_record(
                 existing.value,
                 false,
                 radix.stats(),
@@ -104,8 +116,11 @@ impl KvStageIntegration {
                 return Err(error);
             }
         };
-        let room = if bytes > self.resident_checkpoint_max_bytes {
-            Ok(false)
+        let skip = if bytes > self.resident_checkpoint_max_bytes {
+            Ok(Some(ResidentRecordSkip::OverCheckpointBudget {
+                bytes,
+                budget_bytes: self.resident_checkpoint_max_bytes,
+            }))
         } else {
             make_record_room(
                 self.resident_config,
@@ -115,11 +130,11 @@ impl KvStageIntegration {
                 &mut evicted,
                 |victim| self.release_native_prefix(runtime, session_id, victim),
             )
+            .map(|made| (!made).then_some(ResidentRecordSkip::NoRoom { bytes }))
         };
-        if !matches!(room, Ok(true)) {
+        if let Some(skip) = skip.transpose() {
             self.release_unpublished_prefix(runtime, session_id, &mut sequences, &candidate)?;
-            room?;
-            return Ok(None);
+            return skip.map(ResidentRecordOutcome::Skipped);
         }
         let inserted = insert_saved_resident(
             &mut radix,
@@ -143,7 +158,7 @@ impl KvStageIntegration {
             crate::frontend::capture_trace::log_stored_identity(&identity.namespace, tokens);
         }
         self.verify_resident_ownership(radix.stats().resident_entries, sequences.stats().0)?;
-        Ok(Some(resident_record(
+        Ok(ResidentRecordOutcome::Recorded(resident_record(
             entry,
             inserted,
             radix.stats(),
@@ -157,9 +172,9 @@ impl KvStageIntegration {
         session_id: &str,
         identity: &PrefillKvIdentity,
         token_ids: &[i32],
-    ) -> Result<Option<(usize, u32)>> {
+    ) -> Result<std::result::Result<(usize, u32), ResidentRecordSkip>> {
         if !self.should_record() || self.payload != StagePrefixCachePayload::ResidentKv {
-            return Ok(None);
+            return Ok(Err(ResidentRecordSkip::RecordingOff));
         }
         let requested = usize::try_from(identity.identity.token_count)
             .unwrap_or(usize::MAX)
@@ -171,21 +186,24 @@ impl KvStageIntegration {
             .max(1);
         let checkpoint = self.resident_requires_checkpoint();
         let count = if checkpoint {
-            if runtime.canonical_session_position(session_id)? != requested as u64 {
-                return Ok(None);
+            let session_tokens = runtime.canonical_session_position(session_id)?;
+            if session_tokens != requested as u64 {
+                return Ok(Err(ResidentRecordSkip::PositionMismatch { session_tokens }));
             }
             requested
         } else {
             recordable_token_count(self.resident_config, requested)
         };
         if count == 0 || (count as u64) < self.checkpoint_policy.min_tokens {
-            return Ok(None);
+            return Ok(Err(ResidentRecordSkip::BelowMinTokens {
+                min_tokens: self.checkpoint_policy.min_tokens,
+            }));
         }
         anyhow::ensure!(
             identity.token_ids.get(..count) == token_ids.get(..count),
             "resident prefix identity does not match the session token path"
         );
-        Ok(Some((count, layers)))
+        Ok(Ok((count, layers)))
     }
 }
 

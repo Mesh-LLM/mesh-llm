@@ -1,0 +1,4 @@
+For license and usage guidelines on the seL4 trademark and logo, including
+the seL4 Foundation logo, see https://sel4.systems/Foundation/Trademark/
+
+No further license is granted from use in this repository.

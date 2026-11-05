@@ -1,0 +1,1 @@
+{"tcb": 12, "endpoint": 4, "notification": 6, "small_page": 12, "large_page": 21, "asid_pool": 12, "asid_table": 9, "slot": 5, "min_untyped_bits": 4, "max_untyped_bits": 47, "vspace": 13, "reply": 5, "vcpu": 12, "page_table": 12, "huge_page": 30, "io_page_table": 12}

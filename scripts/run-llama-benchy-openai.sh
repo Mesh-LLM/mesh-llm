@@ -20,6 +20,7 @@ SAVE_RESULT="${SAVE_RESULT:-}"
 SKIP_COHERENCE="${SKIP_COHERENCE:-1}"
 NO_ADAPT_PROMPT="${NO_ADAPT_PROMPT:-0}"
 NO_CACHE="${NO_CACHE:-0}"
+PREFIX_CACHING="${PREFIX_CACHING:-0}"
 
 discover_model() {
   local -a automation=(cargo xtool)
@@ -81,6 +82,9 @@ if [[ "$NO_ADAPT_PROMPT" == "1" ]]; then
 fi
 if [[ "$NO_CACHE" == "1" ]]; then
   cmd+=(--no-cache)
+fi
+if [[ "$PREFIX_CACHING" == "1" ]]; then
+  cmd+=(--enable-prefix-caching)
 fi
 
 printf 'Running:'

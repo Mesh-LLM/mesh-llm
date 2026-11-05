@@ -406,7 +406,9 @@ impl KvStageIntegration {
             inflight_fills,
             dense_without_recurrent,
             resident_checkpoint_max_bytes,
-        }))
+        };
+        super::tier_metrics::register(&integration);
+        Ok(Some(integration))
     }
 
     #[cfg(test)]

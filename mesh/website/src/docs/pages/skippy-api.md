@@ -242,6 +242,14 @@ Current generated surface: **21 headers** and **134 exported functions**.
       </div>
     </section>
     <section class="skippy-api-index__group">
+      <a class="skippy-api-index__group-title" href="#skippy-header-tracing-h"><code>tracing.h</code><span>3 functions</span></a>
+      <div class="skippy-api-index__functions">
+        <a href="#skippy-fn-skippy-set-native-span-callback"><code>skippy_set_native_span_callback</code></a>
+        <a href="#skippy-fn-skippy-set-gpu-command-timing-callback"><code>skippy_set_gpu_command_timing_callback</code></a>
+        <a href="#skippy-fn-skippy-set-trace-tag"><code>skippy_set_trace_tag</code></a>
+      </div>
+    </section>
+    <section class="skippy-api-index__group">
       <a class="skippy-api-index__group-title" href="#skippy-header-workloads-h"><code>workloads.h</code><span>4 functions</span></a>
       <div class="skippy-api-index__functions">
         <a href="#skippy-fn-skippy-model-workload-info-v1"><code>skippy_model_workload_info_v1</code></a>
@@ -286,6 +294,7 @@ Capability consumers can include a narrower header:
 | `include/skippy/state.h` | Moves KV, recurrent, checkpoint, and resident-prefix state. |
 | `include/skippy/system_one.h` | One-pass structured label scoring for diffusion decision models. |
 | `include/skippy/tokenization.h` | Token, detokenization, chat-template, and chat-response helpers. |
+| `include/skippy/tracing.h` | Where time goes inside native calls: native spans and GPU command timing. Requires SKIPPY_FEATURE_NATIVE_TRACING. Two callbacks report what a native call did, for a caller that already times the call itself. Native spans name the phases of host work (preparing a batch, building and allocating the llama graph, encoding it, waiting for the device, extracting outputs, sampling, and in a backend that reports them, compiling kernel libraries and pipelines); each arrives when it ends, on the thread that did the work. GPU command timing reports each unit of device work (Metal: a command buffer) once the device has finished it, on a backend completion thread. Both carry the tag the calling thread set with skippy_set_trace_tag, so a caller that sets a fresh tag before each native call can place everything the call caused under it, though spans and device records arrive later. |
 | `include/skippy/workloads.h` | Full-model embedding, reranking, and encoder-decoder execution. These operations deliberately reject filtered stage models. Their explicit workload descriptor lets callers fail closed instead of inferring support from a model name or architecture family. |
 
 <a id="skippy-abi-conventions"></a>
@@ -2179,6 +2188,43 @@ SKIPPY_COMMON_API enum skippy_status skippy_parse_chat_response_json(
 
 <a class="skippy-api-backlink" href="#skippy-function-index">↩ Back to function index</a>
 
+<a id="skippy-header-tracing-h"></a>
+### `tracing.h`
+
+<a id="skippy-fn-skippy-set-native-span-callback"></a>
+#### `skippy_set_native_span_callback`
+
+Installs the process-global native span callback. Install once, before the calls to observe; a null callback stops reporting. A callback already running may finish after it is cleared. Installing reaches every loaded backend, which may initialise the backend registry on the calling thread. Backend spans that ended before a backend received its first callback (device initialisation compiles kernel libraries) are delivered from within this call: those that began during it under the calling thread's tag, earlier ones with no parent.
+
+```cpp
+LLAMA_API enum skippy_status skippy_set_native_span_callback(
+         skippy_native_span_callback callback,
+        void * user_data);
+```
+
+<a id="skippy-fn-skippy-set-gpu-command-timing-callback"></a>
+#### `skippy_set_gpu_command_timing_callback`
+
+Installs the process-global GPU command timing callback. Install once, before submitting work; a null callback stops reporting. A callback already running may finish after it is cleared. Returns SKIPPY_STATUS_UNSUPPORTED when no loaded backend reports command timing.
+
+```cpp
+LLAMA_API enum skippy_status skippy_set_gpu_command_timing_callback(
+         skippy_gpu_command_timing_callback callback,
+        void * user_data);
+```
+
+<a id="skippy-fn-skippy-set-trace-tag"></a>
+#### `skippy_set_trace_tag`
+
+Sets the calling thread's trace tag for the work it does afterwards. Native spans without an enclosing native span, and GPU work the thread submits, carry the tag. Thread-local and cheap; pass 0 to stop tagging. Tags should leave SKIPPY_NATIVE_SPAN_ID_BIT clear. Backends see the tag once either callback has been installed.
+
+```cpp
+LLAMA_API void skippy_set_trace_tag(
+        uint64_t tag);
+```
+
+<a class="skippy-api-backlink" href="#skippy-function-index">↩ Back to function index</a>
+
 <a id="skippy-header-workloads-h"></a>
 ### `workloads.h`
 
@@ -2264,6 +2310,7 @@ The headers also define the following enums, structs, opaque handles, and ABI co
 - `stage_plan.h`: `skippy_stage_planner`, `skippy_stage_plan`, `skippy_stage_plan_string_ref_v1`, `skippy_stage_planner_tensor_v1`, `skippy_stage_planner_profile_v1`, `skippy_stage_planner_config_v1`, `skippy_stage_plan_value_kind`, `skippy_stage_plan_state_kind`, `skippy_stage_plan_state_access`, `skippy_stage_plan_state_residency`, `skippy_stage_plan_desc_v1`, `skippy_stage_plan_profile_desc_v1`, `skippy_stage_plan_value_desc_v1`, `skippy_stage_plan_state_desc_v1`, `SKIPPY_STAGE_PLANNER_CONFIG_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLANNER_TENSOR_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLANNER_PROFILE_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_PROFILE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_VALUE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_STATE_DESC_V1_ABI_VERSION = 1`, `SKIPPY_STAGE_PLAN_MAX_DIMS = 4`
 - `state.h`: `skippy_memory_cache_capability`, `skippy_kv_page_flag`, `skippy_kv_page_codec`, `skippy_kv_page_component_role`, `skippy_cachegen_record_kind`, `skippy_cachegen_record_v1`, `skippy_kv_page_component_desc`, `skippy_kv_page_desc`, `SKIPPY_CACHEGEN_RECORD_V1_ABI_VERSION = 1`
 - `system_one.h`: `skippy_model`, `skippy_system_one_slot`
+- `tracing.h`: `skippy_native_span_v1`, `skippy_gpu_command_timing_v1`, `SKIPPY_NATIVE_SPAN_V1_ABI_VERSION = 1`, `SKIPPY_NATIVE_SPAN_ID_BIT = (UINT64_C(1) << 63)`, `SKIPPY_GPU_COMMAND_TIMING_V1_ABI_VERSION = 1`
 - `workloads.h`: `skippy_model`, `skippy_session`, `skippy_workload_kind`, `skippy_workload_pooling`, `skippy_workload_info_v1`, `SKIPPY_WORKLOAD_INFO_V1_ABI_VERSION = 1`
 
 Source directory: `include/skippy/`. Regenerate this page after changing any public header or exported function.

@@ -19,6 +19,8 @@ mod media;
 mod native;
 mod native_mtp;
 mod native_test_evidence;
+pub mod native_timing;
+pub mod native_tracing;
 mod ngram;
 pub mod package;
 mod path_cstring;
