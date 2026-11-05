@@ -206,7 +206,12 @@ if run_cases_against_stage contract family-qwen3-dense "$PWD/{file}" contract 12
 }
 
 fn document(path: &str) -> Node {
-    workflow_yaml::parse(&source(path)).unwrap()
+    let source = source(path);
+    if path == ".github/workflows/llama-canary-family-pass.yml" {
+        workflow_yaml::parse_resolved_aliases(&source).unwrap()
+    } else {
+        workflow_yaml::parse(&source).unwrap()
+    }
 }
 fn text<'a>(node: &'a Node, key: &str) -> &'a str {
     node.get(key).and_then(Node::text).unwrap()
@@ -335,6 +340,12 @@ fn actual_canary_build_qualification_and_verification_relocation_preserve_requir
     let verification = verification.canonicalize().unwrap();
     let materialize = function(&script, "materialize_verification_tree", "run_prepare");
     let full_build = function(&script, "run_full_build", "run_certification");
+    fs::create_dir_all(root.join("scripts/lib")).unwrap();
+    fs::write(
+        root.join("scripts/lib/llama-canary-native-build.sh"),
+        source("scripts/lib/llama-canary-native-build.sh"),
+    )
+    .unwrap();
     let caller = format!(
         r#"set -euo pipefail
 ROOT="$PWD"
@@ -355,6 +366,7 @@ materialize_verification_tree
 BUILD_LOG="$ROOT/build.log"
 STATE_DIR="$ROOT"
 HARNESS_MODE=verify-build
+LLAMA_STAGE_BACKEND=metal
 lipo() {{ printf 'arm64\n'; }}
 run_verification_logged() {{
  local label="$1"

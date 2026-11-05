@@ -51,10 +51,12 @@ pub(super) fn wrapper(
         environment.remove(std::ffi::OsStr::new(key));
     }
     if let Some((package, identity)) = previous {
-        environment.insert(
-            "CANARY_INPUT_BUNDLE".into(),
-            Value::Public(package.join("candidate.bundle").into()),
-        );
+        if package.join("candidate.bundle").is_file() {
+            environment.insert(
+                "CANARY_INPUT_BUNDLE".into(),
+                Value::Public(package.join("candidate.bundle").into()),
+            );
+        }
         environment.insert(
             "CANARY_CANDIDATE_BRANCH".into(),
             Value::Public(identity.branch.clone().into()),

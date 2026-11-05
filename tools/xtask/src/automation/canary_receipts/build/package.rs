@@ -30,6 +30,12 @@ pub(super) fn previous(input: &Input) -> DynResult<Option<(PathBuf, Identity)>> 
     }
     let pass = PassId::parse(&input.pass_id)?;
     let producer = PassId::parse(&identity.pass_id)?;
+    if matches!(input.mode, Mode::Native) {
+        if pass != producer {
+            return Err("native producer requires the same frozen pass".into());
+        }
+        return Ok(Some((previous.package.canonicalize()?, identity)));
+    }
     if matches!(input.mode, Mode::Pinned) {
         if input.mesh_source.is_empty()
             || pass != PassId::Verify1
@@ -110,7 +116,7 @@ pub(super) fn exported(input: &Input, previous: Option<&Identity>) -> DynResult<
     let digest = Digest::of_file(&input.export.join("identity.json"))?;
     let identity = verified(input, &input.export, digest.as_str())?;
     let expected_candidate = match input.mode {
-        Mode::Verify => {
+        Mode::Verify | Mode::Native => {
             &previous
                 .ok_or("missing verified previous candidate")?
                 .candidate

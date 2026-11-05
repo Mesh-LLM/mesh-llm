@@ -3,15 +3,19 @@ on:
   workflow_call:
     inputs:
       runner_labels_128:
-        description: JSON runner label array for 128-tier jobs, emitted by the caller's platform selection
+        description: JSON memory-only runner label array for 128-tier families
         type: string
         required: true
       runner_labels_256:
-        description: JSON runner label array for 256-tier jobs; always targets macOS runners
+        description: JSON memory-only runner label array for 256-tier families
         type: string
         required: true
-      runner_profile:
-        description: prepare-automation profile matching the selected platform (preinstalled-macos or preinstalled-linux)
+      runner_labels_macos:
+        description: JSON labels for the macOS native producer
+        type: string
+        required: true
+      runner_labels_linux:
+        description: JSON labels for the Linux native producer
         type: string
         required: true
       source:
@@ -47,17 +51,17 @@ on:
       green:
         value: ${{ jobs.reconcile.outputs.green || jobs.aggregate.outputs.green }}
       package:
-        value: ${{ jobs.build.outputs.package }}
+        value: ${{ jobs.combine.outputs.package }}
       identity:
-        value: ${{ jobs.build.outputs.identity }}
+        value: ${{ jobs.combine.outputs.identity }}
       head:
-        value: ${{ jobs.build.outputs.head }}
+        value: ${{ jobs.combine.outputs.head }}
       branch:
-        value: ${{ jobs.build.outputs.branch }}
+        value: ${{ jobs.combine.outputs.branch }}
       failure_class:
-        value: ${{ jobs.reconcile.outputs.failure_class || jobs.aggregate.outputs.failure_class || jobs.build.outputs.failure_class }}
+        value: ${{ jobs.reconcile.outputs.failure_class || jobs.aggregate.outputs.failure_class || jobs.combine.outputs.failure_class || jobs.build_linux.outputs.failure_class || jobs.build.outputs.failure_class }}
       failure_stage:
-        value: ${{ jobs.reconcile.outputs.failure_stage || jobs.aggregate.outputs.failure_stage || jobs.build.outputs.failure_stage }}
+        value: ${{ jobs.reconcile.outputs.failure_stage || jobs.aggregate.outputs.failure_stage || jobs.combine.outputs.failure_stage || jobs.build_linux.outputs.failure_stage || jobs.build.outputs.failure_stage }}
       repairable:
         value: ${{ jobs.reconcile.outputs.repairable || jobs.aggregate.outputs.repairable }}
       feedback:
@@ -81,7 +85,7 @@ jobs:
   build:
     # These persistent machines only execute the protected main workflow.
     if: github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main'
-    runs-on: ${{ fromJSON(inputs.runner_labels_128) }}
+    runs-on: ${{ fromJSON(inputs.runner_labels_macos) }}
     timeout-minutes: 1430
     outputs:
       matrix: ${{ steps.build.outputs.matrix }}
@@ -90,13 +94,18 @@ jobs:
       branch: ${{ steps.build.outputs.branch }}
       failure_class: ${{ steps.build.outputs.failure_class }}
       failure_stage: ${{ steps.build.outputs.failure_stage }}
-      package: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ steps.build.outputs.identity_sha256 }}
+      package: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ steps.build.outputs.identity_sha256 }}-macOS
     env:
       MESH_LLM_REQUIRE_SCCACHE: '1'
       CTEST_PARALLEL_LEVEL: '16'
       LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
       LLAMA_BUILD_DIR: ${{ github.workspace }}/.deps/llama-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
-    steps:
+      NATIVE_BUILD_MODE: ${{ inputs.mode }}
+      NATIVE_PREVIOUS_PACKAGE: ${{ inputs.previous_package }}
+      NATIVE_PREVIOUS_IDENTITY: ${{ inputs.previous_identity }}
+      NATIVE_PREVIOUS_HEAD: ${{ inputs.previous_head }}
+      NATIVE_PREVIOUS_FEEDBACK: ${{ inputs.previous_feedback }}
+    steps: &native_build_steps
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           ref: ${{ inputs.source }}
@@ -112,7 +121,7 @@ jobs:
           persist-credentials: false
       - uses: ./.github/actions/setup-canary-runner
         with:
-          require-agent: ${{ inputs.mode == 'repair-build' }}
+          require-agent: ${{ env.NATIVE_BUILD_MODE == 'repair-build' }}
       - uses: ./.github/actions/select-canary-backend
       - name: Prepare protected controller automation
         uses: ./.github/actions/prepare-automation
@@ -120,33 +129,33 @@ jobs:
           SCCACHE_GHA_ENABLED: 'false'
           SCCACHE_MULTILEVEL_CHAIN: disk
         with:
-          runner-profile: ${{ inputs.runner_profile }}
+          runner-profile: ${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - uses: ./.github/actions/setup-canary-python
       - uses: ./.github/actions/use-canary-cache
       - name: Download previous candidate
-        if: inputs.previous_package != ''
+        if: env.NATIVE_PREVIOUS_PACKAGE != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ inputs.previous_package }}
+          name: ${{ env.NATIVE_PREVIOUS_PACKAGE }}
           path: ${{ runner.temp }}/canary-previous-${{ inputs.pass_id }}
       - name: Download previous family failure evidence
-        if: inputs.previous_feedback != ''
+        if: env.NATIVE_PREVIOUS_FEEDBACK != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ inputs.previous_feedback }}
+          name: ${{ env.NATIVE_PREVIOUS_FEEDBACK }}
           path: ${{ runner.temp }}/canary-feedback-${{ inputs.pass_id }}
       - name: Build exact candidate for distributed certification
         id: build
         env:
-          CANARY_HARNESS_MODE: ${{ inputs.mode }}
+          CANARY_HARNESS_MODE: ${{ env.NATIVE_BUILD_MODE }}
           CANARY_PASS_ID: ${{ inputs.pass_id }}
           UPSTREAM_SHA_INPUT: ${{ inputs.upstream }}
-          CANARY_PREVIOUS_PACKAGE: ${{ inputs.previous_package != '' && format('{0}/canary-previous-{1}', runner.temp, inputs.pass_id) || '' }}
-          CANARY_PREVIOUS_IDENTITY: ${{ inputs.previous_identity }}
-          CANARY_CANDIDATE_SHA: ${{ inputs.previous_head }}
-          CANARY_PREVIOUS_FEEDBACK: ${{ inputs.previous_feedback != '' && format('{0}/canary-feedback-{1}', runner.temp, inputs.pass_id) || '' }}
+          CANARY_PREVIOUS_PACKAGE: ${{ env.NATIVE_PREVIOUS_PACKAGE != '' && format('{0}/canary-previous-{1}', runner.temp, inputs.pass_id) || '' }}
+          CANARY_PREVIOUS_IDENTITY: ${{ env.NATIVE_PREVIOUS_IDENTITY }}
+          CANARY_CANDIDATE_SHA: ${{ env.NATIVE_PREVIOUS_HEAD }}
+          CANARY_PREVIOUS_FEEDBACK: ${{ env.NATIVE_PREVIOUS_FEEDBACK != '' && format('{0}/canary-feedback-{1}', runner.temp, inputs.pass_id) || '' }}
           CANARY_EXPORT_DIR: ${{ runner.temp }}/canary-export-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
           CANARY_AGENT_PROVIDER: ${{ vars.LLAMA_CANARY_GOOSE_PROVIDER || 'zai_coding_plan' }}
           CANARY_AGENT_MODEL: ${{ vars.LLAMA_CANARY_GOOSE_MODEL || 'glm-5.3-flash' }}
@@ -230,7 +239,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: llama-canary-system-one-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+          name: llama-canary-system-one-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ runner.os }}
           path: |
             ${{ env.CANARY_SOURCE_ROOT }}/target/skippy-system-one-smoke/
           if-no-files-found: warn
@@ -239,7 +248,7 @@ jobs:
         id: upload_package
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ steps.build.outputs.identity_sha256 }}
+          name: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ steps.build.outputs.identity_sha256 }}-${{ runner.os }}
           path: ${{ runner.temp }}/canary-export-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/
           if-no-files-found: error
           retention-days: 7
@@ -248,7 +257,7 @@ jobs:
         if: ${{ success() || failure() || cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: llama-build-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+          name: llama-build-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ runner.os }}
           include-hidden-files: true
           path: |
             ${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/
@@ -267,22 +276,101 @@ jobs:
           set -euo pipefail
           "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job build \
             --evidence-uploaded "$EVIDENCE_UPLOADED" --package-uploaded "$PACKAGE_UPLOADED"
+  build_linux:
+    needs: build
+    if: ${{ needs.build.result == 'success' }}
+    runs-on: ${{ fromJSON(inputs.runner_labels_linux) }}
+    timeout-minutes: 1430
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+      identity: ${{ steps.build.outputs.identity_sha256 }}
+      head: ${{ steps.build.outputs.candidate }}
+      branch: ${{ steps.build.outputs.branch }}
+      package: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ steps.build.outputs.identity_sha256 }}-Linux
+      failure_class: ${{ steps.build.outputs.failure_class }}
+      failure_stage: ${{ steps.build.outputs.failure_stage }}
+    env:
+      MESH_LLM_REQUIRE_SCCACHE: '1'
+      CTEST_PARALLEL_LEVEL: '16'
+      LLAMA_STAGE_BUILD_DIR: ${{ github.workspace }}/.deps/llama-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+      LLAMA_BUILD_DIR: ${{ github.workspace }}/.deps/llama-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}
+      NATIVE_BUILD_MODE: native-build
+      NATIVE_PREVIOUS_PACKAGE: ${{ needs.build.outputs.package }}
+      NATIVE_PREVIOUS_IDENTITY: ${{ needs.build.outputs.identity }}
+      NATIVE_PREVIOUS_HEAD: ${{ needs.build.outputs.head }}
+      NATIVE_PREVIOUS_FEEDBACK: ''
+    steps: *native_build_steps
+
+  combine:
+    needs: [build, build_linux]
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.combine.outputs.matrix }}
+      identity: ${{ steps.combine.outputs.identity_sha256 }}
+      head: ${{ steps.combine.outputs.candidate }}
+      branch: ${{ steps.combine.outputs.branch }}
+      package: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ steps.combine.outputs.identity_sha256 }}
+      failure_class: ${{ steps.combine.outcome == 'failure' && 'infrastructure' || '' }}
+      failure_stage: ${{ steps.combine.outcome == 'failure' && 'package-combine' || '' }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          ref: ${{ inputs.source }}
+          persist-credentials: false
+      - uses: ./.github/actions/prepare-automation
+        with:
+          runner-profile: hosted-bare
+          allow_depot_remote_cache: 'false'
+          allow_native_github_cache: 'false'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.build.outputs.package }}
+          path: ${{ runner.temp }}/canary-macos
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.build_linux.outputs.package }}
+          path: ${{ runner.temp }}/canary-linux
+      - name: Bind both native producers to one candidate
+        id: combine
+        env:
+          MAC_IDENTITY: ${{ needs.build.outputs.identity }}
+          LINUX_IDENTITY: ${{ needs.build_linux.outputs.identity }}
+        run: |
+          set -euo pipefail
+          input="$RUNNER_TEMP/canary-combine.json"
+          jq -n --arg controller_root "$GITHUB_WORKSPACE" \
+            --arg controller_revision "$CANARY_CONTROLLER_SHA" --arg selected_source "$CANARY_MESH_SOURCE" \
+            --arg run_id "$GITHUB_RUN_ID" --arg run_attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg mac_package "$RUNNER_TEMP/canary-macos" --arg mac_identity_sha256 "$MAC_IDENTITY" \
+            --arg linux_package "$RUNNER_TEMP/canary-linux" --arg linux_identity_sha256 "$LINUX_IDENTITY" \
+            --arg output "$RUNNER_TEMP/canary-combined" \
+            '{context:{controller_root:$controller_root,controller_revision:$controller_revision,selected_source:$selected_source,run_id:$run_id,run_attempt:$run_attempt},
+              mac_package:$mac_package,mac_identity_sha256:$mac_identity_sha256,
+              linux_package:$linux_package,linux_identity_sha256:$linux_identity_sha256,output:$output}' > "$input"
+          "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts combine --input "$input"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: llama-family-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ steps.combine.outputs.identity_sha256 }}
+          path: ${{ runner.temp }}/canary-combined/
+          if-no-files-found: error
+          retention-days: 1
+
   family:
     name: ${{ inputs.pass_id }} / ${{ matrix.families }}
-    needs: build
+    needs: combine
     runs-on: ${{ fromJSON(matrix.memory_tier == 'accelerator-memory-256plus' && inputs.runner_labels_256 || inputs.runner_labels_128) }}
     timeout-minutes: 780
     strategy:
       fail-fast: false
       max-parallel: 8
-      matrix: ${{ fromJSON(needs.build.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.combine.outputs.matrix) }}
     env:
       CANARY_SOURCE_ROOT: ${{ github.workspace }}/canary-source
       FAMILY_BATTERY_RUN_ID: ${{ inputs.pass_id }}-${{ matrix.shard_index }}
       FAMILY_BATTERY_ARTIFACT_ROOT: ${{ github.workspace }}/target/canary-evidence-${{ github.run_id }}-${{ github.run_attempt }}
       FAMILY_BATTERY_MM_TEST_BIN: ${{ github.workspace }}/canary-source/target/debug/skippy-mm-test
       PACKAGE: ${{ github.workspace }}/.deps/canary-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}
-      IDENTITY: ${{ needs.build.outputs.identity }}
+      IDENTITY: ${{ needs.combine.outputs.identity }}
       # Restored workload oracle closure (Rust canary-receipts
       # restore). The battery's non-chat lanes consume the CPU candidate and
       # native oracle executables from this immutable handoff instead of
@@ -314,14 +402,14 @@ jobs:
           SCCACHE_GHA_ENABLED: 'false'
           SCCACHE_MULTILEVEL_CHAIN: disk
         with:
-          runner-profile: ${{ inputs.runner_profile }}
+          runner-profile: ${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - uses: ./.github/actions/use-canary-cache
       - uses: ./.github/actions/setup-canary-python
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ needs.build.outputs.package }}
+          name: ${{ needs.combine.outputs.package }}
           path: ${{ env.PACKAGE }}
       - name: Verify immutable handoff and restore producer executables
         run: |
@@ -373,7 +461,7 @@ jobs:
         if: ${{ success() || failure() || cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: llama-family-${{ github.run_id }}-${{ needs.build.outputs.identity }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}
+          name: llama-family-${{ github.run_id }}-${{ needs.combine.outputs.identity }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}
           path: ${{ env.FAMILY_BATTERY_ARTIFACT_ROOT }}/${{ env.FAMILY_BATTERY_RUN_ID }}/
           if-no-files-found: error
           retention-days: 14
@@ -393,8 +481,8 @@ jobs:
           set -euo pipefail
           "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job family --evidence-uploaded "$EVIDENCE_UPLOADED"
   aggregate:
-    needs: [build, family]
-    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    needs: [combine, family]
+    if: ${{ !cancelled() && needs.combine.result == 'success' }}
     runs-on: ubuntu-24.04
     outputs:
       green: ${{ steps.aggregate.outputs.green }}
@@ -404,7 +492,7 @@ jobs:
       failure_stage: ${{ steps.aggregate.outputs.failure_stage }}
       retry_matrix: ${{ steps.aggregate.outputs.retry_matrix }}
       feedback_ready: ${{ steps.aggregate.outputs.feedback_ready }}
-      feedback: llama-family-feedback-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ needs.build.outputs.identity }}
+      feedback: llama-family-feedback-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ needs.combine.outputs.identity }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -418,17 +506,17 @@ jobs:
           allow_native_github_cache: 'false'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ needs.build.outputs.package }}
+          name: ${{ needs.combine.outputs.package }}
           path: ${{ runner.temp }}/aggregate-input
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: llama-family-${{ github.run_id }}-${{ needs.build.outputs.identity }}-*-${{ inputs.pass_id }}-*
+          pattern: llama-family-${{ github.run_id }}-${{ needs.combine.outputs.identity }}-*-${{ inputs.pass_id }}-*
           path: ${{ runner.temp }}/aggregate-evidence
       - name: Require every planned family and lane
         id: aggregate
         continue-on-error: true
         env:
-          IDENTITY: ${{ needs.build.outputs.identity }}
+          IDENTITY: ${{ needs.combine.outputs.identity }}
           FAMILY_RESULT: ${{ needs.family.result }}
         run: |
           set -euo pipefail
@@ -441,14 +529,14 @@ jobs:
         if: ${{ !cancelled() && steps.aggregate.outputs.feedback_ready == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: llama-family-feedback-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ needs.build.outputs.identity }}
+          name: llama-family-feedback-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ needs.combine.outputs.identity }}
           path: ${{ runner.temp }}/canary-family-feedback/
           if-no-files-found: error
           retention-days: 14
 
   retry_family:
     name: ${{ inputs.pass_id }} infrastructure retry / ${{ matrix.families }}
-    needs: [build, aggregate]
+    needs: [combine, aggregate]
     if: ${{ !cancelled() && needs.aggregate.outputs.state == 'infrastructure_retryable' }}
     runs-on: ${{ fromJSON(matrix.memory_tier == 'accelerator-memory-256plus' && inputs.runner_labels_256 || inputs.runner_labels_128) }}
     timeout-minutes: 780
@@ -462,7 +550,7 @@ jobs:
       FAMILY_BATTERY_ARTIFACT_ROOT: ${{ github.workspace }}/target/canary-evidence-${{ github.run_id }}-${{ github.run_attempt }}
       FAMILY_BATTERY_MM_TEST_BIN: ${{ github.workspace }}/canary-source/target/debug/skippy-mm-test
       PACKAGE: ${{ github.workspace }}/.deps/canary-retry-input-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}
-      IDENTITY: ${{ needs.build.outputs.identity }}
+      IDENTITY: ${{ needs.combine.outputs.identity }}
       SKIPPY_WORKLOAD_ORACLE_SERVER: ${{ github.workspace }}/canary-source/.deps/canary-workload-oracles/native/bin/llama-server
       SKIPPY_WORKLOAD_ORACLE_COMPLETION: ${{ github.workspace }}/canary-source/.deps/canary-workload-oracles/native/bin/llama-completion
       SKIPPY_WORKLOAD_ORACLE_TTS: ${{ github.workspace }}/canary-source/.deps/canary-workload-oracles/native/bin/llama-tts
@@ -490,14 +578,14 @@ jobs:
           SCCACHE_GHA_ENABLED: 'false'
           SCCACHE_MULTILEVEL_CHAIN: disk
         with:
-          runner-profile: ${{ inputs.runner_profile }}
+          runner-profile: ${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}
           allow_depot_remote_cache: 'false'
           allow_native_github_cache: 'false'
       - uses: ./.github/actions/use-canary-cache
       - uses: ./.github/actions/setup-canary-python
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ needs.build.outputs.package }}
+          name: ${{ needs.combine.outputs.package }}
           path: ${{ env.PACKAGE }}
       - name: Verify immutable handoff and restore producer executables
         run: |
@@ -549,7 +637,7 @@ jobs:
         if: ${{ success() || failure() || cancelled() }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: llama-family-retry-${{ github.run_id }}-${{ needs.build.outputs.identity }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}
+          name: llama-family-retry-${{ github.run_id }}-${{ needs.combine.outputs.identity }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}
           path: ${{ env.FAMILY_BATTERY_ARTIFACT_ROOT }}/${{ env.FAMILY_BATTERY_RUN_ID }}/
           if-no-files-found: error
           retention-days: 14
@@ -570,7 +658,7 @@ jobs:
           "$MESH_LLM_AUTOMATION_BIN" ci-ops runner-cleanup --job family --evidence-uploaded "$EVIDENCE_UPLOADED"
 
   reconcile:
-    needs: [build, aggregate, retry_family]
+    needs: [combine, aggregate, retry_family]
     if: ${{ !cancelled() && needs.aggregate.outputs.state == 'infrastructure_retryable' }}
     runs-on: ubuntu-24.04
     outputs:
@@ -579,7 +667,7 @@ jobs:
       repairable: ${{ steps.reconcile.outputs.repairable }}
       failure_class: ${{ steps.reconcile.outputs.failure_class }}
       failure_stage: ${{ steps.reconcile.outputs.failure_stage }}
-      feedback: llama-family-reconciled-feedback-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ needs.build.outputs.identity }}
+      feedback: llama-family-reconciled-feedback-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ needs.combine.outputs.identity }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
@@ -593,7 +681,7 @@ jobs:
           allow_native_github_cache: 'false'
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ needs.build.outputs.package }}
+          name: ${{ needs.combine.outputs.package }}
           path: ${{ runner.temp }}/reconcile-input
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -601,13 +689,13 @@ jobs:
           path: ${{ runner.temp }}/previous-feedback
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: llama-family-retry-${{ github.run_id }}-${{ needs.build.outputs.identity }}-*-${{ inputs.pass_id }}-*
+          pattern: llama-family-retry-${{ github.run_id }}-${{ needs.combine.outputs.identity }}-*-${{ inputs.pass_id }}-*
           path: ${{ runner.temp }}/retry-evidence
       - name: Reconcile targeted infrastructure retries
         id: reconcile
         continue-on-error: true
         env:
-          IDENTITY: ${{ needs.build.outputs.identity }}
+          IDENTITY: ${{ needs.combine.outputs.identity }}
           FAMILY_RESULT: ${{ needs.retry_family.result }}
         run: |
           set -euo pipefail
@@ -621,7 +709,7 @@ jobs:
         if: ${{ !cancelled() && steps.reconcile.outputs.feedback_ready == 'true' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
-          name: llama-family-reconciled-feedback-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ needs.build.outputs.identity }}
+          name: llama-family-reconciled-feedback-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ needs.combine.outputs.identity }}
           path: ${{ runner.temp }}/reconciled-family-feedback/
           if-no-files-found: error
           retention-days: 14
