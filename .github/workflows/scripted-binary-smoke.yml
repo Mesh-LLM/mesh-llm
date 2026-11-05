@@ -95,6 +95,10 @@ on:
         required: false
 
 env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_BENCH_DEBUG: "0"
   MESH_LLM_SMOKE_CONTEXT_SIZE: ${{ inputs.model_context_size }}
   MESH_TWO_NODE_SPLIT_EXPECTED_EXACT_PAYLOAD_KIND: ${{ inputs.expected_exact_payload_kind }}
   MESH_TWO_NODE_SPLIT_RECURRENT_CTX_SIZE: ${{ inputs.kv_recurrent_context_size }}

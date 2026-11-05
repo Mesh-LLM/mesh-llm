@@ -70,18 +70,50 @@ pub(super) fn admission(host: Host, peak: u64) -> DynResult<u64> {
     Ok(reserve)
 }
 pub(super) fn observe(root: &Path, cancel: &Cancellation) -> DynResult<Host> {
-    if !cfg!(target_os = "macos") {
-        return Err("family memory guard requires macOS".into());
-    }
-    let total = probe(root, "/usr/sbin/sysctl", &["-n", "hw.memsize"], cancel)?
-        .trim()
-        .parse()?;
-    let available = available(&probe(root, "/usr/bin/vm_stat", &[], cancel)?)?;
+    let host = if cfg!(target_os = "macos") {
+        Host {
+            total: probe(root, "/usr/sbin/sysctl", &["-n", "hw.memsize"], cancel)?
+                .trim()
+                .parse()?,
+            available: available(&probe(root, "/usr/bin/vm_stat", &[], cancel)?)?,
+        }
+    } else if cfg!(target_os = "linux") {
+        linux_memory(&std::fs::read_to_string("/proc/meminfo")?)?
+    } else {
+        return Err("unsupported family memory observation platform".into());
+    };
+    let Host { total, available } = host;
     if total == 0 || available > total {
         return Err("invalid host memory observation".into());
     }
-    Ok(Host { total, available })
+    Ok(host)
 }
+
+fn linux_memory(text: &str) -> DynResult<Host> {
+    fn field(text: &str, name: &str) -> DynResult<u64> {
+        let mut values = text.lines().filter_map(|line| line.strip_prefix(name));
+        let value = values.next().ok_or("missing Linux memory field")?;
+        if values.next().is_some() {
+            return Err("duplicate Linux memory field".into());
+        }
+        let (amount, unit) = value
+            .trim()
+            .split_once(' ')
+            .ok_or("invalid Linux memory field")?;
+        if unit.trim() != "kB" {
+            return Err("invalid Linux memory unit".into());
+        }
+        amount
+            .parse::<u64>()?
+            .checked_mul(1024)
+            .ok_or_else(|| "Linux memory overflow".into())
+    }
+    Ok(Host {
+        total: field(text, "MemTotal:")?,
+        available: field(text, "MemAvailable:")?,
+    })
+}
+
 fn probe(root: &Path, executable: &str, args: &[&str], cancel: &Cancellation) -> DynResult<String> {
     let report = process::supervise(
         &ProcessSpec {
@@ -118,4 +150,19 @@ fn probe(root: &Path, executable: &str, args: &[&str], cancel: &Cancellation) ->
         .into());
     }
     Ok(String::from_utf8(report.stdout.bytes_retained)?)
+}
+
+#[cfg(test)]
+mod linux_tests {
+    use super::*;
+
+    #[test]
+    fn linux_memory_observation_uses_available_bytes_and_rejects_duplicates() {
+        let text = "MemTotal:       131072000 kB\nMemAvailable:   98304000 kB\n";
+        let host = linux_memory(text).unwrap();
+        assert_eq!(host.total, 131072000 * 1024);
+        assert_eq!(host.available, 98304000 * 1024);
+        assert!(linux_memory(&format!("{text}MemAvailable: 1 kB\n")).is_err());
+        assert!(linux_memory("MemTotal: 1 MB\nMemAvailable: 1 kB\n").is_err());
+    }
 }

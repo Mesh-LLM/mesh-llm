@@ -15,6 +15,10 @@ permissions:
   pull-requests: write
 
 env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_BENCH_DEBUG: "0"
   PR_CLOSE_DAYS: ${{ vars.STALE_PR_DAYS || '7' }}
   PR_WARNING_DAYS: ${{ vars.STALE_PR_WARNING_DAYS || '2' }}
 

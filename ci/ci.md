@@ -1,12 +1,17 @@
 # MeshLLM CI topology
 
-Linux Rust-test jobs disable test-profile debug information with
-`CARGO_PROFILE_TEST_DEBUG=0`, preserving complete package tests, debug
-assertions and overflow checks. This reduces the dependency variants and
-linked test executables retained across feature-isolated package invocations.
-The shared compiler seed warmer uses the same test setting. Cache epoch `v4`
-starts a fresh namespace. Batch jobs record filesystem space before each
-package and retained target/compiler-cache sizes even when tests fail.
+All workflows disable Rust debug information with workflow- or job-level
+`CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`,
+`CARGO_PROFILE_RELEASE_DEBUG=0` and `CARGO_PROFILE_BENCH_DEBUG=0`.
+Each reusable workflow sets these values because caller workflow environments
+do not propagate through `workflow_call`. The Linux test, client and Fly Docker
+builders set the same environment inside their Rust build stages. Compiler-seed
+publishers and consumers use matching settings. Local development defaults,
+complete package tests, debug assertions and overflow checks are preserved.
+Cache epoch `v5` starts a fresh namespace. Batch jobs record filesystem space
+before each package and retained target/compiler-cache sizes even when tests fail.
+The upstream canary sets the environment in each executing job and its reusable
+family-pass workflow separately.
 
 ## Standalone C++ API qualification
 
@@ -286,10 +291,10 @@ release's kind, publication time, tag and SHA in the summary, because the feed
 is ordered by creation time and a draft created long ago but published recently
 sits on a late page. It peels the selected tag to an exact commit. API errors,
 missing releases and moving tags fail before hardware work;
-there is no `master` fallback. The hosted upstream and platform-selection
-steps receive the workflow's read-only token via `GH_TOKEN`; workers remain
-credential-free. That token cannot list repository runners, so `platform=auto`
-falls back to macOS; use explicit `platform=linux` to select Linux.
+there is no `master` fallback. The hosted upstream selection step receives the
+workflow's read-only token via `GH_TOKEN`; workers
+remain credential-free. Runner placement uses managed memory labels and does
+not query the repository runner API.
 Fixed read-only GraphQL queries fetch metadata
 without assets; REST resolves the tag. A 180-second total budget, 1 MiB response
 cap and 1000-page ceiling bound the lookup; incomplete pagination fails without
@@ -388,8 +393,10 @@ gh workflow run llama-upstream-canary.yml --ref main \
 The run summary records the resolved MeshLLM SHA and existing llama.cpp pin;
 a branch moving later cannot change the selected source for that run.
 
-`llama-canary-family-pass.yml` owns the reusable build → family matrix → hosted
-aggregate. The producer performs prepare, manifest-policy, full native and Rust
+`llama-canary-family-pass.yml` owns the reusable macOS build → Linux native
+build → hosted package combination → memory-tier family matrix → hosted
+aggregate. The first producer freezes the candidate; the second rebuilds that
+exact candidate for Linux. Both producers perform prepare, manifest-policy, full native and Rust
 builds, generated-family validation, smoke, and split-roster checks. It reads
 Git manifest, path-list and diff payloads through bounded raw capture, separately
 from redacted diagnostics, so ordinary model names containing `token` retain
@@ -397,14 +404,15 @@ their exact bytes. Capture overflow or incomplete output fails admission. It val
 the immutable HF cache before compilation. After preparing the exact llama.cpp
 pin, it reads GGUF tensor descriptors with that pin's GGML type table and
 compares each target's tensor byte sum with the manifest before any build.
-After the build, seven pinned Metal models exercise dense parity, recurrent and
+After the build, seven pinned models exercise dense parity, recurrent and
 MoE replay, embedding and rerank startup, encoder-decoder ordering, and image
-response content before the 95-family matrix is submitted. The full matrix
+response content on each backend before the 95-family matrix is submitted. The full matrix
 and independent verification retain publication authority. The producer exports a candidate Git bundle,
 one-family-per-shard plan, four arm64 certification binaries, a prebuilt
 multimodal library-test executable, and the run-scoped CPU workload oracle
-closure. Static Metal resources are embedded; an unpackaged non-system dylib
-makes the handoff fail. SHA-256 digests bind all handoff bytes to the candidate,
+closure for each OS. Static Metal resources are embedded; an unpackaged
+non-system dylib or unsafe Linux ELF loader path makes the handoff fail. SHA-256
+digests bind both native payloads to one candidate,
 main base, run/attempt, and pass identity.
 The native generator gives each whole-source rewriter pass a 600-second
 deadline, separate from the 60-second Git command default. An explicit
@@ -440,9 +448,13 @@ name breaking ties. Balanced shard membership remains unchanged. This puts
 small models first in the canary's one-family-per-job matrix; parallel runner
 availability can still change actual start and completion order.
 
+The native build adapter keeps arch/lipo and OSX CMake options on macOS only;
+Linux uses its selected CUDA backend with the ordinary shell.
+
 Partial reruns reuse the successful producer's exact identity digest from the
-same workflow run, retaining its original attempt. Family artifacts include
-that digest and their worker attempt; aggregation downloads all attempts for
+same run even when native producer attempts differ. Combination retains the
+macOS producer's attempt and rejects either producer from a future attempt.
+Family artifacts include that digest and their worker attempt; aggregation downloads all attempts for
 that identity and pass, then selects the latest receipt per family. Newer
 failures supersede older successes; duplicate same-attempt receipts, missing
 families, foreign identities, and out-of-range attempts fail closed. The matrix
@@ -1606,8 +1618,8 @@ The warmer's `just ci-sccache-seed-build` recipe covers the dominant
 `mesh-llm` Clippy graph, the release-profile backend-neutral `mesh-llm` host
 graph, the isolated `mesh-llm-cli` test graph used by the Rust-test matrix,
 and the isolated default-feature `xtask` Clippy graph with all targets. The
-test-debug override applies only to the test build so both Clippy graphs retain
-their consumers' profiles. Root and workspace package Cargo manifests and the
+workflow-level debug-information overrides apply to every seed profile and its
+consumers. Root and workspace package Cargo manifests and the
 warmer workflow, along with `Justfile` and `just/**`, are part of the exact
 seed key.
 `ci/runner-images.json` and `cargo xtool ci-ops runner-identity check` make the
@@ -1986,13 +1998,12 @@ placeholder directory. Neither change expands runner or cache authority.
 
 ### Canary memory admission and Python SDK
 
-Persistent canary jobs require `self-hosted`, `macOS`, `ARM64`, `jy-managed`
-and `family-certify`. Preflight and build also require
-`accelerator-memory-128plus`; family and infrastructure-retry jobs use the
-controller's existing memory-tier label. JY selects macOS Apple M1 Ultra
-128 GiB and Apple M3 Ultra 256 GiB machines by attributes, with mounted storage,
-without embedding node names in workflows. Both advertise the 128-plus tier;
-only the M3 Ultra advertises 256-plus.
+Persistent canary jobs require `self-hosted`, `ARM64`, `jy-managed` and
+`family-certify`. Preflight, family and infrastructure-retry jobs request only
+the controller's memory-tier label. The two native producers additionally
+request their OS, then a hosted job binds their binaries to one candidate
+package. JY selects eligible machines by memory and storage attributes; the
+workflow names no machine type or node.
 
 Roll out [the JY runner policies and Fleet provisioning](https://github.com/general-inference/monorepo/pull/244)
 before merging this placement change. The runner groups restrict access to

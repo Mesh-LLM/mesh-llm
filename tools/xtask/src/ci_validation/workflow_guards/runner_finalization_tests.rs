@@ -14,7 +14,12 @@ fn actual() -> BTreeMap<String, Node> {
             let path = entry.unwrap().path();
             (
                 path.file_name().unwrap().to_str().unwrap().to_owned(),
-                workflow_yaml::parse(&fs::read_to_string(path).unwrap()).unwrap(),
+                if path.file_name().unwrap() == "llama-canary-family-pass.yml" {
+                    workflow_yaml::parse_resolved_aliases(&fs::read_to_string(path).unwrap())
+                        .unwrap()
+                } else {
+                    workflow_yaml::parse(&fs::read_to_string(path).unwrap()).unwrap()
+                },
             )
         })
         .collect()

@@ -5,7 +5,12 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 fn document(path: &str) -> Node {
-    workflow_yaml::parse(&fs::read_to_string(root().join(path)).unwrap()).unwrap()
+    let source = fs::read_to_string(root().join(path)).unwrap();
+    if path == ".github/workflows/llama-canary-family-pass.yml" {
+        workflow_yaml::parse_resolved_aliases(&source).unwrap()
+    } else {
+        workflow_yaml::parse(&source).unwrap()
+    }
 }
 fn field<'a>(node: &'a Node, key: &str) -> &'a str {
     node.get(key).and_then(Node::text).unwrap()
@@ -121,13 +126,8 @@ fn reject_nonpublisher_secrets(name: &str, job: &Node) -> Result<(), String> {
         return Err("resolver steps missing".into());
     };
     for step in items {
-        if matches!(
-            step.get("id").and_then(Node::text),
-            Some("upstream") | Some("select_platform")
-        ) {
-            // Read-only workflow-token API calls (upstream release selection
-            // and platform/runner resolution) are admitted only with the
-            // workflow token, never a publication credential.
+        if step.get("id").and_then(Node::text) == Some("upstream") {
+            // Upstream release selection uses only the read-only workflow token.
             let Node::Map(env) = change(step, &["env"]) else {
                 return Err("read-only selection environment missing".into());
             };
@@ -246,19 +246,6 @@ fn protected_controller_and_worker_credentials_refuse_permission_or_token_mutati
     *change(&mut token, &["env", "CANARY_CONTROLLER_SHA"]) =
         Node::Scalar("${{ github.token }}".into());
     assert!(security(&controller, &token).is_err());
-    for id in ["upstream", "select_platform"] {
-        let mut token = controller.clone();
-        let Node::Seq(items) = change(&mut token, &["jobs", "resolve", "steps"]) else {
-            panic!("resolver steps");
-        };
-        let step = items
-            .iter_mut()
-            .find(|step| step.get("id").and_then(Node::text) == Some(id))
-            .unwrap();
-        *change(step, &["env", "GH_TOKEN"]) =
-            Node::Scalar("${{ secrets.CANARY_REPAIR_TOKEN }}".into());
-        assert!(security(&token, &worker).is_err(), "resolver step {id}");
-    }
     let mut forwarded = controller.clone();
     let Node::Map(candidate) = change(&mut forwarded, &["jobs", "repair_1"]) else {
         panic!("job");
@@ -270,7 +257,8 @@ fn protected_controller_and_worker_credentials_refuse_permission_or_token_mutati
 fn resolver_tokens_remain_read_only_and_scoped_to_selection_steps() {
     let controller = document(".github/workflows/llama-upstream-canary.yml");
     let worker = document(".github/workflows/llama-canary-family-pass.yml");
-    for id in ["select_platform", "upstream"] {
+    {
+        let id = "upstream";
         let mut mutated = controller.clone();
         let resolve = change(&mut mutated, &["jobs", "resolve"]);
         let (index, _) = named(resolve, "id", id);
@@ -476,22 +464,22 @@ fn frozen_prebuilt_workers_load_cache_after_controller_and_before_consumption() 
         (
             controller.get("jobs").unwrap().get("preflight").unwrap(),
             "Verify immutable family plan and pinned cache",
-            "${{ needs.resolve.outputs.runner_profile }}",
+            "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}",
         ),
         (
             worker_jobs.get("build").unwrap(),
             "Build exact candidate for distributed certification",
-            "${{ inputs.runner_profile }}",
+            "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}",
         ),
         (
             worker_jobs.get("family").unwrap(),
             "Certify one family",
-            "${{ inputs.runner_profile }}",
+            "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}",
         ),
         (
             worker_jobs.get("retry_family").unwrap(),
             "Recheck one infrastructure-failed family",
-            "${{ inputs.runner_profile }}",
+            "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}",
         ),
     ] {
         let (prepare, step) = named(job, "uses", "./.github/actions/prepare-automation");
@@ -513,12 +501,12 @@ fn frozen_prebuilt_workers_load_cache_after_controller_and_before_consumption() 
         );
     }
     let family = worker_jobs.get("family").unwrap();
-    assert_eq!(needs(family), BTreeSet::from(["build"]));
+    assert_eq!(needs(family), BTreeSet::from(["combine"]));
     let strategy = family.get("strategy").unwrap();
     assert_eq!(field(strategy, "fail-fast"), "false");
     assert_eq!(
         field(strategy, "matrix"),
-        "${{ fromJSON(needs.build.outputs.matrix) }}"
+        "${{ fromJSON(needs.combine.outputs.matrix) }}"
     );
     let (restore, _) = named(
         family,
@@ -627,13 +615,13 @@ fn parsed_family_worker_preserves_bounded_fanout_and_prebuilt_restore_before_cer
     let worker = document(".github/workflows/llama-canary-family-pass.yml");
     let jobs = worker.get("jobs").unwrap();
     let family = jobs.get("family").unwrap();
-    assert_eq!(needs(family), BTreeSet::from(["build"]));
+    assert_eq!(needs(family), BTreeSet::from(["combine"]));
     let strategy = family.get("strategy").unwrap();
     assert_eq!(field(strategy, "max-parallel"), "8");
     assert_eq!(field(strategy, "fail-fast"), "false");
     assert_eq!(
         field(strategy, "matrix"),
-        "${{ fromJSON(needs.build.outputs.matrix) }}"
+        "${{ fromJSON(needs.combine.outputs.matrix) }}"
     );
     let (restore, restored) = named(
         family,
@@ -658,7 +646,7 @@ fn parsed_family_worker_preserves_bounded_fanout_and_prebuilt_restore_before_cer
     let build = jobs.get("build").unwrap();
     assert_eq!(
         field(build, "runs-on"),
-        "${{ fromJSON(inputs.runner_labels_128) }}"
+        "${{ fromJSON(inputs.runner_labels_macos) }}"
     );
     let (setup, _) = named(build, "uses", "./.github/actions/setup-canary-runner");
     let (backend, _) = named(build, "uses", "./.github/actions/select-canary-backend");
@@ -667,7 +655,7 @@ fn parsed_family_worker_preserves_bounded_fanout_and_prebuilt_restore_before_cer
     let build_env = build.get("env").unwrap();
     assert!(
         build_env.get("LLAMA_STAGE_BACKEND").is_none(),
-        "the backend is platform-independent; the resolve job selects the platform"
+        "the backend is selected by the native runner"
     );
     assert!(field(build_env, "LLAMA_STAGE_BUILD_DIR").contains("inputs.pass_id"));
     let certification = fs::read_to_string(

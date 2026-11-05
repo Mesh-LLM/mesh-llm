@@ -96,6 +96,7 @@ impl Node {
         let (tunnel_http_tx, tunnel_http_rx) = tokio::sync::mpsc::channel(256);
         let (stage_transport_tx, stage_transport_rx) = tokio::sync::mpsc::channel(256);
 
+        super::startup::end_if_stopping(&endpoint).await?;
         let config_state_init = super::startup::load_config_state(config_path)?;
         let config = config_state_init.config();
         let hardware = hardware_for_identity(config, &role, max_vram_gb, identity.as_ref());

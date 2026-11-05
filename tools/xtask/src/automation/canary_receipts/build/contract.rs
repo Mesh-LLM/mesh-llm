@@ -12,6 +12,8 @@ pub(super) enum Mode {
     Verify,
     #[serde(rename = "pinned-build")]
     Pinned,
+    #[serde(rename = "native-build")]
+    Native,
 }
 impl Mode {
     pub(super) fn text(self) -> &'static str {
@@ -19,6 +21,7 @@ impl Mode {
             Self::Repair => "repair-build",
             Self::Verify => "verify-build",
             Self::Pinned => "pinned-build",
+            Self::Native => "native-build",
         }
     }
 }
@@ -93,6 +96,7 @@ impl Input {
                             && matches!(pass, PassId::Verify1)
                             && self.previous.is_some()))
             }
+            Mode::Native => self.previous.is_some() && self.previous_feedback.is_none(),
         };
         if !valid {
             return Err(
