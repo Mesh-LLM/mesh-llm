@@ -651,6 +651,12 @@ fn parsed_family_worker_preserves_bounded_fanout_and_prebuilt_restore_before_cer
     let (backend, _) = named(build, "uses", "./.github/actions/select-canary-backend");
     let (consume, _) = named(build, "id", "build");
     assert!(setup < backend && backend < consume);
+    for job in [build, family, jobs.get("retry_family").unwrap()] {
+        let (setup, _) = named(job, "uses", "./.github/actions/setup-canary-runner");
+        let (backend, _) = named(job, "uses", "./.github/actions/select-canary-backend");
+        let (prepare, _) = named(job, "uses", "./.github/actions/prepare-automation");
+        assert!(setup < backend && backend < prepare);
+    }
     let build_env = build.get("env").unwrap();
     assert!(
         build_env.get("LLAMA_STAGE_BACKEND").is_none(),
@@ -671,27 +677,43 @@ fn parsed_family_worker_preserves_bounded_fanout_and_prebuilt_restore_before_cer
 fn canary_backend_selection_requires_a_supported_platform_and_linux_architectures() {
     let action = document(".github/actions/select-canary-backend/action.yml");
     let (_, step) = named(action.get("runs").unwrap(), "name", "Detect stage backend");
+    assert_eq!(field(step, "shell"), "bash");
     for (os, architectures, backend) in [
-        ("Darwin", "", Some("metal")),
-        ("Linux", "90", Some("cuda")),
-        ("Linux", "", None),
-        ("Windows", "90", None),
+        ("Darwin", None, Some("metal")),
+        ("Linux", Some("90"), Some("cuda")),
+        ("Linux", Some(""), None),
+        ("Linux", None, None),
+        ("Windows", Some("90"), None),
     ] {
         let temp = tempfile::tempdir().unwrap();
         let directory = temp.path().canonicalize().unwrap();
-        let setup = format!(
-            "export GITHUB_ENV=\"$PWD/action.env\"\nexport SKIPPY_CUDA_ARCHITECTURES='{architectures}'\nuname() {{ printf '%s\\n' '{os}'; }}"
+        let architectures = architectures.map_or_else(
+            || "unset SKIPPY_CUDA_ARCHITECTURES".to_string(),
+            |value| format!("export SKIPPY_CUDA_ARCHITECTURES='{value}'"),
         );
-        let (status, _, stderr) = action_shell(&directory, &setup, field(step, "run"));
+        let setup = format!(
+            "export GITHUB_ENV=\"$PWD/action.env\"\n{architectures}\nuname() {{ printf '%s\\n' '{os}'; }}"
+        );
+        let (status, stdout, stderr) = action_shell(&directory, &setup, field(step, "run"));
         if let Some(backend) = backend {
             assert_eq!(status, 0, "{}", String::from_utf8_lossy(&stderr));
             assert_eq!(
                 fs::read_to_string(directory.join("action.env")).unwrap(),
                 format!("LLAMA_STAGE_BACKEND={backend}\n")
             );
+            assert!(
+                String::from_utf8_lossy(&stdout)
+                    .contains(&format!("selected stage backend: {backend}"))
+            );
         } else {
             assert_eq!(status, 1, "{os}");
             assert!(!directory.join("action.env").exists());
+            if os == "Linux" {
+                assert!(
+                    String::from_utf8_lossy(&stderr)
+                        .contains("SKIPPY_CUDA_ARCHITECTURES is not set")
+                );
+            }
         }
     }
 }
