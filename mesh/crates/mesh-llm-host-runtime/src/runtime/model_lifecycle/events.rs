@@ -1020,8 +1020,10 @@ mod tests {
             if report_resolution {
                 op.resolution_completed("org/model");
             }
-            op.native_load_completed("org/model")
-                .model_available("org/model");
+            let availability = op.native_load_completed("org/model");
+            engine.drain();
+            assert_eq!(engine.occupied_count(), 1, "the root stays open");
+            availability.model_available("org/model");
             let kinds = engine.published_kinds();
             let count = |kind: &str| kinds.iter().filter(|k| **k == kind).count();
             assert_eq!(count("model_resolution_completed"), 1, "{kinds:?}");
