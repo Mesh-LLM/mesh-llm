@@ -26,11 +26,23 @@ fn invoke(input: &Value) -> (std::process::Output, String) {
 
 #[test]
 fn changed_pin_appends_only_independently_verified_identity() {
-    let (output, bytes) = invoke(&needs());
-    assert!(output.status.success(), "{:?}", output);
-    assert_eq!(
-        bytes,
-        "prior=preserved\npackage=verified-package\nidentity=verified-identity\nhead=candidate-head\nbranch=llama-canary/fixture\npublish=true\n"
+    for source in ["", "selected-upgrade-base"] {
+        let mut input = needs();
+        input["resolve"]["outputs"]["mesh_source"] = json!(source);
+        let (output, bytes) = invoke(&input);
+        assert!(output.status.success(), "{:?}", output);
+        assert_eq!(
+            bytes,
+            "prior=preserved\npackage=verified-package\nidentity=verified-identity\nhead=candidate-head\nbranch=llama-canary/fixture\npublish=true\n"
+        );
+        input["verification"]["outputs"]["head"] = json!("unrelated-head");
+        assert_denied(&input, "independent family verification failed");
+    }
+    let mut unchanged = needs();
+    unchanged["resolve"]["outputs"]["mesh_source"] = json!("candidate-head");
+    assert_denied(
+        &unchanged,
+        "selected upgrade did not produce a changed candidate",
     );
 }
 
@@ -100,12 +112,8 @@ fn resolution_preflight_and_every_certification_failure_deny_publication() {
     unchanged["candidate"]["outputs"]["green"] = json!("false");
     assert_denied(&unchanged, "unchanged-pin family certification failed");
     let mut historical = needs();
-    historical["resolve"]["outputs"]["mesh_source"] = json!("other-head");
-    assert_denied(
-        &historical,
-        "selected MeshLLM revision certification failed",
-    );
     historical["resolve"]["outputs"]["changed"] = json!("false");
+    historical["resolve"]["outputs"]["mesh_source"] = json!("other-head");
     assert_denied(
         &historical,
         "selected MeshLLM revision certification failed",

@@ -32,7 +32,7 @@ pub(crate) mod value_format;
 use crate::command::DynResult;
 use crate::repository::check_report::CheckReport;
 
-const USAGE: &str = "xtask prepared-input {ui-distribution {stamp|verify} --dist DIST --source-sha SHA --release-tag TAG | static-abi-stamp STAMP --backend B --link-mode M --stamp-version V --toolchain-epoch E [--patched-sha S] | static-abi-manifest describe MANIFEST TARGET BACKEND BUILD_DIR EPOCH PATCHED_SHA_FILE STAMP | static-abi-manifest verify MANIFEST STAMP TARGET BACKEND BUILD_DIR EPOCH | native-sdk-manifest ARTIFACT_DIR MANIFEST | native-sdk-identity MANIFEST TARGET BACKEND PROFILE | native-sdk-library-dir MANIFEST | sdk-runtime-select RUNTIME_ROOT BACKEND REPORT SKIPPY_ABI | static-abi-cache-filter SOURCE DESTINATION | static-abi-path-scan STAGE [FORBIDDEN ...] | sdk-console-manifest DIRECTORY | sdk-console-verify DIRECTORY}";
+const USAGE: &str = "xtask prepared-input {ui-distribution {stamp|verify} --dist DIST --source-sha SHA --release-tag TAG | static-abi-stamp STAMP --backend B --link-mode M --stamp-version V --toolchain-epoch E [--patched-sha S] | static-abi-manifest describe MANIFEST TARGET BACKEND BUILD_DIR EPOCH PATCHED_SHA_FILE STAMP | static-abi-manifest verify MANIFEST STAMP TARGET BACKEND BUILD_DIR EPOCH | native-sdk-manifest ARTIFACT_DIR MANIFEST | native-sdk-identity MANIFEST TARGET BACKEND PROFILE | native-sdk-library-dir MANIFEST | native-sdk-uniffi-library MANIFEST | sdk-runtime-select RUNTIME_ROOT BACKEND REPORT SKIPPY_ABI | static-abi-cache-filter SOURCE DESTINATION | static-abi-path-scan STAGE [FORBIDDEN ...] | sdk-console-manifest DIRECTORY | sdk-console-verify DIRECTORY}";
 
 /// A rejected input: the legacy `SystemExit(message)` shape, status 1.
 pub(crate) struct Rejected(pub(crate) String);
@@ -96,6 +96,9 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         }
         [command, rest @ ..] if command == "native-sdk-library-dir" => {
             report(sdk_identity::library_dir(rest))
+        }
+        [command, rest @ ..] if command == "native-sdk-uniffi-library" => {
+            report(sdk_identity::library_file(rest))
         }
         [command, rest @ ..] if command == "native-sdk-crate-field" => {
             report(sdk_crate_field::run(rest))

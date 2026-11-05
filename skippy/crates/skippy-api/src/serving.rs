@@ -24,6 +24,8 @@ pub struct InferenceOptions {
     pub model_id: Option<String>,
     pub default_max_tokens: u32,
     pub request_defaults: EmbeddedOpenAiRequestDefaults,
+    /// See `EmbeddedOpenAiArgs::live_defaults_scope`.
+    pub live_defaults_scope: u64,
     pub generation_concurrency: usize,
     pub continuous_batching: bool,
     pub pipeline_decode_groups: Option<usize>,
@@ -52,20 +54,6 @@ pub struct InferenceOptions {
 }
 
 impl InferenceOptions {
-    /// How far verify windows rewind recurrent state in place: the default
-    /// when this frontend drafts (native MTP, an N-gram proposer or a draft
-    /// model), none when it never does.
-    pub fn verify_rollback(
-        &self,
-        mtp_source: skippy_runtime::MtpSource,
-    ) -> skippy_runtime::VerifyRollback {
-        skippy_runtime::VerifyRollback::for_drafting(
-            mtp_source != skippy_runtime::MtpSource::Disabled
-                || self.speculative.ngram.is_some()
-                || self.draft_model_path.is_some(),
-        )
-    }
-
     pub fn direct_single_stage_defaults(
         model_id: String,
         default_max_tokens: u32,
@@ -92,6 +80,7 @@ impl InferenceOptions {
             model_id,
             default_max_tokens,
             request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+            live_defaults_scope: 0,
             generation_concurrency,
             continuous_batching: skippy_config::local_serving::CONTINUOUS_BATCHING,
             pipeline_decode_groups: None,
@@ -153,6 +142,7 @@ impl InferenceOptions {
             model_id: self.model_id,
             default_max_tokens: self.default_max_tokens,
             request_defaults: self.request_defaults,
+            live_defaults_scope: self.live_defaults_scope,
             generation_concurrency: self.generation_concurrency,
             continuous_batching: self.continuous_batching,
             pipeline_decode_groups: self.pipeline_decode_groups,

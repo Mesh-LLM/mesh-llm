@@ -74,16 +74,7 @@ pub(crate) fn verify_package(
     if !selected_source_matches(&identity, &verification.selected_source) {
         return Err(package_identity_error("selected source identity mismatch"));
     }
-    if !verification.selected_source.is_empty()
-        && (candidate != verification.selected_source
-            || base != verification.selected_source
-            || optional_digest(&identity, "bundle_sha256")?.is_some()
-            || !["repair-1", "verify-1"].contains(&string_field(&identity, "pass_id")?))
-    {
-        return Err(package_identity_error(
-            "certify-only package changed selected source",
-        ));
-    }
+    selected_base_contract(&identity, &verification.selected_source, base, candidate)?;
 
     if identity.get("run_id").and_then(Value::as_str) != Some(verification.current_run_id.as_str())
     {
@@ -129,6 +120,29 @@ pub(crate) fn verify_package(
             run_attempt: current_run_attempt,
         },
     })
+}
+
+fn selected_base_contract(
+    identity: &Value,
+    selected: &str,
+    base: &str,
+    candidate: &str,
+) -> Result<(), Error> {
+    if selected.is_empty() {
+        return Ok(());
+    }
+    let pass = string_field(identity, "pass_id")?;
+    super::pass_identity::PassId::parse(pass)?;
+    let changed = candidate != base;
+    if base != selected
+        || optional_digest(identity, "bundle_sha256")?.is_some() != changed
+        || (!changed && !["repair-1", "verify-1"].contains(&pass))
+    {
+        return Err(package_identity_error(
+            "package differs from frozen selected base",
+        ));
+    }
+    Ok(())
 }
 
 // Verify the same captured bytes that all parsing and retained projections consume.

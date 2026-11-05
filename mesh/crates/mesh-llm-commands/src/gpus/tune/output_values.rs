@@ -67,6 +67,7 @@ pub(crate) fn render_recommended_value(value: &TuneRecommendedValue) -> String {
         TuneRecommendedValue::BoolOrAuto(TuneBoolOrAutoValue::Enabled) => "enabled".to_string(),
         TuneRecommendedValue::BoolOrAuto(TuneBoolOrAutoValue::Disabled) => "disabled".to_string(),
         TuneRecommendedValue::BoolOrAuto(TuneBoolOrAutoValue::Auto) => "auto".to_string(),
+        TuneRecommendedValue::HostExpertBlocks(value) => value.to_string(),
     }
 }
 
@@ -194,11 +195,13 @@ pub(crate) fn preserved_value(
             preserved_mmap(model_entry, defaults).map(TuneRecommendedValue::BoolOrAuto)
         }
         TuneField::Mlock => preserved_mlock(model_entry, defaults).map(TuneRecommendedValue::Bool),
-        TuneField::CpuMoe
-        | TuneField::NCpuMoe
-        | TuneField::TensorSplit
-        | TuneField::Placement
-        | TuneField::Defaults => None,
+        TuneField::CpuMoe => {
+            preserved_cpu_moe(model_entry, defaults).map(TuneRecommendedValue::BoolOrAuto)
+        }
+        TuneField::NCpuMoe => {
+            preserved_n_cpu_moe(model_entry, defaults).map(TuneRecommendedValue::HostExpertBlocks)
+        }
+        TuneField::TensorSplit | TuneField::Placement | TuneField::Defaults => None,
     }
 }
 
@@ -307,6 +310,27 @@ fn preserved_mmap(
         .and_then(|hardware| hardware.mmap.as_ref())
         .or_else(|| defaults?.hardware.as_ref()?.mmap.as_ref())
         .and_then(render_bool_or_auto_value)
+}
+
+fn preserved_cpu_moe(
+    model_entry: Option<&OutputModelConfigEntry>,
+    defaults: Option<&OutputModelConfigDefaults>,
+) -> Option<TuneBoolOrAutoValue> {
+    model_entry
+        .and_then(|entry| entry.hardware.as_ref())
+        .and_then(|hardware| hardware.cpu_moe.as_ref())
+        .or_else(|| defaults?.hardware.as_ref()?.cpu_moe.as_ref())
+        .and_then(render_bool_or_auto_value)
+}
+
+fn preserved_n_cpu_moe(
+    model_entry: Option<&OutputModelConfigEntry>,
+    defaults: Option<&OutputModelConfigDefaults>,
+) -> Option<u32> {
+    model_entry
+        .and_then(|entry| entry.hardware.as_ref())
+        .and_then(|hardware| hardware.n_cpu_moe)
+        .or_else(|| defaults?.hardware.as_ref()?.n_cpu_moe)
 }
 
 fn preserved_mlock(

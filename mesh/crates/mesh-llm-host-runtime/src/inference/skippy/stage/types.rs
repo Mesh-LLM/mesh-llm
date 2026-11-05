@@ -105,6 +105,8 @@ pub(crate) struct StageLoadRequest {
     pub(crate) flash_attn_type: FlashAttentionType,
     pub(crate) runtime_settings: StageLoadRuntimeSettings,
     pub(crate) native_mtp_enabled: bool,
+    /// This stage's part in a split DFlash plan.
+    pub(crate) dflash: Option<skippy_serving::split_dflash::SplitDFlashStage>,
     pub(crate) shutdown_generation: u64,
     pub(crate) coordinator_term: u64,
     pub(crate) coordinator_id: Option<iroh::EndpointId>,
@@ -283,4 +285,8 @@ pub(crate) struct StageStatusSnapshot {
     /// Cumulative runtime compute-busy time; see `skippy_serving::compute_meter`.
     pub(crate) compute_busy_nanos: u64,
     pub(crate) compute_operations: u64,
+    /// On a split final stage that attached its DFlash draft, the target
+    /// layers the draft reads. `None` when the stage drafts nothing, so the
+    /// coordinator serves stage 0 without DFlash.
+    pub(crate) dflash_target_layers: Option<Vec<u32>>,
 }

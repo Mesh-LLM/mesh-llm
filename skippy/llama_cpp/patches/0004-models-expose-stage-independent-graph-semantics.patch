@@ -1461,7 +1461,7 @@ index 6cadda971..ec6e4d075 100644
      return (llm_graph_input_mem_hybrid_iswa *) res->add_input(std::move(inp));
  }
 diff --git a/src/llama-graph.h b/src/llama-graph.h
-index e846b28f9..a5d855abd 100644
+index e846b28f9..a4ffee4e5 100644
 --- a/src/llama-graph.h
 +++ b/src/llama-graph.h
 @@ -5,11 +5,17 @@
@@ -1827,7 +1827,7 @@ index e846b28f9..a5d855abd 100644
 +                int32_t   state_size,
 +                int32_t   n_seqs,
 +            skippy_state_kind kind, int il,
-+            const llm_graph_get_rows_fn & get_state_rows = nullptr) const;
++            const llm_graph_get_rows_fn & get_state_rows = ggml_get_rows) const;
 +
      ggml_tensor * build_rwkv_token_shift_load(
          llm_graph_input_rs * inp,

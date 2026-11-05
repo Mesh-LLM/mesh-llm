@@ -63,6 +63,20 @@ curl -s http://localhost:3131/api/status | jq .
 
 Named meshes are useful for lab machines, office workstations, or a home cluster where you want your own machines to find each other by name.
 
+## Serve one model to independent meshes
+
+To offer one local model to separate meshes, use a memberships manifest:
+
+```sh
+mesh-llm serve --gguf /models/model.gguf --memberships-config ./memberships.toml
+```
+
+Each membership has its own endpoint, peers, trust settings, and execution/cache
+namespace. The process loads the model once and shares its execution capacity.
+Repeated `--join` values still identify bootstrap peers for a single mesh.
+See [One model across independent meshes](/docs/pages/shared-serving/) for the
+manifest, trust defaults, and local lifecycle controls.
+
 ## Control an owned node
 
 Mesh membership and private owner-control are separate
@@ -87,7 +101,7 @@ mesh-llm runtime drain-model \
 ```
 
 The endpoint token pins exactly one target. These commands travel over
-`mesh-llm-control/1`, require same-owner authentication, and create session-only
+`mesh-llm-control/2`, require same-owner authentication, and create session-only
 intents. They do not persist TOML, use public gossip, or silently fall back to
 mesh request streams. Public mixed-version join and routing continue
 independently; an older target that lacks owner lifecycle support returns a

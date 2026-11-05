@@ -79,6 +79,7 @@ async fn model_target_reconciliation_replacement_unloads_before_loading() {
             spec,
             config_model_id,
             profile,
+            sizing: _,
             resp,
         }) => {
             assert_eq!(spec, "/models/large.gguf");
@@ -103,6 +104,53 @@ async fn model_target_reconciliation_replacement_unloads_before_loading() {
         .expect("replacement action should finish");
     assert_eq!(result.model, "Large");
     assert!(control_rx.try_recv().is_err());
+}
+
+#[test]
+fn pending_load_rejects_explicit_sizing_and_stacks_default_sizing() {
+    let mut state = ModelTargetReconciliationState::default();
+    let model_ref = "org/model@main:model.gguf";
+    let profile = "low-ctx";
+    state.mark_load_started(model_ref, profile);
+    for sizing in [
+        api::RuntimeLoadSizing {
+            ctx_size: Some(8192),
+            parallel: None,
+        },
+        api::RuntimeLoadSizing {
+            ctx_size: None,
+            parallel: Some(2),
+        },
+    ] {
+        let (rejected_tx, rejected_rx) = tokio::sync::oneshot::channel();
+        state.stack_pending_load_completion(model_ref, profile, sizing, rejected_tx);
+        let error = rejected_rx.blocking_recv().unwrap().unwrap_err();
+        assert!(error.to_string().contains("cannot be applied"));
+    }
+
+    let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+    state.stack_pending_load_completion(
+        model_ref,
+        profile,
+        api::RuntimeLoadSizing::default(),
+        accepted_tx,
+    );
+    state.notify_load_success(
+        model_ref,
+        profile,
+        api::RuntimeLoadResponse {
+            model_ref: model_ref.to_string(),
+            model: "Model".to_string(),
+            instance_id: "runtime-1".to_string(),
+            profile: profile.to_string(),
+            backend: Some("skippy".to_string()),
+            context_length: Some(4096),
+        },
+    );
+    assert_eq!(
+        accepted_rx.blocking_recv().unwrap().unwrap().instance_id,
+        "runtime-1"
+    );
 }
 
 #[test]
@@ -377,6 +425,11 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
     let registry = Arc::new(tokio::sync::Mutex::new(HashMap::new()));
     let vision_model = "Qwen3VL-2B-Instruct-Q4_K_M";
     let text_model = "Qwen3-8B-Q4_K_M";
+    let thinking = skippy_inference_api::thinking::ThinkingControls {
+        toggle: skippy_inference_api::thinking::ThinkingToggle::Observed,
+        reasoning_parser: Some(true),
+        efforts: vec!["high".into(), "low".into()],
+    };
     let vision_capabilities = models::ModelCapabilities {
         multimodal: true,
         vision: models::CapabilityLevel::Supported,
@@ -391,6 +444,9 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
             model_name: vision_model,
             instance_id: "runtime-vision",
             context_length: Some(8192),
+            thinking: Some(&thinking),
+            backend: None,
+            port: 0,
             capabilities: vision_capabilities,
             workload_class: mesh::ModelWorkloadClass::CausalGeneration,
         },
@@ -404,6 +460,9 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
             model_name: text_model,
             instance_id: "runtime-text",
             context_length: Some(8192),
+            thinking: None,
+            backend: None,
+            port: 0,
             capabilities: models::ModelCapabilities::default(),
             workload_class: mesh::ModelWorkloadClass::Embedding,
         },
@@ -424,6 +483,19 @@ async fn register_runtime_instance_preserves_existing_known_descriptor_capabilit
         .expect("text descriptor should be registered");
     assert!(text.capabilities_known);
     assert_eq!(text.capabilities, models::ModelCapabilities::default());
+
+    assert_eq!(
+        vision.metadata.as_ref().unwrap().thinking_efforts,
+        Some(thinking.efforts)
+    );
+    assert_eq!(text.metadata.as_ref().unwrap().thinking_efforts, None);
+    assert!(unregister_runtime_instance(&registry, &node, vision_model, "runtime-vision").await);
+    assert!(
+        node.served_model_descriptors()
+            .await
+            .iter()
+            .all(|descriptor| descriptor.identity.model_name != vision_model)
+    );
 }
 
 #[tokio::test]
@@ -545,5 +617,28 @@ fn runtime_load_ctx_size_prefers_cli_override_over_model_override() {
     assert_eq!(
         runtime_model_ctx_size_override(&options, Some(&model)),
         Some(8192)
+    );
+}
+
+#[test]
+fn load_failure_reaches_waiting_callers_with_its_whole_cause_chain() {
+    let model = "org/model@main:model.gguf";
+    let mut state = ModelTargetReconciliationState::default();
+    let (tx, mut rx) = tokio::sync::oneshot::channel();
+    state.stack_load_completion(model, "", tx);
+    let failure = anyhow::anyhow!("error loading model: tensor data is not within the file bounds")
+        .context("load Skippy runtime for model org/model");
+
+    state.notify_load_failure(model, "", &failure);
+
+    let reported = rx
+        .try_recv()
+        .expect("waiting caller is answered")
+        .expect_err("the load failed")
+        .to_string();
+    assert!(reported.contains("load Skippy runtime"), "{reported}");
+    assert!(
+        reported.contains("not within the file bounds"),
+        "{reported}"
     );
 }

@@ -4,10 +4,14 @@ use mesh_llm_types::mesh::{DEMAND_TTL_SECS, merge_demand};
 use serde_json::json;
 use std::net::SocketAddr;
 
+mod construction;
+mod demand;
 mod membership;
+mod ownership;
 mod routing_telemetry;
 mod startup;
 
+pub(crate) use construction::{NodeStartupSpec, ScopedNodeIdentity};
 pub(crate) use membership::{
     LocalEndpoints, MembershipEntry, MembershipNodeConfig, MeshMemberships,
     membership_token_endpoint,
@@ -16,11 +20,7 @@ pub(crate) use membership::{
 pub use startup::detect_local_fit_bytes;
 #[cfg(test)]
 pub(crate) use startup::hardware_snapshot_for_start;
-use startup::{
-    advertised_hardware_for_start, bind_mesh_endpoint, init_owner_runtime,
-    saved_owner_attestation_path, startup_secret_key, wait_for_endpoint_online,
-};
-pub(crate) use startup::{stamp_plugin_event_source, startup_transport_config};
+pub(crate) use startup::{StartupResolution, stamp_plugin_event_source, startup_transport_config};
 
 /// Upper bound on how long shutdown waits for one iroh endpoint to close.
 ///
@@ -76,6 +76,7 @@ pub struct RouteEntry {
 
 #[derive(Clone)]
 pub struct Node {
+    pub(crate) native_inference: Arc<super::native_inference::NativeInferenceState>,
     pub(crate) endpoint: Endpoint,
     pub(crate) endpoint_secret_key: SecretKey,
     pub(crate) public_addr: Option<stun::PublicAddr>,
@@ -97,19 +98,27 @@ pub struct Node {
     pub(crate) serving_models: Arc<Mutex<Vec<String>>>,
     pub(crate) served_model_descriptors: Arc<Mutex<Vec<ServedModelDescriptor>>>,
     pub(crate) served_model_generations: Arc<Mutex<HashMap<String, u64>>>,
+    /// The local runtime port each model's current generation (and so its
+    /// `weights_digest`) belongs to. A digest read for any other port is not
+    /// that instance's: the descriptor is node-wide and keeps only the newest.
+    pub(crate) served_model_weights_ports: Arc<Mutex<HashMap<String, (u64, u16)>>>,
     pub(crate) model_runtime_descriptors: Arc<Mutex<Vec<ModelRuntimeDescriptor>>>,
     pub(crate) hosted_models: Arc<Mutex<Vec<String>>>,
     pub(crate) llama_ready: Arc<Mutex<bool>>,
     pub(crate) available_models: Arc<Mutex<Vec<String>>>,
     pub(crate) requested_models: Arc<Mutex<Vec<String>>>,
+    /// See `Node::startup_model_may_be`.
+    pub(crate) startup_models_resolving: Arc<Mutex<StartupResolution>>,
     pub(crate) explicit_model_interests: Arc<Mutex<Vec<String>>>,
     /// Mesh-wide demand map — merged from gossip + local API requests.
     /// This is the single source of truth for "what does the mesh want?"
     pub(crate) model_demand: Arc<std::sync::Mutex<HashMap<String, ModelDemand>>>,
     pub(crate) requirement_mesh_state: Arc<Mutex<Option<RequirementAwareMeshState>>>,
     /// Tests opt into membership persistence with an explicit temporary file.
-    #[cfg(test)]
     pub(crate) adopted_membership_file: Option<std::path::PathBuf>,
+    pub(crate) identity_state_dir: Option<std::path::PathBuf>,
+    /// An attachment to a host-owned full-model backend, never a GPU participant.
+    pub(crate) full_model_only: bool,
     pub(crate) mesh_id: Arc<Mutex<Option<String>>>,
     pub(crate) mesh_policy_hash: Arc<Mutex<Option<String>>>,
     pub(crate) signed_genesis_policy: Arc<Mutex<Option<crate::SignedMeshGenesisPolicy>>>,
@@ -197,17 +206,24 @@ pub struct Node {
     pub gpu_compute_tflops_fp32: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     pub gpu_compute_tflops_fp16: Arc<tokio::sync::Mutex<Option<Vec<f64>>>>,
     pub(crate) config_state: Arc<tokio::sync::Mutex<crate::runtime::config_state::ConfigState>>,
+    /// This node's request-defaults tracker; the same one `config_state` swaps
+    /// through, so a config apply reaches only this node's models.
+    pub(crate) live_request_defaults:
+        Arc<crate::runtime::live_request_defaults::LiveRequestDefaults>,
     /// Peers this node's operator chose to stop routing to (local only).
     pub(crate) peer_blocks: crate::network::peer_blocks::PeerBlocks,
+    /// The route-health table the serving surface routes with, registered by
+    /// [`crate::network::affinity::AffinityRouter::for_node`], so a plugin
+    /// vouching for a peer (an UNBLOCK) can lift that peer's cooldowns.
+    pub(crate) route_target_health:
+        Arc<std::sync::OnceLock<crate::network::target_health::TargetHealth>>,
     /// Plugin public keys this node announces, and the verified ones its
     /// directly-connected peers announce (`mesh::plugin_keys`).
     pub(crate) plugin_keys: crate::mesh::plugin_keys::PluginKeys,
+    pub(crate) model_requirements: super::model_requirements::ModelRequirements,
+    pub(crate) unmatched_model_requirements:
+        Arc<tokio::sync::Mutex<std::collections::HashSet<(String, String)>>>,
     pub(crate) config_revision_tx: Arc<tokio::sync::watch::Sender<u64>>,
-    #[cfg(feature = "payments")]
-    pub(crate) payments: crate::network::payments::PaymentsSlot,
-    /// Stops the payment-recovery loop, which holds a `Node` clone.
-    #[cfg(feature = "payments")]
-    pub(crate) payment_recovery: crate::network::payments::PaymentRecoverySlot,
     /// Shared activity policy guard for ingress admission checks.
     pub(crate) activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard,
     /// Whether activity admission details are being advertised onto a public mesh.
@@ -678,8 +694,6 @@ impl Node {
             close_endpoint_gracefully(&lifecycle.endpoint, "owner-control").await;
         }
         self.shutdown_stage_control().await;
-        #[cfg(feature = "payments")]
-        self.shutdown_payment_recovery().await;
     }
 
     async fn shutdown_stage_control(&self) {
@@ -745,232 +759,6 @@ impl Node {
         close_endpoint_gracefully(&self.endpoint, "mesh").await;
     }
 
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "startup wires independent node/runtime subsystems; changing the public constructor shape is outside this rebase repair"
-    )]
-    pub async fn start(
-        role: NodeRole,
-        relay: RelayConfig<'_>,
-        quic_bind: QuicBindSelection,
-        max_vram_gb: Option<f64>,
-        enumerate_host: bool,
-        owner_config: Option<OwnerRuntimeConfig>,
-        config_path: Option<&std::path::Path>,
-        local_mesh_requirements: crate::MeshRequirements,
-    ) -> Result<(Self, TunnelChannels)> {
-        let secret_key = startup_secret_key(&role).await?;
-        let endpoint = bind_mesh_endpoint(secret_key.clone(), relay, quic_bind).await?;
-        if relay.policy.uses_relay() {
-            // Wait briefly for relay connection so the invite token includes the relay URL.
-            // On sinkholed networks this times out and we proceed without relay (direct UDP only).
-            wait_for_endpoint_online(
-                &endpoint,
-                "Relay connected",
-                "Relay connection timed out (5s) — proceeding without relay",
-            )
-            .await;
-        }
-
-        // Use iroh's net report because it probes through the endpoint's actual QUIC sockets.
-        // Its observed address includes the NAT-mapped port; substituting the configured
-        // bind port would advertise an address that was never verified externally.
-        let public_addr = if relay.policy.uses_raw_stun() {
-            stun_public_addr(&endpoint, relay.policy.uses_relay()).await
-        } else {
-            tracing::info!("Raw STUN: disabled by LAN-only discovery mode");
-            None
-        };
-
-        let (peer_change_tx, peer_change_rx) = watch::channel(0usize);
-        let (inflight_change_tx, _inflight_change_rx) = watch::channel(0u64);
-        let (tunnel_tx, tunnel_rx) = tokio::sync::mpsc::channel(256);
-        let (tunnel_http_tx, tunnel_http_rx) = tokio::sync::mpsc::channel(256);
-        let (stage_transport_tx, stage_transport_rx) = tokio::sync::mpsc::channel(256);
-
-        let config_state_init = startup::load_config_state(config_path)?;
-        let hardware =
-            advertised_hardware_for_start(config_state_init.config(), &role, max_vram_gb);
-        let owner_runtime = init_owner_runtime(
-            owner_config.as_ref(),
-            endpoint.id(),
-            hardware.hostname.clone(),
-        )?;
-        let owner_summary = verify_node_ownership(
-            owner_runtime.owner_attestation.as_ref(),
-            endpoint.id().as_bytes(),
-            &owner_runtime.trust_store,
-            TrustPolicy::Off,
-            current_time_unix_ms(),
-        );
-        let config_revision_init = config_state_init.revision();
-        let runtime_data_collector = crate::runtime_data::RuntimeDataCollector::new();
-        let runtime_data_producer =
-            runtime_data_collector.producer(crate::runtime_data::RuntimeDataSource {
-                scope: "routing",
-                plugin_data_key: None,
-                plugin_endpoint_key: None,
-            });
-
-        let owner_keypair = owner_config
-            .as_ref()
-            .and_then(|config| config.keypair.clone());
-        let activity_policy_config = owner_config
-            .as_ref()
-            .map(|config| config.activity.clone())
-            .unwrap_or_default();
-        let public_mesh = owner_config
-            .as_ref()
-            .is_some_and(|config| config.public_mesh);
-        let drain_timeout_secs = owner_config
-            .as_ref()
-            .map_or(mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_SECS, |config| {
-                config.drain_timeout_secs
-            });
-        let drain_timeout_max_secs = owner_config
-            .as_ref()
-            .map_or(mesh_llm_config::DEFAULT_DRAIN_TIMEOUT_MAX_SECS, |config| {
-                config.drain_timeout_max_secs
-            });
-
-        let node = Node {
-            endpoint,
-            endpoint_secret_key: secret_key.clone(),
-            public_addr,
-            quic_bind,
-            relay_policy: relay.policy,
-            owner_keypair,
-            local_mesh_requirements,
-            state: Arc::new(Mutex::new(MembershipState::default())),
-            plugin_message_history: Default::default(),
-            direct_rescue_endpoints: super::direct_rescue::DirectRescueEndpoints::default(),
-            role: Arc::new(Mutex::new(role)),
-            host_role_claims: Arc::new(Mutex::new(HostRoleClaims::default())),
-            models: Arc::new(Mutex::new(Vec::new())),
-            model_source: Arc::new(Mutex::new(None)),
-            serving_models: Arc::new(Mutex::new(Vec::new())),
-            served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
-            served_model_generations: Arc::new(Mutex::new(HashMap::new())),
-            model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
-            hosted_models: Arc::new(Mutex::new(Vec::new())),
-            llama_ready: Arc::new(Mutex::new(false)),
-            available_models: Arc::new(Mutex::new(Vec::new())),
-            requested_models: Arc::new(Mutex::new(Vec::new())),
-            explicit_model_interests: Arc::new(Mutex::new(Vec::new())),
-            model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            requirement_mesh_state: Arc::new(Mutex::new(None)),
-            #[cfg(test)]
-            adopted_membership_file: None,
-            mesh_id: Arc::new(Mutex::new(None)),
-            mesh_policy_hash: Arc::new(Mutex::new(None)),
-            signed_genesis_policy: Arc::new(Mutex::new(None)),
-            gossip_verification: Arc::default(),
-            gossip_encoder: Arc::default(),
-            bootstrap_token: Arc::new(Mutex::new(None)),
-            join_targets: Arc::new(Mutex::new(Vec::new())),
-            first_joined_mesh_ts: Arc::new(Mutex::new(None)),
-            accepting: Arc::new((
-                tokio::sync::Notify::new(),
-                std::sync::atomic::AtomicBool::new(false),
-            )),
-            vram_bytes: hardware.vram_bytes,
-            local_runtime_capacity_bytes: hardware.local_runtime_capacity_bytes,
-            host_ram_capacity_bytes: hardware.host_ram_capacity_bytes,
-            host_ram_offload_gain_bytes: hardware.host_ram_offload_gain_bytes,
-            peer_change_tx,
-            peer_change_rx,
-            inflight_requests: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-            inflight_change_tx,
-            routing_metrics: crate::network::metrics::RoutingMetrics::default(),
-            routing_telemetry: Arc::new(std::sync::Mutex::new(None)),
-            cache_affinity_inventory: Arc::new(std::sync::Mutex::new(
-                mesh_llm_routing::cache_inventory::CacheInventory::default(),
-            )),
-            swarm_capture: Arc::new(std::sync::Mutex::new(None)),
-            local_request_metrics: Arc::new(LocalRequestMetricsSampler::default()),
-            plugin_frame_telemetry: Arc::new(PluginFrameTelemetry::default()),
-            runtime_data_producer,
-            tunnel_tx,
-            tunnel_http_tx,
-            stage_transport_tx,
-            stage_control_tx: Arc::new(Mutex::new(None)),
-            stage_control_lifecycle: Arc::new(Mutex::new(None)),
-            stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),
-            stage_transport_aliases: Arc::new(Mutex::new(HashMap::new())),
-            stage_topologies: Arc::new(Mutex::new(StageTopologyState::default())),
-            plugin_manager: Arc::new(Mutex::new(None)),
-            display_name: Arc::new(Mutex::new(None)),
-            owner_attestation: Arc::new(Mutex::new(owner_runtime.owner_attestation)),
-            plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
-            release_attestation: Arc::new(Mutex::new(None)),
-            release_attestation_summary: Arc::new(Mutex::new(
-                crate::ReleaseAttestationSummary::default(),
-            )),
-            owner_summary: Arc::new(Mutex::new(owner_summary)),
-            control_listener: Arc::new(Mutex::new(None)),
-            trust_store: Arc::new(Mutex::new(owner_runtime.trust_store)),
-            trust_policy: owner_runtime.trust_policy,
-            enumerate_host,
-            gpu_name: hardware.gpu_name,
-            hostname: hardware.hostname,
-            is_soc: hardware.is_soc,
-            gpu_vram: hardware.gpu_vram,
-            gpu_reserved_bytes: hardware.gpu_reserved_bytes,
-            advertised_memory: hardware.memory,
-            gpu_mem_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
-            gpu_compute_tflops_fp32: Arc::new(tokio::sync::Mutex::new(None)),
-            gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
-            config_state: Arc::new(tokio::sync::Mutex::new(config_state_init)),
-            peer_blocks: crate::network::peer_blocks::PeerBlocks::for_this_node(),
-            config_revision_tx: {
-                let (tx, _rx) = tokio::sync::watch::channel(config_revision_init);
-                Arc::new(tx)
-            },
-            #[cfg(feature = "payments")]
-            payments: Arc::new(tokio::sync::OnceCell::new()),
-            #[cfg(feature = "payments")]
-            payment_recovery: Arc::new(Mutex::new(None)),
-            activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
-                &activity_policy_config,
-            ),
-            public_mesh,
-            drain_timeout_secs,
-            drain_timeout_max_secs,
-            runtime_intents: Arc::new(std::sync::Mutex::new(Vec::new())),
-            runtime_instance_lifecycles: Arc::new(std::sync::Mutex::new(HashMap::new())),
-            owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
-            native_model_lifecycle: Arc::default(),
-            model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
-            memberships: MeshMemberships::default(),
-            owner_attestation_path: saved_owner_attestation_path(),
-            unsaved_owner_attestation: Arc::default(),
-            local_endpoints: LocalEndpoints::default(),
-            is_membership: false,
-        };
-
-        node.maybe_start_control_listener(
-            secret_key,
-            owner_config.as_ref().and_then(|config| config.control_bind),
-            owner_config
-                .as_ref()
-                .and_then(|config| config.control_advertise_addr),
-        )
-        .await?;
-
-        // Accept loop starts but waits for start_accepting() before processing connections.
-        // This lets a node exist before it is ready to accept mesh traffic.
-        node.spawn_accept_loop();
-
-        Ok((
-            node,
-            TunnelChannels {
-                rpc: tunnel_rx,
-                http: tunnel_http_rx,
-                stage: stage_transport_rx,
-            },
-        ))
-    }
-
     fn spawn_accept_loop(&self) {
         let node = self.clone();
         tokio::spawn(async move {
@@ -1008,11 +796,14 @@ impl Node {
     }
 
     #[cfg(test)]
+    /// Construct a test node around an already bound endpoint and isolated state.
     pub(crate) fn new_test_node_from_endpoint(
         role: NodeRole,
         endpoint: Endpoint,
         secret_key: SecretKey,
     ) -> Self {
+        let test_config_state = crate::runtime::config_state::ConfigState::default();
+        let test_live_request_defaults = test_config_state.live_request_defaults();
         let (peer_change_tx, peer_change_rx) = watch::channel(0usize);
         let (inflight_change_tx, _inflight_change_rx) = watch::channel(0u64);
         let (tunnel_tx, _tunnel_rx) = tokio::sync::mpsc::channel(256);
@@ -1044,16 +835,20 @@ impl Node {
             serving_models: Arc::new(Mutex::new(Vec::new())),
             served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
             served_model_generations: Arc::new(Mutex::new(HashMap::new())),
+            served_model_weights_ports: Arc::new(Mutex::new(HashMap::new())),
             model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
             hosted_models: Arc::new(Mutex::new(Vec::new())),
             llama_ready: Arc::new(Mutex::new(false)),
             available_models: Arc::new(Mutex::new(Vec::new())),
             requested_models: Arc::new(Mutex::new(Vec::new())),
+            startup_models_resolving: Arc::default(),
             explicit_model_interests: Arc::new(Mutex::new(Vec::new())),
             model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
             requirement_mesh_state: Arc::new(Mutex::new(None)),
             #[cfg(test)]
             adopted_membership_file: None,
+            identity_state_dir: None,
+            full_model_only: false,
             mesh_id: Arc::new(Mutex::new(None)),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
@@ -1087,6 +882,7 @@ impl Node {
             tunnel_tx,
             tunnel_http_tx,
             stage_transport_tx,
+            native_inference: Default::default(),
             stage_control_tx: Arc::new(Mutex::new(None)),
             stage_control_lifecycle: Arc::new(Mutex::new(None)),
             stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),
@@ -1096,6 +892,8 @@ impl Node {
             display_name: Arc::new(Mutex::new(None)),
             owner_attestation: Arc::new(Mutex::new(None)),
             plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
+            model_requirements: Default::default(),
+            unmatched_model_requirements: Default::default(),
             release_attestation: Arc::new(Mutex::new(None)),
             release_attestation_summary: Arc::new(Mutex::new(
                 crate::ReleaseAttestationSummary::default(),
@@ -1113,18 +911,14 @@ impl Node {
             gpu_mem_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
             gpu_compute_tflops_fp32: Arc::new(tokio::sync::Mutex::new(None)),
             gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
-            config_state: Arc::new(tokio::sync::Mutex::new(
-                crate::runtime::config_state::ConfigState::default(),
-            )),
+            config_state: Arc::new(tokio::sync::Mutex::new(test_config_state)),
+            live_request_defaults: test_live_request_defaults,
             peer_blocks: crate::network::peer_blocks::PeerBlocks::in_memory(),
+            route_target_health: Arc::new(std::sync::OnceLock::new()),
             config_revision_tx: {
                 let (tx, _rx) = tokio::sync::watch::channel(0);
                 Arc::new(tx)
             },
-            #[cfg(feature = "payments")]
-            payments: Arc::new(tokio::sync::OnceCell::new()),
-            #[cfg(feature = "payments")]
-            payment_recovery: Arc::new(Mutex::new(None)),
             activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
                 &mesh_llm_config::RuntimeActivityConfig::default(),
             ),
@@ -1144,13 +938,19 @@ impl Node {
         }
     }
 
+    /// Start direct owner control only for a verified owner on an ordinary node.
+    /// Full-model attachments have no mesh control authority; the separate control
+    /// endpoint never registers a duplicate identity with the relay.
     pub(crate) async fn maybe_start_control_listener(
         &self,
         secret_key: SecretKey,
         bind_addr: Option<std::net::SocketAddr>,
         advertise_addr: Option<std::net::SocketAddr>,
     ) -> Result<()> {
-        if self.local_verified_owner_id().await.is_none() {
+        // An attachment has no model/control authority, even when its identity
+        // is attested by an owner trusted by this mesh. Only the shared host's
+        // separately authenticated local operator can change its lifecycle.
+        if self.full_model_only || self.local_verified_owner_id().await.is_none() {
             return Ok(());
         }
 
@@ -1176,7 +976,7 @@ impl Node {
         // endpoints share one id.
         let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
             .secret_key(secret_key)
-            .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+            .alpns(vec![ALPN_CONTROL_V2.to_vec()])
             .clear_ip_transports()
             .bind_addr(bind_addr.unwrap_or_else(default_control_bind_addr))?
             .relay_mode(iroh::endpoint::RelayMode::Disabled)
@@ -1208,49 +1008,6 @@ impl Node {
             crate::plugin::proto::mesh_event::Kind::LocalAccepting
         } else {
             crate::plugin::proto::mesh_event::Kind::LocalStandby
-        }
-    }
-
-    pub(crate) async fn broadcast_existing_mesh_snapshot(
-        &self,
-        plugin_manager: &crate::plugin::PluginManager,
-        peers: Vec<PeerInfo>,
-    ) {
-        let _ = plugin_manager
-            .broadcast_mesh_event(
-                self.build_mesh_event(self.plugin_manager_local_kind(), None, String::new())
-                    .await,
-            )
-            .await;
-        if self.mesh_id().await.is_some() {
-            let _ = plugin_manager
-                .broadcast_mesh_event(
-                    self.build_mesh_event(
-                        crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
-                        None,
-                        String::new(),
-                    )
-                    .await,
-                )
-                .await;
-        }
-        for peer in peers {
-            if let Err(err) = plugin_manager
-                .broadcast_mesh_event(
-                    self.build_mesh_event(
-                        crate::plugin::proto::mesh_event::Kind::PeerUp,
-                        Some(peer_info_to_mesh_peer(&peer)),
-                        String::new(),
-                    )
-                    .await,
-                )
-                .await
-            {
-                tracing::debug!(
-                    "Failed to send existing peer snapshot to plugins for {}: {err}",
-                    peer.id.fmt_short()
-                );
-            }
         }
     }
 
@@ -1397,6 +1154,7 @@ impl Node {
                     local_file_name: Some(format!("{model_name}.gguf")),
                     ..Default::default()
                 },
+                requires: Vec::new(),
                 capabilities_known: false,
                 capabilities: crate::models::ModelCapabilities::default(),
                 topology: None,
@@ -1404,6 +1162,71 @@ impl Node {
             });
         }
         generation
+    }
+
+    /// Record the local runtime `port` the generation `begin_served_model_generation`
+    /// returned will serve on. Ignored when a newer generation has begun.
+    pub(crate) async fn bind_served_model_generation_to_port(
+        &self,
+        model_name: &str,
+        generation: u64,
+        port: u16,
+    ) {
+        let generations = self.served_model_generations.lock().await;
+        if generations.get(model_name).copied() == Some(generation) {
+            self.served_model_weights_ports
+                .lock()
+                .await
+                .insert(model_name.to_string(), (generation, port));
+        }
+    }
+
+    /// Load a model on `port` the way the runtime does: a new generation
+    /// bound to that port, carrying `digest`.
+    #[cfg(test)]
+    pub(crate) async fn load_model_for_tests(&self, model_name: &str, port: u16, digest: &str) {
+        let generation = self.begin_served_model_generation(model_name).await;
+        self.bind_served_model_generation_to_port(model_name, generation, port)
+            .await;
+        assert!(
+            self.set_served_model_weights_digest_for_generation(
+                model_name,
+                generation,
+                Some(digest.to_owned()),
+            )
+            .await
+        );
+    }
+
+    /// Drop `identity.weights_digest` unless it was computed for the runtime
+    /// instance on `port`. The node-wide descriptor keeps only the newest
+    /// generation's digest, so a request that reached an older instance of the
+    /// same model name (its file replaced between loads) must not report the
+    /// newer file's bytes as the ones it ran.
+    pub(crate) async fn scope_weights_digest_to_port(
+        &self,
+        identity: &mut ServedModelIdentity,
+        port: u16,
+    ) {
+        if identity.weights_digest.is_none() {
+            return;
+        }
+        let name = &identity.model_name;
+        let current = self
+            .served_model_generations
+            .lock()
+            .await
+            .get(name)
+            .copied();
+        let bound = self
+            .served_model_weights_ports
+            .lock()
+            .await
+            .get(name)
+            .copied();
+        if bound.is_none() || bound != current.map(|generation| (generation, port)) {
+            identity.weights_digest = None;
+        }
     }
 
     pub(crate) async fn set_served_model_weights_digest_for_generation(
@@ -1515,11 +1338,15 @@ impl Node {
         peer_id: EndpointId,
         model_name: &str,
     ) -> Option<crate::network::metrics::ModelThroughputHint> {
+        // Only a hint whose measuring node says when it measured, recently
+        // enough, is evidence; an older peer's hint ranks as unmeasured.
+        let now_unix_ms = current_time_unix_ms();
         let state = self.state.lock().await;
         state.peers.get(&peer_id).and_then(|peer| {
             peer.advertised_model_throughput
                 .iter()
                 .find(|hint| hint.model_name == model_name)
+                .filter(|hint| hint.is_fresh_at(now_unix_ms))
                 .cloned()
         })
     }
@@ -1538,7 +1365,10 @@ impl Node {
     }
 
     pub async fn all_served_model_descriptors(&self) -> Vec<ServedModelDescriptor> {
-        let mut descriptors = self.local_descriptors_with_plugins().await;
+        // Local descriptors carry the channel requirements plugins attached,
+        // exactly as peers see them in announcements.
+        let hosted_models = self.hosted_models.lock().await.clone();
+        let mut descriptors = self.descriptors_with_requirements(&hosted_models).await;
         let peer_descriptors = {
             let state = self.state.lock().await;
             state
@@ -1549,20 +1379,6 @@ impl Node {
         };
         descriptors.extend(peer_descriptors);
         descriptors
-    }
-
-    pub async fn all_model_runtime_descriptors(&self) -> Vec<ModelRuntimeDescriptor> {
-        let mut runtimes = self.model_runtime_descriptors.lock().await.clone();
-        let peer_runtimes = {
-            let state = self.state.lock().await;
-            state
-                .peers
-                .values()
-                .flat_map(|peer| peer.served_model_runtime.clone())
-                .collect::<Vec<_>>()
-        };
-        runtimes.extend(peer_runtimes);
-        runtimes
     }
 
     pub async fn serving_models(&self) -> Vec<String> {
@@ -1676,10 +1492,7 @@ impl Node {
         *self.display_name.lock().await = Some(name);
     }
 
-    /// Removes the plugin manager from this node. The in-process payments
-    /// runner holds a `Node` clone, so a manager left installed forms a
-    /// Node -> manager -> runner -> Node cycle that keeps the payments engine
-    /// (and its `service.lock`) alive after an embedded stop.
+    /// Removes the plugin manager, releasing any runner references to this node.
     pub async fn take_plugin_manager(&self) -> Option<crate::plugin::PluginManager> {
         self.plugin_manager.lock().await.take()
     }
@@ -1689,6 +1502,7 @@ impl Node {
             let state = self.state.lock().await;
             state.peers.values().cloned().collect::<Vec<_>>()
         };
+        plugin_manager.expect_mesh_snapshots();
         *self.plugin_manager.lock().await = Some(plugin_manager.clone());
         self.broadcast_existing_mesh_snapshot(&plugin_manager, peers)
             .await;
@@ -1917,100 +1731,5 @@ impl Node {
 
     pub async fn available_models(&self) -> Vec<String> {
         self.available_models.lock().await.clone()
-    }
-
-    /// Record a request for a model — updates the demand map.
-    /// Called from API proxy on every request (including misses for unserved models).
-    /// Uses std::sync::Mutex (not tokio) so it can be called from sync context too.
-    pub fn record_request(&self, model: &str) {
-        // "auto" is a routing directive, not a real model — don't pollute demand
-        if model == "auto" || model.is_empty() {
-            return;
-        }
-        let model_ref = canonical_demand_model_ref(model);
-        let mut demand = self.model_demand.lock().unwrap();
-        let entry = demand.entry(model_ref).or_default();
-        entry.last_active = now_secs();
-        entry.request_count += 1;
-    }
-
-    /// Get the current demand map (for gossip and assignment decisions).
-    pub fn get_demand(&self) -> HashMap<String, ModelDemand> {
-        self.model_demand.lock().unwrap().clone()
-    }
-
-    /// Merge incoming demand from gossip into our local map.
-    pub fn merge_remote_demand(&self, remote: &HashMap<String, ModelDemand>) {
-        let mut demand = self.model_demand.lock().unwrap();
-        merge_demand(&mut demand, remote);
-    }
-
-    /// Remove demand entries that have expired (past TTL and not pinned).
-    /// Call periodically to prevent unbounded map growth.
-    pub async fn gc_demand(&self) {
-        let now = now_secs();
-        let pinned = self.pinned_requested_models().await;
-
-        let mut demand = self.model_demand.lock().unwrap();
-        demand.retain(|model, d| {
-            pinned.contains(model) || now.saturating_sub(d.last_active) < DEMAND_TTL_SECS
-        });
-    }
-
-    /// Get active demand entries (within TTL or pinned by a live node).
-    /// This replaces mesh_wanted_models().
-    pub async fn active_demand(&self) -> HashMap<String, ModelDemand> {
-        let now = now_secs();
-        let demand = self.model_demand.lock().unwrap().clone();
-        let pinned = self.pinned_requested_models().await;
-
-        demand
-            .into_iter()
-            .filter(|(model, d)| {
-                pinned.contains(model) || now.saturating_sub(d.last_active) < DEMAND_TTL_SECS
-            })
-            .collect()
-    }
-
-    async fn pinned_requested_models(&self) -> std::collections::HashSet<String> {
-        let my_requested = self.requested_models.lock().await;
-        let peers = self.state.lock().await;
-        let mut pinned: std::collections::HashSet<String> = my_requested.iter().cloned().collect();
-        for peer in peers.peers.values() {
-            pinned.extend(peer.requested_models.iter().cloned());
-        }
-        pinned
-    }
-
-    pub async fn set_requested_models(&self, models: Vec<String>) {
-        let models = models
-            .into_iter()
-            .map(|model| canonical_demand_model_ref(&model))
-            .collect::<Vec<_>>();
-        // Seed demand entries for --model declarations
-        {
-            let mut demand = self.model_demand.lock().unwrap();
-            let now = now_secs();
-            for m in &models {
-                let entry = demand.entry(m.clone()).or_default();
-                entry.last_active = entry.last_active.max(now);
-            }
-        }
-        *self.requested_models.lock().await = models;
-    }
-
-    pub async fn requested_models(&self) -> Vec<String> {
-        self.requested_models.lock().await.clone()
-    }
-
-    pub async fn set_explicit_model_interests(&self, mut model_refs: Vec<String>) {
-        model_refs.retain(|model_ref| !model_ref.trim().is_empty());
-        model_refs.sort();
-        model_refs.dedup();
-        *self.explicit_model_interests.lock().await = model_refs;
-    }
-
-    pub async fn explicit_model_interests(&self) -> Vec<String> {
-        self.explicit_model_interests.lock().await.clone()
     }
 }

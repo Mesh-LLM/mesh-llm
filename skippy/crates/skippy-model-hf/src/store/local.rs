@@ -35,8 +35,27 @@ fn model_ref_paths() -> &'static Mutex<HashMap<String, PathBuf>> {
     MODEL_REF_PATHS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn remember_model_ref_path(model_ref: &str, path: &Path) {
+static SERVED_MODEL_REFS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+fn served_model_refs() -> &'static Mutex<HashSet<String>> {
+    SERVED_MODEL_REFS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Record that `model_ref` resolves to `path` so [`find_model_path`] can map a
+/// runtime-minted ref (for example the content-addressed `local-gguf/sha256-…`
+/// id mesh-llm serves a loaded GGUF under) back to the file it was loaded from.
+pub fn remember_model_ref_path(model_ref: &str, path: &Path) {
     if let Ok(mut paths) = model_ref_paths().lock() {
+        // A served ref's file is dictated by whoever serves it; scanner
+        // preference must not re-point it at a "better"-sorted candidate
+        // (e.g. an HF cache blob that happens to share the ref).
+        let served = served_model_refs()
+            .lock()
+            .map(|served| served.contains(model_ref))
+            .unwrap_or(false);
+        if served {
+            return;
+        }
         match paths.get(model_ref) {
             Some(existing)
                 if model_ref_path_preference_key(existing)
@@ -45,6 +64,24 @@ fn remember_model_ref_path(model_ref: &str, path: &Path) {
                 paths.insert(model_ref.to_string(), path.to_path_buf());
             }
         }
+    }
+}
+
+/// Record that `model_ref` resolves to `path`, replacing any earlier mapping.
+///
+/// Unlike [`remember_model_ref_path`], which keeps the preferred of several
+/// scanned candidates for one ref, this is for refs whose file is dictated by
+/// whoever serves them: a served alias must always describe the file currently
+/// loaded under it, even when an earlier registration pointed elsewhere. The
+/// ref is marked served, so later scanner registrations via
+/// [`remember_model_ref_path`] cannot re-point it at a preferred candidate
+/// that happens to share the ref (PR #2651 review).
+pub fn replace_model_ref_path(model_ref: &str, path: &Path) {
+    if let Ok(mut paths) = model_ref_paths().lock() {
+        paths.insert(model_ref.to_string(), path.to_path_buf());
+    }
+    if let Ok(mut served) = served_model_refs().lock() {
+        served.insert(model_ref.to_string());
     }
 }
 
@@ -834,6 +871,17 @@ mod tests {
 
     const SCAN_WITHOUT_CA_CHILD: &str = "SKIPPY_TEST_SCAN_WITHOUT_CA_CHILD";
 
+    /// Reset every remembered ref mapping, including served marks, so
+    /// serial tests do not observe each other's registrations.
+    fn clear_remembered_model_refs() {
+        if let Ok(mut paths) = model_ref_paths().lock() {
+            paths.clear();
+        }
+        if let Ok(mut served) = served_model_refs().lock() {
+            served.clear();
+        }
+    }
+
     // SSL_CERT_FILE and SSL_CERT_DIR point the system root loading at an empty
     // file and directory on Linux; they are set on a child test process only.
     #[test]
@@ -996,9 +1044,7 @@ mod tests {
     #[test]
     #[serial]
     fn local_model_scan_remembers_first_multipart_shard() {
-        if let Ok(mut paths) = model_ref_paths().lock() {
-            paths.clear();
-        }
+        clear_remembered_model_refs();
         let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
         let prev_hf_home = std::env::var_os("HF_HOME");
         let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
@@ -1061,10 +1107,56 @@ mod tests {
 
     #[test]
     #[serial]
+    fn find_model_path_honours_a_remembered_runtime_minted_ref() {
+        clear_remembered_model_refs();
+        let temp = tempfile::tempdir().unwrap();
+        let gguf = temp.path().join("weights.gguf");
+        std::fs::write(&gguf, b"GGUF").unwrap();
+        // A content-addressed id carries no path information, so only the
+        // registration can map it back to the loaded file.
+        let model_ref = format!("local-gguf/sha256-{}", "ab".repeat(32));
+
+        assert_ne!(find_model_path(&model_ref), gguf);
+
+        remember_model_ref_path(&model_ref, &gguf);
+
+        assert_eq!(find_model_path(&model_ref), gguf);
+    }
+
+    #[test]
+    #[serial]
+    fn served_mapping_survives_a_later_scanner_sighting() {
+        clear_remembered_model_refs();
+        let temp = tempfile::tempdir().unwrap();
+        // The served file sorts after the scanned one, so scanner preference
+        // ("keep the preferred candidate") would re-point the alias at the
+        // scanned file without the served mark.
+        let served = temp.path().join("z-served.gguf");
+        let scanned = temp.path().join("a-scanned.gguf");
+        std::fs::write(&served, b"GGUF").unwrap();
+        std::fs::write(&scanned, b"GGUF").unwrap();
+        let alias = "served/protected-alias:Q4_K_M";
+
+        replace_model_ref_path(alias, &served);
+        assert_eq!(find_model_path(alias), served);
+
+        // A scanner sighting of the same ref must not replace the served
+        // mapping, even though the scanned path wins the preference key.
+        remember_model_ref_path(alias, &scanned);
+        assert_eq!(find_model_path(alias), served);
+
+        // A re-registration under the same alias still wins: the serve-time
+        // contract is "describe the file loaded now".
+        let swapped = temp.path().join("m-swapped.gguf");
+        std::fs::write(&swapped, b"GGUF").unwrap();
+        replace_model_ref_path(alias, &swapped);
+        assert_eq!(find_model_path(alias), swapped);
+    }
+
+    #[test]
+    #[serial]
     fn find_model_path_resolves_only_the_requested_repository() {
-        if let Ok(mut paths) = model_ref_paths().lock() {
-            paths.clear();
-        }
+        clear_remembered_model_refs();
         let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
         let prev_hf_home = std::env::var_os("HF_HOME");
         let prev_xdg = std::env::var_os("XDG_CACHE_HOME");
@@ -1269,9 +1361,7 @@ mod tests {
     #[test]
     #[serial]
     fn scan_installed_models_collapses_layered_package_files() {
-        if let Ok(mut paths) = model_ref_paths().lock() {
-            paths.clear();
-        }
+        clear_remembered_model_refs();
         let prev_hub_cache = std::env::var_os("HF_HUB_CACHE");
         let prev_hf_home = std::env::var_os("HF_HOME");
         let prev_xdg = std::env::var_os("XDG_CACHE_HOME");

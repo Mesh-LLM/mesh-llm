@@ -14,15 +14,26 @@ pub fn discover_native_runtime_bundle_dirs(
     explicit_dirs: &[PathBuf],
     release: &str,
 ) -> Result<Vec<PathBuf>> {
-    let environment_dirs = env::var_os(NATIVE_RUNTIME_BUNDLE_DIR_ENV)
-        .map(|value| env::split_paths(&value).collect::<Vec<_>>())
-        .unwrap_or_default();
+    let environment_dirs = environment_bundle_dirs(env::var_os(NATIVE_RUNTIME_BUNDLE_DIR_ENV));
     discover_native_runtime_bundle_dirs_from(
         explicit_dirs,
         &environment_dirs,
         env::current_exe().ok().as_deref(),
         release,
     )
+}
+
+/// The directories in the bundle variable's value. Empty entries are dropped:
+/// an empty value (a systemd `Environment=VAR=` that clears it, say) means no
+/// directory, not the working directory.
+fn environment_bundle_dirs(value: Option<std::ffi::OsString>) -> Vec<PathBuf> {
+    value
+        .map(|value| {
+            env::split_paths(&value)
+                .filter(|dir| !dir.as_os_str().is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Discover only the supplied roots; no environment or executable policy.
@@ -101,9 +112,7 @@ fn discover_native_runtime_bundle_dirs_lenient(
     explicit_dirs: &[PathBuf],
     release: &str,
 ) -> Result<Vec<PathBuf>> {
-    let environment_dirs = env::var_os(NATIVE_RUNTIME_BUNDLE_DIR_ENV)
-        .map(|value| env::split_paths(&value).collect::<Vec<_>>())
-        .unwrap_or_default();
+    let environment_dirs = environment_bundle_dirs(env::var_os(NATIVE_RUNTIME_BUNDLE_DIR_ENV));
     discover_native_runtime_bundle_dirs_from_with_policy(
         explicit_dirs,
         &environment_dirs,
@@ -475,6 +484,9 @@ mod tests {
 
     #[test]
     fn local_runtime_listing_prefers_bundle_and_includes_distinct_cache_entries() {
+        crate::rerun_without_bundle_env!(
+            local_runtime_listing_prefers_bundle_and_includes_distinct_cache_entries
+        );
         let temp = tempfile::tempdir().unwrap();
         let bundle = temp.path().join("bundle");
         let cached_source = temp.path().join("cached-source");
@@ -496,6 +508,9 @@ mod tests {
 
     #[test]
     fn local_runtime_listing_skips_malformed_bundle_and_cache_candidates() {
+        crate::rerun_without_bundle_env!(
+            local_runtime_listing_skips_malformed_bundle_and_cache_candidates
+        );
         let temp = tempfile::tempdir().unwrap();
         let product = temp.path().join("mesh-bundle");
         let malformed_bundle = product.join("native-runtimes/malformed-bundle");
@@ -527,5 +542,15 @@ mod tests {
         assert_eq!(discovered[0].native_runtime_id, "valid-bundle");
         assert_eq!(discovered[0].path, valid_bundle.canonicalize().unwrap());
         assert_eq!(discovered[1], valid_cache);
+    }
+
+    #[test]
+    fn an_empty_bundle_variable_names_no_directory() {
+        assert!(environment_bundle_dirs(None).is_empty());
+        assert!(environment_bundle_dirs(Some("".into())).is_empty());
+        let a = PathBuf::from("/opt/a");
+        let b = PathBuf::from("/opt/b");
+        let with_gap = env::join_paths([a.clone(), PathBuf::new(), b.clone()]).unwrap();
+        assert_eq!(environment_bundle_dirs(Some(with_gap)), [a, b]);
     }
 }

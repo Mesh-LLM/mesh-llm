@@ -34,6 +34,7 @@
     "rustfmt --edition 2024 over all Rust sources and tests",
     "src/client.rs: preserve eight token-precedence scenarios in subprocess environments with a filtered child assertion worker",
     "src/client.rs: remove uncalled private head_with_relative_redirects; retain is_relative_location and its classification test under cfg(test)",
+    "src/constants.rs, src/client.rs: treat an empty or whitespace-only HF_ENDPOINT, HF_HOME, XDG_CACHE_HOME, HF_HUB_CACHE, HUGGINGFACE_HUB_CACHE or HF_TOKEN_PATH as unset; the empty-variable case is tested in a child process",
     "src/repository/download.rs: box the four inner download implementation futures before awaiting them inside existing public async finishers; signatures remain async, while future representation and allocation change; original 2048/4096-byte limits retained"
   ],
   "imported_sha256": {

@@ -202,7 +202,7 @@ fn local_generation_signal_window_uses_configured_value() {
         telemetry,
         model_id: "signal-window-test".to_string(),
         default_max_tokens: 1,
-        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        request_defaults: EmbeddedOpenAiRequestDefaults::default().into(),
         thinking: None,
         ctx_size: 4096,
         mode: InferenceBackendMode::LocalRuntime,
@@ -408,7 +408,7 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
             &first_request,
             crate::frontend::request::chat_template_options(
                 &first_request,
-                &backend.request_defaults,
+                &backend.request_defaults.snapshot(),
             )?,
         )?;
         let first_prompt_tokens = backend.tokenize(&first_prompt.text)?;
@@ -527,7 +527,7 @@ fn recurrent_chat_checkpoint_preserves_cached_output_parity() -> Result<()> {
             &cached_request,
             crate::frontend::request::chat_template_options(
                 &cached_request,
-                &backend.request_defaults,
+                &backend.request_defaults.snapshot(),
             )?,
         )?;
         let second_prompt_tokens = backend.tokenize(&second_prompt.text)?;
@@ -657,6 +657,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         direct_io: false,
         main_gpu: None,
         split_mode: skippy_protocol::SplitMode::Auto,
+        host_expert_layers: None,
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: Default::default(),
@@ -688,7 +689,7 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
         telemetry,
         model_id: "generation-receipt-test".to_string(),
         default_max_tokens: 1,
-        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        request_defaults: EmbeddedOpenAiRequestDefaults::default().into(),
         thinking: None,
         ctx_size: 128,
         mode: InferenceBackendMode::LocalRuntime,

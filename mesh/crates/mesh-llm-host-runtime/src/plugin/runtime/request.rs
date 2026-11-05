@@ -1,5 +1,5 @@
 //! Request replay policy at the transport boundary, before any restart can
-//! turn a lost payment reply into a fresh process's `not_open` response.
+//! turn a lost reply to a side-effecting call into a fresh process's `not_open` response.
 
 use super::{ExternalPlugin, PluginTimeout, plugin_error, proto};
 use crate::plugin::ToolCallResult;

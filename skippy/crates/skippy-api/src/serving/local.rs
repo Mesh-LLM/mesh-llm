@@ -164,7 +164,6 @@ impl LocalOpenAiOptions {
         } else {
             skippy_runtime::MtpSource::Disabled
         };
-        let verify_rollback = openai.verify_rollback(mtp_source);
         let mut config = self.config;
         config.native_mtp_enabled = native_mtp_enabled;
         let l3_manager = self.disk_cache.and_then(LocalDiskCacheOptions::acquire);
@@ -177,7 +176,7 @@ impl LocalOpenAiOptions {
                     n_threads: self.tuning.n_threads,
                     n_threads_batch: self.tuning.n_threads_batch,
                     mtp_source,
-                    verify_rollback,
+                    recurrent_rollback_tokens: 0,
                     metrics_otlp_grpc: self.metrics_otlp_grpc,
                     telemetry_queue_capacity: self.telemetry_queue_capacity,
                     telemetry_level: self.telemetry_level,

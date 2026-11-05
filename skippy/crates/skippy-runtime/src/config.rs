@@ -1,5 +1,4 @@
 use std::ffi::CString;
-use std::num::NonZeroU32;
 use std::ptr;
 
 use anyhow::{Context, Result, anyhow};
@@ -47,47 +46,6 @@ impl MtpSource {
             Self::Integrated => RawMtpSource::Integrated,
             Self::External => RawMtpSource::External,
         }
-    }
-}
-
-/// How far a verify window may rewind recurrent and hybrid state in place,
-/// without restoring a checkpoint. Each token keeps another snapshot of every
-/// recurrent state, which every decode step writes, so a session that never
-/// verifies drafts reserves none.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VerifyRollback {
-    /// The session never verifies drafts.
-    None,
-    /// Verify windows of up to this many tokens rewind in place.
-    InPlace(NonZeroU32),
-}
-
-impl VerifyRollback {
-    /// What every load reserved before loads said whether they verify drafts:
-    /// native `SKIPPY_VERIFY_ROLLBACK_TOKENS_DEFAULT`.
-    pub const DEFAULT_IN_PLACE: Self = Self::InPlace(NonZeroU32::new(2).unwrap());
-
-    /// The default in-place rollback for a session that verifies drafts.
-    pub const fn for_drafting(verifies_drafts: bool) -> Self {
-        if verifies_drafts {
-            Self::DEFAULT_IN_PLACE
-        } else {
-            Self::None
-        }
-    }
-
-    pub const fn tokens(self) -> u32 {
-        match self {
-            Self::None => 0,
-            Self::InPlace(tokens) => tokens.get(),
-        }
-    }
-}
-
-/// A load that does not say keeps the rollback every load reserved before.
-impl Default for VerifyRollback {
-    fn default() -> Self {
-        Self::DEFAULT_IN_PLACE
     }
 }
 
@@ -143,7 +101,6 @@ pub struct RuntimeConfig {
     pub batch_max_tokens: Option<u32>,
     pub glm_dsa_policy: GlmDsaPolicy,
     pub mtp_source: MtpSource,
-    pub verify_rollback: VerifyRollback,
     /// Exact native tensor names admitted for this stage. An empty set means
     /// an unsplit full-model load; split stages have no range-based fallback.
     pub resident_tensor_names: Vec<String>,
@@ -190,6 +147,35 @@ pub struct RuntimeConfig {
     pub main_gpu: Option<u32>,
     /// How to split the model across multiple GPUs.
     pub split_mode: SplitMode,
+    /// Absolute block range whose routed-expert tensors load into host memory
+    /// instead of accelerator memory. `None` keeps every expert on the
+    /// accelerator.
+    pub host_expert_layers: Option<HostExpertLayers>,
+    /// Recurrent-state rollback depth for recurrent and hybrid models. A
+    /// speculative plan sets it to its largest verify window so verify rolls
+    /// back in place; `0` keeps the native default.
+    pub recurrent_rollback_tokens: u32,
+}
+
+/// Half-open absolute block range `[start, end)` whose routed-expert tensors
+/// (`ffn_{up,down,gate}_exps`) load into host memory. Placement only changes
+/// where the weights live and which kernels run them; routing and precision
+/// are unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HostExpertLayers {
+    pub start: u32,
+    pub end: u32,
+}
+
+impl HostExpertLayers {
+    /// Build a range, returning `None` when it is empty.
+    pub fn new(start: u32, end: u32) -> Option<Self> {
+        (start < end).then_some(Self { start, end })
+    }
+
+    pub fn layer_count(self) -> u32 {
+        self.end.saturating_sub(self.start)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -399,7 +385,6 @@ impl RuntimeConfig {
                 activation_export_identity_count: activation_export_identity_ptrs.len(),
                 activation_export_bindings: slice_ptr(&activation_export_binding_ptrs),
                 mtp_source: self.mtp_source.as_raw(),
-                verify_rollback_tokens: self.verify_rollback.tokens(),
                 selected_backend_device: selected_backend_device_ptr,
                 glm_dsa_policy_profile: match self.glm_dsa_policy {
                     GlmDsaPolicy::Auto => 0,
@@ -434,6 +419,19 @@ impl RuntimeConfig {
                     .context("main_gpu exceeds i32")?
                     .unwrap_or(0),
                 split_mode: self.split_mode.as_raw(),
+                host_expert_layer_start: self
+                    .host_expert_layers
+                    .map(|layers| i32::try_from(layers.start))
+                    .transpose()
+                    .context("host_expert_layers.start exceeds i32")?
+                    .unwrap_or(0),
+                host_expert_layer_end: self
+                    .host_expert_layers
+                    .map(|layers| i32::try_from(layers.end))
+                    .transpose()
+                    .context("host_expert_layers.end exceeds i32")?
+                    .unwrap_or(0),
+                recurrent_rollback_tokens: self.recurrent_rollback_tokens,
             },
             _selected_backend_device: selected_backend_device,
             _resident_tensor_names: resident_tensor_names,
@@ -456,7 +454,7 @@ impl RuntimeConfig {
             .unwrap_or_else(|| default_n_batch_for_lane_count(self.lane_count));
         let n_ubatch = self.n_ubatch.unwrap_or(LLAMA_SERVER_DEFAULT_N_UBATCH);
         format!(
-            "stage_index={} layers={}..{} ctx={} lanes={} n_batch={} n_ubatch={} n_gpu_layers={} mmap={} mlock={} repack={} backend={} cache_k={} cache_v={} flash_attn={:?} load_mode={:?} source_stage={} terminal_stage={} mtp_source={:?} verify_rollback_tokens={} resident_tensor_count={} checkpoint_quantization={:?}",
+            "stage_index={} layers={}..{} ctx={} lanes={} n_batch={} n_ubatch={} n_gpu_layers={} mmap={} mlock={} repack={} backend={} cache_k={} cache_v={} flash_attn={:?} load_mode={:?} source_stage={} terminal_stage={} mtp_source={:?} resident_tensor_count={} checkpoint_quantization={:?} host_expert_layers={}",
             self.stage_index,
             self.layer_start,
             self.layer_end,
@@ -478,9 +476,11 @@ impl RuntimeConfig {
             self.is_source_stage(),
             self.is_terminal_stage(),
             self.mtp_source,
-            self.verify_rollback.tokens(),
             self.resident_tensor_names.len(),
             self.checkpoint_quantization,
+            self.host_expert_layers
+                .map(|layers| format!("{}..{}", layers.start, layers.end))
+                .unwrap_or_else(|| "none".to_string()),
         )
     }
 }
@@ -536,7 +536,6 @@ impl Default for RuntimeConfig {
             batch_max_tokens: None,
             glm_dsa_policy: GlmDsaPolicy::Auto,
             mtp_source: MtpSource::Disabled,
-            verify_rollback: VerifyRollback::default(),
             resident_tensor_names: Vec::new(),
             execution_contract: String::new(),
             activation_import_identities: Vec::new(),
@@ -555,6 +554,8 @@ impl Default for RuntimeConfig {
             direct_io: false,
             main_gpu: None,
             split_mode: SplitMode::Auto,
+            host_expert_layers: None,
+            recurrent_rollback_tokens: 0,
         }
     }
 }
@@ -798,6 +799,37 @@ mod tests {
     }
 
     #[test]
+    fn runtime_config_raw_defaults_host_expert_layers_to_empty_range() -> anyhow::Result<()> {
+        let raw = RuntimeConfig::default().as_raw()?.raw;
+        assert_eq!(raw.host_expert_layer_start, 0);
+        assert_eq!(raw.host_expert_layer_end, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn runtime_config_raw_carries_host_expert_layer_range() -> anyhow::Result<()> {
+        let raw = RuntimeConfig {
+            host_expert_layers: HostExpertLayers::new(25, 48),
+            ..RuntimeConfig::default()
+        }
+        .as_raw()?
+        .raw;
+        assert_eq!(raw.host_expert_layer_start, 25);
+        assert_eq!(raw.host_expert_layer_end, 48);
+        Ok(())
+    }
+
+    #[test]
+    fn host_expert_layers_rejects_empty_ranges() {
+        assert_eq!(HostExpertLayers::new(4, 4), None);
+        assert_eq!(HostExpertLayers::new(5, 4), None);
+        assert_eq!(
+            HostExpertLayers::new(0, 3).map(|layers| layers.layer_count()),
+            Some(3)
+        );
+    }
+
+    #[test]
     fn runtime_config_raw_no_host_buffer_true_and_false_are_distinct() -> anyhow::Result<()> {
         let enabled = RuntimeConfig {
             no_host_buffer: true,
@@ -984,26 +1016,6 @@ mod tests {
             512 * 1024 * 1024
         );
         assert_eq!(raw.raw.glm_dsa_compact_flash_min_kv, 1);
-        Ok(())
-    }
-
-    #[test]
-    fn runtime_config_raw_carries_the_verify_rollback() -> anyhow::Result<()> {
-        assert_eq!(
-            RuntimeConfig::default()
-                .as_raw()?
-                .raw
-                .verify_rollback_tokens,
-            2
-        );
-        for (verifies_drafts, expected) in [(true, 2), (false, 0)] {
-            let raw = RuntimeConfig {
-                verify_rollback: VerifyRollback::for_drafting(verifies_drafts),
-                ..RuntimeConfig::default()
-            }
-            .as_raw()?;
-            assert_eq!(raw.raw.verify_rollback_tokens, expected);
-        }
         Ok(())
     }
 

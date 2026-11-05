@@ -12,16 +12,19 @@ use std::{
     time::Duration,
 };
 
-// Only the included pre-existing build-script main exceeds xtask's line limit.
-// New fixture code keeps the normal lint policy; production source is unchanged.
+// Only the included pre-existing build-script link policy exceeds xtask's
+// line limit. New fixture code keeps the normal lint policy; production
+// source is unchanged. The bindings-regeneration half of skippy-ffi's build
+// script needs the bindgen toolchain and is covered by the crate's own
+// SKIPPY_FFI_BINDGEN=check gate instead of this fixture.
 #[allow(clippy::too_many_lines)]
 mod actual_build_script {
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../skippy/crates/skippy-ffi/build.rs"
+        "/../../skippy/crates/skippy-ffi/build/native_link.rs"
     ));
     pub(super) fn run() {
-        main();
+        native_link_main();
     }
 }
 

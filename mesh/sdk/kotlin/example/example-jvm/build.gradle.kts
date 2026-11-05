@@ -1,3 +1,5 @@
+import java.io.File
+
 plugins {
     kotlin("jvm") version "2.0.21"
     application
@@ -24,12 +26,24 @@ dependencies {
 val repoRoot = projectDir.resolve("../../../../..").canonicalFile
 
 val generateKotlinBindings by tasks.registering(Exec::class) {
-    description = "Generate Kotlin UniFFI bindings from the mesh-llm FFI UDL"
+    description = "Generate Kotlin UniFFI bindings from the prebuilt mesh-llm FFI library"
     group = "build"
 
     workingDir = repoRoot
     commandLine("bash", "mesh/sdk/kotlin/scripts/generate-kotlin-bindings.sh")
-    inputs.file(repoRoot.resolve("mesh/crates/mesh-llm-ffi/src/mesh_ffi.udl"))
+    // Mirror generate-kotlin-bindings.sh: a blank MESH_LLM_FFI_LIBRARY or
+    // CARGO_TARGET_DIR behaves as unset, and the default target directory is
+    // <repo>/target. Resolved without nullable provider mappings so the
+    // configuration never emits DSL warnings.
+    inputs.file(
+        providers.environmentVariable("MESH_LLM_FFI_LIBRARY").orElse("").zip(
+            providers.environmentVariable("CARGO_TARGET_DIR").orElse("")
+        ) { ffiLibrary, cargoTarget ->
+            ffiLibrary.takeIf(String::isNotBlank)
+                ?: File(cargoTarget.takeIf(String::isNotBlank) ?: repoRoot.resolve("target").absolutePath)
+                    .resolve("release/libmeshllm_ffi.a").absolutePath
+        }
+    )
     outputs.file(projectDir.resolve("src/main/kotlin/uniffi/mesh_ffi/mesh_ffi.kt"))
     outputs.file(repoRoot.resolve("mesh/sdk/kotlin/src/main/kotlin/uniffi/mesh_ffi/mesh_ffi.kt"))
 }

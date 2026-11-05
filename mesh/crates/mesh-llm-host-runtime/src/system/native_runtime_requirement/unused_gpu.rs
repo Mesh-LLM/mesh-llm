@@ -10,8 +10,7 @@ use crate::system::native_runtime_install;
 use mesh_llm_events::{OutputEvent, emit_event};
 use skippy_native_runtime::{
     HostRuntimeProfile, InstalledNativeRuntime, NativeRuntimeArtifact, RuntimeSelection,
-    describe_unused_gpu_backends, evaluate_native_runtime_artifact,
-    has_startup_compatibility_metadata, unused_gpu_backends,
+    describe_unused_gpus, has_startup_compatibility_metadata,
 };
 use std::sync::Mutex;
 
@@ -110,35 +109,27 @@ fn warnings(
     release: &str,
     loaded_id: &str,
 ) -> Vec<String> {
-    let (usable, missing_metadata): (Vec<_>, Vec<_>) = artifacts
-        .iter()
-        .cloned()
-        .partition(|artifact| has_startup_compatibility_metadata(artifact, profile));
-    let Some(loaded) = usable.iter().find(|artifact| artifact.id == loaded_id) else {
+    let Some(loaded) = artifacts.iter().find(|artifact| {
+        artifact.id == loaded_id && has_startup_compatibility_metadata(artifact, profile)
+    }) else {
         return Vec::new();
     };
-    let evaluated = usable
-        .iter()
-        .map(|artifact| {
-            evaluate_native_runtime_artifact(
-                artifact,
-                profile,
-                release,
-                Some(&loaded.skippy_abi),
-                selection,
-            )
-        })
-        .collect::<Vec<_>>();
-    let unused = unused_gpu_backends(&evaluated, &missing_metadata, profile, selection, loaded);
-    describe_unused_gpu_backends(&unused)
-        .map(|description| {
-            format!(
-                "{description}; serving on the {} runtime instead. `mesh-llm runtime list --available` lists every runtime and why it doesn't fit.",
-                loaded.backend.kind
-            )
-        })
-        .into_iter()
-        .collect()
+    describe_unused_gpus(
+        artifacts,
+        profile,
+        release,
+        Some(&loaded.skippy_abi),
+        selection,
+        loaded,
+    )
+    .map(|description| {
+        format!(
+            "{description}; serving on the {} runtime instead. `mesh-llm runtime list --available` lists every runtime and why it doesn't fit.",
+            loaded.backend.kind
+        )
+    })
+    .into_iter()
+    .collect()
 }
 
 #[cfg(test)]
@@ -338,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn one_gpu_with_two_unused_backends_gets_one_warning() {
+    fn a_vulkan_icd_beside_an_unused_cuda_gpu_is_not_a_second_gpu() {
         let mut host = cuda12_host();
         host.available_flavors
             .insert(NativeRuntimeBackendKind::Vulkan);
@@ -355,7 +346,7 @@ mod tests {
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(
             warnings[0].starts_with(
-                "GPU detected (cuda, vulkan), but no runtime for it fits: no cuda runtime is available; no vulkan runtime is available; serving on the cpu runtime instead."
+                "cuda GPU detected, but no cuda runtime is installed; serving on the cpu runtime instead."
             ),
             "{}",
             warnings[0]

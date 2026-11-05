@@ -88,6 +88,8 @@ mod gossip;
 pub(crate) mod heartbeat;
 mod host_role_claims;
 pub(crate) mod model_identity;
+mod model_requirements;
+mod native_inference;
 mod node;
 mod node_identity;
 mod node_requirements;
@@ -110,6 +112,7 @@ mod stage_transport_bridge;
 mod stun;
 mod weights_digest;
 
+pub(crate) use connections::parse_invite_token;
 use connections::*;
 pub(crate) use host_role_claims::{HostRoleClaim, HostRoleClaims};
 use mesh_llm_membership::connection_reservation::*;
@@ -118,6 +121,7 @@ use model_identity::*;
 // Main's openai::model_names calls this through the mesh:: path; keep the
 // pub(crate) surface stable across the model_identity move.
 pub(crate) use model_identity::public_model_id_from_identity;
+pub(crate) use model_requirements::model_requires_unsupported_channel;
 use node_identity::*;
 #[cfg(test)]
 use operational_logging::capture_mesh_operational_audits;
@@ -170,13 +174,14 @@ pub use node::{
     LocalRequestMetricsSnapshot, Node, RouteEntry, RoutingTable, detect_local_fit_bytes,
 };
 pub(crate) use node::{
-    MembershipEntry, MembershipNodeConfig, PeerDownReport, membership_token_endpoint,
-    peer_down_endpoint_id,
+    MembershipEntry, MembershipNodeConfig, PeerDownReport, StartupResolution,
+    membership_token_endpoint, peer_down_endpoint_id,
 };
+pub(crate) use node::{NodeStartupSpec, ScopedNodeIdentity};
 pub(crate) use peer_state::{
     ClaimedLogHead, ControlListenerLifecycle, DEAD_PEER_TTL, PEER_STALE_SECS, http_routable_models,
-    peer_has_observed_liveness, resolve_peer_leaving, routable_models, routes_http_model,
-    routes_model,
+    peer_has_observed_liveness, public_model_id_for_routable_model, resolve_peer_leaving,
+    routable_models, routes_http_model, routes_model,
 };
 #[expect(
     unused_imports,
@@ -214,6 +219,3 @@ pub(crate) mod tests;
 
 #[cfg(test)]
 mod public_identity_tests;
-
-#[cfg(feature = "payments")]
-pub(crate) mod payments;

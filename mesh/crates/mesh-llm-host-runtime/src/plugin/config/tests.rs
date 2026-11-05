@@ -353,6 +353,8 @@ fn installed_plugin_metadata(
             openai_exchange_hook: None,
             config_schema: schema,
             web_ui: None,
+            operation_bindings: Vec::new(),
+            peer_blocks: false,
         }),
         last_protocol_version: Some(1),
         last_status: Some("installed".to_string()),
@@ -1537,6 +1539,23 @@ batch = 0
     assert_eq!(
         err.to_string(),
         "models[0].model_fit.batch must be between 1 and 10000000, got 0"
+    );
+}
+
+#[test]
+fn invalid_activation_codec_path_is_stable() {
+    let config: MeshConfig = toml::from_str(
+        r#"
+[defaults.skippy]
+activation_codec = "int4"
+"#,
+    )
+    .unwrap();
+
+    let err = validate_config(&config).unwrap_err();
+    assert_eq!(
+        err.to_string(),
+        "defaults.skippy.activation_codec must be one of: lossless, f16, bf16, s8-row, fp8-e4m3-row, fp8-e4m3-block32, fp8-e5m2-row, f32"
     );
 }
 

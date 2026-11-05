@@ -56,6 +56,38 @@ pub(super) fn layer_required_bytes(
         .collect()
 }
 
+/// Charges `final_layer_kv_bytes_per_token` to the last layer, which every
+/// plan keeps on the final stage: KV the final stage holds beyond its layers',
+/// such as a split DFlash draft's context, with the same compute reserve.
+pub(super) fn charge_final_layer_kv(
+    costs: &mut [u64],
+    final_layer_kv_bytes_per_token: u64,
+    context_length: u32,
+    parallel_lanes: usize,
+) -> Option<()> {
+    if final_layer_kv_bytes_per_token == 0 {
+        return Some(());
+    }
+    let extra = context_scaled_kv_bytes(
+        final_layer_kv_bytes_per_token,
+        context_length,
+        parallel_lanes,
+    )?;
+    let last = costs.last_mut()?;
+    *last = last.checked_add(extra)?;
+    Some(())
+}
+
+/// KV of `kv_bytes_per_token` at `context_length` for every lane, with the
+/// planner's compute reserve.
+pub fn context_scaled_kv_bytes(
+    kv_bytes_per_token: u64,
+    context_length: u32,
+    parallel_lanes: usize,
+) -> Option<u64> {
+    candidate_bytes_per_layer(0, kv_bytes_per_token, context_length, parallel_lanes)
+}
+
 /// Reserve context-independent process and runtime memory on each node.
 pub fn default_runtime_headroom_bytes(vram_bytes: u64) -> u64 {
     let proportional = vram_bytes

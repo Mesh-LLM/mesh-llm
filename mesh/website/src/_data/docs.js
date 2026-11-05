@@ -28,6 +28,7 @@ export default [
     links: [
       ["Run your first model", "/docs/pages/quickstart/#3-start-one-private-node"],
       ["Runtime lifecycle", "/docs/pages/runtime-lifecycle/"],
+      ["One model across meshes", "/docs/pages/shared-serving/"],
       ["Choose a model", "/docs/pages/choose-a-model/"],
       ["Running large models", "/docs/pages/running-large-models/"],
       ["Console chat", "/docs/pages/console-chat/"],
@@ -39,6 +40,7 @@ export default [
     description: "Use Mesh through OpenAI-compatible clients and model-serving features.",
     links: [
       ["OpenAI-compatible API", "/docs/pages/openai-compatible-api/"],
+      ["Mesh model discovery", "/docs/pages/model-discovery/"],
       ["Decisions API", "/docs/pages/decisions-api/"],
       ["System One API", "/docs/pages/system-one-api/"],
       ["Automatic routing", "/docs/pages/automatic-routing/"],
@@ -86,6 +88,7 @@ export default [
     links: [
       ["Join the public mesh", "/docs/pages/public-mesh/"],
       ["Your own mesh", "/docs/pages/private-meshes/"],
+      ["One model across meshes", "/docs/pages/shared-serving/"],
       ["Publish mesh", "/docs/pages/publish-mesh/"]
     ]
   },
@@ -114,6 +117,7 @@ export default [
     description: "API reference, CLI commands, testing, and technical reference documentation.",
     links: [
       ["API reference", "/docs/pages/api-reference/"],
+      ["Mesh model discovery", "/docs/pages/model-discovery/"],
       ["Local logging API", "/docs/pages/logging-api/"],
       ["Crate API reference", "/crates/"],
       ["Skippy native API", "/docs/pages/skippy-api/"],

@@ -75,6 +75,25 @@ class Inference {
     return (await this.request('/v1/responses', { ...body, stream: false })).json()
   }
 
+  async documentOcr(file, options, requestOptions = {}) {
+    const { contentType, responseFormat, maxPages, ...rest } = options
+    const wire = { ...rest }
+    if (contentType !== undefined) wire.content_type = contentType
+    if (responseFormat !== undefined) wire.response_format = responseFormat
+    if (maxPages !== undefined) wire.max_pages = maxPages
+    const response = parse(await this._handle.documentOcrJson(Buffer.from(file), JSON.stringify(wire)))
+    const result = {
+      statusCode: response.statusCode,
+      contentType: response.contentType,
+      body: response.body,
+      json() { return parse(response.body) }
+    }
+    if (requestOptions.raiseForStatus !== false && (result.statusCode < 200 || result.statusCode >= 300)) {
+      throw new OpenAIRequestError(result.statusCode, result.body)
+    }
+    return result
+  }
+
   async *stream(path, body) {
     const queue = new AsyncEventQueue()
     const requestId = await this._handle.openaiStream(

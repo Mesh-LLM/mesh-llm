@@ -34,6 +34,7 @@ fn legacy_descriptor_from_identity(
 ) -> crate::mesh::ServedModelDescriptor {
     crate::mesh::ServedModelDescriptor {
         identity: proto_identity_to_local(identity),
+        requires: Vec::new(),
         capabilities_known: false,
         capabilities: crate::models::ModelCapabilities::default(),
         topology: None,
@@ -63,6 +64,14 @@ fn proto_descriptor_to_local(
         })
         .unwrap_or_default();
     Some(ServedModelDescriptor {
+        requires: descriptor
+            .requires
+            .iter()
+            .map(|r| mesh_llm_types::mesh::ChannelRequirement {
+                channel: r.channel.clone(),
+                terms: r.terms.clone(),
+            })
+            .collect(),
         identity: proto_identity_to_local(identity),
         capabilities_known: descriptor
             .capabilities_known

@@ -60,7 +60,7 @@ use crate::runtime_events::engine::OperationReservation;
 use crate::runtime_events::runtime_event_engine;
 
 use facts::{
-    abort_terminal_fact, empty_data, first_token_produced_fact,
+    DecodeTiming, abort_terminal_fact, empty_data, first_token_produced_fact,
     generation_completion_terminal_fact, generation_fact, prefill_cancelled_fact,
     prefill_completion_terminal_fact, prefill_terminal_fact, progress_fact, receipt_terminal_fact,
     session_active_fact, session_idle_fact, stop_condition_reached_fact,
@@ -319,6 +319,11 @@ impl SkippyGenerationRuntimeEventAdapter {
                 completion.termination,
                 completion.prompt_token_count,
                 completion.generated_token_count,
+                DecodeTiming::from_token_span(
+                    completion.request_to_first_token_us,
+                    completion.request_to_last_token_us,
+                    completion.generated_token_count,
+                ),
             ),
             prefill_completion_terminal_fact(
                 completion.termination,

@@ -6,8 +6,6 @@ mod hf_mtp_compose_fixture;
 mod hf_publication_fixture;
 #[path = "l7_daemon_fixture/hf_raw_conversion_fixture.rs"]
 mod hf_raw_conversion_fixture;
-#[path = "l7_daemon_fixture/lightning_peer_fixture.rs"]
-mod lightning_peer_fixture;
 #[path = "l7_daemon_fixture/manual_smoke_fixture.rs"]
 mod manual_smoke_fixture;
 #[path = "l7_daemon_fixture/mtp_fixture.rs"]
@@ -68,11 +66,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ["validate-projector", "validate-mtp-attach"].contains(&value.as_str())
     }) {
         return hf_certification_fixture::run(&arguments);
-    }
-    if let [verb, rest @ ..] = arguments.as_slice()
-        && verb == "lightning-peer"
-    {
-        return lightning_peer_fixture::run(rest);
     }
     if arguments.iter().any(|argument| argument == "--version") {
         if std::path::Path::new("version-oversized").exists() {

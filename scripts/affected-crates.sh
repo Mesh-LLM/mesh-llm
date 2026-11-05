@@ -24,7 +24,6 @@ WORKSPACE_MEMBERS=(
   "mesh-llm-log-store"
   "skippy-native-runtime"
   "mesh-llm-payments"
-  "mesh-llm-payments-types"
   "mesh-llm-wallet"
   "mesh-llm-protocol"
   "mesh-llm-transport"
@@ -85,6 +84,7 @@ WORKSPACE_MEMBERS=(
   "skippy-correctness"
   "llama-spec-bench"
   "ci-controller"
+  "process-supervision"
   "trajectory-reader"
   "xtask"
 )

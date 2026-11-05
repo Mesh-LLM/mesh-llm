@@ -46,6 +46,15 @@ product, native, canary, and release automation stay in xtask. Put new
 repository automation in xtask unless it belongs to the controller's planning
 and validation scope.
 
+`tools/process-supervision` owns bounded child-process supervision
+(`supervise*`, `retained`) and the command interruption scope (`interrupt`).
+Its normal dependencies are limited to thiserror, libc on Unix, and windows-sys
+on Windows; it never takes HTTP, async runtime, or archive crates. xtask
+imports it as `crate::process` and `crate::command_interrupt`, and keeps
+`curl_https`. The controller does not link it yet; a command that moves to the
+controller and spawns a child must use it rather than a raw `std::process`
+runner.
+
 The explicit `prepare-automation` `hosted-bare` profile is an automation-only
 exception for GitHub-hosted Linux. It uses the existing stable Rust selection
 and locked Cargo without Just or compiler wrappers; default image preparation
@@ -54,10 +63,13 @@ preparation may use step-local Cargo home and target directories outside the
 measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
 
-Persistent macOS canary jobs use the `preinstalled-macos` automation profile.
-Preflight and build require `[self-hosted, macOS, ARM64, jy-managed,
-family-certify, accelerator-memory-128plus]`; family and infrastructure-retry
-jobs replace the final label with the controller's `matrix.memory_tier`.
+Persistent canary jobs use the resolver-selected `preinstalled-macos` or
+`preinstalled-linux` automation profile. Preflight and build require
+`[self-hosted, <selected OS>, ARM64, jy-managed, family-certify,
+accelerator-memory-128plus]`. Family and infrastructure-retry jobs consume the
+controller's memory tier: 128-tier labels follow the selected platform, while
+256-tier labels remain on macOS. Backend selection uses Metal on macOS and
+CUDA on Linux; the Linux image must carry a working driver and toolkit.
 JY owns machine eligibility through attribute selectors: macOS Apple M1 Ultra
 with exactly 128 GiB or Apple M3 Ultra with exactly 256 GiB, with mounted model
 storage. Never select a node name. The JY runner groups must allow only these
@@ -67,7 +79,7 @@ unavailable managed capacity queues rather than falling back to another pool.
 They check runner prerequisites before compiling automation or preparing SDK
 dependencies and fail if any are absent. Tool installation and upgrades belong
 to runner provisioning: never invoke Rust, Just, or Homebrew installers from
-this profile. Keep job-owned compiler-cache startup and linker verification.
+these profiles. Keep job-owned compiler-cache startup and linker verification.
 
 Automation is compiled at most once per run and platform for product-source
 work, never once per job. Each platform lane has one `product_automation_*`
@@ -128,8 +140,10 @@ not need to contain the dependency manifest.
 checks repository Python tooling. Its typed policy is
 `ci/python-tooling-policy.json`: exact external dependency inputs, source pins,
 and executable invocation exceptions must retain their documented owners and
-reviewed occurrence counts. The census includes tracked and new nonignored
-files, including hidden directories. Python sources, shebangs, unapproved
+reviewed occurrence counts. Platform-specific runner prerequisite lists require
+separate exact entries; listing an interpreter as a prerequisite does not
+authorize executing or installing it. The census includes tracked and new
+nonignored files, including hidden directories. Python sources, shebangs, unapproved
 package inputs and direct interpreter invocations fail validation. Archived
 receipts and documentation examples remain data. Literal process checks are
 bounded static analysis; native caller tests must continue to reject the
@@ -479,10 +493,25 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Cache contract
 
+- Linux Rust-test jobs and the trusted compiler seed's test build disable
+  Cargo test-profile debug information (`CARGO_PROFILE_TEST_DEBUG=0`). Keep
+  debug assertions, overflow checks and complete package test coverage. The
+  per-package feature-isolated builds otherwise retain large DWARF-bearing
+  dependency variants and test executables on the same hosted disk. Keep the
+  warmer and consumers aligned, and change the cache epoch with this policy.
+- The trusted seed also builds the isolated default-feature `xtask` Clippy
+  graph with `--all-targets`, independently of the product graph. Scope the
+  seed's test-debug override to its test-build command so Clippy retains the
+  consumer's profile. Seed compatibility keys include the root and workspace
+  package Cargo manifests and the warmer workflow's build configuration as well
+  as the image, lockfile and recipe inputs. Keep the publisher, consumers and
+  runner-image catalog aligned.
 - macOS compiler-cache bootstrap must use a job-owned Unix socket before any
   compiler probe. Eagerly start its server in every cache mode; parallel compiler
-  clients must not race to initialize a newly allocated socket. Never stop or
-  restart the host-wide default sccache server:
+  clients must not race to initialize a newly allocated socket. Export
+  `SCCACHE_IDLE_TIMEOUT=0` before startup and persist it for later job steps so
+  quiet test phases cannot expire the daemon and expose another startup race.
+  Never stop or restart the host-wide default sccache server:
   multiple runner accounts can share one physical host. Preserve the disk cache
   independently of the server endpoint, and pass the endpoint to later steps.
 - Declare cache mode per slice: no remote cache, PR restore-only/isolated, or
@@ -531,8 +560,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   cache namespace) never restores an executable. `prepare-ci-controller` keeps
   a separate exact-key identity (`ci-controller-hosted-...`) over the
   controller's compiled inputs and never shares an entry with the full xtask
-  executable, whose key also hashes `tools/ci-controller/**` because xtask
-  compiles the controller library.
+  executable, whose key also hashes `tools/ci-controller/**` and
+  `tools/process-supervision/**` because xtask compiles both libraries. A
+  library crate that xtask or the controller starts compiling joins the
+  matching key in the same change.
 - PR and smoke-only artifacts default to one-day retention. Release evidence
   follows the release policy.
 
@@ -554,6 +585,12 @@ checked-in expiry are the maintainer-controlled approval boundary.
 - Host artifacts include the executable checksum and import-policy report.
   Runtime artifacts include manifest, checksums, ABI/version, platform, and
   backend identity. Product manifests record exact host and runtime digests.
+- The typed runtime manifest writer narrows configured Windows ROCm targets
+  when `rocblas.dll` is declared: each advertised target must have a staged
+  rocBLAS `.co` or `.hsaco` file bound by the manifest's checksum map. Missing
+  kernels for every configured target fail packaging. Preserve unconfigured
+  lists and other platforms/backends; filename admission does not replace
+  hardware inference qualification.
 - Use the owning preparation and composition actions. A composer verifies and
   copies exact producer bytes; it never compiles, links, re-stamps, or silently
   substitutes an input.
@@ -672,8 +709,13 @@ override; `mesh_ref` defaults to certify-only; explicit `mesh_action=certify-and
 adds independent verification and publication of the unchanged selected commit. Upstream release
 qualification never replaces the complete candidate and independent family
 passes required before publishing an upgrade PR. Only the hosted upstream
-selection step may receive the read-only GitHub token for public upstream API
-reads; workers and repair agents remain credential-free.
+selection and platform-selection steps may receive the read-only GitHub token;
+workers and repair agents remain credential-free. That token can read public
+upstream metadata but cannot list repository runners: the runner API requires
+[repository Administration read access](https://docs.github.com/en/rest/actions/self-hosted-runners#list-self-hosted-runners-for-a-repository).
+With the current token, `platform=auto` falls back to macOS; use explicit
+`platform=linux` to select Linux. Do not rely on automatic Linux availability
+selection or add an administrator credential to repair workers.
 
 Each candidate build owns one complete native CTest pass. The initial native
 build may compile tests without executing them; after fresh annotation
@@ -710,7 +752,13 @@ existing pin and patches without repair. Default `mesh_action=certify` does not
 publish. Explicit `mesh_action=certify-and-publish` requires a complete candidate
 pass and a fresh independent build and complete family pass on the same frozen
 selected commit before publishing that exact commit as a PR to main. It never
-changes the selected pin or invokes coding repair. Selected build scripts
+changes the selected pin or invokes coding repair. Explicit `mesh_action=upgrade`
+instead requires a full lowercase `upstream_sha` and admits a changed-pin repair
+from the frozen selected branch. Keep the controller on protected main and bind
+the selected revision as the candidate's base through build, bundle, worker,
+retry and verification handoffs. An upgrade must target a different pin; it uses
+the normal bounded repair loop, two complete green passes, and hosted PR
+publication. Certify modes continue to reject upstream overrides. Selected build scripts
 and battery code execute on persistent lab runners, so operators must choose
 trusted revisions; a main controller does not sandbox that source.
 
@@ -837,4 +885,4 @@ never a parallel packaging implementation. Preview versions must contain
 frozen source SHA. Publish verified assets as a draft before exposing the
 complete prerelease, without marking it latest or invoking stable registries.
 Keep immutable preview tags and previous downloads; no automated deletion is
-part of the initial rollout. The schedule is Tuesday/Friday 03:23 UTC.
+part of the initial rollout. The Tuesday/Friday 03:23 UTC schedule is commented out; dispatch manually.

@@ -324,6 +324,7 @@ fn stage_load_request() -> crate::inference::skippy::StageLoadRequest {
         flash_attn_type: skippy_protocol::FlashAttentionType::Auto,
         runtime_settings: Default::default(),
         native_mtp_enabled: true,
+        dflash: None,
         shutdown_generation: 3,
         coordinator_term: 11,
         coordinator_id: None,
@@ -338,6 +339,7 @@ async fn make_test_node(role: super::NodeRole) -> Result<Node> {
     make_test_node_with_requirements(role, crate::MeshRequirements::unrestricted()).await
 }
 
+/// Construct an isolated test endpoint with explicit role, trust and mesh requirements.
 async fn make_test_node_with_requirements(
     role: super::NodeRole,
     local_mesh_requirements: crate::MeshRequirements,
@@ -372,10 +374,15 @@ async fn make_test_node_with_requirements(
         },
     );
 
+    let config_state = crate::runtime::config_state::ConfigState::default();
+    let live_request_defaults = config_state.live_request_defaults();
     let node = Node {
         gossip_verification: Arc::default(),
         gossip_encoder: Arc::default(),
+        native_inference: Default::default(),
         adopted_membership_file: None,
+        identity_state_dir: None,
+        full_model_only: false,
         endpoint,
         endpoint_secret_key,
         public_addr: None,
@@ -393,11 +400,13 @@ async fn make_test_node_with_requirements(
         serving_models: Arc::new(Mutex::new(Vec::new())),
         served_model_descriptors: Arc::new(Mutex::new(Vec::new())),
         served_model_generations: Arc::new(Mutex::new(HashMap::new())),
+        served_model_weights_ports: Arc::new(Mutex::new(HashMap::new())),
         model_runtime_descriptors: Arc::new(Mutex::new(Vec::new())),
         hosted_models: Arc::new(Mutex::new(Vec::new())),
         llama_ready: Arc::new(Mutex::new(false)),
         available_models: Arc::new(Mutex::new(Vec::new())),
         requested_models: Arc::new(Mutex::new(Vec::new())),
+        startup_models_resolving: Arc::default(),
         explicit_model_interests: Arc::new(Mutex::new(Vec::new())),
         model_demand: Arc::new(std::sync::Mutex::new(HashMap::new())),
         requirement_mesh_state: Arc::new(Mutex::new(None)),
@@ -457,19 +466,17 @@ async fn make_test_node_with_requirements(
         gpu_mem_bandwidth_gbps: Arc::new(tokio::sync::Mutex::new(None)),
         gpu_compute_tflops_fp32: Arc::new(tokio::sync::Mutex::new(None)),
         gpu_compute_tflops_fp16: Arc::new(tokio::sync::Mutex::new(None)),
-        config_state: Arc::new(tokio::sync::Mutex::new(
-            crate::runtime::config_state::ConfigState::default(),
-        )),
+        config_state: Arc::new(tokio::sync::Mutex::new(config_state)),
+        live_request_defaults,
         peer_blocks: crate::network::peer_blocks::PeerBlocks::in_memory(),
+        route_target_health: Arc::new(std::sync::OnceLock::new()),
         plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
+        model_requirements: Default::default(),
+            unmatched_model_requirements: Default::default(),
         config_revision_tx: {
             let (tx, _rx) = tokio::sync::watch::channel(0u64);
             Arc::new(tx)
         },
-        #[cfg(feature = "payments")]
-        payments: Arc::new(tokio::sync::OnceCell::new()),
-        #[cfg(feature = "payments")]
-        payment_recovery: Arc::new(Mutex::new(None)),
         activity_policy_guard: crate::runtime::activity_policy::ActivityPolicyGuard::new(
             &mesh_llm_config::RuntimeActivityConfig::default(),
         ),
@@ -604,6 +611,7 @@ async fn set_serving_models_preserves_existing_known_descriptor_capabilities_whe
 
     node.set_serving_models(vec![vision_model.clone()]).await;
     node.upsert_served_model_descriptor(ServedModelDescriptor {
+        requires: Vec::new(),
         identity: ServedModelIdentity {
             model_name: vision_model.clone(),
             is_primary: true,

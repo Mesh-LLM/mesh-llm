@@ -201,6 +201,7 @@ Other product directories:
 Embedded staged runtime (`skippy/crates/skippy-*`):
 
 - `skippy-ffi/src/lib.rs` — Rust ABI mirror of the patched llama.cpp staged runtime; `ABI_VERSION_*` constants must stay in sync with `skippy/common.h` in the patch queue.
+- `skippy-ffi/src/bindings/` — bindgen-generated declarations from the pinned headers (Skippy ABI, upstream llama, mtmd). They are the source of truth for native layouts; regenerate via `SKIPPY_FFI_BINDGEN=regen cargo check -p skippy-ffi` after `scripts/prepare-llama.sh pinned`, and never hand-edit them. See `skippy-ffi/README.md` for the pinned bindgen/libclang toolchain.
 - `skippy-runtime/src/package.rs` — layer-package materialization, identity-bound cache.
 - `skippy-runtime/src/devices.rs` — backend device enumeration.
 - `skippy-serving/src/frontend.rs`, `skippy-serving/src/frontend/` — embedded chat/generation frontend.

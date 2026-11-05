@@ -144,6 +144,7 @@ pub fn identity_from_package_v2(
         "package-v2 source model byte count must be positive"
     );
     let mut source_files = package_v2_source_files(&package_dir, &manifest, digest_cache)?;
+    let layer_count = package_v2_executable_layer_count(&manifest)?;
     let layer_weight_bytes = package_v2_layer_weight_bytes(&manifest)?;
     let tensor_count = u64::try_from(manifest.tensor_catalog.entries.len())
         .context("package-v2 tensor count exceeds u64")?;
@@ -165,7 +166,7 @@ pub fn identity_from_package_v2(
         source_model_bytes,
         source_files,
         layer_weight_bytes,
-        layer_count: manifest.layer_count,
+        layer_count,
         activation_width,
         tensor_count,
         generation,
@@ -237,6 +238,34 @@ fn package_v2_source_files(
         .collect()
 }
 
+/// The manifest `layer_count` mirrors GGUF `block_count`, which includes
+/// appended NextN/MTP blocks, while llama.cpp's `n_layer()` excludes them.
+/// Stage ranges must use the same executable trunk count; native planning
+/// keeps the MTP block resident on the stage that ends the trunk.
+pub fn package_v2_executable_layer_count(manifest: &PackageManifestV2) -> Result<u32> {
+    let nextn_predict_layers = manifest
+        .model_metadata
+        .get("general.architecture")
+        .and_then(serde_json::Value::as_str)
+        .and_then(|architecture| {
+            manifest
+                .model_metadata
+                .get(&format!("{architecture}.nextn_predict_layers"))
+        })
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    u32::try_from(nextn_predict_layers)
+        .ok()
+        .and_then(|nextn| manifest.layer_count.checked_sub(nextn))
+        .filter(|layer_count| *layer_count > 0)
+        .with_context(|| {
+            format!(
+                "package-v2 has no executable layers (layer_count={}, nextn_predict_layers={nextn_predict_layers})",
+                manifest.layer_count
+            )
+        })
+}
+
 pub fn package_v2_layer_weight_bytes(manifest: &PackageManifestV2) -> Result<Vec<u64>> {
     if !manifest
         .tensor_catalog
@@ -264,7 +293,111 @@ pub fn package_v2_layer_weight_bytes(manifest: &PackageManifestV2) -> Result<Vec
     if layer_bytes.contains(&0) {
         return Ok(Vec::new());
     }
+    // MTP blocks stay with the final stage that owns logits.
+    let executable = package_v2_executable_layer_count(manifest)? as usize;
+    let mtp_bytes = layer_bytes.split_off(executable).into_iter().sum::<u64>();
+    if let Some(last) = layer_bytes.last_mut() {
+        *last = last.saturating_add(mtp_bytes);
+    }
     Ok(layer_bytes)
+}
+
+/// Bytes of the target tensors a DFlash draft borrows that the final stage of
+/// a split does not otherwise load: the token embeddings of a target whose
+/// output head is a separate tensor. A tied target's final stage already
+/// loads them for its output head. `0` when the tensor layout is unavailable.
+pub fn split_dflash_borrowed_tensor_bytes(identity: &SkippyPackageIdentity) -> u64 {
+    let tensors = match split_dflash_tensor_sizes(identity) {
+        Ok(tensors) => tensors,
+        Err(error) => {
+            tracing::debug!(
+                package = identity.package_ref,
+                error = format!("{error:#}"),
+                "tensor sizes unavailable; not charging the DFlash draft's borrowed tensors"
+            );
+            return 0;
+        }
+    };
+    untied_token_embd_bytes(tensors.iter().map(|(name, bytes)| (name.as_str(), *bytes)))
+}
+
+const TOKEN_EMBD_TENSOR: &str = "token_embd.weight";
+const OUTPUT_TENSOR: &str = "output.weight";
+
+/// The token embeddings' bytes when the target has a separate output head.
+fn untied_token_embd_bytes<'a>(tensors: impl Iterator<Item = (&'a str, u64)>) -> u64 {
+    let (mut embd, mut untied) = (0, false);
+    for (name, bytes) in tensors {
+        match name {
+            TOKEN_EMBD_TENSOR => embd = bytes,
+            OUTPUT_TENSOR => untied = true,
+            _ => {}
+        }
+    }
+    if untied { embd } else { 0 }
+}
+
+/// The local directory of a package-v2 identity: the package reference for a
+/// local package, else the cached snapshot holding its metadata carrier, as
+/// for a Hugging Face package, whose reference is an `hf://` name.
+fn package_v2_dir(identity: &SkippyPackageIdentity) -> Option<PathBuf> {
+    let local = Path::new(&identity.package_ref);
+    if local.join(PACKAGE_V2_MANIFEST).is_file() {
+        return Some(local.to_path_buf());
+    }
+    identity
+        .source_model_path
+        .ancestors()
+        .skip(1)
+        .find(|dir| dir.join(PACKAGE_V2_MANIFEST).is_file())
+        .map(Path::to_path_buf)
+}
+
+/// `(name, stored bytes)` of every tensor, from a package-v2 manifest resolved
+/// through its metadata carrier, or the GGUF files of a direct load.
+fn split_dflash_tensor_sizes(identity: &SkippyPackageIdentity) -> Result<Vec<(String, u64)>> {
+    if let Some(package_dir) = package_v2_dir(identity) {
+        let manifest_path = package_dir.join(PACKAGE_V2_MANIFEST);
+        let manifest: PackageManifestV2 = serde_json::from_slice(
+            &std::fs::read(&manifest_path)
+                .with_context(|| format!("read {}", manifest_path.display()))?,
+        )
+        .context("parse package-v2 manifest")?;
+        // A package root keeps its tensor catalog in the metadata carrier.
+        let manifest = if manifest.tensor_catalog.entries.is_empty() {
+            skippy_model::package_carrier::resolve_package_carrier_from_dir(manifest, &package_dir)
+                .context("resolve package-v2 metadata carrier")?
+        } else {
+            manifest
+        };
+        return Ok(manifest
+            .tensor_catalog
+            .entries
+            .into_iter()
+            .map(|tensor| {
+                let bytes = match tensor.storage {
+                    TensorStorage::Owned { stored_length, .. } => stored_length,
+                    TensorStorage::Alias { .. } => 0,
+                };
+                (tensor.name, bytes)
+            })
+            .collect());
+    }
+    anyhow::ensure!(
+        skippy_runtime::native_runtime_loaded(),
+        "the native runtime is not loaded"
+    );
+    let mut tensors = Vec::new();
+    for file in &identity.source_files {
+        let info = skippy_runtime::ModelInfo::open(&file.path)
+            .with_context(|| format!("open {}", file.path.display()))?;
+        tensors.extend(
+            info.tensors()?
+                .into_iter()
+                .map(|tensor| (tensor.name, tensor.byte_size)),
+        );
+    }
+    Ok(tensors)
 }
 
 pub fn manifest_ships_mtp_without_generation(manifest: &PackageManifestV2) -> bool {
@@ -325,6 +458,7 @@ pub fn package_v2_generation_info(
                                 ngram_max: None,
                                 max_proposal_tokens: None,
                                 history_scope: None,
+                                dflash: None,
                             },
                             ProposerKind::NgramCache {
                                 ngram_min,
@@ -341,7 +475,10 @@ pub fn package_v2_generation_info(
                                 proposer_type: match &proposer.kind {
                                     ProposerKind::NgramCache { .. } => "ngram-cache",
                                     ProposerKind::NgramSuffix { .. } => "ngram-suffix",
-                                    ProposerKind::NativeMtp { .. } => unreachable!(),
+                                    ProposerKind::NativeMtp { .. }
+                                    | ProposerKind::Dflash { .. } => {
+                                        unreachable!()
+                                    }
                                 }
                                 .to_string(),
                                 prediction_depth: None,
@@ -350,6 +487,29 @@ pub fn package_v2_generation_info(
                                 ngram_max: Some(*ngram_max),
                                 max_proposal_tokens: Some(*max_proposal_tokens),
                                 history_scope: Some(history_scope.clone()),
+                                dflash: None,
+                            },
+                            ProposerKind::Dflash {
+                                draft,
+                                target_layers,
+                                block_size,
+                                max_draft_tokens,
+                                backends,
+                            } => skippy_runtime::package::PackageSpeculativeProposerInfo {
+                                proposer_type: "dflash".to_string(),
+                                prediction_depth: None,
+                                layer_indices: Vec::new(),
+                                ngram_min: None,
+                                ngram_max: None,
+                                max_proposal_tokens: None,
+                                history_scope: None,
+                                dflash: Some(skippy_runtime::package::PackageDFlashProposerInfo {
+                                    draft: draft.clone(),
+                                    target_layers: target_layers.clone(),
+                                    block_size: *block_size,
+                                    max_draft_tokens: *max_draft_tokens,
+                                    backends: *backends,
+                                }),
                             },
                         };
                         (name.clone(), info)
@@ -376,6 +536,7 @@ pub fn package_v2_generation_info(
                                 primary: None,
                                 extender: None,
                                 extension_policy: None,
+                                proposers: Vec::new(),
                             },
                             StrategyKind::NgramCache {
                                 proposer,
@@ -389,6 +550,7 @@ pub fn package_v2_generation_info(
                                     StrategyKind::NgramCache { .. } => "ngram-cache",
                                     StrategyKind::NgramSuffix { .. } => "ngram-suffix",
                                     StrategyKind::NativeMtp { .. }
+                                    | StrategyKind::Dflash { .. }
                                     | StrategyKind::Composite { .. } => unreachable!(),
                                 }
                                 .to_string(),
@@ -401,6 +563,7 @@ pub fn package_v2_generation_info(
                                 primary: None,
                                 extender: None,
                                 extension_policy: None,
+                                proposers: Vec::new(),
                             },
                             StrategyKind::Composite {
                                 primary,
@@ -422,7 +585,21 @@ pub fn package_v2_generation_info(
                                         max_tokens: extension_policy.max_tokens,
                                     },
                                 ),
+                                proposers: Vec::new(),
                             },
+                            StrategyKind::Dflash { proposers } => {
+                                skippy_runtime::package::PackageSpeculativeStrategyInfo {
+                                    strategy_type: "dflash".to_string(),
+                                    prediction_depth: None,
+                                    layer_indices: Vec::new(),
+                                    window_policy: None,
+                                    proposer: None,
+                                    primary: None,
+                                    extender: None,
+                                    extension_policy: None,
+                                    proposers: proposers.clone(),
+                                }
+                            }
                         };
                         (name.clone(), info)
                     })
@@ -528,3 +705,126 @@ impl From<SkippyPackageIdentity> for crate::StageSourceIdentity {
 }
 
 pub mod certification;
+
+#[cfg(test)]
+mod split_dflash_tests {
+    use super::{
+        PACKAGE_V2_MANIFEST, SkippyPackageIdentity, package_v2_dir, untied_token_embd_bytes,
+    };
+
+    fn identity(package_ref: &str, source_model_path: std::path::PathBuf) -> SkippyPackageIdentity {
+        SkippyPackageIdentity {
+            package_ref: package_ref.to_string(),
+            manifest_sha256: String::new(),
+            source_model_path,
+            source_model_sha256: String::new(),
+            source_model_bytes: 1,
+            source_files: Vec::new(),
+            layer_weight_bytes: Vec::new(),
+            layer_count: 1,
+            activation_width: 1,
+            tensor_count: 0,
+            generation: None,
+            publisher_defaults: None,
+        }
+    }
+
+    #[test]
+    fn a_hugging_face_package_is_read_from_its_cached_snapshot() {
+        let snapshot = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(snapshot.path().join("shared")).unwrap();
+        std::fs::write(snapshot.path().join(PACKAGE_V2_MANIFEST), b"{}").unwrap();
+        let carrier = snapshot.path().join("shared/metadata.gguf");
+        assert_eq!(
+            package_v2_dir(&identity("hf://meshllm/demo@abc123", carrier.clone())),
+            Some(snapshot.path().to_path_buf())
+        );
+        let local = snapshot.path().to_string_lossy().into_owned();
+        assert_eq!(
+            package_v2_dir(&identity(&local, carrier)),
+            Some(snapshot.path().to_path_buf())
+        );
+        // A direct GGUF load has no package directory.
+        let direct = tempfile::tempdir().unwrap();
+        assert_eq!(
+            package_v2_dir(&identity("model.gguf", direct.path().join("model.gguf"))),
+            None
+        );
+    }
+
+    #[test]
+    fn an_untied_target_charges_its_token_embeddings_to_the_final_stage() {
+        // Qwen3.6-27B Q4_K_M: 5120 x 248320 Q4_K embeddings, a separate head.
+        let untied = [
+            ("token_embd.weight", 715_161_600),
+            ("blk.63.attn_norm.weight", 20_480),
+            ("output.weight", 1_042_944_000),
+        ];
+        assert_eq!(untied_token_embd_bytes(untied.into_iter()), 715_161_600);
+    }
+
+    #[test]
+    fn a_tied_target_already_loads_its_embeddings_on_the_final_stage() {
+        let tied = [("token_embd.weight", 100), ("output_norm.weight", 4)];
+        assert_eq!(untied_token_embd_bytes(tied.into_iter()), 0);
+    }
+}
+
+#[cfg(test)]
+mod dflash_generation_tests {
+    use super::package_v2_generation_info;
+    use skippy_package_format::{
+        DFlashBackends, DFlashDraft, Generation, ProposerKind, ProposerSpec, SpeculativeDecoding,
+        StrategyKind, StrategySpec,
+    };
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn a_dflash_proposer_reaches_the_runtime_generation_info() {
+        let draft = DFlashDraft {
+            repo: "meshllm/draft".to_string(),
+            revision: "a3d4fb1eff6f268cbbdf808042f6902cc17f5458".to_string(),
+            file: "draft-Q8_0.gguf".to_string(),
+            sha256: "b9be52167d0b4f5cbaffba6658bcb20dd814ad4e5846532353c165ccf97e47a1".to_string(),
+            bytes: 1 << 30,
+        };
+        let generation = Generation {
+            request_defaults: None,
+            speculative_decoding: Some(SpeculativeDecoding {
+                default: "dflash".to_string(),
+                proposers: BTreeMap::from([(
+                    "draft".to_string(),
+                    ProposerSpec {
+                        kind: ProposerKind::Dflash {
+                            draft: draft.clone(),
+                            target_layers: vec![2, 62],
+                            block_size: 8,
+                            max_draft_tokens: 7,
+                            backends: DFlashBackends::Metal,
+                        },
+                    },
+                )]),
+                strategies: BTreeMap::from([(
+                    "dflash".to_string(),
+                    StrategySpec {
+                        kind: StrategyKind::Dflash {
+                            proposers: vec!["draft".to_string()],
+                        },
+                    },
+                )]),
+            }),
+        };
+        let info = package_v2_generation_info(&generation);
+        let speculative = info.speculative_decoding.unwrap();
+        let proposer = &speculative.proposers["draft"];
+        assert_eq!(proposer.proposer_type, "dflash");
+        let dflash = proposer.dflash.as_ref().unwrap();
+        assert_eq!(dflash.draft, draft);
+        assert_eq!(dflash.target_layers, [2, 62]);
+        assert_eq!((dflash.block_size, dflash.max_draft_tokens), (8, 7));
+        assert_eq!(dflash.backends, DFlashBackends::Metal);
+        let strategy = &speculative.strategies["dflash"];
+        assert_eq!(strategy.strategy_type, "dflash");
+        assert_eq!(strategy.proposers, ["draft"]);
+    }
+}

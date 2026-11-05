@@ -34,8 +34,6 @@ pub(crate) struct LocalAnnouncementData {
     owner_attestation: Option<SignedNodeOwnership>,
     artifact_transfer_supported: bool,
     advertised_model_throughput: Vec<crate::network::metrics::ModelThroughputHint>,
-    #[cfg(feature = "payments")]
-    lightning_offers: std::collections::BTreeMap<String, mesh_llm_payments_types::pricing::Pricing>,
     cache_affinity: Option<mesh_llm_routing::cache_inventory::CacheAffinityAdvertisement>,
     gpu_mem_bandwidth_gbps: Option<String>,
     gpu_compute_tflops_fp32: Option<String>,
@@ -128,7 +126,7 @@ impl Node {
             models,
             model_source: self.model_source.lock().await.clone(),
             serving_models,
-            hosted_models,
+            hosted_models: hosted_models.clone(),
             available_models: self.available_models.lock().await.clone(),
             requested_models: self.requested_models.lock().await.clone(),
             explicit_model_interests: self.explicit_model_interests.lock().await.clone(),
@@ -140,15 +138,13 @@ impl Node {
             direct_admission_proof,
             available_model_metadata: Vec::new(),
             available_model_sizes: HashMap::new(),
-            served_model_descriptors: self.local_descriptors_with_plugins().await,
+            served_model_descriptors: self.descriptors_with_requirements(&hosted_models).await,
             served_model_runtime: self.model_runtime_descriptors.lock().await.clone(),
             owner_attestation: self.owner_attestation.lock().await.clone(),
             // A membership carries no stage transport, so no artifacts either.
             artifact_transfer_supported: !self.is_membership
                 && crate::models::artifact_transfer::artifact_transfer_advertised(&owner_summary),
             advertised_model_throughput,
-            #[cfg(feature = "payments")]
-            lightning_offers: self.advertised_payment_offers().await.unwrap_or_default(),
             cache_affinity: Some(cache_affinity),
             gpu_mem_bandwidth_gbps: Self::format_optional_locked_f32_list(
                 &self.gpu_mem_bandwidth_gbps,
@@ -289,18 +285,16 @@ impl Node {
             genesis_policy: data.signed_genesis_policy,
             release_attestation: data.release_attestation,
             direct_admission_proof: data.direct_admission_proof,
-            artifact_transfer_supported: data.artifact_transfer_supported,
-            stage_protocol_generation_supported: !self.is_membership,
-            stage_status_list_supported: !self.is_membership,
-            local_gguf_content_id_supported: true,
-            // Advertised unconditionally: there is no build-time variability
-            // behind it, unlike artifact transfer.
-            decode_batch_policy_supported: true,
+            artifact_transfer_supported: !self.full_model_only && data.artifact_transfer_supported,
+            stage_protocol_generation_supported: !self.full_model_only && !self.is_membership,
+            stage_status_list_supported: !self.full_model_only && !self.is_membership,
+            local_gguf_content_id_supported: !self.full_model_only,
+            // Full-model attachments cannot participate in stage scheduling.
+            // Ordinary nodes support this independently of build features.
+            decode_batch_policy_supported: !self.full_model_only,
             plugin_origin_signature_supported: true,
             persistent_lane_marker_supported: true,
             advertised_model_throughput: data.advertised_model_throughput,
-            #[cfg(feature = "payments")]
-            lightning_offers: data.lightning_offers.into(),
             cache_affinity: data.cache_affinity,
             latency_ms: None,
             latency_source: None,

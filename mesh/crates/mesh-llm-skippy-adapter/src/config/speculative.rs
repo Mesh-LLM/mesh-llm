@@ -9,13 +9,18 @@ use skippy_runtime::package::{
     PackageSpeculativeProposerInfo, PackageSpeculativeStrategyInfo, PackageWindowPolicyInfo,
 };
 use skippy_serving::{
-    NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig, NgramProposerKind,
-    SpeculativeDecodeConfig, VerifyWindowConfig,
+    DFLASH_STRATEGY, NativeMtpProposalConfig, NgramExtensionConfig, NgramProposalConfig,
+    NgramProposerKind, SpeculativeDecodeConfig, VerifyWindowConfig,
 };
 
+use super::dflash::{
+    DFLASH_DRAFT_CONTEXT_AVAILABLE, DFlashDefaultSelection, DFlashSelection, choose_dflash_draft,
+    dflash_decode_config, dflash_max_draft_tokens,
+};
 use super::support::{pick_owned, pick_string, pick_string_owned, resolve_bool_or_auto};
 use super::types::ResolvedSpeculativeConfig;
 use mesh_llm_config::{BoolOrAuto, SpeculativeConfig};
+use skippy_model_artifact::gguf::GgufCompactMeta;
 
 pub(super) fn resolve_speculative_config(
     model_config: Option<&SpeculativeConfig>,
@@ -23,6 +28,56 @@ pub(super) fn resolve_speculative_config(
     _model_id: &str,
     model_path: &Path,
     package_generation: Option<&PackageGenerationInfo>,
+    target_meta: Option<&GgufCompactMeta>,
+) -> Result<ResolvedSpeculativeConfig> {
+    let resolve = |dflash_over_auto_mtp| {
+        resolve_speculative(
+            model_config,
+            global_config,
+            model_path,
+            package_generation,
+            target_meta,
+            dflash_over_auto_mtp,
+        )
+    };
+    let mut resolved = resolve(true)?;
+    if resolved.default_dflash.is_some() {
+        // The plan this default replaced, if it replaced automatic native MTP.
+        let without = resolve(false)?;
+        if without.default_dflash.is_none() {
+            resolved.native_mtp_fallback = Some(Box::new(without));
+        }
+    }
+    Ok(resolved)
+}
+
+/// The configured N-gram `(min, max)` lengths, model settings over global ones.
+fn pick_ngram_range(
+    model_config: Option<&SpeculativeConfig>,
+    global_config: Option<&SpeculativeConfig>,
+) -> (u32, u32) {
+    let ngram_min = super::support::pick_value(
+        model_config.and_then(|config| config.ngram_min),
+        global_config.and_then(|config| config.ngram_min),
+        0,
+    );
+    let ngram_max = super::support::pick_value(
+        model_config.and_then(|config| config.ngram_max),
+        global_config.and_then(|config| config.ngram_max),
+        0,
+    );
+    (ngram_min, ngram_max)
+}
+
+/// `dflash_over_auto_mtp` lets a known DFlash pairing replace native MTP that
+/// is on only by default.
+fn resolve_speculative(
+    model_config: Option<&SpeculativeConfig>,
+    global_config: Option<&SpeculativeConfig>,
+    model_path: &Path,
+    package_generation: Option<&PackageGenerationInfo>,
+    target_meta: Option<&GgufCompactMeta>,
+    dflash_over_auto_mtp: bool,
 ) -> Result<ResolvedSpeculativeConfig> {
     let spec_default = pick_owned(
         model_config.and_then(|config| config.spec_default.as_ref()),
@@ -69,17 +124,18 @@ pub(super) fn resolve_speculative_config(
         package_generation,
         model_path,
     )?;
-    let mode = pick_string_owned(
+    let mtp_yields = mtp_yields(dflash_over_auto_mtp, &strategy, model_config, global_config);
+    let mut mode = pick_string_owned(
         model_config.and_then(|config| config.mode.as_deref()),
         global_config.and_then(|config| config.mode.as_deref()),
         Some("auto"),
     );
-    let mut mode = mode;
-    let mut draft_max_tokens = super::support::pick_value(
+    let configured_draft_max_tokens = super::support::pick_value(
         model_config.and_then(|config| config.draft_max_tokens),
         global_config.and_then(|config| config.draft_max_tokens),
         0,
     );
+    let mut draft_max_tokens = configured_draft_max_tokens;
     if (mode == "draft" || (mode == "auto" && draft_model_path.is_some())) && draft_max_tokens == 0
     {
         draft_max_tokens = skippy_config::local_serving::DRAFT_MODEL_TOKENS as u32;
@@ -93,21 +149,59 @@ pub(super) fn resolve_speculative_config(
         model_config.and_then(|config| config.draft_gpu_layers),
         global_config.and_then(|config| config.draft_gpu_layers),
     );
-    let ngram_min = super::support::pick_value(
-        model_config.and_then(|config| config.ngram_min),
-        global_config.and_then(|config| config.ngram_min),
-        0,
-    );
-    let ngram_max = super::support::pick_value(
-        model_config.and_then(|config| config.ngram_max),
-        global_config.and_then(|config| config.ngram_max),
-        0,
-    );
+    let (ngram_min, ngram_max) = pick_ngram_range(model_config, global_config);
     let pairing_fault = normalize_pairing_fault(pick_string(
         model_config.and_then(|config| config.pairing_fault.as_deref()),
         global_config.and_then(|config| config.pairing_fault.as_deref()),
         Some("warn_disable"),
     ));
+    if let Some((dflash_draft, default_dflash)) = choose_dflash_draft(
+        &DFlashSelection {
+            strategy: &strategy,
+            mode: &mode,
+            draft_model_path: draft_model_path.as_deref(),
+        },
+        &DFlashDefaultSelection {
+            auto_defaults_enabled,
+            draft_context_available: DFLASH_DRAFT_CONTEXT_AVAILABLE,
+            native_mtp_decides: native_mtp_enabled && !mtp_yields,
+            has_ngram_settings: ngram_min > 0 || ngram_max > 0,
+            package_generation,
+            target_meta,
+            model_path,
+        },
+    )? {
+        let draft_max_tokens =
+            dflash_max_draft_tokens(configured_draft_max_tokens, default_dflash.as_ref());
+        let base = resolve_decode_config(DecodeResolutionInput {
+            requested_strategy: "disabled",
+            native_mtp_enabled: false,
+            draft_max_tokens: 0,
+            draft_min_tokens: 0,
+            model_config,
+            global_config,
+            package_generation,
+            has_draft_model: false,
+        })?;
+        let decode = dflash_decode_config(base, &strategy, &dflash_draft, draft_max_tokens);
+        decode.validate()?;
+        return Ok(ResolvedSpeculativeConfig {
+            strategy,
+            native_mtp_enabled: false,
+            // The draft travels in the plan; the separate draft runner stays off.
+            mode: "disabled".to_string(),
+            draft_model_path: None,
+            pairing_fault,
+            draft_max_tokens,
+            draft_max_tokens_configured: configured_draft_max_tokens > 0,
+            draft_min_tokens: 0,
+            explicit: default_dflash.is_none(),
+            draft_n_gpu_layers,
+            decode,
+            default_dflash,
+            native_mtp_fallback: None,
+        });
+    }
     let explicit = mode != "auto"
         || draft_model_path.is_some()
         || draft_max_tokens > 0
@@ -173,11 +267,35 @@ pub(super) fn resolve_speculative_config(
         draft_model_path,
         pairing_fault,
         draft_max_tokens: effective_draft_max_tokens,
+        draft_max_tokens_configured: configured_draft_max_tokens > 0,
         draft_min_tokens,
         explicit,
         draft_n_gpu_layers,
         decode,
+        default_dflash: None,
+        native_mtp_fallback: None,
     })
+}
+
+/// Whether native MTP may yield to a known DFlash pairing. Under `auto` it is
+/// on because the model carries NextN layers, not because anyone asked for
+/// it, unless either layer tunes native MTP.
+fn mtp_yields(
+    dflash_over_auto_mtp: bool,
+    strategy: &str,
+    model_config: Option<&SpeculativeConfig>,
+    global_config: Option<&SpeculativeConfig>,
+) -> bool {
+    dflash_over_auto_mtp
+        && strategy == "auto"
+        && ![model_config, global_config]
+            .into_iter()
+            .flatten()
+            .any(|config| {
+                config.native_mtp_reject_cooldown_tokens.is_some()
+                    || config.native_mtp_suppress_cooldown_drafts.is_some()
+                    || config.native_mtp_suppress_cooldown_draft_limit.is_some()
+            })
 }
 
 fn configured_draft_source(config: &SpeculativeConfig) -> Option<String> {
@@ -211,7 +329,7 @@ fn resolve_native_mtp_strategy(
             }
             true
         }
-        "ngram-cache" | "ngram-suffix" => false,
+        "ngram-cache" | "ngram-suffix" | DFLASH_STRATEGY => false,
         "disabled" => false,
         package_strategy if package_strategy_exists(package_generation, package_strategy) => {
             let speculative = package_generation
@@ -220,7 +338,7 @@ fn resolve_native_mtp_strategy(
             strategy_uses_native_mtp(speculative, package_strategy)
         }
         _ => bail!(
-            "skippy speculative.strategy must be auto, disabled, mtp, ngram-cache, ngram-suffix, or a strategy declared by model-package.json"
+            "skippy speculative.strategy must be auto, disabled, mtp, ngram-cache, ngram-suffix, dflash, or a strategy declared by model-package.json"
         ),
     };
     Ok((strategy, native_mtp_enabled))
@@ -290,6 +408,8 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
             .and_then(|config| config.draft_cache_type_v.as_deref()),
         Some("f16"),
     );
+    // DFlash resolves its base as "disabled", and the gate still governs it.
+    resolve_gate_settings(&mut config, input.model_config, input.global_config)?;
 
     if input.requested_strategy == "disabled" {
         // A model-level disable must ignore proposer, extension, and native-MTP
@@ -514,66 +634,6 @@ fn resolve_decode_config(input: DecodeResolutionInput<'_>) -> Result<Speculative
     if config.verify_window.min_tokens > config.verify_window.max_tokens {
         bail!("skippy speculative verify window requires min_tokens <= max_tokens");
     }
-    // The gate's settings, promoted out of SKIPPY_SPECULATION_GATE so a strategy
-    // can compose them (#2112 workstream 5 puts the gate under `balanced`). The
-    // environment variable stays an override and is resolved inside
-    // skippy-serving, so nothing here needs to read it.
-    // `auto` means "let the built-in default decide", so it is not an answer.
-    if let Some(enabled) = resolve_bool_or_auto(
-        input
-            .model_config
-            .and_then(|config| config.gate.as_ref())
-            .or_else(|| input.global_config.and_then(|config| config.gate.as_ref())),
-        "speculative.gate",
-    )? {
-        config.gate.enabled = enabled;
-    }
-    if let Some(value) = pick_optional_u64(
-        input
-            .model_config
-            .and_then(|config| config.gate_min_window_s),
-        input
-            .global_config
-            .and_then(|config| config.gate_min_window_s),
-    ) {
-        config.gate.min_window_s = value;
-    }
-    if let Some(value) = pick_optional_u64(
-        input
-            .model_config
-            .and_then(|config| config.gate_min_requests),
-        input
-            .global_config
-            .and_then(|config| config.gate_min_requests),
-    ) {
-        config.gate.min_requests = value;
-    }
-    if let Some(value) = input
-        .model_config
-        .and_then(|config| config.gate_decisive_margin)
-        .or_else(|| {
-            input
-                .global_config
-                .and_then(|config| config.gate_decisive_margin)
-        })
-    {
-        if !(value > 0.0 && value < 1.0) {
-            bail!(
-                "skippy speculative gate_decisive_margin must sit in (0, 1); got {value}. It is a \
-                 fractional change in decode rate, and a margin of 0 or 1 makes every trial \
-                 decisive or none of them"
-            );
-        }
-        config.gate.decisive_margin = value;
-    }
-    if let Some(value) = pick_optional_u64(
-        input.model_config.and_then(|config| config.gate_cooldown_s),
-        input
-            .global_config
-            .and_then(|config| config.gate_cooldown_s),
-    ) {
-        config.gate.cooldown_s = value;
-    }
     let ngram_fallback = pick_string(
         input
             .model_config
@@ -675,6 +735,10 @@ fn package_decode_config(
                 Some(ngram_proposer_config(Some(extender))?),
             )
         }
+        // The DFlash draft is chosen with the catalog defaults; a package
+        // `dflash` strategy with no draft for this backend serves without
+        // speculation.
+        "dflash" => return Ok(None),
         other => bail!("package speculative strategy {strategy_name} has unsupported type {other}"),
     };
     let extension = strategy.extension_policy.as_ref().map(extension_config);
@@ -870,6 +934,58 @@ fn resolved_draft_max_tokens(
             .unwrap_or(skippy_config::local_serving::NATIVE_MTP_DRAFT_TOKENS as u32);
     }
     draft_max_tokens
+}
+
+/// The gate's settings, promoted out of SKIPPY_SPECULATION_GATE so a strategy
+/// can compose them (#2112 workstream 5 puts the gate under `balanced`). The
+/// environment variable stays an override and is resolved inside
+/// skippy-serving, so nothing here needs to read it.
+fn resolve_gate_settings(
+    config: &mut SpeculativeDecodeConfig,
+    model_config: Option<&SpeculativeConfig>,
+    global_config: Option<&SpeculativeConfig>,
+) -> Result<()> {
+    // `auto` means "let the built-in default decide", so it is not an answer.
+    if let Some(enabled) = resolve_bool_or_auto(
+        model_config
+            .and_then(|config| config.gate.as_ref())
+            .or_else(|| global_config.and_then(|config| config.gate.as_ref())),
+        "speculative.gate",
+    )? {
+        config.gate.enabled = enabled;
+    }
+    if let Some(value) = pick_optional_u64(
+        model_config.and_then(|config| config.gate_min_window_s),
+        global_config.and_then(|config| config.gate_min_window_s),
+    ) {
+        config.gate.min_window_s = value;
+    }
+    if let Some(value) = pick_optional_u64(
+        model_config.and_then(|config| config.gate_min_requests),
+        global_config.and_then(|config| config.gate_min_requests),
+    ) {
+        config.gate.min_requests = value;
+    }
+    if let Some(value) = model_config
+        .and_then(|config| config.gate_decisive_margin)
+        .or_else(|| global_config.and_then(|config| config.gate_decisive_margin))
+    {
+        if !(value > 0.0 && value < 1.0) {
+            bail!(
+                "skippy speculative gate_decisive_margin must sit in (0, 1); got {value}. It is a \
+                 fractional change in decode rate, and a margin of 0 or 1 makes every trial \
+                 decisive or none of them"
+            );
+        }
+        config.gate.decisive_margin = value;
+    }
+    if let Some(value) = pick_optional_u64(
+        model_config.and_then(|config| config.gate_cooldown_s),
+        global_config.and_then(|config| config.gate_cooldown_s),
+    ) {
+        config.gate.cooldown_s = value;
+    }
+    Ok(())
 }
 
 fn resolve_draft_model_path(raw: String) -> String {

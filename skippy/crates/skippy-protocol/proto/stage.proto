@@ -109,6 +109,35 @@ message LoadStage {
   // layers is a different process - on a mesh split a different machine -
   // from the one the operator configured, and rebalancing can move it.
   optional bool last_stage_decode_batch = 53;
+  // A DFlash draft on the final stage of this split. Stages that own one of
+  // its target layers capture that layer's input and forward it with their
+  // activations; the final stage drafts. Older stages ignore it.
+  optional StageDFlashPlan dflash = 54;
+}
+
+message StageDFlashPlan {
+  repeated uint32 target_layers = 1;
+  // Set on the final stage only.
+  optional string draft_model_path = 2;
+  optional uint32 max_draft_tokens = 3;
+  optional int32 draft_n_gpu_layers = 4;
+  // The pinned default draft (from the package, the pairing index or the
+  // bootstrap table), on the final stage only, which fetches and verifies its
+  // own copy. Unset for a configured draft and from older planners; the stage
+  // then loads draft_model_path as sent.
+  optional StageDFlashDraftSource draft_source = 5;
+  // The configured draft device, on the final stage only. A stage without
+  // it places the draft with the target.
+  optional string draft_device = 6;
+}
+
+message StageDFlashDraftSource {
+  string repo = 1;
+  string revision = 2;
+  string file = 3;
+  string sha256 = 4;
+  // File size; a stage refuses a source without one.
+  uint64 bytes = 5;
 }
 
 message StageTopologyStage {
@@ -133,6 +162,10 @@ message StageLoadRuntimeSettings {
   optional bool swa_full = 10;
   optional uint32 cache_idle_slots = 11;
   StageActivationCodecPolicy activation_codec_policy = 12;
+  // Host-resident routed experts: the operator switch and the operator
+  // block count (llama.cpp --n-cpu-moe).
+  optional bool cpu_moe = 13;
+  optional uint32 n_cpu_moe = 14;
 }
 
 message StopStage {
@@ -250,6 +283,14 @@ message StageStatus {
   // covers, for auto-balance split placement. Zero when not reported.
   uint64 compute_busy_nanos = 37;
   uint64 compute_operations = 38;
+  // Set by a split final stage that attached its DFlash draft. Unset when the
+  // stage drafts nothing, and from older stages.
+  optional StageDFlashDraftStatus dflash_draft = 39;
+}
+
+message StageDFlashDraftStatus {
+  // The target layers the attached draft reads.
+  repeated uint32 target_layers = 1;
 }
 
 message StageStatusList {
@@ -288,6 +329,9 @@ enum StageActivationCodec {
   STAGE_ACTIVATION_CODEC_F16_RNE_V1 = 2;
   STAGE_ACTIVATION_CODEC_BF16_RNE_V1 = 3;
   STAGE_ACTIVATION_CODEC_S8_ROW_F32_RNE_V1 = 4;
+  STAGE_ACTIVATION_CODEC_FP8_E4M3_ROW_F32_RNE_V1 = 5;
+  STAGE_ACTIVATION_CODEC_FP8_E4M3_BLOCK32_E8M0_RNE_V1 = 6;
+  STAGE_ACTIVATION_CODEC_FP8_E5M2_ROW_F32_RNE_V1 = 7;
 }
 
 enum StageActivationCodecPolicy {

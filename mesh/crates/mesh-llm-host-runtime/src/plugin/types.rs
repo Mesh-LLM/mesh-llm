@@ -9,7 +9,19 @@ use tokio::sync::oneshot;
 
 #[derive(Debug)]
 pub enum PluginMeshEvent {
+    BoundOperation {
+        plugin_id: String,
+        generation: u64,
+        request: mesh_llm_plugin::operation_binding::BoundOperationRequest,
+        response_tx: oneshot::Sender<mesh_llm_plugin::operation_binding::BoundOperationResponse>,
+    },
     /// Host-private identity services use the authenticated connection name.
+    ModelRequirementsWithdraw { plugin_id: String },
+    ModelRequirement {
+        plugin_id: String,
+        request: proto::ModelRequirementRequest,
+        response_tx: oneshot::Sender<Result<proto::ModelRequirementResponse, proto::ErrorResponse>>,
+    },
     IdentityService {
         plugin_id: String,
         request: proto::RpcRequest,
@@ -67,6 +79,16 @@ pub enum PluginMeshEvent {
     /// withdraws what it announced for it. Not sent when the plugin restarts
     /// after a failure, so its key stays announced across a restart.
     PluginStopped { plugin_id: String },
+    /// The plugin process of `generation` started after the host's own
+    /// start: a restart after it exited or failed, or a lazy plugin's first
+    /// start. The node sends that process alone the mesh snapshot it would
+    /// otherwise only get from the next mesh change, then answers
+    /// `delivered`: `true` when the process took the whole snapshot.
+    PluginStarted {
+        plugin_id: String,
+        generation: u64,
+        delivered: oneshot::Sender<bool>,
+    },
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]

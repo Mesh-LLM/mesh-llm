@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use skippy_protocol::{StageConfig, StageTopology};
-use skippy_runtime::{MtpSource, VerifyRollback};
+use skippy_runtime::MtpSource;
 
 use crate::{frontend::SpeculativeDecodeConfig, telemetry::TelemetryLevel};
 
@@ -40,6 +40,8 @@ pub struct BinaryStageOptions {
     pub compute_meter: Option<std::sync::Arc<crate::compute_meter::StageComputeMeter>>,
     /// Optional node-scoped durable cache manager supplied by the embedding host.
     pub l3_manager: Option<skippy_cache::L3CacheManager>,
+    /// This stage's part in a split DFlash plan.
+    pub split_dflash: Option<crate::split_dflash::SplitDFlashStage>,
 }
 
 #[derive(Clone)]
@@ -86,19 +88,5 @@ impl BinaryStageOptions {
         } else {
             MtpSource::Integrated
         }
-    }
-
-    /// Rewind recurrent state in place only for an OpenAI frontend that drafts
-    /// (native MTP, an N-gram proposer or a draft model). Without one, verify
-    /// windows may still come from a remote frontend, so keep the default.
-    pub fn resolved_verify_rollback(&self) -> VerifyRollback {
-        let Some(openai) = self.openai.as_ref() else {
-            return VerifyRollback::default();
-        };
-        VerifyRollback::for_drafting(
-            self.resolved_mtp_source() != MtpSource::Disabled
-                || openai.speculative.ngram.is_some()
-                || openai.draft_model_path.is_some(),
-        )
     }
 }

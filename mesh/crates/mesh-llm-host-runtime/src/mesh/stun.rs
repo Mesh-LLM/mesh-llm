@@ -43,9 +43,20 @@ fn observed_public_ipv4(report: &iroh::unstable_net_report::NetReport) -> Option
         .map(PublicAddr::Observed)
 }
 
+/// The net report's observed address. An embedded node being stopped doesn't
+/// wait for the report and observes nothing; outside the embedded SDK the
+/// cancellation never resolves.
+async fn wait_for_observed_public_ipv4(endpoint: &iroh::Endpoint) -> Option<PublicAddr> {
+    tokio::select! {
+        biased;
+        _ = crate::sdk::embedded_shutdown::cancelled() => None,
+        observed = observe_public_ipv4(endpoint) => observed,
+    }
+}
+
 /// Wait (bounded by `iroh::NET_REPORT_TIMEOUT`) for a net report yielding a
 /// usable observed public IPv4.
-async fn wait_for_observed_public_ipv4(endpoint: &iroh::Endpoint) -> Option<PublicAddr> {
+async fn observe_public_ipv4(endpoint: &iroh::Endpoint) -> Option<PublicAddr> {
     let mut net_report = endpoint.net_report();
     let deadline =
         tokio::time::Instant::now() + std::time::Duration::from_secs(iroh::NET_REPORT_TIMEOUT);

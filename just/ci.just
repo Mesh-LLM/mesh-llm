@@ -1,12 +1,13 @@
 # ── Full Validation Gate ───────────────────────────────────────
 
 # Populate the trusted Linux compiler-object seed with the dominant Clippy,
-# release-host, and isolated test graphs used by high-fanout CI jobs.
+# release-host, isolated test, and automation Clippy graphs used by CI jobs.
 [linux]
 ci-sccache-seed-build:
     cargo clippy --locked -p mesh-llm --all-targets -- -D warnings
     cargo build --release --locked -p mesh-llm --bin mesh-llm --no-default-features --features web-ui,dynamic-native-runtime
-    cargo test --locked -p mesh-llm-cli --no-run
+    CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked -p mesh-llm-cli --no-run
+    cargo clippy --locked -p xtask --all-targets -- -D warnings
 
 # Validate CI definitions, planner fixtures, and repository consistency.
 ci-validate:
@@ -174,11 +175,14 @@ test-all:
         --exclude skippy-runtime \
         --exclude skippy-serving \
         --exclude skippy-cli \
+        --exclude process-supervision \
         --exclude xtask
     # Automation fixtures own process-global signal scopes. Keep this harness
     # serial without changing the environment of other packages' child tests.
     echo "--- Repository automation tests ---"
     just with-lld cargo test --package xtask -- --test-threads=1
+    echo "--- Process supervision tests ---"
+    just with-lld cargo test --package process-supervision -- --test-threads=1
     echo "--- Static Skippy package-builder tests ---"
     just with-lld cargo test --package skippy-package-builder --no-default-features
     echo "--- Static Skippy runtime tests ---"
@@ -224,11 +228,15 @@ ci-automation-contracts:
     just with-lld cargo build --locked -p trajectory-reader --features corpus-input --bin trajectory-reader
     just with-lld cargo test --locked -p trajectory-reader --features corpus-input --lib -- --test-threads=1
     MESH_LLM_TEST_XTASK_BIN="$binary" just with-lld cargo test --locked -p trajectory-reader --features corpus-input --test prompt_command native_prompt_command_ -- --test-threads=1
-    # The narrow controller is contract-tested here, not in the Rust test matrix.
+    # The narrow controller and supervision crates are contract-tested here, not
+    # in the Rust test matrix. Supervision tests keep xtask's single-threaded harness.
     just with-lld cargo test --locked -p ci-controller
+    just with-lld cargo test --locked -p process-supervision -- --test-threads=1
     fixture_suffix=""
     case "$binary" in *.exe) fixture_suffix=".exe" ;; esac
-    export SPV_ADAPTER_FIXTURE="$target_directory/debug/examples/swift_privacy_lint_fixture$fixture_suffix"
+    # Examples sit beside the bootstrap binary in its profile directory, which is
+    # <target>/<host>/debug when the build names the host triple.
+    export SPV_ADAPTER_FIXTURE="${binary%[/\\]*}/examples/swift_privacy_lint_fixture$fixture_suffix"
     git_path="${MIGRATION_TEST_GIT-$(command -v git)}"
     if command -v cygpath >/dev/null 2>&1; then
         git_path="$(cygpath -w "$git_path")"

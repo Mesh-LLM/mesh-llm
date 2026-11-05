@@ -1,6 +1,13 @@
 syntax = "proto3";
 package meshllm.node.v1;
 
+// Native chat request/response envelope; payload_json contains typed inference data, never HTTP.
+message NativeChatFrame {
+  uint32 generation = 1;
+  bytes payload_json = 2;
+  optional string error = 3;
+}
+
 // Stream 0x01 — Gossip
 message GossipFrame {
   uint32 gen = 1;
@@ -78,7 +85,7 @@ message NodeRecord {
   repeated MeshSubprotocol subprotocols = 19;
   InferenceAdmissionState admission_state = 20;
   repeated AdvertisedModelThroughput throughput = 21;
-  repeated LightningOffer lightning_offers = 22;
+  reserved 22;
   optional SignedNodeOwnership owner_attestation = 23;
   optional SignedMeshGenesisPolicy genesis_policy = 24;
   optional ReleaseBuildAttestation release_attestation = 25;
@@ -156,10 +163,13 @@ message PeerAnnouncement {
   // Never verified by mesh-llm itself — carried opaquely so a receiver MAY
   // verify independently.
   optional ClaimedLogHead claimed_log_head = 51;
-  repeated LightningOffer lightning_offers = 52;
+  reserved 52;
   // Public keys plugins on this node sign with, each bound to this node's key;
   // see `PluginKey`. At most 16, one per plugin.
   repeated PluginKey plugin_keys = 53;
+  // Plugin keys this node has withdrawn; see `PluginKeyWithdrawal`. At most 16,
+  // one per plugin.
+  repeated PluginKeyWithdrawal plugin_key_withdrawals = 54;
 }
 
 // A public key a plugin on this node signs with, bound to this node by the
@@ -182,6 +192,34 @@ message PluginKey {
   string plugin = 1;                 // the plugin's name on this node
   bytes public_key = 2;              // exactly 32 bytes (Ed25519)
   bytes binding_signature = 3;       // by this node's key over sig_input above
+  string signature_algorithm = 4;    // "ed25519"
+}
+
+// A node's signed statement that it no longer vouches for a plugin key it
+// announced, so a peer's plugin stops honouring `key_id` at its next poll
+// instead of waiting for the node's keys to age out, including when the node
+// has since gone offline. Set when a plugin withdraws its key through the
+// plugin protocol (`PluginKeyRequest` with an empty key). `key_id` is the
+// withdrawn 32-byte Ed25519 public key. A receiver verifies
+// `withdrawal_signature` with the withdrawing node's key (its `endpoint_id`)
+// over:
+//
+//   sig_input = b"mesh-llm-plugin-key-withdrawal-v1:"
+//             || u64le(len(endpoint_id))          || endpoint_id
+//             || u64le(len(plugin))               || plugin
+//             || u64le(len(key_id))               || key_id
+//             || u64le(len(signature_algorithm))  || signature_algorithm
+//
+// A withdrawal that does not verify is dropped on receipt. Like `PluginKey`, it
+// rides only the sender's own entry and is not relayed. A receiver keeps a
+// peer's withdrawals, one per plugin, after the peer leaves and across its
+// restarts, until the peer announces the withdrawn key again, withdraws another
+// key for that plugin, is rejected, or its entry is evicted (a receiver keeps
+// those of at most 256 peers, dropping the longest-unrefreshed first).
+message PluginKeyWithdrawal {
+  string plugin = 1;                 // the plugin's name on this node
+  bytes key_id = 2;                  // the withdrawn public key, 32 bytes
+  bytes withdrawal_signature = 3;    // by this node's key over sig_input above
   string signature_algorithm = 4;    // "ed25519"
 }
 
@@ -247,19 +285,6 @@ message ClaimedLogHead {
   string signature_algorithm = 6;
 }
 
-// Presence means payment is required for this exact model, protocol v1.
-message LightningOffer {
-  string model = 1;
-  uint64 input_msat_per_million = 2;
-  uint64 output_msat_per_million = 3;
-  // Deprecated and ignored on read; sellers send 1 for older buyers.
-  uint64 minimum_invoice_msat = 4;
-  // Optional cached-input discount percentage, 0..100; absent means full rate.
-  uint32 cache_discount_percent = 5;
-  // Payment protocol the seller accepts payment over (3 = metered v3).
-  // Absent (0) on releases before v3; buyers skip such paid offers.
-  uint32 payment_protocol = 6;
-}
 
 enum InferenceAdmissionState {
   INFERENCE_ADMISSION_STATE_UNSPECIFIED = 0;
@@ -354,6 +379,19 @@ message AdvertisedModelThroughput {
   string model_name = 1;
   uint64 avg_tokens_per_second_milli = 2;
   uint64 throughput_samples = 3;
+  // Wall-clock time of the newest sample behind the average, set by the node
+  // that measured it and never rewritten when the hint is relayed.
+  optional uint64 observed_at_unix_ms = 4;
+  // How long the measuring node keeps a sample as evidence.
+  optional uint32 window_ms = 5;
+  // What the average measures.
+  optional ThroughputMeasurementKind kind = 6;
+}
+
+enum ThroughputMeasurementKind {
+  THROUGHPUT_MEASUREMENT_KIND_UNSPECIFIED = 0;
+  // Completion tokens over the whole routed attempt's duration.
+  THROUGHPUT_MEASUREMENT_KIND_END_TO_END_ATTEMPT = 1;
 }
 
 message CacheAffinityAdvertisement {
@@ -445,6 +483,13 @@ message ServedModelDescriptor {
   optional ModelTopology topology = 3;
   optional bool capabilities_known = 4;
   optional ServedModelMetadata metadata = 5;
+  // Local clients must speak every named plugin channel. Empty means ungated.
+  repeated ChannelRequirement requires = 6;
+}
+
+message ChannelRequirement {
+  string channel = 1;
+  bytes terms = 2;
 }
 
 message ServedModelMetadata {
@@ -461,6 +506,12 @@ message ServedModelMetadata {
   optional uint32 expert_count = 11;
   optional uint32 active_expert_count = 12;
   optional ModelWorkloadClass workload_class = 13;
+  // Wrapper retains the distinction between an unprobed runtime and no observed levels.
+  optional ThinkingEfforts thinking_efforts = 14;
+}
+
+message ThinkingEfforts {
+  repeated string values = 1;
 }
 
 enum ModelWorkloadClass {
@@ -824,6 +875,18 @@ message OwnerControlApplyConfigRequest {
   bytes target_node_id = 2;               // exactly 32 bytes
   uint64 expected_revision = 3;
   NodeConfigSnapshot config = 4;
+  // separate approval for each plugin whose command executable changes
+  repeated OwnerControlPluginCommandApproval plugin_command_approvals = 5;
+}
+
+message OwnerControlPluginCommandApproval {
+  string plugin = 1;
+  string command = 2;                     // exact new command executable
+  optional OwnerControlPluginArguments invocation = 3; // exact approved arguments; required for changes
+}
+
+message OwnerControlPluginArguments {
+  repeated string args = 1;
 }
 
 message OwnerControlApplyConfigResponse {

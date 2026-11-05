@@ -1,21 +1,21 @@
+use skippy_ffi::SkippyRuntimeEventV1 as RawRuntimeEvent;
 use skippy_ffi::{
-    SkippyRuntimeEventCategory as RawRuntimeEventCategory,
-    SkippyRuntimeEventEmitterKind as RawRuntimeEventEmitterKind,
-    SkippyRuntimeEventFailureCode as RawRuntimeEventFailureCode,
-    SkippyRuntimeEventKind as RawRuntimeEventKind,
-    SkippyRuntimeEventProgressUnit as RawRuntimeEventProgressUnit,
-    SkippyRuntimeEventV1 as RawRuntimeEvent,
+    RUNTIME_EVENT_CATEGORY_MODEL_OPEN, RUNTIME_EVENT_EMITTER_WORKER_THREAD,
+    RUNTIME_EVENT_FAILURE_NONE, RUNTIME_EVENT_KIND_BACKEND_DEVICE_SELECTED,
+    RUNTIME_EVENT_KIND_MODEL_OPEN_FAILED_HANDLED, RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED,
+    RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS, RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED,
+    RUNTIME_EVENT_PROGRESS_UNIT_NONE,
 };
 
 use super::{NativeEventRecord, RecordRejection, RuntimeEvent, RuntimeEventKind, Status};
 
-fn raw_event(kind: RawRuntimeEventKind, sequence: u64) -> RawRuntimeEvent {
+fn raw_event(kind: skippy_ffi::SkippyRuntimeEventKind, sequence: u64) -> RawRuntimeEvent {
     RawRuntimeEvent {
         abi_version: 1,
         struct_size: std::mem::size_of::<RawRuntimeEvent>() as u32,
-        category: RawRuntimeEventCategory::MODEL_OPEN,
+        category: RUNTIME_EVENT_CATEGORY_MODEL_OPEN,
         kind,
-        emitter: RawRuntimeEventEmitterKind::WORKER_THREAD,
+        emitter: RUNTIME_EVENT_EMITTER_WORKER_THREAD,
         reserved0: 0,
         sequence,
         timestamp_mono_ns: sequence,
@@ -24,9 +24,9 @@ fn raw_event(kind: RawRuntimeEventKind, sequence: u64) -> RawRuntimeEvent {
         session_id: 0,
         progress_current: 0,
         progress_total: 0,
-        progress_unit: RawRuntimeEventProgressUnit::NONE,
-        failure_code: RawRuntimeEventFailureCode::NONE,
-        status: Status::Ok,
+        progress_unit: RUNTIME_EVENT_PROGRESS_UNIT_NONE,
+        failure_code: RUNTIME_EVENT_FAILURE_NONE,
+        status: Status::Ok as i32,
         reserved1: 0,
         detail_ptr: std::ptr::null(),
         detail_len: 0,
@@ -39,7 +39,7 @@ fn raw_event(kind: RawRuntimeEventKind, sequence: u64) -> RawRuntimeEvent {
 
 #[test]
 fn from_raw_ptr_rejects_short_struct_before_reading_detail_fields() {
-    let mut event = raw_event(RawRuntimeEventKind::MODEL_OPEN_STARTED, 1);
+    let mut event = raw_event(RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED, 1);
     // Below the BASE (pre-extension) layout, not just the full one -- see
     // the equivalent comment in runtime_events/tests.rs.
     event.struct_size = std::mem::offset_of!(RawRuntimeEvent, numeric_summary_0) as u32 - 1;
@@ -49,7 +49,7 @@ fn from_raw_ptr_rejects_short_struct_before_reading_detail_fields() {
 #[test]
 fn from_raw_ptr_rejects_oversized_detail_len() {
     let detail = b"x".repeat(16);
-    let mut event = raw_event(RawRuntimeEventKind::MODEL_OPEN_PROGRESS, 2);
+    let mut event = raw_event(RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS, 2);
     event.detail_ptr = detail.as_ptr().cast();
     event.detail_len = u64::MAX;
     assert!(RuntimeEvent::from_raw_ptr(&event).is_none());
@@ -64,23 +64,23 @@ fn from_raw_ptr_rejects_null_event() {
 fn from_raw_ptr_enumerates_all_five_known_kinds() {
     let cases = [
         (
-            RawRuntimeEventKind::MODEL_OPEN_STARTED,
+            RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED,
             RuntimeEventKind::ModelOpenStarted,
         ),
         (
-            RawRuntimeEventKind::MODEL_OPEN_PROGRESS,
+            RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS,
             RuntimeEventKind::ModelOpenProgress,
         ),
         (
-            RawRuntimeEventKind::BACKEND_DEVICE_SELECTED,
+            RUNTIME_EVENT_KIND_BACKEND_DEVICE_SELECTED,
             RuntimeEventKind::BackendDeviceSelected,
         ),
         (
-            RawRuntimeEventKind::MODEL_OPEN_FINISHED,
+            RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED,
             RuntimeEventKind::ModelOpenFinished,
         ),
         (
-            RawRuntimeEventKind::MODEL_OPEN_FAILED_HANDLED,
+            RUNTIME_EVENT_KIND_MODEL_OPEN_FAILED_HANDLED,
             RuntimeEventKind::ModelOpenFailedHandled,
         ),
     ];
@@ -93,7 +93,7 @@ fn from_raw_ptr_enumerates_all_five_known_kinds() {
 
 #[test]
 fn from_raw_ptr_preserves_unknown_kind_rather_than_dropping_it() {
-    let event = raw_event(RawRuntimeEventKind(9999), 1);
+    let event = raw_event(9999, 1);
     let decoded =
         RuntimeEvent::from_raw_ptr(&event).expect("unknown-but-well-formed event decodes");
     assert_eq!(decoded.kind, RuntimeEventKind::Unknown(9999));
@@ -101,7 +101,7 @@ fn from_raw_ptr_preserves_unknown_kind_rather_than_dropping_it() {
 
 #[test]
 fn rejects_wrong_abi_version() {
-    let mut event = raw_event(RawRuntimeEventKind::MODEL_OPEN_STARTED, 1);
+    let mut event = raw_event(RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED, 1);
     event.abi_version = 2;
     let rejection = unsafe { NativeEventRecord::from_raw_ptr(&event) };
     assert_eq!(rejection, Err(RecordRejection::AbiVersion(2)));
@@ -118,7 +118,7 @@ fn accepts_struct_size_larger_than_known_layout() {
         appended: [u8; 64],
     }
     let mut extended = ExtendedEvent {
-        known: raw_event(RawRuntimeEventKind::MODEL_OPEN_PROGRESS, 9),
+        known: raw_event(RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS, 9),
         appended: [0xAB; 64],
     };
     extended.known.struct_size = std::mem::size_of::<ExtendedEvent>() as u32;
@@ -137,7 +137,7 @@ fn accepts_struct_size_larger_than_known_layout() {
 
 #[test]
 fn null_and_short_struct_are_distinct_rejections() {
-    let mut short = raw_event(RawRuntimeEventKind::MODEL_OPEN_STARTED, 1);
+    let mut short = raw_event(RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED, 1);
     short.struct_size = std::mem::offset_of!(RawRuntimeEvent, numeric_summary_0) as u32 - 1;
 
     let null = unsafe { NativeEventRecord::from_raw_ptr(std::ptr::null()) };
@@ -149,8 +149,19 @@ fn null_and_short_struct_are_distinct_rejections() {
 
 #[test]
 fn oversized_detail_is_its_own_rejection() {
-    let mut event = raw_event(RawRuntimeEventKind::MODEL_OPEN_PROGRESS, 2);
+    let mut event = raw_event(RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS, 2);
     event.detail_len = u64::MAX;
     let rejection = unsafe { NativeEventRecord::from_raw_ptr(&event) };
     assert_eq!(rejection, Err(RecordRejection::OversizedDetail));
+}
+
+#[test]
+fn unknown_status_is_refused_instead_of_forming_an_invalid_enum() {
+    // The C ABI stores status as a plain int32_t; a value outside the
+    // declared skippy_status discriminants must never be materialized as a
+    // `Status` behind a reference (undefined behavior). Refuse the event.
+    let mut event = raw_event(RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS, 3);
+    event.status = 8_000;
+    let rejection = unsafe { NativeEventRecord::from_raw_ptr(&event) };
+    assert_eq!(rejection, Err(RecordRejection::Status(8_000)));
 }

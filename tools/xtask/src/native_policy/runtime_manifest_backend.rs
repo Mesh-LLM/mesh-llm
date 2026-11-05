@@ -1,5 +1,6 @@
 use crate::command::DynResult;
 use serde::Serialize;
+use std::{collections::BTreeMap, path::Path};
 
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -47,7 +48,13 @@ fn arches(primary: &str, fallback: &str, default: &str) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn build(backend: &str, cuda_major: &str) -> DynResult<Backend> {
+pub(super) fn build(
+    backend: &str,
+    cuda_major: &str,
+    os: &str,
+    root: &Path,
+    files: &mut BTreeMap<String, String>,
+) -> DynResult<Backend> {
     Ok(match backend {
         "cpu" => Backend::Cpu,
         "metal" => Backend::Metal,
@@ -68,7 +75,12 @@ pub(super) fn build(backend: &str, cuda_major: &str) -> DynResult<Backend> {
         },
         "hip" | "rocm" => Backend::Rocm {
             rocm: Rocm {
-                gpu_arches: arches("LLAMA_STAGE_AMDGPU_TARGETS", "SKIPPY_AMDGPU_TARGETS", ""),
+                gpu_arches: super::windows_rocm_kernels::admit(
+                    os,
+                    root,
+                    files,
+                    arches("LLAMA_STAGE_AMDGPU_TARGETS", "SKIPPY_AMDGPU_TARGETS", ""),
+                )?,
                 version: environment("MESH_LLM_ROCM_VERSION"),
             },
         },

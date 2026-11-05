@@ -8,6 +8,7 @@ use skippy_ffi::{
     SamplingConfig as RawSamplingConfig, Session as RawSession, TokenSignal as RawTokenSignal,
 };
 
+use crate::dflash::DecodedRows;
 use crate::error::ensure_ok;
 use crate::{GenerationSignalWindow, NativeMtpDraft, SamplingConfig, TokenLogprobs, TokenSignal};
 
@@ -56,6 +57,10 @@ pub struct StageSession {
     /// request. False for memory layouts that split an all-output batch by
     /// sequence, where only the last microbatch's exports stay live.
     pub(crate) batched_activation_exports: bool,
+    /// Attached DFlash draft that mirrors this session's target positions.
+    pub(crate) dflash: Option<crate::dflash::DFlashSessionLink>,
+    /// Split-DFlash feature capture and the rows an earlier stage sent.
+    pub(crate) dflash_split: Option<Box<crate::dflash::DFlashSplitSession>>,
 }
 
 pub struct DecodeBatchRequest<'a> {
@@ -107,7 +112,8 @@ impl StageSession {
     /// deltas between builds -- an inference that cannot separate "reuse is
     /// firing and the residual cost is elsewhere" from "reuse is not firing".
     pub fn graph_reuse_stats(&self) -> Option<GraphReuseStats> {
-        let ctx = unsafe { skippy_ffi::skippy_session_llama_context(self.raw) };
+        let ctx: *mut skippy_ffi::Opaque =
+            unsafe { skippy_ffi::skippy_session_llama_context(self.raw) }.cast();
         if ctx.is_null() {
             return None;
         }
@@ -149,6 +155,7 @@ impl StageSession {
         let status = unsafe { native_call!(skippy_session_reset(self.raw, &mut error)) };
         ensure_ok(status, error)?;
         self.token_count = 0;
+        self.dflash_after_replace();
         Ok(())
     }
 
@@ -261,12 +268,30 @@ impl StageSession {
         ensure_ok(status, error)
     }
 
+    /// How this session's verify windows were held for rollback since it was
+    /// created or last reset.
+    pub fn verify_rollback_counts(&self) -> Result<VerifyRollbackCounts> {
+        let mut counts = VerifyRollbackCounts::default();
+        let mut error = ptr::null_mut();
+        let status = unsafe {
+            skippy_ffi::skippy_session_verify_rollback_counts(
+                self.raw,
+                &mut counts.in_place,
+                &mut counts.checkpointed,
+                &mut error,
+            )
+        };
+        ensure_ok(status, error)?;
+        Ok(counts)
+    }
+
     pub fn trim_session(&mut self, token_count: u64) -> Result<()> {
         let mut error = ptr::null_mut();
         let status =
             unsafe { native_call!(skippy_trim_session(self.raw, token_count, &mut error)) };
         ensure_ok(status, error)?;
         self.token_count = token_count;
+        self.dflash_after_rewind();
         Ok(())
     }
 
@@ -277,6 +302,7 @@ impl StageSession {
             unsafe { native_call!(skippy_session_set_position(self.raw, n_past, &mut error)) };
         ensure_ok(status, error)?;
         self.token_count = token_count;
+        self.dflash_after_rewind();
         Ok(())
     }
 
@@ -323,6 +349,7 @@ impl StageSession {
         };
         ensure_ok(status, error)?;
         self.token_count = u64::try_from(token_ids.len()).context("token count exceeds u64")?;
+        self.dflash_after_replace();
         Ok(())
     }
 
@@ -368,6 +395,7 @@ impl StageSession {
             .token_count
             .checked_add(u64::try_from(token_ids.len()).context("token count exceeds u64")?)
             .context("session token count overflow")?;
+        self.dflash_after_prefill(DecodedRows::trailing(0, token_ids.len()));
         Ok(())
     }
 
@@ -417,6 +445,7 @@ impl StageSession {
             .token_count
             .checked_add(1)
             .context("session token count overflow")?;
+        self.dflash_after_decode(DecodedRows::trailing(0, 1));
         Ok(predicted_token)
     }
 
@@ -455,6 +484,7 @@ impl StageSession {
             .token_count
             .checked_add(1)
             .context("session token count overflow")?;
+        self.dflash_after_decode(DecodedRows::trailing(0, 1));
         Ok((predicted_token, NativeMtpDraft::from_raw(mtp_draft)))
     }
 
@@ -497,12 +527,15 @@ impl StageSession {
             ))
         };
         ensure_ok(status, error)?;
-        for request in requests {
+        for (row, request) in requests.iter_mut().enumerate() {
             request.session.token_count = request
                 .session
                 .token_count
                 .checked_add(1)
                 .context("session token count overflow")?;
+            request
+                .session
+                .dflash_after_decode(DecodedRows::trailing(row, 1));
         }
         Ok(predicted_tokens)
     }
@@ -598,6 +631,7 @@ impl StageSession {
             .token_count
             .checked_add(u64::try_from(token_ids.len()).context("token count exceeds u64")?)
             .context("session token count overflow")?;
+        self.dflash_after_decode(DecodedRows::trailing(0, token_ids.len()));
         predicted.truncate(output_count);
         Ok(predicted)
     }
@@ -676,6 +710,18 @@ mod tests {
         let grammar = r#"{"grammar":"root ::= \"ok\""}"#;
         assert_eq!(chat_sampling_metadata_for_native(grammar), grammar);
     }
+}
+
+/// Verify windows a session held for rollback, by how they were held. A
+/// window counts once its storage is final, so both counts only grow.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VerifyRollbackCounts {
+    /// Rolled back in place through the recurrent rollback snapshots,
+    /// counted when the window is retired or trimmed.
+    pub in_place: u64,
+    /// Held in a host checkpoint, including windows first held in place that
+    /// another decode then landed on.
+    pub checkpointed: u64,
 }
 
 #[cfg(test)]

@@ -14,10 +14,81 @@ Combined mode does both.
 | Kotlin | [Kotlin](sdk/kotlin.md) |
 | Node.js | [Node.js](sdk/node.md) |
 
-The legacy thin `Client`, its in-memory keypair hex constructor, and the Rust
-facade's `client`/`node` feature split have been removed. Platform constructors
-accept an optional Mesh LLM owner keystore path. This is an SDK breaking change;
-the mesh wire protocol and `/v1` API are unchanged.
+**SDK breaking change:** the legacy thin `Client`, its in-memory keypair hex
+constructor, and the Rust facade's `client`/`node` feature split have been removed.
+Platform constructors accept an optional Mesh LLM owner keystore path. These constructor changes are
+separate from the model-discovery API split below; mesh advertisement remains
+compatible.
+
+## Model discovery
+
+All SDKs expose a native `node.models` catalog for every mesh-advertised workload,
+including OCR and other non-LLM models. List filters, pagination, exact lookup
+and per-provider observations have the same semantics across languages.
+Compatibility inference model lists remain LLM-only. See
+[Mesh model discovery](MODEL_DISCOVERY.md) for HTTP shapes and migration.
+
+Native catalog queries do not use HTTP. Compatibility inference and some other
+node operations still use the embedded listener; this is not a claim that the
+entire SDK lifecycle is HTTP-free.
+
+## Native Rust discovery and inference
+
+Rust consumers can use `MeshNode::models()` to discover local and remote models
+with their advertised thinking effort levels, then pass the selected model's
+provider-specific target and a `ChatCompletionRequest` to
+`MeshNode::chat_completion()`. Startup readiness and discovery use native runtime
+state; local inference runs in process and remote inference uses mesh transport.
+See the [complete Rust example](sdk/rust.md) for joining a mesh, waiting for model
+metadata, selecting an effort, and requesting inference without loopback HTTP.
+
+Thinking metadata contains only model-specific effort strings. Missing metadata
+is unknown, including older peers; render-probe observations are not guarantees
+about generated reasoning. The legacy HTTP client and management status methods
+remain available separately.
+
+Thinking effort metadata is also exposed by Kotlin and Swift from
+`listModels()` as `Model.thinkingEfforts`, by Node.js as
+`model.metadata.thinking_efforts`, and by Python as
+`Model.thinking_efforts`. The [Rust](sdk/rust.md), [Node.js](sdk/node.md),
+[Kotlin](sdk/kotlin.md), [Swift](sdk/swift.md), and
+[Python](sdk/python.md) guides show how to select an effort.
+
+Native streaming deadlines are part of the protocol contract. A unary request
+must finish within five minutes. A stream has no total-duration limit: it fails
+after five minutes without progress, and a frame write blocked by flow control
+times out after fifteen seconds. See the
+[native chat protocol](design/message_protocol.md#native-chat-inference-0x0f).
+
+## Common SDK capabilities
+
+| Capability | Contract across Rust, Node.js, Python, Swift and Kotlin |
+|---|---|
+| Lifecycle | Start, stop, status and join by invite token in client, serve-only or combined mode |
+| Native runtimes | Explicit install with progress, list, resolve/validate, remove/prune and version/ABI queries |
+| Model catalog | Native list/get for every primary-mesh workload, AND filters, bounded pages and provider observations |
+| Compatibility inference | LLM-only model list, lossless requests and SSE streams |
+| Document OCR | Binary upload, exact model ID, format/page options and preserved provider response information |
+| Memberships | Add/list/remove additional isolated meshes while sharing already loaded models |
+| Live transcription | Send PCM16 or float samples, commit turns, read events, stop/close |
+
+Inference requests and OCR calls check HTTP success by default in every SDK.
+For explicit provider-error handling, Rust exposes `request_raw`, `stream_raw`
+and `document_ocr_raw`; the other SDKs accept `raiseForStatus: false` or Python's
+`raise_for_status=False` where a raw response is requested. Raw responses retain
+status, content type and body. Node.js raw responses expose `statusCode`,
+`contentType`, `body` and `json()`; check `statusCode` explicitly in raw mode.
+This aligns earlier raw-default Rust/Swift/Kotlin request behavior; callers that
+inspect non-success responses must now opt into raw mode.
+
+Live transcription uses `start_live_transcription` in Rust/Python and
+`startLiveTranscription` in Node.js/Swift/Kotlin. Sessions support PCM16 and
+floating point audio, explicit turn commit, individual events or event streams,
+graceful stop returning remaining events, and immediate close. Defaults are
+16 kHz mono audio and turn detection with threshold `0.5`, 300 ms prefix padding
+and 500 ms silence. An explicit null turn detector (Python `None`) enables
+push-to-talk. Events preserve speech-start/stop, delta, committed, completed and
+error variants. This transport uses the embedded realtime WebSocket.
 
 ## Native Runtime Artifacts
 

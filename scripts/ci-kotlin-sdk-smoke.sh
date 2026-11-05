@@ -39,6 +39,13 @@ native_sdk_uniffi_library="$(
     mesh_automation prepared-input native-sdk-library-dir "$native_sdk_artifact_dir/manifest.json"
 )"
 export MESHLLM_KOTLIN_JNA_LIBRARY_PATH="$native_sdk_artifact_dir/$native_sdk_uniffi_library"
+# The Gradle input and generate-kotlin-bindings.sh must resolve the same
+# restored library; the default target/release/libmeshllm_ffi.a is never
+# built in this lane.
+native_sdk_uniffi_file="$(
+    mesh_automation prepared-input native-sdk-uniffi-library "$native_sdk_artifact_dir/manifest.json"
+)"
+export MESH_LLM_FFI_LIBRARY="$native_sdk_artifact_dir/$native_sdk_uniffi_file"
 native_runtime_dir="$(
     scripts/ci-prepare-native-runtime.sh \
         "$REPO_ROOT/target/kotlin-native-runtime" \

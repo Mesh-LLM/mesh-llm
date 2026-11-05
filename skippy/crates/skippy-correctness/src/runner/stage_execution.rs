@@ -471,6 +471,8 @@ pub(in crate::runner) fn tokenizer_model_for_state_handoff(
             direct_io: false,
             main_gpu: None,
             split_mode: skippy_runtime::SplitMode::Auto,
+            host_expert_layers: None,
+            recurrent_rollback_tokens: 0,
             selected_backend_device: None,
             load_mode,
             projector_path: None,
@@ -481,7 +483,6 @@ pub(in crate::runner) fn tokenizer_model_for_state_handoff(
             batch_max_tokens: None,
             glm_dsa_policy: skippy_runtime::GlmDsaPolicy::Auto,
             mtp_source: MtpSource::Disabled,
-            verify_rollback: skippy_runtime::VerifyRollback::default(),
             resident_tensor_names: runtime_plan
                 .as_ref()
                 .map_or_else(Vec::new, |plan| plan.resident_tensor_names.clone()),

@@ -7,15 +7,28 @@ pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
 pub const ABI_VERSION_PATCH: u32 = 78;
 
+// The facade constants are parsed without compiling; tie them to the generated
+// bindings' view of the native ABI version at compile time so a common.h bump
+// without this file fails to build instead of failing at model load.
+const _: () = assert!(ABI_VERSION_MAJOR == bindings::skippy::SKIPPY_ABI_VERSION_MAJOR);
+const _: () = assert!(ABI_VERSION_MINOR == bindings::skippy::SKIPPY_ABI_VERSION_MINOR);
+const _: () = assert!(ABI_VERSION_PATCH == bindings::skippy::SKIPPY_ABI_VERSION_PATCH);
+
 // Propagate static native archive changes through Cargo dependency metadata so
 // final binaries are relinked after CMake rebuilds llama.cpp.
 #[doc(hidden)]
 pub const NATIVE_LINK_FINGERPRINT: &str = env!("SKIPPY_NATIVE_LINK_FINGERPRINT");
 
+/// Bindgen-generated FFI declarations for the native ABI surfaces Skippy
+/// consumes. These are the single source of truth for native layouts; the
+/// modules below provide safe wrappers and ergonomic re-exports only.
+pub mod bindings;
+
 mod abi;
 mod activation;
 #[cfg(feature = "dynamic-runtime")]
 mod dynamic;
+pub mod llama_draft;
 mod model;
 mod multimodal;
 mod runtime;
@@ -30,11 +43,13 @@ mod tests;
 
 pub use abi::{
     ASR_INFO_V1_ABI_VERSION, ASR_MAX_SAMPLES, ASR_SAMPLE_RATE, ASR_SEGMENT_V1_ABI_VERSION,
-    ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION, AbiVersion, ActivationDType, ActivationLayout,
-    AsrAbortCallback, AsrInfoV1, AsrModel, AsrResult, AsrSegmentV1, AsrTranscribeParamsV1,
-    BACKEND_DEVICE_CAP_ASYNC, BACKEND_DEVICE_CAP_BUFFER_FROM_HOST_PTR, BACKEND_DEVICE_CAP_EVENTS,
-    BACKEND_DEVICE_CAP_HOST_BUFFER, BackendDevice, BackendDeviceType, Error,
-    FEATURE_ACTIVATION_BOUNDARY, FEATURE_BACKEND_DEVICES, FEATURE_CACHEGEN_KV_PAGE,
+    ASR_TRANSCRIBE_PARAMS_V1_ABI_VERSION, AbiVersion, AsrAbortCallback, AsrInfoV1, AsrModel,
+    AsrResult, AsrSegmentV1, AsrTranscribeParamsV1, BACKEND_DEVICE_CAP_ASYNC,
+    BACKEND_DEVICE_CAP_BUFFER_FROM_HOST_PTR, BACKEND_DEVICE_CAP_EVENTS,
+    BACKEND_DEVICE_CAP_HOST_BUFFER, BackendDevice, BackendDeviceType, CLEF_INFO_V1_ABI_VERSION,
+    CLEF_ORDER_NONE, CLEF_ORDER_OPTION, CLEF_ORDER_QUESTION_CHOICE, CLEF_ORDER_QUESTION_NOUL,
+    CLEF_ORDER_QUESTION_SCORE, ClefInfoV1, ClefModel, Error, FEATURE_ACTIVATION_BOUNDARY,
+    FEATURE_BACKEND_DEVICES, FEATURE_CACHEGEN_KV_PAGE, FEATURE_CLEF_DECISIONS,
     FEATURE_DEVICE_EVENTS, FEATURE_DIAGNOSTIC_EVENTS, FEATURE_ITERATION_BATCH, FEATURE_KV_EVENTS,
     FEATURE_LAYA_DECISIONS, FEATURE_MODEL_LOAD_EVENTS_V2, FEATURE_MODEL_SOURCE,
     FEATURE_MTP_MULTIMODAL, FEATURE_NATIVE_MTP_N1, FEATURE_NATIVE_TRACING,
@@ -53,7 +68,40 @@ pub use abi::{
     SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, SkippySetGpuCommandTimingCallbackFn,
     SkippySetNativeSpanCallbackFn, SkippySetTraceTagFn, Status, SystemOneSlot, TRISTATE_AUTO,
     TRISTATE_FALSE, TRISTATE_TRUE, TensorRole, TokenScoreRequest, WORKLOAD_INFO_V1_ABI_VERSION,
-    WorkloadInfoV1, WorkloadKind, WorkloadPooling, runtime_abi_supported,
+    WorkloadInfoV1, WorkloadKind, WorkloadPooling, runtime_abi_supported, status_from_raw,
+};
+pub use abi::{
+    RUNTIME_EVENT_CATEGORY_BACKEND, RUNTIME_EVENT_CATEGORY_DEVICE,
+    RUNTIME_EVENT_CATEGORY_DIAGNOSTIC, RUNTIME_EVENT_CATEGORY_KV,
+    RUNTIME_EVENT_CATEGORY_MODEL_OPEN, RUNTIME_EVENT_CATEGORY_SESSION,
+    RUNTIME_EVENT_CATEGORY_UNLOAD, RUNTIME_EVENT_CATEGORY_WARNING,
+    RUNTIME_EVENT_EMITTER_OPEN_THREAD, RUNTIME_EVENT_EMITTER_UNKNOWN,
+    RUNTIME_EVENT_EMITTER_WORKER_THREAD, RUNTIME_EVENT_FAILURE_BACKEND_ERROR,
+    RUNTIME_EVENT_FAILURE_CANCELLED, RUNTIME_EVENT_FAILURE_INTERNAL_ERROR,
+    RUNTIME_EVENT_FAILURE_INVALID_ARGUMENT, RUNTIME_EVENT_FAILURE_IO_ERROR,
+    RUNTIME_EVENT_FAILURE_MODEL_ERROR, RUNTIME_EVENT_FAILURE_NONE,
+    RUNTIME_EVENT_FAILURE_RUNTIME_ERROR, RUNTIME_EVENT_KIND_BACKEND_DEVICE_SELECTED,
+    RUNTIME_EVENT_KIND_DEVICE_BACKEND_INITIALIZED, RUNTIME_EVENT_KIND_DEVICE_DEGRADED,
+    RUNTIME_EVENT_KIND_DEVICE_FALLBACK_ACTIVATED, RUNTIME_EVENT_KIND_DEVICE_LOST,
+    RUNTIME_EVENT_KIND_DEVICE_OUT_OF_MEMORY, RUNTIME_EVENT_KIND_DEVICE_READY,
+    RUNTIME_EVENT_KIND_DEVICE_RECOVERED, RUNTIME_EVENT_KIND_DEVICE_RESOURCE_ALLOCATED,
+    RUNTIME_EVENT_KIND_DEVICE_UNAVAILABLE, RUNTIME_EVENT_KIND_DIAGNOSTIC_FATAL_FAILURE,
+    RUNTIME_EVENT_KIND_DIAGNOSTIC_INVARIANT_VIOLATION,
+    RUNTIME_EVENT_KIND_DIAGNOSTIC_RECOVERABLE_FAILURE,
+    RUNTIME_EVENT_KIND_DIAGNOSTIC_WARNING_CLEARED, RUNTIME_EVENT_KIND_DIAGNOSTIC_WARNING_RAISED,
+    RUNTIME_EVENT_KIND_KV_CONTEXT_APPROACHING_CAPACITY,
+    RUNTIME_EVENT_KIND_KV_CONTEXT_CAPACITY_EXHAUSTED, RUNTIME_EVENT_KIND_KV_INITIALIZED,
+    RUNTIME_EVENT_KIND_KV_PRESSURE_CLEARED, RUNTIME_EVENT_KIND_KV_PRESSURE_CROSSED,
+    RUNTIME_EVENT_KIND_MODEL_LOAD_AUX_COMPONENT_READY,
+    RUNTIME_EVENT_KIND_MODEL_LOAD_MEMORY_ALLOCATED, RUNTIME_EVENT_KIND_MODEL_LOAD_PHASE_CHANGED,
+    RUNTIME_EVENT_KIND_MODEL_LOAD_TENSORS_OFFLOADED, RUNTIME_EVENT_KIND_MODEL_LOAD_TOKENIZER_READY,
+    RUNTIME_EVENT_KIND_MODEL_OPEN_FAILED_HANDLED, RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED,
+    RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS, RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED,
+    RUNTIME_EVENT_KIND_UNLOAD_COMPLETED, RUNTIME_EVENT_KIND_UNLOAD_FAILED,
+    RUNTIME_EVENT_KIND_UNLOAD_FORCED, RUNTIME_EVENT_KIND_UNLOAD_SESSION_DRAINING,
+    RUNTIME_EVENT_KIND_UNLOAD_STARTED, RUNTIME_EVENT_PROGRESS_UNIT_BYTES,
+    RUNTIME_EVENT_PROGRESS_UNIT_ITEMS, RUNTIME_EVENT_PROGRESS_UNIT_NONE,
+    RUNTIME_EVENT_PROGRESS_UNIT_STEPS, RUNTIME_EVENT_PROGRESS_UNIT_TENSORS,
 };
 pub use activation::{
     ACTIVATION_BOUNDARY_DESC_VERSION, ACTIVATION_FRAME_VERSION, ACTIVATION_IDENTITY_BYTES,
@@ -127,11 +175,12 @@ pub use dynamic::{
     skippy_asr_model_info_v1, skippy_asr_model_open, skippy_asr_result_duration_seconds,
     skippy_asr_result_free, skippy_asr_result_language, skippy_asr_result_segment_count,
     skippy_asr_result_segment_v1, skippy_asr_samples_free, skippy_asr_transcribe,
-    skippy_backend_device_at, skippy_backend_device_count, skippy_decode_batch_sampled,
-    skippy_decode_step_frame_batch_sampled, skippy_decode_step_frame_sampled,
-    skippy_decode_step_frame_sampled_mtp, skippy_decode_step_sampled,
-    skippy_decode_step_sampled_mtp, skippy_decode_step_sampled_mtp_fn, skippy_detokenize,
-    skippy_error_free, skippy_export_full_state, skippy_export_kv_page,
+    skippy_backend_device_at, skippy_backend_device_count, skippy_clef_model_decision_metadata,
+    skippy_clef_model_free, skippy_clef_model_info_v1, skippy_clef_model_open, skippy_clef_plan,
+    skippy_clef_read, skippy_decode_batch_sampled, skippy_decode_step_frame_batch_sampled,
+    skippy_decode_step_frame_sampled, skippy_decode_step_frame_sampled_mtp,
+    skippy_decode_step_sampled, skippy_decode_step_sampled_mtp, skippy_decode_step_sampled_mtp_fn,
+    skippy_detokenize, skippy_error_free, skippy_export_full_state, skippy_export_kv_page,
     skippy_export_recurrent_state, skippy_export_state, skippy_import_cachegen_kv_page_v1,
     skippy_import_full_state, skippy_import_kv_page, skippy_import_recurrent_state,
     skippy_import_state, skippy_iteration_batch_sampled, skippy_laya_model_free,
@@ -160,14 +209,15 @@ pub use dynamic::{
     skippy_session_restore_token_history, skippy_session_sample_current,
     skippy_session_save_prefix, skippy_session_sequence_id, skippy_session_set_position,
     skippy_session_signal_window, skippy_session_take_token_logprobs,
-    skippy_stage_plan_describe_v1, skippy_stage_plan_free, skippy_stage_plan_profile_at_v1,
-    skippy_stage_plan_resident_tensor_at_v1, skippy_stage_plan_state_at_v1,
-    skippy_stage_plan_string_v1, skippy_stage_plan_validate_chain_v1,
-    skippy_stage_plan_value_at_v1, skippy_stage_planner_create_v1, skippy_stage_planner_free,
-    skippy_stage_planner_realize_v1, skippy_system_one_canvas_length, skippy_system_one_read,
-    skippy_token_is_eog, skippy_tokenize, skippy_trim_session, skippy_verify_tokens,
-    skippy_verify_tokens_frame_sampled, skippy_write_gguf_from_parts,
-    skippy_write_gguf_from_parts_consuming, skippy_write_gguf_metadata_from_parts,
+    skippy_session_verify_rollback_counts, skippy_stage_plan_describe_v1, skippy_stage_plan_free,
+    skippy_stage_plan_profile_at_v1, skippy_stage_plan_resident_tensor_at_v1,
+    skippy_stage_plan_state_at_v1, skippy_stage_plan_string_v1,
+    skippy_stage_plan_validate_chain_v1, skippy_stage_plan_value_at_v1,
+    skippy_stage_planner_create_v1, skippy_stage_planner_free, skippy_stage_planner_realize_v1,
+    skippy_system_one_canvas_length, skippy_system_one_read, skippy_token_is_eog, skippy_tokenize,
+    skippy_trim_session, skippy_verify_tokens, skippy_verify_tokens_frame_sampled,
+    skippy_write_gguf_from_parts, skippy_write_gguf_from_parts_consuming,
+    skippy_write_gguf_metadata_from_parts,
 };
 
 #[cfg(feature = "dynamic-runtime")]
@@ -197,43 +247,45 @@ pub use static_bindings::{
     skippy_asr_result_duration_seconds, skippy_asr_result_free, skippy_asr_result_language,
     skippy_asr_result_segment_count, skippy_asr_result_segment_v1, skippy_asr_samples_free,
     skippy_asr_transcribe, skippy_backend_device_at, skippy_backend_device_count,
-    skippy_decode_batch_sampled, skippy_decode_step_frame_batch_sampled,
-    skippy_decode_step_frame_sampled, skippy_decode_step_frame_sampled_mtp,
-    skippy_decode_step_sampled, skippy_decode_step_sampled_mtp, skippy_detokenize,
-    skippy_error_free, skippy_export_full_state, skippy_export_kv_page,
-    skippy_export_recurrent_state, skippy_export_state, skippy_import_cachegen_kv_page_v1,
-    skippy_import_full_state, skippy_import_kv_page, skippy_import_recurrent_state,
-    skippy_import_state, skippy_iteration_batch_sampled, skippy_laya_model_free,
-    skippy_laya_model_info_v1, skippy_laya_model_memory_v1, skippy_laya_model_open,
-    skippy_laya_read, skippy_laya_tokenize, skippy_model_attach_mtp_draft_model, skippy_model_free,
-    skippy_model_info_free, skippy_model_info_open, skippy_model_info_tensor_at,
-    skippy_model_info_tensor_count, skippy_model_input_activation_boundary,
-    skippy_model_llama_model, skippy_model_memory_cache_capabilities, skippy_model_open,
-    skippy_model_open_from_parts, skippy_model_open_from_source,
-    skippy_model_output_activation_boundary, skippy_model_supports_causal_readout,
-    skippy_model_workload_info_v1, skippy_ngram_cache_append, skippy_ngram_cache_create,
-    skippy_ngram_cache_draft, skippy_ngram_cache_free, skippy_ngram_cache_reset,
-    skippy_parse_chat_response_json, skippy_prefill_chunk, skippy_prefill_chunk_frame,
-    skippy_prefill_chunk_frame_sampled, skippy_prefill_chunk_frame_sampled_with_positions,
-    skippy_prefill_chunk_frame_with_positions, skippy_retire_verify_checkpoint,
-    skippy_session_batch_size, skippy_session_begin_external_decode,
-    skippy_session_configure_chat_sampling, skippy_session_copy_output_activation_frame,
-    skippy_session_create, skippy_session_create_from_resident_prefix,
-    skippy_session_drop_sequence, skippy_session_embed, skippy_session_encode_prompt,
-    skippy_session_end_external_decode, skippy_session_export_resident_kv_page,
-    skippy_session_export_resident_recurrent_state, skippy_session_free,
-    skippy_session_last_token_signal, skippy_session_llama_context,
+    skippy_clef_model_decision_metadata, skippy_clef_model_free, skippy_clef_model_info_v1,
+    skippy_clef_model_open, skippy_clef_plan, skippy_clef_read, skippy_decode_batch_sampled,
+    skippy_decode_step_frame_batch_sampled, skippy_decode_step_frame_sampled,
+    skippy_decode_step_frame_sampled_mtp, skippy_decode_step_sampled,
+    skippy_decode_step_sampled_mtp, skippy_detokenize, skippy_error_free, skippy_export_full_state,
+    skippy_export_kv_page, skippy_export_recurrent_state, skippy_export_state,
+    skippy_import_cachegen_kv_page_v1, skippy_import_full_state, skippy_import_kv_page,
+    skippy_import_recurrent_state, skippy_import_state, skippy_iteration_batch_sampled,
+    skippy_laya_model_free, skippy_laya_model_info_v1, skippy_laya_model_memory_v1,
+    skippy_laya_model_open, skippy_laya_read, skippy_laya_tokenize,
+    skippy_model_attach_mtp_draft_model, skippy_model_free, skippy_model_info_free,
+    skippy_model_info_open, skippy_model_info_tensor_at, skippy_model_info_tensor_count,
+    skippy_model_input_activation_boundary, skippy_model_llama_model,
+    skippy_model_memory_cache_capabilities, skippy_model_open, skippy_model_open_from_parts,
+    skippy_model_open_from_source, skippy_model_output_activation_boundary,
+    skippy_model_supports_causal_readout, skippy_model_workload_info_v1, skippy_ngram_cache_append,
+    skippy_ngram_cache_create, skippy_ngram_cache_draft, skippy_ngram_cache_free,
+    skippy_ngram_cache_reset, skippy_parse_chat_response_json, skippy_prefill_chunk,
+    skippy_prefill_chunk_frame, skippy_prefill_chunk_frame_sampled,
+    skippy_prefill_chunk_frame_sampled_with_positions, skippy_prefill_chunk_frame_with_positions,
+    skippy_retire_verify_checkpoint, skippy_session_batch_size,
+    skippy_session_begin_external_decode, skippy_session_configure_chat_sampling,
+    skippy_session_copy_output_activation_frame, skippy_session_create,
+    skippy_session_create_from_resident_prefix, skippy_session_drop_sequence, skippy_session_embed,
+    skippy_session_encode_prompt, skippy_session_end_external_decode,
+    skippy_session_export_resident_kv_page, skippy_session_export_resident_recurrent_state,
+    skippy_session_free, skippy_session_last_token_signal, skippy_session_llama_context,
     skippy_session_memory_used_cells, skippy_session_position, skippy_session_rerank,
     skippy_session_reset, skippy_session_resident_prefix_bytes, skippy_session_restore_prefix,
     skippy_session_restore_token_history, skippy_session_sample_current,
     skippy_session_save_prefix, skippy_session_sequence_id, skippy_session_set_position,
     skippy_session_signal_window, skippy_session_take_token_logprobs,
-    skippy_stage_plan_describe_v1, skippy_stage_plan_free, skippy_stage_plan_profile_at_v1,
-    skippy_stage_plan_resident_tensor_at_v1, skippy_stage_plan_state_at_v1,
-    skippy_stage_plan_string_v1, skippy_stage_plan_validate_chain_v1,
-    skippy_stage_plan_value_at_v1, skippy_stage_planner_create_v1, skippy_stage_planner_free,
-    skippy_stage_planner_realize_v1, skippy_system_one_canvas_length, skippy_system_one_read,
-    skippy_token_is_eog, skippy_tokenize, skippy_trim_session, skippy_verify_tokens,
-    skippy_verify_tokens_frame_sampled, skippy_write_gguf_from_parts,
-    skippy_write_gguf_from_parts_consuming, skippy_write_gguf_metadata_from_parts,
+    skippy_session_verify_rollback_counts, skippy_stage_plan_describe_v1, skippy_stage_plan_free,
+    skippy_stage_plan_profile_at_v1, skippy_stage_plan_resident_tensor_at_v1,
+    skippy_stage_plan_state_at_v1, skippy_stage_plan_string_v1,
+    skippy_stage_plan_validate_chain_v1, skippy_stage_plan_value_at_v1,
+    skippy_stage_planner_create_v1, skippy_stage_planner_free, skippy_stage_planner_realize_v1,
+    skippy_system_one_canvas_length, skippy_system_one_read, skippy_token_is_eog, skippy_tokenize,
+    skippy_trim_session, skippy_verify_tokens, skippy_verify_tokens_frame_sampled,
+    skippy_write_gguf_from_parts, skippy_write_gguf_from_parts_consuming,
+    skippy_write_gguf_metadata_from_parts,
 };

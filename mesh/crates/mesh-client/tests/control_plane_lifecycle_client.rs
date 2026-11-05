@@ -6,7 +6,7 @@ use mesh_client::proto::node::{
     OwnerControlUnloadModelResponse,
 };
 use mesh_client::protocol::{
-    ALPN_CONTROL_V1, NODE_PROTOCOL_GENERATION, decode_owner_control_envelope, read_len_prefixed,
+    ALPN_CONTROL_V2, NODE_PROTOCOL_GENERATION, decode_owner_control_envelope, read_len_prefixed,
     write_len_prefixed,
 };
 use mesh_client::{
@@ -83,7 +83,7 @@ async fn spawn_lifecycle_server() -> (
 ) {
     let endpoint = Endpoint::builder(iroh::endpoint::presets::Minimal)
         .secret_key(SecretKey::generate())
-        .alpns(vec![ALPN_CONTROL_V1.to_vec()])
+        .alpns(vec![ALPN_CONTROL_V2.to_vec()])
         .relay_mode(iroh::endpoint::RelayMode::Disabled)
         .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
         .expect("test bind address should be valid")

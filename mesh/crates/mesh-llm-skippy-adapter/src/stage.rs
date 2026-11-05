@@ -35,6 +35,7 @@ pub fn single_stage_config(options: &SkippyModelLoadOptions) -> Result<StageConf
         direct_io: options.direct_io,
         main_gpu: options.main_gpu,
         split_mode: options.split_mode,
+        host_experts: options.host_experts,
         cache_type_k: options.cache_type_k.clone(),
         cache_type_v: options.cache_type_v.clone(),
         flash_attn_type: options.flash_attn_type,

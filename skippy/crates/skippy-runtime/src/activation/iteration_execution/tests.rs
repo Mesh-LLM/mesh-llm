@@ -9,6 +9,8 @@ fn serial_decode_accepts_explicit_phase_and_matching_position() {
         token_count: 4,
         terminal_stage: true,
         batched_activation_exports: true,
+        dflash: None,
+        dflash_split: None,
     };
     let request = IterationBatchRequest {
         session: &mut session,
@@ -32,6 +34,8 @@ fn serial_decode_accepts_framed_origin_for_recurrent_downstream_stage() {
             token_count: 0,
             terminal_stage: true,
             batched_activation_exports: true,
+            dflash: None,
+            dflash_split: None,
         };
         let frame = ActivationFrame {
             desc: activation_desc(1),
@@ -65,6 +69,8 @@ fn serial_decode_rejects_invalid_decode_shapes() {
             token_count: session_tokens,
             terminal_stage: true,
             batched_activation_exports: true,
+            dflash: None,
+            dflash_split: None,
         };
         let request = IterationBatchRequest {
             session: &mut session,
@@ -88,6 +94,8 @@ fn one_token_prefill_tail_is_explicitly_not_decode() {
         token_count: 4,
         terminal_stage: true,
         batched_activation_exports: true,
+        dflash: None,
+        dflash_split: None,
     };
     let request = IterationBatchRequest {
         session: &mut session,
@@ -109,6 +117,8 @@ fn serial_iteration_omits_samples_for_intermediate_stages() {
         token_count: 4,
         terminal_stage: false,
         batched_activation_exports: true,
+        dflash: None,
+        dflash_split: None,
     };
     let request = IterationBatchRequest {
         session: &mut session,
@@ -150,6 +160,8 @@ fn batch_session(terminal_stage: bool, batched_activation_exports: bool) -> Stag
         token_count: 0,
         terminal_stage,
         batched_activation_exports,
+        dflash: None,
+        dflash_split: None,
     }
 }
 
@@ -243,4 +255,77 @@ fn partial_batch_execution_reports_the_requests_that_already_ran() {
     assert_eq!(partial.executed(), 2);
     assert_eq!(partial.error().to_string(), "native failed");
     assert!(partial.to_string().contains("executed 2 request(s)"));
+}
+
+/// A decode run through the scheduler forwards the DFlash target-layer rows a
+/// split stage captured, as a stage message does; a frame without them makes
+/// the final stage's draft drop its context.
+#[test]
+fn iteration_frames_carry_captured_dflash_rows() {
+    let mut rows = crate::DFlashFeatureRows::new(1, 1);
+    rows.insert(6, vec![0.5]).unwrap();
+    let mut capturing = batch_session(false, true);
+    capturing.dflash_split = Some(Box::new(crate::dflash::DFlashSplitSession::with_captured(
+        rows.clone(),
+    )));
+    let mut plain = batch_session(false, true);
+    let mut requests = vec![
+        decode_request(&mut capturing, None),
+        decode_request(&mut plain, None),
+    ];
+    let mut frames = vec![
+        ActivationFrame {
+            desc: activation_desc(4),
+            payload: vec![0; 4],
+        },
+        ActivationFrame {
+            desc: activation_desc(4),
+            payload: vec![0; 4],
+        },
+    ];
+
+    forward_dflash_features(&mut requests, &mut frames);
+
+    let forwarded = crate::DFlashFeatureRows::from_frame(&frames[0])
+        .unwrap()
+        .expect("the capturing stage's frame carries its rows");
+    assert_eq!(forwarded.layer_ids().collect::<Vec<_>>(), vec![6]);
+    let value = forwarded.rows_of(6, 0, 1).unwrap()[0];
+    assert!((value - 0.5).abs() < 0.5 / 128.0, "{value}");
+    assert_eq!(
+        crate::DFlashFeatureRows::from_frame(&frames[1]).unwrap(),
+        None
+    );
+}
+
+/// A batched decode on a split final stage hands its draft the feature rows
+/// the input frame carries, as a stage message does. Without them the draft
+/// finds the decode's rows missing and drops its context.
+#[test]
+fn iteration_batches_hand_frame_features_to_the_draft() {
+    let mut rows = crate::DFlashFeatureRows::new(1, 1);
+    rows.insert(6, vec![0.5]).unwrap();
+    let mut frame = ActivationFrame {
+        desc: activation_desc(4),
+        payload: vec![0; 4],
+    };
+    rows.append_to_frame_as(&mut frame, crate::DFlashFeatureEncoding::Bf16)
+        .unwrap();
+    let mut drafting = batch_session(true, true);
+    drafting.dflash = Some(crate::dflash::DFlashSessionLink::detached(0));
+    let mut capturing = batch_session(false, true);
+    let mut requests = vec![
+        decode_request(&mut drafting, Some(&frame)),
+        decode_request(&mut capturing, Some(&frame)),
+    ];
+
+    receive_dflash_features(&mut requests);
+
+    let remote = drafting
+        .dflash_split
+        .as_ref()
+        .and_then(|split| split.remote.as_ref());
+    assert_eq!(remote, Some(&(rows, 0)));
+    // A stage without a draft keeps no rows; they ride its frame on.
+    assert!(capturing.dflash_split.is_none());
 }

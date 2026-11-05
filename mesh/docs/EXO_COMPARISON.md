@@ -93,7 +93,7 @@ updates, capability advertisements (vision, audio, multimodal, reasoning,
 tool_use, moe), and mesh membership information. Each node independently
 maintains its view of the mesh.
 
-The **owner-control plane** uses an additive `mesh-llm-control/1` lane with
+The **owner-control plane** uses an additive `mesh-llm-control/2` lane with
 explicit endpoint bootstrap, separate from the public mesh plane for
 mixed-version compatibility.
 

@@ -1,5 +1,7 @@
 mod cache_deadline;
 mod decode_step;
+mod dflash_block_size;
+mod dflash_decode;
 mod linear_decode;
 mod native_mtp_decode;
 mod receipt_lifecycle;
@@ -9,6 +11,7 @@ mod tests;
 mod token_generation;
 // Test-only: re-export of the outstanding-capture guard used by
 // iteration_scheduler tests (see token_generation::exact_state_recording).
+pub(in crate::frontend) use dflash_decode::AdaptiveBlocks;
 #[cfg(test)]
 pub(crate) use token_generation::CaptureTaskOutstandingGuard;
 #[cfg(test)]

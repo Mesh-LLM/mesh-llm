@@ -7,6 +7,7 @@ mod plan;
 mod planner;
 mod prompt;
 mod service;
+mod service_binary;
 pub(crate) mod service_files;
 pub(crate) mod service_host;
 #[cfg(windows)]
@@ -41,6 +42,9 @@ mod github_tests;
 
 #[cfg(test)]
 mod orchestration_tests;
+
+#[cfg(all(test, unix))]
+mod service_binary_tests;
 
 #[cfg(test)]
 mod service_host_tests;

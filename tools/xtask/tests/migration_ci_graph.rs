@@ -21,7 +21,6 @@ mod result_failures;
 
 #[path = "migration_ci_graph/native_check_authority.rs"]
 mod native_check_authority;
-#[path = "../src/process/mod.rs"]
-pub mod process;
+pub use process_supervision as process;
 #[path = "migration_ci_graph/workflow_uniqueness.rs"]
 mod workflow_uniqueness;

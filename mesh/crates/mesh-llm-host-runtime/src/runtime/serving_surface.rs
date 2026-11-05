@@ -12,6 +12,7 @@ use crate::mesh;
 use crate::network::openai::accept::IngressListener;
 use crate::network::{affinity, discovery as mesh_discovery, nostr};
 use crate::plugin;
+use crate::runtime::embedded_readiness::{EmbeddedReadinessTx, EmbeddedRuntimeReadiness};
 use crate::runtime::interactive;
 use crate::runtime::survey;
 use crate::runtime::{InstanceLifecycleRecord, InstanceLifecycleState};
@@ -940,6 +941,7 @@ pub(super) struct RunAutoServingSurfaceContext<'a> {
     pub(super) interactive_started: &'a Arc<AtomicBool>,
     pub(super) console_state: Option<&'a api::MeshApi>,
     pub(super) model_name_for_console: &'a str,
+    pub(super) embedded_readiness_tx: Option<EmbeddedReadinessTx>,
 }
 
 pub(super) struct RunAutoServingSurface {
@@ -949,6 +951,23 @@ pub(super) struct RunAutoServingSurface {
     pub(super) ready_console_url: Option<String>,
     pub(super) ready_api_port: u16,
     pub(super) ready_console_port: Option<u16>,
+}
+
+async fn apply_owner_control_token(
+    console_state: &api::MeshApi,
+    owner_key_path: Option<&std::path::Path>,
+) {
+    // Owner-control routes fail closed without this credential, so a token
+    // that cannot be persisted must not silently disable owner control.
+    match api::owner_control_token::load_or_create_owner_control_token(owner_key_path) {
+        Ok(token) => console_state.set_owner_control_token(Some(token)).await,
+        Err(error) => {
+            tracing::warn!(
+                "owner control: credential unavailable; owner-control routes will reject callers: {error}"
+            );
+            console_state.set_owner_control_token(None).await;
+        }
+    }
 }
 
 pub(super) async fn setup_run_auto_console_state(
@@ -978,6 +997,7 @@ pub(super) async fn setup_run_auto_console_state(
     });
     console_state.set_primary_backend("skippy".into()).await;
     console_state.set_update_check(ctx.update_check).await;
+    apply_owner_control_token(&console_state, ctx.owner_key_path.as_deref()).await;
     console_state
         .set_runtime_control(ctx.control_tx.clone())
         .await;
@@ -1262,6 +1282,9 @@ pub(super) async fn setup_run_auto_serving_surface(
         ctx.console_state,
         ctx.model_name_for_console,
     );
+    if let Some(readiness_tx) = ctx.embedded_readiness_tx {
+        let _ = readiness_tx.send(Ok(EmbeddedRuntimeReadiness));
+    }
     spawn_run_auto_local_instance_scanner(ctx.is_client, ctx.console_state).await;
     Ok(RunAutoServingSurface {
         api_proxy_handle,
@@ -1437,58 +1460,6 @@ pub(super) fn detect_bin_dir() -> Result<PathBuf> {
     let exe = std::env::current_exe().context("Failed to determine own binary path")?;
     let dir = exe.parent().context("Binary has no parent directory")?;
     Ok(dir.to_path_buf())
-}
-
-/// Update ~/.pi/agent/models.json to include a "mesh" provider.
-pub(super) fn update_pi_models_json(model_id: &str, port: u16) {
-    let Some(home) = dirs::home_dir() else { return };
-    let models_path = home.join(".pi/agent/models.json");
-
-    let mut root: serde_json::Value = if models_path.exists() {
-        match std::fs::read_to_string(&models_path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_else(|_| serde_json::json!({})),
-            Err(_) => serde_json::json!({}),
-        }
-    } else {
-        serde_json::json!({})
-    };
-
-    let providers = root.as_object_mut().and_then(|r| {
-        r.entry("providers")
-            .or_insert_with(|| serde_json::json!({}));
-        r.get_mut("providers")?.as_object_mut()
-    });
-    let Some(providers) = providers else { return };
-
-    let mesh = serde_json::json!({
-        "baseUrl": format!("http://localhost:{port}/v1"),
-        "api": "openai-completions",
-        "apiKey": "mesh",
-        "models": [{
-            "id": model_id,
-            "name": model_id,
-            "reasoning": false,
-            "input": ["text"],
-            "contextWindow": 32768,
-            "maxTokens": 8192,
-            "compat": {
-                "supportsUsageInStreaming": false,
-                "maxTokensField": "max_tokens",
-                "supportsDeveloperRole": false
-            }
-        }]
-    });
-
-    providers.insert("mesh".to_string(), mesh);
-
-    if let Some(parent) = models_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    if let Ok(json) = serde_json::to_string_pretty(&root)
-        && let Err(e) = std::fs::write(&models_path, json)
-    {
-        tracing::warn!("Failed to update {}: {e}", models_path.display());
-    }
 }
 
 /// Resolve Nostr relay URLs from CLI or defaults.

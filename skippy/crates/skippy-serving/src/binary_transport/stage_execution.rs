@@ -11,7 +11,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{runtime_state::RuntimeState, telemetry::lifecycle_attrs};
+use crate::{
+    runtime_state::{DeferredDFlashDraft, RuntimeState},
+    telemetry::lifecycle_attrs,
+};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 use skippy_metrics::attr;
@@ -22,12 +25,12 @@ use skippy_protocol::{
 use skippy_protocol::{
     MessageBase, SCHEMA_VERSION, StageConfig, StageTopology,
     binary::{
-        READY_MAGIC, StageNativeMtpDraft, StageWireMessage, WireMessageKind, WireReplyKind,
-        send_ready,
+        READY_MAGIC, STAGE_REPLY_STATS_WIRE_BYTES, StageNativeMtpDraft, StageWireMessage,
+        WireMessageKind, WireReplyKind, send_ready,
     },
 };
 use skippy_runtime::{
-    ACTIVATION_FRAME_VERSION, ACTIVATION_MAX_PARTS, ActivationDesc, ActivationFrame,
+    ACTIVATION_FRAME_VERSION, ACTIVATION_MAX_PARTS, ActivationDesc, ActivationFrame, NativeMtpDraft,
 };
 
 use super::native_mtp_reply::{
@@ -350,14 +353,13 @@ pub(in crate::binary_transport) fn estimated_reply_wire_bytes(
     predicted_token_count: usize,
 ) -> usize {
     const REPLY_HEADER_BYTES: usize = 3 * std::mem::size_of::<i32>();
-    const REPLY_STATS_BYTES: usize = 27 * std::mem::size_of::<i64>();
     let token_count = match reply_kind {
         WireReplyKind::Ack => 0,
         WireReplyKind::PredictedToken => 1,
         WireReplyKind::PredictedTokens => predicted_token_count,
         WireReplyKind::TokenScores => predicted_token_count + 1,
     };
-    REPLY_HEADER_BYTES + token_count * std::mem::size_of::<i32>() + REPLY_STATS_BYTES
+    REPLY_HEADER_BYTES + token_count * std::mem::size_of::<i32>() + STAGE_REPLY_STATS_WIRE_BYTES
 }
 pub(in crate::binary_transport) fn binary_message_attrs(
     config: &StageConfig,
@@ -584,6 +586,12 @@ impl BinaryStageExecutionOptions {
 }
 
 /// Dispatch a validated stage request to its owning execution path.
+///
+/// On a split DFlash target this also moves target features along: an earlier
+/// stage appends the rows of its DFlash target layers to its output frame, and
+/// the final stage hands the rows it received to its draft. When stage 0 asks
+/// for a draft, the final stage drafts the next block with DFlash and returns
+/// it where a native MTP draft would go.
 pub(crate) fn run_binary_stage_message(
     runtime: &mut RuntimeState,
     session_id: &str,
@@ -591,6 +599,174 @@ pub(crate) fn run_binary_stage_message(
     token_ids: &[i32],
     input: Option<&ActivationFrame>,
     options: BinaryStageExecutionOptions,
+) -> Result<(i32, Vec<i32>, ActivationFrame, Option<StageNativeMtpDraft>)> {
+    runtime.dflash_split_input(session_id, input);
+    // A draft owed for an earlier window is moot once the next message lands.
+    runtime.dflash_take_deferred_draft(session_id);
+    let dflash_tokens = dflash_draft_tokens(runtime, message);
+    let early_verdict = dflash_early_verdict(message, dflash_tokens);
+    if early_verdict {
+        runtime.dflash_defer_next_ingest(session_id);
+    }
+    let (predicted, mut predicted_tokens, mut output, mut draft) = execute_binary_stage_message(
+        runtime,
+        session_id,
+        message,
+        token_ids,
+        input,
+        options,
+        dflash_tokens > 0,
+    )?;
+    runtime.dflash_split_output(session_id, &mut output);
+    if early_verdict {
+        // The verdict goes back first; the caller drafts with
+        // `run_deferred_dflash_draft` once it is on the wire.
+        runtime.dflash_defer_draft(
+            session_id,
+            DeferredDFlashDraft {
+                window: token_ids.to_vec(),
+                predicted_tokens: predicted_tokens.clone(),
+                max_tokens: dflash_tokens,
+                accepts_after_correction: message.state.accepts_native_mtp_draft_after_correction(),
+            },
+        );
+        return Ok((predicted, predicted_tokens, output, draft));
+    }
+    if dflash_tokens > 0 {
+        let window = (message.kind == WireMessageKind::VerifyWindow).then_some(token_ids);
+        if let Some(proposal) = propose_dflash_after(
+            runtime,
+            session_id,
+            window,
+            &predicted_tokens,
+            dflash_tokens,
+        )? {
+            let proposal = NativeMtpDraft {
+                token_ids: proposal.tokens,
+                proposal_compute_us: i64::try_from(proposal.proposal_compute_us)
+                    .unwrap_or(i64::MAX),
+            };
+            match window {
+                Some(window) => {
+                    draft = verify_reply_native_mtp_draft(
+                        Some(stage_native_mtp_draft(proposal)),
+                        window,
+                        &predicted_tokens,
+                        message.state.accepts_native_mtp_draft_after_correction(),
+                    );
+                }
+                None => {
+                    predicted_tokens = native_mtp_prediction_tokens(predicted, Some(proposal));
+                }
+            }
+        }
+    }
+    Ok((predicted, predicted_tokens, output, draft))
+}
+
+/// Whether to answer this message with an early verdict: a verify window
+/// whose sender reads one, on a final stage that drafts its next block.
+fn dflash_early_verdict(message: &StageWireMessage, dflash_tokens: usize) -> bool {
+    dflash_tokens > 0
+        && message.kind == WireMessageKind::VerifyWindow
+        && message.state.split_dflash_early_verdict()
+}
+
+/// Drafts the block a final stage owes stage 0 after an early verdict on
+/// this session's last verify window. `None` when nothing is owed, or the
+/// draft has nothing to propose, or proposes after a rejected window to a
+/// sender that cannot use it.
+pub(crate) fn run_deferred_dflash_draft(
+    runtime: &mut RuntimeState,
+    session_id: &str,
+) -> Result<Option<StageNativeMtpDraft>> {
+    let Some(deferred) = runtime.dflash_take_deferred_draft(session_id) else {
+        return Ok(None);
+    };
+    let Some(proposal) = propose_dflash_after(
+        runtime,
+        session_id,
+        Some(&deferred.window),
+        &deferred.predicted_tokens,
+        deferred.max_tokens,
+    )?
+    else {
+        return Ok(None);
+    };
+    let proposal = NativeMtpDraft {
+        token_ids: proposal.tokens,
+        proposal_compute_us: i64::try_from(proposal.proposal_compute_us).unwrap_or(i64::MAX),
+    };
+    Ok(verify_reply_native_mtp_draft(
+        Some(stage_native_mtp_draft(proposal)),
+        &deferred.window,
+        &deferred.predicted_tokens,
+        deferred.accepts_after_correction,
+    ))
+}
+
+/// Draft tokens stage 0 asked a DFlash final stage to propose with this
+/// message; 0 when this stage has no draft or the sender asked for none.
+fn dflash_draft_tokens(runtime: &RuntimeState, message: &StageWireMessage) -> usize {
+    let drafting_kind = matches!(
+        message.kind,
+        WireMessageKind::DecodeEmbd
+            | WireMessageKind::DecodeReadout
+            | WireMessageKind::DecodeLightCtx
+            | WireMessageKind::VerifyWindow
+    );
+    if !drafting_kind || !runtime.dflash_drafts() {
+        return 0;
+    }
+    message.state.native_mtp_draft_tokens().unwrap_or(0)
+}
+
+/// Accepted proposal tokens of a verify window: proposals that match the
+/// target's prediction for the row before them.
+fn verify_accepted_prefix(window: &[i32], predicted: &[i32]) -> usize {
+    window
+        .iter()
+        .skip(1)
+        .zip(predicted)
+        .take_while(|(proposed, target)| proposed == target)
+        .count()
+}
+
+/// Drafts the block after the last token this message commits: the decoded
+/// token's prediction, or a verify window's bonus or correction token.
+fn propose_dflash_after(
+    runtime: &mut RuntimeState,
+    session_id: &str,
+    window: Option<&[i32]>,
+    predicted_tokens: &[i32],
+    max_tokens: usize,
+) -> Result<Option<skippy_runtime::DFlashProposal>> {
+    let Some(decoded_end) = runtime.session_token_count(session_id) else {
+        return Ok(None);
+    };
+    let (accepted, window_len) = match window {
+        Some(window) => (
+            verify_accepted_prefix(window, predicted_tokens),
+            window.len(),
+        ),
+        None => (0, 1),
+    };
+    let Some(&anchor) = predicted_tokens.get(accepted) else {
+        return Ok(None);
+    };
+    let window_start = decoded_end.saturating_sub(window_len as u64);
+    let anchor_position = window_start + accepted as u64 + 1;
+    runtime.dflash_propose_at(session_id, anchor, anchor_position, max_tokens)
+}
+
+fn execute_binary_stage_message(
+    runtime: &mut RuntimeState,
+    session_id: &str,
+    message: &StageWireMessage,
+    token_ids: &[i32],
+    input: Option<&ActivationFrame>,
+    options: BinaryStageExecutionOptions,
+    dflash_drafts: bool,
 ) -> Result<(i32, Vec<i32>, ActivationFrame, Option<StageNativeMtpDraft>)> {
     match message.kind {
         WireMessageKind::PrefillEmbd => {
@@ -639,7 +815,7 @@ pub(crate) fn run_binary_stage_message(
                 runtime.context_tokens_per_lane(),
             );
             let draft_tokens = native_mtp_draft_tokens(message, options);
-            if !options.native_mtp_enabled || draft_tokens == 0 {
+            if !options.native_mtp_enabled || draft_tokens == 0 || dflash_drafts {
                 let (predicted, output) = runtime.decode_frame_sampled(
                     session_id,
                     token_id,
@@ -669,13 +845,18 @@ pub(crate) fn run_binary_stage_message(
                 message.sampling.as_ref(),
                 runtime.context_tokens_per_lane(),
             );
+            let native_mtp_tokens = if dflash_drafts {
+                0
+            } else {
+                native_mtp_draft_tokens(message, options)
+            };
             let (predicted_tokens, native_mtp, output) = runtime.verify_frame_sampled(
                 session_id,
                 token_ids,
                 sampling.as_ref(),
                 input,
                 options.output_capacity,
-                native_mtp_draft_tokens(message, options),
+                native_mtp_tokens,
             )?;
             let predicted = predicted_tokens.first().copied().unwrap_or(0);
             let draft = verify_reply_native_mtp_draft(
@@ -779,17 +960,48 @@ pub(in crate::binary_transport) fn input_activation_frame(
         .take_activation_frame()
         .context("decode wire activation frame")?
         .context("activation payload did not contain a frame")?;
-    let expected_range = upstream_layer_range(config, topology, message);
-    if (frame.desc.layer_start, frame.desc.layer_end) != expected_range {
+    check_upstream_layer_range(
+        config,
+        topology,
+        message,
+        (frame.desc.layer_start, frame.desc.layer_end),
+    )?;
+    runtime_activation_frame(frame).map(Some)
+}
+
+/// Checks that an activation frame covers the layers of the stage that sent
+/// it. A frame describes only its producer's layers, so with a topology the
+/// range must be exactly that stage's. Without one this stage knows only
+/// where its own layers start: the frame must end there. Assuming the
+/// producer started at layer 0 held only for the second stage of a split and
+/// rejected every frame reaching a third.
+fn check_upstream_layer_range(
+    config: &StageConfig,
+    topology: Option<&StageTopology>,
+    message: &StageWireMessage,
+    (layer_start, layer_end): (i32, i32),
+) -> Result<()> {
+    let expected = upstream_layer_range(topology, message);
+    if topology.is_some() && expected.is_none() {
         bail!(
-            "activation frame layer range {}..{} does not match upstream stage {}..{}",
-            frame.desc.layer_start,
-            frame.desc.layer_end,
-            expected_range.0,
-            expected_range.1,
+            "activation frame came from stage {}, which the stage topology does not list",
+            message.state.source_stage_index
         );
     }
-    runtime_activation_frame(frame).map(Some)
+    let matches = match expected {
+        Some(expected) => (layer_start, layer_end) == expected,
+        None => layer_end == config.layer_start as i32 && (0..layer_end).contains(&layer_start),
+    };
+    if !matches {
+        let expected = expected.map_or_else(
+            || format!("..{}", config.layer_start),
+            |(start, end)| format!("{start}..{end}"),
+        );
+        bail!(
+            "activation frame layer range {layer_start}..{layer_end} does not match upstream stage {expected}"
+        );
+    }
+    Ok(())
 }
 
 pub(in crate::binary_transport) fn empty_activation_frame(
@@ -813,20 +1025,16 @@ pub(in crate::binary_transport) fn empty_activation_frame(
     }
 }
 
+/// The layers of the stage that sent `message`, when a topology names it.
 fn upstream_layer_range(
-    config: &StageConfig,
     topology: Option<&StageTopology>,
     message: &StageWireMessage,
-) -> (i32, i32) {
-    if let Some(topology) = topology
-        && let Some(stage) = topology
-            .stages
-            .iter()
-            .find(|stage| stage.stage_index as i32 == message.state.source_stage_index)
-    {
-        return (stage.layer_start as i32, stage.layer_end as i32);
-    }
-    (0, config.layer_start as i32)
+) -> Option<(i32, i32)> {
+    topology?
+        .stages
+        .iter()
+        .find(|stage| stage.stage_index as i32 == message.state.source_stage_index)
+        .map(|stage| (stage.layer_start as i32, stage.layer_end as i32))
 }
 
 pub(in crate::binary_transport) fn token_sideband_or_fill(
@@ -927,6 +1135,7 @@ pub(in crate::binary_transport) fn prefix_cache_test_config() -> StageConfig {
         direct_io: false,
         main_gpu: None,
         split_mode: skippy_protocol::SplitMode::Auto,
+        host_expert_layers: None,
         cache_type_k: "f16".to_string(),
         cache_type_v: "f16".to_string(),
         flash_attn_type: Default::default(),
@@ -989,8 +1198,10 @@ pub(in crate::binary_transport) fn first_decode_message_with_full_prompt_sideban
 #[cfg(test)]
 mod tests {
     use super::{
-        decode_record_tokens_sideband, first_decode_message_with_full_prompt_sideband,
-        is_decode_frame_batch_candidate, prefix_cache_test_config,
+        BinaryStageExecutionOptions, DeferredDFlashDraft, RuntimeState,
+        decode_record_tokens_sideband, dflash_early_verdict,
+        first_decode_message_with_full_prompt_sideband, is_decode_frame_batch_candidate,
+        prefix_cache_test_config, run_binary_stage_message, run_deferred_dflash_draft,
         stage_output_activation_capacity, take_ready_downstream, take_warm_or_connect_downstream,
         token_sideband_or_fill, warm_downstream_is_healthy,
         warm_downstream_preconnect_enabled_from,
@@ -1176,6 +1387,141 @@ mod tests {
 
         assert!(error.to_string().contains("cancelled during shutdown"));
         task.join().unwrap();
+    }
+
+    /// A frame carries only its producer's layers. On the third stage of a
+    /// split without a topology, as mesh loads stages, the frame from the
+    /// second stage starts after layer 0 and must still be accepted.
+    #[test]
+    fn a_third_stage_accepts_the_frame_of_the_stage_before_it() {
+        use super::check_upstream_layer_range;
+        use skippy_protocol::{LoadMode, StageTopology, StageTopologyEntry};
+
+        let mut config = prefix_cache_test_config();
+        config.stage_index = 2;
+        config.layer_start = 23;
+        config.layer_end = 35;
+        let mut message = first_decode_message_with_full_prompt_sideband();
+        message.state.source_stage_index = 1;
+
+        check_upstream_layer_range(&config, None, &message, (11, 23)).unwrap();
+        check_upstream_layer_range(&config, None, &message, (0, 23)).unwrap();
+        for wrong in [(11, 22), (23, 35), (-1, 23), (23, 23)] {
+            assert!(check_upstream_layer_range(&config, None, &message, wrong).is_err());
+        }
+
+        let entry = |stage_index, layer_start, layer_end| StageTopologyEntry {
+            stage_id: format!("stage-{stage_index}"),
+            stage_index,
+            host: None,
+            endpoint: String::new(),
+            layer_start,
+            layer_end,
+            load_mode: LoadMode::RuntimeSlice,
+        };
+        let topology = StageTopology {
+            topology_id: "topology".to_string(),
+            model_id: "model".to_string(),
+            stages: vec![entry(0, 0, 11), entry(1, 11, 23), entry(2, 23, 35)],
+        };
+        check_upstream_layer_range(&config, Some(&topology), &message, (11, 23)).unwrap();
+        assert!(check_upstream_layer_range(&config, Some(&topology), &message, (0, 23)).is_err());
+        // A topology that does not list the sender rejects the frame.
+        message.state.source_stage_index = 99;
+        assert!(check_upstream_layer_range(&config, Some(&topology), &message, (11, 23)).is_err());
+    }
+
+    #[test]
+    fn only_verify_windows_of_senders_that_ask_get_an_early_verdict() {
+        let mut verify = test_message(WireMessageKind::VerifyWindow, 5);
+        assert!(!dflash_early_verdict(&verify, 4));
+        verify.state.set_split_dflash_early_verdict(true);
+        assert!(dflash_early_verdict(&verify, 4));
+        // Nothing to draft: the reply carries everything.
+        assert!(!dflash_early_verdict(&verify, 0));
+        // A serial decode's draft rides its prediction vector.
+        let mut decode = test_message(WireMessageKind::DecodeEmbd, 1);
+        decode.state.set_split_dflash_early_verdict(true);
+        assert!(!dflash_early_verdict(&decode, 4));
+    }
+
+    #[test]
+    fn an_owed_draft_is_drafted_once_and_counted() {
+        skippy_runtime::test_support::require_native_runtime();
+        let mut runtime = RuntimeState::split_dflash_final_stage_for_test();
+        let mut state = StageStateHeader::new(WireMessageKind::VerifyWindow);
+        state.set_split_dflash(true);
+        // Creates the session's lane.
+        runtime.dflash_split_input("s", None);
+        assert!(
+            run_deferred_dflash_draft(&mut runtime, "s")
+                .unwrap()
+                .is_none()
+        );
+
+        runtime.dflash_defer_draft(
+            "s",
+            DeferredDFlashDraft {
+                window: vec![10, 11, 12, 13, 14],
+                predicted_tokens: vec![11, 12, 99, 1, 2],
+                max_tokens: 4,
+                accepts_after_correction: true,
+            },
+        );
+        assert!(runtime.dflash_draft_deferred("s"));
+        // The detached draft has no context, so the block is empty, but it
+        // is drafted and counted.
+        let draft = run_deferred_dflash_draft(&mut runtime, "s").unwrap();
+        assert!(draft.is_none_or(|draft| draft.token_ids.is_empty()));
+        assert!(!runtime.dflash_draft_deferred("s"));
+        assert_eq!(runtime.dflash_reply_stats("s", state).dflash_drafts, 1);
+        // Nothing is owed twice.
+        assert!(
+            run_deferred_dflash_draft(&mut runtime, "s")
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(runtime.dflash_reply_stats("s", state).dflash_drafts, 1);
+    }
+
+    #[test]
+    fn a_new_message_drops_a_draft_still_owed() {
+        let mut runtime = RuntimeState::split_dflash_final_stage_for_test();
+        runtime.dflash_split_input("s", None);
+        runtime.dflash_defer_draft(
+            "s",
+            DeferredDFlashDraft {
+                window: vec![1, 2],
+                predicted_tokens: vec![2, 3],
+                max_tokens: 4,
+                accepts_after_correction: false,
+            },
+        );
+        let stop = test_message(WireMessageKind::Stop, 0);
+        // Stop is not executable; the owed draft is dropped before that.
+        assert!(
+            run_binary_stage_message(
+                &mut runtime,
+                "s",
+                &stop,
+                &[],
+                None,
+                BinaryStageExecutionOptions::new(false, 0, false),
+            )
+            .is_err()
+        );
+        assert!(!runtime.dflash_draft_deferred("s"));
+    }
+
+    #[test]
+    fn verify_accepted_prefix_stops_at_the_first_rejected_proposal() {
+        use super::verify_accepted_prefix;
+        // Window [current, p1, p2, p3]; prediction i is the target's token
+        // after window row i.
+        assert_eq!(verify_accepted_prefix(&[1, 2, 3, 4], &[2, 3, 4, 5]), 3);
+        assert_eq!(verify_accepted_prefix(&[1, 2, 3, 4], &[2, 9, 4, 5]), 1);
+        assert_eq!(verify_accepted_prefix(&[1, 2, 3, 4], &[7]), 0);
+        assert_eq!(verify_accepted_prefix(&[1], &[2]), 0);
     }
 
     #[test]

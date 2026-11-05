@@ -8,6 +8,7 @@ use super::probe::{
     PEER_CAPSULE_ID_HEADER, ResponseProbe, peer_response_header_value, probe_http_response,
     probe_http_response_local,
 };
+use super::served_model_headers::{ServedModelHeaders, set_served_model_headers};
 use crate::logging::OpenAiRouteObserver;
 use crate::mesh;
 use crate::network::openai::client_stream::ClientStream;
@@ -19,7 +20,7 @@ use std::future::Future;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 
-/// Check remote seller pricing before forwarding a request to local inference.
+/// Forward a request to local inference on `port`.
 pub(in crate::network::openai) async fn route_local_attempt(
     node: &mesh::Node,
     tcp_stream: &mut ClientStream,
@@ -29,7 +30,6 @@ pub(in crate::network::openai) async fn route_local_attempt(
     logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
     let RouteAttemptLoggingContext {
-        exchange_id: _,
         request_id,
         retry_policy,
         response_adapter,
@@ -37,35 +37,7 @@ pub(in crate::network::openai) async fn route_local_attempt(
         served_by,
         peer_capsule_id,
     } = logging;
-    // The decoded model identity is only consulted by seller payment
-    // admission. Keep the parameter deliberate when that feature is compiled
-    // out so the denied-warnings build does not flag it as unused.
-    #[cfg(not(feature = "payments"))]
-    let _ = model;
-    #[cfg(feature = "payments")]
-    {
-        if !super::paid::is_local_origin(tcp_stream) {
-            match node.advertised_payment_offers().await {
-                Ok(prices)
-                    if super::payment_admission::requires_payment(node, model, &prices).await =>
-                {
-                    return super::paid::payment_error(
-                        tcp_stream,
-                        "this provider requires the Lightning payment protocol",
-                    )
-                    .await;
-                }
-                Err(_) => {
-                    return super::paid::payment_error(
-                        tcp_stream,
-                        "seller payment state unavailable",
-                    )
-                    .await;
-                }
-                _ => {}
-            }
-        }
-    }
+    let served_model = served_model_headers_for_mesh_peer(node, tcp_stream, model, port).await;
     let Ok((_instance_request, mut upstream)) = acquire_local_attempt_upstream(node, port).await
     else {
         return RouteAttemptResult::RetryableUnavailable;
@@ -86,10 +58,28 @@ pub(in crate::network::openai) async fn route_local_attempt(
         retry_policy,
         response_adapter,
         served_by,
+        served_model.as_ref(),
         peer_capsule_id,
         route_observer,
     )
     .await
+}
+
+/// This node's served-model headers for `model`, to return to a mesh peer
+/// that asked this node to serve it (see `served_model_headers`). `None` for
+/// a local client, which reads this node's own exchange events, and when this
+/// node knows nothing about the model.
+async fn served_model_headers_for_mesh_peer(
+    node: &mesh::Node,
+    tcp_stream: &ClientStream,
+    model: Option<&str>,
+    port: u16,
+) -> Option<ServedModelHeaders> {
+    let model = model?;
+    if !tcp_stream.is_mesh_peer() {
+        return None;
+    }
+    ServedModelHeaders::for_served_model(node, model, Some(port)).await
 }
 
 async fn acquire_local_attempt_upstream(
@@ -119,6 +109,7 @@ pub(super) async fn route_local_attempt_after_forward<U: AsyncRead + Unpin + Can
     retry_policy: ResponseRetryPolicy,
     response_adapter: ResponseAdapter,
     served_by: Option<&str>,
+    served_model: Option<&ServedModelHeaders>,
     peer_capsule_id: Option<&PeerCapsuleIdSink>,
     route_observer: OpenAiRouteObserver<'_>,
 ) -> RouteAttemptResult {
@@ -127,8 +118,12 @@ pub(super) async fn route_local_attempt_after_forward<U: AsyncRead + Unpin + Can
             cancel_upstream_if_client_disconnected(RouteAttemptResult::ClientDisconnected, upstream)
                 .await
         }
-        ProbeOutcome::Response(Ok(probe)) => {
-            record_peer_capsule_id(peer_capsule_id, &probe);
+        ProbeOutcome::Response(Ok(mut probe)) => {
+            record_peer_response_markers(peer_capsule_id, &probe);
+            // Recorded before the headers are set below, so this node never
+            // records its own model as a peer's, and a paid seller's headers
+            // read here never reach this node's client.
+            set_served_model_headers(&mut probe, served_model);
             let result = relay_attempted_response(
                 tcp_stream,
                 upstream,
@@ -198,8 +193,11 @@ async fn route_remote_attempt_after_forward<R: AsyncRead + Unpin + CancelUpstrea
             )
             .await
         }
-        ProbeOutcome::Response(Ok(probe)) => {
-            record_peer_capsule_id(peer_capsule_id, &probe);
+        ProbeOutcome::Response(Ok(mut probe)) => {
+            record_peer_response_markers(peer_capsule_id, &probe);
+            // The peer's served-model headers are for this node's own exchange
+            // events; they are never relayed on to this node's client.
+            set_served_model_headers(&mut probe, None);
             let result = relay_attempted_response(
                 tcp_stream,
                 quic_recv,
@@ -235,7 +233,6 @@ pub(in crate::network::openai) async fn route_remote_attempt(
     logging: RouteAttemptLoggingContext<'_>,
 ) -> RouteAttemptResult {
     let RouteAttemptLoggingContext {
-        exchange_id: _,
         request_id,
         retry_policy,
         response_adapter,
@@ -243,24 +240,6 @@ pub(in crate::network::openai) async fn route_remote_attempt(
         served_by,
         peer_capsule_id,
     } = logging;
-    #[cfg(feature = "payments")]
-    {
-        if let Ok(request) = crate::network::payments::request::PaidRequest::parse(prefetched)
-            && let Some(price) = node.peer_payment_offer(host_id, &request.model).await
-        {
-            return super::paid::route(node, tcp_stream, host_id, prefetched, price, logging).await;
-        }
-    }
-    #[cfg(feature = "payments")]
-    let sanitized = match crate::network::payments::request::strip_intent(prefetched) {
-        Ok(raw) => raw,
-        Err(_) => {
-            return super::paid::payment_error(tcp_stream, "invalid request payment intent").await;
-        }
-    };
-    #[cfg(not(feature = "payments"))]
-    let sanitized = prefetched.to_vec();
-    let prefetched = sanitized.as_slice();
     let (mut quic_send, mut quic_recv) = match node.open_http_tunnel(host_id).await {
         Ok(tunnel) => tunnel,
         Err(err) => {
@@ -325,20 +304,15 @@ async fn forward_buffered_request<W: AsyncWrite + Unpin>(
     upstream: &mut W,
     prefetched: &[u8],
 ) -> std::io::Result<()> {
-    #[cfg(feature = "payments")]
-    let sanitized = crate::network::payments::request::strip_intent(prefetched)
-        .map_err(std::io::Error::other)?;
-    #[cfg(not(feature = "payments"))]
-    let sanitized = prefetched.to_vec();
-    upstream.write_all(&sanitized).await
+    upstream.write_all(prefetched).await
 }
 
 /// Peek the just-probed, untouched response headers for a peer's
-/// `X-Capsule-Id` and stash it in `sink`, before any relay/adapter rewrite
-/// runs. A no-op when `sink` is `None` (every attempt except the
-/// `RemoteMesh` dispatch path) or the header is absent — never invents a
-/// value.
-fn record_peer_capsule_id(sink: Option<&PeerCapsuleIdSink>, probe: &ResponseProbe) {
+/// `X-Capsule-Id` and served-model headers and stash them in `sink`, before
+/// any relay/adapter rewrite runs. A no-op when `sink` is `None` (every attempt
+/// except the `RemoteMesh` dispatch path) or a header is absent — never
+/// invents a value.
+fn record_peer_response_markers(sink: Option<&PeerCapsuleIdSink>, probe: &ResponseProbe) {
     let Some(sink) = sink else {
         return;
     };
@@ -346,6 +320,10 @@ fn record_peer_capsule_id(sink: Option<&PeerCapsuleIdSink>, probe: &ResponseProb
         peer_response_header_value(&probe.buffered, probe.header_end, PEER_CAPSULE_ID_HEADER)
     {
         sink.set(capsule_id);
+    }
+    let served_model = ServedModelHeaders::read(&probe.buffered, probe.header_end);
+    if !served_model.is_empty() {
+        sink.set_served_model(served_model);
     }
 }
 
@@ -454,6 +432,7 @@ mod tests {
                 RequestId::new(),
                 ResponseRetryPolicy::next_target_available(false),
                 ResponseAdapter::None,
+                None,
                 None,
                 None,
                 OpenAiRouteObserver::default(),
@@ -664,7 +643,7 @@ mod tests {
     async fn a_remote_attempt_records_the_peers_capsule_id_into_the_sink() {
         let body = "x".repeat(8);
         let header = format!(
-            "HTTP/1.1 200 OK\r\nX-Capsule-Id: cap-peer-1\r\nContent-Length: {}\r\n\r\n{body}",
+            "HTTP/1.1 200 OK\r\nX-Capsule-Id: cap-peer-1\r\nx-mesh-weights-digest: 74a4da8c\r\nx-mesh-model-canonical-ref: org/repo@main:Q4_K_M\r\nContent-Length: {}\r\n\r\n{body}",
             body.len()
         );
         let mut upstream = ScriptedUpstream::new(vec![Ok(header.into_bytes())]);
@@ -696,6 +675,67 @@ mod tests {
 
         let sink = task.await.unwrap();
         assert_eq!(sink.take(), Some("cap-peer-1".to_string()));
+        assert_eq!(sink.take_served_model(), test_served_model());
+    }
+
+    /// The peer's served-model headers are recorded for this node's own events
+    /// but never relayed on to this node's client, whether the head is relayed
+    /// as is or rebuilt by a response adapter.
+    #[tokio::test]
+    async fn a_remote_attempt_never_relays_the_peers_served_model() {
+        let body = r#"{"id":"c","object":"chat.completion","choices":[]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nx-mesh-weights-digest: 74a4da8c\r\nx-mesh-model-canonical-ref: org/repo@main:Q4_K_M\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        for adapter in [
+            ResponseAdapter::None,
+            ResponseAdapter::OpenAiChatCompletionsJson,
+        ] {
+            let mut upstream = ScriptedUpstream::new(vec![Ok(response.clone().into_bytes())]);
+            let host_id = iroh::SecretKey::generate().public();
+            let sink = PeerCapsuleIdSink::new();
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let task = tokio::spawn(async move {
+                let (client, _) = listener.accept().await.unwrap();
+                let mut client: ClientStream = client.into();
+                route_remote_attempt_after_forward(
+                    &mut client,
+                    &mut upstream,
+                    host_id,
+                    RequestId::new(),
+                    ResponseRetryPolicy::next_target_available(false),
+                    adapter,
+                    None,
+                    Some(&sink),
+                    OpenAiRouteObserver::default(),
+                )
+                .await;
+                sink
+            });
+            let mut socket = TcpStream::connect(address).await.unwrap();
+            let mut relayed = Vec::new();
+            socket.read_to_end(&mut relayed).await.unwrap();
+            let relayed = String::from_utf8(relayed).unwrap();
+
+            let sink = task.await.unwrap();
+            assert_eq!(sink.take_served_model(), test_served_model());
+            assert!(
+                relayed.starts_with("HTTP/1.1 200"),
+                "{adapter:?}: {relayed}"
+            );
+            let lowered = relayed.to_ascii_lowercase();
+            assert!(
+                !lowered.contains("x-mesh-weights-digest")
+                    && !lowered.contains("x-mesh-model-canonical-ref"),
+                "{adapter:?}: {relayed}"
+            );
+            assert!(
+                relayed.contains("\"chat.completion\""),
+                "{adapter:?}: {relayed}"
+            );
+        }
     }
 
     /// Mutant: no `X-Capsule-Id` on the peer's response — the sink stays
@@ -736,6 +776,191 @@ mod tests {
 
         let sink = task.await.unwrap();
         assert_eq!(sink.take(), None);
+        assert!(sink.take_served_model().is_empty());
+    }
+
+    fn test_served_model() -> ServedModelHeaders {
+        ServedModelHeaders {
+            weights_digest: Some("74a4da8c".to_owned()),
+            canonical_ref: Some("org/repo@main:Q4_K_M".to_owned()),
+        }
+    }
+
+    /// Serve `upstream_response` from this node with `served_model` set and
+    /// return the bytes the client received.
+    async fn relay_local_with_served_model(
+        upstream_response: String,
+        response_adapter: ResponseAdapter,
+        served_model: Option<ServedModelHeaders>,
+    ) -> String {
+        let mut upstream = ScriptedUpstream::new(vec![Ok(upstream_response.into_bytes())]);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let (client, _) = listener.accept().await.unwrap();
+            let mut client: ClientStream = client.into();
+            route_local_attempt_after_forward(
+                &mut client,
+                &mut upstream,
+                0,
+                RequestId::new(),
+                ResponseRetryPolicy::next_target_available(false),
+                response_adapter,
+                None,
+                served_model.as_ref(),
+                None,
+                OpenAiRouteObserver::default(),
+            )
+            .await
+        });
+        let mut socket = TcpStream::connect(address).await.unwrap();
+        let mut relayed = Vec::new();
+        socket.read_to_end(&mut relayed).await.unwrap();
+        task.await.unwrap();
+        String::from_utf8(relayed).unwrap()
+    }
+
+    /// A node serving a mesh peer returns its served-model headers on the
+    /// response, both when it relays the backend's head as is and when a
+    /// response adapter rebuilds it.
+    #[tokio::test]
+    async fn a_local_attempt_returns_the_served_model() {
+        let body = r#"{"id":"c","object":"chat.completion","choices":[]}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        for adapter in [
+            ResponseAdapter::None,
+            ResponseAdapter::OpenAiChatCompletionsJson,
+        ] {
+            let relayed =
+                relay_local_with_served_model(response.clone(), adapter, Some(test_served_model()))
+                    .await;
+            assert!(
+                relayed.contains("x-mesh-weights-digest: 74a4da8c\r\n")
+                    && relayed.contains("x-mesh-model-canonical-ref: org/repo@main:Q4_K_M\r\n"),
+                "{adapter:?}: {relayed}"
+            );
+        }
+        let relayed = relay_local_with_served_model(response, ResponseAdapter::None, None).await;
+        assert!(!relayed.contains("x-mesh-"), "{relayed}");
+
+        // A streamed chat completion rebuilds its head too.
+        let sse = "data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[]}\n\ndata: [DONE]\n\n";
+        let streamed = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{sse}",
+            sse.len()
+        );
+        let relayed = relay_local_with_served_model(
+            streamed,
+            ResponseAdapter::OpenAiChatCompletionsStream,
+            Some(test_served_model()),
+        )
+        .await;
+        assert!(
+            relayed.contains("x-mesh-weights-digest: 74a4da8c\r\n")
+                && relayed.contains("x-mesh-model-canonical-ref: org/repo@main:Q4_K_M\r\n"),
+            "{relayed}"
+        );
+    }
+
+    /// Only a mesh peer that reached this node over its QUIC tunnel is given
+    /// this node's served-model headers; a local TCP client is not, and a
+    /// model this node does not describe yields none.
+    #[tokio::test]
+    async fn only_a_mesh_peer_is_given_this_nodes_served_model() {
+        const TEST_ALPN: &[u8] = b"mesh-llm/weights-digest-peer-test/1";
+        let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
+            .await
+            .unwrap();
+        *node.served_model_descriptors.lock().await = vec![mesh::ServedModelDescriptor {
+            identity: mesh::ServedModelIdentity {
+                model_name: "served".to_owned(),
+                canonical_ref: Some("org/repo@main:Q4_K_M".to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        }];
+        node.load_model_for_tests("served", 8080, "74a4da8c").await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let _tcp_client = TcpStream::connect(address).await.unwrap();
+        let (tcp, _) = listener.accept().await.unwrap();
+        let tcp = ClientStream::from(tcp).with_response_metadata(Vec::new());
+        assert!(!tcp.is_mesh_peer());
+        assert_eq!(
+            served_model_headers_for_mesh_peer(&node, &tcp, Some("served"), 8080).await,
+            None
+        );
+        assert!(!ClientStream::null().is_mesh_peer());
+
+        let server = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .secret_key(iroh::SecretKey::generate())
+            .alpns(vec![TEST_ALPN.to_vec()])
+            .relay_mode(iroh::endpoint::RelayMode::Disabled)
+            .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+            .unwrap()
+            .bind()
+            .await
+            .unwrap();
+        let server_endpoint = server.clone();
+        let accepting = tokio::spawn(async move {
+            let incoming = server_endpoint.accept().await.expect("connection arrives");
+            let connection = incoming.await.expect("connection negotiates");
+            let (send, recv) = connection.accept_bi().await.expect("stream arrives");
+            (connection, send, recv)
+        });
+        let client = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
+            .secret_key(iroh::SecretKey::generate())
+            .relay_mode(iroh::endpoint::RelayMode::Disabled)
+            .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
+            .unwrap()
+            .bind()
+            .await
+            .unwrap();
+        let connection = client.connect(server.addr(), TEST_ALPN).await.unwrap();
+        let (mut request_send, _response_recv) = connection.open_bi().await.unwrap();
+        request_send.write_all(b"x").await.unwrap();
+        let (_accepted, send, recv) = accepting.await.unwrap();
+        let quic = ClientStream::from_quic_with_prefix(recv, send, Vec::new())
+            .with_response_metadata(Vec::new());
+        assert!(quic.is_mesh_peer());
+        assert_eq!(
+            served_model_headers_for_mesh_peer(&node, &quic, Some("served"), 8080).await,
+            Some(test_served_model())
+        );
+        assert_eq!(
+            served_model_headers_for_mesh_peer(&node, &quic, Some("other"), 8080).await,
+            None
+        );
+        assert_eq!(
+            served_model_headers_for_mesh_peer(&node, &quic, None, 8080).await,
+            None
+        );
+
+        client.close().await;
+        server.close().await;
+        node.endpoint.close().await;
+    }
+
+    /// A non-2xx response served nothing, so it carries no served model.
+    #[tokio::test]
+    async fn a_failed_local_attempt_returns_no_served_model() {
+        let body = r#"{"error":{"message":"busy"}}"#;
+        let response = format!(
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let relayed = relay_local_with_served_model(
+            response,
+            ResponseAdapter::None,
+            Some(test_served_model()),
+        )
+        .await;
+        assert!(relayed.starts_with("HTTP/1.1 503"), "{relayed}");
+        assert!(!relayed.contains("x-mesh-"), "{relayed}");
     }
 
     #[tokio::test]
@@ -800,174 +1025,5 @@ mod tests {
 
             assert_eq!(forwarded, REQUEST);
         }
-    }
-
-    /// A remote request for a model this node does not charge for must reach
-    /// local inference — even when the node runs with no `payments.v1`
-    /// provider at all, the documented free-only configuration. Treating that
-    /// absence as "seller payment state unavailable" answered 402 before any
-    /// inference happened.
-    #[cfg(feature = "payments")]
-    #[tokio::test]
-    async fn a_remote_free_request_reaches_local_inference_without_a_payments_provider() {
-        const TEST_ALPN: &[u8] = b"mesh-llm/free-routing-regression/1";
-        const BODY: &str = r#"{"model":"free-model","prompt":"Hi","max_tokens":8}"#;
-
-        let node = mesh::Node::new_for_tests(mesh::NodeRole::Client)
-            .await
-            .unwrap();
-        // Free-only: a manager is installed, but nothing serves `payments.v1`.
-        let (mesh_tx, _mesh_rx) = tokio::sync::mpsc::channel(8);
-        let manager = crate::plugin::PluginManager::start_with_in_process(
-            &crate::plugin::ResolvedPlugins {
-                externals: Vec::new(),
-                inactive: Vec::new(),
-            },
-            crate::plugin::PluginHostMode {
-                mesh_visibility: mesh_llm_plugin::MeshVisibility::Private,
-            },
-            mesh_tx,
-            crate::plugin::InProcessPlugins::default(),
-        )
-        .await
-        .unwrap();
-        node.set_plugin_manager(manager).await;
-
-        // The node's local OpenAI surface, which proves inference was reached.
-        let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = backend.local_addr().unwrap().port();
-        let (inference_reached_tx, inference_reached_rx) = oneshot::channel();
-        let backend_task = tokio::spawn(async move {
-            let (mut stream, _) = backend.accept().await.expect("local inference connection");
-            let mut raw = Vec::new();
-            let mut buffer = [0_u8; 4096];
-            loop {
-                let read = stream
-                    .read(&mut buffer)
-                    .await
-                    .expect("local inference request");
-                if read == 0 {
-                    break;
-                }
-                raw.extend_from_slice(&buffer[..read]);
-                if raw.windows(4).any(|window| window == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            inference_reached_tx.send(()).unwrap();
-            let body = r#"{"id":"free-1","model":"free-model","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            stream
-                .write_all(response.as_bytes())
-                .await
-                .expect("local inference response");
-            stream.shutdown().await.expect("local inference shutdown");
-        });
-
-        let server = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
-            .secret_key(iroh::SecretKey::generate())
-            .alpns(vec![TEST_ALPN.to_vec()])
-            .relay_mode(iroh::endpoint::RelayMode::Disabled)
-            .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
-            .unwrap()
-            .bind()
-            .await
-            .unwrap();
-        let server_address = server.addr();
-        let request = format!(
-            "POST /v1/completions HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{BODY}",
-            BODY.len()
-        );
-        // The caller dials in over QUIC and reads the relayed response. A QUIC
-        // ingress exposes no socket address, so this request has a remote
-        // origin and the payments branch runs for it.
-        let caller_request = request.clone();
-        let caller_task = tokio::spawn(async move {
-            let caller = iroh::Endpoint::builder(iroh::endpoint::presets::Minimal)
-                .secret_key(iroh::SecretKey::generate())
-                .relay_mode(iroh::endpoint::RelayMode::Disabled)
-                .bind_addr(std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
-                .unwrap()
-                .bind()
-                .await
-                .unwrap();
-            let connection = caller.connect(server_address, TEST_ALPN).await.unwrap();
-            let (mut request_send, mut response_recv) = connection.open_bi().await.unwrap();
-            request_send
-                .write_all(caller_request.as_bytes())
-                .await
-                .expect("the caller sends its request over the QUIC stream");
-            let relayed = response_recv
-                .read_to_end(16 * 1024)
-                .await
-                .expect("the caller must receive the relayed response");
-            caller.close().await;
-            relayed
-        });
-
-        let incoming = server.accept().await.expect("the remote caller arrives");
-        let connection = incoming.await.expect("the remote caller negotiates");
-        let (send, recv) = connection
-            .accept_bi()
-            .await
-            .expect("the remote request stream");
-        let mut client = ClientStream::from_quic_with_prefix(recv, send, Vec::new());
-
-        let result = timeout(
-            Duration::from_secs(10),
-            route_local_attempt(
-                &node,
-                &mut client,
-                port,
-                Some("free-model"),
-                request.as_bytes(),
-                RouteAttemptLoggingContext {
-                    exchange_id: None,
-                    request_id: RequestId::new(),
-                    retry_policy: ResponseRetryPolicy::next_target_available(false),
-                    response_adapter: ResponseAdapter::None,
-                    route_observer: OpenAiRouteObserver::default(),
-                    served_by: None,
-                    peer_capsule_id: None,
-                },
-            ),
-        )
-        .await
-        .expect("a free remote request must not stall");
-
-        assert!(
-            matches!(
-                result,
-                RouteAttemptResult::Delivered {
-                    status_code: 200,
-                    ..
-                }
-            ),
-            "{result:?}"
-        );
-
-        // `connection` stays alive here so the caller can still read the
-        // relayed response before the stream is torn down.
-        let relayed = timeout(Duration::from_secs(5), caller_task)
-            .await
-            .expect("the caller must receive its response")
-            .unwrap();
-        assert!(
-            String::from_utf8_lossy(&relayed).starts_with("HTTP/1.1 200"),
-            "{}",
-            String::from_utf8_lossy(&relayed)
-        );
-        drop(connection);
-        timeout(Duration::from_secs(5), inference_reached_rx)
-            .await
-            .expect("the request must reach local inference")
-            .expect("the local inference task must report acceptance");
-        backend_task.await.unwrap();
-        drop(client);
-        node.endpoint.close().await;
-        server.close().await;
     }
 }

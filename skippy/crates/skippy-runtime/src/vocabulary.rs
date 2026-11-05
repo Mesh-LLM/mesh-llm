@@ -16,7 +16,7 @@ pub(crate) fn vocabulary_size(raw: *mut RawModel) -> Result<usize> {
     // SAFETY: `raw` is a live Skippy model; the llama model and vocabulary it
     // returns are owned by it and only read here.
     let size = unsafe {
-        let model = skippy_ffi::skippy_model_llama_model(raw);
+        let model: *const skippy_ffi::Opaque = skippy_ffi::skippy_model_llama_model(raw).cast();
         if model.is_null() {
             bail!("model has no native llama model");
         }

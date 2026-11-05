@@ -86,6 +86,20 @@ impl SkippyModelHandle {
                 .as_ref()
                 .and_then(|args| args.native_mtp_draft_model_path.as_deref()),
         );
+        let runtime_options = EmbeddedRuntimeOptions {
+            config: stage_config,
+            topology: None,
+            n_threads: options.n_threads,
+            n_threads_batch: options.n_threads_batch,
+            mtp_source,
+            recurrent_rollback_tokens: 0,
+            metrics_otlp_grpc: options.telemetry.metrics_otlp_grpc.clone(),
+            telemetry_queue_capacity: options.telemetry.queue_capacity,
+            telemetry_level: options.telemetry.level,
+            session_lifecycle_observer: Some(Arc::new(
+                runtime_events::SkippySessionRuntimeEventObserver::new(),
+            )),
+        };
         let embedded_args = options.embedded_openai.unwrap_or_else(|| {
             resolver::ResolvedEmbeddedOpenAiArgs::direct_single_stage_defaults(
                 options.model_id,
@@ -94,20 +108,6 @@ impl SkippyModelHandle {
                 options.native_mtp_enabled,
             )
         });
-        let runtime_options = EmbeddedRuntimeOptions {
-            config: stage_config,
-            topology: None,
-            n_threads: options.n_threads,
-            n_threads_batch: options.n_threads_batch,
-            mtp_source,
-            verify_rollback: embedded_args.verify_rollback(mtp_source),
-            metrics_otlp_grpc: options.telemetry.metrics_otlp_grpc.clone(),
-            telemetry_queue_capacity: options.telemetry.queue_capacity,
-            telemetry_level: options.telemetry.level,
-            session_lifecycle_observer: Some(Arc::new(
-                runtime_events::SkippySessionRuntimeEventObserver::new(),
-            )),
-        };
         Self::load_prepared(
             runtime_options,
             embedded_args,
@@ -164,7 +164,7 @@ impl SkippyModelHandle {
                 n_threads: None,
                 n_threads_batch: None,
                 mtp_source,
-                verify_rollback: embedded_args.verify_rollback(mtp_source),
+                recurrent_rollback_tokens: 0,
                 metrics_otlp_grpc: telemetry.metrics_otlp_grpc.clone(),
                 telemetry_queue_capacity: telemetry.queue_capacity,
                 telemetry_level: telemetry.level,

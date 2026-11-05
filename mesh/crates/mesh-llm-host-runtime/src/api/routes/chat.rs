@@ -6,8 +6,8 @@ use tokio::net::TcpStream;
 /// the trusted-local check (loopback peer + local `Host`/`Origin`).
 ///
 /// The console forwards inference to the OpenAI port over a fresh loopback
-/// socket, so without this the payment boundary in
-/// `network::openai::response::paid` would see every forwarded caller as local
+/// socket, so without this the exchange hook's caller-trust
+/// check would see every forwarded caller as local
 /// — including remote ones reaching a `--listen-all` console (Loupe #3051).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum CallerTrust {
@@ -38,13 +38,12 @@ const RELAY_SECURITY_HEADERS: &str =
 
 pub(super) fn is_inference_passthrough(path: &str) -> bool {
     path.starts_with("/v1/")
-        || matches!(
-            path,
-            "/models"
-                | "/mesh/v1/documents/ocr"
-                | "/mesh/v1/images/similarity"
-                | "/mesh/v1/images/depth"
-        )
+        || path == "/models"
+        || path.starts_with("/models/")
+        || path.starts_with("/mesh/v1/models")
+        || path == "/mesh/v1/documents/ocr"
+        || path == "/mesh/v1/images/similarity"
+        || path == "/mesh/v1/images/depth"
 }
 
 pub(super) async fn handle(
@@ -67,9 +66,9 @@ pub(super) async fn handle(
 
     // A browser navigation is a GET, and the inference port's model-less
     // fallback would route an arbitrary `/v1/*` GET to whichever peer is first
-    // in the target list. Only the model list is a legitimate GET here.
+    // in the target list. Only recognized model discovery routes are legitimate GETs here.
     let allowed_get =
-        method == "GET" && crate::network::proxy::is_models_list_request(method, path_only);
+        method == "GET" && crate::network::openai::model_discovery::is_request(method, path_only);
     if method != "POST" && !allowed_get {
         return respond_error(stream, 405, "Method Not Allowed").await;
     }
@@ -90,7 +89,7 @@ pub(super) async fn handle(
     match TcpStream::connect(&target).await {
         Ok(mut upstream) => {
             // A remote caller must stay remote across the loopback hop so the
-            // payment gate charges (or refuses) it like any other remote peer.
+            // exchange hook admits (or refuses) it like any other remote peer.
             let _remote_origin = match caller {
                 CallerTrust::TrustedLocal => None,
                 CallerTrust::Untrusted => Some(

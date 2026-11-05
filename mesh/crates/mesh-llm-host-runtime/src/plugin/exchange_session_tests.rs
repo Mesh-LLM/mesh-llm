@@ -62,6 +62,7 @@ fn delayed_observer(denied: bool, received: tokio::sync::mpsc::Sender<Vec<u8>>) 
                     } else {
                         OpenAiAdmissionDecision::Abstain
                     },
+                    status: None,
                     reason: None,
                     annotations: Vec::new(),
                     response_headers: Vec::new(),
@@ -220,6 +221,7 @@ async fn selected_policy_manager(
                     };
                     Ok(OpenAiExchangeDecision {
                         decision,
+                        status: None,
                         reason: None,
                         annotations: Vec::new(),
                         response_headers: Vec::new(),

@@ -25,8 +25,10 @@ pub(super) async fn startup_secret_key(role: &NodeRole) -> Result<SecretKey> {
 /// Where the node saves a renewed ownership certificate. Renewal still works
 /// without one; the renewed certificate just is not written for `mesh-llm auth`
 /// to read, which is worth a warning.
-pub(super) fn saved_owner_attestation_path() -> Option<std::path::PathBuf> {
-    default_node_ownership_path()
+pub(super) fn saved_owner_attestation_path(
+    identity_directory: Option<&std::path::Path>,
+) -> Option<std::path::PathBuf> {
+    super::ownership::owner_attestation_path(identity_directory)
         .inspect_err(|error| {
             tracing::warn!("renewed ownership certificates will not be saved to disk: {error:#}");
         })
@@ -103,14 +105,32 @@ pub(super) async fn bind_mesh_endpoint(
     builder.bind().await.map_err(Into::into)
 }
 
+/// Ends startup once the embedded node is being stopped, before the hardware
+/// survey a stop can't interrupt. The endpoint is closed first: dropping it
+/// unclosed makes iroh abort it and log an error.
+pub(super) async fn end_if_stopping(endpoint: &Endpoint) -> Result<()> {
+    if let Err(stopped) = crate::sdk::embedded_shutdown::ensure_running() {
+        close_endpoint_gracefully(endpoint, "mesh").await;
+        return Err(stopped);
+    }
+    Ok(())
+}
+
 pub(super) async fn wait_for_endpoint_online(
     endpoint: &Endpoint,
     connected_log: &str,
     timeout_log: &str,
 ) {
-    match tokio::time::timeout(std::time::Duration::from_secs(5), endpoint.online()).await {
-        Ok(()) => tracing::info!("{connected_log}"),
-        Err(_) => tracing::warn!("{timeout_log}"),
+    let online = tokio::time::timeout(std::time::Duration::from_secs(5), endpoint.online());
+    tokio::select! {
+        biased;
+        // An embedded node being stopped doesn't wait out the relay; outside
+        // the embedded SDK this never resolves.
+        _ = crate::sdk::embedded_shutdown::cancelled() => {}
+        result = online => match result {
+            Ok(()) => tracing::info!("{connected_log}"),
+            Err(_) => tracing::warn!("{timeout_log}"),
+        },
     }
 }
 
@@ -244,10 +264,13 @@ fn log_detected_vram_with_cap(
     }
 }
 
+/// Initialize trust and sign endpoint ownership with the configured owner key.
+/// Scoped identities persist their attestation in their own state directory.
 pub(super) fn init_owner_runtime(
     owner_config: Option<&OwnerRuntimeConfig>,
     endpoint_id: EndpointId,
     hostname: Option<String>,
+    identity_directory: Option<&std::path::Path>,
 ) -> Result<OwnerRuntimeInit> {
     let trust_store = owner_config
         .map(|config| config.trust_store.clone())
@@ -256,12 +279,28 @@ pub(super) fn init_owner_runtime(
         .map(|config| config.trust_policy)
         .unwrap_or_default();
     let owner_attestation = match owner_config.and_then(|config| config.keypair.as_ref()) {
-        Some(keypair) => Some(load_or_refresh_owner_attestation(
-            keypair,
-            endpoint_id,
-            owner_config.and_then(|config| config.node_label.clone()),
-            hostname,
-        )?),
+        Some(keypair) => Some(match identity_directory {
+            Some(directory) => {
+                let attestation = sign_node_ownership(
+                    keypair,
+                    endpoint_id.as_bytes(),
+                    current_time_unix_ms() + DEFAULT_NODE_CERT_LIFETIME_SECS * 1000,
+                    owner_config.and_then(|config| config.node_label.clone()),
+                    hostname,
+                )?;
+                save_node_ownership(
+                    &super::ownership::owner_attestation_path(Some(directory))?,
+                    &attestation,
+                )?;
+                attestation
+            }
+            None => load_or_refresh_owner_attestation(
+                keypair,
+                endpoint_id,
+                owner_config.and_then(|config| config.node_label.clone()),
+                hostname,
+            )?,
+        }),
         None => None,
     };
 
@@ -292,4 +331,33 @@ pub(super) fn load_config_state(
     let path = crate::plugin::config_path(config_path)
         .unwrap_or_else(|_| std::path::PathBuf::from("config.toml"));
     crate::runtime::config_state::ConfigState::load(&path)
+}
+
+/// Which model names may still be coming while the startup models resolve,
+/// before any of them is assigned to this node.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum StartupResolution {
+    /// Nothing is resolving.
+    #[default]
+    Done,
+    /// Every startup model is declared or configured under a name before it
+    /// resolves, so only these names may be coming.
+    Names(Vec<String>),
+    /// A bare local GGUF is named only once it is hashed, so any name may be.
+    AnyName,
+}
+
+impl Node {
+    pub(crate) async fn set_startup_resolution(&self, resolution: StartupResolution) {
+        *self.startup_models_resolving.lock().await = resolution;
+    }
+
+    /// True while the startup models resolve and `model_name` may be one of them.
+    pub(crate) async fn startup_model_may_be(&self, model_name: &str) -> bool {
+        match &*self.startup_models_resolving.lock().await {
+            StartupResolution::Done => false,
+            StartupResolution::Names(names) => names.iter().any(|name| name == model_name),
+            StartupResolution::AnyName => true,
+        }
+    }
 }
