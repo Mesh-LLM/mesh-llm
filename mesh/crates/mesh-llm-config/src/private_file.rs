@@ -285,11 +285,11 @@ mod platform {
     pub(super) struct FileAccess(fs::Permissions, super::acl::Acl);
 
     impl FileAccess {
+        // The mode last, as apply sets it last: a chmod between the two
+        // reads then stays in the captured mode.
         pub(super) fn of(path: &Path) -> io::Result<Self> {
-            Ok(Self(
-                fs::metadata(path)?.permissions(),
-                super::acl::Acl::of(path)?,
-            ))
+            let acl = super::acl::Acl::of(path)?;
+            Ok(Self(fs::metadata(path)?.permissions(), acl))
         }
 
         // The ACL first: setting the mode afterwards leaves its entries but
