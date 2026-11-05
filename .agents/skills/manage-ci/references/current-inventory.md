@@ -495,7 +495,9 @@ checksum and required native libraries (`libmtmd.so`, `libllama-common.so`,
 `libllama.so`), then supplies that library directory to Cargo's package
 verification. The resume workflow uses the same release-archive contract.
 
-The `release_notes` job runs after a successful stable publish with
+The `release_notes` job initializes the Rust toolchain and sccache with both
+remote caches disabled before invoking its Cargo-backed notes helper. It runs
+after a successful stable publish with
 `contents: write` and regroups that published body into Keep a Changelog
 sections through `scripts/release-notes-generate.sh`, which calls `cargo xtool
 release notes-link`, `notes-classify`, and `notes-regroup`. The deterministic
