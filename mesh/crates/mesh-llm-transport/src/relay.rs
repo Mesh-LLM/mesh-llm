@@ -193,7 +193,32 @@ async fn relay_quic_to_tcp(
     mut tcp_write: tokio::io::WriteHalf<TcpStream>,
     first_byte_timeout: Duration,
 ) -> Result<()> {
-    relay_response_with_first_byte_timeout(&mut quic_recv, &mut tcp_write, first_byte_timeout).await
+    relay_response_and_close_writer(&mut quic_recv, &mut tcp_write, first_byte_timeout).await
+}
+
+/// Relay the response, then tell the TCP side that nothing more is coming.
+///
+/// Dropping `tokio::io::split`'s write half sends nothing, because the read
+/// half in the other relay task keeps the socket open. Without this shutdown
+/// the end of a QUIC stream never reaches the local TCP peer: a stage whose
+/// upstream dropped its lane keeps waiting for the next message, holding its
+/// session and execution lane, and an upstream whose stage closed the
+/// connection waits out its whole reply timeout.
+async fn relay_response_and_close_writer<R, W>(
+    reader: R,
+    writer: &mut W,
+    first_byte_timeout: Duration,
+) -> Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let result =
+        relay_response_with_first_byte_timeout(reader, &mut *writer, first_byte_timeout).await;
+    // Best effort: the peer may already be gone, and the relay's outcome is
+    // decided by then.
+    let _ = writer.shutdown().await;
+    result
 }
 
 async fn relay_response_with_first_byte_timeout<R, W>(
@@ -396,6 +421,61 @@ mod tests {
             response_str.contains("200 OK"),
             "response should contain 200 OK, got: {response_str}"
         );
+    }
+
+    /// The end of the QUIC stream must reach the local TCP peer while the other
+    /// relay direction still holds the read half of the socket. A stage's
+    /// connection handler only reclaims its session when it sees this EOF.
+    #[tokio::test]
+    async fn stream_end_reaches_the_tcp_peer_while_the_read_half_is_alive() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let relay_side = TcpStream::connect(addr).await.unwrap();
+        let (mut stage, _) = listener.accept().await.unwrap();
+        let (_read_half, mut write_half) = tokio::io::split(relay_side);
+
+        let (mut upstream_write, upstream_read) = tokio::io::duplex(1024);
+        upstream_write.write_all(b"last frame").await.unwrap();
+        drop(upstream_write);
+
+        relay_response_and_close_writer(upstream_read, &mut write_half, Duration::from_secs(5))
+            .await
+            .unwrap();
+
+        let mut received = Vec::new();
+        tokio::time::timeout(Duration::from_secs(30), stage.read_to_end(&mut received))
+            .await
+            .expect("the TCP peer must see EOF when the QUIC stream ends")
+            .unwrap();
+        assert_eq!(received, b"last frame");
+    }
+
+    /// A relay that fails still ends the TCP side, or its peer waits forever.
+    #[tokio::test]
+    async fn failed_relay_still_closes_the_tcp_side() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let relay_side = TcpStream::connect(addr).await.unwrap();
+        let (mut stage, _) = listener.accept().await.unwrap();
+        let (_read_half, mut write_half) = tokio::io::split(relay_side);
+
+        // Never written and never closed: the first-byte timeout fails the relay.
+        let (_upstream_write, upstream_read) = tokio::io::duplex(1024);
+        let err = relay_response_and_close_writer(
+            upstream_read,
+            &mut write_half,
+            Duration::from_millis(20),
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("no response within"));
+
+        let mut received = Vec::new();
+        tokio::time::timeout(Duration::from_secs(30), stage.read_to_end(&mut received))
+            .await
+            .expect("the TCP peer must see EOF when the relay fails")
+            .unwrap();
+        assert!(received.is_empty());
     }
 
     #[tokio::test]
