@@ -1,7 +1,10 @@
 # Node.js SDK
 
-Install the package with `npm install @mesh-llm/sdk`. When developing from this
-checkout, run `npm run build:native` in `mesh/sdk/node` before using the SDK.
+Install the published stable SDK with `npm install @mesh-llm/sdk`. MeshLLM
+prereleases do not trigger npm publication. For a release candidate, use its
+exact source commit or published tag, then run `npm run build:native` in
+`mesh/sdk/node`. Use that checkout's package and matching native addon; serving
+also requires a compatible native runtime.
 
 The npm package exposes one embedded `Node` with `client`, `serve`, and
 `combined` roles. `serve` is serve-only.

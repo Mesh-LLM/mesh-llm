@@ -10,13 +10,21 @@ with `.client()`, `.serve_only()`, or `.serve()` (combined).
 
 ## Install and join
 
+Prereleases are not published to crates.io. Use the Git dependency below after
+its release tag has been published:
+
 ```toml
 [dependencies]
 anyhow = "1"
-mesh-llm-sdk = "{{ site.sdkVersion }}"
+mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", tag = "v{{ site.sdkVersion }}" }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
+
+Before the tag exists, check out the exact candidate commit and use a path
+dependency to its `mesh/crates/mesh-llm-sdk` directory, or replace `tag` with
+`rev = "<full-candidate-commit-sha>"` for an immutable source commit. Keep MeshLLM
+dependencies on the same source revision.
 
 ```rust,no_run
 use mesh_llm_sdk::MeshNode;
