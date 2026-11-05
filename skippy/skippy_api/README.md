@@ -76,9 +76,11 @@ in `benchmarks/cases.txt`; "—" means nothing ports into the façade.
 | patch | what it is | what ported |
 |---|---|---|
 | 0011 causal token score readouts | unsampled `skippy_iteration_batch_sampled` readout, `skippy_session_reset` | `include/selected_log_probs.h` (pure, 256-bound log-softmax), `llama/causal_readout.h` (`read_selected_log_probs`), `StagedSession::reset`, Rust `StagedSession::read_selected_log_probs` |
+| 0012 grammar literal lazy triggers | grammar engine matches literal lazy triggers without compiling a regex | — the grammar matcher is llama-internal; the façade never links or drives it |
 | 0013 routed-expert host placement | `skippy_runtime_config.host_expert_layer_start/end`, block-range → tensor-override placement | `include/host_experts.h` (pure range validation, 4096-block cap), `StageSpec::host_experts`, `StagedModel::open` threads the pair, Rust `load_stage_with_host_experts`; plain `Model` loads keep no placement (raw-llama reference path) |
 | 0014 temperature-0 argmax fast path | `skippy_sampling_selects_argmax`, `skippy_prepare_argmax_plan`, `skippy_select_unique_argmax` | `include/argmax_sampling.h` (pure eligibility + bias-plan mirror, no sampler linkage), Rust surface intentionally absent - the facade never links a sampler |
 | 0015 recurrent rollback depth | `skippy_runtime_config.recurrent_rollback_tokens`, loader clamp to [2, 64] | `include/recurrent_rollback.h` (type-level clamp), `StageSpec::recurrent_rollback`, `StagedModel::open` threads the depth, Rust `load_stage_with_rollback_depth`; `SKIPPY_RS_SEQ` stays native |
+| 0016 staged verify windows roll back in place | verify windows rewind recurrent state in place, `skippy_session_verify_rollback_counts` reads the rewind budget | — verify windows are driven by the serving layer's speculative loop, never by the façade; the counts entry point has no façade consumer |
 
 ## Checkpoint workflow
 
