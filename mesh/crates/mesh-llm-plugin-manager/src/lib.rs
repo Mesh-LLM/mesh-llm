@@ -6,12 +6,14 @@ mod catalog_pin;
 pub mod defaults;
 pub mod github;
 pub mod install;
+mod package_identity;
+pub mod plugin_toml;
 pub mod skills;
 pub mod source_ref;
 pub mod store;
 pub mod target;
 
-pub use asset::{AssetMatchKind, PluginAsset, select_plugin_asset};
+pub use asset::{AssetMatchKind, PluginAsset, infer_plugin_asset, select_plugin_asset};
 pub use bundled::install_bundled_default;
 pub use catalog::{CatalogEntry, PinnedRelease, PluginCatalog};
 pub use github::{GitHubRelease, GitHubReleaseAsset, GitHubReleaseClient};

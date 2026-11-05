@@ -57,6 +57,7 @@ pub(super) fn start(launch: PublicFrontendLaunch) -> Result<Option<EmbeddedFront
                     model_id: openai_options.model_id,
                     default_max_tokens: openai_options.default_max_tokens,
                     request_defaults: tuning.request_defaults,
+                    live_defaults_scope: 0,
                     generation_concurrency: openai_options.generation_concurrency,
                     continuous_batching,
                     pipeline_decode_groups: openai_options.pipeline_decode_groups,

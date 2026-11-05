@@ -15,8 +15,62 @@
 //! never ignored.
 
 use std::fs;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
+
+/// Reads a small owner-only file after verifying its open handle.
+pub fn read_private_file(target: &Path) -> io::Result<Vec<u8>> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(target)?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || is_link_or_reparse_point(&metadata) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "private file must be a regular file",
+        ));
+    }
+    platform::verify_private_file(&file)?;
+    let mut contents = Vec::new();
+    file.take(1025).read_to_end(&mut contents)?;
+    if contents.len() > 1024 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "private file exceeds 1024 bytes",
+        ));
+    }
+    Ok(contents)
+}
+
+/// Creates a complete owner-only file without replacing an existing target.
+///
+/// The file is written and synced before its name is published. Publishing
+/// requires hard-link support; unsupported filesystems return an error rather
+/// than exposing a partially written file.
+pub fn create_private_file_if_absent(target: &Path, contents: &[u8]) -> io::Result<()> {
+    let parent = match target.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    create_private_dirs(parent)?;
+    let (tmp, mut file) = create_private_temp(parent, target)?;
+    let written = file.write_all(contents).and_then(|()| file.sync_all());
+    drop(file);
+    let result = written.and_then(|()| fs::hard_link(&tmp, target));
+    fs::remove_file(&tmp)?;
+    result
+}
 
 pub(crate) fn write_private_file(target: &Path, contents: &[u8]) -> io::Result<()> {
     reject_link_or_special(target)?;
@@ -46,8 +100,38 @@ pub(crate) fn write_private_file(target: &Path, contents: &[u8]) -> io::Result<(
     Ok(())
 }
 
+/// Replaces `target` with `contents` through a temporary file renamed over
+/// it, which gets the access the old file had before anything is written: its
+/// mode and ACL on Unix, its DACL on Windows, read back through the temporary file's
+/// handle to confirm it. A new file gets what a file created there gets. On
+/// any failure the old file stays as it was. Crates that forbid `unsafe`
+/// call this rather than reach the Windows security API themselves.
+pub fn replace_file_keeping_access(target: &Path, contents: &[u8]) -> io::Result<()> {
+    let parent = match target.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    };
+    fs::create_dir_all(parent)?;
+    let access = match platform::FileAccess::of(target) {
+        Ok(access) => Some(access),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let (tmp, mut file) = create_temp(parent, target, |file| match &access {
+        Some(access) => access.apply(file),
+        None => platform::keep_new_file_access(file),
+    })?;
+    let written = file.write_all(contents).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(error) = written.and_then(|()| fs::rename(&tmp, target)) {
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
+    }
+    Ok(())
+}
+
 /// Restricts an existing directory the caller owns outright, such as the
-/// payments directory beside the config, to the current user: mode 0700 on
+/// a state directory beside the config, to the current user: mode 0700 on
 /// Unix, and on Windows the protected DACL below, whose single ACE is
 /// inherited by the files and folders inside it, including those already
 /// there. Unlike the parents `write_private_file` leaves alone, this directory
@@ -106,6 +190,17 @@ fn create_private_dirs(dir: &Path) -> io::Result<()> {
 }
 
 fn create_private_temp(parent: &Path, target: &Path) -> io::Result<(PathBuf, fs::File)> {
+    create_temp(parent, target, platform::restrict_file)
+}
+
+/// Creates a temporary file next to `target`, readable by the owner only on
+/// Unix and open to no other handle on Windows, and hands it to `prepare`
+/// before returning it.
+fn create_temp(
+    parent: &Path,
+    target: &Path,
+    prepare: impl Fn(&fs::File) -> io::Result<()>,
+) -> io::Result<(PathBuf, fs::File)> {
     let file_name = target
         .file_name()
         .unwrap_or(target.as_os_str())
@@ -131,9 +226,9 @@ fn create_private_temp(parent: &Path, target: &Path) -> io::Result<(PathBuf, fs:
             use windows_sys::Win32::Storage::FileSystem::{
                 FILE_GENERIC_WRITE, WRITE_DAC, WRITE_OWNER,
             };
-            // Deny every other open (share mode 0) until `restrict_file` has
-            // applied the owner-only DACL through this handle, so the file is
-            // never readable while it still carries the parent's inherited ACL.
+            // Deny every other open (share mode 0) until `prepare` has
+            // applied the DACL through this handle, so the file is never
+            // readable while it still carries the parent's inherited ACL.
             // `write(true)` alone asks for GENERIC_WRITE, which has neither
             // WRITE_DAC nor WRITE_OWNER, and `restrict_file` sets both the DACL
             // and the owner through this handle.
@@ -143,7 +238,7 @@ fn create_private_temp(parent: &Path, target: &Path) -> io::Result<(PathBuf, fs:
         }
         match options.open(&tmp) {
             Ok(file) => {
-                if let Err(error) = platform::restrict_file(&file) {
+                if let Err(error) = prepare(&file) {
                     drop(file);
                     let _ = fs::remove_file(&tmp);
                     return Err(error);
@@ -161,6 +256,11 @@ fn create_private_temp(parent: &Path, target: &Path) -> io::Result<(PathBuf, fs:
 }
 
 #[cfg(unix)]
+mod acl;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod acl_tests;
+
+#[cfg(unix)]
 mod platform {
     use std::fs;
     use std::io;
@@ -175,6 +275,44 @@ mod platform {
     pub(super) fn restrict_file(file: &fs::File) -> io::Result<()> {
         file.set_permissions(fs::Permissions::from_mode(0o600))
     }
+
+    /// A new file keeps the owner-only mode it was opened with.
+    pub(super) fn keep_new_file_access(_file: &fs::File) -> io::Result<()> {
+        Ok(())
+    }
+
+    /// A file's mode and ACL.
+    pub(super) struct FileAccess(fs::Permissions, super::acl::Acl);
+
+    impl FileAccess {
+        // The mode last, as apply sets it last: a chmod between the two
+        // reads then stays in the captured mode.
+        pub(super) fn of(path: &Path) -> io::Result<Self> {
+            let acl = super::acl::Acl::of(path)?;
+            Ok(Self(fs::metadata(path)?.permissions(), acl))
+        }
+
+        // The ACL first: setting the mode afterwards leaves its entries but
+        // sets the mask from the mode, as on the old file.
+        pub(super) fn apply(&self, file: &fs::File) -> io::Result<()> {
+            self.1.apply(file)?;
+            file.set_permissions(self.0.clone())
+        }
+    }
+
+    pub(super) fn verify_private_file(file: &fs::File) -> io::Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = file.metadata()?;
+        // SAFETY: geteuid has no arguments and no preconditions.
+        let uid = unsafe { libc::geteuid() };
+        if !metadata.is_file() || metadata.uid() != uid || metadata.mode() & 0o077 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "private file must be owned by the current user and inaccessible to others",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[cfg(windows)]
@@ -184,6 +322,7 @@ mod platform {
     use std::io;
     use std::mem::{align_of, size_of};
     use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::fs::OpenOptionsExt;
     use std::os::windows::io::AsRawHandle;
     use std::path::Path;
     use std::ptr::{null, null_mut};
@@ -197,9 +336,9 @@ mod platform {
         DACL_SECURITY_INFORMATION, EqualSid, GetAce, GetLengthSid, GetSecurityDescriptorControl,
         GetTokenInformation, InitializeAcl, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
         PROTECTED_DACL_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR, PSID, SE_DACL_PROTECTED,
-        TOKEN_QUERY, TOKEN_USER, TokenUser,
+        TOKEN_QUERY, TOKEN_USER, TokenUser, UNPROTECTED_DACL_SECURITY_INFORMATION,
     };
-    use windows_sys::Win32::Storage::FileSystem::FILE_ALL_ACCESS;
+    use windows_sys::Win32::Storage::FileSystem::{FILE_ALL_ACCESS, READ_CONTROL};
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
     pub(super) fn restrict_directory(path: &Path) -> io::Result<()> {
@@ -219,6 +358,117 @@ mod platform {
             set_handle(file.as_raw_handle(), sid, &acl)?;
             verify_handle(file.as_raw_handle(), sid, ace_flags(false))
         })
+    }
+
+    /// A new file keeps the DACL it inherited from its directory, as one
+    /// created there directly would.
+    pub(super) fn keep_new_file_access(_file: &fs::File) -> io::Result<()> {
+        Ok(())
+    }
+
+    /// A file's DACL, and whether it is protected from inheritance. `dacl`
+    /// holds the ACL's bytes in aligned storage, zero-padded, and is `None`
+    /// for a null DACL.
+    #[derive(Debug, PartialEq, Eq)]
+    pub(super) struct FileAccess {
+        protected: bool,
+        dacl: Option<Vec<u64>>,
+    }
+
+    impl FileAccess {
+        pub(super) fn of(path: &Path) -> io::Result<Self> {
+            let file = fs::OpenOptions::new()
+                .access_mode(READ_CONTROL)
+                .open(path)?;
+            Self::of_handle(file.as_raw_handle())
+        }
+
+        fn of_handle(handle: HANDLE) -> io::Result<Self> {
+            let mut dacl: *mut ACL = null_mut();
+            let mut descriptor: PSECURITY_DESCRIPTOR = null_mut();
+            let result = unsafe {
+                GetSecurityInfo(
+                    handle,
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION,
+                    null_mut(),
+                    null_mut(),
+                    &mut dacl,
+                    null_mut(),
+                    &mut descriptor,
+                )
+            };
+            if result != 0 || descriptor.is_null() {
+                return Err(access_not_kept());
+            }
+            let _descriptor = SecurityDescriptor(descriptor);
+            let mut control = 0_u16;
+            let mut revision = 0_u32;
+            if unsafe { GetSecurityDescriptorControl(descriptor, &mut control, &mut revision) } == 0
+            {
+                return Err(access_not_kept());
+            }
+            let dacl = (!dacl.is_null()).then(|| {
+                let size = usize::from(unsafe { (*dacl).AclSize });
+                let mut storage = vec![0_u64; size.div_ceil(size_of::<u64>())];
+                // SAFETY: the ACL is `AclSize` bytes long, and the storage
+                // holds at least that many.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        dacl.cast::<u8>(),
+                        storage.as_mut_ptr().cast::<u8>(),
+                        size,
+                    );
+                }
+                storage
+            });
+            Ok(Self {
+                protected: control & SE_DACL_PROTECTED != 0,
+                dacl,
+            })
+        }
+
+        /// Gives the file this DACL through its handle and reads it back. An
+        /// unprotected DACL takes its inherited entries from the directory
+        /// again, so the copy matches only next to the file it was read from.
+        pub(super) fn apply(&self, file: &fs::File) -> io::Result<()> {
+            let handle = file.as_raw_handle();
+            let inheritance = if self.protected {
+                PROTECTED_DACL_SECURITY_INFORMATION
+            } else {
+                UNPROTECTED_DACL_SECURITY_INFORMATION
+            };
+            let acl = self
+                .dacl
+                .as_ref()
+                .map_or(null(), |storage| storage.as_ptr().cast::<ACL>());
+            let result = unsafe {
+                SetSecurityInfo(
+                    handle,
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION | inheritance,
+                    null_mut(),
+                    null_mut(),
+                    acl,
+                    null(),
+                )
+            };
+            if result != 0 || Self::of_handle(handle)? != *self {
+                return Err(access_not_kept());
+            }
+            Ok(())
+        }
+    }
+
+    fn access_not_kept() -> io::Error {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "could not give the new file the old file's access control list",
+        )
+    }
+
+    pub(super) fn verify_private_file(file: &fs::File) -> io::Result<()> {
+        with_current_user_sid(|sid| verify_handle(file.as_raw_handle(), sid, ace_flags(false)))
     }
 
     #[cfg(test)]
@@ -542,6 +792,58 @@ mod tests {
     }
 
     #[test]
+    fn private_create_publishes_one_complete_value_without_replacement() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = temp.path().join("credential");
+        let results = std::thread::scope(|scope| {
+            (0..8)
+                .map(|index| {
+                    let target = &target;
+                    scope.spawn(move || {
+                        create_private_file_if_absent(target, format!("value-{index}\n").as_bytes())
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(|thread| thread.join().unwrap())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert!(
+            results
+                .iter()
+                .filter_map(|result| result.as_ref().err())
+                .all(|error| { error.kind() == io::ErrorKind::AlreadyExists })
+        );
+        let contents = fs::read_to_string(&target).unwrap();
+        assert!((0..8).any(|index| contents == format!("value-{index}\n")));
+        assert_eq!(read_private_file(&target).unwrap(), contents.as_bytes());
+        assert!(leftover_temp_files(temp.path()).is_empty());
+        #[cfg(unix)]
+        assert_eq!(mode(&target), 0o600);
+        #[cfg(windows)]
+        platform::verify_current_user_only(&target, false).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_read_rejects_a_permissive_file_or_symlink() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = temp.path().join("credential");
+        fs::write(&target, b"private").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(
+            read_private_file(&target).unwrap_err().kind(),
+            io::ErrorKind::PermissionDenied
+        );
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        let alias = temp.path().join("alias");
+        symlink(&target, &alias).unwrap();
+        assert!(read_private_file(&alias).is_err());
+    }
+
+    #[test]
     fn rejects_a_directory_target() {
         let temp = tempfile::TempDir::new().unwrap();
         let target = temp.path().join("config.toml");
@@ -626,10 +928,57 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn a_replaced_file_keeps_its_mode_and_a_new_one_is_owner_only_on_unix() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::TempDir::new().unwrap();
+        let target = temp.path().join("models.json");
+        fs::write(&target, b"old").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+        replace_file_keeping_access(&target, b"new").unwrap();
+        assert_eq!(mode(&target), 0o640);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+
+        let created = temp.path().join("agent").join("models.json");
+        replace_file_keeping_access(&created, b"new").unwrap();
+        assert_eq!(mode(&created), 0o600);
+        assert!(leftover_temp_files(temp.path()).is_empty());
+    }
+
+    // The case that matters: a file restricted to its owner in a directory
+    // other accounts may read. A file renamed in from there would carry the
+    // directory's inherited read access instead of the old file's DACL.
+    #[cfg(windows)]
+    #[test]
+    fn a_replaced_file_keeps_its_dacl_on_windows() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let granted = std::process::Command::new("icacls")
+            .arg(temp.path())
+            .args(["/grant", "*S-1-1-0:(OI)(CI)R", "/Q"])
+            .status()
+            .unwrap();
+        assert!(granted.success());
+        let restricted = temp.path().join("models.json");
+        write_private_file(&restricted, b"old").unwrap();
+        let inherited = temp.path().join("inherited.json");
+        fs::write(&inherited, b"old").unwrap();
+        assert!(!platform::only_current_user_allowed(&inherited).unwrap());
+
+        for target in [&restricted, &inherited] {
+            let before = platform::FileAccess::of(target).unwrap();
+            replace_file_keeping_access(target, b"new").unwrap();
+            assert_eq!(platform::FileAccess::of(target).unwrap(), before);
+            assert_eq!(fs::read_to_string(target).unwrap(), "new");
+        }
+        assert!(platform::only_current_user_allowed(&restricted).unwrap());
+        assert!(leftover_temp_files(temp.path()).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn an_existing_directory_is_restricted_owner_only_on_unix() {
         use std::os::unix::fs::PermissionsExt;
         let temp = tempfile::TempDir::new().unwrap();
-        let directory = temp.path().join("payments");
+        let directory = temp.path().join("state");
         fs::create_dir(&directory).unwrap();
         fs::set_permissions(&directory, fs::Permissions::from_mode(0o755)).unwrap();
         restrict_private_directory(&directory).unwrap();
@@ -640,10 +989,10 @@ mod tests {
     #[test]
     fn an_existing_directory_and_its_contents_become_current_user_only_on_windows() {
         let temp = tempfile::TempDir::new().unwrap();
-        let directory = temp.path().join("payments");
-        let wallet = directory.join("wallets").join("wallet-test");
-        fs::create_dir_all(&wallet).unwrap();
-        fs::write(wallet.join("seed"), b"seed").unwrap();
+        let directory = temp.path().join("state");
+        let vault = directory.join("vaults").join("vault-test");
+        fs::create_dir_all(&vault).unwrap();
+        fs::write(vault.join("secret"), b"secret").unwrap();
         // What a directory under C:\ProgramData inherits: read access for
         // other accounts, passed down to what is already inside it. S-1-1-0 is
         // Everyone, named by SID so the grant does not depend on the locale.
@@ -653,14 +1002,14 @@ mod tests {
             .status()
             .unwrap();
         assert!(granted.success());
-        assert!(!platform::only_current_user_allowed(&wallet.join("seed")).unwrap());
+        assert!(!platform::only_current_user_allowed(&vault.join("secret")).unwrap());
 
         restrict_private_directory(&directory).unwrap();
         platform::verify_current_user_only(&directory, true).unwrap();
-        assert!(platform::only_current_user_allowed(&wallet).unwrap());
-        assert!(platform::only_current_user_allowed(&wallet.join("seed")).unwrap());
+        assert!(platform::only_current_user_allowed(&vault).unwrap());
+        assert!(platform::only_current_user_allowed(&vault.join("secret")).unwrap());
         // What is created there afterwards inherits the same single ACE.
-        fs::write(directory.join("payments.sqlite3"), b"").unwrap();
-        assert!(platform::only_current_user_allowed(&directory.join("payments.sqlite3")).unwrap());
+        fs::write(directory.join("state.sqlite3"), b"").unwrap();
+        assert!(platform::only_current_user_allowed(&directory.join("state.sqlite3")).unwrap());
     }
 }

@@ -22,7 +22,8 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use mesh_llm_system::embedded_release_footer::{
-    EmbeddedReleaseFooterStatus, EmbeddedReleasePayloadSummary, EmbeddedReleasePayloadVerifier,
+    EMBEDDED_RELEASE_FOOTER_LEN, EmbeddedReleaseFooterStatus, EmbeddedReleasePayloadSummary,
+    EmbeddedReleasePayloadVerifier, embedded_release_footer_suffix_len,
     verify_embedded_release_footer,
 };
 
@@ -131,11 +132,39 @@ fn current_time_unix_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// Reads what the footer verification needs: the trailing bytes that settle
+/// the result, which is the whole binary only when it carries a footer. Startup
+/// runs this on its own executable, which for a debug test binary can be
+/// gigabytes.
+fn read_release_footer_bytes(binary_path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let mut file = std::fs::File::open(binary_path)?;
+    let binary_len = file.metadata()?.len();
+    if binary_len > EMBEDDED_RELEASE_FOOTER_LEN as u64 {
+        let mut tail = [0u8; EMBEDDED_RELEASE_FOOTER_LEN];
+        let footer_start = file.seek(SeekFrom::End(-(EMBEDDED_RELEASE_FOOTER_LEN as i64)))?;
+        file.read_exact(&mut tail)?;
+        let binary_len = footer_start + EMBEDDED_RELEASE_FOOTER_LEN as u64;
+        let suffix_len = embedded_release_footer_suffix_len(&tail, binary_len);
+        if suffix_len < binary_len {
+            let mut suffix = vec![0u8; usize::try_from(suffix_len).map_err(std::io::Error::other)?];
+            file.seek(SeekFrom::Start(binary_len - suffix_len))?;
+            file.read_exact(&mut suffix)?;
+            return Ok(suffix);
+        }
+        file.rewind()?;
+    }
+    let mut binary_bytes = Vec::new();
+    file.read_to_end(&mut binary_bytes)?;
+    Ok(binary_bytes)
+}
+
 pub fn load_embedded_release_attestation_for_binary(
     binary_path: &Path,
     trust_store: &ReleaseSignerTrustStore,
 ) -> Result<LoadedEmbeddedReleaseAttestation, ReleaseAttestationError> {
-    let binary_bytes = std::fs::read(binary_path).map_err(|error| {
+    let binary_bytes = read_release_footer_bytes(binary_path).map_err(|error| {
         ReleaseAttestationError::Io(format!(
             "failed to read release attestation binary {}: {error}",
             binary_path.display()
@@ -255,5 +284,62 @@ pub(crate) mod tests {
         attestation
             .verify()
             .expect("embedded attestation should verify as canonical protocol attestation");
+    }
+
+    #[test]
+    fn embedded_release_attestation_loader_reads_only_the_tail_it_needs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let binary_path = dir.path().join("mesh-llm");
+        let signing_key = test_release_signing_key(9);
+        let stamped = stamped_binary_bytes(&signing_key);
+        let trust_store = ReleaseSignerTrustStore::default();
+        let load = |bytes: &[u8]| {
+            std::fs::write(&binary_path, bytes).expect("write binary");
+            load_embedded_release_attestation_for_binary(&binary_path, &trust_store)
+                .expect("load embedded attestation")
+        };
+
+        let unstamped = load(&[0x7f; 4096]);
+        assert_eq!(unstamped.summary.status, ReleaseAttestationStatus::Missing);
+        assert!(unstamped.attestation.is_none());
+        assert_eq!(
+            read_release_footer_bytes(&binary_path).expect("read").len(),
+            EMBEDDED_RELEASE_FOOTER_LEN
+        );
+
+        let truncated = load(&stamped[..stamped.len() - 1]);
+        assert_eq!(truncated.summary.status, ReleaseAttestationStatus::Invalid);
+        assert!(
+            truncated
+                .summary
+                .error
+                .as_deref()
+                .is_some_and(|error| error.contains("truncated"))
+        );
+
+        // A code signature's tail can look like a corrupted footer (canonical
+        // version and reserved, an 8-byte payload); only that much is read.
+        let mut signed = vec![0x7f; 4096];
+        signed.extend_from_slice(b"codesign");
+        signed.extend_from_slice(b"NOTSURE!");
+        signed.extend_from_slice(&1u32.to_le_bytes());
+        signed.extend_from_slice(&8u64.to_le_bytes());
+        signed.extend_from_slice(&0u32.to_le_bytes());
+        let signed_load = load(&signed);
+        assert_eq!(
+            signed_load.summary.status,
+            ReleaseAttestationStatus::Missing
+        );
+        assert_eq!(
+            read_release_footer_bytes(&binary_path).expect("read").len(),
+            8 + EMBEDDED_RELEASE_FOOTER_LEN
+        );
+
+        let valid = load(&stamped);
+        assert_eq!(valid.summary.status, ReleaseAttestationStatus::Valid);
+        assert_eq!(
+            read_release_footer_bytes(&binary_path).expect("read"),
+            stamped
+        );
     }
 }

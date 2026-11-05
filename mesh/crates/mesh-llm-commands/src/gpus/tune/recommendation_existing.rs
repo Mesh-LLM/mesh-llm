@@ -240,6 +240,41 @@ pub(crate) fn existing_mmap_source(
         })
 }
 
+pub(crate) fn existing_cpu_moe_source(
+    model_entry: Option<&ModelConfigEntry>,
+    defaults: Option<&ModelConfigDefaults>,
+) -> Option<ExistingValueSource> {
+    model_entry
+        .and_then(|entry| entry.hardware.as_ref())
+        .and_then(|hardware| hardware.cpu_moe.as_ref())
+        .map(|_| ExistingValueSource::ModelNested)
+        .or_else(|| {
+            defaults?
+                .hardware
+                .as_ref()?
+                .cpu_moe
+                .as_ref()
+                .map(|_| ExistingValueSource::Defaults)
+        })
+}
+
+pub(crate) fn existing_n_cpu_moe_source(
+    model_entry: Option<&ModelConfigEntry>,
+    defaults: Option<&ModelConfigDefaults>,
+) -> Option<ExistingValueSource> {
+    model_entry
+        .and_then(|entry| entry.hardware.as_ref())
+        .and_then(|hardware| hardware.n_cpu_moe)
+        .map(|_| ExistingValueSource::ModelNested)
+        .or_else(|| {
+            defaults?
+                .hardware
+                .as_ref()?
+                .n_cpu_moe
+                .map(|_| ExistingValueSource::Defaults)
+        })
+}
+
 pub(crate) fn existing_mlock_source(
     model_entry: Option<&ModelConfigEntry>,
     defaults: Option<&ModelConfigDefaults>,

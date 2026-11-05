@@ -14,7 +14,7 @@ fn hash_bytes(raw: &[u8]) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(raw)))
 }
 
-/// A stage holding an unqualified catalog whose `public-cpu` image points
+/// A stage holding an unqualified catalog whose `public-cpu-libclang` image points
 /// at the synthetic cohort's index, the cohort, and a reviewed anchor.
 struct EvidenceStage {
     stage: Stage,
@@ -38,9 +38,9 @@ impl EvidenceStage {
             let digest = cohort["candidates"]["candidate-index-public-cpu"]["digest"]
                 .as_str()
                 .unwrap_or_default();
-            catalog["images"]["public-cpu"]["reference"] =
+            catalog["images"]["public-cpu-libclang"]["reference"] =
                 format!("ghcr.io/mesh-llm/mesh-llm-cuda-runner@{digest}").into();
-            catalog["images"]["public-cpu"]["native_toolchain_epoch"] =
+            catalog["images"]["public-cpu-libclang"]["native_toolchain_epoch"] =
                 format!("mesh-llm-cuda-runner-sha256-{}", "8".repeat(64)).into();
             catalog["compiler_seed"]["key_prefix"] =
                 "mesh-llm-sccache-seed-linux-x86_64-img-88888888-epoch-88888888-v2-".into();
@@ -82,7 +82,7 @@ impl EvidenceStage {
             &root,
             "bind",
             "--image-id",
-            "public-cpu",
+            "public-cpu-libclang",
             "--cohort",
             "input.json",
             "--anchor",
@@ -143,7 +143,7 @@ fn bind_writes_a_fresh_proposal_that_validates() -> TestResult {
         &root,
         "bind",
         "--image-id",
-        "public-cpu",
+        "public-cpu-libclang",
         "--cohort",
         "input.json",
         "--anchor",
@@ -206,7 +206,7 @@ fn bind_rejects_immutable_conflicts_and_missing_platforms() -> TestResult {
     let mut other = evidence.anchor(&evidence.cohort()?["origin"]);
     other["provenance"]["admission_validator_revision"] = "e".repeat(40).into();
     evidence.stage.edit_catalog(|catalog| {
-        let image = &mut catalog["images"]["public-cpu"];
+        let image = &mut catalog["images"]["public-cpu-libclang"];
         image["receipt"] = other["receipt"].clone();
         image["provenance"] = other["provenance"].clone();
     })?;
@@ -230,7 +230,7 @@ fn qualified_images_without_retained_evidence_fail_every_command() -> TestResult
     let evidence = EvidenceStage::new("missing-evidence")?;
     let anchor = evidence.anchor(&evidence.cohort()?["origin"]);
     evidence.stage.edit_catalog(|catalog| {
-        let image = &mut catalog["images"]["public-cpu"];
+        let image = &mut catalog["images"]["public-cpu-libclang"];
         image["receipt"] = anchor["receipt"].clone();
         image["provenance"] = anchor["provenance"].clone();
     })?;
@@ -305,7 +305,7 @@ fn reanchored_cohort_still_rejects_structural_and_platform_corruption() -> TestR
                 evidence.stage.root_arg(),
                 "bind".into(),
                 "--image-id".into(),
-                "public-cpu".into(),
+                "public-cpu-libclang".into(),
                 "--cohort".into(),
                 "input.json".into(),
                 "--anchor".into(),
@@ -348,7 +348,7 @@ fn sequential_proposals_retain_shared_and_distinct_evidence() -> TestResult {
         assert_eq!(
             invoke(
                 evidence.stage.path(),
-                "public-cpu",
+                "public-cpu-libclang",
                 "input.json",
                 "anchor.json",
                 "first"

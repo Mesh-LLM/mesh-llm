@@ -30,6 +30,8 @@ pub struct SkippyModelLoadOptions {
     pub direct_io: bool,
     pub main_gpu: Option<u32>,
     pub split_mode: skippy_protocol::SplitMode,
+    /// Operator policy for host-resident routed experts.
+    pub host_experts: skippy_protocol::HostExpertPolicy,
     pub cache_type_k: String,
     pub cache_type_v: String,
     pub n_batch: Option<u32>,
@@ -84,6 +86,7 @@ impl SkippyModelLoadOptions {
             direct_io: defaults.direct_io,
             main_gpu: defaults.main_gpu,
             split_mode: defaults.split_mode,
+            host_experts: defaults.host_experts,
             cache_type_k: defaults.cache_type_k,
             cache_type_v: defaults.cache_type_v,
             n_batch: defaults.n_batch,

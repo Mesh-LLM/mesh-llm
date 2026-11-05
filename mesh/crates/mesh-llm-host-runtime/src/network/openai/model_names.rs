@@ -1,7 +1,7 @@
 //! Public model names shared by listing, descriptor lookup and request resolution.
 use crate::mesh;
 
-pub(super) fn public_model_id(
+pub(crate) fn public_model_id(
     model_name: &str,
     descriptor: Option<&mesh::ServedModelDescriptor>,
     profile: &str,
@@ -52,6 +52,15 @@ fn descriptor_can_produce_lossless_id(identity: &mesh::ServedModelIdentity) -> b
 }
 
 fn public_model_id_from_local_path(model_name: &str) -> Option<String> {
+    // A ref the runtime registered at startup — a runtime-minted
+    // `local-gguf/sha256-<digest>` id, a `--model` alias, a configured alias —
+    // is already the public id the request resolver routes on. Since
+    // `find_model_path` maps it back to its file, re-deriving a ref from that
+    // path would rename the model in `/v1/models` (to a host-specific
+    // path-hash form, or an HF ref) and break the round trip.
+    if crate::models::is_served_model_ref(model_name) {
+        return None;
+    }
     let path = crate::models::find_model_path(model_name);
     if !path.is_file() {
         return None;
@@ -61,3 +70,6 @@ fn public_model_id_from_local_path(model_name: &str) -> Option<String> {
     }
     Some(crate::models::model_ref_for_path(&path))
 }
+
+#[cfg(test)]
+mod tests;

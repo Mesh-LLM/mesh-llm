@@ -90,6 +90,10 @@ pub struct ServingOptions {
     #[arg(long)]
     pub gguf: Vec<PathBuf>,
 
+    /// Local memberships TOML: serve one GGUF to independent meshes with shared capacity.
+    #[arg(long)]
+    pub memberships_config: Option<PathBuf>,
+
     /// Explicit mmproj sidecar for the primary served model.
     #[arg(long, hide = true)]
     pub mmproj: Option<PathBuf>,
@@ -214,7 +218,7 @@ pub struct MeshPolicyOptions {
 /// Speculative decoding and draft models (hidden from default --help).
 #[derive(Args, Debug)]
 pub struct SpeculativeOptions {
-    /// Override speculative decoding (`mtp`, `ngram-cache`, `ngram-suffix`, or a package strategy id).
+    /// Override speculative decoding (`mtp`, `ngram-cache`, `ngram-suffix`, `dflash`, or a package strategy id).
     #[arg(long, hide = true)]
     pub speculative_strategy: Option<String>,
 

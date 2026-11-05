@@ -5,6 +5,7 @@ pub(super) use message_history::PluginMessageHistory;
 
 use super::*;
 use crate::mesh::node::stamp_plugin_event_source;
+use crate::plugin::ChannelRoute;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const PLUGIN_FRAME_PREFIX_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
@@ -356,6 +357,22 @@ impl Node {
         event: crate::plugin::PluginMeshEvent,
     ) -> Result<()> {
         match event {
+            crate::plugin::PluginMeshEvent::BoundOperation {
+                plugin_id,
+                generation,
+                request,
+                response_tx,
+            } => {
+                if let Some(manager) = self.plugin_manager().await {
+                    tokio::spawn(async move {
+                        let result = manager
+                            .bound_operation(&plugin_id, generation, request)
+                            .await;
+                        let _ = response_tx.send(result);
+                    });
+                }
+                Ok(())
+            }
             crate::plugin::PluginMeshEvent::IdentityService {
                 plugin_id,
                 request,
@@ -371,51 +388,12 @@ impl Node {
                 });
                 Ok(())
             }
-            crate::plugin::PluginMeshEvent::Channel {
-                plugin_id,
-                mut message,
-            } => {
-                if !self
-                    .plugin_event_channel_declared(&plugin_id, &message.channel, "message")
+            crate::plugin::PluginMeshEvent::Channel { plugin_id, message } => {
+                self.forward_plugin_channel_message(plugin_id, message)
                     .await
-                {
-                    return Ok(());
-                }
-                stamp_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
-                let mut frame = crate::plugin::proto::MeshChannelFrame {
-                    plugin_id,
-                    message_id: new_plugin_message_id(&message.source_peer_id),
-                    message: Some(message),
-                    ..Default::default()
-                };
-                sign_channel_frame(&self.endpoint_secret_key, &mut frame);
-                if !self.remember_plugin_message(frame.message_id.clone()).await {
-                    return Ok(());
-                }
-                self.broadcast_plugin_channel_frame(&frame, None).await
             }
-            crate::plugin::PluginMeshEvent::BulkTransfer {
-                plugin_id,
-                mut message,
-            } => {
-                if !self
-                    .plugin_event_channel_declared(&plugin_id, &message.channel, "bulk transfer")
-                    .await
-                {
-                    return Ok(());
-                }
-                stamp_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
-                let mut frame = crate::plugin::proto::MeshBulkFrame {
-                    plugin_id,
-                    message_id: new_plugin_message_id(&message.source_peer_id),
-                    message: Some(message),
-                    ..Default::default()
-                };
-                sign_bulk_frame(&self.endpoint_secret_key, &mut frame);
-                if !self.remember_plugin_message(frame.message_id.clone()).await {
-                    return Ok(());
-                }
-                self.broadcast_plugin_bulk_frame(&frame, None).await
+            crate::plugin::PluginMeshEvent::BulkTransfer { plugin_id, message } => {
+                self.forward_plugin_bulk_transfer(plugin_id, message).await
             }
             crate::plugin::PluginMeshEvent::OpenStream {
                 plugin_id,
@@ -437,6 +415,18 @@ impl Node {
                     crate::network::peer_blocks::apply_plugin_request(self, plugin_id, request)
                         .await;
                 let _ = response_tx.send(response);
+                Ok(())
+            }
+            crate::plugin::PluginMeshEvent::ModelRequirementsWithdraw { plugin_id } => {
+                self.model_requirements.lock().await.remove(&plugin_id);
+                Ok(())
+            }
+            crate::plugin::PluginMeshEvent::ModelRequirement {
+                plugin_id,
+                request,
+                response_tx,
+            } => {
+                let _ = response_tx.send(self.apply_model_requirement(&plugin_id, request).await);
                 Ok(())
             }
             crate::plugin::PluginMeshEvent::PluginKey {
@@ -494,11 +484,112 @@ impl Node {
                 // A disabled or removed plugin no longer runs here, so this
                 // node stops vouching for its key and showing its status.
                 self.plugin_keys.remove_own(&plugin_id);
+                self.model_requirements.lock().await.remove(&plugin_id);
                 self.runtime_data_collector()
                     .remove_plugin_status(&plugin_id);
                 Ok(())
             }
+            crate::plugin::PluginMeshEvent::PluginStarted {
+                plugin_id,
+                generation,
+                delivered,
+            } => {
+                // Before the manager is installed, installing it sends the
+                // snapshot to every plugin.
+                let sent = match self.plugin_manager().await {
+                    Some(plugin_manager) => self
+                        .send_mesh_snapshot_to(&plugin_manager, &plugin_id, generation)
+                        .await
+                        .is_ok(),
+                    None => true,
+                };
+                let _ = delivered.send(sent);
+                Ok(())
+            }
         }
+    }
+
+    pub(crate) async fn broadcast_existing_mesh_snapshot(
+        &self,
+        plugin_manager: &crate::plugin::PluginManager,
+        peers: Vec<PeerInfo>,
+    ) {
+        // A plugin that misses part of the broadcast gets it again when it
+        // next starts, or with the next mesh change.
+        let _ = self.send_mesh_snapshot(plugin_manager, None, peers).await;
+    }
+
+    /// The mesh snapshot [`Self::broadcast_existing_mesh_snapshot`] sends,
+    /// with the peers known now, to the process of `generation` of
+    /// `plugin_id` alone, without starting it. Fails when that process did
+    /// not take every event of it.
+    pub(crate) async fn send_mesh_snapshot_to(
+        &self,
+        plugin_manager: &crate::plugin::PluginManager,
+        plugin_id: &str,
+        generation: u64,
+    ) -> anyhow::Result<()> {
+        let peers = {
+            let state = self.state.lock().await;
+            state.peers.values().cloned().collect::<Vec<_>>()
+        };
+        self.send_mesh_snapshot(plugin_manager, Some((plugin_id, generation)), peers)
+            .await
+    }
+
+    async fn send_mesh_snapshot(
+        &self,
+        plugin_manager: &crate::plugin::PluginManager,
+        target: Option<(&str, u64)>,
+        peers: Vec<PeerInfo>,
+    ) -> anyhow::Result<()> {
+        let send = |event| async move {
+            match target {
+                Some((plugin_id, generation)) => {
+                    plugin_manager
+                        .send_mesh_event_to(plugin_id, generation, event)
+                        .await
+                }
+                None => plugin_manager.broadcast_mesh_event(event).await,
+            }
+        };
+        let mut result = send(
+            self.build_mesh_event(self.plugin_manager_local_kind(), None, String::new())
+                .await,
+        )
+        .await;
+        if self.mesh_id().await.is_some() {
+            result = result.and(
+                send(
+                    self.build_mesh_event(
+                        crate::plugin::proto::mesh_event::Kind::MeshIdUpdated,
+                        None,
+                        String::new(),
+                    )
+                    .await,
+                )
+                .await,
+            );
+        }
+        for peer in peers {
+            if let Err(err) = send(
+                self.build_mesh_event(
+                    crate::plugin::proto::mesh_event::Kind::PeerUp,
+                    Some(peer_info_to_mesh_peer(&peer)),
+                    String::new(),
+                )
+                .await,
+            )
+            .await
+            {
+                tracing::debug!(
+                    "Failed to send existing peer snapshot to plugins for {}: {err}",
+                    peer.id.fmt_short()
+                );
+                result = result.and(Err(err));
+            }
+        }
+        result
     }
 
     /// Announce (or withdraw) `plugin_id`'s public key, bound to this node.
@@ -521,7 +612,11 @@ impl Node {
             )));
         }
         if request.public_key.is_empty() {
-            self.plugin_keys.remove_own(plugin_id);
+            // Sign the withdrawal so peers, and their plugins, drop the key at
+            // once, whether or not this node stays up to be asked again.
+            self.plugin_keys.withdraw_own(plugin_id, |key| {
+                plugin_keys::withdraw(&self.endpoint_secret_key, plugin_id, key.public_key)
+            });
             return Ok(crate::plugin::proto::PluginKeyResponse {
                 node_id,
                 binding_signature: Vec::new(),
@@ -545,26 +640,107 @@ impl Node {
         })
     }
 
-    pub(crate) async fn plugin_event_channel_declared(
+    /// A plugin's own channel message: to the other local plugins on a
+    /// channel it declares local, else signed and sent to the mesh.
+    async fn forward_plugin_channel_message(
+        &self,
+        plugin_id: String,
+        mut message: crate::plugin::proto::ChannelMessage,
+    ) -> Result<()> {
+        // One classification decides the route, so a manifest that changes
+        // mid-call cannot turn a local message into a mesh one.
+        match self
+            .plugin_channel_route(&plugin_id, &message.channel, "message")
+            .await
+        {
+            (ChannelRoute::Local, Some(plugin_manager)) => {
+                // A local channel never reaches the mesh: its messages go to
+                // the other plugins on this node.
+                return plugin_manager
+                    .relay_local_channel_message(&plugin_id, message)
+                    .await;
+            }
+            (ChannelRoute::Mesh, _) => {}
+            _ => return Ok(()),
+        }
+        stamp_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
+        let mut frame = crate::plugin::proto::MeshChannelFrame {
+            plugin_id,
+            message_id: new_plugin_message_id(&message.source_peer_id),
+            message: Some(message),
+            ..Default::default()
+        };
+        sign_channel_frame(&self.endpoint_secret_key, &mut frame);
+        if !self.remember_plugin_message(frame.message_id.clone()).await {
+            return Ok(());
+        }
+        self.broadcast_plugin_channel_frame(&frame, None).await
+    }
+
+    /// A plugin's own bulk transfer, sent to the mesh; dropped on a local
+    /// channel.
+    async fn forward_plugin_bulk_transfer(
+        &self,
+        plugin_id: String,
+        mut message: crate::plugin::proto::BulkTransferMessage,
+    ) -> Result<()> {
+        // Bulk transfers are peer-to-peer only; a local channel has no
+        // peer to send one to.
+        match self
+            .plugin_channel_route(&plugin_id, &message.channel, "bulk transfer")
+            .await
+        {
+            (ChannelRoute::Mesh, _) => {}
+            (ChannelRoute::Local, _) => {
+                tracing::warn!(
+                    plugin = %plugin_id,
+                    channel = %message.channel,
+                    "dropping bulk transfer on a local channel: local channels never reach the mesh"
+                );
+                return Ok(());
+            }
+            _ => return Ok(()),
+        }
+        stamp_plugin_event_source(self.endpoint.id(), &mut message.source_peer_id);
+        let mut frame = crate::plugin::proto::MeshBulkFrame {
+            plugin_id,
+            message_id: new_plugin_message_id(&message.source_peer_id),
+            message: Some(message),
+            ..Default::default()
+        };
+        sign_bulk_frame(&self.endpoint_secret_key, &mut frame);
+        if !self.remember_plugin_message(frame.message_id.clone()).await {
+            return Ok(());
+        }
+        self.broadcast_plugin_bulk_frame(&frame, None).await
+    }
+
+    /// How `plugin_id`'s traffic on `channel` may travel, with the plugin
+    /// manager that answered. Without a manager (shutdown) or a cached
+    /// manifest (restart) nothing is declared, so the route fails closed.
+    pub(crate) async fn plugin_channel_route(
         &self,
         plugin_id: &str,
         channel: &str,
         noun: &str,
-    ) -> bool {
-        let plugin_manager = self.plugin_manager.lock().await.clone();
-        if let Some(plugin_manager) = plugin_manager
-            && !plugin_manager
-                .plugin_declares_mesh_channel(plugin_id, channel)
-                .await
-        {
+    ) -> (ChannelRoute, Option<crate::plugin::PluginManager>) {
+        let Some(plugin_manager) = self.plugin_manager().await else {
+            tracing::debug!(
+                plugin = %plugin_id,
+                channel = %channel,
+                "Dropping outbound {noun}: no plugin manager"
+            );
+            return (ChannelRoute::Undeclared, None);
+        };
+        let route = plugin_manager.channel_route(plugin_id, channel).await;
+        if route == ChannelRoute::Undeclared {
             tracing::debug!(
                 plugin = %plugin_id,
                 channel = %channel,
                 "Dropping outbound {noun} for undeclared mesh channel"
             );
-            return false;
         }
-        true
+        (route, Some(plugin_manager))
     }
 
     /// Record a plugin-frame source mismatch from `remote` and decide the warning.

@@ -8,8 +8,8 @@ mod ci_validation;
 mod cli;
 mod cli_output;
 mod command;
-#[path = "automation/command_interrupt/mod.rs"]
 pub(crate) mod command_interrupt;
+mod curl_https;
 #[cfg(test)]
 mod fixture_paths;
 mod installer_fixtures;
@@ -17,7 +17,6 @@ mod model_registry;
 mod native_policy;
 mod no_console_print;
 mod prepared_input;
-pub mod process;
 mod product;
 mod publish_consistency;
 mod release;
@@ -27,6 +26,8 @@ mod repository;
 mod split_payloads;
 
 use command::DynResult;
+// Transitional: call sites still import supervision as `crate::process`.
+use process_supervision as process;
 
 #[cfg(test)]
 mod tests;
@@ -77,6 +78,9 @@ fn run() -> DynResult<()> {
         cli::CliCommand::EventBenchmarkComparison(rest) => {
             automation::event_benchmark_comparison::run(rest)
         }
+        cli::CliCommand::SkippyBenchmarkCompare(rest) => {
+            automation::skippy_benchmark_compare::run(rest)
+        }
         cli::CliCommand::AgenticPromptManifest(rest) => {
             automation::agentic_prompt_manifest::run(rest)
         }
@@ -118,9 +122,6 @@ fn run() -> DynResult<()> {
         cli::CliCommand::SmokeInputs(rest) => automation::smoke_inputs::run(rest),
         cli::CliCommand::RemoteHandoffSummary(rest) => {
             automation::remote_handoff_summary::run(rest)
-        }
-        cli::CliCommand::LightningCompatibility(rest) => {
-            automation::lightning_compatibility::run(rest)
         }
         cli::CliCommand::ControlPlaneQa(rest) => {
             let root = match explicit_root {

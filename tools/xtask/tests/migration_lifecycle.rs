@@ -30,7 +30,7 @@ mod runtime_events_gate;
 #[path = "migration_lifecycle/just_automation_argv.rs"]
 mod just_automation_argv;
 
-#[path = "../src/automation/command_interrupt/mod.rs"]
+#[path = "../src/command_interrupt.rs"]
 pub(crate) mod command_interrupt;
 
 #[path = "../src/automation"]
@@ -59,8 +59,7 @@ mod daemon_header_bound;
 mod interruption;
 #[path = "migration_lifecycle/observation.rs"]
 mod observation;
-#[path = "../src/process/mod.rs"]
-pub mod process;
+pub use process_supervision as process;
 #[path = "migration_lifecycle/protocol.rs"]
 mod protocol;
 #[path = "migration_lifecycle/pty.rs"]
@@ -300,9 +299,6 @@ mod cache_family_plan_cli;
 
 #[path = "migration_lifecycle/cache_family_measure_cli.rs"]
 mod cache_family_measure_cli;
-
-#[path = "migration_lifecycle/lightning_compatibility_cli.rs"]
-mod lightning_compatibility_cli;
 
 #[path = "migration_lifecycle/cache_family_cell_cli.rs"]
 mod cache_family_cell_cli;

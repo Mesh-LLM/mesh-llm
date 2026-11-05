@@ -19,6 +19,7 @@
 //! no owner control listener, and no split-stage transport, and it does not
 //! advertise them.
 
+use super::startup::{bind_mesh_endpoint, wait_for_endpoint_online};
 use super::*;
 use std::collections::{BTreeMap, HashSet};
 
@@ -337,8 +338,9 @@ impl Node {
             requested_models: Arc::new(Mutex::new(Vec::new())),
             explicit_model_interests: Arc::new(Mutex::new(Vec::new())),
             requirement_mesh_state: Arc::new(Mutex::new(None)),
-            #[cfg(test)]
             adopted_membership_file: None,
+            identity_state_dir: None,
+            full_model_only: false,
             mesh_id: Arc::new(Mutex::new(None)),
             mesh_policy_hash: Arc::new(Mutex::new(None)),
             signed_genesis_policy: Arc::new(Mutex::new(None)),
@@ -360,6 +362,7 @@ impl Node {
             tunnel_http_tx,
             stage_transport_tx,
             // No split stages, plugins, or owner control through a membership.
+            native_inference: self.native_inference.clone(),
             stage_control_tx: Arc::new(Mutex::new(None)),
             stage_control_lifecycle: Arc::new(Mutex::new(None)),
             stage_transport_bridges: Arc::new(Mutex::new(HashMap::new())),
@@ -367,12 +370,12 @@ impl Node {
             stage_topologies: Arc::new(Mutex::new(StageTopologyState::default())),
             plugin_manager: Arc::new(Mutex::new(None)),
             plugin_keys: crate::mesh::plugin_keys::PluginKeys::default(),
+            model_requirements: Default::default(),
+            unmatched_model_requirements: Default::default(),
             control_listener: Arc::new(Mutex::new(None)),
             owner_lifecycle_response_cache: OwnerLifecycleResponseCache::default(),
             native_model_lifecycle: self.native_model_lifecycle.clone(),
             model_intent_tx: Arc::new(tokio::sync::Mutex::new(None)),
-            #[cfg(feature = "payments")]
-            payment_recovery: Arc::new(Mutex::new(None)),
             memberships: MeshMemberships::default(),
             // This membership's admission: its own allowlist, always enforced.
             owner_attestation: Arc::new(Mutex::new(Some(owner_attestation))),
@@ -390,8 +393,10 @@ impl Node {
             models: self.models.clone(),
             model_source: self.model_source.clone(),
             serving_models: self.serving_models.clone(),
+            startup_models_resolving: self.startup_models_resolving.clone(),
             served_model_descriptors: self.served_model_descriptors.clone(),
             served_model_generations: self.served_model_generations.clone(),
+            served_model_weights_ports: self.served_model_weights_ports.clone(),
             model_runtime_descriptors: self.model_runtime_descriptors.clone(),
             hosted_models: self.hosted_models.clone(),
             llama_ready: self.llama_ready.clone(),
@@ -418,10 +423,10 @@ impl Node {
             gpu_compute_tflops_fp32: host_figure(&self.gpu_compute_tflops_fp32),
             gpu_compute_tflops_fp16: host_figure(&self.gpu_compute_tflops_fp16),
             config_state: self.config_state.clone(),
+            live_request_defaults: self.live_request_defaults.clone(),
             peer_blocks: self.peer_blocks.clone(),
+            route_target_health: self.route_target_health.clone(),
             config_revision_tx: self.config_revision_tx.clone(),
-            #[cfg(feature = "payments")]
-            payments: self.payments.clone(),
             activity_policy_guard: self.activity_policy_guard.clone(),
             drain_timeout_secs: self.drain_timeout_secs,
             drain_timeout_max_secs: self.drain_timeout_max_secs,

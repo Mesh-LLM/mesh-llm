@@ -1,0 +1,27 @@
+name: Select canary stage backend
+description: Detect the runner platform and export LLAMA_STAGE_BACKEND — metal on macOS, cuda on Linux with an NVIDIA driver. Requires setup-canary-runner to have run first.
+runs:
+  using: composite
+  steps:
+    - name: Detect stage backend
+      shell: bash
+      run: |
+        set -euo pipefail
+        case "$(uname -s)" in
+          Darwin)
+            backend=metal
+            ;;
+          Linux)
+            if [[ -z "${SKIPPY_CUDA_ARCHITECTURES:-}" ]]; then
+              echo "SKIPPY_CUDA_ARCHITECTURES is not set; run setup-canary-runner before selecting the backend" >&2
+              exit 1
+            fi
+            backend=cuda
+            ;;
+          *)
+            echo "unsupported canary runner OS: $(uname -s)" >&2
+            exit 1
+            ;;
+        esac
+        echo "LLAMA_STAGE_BACKEND=$backend" >> "$GITHUB_ENV"
+        echo "selected stage backend: $backend"

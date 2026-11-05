@@ -6,7 +6,9 @@
 //! boundary, and they can disagree with the return. This module reports
 //! both conditions; it never decides the terminal.
 
-use skippy_ffi::SkippyRuntimeEventKind;
+use skippy_ffi::{
+    RUNTIME_EVENT_KIND_MODEL_OPEN_FAILED_HANDLED, RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED,
+};
 use skippy_runtime::{ModelOpenEventQueue, NativeEventRecord};
 
 /// Host-side summary of the records one model-open queue produced.
@@ -47,9 +49,9 @@ impl ModelOpenObservation {
     pub(super) fn record(&mut self, record: &NativeEventRecord) {
         self.drained += 1;
         self.last_sequence = Some(record.sequence);
-        let kind = SkippyRuntimeEventKind(record.kind);
-        self.saw_finished |= kind == SkippyRuntimeEventKind::MODEL_OPEN_FINISHED;
-        self.saw_failed_handled |= kind == SkippyRuntimeEventKind::MODEL_OPEN_FAILED_HANDLED;
+        let kind = record.kind;
+        self.saw_finished |= kind == RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED;
+        self.saw_failed_handled |= kind == RUNTIME_EVENT_KIND_MODEL_OPEN_FAILED_HANDLED;
     }
 
     /// Copy the queue's loss counters. Called once the final drain is done.

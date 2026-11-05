@@ -19,9 +19,8 @@ mod runtime_activity;
 pub(crate) mod runtime_control_state;
 mod runtime_control_state_sources;
 pub(crate) mod runtime_events;
+mod runtime_load_request;
 mod search;
-#[cfg(feature = "payments")]
-mod wallet;
 
 use super::MeshApi;
 use std::future::Future;
@@ -45,11 +44,6 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
     |stream, state, method, path, path_only, body, _req, raw_request, caller| {
         Box::pin(async move {
             match (method, path_only) {
-                #[cfg(feature = "payments")]
-                ("POST", "/api/wallet") => {
-                    wallet::handle(stream, state, body).await?;
-                    Ok(true)
-                }
                 (method, route_path) if logs::is_route(route_path) => {
                     logs::handle(stream, method, path, body, raw_request).await?;
                     Ok(true)
@@ -102,6 +96,7 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 | ("GET", "/api/runtime/config-control-state")
                 | ("GET", "/api/runtime/kv-cache")
                 | ("GET", "/api/runtime/control-bootstrap")
+                | ("GET", "/api/runtime/control/owner-control-token")
                 | ("GET", "/api/runtime/intents")
                 | ("GET", "/api/runtime/activity")
                 | ("POST", "/api/runtime/control/get-config")
@@ -121,15 +116,15 @@ pub(super) const DISPATCH_REQUEST: DispatchRequestFn =
                 | ("PUT", "/api/runtime/activity/override")
                 | ("DELETE", "/api/runtime/activity/override")
                 | ("GET", "/api/events") => {
-                    runtime::handle(stream, state, method, path_only, body).await?;
+                    runtime::handle(stream, state, method, path_only, body, raw_request).await?;
                     Ok(true)
                 }
                 ("DELETE", p) if p.starts_with("/api/runtime/instances/") => {
-                    runtime::handle(stream, state, method, path_only, body).await?;
+                    runtime::handle(stream, state, method, path_only, body, raw_request).await?;
                     Ok(true)
                 }
                 ("DELETE", p) if p.starts_with("/api/runtime/models/") => {
-                    runtime::handle(stream, state, method, path_only, body).await?;
+                    runtime::handle(stream, state, method, path_only, body, raw_request).await?;
                     Ok(true)
                 }
                 ("GET", "/api/search") => {

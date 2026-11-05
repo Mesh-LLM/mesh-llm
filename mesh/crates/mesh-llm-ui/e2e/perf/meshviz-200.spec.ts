@@ -129,10 +129,19 @@ test('measures MeshViz pan and zoom performance with 200 nodes', async ({ page }
 
   const centerX = box.x + box.width / 2
   const centerY = box.y + box.height / 2
-  await page.mouse.move(centerX, centerY)
+  // The centre is the self-node button, which intentionally rejects canvas
+  // dragging. Start on the background so this measures panning, not repeated
+  // node hover renders as the pointer crosses the topology.
+  const start = await findEmptyCanvasPoint(page)
+  const direction = start.x < centerX ? 1 : -1
+  const packetLayer = page.getByTestId('mesh-packet-layer')
+  const initialTransform = await packetLayer.evaluate((element) => element.style.transform)
+  await page.mouse.move(start.x, start.y)
   await page.mouse.down()
-  await dragTo(page, centerX, centerY, centerX - 280, centerY + 90, 90, 16)
-  await dragTo(page, centerX - 280, centerY + 90, centerX + 260, centerY - 70, 90, 16)
+  await expect(canvas).toHaveClass(/cursor-grabbing/)
+  await dragTo(page, start.x, start.y, start.x + direction * 280, start.y + 90, 90, 16)
+  await expect.poll(() => packetLayer.evaluate((element) => element.style.transform)).not.toBe(initialTransform)
+  await dragTo(page, start.x + direction * 280, start.y + 90, start.x - direction * 260, start.y - 70, 90, 16)
   await page.mouse.up()
 
   await page.mouse.move(centerX, centerY)

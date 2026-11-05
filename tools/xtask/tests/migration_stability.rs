@@ -1,7 +1,6 @@
 #![cfg(feature = "automation-contracts")]
 #![allow(dead_code, unused_imports)]
-#[path = "../src/process/mod.rs"]
-mod process;
+use process_supervision as process;
 
 #[path = "migration_stability/tls_cases.rs"]
 mod tls_cases;

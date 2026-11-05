@@ -177,6 +177,9 @@ pub(crate) fn apply_config_edits(table: &mut Table, edits: &[TuneConfigEdit]) ->
             TuneConfigEdit::SetHardwareMlock(mlock) => {
                 ensure_subtable(table, "hardware")?["mlock"] = value(*mlock);
             }
+            TuneConfigEdit::SetHardwareNCpuMoe(blocks) => {
+                ensure_subtable(table, "hardware")?["n_cpu_moe"] = value(i64::from(*blocks));
+            }
         }
     }
     Ok(())

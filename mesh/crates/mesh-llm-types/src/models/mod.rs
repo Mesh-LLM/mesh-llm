@@ -1,4 +1,5 @@
 pub mod capabilities;
+pub mod discovery;
 pub mod sizes;
 pub mod topology;
 

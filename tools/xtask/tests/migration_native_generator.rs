@@ -1,7 +1,6 @@
 #![cfg(feature = "automation-contracts")]
-#[path = "../src/process/mod.rs"]
-pub mod process;
 use process::*;
+pub use process_supervision as process;
 use std::collections::BTreeMap;
 use std::time::Duration;
 

@@ -95,6 +95,7 @@ async fn status_payload_control_plane_compat() {
 #[tokio::test]
 async fn mesh_guardrails_runtime_mode_accepts_loopback_callers() {
     let state = build_test_mesh_api().await;
+    seed_owner_control_token(&state).await;
     let (control_tx, mut control_rx) = mpsc::unbounded_channel();
     state.set_runtime_control(control_tx).await;
     let (addr, handle) = spawn_management_test_server(state).await;
@@ -116,7 +117,7 @@ async fn mesh_guardrails_runtime_mode_accepts_loopback_callers() {
     let response = send_management_request(
         addr,
         format!(
-            "POST /api/runtime/mesh-guardrails HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            "POST /api/runtime/mesh-guardrails HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer {TEST_OWNER_CONTROL_TOKEN}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
             body.len(),
             body
         ),
@@ -189,15 +190,15 @@ async fn control_plane_api_cli_requires_explicit_endpoint_and_runs_local_orchest
     let control_server = spawn_owner_control_test_server().await;
     let state = build_test_mesh_api().await;
     state.set_owner_key_path(Some(keystore_path)).await;
+    seed_owner_control_token(&state).await;
     let (addr, handle) = spawn_management_test_server(state.clone()).await;
 
     let missing_request_body = "{}";
     let missing = send_management_request(
         addr,
-        format!(
-            "POST /api/runtime/control/get-config HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            missing_request_body.len(),
-            missing_request_body
+        management_post_request_with_owner_control(
+            "/api/runtime/control/get-config",
+            missing_request_body,
         ),
     )
     .await;
@@ -209,10 +210,9 @@ async fn control_plane_api_cli_requires_explicit_endpoint_and_runs_local_orchest
     let request_body = json!({ "endpoint": control_server.endpoint_token }).to_string();
     let response = send_management_request(
         addr,
-        format!(
-            "POST /api/runtime/control/get-config HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            request_body.len(),
-            request_body
+        management_post_request_with_owner_control(
+            "/api/runtime/control/get-config",
+            &request_body,
         ),
     )
     .await;
@@ -252,12 +252,16 @@ async fn control_plane_api_apply_config_uses_full_mesh_config_contract() {
     .await;
     let state = build_test_mesh_api().await;
     state.set_owner_key_path(Some(keystore_path)).await;
+    seed_owner_control_token(&state).await;
     let (addr, handle) = spawn_management_test_server(state.clone()).await;
 
     let get_request_body = json!({ "endpoint": get_server.endpoint_token }).to_string();
     let get_response = send_management_request(
         addr,
-        management_post_request("/api/runtime/control/get-config", &get_request_body),
+        management_post_request_with_owner_control(
+            "/api/runtime/control/get-config",
+            &get_request_body,
+        ),
     )
     .await;
     let get_body = json_body(&get_response);
@@ -284,7 +288,10 @@ async fn control_plane_api_apply_config_uses_full_mesh_config_contract() {
     .to_string();
     let apply_response = send_management_request(
         addr,
-        management_post_request("/api/runtime/control/apply-config", &apply_request_body),
+        management_post_request_with_owner_control(
+            "/api/runtime/control/apply-config",
+            &apply_request_body,
+        ),
     )
     .await;
     let apply_body = json_body(&apply_response);
@@ -338,6 +345,7 @@ async fn control_plane_api_apply_config_reports_revision_conflict() {
     .await;
     let state = build_test_mesh_api().await;
     state.set_owner_key_path(Some(keystore_path)).await;
+    seed_owner_control_token(&state).await;
     let (addr, handle) = spawn_management_test_server(state).await;
 
     let request_body = json!({
@@ -348,7 +356,7 @@ async fn control_plane_api_apply_config_reports_revision_conflict() {
     .to_string();
     let response = send_management_request(
         addr,
-        management_post_request("/api/runtime/control/apply-config", &request_body),
+        management_post_request_with_owner_control("/api/runtime/control/apply-config", &request_body),
     )
     .await;
     let body = json_body(&response);
@@ -370,12 +378,16 @@ async fn control_plane_api_apply_config_reports_revision_conflict() {
 #[tokio::test]
 async fn control_plane_api_apply_config_rejects_invalid_json() {
     let state = build_test_mesh_api().await;
+    seed_owner_control_token(&state).await;
     let (addr, handle) = spawn_management_test_server(state).await;
 
     let request_body = "{\"endpoint\":";
     let response = send_management_request(
         addr,
-        management_post_request("/api/runtime/control/apply-config", request_body),
+        management_post_request_with_owner_control(
+            "/api/runtime/control/apply-config",
+            request_body,
+        ),
     )
     .await;
     let body = json_body(&response);
@@ -427,15 +439,15 @@ async fn control_plane_api_reports_remote_endpoint_unreachable() {
     let endpoint_token = unreachable_owner_control_endpoint_token().await;
     let state = build_test_mesh_api().await;
     state.set_owner_key_path(Some(keystore_path)).await;
+    seed_owner_control_token(&state).await;
     let (addr, handle) = spawn_management_test_server(state).await;
 
     let request_body = json!({ "endpoint": endpoint_token }).to_string();
     let response = send_management_request(
         addr,
-        format!(
-            "POST /api/runtime/control/get-config HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            request_body.len(),
-            request_body
+        management_post_request_with_owner_control(
+            "/api/runtime/control/get-config",
+            &request_body,
         ),
     )
     .await;
@@ -467,15 +479,15 @@ async fn control_plane_api_cli_uses_custom_owner_key_path() {
     let control_server = spawn_owner_control_test_server().await;
     let state = build_test_mesh_api().await;
     state.set_owner_key_path(Some(custom_owner_key)).await;
+    seed_owner_control_token(&state).await;
     let (addr, handle) = spawn_management_test_server(state).await;
 
     let request_body = json!({ "endpoint": control_server.endpoint_token }).to_string();
     let response = send_management_request(
         addr,
-        format!(
-            "POST /api/runtime/control/get-config HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            request_body.len(),
-            request_body
+        management_post_request_with_owner_control(
+            "/api/runtime/control/get-config",
+            &request_body,
         ),
     )
     .await;

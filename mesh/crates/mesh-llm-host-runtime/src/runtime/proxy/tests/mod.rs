@@ -14,6 +14,30 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{oneshot, watch};
 
+// Routing fixtures also publish positive LLM evidence, just as real loaded
+// runtimes do. Compatibility discovery intentionally excludes legacy unknowns.
+async fn advertise_test_targets(node: &mesh::Node, targets: &election::ModelTargets) {
+    let names = callable_models(targets);
+    node.set_hosted_models(names.clone()).await;
+    node.set_served_model_descriptors(
+        names
+            .into_iter()
+            .map(|name| mesh::ServedModelDescriptor {
+                identity: mesh::ServedModelIdentity {
+                    model_name: name,
+                    ..Default::default()
+                },
+                metadata: Some(mesh::ServedModelMetadata {
+                    workload_class: Some(mesh::ModelWorkloadClass::CausalGeneration),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .collect(),
+    )
+    .await;
+}
+
 async fn spawn_api_proxy_test_harness(
     targets: election::ModelTargets,
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
@@ -31,6 +55,7 @@ async fn spawn_api_proxy_test_harness_with_affinity(
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
         .await
         .unwrap();
+    advertise_test_targets(&node, &targets).await;
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (_target_tx, target_rx) = watch::channel(targets);
@@ -53,6 +78,7 @@ async fn spawn_api_proxy_test_harness_with_contexts(
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
         .await
         .unwrap();
+    advertise_test_targets(&node, &targets).await;
     for (model, context_length) in contexts {
         node.set_model_runtime_context_length(model, Some(*context_length))
             .await;
@@ -87,6 +113,7 @@ async fn spawn_api_proxy_test_harness_with_plugin_manager_and_contexts(
     let node = mesh::Node::new_for_tests(mesh::NodeRole::Worker)
         .await
         .unwrap();
+    advertise_test_targets(&node, &targets).await;
     for (model, context_length) in contexts {
         node.set_model_runtime_context_length(model, Some(*context_length))
             .await;

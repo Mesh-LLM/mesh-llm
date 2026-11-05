@@ -137,6 +137,7 @@ pub(crate) fn stage_snapshot_from_runtime_status(
         lease_until_unix_ms: 0,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        dflash_target_layers: None,
     }
 }
 
@@ -281,6 +282,7 @@ pub(super) fn stage_load_to_proto(
         flash_attn_type: stage_flash_attn_type_to_proto(load.flash_attn_type) as i32,
         runtime_settings: Some(stage_runtime_settings_to_proto(load.runtime_settings)),
         native_mtp_enabled: Some(load.native_mtp_enabled),
+        dflash: load.dflash.as_ref().map(stage_dflash_to_proto),
         shutdown_generation: load.shutdown_generation,
         coordinator_term: load.coordinator_term,
         coordinator_id: load.coordinator_id.map(|id| id.to_string()),
@@ -347,6 +349,8 @@ fn stage_runtime_settings_to_proto(
         kv_unified: settings.kv_unified,
         swa_full: settings.swa_full,
         cache_idle_slots: settings.cache_idle_slots,
+        cpu_moe: settings.host_experts.cpu_moe,
+        n_cpu_moe: settings.host_experts.n_cpu_moe,
         activation_codec_policy: stage_activation_codec_policy_to_proto(
             settings.activation_codec_policy,
         ) as i32,
@@ -559,6 +563,7 @@ pub(super) fn stage_load_from_proto(
         flash_attn_type: stage_flash_attn_type_from_proto(load.flash_attn_type),
         runtime_settings: stage_runtime_settings_from_proto(load.runtime_settings)?,
         native_mtp_enabled: load.native_mtp_enabled.unwrap_or(true),
+        dflash: load.dflash.map(stage_dflash_from_proto),
         shutdown_generation: load.shutdown_generation,
         coordinator_term: load.coordinator_term,
         coordinator_id: load
@@ -610,6 +615,10 @@ fn stage_runtime_settings_from_proto(
         kv_unified: settings.kv_unified,
         swa_full: settings.swa_full,
         cache_idle_slots: settings.cache_idle_slots,
+        host_experts: skippy_protocol::HostExpertPolicy {
+            cpu_moe: settings.cpu_moe,
+            n_cpu_moe: settings.n_cpu_moe,
+        },
         activation_codec_policy: stage_activation_codec_policy_from_proto(
             settings.activation_codec_policy,
         )?,
@@ -697,6 +706,15 @@ fn stage_activation_codec_to_proto(
         skippy_protocol::StageActivationCodec::S8RowF32RneV1 => {
             skippy_stage_proto::StageActivationCodec::S8RowF32RneV1
         }
+        skippy_protocol::StageActivationCodec::Fp8E4m3RowF32RneV1 => {
+            skippy_stage_proto::StageActivationCodec::Fp8E4m3RowF32RneV1
+        }
+        skippy_protocol::StageActivationCodec::Fp8E4m3Block32E8m0RneV1 => {
+            skippy_stage_proto::StageActivationCodec::Fp8E4m3Block32E8m0RneV1
+        }
+        skippy_protocol::StageActivationCodec::Fp8E5m2RowF32RneV1 => {
+            skippy_stage_proto::StageActivationCodec::Fp8E5m2RowF32RneV1
+        }
     }
 }
 
@@ -715,6 +733,15 @@ fn stage_activation_codec_from_proto(
         }
         Ok(skippy_stage_proto::StageActivationCodec::S8RowF32RneV1) => {
             Ok(skippy_protocol::StageActivationCodec::S8RowF32RneV1)
+        }
+        Ok(skippy_stage_proto::StageActivationCodec::Fp8E4m3RowF32RneV1) => {
+            Ok(skippy_protocol::StageActivationCodec::Fp8E4m3RowF32RneV1)
+        }
+        Ok(skippy_stage_proto::StageActivationCodec::Fp8E4m3Block32E8m0RneV1) => {
+            Ok(skippy_protocol::StageActivationCodec::Fp8E4m3Block32E8m0RneV1)
+        }
+        Ok(skippy_stage_proto::StageActivationCodec::Fp8E5m2RowF32RneV1) => {
+            Ok(skippy_protocol::StageActivationCodec::Fp8E5m2RowF32RneV1)
         }
         _ => anyhow::bail!("unsupported generation-11 activation codec {value}"),
     }
@@ -808,6 +835,7 @@ pub(super) fn stage_control_unavailable_response(
                 lease_until_unix_ms: 0,
                 compute_busy_nanos: 0,
                 compute_operations: 0,
+                dflash_target_layers: None,
             }
         }
         crate::inference::skippy::StageControlRequest::Status(_) => {
@@ -890,6 +918,7 @@ pub(crate) fn stage_status_from_load(
         lease_until_unix_ms: load.lease_until_unix_ms,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        dflash_target_layers: None,
     }
 }
 
@@ -1178,6 +1207,9 @@ pub(super) fn stage_status_to_proto(
         ) as i32,
         compute_busy_nanos: status.compute_busy_nanos,
         compute_operations: status.compute_operations,
+        dflash_draft: status
+            .dflash_target_layers
+            .map(|target_layers| skippy_stage_proto::StageDFlashDraftStatus { target_layers }),
     }
 }
 
@@ -1257,6 +1289,7 @@ pub(super) fn stage_status_from_proto(
         lease_until_unix_ms: status.lease_until_unix_ms,
         compute_busy_nanos: status.compute_busy_nanos,
         compute_operations: status.compute_operations,
+        dflash_target_layers: status.dflash_draft.map(|draft| draft.target_layers),
     })
 }
 
@@ -1441,6 +1474,53 @@ pub(super) fn stage_runtime_state_to_proto(
     }
 }
 
+fn stage_dflash_to_proto(
+    plan: &skippy_serving::split_dflash::SplitDFlashStage,
+) -> skippy_stage_proto::StageDFlashPlan {
+    skippy_stage_proto::StageDFlashPlan {
+        target_layers: plan.target_layers.clone(),
+        draft_model_path: plan
+            .draft_model_path
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned()),
+        max_draft_tokens: plan
+            .max_draft_tokens
+            .map(|tokens| u32::try_from(tokens).unwrap_or(u32::MAX)),
+        draft_n_gpu_layers: plan.draft_n_gpu_layers,
+        draft_device: plan.draft_device.clone(),
+        draft_source: plan.draft_source.as_ref().map(|source| {
+            skippy_stage_proto::StageDFlashDraftSource {
+                repo: source.repo.clone(),
+                revision: source.revision.clone(),
+                file: source.file.clone(),
+                sha256: source.sha256.clone(),
+                bytes: source.bytes,
+            }
+        }),
+    }
+}
+
+fn stage_dflash_from_proto(
+    plan: skippy_stage_proto::StageDFlashPlan,
+) -> skippy_serving::split_dflash::SplitDFlashStage {
+    skippy_serving::split_dflash::SplitDFlashStage {
+        target_layers: plan.target_layers,
+        draft_model_path: plan.draft_model_path.map(std::path::PathBuf::from),
+        max_draft_tokens: plan.max_draft_tokens.map(|tokens| tokens as usize),
+        draft_n_gpu_layers: plan.draft_n_gpu_layers,
+        draft_device: plan.draft_device,
+        draft_source: plan.draft_source.map(|source| {
+            skippy_serving::split_dflash::SplitDFlashDraftSource {
+                repo: source.repo,
+                revision: source.revision,
+                file: source.file,
+                sha256: source.sha256,
+                bytes: source.bytes,
+            }
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1460,6 +1540,8 @@ mod tests {
             kv_unified: Some(true),
             swa_full: Some(false),
             cache_idle_slots: Some(3),
+            cpu_moe: Some(false),
+            n_cpu_moe: Some(4),
             activation_codec_policy: skippy_stage_proto::StageActivationCodecPolicy::FixedV1 as i32,
         };
         let load = skippy_stage_proto::LoadStage {

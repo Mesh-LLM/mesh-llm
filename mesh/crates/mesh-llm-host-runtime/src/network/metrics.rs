@@ -14,9 +14,13 @@ use mesh_llm_membership::advertised_throughput::MAX_ADVERTISED_MODEL_NAME_BYTES;
 
 pub(crate) use mesh_llm_membership::advertised_throughput::{
     MAX_ADVERTISED_MODEL_THROUGHPUT_HINTS, MAX_ADVERTISED_THROUGHPUT_SAMPLES,
-    MAX_ADVERTISED_TPS_MILLI, ModelThroughputHint, THROUGHPUT_SCALE_MILLI,
-    sanitize_model_throughput_hints,
+    MAX_ADVERTISED_TPS_MILLI, ModelThroughputHint, THROUGHPUT_SCALE_MILLI, ThroughputMeasurement,
+    ThroughputMeasurementKind, sanitize_model_throughput_hints,
 };
+
+#[path = "metrics/throughput_window.rs"]
+mod throughput_window;
+use throughput_window::{RecentThroughput, ThroughputWindow};
 
 const METRICS_TTL: Duration = Duration::from_secs(60 * 60);
 const MAX_TRACKED_MODELS: usize = 128;
@@ -371,6 +375,28 @@ impl RoutingMetrics {
         outcome: AttemptOutcome,
         completion_tokens: Option<u64>,
     ) {
+        self.record_attempt_at(
+            Instant::now(),
+            model,
+            target,
+            queue_wait,
+            attempt_time,
+            outcome,
+            completion_tokens,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn record_attempt_at(
+        &self,
+        now: Instant,
+        model: Option<&str>,
+        target: AttemptTarget,
+        queue_wait: Duration,
+        attempt_time: Duration,
+        outcome: AttemptOutcome,
+        completion_tokens: Option<u64>,
+    ) {
         let queue_wait_ms = duration_millis(queue_wait);
         let attempt_ms = duration_millis(attempt_time);
         let target_key = target.key();
@@ -385,7 +411,6 @@ impl RoutingMetrics {
         );
 
         if let Some(model) = normalized_model_name(model) {
-            let now = Instant::now();
             let shard_index = self.shard_index(model);
             let mut shard = self.shards[shard_index].lock().unwrap();
             shard.record_attempt(
@@ -442,22 +467,23 @@ impl RoutingMetrics {
 
     /// Cheap per-model throughput lookup for routing decisions.
     ///
-    /// Returns `(avg_tokens_per_second, throughput_samples)` if the model has
-    /// observed throughput, `None` if the model is unknown or has never
-    /// recorded a token-bearing attempt. Avoids the per-call HashMap
+    /// Returns `(avg_tokens_per_second, throughput_samples)` over the samples
+    /// still inside the evidence window, `None` if the model is unknown or no
+    /// token-bearing attempt is recent enough. Avoids the per-call HashMap
     /// allocation that [`model_snapshots`](Self::model_snapshots) does —
     /// callers in the routing hot path can poll this once per candidate
     /// without rebuilding every model's full snapshot.
     pub fn tps_for_model(&self, model: &str) -> Option<(f64, u64)> {
+        self.tps_for_model_at(model, Instant::now())
+    }
+
+    fn tps_for_model_at(&self, model: &str, now: Instant) -> Option<(f64, u64)> {
         let shard_index = self.shard_index(model);
         let shard = self.shards[shard_index].lock().unwrap();
         let metrics = shard.models.get(model)?;
-        let samples = metrics.throughput_samples;
-        if samples == 0 {
-            return None;
-        }
-        let tps = average_milli(metrics.throughput_tps_milli_sum, samples)?;
-        Some((tps, samples))
+        let recent = metrics.recent_throughput.recent(now);
+        let tps = average_milli(recent.tps_milli_sum, recent.samples)?;
+        Some((tps, recent.samples))
     }
 
     /// Return bounded local-throughput hints that this node can safely advertise.
@@ -465,11 +491,26 @@ impl RoutingMetrics {
     /// Only local targets for currently hosted models are included. Remote and
     /// endpoint observations are measurements this node made while routing, not
     /// proof of this node's serving speed, so they are intentionally excluded.
+    /// Only samples still inside the evidence window count.
     pub(crate) fn advertisable_model_throughput(
         &self,
         hosted_models: &[String],
     ) -> Vec<ModelThroughputHint> {
-        let now = Instant::now();
+        let now_unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(duration_millis)
+            .unwrap_or_default();
+        self.advertisable_model_throughput_at(hosted_models, Instant::now(), now_unix_ms)
+    }
+
+    /// `now` and `now_unix_ms` are the same moment on the monotonic and the
+    /// wall clock; the newest sample's wall time is derived from their gap.
+    fn advertisable_model_throughput_at(
+        &self,
+        hosted_models: &[String],
+        now: Instant,
+        now_unix_ms: u64,
+    ) -> Vec<ModelThroughputHint> {
         let mut seen = HashSet::new();
         let mut hints = Vec::new();
 
@@ -486,29 +527,46 @@ impl RoutingMetrics {
                 continue;
             };
 
-            let mut tps_milli_sum = 0_u64;
-            let mut samples = 0_u64;
-            for (target, target_metrics) in &metrics.targets {
-                if target.kind != TargetKind::Local || target_metrics.throughput_samples == 0 {
-                    continue;
-                }
-                tps_milli_sum =
-                    tps_milli_sum.saturating_add(target_metrics.throughput_tps_milli_sum);
-                samples = samples.saturating_add(target_metrics.throughput_samples);
-            }
-
-            if samples == 0 {
-                continue;
-            }
-            let Some(avg_tokens_per_second_milli) = average_milli_raw(tps_milli_sum, samples)
+            let recent = metrics
+                .targets
+                .iter()
+                .filter(|(target, _)| target.kind == TargetKind::Local)
+                .map(|(_, target_metrics)| target_metrics.recent_throughput.recent(now))
+                .fold(RecentThroughput::default(), RecentThroughput::add);
+            let Some(avg_tokens_per_second_milli) =
+                average_milli_raw(recent.tps_milli_sum, recent.samples)
             else {
                 continue;
             };
+            // Dated by the newest sample, valid until the oldest sample in the
+            // average expires: the window is what remains of the oldest one's
+            // evidence age. When nothing remains — the span has already
+            // reached the evidence age — the hint is kept but undated instead
+            // of being advertised with a bogus window: an undated hint
+            // survives sanitization yet is never fresh, so no receiver can
+            // accept evidence past the oldest sample's last valid instant.
+            let measurement = recent
+                .newest
+                .zip(recent.oldest)
+                .and_then(|(newest, oldest)| {
+                    let remaining = throughput_window::THROUGHPUT_EVIDENCE_MAX_AGE
+                        .saturating_sub(newest.saturating_duration_since(oldest));
+                    if remaining.is_zero() {
+                        return None;
+                    }
+                    Some(ThroughputMeasurement {
+                        observed_at_unix_ms: now_unix_ms
+                            .saturating_sub(duration_millis(now.saturating_duration_since(newest))),
+                        window_ms: duration_millis(remaining).max(1),
+                        kind: ThroughputMeasurementKind::EndToEndAttempt,
+                    })
+                });
             hints.push(ModelThroughputHint {
                 model_name: model.to_string(),
                 avg_tokens_per_second_milli: avg_tokens_per_second_milli
                     .min(MAX_ADVERTISED_TPS_MILLI),
-                throughput_samples: samples.min(MAX_ADVERTISED_THROUGHPUT_SAMPLES),
+                throughput_samples: recent.samples.min(MAX_ADVERTISED_THROUGHPUT_SAMPLES),
+                measurement,
             });
             if hints.len() >= MAX_ADVERTISED_MODEL_THROUGHPUT_HINTS {
                 break;
@@ -518,28 +576,35 @@ impl RoutingMetrics {
         sanitize_model_throughput_hints(hints)
     }
 
+    /// This node's own observation of `target` for `model`, over the samples
+    /// still inside the evidence window.
     pub(crate) fn throughput_hint_for_target(
         &self,
         model: &str,
         target: AttemptTarget,
     ) -> Option<ModelThroughputHint> {
-        let now = Instant::now();
+        self.throughput_hint_for_target_at(model, target, Instant::now())
+    }
+
+    fn throughput_hint_for_target_at(
+        &self,
+        model: &str,
+        target: AttemptTarget,
+        now: Instant,
+    ) -> Option<ModelThroughputHint> {
         let shard_index = self.shard_index(model);
         let mut shard = self.shards[shard_index].lock().unwrap();
         shard.compact(now, &self.config);
         let metrics = shard.models.get(model)?;
         let target = target.key();
-        let metrics = metrics.targets.get(&target)?;
-        let samples = metrics.throughput_samples;
-        if samples == 0 {
-            return None;
-        }
-        let avg_tokens_per_second_milli =
-            average_milli_raw(metrics.throughput_tps_milli_sum, samples)?;
+        let recent = metrics.targets.get(&target)?.recent_throughput.recent(now);
+        let avg_tokens_per_second_milli = average_milli_raw(recent.tps_milli_sum, recent.samples)?;
         Some(ModelThroughputHint {
             model_name: model.to_string(),
             avg_tokens_per_second_milli,
-            throughput_samples: samples,
+            throughput_samples: recent.samples,
+            // Local observation, read straight from the window: no wire age.
+            measurement: None,
         })
     }
 
@@ -878,6 +943,8 @@ struct ModelMetrics {
     completion_tokens_observed: u64,
     throughput_tps_milli_sum: u64,
     throughput_samples: u64,
+    /// What routing reads; the two cumulative fields above stay diagnostic.
+    recent_throughput: ThroughputWindow,
     targets: HashMap<TargetKey, TargetMetrics>,
 }
 
@@ -899,6 +966,7 @@ impl Default for ModelMetrics {
             completion_tokens_observed: 0,
             throughput_tps_milli_sum: 0,
             throughput_samples: 0,
+            recent_throughput: ThroughputWindow::default(),
             targets: HashMap::new(),
         }
     }
@@ -923,6 +991,7 @@ impl ModelMetrics {
                         self.throughput_tps_milli_sum =
                             self.throughput_tps_milli_sum.saturating_add(tps_milli);
                         self.throughput_samples += 1;
+                        self.recent_throughput.record(record.now, tps_milli);
                     }
                 }
             }
@@ -939,6 +1008,7 @@ impl ModelMetrics {
         let metrics = self.targets.entry(record.target).or_default();
         metrics.last_updated = record.now;
         metrics.record(
+            record.now,
             record.queue_wait_ms,
             record.attempt_ms,
             record.outcome,
@@ -1051,6 +1121,8 @@ struct TargetMetrics {
     completion_tokens_observed: u64,
     throughput_tps_milli_sum: u64,
     throughput_samples: u64,
+    /// What routing reads; the two cumulative fields above stay diagnostic.
+    recent_throughput: ThroughputWindow,
 }
 
 impl Default for TargetMetrics {
@@ -1068,6 +1140,7 @@ impl Default for TargetMetrics {
             completion_tokens_observed: 0,
             throughput_tps_milli_sum: 0,
             throughput_samples: 0,
+            recent_throughput: ThroughputWindow::default(),
         }
     }
 }
@@ -1075,6 +1148,7 @@ impl Default for TargetMetrics {
 impl TargetMetrics {
     fn record(
         &mut self,
+        now: Instant,
         queue_wait_ms: u64,
         attempt_ms: u64,
         outcome: AttemptOutcome,
@@ -1095,6 +1169,7 @@ impl TargetMetrics {
                         self.throughput_tps_milli_sum =
                             self.throughput_tps_milli_sum.saturating_add(tps_milli);
                         self.throughput_samples += 1;
+                        self.recent_throughput.record(now, tps_milli);
                     }
                 }
             }
@@ -1198,490 +1273,4 @@ fn tokens_per_second_milli(tokens: u64, elapsed: Duration) -> Option<u64> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::{Arc, Barrier};
-    use std::thread;
-
-    #[test]
-    fn routing_metric_groups_declare_explicit_layer_and_scope() {
-        let mut names = ROUTING_METRIC_GROUPS
-            .iter()
-            .map(|group| group.name)
-            .collect::<Vec<_>>();
-        names.sort_unstable();
-        assert_eq!(
-            names,
-            vec![
-                "mesh_models[].routing_metrics",
-                "mesh_models[].routing_metrics.targets[]",
-                "routing_metrics",
-                "routing_metrics.local_node",
-                "routing_metrics.pressure",
-            ]
-        );
-        assert!(
-            ROUTING_METRIC_GROUPS
-                .iter()
-                .all(|group| !group.description.is_empty())
-        );
-        assert!(
-            ROUTING_METRIC_GROUPS
-                .iter()
-                .all(|group| !group.api_surface.is_empty())
-        );
-        assert!(ROUTING_METRIC_GROUPS.iter().all(|group| matches!(
-            group.layer,
-            MetricLayer::Runtime | MetricLayer::Information | MetricLayer::Strategy
-        )));
-        assert!(ROUTING_METRIC_GROUPS.iter().all(|group| matches!(
-            group.scope,
-            MetricScope::LocalOnly | MetricScope::PeerAdvertised | MetricScope::MeshDerived
-        )));
-        assert!(
-            ROUTING_METRIC_GROUPS
-                .iter()
-                .all(|group| group.scope == MetricScope::LocalOnly)
-        );
-    }
-
-    #[test]
-    fn routing_metrics_enforces_model_and_target_bounds() {
-        let metrics = RoutingMetrics::with_config(Duration::from_secs(3600), 2, 2);
-        metrics.record_attempt(
-            Some("alpha"),
-            AttemptTarget::Remote("peer-a".into()),
-            Duration::from_millis(1),
-            Duration::from_millis(10),
-            AttemptOutcome::Success,
-            Some(8),
-        );
-        metrics.record_attempt(
-            Some("alpha"),
-            AttemptTarget::Remote("peer-b".into()),
-            Duration::from_millis(2),
-            Duration::from_millis(12),
-            AttemptOutcome::Success,
-            Some(9),
-        );
-        metrics.record_attempt(
-            Some("alpha"),
-            AttemptTarget::Remote("peer-c".into()),
-            Duration::from_millis(3),
-            Duration::from_millis(15),
-            AttemptOutcome::Timeout,
-            None,
-        );
-        metrics.record_attempt(
-            Some("beta"),
-            AttemptTarget::Local("127.0.0.1:9001".into()),
-            Duration::from_millis(1),
-            Duration::from_millis(11),
-            AttemptOutcome::Success,
-            Some(7),
-        );
-        metrics.record_attempt(
-            Some("gamma"),
-            AttemptTarget::Endpoint("http://example.com".into()),
-            Duration::from_millis(4),
-            Duration::from_millis(20),
-            AttemptOutcome::Unavailable,
-            None,
-        );
-
-        let model_snapshots = metrics.model_snapshots();
-        assert_eq!(model_snapshots.len(), 2);
-        assert!(model_snapshots.contains_key("beta"));
-        assert!(model_snapshots.contains_key("gamma"));
-        assert_eq!(model_snapshots["beta"].targets.len(), 1);
-    }
-
-    #[test]
-    fn endpoint_target_label_credentials_are_redacted_in_snapshot() {
-        let metrics = RoutingMetrics::with_config(Duration::from_secs(3600), 8, 8);
-        metrics.record_attempt(
-            Some("gamma"),
-            AttemptTarget::Endpoint(
-                "https://alice:s3cret@endpoint.example/v1?api_key=abc123".into(),
-            ),
-            Duration::from_millis(4),
-            Duration::from_millis(20),
-            AttemptOutcome::Success,
-            Some(5),
-        );
-
-        let snapshot = &metrics.model_snapshots()["gamma"];
-        let target = &snapshot.targets[0];
-        assert_eq!(target.kind, "endpoint");
-        assert!(
-            !target.target.contains("alice:s3cret"),
-            "endpoint userinfo leaked into metrics: {}",
-            target.target
-        );
-        assert!(
-            !target.target.contains("abc123"),
-            "endpoint api_key leaked into metrics: {}",
-            target.target
-        );
-        assert!(
-            target.target.contains("endpoint.example"),
-            "endpoint host lost from metrics: {}",
-            target.target
-        );
-    }
-
-    #[test]
-    fn uppercase_scheme_endpoint_label_is_still_redacted_in_snapshot() {
-        // URL schemes are case-insensitive (RFC 3986); an uppercase scheme
-        // must not bypass credential redaction of the metrics label.
-        let metrics = RoutingMetrics::with_config(Duration::from_secs(3600), 8, 8);
-        metrics.record_attempt(
-            Some("gamma"),
-            AttemptTarget::Endpoint(
-                "HTTPS://alice:s3cret@endpoint.example/v1?api_key=abc123".into(),
-            ),
-            Duration::from_millis(4),
-            Duration::from_millis(20),
-            AttemptOutcome::Success,
-            Some(5),
-        );
-
-        let snapshot = &metrics.model_snapshots()["gamma"];
-        let target = &snapshot.targets[0];
-        assert!(
-            !target.target.contains("alice:s3cret"),
-            "endpoint userinfo leaked for uppercase scheme: {}",
-            target.target
-        );
-        assert!(
-            !target.target.contains("abc123"),
-            "endpoint api_key leaked for uppercase scheme: {}",
-            target.target
-        );
-    }
-
-    #[test]
-    fn non_endpoint_target_labels_pass_through_verbatim() {
-        let metrics = RoutingMetrics::with_config(Duration::from_secs(3600), 8, 8);
-        metrics.record_attempt(
-            Some("beta"),
-            AttemptTarget::Local("127.0.0.1:9001".into()),
-            Duration::from_millis(1),
-            Duration::from_millis(11),
-            AttemptOutcome::Success,
-            Some(7),
-        );
-
-        let snapshot = &metrics.model_snapshots()["beta"];
-        assert_eq!(snapshot.targets[0].target, "127.0.0.1:9001");
-    }
-
-    #[test]
-    fn routing_metrics_prunes_stale_entries_on_snapshot() {
-        let metrics = RoutingMetrics::with_config(Duration::from_secs(1), 8, 8);
-        metrics.record_attempt(
-            Some("stale"),
-            AttemptTarget::Remote("peer-a".into()),
-            Duration::from_millis(1),
-            Duration::from_millis(10),
-            AttemptOutcome::Success,
-            Some(3),
-        );
-        metrics.age_model_for_test("stale", Duration::from_secs(2));
-
-        let snapshots = metrics.model_snapshots();
-        assert!(snapshots.is_empty());
-    }
-
-    #[test]
-    fn routing_metrics_aggregates_success_retry_and_pressure() {
-        let metrics = RoutingMetrics::new();
-        metrics.observe_inflight(3);
-        metrics.record_attempt(
-            Some("glm"),
-            AttemptTarget::Remote("peer-a".into()),
-            Duration::from_millis(5),
-            Duration::from_millis(20),
-            AttemptOutcome::Timeout,
-            None,
-        );
-        metrics.record_attempt(
-            Some("glm"),
-            AttemptTarget::Remote("peer-b".into()),
-            Duration::from_millis(25),
-            Duration::from_millis(40),
-            AttemptOutcome::Success,
-            Some(12),
-        );
-        metrics.record_request(
-            Some("glm"),
-            2,
-            RequestOutcome::Success(RequestService::Remote),
-        );
-
-        metrics.record_attempt(
-            Some("qwen"),
-            AttemptTarget::Local("127.0.0.1:9338".into()),
-            Duration::from_millis(2),
-            Duration::from_millis(16),
-            AttemptOutcome::Rejected,
-            None,
-        );
-        metrics.record_request(
-            Some("qwen"),
-            1,
-            RequestOutcome::Rejected(RequestService::Local),
-        );
-
-        let status = metrics.status_snapshot(1);
-        assert_eq!(status.request_count, 2);
-        assert_eq!(status.successful_requests, 1);
-        assert_eq!(status.retry_count, 1);
-        assert_eq!(status.failover_count, 1);
-        assert_eq!(status.attempt_timeout_count, 1);
-        assert_eq!(status.attempt_reject_count, 1);
-        assert_eq!(status.local_node.peak_inflight_requests, 3);
-        assert_eq!(status.pressure.fronted_request_count, 2);
-        assert_eq!(status.pressure.remotely_served_request_count, 1);
-        assert_eq!(status.pressure.locally_served_request_count, 1);
-
-        let model = metrics.model_snapshots().remove("glm").unwrap();
-        assert_eq!(model.request_count, 1);
-        assert_eq!(model.successful_requests, 1);
-        assert_eq!(model.retry_count, 1);
-        assert_eq!(model.failover_count, 1);
-        assert_eq!(model.attempt_timeout_count, 1);
-        assert_eq!(model.targets.len(), 2);
-        assert!(model.avg_tokens_per_second.is_some());
-    }
-
-    #[test]
-    fn zero_attempt_rejection_does_not_count_as_local_service() {
-        let metrics = RoutingMetrics::new();
-        metrics.record_request(None, 0, RequestOutcome::Rejected(RequestService::Local));
-        let status = metrics.status_snapshot(0);
-        assert_eq!(status.request_count, 1);
-        assert_eq!(status.pressure.locally_served_request_count, 0);
-    }
-
-    #[test]
-    fn routing_metrics_tracks_unattributed_requests_in_global_status_only() {
-        let metrics = RoutingMetrics::new();
-        metrics.record_attempt(
-            None,
-            AttemptTarget::Remote("peer-a".into()),
-            Duration::from_millis(3),
-            Duration::from_millis(14),
-            AttemptOutcome::Unavailable,
-            None,
-        );
-        metrics.record_request(None, 1, RequestOutcome::Unavailable);
-
-        let status = metrics.status_snapshot(0);
-        let model_snapshots = metrics.model_snapshots();
-        assert_eq!(status.request_count, 1);
-        assert_eq!(status.attempt_unavailable_count, 1);
-        assert_eq!(status.local_node.remote_attempt_count, 1);
-        assert!(model_snapshots.is_empty());
-    }
-
-    #[test]
-    fn routing_metrics_ignores_auto_model_for_per_model_state() {
-        let metrics = RoutingMetrics::new();
-        metrics.record_attempt(
-            Some("auto"),
-            AttemptTarget::Local("127.0.0.1:9337".into()),
-            Duration::from_millis(1),
-            Duration::from_millis(5),
-            AttemptOutcome::Success,
-            Some(2),
-        );
-        metrics.record_request(
-            Some("auto"),
-            1,
-            RequestOutcome::Success(RequestService::Local),
-        );
-
-        let status = metrics.status_snapshot(0);
-        assert_eq!(status.request_count, 1);
-        assert_eq!(status.successful_requests, 1);
-        assert!(metrics.model_snapshots().is_empty());
-    }
-
-    #[test]
-    fn routing_metrics_advertises_only_local_hosted_model_throughput() {
-        let metrics = RoutingMetrics::new();
-        metrics.record_attempt(
-            Some("qwen"),
-            AttemptTarget::Local("127.0.0.1:9337".into()),
-            Duration::from_millis(2),
-            Duration::from_millis(1_000),
-            AttemptOutcome::Success,
-            Some(42),
-        );
-        metrics.record_attempt(
-            Some("remote-only"),
-            AttemptTarget::Remote("peer-a".into()),
-            Duration::from_millis(2),
-            Duration::from_millis(1_000),
-            AttemptOutcome::Success,
-            Some(200),
-        );
-        metrics.record_attempt(
-            Some("failed-local"),
-            AttemptTarget::Local("127.0.0.1:9338".into()),
-            Duration::from_millis(2),
-            Duration::from_millis(1_000),
-            AttemptOutcome::Timeout,
-            None,
-        );
-
-        let hosted = vec![
-            "qwen".to_string(),
-            "remote-only".to_string(),
-            "failed-local".to_string(),
-        ];
-        let hints = metrics.advertisable_model_throughput(&hosted);
-
-        assert_eq!(hints.len(), 1);
-        assert_eq!(hints[0].model_name, "qwen");
-        assert_eq!(hints[0].avg_tokens_per_second_milli, 42_000);
-        assert_eq!(hints[0].throughput_samples, 1);
-    }
-
-    #[test]
-    fn throughput_hint_for_target_ignores_expired_metrics() {
-        let metrics = RoutingMetrics::new();
-        let target = AttemptTarget::Local("127.0.0.1:9337".into());
-        metrics.record_attempt(
-            Some("qwen"),
-            target.clone(),
-            Duration::from_millis(2),
-            Duration::from_millis(1_000),
-            AttemptOutcome::Success,
-            Some(42),
-        );
-
-        assert!(
-            metrics
-                .throughput_hint_for_target("qwen", target.clone())
-                .is_some()
-        );
-        metrics.age_model_for_test("qwen", METRICS_TTL + Duration::from_secs(1));
-
-        assert!(metrics.throughput_hint_for_target("qwen", target).is_none());
-    }
-
-    #[test]
-    fn sanitize_model_throughput_hints_drops_invalid_and_clamps_values() {
-        let hints = sanitize_model_throughput_hints([
-            ModelThroughputHint {
-                model_name: "  qwen  ".to_string(),
-                avg_tokens_per_second_milli: MAX_ADVERTISED_TPS_MILLI + 1,
-                throughput_samples: MAX_ADVERTISED_THROUGHPUT_SAMPLES + 1,
-            },
-            ModelThroughputHint {
-                model_name: "qwen".to_string(),
-                avg_tokens_per_second_milli: 42_000,
-                throughput_samples: 7,
-            },
-            ModelThroughputHint {
-                model_name: "".to_string(),
-                avg_tokens_per_second_milli: 42_000,
-                throughput_samples: 7,
-            },
-            ModelThroughputHint {
-                model_name: "x".repeat(MAX_ADVERTISED_MODEL_NAME_BYTES + 1),
-                avg_tokens_per_second_milli: 42_000,
-                throughput_samples: 7,
-            },
-            ModelThroughputHint {
-                model_name: "empty-speed".to_string(),
-                avg_tokens_per_second_milli: 0,
-                throughput_samples: 7,
-            },
-            ModelThroughputHint {
-                model_name: "empty-samples".to_string(),
-                avg_tokens_per_second_milli: 42_000,
-                throughput_samples: 0,
-            },
-        ]);
-
-        assert_eq!(hints.len(), 1);
-        assert_eq!(hints[0].model_name, "qwen");
-        assert_eq!(
-            hints[0].avg_tokens_per_second_milli,
-            MAX_ADVERTISED_TPS_MILLI
-        );
-        assert_eq!(
-            hints[0].throughput_samples,
-            MAX_ADVERTISED_THROUGHPUT_SAMPLES
-        );
-    }
-
-    #[test]
-    fn observe_inflight_tracks_peak_monotonically() {
-        let metrics = RoutingMetrics::new();
-        metrics.observe_inflight(3);
-        metrics.observe_inflight(1);
-        metrics.observe_inflight(5);
-        metrics.observe_inflight(2);
-
-        let status = metrics.status_snapshot(0);
-        assert_eq!(status.local_node.peak_inflight_requests, 5);
-    }
-
-    #[test]
-    fn routing_metrics_concurrent_updates_preserve_totals() {
-        let metrics = RoutingMetrics::with_config_and_shards(Duration::from_secs(3600), 64, 8, 8);
-        let metrics = Arc::new(metrics);
-        let threads = 8usize;
-        let per_thread = 250usize;
-        let barrier = Arc::new(Barrier::new(threads));
-        let mut handles = Vec::new();
-
-        for thread_idx in 0..threads {
-            let metrics = metrics.clone();
-            let barrier = barrier.clone();
-            handles.push(thread::spawn(move || {
-                let model = format!("model-{}", thread_idx % 4);
-                barrier.wait();
-                for _ in 0..per_thread {
-                    metrics.observe_inflight((thread_idx + 1) as u64);
-                    metrics.record_attempt(
-                        Some(&model),
-                        AttemptTarget::Remote(format!("peer-{thread_idx}")),
-                        Duration::from_millis(2),
-                        Duration::from_millis(10),
-                        AttemptOutcome::Success,
-                        Some(4),
-                    );
-                    metrics.record_request(
-                        Some(&model),
-                        1,
-                        RequestOutcome::Success(RequestService::Remote),
-                    );
-                }
-            }));
-        }
-
-        for handle in handles {
-            handle.join().unwrap();
-        }
-
-        let status = metrics.status_snapshot(0);
-        assert_eq!(status.request_count, (threads * per_thread) as u64);
-        assert_eq!(status.successful_requests, (threads * per_thread) as u64);
-        assert_eq!(
-            status.local_node.remote_attempt_count,
-            (threads * per_thread) as u64
-        );
-
-        let total_model_requests: u64 = metrics
-            .model_snapshots()
-            .values()
-            .map(|snapshot| snapshot.request_count)
-            .sum();
-        assert_eq!(total_model_requests, (threads * per_thread) as u64);
-    }
-}
+mod tests;

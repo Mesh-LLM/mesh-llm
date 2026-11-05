@@ -1,7 +1,9 @@
 //! Native SDK consumers that bind a verified artifact to the requested
 //! build: `native-sdk-identity` (the inline program shared by
 //! `prepare-native-sdk-input` and `scripts/restore-native-sdk-input.sh`) and
-//! `native-sdk-library-dir` (the JNA library directory the Kotlin smoke uses).
+//! `native-sdk-library-dir` (the JNA library directory the Kotlin smoke uses)
+//! plus `native-sdk-uniffi-library` (the artifact-relative library file that
+//! regenerates SDK bindings).
 
 use super::{Checked, Rejected, json_bytes, positional, value_format};
 use crate::ci_plan::document::Json;
@@ -51,6 +53,27 @@ pub(super) fn library_dir(args: &[String]) -> Checked<String> {
         ));
     };
     Ok(format!("{}\n", dirname(path)))
+}
+
+/// Args: MANIFEST. Prints `uniffi_library` or `library` — the artifact-relative
+/// library file whose exported metadata regenerates SDK bindings.
+pub(super) fn library_file(args: &[String]) -> Checked<String> {
+    let [manifest] = positional(args, "MANIFEST")?;
+    let manifest = load(manifest)?;
+    let uniffi = manifest.get("uniffi_library").filter(|value| match value {
+        Json::Null | Json::Bool(false) => false,
+        Json::String(text) => !text.is_empty(),
+        _ => true,
+    });
+    let library = uniffi
+        .or_else(|| manifest.get("library"))
+        .ok_or_else(|| Rejected("native SDK manifest is missing library".to_owned()))?;
+    let Some(path) = library.as_str() else {
+        return Err(Rejected(
+            "native SDK library must be a string path".to_owned(),
+        ));
+    };
+    Ok(format!("{path}\n"))
 }
 
 /// `os.path.dirname` on POSIX: the head before the last `/`, with trailing

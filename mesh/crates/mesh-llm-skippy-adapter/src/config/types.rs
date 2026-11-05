@@ -103,6 +103,9 @@ pub struct ResolvedHardwareConfig {
     pub direct_io: bool,
     pub main_gpu: Option<u32>,
     pub split_mode: skippy_protocol::SplitMode,
+    /// Operator policy for host-resident routed experts (`hardware.cpu_moe`
+    /// and `hardware.n_cpu_moe`).
+    pub host_experts: skippy_protocol::HostExpertPolicy,
     pub fit_target_mib: Option<u64>,
     pub resolved_model_path: PathBuf,
     pub projector_path: Option<PathBuf>,
@@ -141,10 +144,20 @@ pub struct ResolvedSpeculativeConfig {
     pub draft_model_path: Option<PathBuf>,
     pub pairing_fault: String,
     pub draft_max_tokens: u32,
+    /// Whether the configuration set `draft_max_tokens`. An unset cap takes
+    /// the placement's default, which is shorter on a split.
+    pub draft_max_tokens_configured: bool,
     pub draft_min_tokens: u32,
     pub explicit: bool,
     pub draft_n_gpu_layers: Option<i32>,
     pub decode: SpeculativeDecodeConfig,
+    /// The draft the DFlash plan uses by default, from the package or the
+    /// catalog. The host fetches that draft before loading, and drops the plan
+    /// if it cannot.
+    pub default_dflash: Option<super::dflash_catalog::DefaultDFlash>,
+    /// The native MTP plan a default DFlash plan replaced, served instead when
+    /// the default draft is dropped.
+    pub native_mtp_fallback: Option<Box<ResolvedSpeculativeConfig>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -304,6 +304,45 @@ impl<'a> PluginContext<'a> {
         }
     }
 
+    /// Replace this plugin's required channels for `model`; empty withdraws.
+    /// Only channels declared by this plugin may be required. Older hosts fail
+    /// immediately, before a request is sent.
+    pub async fn require_channels_for_model(
+        &mut self,
+        model: &str,
+        channels: &[(&str, &[u8])],
+    ) -> Result<()> {
+        if !self.host_supports(crate::host_capabilities::MODEL_REQUIREMENTS) {
+            bail!("host does not support model_requirements.v1");
+        }
+        let request_id = next_host_request_id();
+        let (tx, rx) = oneshot::channel();
+        insert_pending_host_response(&self.pending_host_responses, request_id, tx);
+        let mut guard =
+            PendingHostResponseGuard::new(request_id, self.pending_host_responses.clone());
+        self.send_payload(
+            proto::envelope::Payload::ModelRequirementRequest(proto::ModelRequirementRequest {
+                model: model.to_string(),
+                requires: channels
+                    .iter()
+                    .map(|(channel, terms)| proto::ChannelRequirement {
+                        channel: (*channel).to_string(),
+                        terms: terms.to_vec(),
+                    })
+                    .collect(),
+            }),
+            request_id,
+        )
+        .await?;
+        let response = tokio::time::timeout(PEER_BLOCK_REQUEST_TIMEOUT, rx).await???;
+        guard.disarm();
+        match response.payload {
+            Some(proto::envelope::Payload::ModelRequirementResponse(_)) => Ok(()),
+            Some(proto::envelope::Payload::ErrorResponse(error)) => bail!(error.message),
+            _ => bail!("Host returned an unexpected model requirement response"),
+        }
+    }
+
     /// Ask the host to announce `public_key` (32-byte Ed25519) as the key this
     /// plugin signs with, bound to this node by the node's own key, so peers'
     /// plugins can check what this plugin signs. An empty key withdraws it. The
@@ -665,6 +704,49 @@ mod tests {
         let context = PluginContext::new("demo".into(), outbound_tx, pending.clone())
             .with_host_capabilities(host_capabilities.iter().map(|c| c.to_string()).collect());
         (context, outbound_rx, pending)
+    }
+
+    #[tokio::test]
+    async fn model_requirements_reject_older_hosts_without_sending() {
+        let (mut context, mut outbound, pending) = context(&[]);
+        assert!(
+            context
+                .require_channels_for_model("model", &[("gate.v1", &[])])
+                .await
+                .is_err()
+        );
+        assert!(outbound.try_recv().is_err());
+        assert!(pending.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn model_requirements_preserve_opaque_terms_and_handle_response() {
+        let (mut context, mut outbound, pending) =
+            context(&[crate::host_capabilities::MODEL_REQUIREMENTS]);
+        let host = tokio::spawn(async move {
+            let envelope = outbound.recv().await.unwrap();
+            let Some(proto::envelope::Payload::ModelRequirementRequest(request)) = envelope.payload
+            else {
+                panic!("requirement request");
+            };
+            assert_eq!(request.model, "model");
+            assert_eq!(request.requires[0].channel, "gate.v1");
+            assert_eq!(request.requires[0].terms, vec![0, 255]);
+            let sender = remove_pending_host_response(&pending, envelope.request_id).unwrap();
+            sender
+                .send(Ok(proto::Envelope {
+                    payload: Some(proto::envelope::Payload::ModelRequirementResponse(
+                        proto::ModelRequirementResponse {},
+                    )),
+                    ..Default::default()
+                }))
+                .unwrap();
+        });
+        context
+            .require_channels_for_model("model", &[("gate.v1", &[0, 255])])
+            .await
+            .unwrap();
+        host.await.unwrap();
     }
 
     #[tokio::test]

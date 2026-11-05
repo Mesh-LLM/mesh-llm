@@ -523,6 +523,164 @@ impl RuntimeState {
         Ok(predicted)
     }
 
+    /// Drafts a DFlash block that follows `anchor`, the token this session
+    /// consumes next. `None` when the model has no DFlash draft attached.
+    pub(crate) fn dflash_propose(
+        &mut self,
+        session_id: &str,
+        anchor: i32,
+        max_tokens: usize,
+    ) -> Result<Option<skippy_runtime::DFlashProposal>> {
+        self.active_session(session_id)?
+            .dflash_propose(anchor, max_tokens)
+    }
+
+    /// Whether this stage drafts DFlash blocks for a split target.
+    pub(crate) fn dflash_drafts(&self) -> bool {
+        #[cfg(test)]
+        if self.dflash_drafts_for_test {
+            return true;
+        }
+        self.model.dflash_info().is_some()
+    }
+
+    /// Hands a split final stage's draft the feature rows that earlier stages
+    /// sent with `input`, and lets a stage that starts on a draft target
+    /// layer keep `input` to forward as that layer's rows. A no-op on other
+    /// stages. The first message of a session arrives before anything has
+    /// created it, so this does.
+    pub(crate) fn dflash_split_input(&mut self, session_id: &str, input: Option<&ActivationFrame>) {
+        if !self.dflash_drafts() && !self.model.dflash_forwards_input() {
+            return;
+        }
+        match self.session(session_id) {
+            Ok(session) => {
+                if let Err(error) = session.dflash_receive_input(input) {
+                    tracing::warn!(
+                        session_id,
+                        error = format!("{error:#}"),
+                        "dropping malformed split DFlash feature rows"
+                    );
+                }
+            }
+            Err(error) => tracing::warn!(
+                session_id,
+                error = format!("{error:#}"),
+                "dropping split DFlash feature rows: no session to hand them to"
+            ),
+        }
+    }
+
+    /// Appends the DFlash feature rows this stage captured for the message
+    /// that produced `output`, for the final stage's draft.
+    pub(crate) fn dflash_split_output(&mut self, session_id: &str, output: &mut ActivationFrame) {
+        let Some(lane) = self.sessions.get_mut(session_id) else {
+            return;
+        };
+        let dropped_before = lane.session.dflash_rows_dropped();
+        if let Err(error) = lane.session.dflash_forward_captured(output) {
+            tracing::warn!(
+                session_id,
+                error = format!("{error:#}"),
+                "not forwarding split DFlash feature rows"
+            );
+        }
+        let dropped = lane.session.dflash_rows_dropped();
+        if dropped > dropped_before {
+            tracing::warn!(
+                session_id,
+                rows = dropped - dropped_before,
+                session_rows_dropped = dropped,
+                "split DFlash feature rows left this stage without their features"
+            );
+        }
+    }
+
+    /// This session's split DFlash draft-context counters for a reply to a
+    /// sender that reads them, logging any loss since the last report. Empty
+    /// stats on stages without a draft.
+    pub(crate) fn dflash_reply_stats(
+        &mut self,
+        session_id: &str,
+        state: skippy_protocol::binary::StageStateHeader,
+    ) -> skippy_protocol::binary::StageReplyStats {
+        let mut stats = skippy_protocol::binary::StageReplyStats::default();
+        let Some(lane) = self.sessions.get_mut(session_id) else {
+            return stats;
+        };
+        if let Some(health) = lane.session.dflash_take_new_losses() {
+            tracing::warn!(
+                session_id,
+                feature_rows_missing = health.feature_rows_missing,
+                draft_context_resets = health.draft_context_resets,
+                "split DFlash draft lost target rows"
+            );
+        }
+        if state.split_dflash()
+            && let Some(health) = lane.session.dflash_health()
+        {
+            stats.dflash_feature_rows_missing =
+                i64::try_from(health.feature_rows_missing).unwrap_or(i64::MAX);
+            stats.dflash_draft_context_resets =
+                i64::try_from(health.draft_context_resets).unwrap_or(i64::MAX);
+        }
+        if state.split_dflash()
+            && let Some(draft) = lane.session.dflash_draft_stats()
+        {
+            stats.dflash_draft_us = i64::try_from(draft.draft_us()).unwrap_or(i64::MAX);
+            stats.dflash_drafts = i64::try_from(draft.proposals).unwrap_or(i64::MAX);
+            stats.dflash_ingest_us = i64::try_from(draft.ingest_us).unwrap_or(i64::MAX);
+        }
+        if state.split_dflash()
+            && let Ok(counts) = lane.session.verify_rollback_counts()
+        {
+            stats.verify_rollbacks_in_place = i64::try_from(counts.in_place).unwrap_or(i64::MAX);
+            stats.verify_rollbacks_checkpointed =
+                i64::try_from(counts.checkpointed).unwrap_or(i64::MAX);
+        }
+        stats
+    }
+
+    /// Holds back the feature rows of this session's next decode until its
+    /// next DFlash proposal. A no-op without a draft.
+    pub(crate) fn dflash_defer_next_ingest(&mut self, session_id: &str) {
+        if let Ok(session) = self.session(session_id) {
+            session.dflash_defer_next_ingest();
+        }
+    }
+
+    /// Records the draft this final stage owes stage 0 after an early verdict.
+    pub(crate) fn dflash_defer_draft(&mut self, session_id: &str, draft: DeferredDFlashDraft) {
+        self.dflash_deferred_drafts
+            .insert(session_id.to_string(), draft);
+    }
+
+    /// Whether a draft is owed for this session's last verify window.
+    pub(crate) fn dflash_draft_deferred(&self, session_id: &str) -> bool {
+        self.dflash_deferred_drafts.contains_key(session_id)
+    }
+
+    /// Takes the draft owed for this session, if any.
+    pub(crate) fn dflash_take_deferred_draft(
+        &mut self,
+        session_id: &str,
+    ) -> Option<DeferredDFlashDraft> {
+        self.dflash_deferred_drafts.remove(session_id)
+    }
+
+    /// Drafts a DFlash block after `anchor` at `anchor_position` on a split
+    /// final stage. `None` when the model has no DFlash draft attached.
+    pub(crate) fn dflash_propose_at(
+        &mut self,
+        session_id: &str,
+        anchor: i32,
+        anchor_position: u64,
+        max_tokens: usize,
+    ) -> Result<Option<skippy_runtime::DFlashProposal>> {
+        self.active_session(session_id)?
+            .dflash_propose_at(anchor, anchor_position, max_tokens)
+    }
+
     /// Verifies a speculative span in one batched forward, returning the target
     /// predictions plus the MTP draft for the branch that was verified.
     pub(crate) fn verify_tokens_sampled_mtp(
@@ -539,6 +697,18 @@ impl RuntimeState {
             session.verify_tokens_sampled_mtp(token_ids, sampling, max_draft_tokens)?;
         self.add_session_tokens(session_id, token_count);
         Ok((predicted, draft))
+    }
+
+    /// How this session's verify windows were held for rollback on this stage.
+    pub(crate) fn verify_rollback_counts(
+        &self,
+        session_id: &str,
+    ) -> Option<skippy_runtime::VerifyRollbackCounts> {
+        self.sessions
+            .get(session_id)?
+            .session
+            .verify_rollback_counts()
+            .ok()
     }
 
     pub(crate) fn session_token_count(&self, session_id: &str) -> Option<u64> {
@@ -646,12 +816,14 @@ impl RuntimeState {
     pub(super) fn session(&mut self, session_id: &str) -> Result<&mut StageSession> {
         if !self.sessions.contains_key(session_id) {
             self.ensure_not_reset_by_panic(session_id)?;
-            let lane_session = self.take_idle_session().map(Ok).unwrap_or_else(|| {
+            let mut lane_session = self.take_idle_session().map(Ok).unwrap_or_else(|| {
                 if self.sessions.len() >= self.lane_count as usize {
                     bail!("all execution lanes are busy");
                 }
                 self.create_lane_session()
             })?;
+            // A reused lane starts this session's DFlash counters over.
+            lane_session.session.dflash_reset_health();
             self.sessions.insert(session_id.to_string(), lane_session);
             // Every active session must have a tracked position from the
             // moment it activates (both a fresh and a reused idle lane start

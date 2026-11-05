@@ -176,7 +176,7 @@ fn env_path(key: &str) -> Option<PathBuf> {
     nonempty_path(value)
 }
 
-fn nonempty_path(value: OsString) -> Option<PathBuf> {
+pub(crate) fn nonempty_path(value: OsString) -> Option<PathBuf> {
     if value.to_str().is_some_and(|value| value.trim().is_empty()) {
         return None;
     }

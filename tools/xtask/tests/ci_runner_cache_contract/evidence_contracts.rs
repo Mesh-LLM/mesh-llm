@@ -343,6 +343,31 @@ fn seed_identity_restore_save_and_runtime_opt_out_mutations_are_rejected() {
 }
 
 #[test]
+fn seed_manifest_and_warmer_boundaries_cannot_be_dropped_from_all_keys() {
+    for path in [
+        "Cargo.toml",
+        "mesh/crates/*/Cargo.toml",
+        "skippy/crates/*/Cargo.toml",
+        "tools/*/Cargo.toml",
+        ".github/workflows/cache-warm-sccache.yml",
+    ] {
+        let documents = workflows()
+            .into_keys()
+            .map(|name| {
+                let source = fs::read_to_string(root().join(".github/workflows").join(&name))
+                    .unwrap()
+                    .replace(&format!("'{path}'"), "'unrelated-input'");
+                (name, workflow_yaml::parse(&source).unwrap())
+            })
+            .collect();
+        assert!(
+            cache_identity::check(&documents).is_err(),
+            "accepted synchronized omission of {path}"
+        );
+    }
+}
+
+#[test]
 fn configure_default_denial_and_original_event_bindings_cannot_be_dropped() {
     let source =
         fs::read_to_string(root().join(".github/actions/configure-sccache-gha/action.yml"))
@@ -415,7 +440,7 @@ fn trusted_caller_exceptions_preserve_explicit_native_cache_decisions() {
 }
 
 #[test]
-fn current_seed_recipe_compiles_host_clippy_and_cli_test_dependencies() {
+fn current_seed_recipe_compiles_host_and_isolated_automation_clippy_dependencies() {
     let source = fs::read_to_string(root().join("just/ci.just")).unwrap();
     let body = source.split_once("\nci-sccache-seed-build:\n").unwrap().1;
     let commands: Vec<_> = body
@@ -428,8 +453,22 @@ fn current_seed_recipe_compiles_host_clippy_and_cli_test_dependencies() {
         [
             "cargo clippy --locked -p mesh-llm --all-targets -- -D warnings",
             "cargo build --release --locked -p mesh-llm --bin mesh-llm --no-default-features --features web-ui,dynamic-native-runtime",
-            "cargo test --locked -p mesh-llm-cli --no-run",
+            "CARGO_PROFILE_TEST_DEBUG=0 cargo test --locked -p mesh-llm-cli --no-run",
+            "cargo clippy --locked -p xtask --all-targets -- -D warnings",
         ]
+    );
+    let warmer = workflows().remove("cache-warm-sccache.yml").unwrap();
+    assert!(
+        warmer
+            .get("jobs")
+            .unwrap()
+            .get("warm")
+            .unwrap()
+            .get("env")
+            .unwrap()
+            .get("CARGO_PROFILE_TEST_DEBUG")
+            .is_none(),
+        "test-profile overrides must not change the Clippy seed graph"
     );
 }
 

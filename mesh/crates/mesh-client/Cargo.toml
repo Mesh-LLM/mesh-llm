@@ -46,3 +46,6 @@ base64 = "0.23"
 [dev-dependencies]
 hex = "0.4"
 tokio = { version = "1", features = ["macros", "rt"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+libc = "0.2.183"

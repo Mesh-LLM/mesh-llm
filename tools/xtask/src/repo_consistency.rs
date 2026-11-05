@@ -249,17 +249,18 @@ pub(crate) fn check_ci_crate_lists_command(repo_root: &Path) -> DynResult<()> {
 }
 
 /// `mesh-llm-runtime-event-contracts` (a publishable dependency-leaf crate)
-/// mirrors the raw ABI struct `skippy_ffi::abi::SkippyRuntimeEventV1` in its
-/// own test fixture `RawNativeEventV1Fixture` rather than reading
-/// `skippy-ffi`'s source directly, because a published crate tarball
-/// contains only its own package root (see
-/// `publish_consistency::check_publish_literal_includes`). This check keeps
-/// that mirror honest by comparing both structs' field names, in
-/// declaration order, from this dev-only cross-crate-aware binary.
+/// mirrors the raw ABI struct `skippy_runtime_event_v1` in its own test
+/// fixture `RawNativeEventV1Fixture` rather than reading `skippy-ffi`'s
+/// source directly, because a published crate tarball contains only its own
+/// package root (see `publish_consistency::check_publish_literal_includes`).
+/// The ABI struct is bindgen-generated, so this check reads the committed
+/// bindings (the source of truth for the layout) and keeps the mirror honest
+/// by comparing both structs' field names, in declaration order, from this
+/// dev-only cross-crate-aware binary.
 fn check_runtime_event_abi_mirror(repo_root: &Path) -> DynResult<()> {
-    let abi_relative = Path::new("skippy/crates/skippy-ffi/src/abi.rs");
+    let abi_relative = Path::new("skippy/crates/skippy-ffi/src/bindings/skippy.rs");
     let abi_source = fs::read_to_string(repo_root.join(abi_relative))?;
-    let abi_fields = struct_field_names(&abi_source, "pub struct SkippyRuntimeEventV1 {")
+    let abi_fields = struct_field_names(&abi_source, "pub struct skippy_runtime_event_v1 {")
         .map_err(|error| format!("{}: {error}", abi_relative.display()))?;
 
     let mirror_relative =
@@ -271,7 +272,7 @@ fn check_runtime_event_abi_mirror(repo_root: &Path) -> DynResult<()> {
     ensure_eq(
         &abi_fields.join(", "),
         &mirror_fields.join(", "),
-        "skippy-ffi SkippyRuntimeEventV1 fields mirrored by mesh-llm-runtime-event-contracts RawNativeEventV1Fixture",
+        "skippy_runtime_event_v1 fields mirrored by mesh-llm-runtime-event-contracts RawNativeEventV1Fixture",
     )
 }
 

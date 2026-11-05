@@ -4,85 +4,108 @@ title: SDKs
 
 # Embed Mesh in your app
 
-The Mesh SDKs let an application either connect to an existing mesh or embed a complete mesh node with local model serving. The public APIs are intentionally shaped the same way across Python, Rust, Node.js, JVM/Android, and Swift.
+Rust, Node.js, Python, Swift, and Kotlin expose an embedded node with the same
+public capabilities. Names and async syntax follow each language's conventions;
+model workloads, filters, metadata, pagination and operation behavior match.
 
-## Choose a role
+## Choose a node role
 
-| Role | What it does | What it needs |
-| --- | --- | --- |
-| `Client` | Joins a private mesh or connects to a selected public mesh and runs inference. | SDK package, owner keypair, and invite token or public-mesh discovery. |
-| `Node` | Includes the client role, model search/download, local model loading, serving, and optional console hosting. | SDK package plus a compatible native runtime artifact for local serving. |
+| Role | Rust builder | Other SDKs' mode | Behavior |
+|---|---|---|---|
+| Client | `.client()` | `client` | Join a mesh and consume inference without loading a serving runtime |
+| Serve-only | `.serve_only()` | `serve` | Serve local models; SDK inference calls are disabled |
+| Combined | `.serve()` | `combined` | Serve local models and consume mesh inference |
 
-Use `Client` when another machine already serves the model. Use `Node` when the application should own local model files, load/unload decisions, and serving lifecycle.
+The old separate thin `Client` has been removed. Use `MeshNode` in Rust and
+`Node` in the other SDKs. Supply an owner keystore path when owner identity is
+required. A node accepts invite tokens for a private mesh or public-mesh
+auto-join. Keep API and console ports isolated when embedding multiple nodes.
 
-## Common lifecycle
-
-Client-only applications usually follow this shape:
+A normal lifecycle is:
 
 ```text
-load or create owner keypair
-create Client with an invite token
+create node with role and join configuration
 start
-list models
-stream chat or responses
+query the mesh model catalog
+invoke the appropriate model operation
 stop
 ```
 
-Serving applications add runtime and model lifecycle:
+Serving applications explicitly install or bundle a compatible native runtime
+before startup and configure the local models to serve. Startup does not
+implicitly download a runtime. Runtime artifacts are matched to the release,
+platform/backend and exact Skippy ABI; a package's presence alone does not
+establish that its target can serve models locally.
 
-```text
-resolve a native runtime
-create Node
-start
-download or locate a model
-load the model through serving
-run inference
-unload the model or instance
-stop
-```
+## Common SDK surface
 
-Persist the owner keypair in the host application's secure storage. Generate an ephemeral key only for demos; changing it on every launch creates a new mesh identity.
+| Capability | Common behavior |
+|---|---|
+| Lifecycle | Start, stop, status, and join by invite token |
+| Native runtimes | Explicit install with progress, list, resolve/validate, remove/prune and version/ABI queries |
+| Model discovery | List all primary-mesh advertisements, combine typed filters, follow bounded pages, and look up an exact ID |
+| Compatible inference | LLM-only compatibility model list; protocol-preserving request and SSE stream APIs |
+| Document OCR | Binary PDF/image upload, exact model ID, output-format/page options, and provider status/body |
+| Mesh memberships | Add, list and remove additional isolated memberships without loading local models again |
+| Live transcription | Send signed 16-bit mono PCM, commit turns, read events, and stop the session |
 
-## Platform support
+SDK changes must update all five language surfaces, native bridges, tests,
+product docs and website examples together. Python is maintained in a separate
+repository and uses a coordinated source/native checkpoint. Use matching
+language packages and native artifacts; this documentation does not publish
+new packages or qualify target-specific serving support.
 
-| SDK / target | Mesh inference | Model management | Local serving |
-| --- | ---: | ---: | ---: |
-| Python on macOS/Linux/Windows | yes | native bridge available | build with `embedded-runtime` and package a compatible native runtime |
-| Rust on macOS/Linux | yes | yes | yes with `serving` and a compatible native runtime |
-| Node.js on macOS/Linux/Windows | yes | yes | yes with a compatible native runtime |
-| JVM on macOS/Linux | yes | yes | yes with a matching native runtime library |
-| Android | yes | yes | not currently advertised |
-| Swift on macOS | yes | yes | yes with a matching native runtime |
-| Swift on Mac Catalyst | yes | yes | planned validation |
-| Swift on iOS | yes | limited by app filesystem policy | no |
+Inference requests and OCR calls check HTTP success by default across all five
+SDKs. Use Rust's `request_raw`, `stream_raw` or `document_ocr_raw` for deliberate
+provider-status handling. Other SDKs offer `raiseForStatus: false` or Python's
+`raise_for_status=False` on raw request methods. Raw responses retain status,
+content type and body. Node.js raw responses expose `statusCode`, `contentType`,
+`body` and `json()`; check `statusCode` explicitly in raw mode. Rust/Swift/Kotlin generic
+requests previously returned non-success responses by default; those callers
+must now select raw mode explicitly.
 
-Targets without validated local serving should surface the typed `ServingUnsupported` error. Do not silently fall back to a fake local implementation.
+Live sessions start with `start_live_transcription` in Rust/Python or
+`startLiveTranscription` in Node.js/Swift/Kotlin. Defaults use 16 kHz mono audio
+and turn detection with threshold `0.5`, 300 ms prefix padding and 500 ms
+silence. An explicit null turn detector (Python `None`) enables push-to-talk.
+Sessions retain speech-start/stop, delta, committed, completed and error events.
+They use the embedded realtime WebSocket, while native model queries use the
+in-process discovery service.
 
-## Native runtime artifacts
+## Discover all models; choose the right operation
 
-The language package provides the API and native bridge. Local inference also needs a release runtime artifact for the host platform and backend, such as Metal on Apple Silicon or CUDA on Linux. Runtime artifacts are selected and verified against the Mesh release and exact Skippy ABI; they are not compiled implicitly by npm, SwiftPM, Maven, or Cargo.
+The native `node.models` catalog includes local and remote LLM, speech,
+embedding, reranking, decision and OCR advertisements. It is the node's observed
+inventory in its primary mesh, not the downloadable catalog or a global
+registry. Extra memberships do not merge into it implicitly.
 
-Serving apps can either:
+Compatibility model lists include only available confirmed LLMs. Non-LLM
+models retain their inference endpoints. For example, discover an OCR model
+through `node.models`, then invoke document OCR with that exact ID.
 
-- bundle the matching `meshllm-native-runtime-*` directory with the app, or
-- allow the SDK runtime manager to download a verified artifact at startup.
+Pages have `data` and `next_cursor`. List filters combine with AND; retain the
+same filters when continuing a cursor and restart when its snapshot expires.
+Runtime limits, capability evidence, thinking controls and payment observations
+remain associated with each provider. A single replica's limits are not a
+promise about all replicas. Missing metadata means unknown.
 
-For offline or packaged applications, pass the artifact directory directly to the language SDK resolver. For online development, opt into downloads explicitly with `allowDownload` or `MESH_SDK_RUNTIME_ALLOW_DOWNLOAD=1`.
+See [Mesh model discovery](/docs/pages/model-discovery/) for complete HTTP
+shapes, filters and compatibility migration.
+
+Only the native catalog query is guaranteed to avoid HTTP. Compatibility
+inference and some lifecycle/session APIs use the embedded listener. The SDKs
+do not require a separately supervised HTTP sidecar, but their whole lifecycle
+is not HTTP-free.
 
 ## Pick a language guide
 
-- [Python SDK](/docs/pages/sdk-python/) — PyPI package, async lifecycle, and protocol-preserving requests for agent runtimes.
-- [Rust SDK](/docs/pages/sdk-rust/) — crates.io client facade and embedded `MeshNode`.
-- [Node.js and Electron SDK](/docs/pages/sdk-node/) — npm package, N-API addon, runtime packaging, and console assets.
-- [Java, Kotlin, and Android SDK](/docs/pages/sdk-kotlin/) — GitHub Packages AAR, JVM serving, Android client mode, and coroutines.
-- [Swift SDK](/docs/pages/sdk-swift/) — SwiftPM, XCFrameworks, async streams, macOS, iOS, and App Store notes.
+- [Rust](/docs/pages/sdk-rust/) — `MeshNode`, typed catalog queries and the OpenAI client.
+- [Node.js and Electron](/docs/pages/sdk-node/) — `Node`, promises and the N-API addon.
+- [Python](/docs/pages/sdk-python/) — `Node`, asyncio and generated UniFFI bindings.
+- [Swift](/docs/pages/sdk-swift/) — SwiftPM, typed values and async APIs.
+- [Kotlin and Android](/docs/pages/sdk-kotlin/) — Kotlin coroutines and the native bridge.
 
-## Shared rules
-
-- Pass identity and join tokens explicitly; SDKs do not read credentials from global CLI config directories.
-- Keep API and console ports isolated when embedding more than one node in a process or test suite.
-- Treat model downloads as application work: show progress, choose an app-owned cache, and handle cancellation.
-- Stop or reconnect nodes with the host application's lifecycle. On mobile, reconnect when returning to the foreground.
-- Handle typed errors, especially invalid tokens, discovery failures, model-management failures, stream failures, and unsupported serving.
-- Use the protocol-preserving OpenAI request and stream APIs for agents. They carry tools, incremental tool-call arguments, tool results, multimodal content, structured-output settings, reasoning, usage, and future fields without narrowing the protocol to text.
-- Package console assets only when the app needs a local web console; the default native runtime should stay smaller without them.
+For raw HTTP clients, use [the compatible inference API](/docs/pages/openai-compatible-api/)
+or [the Mesh catalog](/docs/pages/model-discovery/). Stop nodes with the host
+application and handle transport failures, provider HTTP errors and unsupported
+platform/runtime combinations explicitly.

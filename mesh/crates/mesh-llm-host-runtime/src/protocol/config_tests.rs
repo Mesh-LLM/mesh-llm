@@ -41,6 +41,7 @@ fn config_sync_full_config_roundtrip() {
             ..Default::default()
         }],
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "demo".to_string(),
             enabled: Some(true),
             web_ui_enabled: Some(false),
@@ -51,18 +52,15 @@ fn config_sync_full_config_roundtrip() {
             command: Some("mesh-llm".to_string()),
             args: vec!["--plugin".to_string()],
             url: None,
+            models: None,
             settings: Default::default(),
             startup: Default::default(),
         }],
         logging: Default::default(),
-        payments: mesh_llm_config::PaymentsConfig {
-            wallet: Some("my-wallet".to_string()),
-        },
         extra: Default::default(),
     };
     let snapshot = mesh_config_to_proto(&config);
     let restored = proto_config_to_mesh(&snapshot);
-    assert_eq!(restored.payments.wallet.as_deref(), Some("my-wallet"));
     assert_eq!(restored.updates.check, Some(false));
     assert_eq!(restored.version, config.version);
     assert_eq!(restored.models.len(), 1);

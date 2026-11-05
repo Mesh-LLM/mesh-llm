@@ -98,6 +98,7 @@ mod tests {
     #[cfg(unix)]
     fn process_spec() -> super::super::ExternalPluginSpec {
         super::super::ExternalPluginSpec {
+            operation_bindings: Vec::new(),
             name: "peer-auth-observer".into(),
             command: std::env::current_exe().unwrap().to_str().unwrap().into(),
             args: vec![
@@ -110,6 +111,7 @@ mod tests {
             startup: Default::default(),
             web_ui_enabled: None,
             web_ui_primary_tab: None,
+            endpoint_models: None,
             installed_metadata: None,
             openai_exchange_grant: Some(Box::default()),
         }

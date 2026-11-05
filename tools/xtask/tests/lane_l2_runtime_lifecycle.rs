@@ -16,7 +16,7 @@ fn preflight_restore_start_finish_retains_verified_negative_measurement() -> Tes
     let tools = root.join("tools");
     fs::create_dir(&tools)?;
     let key = format!(
-        "mesh-llm-sccache-seed-linux-x86_64-img-f499b79b-epoch-f499b79b-v3-{}",
+        "mesh-llm-sccache-seed-linux-x86_64-img-aaa36843-epoch-aaa36843-v3-{}",
         "a".repeat(64)
     );
     let cache = json!({"id":123,"key":key,"version":"b".repeat(64),"ref":"refs/heads/main","size_in_bytes":1024});

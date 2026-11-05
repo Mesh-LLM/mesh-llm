@@ -3,10 +3,12 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fs::{self, File},
     io::Read,
     path::{Component, Path, PathBuf},
+    sync::{Mutex, OnceLock},
+    time::SystemTime,
 };
 
 mod wire;
@@ -253,15 +255,68 @@ fn verify_file_checksums(
 ) -> Result<()> {
     for (relative, expected) in checksums {
         let path = checked_runtime_path(root, relative)?;
-        let actual = sha256_file(&path)?;
         let expected = normalize_sha256(expected)?;
-        if actual != expected {
+        // Taken before hashing, so a write during the hash leaves a stale
+        // stamp and the next verification hashes again.
+        let stamp = FileStamp::of(&path)?;
+        let key = (path, expected);
+        if stamp.is_some() && verified_files().get(&key) == stamp.as_ref() {
+            continue;
+        }
+        let actual = sha256_file(&key.0)?;
+        if actual != key.1 {
             bail!(
-                "native runtime {kind} checksum mismatch for {relative}: expected {expected}, got {actual}"
+                "native runtime {kind} checksum mismatch for {relative}: expected {}, got {actual}",
+                key.1
             );
+        }
+        if let Some(stamp) = stamp {
+            verified_files().insert(key, stamp);
         }
     }
     Ok(())
+}
+
+/// A runtime file's length and modification time when it was hashed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FileStamp {
+    len: u64,
+    modified: SystemTime,
+    /// On Unix the inode change time, which a writer cannot set back: a
+    /// same-length rewrite whose modification time is restored still changes
+    /// it. Stable `std` exposes no equivalent on Windows.
+    #[cfg(unix)]
+    changed: (i64, i64),
+}
+
+impl FileStamp {
+    /// `None` where the filesystem keeps no modification time: such a file is
+    /// hashed on every verification.
+    fn of(path: &Path) -> Result<Option<Self>> {
+        let metadata = fs::metadata(path)
+            .with_context(|| format!("stat native runtime file {}", path.display()))?;
+        Ok(metadata.modified().ok().map(|modified| Self {
+            len: metadata.len(),
+            modified,
+            #[cfg(unix)]
+            changed: {
+                use std::os::unix::fs::MetadataExt;
+                (metadata.ctime(), metadata.ctime_nsec())
+            },
+        }))
+    }
+}
+
+/// Files this process already hashed to their declared checksum. Runtime
+/// discovery, selection and loading each read the same manifests, and a CUDA
+/// runtime is about 1 GB, so a start hashed it about three times. A file
+/// whose `FileStamp` changed since is hashed again.
+fn verified_files() -> std::sync::MutexGuard<'static, HashMap<(PathBuf, String), FileStamp>> {
+    static VERIFIED: OnceLock<Mutex<HashMap<(PathBuf, String), FileStamp>>> = OnceLock::new();
+    VERIFIED
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn checked_runtime_path(root: &Path, relative: &str) -> Result<PathBuf> {
@@ -327,6 +382,8 @@ fn normalize_sha256(value: &str) -> Result<String> {
 }
 
 fn sha256_file(path: &Path) -> Result<String> {
+    #[cfg(test)]
+    tests::HASHED.with(|count| count.set(count.get() + 1));
     let mut file =
         File::open(path).with_context(|| format!("open native runtime file {}", path.display()))?;
     let mut digest = Sha256::new();
@@ -351,6 +408,100 @@ fn sha256_file(path: &Path) -> Result<String> {
 mod tests {
     use super::*;
     use crate::NativeRuntimeBackend;
+    use std::cell::Cell;
+
+    thread_local! {
+        /// Files `sha256_file` hashed on this test's thread.
+        pub(super) static HASHED: Cell<usize> = const { Cell::new(0) };
+    }
+
+    fn cpu_runtime_manifest() -> NativeRuntimeManifest {
+        NativeRuntimeManifest {
+            runtime: NativeRuntimeArtifact {
+                id: "meshllm-runtime-linux-x86_64-cpu".to_string(),
+                release_version: Some("0.68.0".to_string()),
+                skippy_abi: "0.1.25".to_string(),
+                platform: NativeRuntimePlatform {
+                    os: "linux".to_string(),
+                    arch: "x86_64".to_string(),
+                    target: None,
+                    min_glibc: None,
+                },
+                backend: NativeRuntimeBackend::cpu(),
+                rank: 0,
+                libraries: vec!["lib/libllama.so".to_string()],
+                files: Default::default(),
+                tools: Default::default(),
+                url: None,
+                sha256: None,
+                signature: None,
+            },
+        }
+    }
+
+    #[test]
+    fn reading_a_manifest_again_hashes_only_changed_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let library = temp.path().join("lib/libllama.so");
+        fs::create_dir_all(library.parent().unwrap()).unwrap();
+        fs::write(&library, b"native runtime").unwrap();
+        cpu_runtime_manifest().write_to_dir(temp.path()).unwrap();
+        let hashed = || HASHED.with(Cell::get);
+        let before = hashed();
+
+        NativeRuntimeManifest::read_from_dir(temp.path()).unwrap();
+        assert_eq!(hashed(), before + 1);
+        NativeRuntimeManifest::read_from_dir(temp.path()).unwrap();
+        assert_eq!(
+            hashed(),
+            before + 1,
+            "an unchanged file is not hashed again"
+        );
+
+        // Same length, new modification time: hashed again, and rejected.
+        fs::write(&library, b"NATIVE RUNTIME").unwrap();
+        let later = SystemTime::now() + std::time::Duration::from_secs(60);
+        File::options()
+            .write(true)
+            .open(&library)
+            .unwrap()
+            .set_modified(later)
+            .unwrap();
+        let error = NativeRuntimeManifest::read_from_dir(temp.path()).unwrap_err();
+        assert!(error.to_string().contains("checksum mismatch"));
+        assert_eq!(hashed(), before + 2);
+    }
+
+    /// A same-length rewrite that puts the old modification time back still
+    /// changes the inode change time, so it is hashed again and rejected.
+    #[cfg(unix)]
+    #[test]
+    fn a_rewrite_with_its_modification_time_restored_is_hashed_again() {
+        let temp = tempfile::tempdir().unwrap();
+        let library = temp.path().join("lib/libllama.so");
+        fs::create_dir_all(library.parent().unwrap()).unwrap();
+        fs::write(&library, b"native runtime").unwrap();
+        cpu_runtime_manifest().write_to_dir(temp.path()).unwrap();
+        NativeRuntimeManifest::read_from_dir(temp.path()).unwrap();
+        let original = fs::metadata(&library).unwrap().modified().unwrap();
+        let before = HASHED.with(Cell::get);
+
+        fs::write(&library, b"NATIVE RUNTIME").unwrap();
+        File::options()
+            .write(true)
+            .open(&library)
+            .unwrap()
+            .set_modified(original)
+            .unwrap();
+        assert_eq!(
+            fs::metadata(&library).unwrap().modified().unwrap(),
+            original
+        );
+
+        let error = NativeRuntimeManifest::read_from_dir(temp.path()).unwrap_err();
+        assert!(error.to_string().contains("checksum mismatch"));
+        assert_eq!(HASHED.with(Cell::get), before + 1);
+    }
 
     #[test]
     fn reads_native_runtime_manifest_shape() {

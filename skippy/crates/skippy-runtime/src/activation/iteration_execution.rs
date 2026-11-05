@@ -1,6 +1,7 @@
 //! Scheduler batch execution and bounded selected-token readouts.
 
 use super::*;
+use crate::dflash::DecodedRows;
 
 /// Collect valid sampled tokens while retaining their original batch request indexes.
 pub(super) fn collect_iteration_samples(
@@ -43,6 +44,38 @@ pub(super) fn collect_iteration_samples(
         .collect()
 }
 
+/// Appends each split-DFlash stage's captured target-layer rows to the frame
+/// its request produced, so a decode run through the scheduler carries them
+/// to the final stage like one run as a stage message. Without them the
+/// final stage's draft drops its whole context.
+fn forward_dflash_features(
+    requests: &mut [IterationBatchRequest<'_>],
+    outputs: &mut [ActivationFrame],
+) {
+    for (request, frame) in requests.iter_mut().zip(outputs) {
+        if let Err(error) = request.session.dflash_forward_captured(frame) {
+            crate::write_native_log_note(format!("dflash feature forwarding failed: {error:#}"));
+        }
+    }
+}
+
+/// Hands a split final stage's draft the DFlash feature rows each request's
+/// input frame carries, as a stage message would, and lets a stage that
+/// starts on a draft target layer keep its input to forward. A frame without
+/// rows leaves the draft nothing to ingest, which it counts as missing rows.
+fn receive_dflash_features(requests: &mut [IterationBatchRequest<'_>]) {
+    for request in requests.iter_mut() {
+        if !request.session.dflash_reads_input() {
+            continue;
+        }
+        if let Err(error) = request.session.dflash_receive_input(request.input) {
+            crate::write_native_log_note(format!(
+                "dflash feature rows are malformed, dropped: {error:#}"
+            ));
+        }
+    }
+}
+
 impl StageSession {
     /// Execute one scheduler iteration for every request as a single native
     /// batch. Frames that carry optional parts, and exporting stages whose
@@ -52,14 +85,17 @@ impl StageSession {
     pub fn iteration_batch_sampled(
         requests: &mut [IterationBatchRequest<'_>],
     ) -> Result<IterationBatchOutput> {
-        if requests
+        receive_dflash_features(requests);
+        let mut outputs = if requests
             .iter()
             .any(iteration_request_requires_one_at_a_time)
         {
-            return Self::iteration_batch_sampled_one_at_a_time(requests);
-        }
-        Self::iteration_batch_sampled_raw(requests, &vec![0; requests.len()], &[])
-            .map(|(outputs, _)| outputs)
+            Self::iteration_batch_sampled_one_at_a_time(requests)?
+        } else {
+            Self::iteration_batch_sampled_raw(requests, &vec![0; requests.len()], &[])?.0
+        };
+        forward_dflash_features(requests, &mut outputs.request_outputs);
+        Ok(outputs)
     }
 
     /// Evaluate independent sequences in one batch and read only the selected
@@ -88,6 +124,7 @@ impl StageSession {
                 "causal readouts require a text-only activation frontier"
             );
         }
+        receive_dflash_features(requests);
         if requests
             .iter()
             .any(iteration_request_requires_one_at_a_time)
@@ -128,9 +165,13 @@ impl StageSession {
                     }));
                 scores.append(&mut readouts);
             }
+            forward_dflash_features(requests, &mut outputs.request_outputs);
             return Ok((outputs, scores));
         }
-        Self::iteration_batch_sampled_raw(requests, &vec![0; requests.len()], selections)
+        let (mut outputs, scores) =
+            Self::iteration_batch_sampled_raw(requests, &vec![0; requests.len()], selections)?;
+        forward_dflash_features(requests, &mut outputs.request_outputs);
+        Ok((outputs, scores))
     }
 
     /// Execute a native batch and validate its sampled or selected-token outputs.
@@ -357,8 +398,17 @@ fn advance_iteration_counts(requests: &mut [IterationBatchRequest<'_>]) -> Resul
                 .context("session token count overflow")
         })
         .collect::<Result<Vec<_>>>()?;
+    // Native batches concatenate each request's rows in request order.
+    let mut first_row = 0usize;
     for (request, count) in requests.iter_mut().zip(counts) {
         request.session.token_count = count;
+        let rows = request.token_ids.len();
+        let decoded = DecodedRows::for_prefill(rows, request.positions).offset(first_row);
+        match request.phase {
+            IterationBatchPhase::Prefill => request.session.dflash_after_prefill(decoded),
+            IterationBatchPhase::Decode => request.session.dflash_after_decode(decoded),
+        }
+        first_row += rows;
     }
     Ok(())
 }

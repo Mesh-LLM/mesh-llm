@@ -154,11 +154,8 @@ fn validate_mode(input: &Input) -> DynResult<()> {
         if input.base != input.context.controller_revision {
             return Err("ordinary package base differs from frozen controller".into());
         }
-    } else if input.mode != "pinned-build"
-        || input.candidate != input.context.selected_source
-        || input.base != input.candidate
-    {
-        return Err("selected package changed frozen source".into());
+    } else if input.base != input.context.selected_source {
+        return Err("selected package differs from frozen source base".into());
     }
     Ok(())
 }

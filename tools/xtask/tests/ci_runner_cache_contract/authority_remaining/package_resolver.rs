@@ -62,7 +62,7 @@ fn inputs(file: &str, id: &str) -> (&'static str, &'static str, &'static str, &'
         ),
         (_, "windows_packages") => (
             "current",
-            "[\"mesh-llm-analytics\",\"mesh-llm-config\",\"mesh-llm-events\",\"mesh-llm-identity\",\"mesh-llm-payments\",\"mesh-llm-plugin\",\"mesh-llm-plugin-manager\",\"mesh-llm-tui\",\"mesh-llm-ui\",\"mesh-llm-wallet\",\"skippy-cache\"]",
+            "[\"mesh-llm-analytics\",\"mesh-llm-config\",\"mesh-llm-events\",\"mesh-llm-identity\",\"mesh-llm-payments\",\"mesh-llm-plugin\",\"mesh-llm-plugin-manager\",\"mesh-llm-routing\",\"mesh-llm-tui\",\"mesh-llm-ui\",\"mesh-llm-wallet\",\"process-supervision\",\"skippy-cache\"]",
             "",
             "${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}",
         ),

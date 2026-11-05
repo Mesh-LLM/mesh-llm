@@ -44,11 +44,18 @@ fn persistent_runner(job: &Node) -> bool {
             .iter()
             .any(|value| value.contains("self-hosted"))
     });
+    // The canary workflows take their runner labels from the resolve job's
+    // managed platform dispatch; that is still a persistent self-hosted job.
+    let managed_dispatch = job
+        .get("runs-on")
+        .and_then(Node::text)
+        .is_some_and(|runner| runner.contains("runner_labels"));
     let matrix = job
         .get("strategy")
         .and_then(|strategy| strategy.get("matrix"))
         .and_then(|matrix| matrix.get("include"));
     literal
+        || managed_dispatch
         || matches!(matrix, Some(Node::Seq(rows)) if rows.iter().any(|row| {
             field(row, "runner").is_some_and(|runner| runner.starts_with("mesh-llm-"))
         }))

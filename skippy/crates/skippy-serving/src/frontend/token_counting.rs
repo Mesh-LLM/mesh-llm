@@ -6,16 +6,19 @@ use super::request::{
 use skippy_inference_api::{ChatCompletionRequest, InferenceError, InferenceResult};
 
 impl StageOpenAiBackend {
+    /// Apply chat defaults and render the prompt with the loaded model's tokenizer.
+    /// Reject media prompts because this endpoint cannot count their native input tokens.
     pub(super) async fn count_prompt_tokens(
         &self,
         mut request: ChatCompletionRequest,
     ) -> InferenceResult<u32> {
         self.ensure_model(&request.model)?;
-        apply_chat_request_defaults(&mut request, &self.request_defaults)?;
+        let request_defaults = self.request_defaults.snapshot();
+        apply_chat_request_defaults(&mut request, &request_defaults)?;
         ensure_chat_runtime_features_supported(&request)?;
-        let options = chat_template_options(&request, &self.request_defaults)?;
+        let options = chat_template_options(&request, &request_defaults)?;
         let prompt = self
-            .prepare_chat_prompt_offloaded(&request, options)
+            .prepare_chat_prompt_offloaded(&request, options, Default::default())
             .await?;
         if !prompt.media.is_empty() {
             return Err(InferenceError::unsupported(

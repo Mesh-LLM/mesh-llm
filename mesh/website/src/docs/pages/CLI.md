@@ -111,6 +111,22 @@ mesh-llm serve --model Qwen3-0.6B-Q4_K_M
 mesh-llm client --auto
 ```
 
+### Serve one model across independent meshes
+
+```sh
+mesh-llm config validate --memberships-config ./memberships.toml
+mesh-llm serve --gguf /models/model.gguf --memberships-config ./memberships.toml
+```
+
+The manifest defines independent memberships and one shared model execution
+budget. This launch requires exactly one local GGUF. `--ctx-size` and
+`--parallel` override the manifest's context size and concurrency; topology and
+GPU offload settings belong in the manifest. Repeated `--join` still supplies
+bootstrap peers for one mesh.
+
+See [One model across independent meshes](/docs/pages/shared-serving/) for the
+manifest format, effective trust policy, supported flags, and local controls.
+
 ## Runtime lifecycle and modes
 
 Bare `mesh-llm serve` is valid. It starts the durable API, console, mesh,
@@ -615,7 +631,7 @@ keeps the cause chain in every case.
 #### `runtime scan-refresh`
 
 Use this to ask exactly one remote, owner-attested node to rescan its managed
-model inventory. It uses the private `mesh-llm-control/1` lane; it does not
+model inventory. It uses the private `mesh-llm-control/2` lane; it does not
 change public mesh join, gossip, routing, or inference behavior.
 
 The target node must expose owner-control and the requester must use an owner
@@ -711,6 +727,7 @@ Usage:
 mesh-llm config validate
 mesh-llm config validate --config-path ~/.mesh-llm/config.toml
 mesh-llm config validate --config-path ./mesh.toml --json
+mesh-llm config validate --memberships-config ./memberships.toml
 ```
 
 Switches:
@@ -719,6 +736,9 @@ Switches:
   mesh-llm uses the global `--config` path, then `MESH_LLM_CONFIG`, then
   `~/.mesh-llm/config.toml`.
 - `--json`: print a machine-readable validation report.
+- `--memberships-config <PATH>`: validate a local memberships manifest instead
+  of the ordinary configuration. Cannot be combined with `--config-path`.
+  Checks schema and limits without reading token/trust files or loading a model.
 
 The JSON report uses this shape:
 
@@ -756,6 +776,10 @@ mesh-llm load Qwen3-0.6B-Q4_K_M
 Switches:
 
 - `--port <PORT>`: target management/API port (default `3131`).
+- `--ctx-size <TOKENS>`: context per lane for this load. Default: the model's `[[models]]` row, else planned for this node.
+- `--parallel <LANES>`: concurrent lanes for this load. The native runtime allocates context × lanes KV cells. Default: the model's row, else `[gpu] parallel`, else planned.
+
+The command waits up to 30 seconds. If the node is still loading (for example while it downloads the model), it says so and the load continues on the node; check with `mesh-llm status`. `Can't connect` means nothing is listening on the port.
 
 The command targets the local runtime. Use `status`,
 `GET /api/runtime/intents`, and `/v1/models` to observe completion.
@@ -931,6 +955,8 @@ Subcommands:
 
 - `plugins install <reference>`: install from a catalog name, GitHub
   `owner/repository`, or GitHub URL.
+  A plugin whose `plugin.toml` lists `requires = [...]` has each missing
+  requirement installed from the catalog as well.
 - `plugins install --archive <PATH> --name <NAME> [--version <VERSION>]`:
   install a local `.tar.gz` or `.zip` release archive. `--name` is required;
   `--version` defaults to `dev`. These flags conflict with `<reference>`.
@@ -938,6 +964,8 @@ Subcommands:
 - `plugins enable <name>`: mark an installed plugin runnable by mesh-llm.
 - `plugins disable <name>`: keep the plugin on disk but prevent host startup from launching it.
 - `plugins delete <name>`: remove the extracted files and local metadata.
+  Refused while another installed plugin lists `<name>` in its `plugin.toml`
+  `requires`; delete that plugin first.
 - `plugins info <name>`: show source, version, target, path, and latest known status.
 - `plugins search [query]`: search the plugin catalog.
 - `plugins list`: list installed, auto-registered, and configured plugins.

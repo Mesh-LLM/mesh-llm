@@ -11,6 +11,19 @@ mod commands;
 
 pub use mesh_llm_host_runtime::*;
 
+/// Default MeshLLM application and Tokio worker thread stack size: 8 MB.
+///
+/// The standard Tokio default is 2 MB, which is too small for several spawned
+/// futures in this codebase (startup_local_model_loop, api_proxy,
+/// nostr_rediscovery, publish_loop, handle_mesh_request). Box::pin on the
+/// largest spawn sites keeps most futures on the heap, but 8 MB provides a
+/// safety margin for any remaining large futures or deep call chains. This
+/// matches the macOS main-thread default.
+///
+/// Override with MESH_TOKIO_STACK_SIZE for CI or debugging (e.g. set to
+/// 1048576 to catch regressions with a 1 MB clamp).
+pub const DEFAULT_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
+
 /// Handle immutable build metadata before process-wide cache/TLS setup.
 pub fn run_build_contract_if_requested() -> Option<i32> {
     let args: Vec<_> = std::env::args_os().collect();
@@ -34,12 +47,6 @@ pub fn run_build_contract_if_requested() -> Option<i32> {
 }
 
 pub async fn run_main() -> i32 {
-    // This binary is what links the payments engine; the host only names
-    // the `payments.v1` seam.
-    #[cfg(feature = "payments")]
-    mesh_llm_host_runtime::install_payments_engine(Arc::new(
-        mesh_llm_payments::plugin_server::EngineProvider,
-    ));
     match run_cli_entrypoint().await {
         Ok(()) => 0,
         Err(err) => {
@@ -66,7 +73,12 @@ async fn run_cli_entrypoint() -> anyhow::Result<()> {
     }
 
     let normalized_args = mesh_llm_cli::normalize_runtime_surface_args(raw_args);
-    let cli = match mesh_llm_cli::Cli::try_parse_from(normalized_args.normalized.clone()) {
+    let parsed =
+        mesh_llm_cli::Cli::try_parse_from(normalized_args.normalized.clone()).and_then(|cli| {
+            mesh_llm_cli::memberships::validate_launch(&cli, &normalized_args)?;
+            Ok(cli)
+        });
+    let cli = match parsed {
         Ok(cli) => cli,
         Err(error) => {
             let outcome = parse_exit_outcome(&error);
@@ -326,7 +338,6 @@ fn parse_failure_family(
             "runtime" | "load" | "unload" | "drop" | "status" | "stop" => {
                 Some(CliCommandFamily::Runtime)
             }
-            "wallet" => Some(CliCommandFamily::Wallet),
             "config" => Some(CliCommandFamily::Configuration),
             "doctor" => Some(CliCommandFamily::Diagnostics),
             "discover" => Some(CliCommandFamily::Discovery),
@@ -473,6 +484,7 @@ fn runtime_options_from_cli(cli: mesh_llm_cli::Cli) -> mesh_llm_host_runtime::Ru
         mesh_discovery_mode: map_mesh_discovery_mode(cli.joining.mesh_discovery_mode),
         model: cli.serving.model,
         gguf: cli.serving.gguf,
+        memberships_config: cli.serving.memberships_config,
         mmproj: cli.serving.mmproj,
         checkpoint_quantization: cli.serving.checkpoint_quantization,
         checkpoint_imatrix: cli.serving.checkpoint_imatrix,

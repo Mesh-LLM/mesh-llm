@@ -3,9 +3,18 @@ description: Load the runner login shell configuration and validate its existing
 runs:
   using: composite
   steps:
-    - name: Read configured model cache
+    - name: Read configured model cache (macOS)
       # The runner service does not load the owner's interactive shell configuration.
+      if: runner.os == 'macOS'
       shell: /bin/zsh -il {0}
+      run: |
+        set -eu
+        "${MESH_LLM_AUTOMATION_BIN:?protected controller automation required}" ci-ops configure-canary-cache
+    - name: Read configured model cache (Linux)
+      # Linux runner images ship bash, not zsh; the resolution contract is the
+      # same (HF_HOME -> HF_CACHE -> default), only the login shell differs.
+      if: runner.os == 'Linux'
+      shell: /bin/bash -il {0}
       run: |
         set -eu
         "${MESH_LLM_AUTOMATION_BIN:?protected controller automation required}" ci-ops configure-canary-cache

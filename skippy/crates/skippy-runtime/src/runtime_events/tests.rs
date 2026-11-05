@@ -4,13 +4,14 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 
+use skippy_ffi::SkippyRuntimeEventV1 as RawRuntimeEvent;
 use skippy_ffi::{
-    SkippyRuntimeEventCategory as RawRuntimeEventCategory,
-    SkippyRuntimeEventEmitterKind as RawRuntimeEventEmitterKind,
-    SkippyRuntimeEventFailureCode as RawRuntimeEventFailureCode,
-    SkippyRuntimeEventKind as RawRuntimeEventKind,
-    SkippyRuntimeEventProgressUnit as RawRuntimeEventProgressUnit,
-    SkippyRuntimeEventV1 as RawRuntimeEvent,
+    RUNTIME_EVENT_CATEGORY_MODEL_OPEN, RUNTIME_EVENT_EMITTER_OPEN_THREAD,
+    RUNTIME_EVENT_FAILURE_MODEL_ERROR, RUNTIME_EVENT_FAILURE_NONE,
+    RUNTIME_EVENT_KIND_BACKEND_DEVICE_SELECTED, RUNTIME_EVENT_KIND_MODEL_OPEN_FAILED_HANDLED,
+    RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED, RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS,
+    RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED, RUNTIME_EVENT_PROGRESS_UNIT_NONE,
+    RUNTIME_EVENT_PROGRESS_UNIT_STEPS,
 };
 
 use super::{
@@ -22,7 +23,7 @@ use super::{
 const TEST_OPERATION_ID: OperationId = OperationId(1);
 
 fn make_raw_runtime_event(
-    kind: RawRuntimeEventKind,
+    kind: u32,
     sequence: u64,
     status: Status,
     detail: &[u8],
@@ -30,36 +31,36 @@ fn make_raw_runtime_event(
     RawRuntimeEvent {
         abi_version: 1,
         struct_size: std::mem::size_of::<RawRuntimeEvent>() as u32,
-        category: RawRuntimeEventCategory::MODEL_OPEN,
+        category: RUNTIME_EVENT_CATEGORY_MODEL_OPEN,
         kind,
-        emitter: RawRuntimeEventEmitterKind::OPEN_THREAD,
+        emitter: RUNTIME_EVENT_EMITTER_OPEN_THREAD,
         reserved0: 0,
         sequence,
         timestamp_mono_ns: sequence * 10,
         model_id: 11,
         stage_id: 3,
         session_id: 0,
-        progress_current: if kind == RawRuntimeEventKind::MODEL_OPEN_PROGRESS {
+        progress_current: if kind == RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS {
             500
         } else {
             0
         },
-        progress_total: if kind == RawRuntimeEventKind::MODEL_OPEN_PROGRESS {
+        progress_total: if kind == RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS {
             1000
         } else {
             0
         },
-        progress_unit: if kind == RawRuntimeEventKind::MODEL_OPEN_PROGRESS {
-            RawRuntimeEventProgressUnit::STEPS
+        progress_unit: if kind == RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS {
+            RUNTIME_EVENT_PROGRESS_UNIT_STEPS
         } else {
-            RawRuntimeEventProgressUnit::NONE
+            RUNTIME_EVENT_PROGRESS_UNIT_NONE
         },
-        failure_code: if kind == RawRuntimeEventKind::MODEL_OPEN_FAILED_HANDLED {
-            RawRuntimeEventFailureCode::MODEL_ERROR
+        failure_code: if kind == RUNTIME_EVENT_KIND_MODEL_OPEN_FAILED_HANDLED {
+            RUNTIME_EVENT_FAILURE_MODEL_ERROR
         } else {
-            RawRuntimeEventFailureCode::NONE
+            RUNTIME_EVENT_FAILURE_NONE
         },
-        status,
+        status: status as i32,
         reserved1: 0,
         detail_ptr: detail.as_ptr().cast(),
         detail_len: detail.len() as u64,
@@ -129,9 +130,9 @@ fn runtime_event_from_raw_ptr_converts_unknown_values_and_copies_detail() {
     let raw = RawRuntimeEvent {
         abi_version: 1,
         struct_size: std::mem::size_of::<RawRuntimeEvent>() as u32,
-        category: RawRuntimeEventCategory(999),
-        kind: RawRuntimeEventKind::BACKEND_DEVICE_SELECTED,
-        emitter: RawRuntimeEventEmitterKind(77),
+        category: 999,
+        kind: RUNTIME_EVENT_KIND_BACKEND_DEVICE_SELECTED,
+        emitter: 77,
         reserved0: 0,
         sequence: 42,
         timestamp_mono_ns: 4242,
@@ -140,9 +141,9 @@ fn runtime_event_from_raw_ptr_converts_unknown_values_and_copies_detail() {
         session_id: 9,
         progress_current: 12,
         progress_total: 34,
-        progress_unit: RawRuntimeEventProgressUnit(88),
-        failure_code: RawRuntimeEventFailureCode(66),
-        status: Status::Unsupported,
+        progress_unit: 88,
+        failure_code: 66,
+        status: Status::Unsupported as i32,
         reserved1: 0,
         detail_ptr: detail.as_ptr().cast(),
         detail_len: detail.len() as u64,
@@ -189,9 +190,9 @@ fn runtime_event_from_raw_ptr_omits_extension_fields_for_a_short_prefix_struct_s
         // the end, so a struct_size stopping exactly there models a native
         // allocation from before the extension existed.
         struct_size: std::mem::offset_of!(RawRuntimeEvent, numeric_summary_0) as u32,
-        category: RawRuntimeEventCategory::MODEL_OPEN,
-        kind: RawRuntimeEventKind::MODEL_OPEN_STARTED,
-        emitter: RawRuntimeEventEmitterKind::OPEN_THREAD,
+        category: RUNTIME_EVENT_CATEGORY_MODEL_OPEN,
+        kind: RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED,
+        emitter: RUNTIME_EVENT_EMITTER_OPEN_THREAD,
         reserved0: 0,
         sequence: 1,
         timestamp_mono_ns: 2,
@@ -200,9 +201,9 @@ fn runtime_event_from_raw_ptr_omits_extension_fields_for_a_short_prefix_struct_s
         session_id: 0,
         progress_current: 0,
         progress_total: 0,
-        progress_unit: RawRuntimeEventProgressUnit::NONE,
-        failure_code: RawRuntimeEventFailureCode::NONE,
-        status: Status::Ok,
+        progress_unit: RUNTIME_EVENT_PROGRESS_UNIT_NONE,
+        failure_code: RUNTIME_EVENT_FAILURE_NONE,
+        status: Status::Ok as i32,
         reserved1: 0,
         detail_ptr: detail.as_ptr().cast(),
         detail_len: detail.len() as u64,
@@ -238,7 +239,7 @@ pub(crate) fn assert_model_open_events_success() {
             }
 
             let mut too_small = make_raw_runtime_event(
-                RawRuntimeEventKind::MODEL_OPEN_STARTED,
+                RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED,
                 0,
                 Status::Ok,
                 b"ignored",
@@ -256,7 +257,7 @@ pub(crate) fn assert_model_open_events_success() {
             }
 
             let started = make_raw_runtime_event(
-                RawRuntimeEventKind::MODEL_OPEN_STARTED,
+                RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED,
                 1,
                 Status::Ok,
                 &started_detail,
@@ -267,7 +268,7 @@ pub(crate) fn assert_model_open_events_success() {
             started_detail.fill(b'x');
 
             let backend_selected = make_raw_runtime_event(
-                RawRuntimeEventKind::BACKEND_DEVICE_SELECTED,
+                RUNTIME_EVENT_KIND_BACKEND_DEVICE_SELECTED,
                 2,
                 Status::Ok,
                 &backend_detail,
@@ -277,7 +278,7 @@ pub(crate) fn assert_model_open_events_success() {
             }
 
             let progress = make_raw_runtime_event(
-                RawRuntimeEventKind::MODEL_OPEN_PROGRESS,
+                RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS,
                 3,
                 Status::Ok,
                 &progress_detail,
@@ -287,7 +288,7 @@ pub(crate) fn assert_model_open_events_success() {
             }
 
             let finished = make_raw_runtime_event(
-                RawRuntimeEventKind::MODEL_OPEN_FINISHED,
+                RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED,
                 4,
                 Status::Ok,
                 &finished_detail,
@@ -342,7 +343,7 @@ pub(crate) fn assert_model_open_events_handled_failure() {
         collect_runtime_events_for_test(|reporter, _out_model, _out_error| {
             let callback = unsafe { (*reporter).callback.expect("callback") };
             let started = make_raw_runtime_event(
-                RawRuntimeEventKind::MODEL_OPEN_STARTED,
+                RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED,
                 1,
                 Status::Ok,
                 b"started",
@@ -351,7 +352,7 @@ pub(crate) fn assert_model_open_events_handled_failure() {
                 callback(&started, (*reporter).user_data);
             }
             let progress = make_raw_runtime_event(
-                RawRuntimeEventKind::MODEL_OPEN_PROGRESS,
+                RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS,
                 2,
                 Status::Ok,
                 b"progress",
@@ -360,7 +361,7 @@ pub(crate) fn assert_model_open_events_handled_failure() {
                 callback(&progress, (*reporter).user_data);
             }
             let failure = make_raw_runtime_event(
-                RawRuntimeEventKind::MODEL_OPEN_FAILED_HANDLED,
+                RUNTIME_EVENT_KIND_MODEL_OPEN_FAILED_HANDLED,
                 3,
                 Status::ModelError,
                 &failure_detail,
@@ -405,7 +406,7 @@ pub(crate) fn assert_model_open_events_missing_terminal_callback_uses_return() {
         collect_runtime_events_for_test(|reporter, _out_model, _out_error| {
             let callback = unsafe { (*reporter).callback.expect("callback") };
             let started = make_raw_runtime_event(
-                RawRuntimeEventKind::MODEL_OPEN_STARTED,
+                RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED,
                 1,
                 Status::Ok,
                 b"started",
@@ -414,7 +415,7 @@ pub(crate) fn assert_model_open_events_missing_terminal_callback_uses_return() {
                 callback(&started, (*reporter).user_data);
             }
             let progress = make_raw_runtime_event(
-                RawRuntimeEventKind::MODEL_OPEN_PROGRESS,
+                RUNTIME_EVENT_KIND_MODEL_OPEN_PROGRESS,
                 2,
                 Status::Ok,
                 b"progress",
@@ -445,7 +446,7 @@ pub(crate) fn assert_model_open_events_forwarded_before_open_returns() {
         collect_model_open_events(&queue, |reporter, out_model, _out_error| {
             let callback = unsafe { (*reporter).callback.expect("callback") };
             let started = make_raw_runtime_event(
-                RawRuntimeEventKind::MODEL_OPEN_STARTED,
+                RUNTIME_EVENT_KIND_MODEL_OPEN_STARTED,
                 1,
                 Status::Ok,
                 b"started",
@@ -456,7 +457,7 @@ pub(crate) fn assert_model_open_events_forwarded_before_open_returns() {
             assert_eq!(open_queue.len(), 1);
 
             let finished = make_raw_runtime_event(
-                RawRuntimeEventKind::MODEL_OPEN_FINISHED,
+                RUNTIME_EVENT_KIND_MODEL_OPEN_FINISHED,
                 2,
                 Status::Ok,
                 b"finished",

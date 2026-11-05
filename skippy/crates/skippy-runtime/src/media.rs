@@ -133,7 +133,8 @@ impl MediaProjector {
         config: &crate::RuntimeConfig,
     ) -> Result<Self> {
         let path = path_to_cstring(std::path::Path::new(path), "projector path")?;
-        let raw_model = unsafe { skippy_ffi::skippy_model_llama_model(model) };
+        let raw_model: *const skippy_ffi::Opaque =
+            unsafe { skippy_ffi::skippy_model_llama_model(model) }.cast();
         if raw_model.is_null() {
             return Err(anyhow!("model did not expose a llama_model handle"));
         }
@@ -210,7 +211,7 @@ impl StageModel {
     pub fn supports_speech_synthesis(&self) -> bool {
         self.media.as_ref().is_some_and(|projector| {
             let info = unsafe { skippy_ffi::mtmd_gen_audio_get_info(projector.raw) };
-            info.audio_type != skippy_ffi::MtmdGenAudioType::None
+            info.type_ != skippy_ffi::MtmdGenAudioType::None
         })
     }
 
@@ -227,7 +228,7 @@ impl StageModel {
             .as_ref()
             .ok_or_else(|| anyhow!("speech synthesis requires a configured projector"))?;
         let info = unsafe { skippy_ffi::mtmd_gen_audio_get_info(projector.raw) };
-        if info.audio_type == skippy_ffi::MtmdGenAudioType::None {
+        if info.type_ == skippy_ffi::MtmdGenAudioType::None {
             return Err(anyhow!(
                 "configured projector does not support speech synthesis"
             ));
@@ -245,7 +246,8 @@ impl StageModel {
             .map(CString::new)
             .transpose()
             .context("speech language contains an interior NUL byte")?;
-        let lctx = unsafe { skippy_ffi::skippy_session_llama_context(session.raw) };
+        let lctx: *mut skippy_ffi::Opaque =
+            unsafe { skippy_ffi::skippy_session_llama_context(session.raw) }.cast();
         if lctx.is_null() {
             return Err(anyhow!("speech session did not expose a llama context"));
         }
@@ -559,7 +561,8 @@ impl StageModel {
         if n_batch <= 0 {
             return Err(anyhow!("skippy session has no valid batch size"));
         }
-        let lctx = unsafe { skippy_ffi::skippy_session_llama_context(session.raw) };
+        let lctx: *mut skippy_ffi::Opaque =
+            unsafe { skippy_ffi::skippy_session_llama_context(session.raw) }.cast();
         if lctx.is_null() {
             return Err(anyhow!(
                 "skippy session did not expose a llama_context handle"
@@ -747,7 +750,8 @@ impl StageModel {
         if n_batch <= 0 {
             return Err(anyhow!("skippy session has no valid batch size"));
         }
-        let lctx = unsafe { skippy_ffi::skippy_session_llama_context(session.raw) };
+        let lctx: *mut skippy_ffi::Opaque =
+            unsafe { skippy_ffi::skippy_session_llama_context(session.raw) }.cast();
         if lctx.is_null() {
             return Err(anyhow!(
                 "skippy session did not expose a llama_context handle"

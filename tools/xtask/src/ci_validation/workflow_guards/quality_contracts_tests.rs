@@ -50,6 +50,7 @@ fn bootstrap_fixture_build_and_required_environment_cannot_be_omitted_or_reorder
             "target_directory=\"$(printf",
             "guessed_directory=\"$(printf",
         ),
+        source.replace("$1 == \"binary_path\"", "$1 == \"target_directory\""),
         source.replace(
             "export CARGO_TARGET_DIR=\"$target_directory\"",
             "export CARGO_TARGET_DIR=target",
@@ -74,6 +75,17 @@ fn bootstrap_fixture_build_and_required_environment_cannot_be_omitted_or_reorder
     );
     assert!(recipe(&late, &targets).is_err());
 }
+#[test]
+fn fixture_path_in_shell_comment_cannot_mask_an_incorrect_assignment() {
+    let (source, targets) = inputs();
+    let changed = source.replace(
+        r#"export SPV_ADAPTER_FIXTURE="${binary%[/\\]*}/examples/swift_privacy_lint_fixture$fixture_suffix""#,
+        r#"export SPV_ADAPTER_FIXTURE="$target_directory/debug/examples/swift_privacy_lint_fixture$fixture_suffix" # ${binary%[/\\]*}/examples/swift_privacy_lint_fixture$fixture_suffix"#,
+    );
+    assert_ne!(changed, source);
+    assert!(recipe(&changed, &targets).is_err());
+}
+
 #[test]
 fn quality_calls_are_required_direct_and_ordered_before_retained_legacy() {
     for run in [
@@ -252,21 +264,26 @@ fn quality_native_tooling_rejects_reintroduced_python_setup_and_installs() {
 }
 
 #[test]
-fn controller_contracts_cannot_be_omitted_filtered_or_moved() {
+fn component_contracts_cannot_be_omitted_filtered_or_moved() {
     let (source, targets) = inputs();
-    let line = "    just with-lld cargo test --locked -p ci-controller\n";
-    for changed in [
-        source.replace(line, ""),
-        source.replace(
-            line,
+    for (line, filtered) in [
+        (
+            "    just with-lld cargo test --locked -p ci-controller\n",
             "    just with-lld cargo test --locked -p ci-controller --lib\n",
         ),
-        source.replace(
-            line,
-            "    just with-lld cargo test --locked -p ci-controller || true\n",
+        (
+            "    just with-lld cargo test --locked -p process-supervision -- --test-threads=1\n",
+            "    just with-lld cargo test --locked -p process-supervision --lib -- --test-threads=1\n",
         ),
-        source.replace(line, &format!("{line}{line}")),
     ] {
-        assert!(recipe(&changed, &targets).is_err());
+        assert!(source.contains(line), "{line}");
+        for changed in [
+            source.replace(line, ""),
+            source.replace(line, filtered),
+            source.replace(line, &format!("{} || true\n", line.trim_end())),
+            source.replace(line, &format!("{line}{line}")),
+        ] {
+            assert!(recipe(&changed, &targets).is_err(), "{line}");
+        }
     }
 }

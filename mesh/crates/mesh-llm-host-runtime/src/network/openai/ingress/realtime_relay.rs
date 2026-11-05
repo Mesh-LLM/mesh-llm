@@ -12,7 +12,7 @@
 //!
 //! Sessions draw on their own bounded budget and end after a quiet spell, so
 //! parked websockets cannot starve ordinary requests. Exchange-admission
-//! plugins (payments, policy) see request/response exchanges only, so a node
+//! plugins (policy, metering) see request/response exchanges only, so a node
 //! that runs them refuses live sessions rather than bypassing them.
 
 use std::sync::{Arc, OnceLock};

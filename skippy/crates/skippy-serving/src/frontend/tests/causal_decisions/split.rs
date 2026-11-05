@@ -71,6 +71,7 @@ pub(super) async fn terminal(config: StageConfig) -> Result<EmbeddedServerHandle
         continuous_batching: true,
         openai: None,
         compute_meter: None,
+        split_dflash: None,
         l3_manager: None,
     });
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);

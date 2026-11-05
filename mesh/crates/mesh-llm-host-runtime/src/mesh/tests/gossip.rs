@@ -64,8 +64,6 @@ pub(crate) fn test_announcement(ts: Option<u64>) -> PeerAnnouncement {
         plugin_origin_signature_supported: false,
         persistent_lane_marker_supported: false,
         advertised_model_throughput: vec![],
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
         cache_affinity: None,
         latency_ms: None,
         latency_source: None,

@@ -34,7 +34,7 @@ impl EmbeddedServeHandle {
             .await
     }
 
-    async fn control<T>(
+    pub(super) async fn control<T>(
         &self,
         request: impl FnOnce(tokio::sync::oneshot::Sender<T>) -> RuntimeControlRequest,
     ) -> Result<T> {

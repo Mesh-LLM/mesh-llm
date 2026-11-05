@@ -741,6 +741,14 @@ capture_kv_cache_statuses() {
         >"${prefix}-worker.json"
 }
 
+# Owner-control commands present the credential the node persisted under its
+# own HOME, so they run with that node's HOME.
+node_owner_cli() {
+    local label="$1"
+    shift
+    HOME="${PROCESS_ROOT}/${label}/h" "$MESH_LLM" "$@"
+}
+
 durable_population_ready() {
     "${automation[@]}" automation split-probe durable-ready "$1"
 }
@@ -823,9 +831,9 @@ run_durable_restart_probe() {
         -o "$evidence_dir/restored-response.json"
     sleep "$REQUEST_SETTLE_SECONDS"
     capture_kv_cache_statuses "$evidence_dir/after"
-    "$MESH_LLM" kv-cache clear --port "$SEED_CONSOLE_PORT" --yes --json \
+    node_owner_cli seed kv-cache clear --port "$SEED_CONSOLE_PORT" --yes --json \
         >"$evidence_dir/clear-seed.json"
-    "$MESH_LLM" kv-cache clear --port "$WORKER_CONSOLE_PORT" --yes --json \
+    node_owner_cli worker kv-cache clear --port "$WORKER_CONSOLE_PORT" --yes --json \
         >"$evidence_dir/clear-worker.json"
     capture_kv_cache_statuses "$evidence_dir/cleared"
     record_durable_restart "$evidence_dir"

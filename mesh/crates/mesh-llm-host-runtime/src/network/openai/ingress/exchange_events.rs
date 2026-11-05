@@ -2,10 +2,11 @@
 //! effective and terminal envelopes, the serving provenance, token usage,
 //! digests and client nonce they carry, and the channel a route publishes to.
 use crate::mesh;
+use crate::network::openai::ServedModelHeaders;
 use crate::network::openai::transport as proxy;
 use crate::plugin::openai_exchange::{
-    ClientNonceSource, ExchangeUsage, OpenAiExchangeChannel, OpenAiExchangeDispatchPath,
-    OpenAiExchangeEnvelope, ServingProvenance,
+    ClientNonceSource, ExchangeFailureClass, ExchangeUsage, OpenAiExchangeChannel,
+    OpenAiExchangeDispatchPath, OpenAiExchangeEnvelope, ServingProvenance,
 };
 
 use super::{IngressRouteContext, twin_bracket_id};
@@ -15,13 +16,61 @@ use super::{IngressRouteContext, twin_bracket_id};
 /// outcome carries no HTTP status at all (a dropped/failed connection).
 pub(super) fn plugin_route_status(outcome: &proxy::RouteDispatchOutcome) -> Option<u16> {
     match *outcome {
-        proxy::RouteDispatchOutcome::PolicyDenied => Some(403),
+        proxy::RouteDispatchOutcome::PolicyDenied { status_code } => Some(status_code),
         proxy::RouteDispatchOutcome::RequiredHookFailed => Some(503),
         proxy::RouteDispatchOutcome::Responded(status) => Some(status),
         proxy::RouteDispatchOutcome::RespondedWithUsage { status_code, .. } => Some(status_code),
         proxy::RouteDispatchOutcome::RespondedWithDigests { status_code, .. } => Some(status_code),
         proxy::RouteDispatchOutcome::FailedWithStatus { status_code, .. } => Some(status_code),
         proxy::RouteDispatchOutcome::Failed(_) | proxy::RouteDispatchOutcome::Dropped(_) => None,
+    }
+}
+
+/// The class a terminal event states for an exchange that did not complete,
+/// `None` for one that did. `plugin_route_status` cannot carry this alone: a
+/// stream cut after its 200 headers is a `FailedWithStatus` whose status is
+/// 200, and a dropped stream or transport failure has no status at all. A
+/// timeout is classed by its 408/504 status; a plugin endpoint's connect
+/// timeout reaches this terminal as a 503 and classes as `upstream_error`.
+pub(super) fn exchange_failure_class(
+    outcome: &proxy::RouteDispatchOutcome,
+) -> Option<ExchangeFailureClass> {
+    use ExchangeFailureClass::{Dropped, PaymentRequired, Refused, Timeout, UpstreamError};
+    match *outcome {
+        proxy::RouteDispatchOutcome::PolicyDenied { status_code: 402 } => Some(PaymentRequired),
+        proxy::RouteDispatchOutcome::PolicyDenied { .. }
+        | proxy::RouteDispatchOutcome::RequiredHookFailed => Some(Refused),
+        proxy::RouteDispatchOutcome::Responded(status)
+        | proxy::RouteDispatchOutcome::RespondedWithUsage {
+            status_code: status,
+            ..
+        }
+        | proxy::RouteDispatchOutcome::RespondedWithDigests {
+            status_code: status,
+            ..
+        } => failure_class_of_status(status),
+        // The "timeout" reason is the one `buffered_exchange` matches on; kept
+        // so a route that starts to emit it is classed rather than missed.
+        proxy::RouteDispatchOutcome::FailedWithStatus {
+            status_code,
+            reason,
+        } => Some(if reason == "timeout" {
+            Timeout
+        } else {
+            failure_class_of_status(status_code).unwrap_or(UpstreamError)
+        }),
+        proxy::RouteDispatchOutcome::Failed(_) => Some(UpstreamError),
+        proxy::RouteDispatchOutcome::Dropped(_) => Some(Dropped),
+    }
+}
+
+fn failure_class_of_status(status: u16) -> Option<ExchangeFailureClass> {
+    match status {
+        ..=399 => None,
+        402 => Some(ExchangeFailureClass::PaymentRequired),
+        408 | 504 => Some(ExchangeFailureClass::Timeout),
+        400..=499 => Some(ExchangeFailureClass::Refused),
+        _ => Some(ExchangeFailureClass::UpstreamError),
     }
 }
 
@@ -135,7 +184,8 @@ fn outcome_was_served(outcome: &proxy::RouteDispatchOutcome) -> bool {
 }
 
 /// The serving provenance a routing node can state for an exchange a peer
-/// delivered: only `served_by_node_id`, naming that peer, never this node.
+/// delivered: only `served_by_node_id`, naming that peer, never this node,
+/// and the weights digest that peer reported for it.
 /// `serving_provenance_for_model` above describes this node's own model and
 /// hardware, so it is never used on this path.
 ///
@@ -143,11 +193,22 @@ fn outcome_was_served(outcome: &proxy::RouteDispatchOutcome) -> bool {
 /// (`observed_served_by_hex`, from [`proxy::ServedByNodeIdSink`]), which
 /// covers a request that named no `x-mesh-target`. An explicit `x-mesh-target`
 /// is the fallback: routing narrows the candidates to exactly that peer.
-/// `None` when the outcome was not served or neither is known. Every hardware
-/// and model field stays absent, since this node never touched that hardware.
+/// `None` when the outcome was not served or neither is known. Every other
+/// hardware and model field stays absent, since this node never touched that
+/// hardware.
+///
+/// `peer_served_model` holds the peer's served-model response headers
+/// (`x-mesh-weights-digest`, `x-mesh-model-canonical-ref`): what the peer
+/// says it ran, taken from the descriptor its backend served. On a free
+/// exchange that is the descriptor its own host-served terminal reports. A
+/// paid seller's own terminal looks the model up by the buyer's public ID,
+/// so it can lack what these headers carry. This node cannot check them
+/// against the bytes, as with the peer's `X-Capsule-Id`; they are recorded
+/// as the peer's statement.
 pub(super) fn serving_provenance_for_remote_mesh(
     target: Option<iroh::EndpointId>,
     observed_served_by_hex: Option<String>,
+    peer_served_model: ServedModelHeaders,
     outcome: &proxy::RouteDispatchOutcome,
 ) -> Option<ServingProvenance> {
     if !outcome_was_served(outcome) {
@@ -164,9 +225,9 @@ pub(super) fn serving_provenance_for_remote_mesh(
         parameter_size: None,
         layer_count: None,
         model_identity_hash: None,
-        model_canonical_ref: None,
+        model_canonical_ref: peer_served_model.canonical_ref,
         model_revision: None,
-        weights_digest: None,
+        weights_digest: peer_served_model.weights_digest,
         gpu: None,
         vram_bytes: None,
         is_soc: None,
@@ -185,7 +246,10 @@ pub(in crate::network::openai) struct RawProxyTerminalFacts<'a> {
     /// Canonical digest of the real request body the host dispatched.
     pub(in crate::network::openai) request_digest: Option<&'a str>,
     /// The mesh node that asked, from the tunnel's authenticated remote id
-    /// ([`IngressRouteContext::requested_by_node_id`]). Host-served only.
+    /// ([`IngressRouteContext::requested_by_node_id`]). Goes into the serving
+    /// provenance of a host-served exchange, and onto the envelope of a
+    /// raw-proxy exchange that failed (host-served or plugin-served); an
+    /// exchange a peer delivered takes `remote_delivered_terminal`, which has none.
     pub(in crate::network::openai) requested_by_node_id: Option<&'a str>,
     /// The request's stabilized `x-capsule-client-nonce` and who contributed
     /// it ([`request_client_nonce`]), as the `RemoteMesh` terminal reports it.
@@ -239,7 +303,14 @@ pub(in crate::network::openai) async fn publish_raw_proxy_terminal(
         plugin_route_status(final_outcome),
         None,
         client_nonce.map(|(_, source)| source),
-    );
+    )
+    .with_failure_class(exchange_failure_class(final_outcome));
+    // A failed exchange has no serving provenance to name the asker in, so
+    // it is stated here, only for the exchanges that failed: the same value
+    // a served one already gives plugins inside its provenance.
+    if envelope.failure_class.is_some() {
+        envelope = envelope.with_requested_by_node_id(requested_by_node_id);
+    }
     envelope.nonce = client_nonce.map(|(nonce, _)| nonce.to_string());
     // Nothing was served on a 503 / `Failed` / `Dropped` outcome, so there is
     // no hardware or model identity to report — and no reason to pay the
@@ -370,6 +441,8 @@ pub(super) struct RemoteDeliveredFacts<'a> {
     pub(super) target: Option<iroh::EndpointId>,
     /// The peer `route_model_request` saw deliver the attempt.
     pub(super) observed_served_by_hex: Option<String>,
+    /// The served-model headers that peer returned with its response.
+    pub(super) peer_served_model: ServedModelHeaders,
     pub(super) request_digest: Option<String>,
     /// The client's `x-mesh-twin-bracket` value, copied unread.
     pub(super) twin_bracket_id: Option<String>,
@@ -393,10 +466,14 @@ pub(super) fn remote_delivered_terminal(
         facts.nonce_source,
         facts.peer_capsule_id,
     )
-    .with_twin_bracket_id(facts.twin_bracket_id);
-    if let Some(provenance) =
-        serving_provenance_for_remote_mesh(facts.target, facts.observed_served_by_hex, outcome)
-    {
+    .with_twin_bracket_id(facts.twin_bracket_id)
+    .with_failure_class(exchange_failure_class(outcome));
+    if let Some(provenance) = serving_provenance_for_remote_mesh(
+        facts.target,
+        facts.observed_served_by_hex,
+        facts.peer_served_model,
+        outcome,
+    ) {
         terminal = terminal.with_serving_provenance(provenance);
     }
     if let Some(digest) = facts.request_digest {
@@ -421,6 +498,7 @@ pub(super) fn local_route_delivered_by_peer<'a>(
     model_name: &'a str,
     peer_hex: String,
     peer_capsule_id: Option<String>,
+    peer_served_model: ServedModelHeaders,
     request_digest: Option<String>,
 ) -> RemoteDeliveredFacts<'a> {
     let (nonce, nonce_origin) = request.capsule_nonce_headers();
@@ -433,6 +511,7 @@ pub(super) fn local_route_delivered_by_peer<'a>(
         peer_capsule_id,
         target: None,
         observed_served_by_hex: Some(peer_hex),
+        peer_served_model,
         request_digest,
         // Validated in `route_request`; copied unread.
         twin_bracket_id: twin_bracket_id(request).ok().flatten(),

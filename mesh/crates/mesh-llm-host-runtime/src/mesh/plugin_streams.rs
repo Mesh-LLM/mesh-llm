@@ -5,6 +5,7 @@ use prost::Message;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 
 use super::Node;
+use crate::plugin::ChannelRoute;
 use crate::protocol::{STREAM_PLUGIN_MESH_STREAM, read_len_prefixed, write_len_prefixed};
 
 pub(crate) fn endpoint_id_from_hex(peer_id: &str) -> Option<EndpointId> {
@@ -55,13 +56,22 @@ impl Node {
         if request.channel.is_empty() {
             return Err(plugin_mesh_stream_error("channel is required"));
         }
-        if !self
-            .plugin_event_channel_declared(&plugin_id, &request.channel, "mesh stream")
+        match self
+            .plugin_channel_route(&plugin_id, &request.channel, "mesh stream")
             .await
+            .0
         {
-            return Err(plugin_mesh_stream_error(
-                "plugin does not declare mesh channel",
-            ));
+            ChannelRoute::Mesh => {}
+            ChannelRoute::Local => {
+                return Err(plugin_mesh_stream_error(
+                    "a local channel never reaches the mesh",
+                ));
+            }
+            ChannelRoute::Undeclared => {
+                return Err(plugin_mesh_stream_error(
+                    "plugin does not declare mesh channel",
+                ));
+            }
         }
 
         request.plugin_id = plugin_id;
@@ -107,13 +117,11 @@ impl Node {
         if request.plugin_id.is_empty() || request.channel.is_empty() {
             anyhow::bail!("Plugin mesh stream is missing plugin_id or channel");
         }
-        if !self
-            .plugin_event_channel_declared(
-                &request.plugin_id,
-                &request.channel,
-                "inbound mesh stream",
-            )
+        if self
+            .plugin_channel_route(&request.plugin_id, &request.channel, "inbound mesh stream")
             .await
+            .0
+            != ChannelRoute::Mesh
         {
             return Ok(());
         }

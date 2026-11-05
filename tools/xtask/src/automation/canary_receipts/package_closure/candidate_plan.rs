@@ -27,8 +27,7 @@ pub(super) fn admit(input: &Input) -> DynResult<Digest> {
     }
     let root = input.root.canonicalize()?;
     candidate_view::producer(&root, &input.base, &input.candidate)?;
-    if (!input.context.selected_source.is_empty()
-        && (input.candidate != input.context.selected_source || input.base != input.candidate))
+    if (!input.context.selected_source.is_empty() && input.base != input.context.selected_source)
         || (input.context.selected_source.is_empty()
             && input.base != input.context.controller_revision)
     {

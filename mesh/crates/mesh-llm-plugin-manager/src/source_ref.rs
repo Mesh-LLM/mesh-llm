@@ -49,6 +49,16 @@ pub struct GitHubPluginSource {
 }
 
 impl GitHubPluginSource {
+    /// The plugin a repository installs: the repo name without the
+    /// conventional `-plugin` suffix, so `Owner/blackboard-plugin` installs
+    /// `blackboard` from its `blackboard-<tag>-<target>` release asset.
+    pub fn plugin_name(&self) -> &str {
+        self.repo
+            .strip_suffix("-plugin")
+            .filter(|name| !name.is_empty())
+            .unwrap_or(&self.repo)
+    }
+
     pub fn from_url(url: &str) -> Result<Self, PluginInstallRefParseError> {
         match parse_install_ref(url)? {
             PluginInstallRef::GitHub { source, .. } => Ok(source),
@@ -275,6 +285,19 @@ pub(crate) fn is_valid_name(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn plugin_name_drops_the_plugin_suffix() {
+        let source = |repo: &str| super::GitHubPluginSource {
+            owner: "Mesh-LLM".into(),
+            repo: repo.into(),
+        };
+        assert_eq!(source("blackboard-plugin").plugin_name(), "blackboard");
+        assert_eq!(source("ln-payments-plugin").plugin_name(), "ln-payments");
+        assert_eq!(source("capsules").plugin_name(), "capsules");
+        assert_eq!(source("plugin").plugin_name(), "plugin");
+        assert_eq!(source("-plugin").plugin_name(), "-plugin");
+    }
+
     use super::*;
 
     #[test]

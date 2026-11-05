@@ -183,7 +183,7 @@ pub(crate) fn run_native_quantize(
     params.allow_requantize = args.allow_requantize;
     params.quantize_output_tensor = !args.leave_output_tensor;
     params.only_copy = quant == QuantType::Copy;
-    params.pure = args.pure;
+    params.pure_ = args.pure;
     params.keep_split = true;
     params.dry_run = args.dry_run;
     params.output_tensor_type =
@@ -329,12 +329,12 @@ fn tensor_overrides(
         patterns.push(CString::new(raw_pattern.to_ascii_lowercase())?);
         overrides.push(skippy_ffi::LlamaModelTensorOverride {
             pattern: patterns.last().expect("just pushed").as_ptr(),
-            tensor_type,
+            type_: tensor_type,
         });
     }
     overrides.push(skippy_ffi::LlamaModelTensorOverride {
         pattern: std::ptr::null(),
-        tensor_type: skippy_ffi::GgmlType::Count,
+        type_: skippy_ffi::GgmlType::Count,
     });
     Ok((patterns, overrides))
 }
@@ -393,7 +393,7 @@ fn kv_overrides(
     overrides.push(skippy_ffi::LlamaModelKvOverride {
         tag: skippy_ffi::LlamaModelKvOverrideType::Int,
         key: [0; 128],
-        value: skippy_ffi::LlamaModelKvOverrideValue { val_i64: 0 },
+        __bindgen_anon_1: skippy_ffi::LlamaModelKvOverrideValue { val_i64: 0 },
     });
     Ok(overrides)
 }
@@ -402,7 +402,7 @@ fn int_kv_override(key: &str, value: i64) -> Result<skippy_ffi::LlamaModelKvOver
     Ok(skippy_ffi::LlamaModelKvOverride {
         tag: skippy_ffi::LlamaModelKvOverrideType::Int,
         key: fixed_c_char_array(key, "KV override key")?,
-        value: skippy_ffi::LlamaModelKvOverrideValue { val_i64: value },
+        __bindgen_anon_1: skippy_ffi::LlamaModelKvOverrideValue { val_i64: value },
     })
 }
 
@@ -410,7 +410,7 @@ fn string_kv_override(key: &str, value: &str) -> Result<skippy_ffi::LlamaModelKv
     Ok(skippy_ffi::LlamaModelKvOverride {
         tag: skippy_ffi::LlamaModelKvOverrideType::Str,
         key: fixed_c_char_array(key, "KV override key")?,
-        value: skippy_ffi::LlamaModelKvOverrideValue {
+        __bindgen_anon_1: skippy_ffi::LlamaModelKvOverrideValue {
             val_str: fixed_c_char_array(value, "KV override string value")?,
         },
     })
@@ -426,7 +426,7 @@ fn parse_kv_override(raw: &str) -> Result<skippy_ffi::LlamaModelKvOverride> {
         return Ok(skippy_ffi::LlamaModelKvOverride {
             tag: skippy_ffi::LlamaModelKvOverrideType::Int,
             key,
-            value: skippy_ffi::LlamaModelKvOverrideValue {
+            __bindgen_anon_1: skippy_ffi::LlamaModelKvOverrideValue {
                 val_i64: rest.parse::<i64>()?,
             },
         });
@@ -435,7 +435,7 @@ fn parse_kv_override(raw: &str) -> Result<skippy_ffi::LlamaModelKvOverride> {
         return Ok(skippy_ffi::LlamaModelKvOverride {
             tag: skippy_ffi::LlamaModelKvOverrideType::Float,
             key,
-            value: skippy_ffi::LlamaModelKvOverrideValue {
+            __bindgen_anon_1: skippy_ffi::LlamaModelKvOverrideValue {
                 val_f64: rest.parse::<f64>()?,
             },
         });
@@ -449,14 +449,14 @@ fn parse_kv_override(raw: &str) -> Result<skippy_ffi::LlamaModelKvOverride> {
         return Ok(skippy_ffi::LlamaModelKvOverride {
             tag: skippy_ffi::LlamaModelKvOverrideType::Bool,
             key,
-            value: skippy_ffi::LlamaModelKvOverrideValue { val_bool },
+            __bindgen_anon_1: skippy_ffi::LlamaModelKvOverrideValue { val_bool },
         });
     }
     if let Some(rest) = value.strip_prefix("str:") {
         return Ok(skippy_ffi::LlamaModelKvOverride {
             tag: skippy_ffi::LlamaModelKvOverrideType::Str,
             key,
-            value: skippy_ffi::LlamaModelKvOverrideValue {
+            __bindgen_anon_1: skippy_ffi::LlamaModelKvOverrideValue {
                 val_str: fixed_c_char_array(rest, "KV override string value")?,
             },
         });

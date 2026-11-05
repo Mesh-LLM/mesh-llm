@@ -14,14 +14,12 @@ fn field<'a>(node: &'a workflow_yaml::Node, key: &str) -> &'a str {
     node.get(key).and_then(workflow_yaml::Node::text).unwrap()
 }
 
-#[test]
-fn preinstalled_profile_requires_self_hosted_macos_and_each_bootstrap_tool() {
+fn assert_preinstalled_profile(profile: &str, expected_os: &str, tools: &[&str]) {
     let steps = action_steps(".github/actions/prepare-automation/action.yml");
     let check = field(&steps[0], "run");
-    let tools = ["cargo", "rustc", "just", "sccache", "brew", "xcrun"];
     for missing in std::iter::once(None).chain(tools.iter().copied().map(Some)) {
         let f = Fixture::new();
-        for tool in tools {
+        for &tool in tools {
             if Some(tool) != missing {
                 // Presence checks must not invoke the tool or its installer.
                 executable(&f.root.join("bin").join(tool), "#!/bin/bash\nexit 93\n");
@@ -30,8 +28,8 @@ fn preinstalled_profile_requires_self_hosted_macos_and_each_bootstrap_tool() {
         let result = f.shell(
             check,
             &[
-                ("AUTOMATION_PROFILE", "preinstalled-macos"),
-                ("RUNNER_OS", "macOS"),
+                ("AUTOMATION_PROFILE", profile),
+                ("RUNNER_OS", expected_os),
                 ("RUNNER_ENVIRONMENT", "self-hosted"),
                 ("GITHUB_ENV", f.root.join("github.env").to_str().unwrap()),
             ],
@@ -46,15 +44,20 @@ fn preinstalled_profile_requires_self_hosted_macos_and_each_bootstrap_tool() {
     }
     for (os, environment) in [
         ("Linux", "self-hosted"),
+        ("macOS", "self-hosted"),
+        ("Linux", "github-hosted"),
         ("macOS", "github-hosted"),
         ("Windows", "self-hosted"),
     ] {
+        if os == expected_os && environment == "self-hosted" {
+            continue;
+        }
         let f = Fixture::new();
         assert_ne!(
             f.shell(
                 check,
                 &[
-                    ("AUTOMATION_PROFILE", "preinstalled-macos"),
+                    ("AUTOMATION_PROFILE", profile),
                     ("RUNNER_OS", os),
                     ("RUNNER_ENVIRONMENT", environment),
                 ]
@@ -66,12 +69,30 @@ fn preinstalled_profile_requires_self_hosted_macos_and_each_bootstrap_tool() {
 }
 
 #[test]
+fn preinstalled_profile_requires_self_hosted_macos_and_each_bootstrap_tool() {
+    assert_preinstalled_profile(
+        "preinstalled-macos",
+        "macOS",
+        &["cargo", "rustc", "just", "sccache", "brew", "xcrun"],
+    );
+}
+
+#[test]
+fn preinstalled_profile_requires_self_hosted_linux_and_each_bootstrap_tool() {
+    assert_preinstalled_profile(
+        "preinstalled-linux",
+        "Linux",
+        &["cargo", "rustc", "just", "sccache"],
+    );
+}
+
+#[test]
 fn preinstalled_profile_excludes_installers_and_selects_existing_linker_tools() {
     let steps = action_steps(".github/actions/prepare-automation/action.yml");
     for (name, condition) in [
         (
             "Install pinned Rust toolchain",
-            "inputs.runner-profile != 'preinstalled-macos' && (runner.os != 'Linux' || inputs.runner-profile == 'hosted-bare')",
+            "inputs.runner-profile != 'preinstalled-macos' && inputs.runner-profile != 'preinstalled-linux' && (runner.os != 'Linux' || inputs.runner-profile == 'hosted-bare')",
         ),
         (
             "Install just",
@@ -117,7 +138,10 @@ fn preinstalled_linker_refuses_missing_tools_and_starts_cache_without_installing
 set -euo pipefail
 case "$*" in
  --version) exit 0 ;;
- --start-server) printf '%s' "$SCCACHE_SERVER_UDS" > "$FIXTURE_ROOT/started" ;;
+ --start-server)
+  [[ "$SCCACHE_IDLE_TIMEOUT" == 0 ]] || exit 90
+  printf '%s' "$SCCACHE_SERVER_UDS" > "$FIXTURE_ROOT/started"
+  ;;
  *) exit 96 ;;
 esac
 "#,
@@ -131,6 +155,7 @@ esac
             r#"#!/bin/bash
 [[ "$*" == --mesh-probe ]] || exit 97
 [[ "$SCCACHE_SERVER_UDS" == "$(cat "$FIXTURE_ROOT/started")" ]] || exit 98
+[[ "$SCCACHE_IDLE_TIMEOUT" == 0 ]] || exit 90
 "#,
         );
         let env = f.root.join("github.env");
@@ -139,6 +164,7 @@ esac
             &script,
             &[
                 ("TOOL_SOURCE", "preinstalled"),
+                ("SCCACHE_IDLE_TIMEOUT", "2"),
                 ("SCCACHE_MULTILEVEL_CHAIN", "disk"),
                 ("GITHUB_ENV", env.to_str().unwrap()),
                 ("GITHUB_PATH", path.to_str().unwrap()),
@@ -155,6 +181,13 @@ esac
             assert!(!f.root.join("started").exists());
         } else {
             let endpoint = f.text("started");
+            assert_eq!(
+                f.text("github.env")
+                    .lines()
+                    .filter(|line| line.starts_with("SCCACHE_IDLE_TIMEOUT="))
+                    .collect::<Vec<_>>(),
+                ["SCCACHE_IDLE_TIMEOUT=0"]
+            );
             assert!(
                 f.text("github.env")
                     .contains(&format!("SCCACHE_SERVER_UDS={endpoint}"))

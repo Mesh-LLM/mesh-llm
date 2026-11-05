@@ -39,8 +39,6 @@ esac
 
 rustup target add "$RUST_TARGET" 2>/dev/null || true
 
-"$SWIFT_DIR/scripts/generate-swift-bindings.sh"
-
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-13.0}"
 export LLAMA_STAGE_BACKEND="${LLAMA_STAGE_BACKEND:-metal}"
 export LLAMA_STAGE_BUILD_DIR="${LLAMA_STAGE_BUILD_DIR:-$REPO_ROOT/.deps/llama-build/build-stage-abi-$RUST_TARGET-metal}"
@@ -62,6 +60,8 @@ RUSTC="$RUSTUP_RUSTC" \
   cargo build --release -p mesh-llm-ffi --target "$RUST_TARGET" --no-default-features --features embedded-runtime
 
 LIB_PATH="$TARGET_DIR/$RUST_TARGET/release/libmeshllm_ffi.a"
+
+"$SWIFT_DIR/scripts/generate-swift-bindings.sh" "$LIB_PATH"
 
 echo "Syncing UniFFI API checksums into generated Swift bindings..."
 "${automation[@]}" prepared-input swift-api-checksum "$LIB_PATH" "$GENERATED_SWIFT"

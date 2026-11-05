@@ -53,7 +53,6 @@ pub mod models {
     };
     pub use crate::models::{capabilities, catalog};
 }
-
 pub mod plugin {
     pub use crate::plugin::{
         ExternalPluginSpec, GpuAssignment, GpuConfig, MeshConfig, PluginHostMode, PluginManager,
