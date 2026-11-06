@@ -327,9 +327,15 @@ impl DFlashDraft {
             self.info.block_size,
             options.max_draft_tokens.unwrap_or(usize::MAX),
         );
+        // Laguna drafts attend causally within the block; Poolside's own GGUFs
+        // say so only through their decoder architecture.
         let causal =
             unsafe { skippy_ffi::llama_model_meta_val_str(self.model, "dflash.attention.causal") }
-                .is_some_and(|value| value == "true");
+                .is_some_and(|value| value == "true")
+                || unsafe {
+                    skippy_ffi::llama_model_meta_val_str(self.model, "dflash.decoder_arch")
+                }
+                .is_some_and(|value| value == "laguna");
         let dflash2 = self.info.variant == DFlashVariant::DFlash2;
         unsafe {
             // DFlash2 reads its lattice from every row of the nextn output.
