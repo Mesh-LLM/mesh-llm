@@ -392,10 +392,8 @@ fn failed_progress_projection_stops_quiet_goose_without_waiting_for_deadline() {
     executable(
         &fixture.root.join("tools/goose"),
         r#"#!/bin/bash
-trap 'printf stopped > "$HOME/goose.stopped"' EXIT
-trap 'exit 0' TERM INT
-printf started > "$HOME/goose.started"
-while :; do sleep 1; done
+printf '%s\n' "$$" > "$HOME/goose.started"
+exec sleep 60
 "#,
     );
     executable(
@@ -467,10 +465,10 @@ exit "$status"
         String::from_utf8_lossy(report.stderr.as_ref().unwrap().as_bytes())
     );
     assert_eq!(report.process.status.unwrap().code(), Some(125));
-    assert!(
-        fixture.root.join("goose.stopped").exists(),
-        "agent did not exit"
-    );
+    // The supervisor may force-stop the agent, so an EXIT trap is not a
+    // portable witness. Query the fixture-recorded process without signaling it.
+    let goose_pid = fs::read_to_string(fixture.root.join("goose.started")).unwrap();
+    crate::support::assert_absent(goose_pid.trim().parse().unwrap());
     let projector_status = fs::read_to_string(fixture.root.join("projector.status")).unwrap();
     assert_ne!(
         projector_status.trim().parse::<u8>().unwrap(),
