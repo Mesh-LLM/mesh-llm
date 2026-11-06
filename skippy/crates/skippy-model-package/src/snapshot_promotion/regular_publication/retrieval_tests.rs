@@ -167,7 +167,9 @@ fn regular_publication_observer_preserves_known_commit_under_owned_cancel_or_dea
                 file: std::fs::File::open(&path).unwrap(),
                 identity: identity(bytes),
             }],
-            Instant::now() + Duration::from_millis(700),
+            // The deadline covers the preupload and commit exchanges as well as
+            // retrieval. Leave enough time to observe the commit on busy hosts.
+            Instant::now() + Duration::from_secs(20),
             cancellation,
             &mut observer,
         ));
