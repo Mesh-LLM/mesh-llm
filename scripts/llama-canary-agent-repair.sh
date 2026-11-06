@@ -68,6 +68,8 @@ PASS_ID="${CANARY_PASS_ID:-local}"
 BRANCH="llama-canary/repair-${RUN_KEY}-${UPSTREAM_SHA:0:10}"
 VERIFY_ROOT="/tmp/mesh-llm-canary-verify-${RUN_KEY}"
 STATE_DIR="$ROOT/.deps/llama-canary-state-${RUN_KEY}-${PASS_ID}"
+# shellcheck source=scripts/lib/llama-canary-build-gates.sh
+source "$TRUSTED_ROOT/scripts/lib/llama-canary-build-gates.sh"
 TARGET_SHA_FILE="$ROOT/.deps/llama-canary-target-sha"
 AGENT_LOG="$STATE_DIR/agent.log"
 AGENT_COMMAND_LOG_DIR="$STATE_DIR/agent-commands"
@@ -80,6 +82,8 @@ UPSTREAM_SUMMARY="$STATE_DIR/upstream-summary.md"
 BUNDLE="$STATE_DIR/candidate.bundle"
 EVIDENCE_DIR="$STATE_DIR/verification-evidence"
 SYSTEMONE_SMOKE_DIR="$ROOT/target/skippy-system-one-smoke"
+# Historical-source adapters inherit the controller's explicit project paths.
+export JINJA_PROJECT SYSTEMONE_SMOKE_DIR
 FAMILY_BATTERY_RUN_ID="${FAMILY_BATTERY_RUN_ID:-${RUN_KEY}}"
 PLAN_PATH="$ROOT/target/family-battery/$FAMILY_BATTERY_RUN_ID/policy-plan.json"
 BASE_HEAD="$(git rev-parse HEAD)"
@@ -193,46 +197,6 @@ printf '%s\n' "$UPSTREAM_SHA" > "$TARGET_SHA_FILE"
 # checkouts. Remove only the known canary scratch state before the agent starts.
 git -C "$ROOT/.deps/llama.cpp" worktree prune >/dev/null 2>&1 || true
 rm -rf /tmp/llama-old-pin /tmp/llama-repair /tmp/llama-repair-* 2>/dev/null || true
-
-run_for() {
-  local label="$1" seconds="$2"
-  shift 2
-  local transaction_root input executable result timeout_parent
-  local automation=()
-  if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
-    repair_workload_controller_unchanged || return 125
-    automation=("${repair_workload_automation[@]}")
-    timeout_parent="${RUNNER_TEMP:-/tmp}"
-  else
-    automation=("${MESH_LLM_AUTOMATION_BIN:?}")
-    timeout_parent="${RUNNER_TEMP:?}"
-  fi
-  executable="$(command -v "$1")" || return 125
-  if [[ "$executable" != /* && "$executable" == */* ]]; then
-    executable="$PWD/$executable"
-  fi
-  if [[ "$executable" != /* ]]; then
-    echo "$label requires an absolute executable" >&2
-    return 125
-  fi
-  transaction_root="$(mktemp -d "$timeout_parent/canary-timeout.XXXXXXXX")" || return 125
-  input="$transaction_root/input.json"
-  shift
-  jq -n --arg label "$label" --argjson seconds "$seconds" --arg cwd "$PWD" \
-    --arg executable "$executable" --args \
-    '{label:$label,seconds:$seconds,cwd:$cwd,executable:$executable,arguments:$ARGS.positional}' \
-    -- "$@" > "$input" || { rm -rf "$transaction_root"; return 125; }
-  if "${automation[@]}" automation canary-timeout --input "$input"; then
-    result=0
-  else
-    result=$?
-  fi
-  rm -rf "$transaction_root" || return 125
-  if [[ "$HARNESS_MODE" == repair || "$HARNESS_MODE" == verify ]]; then
-    repair_workload_controller_unchanged || return 125
-  fi
-  return "$result"
-}
 
 record_failure_class() {
   local failure_class="$1" failure_stage="$2"
@@ -436,37 +400,17 @@ restore_previous_repair_candidate() {
 }
 
 agent_session_step() {
-  local prompt="$1" started heartbeat_pid status seconds
-  local -a goose_args
+  local prompt="$1" status seconds
+  local -a goose_args progress_automation
   if ! seconds="$(remaining_repair_seconds)"; then
     echo "agent developer task cannot continue: repair budget exhausted" >&2
     return 124
   fi
-  started="$(date +%s)"
-  # shellcheck disable=SC2016
-  env -i PATH="$PATH" bash -c '
-    root="$1"
-    started="$2"
-    sleeper=""
-    stop_heartbeat() {
-      if [[ -n "$sleeper" ]]; then
-        kill "$sleeper" 2>/dev/null || true
-        wait "$sleeper" 2>/dev/null || true
-      fi
-    }
-    trap stop_heartbeat EXIT
-    trap "exit 0" TERM INT
-    while true; do
-      sleep 600 &
-      sleeper=$!
-      wait "$sleeper" || break
-      sleeper=""
-      newest="$(find "$root/.deps/llama.cpp" -type f -newer "$root/skippy/llama_cpp/upstream.txt" -print -quit 2>/dev/null || true)"
-      printf "heartbeat: agent task running for %dm; recent llama.cpp activity: %s\n" \
-        "$(( ($(date +%s) - started) / 60 ))" "${newest:-none observed yet}"
-    done
-  ' heartbeat "$ROOT" "$started" &
-  heartbeat_pid=$!
+  if [[ "$HARNESS_MODE" == repair ]]; then
+    progress_automation=("${repair_workload_automation[@]}")
+  else
+    progress_automation=("${MESH_LLM_AUTOMATION_BIN:?}")
+  fi
   set +e
   goose_args=(
     run
@@ -475,23 +419,40 @@ agent_session_step() {
     --with-builtin developer
     --no-profile
     --max-turns 1000
-    --output-format text
+    --output-format stream-json
     --name "$AGENT_SESSION_NAME"
   )
   if [[ "$AGENT_SESSION_STARTED" == "true" ]]; then
     goose_args+=(--resume)
   fi
   goose_args+=(--text "$prompt")
+  # The complete pipeline belongs to one supervised process group. If either
+  # logging leg fails, stop that group even when Goose produces no more output.
+  # The inner shell expands its own pipeline arguments.
+  # shellcheck disable=SC2016
   run_for "agent developer task" "$seconds" env \
-    -u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN \
+    -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u CANARY_REPAIR_TOKEN \
+    -u GITHUB_ENV -u GITHUB_OUTPUT -u GITHUB_STEP_SUMMARY -u GITHUB_PATH -u GITHUB_STATE \
     CANARY_REPAIR_LOG_DIR="$AGENT_COMMAND_LOG_DIR" \
+    MESH_LLM_AUTOMATION_BIN="${repair_recovery_controller:?}" \
+    CANARY_REPAIR_CONTROLLER_ROOT="$TRUSTED_ROOT" CANARY_REPAIR_STATE_DIR="$STATE_DIR" \
+    LLAMA_STAGE_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" LLAMA_STAGE_BACKEND="${LLAMA_STAGE_BACKEND:?}" \
     GOOSE_MODE=auto GOOSE_DISABLE_SESSION_NAMING=true \
-    goose "${goose_args[@]}" \
-    > >(tee -a "$AGENT_LOG") 2>&1
+    bash -c '
+      set -o pipefail
+      trap "exit 125" TERM
+      log="$1"; commands="$2"; count="$3"; shift 3
+      progress=("${@:1:count}"); shift "$count"
+      goose "$@" 2>&1 \
+        | { tee -a "$log" || kill -TERM -- -$$; } \
+        | { "${progress[@]}" automation canary-progress --commands "$commands" || kill -TERM -- -$$; }
+      statuses=("${PIPESTATUS[@]}")
+      if (( statuses[1] != 0 || statuses[2] != 0 )); then exit 125; fi
+      exit "${statuses[0]}"
+    ' canary-agent-pipeline "$AGENT_LOG" "$AGENT_COMMAND_LOG_DIR" \
+      "${#progress_automation[@]}" "${progress_automation[@]}" "${goose_args[@]}"
   status=$?
   set -e
-  kill "$heartbeat_pid" 2>/dev/null || true
-  wait "$heartbeat_pid" 2>/dev/null || true
   if (( status != 0 )); then
     printf 'agent developer task exited with status %s\n' "$status" \
       | tee -a "$AGENT_LOG" >&2
@@ -584,6 +545,11 @@ validate_agent_manifest_changes() {
 }
 
 agent_feedback_prompt() {
+  if [[ -f "$STATE_DIR/last-check.json" ]] && jq -e '.status == "fail"' "$STATE_DIR/last-check.json" >/dev/null; then
+    printf 'The shared repair check retained this exact failing step and reproduction:\n'
+    cat "$STATE_DIR/last-check.json"
+    printf '\n'
+  fi
   printf 'The trusted harness tested the current working tree and it is still red. Continue the same developer task in this session. Read the current failure logs at:\n\n- %s\n- %s\n- %s\n- %s\n\nFix the actual source or narrowly permitted manifest data, then rerun the affected checks. Once the known failures are fixed and their reproductions pass, return control for the trusted full gates; do not repeat the full family battery inside the coding session. Report the exact checks run and any unresolved failures, without claiming certification. The same control-file, Git, credential, and publication restrictions still apply.' \
     "$PREPARE_LOG" "$MANIFEST_POLICY_LOG" "$BUILD_LOG" "$CERTIFY_LOG"
 }
@@ -709,159 +675,7 @@ materialize_verification_tree() {
   verify_repair_pin
 }
 
-run_prepare() {
-  local prepared_upstream
-  : > "$PREPARE_LOG"
-  echo "trusted candidate gate: prepare" | tee -a "$PREPARE_LOG"
-  write_repair_pin >>"$PREPARE_LOG" 2>&1 || return 1
-  verify_repair_pin >>"$PREPARE_LOG" 2>&1 || return 1
-  run_verification_logged "apply llama.cpp patch queue" "$PREPARE_LOG" \
-    scripts/prepare-llama.sh pinned || return 1
-  prepared_upstream="$(tr -d '[:space:]' < "$ROOT/.deps/llama.cpp/.mesh-llm-upstream-sha")"
-  if [[ "$prepared_upstream" != "$UPSTREAM_SHA" ]]; then
-    echo "prepared upstream is $prepared_upstream, expected $UPSTREAM_SHA" | tee -a "$PREPARE_LOG" >&2
-    return 1
-  fi
-}
-
-run_full_build() {
-  : > "$BUILD_LOG"
-  echo "trusted candidate gate: build" | tee -a "$BUILD_LOG"
-  # shellcheck source=scripts/lib/llama-canary-native-build.sh
-  source "$TRUSTED_ROOT/scripts/lib/llama-canary-native-build.sh"
-  run_canary_native_build || return 1
-  run_verification_logged "stage runtime crate build" "$BUILD_LOG" \
-    cargo build -p skippy-runtime -p skippy-cli -p skippy-package-builder -p skippy-correctness -p skippy-topology --bins \
-    || return 1
-  run_verification_logged "Skippy smoke tests" "$BUILD_LOG" \
-    scripts/skippy-ci-smoke.sh || return 1
-  # Run-scoped CPU workload oracle closure for the non-chat certification
-  # lanes; packed into the executable handoff for family workers.
-  run_verification_logged "pinned CPU workload oracles and candidate" "$BUILD_LOG" \
-    just skippy-workload-oracles-build "${LLAMA_STAGE_BUILD_DIR:?}-workloads" || return 1
-  if [[ "$HARNESS_MODE" == *-build ]]; then
-    # The nested shell expands its positional argument, not this shell.
-    # shellcheck disable=SC2016
-    run_verification_logged "build transferable multimodal test executable" "$BUILD_LOG" \
-      bash -c 'cargo test -p skippy-serving --lib --no-run --message-format=json > "$1"' \
-      build-mm "$STATE_DIR/mm-build.jsonl" || return 1
-  fi
-  # The producer must qualify its own native backend before distributing
-  # executables to family workers on that platform.
-  local backend="${LLAMA_STAGE_BACKEND:?select canary backend before building}"
-  run_verification_logged "System One smoke" "$BUILD_LOG" env \
-    WORK_DIR="$SYSTEMONE_SMOKE_DIR" \
-    SYSTEMONE_SMOKE_CADENCE=llama-bump \
-    SYSTEMONE_SMOKE_BUILD_BACKEND="$backend" \
-    SYSTEMONE_SMOKE_CERTIFIED_BACKENDS="$backend" \
-    SYSTEMONE_SMOKE_REQUIRE_QUALIFIED=1 \
-    scripts/skippy-system-one-smoke.sh || return 1
-  run_verification_logged "Laya smoke" "$BUILD_LOG" env \
-    WORK_DIR="$SYSTEMONE_SMOKE_DIR" \
-    LAYA_SMOKE_CADENCE=llama-bump \
-    LAYA_SMOKE_DEVICE=CPU \
-    scripts/skippy-laya-smoke.sh || return 1
-}
-
 # Local CLI compatibility path. CI uses *-build modes and separate family jobs.
-run_certification() {
-  if [[ "$HARNESS_MODE" != repair && "$HARNESS_MODE" != verify ]]; then
-    echo "local certification requires repair or verify mode" >&2
-    return 2
-  fi
-  local setting workload_settings
-  local workload_env=()
-  workload_settings="$(bash scripts/skippy-workload-oracles-build.sh --print-env "${LLAMA_STAGE_BUILD_DIR:?}-workloads")" || return 1
-  if [[ -z "$workload_settings" ]]; then
-    echo "workload producer returned no certification environment" >&2
-    return 1
-  fi
-  while IFS= read -r setting; do
-    workload_env+=("$setting")
-  done <<< "$workload_settings"
-  : > "$CERTIFY_LOG"
-  echo "trusted candidate gate: certify" | tee -a "$CERTIFY_LOG"
-  if [[ "$HARNESS_MODE" == repair ]]; then
-    repair_source_inspection local-parity-inventory "" "$CERTIFY_LOG" || return 1
-  elif [[ "$HARNESS_MODE" == verify ]]; then
-    verification_source_inspection verification-parity-inventory "$CERTIFY_LOG" || return 1
-  fi
-  repair_family_plan 1 "$CERTIFY_LOG" || return 1
-  run_verification_logged "full supported-family certification" "$CERTIFY_LOG" env \
-    FAMILY_BATTERY_RUN_ID="$FAMILY_BATTERY_RUN_ID" \
-    "${workload_env[@]}" \
-    scripts/skippy-family-battery.sh --skip-build --plan "$PLAN_PATH"
-}
-
-run_early_native_certification() {
-  local setting workload_settings mm_test_bin
-  local workload_env=()
-  # A cached executable is usable only when its recorded source tree (and
-  # therefore pin), native stamp, and every handed-off binary still match.
-  repair_workload_controller_unchanged || return 1
-  verification_candidate_unchanged || return 1
-  run_verification_logged "verify exact workload producer" "$CERTIFY_LOG" \
-    "${repair_workload_automation[@]}" automation canary-receipts workload-manifest verify \
-      "$ROOT" "${LLAMA_STAGE_BUILD_DIR:?}-workloads/cargo/debug/skippy" \
-      "${LLAMA_STAGE_BUILD_DIR:?}-workloads/native" \
-      "${LLAMA_STAGE_BUILD_DIR:?}-workloads/producer.json" || return 1
-  verification_candidate_unchanged || return 1
-  repair_workload_controller_unchanged || return 1
-  workload_settings="$(bash scripts/skippy-workload-oracles-build.sh --print-env "${LLAMA_STAGE_BUILD_DIR:?}-workloads")" || return 1
-  [[ -n "$workload_settings" ]] || return 1
-  while IFS= read -r setting; do
-    workload_env+=("$setting")
-  done <<< "$workload_settings"
-  mm_test_bin="$(jq -rs '[.[] | select(.reason == "compiler-artifact" and .profile.test == true and .target.name == "skippy_serving" and .executable != null) | .executable] | unique | if length == 1 then .[0] else error("expected one exact multimodal test executable") end' "$STATE_DIR/mm-build.jsonl")" || return 1
-  [[ -x "$mm_test_bin" ]] || return 1
-  # One exact candidate on the producer backend, with representatives for split parity,
-  # recurrent and MoE replay, both encode-only startup classes, T5 ordering,
-  # and an actual image response. The full roster remains the promotion gate.
-  run_verification_logged "early real-model native certification" "$CERTIFY_LOG" env \
-    FAMILY_BATTERY_RUN_ID="${FAMILY_BATTERY_RUN_ID}-early" \
-    FAMILY_BATTERY_MM_TEST_BIN="$mm_test_bin" \
-    "${workload_env[@]}" \
-    scripts/skippy-family-battery.sh --skip-build \
-      --families llama,mamba2,deepseek2,nomic-bert-embedding,jina-bert-v2-rerank,t5-encoder-decoder,qwen3-vl
-}
-
-run_candidate_gates() {
-  local roster_mode="${1:-verify}"
-  if [[ "$roster_mode" != "verify" && "$roster_mode" != "refresh" ]]; then
-    echo "invalid candidate-gate roster mode: $roster_mode" >&2
-    return 2
-  fi
-  : > "$PREPARE_LOG"
-  : > "$MANIFEST_POLICY_LOG"
-  : > "$BUILD_LOG"
-  : > "$CERTIFY_LOG"
-  run_prepare || return 1
-  if [[ "$roster_mode" == "refresh" ]]; then
-    # Preparation writes the candidate upstream pin. Generate only after that
-    # transition so the roster recipe matches the runtime about to be built.
-    # Independent verification uses the default read-only mode below.
-    write_split_certification_roster || return 1
-  fi
-  # The prepared pin supplies GGML layout data. Validate immutable cache and
-  # tensor descriptors before compilation; placement uses conservative file sizes.
-  repair_family_plan 256 "$CERTIFY_LOG" || return 1
-  repair_family_plan_step "$CERTIFY_LOG" "${repair_workload_automation[@]}" \
-    automation family-battery-policy --cache-descriptors "$ROOT" \
-    "$ROOT/ci/llama-canary/family-certified.json" "$PLAN_PATH" "${HF_CACHE:?}" || return 1
-  validate_agent_manifest_changes || return 1
-  if [[ "$HARNESS_MODE" == *-build ]]; then
-    run_verification_logged "validate family plan before compilation" "$CERTIFY_LOG" \
-      "${MESH_LLM_AUTOMATION_BIN:?}" --repo-root "$ROOT" ci family-plan --shard-count 256 \
-        --output "$PLAN_PATH" || return 1
-  fi
-  run_full_build || return 1
-  if [[ "$HARNESS_MODE" == *-build ]]; then
-    run_early_native_certification || return 1
-    controller_parity_inventory
-  else
-    run_certification
-  fi
-}
 
 controller_parity_inventory() {
   local transaction_root input context
@@ -912,19 +726,40 @@ check_split_certification_roster() {
   fi
 }
 
+checkpoint_repair_source() {
+  local parent="${CANARY_RECOVERY_DIR:-$STATE_DIR/checkpoints}" destination
+  mkdir -p "$parent" || return 1
+  destination="$(mktemp -d "$parent/turn-$1.XXXXXXXX")" || return 1
+  repair_recovery_controller_unchanged || return 1
+  "$repair_recovery_controller" automation canary-receipts recover-source \
+    --root "$ROOT" --output "$destination/source" --base "$BASE_HEAD" || return 1
+  repair_recovery_controller_unchanged
+}
+
 repair_candidate_until_green() {
-  local prompt status
+  local prompt status iteration=0
   REPAIR_DEADLINE_AT="$(( $(date +%s) + AGENT_TIMEOUT_SECONDS ))"
   prompt="$(agent_prompt)"
 
+  VERIFICATION_DEADLINE_AT="$(( $(date +%s) + VERIFICATION_TIMEOUT_SECONDS ))"
+  run_verification_logged "prepare shared repair environment" "$BUILD_LOG" \
+    "${MESH_LLM_AUTOMATION_BIN:-$repair_workload_controller}" automation canary-receipts repair-check \
+      --root "$ROOT" --controller-root "$TRUSTED_ROOT" --state-dir "$STATE_DIR" \
+      --build-dir "$LLAMA_STAGE_BUILD_DIR" --backend "${LLAMA_STAGE_BACKEND:?}" \
+      --phase environment || return 125
+  export PATH="$STATE_DIR/jinja-env/bin:$PATH"
+  export UV_PROJECT_ENVIRONMENT="$STATE_DIR/jinja-env" UV_PYTHON_DOWNLOADS=never
   while remaining_repair_seconds >/dev/null; do
+    iteration="$((iteration + 1))"
     if agent_session_step "$prompt"; then
       :
     else
       status=$?
+      checkpoint_repair_source "$iteration" || true
       record_failure_class infrastructure agent-runtime
       return "$status"
     fi
+    checkpoint_repair_source "$iteration" || return 125
     assert_agent_control_unchanged || return 1
     # Coding turns may start only within the repair window. Once a turn
     # returns, give its complete gate sequence a fresh bounded pass, even
@@ -934,6 +769,12 @@ repair_candidate_until_green() {
       assert_agent_control_unchanged || return 1
       validate_agent_manifest_changes || return 1
       return 0
+    else
+      status=$?
+      if (( status == 125 )); then
+        record_failure_class infrastructure repair-check
+        return "$status"
+      fi
     fi
     if ! remaining_repair_seconds >/dev/null; then
       echo "candidate remains red and the repair budget is exhausted" >&2

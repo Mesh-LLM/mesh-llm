@@ -526,9 +526,29 @@ days so a single-machine queue can complete later passes.
 Build evidence explicitly includes hidden run-owned `.deps` state and native
 CTest results before cleanup. Live controller output retains up to 16 MiB per
 stream; the artifact contains the complete gate logs when that bound is exceeded.
-Agent-run build and test commands stream to the live job and save individual
-logs and exit statuses under `agent-commands/` in the build evidence artifact.
+Agent-run build and test commands save complete individual logs and exit statuses
+under `agent-commands/` in the build evidence artifact; the console projects their
+activity without dumping successful tool results.
 The command wrapper also snapshots available CTest result files after each run.
+
+Llama repair now invokes Goose with `stream-json` and projects it through
+`automation canary-progress` before the bounded outer wrapper capture. The
+console keeps concise assistant narration, tool start/return/error and one-minute
+activity reports. Expandable GitHub log groups retain commands and returned tool
+results without cluttering the default view. The formatter samples the run-owned
+`agent-commands/*/output.log` files, exposing recent output even while a shell
+tool is blocked behind `tail`.
+It reports elapsed/idle time and the wrapper's separate completion record; active
+logs take priority over newer completed commands. The Unix projector opens logs
+through directory handles without following symlinks and cancels the supervised
+Goose/logging pipeline if projection fails while the agent is quiet.
+Full original events remain in `agent.log`; full command logs retain their
+existing 14-day build-artifact upload. The console prints local paths for live
+operator inspection; these are not remotely accessible HTTP links. Downloadable
+full logs become available after the evidence upload, not while a job is active.
+There is no new service, permission, secret, runner selection or certification gate.
+
+See [Following a Llama Upgrade repair](llama-canary/PROGRESS.md) for console and detailed-log examples.
 
 Within each candidate build job, Goose resumes the same session for
 prepare/build failures under the existing 11.5-hour coding-admission and
@@ -1996,6 +2016,28 @@ Release version propagation discovers both relocated crate trees, including
 versioned local dependencies. The compiler seed warmer uses the resolved UI
 placeholder directory. Neither change expands runner or cache authority.
 
+### Focused upgrade repair checks
+
+`just llama-upgrade <upstream-sha> metal <cache-root>` enters the CI repair/build owner locally without publication credentials (see `ci/llama-canary/REPAIR.md`). `just llama-upgrade-check fast metal` and the trusted canary call the same typed
+`automation canary-receipts repair-check` command. The environment phase restores
+the controller-owned native-test lock before coding. Fast checks compile static
+binaries, verify their native ABI symbols and compiled source/binary hashes, and exercise
+GPU Flash Attention split/chain and recurrent state execution. The full phase
+then checks generated equality/idempotence, runs the complete native suite and
+canonical Skippy, workload-oracle, System One and Laya gates. Focused results do
+not replace the complete candidate and independent family passes. Step logs stay
+on disk; live output contains progress and bounded failure excerpts. One isolated
+Metal fixture SIGBUS gets a diagnostic fixture retry and an unfiltered native
+rerun, without starting an agent for the transient failure.
+
+Every coding turn saves an explicitly unverified source checkpoint; the native
+outer supervisor also attempts recovery after termination and cancellation.
+When the native base commit is unavailable, recovery captures the complete
+tracked tree against an empty tree. Candidate processes cannot inherit GitHub
+workflow-control paths, and local repair uses a private home without Git credentials.
+Recovery uploads precede verbose logs and omit the restored Python environment.
+The original failure remains authoritative if diagnostic recovery fails.
+
 ### Canary memory admission and Python SDK
 
 Persistent canary jobs require `self-hosted`, `ARM64`, `jy-managed` and
@@ -2064,12 +2106,12 @@ source workers consume that exact SDK interpreter. This is managed
 project dependency restoration, not an installation into system Python or the
 read-only model cache. The runner still requires preinstalled `uv`.
 
-The canary build and generated-patch checks share the locked external Jinja
+The canary build and generated-patch checks share the locked external native-test
 project in the trusted controller's `ci/llama-canary/jinja`, frozen before any
 selected-source switch so historical revisions need no new manifest. Its environment lives under the run-owned
 state directory and uses the prepared SDK interpreter when available, otherwise
 the installed `python3`. Interpreter downloads are disabled. Both upstream
-Jinja tests remain selected by the complete native suite. The optional developer
+Jinja and FP8 conversion tests remain selected by the complete native suite. The lock requires Python 3.12 or newer and includes NumPy, PyTorch, Safetensors and Transformers. The optional developer
 llama-benchy wrapper defaults to a full upstream source commit; explicit caller
 overrides remain available. Neither dependency adds repository Python code.
 

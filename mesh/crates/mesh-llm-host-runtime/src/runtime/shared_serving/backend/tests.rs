@@ -15,19 +15,16 @@ impl InferenceBackend for HoldingBackend {
     }
 
     /// Reject non-stream chat so this fixture cannot accidentally execute untracked work.
-    async fn chat_completion(
-        &self,
-        _: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+    async fn chat_completion(&self, _: GenerationRequest) -> InferenceResult<GenerationResponse> {
         Err(InferenceError::unsupported("stream-only test backend"))
     }
 
     /// Keep the worker context alive behind a permanently pending response stream.
     async fn chat_completion_stream(
         &self,
-        _: ChatCompletionRequest,
+        _: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         self.workers.lock().unwrap().push(context);
         Ok(Box::pin(futures_util::stream::pending()))
     }
@@ -96,11 +93,11 @@ async fn disconnect_cancels_only_its_stream_and_does_not_release_a_running_worke
     let context_a = InferenceRequestContext::new();
     let context_b = InferenceRequestContext::new();
     let stream_a = a
-        .chat_completion_stream(request.clone(), context_a.clone())
+        .chat_completion_stream(request.clone().into(), context_a.clone())
         .await
         .unwrap();
     let stream_b = b
-        .chat_completion_stream(request, context_b.clone())
+        .chat_completion_stream(request.into(), context_b.clone())
         .await
         .unwrap();
     assert_eq!(admission.active(), 2);

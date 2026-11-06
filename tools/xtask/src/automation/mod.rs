@@ -18,11 +18,20 @@ pub(crate) mod canary_build;
 pub(crate) mod canary_handoff;
 #[path = "canary_receipts/package_closure.rs"]
 pub(crate) mod canary_package_closure;
+#[cfg(unix)]
+pub(crate) mod canary_progress;
+#[cfg(not(unix))]
+pub(crate) mod canary_progress {
+    pub(crate) fn run(_args: &[String]) -> crate::command::DynResult<()> {
+        Err("canary-progress requires a Unix runner".into())
+    }
+}
 #[expect(
     dead_code,
     reason = "Direct component tests also consume receipt parsing and error accessors"
 )]
 pub(crate) mod canary_receipts;
+pub(crate) mod canary_repair;
 #[path = "canary_receipts/source_plan.rs"]
 pub(crate) mod canary_source_plan;
 pub(crate) mod canary_timeout;

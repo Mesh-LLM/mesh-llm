@@ -1,4 +1,5 @@
 use super::*;
+use crate::chat::ChatCompletionRequest;
 
 #[test]
 fn text_form_tool_shapes_are_not_parsed() {
@@ -278,7 +279,7 @@ async fn tool_result_enforce_mode_returns_text_successfully() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [
             {"role": "user", "content": "What's 5+5?"},
@@ -288,7 +289,7 @@ async fn tool_result_enforce_mode_returns_text_successfully() {
         "tools": [{"type": "function", "function": {"name": "calculator"}}],
         "tool_choice": "auto"
     }))
-    .unwrap();
+    .unwrap().into();
 
     let response = guarded.chat_completion(request).await.unwrap();
 
@@ -328,14 +329,15 @@ async fn malformed_tool_arguments_retry_once_then_succeed() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "weather"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "tool_choice": "auto",
         "prompt_cache_key": "cache-1"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let response = guarded.chat_completion(request.clone()).await.unwrap();
 
@@ -351,7 +353,7 @@ async fn malformed_tool_arguments_retry_once_then_succeed() {
             .as_ref()
             .is_some_and(|content| content == &MessageContent::Text("weather".to_string()))
     );
-    let retry_text = crate::chat::message_content_to_text(
+    let retry_text = crate::generation::message_content_to_text(
         requests[1].messages[0]
             .content
             .as_ref()
@@ -383,12 +385,13 @@ async fn retry_exhaustion_returns_openai_error() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "weather"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let error = guarded.chat_completion(request).await.unwrap_err();
     let body = error.body();
@@ -420,12 +423,13 @@ async fn pass_last_text_exhaustion_returns_safe_final_text() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "weather"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let response = guarded.chat_completion(request).await.unwrap();
 
@@ -464,13 +468,14 @@ async fn pass_last_text_rejects_mixed_synthetic_and_real_exhausted_output() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "weather"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "tool_choice": "auto"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let error = guarded.chat_completion(request).await.unwrap_err();
     let body = error.body();
@@ -501,13 +506,14 @@ async fn pass_last_text_rejects_sentinel_leaking_text_without_safe_fallback() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "weather"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "tool_choice": "auto"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let error = guarded.chat_completion(request).await.unwrap_err();
     let body = error.body();
@@ -542,13 +548,14 @@ async fn mixed_mesh_respond_plus_real_tool_calls_retry_exhaustion_handling() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "weather"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "tool_choice": "auto"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let error = guarded.chat_completion(request).await.unwrap_err();
 
@@ -583,12 +590,13 @@ async fn final_visible_usage_equals_final_attempt_usage_only() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "weather"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let response = guarded.chat_completion(request).await.unwrap();
 
@@ -610,16 +618,19 @@ async fn no_mesh_tool_survives_responses_function_call_conversion() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "json"}],
         "response_format": supported_json_schema_response_format()
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let response = guarded.chat_completion(request).await.unwrap();
     let translated = translate_chat_completion_to_responses(
-        serde_json::to_string(&response).unwrap().as_bytes(),
+        serde_json::to_string(&crate::chat::ChatCompletionResponse::from(response))
+            .unwrap()
+            .as_bytes(),
     )
     .unwrap();
     let parsed: serde_json::Value = serde_json::from_slice(&translated).unwrap();
@@ -645,12 +656,13 @@ async fn structured_response_format_rewrites_to_synthetic_tool() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "json"}],
         "response_format": supported_json_schema_response_format()
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let _ = guarded.chat_completion(request.clone()).await.unwrap();
 
@@ -705,12 +717,13 @@ async fn valid_structured_payload_becomes_json_assistant_text() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "json"}],
         "response_format": supported_json_schema_response_format()
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let response = guarded.chat_completion(request).await.unwrap();
 
@@ -760,13 +773,14 @@ async fn invalid_structured_payload_retries_then_exhaustion_error() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "json"}],
         "response_format": supported_json_schema_response_format(),
         "prompt_cache_key": "structured-cache"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let error = guarded.chat_completion(request).await.unwrap_err();
 
@@ -788,7 +802,7 @@ async fn unsupported_schema_feature_behavior_is_explicit_and_asserted() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "json"}],
         "response_format": {
@@ -808,7 +822,8 @@ async fn unsupported_schema_feature_behavior_is_explicit_and_asserted() {
             }
         }
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let error = guarded.chat_completion(request).await.unwrap_err();
 
@@ -840,12 +855,13 @@ async fn metrics_only_failed_validation_returns_original_backend_response() {
         },
     )
     .with_telemetry(telemetry.clone());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "weather"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let passthrough_request = request.clone();
 
     let response = guarded.chat_completion(request).await.unwrap();
@@ -874,13 +890,14 @@ async fn metrics_only_eligible_tool_request_does_not_rewrite_or_sanitize() {
         },
     )
     .with_telemetry(telemetry.clone());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "weather"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "tool_choice": "auto"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let passthrough_request = request.clone();
 
     let response = guarded.chat_completion(request).await.unwrap();

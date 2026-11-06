@@ -652,6 +652,52 @@ async fn test_read_http_request_preserves_client_path_for_responses_capture() {
     assert_eq!(request.client_path, "/v1/responses?foo=1");
 }
 #[tokio::test]
+/// The canonical System One mount is forwarded on the legacy mount, which
+/// every System One-capable peer serves; the client path is preserved.
+async fn test_read_http_request_forwards_v1_systemone_on_legacy_mount() {
+    let body = br#"{"model":"openjev-latest","state":"s","questions":{}}"#;
+    for (client_path, forwarded_path) in [
+        ("/v1/systemone", "/systemone"),
+        ("/v1/systemone?trace=1", "/systemone?trace=1"),
+        ("/systemone", "/systemone"),
+    ] {
+        let request = format!(
+            "POST {} HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            client_path,
+            body.len(),
+            std::str::from_utf8(body).unwrap()
+        );
+
+        let request = read_request_from_parts(vec![request.into_bytes()]).await;
+
+        assert_eq!(
+            request.path, forwarded_path,
+            "forwarded path for {client_path}"
+        );
+        assert_eq!(request.client_path, client_path);
+    }
+}
+
+#[tokio::test]
+/// Canonical `/v1/systemone` is normalized to the legacy `/systemone` mount
+/// for forwarding so older System One peers stay reachable, while the
+/// client path is preserved for routing, capability checks, and telemetry.
+async fn test_read_http_request_forwards_canonical_systemone_on_legacy_mount() {
+    let body = br#"{"model":"openjev-latest","state":"s","questions":{}}"#;
+    let request = format!(
+        "POST /v1/systemone?foo=1 HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        std::str::from_utf8(body).unwrap()
+    );
+
+    let request = read_request_from_parts(vec![request.into_bytes()]).await;
+
+    assert_eq!(request.path, "/systemone?foo=1");
+    assert_eq!(request.client_path, "/v1/systemone?foo=1");
+    assert!(request.is_system_one_request());
+}
+
+#[tokio::test]
 async fn test_read_http_request_large_body_over_32k() {
     let large = "x".repeat(40_000);
     let body = serde_json::json!({

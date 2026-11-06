@@ -17,7 +17,7 @@ fn actual_wrapper_endpoint_and_timeouts_are_admitted_without_readiness_inference
         let mut a = args();
         a.extend(["--timeout".into(), timeout.into()]);
         let o = Options::parse(&a).unwrap();
-        assert_eq!(o.endpoint, "http://127.0.0.1:9337/systemone");
+        assert_eq!(o.endpoint, "http://127.0.0.1:9337/v1/systemone");
     }
     for timeout in ["0", "-1", "NaN", "inf", "3601"] {
         let mut a = args();

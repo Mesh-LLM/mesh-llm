@@ -224,7 +224,7 @@ impl BufferedHttpRequest {
         self.method == "POST"
             && matches!(
                 self.client_path.split('?').next(),
-                Some("/systemone" | "/v1/decisions")
+                Some("/v1/systemone" | "/systemone" | "/v1/decisions")
             )
     }
 
@@ -623,6 +623,20 @@ where
     Ok(raw[header_end..body_end].to_vec())
 }
 
+/// Forward canonical `/v1/systemone` requests on the legacy `/systemone`
+/// mount. Every System One-capable peer serves the legacy mount, while the
+/// canonical mount only exists on newer frontends; normalizing here keeps
+/// older peers reachable without per-peer negotiation. The client's
+/// original path is preserved on `client_path` for routing, capability
+/// checks, and telemetry.
+fn system_one_forward_path(path: &str) -> String {
+    match path.split_once('?') {
+        Some(("/v1/systemone", query)) => format!("/systemone?{query}"),
+        _ if path == "/v1/systemone" => "/systemone".to_string(),
+        _ => path.to_string(),
+    }
+}
+
 async fn rewrite_request_body_for_forwarding(
     path: &str,
     body: &[u8],
@@ -632,7 +646,7 @@ async fn rewrite_request_body_for_forwarding(
     let mut outcome = RequestRewriteOutcome {
         body_json: None,
         request_object_request_ids: Vec::new(),
-        request_path: path.to_string(),
+        request_path: system_one_forward_path(path),
         response_adapter: ResponseAdapter::None,
         rewritten_body: None,
     };

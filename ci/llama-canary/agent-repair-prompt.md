@@ -18,6 +18,14 @@ The existing patch generator below is transitional and stays in use until an
 equivalent Rust command has passed parity checks. This does not grant permission
 to edit the trusted scripts or CI boundary listed below.
 
+Keep console narration brief: before each meaningful action, state what you are
+checking or changing and why in one or two sentences. Report the result and next
+step afterward. Do not repeat complete commands, diffs, or tool output in prose;
+the harness retains them separately. Use descriptive command-log labels and
+keep long-running checks inside the logging wrapper so their progress can be
+observed before the tool returns. Do not infer progress percentages or success
+from activity alone.
+
 Own the repair end to end:
 
 1. Run `scripts/prepare-llama.sh pinned` and inspect the first real failure. If
@@ -39,9 +47,23 @@ Own the repair end to end:
    requires it. Bump the prepare schema and ABI version together where the
    repository skills require that. A model row may change only when runtime
    evidence shows that its immutable manifest data is stale.
-5. Run prepare, the complete patched llama.cpp build with upstream tests, the
-   generated-family check, affected Rust package checks, and focused smoke or
-   real-model reproductions for your repairs. Inspect failures and fix them.
+5. Use the shared focused repair command after updating the durable queue:
+
+   ```bash
+   "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts repair-check \
+     --root "$PWD" --controller-root "$CANARY_REPAIR_CONTROLLER_ROOT" \
+     --state-dir "$CANARY_REPAIR_STATE_DIR" --build-dir "$LLAMA_STAGE_BUILD_DIR" \
+     --backend "$LLAMA_STAGE_BACKEND" --phase fast
+   ```
+
+   It owns the locked native-test Python environment, builds self-contained
+   static binaries, rejects dynamic-runtime substitutions, and exercises split
+   and recurrent state execution on the producer backend. Read its step result,
+   bounded failure excerpt and reproduction arguments. Use focused reproductions
+   for subsequent fixes. The harness owns the complete generated-family check,
+   native suite and canonical smokes; do not repeat those full gates here.
+   Python is already selected from the controller's locked environment. Do not
+   install packages with system pip or modify the system interpreter.
    Run every build and test command through
    `scripts/llama-canary-log-command.sh <short-label> <command> [args...]`.
    For build or test commands containing pipelines, use `bash -o pipefail -c`

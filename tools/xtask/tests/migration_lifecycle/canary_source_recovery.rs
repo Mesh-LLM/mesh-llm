@@ -130,10 +130,7 @@ fn actual_recovery_cli_records_failed_source_and_refuses_bad_base_without_comple
     assert!(!fixture.root.join("recovery").exists());
 }
 fn caller_source() -> String {
-    let source = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/llama-canary-agent-repair.sh"),
-    )
-    .unwrap();
+    let source = crate::canary_full_gates::fixture::source();
     let admission_start = source
         .find("if [[ \"$HARNESS_MODE\" == repair* ]]; then\n  repair_recovery_controller=")
         .unwrap();

@@ -1,7 +1,7 @@
 use crate::runtime_state::panic_recovery::lock_runtime;
 use std::time::Instant;
 
-use skippy_inference_api::{ChatCompletionRequest, InferenceError, InferenceResult};
+use skippy_inference_api::{InferenceError, InferenceResult, generation::GenerationRequest};
 use skippy_runtime::{ModelWorkload, SamplingConfig};
 
 use crate::frontend::generation::{
@@ -20,7 +20,7 @@ impl StageOpenAiBackend {
         prompt_token_ids: &[i32],
         max_tokens: u32,
         sampling: &SamplingConfig,
-        chat_request: Option<&ChatCompletionRequest>,
+        chat_request: Option<&GenerationRequest>,
         cancellation: Option<&skippy_inference_api::CancellationToken>,
         ids: &InferenceGenerationIds,
         mut emit_token: impl FnMut(i32) -> InferenceResult<TokenControl>,

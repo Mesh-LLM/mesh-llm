@@ -162,6 +162,8 @@
       "hooks-install",
       "llama-summary",
       "llama-update-pin",
+      "llama-upgrade",
+      "llama-upgrade-check",
       "stop",
       "test",
       "ui-clean"

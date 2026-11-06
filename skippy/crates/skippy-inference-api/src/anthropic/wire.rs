@@ -1,7 +1,7 @@
 //! Shared wire adapter for OpenAI upstreams (local, mesh, plugin and MoA).
 use super::protocol::AnthropicMessagesStreamEvent;
 use super::translate::{
-    MessagesStreamAssembler, message_start_event, messages_response_from_chat_response,
+    MessagesStreamAssembler, message_start_event, messages_response_from_generation,
     translate_stream_error_body,
 };
 use crate::{
@@ -39,7 +39,7 @@ pub fn translate_chat_value(value: &Value) -> Result<Value, InferenceError> {
     response.id = value["id"].as_str().unwrap_or("upstream").into();
     response.choices[0].finish_reason = finish;
     response.choices[0].message.tool_calls = choice["message"].get("tool_calls").cloned();
-    serde_json::to_value(messages_response_from_chat_response(&response)?)
+    serde_json::to_value(messages_response_from_generation(&response.into())?)
         .map_err(|error| InferenceError::internal(error.to_string()))
 }
 
@@ -108,7 +108,7 @@ impl MessagesWireStream {
         if value["usage"].is_object() {
             chunk.usage = Some(usage(&value["usage"]));
         }
-        events.extend(self.assembler.absorb(&chunk));
+        events.extend(self.assembler.absorb(&chunk.into()));
         Ok(events)
     }
     pub fn truncated(&mut self) -> Vec<AnthropicMessagesStreamEvent> {

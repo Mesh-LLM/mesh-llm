@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Default)]
 struct PreparedExchangeState {
-    request: Option<ChatCompletionRequest>,
+    request: Option<GenerationRequest>,
     denied: bool,
 }
 
@@ -24,7 +24,7 @@ impl PreparedExchangeAdmission {
             state: Arc::new(Mutex::new(PreparedExchangeState::default())),
         }
     }
-    pub(super) async fn admit(&self, request: &ChatCompletionRequest) -> InferenceResult<()> {
+    pub(super) async fn admit(&self, request: &GenerationRequest) -> InferenceResult<()> {
         if let Some(hooks) = &self.hooks {
             if hooks.observes_dispatched_request() {
                 self.state.lock().unwrap().request = Some(request.clone());
@@ -38,7 +38,7 @@ impl PreparedExchangeAdmission {
         }
         Ok(())
     }
-    pub(super) fn request(&self) -> Option<ChatCompletionRequest> {
+    pub(super) fn request(&self) -> Option<GenerationRequest> {
         if self
             .hooks
             .as_ref()
@@ -46,7 +46,7 @@ impl PreparedExchangeAdmission {
         {
             self.state.lock().unwrap().request.clone()
         } else if self.hooks.is_some() {
-            Some(ChatCompletionRequest::default())
+            Some(GenerationRequest::default())
         } else {
             None
         }
@@ -100,7 +100,7 @@ mod retention_tests {
         }
         async fn admit_effective_chat_completion(
             &self,
-            _request: &ChatCompletionRequest,
+            _request: &GenerationRequest,
             _route: &ChatExchangeRoute,
         ) -> InferenceResult<()> {
             self.calls.fetch_add(1, Ordering::SeqCst);
@@ -110,7 +110,7 @@ mod retention_tests {
 
     #[tokio::test]
     async fn prepared_request_retention_requires_observation_without_skipping_admission() {
-        let request = ChatCompletionRequest {
+        let request = GenerationRequest {
             model: "prepared-model".into(),
             ..Default::default()
         };

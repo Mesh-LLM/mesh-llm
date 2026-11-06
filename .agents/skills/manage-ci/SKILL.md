@@ -128,7 +128,7 @@ tooling requires an explicit maintainer decision to change that policy. Do not c
 Python-free or remove legacy validation before its Rust replacement passes.
 
 Retained external Python dependencies have bounded owners: the admitted external
-Python SDK and its locked client environments, llama.cpp's upstream Jinja tests
+Python SDK and its locked client environments, llama.cpp's upstream Jinja and FP8 conversion tests
 using the trusted controller's `ci/llama-canary/jinja/uv.lock`, and the optional llama-benchy wrapper with
 an immutable default source commit. These interfaces do not authorize new
 repository Python implementations. The canary Jinja environment belongs to its
@@ -685,6 +685,27 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Llama canary family fan-out
 
+Repair iterations use `automation canary-receipts repair-check --phase fast`.
+The same typed command owns local and CI environments, static native/Rust builds,
+binary identity checks and focused GPU split/state smokes. Agents inherit the
+controller's locked native-test Python environment and must not install system
+packages or repeat the full native suite. The trusted `full` phase repeats the
+focused checks before generation/idempotence and the unfiltered native suite;
+complete family certification and fresh independent verification remain required.
+Only an isolated Metal fixture SIGBUS may receive one diagnostic retry, followed
+by an unfiltered native rerun; ordinary candidate failures never receive retries.
+Repair checks remove GitHub workflow-control paths from candidate processes and
+bind smoke tests to the compiled Mesh and llama.cpp source state. The local owner
+uses a private home and disables Git credential helpers.
+A downloaded job log alone does not establish that a process is stuck. Correlate
+runner/process state or an observed deadline; if unavailable, report liveness as
+unconfirmed.
+Bounded, explicitly unverified source checkpoints are retained after every coding
+turn and after supervised termination. Upload recovery before verbose evidence;
+never include the restored Python environment in the diagnostic upload.
+If the recorded native base is unavailable, capture its complete tracked tree
+against an empty tree so committed repairs remain in the unverified checkpoint.
+
 The System One contract fixture must exercise both single-token causal
 readouts and multi-token likelihoods as supported execution paths, retaining
 all malformed/unsupported request refusals. Verify ordered finite scores,
@@ -729,6 +750,17 @@ metadata operations. The native generator allows 600 seconds for each complete
 rewriter pass and 60 seconds per Git command by default; an explicit `--timeout`
 overrides both. Keep both generation and idempotence passes mandatory, and
 report deadline failures with readable retained diagnostics and cleanup status.
+
+Changed-pin repair uses Goose `stream-json` through the trusted controller's
+`automation canary-progress` projection. Keep assistant action/reason updates,
+tool lifecycle and errors visible without dumping successful tool responses.
+Expose commands and returned tool results in expandable GitHub log groups;
+neutralize workflow commands in all model/tool text. Retain original events in
+`agent.log` and complete per-command logs in the
+existing build evidence. Every minute, report active tool duration, last event
+age and bounded snapshots of run-owned command logs; silence is not a failure
+or proof of progress. Projection/logging errors must not admit a successful
+candidate. Keep the existing worker credential boundary.
 
 Build evidence uploads must explicitly include the run-owned hidden `.deps`
 state and native CTest results before cleanup. A truncated live log is not a

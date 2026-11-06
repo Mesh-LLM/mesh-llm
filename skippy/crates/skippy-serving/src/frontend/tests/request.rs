@@ -1,9 +1,10 @@
 use super::support::*;
 use super::*;
+use skippy_inference_api::chat::ChatCompletionRequest;
 
 #[test]
 fn chat_runtime_feature_guard_allows_noop_parity_fields() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}],
         "tools": [],
@@ -11,20 +12,23 @@ fn chat_runtime_feature_guard_allows_noop_parity_fields() {
         "parallel_tool_calls": false,
         "response_format": {"type": "text"}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     ensure_chat_runtime_features_supported(&request).unwrap();
 }
 
 /// A one-message chat request with `extra` fields merged in.
-fn chat_request_with(extra: &serde_json::Value) -> ChatCompletionRequest {
+fn chat_request_with(extra: &serde_json::Value) -> GenerationRequest {
     let mut payload = json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}]
     });
     let fields = extra.as_object().unwrap().clone();
     payload.as_object_mut().unwrap().extend(fields);
-    serde_json::from_value(payload).unwrap()
+    serde_json::from_value::<ChatCompletionRequest>(payload)
+        .unwrap()
+        .into()
 }
 
 #[test]
@@ -133,11 +137,12 @@ fn default_sampling_controls_are_allowed() {
     // When no sampling params are specified, the server applies its own
     // defaults (temp=0.8, top_k=40, top_p=0.95, min_p=0.05) which enable
     // the sampling chain automatically.
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let sampling =
         chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
@@ -190,13 +195,14 @@ fn package_generation_defaults() -> skippy_package_format::GenerationRequestDefa
 
 #[test]
 fn package_profile_fills_fields_without_overriding_request_or_operator_values() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}],
         "top_k": 7,
         "reasoning_effort": "high"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let configured = EmbeddedOpenAiRequestDefaults {
         temperature: Some(0.4),
         package_request_defaults: Some(package_generation_defaults()),
@@ -237,11 +243,12 @@ fn resolved_reasoning_mode_selects_direct_package_profile() {
             ..EmbeddedOpenAiRequestDefaults::default()
         },
     ] {
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
+        let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
             "model": "test",
             "messages": [{"role": "user", "content": "hello"}]
         }))
-        .unwrap();
+        .unwrap()
+        .into();
         let (resolved, diagnostics) = resolve_chat_request_defaults(&request, &configured).unwrap();
         assert_eq!(
             diagnostics.selected_package_profile.as_deref(),
@@ -251,12 +258,13 @@ fn resolved_reasoning_mode_selects_direct_package_profile() {
         assert_eq!(resolved.temperature, Some(0.7));
     }
 
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}],
         "reasoning_effort": "none"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let configured = EmbeddedOpenAiRequestDefaults {
         package_request_defaults: Some(package_generation_defaults()),
         ..EmbeddedOpenAiRequestDefaults::default()
@@ -278,11 +286,12 @@ fn package_thinking_profile_requires_a_client_request() {
         package_request_defaults: Some(package_generation_defaults()),
         ..EmbeddedOpenAiRequestDefaults::default()
     };
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let (resolved, diagnostics) = resolve_chat_request_defaults(&request, &configured).unwrap();
     assert_eq!(
@@ -301,12 +310,13 @@ fn package_thinking_profile_requires_a_client_request() {
     );
 
     // The same request with an explicit reasoning ask selects the thinking profile.
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}],
         "reasoning_effort": "high"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let (resolved, diagnostics) = resolve_chat_request_defaults(&request, &configured).unwrap();
     assert_eq!(
         diagnostics.selected_package_profile.as_deref(),
@@ -362,12 +372,13 @@ fn non_default_sampling_controls_are_enabled() {
 
 #[test]
 fn typed_sampling_penalties_are_enabled() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "presence_penalty": 1.0
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let sampling =
         chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
@@ -398,7 +409,9 @@ fn penalty_windows_resolve_legacy_whole_context_to_the_default() {
         body.as_object_mut()
             .expect("request body object")
             .extend(controls.as_object().expect("controls object").clone());
-        let request: ChatCompletionRequest = serde_json::from_value(body).unwrap();
+        let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(body)
+            .unwrap()
+            .into();
 
         let sampling =
             chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
@@ -409,12 +422,13 @@ fn penalty_windows_resolve_legacy_whole_context_to_the_default() {
 
 #[test]
 fn extra_sampling_fields_are_enabled() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "top_k": 40
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let sampling =
         chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
@@ -424,12 +438,13 @@ fn extra_sampling_fields_are_enabled() {
 
 #[test]
 fn ignore_eos_is_accepted_and_forwarded() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "ignore_eos": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let mut sampling =
         chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
@@ -445,12 +460,13 @@ fn ignore_eos_is_accepted_and_forwarded() {
 
 #[test]
 fn ignore_eos_rejects_non_boolean_values() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "ignore_eos": "yes"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let error =
         chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap_err();
@@ -459,11 +475,12 @@ fn ignore_eos_rejects_non_boolean_values() {
 
 #[test]
 fn request_defaults_fill_omitted_chat_fields_only() {
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     apply_chat_request_defaults(&mut request, &test_request_defaults()).unwrap();
 
@@ -511,11 +528,12 @@ fn structured_output_defaults_fill_one_mutually_exclusive_field() {
         json_schema: Some(json!({"type": "object"})),
         ..EmbeddedOpenAiRequestDefaults::default()
     };
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     apply_chat_request_defaults(&mut request, &defaults).unwrap();
     assert_eq!(
         request.extra.get("grammar"),
@@ -524,12 +542,13 @@ fn structured_output_defaults_fill_one_mutually_exclusive_field() {
     assert!(!request.extra.contains_key("json_schema"));
     chat_template_options(&request, &defaults).expect("grammar default should remain valid");
 
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}],
         "grammar": "root ::= 'request'"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     apply_chat_request_defaults(
         &mut request,
         &EmbeddedOpenAiRequestDefaults {
@@ -545,12 +564,13 @@ fn structured_output_defaults_fill_one_mutually_exclusive_field() {
     assert!(!request.extra.contains_key("json_schema"));
     chat_template_options(&request, &defaults).expect("request grammar should remain valid");
 
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}],
         "json_schema": {"type": "object"}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     apply_chat_request_defaults(
         &mut request,
         &EmbeddedOpenAiRequestDefaults {
@@ -609,7 +629,7 @@ fn request_defaults_fill_omitted_completion_fields_and_nulls() {
 
 #[test]
 fn explicit_chat_request_values_override_request_defaults() {
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "max_tokens": 32,
@@ -624,7 +644,8 @@ fn explicit_chat_request_values_override_request_defaults() {
         "repeat_last_n": 24,
         "reasoning": {"enabled": false}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     apply_chat_request_defaults(&mut request, &test_request_defaults()).unwrap();
 
@@ -700,7 +721,7 @@ fn explicit_completion_request_values_override_request_defaults() {
 
 #[test]
 fn request_defaults_keep_logprobs_requests_servable() {
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}],
         "response_format": {
@@ -710,7 +731,8 @@ fn request_defaults_keep_logprobs_requests_servable() {
         "logprobs": true,
         "top_logprobs": 2
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     apply_chat_request_defaults(&mut request, &test_request_defaults()).unwrap();
 
@@ -722,12 +744,13 @@ fn request_defaults_keep_logprobs_requests_servable() {
 
 #[test]
 fn canonical_reasoning_overrides_chat_template_thinking() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "reasoning": {"enabled": false}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let options =
         chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
@@ -737,11 +760,12 @@ fn canonical_reasoning_overrides_chat_template_thinking() {
 
 #[test]
 fn chat_template_options_default_to_auto_reasoning_parser_with_thinking_off() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let options = chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default())
         .expect("template options");
@@ -755,11 +779,12 @@ fn chat_template_options_default_to_auto_reasoning_parser_with_thinking_off() {
 
 #[test]
 fn request_default_reasoning_enabled_controls_chat_template() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     for (configured, expected) in [
         (EmbeddedReasoningEnabled::Disabled, Some(false)),
@@ -778,12 +803,13 @@ fn request_default_reasoning_enabled_controls_chat_template() {
 
 #[test]
 fn explicit_request_reasoning_overrides_configured_default() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}],
         "reasoning": {"enabled": true}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let defaults = EmbeddedOpenAiRequestDefaults {
         reasoning_enabled: Some(EmbeddedReasoningEnabled::Disabled),
         ..EmbeddedOpenAiRequestDefaults::default()
@@ -796,11 +822,12 @@ fn explicit_request_reasoning_overrides_configured_default() {
 
 #[test]
 fn request_default_reasoning_budget_controls_chat_template() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     for (configured, expected) in [
         (EmbeddedReasoningBudget::Tokens(0), Some(false)),
@@ -827,11 +854,12 @@ fn request_default_reasoning_budget_controls_chat_template() {
 
 #[test]
 fn request_default_reasoning_format_controls_chat_parser_mode() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let defaults = EmbeddedOpenAiRequestDefaults {
         reasoning_format: Some(EmbeddedReasoningFormat::None),
         ..EmbeddedOpenAiRequestDefaults::default()
@@ -845,12 +873,13 @@ fn request_default_reasoning_format_controls_chat_parser_mode() {
 
 #[test]
 fn reasoning_effort_overrides_chat_template_thinking() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "reasoning": {"effort": "none"}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let options =
         chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
@@ -860,12 +889,13 @@ fn reasoning_effort_overrides_chat_template_thinking() {
 
 #[test]
 fn top_level_reasoning_effort_overrides_chat_template_thinking() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "reasoning_effort": "none"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let options =
         chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
@@ -876,12 +906,13 @@ fn top_level_reasoning_effort_overrides_chat_template_thinking() {
 #[test]
 fn reasoning_effort_modes_reach_chat_template_kwargs() {
     for (effort, enabled) in [("none", false), ("high", true), ("max", true)] {
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
+        let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
             "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
             "messages": [{"role": "user", "content": "hello"}],
             "reasoning_effort": effort
         }))
-        .unwrap();
+        .unwrap()
+        .into();
 
         let options =
             chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
@@ -894,13 +925,14 @@ fn reasoning_effort_modes_reach_chat_template_kwargs() {
 
 #[test]
 fn explicit_chat_template_kwargs_override_reasoning_effort_and_preserve_custom_values() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "reasoning_effort": "high",
         "chat_template_kwargs": {"reasoning_effort": "max", "custom_mode": 7}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let options =
         chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
@@ -912,13 +944,14 @@ fn explicit_chat_template_kwargs_override_reasoning_effort_and_preserve_custom_v
 
 #[test]
 fn provider_enable_thinking_overrides_chat_template_thinking() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "reasoning": {"enabled": false},
         "enable_thinking": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let options =
         chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
@@ -929,12 +962,13 @@ fn provider_enable_thinking_overrides_chat_template_thinking() {
 #[test]
 fn chat_template_kwargs_enable_thinking_overrides_template() {
     for enabled in [true, false] {
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
+        let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
             "model": "test",
             "messages": [{"role": "user", "content": "hello"}],
             "chat_template_kwargs": {"enable_thinking": enabled}
         }))
-        .unwrap();
+        .unwrap()
+        .into();
         let defaults = EmbeddedOpenAiRequestDefaults {
             reasoning_enabled: Some(if enabled {
                 EmbeddedReasoningEnabled::Disabled
@@ -953,12 +987,13 @@ fn chat_template_kwargs_enable_thinking_overrides_template() {
 #[test]
 fn thinking_boolean_aliases_override_chat_template_thinking() {
     for field in skippy_inference_api::THINKING_BOOLEAN_ALIASES {
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
+        let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
             "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
             "messages": [{"role": "user", "content": "hello"}],
             (*field): false
         }))
-        .unwrap();
+        .unwrap()
+        .into();
         assert_eq!(
             chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default())
                 .unwrap()
@@ -967,12 +1002,13 @@ fn thinking_boolean_aliases_override_chat_template_thinking() {
             "top-level alias {field}"
         );
 
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
+        let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
             "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
             "messages": [{"role": "user", "content": "hello"}],
             "chat_template_kwargs": {(*field): false}
         }))
-        .unwrap();
+        .unwrap()
+        .into();
         assert_eq!(
             chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default())
                 .unwrap()
@@ -985,12 +1021,13 @@ fn thinking_boolean_aliases_override_chat_template_thinking() {
 
 #[test]
 fn reasoning_budget_overrides_chat_template_thinking() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "reasoning": {"max_tokens": 1024}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     assert_eq!(
         chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default())
             .unwrap()
@@ -998,13 +1035,14 @@ fn reasoning_budget_overrides_chat_template_thinking() {
         Some(true)
     );
 
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "reasoning": {"enabled": true},
         "thinking_budget": 0
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     assert_eq!(
         chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default())
             .unwrap()
@@ -1015,12 +1053,13 @@ fn reasoning_budget_overrides_chat_template_thinking() {
 
 #[test]
 fn logit_bias_is_enabled() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "logit_bias": {"123": -50.0, "456": 12.5}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let sampling =
         chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
@@ -1034,12 +1073,13 @@ fn logit_bias_is_enabled() {
 
 #[test]
 fn invalid_logit_bias_returns_openai_error() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "logit_bias": {"not-a-token": 1.0}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let error =
         chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap_err();
@@ -1048,7 +1088,7 @@ fn invalid_logit_bias_returns_openai_error() {
 
 #[test]
 fn extended_sampling_fields_reach_runtime_sampling_config() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "typical_p": 0.73,
@@ -1070,7 +1110,8 @@ fn extended_sampling_fields_reach_runtime_sampling_config() {
         "sampler_sequence": "dkyt",
         "ignore_eos": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let sampling = chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default())
         .expect("extended sampling should normalize");
@@ -1111,12 +1152,13 @@ fn backend_sampling_is_rejected_as_unsupported() {
 
 #[test]
 fn min_p_is_accepted_and_forwarded() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "jc-builds/SmolLM2-135M-Instruct-Q4_K_M-GGUF:Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "min_p": 0.1
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let sampling =
         chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
@@ -1141,12 +1183,13 @@ fn extended_only_sampling_controls_enable_wire_sampling() {
 
 #[test]
 fn explicit_auto_reasoning_format_overrides_configured_default() {
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}],
         "reasoning_format": "auto"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let defaults = EmbeddedOpenAiRequestDefaults {
         reasoning_format: Some(EmbeddedReasoningFormat::Hidden),
         ..EmbeddedOpenAiRequestDefaults::default()
@@ -1169,12 +1212,13 @@ fn malformed_nested_sampling_values_are_rejected() {
         ("xtc", json!({"probability": "often"})),
         ("xtc", json!({"probablity": 0.2})),
     ] {
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
+        let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
             "model": "test",
             "messages": [{"role": "user", "content": "hello"}],
             (field): value
         }))
-        .unwrap();
+        .unwrap()
+        .into();
 
         assert!(
             chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).is_err(),
@@ -1215,7 +1259,9 @@ fn extended_sampling_boundaries_are_rejected_with_openai_errors() {
                 .expect("sampling controls object")
                 .clone(),
         );
-        let request: ChatCompletionRequest = serde_json::from_value(body).unwrap();
+        let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(body)
+            .unwrap()
+            .into();
 
         let error = chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default())
             .expect_err("invalid sampling control");
@@ -1238,7 +1284,9 @@ fn malformed_sampler_controls_are_rejected() {
         body.as_object_mut()
             .unwrap()
             .extend(payload.as_object().unwrap().clone());
-        let request: ChatCompletionRequest = serde_json::from_value(body).unwrap();
+        let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(body)
+            .unwrap()
+            .into();
 
         assert!(chat_sampling_config(&request, &EmbeddedOpenAiRequestDefaults::default()).is_err());
     }
@@ -1246,21 +1294,23 @@ fn malformed_sampler_controls_are_rejected() {
 
 #[test]
 fn oversized_structured_output_is_rejected() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}],
         "grammar": "x".repeat(1_048_577)
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     assert!(chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).is_err());
 
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}],
         "chat_template_kwargs": {"payload": "x".repeat(1_048_577)}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     assert!(chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).is_err());
 }
@@ -1268,12 +1318,13 @@ fn oversized_structured_output_is_rejected() {
 #[test]
 fn deeply_nested_grammar_is_rejected_before_native_parsing() {
     let depth = 100_000;
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}],
         "grammar": format!("root ::= {}\"a\"{}", "(".repeat(depth), ")".repeat(depth))
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     assert!(chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).is_err());
 }
@@ -1286,12 +1337,13 @@ fn grammars_that_expand_too_far_are_rejected_before_native_parsing() {
     }
     chain.push_str("r10000 ::= \"a\"\n");
     for grammar in [chain, "root ::= \"a\"{5,3}\n".to_string()] {
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
+        let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
             "model": "test",
             "messages": [{"role": "user", "content": "hello"}],
             "grammar": grammar
         }))
-        .unwrap();
+        .unwrap()
+        .into();
         assert!(
             chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).is_err()
         );
@@ -1301,12 +1353,13 @@ fn grammars_that_expand_too_far_are_rejected_before_native_parsing() {
 #[test]
 fn oversized_stop_lists_are_rejected_before_generation() {
     let stops = vec!["x"; 65];
-    let chat: ChatCompletionRequest = serde_json::from_value(json!({
+    let chat: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}],
         "stop": stops
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     assert!(ensure_chat_runtime_features_supported(&chat).is_err());
 
     let completion: CompletionRequest = serde_json::from_value(json!({
@@ -1323,14 +1376,15 @@ fn request_chat_templates_are_rejected_by_default() {
     // The template engine has no recursion, loop, or memory limits, so a
     // request's own template is only rendered where the operator opted in.
     let hostile = "{% macro f() %}{{ f() }}{% endmacro %}{{ f() }}";
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}],
         "chat_template": hostile,
         // A request cannot grant itself the operator setting.
         "allow_request_chat_template": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let defaults = EmbeddedOpenAiRequestDefaults::default();
     apply_chat_request_defaults(&mut request, &defaults).unwrap();
 
@@ -1350,12 +1404,13 @@ fn request_chat_templates_are_rejected_by_default() {
 
 #[test]
 fn operators_can_allow_request_chat_templates() {
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}],
         "chat_template": "{{ messages[0].role }}"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let defaults = EmbeddedOpenAiRequestDefaults {
         allow_request_chat_template: Some(true),
         chat_template: Some("{{ messages[0].content }}".to_string()),
@@ -1370,22 +1425,24 @@ fn operators_can_allow_request_chat_templates() {
         Some("{{ messages[0].role }}")
     );
 
-    let oversized: ChatCompletionRequest = serde_json::from_value(json!({
+    let oversized: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}],
         "chat_template": "x".repeat(1_048_577)
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     assert!(chat_template_options(&oversized, &defaults).is_err());
 }
 
 #[test]
 fn operator_chat_template_still_reaches_the_renderer() {
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let defaults = EmbeddedOpenAiRequestDefaults {
         chat_template: Some("{{ messages[0].content }}".to_string()),
         ..EmbeddedOpenAiRequestDefaults::default()

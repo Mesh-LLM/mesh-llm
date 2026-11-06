@@ -11766,6 +11766,7 @@ dependencies = [
  "process-supervision",
  "rcgen",
  "regex",
+ "rustix",
  "rustls",
  "semver",
  "serde",
