@@ -32,6 +32,8 @@ pub(super) fn direct_coalesce_target(
 
 #[cfg(test)]
 mod coalescing_tests;
+#[cfg(test)]
+mod selection_tests;
 
 /// Environment switch: split each coalesced decode wave into this many
 /// pipeline groups, so a pipelined split keeps more than one batch in flight
@@ -132,6 +134,10 @@ pub(super) fn take_direct_iteration_batch(
     }
     deferred.append(queue);
     *queue = deferred;
+    // Selection stays FIFO and budget-driven. Only order the selected, distinct
+    // sessions for native execution so arrival timing cannot permute graph rows
+    // between otherwise identical waves. Each request keeps its own reply.
+    batch.sort_unstable_by(|left, right| left.session_id.cmp(&right.session_id));
     batch
 }
 

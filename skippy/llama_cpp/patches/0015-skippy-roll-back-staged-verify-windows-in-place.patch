@@ -43,7 +43,7 @@ checkpoint, buffer reuse) and its rollback-count ABI.
 ---
  include/skippy/common.h                       |   2 +-
  include/skippy/state.h                        |  15 +
- src/CMakeLists.txt                            |  21 ++
+ src/CMakeLists.txt                            |  34 ++
  src/skippy-verify-checkpoint.h                |   9 +-
  src/skippy/activation.cpp                     | 154 ++++----
  src/skippy/execution-batch.cpp                |   7 +
@@ -461,10 +461,10 @@ index 86ea1ed55..40faff815 100644
              &first->stage_model->config, SKIPPY_GLM_DSA_PHASE_HINT_AUTO);
      std::vector<std::vector<uint8_t>> frontier_storage;
 diff --git a/src/skippy/execution-single.cpp b/src/skippy/execution-single.cpp
-index 4ce3d4ba9..8a1b320ff 100644
+index 84ead575c..965880071 100644
 --- a/src/skippy/execution-single.cpp
 +++ b/src/skippy/execution-single.cpp
-@@ -210,6 +210,11 @@ enum skippy_status skippy_decode_batch_sampled(
+@@ -221,6 +221,11 @@ enum skippy_status skippy_decode_batch_sampled(
              skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched token decode requires the first runtime slice or a full model");
              return SKIPPY_STATUS_UNSUPPORTED;
          }

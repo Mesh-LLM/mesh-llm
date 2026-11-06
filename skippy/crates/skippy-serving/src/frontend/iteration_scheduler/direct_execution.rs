@@ -4,6 +4,9 @@ use super::step_telemetry::{insert_kv_used_cells, sample_kv_used_cells};
 use super::*;
 use skippy_runtime::IterationBatchOutput;
 
+#[cfg(test)]
+mod ordered_reply_tests;
+
 type Runnable = (DirectIteration, Option<RuntimeSessionAlignStats>);
 
 struct BatchTiming {

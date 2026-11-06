@@ -15,12 +15,12 @@ Sampled verify also gets cheaper: a sampling chain retired by sampled verify
 stays retired until the session resets, and upstream's per-sequence
 backend-sampling output limit is restored.
 ---
- include/skippy/runtime.h     | 4 ++++
- src/llama-context.cpp        | 7 ++++---
- src/skippy/model_loading.cpp | 8 +++++++-
- src/skippy/sampling.cpp      | 4 +++-
- src/skippy/session.cpp       | 1 +
- 5 files changed, 19 insertions(+), 5 deletions(-)
+ include/skippy/runtime.h     |  4 ++++
+ src/llama-context.cpp        |  7 ++++---
+ src/skippy/model_loading.cpp | 15 ++++++++++++++-
+ src/skippy/sampling.cpp      |  4 +++-
+ src/skippy/session.cpp       |  1 +
+ 5 files changed, 26 insertions(+), 5 deletions(-)
 
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
 index bc4da9a07..b570682ef 100644
@@ -74,6 +74,15 @@ index 7305cc529..db5a69e38 100644
          params.kv_unified = true;
      }
      // Multi-lane activation exports rely on the shared KV pool's batch order.
+@@ -856,6 +867,8 @@ enum skippy_status skippy_finish_model_open(
+     if (skippy_should_create_native_mtp_sidecar(model, config)) {
+         llama_context_params mtp_params = params;
+         mtp_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
++        // MTP consumes raw multirow outputs, without session backend samplers.
++        mtp_params.n_outputs_max_per_seq = 0;
+         mtp_params.embeddings = false;
+         stage_model->mtp_ctx = llama_init_from_model_with_graph_inputs(model, mtp_params, graph_build_inputs);
+         if (stage_model->mtp_ctx != nullptr) {
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
 index 6a1352271..b688fce73 100644
 --- a/src/skippy/sampling.cpp
@@ -102,5 +111,5 @@ index 36c972d92..4741f55cb 100644
      skippy_mtp_clear_session_state(session);
      session->sampling_backend_verifying = false;
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 
