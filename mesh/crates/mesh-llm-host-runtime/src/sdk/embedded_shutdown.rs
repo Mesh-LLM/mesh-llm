@@ -20,6 +20,7 @@ impl EmbeddedServeHandle {
         join_embedded_runtime_thread(task).await
     }
 
+    /// Release the SDK's node reference before signaling worker shutdown.
     fn request_shutdown(&mut self, source: &'static str) {
         // Release the SDK's transport reference BEFORE allowing the worker to
         // exit. The worker's runtime then owns the final endpoint drop and
@@ -35,17 +36,20 @@ impl EmbeddedServeHandle {
 }
 
 impl Drop for EmbeddedServeHandle {
+    /// Signal cancellation when a handle is dropped without calling `stop`.
     fn drop(&mut self) {
         self.request_shutdown("sdk-drop");
     }
 }
 
+/// Join the worker on the caller's blocking pool so `stop` can await teardown.
 async fn join_embedded_runtime_thread(task: std::thread::JoinHandle<Result<()>>) -> Result<()> {
     tokio::task::spawn_blocking(move || join_embedded_runtime_thread_blocking(task))
         .await
         .context("join embedded mesh runtime thread")?
 }
 
+/// Bound the startup-error join while retaining the worker's error context.
 async fn join_embedded_runtime_thread_with_timeout(
     task: std::thread::JoinHandle<Result<()>>,
     timeout: Duration,
@@ -69,6 +73,7 @@ async fn join_embedded_runtime_thread_with_timeout(
     .context("join embedded mesh runtime thread after startup failure")?
 }
 
+/// Return the worker result or report a panic in its runtime thread.
 fn join_embedded_runtime_thread_blocking(task: std::thread::JoinHandle<Result<()>>) -> Result<()> {
     task.join()
         .map_err(|_| anyhow::anyhow!("embedded mesh runtime thread panicked"))?

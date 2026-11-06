@@ -319,6 +319,7 @@ async fn join_scenario() {
     restart_and_stop(config).await;
 }
 
+/// Require the QUIC port to be reusable before the caller's blocking worker runs.
 async fn busy_caller_pool_scenario() {
     let config = isolated_config();
     let handle = start_embedded_node(config.clone()).await.unwrap();
