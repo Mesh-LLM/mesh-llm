@@ -249,9 +249,12 @@ pub(super) fn inherited(
         .filter(|(key, _)| !REMOVED_ENVIRONMENT.iter().any(|name| key == name))
         .map(|(key, value)| {
             let name = key.to_string_lossy();
-            let secret = ["_KEY", "_TOKEN", "_SECRET", "_PASSWORD"]
-                .iter()
-                .any(|suffix| name.ends_with(suffix));
+            // Empty runner placeholders contain nothing to redact; the process
+            // supervisor rejects them when marked as secret patterns.
+            let secret = !value.is_empty()
+                && ["_KEY", "_TOKEN", "_SECRET", "_PASSWORD"]
+                    .iter()
+                    .any(|suffix| name.ends_with(suffix));
             (
                 key,
                 if secret {
