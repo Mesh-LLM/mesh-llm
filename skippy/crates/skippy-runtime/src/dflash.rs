@@ -37,7 +37,7 @@ use crate::{RuntimeConfig, StageModel, StageSession, ensure_ok, write_native_log
 
 use context::{DraftContext, IngestPlan};
 use draft_batch::{DraftBatch, target_feature_row};
-use readout::{argmax_token, block_draft_capacity, walk_dflash2_lattice};
+use readout::{BlockLayout, argmax_token, walk_dflash2_lattice};
 
 pub use context::DFlashHealth;
 pub use feature_wire::{DFlashFeatureEncoding, dflash_feature_identity, dflash_feature_layer};
@@ -49,8 +49,12 @@ const DEFAULT_BLOCK_SIZE: usize = 16;
 /// Draft cache and batch room reserved per lane for one scratch noise block.
 /// Trained DFlash blocks are 8-16 tokens.
 const MAX_BLOCK_SIZE: usize = 64;
-/// DSpark drafts share the `dflash` architecture and add a Markov head.
+/// DSpark drafts share the `dflash` architecture and add a Markov head,
+/// which the draft graph applies to its logits.
 const DSPARK_MARKOV_TENSOR: &str = "markov_w1.weight";
+/// Whether a DSpark draft predicts from the anchor position. Upstream reads a
+/// missing key as true.
+const DSPARK_SAMPLE_FROM_ANCHOR_KEY: &str = "dflash.sample_from_anchor";
 /// LiliCorr drafts share the `dflash` architecture and carry state
 /// embeddings between blocks, which this drafter does not implement.
 const LILICORR_CANDIDATE_TOPK_KEY: &str = "lilicorr.candidate_topk";
@@ -62,6 +66,9 @@ pub enum DFlashVariant {
     DFlash,
     /// Local convolution plus a candidate selector lattice.
     DFlash2,
+    /// A Markov head biasing each position's logits by the token before it,
+    /// read greedily like DFlash.
+    DSpark,
 }
 
 impl DFlashVariant {
@@ -69,6 +76,7 @@ impl DFlashVariant {
         match self {
             Self::DFlash => "dflash",
             Self::DFlash2 => "dflash2",
+            Self::DSpark => "dspark",
         }
     }
 }
@@ -157,6 +165,7 @@ pub(crate) struct DFlashDraft {
     target_n_batch: usize,
     mask_token: i32,
     mrope: bool,
+    layout: BlockLayout,
     batch: DraftBatch,
 }
 
@@ -180,8 +189,8 @@ impl DFlashDraft {
     ) -> Result<Self> {
         let api = skippy_ffi::llama_draft::llama_draft_api()
             .ok_or_else(|| anyhow!("native runtime does not export the draft-context API"))?;
-        let draft_embeds = reject_dspark(path)?;
-        if !draft_embeds
+        let tensors = inspect_draft_tensors(path)?;
+        if !tensors.embeds
             && let Some(tensor) = missing_borrowed_tensor(&config.resident_tensor_names)
         {
             bail!(
@@ -217,10 +226,11 @@ impl DFlashDraft {
             target_n_batch: 0,
             mask_token: -1,
             mrope: false,
+            layout: BlockLayout::BonusAnchor,
             batch: DraftBatch::default(),
         };
         // From here the Drop impl owns the native handles.
-        draft.configure(target_model, options, config)?;
+        draft.configure(target_model, options, config, tensors.markov)?;
         Ok(draft)
     }
 
@@ -229,6 +239,7 @@ impl DFlashDraft {
         target_model: *const Opaque,
         options: &DFlashDraftOptions,
         config: &RuntimeConfig,
+        markov: bool,
     ) -> Result<()> {
         let api = self.api;
         let architecture =
@@ -310,7 +321,21 @@ impl DFlashDraft {
             );
         }
         let selector_top_k = unsafe { (api.model_dflash_selector_top_k)(self.model) };
-        if selector_top_k > 0 {
+        if markov {
+            if selector_top_k > 0 {
+                bail!(
+                    "a draft with both a DSpark Markov head and a DFlash2 selector is not supported"
+                );
+            }
+            self.info.variant = DFlashVariant::DSpark;
+            let anchor_first = unsafe {
+                skippy_ffi::llama_model_meta_val_str(self.model, DSPARK_SAMPLE_FROM_ANCHOR_KEY)
+            }
+            .is_none_or(|value| value == "true");
+            if anchor_first {
+                self.layout = BlockLayout::AnchorFirst;
+            }
+        } else if selector_top_k > 0 {
             self.info.variant = DFlashVariant::DFlash2;
             self.info.selector_top_k = positive_usize(selector_top_k, "selector top-k")?;
             let row_used = self.info.selector_top_k * (self.info.selector_top_k + 1);
@@ -318,7 +343,7 @@ impl DFlashDraft {
                 bail!("draft hidden size is too small for the DFlash2 selector lattice");
             }
         }
-        self.info.max_draft_tokens = block_draft_capacity(
+        self.info.max_draft_tokens = self.layout.capacity(
             self.info.block_size,
             options.max_draft_tokens.unwrap_or(usize::MAX),
         );
@@ -523,9 +548,11 @@ impl DFlashDraft {
         self.truncate(seq_id, anchor_position);
         // Every block row is an output, as upstream requests: marking only the
         // mask rows returns logits shifted by one row. DFlash2 reads its
-        // lattice from the nextn output instead and needs no logits.
+        // lattice from the nextn output instead and needs no logits. A DSpark
+        // block is never longer than its trained block, past which the draft
+        // graph leaves out the Markov head.
         self.batch.clear();
-        for index in 0..=draft_tokens {
+        for index in 0..self.layout.block_tokens(draft_tokens) {
             let token = if index == 0 { anchor } else { self.mask_token };
             let position = anchor_position
                 .checked_add(i32::try_from(index).context("draft index exceeds i32")?)
@@ -561,7 +588,8 @@ impl DFlashDraft {
             ));
         }
         let mut tokens = Vec::with_capacity(draft_tokens);
-        for row in 1..=draft_tokens {
+        let first = self.layout.first_draft_row();
+        for row in first..first + draft_tokens {
             let row = i32::try_from(row).context("draft row exceeds i32")?;
             let logits = unsafe { (self.api.get_logits_ith)(self.ctx, row) };
             if logits.is_null() {
@@ -608,25 +636,23 @@ fn missing_borrowed_tensor(resident: &[String]) -> Option<&'static str> {
     .then_some(DFLASH_BORROWED_TARGET_TENSOR)
 }
 
-/// Refuses a DSpark draft, and returns whether the draft carries its own
-/// token embeddings.
-fn reject_dspark(path: &Path) -> Result<bool> {
+/// What a draft's tensors say about how it runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DraftTensors {
+    /// The draft carries its own token embeddings.
+    embeds: bool,
+    /// The draft is a DSpark draft with a Markov head.
+    markov: bool,
+}
+
+fn inspect_draft_tensors(path: &Path) -> Result<DraftTensors> {
     let catalog = skippy_model::gguf_catalog::read_gguf_tensor_catalog(path)
         .with_context(|| format!("read draft GGUF {}", path.display()))?;
-    if catalog
-        .tensors
-        .iter()
-        .any(|tensor| tensor.name == DSPARK_MARKOV_TENSOR)
-    {
-        bail!(
-            "DSpark drafts are not supported; {} has a Markov head",
-            path.display()
-        );
-    }
-    Ok(catalog
-        .tensors
-        .iter()
-        .any(|tensor| tensor.name == DFLASH_BORROWED_TARGET_TENSOR))
+    let has = |name: &str| catalog.tensors.iter().any(|tensor| tensor.name == name);
+    Ok(DraftTensors {
+        embeds: has(DFLASH_BORROWED_TARGET_TENSOR),
+        markov: has(DSPARK_MARKOV_TENSOR),
+    })
 }
 
 /// Refuses a runtime whose upstream parameter defaults do not match the
@@ -1572,6 +1598,53 @@ mod tests {
         let mut with_embeddings = final_stage.to_vec();
         with_embeddings.push("token_embd.weight".to_string());
         assert_eq!(missing_borrowed_tensor(&with_embeddings), None);
+    }
+
+    /// A GGUF holding one-float tensors named `names`.
+    fn gguf_with_tensors(names: &[&str]) -> tempfile::NamedTempFile {
+        use std::io::Write;
+        let mut bytes = b"GGUF".to_vec();
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&(names.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        for (index, name) in names.iter().enumerate() {
+            bytes.extend_from_slice(&(name.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(name.as_bytes());
+            bytes.extend_from_slice(&1u32.to_le_bytes());
+            bytes.extend_from_slice(&1u64.to_le_bytes());
+            bytes.extend_from_slice(&0u32.to_le_bytes()); // f32
+            bytes.extend_from_slice(&(32 * index as u64).to_le_bytes());
+        }
+        bytes.resize(bytes.len().next_multiple_of(32), 0);
+        bytes.resize(bytes.len() + 32 * names.len(), 0);
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(&bytes).unwrap();
+        file
+    }
+
+    #[test]
+    fn a_markov_head_marks_a_dspark_draft() {
+        let dflash = gguf_with_tensors(&["blk.0.attn_q.weight", "fc.weight"]);
+        assert_eq!(
+            inspect_draft_tensors(dflash.path()).unwrap(),
+            DraftTensors {
+                embeds: false,
+                markov: false
+            }
+        );
+        let dspark = gguf_with_tensors(&[
+            "blk.0.attn_q.weight",
+            "token_embd.weight",
+            "markov_w1.weight",
+            "markov_w2.weight",
+        ]);
+        assert_eq!(
+            inspect_draft_tensors(dspark.path()).unwrap(),
+            DraftTensors {
+                embeds: true,
+                markov: true
+            }
+        );
     }
 
     #[test]
