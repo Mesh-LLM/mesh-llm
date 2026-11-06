@@ -392,15 +392,22 @@ fn failed_progress_projection_stops_quiet_goose_without_waiting_for_deadline() {
     executable(
         &fixture.root.join("tools/goose"),
         r#"#!/bin/bash
+trap 'printf stopped > "$HOME/goose.stopped"' EXIT
+trap 'exit 0' TERM INT
 printf started > "$HOME/goose.started"
-exec sleep 60
+while :; do sleep 1; done
 "#,
     );
     executable(
         &fixture.root.join("tools/automation"),
         r#"#!/bin/bash
 if [[ "$2" == canary-progress ]]; then
+  [[ "$3" == --commands && "$4" == "$HOME/command-logs" ]] || exit 99
   while [[ ! -f "$HOME/goose.started" ]]; do sleep 0.05; done
+  "$REAL_AUTOMATION" "$@"
+  status=$?
+  printf '%s\n' "$status" > "$HOME/projector.status"
+  exit "$status"
 fi
 exec "$REAL_AUTOMATION" "$@"
 "#,
@@ -431,7 +438,9 @@ AGENT_LOG="$ROOT/agent.log"
 AGENT_COMMAND_LOG_DIR="$ROOT/command-logs"
 AGENT_SESSION_NAME=projection-failure
 AGENT_SESSION_STARTED=false
-REPAIR_DEADLINE_AT="$(( $(date +%s) + 20 ))"
+# The outer fixture supervises for 30 seconds, so a normal repair deadline
+# cannot be responsible for a passing result even on a busy builder.
+REPAIR_DEADLINE_AT="$(( $(date +%s) + 180 ))"
 {declarations}
 if agent_session_step 'fixture prompt'; then exit 99; else status=$?; fi
 [[ "$AGENT_SESSION_STARTED" == false ]] || exit 98
@@ -458,5 +467,21 @@ exit "$status"
         String::from_utf8_lossy(report.stderr.as_ref().unwrap().as_bytes())
     );
     assert_eq!(report.process.status.unwrap().code(), Some(125));
+    assert!(
+        fixture.root.join("goose.stopped").exists(),
+        "agent did not exit"
+    );
+    let projector_status = fs::read_to_string(fixture.root.join("projector.status")).unwrap();
+    assert_ne!(
+        projector_status.trim().parse::<u8>().unwrap(),
+        0,
+        "projector unexpectedly succeeded"
+    );
+    let stderr = String::from_utf8_lossy(report.stderr.as_ref().unwrap().as_bytes());
+    assert!(
+        stderr.contains(&std::io::Error::from_raw_os_error(libc::ENOTDIR).to_string()),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("timed out"), "{stderr}");
     fixture.finish();
 }
