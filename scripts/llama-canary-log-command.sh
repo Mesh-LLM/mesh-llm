@@ -20,7 +20,7 @@ log="$command_dir/output.log"
 printf 'repair command log: %s\n' "$log" >&2
 set +e
 {
-  printf 'started: %s\nlabel: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$label"
+  printf 'started: %s\nstarted_epoch: %s\nlabel: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(date +%s)" "$label"
   "$@"
 } 2>&1 | tee "$log"
 pipeline_status=("${PIPESTATUS[@]}")

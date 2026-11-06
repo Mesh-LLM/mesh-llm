@@ -526,9 +526,26 @@ days so a single-machine queue can complete later passes.
 Build evidence explicitly includes hidden run-owned `.deps` state and native
 CTest results before cleanup. Live controller output retains up to 16 MiB per
 stream; the artifact contains the complete gate logs when that bound is exceeded.
-Agent-run build and test commands stream to the live job and save individual
-logs and exit statuses under `agent-commands/` in the build evidence artifact.
+Agent-run build and test commands save complete individual logs and exit statuses
+under `agent-commands/` in the build evidence artifact; the console projects their
+activity without dumping successful tool results.
 The command wrapper also snapshots available CTest result files after each run.
+
+Llama repair now invokes Goose with `stream-json` and projects it through
+`automation canary-progress` before the bounded outer wrapper capture. The
+console keeps concise assistant narration, tool start/return/error and one-minute
+activity reports. Expandable GitHub log groups retain commands and returned tool
+results without cluttering the default view. The formatter samples the run-owned
+`agent-commands/*/output.log` files, exposing recent output even while a shell
+tool is blocked behind `tail`.
+It reports elapsed/idle time and observed exit status without guessing completion.
+Full original events remain in `agent.log`; full command logs retain their
+existing 14-day build-artifact upload. The console prints local paths for live
+operator inspection; these are not remotely accessible HTTP links. Downloadable
+full logs become available after the evidence upload, not while a job is active.
+There is no new service, permission, secret, runner selection or certification gate.
+
+See [Following a Llama Upgrade repair](llama-canary/PROGRESS.md) for console and detailed-log examples.
 
 Within each candidate build job, Goose resumes the same session for
 prepare/build failures under the existing 11.5-hour coding-admission and

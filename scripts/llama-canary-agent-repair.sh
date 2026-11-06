@@ -436,37 +436,17 @@ restore_previous_repair_candidate() {
 }
 
 agent_session_step() {
-  local prompt="$1" started heartbeat_pid status seconds
-  local -a goose_args
+  local prompt="$1" status seconds
+  local -a goose_args pipeline_status progress_automation
   if ! seconds="$(remaining_repair_seconds)"; then
     echo "agent developer task cannot continue: repair budget exhausted" >&2
     return 124
   fi
-  started="$(date +%s)"
-  # shellcheck disable=SC2016
-  env -i PATH="$PATH" bash -c '
-    root="$1"
-    started="$2"
-    sleeper=""
-    stop_heartbeat() {
-      if [[ -n "$sleeper" ]]; then
-        kill "$sleeper" 2>/dev/null || true
-        wait "$sleeper" 2>/dev/null || true
-      fi
-    }
-    trap stop_heartbeat EXIT
-    trap "exit 0" TERM INT
-    while true; do
-      sleep 600 &
-      sleeper=$!
-      wait "$sleeper" || break
-      sleeper=""
-      newest="$(find "$root/.deps/llama.cpp" -type f -newer "$root/skippy/llama_cpp/upstream.txt" -print -quit 2>/dev/null || true)"
-      printf "heartbeat: agent task running for %dm; recent llama.cpp activity: %s\n" \
-        "$(( ($(date +%s) - started) / 60 ))" "${newest:-none observed yet}"
-    done
-  ' heartbeat "$ROOT" "$started" &
-  heartbeat_pid=$!
+  if [[ "$HARNESS_MODE" == repair ]]; then
+    progress_automation=("${repair_workload_automation[@]}")
+  else
+    progress_automation=("${MESH_LLM_AUTOMATION_BIN:?}")
+  fi
   set +e
   goose_args=(
     run
@@ -475,7 +455,7 @@ agent_session_step() {
     --with-builtin developer
     --no-profile
     --max-turns 1000
-    --output-format text
+    --output-format stream-json
     --name "$AGENT_SESSION_NAME"
   )
   if [[ "$AGENT_SESSION_STARTED" == "true" ]]; then
@@ -487,11 +467,14 @@ agent_session_step() {
     CANARY_REPAIR_LOG_DIR="$AGENT_COMMAND_LOG_DIR" \
     GOOSE_MODE=auto GOOSE_DISABLE_SESSION_NAMING=true \
     goose "${goose_args[@]}" \
-    > >(tee -a "$AGENT_LOG") 2>&1
-  status=$?
+    2>&1 | tee -a "$AGENT_LOG" | "${progress_automation[@]}" automation canary-progress --commands "$AGENT_COMMAND_LOG_DIR"
+  pipeline_status=("${PIPESTATUS[@]}")
+  status=${pipeline_status[0]}
+  # A failed logger must not turn successful coding into an admitted candidate.
+  if (( status == 0 && (pipeline_status[1] != 0 || pipeline_status[2] != 0) )); then
+    status=125
+  fi
   set -e
-  kill "$heartbeat_pid" 2>/dev/null || true
-  wait "$heartbeat_pid" 2>/dev/null || true
   if (( status != 0 )); then
     printf 'agent developer task exited with status %s\n' "$status" \
       | tee -a "$AGENT_LOG" >&2

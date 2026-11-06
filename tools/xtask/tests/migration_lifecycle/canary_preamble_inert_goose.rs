@@ -251,35 +251,15 @@ for key in GH_TOKEN GITHUB_TOKEN CANARY_REPAIR_TOKEN; do
 done
 [[ "$GOOSE_MODE" == auto && "$GOOSE_DISABLE_SESSION_NAMING" == true ]] || exit 96
 [[ "$CANARY_REPAIR_LOG_DIR" == "$root/command-logs" ]] || exit 96
-for ((attempt=0; attempt<200; attempt++)); do
-  if [[ -f "$root/heartbeat-sleep.pids" ]]; then
-    lines=$(wc -l < "$root/heartbeat-sleep.pids")
-    if (( lines >= count )); then break; fi
-  fi
-  /bin/sleep 0.01
-done
-[[ -f "$root/heartbeat-sleep.pids" ]] || exit 97
-lines=$(wc -l < "$root/heartbeat-sleep.pids")
-(( lines >= count )) || exit 97
-printf 'inert goose call %s\n' "$count"
+printf '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"inert goose call %s"}]}}\n' "$count"
 if (( count == 2 )); then exit 23; fi
 "#;
 
 #[test]
-fn actual_two_agent_steps_preserve_named_resume_credentials_exit_log_and_heartbeat_cleanup() {
+fn actual_two_agent_steps_preserve_named_resume_credentials_exit_and_full_log() {
     let fixture = Fixture::new();
     fixture.install_timeout_tools();
     executable(&fixture.root.join("tools/goose"), GOOSE);
-    executable(
-        &fixture.root.join("tools/sleep"),
-        r#"#!/bin/bash
-set -euo pipefail
-[[ "$*" == 600 ]] || exit 94
-root="$(cd "$(dirname "$0")/.." && pwd)"
-printf '%s\n' "$$" >> "$root/heartbeat-sleep.pids"
-exec /bin/sleep 600
-"#,
-    );
     let source = wrapper();
     let declarations = ["run_for", "remaining_repair_seconds", "agent_session_step"]
         .iter()
@@ -335,7 +315,7 @@ exit "$status"
         "--max-turns",
         "1000",
         "--output-format",
-        "text",
+        "stream-json",
         "--name",
         "llama-canary-repair-fixture-1-local",
     ];
@@ -353,20 +333,90 @@ exit "$status"
     }
     let log = fs::read_to_string(fixture.root.join("agent.log")).unwrap();
     assert!(log.contains("inert goose call 1") && log.contains("inert goose call 2"));
+    assert!(log.contains(r#""type":"message""#));
+    let console = String::from_utf8_lossy(report.stdout.as_ref().unwrap().as_bytes());
+    assert!(console.contains("goose: inert goose call 1"));
+    assert!(!console.contains(r#""type":"message""#));
     assert!(log.contains("agent developer task exited with status 23"));
     assert!(!log.contains("inert credential"));
-    let sleepers = fs::read_to_string(fixture.root.join("heartbeat-sleep.pids")).unwrap();
-    assert_eq!(sleepers.lines().count(), 2);
-    for sleeper in sleepers.lines() {
-        let pid: i32 = sleeper.parse().unwrap();
-        assert!(pid > 0);
-        // SAFETY: zero only queries the fixture-observed PID; it sends no signal.
-        assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
-        assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::ESRCH)
-        );
-    }
     assert_eq!(fs::read_dir(fixture.root.join("tmp")).unwrap().count(), 0);
+    fixture.finish();
+}
+
+#[test]
+fn repair_command_wrapper_preserves_complete_output_timing_and_nonzero_status() {
+    let fixture = Fixture::new();
+    let log_root = fixture.root.join("command-logs");
+    let mut environment = fixture.environment();
+    environment.insert(
+        "CANARY_REPAIR_LOG_DIR".into(),
+        Value::Public(log_root.clone().into()),
+    );
+    let report = fixture.run(
+        &repository().join("scripts/llama-canary-log-command.sh"),
+        &[
+            "failed-check",
+            "bash",
+            "-c",
+            "printf 'first diagnostic\\nlast diagnostic\\n'; exit 73",
+        ],
+        environment,
+    );
+    assert_eq!(report.process.status.unwrap().code(), Some(73));
+    let command = fs::read_dir(log_root)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let log = fs::read_to_string(command.join("output.log")).unwrap();
+    assert!(log.contains("started_epoch: "));
+    assert!(log.contains("first diagnostic\nlast diagnostic\n"));
+    assert!(log.contains("exit_status: 73"));
+    fixture.finish();
+}
+
+#[test]
+fn failed_progress_projection_cannot_accept_successful_goose_turn() {
+    let fixture = Fixture::new();
+    fixture.install_timeout_tools();
+    executable(&fixture.root.join("tools/goose"), GOOSE);
+    // A file cannot be scanned as the command-log directory. Goose still exits
+    // zero, so this exercises the projection leg rather than the agent leg.
+    fs::write(fixture.root.join("command-logs"), "not a directory").unwrap();
+    let source = wrapper();
+    let declarations = ["run_for", "remaining_repair_seconds", "agent_session_step"]
+        .iter()
+        .map(|name| declaration(&source, name))
+        .collect::<String>();
+    let script = fixture.root.join("session.sh");
+    fs::write(
+        &script,
+        format!(
+            r#"set -euo pipefail
+ROOT="$PWD"
+HARNESS_MODE=repair-build
+AGENT_PROVIDER=fixture_provider
+AGENT_MODEL=fixture_model
+AGENT_LOG="$ROOT/agent.log"
+AGENT_COMMAND_LOG_DIR="$ROOT/command-logs"
+AGENT_SESSION_NAME=projection-failure
+AGENT_SESSION_STARTED=false
+REPAIR_DEADLINE_AT="$(( $(date +%s) + 20 ))"
+{declarations}
+if agent_session_step 'fixture prompt'; then exit 99; else status=$?; fi
+[[ "$AGENT_SESSION_STARTED" == false ]] || exit 98
+exit "$status"
+"#
+        ),
+    )
+    .unwrap();
+    let report = fixture.run(&script, &[], fixture.environment());
+    assert_eq!(report.process.status.unwrap().code(), Some(125));
+    assert!(
+        fs::read_to_string(fixture.root.join("agent.log"))
+            .unwrap()
+            .contains("inert goose call 1")
+    );
     fixture.finish();
 }

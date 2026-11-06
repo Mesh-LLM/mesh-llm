@@ -18,6 +18,7 @@ pub(crate) mod canary_build;
 pub(crate) mod canary_handoff;
 #[path = "canary_receipts/package_closure.rs"]
 pub(crate) mod canary_package_closure;
+pub(crate) mod canary_progress;
 #[expect(
     dead_code,
     reason = "Direct component tests also consume receipt parsing and error accessors"

@@ -305,7 +305,7 @@ job results, then export verified classified feedback. Retry rows overlay only
 controller placement fields over admitted source rows. Each attempt selector
 and the final selector prepare the frozen controller with both cache authorities
 disabled before invoking native selection.
-Its bounded process owner retains redacted logs and owns the repair heartbeat tree.
+Its bounded process owner retains redacted logs and owns Goose and its progress projection.
 The retained repair wrapper performs prepare, manifest-policy, full native and Rust
 builds, generated-family validation, smoke, and split-roster checks. It validates
 the immutable HF cache before compilation and exports a candidate Git bundle,
@@ -330,7 +330,7 @@ and verifies oracle evidence against that same `skippy` executable. Its native
 fixture distinguishes API workload classes from causal decoder execution;
 OCR and speech frontends may legitimately warm a decoder.
 Goose's build and test commands use `scripts/llama-canary-log-command.sh` to
-stream output and retain separate invocation logs, exit statuses, and available
+retain complete invocation logs, exit statuses, and available
 CTest result files under the build job's 14-day repair evidence artifact.
 That upload explicitly includes hidden run-owned `.deps` state and the native
 build's `Testing/Temporary` results before cleanup. The controller forwards up
@@ -480,6 +480,22 @@ a repeated infrastructure failure or invalid aggregate evidence stops. Only
 complete independent success permits publication.
 Full worker/build logs remain for 14 days; executable handoffs remain for seven
 days so a single-machine queue can complete later passes.
+
+Llama repair now invokes Goose with `stream-json` and projects it through
+`automation canary-progress` before the bounded outer wrapper capture. The
+console keeps concise assistant narration, tool start/return/error and one-minute
+activity reports. Expandable GitHub log groups retain commands and returned tool
+results without cluttering the default view. The formatter samples the run-owned
+`agent-commands/*/output.log` files, exposing recent output even while a shell
+tool is blocked behind `tail`.
+It reports elapsed/idle time and observed exit status without guessing completion.
+Full original events remain in `agent.log`; full command logs retain their
+existing 14-day build-artifact upload. The console prints local paths for live
+operator inspection; these are not remotely accessible HTTP links. Downloadable
+full logs become available after the evidence upload, not while a job is active.
+There is no new service, permission, secret, runner selection or certification gate.
+
+See [Following a Llama Upgrade repair](../../../../ci/llama-canary/PROGRESS.md) for console and detailed-log examples.
 
 Within each candidate build job, Goose resumes the same session for
 prepare/build failures under the existing 11.5-hour coding-admission and

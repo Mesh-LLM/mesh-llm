@@ -176,6 +176,7 @@ pub(crate) enum CliCommand<'a> {
     Laya(&'a [String]),
     AgentPickModel(&'a [String]),
     WorkloadOracleEvidence(&'a [String]),
+    CanaryProgress(&'a [String]),
     CanaryTimeout(&'a [String]),
     CanaryReceipts(&'a [String]),
     RewriterReport(&'a [String]),
@@ -474,6 +475,9 @@ impl<'a> Cli<'a> {
                 if domain == "automation" && scope == "workload-oracle-evidence" =>
             {
                 CliCommand::WorkloadOracleEvidence(rest)
+            }
+            [domain, scope, rest @ ..] if domain == "automation" && scope == "canary-progress" => {
+                CliCommand::CanaryProgress(rest)
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "canary-timeout" => {
                 CliCommand::CanaryTimeout(rest)
