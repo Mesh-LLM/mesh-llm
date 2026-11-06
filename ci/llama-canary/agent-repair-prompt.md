@@ -54,7 +54,11 @@ Work in this order. Stop as soon as the focused repair check passes:
    identity, and exercises focused split and recurrent execution. If it fails,
    read its step result, bounded failure excerpt, and reproduction
    arguments. Fix that failure, rerun its narrow reproduction, then rerun the
-   focused repair check. Do not install system Python packages.
+   focused repair check. Do not install system Python packages. If the selected
+   Python interpreter becomes unavailable after preflight, try to restore it
+   only from the runner's existing offline tools. If that is impossible, stop
+   and report the failing step and evidence as an infrastructure failure;
+   returning without a passing focused check is allowed in that case.
 5. When the focused repair check passes, stop running commands and return
    control. Report the files changed, exact passing checks, and any remaining
    uncertainty. Do not preemptively investigate a smoke, model family, or
