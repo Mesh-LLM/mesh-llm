@@ -405,8 +405,9 @@ pub fn dflash_draft_cache_path(draft: &DFlashDraft) -> PathBuf {
 
 impl DefaultDFlash {
     /// Refuses a draft that cannot read this target: it must be a DFlash GGUF
-    /// as wide as the target that reads only layers the target has, and
-    /// exactly the layers a package proposer declares.
+    /// as wide as the target that reads only layers the target has (layer
+    /// `layer_count` is the last layer's output, the output head's input),
+    /// and exactly the layers a package proposer declares.
     pub fn check_draft(&self, path: &Path) -> Result<()> {
         let target = &self.pairing.target;
         let Some(meta) = scan_gguf_compact_meta(path) else {
@@ -425,7 +426,7 @@ impl DefaultDFlash {
         );
         let layers = scan_gguf_dflash_target_layers(path).unwrap_or_default();
         ensure!(!layers.is_empty(), "draft names no target layers");
-        if let Some(layer) = layers.iter().find(|&&layer| layer >= target.layer_count) {
+        if let Some(layer) = layers.iter().find(|&&layer| layer > target.layer_count) {
             bail!(
                 "draft reads target layer {layer}, but the target has {} layers",
                 target.layer_count
@@ -852,12 +853,17 @@ mod tests {
         for (draft, reason) in [
             (draft_file("qwen35", 4096, &[2, 30]), "architecture"),
             (draft_file("dflash", 2048, &[2, 30]), "hidden size"),
-            (draft_file("dflash", 4096, &[2, 38]), "target layer 38"),
+            (draft_file("dflash", 4096, &[2, 33]), "target layer 33"),
             (draft_file("dflash", 4096, &[]), "no target layers"),
         ] {
             let error = pairing.check_draft(draft.path()).unwrap_err().to_string();
             assert!(error.contains(reason), "{error}");
         }
+
+        // Layer 32 of a 32-layer target is its last layer's output, the
+        // output head's input, which Nemotron-3.5 drafts read.
+        let head_input = draft_file("dflash", 4096, &[2, 32]);
+        pairing.check_draft(head_input.path()).unwrap();
 
         // A package proposer's declared target layers must be the draft's.
         pairing.target_layers = Some(vec![2, 30]);
