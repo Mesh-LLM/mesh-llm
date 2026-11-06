@@ -146,15 +146,8 @@ pub fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
     crate::dynamic::llama_draft_api()
 }
 
-/// The `src/llama-ext.h` entry points keep C++ linkage and are only bound
-/// under the Itanium mangling, so Windows builds have no draft-context API.
-#[cfg(all(not(feature = "dynamic-runtime"), windows))]
-pub fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
-    None
-}
-
 /// Returns the statically linked draft-context API.
-#[cfg(all(not(feature = "dynamic-runtime"), not(windows)))]
+#[cfg(not(feature = "dynamic-runtime"))]
 pub fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
     use crate::static_bindings as raw;
     static API: LlamaDraftApi = LlamaDraftApi {
