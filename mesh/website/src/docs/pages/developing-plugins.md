@@ -28,7 +28,8 @@ MCP and HTTP are host projections. A plugin does not need to implement an MCP se
 
 Create a binary crate and depend on `mesh-llm-plugin` at a version compatible with the mesh-llm release you target. Keep the host and plugin protocol versions aligned; the host rejects incompatible initialization handshakes.
 
-A minimal standalone `Cargo.toml` for the current release line is:
+Prereleases are not published to crates.io. Use this standalone `Cargo.toml`
+after the matching Git release tag has been published:
 
 ```toml
 [package]
@@ -38,15 +39,18 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1"
-mesh-llm-plugin = "0.78.0"
+mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm", tag = "v0.79.0-rc1" }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
-During mesh-llm development, replace the published dependency with a path to
-the checkout's `mesh/crates/mesh-llm-plugin`; do not import host or console crates.
+Before the tag exists or during development, check out the exact candidate
+commit and use a path dependency to its `mesh/crates/mesh-llm-plugin` directory,
+or replace `tag` with `rev = "<full-candidate-commit-sha>"` for an immutable
+source commit. Keep MeshLLM dependencies on the same source revision; do not
+import host or console crates.
 
 The smallest useful plugin has a manifest, one handler, and a runtime entrypoint:
 

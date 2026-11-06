@@ -8,10 +8,18 @@
 | `.serve_only()` | no | yes |
 | `.serve()` | yes | yes |
 
+Prereleases are not published to crates.io. Use the Git dependency below after
+its release tag has been published:
+
 ```toml
 [dependencies]
-mesh-llm-sdk = { version = "0.78.0" }
+mesh-llm-sdk = { git = "https://github.com/Mesh-LLM/mesh-llm", tag = "v0.79.0-rc1" }
 ```
+
+Before the tag exists, check out the exact candidate commit and use a path
+dependency to its `mesh/crates/mesh-llm-sdk` directory, or replace `tag` with
+`rev = "<full-candidate-commit-sha>"` for an immutable source commit. Keep MeshLLM
+dependencies on the same source revision.
 
 Native discovery returns one entry per provider and serving ID. Its
 `thinking_efforts` advertises only model-specific effort strings, preserving

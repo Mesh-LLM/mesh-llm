@@ -1,10 +1,11 @@
 # Swift SDK
 
-Add the tagged Swift package to `Package.swift`:
+After the release tag and its referenced XCFramework asset have been published,
+add the tagged Swift package to `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.78.0"),
+    .package(url: "https://github.com/Mesh-LLM/mesh-llm", from: "0.79.0-rc1"),
 ],
 targets: [
     .target(name: "YourApp", dependencies: [
@@ -12,6 +13,12 @@ targets: [
     ]),
 ]
 ```
+
+Before publication, use the exact candidate checkout as a local Swift package.
+Prepare its matching XCFramework with
+`mesh/sdk/swift/scripts/build-xcframework.sh` from the repository root; this
+also generates the Swift binding from the built native library's metadata.
+A Git commit pin alone does not supply the required XCFramework.
 
 The release XCFramework supports arm64 macOS, Mac Catalyst, iOS devices, and
 iOS simulators. Intel Apple machines are not supported for MeshLLM inference.
