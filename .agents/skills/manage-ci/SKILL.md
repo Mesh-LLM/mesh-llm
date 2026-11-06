@@ -751,6 +751,17 @@ rewriter pass and 60 seconds per Git command by default; an explicit `--timeout`
 overrides both. Keep both generation and idempotence passes mandatory, and
 report deadline failures with readable retained diagnostics and cleanup status.
 
+Changed-pin repair uses Goose `stream-json` through the trusted controller's
+`automation canary-progress` projection. Keep assistant action/reason updates,
+tool lifecycle and errors visible without dumping successful tool responses.
+Expose commands and returned tool results in expandable GitHub log groups;
+neutralize workflow commands in all model/tool text. Retain original events in
+`agent.log` and complete per-command logs in the
+existing build evidence. Every minute, report active tool duration, last event
+age and bounded snapshots of run-owned command logs; silence is not a failure
+or proof of progress. Projection/logging errors must not admit a successful
+candidate. Keep the existing worker credential boundary.
+
 Build evidence uploads must explicitly include the run-owned hidden `.deps`
 state and native CTest results before cleanup. A truncated live log is not a
 substitute for the retained failure output.

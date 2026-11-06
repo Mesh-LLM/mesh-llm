@@ -400,37 +400,17 @@ restore_previous_repair_candidate() {
 }
 
 agent_session_step() {
-  local prompt="$1" started heartbeat_pid status seconds
-  local -a goose_args
+  local prompt="$1" status seconds
+  local -a goose_args progress_automation
   if ! seconds="$(remaining_repair_seconds)"; then
     echo "agent developer task cannot continue: repair budget exhausted" >&2
     return 124
   fi
-  started="$(date +%s)"
-  # shellcheck disable=SC2016
-  env -i PATH="$PATH" bash -c '
-    root="$1"
-    started="$2"
-    sleeper=""
-    stop_heartbeat() {
-      if [[ -n "$sleeper" ]]; then
-        kill "$sleeper" 2>/dev/null || true
-        wait "$sleeper" 2>/dev/null || true
-      fi
-    }
-    trap stop_heartbeat EXIT
-    trap "exit 0" TERM INT
-    while true; do
-      sleep 600 &
-      sleeper=$!
-      wait "$sleeper" || break
-      sleeper=""
-      newest="$(find "$root/.deps/llama.cpp" -type f -newer "$root/skippy/llama_cpp/upstream.txt" -print -quit 2>/dev/null || true)"
-      printf "heartbeat: agent task running for %dm; recent llama.cpp activity: %s\n" \
-        "$(( ($(date +%s) - started) / 60 ))" "${newest:-none observed yet}"
-    done
-  ' heartbeat "$ROOT" "$started" &
-  heartbeat_pid=$!
+  if [[ "$HARNESS_MODE" == repair ]]; then
+    progress_automation=("${repair_workload_automation[@]}")
+  else
+    progress_automation=("${MESH_LLM_AUTOMATION_BIN:?}")
+  fi
   set +e
   goose_args=(
     run
@@ -439,13 +419,17 @@ agent_session_step() {
     --with-builtin developer
     --no-profile
     --max-turns 1000
-    --output-format text
+    --output-format stream-json
     --name "$AGENT_SESSION_NAME"
   )
   if [[ "$AGENT_SESSION_STARTED" == "true" ]]; then
     goose_args+=(--resume)
   fi
   goose_args+=(--text "$prompt")
+  # The complete pipeline belongs to one supervised process group. If either
+  # logging leg fails, stop that group even when Goose produces no more output.
+  # The inner shell expands its own pipeline arguments.
+  # shellcheck disable=SC2016
   run_for "agent developer task" "$seconds" env \
     -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u CANARY_REPAIR_TOKEN \
     -u GITHUB_ENV -u GITHUB_OUTPUT -u GITHUB_STEP_SUMMARY -u GITHUB_PATH -u GITHUB_STATE \
@@ -454,12 +438,21 @@ agent_session_step() {
     CANARY_REPAIR_CONTROLLER_ROOT="$TRUSTED_ROOT" CANARY_REPAIR_STATE_DIR="$STATE_DIR" \
     LLAMA_STAGE_BUILD_DIR="$LLAMA_STAGE_BUILD_DIR" LLAMA_STAGE_BACKEND="${LLAMA_STAGE_BACKEND:?}" \
     GOOSE_MODE=auto GOOSE_DISABLE_SESSION_NAMING=true \
-    goose "${goose_args[@]}" \
-    > >(tee -a "$AGENT_LOG") 2>&1
+    bash -c '
+      set -o pipefail
+      trap "exit 125" TERM
+      log="$1"; commands="$2"; count="$3"; shift 3
+      progress=("${@:1:count}"); shift "$count"
+      goose "$@" 2>&1 \
+        | { tee -a "$log" || kill -TERM -- -$$; } \
+        | { "${progress[@]}" automation canary-progress --commands "$commands" || kill -TERM -- -$$; }
+      statuses=("${PIPESTATUS[@]}")
+      if (( statuses[1] != 0 || statuses[2] != 0 )); then exit 125; fi
+      exit "${statuses[0]}"
+    ' canary-agent-pipeline "$AGENT_LOG" "$AGENT_COMMAND_LOG_DIR" \
+      "${#progress_automation[@]}" "${progress_automation[@]}" "${goose_args[@]}"
   status=$?
   set -e
-  kill "$heartbeat_pid" 2>/dev/null || true
-  wait "$heartbeat_pid" 2>/dev/null || true
   if (( status != 0 )); then
     printf 'agent developer task exited with status %s\n' "$status" \
       | tee -a "$AGENT_LOG" >&2

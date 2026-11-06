@@ -37,6 +37,7 @@ uuid = "=1.26.0"
 url = "=2.5.8"
 
 [target.'cfg(unix)'.dependencies]
+rustix = { version = "=1.1.5", features = ["fs"] }
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
