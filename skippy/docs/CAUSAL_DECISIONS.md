@@ -1,6 +1,6 @@
 # Independent decisions from causal prefill
 
-Supported loaded causal GGUF decoders serve the existing `/systemone` and
+Supported loaded causal GGUF decoders serve the existing `/v1/systemone` and
 `/v1/decisions` contracts. Mesh advertises `system_one` in its
 `/v1/models` response after probing the loaded backend. Standalone Skippy and
 Mesh's `--local-model-only` mode do not expose that capability field; their
@@ -10,7 +10,7 @@ Each question receives the same state and its own instructions and options.
 Answers to earlier questions are never inserted into later prompts.
 
 ```sh
-curl -sS http://127.0.0.1:9337/systemone \
+curl -sS http://127.0.0.1:9337/v1/systemone \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "YOUR_DISCOVERED_CAUSAL_MODEL_ID",
@@ -48,7 +48,7 @@ It does not reuse a conversational history or render a model-specific chat
 template. Support for this computation does not establish classification
 quality for a model trained on a different format.
 
-`/systemone` adds `readouts`, keyed by question. `/v1/decisions` adds `readout`
+`/v1/systemone` (and its legacy alias `/systemone`) adds `readouts`, keyed by question. `/v1/decisions` adds `readout`
 to each answer, preserving the original question array order. Entries contain:
 
 | Field | Meaning |

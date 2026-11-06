@@ -129,7 +129,7 @@ fn request(stream: &mut TcpStream) -> Option<(String, Value)> {
     let header = std::str::from_utf8(&bytes[..header_end]).ok()?;
     let start = header.lines().next()?;
     let method = start.split_whitespace().next()?.to_owned();
-    assert!(start.contains(" /systemone "));
+    assert!(start.contains(" /v1/systemone "));
     let length = header
         .lines()
         .find_map(|line| {
