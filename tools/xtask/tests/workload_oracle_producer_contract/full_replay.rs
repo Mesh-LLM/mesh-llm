@@ -232,6 +232,8 @@ fn replay_explicit_builds_retained_skippy_gates_and_runs_bounded_filtered_ctest(
         "skippy-model-fixture-generator",
         "skippy-model-loader-accounting",
         "skippy-runtime-events-test",
+        "skippy-sampling-history",
+        "skippy-concurrent-sampling",
         "skippy-noalloc-graph-planning",
         "skippy-renamed-multishard-planning",
         "skippy-stage-slice-plan",

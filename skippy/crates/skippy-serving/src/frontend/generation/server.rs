@@ -238,6 +238,13 @@ fn embedded_openai_backend_with_state_kind(
     iteration_scheduler: Option<IterationScheduler>,
     state_kind: Option<skippy_runtime::ModelStateKind>,
 ) -> Result<EmbeddedOpenAiBackend> {
+    // Startup work (prewarm, cache wiring, scheduler start) nests here.
+    let setup = ActiveSpan::start(
+        Some(&args.telemetry),
+        "stage.openai_server_setup",
+        SpanLevel::Summary,
+    );
+    let _setup = setup.enter();
     if args.prefill_chunk_size == 0 {
         bail!("--prefill-chunk-size must be greater than zero");
     }
@@ -385,6 +392,7 @@ fn embedded_openai_backend_with_state_kind(
     );
     args.telemetry
         .emit("stage.openai_server_start", server_start_attrs);
+    args.telemetry.record_resources("server_start");
     #[cfg(test)]
     if !modelless {
         prewarm_generation_sessions(

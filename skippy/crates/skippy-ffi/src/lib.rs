@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 79;
+pub const ABI_VERSION_PATCH: u32 = 81;
 
 // The facade constants are parsed without compiling; tie them to the generated
 // bindings' view of the native ABI version at compile time so a common.h bump
@@ -60,13 +60,15 @@ pub use abi::{
     LayaMemoryV1, LayaModel, LayaSequence, LlamaLogCallback, LlamaPerfContextData,
     LlamaPerfContextFn, LoadMode, MODEL_TENSOR_SOURCE_V1_ABI_VERSION, Model, ModelImatrixEntryV1,
     ModelInfo, ModelReadTensorF32Callback, ModelTensorSourceV1, MtmdProgressCallback, MtpSource,
-    NgramCache, Opaque, RuntimeConfig, Session, SkippyDecodeStepSampledMtpFn,
-    SkippyModelAttachMtpDraftModelFn, SkippyRuntimeEventCallback, SkippyRuntimeEventCategory,
-    SkippyRuntimeEventEmitterKind, SkippyRuntimeEventFailureCode, SkippyRuntimeEventKind,
-    SkippyRuntimeEventProgressUnit, SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, Status,
-    SystemOneSlot, TRISTATE_AUTO, TRISTATE_FALSE, TRISTATE_TRUE, TensorRole, TokenScoreRequest,
-    WORKLOAD_INFO_V1_ABI_VERSION, WorkloadInfoV1, WorkloadKind, WorkloadPooling,
-    runtime_abi_supported, status_from_raw,
+    NATIVE_SPAN_ID_BIT, NATIVE_SPAN_V1_ABI_VERSION, NgramCache, Opaque, RuntimeConfig, Session,
+    SkippyDecodeStepSampledMtpFn, SkippyGpuCommandTimingCallback, SkippyGpuCommandTimingV1,
+    SkippyModelAttachMtpDraftModelFn, SkippyNativeSpanCallback, SkippyNativeSpanV1,
+    SkippyRuntimeEventCallback, SkippyRuntimeEventCategory, SkippyRuntimeEventEmitterKind,
+    SkippyRuntimeEventFailureCode, SkippyRuntimeEventKind, SkippyRuntimeEventProgressUnit,
+    SkippyRuntimeEventReporterV1, SkippyRuntimeEventV1, SkippySetGpuCommandTimingCallbackFn,
+    SkippySetNativeSpanCallbackFn, SkippySetTraceTagFn, Status, SystemOneSlot, TRISTATE_AUTO,
+    TRISTATE_FALSE, TRISTATE_TRUE, TensorRole, TokenScoreRequest, WORKLOAD_INFO_V1_ABI_VERSION,
+    WorkloadInfoV1, WorkloadKind, WorkloadPooling, runtime_abi_supported, status_from_raw,
 };
 pub use abi::{
     RUNTIME_EVENT_CATEGORY_BACKEND, RUNTIME_EVENT_CATEGORY_DEVICE,

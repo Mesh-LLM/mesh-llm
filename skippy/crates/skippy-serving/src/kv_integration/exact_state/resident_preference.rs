@@ -47,9 +47,15 @@ impl KvStageIntegration {
                 };
                 // Corrupt/unavailable storage remains a cache miss. The
                 // prepared None must never trigger a retry under runtime lock.
-                l3.locate_longest(&identity.namespace, tokens, MAX_PREFIX_PROBES)
+                let location = l3
+                    .locate_longest(&identity.namespace, tokens, MAX_PREFIX_PROBES)
                     .ok()
-                    .flatten()
+                    .flatten();
+                super::super::tier_metrics::record_lookup(
+                    crate::telemetry::log_events::KvTier::L3,
+                    location.as_ref().map(|location| location.token_count),
+                );
+                location
             })
             .collect();
         PreparedExactStateRestore {

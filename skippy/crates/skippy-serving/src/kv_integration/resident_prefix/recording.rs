@@ -48,17 +48,25 @@ impl KvStageIntegration {
         } else {
             0
         };
-        if checkpoint_bytes > self.resident_checkpoint_max_bytes
-            || !make_record_room(
-                self.resident_config,
-                &mut radix,
-                &mut sequences,
-                checkpoint_bytes,
-                &mut evicted,
-                |victim| self.release_native_prefix(runtime, session_id, victim),
-            )?
-        {
-            return Ok(None);
+        if checkpoint_bytes > self.resident_checkpoint_max_bytes {
+            return Ok(ResidentRecordOutcome::Skipped(
+                ResidentRecordSkip::OverCheckpointBudget {
+                    bytes: checkpoint_bytes,
+                    budget_bytes: self.resident_checkpoint_max_bytes,
+                },
+            ));
+        }
+        if !make_record_room(
+            self.resident_config,
+            &mut radix,
+            &mut sequences,
+            checkpoint_bytes,
+            &mut evicted,
+            |victim| self.release_native_prefix(runtime, session_id, victim),
+        )? {
+            return Ok(ResidentRecordOutcome::Skipped(ResidentRecordSkip::NoRoom {
+                bytes: checkpoint_bytes,
+            }));
         }
         let _host_reservation = if self.resident_requires_checkpoint() {
             let Some(reservation) = self.reserve_snapshot_host_memory(
@@ -67,7 +75,9 @@ impl KvStageIntegration {
                 StagePrefixCachePayload::ResidentKv,
                 token_count as u64,
             ) else {
-                return Ok(None);
+                return Ok(ResidentRecordOutcome::Skipped(ResidentRecordSkip::NoRoom {
+                    bytes: checkpoint_bytes,
+                }));
             };
             reservation
         } else {

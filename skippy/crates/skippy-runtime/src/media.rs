@@ -341,7 +341,7 @@ impl StageModel {
         input.top_p = config.top_p;
         input.seed = config.seed;
         input.out_type = output_type;
-        if unsafe { skippy_ffi::mtmd_helper_gen_audio_set_input(generator.0, &input) } != 0 {
+        if unsafe { native_call!(mtmd_helper_gen_audio_set_input(generator.0, &input)) } != 0 {
             return Err(anyhow!("speech synthesis rejected the input"));
         }
         let batch_size =

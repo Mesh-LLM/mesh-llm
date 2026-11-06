@@ -50,6 +50,13 @@ fn telemetry_diagnostics_are_scoped_out_of_publication() {
     );
     tools.backend = Backend::Cpu;
     assert_eq!(tools.campaign_scope(), "cpu_diagnostic_not_gpu_performance");
+    tools.backend = Backend::Metal;
+    tools.diagnostic_telemetry = false;
+    tools.diagnostic_generation_lanes = Some(1);
+    assert_eq!(
+        tools.campaign_scope(),
+        "diagnostic_generation_lanes_AgentX_comparison"
+    );
 
     let mut earlier: Value = serde_json::from_str(include_str!(
         "../../../../../skippy/evals/agentx/tools.example.json"

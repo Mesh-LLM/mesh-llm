@@ -352,7 +352,7 @@ impl KvStageIntegration {
             durable_spill_task,
             durable_spill_tx,
         ));
-        Ok(Some(Self {
+        let integration = Self {
             loaded_model_content,
             mode,
             payload,

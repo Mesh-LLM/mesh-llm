@@ -12,13 +12,11 @@ use crate::frontend::generation::tool_calls_requested;
 use crate::frontend::tool_emulation;
 use crate::frontend::util::openai_backend_error;
 use crate::runtime_state::panic_recovery::lock_runtime;
-use crate::telemetry::active_span::{ActiveSpan, SpanLevel};
 use serde_json::Value;
 use skippy_inference_api::GenerationHookSignals;
 use skippy_inference_api::InferenceError;
 use skippy_inference_api::InferenceRequestContext;
 use skippy_inference_api::InferenceResult;
-use skippy_inference_api::MessageContent;
 use skippy_inference_api::PrefillHookSignals;
 use skippy_inference_api::apply_chat_hook_outcome;
 use skippy_inference_api::chat_skippy_hooks_enabled;
@@ -91,86 +89,50 @@ impl StageOpenAiBackend {
                 tool_emulation::rewrite_history_for_emulation(&request.messages, &instruction);
             let emulated =
                 self.render_chat_prompt(request, &options, &marker, Some(&rewritten), false)?;
-            let (recurrent_cache_prefix_text, recurrent_system_prefix_text) = if self
-                .renders_recurrent_checkpoints(&options, &emulated)
+            let recurrent_cache_prefix_text = if self
+                .kv
+                .as_ref()
+                .is_some_and(|kv| kv.retains_recurrent_checkpoints())
+                && emulated.media.is_empty()
+                && options.add_assistant
             {
-                (
-                    self.render_chat_prefix(request, &options, &marker, Some(&rewritten), false),
-                    self.render_system_prefix(request, &options, &marker, &rewritten, false),
-                )
+                let mut prefix_options = options.clone();
+                prefix_options.add_assistant = false;
+                self.render_chat_prompt(request, &prefix_options, &marker, Some(&rewritten), false)
+                    .ok()
+                    .map(|rendered| rendered.prompt)
             } else {
-                (None, None)
+                None
             };
             return Ok(PreparedGenerationPrompt {
                 text: emulated.prompt,
                 media: emulated.media,
                 chat_parse_metadata: Some(emulated.metadata_json),
                 recurrent_cache_prefix_text,
-                recurrent_system_prefix_text,
             });
         }
 
-        let (recurrent_cache_prefix_text, recurrent_system_prefix_text) =
-            if self.renders_recurrent_checkpoints(&options, &native) {
-                (
-                    self.render_chat_prefix(request, &options, &marker, None, true),
-                    self.render_system_prefix(request, &options, &marker, &request.messages, true),
-                )
-            } else {
-                (None, None)
-            };
+        let recurrent_cache_prefix_text = if self
+            .kv
+            .as_ref()
+            .is_some_and(|kv| kv.retains_recurrent_checkpoints())
+            && native.media.is_empty()
+            && options.add_assistant
+        {
+            let mut prefix_options = options.clone();
+            prefix_options.add_assistant = false;
+            self.render_chat_prompt(request, &prefix_options, &marker, None, true)
+                .ok()
+                .map(|rendered| rendered.prompt)
+        } else {
+            None
+        };
         Ok(PreparedGenerationPrompt {
             text: native.prompt,
             media: native.media,
             chat_parse_metadata: Some(native.metadata_json),
             recurrent_cache_prefix_text,
-            recurrent_system_prefix_text,
         })
-    }
-
-    /// Recurrent checkpoints resume at rendered message boundaries, so a
-    /// text-only prompt that asks for an assistant turn renders its candidates.
-    fn renders_recurrent_checkpoints(
-        &self,
-        options: &ChatTemplateOptions,
-        rendered: &RenderedChatPrompt,
-    ) -> bool {
-        rendered.media.is_empty()
-            && options.add_assistant
-            && self
-                .kv
-                .as_ref()
-                .is_some_and(|kv| kv.retains_recurrent_checkpoints())
-    }
-
-    /// The messages without the assistant-generation suffix.
-    fn render_chat_prefix(
-        &self,
-        request: &ChatCompletionRequest,
-        options: &ChatTemplateOptions,
-        marker: &str,
-        messages: Option<&[ChatMessage]>,
-        include_tools: bool,
-    ) -> Option<String> {
-        let mut prefix_options = options.clone();
-        prefix_options.add_assistant = false;
-        self.render_chat_prompt(request, &prefix_options, marker, messages, include_tools)
-            .ok()
-            .map(|rendered| rendered.prompt)
-    }
-
-    /// The leading system messages and an empty user turn, without the
-    /// assistant-generation suffix.
-    fn render_system_prefix(
-        &self,
-        request: &ChatCompletionRequest,
-        options: &ChatTemplateOptions,
-        marker: &str,
-        messages: &[ChatMessage],
-        include_tools: bool,
-    ) -> Option<String> {
-        let prefix = system_prefix_messages(messages)?;
-        self.render_chat_prefix(request, options, marker, Some(&prefix), include_tools)
     }
 
     /// Applies the chat template for the given messages. When `messages` is
@@ -215,7 +177,10 @@ impl StageOpenAiBackend {
         } else {
             None
         };
-        let reader = self.model_reader();
+        // Short-lock reader pattern: clone the immutable reader and run the
+        // template FFI on it, so template rendering never waits behind
+        // decode's hold of the runtime mutex (and vice versa).
+        let reader = lock_runtime(&self.runtime).model.reader();
         let result = reader
             .apply_chat_template_json(
                 &messages_json,
@@ -306,24 +271,14 @@ impl StageOpenAiBackend {
         text: &str,
         add_special: bool,
     ) -> InferenceResult<Vec<i32>> {
-        self.model_reader()
+        // Hold the inference mutex only long enough to clone the immutable
+        // reader; the tokenizer FFI runs on the reader, so decode can hold
+        // the runtime lock concurrently without serializing tokenization
+        // behind it (see render_chat_prompt for the same pattern).
+        let reader = lock_runtime(&self.runtime).model.reader();
+        reader
             .tokenize(text, add_special)
             .map_err(openai_backend_error)
-    }
-
-    /// Clone the immutable model reader, so tokenizer and template FFI run
-    /// without the runtime lock. Taking the lock to clone it still waits for
-    /// whatever holds the runtime, such as a whole prefill iteration, so that
-    /// wait is a span.
-    pub(in crate::frontend) fn model_reader(&self) -> skippy_runtime::StageModelReader {
-        let wait = ActiveSpan::start(
-            Some(&self.telemetry),
-            "stage.runtime_lock_wait",
-            SpanLevel::Debug,
-        );
-        let reader = lock_runtime(&self.runtime).model.reader();
-        wait.end();
-        reader
     }
 
     pub(super) fn inject_hook_text_into_session(
@@ -457,65 +412,4 @@ pub(super) fn parse_emulated_chat_output(
         reasoning_content: None,
         tool_calls,
     })
-}
-
-/// The leading system and developer messages and an empty user turn, when the
-/// conversation has both. Every request with those system messages renders the
-/// same tokens up to where the user's text begins.
-fn system_prefix_messages(messages: &[ChatMessage]) -> Option<Vec<ChatMessage>> {
-    let system = messages
-        .iter()
-        .take_while(|message| matches!(message.role.as_str(), "system" | "developer"))
-        .count();
-    (system > 0 && system < messages.len()).then(|| {
-        let user = ChatMessage {
-            role: "user".to_string(),
-            content: Some(MessageContent::Text(String::new())),
-            extra: BTreeMap::new(),
-        };
-        messages[..system]
-            .iter()
-            .cloned()
-            .chain(std::iter::once(user))
-            .collect()
-    })
-}
-
-#[cfg(test)]
-mod system_prefix_tests {
-    use super::*;
-
-    fn message(role: &str, text: &str) -> ChatMessage {
-        ChatMessage {
-            role: role.to_string(),
-            content: Some(MessageContent::Text(text.to_string())),
-            extra: BTreeMap::new(),
-        }
-    }
-
-    #[test]
-    fn system_messages_are_followed_by_an_empty_user_turn() {
-        let conversation = [
-            message("system", "rules"),
-            message("developer", "tools"),
-            message("user", "first question"),
-            message("assistant", "answer"),
-            message("user", "second question"),
-        ];
-        assert_eq!(
-            system_prefix_messages(&conversation),
-            Some(vec![
-                message("system", "rules"),
-                message("developer", "tools"),
-                message("user", ""),
-            ])
-        );
-    }
-
-    #[test]
-    fn conversations_without_both_parts_have_no_system_prefix() {
-        assert_eq!(system_prefix_messages(&[message("user", "question")]), None);
-        assert_eq!(system_prefix_messages(&[message("system", "rules")]), None);
-        assert_eq!(system_prefix_messages(&[]), None);
-    }
 }

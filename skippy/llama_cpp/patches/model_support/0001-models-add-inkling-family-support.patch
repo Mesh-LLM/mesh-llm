@@ -1870,18 +1870,18 @@ index 35145e26d..2c51ebb7c 100644
      ggml_tensor * tok_embd_w = layer.nextn.embed_tokens ? layer.nextn.embed_tokens
                            : (model.tok_embd          ? model.tok_embd
 diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
-index 3fb86667d..8a53ceb51 100644
+index 7f55c0d88..5ab739c9d 100644
 --- a/src/skippy/speculative_decoding.cpp
 +++ b/src/skippy/speculative_decoding.cpp
-@@ -8,6 +8,7 @@
+@@ -7,6 +7,7 @@
+ #include "skippy/sampling_internal.h"
  #include "skippy/speculative_internal.h"
- #include "skippy/trace_scope.h"
  
 +#include "llama-arch.h"
  #include "llama-context.h"
  #include "llama-graph.h"
  #include "llama-impl.h"
-@@ -24,10 +25,28 @@
+@@ -23,10 +24,28 @@
  
  thread_local skippy_session * g_skippy_external_decode_session = nullptr;
  
@@ -1913,7 +1913,7 @@ index 3fb86667d..8a53ceb51 100644
      return nullptr;
  }
  
-@@ -72,6 +91,10 @@ struct skippy_mtp_depth_scope {
+@@ -71,6 +90,10 @@ struct skippy_mtp_depth_scope {
          return depth_count > 1;
      }
  
@@ -1924,7 +1924,7 @@ index 3fb86667d..8a53ceb51 100644
      llama_context * ctx;
      uint32_t depth_count;
  };
-@@ -176,8 +199,12 @@ void skippy_mtp_trim_session_state(skippy_session * session, llama_pos token_cou
+@@ -175,8 +198,12 @@ void skippy_mtp_trim_session_state(skippy_session * session, llama_pos token_cou
  static bool skippy_mtp_shares_target_memory(
          const llama_context * mtp_ctx,
          const llama_context * target_ctx) {
@@ -1939,7 +1939,7 @@ index 3fb86667d..8a53ceb51 100644
  }
  
  enum skippy_status skippy_mtp_sync_target_inputs(
-@@ -202,7 +229,7 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+@@ -200,7 +227,7 @@ enum skippy_status skippy_mtp_sync_target_inputs(
      skippy_mtp_depth_scope mtp_depth_scope(mtp_ctx);
      const bool mtp_shares_target_memory = skippy_mtp_shares_target_memory(mtp_ctx, session->ctx);
      const bool chain_heads = mtp_depth_scope.chains_heads();
@@ -1948,7 +1948,7 @@ index 3fb86667d..8a53ceb51 100644
      // MTP consumes complete pre-norm output rows, which can be wider than
      // token embeddings (for example DeepSeek4 hyperconnections).
      const int32_t n_hidden = llama_model_n_embd_out(session->stage_model->model);
-@@ -418,9 +445,55 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+@@ -416,9 +443,55 @@ enum skippy_status skippy_mtp_sync_target_inputs(
  }
  
  int skippy_external_decode_observe(llama_context * ctx, const llama_batch & batch) {
@@ -2007,7 +2007,7 @@ index 3fb86667d..8a53ceb51 100644
  }
  
  skippy_graph_build_inputs skippy_external_decode_build_inputs(llama_context * ctx) {
-@@ -471,7 +544,7 @@ enum skippy_status skippy_mtp_propose_next(
+@@ -469,7 +542,7 @@ enum skippy_status skippy_mtp_propose_next(
              max_draft_tokens,
              SKIPPY_NATIVE_MTP_MAX_DRAFT_TOKENS);
      const bool chain_heads = mtp_depth_scope.chains_heads();

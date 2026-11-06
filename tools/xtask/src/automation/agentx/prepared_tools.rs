@@ -210,6 +210,19 @@ pub(super) struct Tools {
     pub cell_seconds: u64,
 }
 impl Tools {
+    /// Only an undiagnosed GPU campaign is a publishable comparison.
+    pub(super) fn campaign_scope(&self) -> &'static str {
+        if self.backend == Backend::Cpu {
+            "cpu_diagnostic_not_gpu_performance"
+        } else if self.diagnostic_telemetry {
+            "telemetry_diagnostic_not_performance"
+        } else if self.diagnostic_generation_lanes.is_some() {
+            "diagnostic_generation_lanes_AgentX_comparison"
+        } else {
+            "fixed_complete_AgentX_comparison"
+        }
+    }
+
     fn verify_client_environment(&self) -> DynResult<()> {
         absolute(&self.client_environment.path)?;
         verify_python_venv_config(&self.client_environment.path.join("pyvenv.cfg")).map_err(

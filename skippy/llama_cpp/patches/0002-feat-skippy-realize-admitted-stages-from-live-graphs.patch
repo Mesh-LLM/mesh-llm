@@ -4572,10 +4572,10 @@ index 000000000..2b9593e0c
 +} // extern "C"
 diff --git a/src/skippy/execution-single.cpp b/src/skippy/execution-single.cpp
 new file mode 100644
-index 000000000..84ead575c
+index 000000000..4ce3d4ba9
 --- /dev/null
 +++ b/src/skippy/execution-single.cpp
-@@ -0,0 +1,653 @@
+@@ -0,0 +1,642 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/graph_build_inputs.h"
@@ -4771,17 +4771,6 @@ index 000000000..84ead575c
 +    if (skippy_is_filtered(first) && first->stage_model->config.layer_start > 0) {
 +        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched token decode requires the first runtime slice or a full model");
 +        return SKIPPY_STATUS_UNSUPPORTED;
-+    }
-+
-+    // A legacy decode batch still samples only one row per session. Reject
-+    // duplicate lanes before settling any pending verification window.
-+    std::unordered_set<skippy_session *> unique_sessions;
-+    for (size_t i = 0; i < request_count; ++i) {
-+        if (!unique_sessions.insert(sessions[i]).second) {
-+            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
-+                    "batched token decode requires unique sessions");
-+            return SKIPPY_STATUS_INVALID_ARGUMENT;
-+        }
 +    }
 +
 +    const int32_t n_tokens = static_cast<int32_t>(request_count);

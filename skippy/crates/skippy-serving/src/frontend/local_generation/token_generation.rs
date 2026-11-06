@@ -557,8 +557,6 @@ impl StageOpenAiBackend {
         emit_token: &mut impl FnMut(i32) -> InferenceResult<TokenControl>,
     ) -> InferenceResult<Duration> {
         let timer = PhaseTimer::start();
-        // The scheduler links its iterations to this phase.
-        let generating = self.enter_openai_phase(&timer);
         let stats = self.iteration_scheduler.generate(
             ScheduledGenerationRequest {
                 id: session_id,
@@ -570,7 +568,6 @@ impl StageOpenAiBackend {
             },
             emit_token,
         )?;
-        drop(generating);
         cache_stats.suffix_prefill_tokens = saturating_u32(request.prompt_token_ids.len());
         cache_stats.prompt_ms = stats.prompt_ms;
         cache_stats.predicted_ms = stats.predicted_ms;
@@ -709,7 +706,6 @@ impl StageOpenAiBackend {
         cache_stats: &mut GenerationCacheStats,
     ) -> InferenceResult<Option<i32>> {
         let prefill_timer = PhaseTimer::start();
-        let _prefill = self.enter_openai_phase(&prefill_timer);
         let runtime_sessions_before = self
             .iteration_scheduler
             .execute_runtime("feature-prefill-stats-before", |runtime| {
@@ -932,7 +928,6 @@ impl StageOpenAiBackend {
         emit_token: &mut impl FnMut(i32) -> InferenceResult<TokenControl>,
     ) -> InferenceResult<Duration> {
         let decode_timer = PhaseTimer::start();
-        let decoding = self.enter_openai_summary(&decode_timer);
         let mut state =
             self.prepare_decode_state(request, session_id, prompt_prefill_sample, emit_token)?;
         let recurrent_checkpoint_required = self
@@ -967,7 +962,6 @@ impl StageOpenAiBackend {
                 },
             )?;
             cache_stats.predicted_ms = stats.predicted_ms;
-            drop(decoding);
             let model_generation_elapsed =
                 self.emit_decode_summary(request, &mut state, cache_stats, decode_timer)?;
             if state.generated_token_ids.len() > 1 {
@@ -1043,7 +1037,6 @@ impl StageOpenAiBackend {
                 break;
             }
         }
-        drop(decoding);
         let model_generation_elapsed =
             self.emit_decode_summary(request, &mut state, cache_stats, decode_timer)?;
         // The first-token checkpoint names the prompt boundary. Avoid

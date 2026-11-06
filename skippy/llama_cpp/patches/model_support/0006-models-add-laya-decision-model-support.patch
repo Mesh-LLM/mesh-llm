@@ -36,13 +36,13 @@ Changes from the upstream draft:
 Co-authored-by: ZhangYu <zhangyub@uniontech.com>
 ---
  include/skippy.h          |    1 +
- include/skippy/common.h   |    2 +
+ include/skippy/common.h   |    4 +-
  include/skippy/laya.h     |  167 ++++++
  src/CMakeLists.txt        |    4 +-
  src/llama-arch.cpp        |   33 ++
  src/llama-arch.h          |   20 +
  src/llama-model.cpp       |    7 +
- src/skippy/abi.cpp        |    1 +
+ src/skippy/abi.cpp        |    3 +-
  src/skippy/laya.cpp       |  372 ++++++++++++
  tools/CMakeLists.txt      |    1 +
  tools/laya/CMakeLists.txt |   23 +
@@ -58,10 +58,10 @@ Co-authored-by: ZhangYu <zhangyub@uniontech.com>
  create mode 100644 tools/laya/laya.h
 
 diff --git a/include/skippy.h b/include/skippy.h
-index cd65095a5..a1d73ac5a 100644
+index 571841a60..ac091dd24 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
-@@ -27,5 +27,6 @@
+@@ -26,5 +26,6 @@
  #include "skippy/signals.h"
  #include "skippy/workloads.h"
  #include "skippy/system_one.h"
@@ -87,9 +87,9 @@ index d04825da4..54c87b6f2 100644
  #define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
 +/** @brief Full-model Laya decision reads (`skippy/laya.h`). */
 +#define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)
- /** @brief Native span and GPU command timing callbacks (`skippy/tracing.h`). */
- #define SKIPPY_FEATURE_NATIVE_TRACING         (UINT64_C(1) << 42)
  
+ enum skippy_status {
+     SKIPPY_STATUS_OK                      = 0,
 diff --git a/include/skippy/laya.h b/include/skippy/laya.h
 new file mode 100644
 index 000000000..002fac598
@@ -270,7 +270,6 @@ index d3c86694f..db01bc2f5 100644
 @@ -95,6 +95,8 @@ add_library(llama
              skippy/tokenization.cpp
              skippy/events.cpp
-             skippy/tracing.cpp
              skippy/system_one.cpp
 +            skippy/laya.cpp
 +            ../tools/laya/laya.cpp
@@ -436,17 +435,19 @@ index 3486feb6e..ff95ba534 100644
          case LLM_ARCH_NOMIC_BERT_MOE:
          case LLM_ARCH_EUROBERT:
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index f3586bbd0..276dbb8c4 100644
+index 1e1d2d7c8..f806cdbdc 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
-@@ -48,6 +48,7 @@ uint64_t skippy_abi_features(void) {
+@@ -47,7 +47,8 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_UNLOAD_EVENTS |
             SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
             SKIPPY_FEATURE_SYSTEM_ONE |
-            SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
-+           SKIPPY_FEATURE_LAYA_DECISIONS |
-            SKIPPY_FEATURE_NATIVE_TRACING;
+-           SKIPPY_FEATURE_CACHEGEN_KV_PAGE;
++           SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
++           SKIPPY_FEATURE_LAYA_DECISIONS;
  }
  
+ void skippy_error_free(struct skippy_error * error) {
 diff --git a/src/skippy/laya.cpp b/src/skippy/laya.cpp
 new file mode 100644
 index 000000000..9d9f26ecd

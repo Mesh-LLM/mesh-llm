@@ -6,13 +6,15 @@
 
 pub const SKIPPY_ABI_VERSION_MAJOR: u32 = 0;
 pub const SKIPPY_ABI_VERSION_MINOR: u32 = 1;
-pub const SKIPPY_ABI_VERSION_PATCH: u32 = 79;
+pub const SKIPPY_ABI_VERSION_PATCH: u32 = 81;
 pub const SKIPPY_ACTIVATION_FRAME_VERSION: u32 = 2;
 pub const SKIPPY_ACTIVATION_BOUNDARY_DESC_VERSION: u32 = 2;
 pub const SKIPPY_ACTIVATION_IDENTITY_BYTES: u32 = 32;
 pub const SKIPPY_ACTIVATION_MAX_DIMS: u32 = 4;
 pub const SKIPPY_ACTIVATION_MAX_PARTS: u32 = 16;
 pub const SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION: u32 = 1;
+pub const SKIPPY_NATIVE_SPAN_V1_ABI_VERSION: u32 = 1;
+pub const SKIPPY_GPU_COMMAND_TIMING_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_MAX_LOGIT_BIAS: u32 = 256;
 pub const SKIPPY_MAX_SAMPLERS: u32 = 16;
 pub const SKIPPY_MAX_DRY_SEQUENCE_BREAKERS: u32 = 8;
@@ -343,6 +345,111 @@ unsafe extern "C" {
         model_id: u64,
         numeric_summary_0: u64,
     );
+}
+#[doc = " @brief One finished phase of native work."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_native_span_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    #[doc = " Process-unique and nonzero; SKIPPY_NATIVE_SPAN_ID_BIT is set."]
+    pub id: u64,
+    #[doc = " The enclosing native span's id when there is one, else the reporting\n thread's trace tag, else 0. Children end, and so arrive, before their\n parent."]
+    pub parent: u64,
+    #[doc = " Dotted span name such as \"llama.graph_compute\"; static storage."]
+    pub name: *const ::std::os::raw::c_char,
+    #[doc = " Null, or what the span worked on; valid only during the callback."]
+    pub detail: *const ::std::os::raw::c_char,
+    #[doc = " Unix nanoseconds."]
+    pub start_unix_ns: i64,
+    pub end_unix_ns: i64,
+    #[doc = " Null, or the name of one measured quantity; static storage."]
+    pub value_name: *const ::std::os::raw::c_char,
+    pub value: i64,
+}
+#[doc = " @brief Receives one native span, on the thread that did the work.\n\n That is usually the thread inside the native call, so a slow callback\n slows the call it measures. The span is valid only for the call."]
+pub type skippy_native_span_callback = ::std::option::Option<
+    unsafe extern "C" fn(
+        span: *const skippy_native_span_v1,
+        user_data: *mut ::std::os::raw::c_void,
+    ),
+>;
+unsafe extern "C" {
+    #[doc = " @brief Installs the process-global native span callback.\n\n Install once, before the calls to observe; a null callback stops\n reporting. A callback already running may finish after it is cleared.\n Installing reaches every loaded backend, which may initialise the backend\n registry on the calling thread. Backend spans that ended before a backend\n received its first callback (device initialisation compiles kernel\n libraries) are delivered from within this call: those that began during\n it under the calling thread's tag, earlier ones with no parent."]
+    pub fn skippy_set_native_span_callback(
+        callback: skippy_native_span_callback,
+        user_data: *mut ::std::os::raw::c_void,
+    ) -> skippy_status;
+}
+#[doc = " @brief Timing of one unit of device work, such as a Metal command buffer."]
+#[repr(C)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct skippy_gpu_command_timing_v1 {
+    pub abi_version: u32,
+    pub struct_size: u32,
+    #[doc = " The submitting thread's trace tag; 0 when none was set."]
+    pub tag: u64,
+    #[doc = " The ggml backend registry name, such as \"MTL\"; static storage."]
+    pub backend_name: *const ::std::os::raw::c_char,
+    #[doc = " Backend instance, and its 1-based graph compute count."]
+    pub context_id: u32,
+    pub compute_index: u32,
+    #[doc = " Execution order of this command within its graph compute."]
+    pub command_index: u32,
+    pub command_count: u32,
+    #[doc = " Graph nodes encoded into this command."]
+    pub node_count: u32,
+    #[doc = " 0 when the device completed the command, else a backend status."]
+    pub status: i32,
+    #[doc = " Unix nanoseconds; 0 when the backend did not observe the instant."]
+    pub encode_start_unix_ns: i64,
+    pub encode_end_unix_ns: i64,
+    pub execute_start_unix_ns: i64,
+    pub execute_end_unix_ns: i64,
+    #[doc = " What the command's graph nodes do: \"attention\", \"matmul\", \"recurrent\",\n \"kv_write\" or \"other\" when every classified node shares that class,\n else \"mixed\"; static storage. Views and reshapes have no class.\n Attention is flash attention, or the masked soft max and K/Q, K/Q/V\n products of unfused attention; recurrent is SSM, RWKV, gated linear\n attention and delta-net state, and copies to or from its cache."]
+    pub op_class: *const ::std::os::raw::c_char,
+    #[doc = " The model layer of the command's first layer-named node; -1 when unknown."]
+    pub layer: i32,
+    #[doc = " 1 when the backend split this graph at op class boundaries so each\n command holds one class (Metal: GGML_METAL_OP_PROFILE=1), else 0."]
+    pub split_by_class: u32,
+    #[doc = " Attention nodes: the most KV cells one query addresses (the row list\n length for attention that reads per-sequence row lists, else the K/V\n span; for unfused attention, the K/Q product's K span), the most query\n rows one node processes, how many nodes read row lists, and how many\n are flash attention (unfused attention has none)."]
+    pub attention_kv_cells: u32,
+    pub attention_queries: u32,
+    pub attention_row_list_nodes: u32,
+    pub attention_flash_nodes: u32,
+    #[doc = " Graph nodes by class."]
+    pub attention_nodes: u32,
+    pub matmul_nodes: u32,
+    pub recurrent_nodes: u32,
+    pub kv_write_nodes: u32,
+    pub other_nodes: u32,
+    #[doc = " Bytes the nodes read, by class: weights and activations for mat-muls;\n for gathers from and row writes into a cache, only the rows read or\n written; for attention only the K/V rows its nodes address."]
+    pub attention_bytes: u64,
+    pub matmul_bytes: u64,
+    pub recurrent_bytes: u64,
+    pub kv_write_bytes: u64,
+    pub other_bytes: u64,
+    #[doc = " Recurrent state caches: the most states one gather reads (the states\n of the batch's sequences and every state between them), and the most\n of those a copy writes back unchanged because no sequence in the batch\n owns them."]
+    pub recurrent_states: u32,
+    pub recurrent_states_carried: u32,
+}
+#[doc = " @brief Receives one timing record, on a backend-owned completion thread.\n\n The record is valid only for the duration of the call. Return quickly:\n the thread may be serving completion for every command on the device."]
+pub type skippy_gpu_command_timing_callback = ::std::option::Option<
+    unsafe extern "C" fn(
+        timing: *const skippy_gpu_command_timing_v1,
+        user_data: *mut ::std::os::raw::c_void,
+    ),
+>;
+unsafe extern "C" {
+    #[doc = " @brief Installs the process-global GPU command timing callback.\n\n Install once, before submitting work; a null callback stops reporting. A\n callback already running may finish after it is cleared. Returns\n SKIPPY_STATUS_UNSUPPORTED when no loaded backend reports command timing."]
+    pub fn skippy_set_gpu_command_timing_callback(
+        callback: skippy_gpu_command_timing_callback,
+        user_data: *mut ::std::os::raw::c_void,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Sets the calling thread's trace tag for the work it does afterwards.\n\n Native spans without an enclosing native span, and GPU work the thread\n submits, carry the tag. Thread-local and cheap; pass 0 to stop tagging.\n Tags should leave SKIPPY_NATIVE_SPAN_ID_BIT clear. Backends see the tag\n once either callback has been installed."]
+    pub fn skippy_set_trace_tag(tag: u64);
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -2323,4 +2430,5 @@ pub const skippy_ffi_bridge_feature_cachegen_kv_page: u64 = 549755813888;
 pub const skippy_ffi_bridge_feature_laya_decisions: u64 = 1099511627776;
 pub const skippy_ffi_bridge_feature_speech_recognition: u64 = 2199023255552;
 pub const skippy_ffi_bridge_feature_clef_decisions: u64 = 4398046511104;
+pub const skippy_ffi_bridge_feature_native_tracing: u64 = 8796093022208;
 pub const skippy_ffi_bridge_activation_part_optional: u32 = 1;

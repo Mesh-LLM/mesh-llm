@@ -107,7 +107,7 @@ fn run(request: Request, output: &Path) -> DynResult<()> {
     let status = if result.is_ok() { "passed" } else { "failed" };
     let mut report = json!({"schema_version":1,"campaign":request.campaign,"model_key":request.model_key,"request":request,
         "backend":request.tools.backend,"status":status,"arms":arms,"error":result.as_ref().err().map(ToString::to_string),
-        "repeat_order":ORDER,"concurrencies":[1,2,4],"scope":report_scope(request.tools.backend, request.tools.diagnostic_generation_lanes),
+        "repeat_order":ORDER,"concurrencies":[1,2,4],"scope":request.tools.campaign_scope(),
         "jy_job_id":std::env::var("JIANYANG_JOB_ID").ok(),"jy_run_id":std::env::var("JIANYANG_RUN_ID").ok(),
         "source_attribution":{"product":request.tools.product_source_commit,"native":request.tools.native_source_commit,
             "standard_upstream":request.tools.standard_upstream,"automation_binary_sha256":crate::product::digest::file_sha256(&std::env::current_exe()?).map_err(|e|e.error)?},

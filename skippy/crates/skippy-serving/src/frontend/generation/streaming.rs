@@ -193,7 +193,7 @@ impl ChatOutputStreamParser {
     ) -> InferenceResult<Self> {
         let passthrough_content =
             chat_stream_can_passthrough_content(&request, &metadata, emit_reasoning);
-        let model = backend.model_reader();
+        let model = lock_runtime(&backend.runtime).model.reader();
         Ok(Self {
             backend,
             model,

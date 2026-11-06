@@ -164,7 +164,6 @@ impl LocalOpenAiOptions {
         } else {
             skippy_runtime::MtpSource::Disabled
         };
-        let verify_rollback = openai.verify_rollback(mtp_source);
         let mut config = self.config;
         config.native_mtp_enabled = native_mtp_enabled;
         let l3_manager = self.disk_cache.and_then(LocalDiskCacheOptions::acquire);

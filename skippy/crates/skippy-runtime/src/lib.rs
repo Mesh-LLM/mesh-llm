@@ -52,7 +52,7 @@ pub use decision::{
     DecisionError, DecisionModel, DecisionOutput, DecisionQuestion, DecisionQuestionKind,
     DecisionRequest, DecisionValue,
 };
-pub use devices::{BackendDevice, BackendDeviceType, backend_devices};
+pub use devices::{BackendDevice, BackendDeviceType, backend_devices, backend_devices_untraced};
 pub use dflash::{
     DFLASH_BORROWED_TARGET_TENSOR, DFlashDraftInfo, DFlashDraftOptions, DFlashDraftStats,
     DFlashFeatureEncoding, DFlashFeatureRows, DFlashHealth, DFlashProposal, DFlashVariant,

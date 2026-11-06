@@ -10,7 +10,7 @@ use axum::Router;
 use skippy_config::validate_config;
 use skippy_inference_api::{InferenceBackend, InferenceFrontendConfig, InferenceLifecycleObserver};
 use skippy_protocol::{StageConfig, StageTopology};
-use skippy_runtime::{ActivationBoundaryDesc, MtpSource, VerifyRollback, WorkloadInfo};
+use skippy_runtime::{ActivationBoundaryDesc, MtpSource, WorkloadInfo};
 use tokio::{sync::oneshot, task::JoinHandle};
 
 use crate::{

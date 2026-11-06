@@ -56,6 +56,7 @@ fn prefill_only_resident_recurrent_request_retains_shared_grid_checkpoint() -> R
         LocalGeneration {
             prompt_token_ids: &tokens,
             recurrent_cache_prefix_token_ids: None,
+            shared_system_prefix_tokens: None,
             max_tokens: 0,
             sampling: &sampling,
             chat_sampling_metadata: None,

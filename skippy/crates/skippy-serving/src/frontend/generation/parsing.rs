@@ -139,12 +139,6 @@ pub(in crate::frontend) struct PreparedGenerationPrompt {
     /// loaded model and requires the resulting IDs to be an exact prefix of
     /// `text` before it can be used for recurrent-state caching.
     pub(in crate::frontend) recurrent_cache_prefix_text: Option<String>,
-    /// Rendered leading system messages and an empty user turn, without an
-    /// assistant-generation suffix.
-    ///
-    /// Also only a candidate: generation keeps the token prefix it shares with
-    /// `text`, which every request with these system messages shares too.
-    pub(in crate::frontend) recurrent_system_prefix_text: Option<String>,
 }
 
 impl PreparedGenerationPrompt {
@@ -154,7 +148,6 @@ impl PreparedGenerationPrompt {
             media: Vec::new(),
             chat_parse_metadata: None,
             recurrent_cache_prefix_text: None,
-            recurrent_system_prefix_text: None,
         }
     }
 

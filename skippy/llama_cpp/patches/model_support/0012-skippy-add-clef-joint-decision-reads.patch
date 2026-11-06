@@ -9,11 +9,11 @@ in one micro-batch, as the upstream server does for clef.
 ---
  include/skippy.h        |   1 +
  include/skippy/clef.h   | 144 +++++++++++
- include/skippy/common.h |   2 +
+ include/skippy/common.h |   4 +-
  src/CMakeLists.txt      |  20 ++
  src/skippy/abi.cpp      |   1 +
  src/skippy/clef.cpp     | 517 ++++++++++++++++++++++++++++++++++++++++
- 6 files changed, 685 insertions(+)
+ 6 files changed, 686 insertions(+), 1 deletion(-)
  create mode 100644 include/skippy/clef.h
  create mode 100644 src/skippy/clef.cpp
 
@@ -188,7 +188,7 @@ index 93232a2b8..d2ab5d538 100644
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
 -#define SKIPPY_ABI_VERSION_PATCH 78
-+#define SKIPPY_ABI_VERSION_PATCH 79
++#define SKIPPY_ABI_VERSION_PATCH 81
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))

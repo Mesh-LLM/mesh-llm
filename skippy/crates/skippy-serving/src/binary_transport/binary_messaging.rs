@@ -427,7 +427,7 @@ fn run_binary_stage(
 ) -> Result<Option<EmbeddedFrontendTask>> {
     options.tuning.validate()?;
     let mtp_source = options.resolved_mtp_source();
-    let verify_rollback = options.resolved_verify_rollback();
+    let recurrent_rollback_tokens = options.recurrent_rollback_tokens();
     let BinaryStageOptions {
         tuning,
         config,
