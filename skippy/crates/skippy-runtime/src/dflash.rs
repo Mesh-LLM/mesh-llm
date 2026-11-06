@@ -251,7 +251,17 @@ impl DFlashDraft {
             );
         }
         if meta_usize(self.model, LILICORR_CANDIDATE_TOPK_KEY)?.is_some_and(|top_k| top_k > 0) {
-            bail!("LiliCorr drafts are not supported");
+            if !lilicorr_headless_enabled_by(std::env::var(LILICORR_HEADLESS_ENV).ok().as_deref()) {
+                bail!(
+                    "LiliCorr drafts are not supported; {LILICORR_HEADLESS_ENV}=1 runs one as plain DFlash without its correlation head"
+                );
+            }
+            // Without state embeddings in the block batch the draft graph
+            // leaves out the correlation head, and its logits are plain
+            // DFlash logits.
+            write_native_log_note(
+                "dflash draft is LiliCorr; running it as plain DFlash without its correlation head",
+            );
         }
         let target_layers = unsafe { (api.model_n_layer)(target_model) };
         self.info.target_layer_ids = target_layer_ids(api, self.model, target_layers)?;
@@ -634,6 +644,15 @@ fn missing_borrowed_tensor(resident: &[String]) -> Option<&'static str> {
             .iter()
             .any(|name| name == DFLASH_BORROWED_TARGET_TENSOR))
     .then_some(DFLASH_BORROWED_TARGET_TENSOR)
+}
+
+/// Opt-in to run a LiliCorr draft as plain DFlash, without the correlation
+/// head that rescores its top candidates. Verification stays exact; only
+/// acceptance can differ.
+const LILICORR_HEADLESS_ENV: &str = "SKIPPY_DFLASH_LILICORR_HEADLESS";
+
+fn lilicorr_headless_enabled_by(value: Option<&str>) -> bool {
+    matches!(value.map(str::trim), Some("1" | "true"))
 }
 
 /// What a draft's tensors say about how it runs.
@@ -1645,6 +1664,21 @@ mod tests {
                 markov: true
             }
         );
+    }
+
+    #[test]
+    fn a_lilicorr_draft_runs_headless_only_when_asked() {
+        for (value, enabled) in [
+            (None, false),
+            (Some(""), false),
+            (Some("0"), false),
+            (Some("yes"), false),
+            (Some("1"), true),
+            (Some("true"), true),
+            (Some(" 1 "), true),
+        ] {
+            assert_eq!(lilicorr_headless_enabled_by(value), enabled, "{value:?}");
+        }
     }
 
     #[test]
