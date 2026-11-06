@@ -60,13 +60,17 @@ fn fewer_lanes_for_draft(
         return None;
     }
     (1..slots).rev().find_map(|lanes| {
-        let plan = plan_runtime_resources_with_draft(
+        let mut plan = plan_runtime_resources_with_draft(
             RuntimeResourcePlanInput {
                 parallel_override: Some(lanes),
                 ..input
             },
             Some(draft),
         );
+        // The planner chose this lane count, not the operator.
+        if let Some(breakdown) = plan.breakdown.as_mut() {
+            breakdown.slots_auto = true;
+        }
         plan.fits().then_some(plan)
     })
 }
@@ -263,6 +267,10 @@ mod tests {
         assert!(plan.fits());
         assert!((1..4).contains(&plan.slots), "{} lanes", plan.slots);
         assert_eq!(plan.context_length, 4096);
+        assert!(
+            plan.breakdown.unwrap().slots_auto,
+            "the planner chose the lanes"
+        );
 
         // A lane count the operator configured is kept, even when tight.
         let (configured, planned) = plan_with_default_dflash_draft(input(Some(4)), explicit_draft);
