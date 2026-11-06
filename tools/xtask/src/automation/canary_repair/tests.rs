@@ -1,4 +1,5 @@
 use super::*;
+use crate::process::Value;
 #[cfg(unix)]
 use std::collections::BTreeMap;
 
@@ -50,6 +51,30 @@ fn candidate_checks_cannot_write_github_workflow_control_files() {
     ]);
     assert_eq!(environment.len(), 1);
     assert!(environment.contains_key(std::ffi::OsStr::new("PATH")));
+}
+
+#[test]
+fn empty_runner_credential_placeholders_are_not_redaction_patterns() {
+    let environment = runner::inherited([
+        ("SCCACHE_WEBDAV_TOKEN".into(), "".into()),
+        ("SCCACHE_WEBDAV_PASSWORD".into(), "".into()),
+        ("ACTIONS_RUNTIME_TOKEN".into(), "".into()),
+        ("JIANYANG_GATEWAY_TOKEN".into(), "credential".into()),
+    ]);
+    for name in [
+        "SCCACHE_WEBDAV_TOKEN",
+        "SCCACHE_WEBDAV_PASSWORD",
+        "ACTIONS_RUNTIME_TOKEN",
+    ] {
+        assert!(matches!(
+            environment.get(std::ffi::OsStr::new(name)),
+            Some(Value::Public(value)) if value.is_empty()
+        ));
+    }
+    assert!(matches!(
+        environment.get(std::ffi::OsStr::new("JIANYANG_GATEWAY_TOKEN")),
+        Some(Value::Secret(value)) if value == "credential"
+    ));
 }
 
 #[test]
