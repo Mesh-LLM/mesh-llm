@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 /// Stack for the thread that drives the application future. The process main
 /// thread gets 1 MiB on Windows (8 MiB on Linux), which an unoptimized build
-/// overflows; `mesh-llm` and `skippy-model-package` use the same size.
+/// overflows; `mesh-llm` runs its application on a thread of the same size.
 const APPLICATION_STACK_SIZE: usize = 8 * 1024 * 1024;
 
 fn main() -> std::process::ExitCode {
