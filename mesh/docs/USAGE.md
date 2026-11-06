@@ -1133,11 +1133,12 @@ quant matches, and the draft is pinned to a Hugging Face revision and SHA-256:
 | Qwen3.6-35B-A3B | `Alittlehammmer/Qwen3.6-35B-A3B-DFlash-GGUF-llama.cpp` | Metal |
 | Qwen3-Coder-Next | `AtomicChat/Qwen3-Coder-Next-DFlash-GGUF` | Metal only |
 | Nemotron-3.5-Bolt-E4B | `unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF` | all |
+| Nemotron-3.5-Lightning-30B-A3B | `magnitudedev/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark-GGUF` (DSpark) | CUDA and others |
 
-Nemotron-3.5-Bolt-E4B has Gemma-4-E4B-It's shape and is told apart by its GGUF
-name. Nemotron-3.5-Lightning-30B-A3B keeps its native MTP head by default; its
-DFlash draft (`meshllm/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-DFlash-GGUF`, which
-reads the last layer's output as well) can be configured as below.
+Nemotron-3.5-Bolt-E4B has Gemma-4-E4B-It's shape and Nemotron-3.5-Lightning-30B-A3B
+has Nemotron-3-Nano-30B-A3B's; both are told apart by their GGUF names. Lightning's
+draft is a DSpark draft: a DFlash draft with a Markov head that conditions each
+drafted token on the one before it. It replaces Lightning's native MTP head.
 
 A load uses the draft once it is in the Hugging Face cache. A missing draft
 downloads in the background and the load does not wait for it: it serves with

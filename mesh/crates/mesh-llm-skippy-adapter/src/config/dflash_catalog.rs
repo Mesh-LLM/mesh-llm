@@ -300,6 +300,32 @@ pub(super) fn bootstrap_pairings() -> Vec<DFlashPairing> {
             max_draft_tokens: 7,
             backends: DFlashBackends::All,
         },
+        // Nemotron-3.5-Lightning-30B-A3B has Nemotron-3-Nano-30B-A3B's shape,
+        // so the name breaks the tie. NVIDIA's DSpark draft (DFlash with a
+        // Markov head) reads target layers 2..=52, layer 52 being the head's
+        // input, with an 8-token block. It replaces the default native MTP:
+        // on a DGX Spark greedy chat decodes 88.0 tok/s (76.7 MTP, 66.0 off),
+        // sampled at T=0.7 87.6 (54.8 MTP) and agentic coding 78.4 (72.8 MTP).
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "nemotron_h_moe".to_string(),
+                layer_count: 52,
+                embedding_length: 2688,
+                expert_count: 128,
+                family: Some("Nemotron-3.5-Lightning".to_string()),
+            },
+            draft: DFlashDraft {
+                repo: "magnitudedev/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark-GGUF"
+                    .to_string(),
+                revision: "ed35fc990759330e325ab9e41bcf80737ab4dafc".to_string(),
+                file: "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark.gguf".to_string(),
+                sha256: "14fcc5296ca9be2fa2156275fd1811de966835e2894729907a03cf7f80634856"
+                    .to_string(),
+                bytes: 1_357_001_312,
+            },
+            max_draft_tokens: 7,
+            backends: DFlashBackends::NotMetal,
+        },
     ]
 }
 
@@ -625,10 +651,16 @@ mod tests {
 
     /// Every target the bootstrap table pairs by default, named as its GGUF
     /// names it: Qwen3.5-9B, Qwen3.6-27B, Qwen3.8-27B (with its NextN block),
-    /// Qwen3.6-35B-A3B, Qwen3-Coder-Next and Nemotron-3.5-Bolt-E4B.
+    /// Qwen3.6-35B-A3B, Qwen3-Coder-Next, Nemotron-3.5-Bolt-E4B and
+    /// Nemotron-3.5-Lightning-30B-A3B (with its NextN block).
     fn default_targets() -> Vec<(&'static str, GgufCompactMeta)> {
         let mut qwen38 = named(target_meta("qwen35", 65, 5120, 0), "Qwen3.8-27B");
         qwen38.nextn_predict_layers = 1;
+        let mut lightning = named(
+            target_meta("nemotron_h_moe", 53, 2688, 128),
+            "Nvidia-Nemotron-3.5-Lightning-30B-A3B",
+        );
+        lightning.nextn_predict_layers = 1;
         vec![
             (
                 "Qwen3.5-9B",
@@ -654,6 +686,7 @@ mod tests {
                     "NVIDIA Nemotron 3.5 Bolt E4B",
                 ),
             ),
+            ("Nemotron-3.5-Lightning-30B-A3B", lightning),
         ]
     }
 
@@ -729,6 +762,37 @@ mod tests {
                 Some("unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF")
             );
         }
+        assert_eq!(
+            repo("Nemotron-3.5-Lightning-30B-A3B", false).as_deref(),
+            Some("magnitudedev/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark-GGUF")
+        );
+    }
+
+    #[test]
+    fn nemotron_lightning_is_told_from_nemotron_3_nano_by_name() {
+        const DSPARK: &str = "magnitudedev/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark-GGUF";
+        let with_mtp = |name: &str| {
+            let mut meta = named(target_meta("nemotron_h_moe", 53, 2688, 128), name);
+            meta.nextn_predict_layers = 1;
+            meta
+        };
+        for name in [
+            "Nvidia-Nemotron-3.5-Lightning-30B-A3B",
+            "NVIDIA Nemotron 3.5 Lightning 30B A3B",
+        ] {
+            assert_eq!(
+                repo(&with_mtp(name), false).as_deref(),
+                Some(DSPARK),
+                "{name}"
+            );
+        }
+        // Nemotron-3-Nano-30B-A3B has the same executable shape.
+        let nano = named(
+            target_meta("nemotron_h_moe", 52, 2688, 128),
+            "Nemotron-3-Nano-30B-A3B",
+        );
+        assert_eq!(repo(&nano, false), None);
+        assert_eq!(repo(&nano, true), None);
     }
 
     #[test]
