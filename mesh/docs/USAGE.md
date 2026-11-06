@@ -1194,8 +1194,10 @@ is forwarded as usual (`SKIPPY_PREFIX_CACHE=off` turns the prefix cache off
 entirely).
 
 DFlash drafts tokens for greedy and sampled requests; requests that ask for
-logprobs decode normally. DSpark and LiliCorr drafts and Windows runtimes are
-not supported.
+logprobs decode normally. DSpark drafts (DFlash with a Markov head) run the same
+way. LiliCorr drafts are refused unless `SKIPPY_DFLASH_LILICORR_HEADLESS=1`,
+which runs one as plain DFlash without its correlation head. Windows runtimes
+are not supported.
 
 ### Run-ahead admission
 
