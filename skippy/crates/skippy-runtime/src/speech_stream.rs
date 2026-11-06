@@ -5,18 +5,21 @@
 //! the current turn as more arrives, and confirms a word only once two
 //! consecutive passes agree on it. Confirmed words never change, so they can be
 //! sent as append-only deltas. Once the buffer grows long it is cut at the end
-//! of the last fully confirmed segment, with the confirmed text carried forward
-//! as the prompt, so each pass stays inside Whisper's 30 s window.
+//! of a fully confirmed segment before the newest one, with the removed text
+//! carried forward as the prompt. Recent audio remains as acoustic context,
+//! and a hard buffer bound keeps each pass inside Whisper's 30 s window.
 //!
 //! Turns come from an energy voice-activity detector, or from the caller when
 //! turn detection is off.
 
+mod confirmation;
 mod resample;
 
 use std::collections::VecDeque;
 
 use anyhow::Result;
 
+use confirmation::ConfirmedPrefix;
 pub use resample::PcmResampler;
 
 use crate::logging::write_native_log_note;
@@ -162,6 +165,8 @@ pub struct SpeechStream {
     confirmed: Vec<String>,
     /// How many of `confirmed` lie in `buffer`, rather than trimmed audio.
     confirmed_in_buffer: usize,
+    /// Current-window alignment ownership, independent of immutable output.
+    confirmed_prefix: ConfirmedPrefix,
     /// The previous pass's words after the confirmed ones.
     pending: Vec<String>,
     /// Words the passes agreed on that the confirmation delay still holds
@@ -190,6 +195,7 @@ impl SpeechStream {
             speech_started_at: None,
             confirmed: Vec::new(),
             confirmed_in_buffer: 0,
+            confirmed_prefix: ConfirmedPrefix::default(),
             pending: Vec::new(),
             held: Vec::new(),
             reported_tentative: String::new(),
@@ -237,6 +243,9 @@ impl SpeechStream {
 
     /// Adds 16 kHz mono audio, ending turns on silence and running a pass
     /// once `step_ms` of new audio has arrived.
+    ///
+    /// If transcription fails, discard this stream. Audio and confirmation
+    /// state may already have advanced without returning their events.
     pub fn push(
         &mut self,
         samples: &[f32],
@@ -249,17 +258,19 @@ impl SpeechStream {
         for frame in frames.chunks(FRAME_SAMPLES) {
             self.received += frame.len() as u64;
             self.push_frame(frame, transcribe, &mut events)?;
-        }
-        if self.in_turn
-            && self.received - self.last_pass_at >= u64::from(self.config.step_ms) * SAMPLES_PER_MS
-        {
-            self.run_pass(transcribe, &mut events)?;
+            if self.in_turn
+                && self.received - self.last_pass_at
+                    >= u64::from(self.config.step_ms) * SAMPLES_PER_MS
+            {
+                self.run_pass(transcribe, &mut events)?;
+            }
         }
         Ok(events)
     }
 
     /// Ends the current turn now, confirming everything the final pass hears.
     /// Returns no events when no audio is pending.
+    /// Discard this stream after a transcription error, as with [`Self::push`].
     pub fn commit(&mut self, transcribe: &mut Transcribe<'_>) -> Result<Vec<SpeechStreamEvent>> {
         let mut events = Vec::new();
         if !self.partial_frame.is_empty() {
@@ -388,24 +399,23 @@ impl SpeechStream {
         }
         let segments = self.transcribe_buffer(transcribe)?;
         let words = segments.iter().flatten().cloned().collect::<Vec<_>>();
-        if words.len() < self.confirmed_in_buffer {
-            // Whisper now hears fewer words than were confirmed from this
-            // audio (merged words, or a segment dropped as silence). The
-            // confirmed words stand; realign so the next words can still be
-            // confirmed rather than waiting for the count to catch up.
+        let canonical = &self.confirmed[self.confirmed.len() - self.confirmed_in_buffer..];
+        let aligned = self
+            .confirmed_prefix
+            .align_with_pending(&words, &self.pending, canonical);
+        let boundary = aligned.unwrap_or_else(|| {
+            self.confirmed_prefix
+                .unsupported_boundary(&words, &self.pending)
+        });
+        if boundary != self.confirmed_in_buffer {
+            // A revised hypothesis can omit already confirmed words. Keep
+            // their canonical count: they may return on the next pass.
             write_native_log_note(format!(
-                "speech stream desync: pass heard {} words, {} already confirmed; realigning",
-                words.len(),
-                self.confirmed_in_buffer
+                "speech stream alignment: {} confirmed words end at hypothesis word {boundary}",
+                self.confirmed_in_buffer,
             ));
-            self.confirmed_in_buffer = self
-                .confirmed
-                .last()
-                .and_then(|last| words.iter().rposition(|word| same_word(word, last)))
-                .map_or(words.len(), |position| position + 1);
-            self.pending.clear();
         }
-        let tail = &words[self.confirmed_in_buffer..];
+        let tail = &words[boundary..];
         // Only a turn's start is held back; later words have the earlier ones
         // as context. The delay counts speech heard in this window, so
         // leading silence cannot satisfy it.
@@ -446,9 +456,10 @@ impl SpeechStream {
             self.buffer.clear();
             self.buffer_has_speech = false;
             self.confirmed_in_buffer = 0;
+            self.confirmed_prefix.clear();
             self.speech_started_at = None;
-        } else if buffer_ms > u64::from(self.config.trim_after_ms) {
-            self.trim_confirmed(&segments);
+        } else if buffer_ms > u64::from(self.config.trim_after_ms) && aligned.is_some() {
+            self.trim_confirmed(&segments, boundary + agreed);
         }
         self.report_tentative(events);
         Ok(())
@@ -472,28 +483,37 @@ impl SpeechStream {
         }
     }
 
-    /// Cuts the buffer at the end of the last segment whose words are all
-    /// confirmed.
-    fn trim_confirmed(&mut self, segments: &[SegmentWords]) {
+    /// Cuts confirmed audio before the newest segment, retaining recent
+    /// acoustic context even when all of its words are already confirmed.
+    fn trim_confirmed(&mut self, segments: &[SegmentWords], confirmed_end: usize) {
         let mut words_before = 0;
+        let mut previous_end_ms = 0;
+        let buffer_ms = self.buffer.len() as u64 / SAMPLES_PER_MS;
         let mut cut = None;
-        for segment in segments {
+        for segment in segments.iter().take(segments.len().saturating_sub(1)) {
             words_before += segment.words.len();
-            if words_before > self.confirmed_in_buffer {
+            if words_before > confirmed_end {
+                break;
+            }
+            // Whisper can timestamp an incomplete segment beyond the audio
+            // it received. Clamping that end would discard ownership while
+            // the same words' remaining audio is still arriving. Keep the
+            // last valid cut, without crossing a future or reversed boundary.
+            // A later textual segment can itself lie wholly in the future;
+            // require actual samples after the cut, not just that segment.
+            if segment.end_ms <= previous_end_ms || segment.end_ms as u64 >= buffer_ms {
                 break;
             }
             cut = Some((segment.end_ms, words_before));
+            previous_end_ms = segment.end_ms;
         }
-        let Some((end_ms, words)) = cut else {
+        let Some((end_ms, cut_words)) = cut else {
             return;
         };
-        let samples = ((end_ms.max(0) as u64) * SAMPLES_PER_MS).min(self.buffer.len() as u64);
-        if samples == 0 {
-            return;
-        }
+        let samples = end_ms as u64 * SAMPLES_PER_MS;
         self.buffer.drain(..samples as usize);
         self.buffer_start += samples;
-        self.confirmed_in_buffer -= words;
+        self.confirmed_in_buffer -= self.confirmed_prefix.trim(cut_words);
     }
 
     fn finish_turn(
@@ -516,7 +536,15 @@ impl SpeechStream {
                 let held = std::mem::take(&mut self.held);
                 self.confirm(held, events);
             } else {
-                let rest = words[self.confirmed_in_buffer.min(words.len())..].to_vec();
+                let canonical = &self.confirmed[self.confirmed.len() - self.confirmed_in_buffer..];
+                let boundary = self
+                    .confirmed_prefix
+                    .align_with_pending(&words, &self.pending, canonical)
+                    .unwrap_or_else(|| {
+                        self.confirmed_prefix
+                            .unsupported_boundary(&words, &self.pending)
+                    });
+                let rest = words[boundary..].to_vec();
                 self.confirm(rest, events);
             }
         }
@@ -535,6 +563,7 @@ impl SpeechStream {
         self.buffer_has_speech = false;
         self.confirmed.clear();
         self.confirmed_in_buffer = 0;
+        self.confirmed_prefix.clear();
         self.pending.clear();
         self.held.clear();
         self.reported_tentative.clear();
@@ -552,6 +581,7 @@ impl SpeechStream {
             text.insert(0, ' ');
         }
         self.confirmed_in_buffer += words.len();
+        self.confirmed_prefix.append(&words);
         self.confirmed.extend(words);
         events.push(SpeechStreamEvent::Delta {
             turn: self.turn,

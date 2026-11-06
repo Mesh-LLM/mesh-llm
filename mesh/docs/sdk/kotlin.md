@@ -144,3 +144,42 @@ omitted fields use native defaults, and unknown keys are rejected by the core.
 Full-config `mode` is `client`, `serve_only`, or `serve` (combined); the
 full-config default is combined, matching Rust. The existing `Node(...)`
 constructor keeps its client default and Kotlin convenience arguments.
+
+## Live transcription
+
+```kotlin
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+
+val session = node.startLiveTranscription(LiveTranscriptionOptions(
+    model = "speech-model", sampleRate = 16000u, turnDetection = null,
+    stepMs = 400u, tentative = true))
+try {
+    session.sendAudio(pcm16Samples)
+    session.commit()
+    println(session.nextEvent())
+    val remainingEvents = session.stop()
+    println(remainingEvents)
+} finally {
+    withContext(NonCancellable) { session.close() }
+}
+```
+
+Supply signed 16-bit mono samples, or use `sendAudioF32` for float samples.
+`stepMs` accepts 200 to 5000 ms; `null` keeps the node's 1000 ms default.
+Shorter steps run more transcription passes. `tentative` defaults to `false`.
+
+Confirmed deltas are append-only. Recognition errors in confirmed text cannot
+be corrected by later passes or the completed event. Shorter transcription
+intervals do not guarantee better recognition accuracy.
+
+Native transcription failures end the session after an error event. Start a
+new session to retry. Request-validation errors may leave the session open.
+
+Each `tentative` event replaces the previous unconfirmed text for its `itemId`;
+empty text clears it. Append `delta` text to the confirmed transcript and let
+`completed` replace the whole turn, including tentative text. Read events
+concurrently with microphone input. `stop()` finishes the turn and returns
+unread events; `close()` abandons the session.
+Cancelling `events()` also closes the session without waiting for a pending
+native read; native cleanup finishes in the background.

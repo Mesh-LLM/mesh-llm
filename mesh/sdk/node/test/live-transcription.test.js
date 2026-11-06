@@ -38,3 +38,19 @@ test('breaking event iteration closes the session and native errors propagate', 
   assert.equal(closed, true)
   await assert.rejects(live.sendAudio([]), /closed/)
 })
+
+test('incremental options use native keys and tentative replacements survive reads and stop', async () => {
+  const events = ['hel', 'hello', ''].map(text => ({ type: 'tentative', item_id: 'turn', text }))
+  const completed = { type: 'completed', item_id: 'turn', transcript: 'Hello!' }
+  const live = await startLiveTranscription({ async startLiveTranscriptionJson(source) {
+    assert.deepEqual(JSON.parse(source), { step_ms: 400, tentative: true })
+    return {
+      async nextEventJson() { return JSON.stringify(events.shift()) },
+      async stopJson() { return JSON.stringify([completed]) }
+    }
+  } }, { stepMs: 400, tentative: true })
+  for (const text of ['hel', 'hello', '']) {
+    assert.deepEqual(await live.nextEvent(), { type: 'tentative', item_id: 'turn', text })
+  }
+  assert.deepEqual(await live.stop(), [completed])
+})
