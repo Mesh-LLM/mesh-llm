@@ -164,6 +164,7 @@ fn resolve_installed_cli_plugin(command: &str) -> Result<Option<plugin::External
         );
     }
     Ok(Some(plugin::ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         openai_exchange_grant: None,
         name: metadata.name.clone(),
         command: executable.display().to_string(),
@@ -174,6 +175,7 @@ fn resolve_installed_cli_plugin(command: &str) -> Result<Option<plugin::External
         startup: Default::default(),
         web_ui_enabled: None,
         web_ui_primary_tab: None,
+        endpoint_models: None,
         installed_metadata: Some(metadata),
     }))
 }

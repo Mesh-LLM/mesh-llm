@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
 #[cfg(test)]
+use skippy_inference_api::chat::ChatCompletionRequest;
+#[cfg(test)]
 use std::path::PathBuf;
 
 mod certification;
@@ -22,7 +24,7 @@ mod projector;
 mod resolver_host_tests;
 pub(crate) use dflash_draft::{
     default_dflash_draft_cached, materialize_default_dflash_draft, materialize_split_dflash_draft,
-    split_dflash_draft_source,
+    refresh_dflash_pairing_index, split_dflash_draft_source,
 };
 use mesh_llm_skippy_adapter::config as resolver;
 pub(crate) use projector::materialize_projector_url;
@@ -51,10 +53,11 @@ use async_trait::async_trait;
 use skippy_inference_api::thinking::ThinkingControls;
 use skippy_inference_api::{
     AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
-    ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, CompletionRequest,
-    CompletionResponse, CompletionStream, EmbeddingResponse, EmbeddingsRequest, GuardrailMode,
-    GuardrailPolicy, GuardrailPolicyHandle, InferenceBackend, InferenceHookPolicy,
+    CompletionRequest, CompletionResponse, CompletionStream, EmbeddingResponse, EmbeddingsRequest,
+    GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle, InferenceBackend, InferenceHookPolicy,
     InferenceRequestContext, InferenceResult, ModelObject, RerankRequest, RerankResponse,
+    generation::GenerationEventStream, generation::GenerationRequest,
+    generation::GenerationResponse,
 };
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig};
 use skippy_runtime::{ModelInfo, MtpSource};
@@ -127,13 +130,18 @@ const BENCH_DOWNSTREAM_WIRE_DELAY_MS_ENV: &str = "MESH_LLM_BENCH_DOWNSTREAM_WIRE
 const BENCH_DOWNSTREAM_WIRE_JITTER_MS_ENV: &str = "MESH_LLM_BENCH_DOWNSTREAM_WIRE_JITTER_MS";
 const BENCH_DOWNSTREAM_WIRE_STALL_MS_ENV: &str = "MESH_LLM_BENCH_DOWNSTREAM_WIRE_STALL_MS";
 const BENCH_DOWNSTREAM_WIRE_STALL_P_ENV: &str = "MESH_LLM_BENCH_DOWNSTREAM_WIRE_STALL_P";
+/// Simulated link bandwidth in megabits per second, shared by every lane that
+/// writes over the stage's downstream hop; unset or `0` is unlimited.
+const BENCH_DOWNSTREAM_WIRE_MBPS_ENV: &str = "MESH_LLM_BENCH_DOWNSTREAM_WIRE_MBPS";
 
 fn benchmark_downstream_wire_condition() -> Result<WireCondition> {
     let delay_ms = parse_benchmark_wire_env(BENCH_DOWNSTREAM_WIRE_DELAY_MS_ENV)?;
     let jitter_ms = parse_benchmark_wire_env(BENCH_DOWNSTREAM_WIRE_JITTER_MS_ENV)?;
     let stall_ms = parse_benchmark_wire_env(BENCH_DOWNSTREAM_WIRE_STALL_MS_ENV)?;
     let stall_p = parse_benchmark_wire_env(BENCH_DOWNSTREAM_WIRE_STALL_P_ENV)?;
-    WireCondition::with_jitter(delay_ms, None, jitter_ms, stall_ms, stall_p)
+    let mbps =
+        Some(parse_benchmark_wire_env(BENCH_DOWNSTREAM_WIRE_MBPS_ENV)?).filter(|mbps| *mbps > 0.0);
+    WireCondition::with_jitter(delay_ms, mbps, jitter_ms, stall_ms, stall_p)
 }
 
 fn parse_benchmark_wire_env(name: &'static str) -> Result<f64> {
@@ -467,7 +475,7 @@ fn wrap_host_guardrail_backend(
 
 #[async_trait]
 impl InferenceBackend for SkippyModelHandle {
-    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> InferenceResult<u32> {
+    async fn count_chat_tokens(&self, request: GenerationRequest) -> InferenceResult<u32> {
         self.backend.count_chat_tokens(request).await
     }
 
@@ -477,16 +485,16 @@ impl InferenceBackend for SkippyModelHandle {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         self.backend.chat_completion(request).await
     }
 
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         self.backend.chat_completion_stream(request, context).await
     }
 
@@ -781,7 +789,7 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingHostBackend {
-        seen_chat: Mutex<Option<ChatCompletionRequest>>,
+        seen_chat: Mutex<Option<GenerationRequest>>,
     }
 
     #[async_trait]
@@ -792,10 +800,10 @@ mod tests {
 
         async fn chat_completion(
             &self,
-            request: ChatCompletionRequest,
-        ) -> InferenceResult<ChatCompletionResponse> {
+            request: GenerationRequest,
+        ) -> InferenceResult<GenerationResponse> {
             *self.seen_chat.lock().expect("seen chat lock poisoned") = Some(request.clone());
-            Ok(ChatCompletionResponse::new(
+            Ok(GenerationResponse::new(
                 request.model,
                 "ok",
                 skippy_inference_api::Usage::new(0, 0),
@@ -804,9 +812,9 @@ mod tests {
 
         async fn chat_completion_stream(
             &self,
-            _request: ChatCompletionRequest,
+            _request: GenerationRequest,
             _context: InferenceRequestContext,
-        ) -> InferenceResult<ChatCompletionStream> {
+        ) -> InferenceResult<GenerationEventStream> {
             Err(InferenceError::unsupported(
                 "streaming is not needed by this host wrapper test",
             ))
@@ -1127,7 +1135,9 @@ mod tests {
             Some(8),
             None,
         );
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
+        let request: GenerationRequest = serde_json::from_value::<
+            skippy_inference_api::chat::ChatCompletionRequest,
+        >(json!({
             "model": "Qwen3-8B-Q4_K_M",
             "messages": [
                 {"role": "tool", "content": "large intermediate result", "tool_call_id": "call_1"},
@@ -1135,7 +1145,8 @@ mod tests {
             ],
             (MESH_COMPACT_FIELD): true
         }))
-        .expect("valid compacting request");
+        .expect("valid compacting request")
+        .into();
 
         wrapped
             .chat_completion(request)
@@ -1172,13 +1183,14 @@ mod tests {
             Some(8192),
             None,
         );
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
+        let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
             "model": "Qwen3-8B-Q4_K_M",
             "messages": [{"role": "user", "content": "look this up"}],
             "tools": [{"type": "function", "function": {"name": "lookup"}}],
             "tool_choice": "auto"
         }))
-        .expect("valid tool request");
+        .expect("valid tool request")
+        .into();
 
         wrapped.chat_completion(request.clone()).await.unwrap();
         assert_eq!(

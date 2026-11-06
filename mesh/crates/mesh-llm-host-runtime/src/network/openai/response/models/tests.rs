@@ -29,7 +29,7 @@ fn model(id: &str, workload: Option<ModelWorkloadClass>) -> MeshModel {
             metadata: None,
             runtime: None,
             thinking: Some(json!({"toggle": true})),
-            payment: Some(json!({"paid": true})),
+            requires: Some(json!([{"channel": "example.offer.v1"}])),
         }],
     }
 }

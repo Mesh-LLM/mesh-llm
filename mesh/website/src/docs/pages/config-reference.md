@@ -88,7 +88,6 @@ produces a clear startup error rather than a partial start.
 | `mesh_requirements.release_signer_keys` | array of string | `[]`; when non-empty, only those signer keys admit peers | node-level | process restart | wired | none |
 | `owner_control.bind` | socket address | unset (auto); e.g. `[::]:7447` | node-level | process restart | wired | none |
 | `owner_control.advertise_addr` | socket address | unset (auto-detected) | node-level | process restart | wired | none |
-| `payments.wallet` | string | unset: the only running `wallet.v1` plugin | node-level | process restart | wired | none |
 | `telemetry.enabled` | boolean | `false` | node-level | process restart | wired | none |
 | `telemetry.service_name` | string | `mesh-llm` | node-level | process restart | wired | none |
 | `telemetry.endpoint` | URL | unset | node-level | process restart | wired | none |
@@ -300,6 +299,7 @@ per-tensor device overrides. None of these has a schema key yet.
 | `skippy.prefill_chunking` | enum | `auto` (normalizes to `fixed`), `fixed`, `schedule`, `adaptive-ramp` | both | model reload | wired (staged mode only) | none |
 | `skippy.prefill_chunk_size` | integer | runtime default | both | model reload | wired (staged mode only) | none |
 | `skippy.prefill_chunk_schedule` | string | unset | both | model reload | wired (staged mode only; monotonic comma-separated positive integers) | none |
+| `skippy.activation_codec` | enum | `f16` (default), `lossless`, `bf16`, `s8-row`, `fp8-e4m3-row`, `fp8-e4m3-block32`, `fp8-e5m2-row`, `f32` | both | model reload | wired (split serving only; the split's coordinator chooses and every stage follows its stage load; `f16` halves activation bytes and rounds each activation to half precision (100% top-1 agreement with single-node decode on Qwen3.5-4B; a value outside the finite f16 range fails the frame), `lossless` sends exact values, `bf16` also halves them, `s8-row` and the `fp8-*` codecs quarter them with measurable drift) | none |
 
 Staged-only controls stay staged-only: lifecycle intervals, prefill controls,
 and manual stage layer ranges only take effect
@@ -420,6 +420,7 @@ sampling at the backend when it selects mode `1` or `2`.
 | `plugin.<name>.web_ui_enabled` | boolean | unset (follows the plugin's declared default) | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.web_ui_primary_tab` | boolean | unset (`false`; primary placement stays off until explicitly enabled) | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.allow_peer_blocks` | boolean | unset (`false`; the plugin's peer block requests are refused until explicitly enabled) | plugin entry | applies dynamically | wired | none |
+| `plugin.<name>.operation_bindings` | array of objects | empty; operator-fixed provider/profile, setup JSON and operation allowlist | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.allow_inference_observation` | boolean | unset (`false`; the plugin's local inference observation subscription is refused until explicitly enabled) | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.openai_exchange_grant.endpoints` | array of enum | absent grant denies access | plugin entry | applies dynamically | wired | none |
 | `plugin.<name>.openai_exchange_grant.phases` | array of enum | absent grant denies access | plugin entry | applies dynamically | wired | none |
@@ -441,6 +442,7 @@ sampling at the backend when it selects mode `1` or `2`.
 | `plugin.<name>.command` | string | required unless `url` is set | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.args` | array of string | `[]` | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.url` | URL | unset | plugin entry | plugin process restart | wired for HTTP(S) adapter URLs; `tcp://` control is rejected because no authenticated capability handshake exists | none |
+| `plugin.<name>.models` | array of string | unset (every model the plugin's inference endpoints list is shared) | plugin entry | Mesh node restart | wired | none |
 | `plugin.<name>.startup.connect_timeout_secs` | integer | host default | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.startup.init_timeout_secs` | integer | host default | plugin entry | plugin process restart | wired | none |
 | `plugin.<name>.startup.optional` | boolean | `false` | plugin entry | plugin process restart | wired; command resolution, spawn, connect, and initialize failures become inactive error summaries instead of stopping host startup | none |

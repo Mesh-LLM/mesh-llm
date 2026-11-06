@@ -676,8 +676,6 @@ fn make_test_peer(
         persistent_lane_marker_supported: false,
         owner_summary: crate::crypto::OwnershipSummary::default(),
         advertised_model_throughput: vec![],
-        #[cfg(feature = "payments")]
-        lightning_offers: Default::default(),
         cache_affinity: None,
 
         display_rtt: None,

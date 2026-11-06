@@ -33,8 +33,8 @@ use exchange_events::{
 };
 #[cfg(test)]
 use exchange_events::{
-    exchange_output_digests_from_outcome, exchange_usage_from_outcome, plugin_route_status,
-    serving_provenance_for_model, serving_provenance_for_remote_mesh,
+    exchange_failure_class, exchange_output_digests_from_outcome, exchange_usage_from_outcome,
+    plugin_route_status, serving_provenance_for_model, serving_provenance_for_remote_mesh,
 };
 use missing_model::route_missing_local_model;
 #[cfg(test)]
@@ -64,7 +64,6 @@ use mesh_llm_events::audit::{audit_events, emit_audit};
 use mesh_llm_events::{OutputEvent, emit_event};
 
 enum AutoRouteResolution {
-    PaymentRequired(&'static str),
     Continue {
         effective_model: Option<String>,
         classification: Option<router::Classification>,
@@ -78,7 +77,6 @@ enum AutoRouteResolution {
 
 #[derive(Debug)]
 enum AutoRouteRejection {
-    PaymentRequired(&'static str),
     MediaUnsupported,
     WorkloadUnsupported(mesh::ModelWorkloadClass),
     NoModelReady,
@@ -92,7 +90,8 @@ struct IngressRouteContext<'a> {
     /// The mesh node that sent this request over the HTTP tunnel, hex-encoded,
     /// from the tunnel's QUIC-authenticated remote `EndpointId`. `None` for a
     /// request on this node's local API. Carried onto the host-served
-    /// terminal as `ServingProvenance.requested_by_node_id`.
+    /// terminal as `ServingProvenance.requested_by_node_id`, and onto the
+    /// envelope of a raw-proxy exchange that failed (host-served or plugin-served).
     requested_by_node_id: Option<String>,
     /// Explicit exchange channel for the remote-mesh and host-served publish
     /// pairs. When `None`, falls back to `plugin_manager` as the channel
@@ -248,7 +247,7 @@ fn explicit_model_route(
 /// resolution that explains why no pool is usable.
 ///
 /// Applies the ingress admission order in one place: workload-class candidates,
-/// media compatibility, payment admission, then the readiness pool.
+/// media compatibility, then the readiness pool.
 #[allow(clippy::too_many_arguments)]
 async fn auto_route_candidate_pool<'a>(
     node: &mesh::Node,
@@ -277,7 +276,7 @@ async fn auto_route_candidate_pool<'a>(
     let Some(available) = router::filter_media_compatible_candidates(&available, media) else {
         return Err(AutoRouteResolution::MediaUnsupported);
     };
-    let (available, ready_models) = match auto_route::payment_admission::admitted_models(
+    let (available, ready_models) = auto_route::readiness::ready_models(
         node,
         Some(targets),
         request,
@@ -285,11 +284,7 @@ async fn auto_route_candidate_pool<'a>(
         required_tokens,
         affinity,
     )
-    .await
-    {
-        Ok(pool) => pool,
-        Err(reason) => return Err(AutoRouteResolution::PaymentRequired(reason)),
-    };
+    .await;
     Ok(auto_route::pool_for_ready_models(&available, &ready_models))
 }
 
@@ -539,7 +534,6 @@ async fn try_pipeline_proxy(
         node,
         &capsule_nonce,
         super::response::RouteAttemptLoggingContext {
-            exchange_id: None,
             request_id: request.request_id,
             response_adapter: request.response_adapter,
             retry_policy: super::response::ResponseRetryPolicy::next_target_available(false),
@@ -550,7 +544,9 @@ async fn try_pipeline_proxy(
     )
     .await;
     match result {
-        proxy::PipelineProxyResult::PolicyDenied => Some(proxy::RouteDispatchOutcome::PolicyDenied),
+        proxy::PipelineProxyResult::PolicyDenied { status_code } => {
+            Some(proxy::RouteDispatchOutcome::PolicyDenied { status_code })
+        }
         proxy::PipelineProxyResult::RequiredHookFailed => {
             Some(proxy::RouteDispatchOutcome::RequiredHookFailed)
         }
@@ -948,7 +944,7 @@ async fn try_route_plugin_model(
                 RawProxyTerminalFacts {
                     served_locally: false, // plugin-served: never this node's own hardware/weights
                     request_digest: request_digest.as_deref(),
-                    requested_by_node_id: None, // no host-served provenance block on this path
+                    requested_by_node_id: ctx.requested_by_node_id.as_deref(), // named on a failed exchange only; no provenance block on this path
                     client_nonce: None,
                 },
             )
@@ -1184,7 +1180,6 @@ async fn route_prepared_request(
             request,
             proxy::RouteModelRequestContext {
                 local_execution_only,
-                exchange_id: announce.as_ref().map(|(_, id)| id.as_str()),
                 required_tokens,
                 affinity: ctx.affinity,
                 route_observer,
@@ -1331,9 +1326,6 @@ async fn prepare_auto_route_decision(
                 required_tokens,
             })
         }
-        AutoRouteResolution::PaymentRequired(reason) => {
-            Err(AutoRouteRejection::PaymentRequired(reason))
-        }
         AutoRouteResolution::MediaUnsupported => Err(AutoRouteRejection::MediaUnsupported),
         AutoRouteResolution::WorkloadUnsupported(workload) => {
             Err(AutoRouteRejection::WorkloadUnsupported(workload))
@@ -1387,10 +1379,6 @@ async fn send_auto_route_rejection(
 ) -> proxy::RouteDispatchOutcome {
     proxy::release_request_objects(node, request_object_request_ids).await;
     match rejection {
-        AutoRouteRejection::PaymentRequired(reason) => response_outcome(
-            402,
-            proxy::send_error_observed(tcp_stream, 402, reason, route_observer).await,
-        ),
         AutoRouteRejection::MediaUnsupported => {
             send_media_unsupported(tcp_stream, route_observer).await
         }
@@ -1401,7 +1389,7 @@ async fn send_auto_route_rejection(
         // backoff, so a request sent while a model loads still gets served.
         AutoRouteRejection::NoModelReady => response_outcome(
             503,
-            proxy::send_503_observed(
+            proxy::send_model_not_ready_observed(
                 tcp_stream,
                 "no model is ready to serve this request yet; retry shortly",
                 route_observer,
@@ -1409,28 +1397,6 @@ async fn send_auto_route_rejection(
             .await,
         ),
     }
-}
-
-/// Build the sorted list of model names visible to the `/v1/models` endpoint:
-/// the remote-mesh callable set from `targets` merged with `local_models`
-/// (plugin-served and locally-launched models) with duplicates removed.
-/// The locally registered model name for a public model ID, as the free
-/// path's alias rewrite resolves it. A model served from a catalog or Hugging
-/// Face ref is registered under an internal ID (for example
-/// `local-gguf/sha256-…`) but advertised and priced under its public ID.
-#[cfg(feature = "payments")]
-pub(crate) async fn served_model_for_public_id(
-    node: &mesh::Node,
-    targets: &election::ModelTargets,
-    requested: &str,
-) -> String {
-    let callable = callable_models(targets);
-    if callable.iter().any(|model| model == requested) {
-        return requested.to_owned();
-    }
-    let descriptors = node.all_served_model_descriptors().await;
-    super::request_parse::internal_model_for_public_id(requested, &callable, &descriptors)
-        .unwrap_or_else(|| requested.to_owned())
 }
 
 async fn maybe_handle_control_request(
@@ -1769,7 +1735,8 @@ async fn handle_api_proxy_connection_inner(
 
 /// A request that arrived over the mesh HTTP tunnel. `remote` is the tunnel's
 /// QUIC-authenticated peer, the node that asked; it is carried onto the
-/// host-served terminal as `requested_by_node_id`.
+/// host-served terminal as `requested_by_node_id`, and onto the terminal of a
+/// raw-proxy exchange that failed.
 pub(crate) async fn handle_remote_http_stream(
     node: mesh::Node,
     stream: ClientStream,
@@ -1944,6 +1911,10 @@ pub(crate) fn callable_models(targets: &election::ModelTargets) -> Vec<String> {
 #[cfg(test)]
 #[path = "ingress_tests/durable_artifacts.rs"]
 mod durable_artifacts;
+
+#[cfg(test)]
+#[path = "ingress_tests/failure_class.rs"]
+mod failure_class;
 
 #[cfg(test)]
 #[path = "ingress_tests/automatic_routing.rs"]

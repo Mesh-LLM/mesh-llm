@@ -30,6 +30,7 @@ impl Node {
             {
                 Some(plugin) => plugin.web_ui_enabled = Some(enabled),
                 None => config.plugins.push(crate::plugin::PluginConfigEntry {
+                    operation_bindings: Vec::new(),
                     name: plugin_name,
                     enabled: None,
                     web_ui_enabled: Some(enabled),
@@ -40,6 +41,7 @@ impl Node {
                     command: None,
                     args: Vec::new(),
                     url: None,
+                    models: None,
                     settings: BTreeMap::new(),
                     startup: crate::plugin::PluginStartupConfig::default(),
                 }),
@@ -104,6 +106,7 @@ impl Node {
             {
                 Some(plugin) => plugin.web_ui_primary_tab = Some(primary_tab_enabled),
                 None => config.plugins.push(crate::plugin::PluginConfigEntry {
+                    operation_bindings: Vec::new(),
                     name: plugin_name,
                     enabled: None,
                     web_ui_enabled: None,
@@ -114,6 +117,7 @@ impl Node {
                     command: None,
                     args: Vec::new(),
                     url: None,
+                    models: None,
                     settings: BTreeMap::new(),
                     startup: crate::plugin::PluginStartupConfig::default(),
                 }),
@@ -191,6 +195,7 @@ impl Node {
                 Some(plugin) => plugin,
                 None => {
                     config.plugins.push(crate::plugin::PluginConfigEntry {
+                        operation_bindings: Vec::new(),
                         name: plugin_name.clone(),
                         enabled: None,
                         web_ui_enabled: None,
@@ -201,6 +206,7 @@ impl Node {
                         command: None,
                         args: Vec::new(),
                         url: None,
+                        models: None,
                         settings: BTreeMap::new(),
                         startup: crate::plugin::PluginStartupConfig::default(),
                     });

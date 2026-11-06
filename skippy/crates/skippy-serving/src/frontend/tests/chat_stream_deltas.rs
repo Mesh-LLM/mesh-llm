@@ -2,10 +2,11 @@
 //!
 //! `tool_call_stream` covers the per-index delta arithmetic. These tests drive
 //! `ChatStreamDeltas` — the type the live streaming path actually uses — and
-//! convert its events through `generation_event_to_chat_chunk`, so they pin the
+//! convert its events through `generation_event_to_inference_event`, so they pin the
 //! shape a client receives on the wire rather than an internal representation.
 
 use super::*;
+use skippy_inference_api::chat::ChatCompletionRequest;
 
 /// Snapshots recorded from the native parser; see the fixture header.
 const RECORDED: &str = include_str!("../../../tests/fixtures/qwen35_partial_tool_calls.txt");
@@ -32,8 +33,10 @@ fn streamed_tool_call_chunks(events: Vec<GenerationStreamEvent>) -> Vec<Value> {
     events
         .into_iter()
         .filter_map(|event| {
-            let chunk = generation_event_to_chat_chunk(Ok(event), "test").expect("chunk");
-            let value = serde_json::to_value(&chunk).expect("serialize chunk");
+            let chunk = generation_event_to_inference_event(Ok(event), "test").expect("chunk");
+            let value =
+                serde_json::to_value(skippy_inference_api::chat::ChatCompletionChunk::from(chunk))
+                    .expect("serialize chunk");
             value["choices"][0]["delta"]
                 .get("tool_calls")
                 .filter(|tool_calls| !tool_calls.is_null())
@@ -171,7 +174,7 @@ fn malformed_tool_calls_fail_instead_of_sending_a_successful_stop() {
                 .contains("incomplete or inconsistent tool call")
         );
         // The real chunk converter must propagate the error, not emit a Done chunk.
-        assert!(generation_event_to_chat_chunk(Err(error), "test").is_err());
+        assert!(generation_event_to_inference_event(Err(error), "test").is_err());
         assert_eq!(
             deltas.finish_reason(FinishReason::Length).unwrap(),
             FinishReason::Length,
@@ -257,12 +260,13 @@ fn a_request_without_tool_calls_streams_content_exactly_as_before() {
 #[test]
 fn reasoning_prefix_frames_reconstruct_on_auto_wire_and_remain_absent_when_hidden() {
     for format in ["auto", "hidden"] {
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
+        let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
             "model": "test",
             "messages": [{"role": "user", "content": "choose"}],
             "reasoning_format": format
         }))
-        .unwrap();
+        .unwrap()
+        .into();
         let options =
             chat_template_options(&request, &EmbeddedOpenAiRequestDefaults::default()).unwrap();
         let mut deltas = ChatStreamDeltas::new(template_exposes_reasoning(&options));
@@ -280,8 +284,13 @@ fn reasoning_prefix_frames_reconstruct_on_auto_wire_and_remain_absent_when_hidde
                 tool_calls: None,
             };
             for event in deltas.events_for_parse(&parsed, true) {
-                let chunk = generation_event_to_chat_chunk(Ok(event), "test").unwrap();
-                wire.push(serde_json::to_value(chunk).unwrap());
+                let chunk = generation_event_to_inference_event(Ok(event), "test").unwrap();
+                wire.push(
+                    serde_json::to_value(skippy_inference_api::chat::ChatCompletionChunk::from(
+                        chunk,
+                    ))
+                    .unwrap(),
+                );
             }
         }
         let terminal = ParsedChatMessage {

@@ -50,12 +50,6 @@ const ANALYTICS_CATEGORY: CategoryPresentation = CategoryPresentation {
     summary: "Anonymous usage reporting to the mesh-llm maintainers",
     order: 50,
 };
-const PAYMENTS_CATEGORY: CategoryPresentation = CategoryPresentation {
-    id: "payments",
-    label: "Payments",
-    summary: "Wallet backend used for paid inference",
-    order: 60,
-};
 const RUNTIME_POLICY_CATEGORY: CategoryPresentation = CategoryPresentation {
     id: "runtime-policy",
     label: "Runtime Policy",
@@ -130,7 +124,6 @@ fn setting_presentation_for_path(rendered: &str) -> Option<SettingPresentation> 
         .or_else(|| kv_disk_presentation(rendered))
         .or_else(|| gpu_setting_presentation(rendered))
         .or_else(|| process_setting_presentation(rendered))
-        .or_else(|| payments_presentation(rendered))
         .or_else(|| native_runtime_presentation(rendered))
         .or_else(|| runtime_defaults_presentation(rendered))
         .or_else(|| generation_defaults_presentation(rendered))
@@ -424,22 +417,6 @@ fn process_setting_presentation(rendered: &str) -> Option<SettingPresentation> {
         )
         .placeholder("ed25519:<64 hex characters>")
         .hint("text")),
-        _ => None,
-    }
-}
-
-fn payments_presentation(rendered: &str) -> Option<SettingPresentation> {
-    match rendered {
-        "payments.wallet" => Some(
-            sp(
-                "Wallet plugin",
-                "Plugin name of the wallet that backs paid inference. When unset, the only running wallet plugin is used.",
-                PAYMENTS_CATEGORY,
-                10,
-            )
-            .placeholder("lexe-wallet")
-            .hint("text"),
-        ),
         _ => None,
     }
 }
@@ -786,6 +763,13 @@ fn skippy_multimodal_presentation(rendered: &str) -> Option<SettingPresentation>
         )
         .placeholder("e.g. 512,1024,2048")
         .hint("text")),
+        "defaults.skippy.activation_codec" => Some(sp(
+            "Split activation codec",
+            "Choose how activations travel between split stages. f16, the default, halves the bytes by rounding activations to half precision, which matched single-node top-1 tokens in testing; lossless sends exact values; bf16 also halves them; s8-row and the fp8 codecs quarter them at some cost in accuracy (fp8-e4m3-block32 scales each 32 values separately, so an outlier costs precision only in its own block).",
+            SKIPPY_CATEGORY,
+            75,
+        )
+        .hint("select")),
         "defaults.skippy.binary_stage_transport" => Some(sp(
             "Binary stage transport",
             "Choose whether the binary stage transport is enabled or left to auto selection.",
@@ -938,6 +922,16 @@ fn model_and_plugin_presentation(rendered: &str) -> Option<SettingPresentation> 
                 20,
             )
             .placeholder("http://localhost:8000/v1")
+            .hint("text"),
+        ),
+        "plugin.<plugin-name>.models" => Some(
+            sp(
+                "Shared endpoint models",
+                "Model IDs the plugin's inference endpoints may share. Other listed models are not advertised or routed. Unset shares every listed model.",
+                PLUGIN_HOST_CATEGORY,
+                25,
+            )
+            .placeholder("one model ID per line; [] alone shares none")
             .hint("text"),
         ),
         "plugin.<plugin-name>.command" => Some(
@@ -1140,9 +1134,6 @@ fn fallback_category_for_path(rendered: &str) -> Option<CategoryPresentation> {
     }
     if rendered.starts_with("owner_control.") {
         return Some(NETWORK_CATEGORY);
-    }
-    if rendered.starts_with("payments.") {
-        return Some(PAYMENTS_CATEGORY);
     }
     if rendered.starts_with("mesh_requirements.") {
         return Some(ATTESTATION_CATEGORY);

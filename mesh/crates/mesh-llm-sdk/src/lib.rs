@@ -9,6 +9,58 @@ pub mod documents;
 #[cfg(feature = "serving")]
 pub mod live_transcription;
 
+/// Native discovery and inference types. Model metadata contains advertised
+/// effort levels; inference targets retain their provider identity.
+///
+/// ```no_run
+/// use mesh_llm_sdk::{MeshNode, inference::{
+///     ChatCompletionRequest, ChatMessage, MessageContent, ReasoningEffort,
+/// }};
+/// use std::time::Duration;
+///
+/// async fn example(invite_token: String) -> anyhow::Result<()> {
+///     let node = MeshNode::builder()
+///         .client()
+///         .join_token(invite_token)
+///         .start()
+///         .await?;
+///     // Wait for a suitable local or remote model advertisement.
+///     let model = tokio::time::timeout(Duration::from_secs(30), async {
+///         loop {
+///             if let Some(model) = node.inference_models().await?.into_iter().find(|model| {
+///                 model.thinking_efforts.as_ref().is_some_and(|efforts| {
+///                     efforts.iter().any(|effort| effort == "high")
+///                 })
+///             }) {
+///                 break Ok::<_, anyhow::Error>(model);
+///             }
+///             tokio::time::sleep(Duration::from_millis(100)).await;
+///         }
+///     }).await??;
+///     let request = ChatCompletionRequest {
+///         messages: vec![ChatMessage {
+///             role: "user".into(),
+///             content: Some(MessageContent::Text("Explain lock ordering.".into())),
+///             extra: Default::default(),
+///         }],
+///         reasoning_effort: Some(ReasoningEffort::High),
+///         max_tokens: Some(512),
+///         ..Default::default()
+///     };
+///     let response = node.chat_completion(model.target, request).await?;
+///     println!("{response}");
+///     node.shutdown().await?;
+///     Ok(())
+/// }
+/// ```
+#[cfg(feature = "serving")]
+pub mod inference {
+    pub use mesh_llm_embedded_runtime::native::{
+        ChatCompletionRequest, ChatCompletionStream, ChatMessage, MessageContent, Model,
+        ModelTarget, ReasoningEffort,
+    };
+}
+
 #[cfg(feature = "serving")]
 pub mod models;
 
@@ -45,13 +97,6 @@ pub mod native_runtime {
 #[cfg(feature = "serving")]
 pub mod plugin {
     pub use mesh_llm_host_runtime::plugin::run_plugin_process;
-}
-
-/// Payment control and data types for driving the engine's payments over
-/// its control API: policy, pricing, invoices and wallet status.
-#[cfg(feature = "payments")]
-pub mod payments {
-    pub use mesh_llm_payments::{control, invoice, ledger, pricing, wallet};
 }
 
 /// Node identity keys on disk.

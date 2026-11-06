@@ -27,8 +27,23 @@ replacement connection, including when grants were added after startup.
 The optional manifest `openai_exchange_hook` names a handler and requests
 endpoints, phases, permissions, and resource limits. The private
 `ServiceKind::OpenaiExchange` invokes that handler with JSON. A manifest cannot
-grant itself access. The operator supplies `[plugin.openai_exchange_grant]` for
-that configured plugin. An ordinary install with no grant receives no events,
+grant itself access; access comes from one of two operator decisions:
+
+- **Installation consent.** `mesh-llm plugins install` prints the full request
+  (endpoints, phases, prompt/content access, identity bundle, signing
+  delegation) before and as the package lands, and installing it grants exactly
+  that request. The accepted request is recorded with the installed version in
+  the plugin store. An update is accepted by running it, so an update that
+  asks for more than the version it replaces is called out line by line at
+  landing instead of being widened quietly.
+- **Configuration grant.** A `[plugin.openai_exchange_grant]` table on the
+  plugin's `[[plugin]]` entry replaces the installed request: it can narrow
+  it, widen it, or (an empty grant) remove it. Only this entry can grant access
+  to a plugin that is configured without being installed from a package.
+
+Revocation is either `plugins disable`/`plugins delete`, or a configuration
+grant narrower than the installed request. A plugin that is installed but has
+neither an installed request nor a configuration grant receives no events,
 bodies, identity bundle, or delegation authority.
 
 Supported endpoint names are `chat_completions`, `completions`, and `responses`.
@@ -37,7 +52,11 @@ The first phase precedes downstream dispatch. The selected phase observes the
 effective request after core defaults and transformations, immediately before
 backend dispatch. The terminal phase reports the outcome, including denial,
 validation failure, cancellation, timeout, backend failure, and successful end.
-A request denied before selection has no selected phase.
+A request denied before selection has no selected phase. On a mesh route the
+selected phase names the backend in `target` and, for a remote peer, carries
+`target_peer_id`: the peer's endpoint id as lowercase hex, the same encoding the
+serving node's `request_received` and terminal events use for
+`requested_by_node_id`. It is absent for a local or URL backend.
 
 Both sides explicitly list allowed endpoints, phases, and headers. Independent
 booleans control `request_body`, `effective_request_body`, `response_body`,
@@ -139,6 +158,29 @@ deduplicate headers and retain at most 16 names in lexical order across plugins
 and dispatches. Each author's accumulated annotations remain within 4096 bytes;
 discarding excess metadata marks evidence incomplete without breaking HTTP
 emission.
+
+### Why an exchange did not complete (`failure_class`)
+
+On the `openai.exchange.v1` channel, the `terminal` envelope that the
+raw-proxy (`raw_proxy`) and mesh-routed (`remote_mesh`) paths publish carries an
+additive `failure_class` when the exchange did not complete:
+`payment_required` (a 402, including a peer's relayed one), `refused` (a
+policy denial, a failed required hook, another 4xx), `upstream_error` (a 5xx,
+a transport failure, a stream that ended before its body), `timeout` (a 408 or
+504) or `dropped`. `status` cannot say this alone: a stream
+cut after its 200 headers terminates with status 200.
+
+On a `raw_proxy` terminal that carries a `failure_class`, `requested_by_node_id`
+names the asking mesh node (lowercase hex, the encoding
+`serving_provenance.requested_by_node_id` uses), so a plugin can tell who was
+refused or failed; a failed exchange has no serving provenance to carry it. It
+is absent for a request that did not come over the mesh.
+
+On those two paths an absent `failure_class` means the exchange completed. The
+`typed_frontend` path does not set the field, so there its absence says
+nothing; the lifecycle service's `exchange_finished` callbacks do not carry
+it. Other phases never carry it, so existing consumers read what they read
+before.
 
 ### Client-marked pairs (`twin_bracket_id`)
 

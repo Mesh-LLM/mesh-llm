@@ -108,16 +108,85 @@ fn scan_refresh_json_output_preserves_the_api_object() {
     );
 }
 
-fn run_mesh_llm<const N: usize>(args: [&str; N]) -> Output {
+// SSL_CERT_FILE and SSL_CERT_DIR point the system root loading at an empty
+// file and directory on Linux, as on a host without a CA bundle. The command
+// only talks plain HTTP to the console, so it must not need one.
+#[test]
+fn scan_refresh_runs_without_a_ca_bundle() {
+    let temp = tempfile::tempdir().unwrap();
+    let empty_file = temp.path().join("empty.pem");
+    std::fs::write(&empty_file, "").unwrap();
+    let empty_dir = temp.path().join("certs");
+    std::fs::create_dir(&empty_dir).unwrap();
+    let (port, server) = serve_once(SCAN_RESPONSE);
+    let (_directory, mut command) = mesh_llm_command([
+        "runtime",
+        "scan-refresh",
+        "--endpoint",
+        "endpoint-token",
+        "--port",
+        &port.to_string(),
+        "--json",
+    ]);
+    let output = command
+        .env("SSL_CERT_FILE", &empty_file)
+        .env("SSL_CERT_DIR", &empty_dir)
+        .output()
+        .expect("mesh-llm command should run");
+    assert!(
+        output.status.success(),
+        "command failed: {}",
+        stderr(&output)
+    );
+    let request = server.join().expect("test server should not panic");
+    assert_scan_request(&request, "/api/runtime/control/scan-refresh");
+}
+
+// The doctor's console client lives in mesh-llm-commands, apart from the
+// runtime commands', so it gets its own no-CA case.
+#[test]
+fn doctor_network_runs_without_a_ca_bundle() {
+    let temp = tempfile::tempdir().unwrap();
+    let empty_file = temp.path().join("empty.pem");
+    std::fs::write(&empty_file, "").unwrap();
+    let empty_dir = temp.path().join("certs");
+    std::fs::create_dir(&empty_dir).unwrap();
+    let (port, server) =
+        serve_once(r#"{"node_id": "abcd", "advertisement": {"verdict": "verified"}}"#);
+    let (_directory, mut command) =
+        mesh_llm_command(["doctor", "network", "--port", &port.to_string(), "--json"]);
+    let output = command
+        .env("SSL_CERT_FILE", &empty_file)
+        .env("SSL_CERT_DIR", &empty_dir)
+        .output()
+        .expect("mesh-llm command should run");
+    assert!(
+        output.status.success(),
+        "command failed: {}",
+        stderr(&output)
+    );
+    let request = server.join().expect("test server should not panic");
+    assert!(
+        request.starts_with("GET /api/diagnostics/network "),
+        "unexpected request: {request}"
+    );
+}
+
+fn mesh_llm_command<const N: usize>(args: [&str; N]) -> (tempfile::TempDir, Command) {
     let directory = tempfile::tempdir().expect("token directory");
     let token_path = directory.path().join("owner-control-token-v2");
     mesh_llm_config::create_private_file_if_absent(&token_path, b"test-token\n")
         .expect("write private test credential");
-    Command::new(env!("CARGO_BIN_EXE_mesh-llm"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_mesh-llm"));
+    command
         .args(args)
-        .env("MESH_LLM_OWNER_CONTROL_TOKEN_FILE", token_path)
-        .output()
-        .expect("mesh-llm command should run")
+        .env("MESH_LLM_OWNER_CONTROL_TOKEN_FILE", token_path);
+    (directory, command)
+}
+
+fn run_mesh_llm<const N: usize>(args: [&str; N]) -> Output {
+    let (_directory, mut command) = mesh_llm_command(args);
+    command.output().expect("mesh-llm command should run")
 }
 
 fn stdout(output: &Output) -> String {

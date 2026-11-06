@@ -135,6 +135,7 @@ pub fn emit_cli_process_event(family: CliCommandFamily, outcome: CliCommandOutco
     boundary.emit(outcome);
 }
 
+/// Classify a parsed command for operational events without including argument values.
 pub fn command_family(command: &Command) -> CliCommandFamily {
     match command {
         Command::Models { .. } | Command::Download { .. } | Command::ModelPrepare { .. } => {
@@ -143,7 +144,6 @@ pub fn command_family(command: &Command) -> CliCommandFamily {
         Command::Update { .. } | Command::Setup { .. } | Command::Uninstall { .. } => {
             CliCommandFamily::Installation
         }
-        Command::Wallet { .. } => CliCommandFamily::Wallet,
         Command::Gpus { .. } => CliCommandFamily::Hardware,
         Command::Serve
         | Command::Client

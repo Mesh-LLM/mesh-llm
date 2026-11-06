@@ -5,7 +5,12 @@ fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
 fn document(path: &str) -> Node {
-    workflow_yaml::parse(&fs::read_to_string(root().join(path)).unwrap()).unwrap()
+    let source = fs::read_to_string(root().join(path)).unwrap();
+    if path == ".github/workflows/llama-canary-family-pass.yml" {
+        workflow_yaml::parse_resolved_aliases(&source).unwrap()
+    } else {
+        workflow_yaml::parse(&source).unwrap()
+    }
 }
 fn field<'a>(node: &'a Node, key: &str) -> &'a str {
     node.get(key).and_then(Node::text).unwrap()
@@ -87,12 +92,16 @@ fn security(controller: &Node, worker: &Node) -> Result<(), String> {
         if name != "publish-certified-canary" {
             reject_nonpublisher_secrets(name, job)?;
         }
-        if let Some(permissions) = job.get("permissions")
-            && permissions
+        if let Some(permissions) = job.get("permissions") {
+            if name == "resolve" {
+                read_only(permissions)?;
+            }
+            if permissions
                 .get("contents")
                 .is_some_and(|value| value.text() != Some("read"))
-        {
-            return Err("job contents permission escalation".into());
+            {
+                return Err("job contents permission escalation".into());
+            }
         }
         if job.get("secrets").is_some() {
             return Err("reusable invocation forwards secrets".into());
@@ -117,13 +126,8 @@ fn reject_nonpublisher_secrets(name: &str, job: &Node) -> Result<(), String> {
         return Err("resolver steps missing".into());
     };
     for step in items {
-        if matches!(
-            step.get("id").and_then(Node::text),
-            Some("upstream") | Some("select_platform")
-        ) {
-            // Read-only workflow-token API calls (upstream release selection
-            // and platform/runner resolution) are admitted only with the
-            // workflow token, never a publication credential.
+        if step.get("id").and_then(Node::text) == Some("upstream") {
+            // Upstream release selection uses only the read-only workflow token.
             let Node::Map(env) = change(step, &["env"]) else {
                 return Err("read-only selection environment missing".into());
             };
@@ -248,6 +252,39 @@ fn protected_controller_and_worker_credentials_refuse_permission_or_token_mutati
     };
     candidate.push(("secrets".into(), Node::Scalar("inherit".into())));
     assert!(security(&forwarded, &worker).is_err());
+}
+#[test]
+fn resolver_tokens_remain_read_only_and_scoped_to_selection_steps() {
+    let controller = document(".github/workflows/llama-upstream-canary.yml");
+    let worker = document(".github/workflows/llama-canary-family-pass.yml");
+    {
+        let id = "upstream";
+        let mut mutated = controller.clone();
+        let resolve = change(&mut mutated, &["jobs", "resolve"]);
+        let (index, _) = named(resolve, "id", id);
+        let Node::Seq(steps) = change(resolve, &["steps"]) else {
+            panic!("steps");
+        };
+        *change(&mut steps[index], &["env", "GH_TOKEN"]) =
+            Node::Scalar("${{ secrets.CANARY_REPAIR_TOKEN }}".into());
+        assert!(security(&mutated, &worker).is_err(), "{id}");
+
+        let mut misplaced = controller.clone();
+        let Node::Seq(steps) = change(&mut misplaced, &["jobs", "resolve", "steps"]) else {
+            panic!("steps");
+        };
+        *change(&mut steps[index], &["id"]) = Node::Scalar("untrusted_step".into());
+        assert!(security(&misplaced, &worker).is_err(), "{id}");
+    }
+    let mut escalated = controller.clone();
+    let Node::Map(resolve) = change(&mut escalated, &["jobs", "resolve"]) else {
+        panic!("job");
+    };
+    resolve.push((
+        "permissions".into(),
+        Node::Map(vec![("actions".into(), Node::Scalar("write".into()))]),
+    ));
+    assert!(security(&escalated, &worker).is_err());
 }
 fn current_attempt_inputs(jobs: &Node, index: u8) {
     let repair_name = format!("repair_{index}");
@@ -427,22 +464,22 @@ fn frozen_prebuilt_workers_load_cache_after_controller_and_before_consumption() 
         (
             controller.get("jobs").unwrap().get("preflight").unwrap(),
             "Verify immutable family plan and pinned cache",
-            "${{ needs.resolve.outputs.runner_profile }}",
+            "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}",
         ),
         (
             worker_jobs.get("build").unwrap(),
             "Build exact candidate for distributed certification",
-            "${{ inputs.runner_profile }}",
+            "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}",
         ),
         (
             worker_jobs.get("family").unwrap(),
             "Certify one family",
-            "${{ inputs.runner_profile }}",
+            "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}",
         ),
         (
             worker_jobs.get("retry_family").unwrap(),
             "Recheck one infrastructure-failed family",
-            "${{ inputs.runner_profile }}",
+            "${{ runner.os == 'Linux' && 'preinstalled-linux' || 'preinstalled-macos' }}",
         ),
     ] {
         let (prepare, step) = named(job, "uses", "./.github/actions/prepare-automation");
@@ -464,12 +501,12 @@ fn frozen_prebuilt_workers_load_cache_after_controller_and_before_consumption() 
         );
     }
     let family = worker_jobs.get("family").unwrap();
-    assert_eq!(needs(family), BTreeSet::from(["build"]));
+    assert_eq!(needs(family), BTreeSet::from(["combine"]));
     let strategy = family.get("strategy").unwrap();
     assert_eq!(field(strategy, "fail-fast"), "false");
     assert_eq!(
         field(strategy, "matrix"),
-        "${{ fromJSON(needs.build.outputs.matrix) }}"
+        "${{ fromJSON(needs.combine.outputs.matrix) }}"
     );
     let (restore, _) = named(
         family,
@@ -486,11 +523,20 @@ fn frozen_prebuilt_workers_load_cache_after_controller_and_before_consumption() 
                 != Some("./.github/actions/use-canary-cache"))
     );
     let cache = document(".github/actions/use-canary-cache/action.yml");
-    for (name, shell) in [
-        ("Read configured model cache (macOS)", "/bin/zsh -il {0}"),
-        ("Read configured model cache (Linux)", "/bin/bash -il {0}"),
+    for (name, condition, shell) in [
+        (
+            "Read configured model cache (macOS)",
+            "runner.os == 'macOS'",
+            "/bin/zsh -il {0}",
+        ),
+        (
+            "Read configured model cache (Linux)",
+            "runner.os == 'Linux'",
+            "/bin/bash -il {0}",
+        ),
     ] {
         let (_, step) = named(cache.get("runs").unwrap(), "name", name);
+        assert_eq!(field(step, "if"), condition);
         assert_eq!(field(step, "shell"), shell);
         assert_eq!(
             field(step, "run").trim(),
@@ -569,13 +615,13 @@ fn parsed_family_worker_preserves_bounded_fanout_and_prebuilt_restore_before_cer
     let worker = document(".github/workflows/llama-canary-family-pass.yml");
     let jobs = worker.get("jobs").unwrap();
     let family = jobs.get("family").unwrap();
-    assert_eq!(needs(family), BTreeSet::from(["build"]));
+    assert_eq!(needs(family), BTreeSet::from(["combine"]));
     let strategy = family.get("strategy").unwrap();
     assert_eq!(field(strategy, "max-parallel"), "8");
     assert_eq!(field(strategy, "fail-fast"), "false");
     assert_eq!(
         field(strategy, "matrix"),
-        "${{ fromJSON(needs.build.outputs.matrix) }}"
+        "${{ fromJSON(needs.combine.outputs.matrix) }}"
     );
     let (restore, restored) = named(
         family,
@@ -600,12 +646,16 @@ fn parsed_family_worker_preserves_bounded_fanout_and_prebuilt_restore_before_cer
     let build = jobs.get("build").unwrap();
     assert_eq!(
         field(build, "runs-on"),
-        "${{ fromJSON(inputs.runner_labels_128) }}"
+        "${{ fromJSON(inputs.runner_labels_macos) }}"
     );
+    let (setup, _) = named(build, "uses", "./.github/actions/setup-canary-runner");
+    let (backend, _) = named(build, "uses", "./.github/actions/select-canary-backend");
+    let (consume, _) = named(build, "id", "build");
+    assert!(setup < backend && backend < consume);
     let build_env = build.get("env").unwrap();
     assert!(
         build_env.get("LLAMA_STAGE_BACKEND").is_none(),
-        "the backend is platform-independent; the resolve job selects the platform"
+        "the backend is selected by the native runner"
     );
     assert!(field(build_env, "LLAMA_STAGE_BUILD_DIR").contains("inputs.pass_id"));
     let certification = fs::read_to_string(
@@ -617,6 +667,34 @@ fn parsed_family_worker_preserves_bounded_fanout_and_prebuilt_restore_before_cer
             && certification.contains("\"--plan\".into()")
             && certification.contains("\"--shard-index\".into()")
     );
+}
+#[test]
+fn canary_backend_selection_requires_a_supported_platform_and_linux_architectures() {
+    let action = document(".github/actions/select-canary-backend/action.yml");
+    let (_, step) = named(action.get("runs").unwrap(), "name", "Detect stage backend");
+    for (os, architectures, backend) in [
+        ("Darwin", "", Some("metal")),
+        ("Linux", "90", Some("cuda")),
+        ("Linux", "", None),
+        ("Windows", "90", None),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let directory = temp.path().canonicalize().unwrap();
+        let setup = format!(
+            "export GITHUB_ENV=\"$PWD/action.env\"\nexport SKIPPY_CUDA_ARCHITECTURES='{architectures}'\nuname() {{ printf '%s\\n' '{os}'; }}"
+        );
+        let (status, _, stderr) = action_shell(&directory, &setup, field(step, "run"));
+        if let Some(backend) = backend {
+            assert_eq!(status, 0, "{}", String::from_utf8_lossy(&stderr));
+            assert_eq!(
+                fs::read_to_string(directory.join("action.env")).unwrap(),
+                format!("LLAMA_STAGE_BACKEND={backend}\n")
+            );
+        } else {
+            assert_eq!(status, 1, "{os}");
+            assert!(!directory.join("action.env").exists());
+        }
+    }
 }
 fn setup_observers() -> &'static str {
     r#"

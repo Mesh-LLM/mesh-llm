@@ -32,6 +32,9 @@ pub(super) struct ExchangeHealth {
 #[derive(Debug, Default)]
 pub(crate) struct PhaseResult {
     pub denied: bool,
+    /// The denying plugin's status when it asked for one other than 403.
+    /// Validated to `402` by [`valid_decision`]; a 403 deny leaves it unset.
+    pub deny_status: Option<u16>,
     pub required_failure: bool,
     pub incomplete: bool,
     pub evidence_unavailable: bool,
@@ -42,6 +45,10 @@ pub(crate) struct PhaseResult {
 
 impl PhaseResult {
     fn merge(&mut self, other: Self) {
+        self.deny_status = merged_deny_status(
+            self.denied.then_some(self.deny_status),
+            other.denied.then_some(other.deny_status),
+        );
         self.denied |= other.denied;
         self.required_failure |= other.required_failure;
         self.incomplete |= other.incomplete;
@@ -57,12 +64,24 @@ impl PhaseResult {
     }
     pub(crate) fn error_status(&self) -> Option<u16> {
         if self.denied {
-            Some(403)
+            Some(self.deny_status.unwrap_or(403))
         } else if self.required_failure {
             Some(503)
         } else {
             None
         }
+    }
+}
+
+/// Each side is `None` when that plugin did not deny, `Some(None)` for a
+/// plain 403 deny and `Some(Some(402))` for a satisfiable one. A hard 403
+/// from any plugin outranks a satisfiable 402 from another: the caller
+/// cannot buy its way past the stricter gate.
+fn merged_deny_status(mine: Option<Option<u16>>, theirs: Option<Option<u16>>) -> Option<u16> {
+    match (mine, theirs) {
+        (Some(None), _) | (_, Some(None)) | (None, None) => None,
+        (Some(Some(a)), Some(Some(b))) => Some(a.min(b)),
+        (Some(Some(status)), None) | (None, Some(Some(status))) => Some(status),
     }
 }
 
@@ -490,6 +509,9 @@ fn valid_decision(
         .is_some_and(|reason| reason.len() > 1024)
         || (decision.decision == OpenAiAdmissionDecision::Deny
             && (!grant.admission || !matches!(phase, "request_received" | "backend_selected")))
+        || (decision.status.is_some()
+            && (decision.decision != OpenAiAdmissionDecision::Deny
+                || !matches!(decision.status, Some(402 | 403))))
         || ((!decision.annotations.is_empty() || !decision.response_headers.is_empty())
             && !grant.metadata)
         || decision.response_headers.len() > 16
@@ -529,6 +551,7 @@ fn phase_result(name: &str, decision: OpenAiExchangeDecision) -> PhaseResult {
     let prefix = annotation_prefix(name);
     PhaseResult {
         denied: decision.decision == OpenAiAdmissionDecision::Deny,
+        deny_status: decision.status.filter(|status| *status != 403),
         headers: decision.response_headers,
         annotations: decision
             .annotations
@@ -882,6 +905,65 @@ mod tests {
         assert_eq!(health["observer"].in_flight, 0);
         assert_eq!(health["observer"].failures, 0);
         assert!(health["observer"].open_until.is_none());
+    }
+
+    #[test]
+    fn deny_status_is_402_or_403_on_a_deny_only_and_403_wins_a_merge() {
+        let grant = OpenAiExchangeGrant {
+            admission: true,
+            ..Default::default()
+        };
+        let deny = |status| OpenAiExchangeDecision {
+            decision: OpenAiAdmissionDecision::Deny,
+            status,
+            ..Default::default()
+        };
+        for status in [None, Some(402), Some(403)] {
+            assert!(
+                valid_decision(&deny(status), "request_received", "gate", &grant),
+                "{status:?}"
+            );
+        }
+        for status in [Some(400), Some(401), Some(429), Some(503)] {
+            assert!(
+                !valid_decision(&deny(status), "request_received", "gate", &grant),
+                "{status:?}"
+            );
+        }
+        let allow_with_status = OpenAiExchangeDecision {
+            decision: OpenAiAdmissionDecision::Allow,
+            status: Some(402),
+            ..Default::default()
+        };
+        assert!(!valid_decision(
+            &allow_with_status,
+            "request_received",
+            "gate",
+            &grant
+        ));
+
+        // The host answers the status the gate asked for ...
+        assert_eq!(
+            phase_result("gate", deny(Some(402))).error_status(),
+            Some(402)
+        );
+        assert_eq!(
+            phase_result("gate", deny(Some(403))).error_status(),
+            Some(403)
+        );
+        assert_eq!(phase_result("gate", deny(None)).error_status(), Some(403));
+        // ... a satisfiable 402 never outranks another plugin's hard 403 ...
+        let mut merged = phase_result("gate", deny(Some(402)));
+        merged.merge(phase_result("policy", deny(None)));
+        assert_eq!(merged.error_status(), Some(403));
+        let mut merged = phase_result("policy", deny(None));
+        merged.merge(phase_result("gate", deny(Some(402))));
+        assert_eq!(merged.error_status(), Some(403));
+        // ... two gates agree on 402, and an abstaining observer changes nothing.
+        let mut merged = phase_result("gate", deny(Some(402)));
+        merged.merge(phase_result("gate2", deny(Some(402))));
+        merged.merge(phase_result("observer", OpenAiExchangeDecision::default()));
+        assert_eq!(merged.error_status(), Some(402));
     }
 
     #[test]

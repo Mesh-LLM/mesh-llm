@@ -49,6 +49,7 @@ pub(crate) mod runtime_install;
 #[cfg(unix)]
 pub(crate) mod sdk_compat;
 pub(crate) mod sdk_fixture;
+pub(crate) mod skippy_benchmark_compare;
 pub(crate) mod stability;
 pub(crate) mod startup_recovery;
 pub(crate) mod suffix_proposer;
@@ -167,7 +168,6 @@ pub(crate) mod agent_recording_proxy;
 
 pub(crate) mod native_runtime_evidence;
 
-pub(crate) mod lightning_compatibility;
 pub(crate) mod remote_handoff_summary;
 
 pub(crate) mod cache_family_moe;

@@ -76,6 +76,9 @@ fn run() -> DynResult<()> {
         cli::CliCommand::EventBenchmarkComparison(rest) => {
             automation::event_benchmark_comparison::run(rest)
         }
+        cli::CliCommand::SkippyBenchmarkCompare(rest) => {
+            automation::skippy_benchmark_compare::run(rest)
+        }
         cli::CliCommand::AgenticPromptManifest(rest) => {
             automation::agentic_prompt_manifest::run(rest)
         }
@@ -117,9 +120,6 @@ fn run() -> DynResult<()> {
         cli::CliCommand::SmokeInputs(rest) => automation::smoke_inputs::run(rest),
         cli::CliCommand::RemoteHandoffSummary(rest) => {
             automation::remote_handoff_summary::run(rest)
-        }
-        cli::CliCommand::LightningCompatibility(rest) => {
-            automation::lightning_compatibility::run(rest)
         }
         cli::CliCommand::ControlPlaneQa(rest) => {
             let root = match explicit_root {

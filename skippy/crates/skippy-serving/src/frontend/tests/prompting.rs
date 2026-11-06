@@ -1,5 +1,6 @@
 use super::support::*;
 use super::*;
+use skippy_inference_api::chat::ChatCompletionRequest;
 
 #[test]
 fn chat_runtime_feature_guard_allows_tool_calls() {
@@ -20,18 +21,21 @@ fn chat_runtime_feature_guard_allows_tool_calls() {
             "parallel_tool_calls": true
         }),
     ] {
-        let request: ChatCompletionRequest = serde_json::from_value(payload).unwrap();
+        let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(payload)
+            .unwrap()
+            .into();
         ensure_chat_runtime_features_supported(&request).unwrap();
     }
 }
 
 #[test]
 fn plain_chat_does_not_require_chat_output_parser() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     assert!(!chat_output_parser_required(
         &request,
@@ -41,11 +45,12 @@ fn plain_chat_does_not_require_chat_output_parser() {
 
 #[test]
 fn hidden_reasoning_format_requires_chat_output_parser_for_plain_chat() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let template_options = ChatTemplateOptions {
         reasoning_format: Some(ChatReasoningFormat::Hidden),
         ..ChatTemplateOptions::default()
@@ -56,11 +61,12 @@ fn hidden_reasoning_format_requires_chat_output_parser_for_plain_chat() {
 
 #[test]
 fn reasoning_format_none_leaves_plain_chat_unparsed() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hi"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let template_options = ChatTemplateOptions {
         reasoning_format: Some(ChatReasoningFormat::None),
         ..ChatTemplateOptions::default()
@@ -128,7 +134,7 @@ fn assigns_unique_ids_when_llama_message_tool_calls_repeat_an_id() {
 fn parses_llama_message_reasoning_content() {
     let parsed = parsed_chat_message_from_json(
         r#"{"role":"assistant","reasoning_content":"Checked facts first.","content":"Final answer."}"#,
-        &ChatCompletionRequest {
+        &GenerationRequest {
             tools: None,
             ..tool_request()
         },
@@ -169,12 +175,14 @@ fn chat_response_from_parsed_message_separates_reasoning_content() {
         predicted_ms: 100.0,
         queue_wait_ms: 0.0,
         restore_ms: 0.0,
+        split_prefix_cache: None,
         text: "Checked facts first.</think>Final answer.".to_string(),
         finish_reason: FinishReason::Stop,
         detokenize_ms: 0.0,
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
         token_logprobs: None,
+        activation_wire: None,
     };
     let parsed = ParsedChatMessage {
         content: Some("Final answer.".to_string()),
@@ -182,7 +190,8 @@ fn chat_response_from_parsed_message_separates_reasoning_content() {
         tool_calls: None,
     };
 
-    let response = chat_response_from_generated_text("qwen".to_string(), &output, Some(parsed));
+    let response =
+        generation_response_from_generated_text("qwen".to_string(), &output, Some(parsed));
 
     let message = &response.choices[0].message;
     assert_eq!(message.content.as_deref(), Some("Final answer."));
@@ -224,12 +233,14 @@ fn generated_text_timings_are_present_without_native_mtp() {
         predicted_ms: 100.0,
         queue_wait_ms: 0.0,
         restore_ms: 0.0,
+        split_prefix_cache: None,
         text: "Paris".to_string(),
         finish_reason: FinishReason::Stop,
         detokenize_ms: 0.0,
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
         token_logprobs: None,
+        activation_wire: None,
     };
 
     let timings = output.timings().expect("standard timings");
@@ -263,12 +274,14 @@ fn generated_text_timings_report_standalone_speculative_totals() {
         predicted_ms: 100.0,
         queue_wait_ms: 0.0,
         restore_ms: 0.0,
+        split_prefix_cache: None,
         text: "Paris".to_string(),
         finish_reason: FinishReason::Stop,
         detokenize_ms: 0.0,
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
         token_logprobs: None,
+        activation_wire: None,
     };
 
     let timings = output.timings().expect("standalone speculative timings");
@@ -318,17 +331,72 @@ fn generated_text_timings_prefer_composite_proposal_totals() {
         predicted_ms: 100.0,
         queue_wait_ms: 0.0,
         restore_ms: 0.0,
+        split_prefix_cache: None,
         text: "ok".to_string(),
         finish_reason: FinishReason::Stop,
         detokenize_ms: 0.0,
         text_emit_ms: 0.0,
         eog_check_ms: 0.0,
         token_logprobs: None,
+        activation_wire: None,
     };
 
     let timings = output.timings().expect("timings");
     assert_eq!(timings.get("draft_n"), Some(&json!(4)));
     assert_eq!(timings.get("draft_n_accepted"), Some(&json!(4)));
+}
+
+#[test]
+fn split_prefix_cache_hit_is_reported_in_timings() {
+    // 3,456 tokens restored on both stages of a split, then 491 prefilled at
+    // 32 KiB a token (activation plus split DFlash feature rows).
+    let stats = SplitPrefixCacheStats::new(3_456, 2, 491 * 32_768, 491, 2560);
+    assert_eq!(stats.bytes_saved, 3_456 * 32_768);
+    let output = GeneratedText {
+        prompt_tokens: 3_948,
+        completion_tokens: 1,
+        cache_status: "hit",
+        cached_prompt_tokens: 3_456,
+        matched_prefix_tokens: 3_456,
+        suffix_prefill_tokens: 491,
+        cache_hit_kind: Some("chain_prefix"),
+        native_mtp_stats: NativeMtpStats::default(),
+        native_mtp_decode_telemetry: None,
+        verify_window_pipeline_stats: None,
+        speculative_stats: None,
+        prompt_ms: 20.0,
+        predicted_ms: 1.0,
+        queue_wait_ms: 0.0,
+        restore_ms: 0.0,
+        split_prefix_cache: Some(stats),
+        text: "ok".to_string(),
+        finish_reason: FinishReason::Stop,
+        detokenize_ms: 0.0,
+        text_emit_ms: 0.0,
+        eog_check_ms: 0.0,
+        token_logprobs: None,
+        activation_wire: None,
+    };
+
+    let timings = output.timings().expect("timings");
+    assert_eq!(timings.get("prefix_cache_hit_tokens"), Some(&json!(3_456)));
+    assert_eq!(timings.get("prefix_cache_hit_stages"), Some(&json!(2)));
+    assert_eq!(
+        timings.get("prefix_cache_prefill_bytes_sent"),
+        Some(&json!(491 * 32_768))
+    );
+    assert_eq!(
+        timings.get("prefix_cache_bytes_saved"),
+        Some(&json!(3_456 * 32_768))
+    );
+}
+
+#[test]
+fn split_prefix_cache_prices_a_full_hit_at_an_f32_row_per_hop() {
+    let stats = SplitPrefixCacheStats::new(100, 3, 0, 0, 2560);
+    assert_eq!(stats.bytes_saved, 100 * 2560 * 4 * 2);
+    let miss = SplitPrefixCacheStats::new(0, 0, 1_000, 10, 2560);
+    assert_eq!(miss.bytes_saved, 0);
 }
 
 #[test]
@@ -372,8 +440,8 @@ fn auto_reasoning_visibility_keeps_reasoning_content() {
 }
 
 #[test]
-fn generation_event_to_chat_chunk_emits_reasoning_delta() {
-    let chunk = generation_event_to_chat_chunk(
+fn generation_event_to_inference_event_emits_reasoning_delta() {
+    let chunk = generation_event_to_inference_event(
         Ok(GenerationStreamEvent::ReasoningDelta(
             "Checking the premise.".to_string(),
         )),
@@ -409,7 +477,7 @@ fn llama_message_tool_parser_rejects_unknown_tool() {
 
 #[test]
 fn tool_choice_limits_allowed_tool_name() {
-    let mut request: ChatCompletionRequest = serde_json::from_value(json!({
+    let mut request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "look this up"}],
         "tools": [
@@ -418,7 +486,8 @@ fn tool_choice_limits_allowed_tool_name() {
         ],
         "tool_choice": {"type": "function", "function": {"name": "lookup"}}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     assert!(parsed_tool_calls_from_message_json(
         r#"{"role":"assistant","content":null,"tool_calls":[{"id":"call_123","type":"function","function":{"name":"search","arguments":"{}"}}]}"#,
@@ -667,16 +736,17 @@ fn tool_call_stream_delta_adds_indexes() {
 
 #[test]
 fn chat_message_generation_value_preserves_tool_history() {
-    let message: skippy_inference_api::ChatMessage = serde_json::from_value(json!({
-        "role": "assistant",
-        "content": null,
-        "tool_calls": [{
-            "id": "call_123",
-            "type": "function",
-            "function": {"name": "lookup", "arguments": "{\"city\":\"Sydney\"}"}
-        }]
-    }))
-    .unwrap();
+    let message: skippy_inference_api::generation::GenerationMessage =
+        serde_json::from_value(json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": [{
+                "id": "call_123",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{\"city\":\"Sydney\"}"}
+            }]
+        }))
+        .unwrap();
     let mut media = Vec::new();
 
     let value = chat_message_generation_value(&message, "<__media__>", &mut media).unwrap();
@@ -688,15 +758,16 @@ fn chat_message_generation_value_preserves_tool_history() {
 
 #[test]
 fn chat_message_generation_value_preserves_omitted_content() {
-    let message: skippy_inference_api::ChatMessage = serde_json::from_value(json!({
-        "role": "assistant",
-        "tool_calls": [{
-            "id": "call_123",
-            "type": "function",
-            "function": {"name": "lookup", "arguments": "{}"}
-        }]
-    }))
-    .unwrap();
+    let message: skippy_inference_api::generation::GenerationMessage =
+        serde_json::from_value(json!({
+            "role": "assistant",
+            "tool_calls": [{
+                "id": "call_123",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"}
+            }]
+        }))
+        .unwrap();
     let mut media = Vec::new();
 
     let value = chat_message_generation_value(&message, "<__media__>", &mut media).unwrap();
@@ -728,6 +799,7 @@ fn generated_text_with_logprobs() -> GeneratedText {
         predicted_ms: 0.0,
         queue_wait_ms: 0.0,
         restore_ms: 0.0,
+        split_prefix_cache: None,
         text: "Hi!".to_string(),
         finish_reason: FinishReason::Stop,
         detokenize_ms: 0.0,
@@ -743,14 +815,67 @@ fn generated_text_with_logprobs() -> GeneratedText {
                 top: Vec::new(),
             },
         ]),
+        activation_wire: None,
     }
+}
+
+#[test]
+fn timings_report_activation_wire_bytes_per_token() {
+    let mut output = generated_text_with_logprobs();
+    assert!(
+        !output
+            .timings()
+            .expect("timings")
+            .contains_key("activation_codec")
+    );
+    // 99 tokens prefilled; the last prompt token rides the first decode.
+    output.prompt_tokens = 100;
+    output.completion_tokens = 4;
+    output.activation_wire = Some(ActivationWireStats {
+        codec: "s8-row-f32-rne-v1",
+        prefill_bytes: 99 * 2564,
+        decode_bytes: 4 * 2564,
+        dflash_features: None,
+    });
+    let timings = output.timings().expect("timings");
+    assert_eq!(timings["activation_codec"], json!("s8-row-f32-rne-v1"));
+    assert_eq!(timings["activation_prefill_bytes"], json!(253_836));
+    assert_eq!(timings["activation_prefill_bytes_per_token"], json!(2564.0));
+    assert_eq!(timings["activation_decode_bytes"], json!(10_256));
+    assert_eq!(timings["activation_decode_bytes_per_token"], json!(2564.0));
+
+    // A prefix-cache hit forwards only the suffix.
+    output.suffix_prefill_tokens = 33;
+    let timings = output.timings().expect("timings");
+    assert_eq!(timings["activation_prefill_bytes_per_token"], json!(7692.0));
+    assert!(!timings.contains_key("dflash_feature_decode_bytes"));
+
+    // A split DFlash target also reports the draft's feature-row share.
+    output.suffix_prefill_tokens = 0;
+    if let Some(wire) = output.activation_wire.as_mut() {
+        wire.dflash_features = Some(SplitDFlashFeatureBytes {
+            prefill_bytes: 99 * 1360,
+            decode_bytes: 4 * 2720,
+        });
+    }
+    let timings = output.timings().expect("timings");
+    assert_eq!(timings["dflash_feature_prefill_bytes"], json!(134_640));
+    assert_eq!(
+        timings["dflash_feature_prefill_bytes_per_token"],
+        json!(1360.0)
+    );
+    assert_eq!(timings["dflash_feature_decode_bytes"], json!(10_880));
+    assert_eq!(
+        timings["dflash_feature_decode_bytes_per_token"],
+        json!(2720.0)
+    );
 }
 
 #[test]
 fn chat_response_reports_token_logprobs_in_openai_shape() {
     let output = generated_text_with_logprobs();
 
-    let response = chat_response_from_generated_text("qwen".to_string(), &output, None);
+    let response = generation_response_from_generated_text("qwen".to_string(), &output, None);
 
     assert_eq!(
         response.choices[0].logprobs,
@@ -773,7 +898,7 @@ fn chat_response_reports_token_logprobs_in_openai_shape() {
 
     let mut plain = output;
     plain.token_logprobs = None;
-    let response = chat_response_from_generated_text("qwen".to_string(), &plain, None);
+    let response = generation_response_from_generated_text("qwen".to_string(), &plain, None);
     assert_eq!(response.choices[0].logprobs, None);
 }
 

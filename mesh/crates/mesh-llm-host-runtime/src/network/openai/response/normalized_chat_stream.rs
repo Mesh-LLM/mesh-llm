@@ -82,14 +82,10 @@ pub(in crate::network::openai::response) async fn relay_normalized_chat_completi
     route_observer: OpenAiRouteObserver<'_>,
     request_id: RequestId,
 ) -> Result<RouteAttemptResult> {
-    if retry_policy.context_overflow && probe.retryable_context_overflow {
-        return Ok(RouteAttemptResult::RetryableContextOverflow);
-    }
-    if crate::network::openai::response::common::withheld_payment_required_response(
-        retry_policy,
-        probe.status_code,
-    ) {
-        return Ok(RouteAttemptResult::RetryablePaymentRequired);
+    if let Some(result) =
+        crate::network::openai::response::common::retry_before_relay(&probe, retry_policy)
+    {
+        return Ok(result);
     }
 
     if !(200..300).contains(&probe.status_code) {
@@ -327,32 +323,6 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(wire.matches("\"usage\"").count(), 1);
         assert!(!wire.contains("[DONE]"));
-    }
-
-    #[cfg(feature = "payments")]
-    #[tokio::test]
-    async fn seller_replay_matches_payer_usage_and_digests() {
-        let body = frames(true);
-        let (_, result) = relay(body.clone(), RequestId::new()).await;
-        let RouteAttemptResult::Delivered {
-            usage,
-            output_digests,
-            ..
-        } = result.unwrap()
-        else {
-            panic!("not delivered")
-        };
-        let raw = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{body}"
-        );
-        let seller = crate::network::openai::response::served_outcome_of_raw_response(
-            raw.as_bytes(),
-            crate::network::openai::request_normalize::ResponseAdapter::OpenAiChatCompletionsStream,
-        )
-        .await;
-        let payer =
-            crate::network::openai::transport::delivered_outcome(200, usage, output_digests);
-        assert_eq!(seller, payer);
     }
 
     #[tokio::test]

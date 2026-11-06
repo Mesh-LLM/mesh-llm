@@ -18,7 +18,7 @@ use std::ffi::OsStr;
 use std::time::Duration;
 use tempfile::TempDir;
 
-fn test_host_mode() -> PluginHostMode {
+pub(super) fn test_host_mode() -> PluginHostMode {
     PluginHostMode {
         mesh_visibility: MeshVisibility::Private,
     }
@@ -73,6 +73,8 @@ fn installed_metadata_with_web_ui(
                     reason: Some("bundle failed validation".into()),
                 },
             }),
+            operation_bindings: Vec::new(),
+            peer_blocks: false,
         }),
         last_protocol_version: Some(1),
         last_status: Some("running".into()),
@@ -88,6 +90,7 @@ pub(super) fn plugin_spec(
     asset_root: Option<&str>,
 ) -> ExternalPluginSpec {
     ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         openai_exchange_grant: None,
         name: "demo".into(),
         command: "mesh-llm-plugin-demo".into(),
@@ -98,6 +101,7 @@ pub(super) fn plugin_spec(
         startup: Default::default(),
         web_ui_enabled,
         web_ui_primary_tab: None,
+        endpoint_models: None,
         installed_metadata: Some(installed_metadata_with_web_ui(
             temp_dir.path().to_path_buf(),
             validation_status,
@@ -151,6 +155,7 @@ pub(crate) fn in_process_plugin(
     runner: crate::plugin::InProcessPluginRunner,
 ) -> ExternalPlugin {
     let mut plugin = plugin_for_spec(ExternalPluginSpec {
+        operation_bindings: Vec::new(),
         openai_exchange_grant: None,
         name: name.into(),
         command: String::new(),
@@ -161,6 +166,7 @@ pub(crate) fn in_process_plugin(
         startup: Default::default(),
         web_ui_enabled: None,
         web_ui_primary_tab: None,
+        endpoint_models: None,
         installed_metadata: None,
     });
     plugin.in_process = Some(runner);
@@ -225,6 +231,7 @@ pub(super) fn plugin_for_spec_with_mesh_tx(
         }),
         restart_lock: Arc::new(Mutex::new(())),
         stopping: AtomicBool::new(false),
+        announce_starts: AtomicBool::new(false),
         next_request_id: AtomicU64::new(1),
         next_generation: AtomicU64::new(1),
         in_process: None,
@@ -271,6 +278,7 @@ pub(super) async fn mark_plugin_running(plugin: &ExternalPlugin, generation: u64
     *plugin.runtime.lock().await = Some(PluginRuntime {
         managed_models: Vec::new(),
         generation,
+        started: true,
         authenticated_peer: true,
         initialized_lifecycle: None,
         status_declaration: StatusDeclaration::Pending,
@@ -468,6 +476,7 @@ fn child_env_includes_valid_package_web_ui_asset_root() {
 fn configured_plugin_url_is_normalized_before_child_env_export() {
     let config = MeshConfig {
         plugins: vec![PluginConfigEntry {
+            operation_bindings: Vec::new(),
             name: "demo".into(),
             enabled: Some(true),
             web_ui_enabled: None,
@@ -478,6 +487,7 @@ fn configured_plugin_url_is_normalized_before_child_env_export() {
             command: Some("mesh-llm-plugin-demo".into()),
             args: Vec::new(),
             url: Some("\u{2003}https://plugin.example.test/v1\u{2003}".into()),
+            models: None,
             settings: BTreeMap::new(),
             startup: Default::default(),
         }],
@@ -850,6 +860,7 @@ async fn try_send_channel_message_does_not_block_on_a_full_outbound_queue() {
     *plugin.runtime.lock().await = Some(PluginRuntime {
         managed_models: Vec::new(),
         generation: 1,
+        started: true,
         authenticated_peer: true,
         initialized_lifecycle: None,
         status_declaration: StatusDeclaration::Pending,

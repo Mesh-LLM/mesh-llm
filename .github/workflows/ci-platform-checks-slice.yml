@@ -60,6 +60,10 @@ permissions:
   contents: read
 
 env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_BENCH_DEBUG: "0"
   CACHE_NAMESPACE: mesh-llm
   LLAMA_STAGE_BACKEND: metal
   LLAMA_STAGE_BUILD_DIR: .deps/llama-build/build-stage-abi-static-metal
@@ -316,7 +320,7 @@ jobs:
           # there is to *select* this row when that crate changes; it is a
           # shared owner already resolved by the step above, so it is
           # deliberately absent here rather than run twice.
-          crates: '["mesh-llm-analytics","mesh-llm-config","mesh-llm-events","mesh-llm-identity","mesh-llm-payments","mesh-llm-plugin","mesh-llm-plugin-manager","mesh-llm-tui","mesh-llm-ui","mesh-llm-wallet","skippy-cache"]'
+          crates: '["mesh-llm-analytics","mesh-llm-config","mesh-llm-events","mesh-llm-identity","mesh-llm-payments","mesh-llm-plugin","mesh-llm-plugin-manager","mesh-llm-routing","mesh-llm-tui","mesh-llm-ui","mesh-llm-wallet","process-supervision","skippy-cache"]'
       - name: Resolve macOS unit-test owners against the checked-out workspace
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'macos' }}
         id: macos_test_packages

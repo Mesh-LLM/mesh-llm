@@ -94,8 +94,10 @@ mod tests {
             command: command.map(str::to_owned),
             args: Vec::new(),
             url: None,
+            models: None,
             settings: std::collections::BTreeMap::new(),
             startup: PluginStartupConfig::default(),
+            operation_bindings: Vec::new(),
         }
     }
 

@@ -1,3 +1,6 @@
+use crate::generation::{
+    GenerationEvent, GenerationEventStream, GenerationRequest, GenerationResponse,
+};
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicUsize, Ordering},
@@ -11,7 +14,6 @@ use axum::{
 use tower::ServiceExt;
 
 use crate::{
-    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream,
     CompletionChunk, CompletionRequest, CompletionResponse, CompletionStream, InferenceBackend,
     InferenceError, InferenceRequestContext, InferenceResult, ModelObject, RequestId, Usage,
     http_exchange::{HttpExchangeAdmission, HttpExchangePolicy},
@@ -91,24 +93,24 @@ impl InferenceBackend for Backend {
     }
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         self.count_call(&request.model)?;
-        let mut response = ChatCompletionResponse::new(request.model, "hello", Usage::new(2, 1));
+        let mut response = GenerationResponse::new(request.model, "hello", Usage::new(2, 1));
         response.id = "fixed".into();
         response.created = 1;
         Ok(response)
     }
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         self.count_call(&request.model)?;
         if request.model == "pending" {
             return Ok(Box::pin(futures_util::stream::pending()));
         }
-        let mut chunk = ChatCompletionChunk::done(request.model);
+        let mut chunk = GenerationEvent::done(request.model);
         chunk.id = "fixed".into();
         chunk.created = 1;
         Ok(Box::pin(futures_util::stream::iter(vec![Ok(chunk)])))

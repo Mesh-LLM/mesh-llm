@@ -79,6 +79,13 @@ pub(super) const PLUGIN_DESCRIPTORS: &[Descriptor] = &[
         false,
         RawKind::None,
     ),
+    descriptor(
+        &["mesh-llm", "plugins", "call"],
+        NONE,
+        REDACTED_NAME,
+        false,
+        RawKind::None,
+    ),
 ];
 
 pub(super) const BENCHMARK_DESCRIPTORS: &[Descriptor] = &[

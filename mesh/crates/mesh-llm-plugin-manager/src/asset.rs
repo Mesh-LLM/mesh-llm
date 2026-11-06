@@ -42,6 +42,45 @@ pub fn select_plugin_asset(
     )
 }
 
+/// Infers the plugin name from a release whose assets are not named after the
+/// repository, e.g. `Mesh-LLM/ln-payments-plugin` shipping
+/// `pay-lightning-v0.1.0-<target>.tar.gz`. Only versioned assets for this
+/// exact release and target count, and exactly one distinct valid name must
+/// remain; anything else is ambiguous and returns `None`. The packaged
+/// manifest still has to declare the inferred name at extraction time.
+pub fn infer_plugin_asset(
+    version: &PluginVersion,
+    target: &PluginTarget,
+    assets: &[String],
+) -> Option<(String, PluginAsset)> {
+    let mut found: Option<(String, PluginAsset)> = None;
+    for segment in version.matching_segments() {
+        let suffix = format!("-{}-{}.{}", segment, target.triple(), target.archive_ext());
+        for asset in assets {
+            let Some(name) = asset.strip_suffix(&suffix) else {
+                continue;
+            };
+            if !is_valid_name(name) {
+                continue;
+            }
+            match &found {
+                Some((existing, _)) if existing == name => {}
+                Some(_) => return None,
+                None => {
+                    found = Some((
+                        name.to_string(),
+                        PluginAsset {
+                            name: asset.clone(),
+                            kind: AssetMatchKind::Versioned,
+                        },
+                    ))
+                }
+            }
+        }
+    }
+    found
+}
+
 pub fn asset_candidates(
     plugin_name: &str,
     version: Option<&PluginVersion>,
@@ -135,5 +174,38 @@ mod tests {
         let selected =
             select_plugin_asset("cool-plugin", Some(&version), &target, &assets).unwrap();
         assert_eq!(selected.kind, AssetMatchKind::StableAlias);
+    }
+
+    #[test]
+    fn infers_plugin_name_when_assets_differ_from_repo_name() {
+        let target = PluginTarget::from_os_arch("windows", "x86_64").unwrap();
+        let version = PluginVersion::new("v0.1.1").unwrap();
+        let assets = vec![
+            "pay-lightning-v0.1.1-aarch64-apple-darwin.tar.gz".to_string(),
+            "pay-lightning-v0.1.1-x86_64-pc-windows-msvc.zip".to_string(),
+            "pay-lightning-v0.1.1-x86_64-pc-windows-msvc.zip.sha256".to_string(),
+        ];
+        assert!(
+            select_plugin_asset("ln-payments-plugin", Some(&version), &target, &assets).is_err()
+        );
+        let (name, asset) = infer_plugin_asset(&version, &target, &assets).unwrap();
+        assert_eq!(name, "pay-lightning");
+        assert_eq!(
+            asset.name,
+            "pay-lightning-v0.1.1-x86_64-pc-windows-msvc.zip"
+        );
+    }
+
+    #[test]
+    fn inference_refuses_ambiguous_or_other_version_assets() {
+        let target = PluginTarget::from_os_arch("linux", "x86_64").unwrap();
+        let version = PluginVersion::new("v0.1.1").unwrap();
+        let two = vec![
+            "a-v0.1.1-x86_64-unknown-linux-gnu.tar.gz".to_string(),
+            "b-v0.1.1-x86_64-unknown-linux-gnu.tar.gz".to_string(),
+        ];
+        assert!(infer_plugin_asset(&version, &target, &two).is_none());
+        let stale = vec!["a-v0.1.0-x86_64-unknown-linux-gnu.tar.gz".to_string()];
+        assert!(infer_plugin_asset(&version, &target, &stale).is_none());
     }
 }

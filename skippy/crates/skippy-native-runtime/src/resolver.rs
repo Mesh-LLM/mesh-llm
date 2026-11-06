@@ -31,6 +31,7 @@ pub enum CandidateRejection {
     CudaToolkitMajorMismatch { required: u32, installed: Vec<u32> },
     CudaToolkitMajorAboveDriver { required: u32, driver_max: u32 },
     CudaToolkitNotDetected { required: u32 },
+    CudaGpuArchUnknown,
     CudaGpuArchUnsupported { supported: Vec<String> },
     RocmProfileMissing,
     RocmGpuArchUnknown,
@@ -112,6 +113,12 @@ impl std::fmt::Display for CandidateRejection {
                 "no CUDA toolkit detected: runtime requires CUDA {required} libraries \
                  (libcudart, libcublas, libcublasLt) on the loader path; \
                  set MESH_LLM_CUDA_TOOLKIT_MAJORS if the toolkit is installed elsewhere"
+            ),
+            Self::CudaGpuArchUnknown => write!(
+                f,
+                "CUDA GPU architecture unknown: no NVIDIA GPU architecture was detected to match \
+                 the runtime's kernels against; set MESH_LLM_CUDA_GPU_ARCHES (for example 87) \
+                 if the GPU is supported"
             ),
             Self::CudaGpuArchUnsupported { supported } => write!(
                 f,
@@ -594,11 +601,19 @@ fn evaluate_cuda_requirements(
         return;
     };
     evaluate_cuda_toolkit_major(artifact, requirements.toolkit_major, cuda, reasons);
-    if !requirements.gpu_arches.is_empty()
-        && requirements
-            .gpu_arches
-            .iter()
-            .all(|arch| !cuda.gpu_arches.contains(arch))
+    if requirements.gpu_arches.is_empty() {
+        return;
+    }
+    // Discovery found no compute capability (e.g. no `nvidia-smi` on a
+    // service's PATH): say so instead of calling the GPU unsupported.
+    if cuda.gpu_arches.is_empty() {
+        reasons.push(CandidateRejection::CudaGpuArchUnknown);
+        return;
+    }
+    if requirements
+        .gpu_arches
+        .iter()
+        .all(|arch| !cuda.gpu_arches.contains(arch))
     {
         reasons.push(CandidateRejection::CudaGpuArchUnsupported {
             supported: requirements.gpu_arches.clone(),
@@ -895,6 +910,67 @@ mod tests {
         .unwrap();
 
         assert_eq!(selected.artifact.id, "meshllm-runtime-linux-x86_64-cuda12");
+    }
+
+    #[test]
+    fn cuda_runtime_is_not_selected_when_no_gpu_arch_is_known() {
+        let artifacts = vec![
+            artifact(
+                "meshllm-runtime-linux-x86_64-cpu",
+                NativeRuntimeBackend::cpu(),
+            ),
+            cuda_runtime("meshllm-runtime-linux-x86_64-cuda12", 12, &["sm_90"]),
+        ];
+        let mut profile = profile();
+        profile.cuda.as_mut().unwrap().gpu_arches.clear();
+
+        let evaluated = evaluate_candidates(
+            &artifacts,
+            &profile,
+            "0.68.0",
+            Some("0.1.25"),
+            &RuntimeSelection::Recommended,
+        );
+        let cuda = evaluated
+            .iter()
+            .find(|candidate| candidate.artifact.backend.kind == NativeRuntimeBackendKind::Cuda)
+            .unwrap();
+        assert_eq!(
+            cuda.rejection_reasons,
+            vec![CandidateRejection::CudaGpuArchUnknown]
+        );
+        assert!(
+            CandidateRejection::CudaGpuArchUnknown
+                .to_string()
+                .contains("MESH_LLM_CUDA_GPU_ARCHES")
+        );
+        assert_eq!(
+            best_candidate(&evaluated).unwrap().artifact.backend.kind,
+            NativeRuntimeBackendKind::Cpu
+        );
+    }
+
+    #[test]
+    fn cuda_runtime_without_the_detected_gpu_arch_is_unsupported() {
+        let artifacts = vec![cuda_runtime(
+            "meshllm-runtime-linux-x86_64-cuda12",
+            12,
+            &["sm_80", "sm_86"],
+        )];
+
+        let evaluated = evaluate_candidates(
+            &artifacts,
+            &profile(),
+            "0.68.0",
+            Some("0.1.25"),
+            &RuntimeSelection::Recommended,
+        );
+        assert_eq!(
+            evaluated[0].rejection_reasons,
+            vec![CandidateRejection::CudaGpuArchUnsupported {
+                supported: vec!["sm_80".to_string(), "sm_86".to_string()],
+            }]
+        );
     }
 
     #[test]

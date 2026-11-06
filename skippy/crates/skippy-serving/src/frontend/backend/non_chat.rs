@@ -125,7 +125,7 @@ impl StageOpenAiBackend {
         }
 
         let instruction = audio_text_instruction(&request, translate_to_english);
-        let mut chat_request = ChatCompletionRequest {
+        let mut chat_request = GenerationRequest {
             model: request.model.clone(),
             messages: vec![audio_text_user_message(instruction)],
             temperature: request.temperature,
@@ -135,7 +135,7 @@ impl StageOpenAiBackend {
         apply_chat_request_defaults(&mut chat_request, &request_defaults)?;
         let template_options = chat_template_options(&chat_request, &request_defaults)?;
         let mut prompt = self
-            .prepare_chat_prompt_offloaded(&chat_request, template_options)
+            .prepare_chat_prompt_offloaded(&chat_request, template_options, context.clone())
             .await?;
         prompt.media = vec![MediaInput {
             bytes: request.file,
@@ -316,8 +316,10 @@ fn audio_text_instruction(
 }
 
 /// Place the audio marker after the task instruction and optional prompt.
-fn audio_text_user_message(instruction: String) -> skippy_inference_api::ChatMessage {
-    skippy_inference_api::ChatMessage {
+fn audio_text_user_message(
+    instruction: String,
+) -> skippy_inference_api::generation::GenerationMessage {
+    skippy_inference_api::generation::GenerationMessage {
         role: "user".to_string(),
         // The audio marker must follow the instruction. Upstream llama.cpp's
         // transcription route appends the media marker to the user prompt;

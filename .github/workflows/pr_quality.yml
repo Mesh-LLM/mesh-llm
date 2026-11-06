@@ -13,6 +13,12 @@ concurrency:
   group: pr-quality-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_BENCH_DEBUG: "0"
+
 jobs:
   plan:
     name: Plan quality

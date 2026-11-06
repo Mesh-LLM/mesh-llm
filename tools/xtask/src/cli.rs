@@ -18,6 +18,7 @@ pub(crate) fn print_usage() {
     println!("  cargo xtool automation system-one-cases --help");
     println!("  cargo xtool automation system-one-smoke --help");
     println!("  cargo xtool automation decisions-smoke --help");
+    println!("  cargo xtool automation skippy-benchmark-compare <report.json>");
     println!("  cargo xtool automation binary-stage-readiness --help");
     println!("  cargo xtool automation workload-monolithic-oracle --help");
     println!("  cargo xtool automation workload-media-oracle --help");
@@ -120,6 +121,7 @@ pub(crate) enum CliCommand<'a> {
     AgentRecordingProxy(&'a [String]),
     AgenticPromptManifest(&'a [String]),
     EventBenchmarkComparison(&'a [String]),
+    SkippyBenchmarkCompare(&'a [String]),
     EventBenchmarkRun(&'a [String]),
     EndpointModelDiscovery(&'a [String]),
     GuardrailCorpus(&'a [String]),
@@ -154,7 +156,6 @@ pub(crate) enum CliCommand<'a> {
     LoggingRecovery(&'a [String]),
     ControlPlaneQa(&'a [String]),
     RemoteHandoffSummary(&'a [String]),
-    LightningCompatibility(&'a [String]),
     HfCertification(&'a [String]),
     HfMtpCompose(&'a [String]),
     HfConvertedArtifact(&'a [String]),
@@ -262,6 +263,11 @@ impl<'a> Cli<'a> {
                 if domain == "automation" && scope == "event-benchmark-compare" =>
             {
                 CliCommand::EventBenchmarkComparison(rest)
+            }
+            [domain, scope, rest @ ..]
+                if domain == "automation" && scope == "skippy-benchmark-compare" =>
+            {
+                CliCommand::SkippyBenchmarkCompare(rest)
             }
             [domain, scope, rest @ ..]
                 if domain == "automation" && scope == "agentic-prompt-manifest" =>
@@ -399,11 +405,6 @@ impl<'a> Cli<'a> {
                 if domain == "automation" && scope == "remote-handoff-summary" =>
             {
                 CliCommand::RemoteHandoffSummary(rest)
-            }
-            [domain, scope, rest @ ..]
-                if domain == "automation" && scope == "lightning-compatibility" =>
-            {
-                CliCommand::LightningCompatibility(rest)
             }
             [domain, scope, rest @ ..] if domain == "automation" && scope == "control-plane-qa" => {
                 CliCommand::ControlPlaneQa(rest)

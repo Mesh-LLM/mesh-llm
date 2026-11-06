@@ -26,7 +26,7 @@
 use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
-use skippy_inference_api::{ChatMessage, MessageContent};
+use skippy_inference_api::{MessageContent, generation::GenerationMessage};
 
 /// Marker a model is instructed to emit, on its own line, to request a tool
 /// call. The remainder of the line is a JSON object `{"name", "arguments"}`.
@@ -338,10 +338,10 @@ fn arguments_to_json_value(arguments: &Value) -> Value {
 /// The emulation instruction is prepended to (or merged into) the first system
 /// message, or inserted as a new leading system message.
 pub(super) fn rewrite_history_for_emulation(
-    messages: &[ChatMessage],
+    messages: &[GenerationMessage],
     instruction: &str,
-) -> Vec<ChatMessage> {
-    let mut rewritten: Vec<ChatMessage> = Vec::with_capacity(messages.len() + 1);
+) -> Vec<GenerationMessage> {
+    let mut rewritten: Vec<GenerationMessage> = Vec::with_capacity(messages.len() + 1);
     let mut instruction_placed = false;
 
     for message in messages {
@@ -386,10 +386,10 @@ pub(super) fn rewrite_history_for_emulation(
     rewritten
 }
 
-/// Builds a minimal `ChatMessage` with plain text content and no extra fields,
+/// Builds a minimal `GenerationMessage` with plain text content and no extra fields,
 /// so the downstream template sees only `role` + `content`.
-fn plain_message(role: &str, content: String) -> ChatMessage {
-    ChatMessage {
+fn plain_message(role: &str, content: String) -> GenerationMessage {
+    GenerationMessage {
         role: role.to_string(),
         content: Some(MessageContent::Text(content)),
         extra: BTreeMap::new(),
@@ -532,8 +532,8 @@ fn parse_tool_call_json(json_part: &str, allowed_names: &[String]) -> Option<Val
 mod tests {
     use super::*;
 
-    fn msg(role: &str, content: &str) -> ChatMessage {
-        ChatMessage {
+    fn msg(role: &str, content: &str) -> GenerationMessage {
+        GenerationMessage {
             role: role.to_string(),
             content: Some(MessageContent::Text(content.to_string())),
             extra: BTreeMap::new(),
@@ -772,7 +772,7 @@ mod tests {
                 "function": {"name": "shell", "arguments": "{\"command\": \"ls\"}"}
             }]),
         );
-        let assistant = ChatMessage {
+        let assistant = GenerationMessage {
             role: "assistant".to_string(),
             content: None,
             extra,

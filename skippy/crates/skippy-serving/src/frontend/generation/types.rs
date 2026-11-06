@@ -26,10 +26,10 @@ use crate::telemetry::Telemetry;
 use crate::telemetry::now_unix_nanos;
 use serde_json::Value;
 use serde_json::json;
-use skippy_inference_api::ChatCompletionRequest;
 use skippy_inference_api::FinishReason;
 use skippy_inference_api::InferenceHookPolicy;
 use skippy_inference_api::Usage;
+use skippy_inference_api::generation::GenerationRequest;
 use skippy_protocol::StageConfig;
 use skippy_protocol::binary::StageReply;
 use skippy_protocol::binary::StageReplyStats;
@@ -162,7 +162,7 @@ pub(in crate::frontend) struct LocalGeneration<'a> {
     pub(in crate::frontend) chat_sampling_metadata: Option<&'a str>,
     pub(in crate::frontend) speculative: &'a SpeculativeDecodeConfig,
     pub(in crate::frontend) native_mtp_enabled: bool,
-    pub(in crate::frontend) hook_request: Option<ChatCompletionRequest>,
+    pub(in crate::frontend) hook_request: Option<GenerationRequest>,
     pub(in crate::frontend) hook_runtime: Option<tokio::runtime::Handle>,
     pub(in crate::frontend) cancellation: Option<&'a skippy_inference_api::CancellationToken>,
     pub(in crate::frontend) ids: &'a InferenceGenerationIds,
@@ -192,18 +192,49 @@ pub(in crate::frontend) struct EmbeddedStageZeroGeneration<'a> {
     pub(in crate::frontend) max_tokens: u32,
     pub(in crate::frontend) sampling: &'a SamplingConfig,
     pub(in crate::frontend) chat_sampling_metadata: Option<&'a str>,
-    pub(in crate::frontend) hook_request: Option<ChatCompletionRequest>,
+    pub(in crate::frontend) hook_request: Option<GenerationRequest>,
     pub(in crate::frontend) hook_runtime: Option<tokio::runtime::Handle>,
     pub(in crate::frontend) cancellation: Option<&'a skippy_inference_api::CancellationToken>,
     pub(in crate::frontend) ids: &'a InferenceGenerationIds,
 }
 
 /// The largest split DFlash draft-context counters a final stage reported
-/// for this generation's session. Its replies carry running totals.
+/// for this generation's session, whose replies carry running totals, and
+/// the feature-row bytes stage 0 sent it.
 #[derive(Debug, Default)]
 pub(in crate::frontend) struct SplitDFlashHealth {
     feature_rows_missing: std::sync::atomic::AtomicI64,
     draft_context_resets: std::sync::atomic::AtomicI64,
+    verify_rollbacks_in_place: std::sync::atomic::AtomicI64,
+    verify_rollbacks_checkpointed: std::sync::atomic::AtomicI64,
+    draft_us: std::sync::atomic::AtomicI64,
+    drafts: std::sync::atomic::AtomicI64,
+    ingest_us: std::sync::atomic::AtomicI64,
+    prefill_feature_bytes: std::sync::atomic::AtomicUsize,
+    decode_feature_bytes: std::sync::atomic::AtomicUsize,
+    /// The generation ended on an early verdict whose draft reply is still
+    /// on its way, so the lane must drain it before it is reused.
+    draft_reply_owed: std::sync::atomic::AtomicBool,
+}
+
+/// Split DFlash counters for a generation's response timings.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(in crate::frontend) struct SplitDFlashCounts {
+    pub(in crate::frontend) feature_rows_missing: i64,
+    pub(in crate::frontend) draft_context_resets: i64,
+    /// Largest per-stage count of verify windows a downstream stage rolled
+    /// back in place, and held in a host checkpoint. A stage counts a window
+    /// once its storage is final, so both only grow and the running maximum
+    /// is the latest count.
+    pub(in crate::frontend) downstream_rollbacks_in_place: i64,
+    pub(in crate::frontend) downstream_rollbacks_checkpointed: i64,
+    /// The final stage's draft time, block drafts, and the part of that time
+    /// spent injecting feature rows.
+    pub(in crate::frontend) draft_us: i64,
+    pub(in crate::frontend) drafts: i64,
+    pub(in crate::frontend) ingest_us: i64,
+    /// The same on stage 0, when it could be read.
+    pub(in crate::frontend) stage0_rollbacks: Option<skippy_runtime::VerifyRollbackCounts>,
 }
 
 impl SplitDFlashHealth {
@@ -213,15 +244,67 @@ impl SplitDFlashHealth {
             .fetch_max(stats.dflash_feature_rows_missing, Ordering::Relaxed);
         self.draft_context_resets
             .fetch_max(stats.dflash_draft_context_resets, Ordering::Relaxed);
+        self.verify_rollbacks_in_place
+            .fetch_max(stats.verify_rollbacks_in_place, Ordering::Relaxed);
+        self.verify_rollbacks_checkpointed
+            .fetch_max(stats.verify_rollbacks_checkpointed, Ordering::Relaxed);
+        self.draft_us
+            .fetch_max(stats.dflash_draft_us, Ordering::Relaxed);
+        self.drafts
+            .fetch_max(stats.dflash_drafts, Ordering::Relaxed);
+        self.ingest_us
+            .fetch_max(stats.dflash_ingest_us, Ordering::Relaxed);
     }
 
-    /// `(feature rows missing, draft context resets)`.
-    pub(in crate::frontend) fn counts(&self) -> (i64, i64) {
+    /// Counts the DFlash feature-row bytes of a frame stage 0 forwarded, in
+    /// prefill or in decode (verify windows and fused restores included).
+    pub(in crate::frontend) fn record_feature_bytes(&self, prefill: bool, bytes: usize) {
         use std::sync::atomic::Ordering;
-        (
-            self.feature_rows_missing.load(Ordering::Relaxed),
-            self.draft_context_resets.load(Ordering::Relaxed),
-        )
+        let counter = if prefill {
+            &self.prefill_feature_bytes
+        } else {
+            &self.decode_feature_bytes
+        };
+        counter.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    /// Marks that the final stage still owes this generation a draft reply.
+    pub(in crate::frontend) fn owe_draft_reply(&self) {
+        self.draft_reply_owed
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether a draft reply is still owed on the generation's lane.
+    pub(in crate::frontend) fn draft_reply_owed(&self) -> bool {
+        self.draft_reply_owed
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(in crate::frontend) fn feature_bytes(&self) -> SplitDFlashFeatureBytes {
+        use std::sync::atomic::Ordering;
+        SplitDFlashFeatureBytes {
+            prefill_bytes: self.prefill_feature_bytes.load(Ordering::Relaxed),
+            decode_bytes: self.decode_feature_bytes.load(Ordering::Relaxed),
+        }
+    }
+
+    pub(in crate::frontend) fn counts(
+        &self,
+        stage0_rollbacks: Option<skippy_runtime::VerifyRollbackCounts>,
+    ) -> SplitDFlashCounts {
+        use std::sync::atomic::Ordering;
+        SplitDFlashCounts {
+            feature_rows_missing: self.feature_rows_missing.load(Ordering::Relaxed),
+            draft_context_resets: self.draft_context_resets.load(Ordering::Relaxed),
+            downstream_rollbacks_in_place: self.verify_rollbacks_in_place.load(Ordering::Relaxed),
+            downstream_rollbacks_checkpointed: self
+                .verify_rollbacks_checkpointed
+                .load(Ordering::Relaxed),
+            draft_us: self.draft_us.load(Ordering::Relaxed),
+            drafts: self.drafts.load(Ordering::Relaxed),
+            ingest_us: self.ingest_us.load(Ordering::Relaxed),
+            stage0_rollbacks,
+        }
     }
 }
 
@@ -230,6 +313,15 @@ impl EmbeddedStageZeroGeneration<'_> {
     /// decode and verify messages say so.
     pub(in crate::frontend) fn split_dflash(&self) -> bool {
         self.split_dflash_draft.is_some()
+    }
+
+    /// Records the DFlash feature-row bytes of a frame this generation
+    /// forwarded from stage 0.
+    pub(in crate::frontend) fn record_forwarded_features(&self, prefill: bool, bytes: usize) {
+        if self.split_dflash() {
+            self.split_dflash_health
+                .record_feature_bytes(prefill, bytes);
+        }
     }
 
     /// Records the draft-context counters a downstream reply carries.
@@ -318,6 +410,7 @@ pub(in crate::frontend) struct GeneratedText {
     pub(in crate::frontend) predicted_ms: f64,
     pub(in crate::frontend) queue_wait_ms: f64,
     pub(in crate::frontend) restore_ms: f64,
+    pub(in crate::frontend) split_prefix_cache: Option<SplitPrefixCacheStats>,
     pub(in crate::frontend) text: String,
     pub(in crate::frontend) finish_reason: FinishReason,
     pub(in crate::frontend) detokenize_ms: f64,
@@ -325,6 +418,146 @@ pub(in crate::frontend) struct GeneratedText {
     pub(in crate::frontend) eog_check_ms: f64,
     /// One entry per completion token, when the request asked for logprobs.
     pub(in crate::frontend) token_logprobs: Option<Vec<GeneratedTokenLogprob>>,
+    pub(in crate::frontend) activation_wire: Option<ActivationWireStats>,
+}
+
+/// Encoded activation bytes stage 0 wrote to the next stage for one response:
+/// the first hop only, counting whole encoded activation frames (the frame
+/// descriptor and part headers as well as the encoded values), which is what
+/// the link carries. Decode includes speculative verify windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::frontend) struct ActivationWireStats {
+    /// The configured codec, or `auto-lossless-v1` when the producer picks an
+    /// exact encoding per frame.
+    pub(in crate::frontend) codec: &'static str,
+    pub(in crate::frontend) prefill_bytes: usize,
+    pub(in crate::frontend) decode_bytes: usize,
+    /// On a split DFlash target, the share of those bytes that were the
+    /// draft's feature rows.
+    pub(in crate::frontend) dflash_features: Option<SplitDFlashFeatureBytes>,
+}
+
+/// DFlash feature-row payload bytes stage 0 sent to the next stage, by phase.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(in crate::frontend) struct SplitDFlashFeatureBytes {
+    pub(in crate::frontend) prefill_bytes: usize,
+    pub(in crate::frontend) decode_bytes: usize,
+}
+
+impl ActivationWireStats {
+    fn insert_response_timings(
+        &self,
+        timings: &mut BTreeMap<String, Value>,
+        prefill_tokens: u32,
+        completion_tokens: u32,
+    ) {
+        let per_token = |bytes: usize, tokens: u32| {
+            if tokens == 0 {
+                0.0
+            } else {
+                bytes as f64 / f64::from(tokens)
+            }
+        };
+        timings.insert("activation_codec".to_string(), json!(self.codec));
+        timings.insert(
+            "activation_prefill_bytes".to_string(),
+            json!(self.prefill_bytes),
+        );
+        timings.insert(
+            "activation_prefill_bytes_per_token".to_string(),
+            json!(per_token(self.prefill_bytes, prefill_tokens)),
+        );
+        timings.insert(
+            "activation_decode_bytes".to_string(),
+            json!(self.decode_bytes),
+        );
+        timings.insert(
+            "activation_decode_bytes_per_token".to_string(),
+            json!(per_token(self.decode_bytes, completion_tokens)),
+        );
+        if let Some(features) = self.dflash_features {
+            timings.insert(
+                "dflash_feature_prefill_bytes".to_string(),
+                json!(features.prefill_bytes),
+            );
+            timings.insert(
+                "dflash_feature_prefill_bytes_per_token".to_string(),
+                json!(per_token(features.prefill_bytes, prefill_tokens)),
+            );
+            timings.insert(
+                "dflash_feature_decode_bytes".to_string(),
+                json!(features.decode_bytes),
+            );
+            timings.insert(
+                "dflash_feature_decode_bytes_per_token".to_string(),
+                json!(per_token(features.decode_bytes, completion_tokens)),
+            );
+        }
+    }
+}
+
+/// A split's prompt prefix cache for one response, as stage 0 saw it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(in crate::frontend) struct SplitPrefixCacheStats {
+    /// Prompt tokens every stage restored instead of prefilling.
+    pub(in crate::frontend) hit_tokens: usize,
+    /// Stages that confirmed the restore, stage 0 included.
+    pub(in crate::frontend) hit_stages: u32,
+    /// Activation bytes stage 0 wrote to the next stage while prefilling the
+    /// rest of the prompt: the first hop, payload only.
+    pub(in crate::frontend) prefill_bytes_sent: usize,
+    /// Activation bytes the restore kept off the wire, over every hop between
+    /// the stages that restored.
+    pub(in crate::frontend) bytes_saved: usize,
+}
+
+impl SplitPrefixCacheStats {
+    /// Stats for a prefill that restored `hit_tokens` on `hit_stages` stages
+    /// and then sent `prefill_bytes_sent` for `prefilled_tokens` more. Saved
+    /// bytes are priced at this request's measured rate per prefilled token,
+    /// which includes any split DFlash feature rows, or at an f32 activation
+    /// row when nothing was prefilled.
+    pub(in crate::frontend) fn new(
+        hit_tokens: usize,
+        hit_stages: u32,
+        prefill_bytes_sent: usize,
+        prefilled_tokens: usize,
+        activation_width: i32,
+    ) -> Self {
+        let bytes_per_token = prefill_bytes_sent
+            .checked_div(prefilled_tokens)
+            .unwrap_or_else(|| {
+                usize::try_from(activation_width).unwrap_or(0) * std::mem::size_of::<f32>()
+            });
+        let hops = usize::try_from(hit_stages.saturating_sub(1)).unwrap_or(0);
+        Self {
+            hit_tokens,
+            hit_stages,
+            prefill_bytes_sent,
+            bytes_saved: hit_tokens
+                .saturating_mul(bytes_per_token)
+                .saturating_mul(hops),
+        }
+    }
+
+    fn insert_response_timings(&self, timings: &mut BTreeMap<String, Value>) {
+        timings.insert(
+            "prefix_cache_hit_tokens".to_string(),
+            json!(self.hit_tokens),
+        );
+        timings.insert(
+            "prefix_cache_hit_stages".to_string(),
+            json!(self.hit_stages),
+        );
+        timings.insert(
+            "prefix_cache_prefill_bytes_sent".to_string(),
+            json!(self.prefill_bytes_sent),
+        );
+        timings.insert(
+            "prefix_cache_bytes_saved".to_string(),
+            json!(self.bytes_saved),
+        );
+    }
 }
 
 /// A completion token's log-probability and its alternatives, with their text.
@@ -409,6 +642,19 @@ impl GeneratedText {
             stats.insert_response_timings(&mut timings);
         }
         if let Some(stats) = self.speculative_stats.as_ref() {
+            stats.insert_response_timings(&mut timings);
+        }
+        if let Some(wire) = self.activation_wire.as_ref() {
+            // Stage 0 prefills all but the last prompt token, which the first
+            // decode carries; a prefix-cache hit forwards only the suffix.
+            let prefill_tokens = if self.suffix_prefill_tokens > 0 {
+                self.suffix_prefill_tokens
+            } else {
+                self.prompt_tokens.saturating_sub(1)
+            };
+            wire.insert_response_timings(&mut timings, prefill_tokens, self.completion_tokens);
+        }
+        if let Some(stats) = self.split_prefix_cache.as_ref() {
             stats.insert_response_timings(&mut timings);
         }
         Some(timings)

@@ -90,6 +90,10 @@ pub struct ServingOptions {
     #[arg(long)]
     pub gguf: Vec<PathBuf>,
 
+    /// Local memberships TOML: serve one GGUF to independent meshes with shared capacity.
+    #[arg(long)]
+    pub memberships_config: Option<PathBuf>,
+
     /// Explicit mmproj sidecar for the primary served model.
     #[arg(long, hide = true)]
     pub mmproj: Option<PathBuf>,

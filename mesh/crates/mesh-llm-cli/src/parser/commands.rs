@@ -554,13 +554,6 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Manage the local mainnet Lightning wallet.
-    Wallet {
-        #[arg(long, default_value_t = 3131)]
-        port: u16,
-        #[command(subcommand)]
-        command: crate::wallet::WalletCommand,
-    },
     /// Serve local models and join or publish a mesh.
     Serve,
     /// Run as a client-only mesh node with no local model required.
@@ -982,6 +975,9 @@ pub enum ConfigCommand {
         /// Config TOML path to validate. Defaults to --config, MESH_LLM_CONFIG, or ~/.mesh-llm/config.toml.
         #[arg(long = "config-path")]
         config_path: Option<PathBuf>,
+        /// Validate a local memberships TOML instead of the synchronized mesh config.
+        #[arg(long, conflicts_with = "config_path")]
+        memberships_config: Option<PathBuf>,
         /// Print machine-readable JSON output.
         #[arg(long)]
         json: bool,
@@ -998,11 +994,12 @@ pub enum PluginCommand {
         #[arg(long)]
         off: bool,
     },
-    /// Install a native plugin from the catalog, GitHub, or a local release archive.
+    /// Install native plugins in order, or install one local release archive.
     Install {
-        /// Plugin catalog name, GitHub owner/repo, or GitHub URL.
-        #[arg(required_unless_present = "archive", conflicts_with = "archive")]
-        reference: Option<String>,
+        /// Plugin catalog names, GitHub owner/repo references, or GitHub URLs.
+        /// Stops on the first failure; earlier installs are kept.
+        #[arg(num_args = 1.., required_unless_present = "archive", conflicts_with_all = ["archive", "name", "version"])]
+        reference: Vec<String>,
         /// Install a local .tar.gz or .zip release archive. Requires --name.
         #[arg(long, value_name = "PATH", requires = "name")]
         archive: Option<PathBuf>,
@@ -1045,6 +1042,20 @@ pub enum PluginCommand {
     },
     /// List installed, auto-registered, and configured plugins.
     List,
+    /// Call an operation a running plugin publishes, through the local node
+    /// (`POST /api/plugins/<plugin>/tools/<operation>`), and print its answer.
+    Call {
+        /// Installed plugin name.
+        plugin: String,
+        /// Operation name from the plugin's manifest.
+        operation: String,
+        /// JSON input for the operation; `-` reads it from stdin. Defaults to `{}`.
+        #[arg(long, default_value = "{}")]
+        input: String,
+        /// Local node API port.
+        #[arg(long, default_value_t = 3131)]
+        port: u16,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -1606,7 +1617,9 @@ mod tests {
         ]);
 
         let Some(Command::Config {
-            command: ConfigCommand::Validate { config_path, json },
+            command: ConfigCommand::Validate {
+                config_path, json, ..
+            },
         }) = cli.command
         else {
             panic!("expected config validate command");
@@ -1667,55 +1680,6 @@ mod tests {
             }
             other => panic!("unexpected command: {other:?}"),
         }
-    }
-
-    #[test]
-    fn plugins_install_accepts_local_archive_options() {
-        let cli = Cli::parse_from([
-            "mesh-llm",
-            "plugins",
-            "install",
-            "--archive",
-            "/tmp/demo.tar.gz",
-            "--name",
-            "demo",
-            "--version",
-            "0.1.0",
-        ]);
-
-        match cli.command.expect("plugins command") {
-            Command::Plugin {
-                command:
-                    PluginCommand::Install {
-                        reference: None,
-                        archive: Some(archive),
-                        name: Some(name),
-                        version: Some(version),
-                    },
-            } => {
-                assert_eq!(archive, PathBuf::from("/tmp/demo.tar.gz"));
-                assert_eq!(name, "demo");
-                assert_eq!(version, "0.1.0");
-            }
-            other => panic!("unexpected command: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn plugins_install_rejects_reference_with_local_archive() {
-        let error = Cli::try_parse_from([
-            "mesh-llm",
-            "plugins",
-            "install",
-            "demo",
-            "--archive",
-            "/tmp/demo.tar.gz",
-            "--name",
-            "demo",
-        ])
-        .expect_err("reference and local archive must conflict");
-
-        assert!(error.to_string().contains("cannot be used with"));
     }
 
     #[test]
@@ -1854,3 +1818,7 @@ mod tests {
         assert!(help_text.contains("Run as a client-only mesh node with no local model required"));
     }
 }
+
+#[cfg(test)]
+#[path = "plugin_install_tests.rs"]
+mod plugin_install_tests;

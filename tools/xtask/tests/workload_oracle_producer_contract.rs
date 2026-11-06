@@ -463,7 +463,6 @@ fn shared_canary_full_build_runs_cpu_producer_before_required_smokes_and_stops_o
             let harness = format!(
                 r#"
 set -euo pipefail
-TRUSTED_ROOT="$PWD"
 JINJA_PROJECT="$TRUSTED_ROOT/ci/llama-canary/jinja"
 run_full_build() {{
 {body}
@@ -487,10 +486,16 @@ run_full_build
             let mut command = fixture.command();
             command
                 .args(["-c", &harness])
+                .env("TRUSTED_ROOT", root())
                 .env("CASE_MODE", mode)
                 .env("FAIL_CPU", if fail_cpu { "1" } else { "0" });
             let receipt = fixture.run(command);
-            let gates = fs::read_to_string(fixture.path().join("gates")).unwrap();
+            let gates = fs::read_to_string(fixture.path().join("gates")).unwrap_or_else(|error| {
+                panic!(
+                    "missing canary gate log: {error}; stderr={}",
+                    String::from_utf8_lossy(&receipt.stderr)
+                )
+            });
             let before_cpu = "complete patched llama.cpp build\ngenerated model-family patch check\nstage runtime crate build\nSkippy smoke tests\npinned CPU workload oracles and candidate\n";
             if fail_cpu {
                 assert!(!receipt.status.success());

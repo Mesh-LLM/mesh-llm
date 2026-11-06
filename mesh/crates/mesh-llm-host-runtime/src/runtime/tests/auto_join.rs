@@ -394,7 +394,12 @@ fn bootstrap_proxy_gate_does_not_fire_for_standalone_serve() {
 
 #[test]
 fn serve_auto_prefers_fast_join_probe_for_discovered_candidates() {
-    let options = runtime_options_for_test(&["mesh-llm", "--auto"]);
+    // The default invite token file sits beside the resolved config, so point
+    // the config at an empty temp dir; otherwise this reads the runner's
+    // `~/.mesh-llm/invite.token` and fails on a machine that has one.
+    let temp = tempfile::tempdir().unwrap();
+    let mut options = runtime_options_for_test(&["mesh-llm", "--auto"]);
+    options.config = Some(temp.path().join("config.toml"));
     let candidates = vec![("tok-from-discovery".to_string(), None)];
     assert!(
         should_prefer_fast_auto_join(&options, &candidates),

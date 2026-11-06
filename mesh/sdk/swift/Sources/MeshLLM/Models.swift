@@ -1,6 +1,6 @@
 import Foundation
 
-/// Structured JSON for open-ended capability, thinking, payment and plugin metadata.
+/// Structured JSON for open-ended capability, thinking, channel requirements and plugin metadata.
 public enum ModelJSONValue: Codable, Sendable, Equatable {
     case null
     case bool(Bool)
@@ -70,7 +70,7 @@ public struct MeshModelProvider: Decodable, Sendable {
     public let metadata: ModelJSONValue?
     public let runtime: MeshModelRuntime?
     public let thinking: ModelJSONValue?
-    public let payment: ModelJSONValue?
+    public let requires: ModelJSONValue?
 }
 
 /// One advertised identity. String-valued classes preserve future peer values.

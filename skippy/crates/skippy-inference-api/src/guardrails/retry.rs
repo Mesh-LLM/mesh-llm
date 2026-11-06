@@ -1,7 +1,7 @@
 use crate::{
-    chat::{ChatCompletionRequest, ChatCompletionResponse},
     common::FinishReason,
     errors::InferenceError,
+    generation::{GenerationRequest, GenerationResponse},
     hooks::inject_text_into_chat_messages,
 };
 
@@ -28,7 +28,7 @@ pub(crate) fn build_retry_request(
     prepared: &PreparedGuardrailRequest,
     attempt_index: u8,
     classified: &ClassifiedGuardrailResponse,
-) -> ChatCompletionRequest {
+) -> GenerationRequest {
     let mut retry_request = prepared_backend_request(prepared);
     inject_text_into_chat_messages(
         &mut retry_request.messages,
@@ -42,9 +42,9 @@ pub(crate) fn build_retry_request(
 
 pub(crate) fn sanitize_success_response(
     policy: &GuardrailPolicy,
-    response: &ChatCompletionResponse,
+    response: &GenerationResponse,
     classified: &ClassifiedGuardrailResponse,
-) -> Option<ChatCompletionResponse> {
+) -> Option<GenerationResponse> {
     match classified.category {
         GuardrailResponseCategory::ValidToolCalls => Some(rewrite_response(
             response,
@@ -101,9 +101,9 @@ pub(crate) fn should_retry(classified: &ClassifiedGuardrailResponse) -> bool {
 
 pub(crate) fn exhaustion_result(
     policy: &GuardrailPolicy,
-    response: ChatCompletionResponse,
+    response: GenerationResponse,
     classified: &ClassifiedGuardrailResponse,
-) -> Result<ChatCompletionResponse, InferenceError> {
+) -> Result<GenerationResponse, InferenceError> {
     match policy.retry_exhaustion_mode {
         RetryExhaustionMode::Error => Err(validation_failed_error()),
         RetryExhaustionMode::PassLastText => pass_last_text_response(policy, &response, classified)
@@ -126,7 +126,7 @@ fn request_kind(prepared: &PreparedGuardrailRequest) -> GuardrailContractKind {
     }
 }
 
-fn prepared_backend_request(prepared: &PreparedGuardrailRequest) -> ChatCompletionRequest {
+fn prepared_backend_request(prepared: &PreparedGuardrailRequest) -> GenerationRequest {
     match &prepared.outcome {
         GuardrailRequestOutcome::Guarded { backend_request } => (**backend_request).clone(),
         _ => unreachable!("retry logic only applies to guarded requests"),
@@ -200,9 +200,9 @@ fn structured_payload_text(classified: &ClassifiedGuardrailResponse) -> Option<S
 
 fn pass_last_text_response(
     policy: &GuardrailPolicy,
-    response: &ChatCompletionResponse,
+    response: &GenerationResponse,
     classified: &ClassifiedGuardrailResponse,
-) -> Option<ChatCompletionResponse> {
+) -> Option<GenerationResponse> {
     let content = representable_last_text(policy, classified)?;
     Some(rewrite_response(
         response,
@@ -246,12 +246,12 @@ fn contains_synthetic_marker(policy: &GuardrailPolicy, content: &str) -> bool {
 }
 
 fn rewrite_response(
-    response: &ChatCompletionResponse,
+    response: &GenerationResponse,
     policy: Option<&GuardrailPolicy>,
     content: Option<String>,
     tool_calls: Option<serde_json::Value>,
     finish_reason: Option<FinishReason>,
-) -> ChatCompletionResponse {
+) -> GenerationResponse {
     let mut rewritten = response.clone();
     let Some(choice) = rewritten.choices.first_mut() else {
         return rewritten;

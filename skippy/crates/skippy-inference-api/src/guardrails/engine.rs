@@ -1,6 +1,6 @@
 use crate::{
-    chat::ChatCompletionRequest,
     common::{ReasoningConfig, ReasoningEffort, THINKING_BOOLEAN_ALIASES},
+    generation::GenerationRequest,
 };
 
 use super::{
@@ -28,10 +28,7 @@ impl GuardrailEngine {
         Self { policy }
     }
 
-    pub(crate) fn prepare_request(
-        &self,
-        request: &ChatCompletionRequest,
-    ) -> PreparedGuardrailRequest {
+    pub(crate) fn prepare_request(&self, request: &GenerationRequest) -> PreparedGuardrailRequest {
         let request_contract = super::request_contract::from_request(request);
         let state = GuardrailRequestState::from_request(
             request,
@@ -117,14 +114,14 @@ impl GuardrailEngine {
     pub(crate) fn classify_response(
         &self,
         prepared: &PreparedGuardrailRequest,
-        response: &crate::chat::ChatCompletionResponse,
+        response: &crate::generation::GenerationResponse,
     ) -> ClassifiedGuardrailResponse {
         super::validation::classify_response(prepared, response)
     }
 
     fn guardrails_apply_to_request(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         contract: &GuardrailRequestContract,
     ) -> bool {
         matches!(contract.mesh_guardrails, MeshGuardrailsOverride::Enabled)
@@ -167,8 +164,8 @@ impl GuardrailEngine {
 }
 
 fn suppress_implicit_thinking(
-    original_request: &ChatCompletionRequest,
-    backend_request: &mut ChatCompletionRequest,
+    original_request: &GenerationRequest,
+    backend_request: &mut GenerationRequest,
 ) {
     if has_explicit_thinking_control(original_request) {
         return;
@@ -184,7 +181,7 @@ fn suppress_implicit_thinking(
     backend_request.reasoning_effort = Some(ReasoningEffort::None);
 }
 
-fn has_explicit_thinking_control(request: &ChatCompletionRequest) -> bool {
+fn has_explicit_thinking_control(request: &GenerationRequest) -> bool {
     request.reasoning.is_some()
         || request.reasoning_effort.is_some()
         || request.extra.contains_key("thinking_budget")

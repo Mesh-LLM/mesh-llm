@@ -114,7 +114,11 @@ pub(super) fn verify_document(bytes: &[u8]) -> DynResult<Vec<u8>> {
     let size = reader.metadata()?.len();
     executable::inspect(&mut reader, 0, size)?;
     // Compare immutable archives to the actual producer outputs, not only format.
-    compare_binaries(&input.candidate_root, &input.package, &test)?;
+    compare_binaries(
+        &input.candidate_root,
+        &input.package.join("binaries.tar"),
+        &test,
+    )?;
     verify_package(
         &input.package,
         PackageVerification {
@@ -313,8 +317,8 @@ pub(super) fn admitted_bytes(
     Ok((plan, identity_bytes, manifest))
 }
 
-pub(super) fn compare_binaries(root: &Path, package: &Path, test: &Path) -> DynResult<()> {
-    let mut file = fs::File::open(package.join("binaries.tar"))?;
+pub(super) fn compare_binaries(root: &Path, archive: &Path, test: &Path) -> DynResult<()> {
+    let mut file = fs::File::open(archive)?;
     let members = archive::scan(&mut file)?;
     for name in archive::BINARIES {
         let path = if name == "skippy-mm-test" {

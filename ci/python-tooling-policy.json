@@ -22,8 +22,8 @@
     {
       "descriptor_path": "ci/required-sdk-python/sdk-source.json",
       "repository": "Mesh-LLM/mesh-llm-python-sdk",
-      "revision": "85226c50a68a13b48f40fe25e70eb85814e67457",
-      "manifest_sha256": "b795233f672b7eada4fbc4a2fe028e9a54f000cbe35fcf9faeaa68ed738f9b96",
+      "revision": "0357f19f02cc3c2769ab46b0299af027e07049c1",
+      "manifest_sha256": "774e1fb4c94aff1d134ebdac64ffbad0cdef7288531fc9631140c00d01d74426",
       "purpose": "required external SDK compatibility and embedding clients"
     },
     {
@@ -54,7 +54,7 @@
       "path": ".github/actions/setup-canary-runner/action.yml",
       "line": "for cmd in cargo rustc just sccache jq python3 uv cmake ninja hf git-lfs clang ld.lld pkg-config git; do",
       "occurrences": 1,
-      "purpose": "verify preinstalled canary runner prerequisites"
+      "purpose": "verify preinstalled Linux canary runner prerequisites without executing Python"
     },
     {
       "path": ".github/actions/setup-canary-python/action.yml",
@@ -117,7 +117,7 @@
       "purpose": "require the prepared external SDK interpreter path"
     },
     {
-      "path": "scripts/llama-canary-agent-repair.sh",
+      "path": "scripts/lib/llama-canary-native-build.sh",
       "line": "uv run --locked --no-python-downloads --python \"$jinja_python\" --project \"$JINJA_PROJECT\" -- \\",
       "occurrences": 2,
       "purpose": "run the upstream Jinja tests with locked dependencies and the installed interpreter"

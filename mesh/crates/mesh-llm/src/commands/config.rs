@@ -3,8 +3,16 @@ use mesh_llm_cli::{Cli, ConfigCommand};
 
 pub(crate) fn dispatch_config_command(cli: &Cli, command: &ConfigCommand) -> Result<()> {
     match command {
-        ConfigCommand::Validate { config_path, json } => {
-            mesh_llm_commands::config::run_config_validate(cli, config_path.as_deref(), *json)
+        ConfigCommand::Validate {
+            config_path,
+            memberships_config,
+            json,
+        } => {
+            if let Some(path) = memberships_config {
+                mesh_llm_commands::config::run_memberships_validate(path, *json)
+            } else {
+                mesh_llm_commands::config::run_config_validate(cli, config_path.as_deref(), *json)
+            }
         }
     }
 }
@@ -37,6 +45,7 @@ mod tests {
         let cli = Cli::parse_from(["mesh-llm", "config", "validate"]);
         let command = ConfigCommand::Validate {
             config_path: Some(path),
+            memberships_config: None,
             json: true,
         };
 
@@ -49,11 +58,35 @@ mod tests {
         let cli = Cli::parse_from(["mesh-llm", "config", "validate"]);
         let command = ConfigCommand::Validate {
             config_path: Some(path),
+            memberships_config: None,
             json: true,
         };
 
         let error = dispatch_config_command(&cli, &command)
             .expect_err("dispatch should surface config validation failure");
         assert!(error.to_string().contains("config validation failed"));
+    }
+
+    #[test]
+    fn memberships_validation_is_independent_of_mesh_config_and_credentials() {
+        let (directory, path) = write_fixture_file(
+            "version=1\nmodel_id='shared'\nstate_dir='state'\n[[memberships]]\nname='work'\njoin_token_file='missing.token'",
+        );
+        let cli = Cli::parse_from([
+            "mesh-llm",
+            "--config",
+            "missing-mesh.toml",
+            "config",
+            "validate",
+        ]);
+        let command = ConfigCommand::Validate {
+            config_path: None,
+            memberships_config: Some(path.clone()),
+            json: true,
+        };
+        dispatch_config_command(&cli, &command).unwrap();
+        assert!(!directory.path().join("state").exists());
+        std::fs::write(path, "version=99").unwrap();
+        assert!(dispatch_config_command(&cli, &command).is_err());
     }
 }

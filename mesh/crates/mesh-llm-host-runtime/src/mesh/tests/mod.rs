@@ -16,6 +16,7 @@ include!("owner_control.rs");
 include!("stage_transport.rs");
 include!("stage_control_identity.rs");
 include!("peer_state.rs");
+include!("plugin_snapshot.rs");
 include!("protocol_frames.rs");
 include!("admission.rs");
 include!("requirements.rs");
@@ -38,3 +39,5 @@ mod split_coverage {
         include!("stage_control.rs");
     }
 }
+
+mod model_requirements;

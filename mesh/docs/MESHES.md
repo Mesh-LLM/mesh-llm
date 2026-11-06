@@ -1,5 +1,8 @@
 # Mesh Workflows
 
+To expose one locally loaded model to independent meshes without joining their
+peer tables, see [shared full-model serving](SHARED_SERVING.md).
+
 Mesh LLM nodes expose an OpenAI-compatible inference API on `9337` and a
 management API plus optional web console on `3131`. A node can serve models,
 join as an API-only client, or do both.

@@ -1,8 +1,6 @@
 //! One package-bound worker certification; retained battery owns actual native lanes.
 #[path = "certification/guard.rs"]
 mod guard;
-#[path = "certification/host_lock.rs"]
-mod host_lock;
 #[path = "certification/observation.rs"]
 mod observation;
 #[cfg(test)]
@@ -133,17 +131,19 @@ fn execute_bound(
     if !battery.starts_with(root) || !fs::symlink_metadata(&battery)?.is_file() {
         return Err("selected battery escapes consumer source".into());
     }
-    let (_lock, contended, wait) = host_lock::acquire(deadline)?;
-    report["host_lock_contended"] = json!(contended);
-    report["host_lock_wait_seconds"] = json!(wait.as_secs_f64());
     let initial = observation::observe(root, &process::cancellation())?;
     let peak = row["estimated_peak_bytes"]
         .as_u64()
         .ok_or("missing family peak memory")?;
-    let spec = ProcessSpec {
-        executable: "/usr/bin/arch".into(),
-        arguments: [
-            "-arm64".into(),
+    let (executable, mut arguments): (&str, Vec<Value>) = if cfg!(target_os = "macos") {
+        ("/usr/bin/arch", vec![Value::Public("-arm64".into())])
+    } else if cfg!(target_os = "linux") {
+        ("/bin/bash", Vec::new())
+    } else {
+        return Err("unsupported family certification platform".into());
+    };
+    arguments.extend(
+        [
             battery.into(),
             "--skip-build".into(),
             "--plan".into(),
@@ -152,8 +152,11 @@ fn execute_bound(
             input.shard_index.to_string().into(),
         ]
         .into_iter()
-        .map(Value::Public)
-        .collect(),
+        .map(Value::Public),
+    );
+    let spec = ProcessSpec {
+        executable: executable.into(),
+        arguments,
         cwd: root.to_owned(),
         environment: environment(),
     };

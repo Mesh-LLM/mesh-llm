@@ -149,6 +149,11 @@ fn seed(workflows: &BTreeMap<String, Node>) -> Result<(), String> {
     let paths = hashes(key)?;
     for path in [
         "Cargo.lock",
+        "Cargo.toml",
+        "mesh/crates/*/Cargo.toml",
+        "skippy/crates/*/Cargo.toml",
+        "tools/*/Cargo.toml",
+        ".github/workflows/cache-warm-sccache.yml",
         ".github/cache-version.txt",
         ".cargo/config.toml",
         "scripts/cargo-linker",

@@ -31,15 +31,15 @@ index dc8cbb431..571841a60 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index b9b5259af..507a762fe 100644
+index df831c43e..2902b7279 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 68
-+#define SKIPPY_ABI_VERSION_PATCH 69
+-#define SKIPPY_ABI_VERSION_PATCH 69
++#define SKIPPY_ABI_VERSION_PATCH 70
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -118,10 +118,10 @@ index 000000000..4faf057ba
 +
 +#endif // SKIPPY_SYSTEM_ONE_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index e47cf0408..3edf17e64 100644
+index c505659cd..4276b95e3 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -80,6 +80,7 @@ add_library(llama
+@@ -94,6 +94,7 @@ add_library(llama
              skippy/speculative_decoding.cpp
              skippy/tokenization.cpp
              skippy/events.cpp

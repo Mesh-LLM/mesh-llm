@@ -51,11 +51,13 @@ pub(crate) fn verify_package(
     let plan_bytes = std::fs::read(package.join("plan.json"))?;
     let plan = plan_from_captured(&plan_bytes, &identity)?;
 
-    if !identity
-        .get("schema")
-        .is_some_and(|schema| schema.as_u64() == Some(3))
-        || identity.get("platform").and_then(Value::as_str) != Some("macos-arm64-metal")
-    {
+    let platform = identity.get("platform").and_then(Value::as_str);
+    let schema = identity.get("schema").and_then(Value::as_u64);
+    if !matches!(
+        (schema, platform),
+        (Some(3), Some("macos-arm64-metal" | "linux-arm64-cuda"))
+            | (Some(4), Some("macos-arm64-metal+linux-arm64-cuda"))
+    ) {
         return Err(package_identity_error("unknown build identity"));
     }
 
@@ -74,16 +76,7 @@ pub(crate) fn verify_package(
     if !selected_source_matches(&identity, &verification.selected_source) {
         return Err(package_identity_error("selected source identity mismatch"));
     }
-    if !verification.selected_source.is_empty()
-        && (candidate != verification.selected_source
-            || base != verification.selected_source
-            || optional_digest(&identity, "bundle_sha256")?.is_some()
-            || !["repair-1", "verify-1"].contains(&string_field(&identity, "pass_id")?))
-    {
-        return Err(package_identity_error(
-            "certify-only package changed selected source",
-        ));
-    }
+    selected_base_contract(&identity, &verification.selected_source, base, candidate)?;
 
     if identity.get("run_id").and_then(Value::as_str) != Some(verification.current_run_id.as_str())
     {
@@ -109,6 +102,20 @@ pub(crate) fn verify_package(
     for (name, key) in ARTIFACTS {
         verify_artifact(package, &identity, name, key)?;
     }
+    if schema == Some(4) {
+        verify_artifact(
+            package,
+            &identity,
+            "linux-binaries.tar",
+            "linux_binaries_sha256",
+        )?;
+        verify_artifact(
+            package,
+            &identity,
+            "linux-workload-oracles.tar",
+            "linux_workload_oracles_sha256",
+        )?;
+    }
     if optional_digest(&identity, "summary_sha256")?.is_some() {
         verify_artifact(package, &identity, "upstream-summary.md", "summary_sha256")?;
     }
@@ -129,6 +136,29 @@ pub(crate) fn verify_package(
             run_attempt: current_run_attempt,
         },
     })
+}
+
+fn selected_base_contract(
+    identity: &Value,
+    selected: &str,
+    base: &str,
+    candidate: &str,
+) -> Result<(), Error> {
+    if selected.is_empty() {
+        return Ok(());
+    }
+    let pass = string_field(identity, "pass_id")?;
+    super::pass_identity::PassId::parse(pass)?;
+    let changed = candidate != base;
+    if base != selected
+        || optional_digest(identity, "bundle_sha256")?.is_some() != changed
+        || (!changed && !["repair-1", "verify-1"].contains(&pass))
+    {
+        return Err(package_identity_error(
+            "package differs from frozen selected base",
+        ));
+    }
+    Ok(())
 }
 
 // Verify the same captured bytes that all parsing and retained projections consume.

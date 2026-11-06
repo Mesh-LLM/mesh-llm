@@ -6,12 +6,18 @@ use std::{fs, path::Path};
 #[error("all follow-up requests are cold")]
 pub(super) struct Cold;
 
-// A repeated ladder leaves the next token on an argmax near-tie, so comparing
-// one greedy token between an uncached prefill and a restored prefix measures
-// float accumulation order rather than the restored state. End every prompt
-// with a terminator whose continuation has a wide margin: a restored prefix
-// must still produce the same continuation, and losing state still shows here.
-const TERMINATOR: &str = " The capital of France is";
+// The prompt is a chat user turn, so the compared token is the first token of
+// the reply. An open-ended reply leaves it on a near-tie that float
+// accumulation order decides: on granite-4.0-h-350m, " The capital of France
+// is" left the top two replies ("Sure", "The") as little as 0.02 nats apart,
+// and prefilling in 64-token instead of 512-token micro-batches moved them by
+// up to 1 nat, so a cold prefill and a restored prefix disagreed without any
+// state being lost. Ask for a fixed
+// one-word reply instead: "Hello" leads by at least 5.8 nats on that model and
+// 1.2 on SmolLM2-135M, across micro-batch sizes, restore depths and split
+// activation codecs, so a restored prefix must still produce it and lost state
+// still shows here.
+const TERMINATOR: &str = " Reply with only the word Hello.";
 
 fn prompts(nonce: &str) -> Vec<String> {
     let mut prompt = format!(
@@ -89,7 +95,7 @@ fn validate(metrics: &[(u64, u64)], kind: &str) -> DynResult<()> {
     // Resident capacity pressure can evict the deepest checkpoint, so a valid
     // repeat may leave a suffix uncached. Output equality in `verify` proves the
     // restored prefix still leads to the same continuation as the uncached
-    // request; the payloads end on a decisive terminator, so that equality tests
+    // request; the payloads ask for a fixed one-word reply, so that equality tests
     // the restored state instead of which side of a near-tie the logits land on.
     for pair in metrics.as_chunks::<2>().0 {
         if pair[0].1 >= pair[0].0 || pair[1].1 <= pair[0].1 {
@@ -264,7 +270,7 @@ mod tests {
         );
     }
     #[test]
-    fn prompts_end_on_a_decisive_terminator() {
+    fn prompts_end_on_a_fixed_reply_request() {
         let prompts = super::prompts("nonce");
         assert_eq!(prompts.len(), 3);
         assert!(

@@ -1,6 +1,7 @@
 //! HTTP transport for owner-control runtime commands.
 
 use anyhow::{Context, Result};
+use mesh_llm_system::local_http::local_http_client_builder;
 
 pub(super) async fn post_runtime_payload(
     port: u16,
@@ -17,7 +18,7 @@ pub(super) async fn post_with_token(
     body: &serde_json::Value,
     token: &str,
 ) -> Result<serde_json::Value> {
-    let client = reqwest::Client::builder()
+    let client = local_http_client_builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
     let url = format!("http://127.0.0.1:{port}{path}");

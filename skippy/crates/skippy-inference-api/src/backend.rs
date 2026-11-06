@@ -14,18 +14,16 @@ use crate::{
     audio::{
         AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
     },
-    chat::{ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse},
     completions::{CompletionChunk, CompletionRequest, CompletionResponse},
     embeddings::{EmbeddingResponse, EmbeddingsRequest},
     errors::InferenceError,
+    generation::{GenerationEventStream, GenerationRequest, GenerationResponse},
     lifecycle::RequestId,
     models::ModelObject,
     rerank::{RerankRequest, RerankResponse},
     system_one::{SystemOneRequest, SystemOneResponse},
 };
 
-pub type ChatCompletionStream =
-    Pin<Box<dyn Stream<Item = InferenceResult<ChatCompletionChunk>> + Send + 'static>>;
 pub type CompletionStream =
     Pin<Box<dyn Stream<Item = InferenceResult<CompletionChunk>> + Send + 'static>>;
 
@@ -75,6 +73,8 @@ pub struct InferenceRequestContext {
     exchange_id: Arc<OnceLock<String>>,
     stream_usage_observation: bool,
     trusted_agent_session: bool,
+    execution_scope: Option<crate::InferenceExecutionScope>,
+    execution_lease: Option<Arc<dyn crate::InferenceExecutionLease>>,
 }
 
 impl InferenceRequestContext {
@@ -116,6 +116,23 @@ impl InferenceRequestContext {
         self.trusted_agent_session
     }
 
+    /// Bind execution to a trusted backend owner's isolation and admission domain.
+    /// The HTTP adapters never populate these fields from client-supplied data.
+    pub fn with_execution_scope(
+        mut self,
+        scope: crate::InferenceExecutionScope,
+        lease: Arc<dyn crate::InferenceExecutionLease>,
+    ) -> Self {
+        self.execution_scope = Some(scope);
+        self.execution_lease = Some(lease);
+        self
+    }
+
+    /// Return the trusted in-process isolation scope, if the backend owner installed one.
+    pub fn execution_scope(&self) -> Option<crate::InferenceExecutionScope> {
+        self.execution_scope
+    }
+
     /// Return the frontend request identifier when the caller supplied one.
     pub fn request_id(&self) -> Option<RequestId> {
         self.request_id
@@ -145,6 +162,7 @@ impl InferenceRequestContext {
 }
 
 impl Default for InferenceRequestContext {
+    /// Create an uncancelled request context without trusted identity or an execution lease.
     fn default() -> Self {
         Self {
             cancellation: CancellationToken::new(),
@@ -152,6 +170,8 @@ impl Default for InferenceRequestContext {
             exchange_id: Arc::new(OnceLock::new()),
             stream_usage_observation: false,
             trusted_agent_session: false,
+            execution_scope: None,
+            execution_lease: None,
         }
     }
 }
@@ -165,7 +185,7 @@ pub trait InferenceBackend: Send + Sync + 'static {
     async fn models(&self) -> InferenceResult<Vec<ModelObject>>;
 
     /// Count the model-rendered chat prompt without generating or running hooks.
-    async fn count_chat_tokens(&self, _request: ChatCompletionRequest) -> InferenceResult<u32> {
+    async fn count_chat_tokens(&self, _request: GenerationRequest) -> InferenceResult<u32> {
         Err(InferenceError::unsupported(
             "token counting is unavailable for this backend",
         ))
@@ -173,22 +193,22 @@ pub trait InferenceBackend: Send + Sync + 'static {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse>;
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse>;
 
     async fn chat_completion_with_context(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionResponse> {
+    ) -> InferenceResult<GenerationResponse> {
         self.chat_completion(request).await
     }
 
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream>;
+    ) -> InferenceResult<GenerationEventStream>;
 
     async fn completion(&self, _request: CompletionRequest) -> InferenceResult<CompletionResponse> {
         Err(InferenceError::unsupported(

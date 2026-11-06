@@ -17,7 +17,6 @@ const UNVERIFIED: &[&str] = &[
     "skippy-hf-hub",
     // Native HF publication input custody and model FIFO fixtures need Windows qualification.
     "skippy-model-package",
-    "mesh-llm-routing",
     "skippy-model",
     "skippy-package-builder",
     "skippy-quantize",
@@ -27,8 +26,6 @@ const UNVERIFIED: &[&str] = &[
     "skippy-api",
     "skippy-cli",
     "xtask",
-    // Supervision and interruption extracted from xtask keep its pending Windows runtime proof.
-    "process-supervision",
     // Extracted native reader has Unix regular-file admission branches; Windows runtime proof is pending.
     "trajectory-reader",
 ];
@@ -746,18 +743,11 @@ fn every_current_windows_catalog_unit_owner_selects_the_native_planner_row() {
     }
 }
 #[test]
-fn wallet_dependency_closure_preserves_direct_domain_pr_routing_and_full_cadence() {
+fn retired_wallet_placeholder_keeps_direct_domain_pr_routing_and_full_cadence() {
     let plan = plan_for_workflow_owner("mesh-llm-wallet", "pr-ready");
     assert_eq!(
         plan["direct_crates"],
         serde_json::json!(["mesh-llm-wallet"])
-    );
-    assert!(
-        plan["affected_crates"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|name| name == "mesh-llm-host-runtime")
     );
     assert!(
         plan["domains"]

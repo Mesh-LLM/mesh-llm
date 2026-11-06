@@ -78,6 +78,12 @@ that is draining, paused by activity policy, or temporarily unable to accept
 work returns `503` with `service_unavailable`. Pausing admission does not
 unload the model.
 
+A model this node is still loading returns `503` with `model_not_ready` and
+`Retry-After: 5`. That covers a request sent while the startup models resolve,
+during a first load or a reload, and `auto` before any model is ready. Retry
+after the stated seconds. A name that is still unknown once the startup models
+resolve returns `404`.
+
 ## Chat completion
 
 ```sh

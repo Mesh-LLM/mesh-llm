@@ -424,6 +424,10 @@ pub(super) async fn run_auto_handle_control_request(
     use super::{IntentSource, ModelIntent};
 
     match cmd {
+        api::RuntimeControlRequest::NativeNode { resp } => {
+            let _ = resp.send(ctx.node.clone());
+            false
+        }
         api::RuntimeControlRequest::DiscoverModels { resp } => {
             crate::models::discovery::respond(ctx.node.clone(), resp);
             false
