@@ -28,18 +28,51 @@ const DRAFT_COMPUTE_ROWS: u64 = 512;
 /// Plans with room for the DFlash draft, and reports whether that room was
 /// held. A default draft that leaves no room for the minimum context is left
 /// out of the plan, and the model serves without it. An explicit draft is
-/// always planned for; it shortens the context instead.
+/// always planned for; it shortens the context, and on auto lanes it also
+/// gives up lanes until it fits.
 pub(super) fn plan_with_default_dflash_draft(
     input: RuntimeResourcePlanInput<'_>,
     draft: Option<PlannedDFlashDraft>,
 ) -> (RuntimeResourcePlan, bool) {
     if let Some(PlannedDFlashDraft { draft, default }) = draft {
         let plan = plan_runtime_resources_with_draft(input, Some(draft));
-        if !default || plan.fits() {
+        if plan.fits() {
             return (plan, true);
+        }
+        if !default {
+            let fewer_lanes = fewer_lanes_for_draft(input, draft, plan.slots);
+            return (fewer_lanes.unwrap_or(plan), true);
         }
     }
     (plan_runtime_resources(input), false)
+}
+
+/// The draft's rollback snapshots are held per lane on a hybrid target, so a
+/// shorter context cannot make room for them: only fewer lanes can. On auto
+/// lanes, the widest plan under `slots` that fits; a configured lane count is
+/// kept as asked.
+fn fewer_lanes_for_draft(
+    input: RuntimeResourcePlanInput<'_>,
+    draft: PlannedSpeculativeDraft,
+    slots: usize,
+) -> Option<RuntimeResourcePlan> {
+    if input.parallel_override.is_some() {
+        return None;
+    }
+    (1..slots).rev().find_map(|lanes| {
+        let mut plan = plan_runtime_resources_with_draft(
+            RuntimeResourcePlanInput {
+                parallel_override: Some(lanes),
+                ..input
+            },
+            Some(draft),
+        );
+        // The planner chose this lane count, not the operator.
+        if let Some(breakdown) = plan.breakdown.as_mut() {
+            breakdown.slots_auto = true;
+        }
+        plan.fits().then_some(plan)
+    })
 }
 
 /// The DFlash draft the resolver will attach for this load, explicit or
@@ -194,5 +227,54 @@ mod tests {
 
         let (_, planned) = plan_with_default_dflash_draft(input(64 << 30), None);
         assert!(!planned);
+    }
+
+    /// Measured on an RTX 4070 Ti through Vulkan: with four auto lanes the
+    /// target's rollback snapshots did not fit beside the 9B weights and the
+    /// load failed allocating the recurrent-state cache; one lane served.
+    #[test]
+    fn an_explicit_dflash_draft_gives_up_auto_lanes_rather_than_overrun() {
+        let meta = qwen35_9b_meta();
+        let input = |parallel_override| RuntimeResourcePlanInput {
+            ctx_size_override: Some(4096),
+            parallel_override,
+            model_bytes: 5_680_522_464,
+            projector_bytes: 0,
+            vram_bytes: 11_226 << 20,
+            metadata: Some(&meta),
+            kv_cache_quant: crate::models::gguf::GgufKvCacheQuant::F16,
+            local_layer_fraction: None,
+            planning_profile: RuntimeResourcePlanningProfile::DedicatedLocal,
+            measured_buffers: None,
+        };
+        let explicit_draft = Some(PlannedDFlashDraft {
+            draft: PlannedSpeculativeDraft {
+                weight_bytes: 1_383_768_224,
+                recurrent_rollback_tokens: 16,
+                kv_bytes_per_token: 0,
+                compute_bytes: 0,
+            },
+            default: false,
+        });
+
+        let four_lanes =
+            plan_runtime_resources_with_draft(input(None), explicit_draft.map(|d| d.draft));
+        assert_eq!(four_lanes.slots, 4);
+        assert!(!four_lanes.fits(), "four lanes overrun the device");
+
+        let (plan, planned) = plan_with_default_dflash_draft(input(None), explicit_draft);
+        assert!(planned);
+        assert!(plan.fits());
+        assert!((1..4).contains(&plan.slots), "{} lanes", plan.slots);
+        assert_eq!(plan.context_length, 4096);
+        assert!(
+            plan.breakdown.unwrap().slots_auto,
+            "the planner chose the lanes"
+        );
+
+        // A lane count the operator configured is kept, even when tight.
+        let (configured, planned) = plan_with_default_dflash_draft(input(Some(4)), explicit_draft);
+        assert!(planned);
+        assert_eq!(configured.slots, 4);
     }
 }
