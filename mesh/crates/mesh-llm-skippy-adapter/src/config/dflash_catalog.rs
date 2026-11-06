@@ -276,6 +276,30 @@ pub(super) fn bootstrap_pairings() -> Vec<DFlashPairing> {
             max_draft_tokens: 15,
             backends: DFlashBackends::Metal,
         },
+        // Nemotron-3.5-Bolt-E4B, a Gemma-4-E4B fine-tune with Gemma-4-E4B-It's
+        // shape, so the name breaks the tie. NVIDIA's DFlash draft reads target
+        // layers 6..=36 at width 2560 with an 8-token block, in sliding-window
+        // attention. Greedy chat decodes 142.1 tok/s on a DGX Spark (58.4 off)
+        // and 62.3 on an M4 (28.5 off).
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "gemma4".to_string(),
+                layer_count: 42,
+                embedding_length: 2560,
+                expert_count: 0,
+                family: Some("Nemotron-3.5-Bolt".to_string()),
+            },
+            draft: DFlashDraft {
+                repo: "unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF".to_string(),
+                revision: "b738967d6da3441a7d1c71fcec15e49e32e16ecd".to_string(),
+                file: "dflash-NVIDIA-Nemotron-3.5-Bolt-E4B-Q8_0.gguf".to_string(),
+                sha256: "9a63662ae8395b8bfc1a1b00d7a9ef354120f172704bd6ba88d3870cf22d4d03"
+                    .to_string(),
+                bytes: 398_892_256,
+            },
+            max_draft_tokens: 7,
+            backends: DFlashBackends::All,
+        },
     ]
 }
 
@@ -374,13 +398,25 @@ pub(super) fn package_selects_dflash(
 
 /// Whether `name` carries `family` as a whole token, ignoring case, so
 /// "Huihui-Qwen3.6-27B" names Qwen3.6 but "Qwen3.6x" and "Qwen3.65" do not.
+/// Spaces, underscores and hyphens are one separator, so "NVIDIA Nemotron 3.5
+/// Bolt E4B" names Nemotron-3.5-Bolt.
 fn names_family(name: &str, family: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    let family = family.to_ascii_lowercase();
+    let name = separators_as_hyphens(name);
+    let family = separators_as_hyphens(family);
     let continues = |c: char| c.is_ascii_alphanumeric() || c == '.';
     name.match_indices(&family).any(|(start, _)| {
         !name[..start].ends_with(continues) && !name[start + family.len()..].starts_with(continues)
     })
+}
+
+/// `text` lowercased, with spaces and underscores written as hyphens.
+fn separators_as_hyphens(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            ' ' | '_' => '-',
+            c => c.to_ascii_lowercase(),
+        })
+        .collect()
 }
 
 /// The default cap on DFlash draft tokens per block. Adaptive block sizing
@@ -589,7 +625,7 @@ mod tests {
 
     /// Every target the bootstrap table pairs by default, named as its GGUF
     /// names it: Qwen3.5-9B, Qwen3.6-27B, Qwen3.8-27B (with its NextN block),
-    /// Qwen3.6-35B-A3B and Qwen3-Coder-Next.
+    /// Qwen3.6-35B-A3B, Qwen3-Coder-Next and Nemotron-3.5-Bolt-E4B.
     fn default_targets() -> Vec<(&'static str, GgufCompactMeta)> {
         let mut qwen38 = named(target_meta("qwen35", 65, 5120, 0), "Qwen3.8-27B");
         qwen38.nextn_predict_layers = 1;
@@ -610,6 +646,13 @@ mod tests {
             (
                 "Qwen3-Coder-Next",
                 named(target_meta("qwen3next", 48, 2048, 512), "Qwen3-Coder-Next"),
+            ),
+            (
+                "Nemotron-3.5-Bolt-E4B",
+                named(
+                    target_meta("gemma4", 42, 2560, 0),
+                    "NVIDIA Nemotron 3.5 Bolt E4B",
+                ),
             ),
         ]
     }
@@ -680,6 +723,35 @@ mod tests {
             Some("AtomicChat/Qwen3-Coder-Next-DFlash-GGUF")
         );
         assert_eq!(repo("Qwen3-Coder-Next", false), None);
+        for metal in [true, false] {
+            assert_eq!(
+                repo("Nemotron-3.5-Bolt-E4B", metal).as_deref(),
+                Some("unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF")
+            );
+        }
+    }
+
+    #[test]
+    fn nemotron_bolt_is_told_from_gemma_4_by_name() {
+        const BOLT: &str = "unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF";
+        let gemma4 = target_meta("gemma4", 42, 2560, 0);
+        // As unsloth, bartowski, LM Studio and NVIDIA name their quants.
+        for name in [
+            "NVIDIA Nemotron 3.5 Bolt E4B",
+            "NVIDIA-Nemotron-3.5-Bolt-E4B",
+            "Nemotron 3.5 Bolt E4B",
+        ] {
+            for metal in [true, false] {
+                assert_eq!(
+                    repo(&named(gemma4.clone(), name), metal).as_deref(),
+                    Some(BOLT),
+                    "{name}"
+                );
+            }
+        }
+        // Gemma-4-E4B-It has the same shape; the Bolt draft is not its default.
+        assert_eq!(repo(&named(gemma4.clone(), "Gemma-4-E4B-It"), false), None);
+        assert_eq!(repo(&gemma4, false), None);
     }
 
     #[test]
@@ -758,6 +830,16 @@ mod tests {
             ("MyQwen3.8-27B", "Qwen3.8", false),
             ("Qwen3.6-27B", "Qwen3.8", false),
             ("", "Qwen3.8", false),
+            ("NVIDIA Nemotron 3.5 Bolt E4B", "Nemotron-3.5-Bolt", true),
+            ("Nemotron 3.5 Bolt E4B", "Nemotron-3.5-Bolt", true),
+            (
+                "Nvidia-Nemotron-3.5-Lightning-30B-A3B",
+                "Nemotron-3.5-Lightning",
+                true,
+            ),
+            ("nemotron_3.5_lightning", "Nemotron-3.5-Lightning", true),
+            ("Nemotron-3-Nano-30B-A3B", "Nemotron-3.5-Lightning", false),
+            ("Gemma-4-E4B-It", "Nemotron-3.5-Bolt", false),
         ] {
             assert_eq!(names_family(name, family), expected, "{name}");
         }
