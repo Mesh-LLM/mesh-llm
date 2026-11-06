@@ -847,8 +847,10 @@ fn execute_binary_stage_message(
             ))
         }
         WireMessageKind::VerifyWindow => {
-            let sampling =
-                runtime_sampling_config(message.sampling.as_ref(), runtime.kv_pool_tokens());
+            let sampling = runtime_sampling_config(
+                message.sampling.as_ref(),
+                runtime.context_tokens_per_lane(),
+            );
             let native_mtp_tokens = if dflash_drafts {
                 0
             } else {

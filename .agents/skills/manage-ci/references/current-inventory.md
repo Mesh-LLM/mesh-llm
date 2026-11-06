@@ -1,5 +1,19 @@
 # MeshLLM CI inventory
 
+Manual KV validation lives in `automation kv-validation` and the thin
+`skippy-kv-*` Just recipes. It prepares one external native test harness against
+an exact packaged runtime, then reuses producer artifacts for the four pinned
+AgentX models. Its explicit Linux JY CPU/CUDA specs use the accepted lab/custom
+schema; Metal runs natively through the same local owner. This foundation is
+not selected by ordinary CI and does not qualify deferred long-c4/L3/performance
+checks. See `skippy/evals/kv-validation/README.md`.
+
+The optional AgentX comparison owner consumes the pinned external client and
+locked environment in `skippy/evals/agentx/`. The November 6 maintainer decision
+admits this bounded dependency through `ci/python-tooling-policy.json`.
+`agentx-setup` uses installed Python 3.12 without interpreter downloads;
+campaign workers use prepared inputs offline. This adds no required CI lane.
+
 Every workflow disables Rust debug information for the dev, test, release and
 bench profiles through workflow- or job-level `CARGO_PROFILE_<PROFILE>_DEBUG=0`.
 Reusable workflows set their own environment, and the Linux test, client and
@@ -11,6 +25,7 @@ Local development defaults, complete package tests, assertions and overflow
 checks are preserved. Cache epoch `v5` invalidates the previous namespace.
 Batch jobs report filesystem space before each package and target/compiler-cache
 sizes after the test step, including failures.
+
 
 The standalone C++ facade paths `skippy/skippy_api/**` and
 `skippy/skippy-api-rs/**` have additive tooling ownership. Their catalog-only

@@ -22,7 +22,7 @@ use super::{
 use super::{
     binary_kv::{
         add_binary_record_stats, emit_binary_proactive_eviction, maybe_prefix_cache_control,
-        maybe_record_binary_full_prefill,
+        maybe_record_binary_full_prefill, prepare_prefix_cache_control,
     },
     binary_messaging::reply::configure_prediction_return_stream,
     direct_return::PredictionReturnSinks,
@@ -91,7 +91,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
 
     let (prefix_tokens, current_token) = restore_decode_sideband(&message)?;
     let lookup_config = config.clone();
-    let lookup_kv = kv.cloned();
+    let prepared = prepare_prefix_cache_control(config, kv, session_id, &message, prefix_tokens);
     let lookup_telemetry = telemetry.clone();
     let lookup_session_id = session_id.to_string();
     let lookup_message = message.clone();
@@ -101,7 +101,7 @@ pub(super) fn handle_binary_restore_prefill_decode_control(
             Ok(maybe_prefix_cache_control(
                 &lookup_config,
                 runtime,
-                lookup_kv.as_ref(),
+                prepared.as_ref(),
                 &lookup_telemetry,
                 &lookup_session_id,
                 &lookup_message,

@@ -13,14 +13,13 @@ Subject: [PATCH 06/15] test(skippy): cover live graph and state contracts
  .../tests/hardware_application_probe.cpp      |   76 +
  src/skippy/tests/input_capabilities.cpp       |   78 +
  .../tests/input_leaf_state_regression.h       |   49 +
- src/skippy/tests/iswa_row_inputs_cases.hpp    |  307 +++
  src/skippy/tests/live_graph_reference.h       |  194 ++
  src/skippy/tests/noalloc_graph_planning.cpp   | 1137 +++++++++++
  src/skippy/tests/profile_residency.cpp        |  258 +++
  .../tests/renamed_multishard_planning.cpp     | 1665 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
  src/skippy/tests/runtime_events.cpp           |  695 +++++++
- src/skippy/tests/sampling_history.cpp         |  967 ++++++++++
+ src/skippy/tests/sampling_history.cpp         |  517 +++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1198 ++++++++++++
@@ -28,14 +27,13 @@ Subject: [PATCH 06/15] test(skippy): cover live graph and state contracts
  tests/test-chat-auto-parser.cpp               |   47 +
  tests/test-chat.cpp                           |  189 +-
  tests/test-deepseek4-mtp.h                    |   88 +
- tests/test-flash-attn-rows.cpp                |  536 ++++++
  tests/test-graph-contract-fixture.h           |  155 ++
  tests/test-llama-archs.cpp                    |  351 +++-
  tests/test-reasoning-budget.cpp               |   24 +
  tests/test-skippy-activation-validation.cpp   |   18 +
  tests/test-skippy-cachegen-import.cpp         |  347 ++++
  tests/test-skippy-cachegen-metal.cpp          |  399 ++++
- tests/test-skippy-kv-cells-contiguous.cpp     |  118 ++
+ tests/test-skippy-kv-cells-contiguous.cpp     |   20 +
  tests/test-skippy-kv-page-export.cpp          |  367 ++++
  tests/test-skippy-model-loader-accounting.cpp |  320 ++++
  .../test-skippy-recurrent-state-roundtrip.cpp |  160 ++
@@ -52,12 +50,10 @@ Subject: [PATCH 06/15] test(skippy): cover live graph and state contracts
  create mode 100644 src/skippy/tests/hardware_application_probe.cpp
  create mode 100644 src/skippy/tests/input_capabilities.cpp
  create mode 100644 src/skippy/tests/input_leaf_state_regression.h
- create mode 100644 src/skippy/tests/iswa_row_inputs_cases.hpp
  create mode 100644 src/skippy/tests/live_graph_reference.h
  create mode 100644 src/skippy/tests/noalloc_graph_planning.cpp
  create mode 100644 src/skippy/tests/profile_residency.cpp
  create mode 100644 src/skippy/tests/renamed_multishard_planning.cpp
- create mode 100644 src/skippy/tests/resident_checkpoint_gpu.cpp
  create mode 100644 src/skippy/tests/residual_checkpoint_regression.h
  create mode 100644 src/skippy/tests/runtime_events.cpp
  create mode 100644 src/skippy/tests/sampling_history.cpp
@@ -65,7 +61,6 @@ Subject: [PATCH 06/15] test(skippy): cover live graph and state contracts
  create mode 100644 src/skippy/tests/stage_plan_header.cpp
  create mode 100644 src/skippy/tests/stage_slice_plan.cpp
  create mode 100644 tests/test-deepseek4-mtp.h
- create mode 100644 tests/test-flash-attn-rows.cpp
  create mode 100644 tests/test-graph-contract-fixture.h
  create mode 100644 tests/test-skippy-activation-validation.cpp
  create mode 100644 tests/test-skippy-cachegen-import.cpp
@@ -238,8 +233,6 @@ index 000000000..cd2e4af3f
 +#include <thread>
 +#include <utility>
 +#include <vector>
-+
-+#include "iswa_row_inputs_cases.hpp"
 +
 +class recording_input final : public llm_graph_input_i {
 +public:
@@ -785,7 +778,6 @@ index 000000000..cd2e4af3f
 +static const char * fused_op_name(llm_fused_op op) {
 +    switch (op) {
 +        case LLM_FUSED_OP_FLASH_ATTN:         return "flash attention";
-+        case LLM_FUSED_OP_FLASH_ATTN_KV_ROWS: return "flash attention with KV rows";
 +        case LLM_FUSED_OP_GDN_AR:             return "Gated Delta Net (autoregressive)";
 +        case LLM_FUSED_OP_GDN_CH:             return "Gated Delta Net (chunked)";
 +        case LLM_FUSED_OP_LIGHTNING_INDEXER:  return "Lightning Indexer";
@@ -1123,12 +1115,6 @@ index 000000000..cd2e4af3f
 +    if (const int rc = check_prepared_export_token_axis()) return rc;
 +    if (const int rc = check_execution_profile_residency()) return rc;
 +    if (const int rc = check_embedding_execution_profiles()) {
-+        return rc;
-+    }
-+    if (argc == 2 && std::strcmp(argv[1], "--iswa-rows") == 0) {
-+        llama_backend_init();
-+        const int rc = check_iswa_row_inputs();
-+        llama_backend_free();
 +        return rc;
 +    }
 +    if (argc == 2 && std::strcmp(argv[1], "--input-width") == 0) {
@@ -1888,319 +1874,6 @@ index 000000000..33d3faca9
 +    };
 +    if (skippy_infer_state_effects({}, graph, boundaries, effects, error)) { return 96; }
 +    return 0;
-+}
-diff --git a/src/skippy/tests/iswa_row_inputs_cases.hpp b/src/skippy/tests/iswa_row_inputs_cases.hpp
-new file mode 100644
-index 000000000..331607a34
---- /dev/null
-+++ b/src/skippy/tests/iswa_row_inputs_cases.hpp
-@@ -0,0 +1,307 @@
-+#pragma once
-+
-+#include "llama-kv-cache-iswa.h"
-+#include "llama-memory-hybrid-iswa.h"
-+
-+#include <algorithm>
-+#include <cmath>
-+#include <limits>
-+
-+// A tiny native cache/graph fixture, not a synthetic model certification. No
-+// weights or family builders: the actual generic ISWA builder and two caches
-+// own all row lists, masks, allocation, reuse and attention computations below.
-+class iswa_row_fixture_model final : public llama_model {
-+public:
-+    iswa_row_fixture_model() : llama_model(llama_model_default_params()) {
-+        arch = LLM_ARCH_LLAMA;
-+        attn_rot = false;
-+        hparams.n_layer_all = 2;
-+        hparams.n_embd = 64;
-+        hparams.n_embd_head_k_full = hparams.n_embd_head_v_full = 64;
-+        hparams.n_embd_head_k_swa = hparams.n_embd_head_v_swa = 64;
-+        hparams.n_head_arr.fill(1);
-+        hparams.n_head_kv_arr.fill(1);
-+        hparams.is_swa_impl[1] = 1;
-+        hparams.swa_type = LLAMA_SWA_TYPE_STANDARD;
-+        hparams.n_swa = 2;
-+    }
-+    void load_stats(llama_model_loader &) override {}
-+    void load_hparams(llama_model_loader &) override {}
-+    void load_vocab(llama_model_loader &) override {}
-+    bool load_tensors(llama_model_loader &) override { return false; }
-+    void load_arch_hparams(llama_model_loader &) override {}
-+    void load_arch_tensors(llama_model_loader &) override {}
-+    std::unique_ptr<llm_graph_context> build_arch_graph(const llm_graph_params &) const override { return nullptr; }
-+};
-+
-+static void iswa_row_require(bool condition, const char * message) {
-+    if (!condition) throw std::runtime_error(message);
-+}
-+
-+static llama_ubatch iswa_row_batch(uint32_t per_owner, llama_pos first, bool two_owners) {
-+    llama_ubatch batch = {};
-+    batch.b_equal_seqs = 1;
-+    batch.n_seq_tokens = per_owner;
-+    batch.n_seqs = batch.n_seqs_unq = two_owners ? 2 : 1;
-+    batch.n_tokens = per_owner * batch.n_seqs;
-+    batch.n_pos = 1;
-+    batch.data = std::make_shared<llama_ubatch::data_t>();
-+    auto & data = *batch.data;
-+    data.token.assign(batch.n_tokens, 1);
-+    data.pos.resize(batch.n_tokens);
-+    data.n_seq_id.assign(batch.n_tokens, 1);
-+    data.seq_id_data.resize(batch.n_tokens);
-+    data.seq_id.resize(batch.n_tokens);
-+    data.seq_id_unq = two_owners ? std::vector<llama_seq_id>{0, 1} : std::vector<llama_seq_id>{0};
-+    data.output.assign(batch.n_tokens, 1);
-+    data.seq_idx.assign(LLAMA_MAX_SEQ, -1);
-+    for (uint32_t i = 0; i < batch.n_seqs_unq; ++i) data.seq_idx[data.seq_id_unq[i]] = i;
-+    for (uint32_t i = 0; i < batch.n_tokens; ++i) {
-+        // Deliberately different from seq_id_unq order: Q blocks own stream order.
-+        data.seq_id_data[i] = two_owners ? 1 - i/per_owner : 0;
-+        data.seq_id[i] = &data.seq_id_data[i];
-+        data.pos[i] = first + i%per_owner;
-+    }
-+    batch.token = data.token.data();
-+    batch.pos = data.pos.data();
-+    batch.n_seq_id = data.n_seq_id.data();
-+    batch.seq_id = data.seq_id.data();
-+    batch.seq_id_unq = data.seq_id_unq.data();
-+    batch.output = data.output.data();
-+    batch.seq_idx = data.seq_idx.data();
-+    return batch;
-+}
-+
-+static std::unique_ptr<llama_kv_cache_iswa_context> iswa_row_apply(
-+        llama_kv_cache_iswa & cache, const llama_ubatch & batch) {
-+    auto base = cache.get_base()->prepare({batch});
-+    auto swa = cache.get_swa()->prepare({batch});
-+    iswa_row_require(base.size() == 1 && swa.size() == 1, "ISWA prepare both pools");
-+    auto context = std::make_unique<llama_kv_cache_iswa_context>(
-+            &cache, std::move(base), std::move(swa), std::vector<llama_ubatch>{batch});
-+    iswa_row_require(context->apply(), "ISWA apply both pools");
-+    return context;
-+}
-+
-+static void iswa_row_check_pool(
-+        const llama_kv_cache & cache, const llama_ubatch & batch,
-+        const ggml_tensor * rows, const ggml_tensor * mask, bool swa) {
-+    iswa_row_require(rows && mask && rows->buffer && mask->buffer, "ISWA both live inputs allocated");
-+    iswa_row_require(rows->type == GGML_TYPE_I32 && rows->ne[0] >= 256 && rows->ne[0] % 256 == 0 && rows->ne[1] == 2 &&
-+            mask->type == GGML_TYPE_F16 && mask->ne[0] == rows->ne[0] && mask->ne[1] == 2 && mask->ne[3] == 2,
-+            "ISWA row/mask geometry");
-+    const uint32_t width = static_cast<uint32_t>(rows->ne[0]);
-+    const auto * actual_rows = static_cast<const int32_t *>(rows->data);
-+    const auto * actual_mask = static_cast<const ggml_fp16_t *>(mask->data);
-+    for (uint32_t stream = 0; stream < 2; ++stream) {
-+        const llama_seq_id owner = batch.seq_id[stream*2][0];
-+        const auto & cells = cache.get_cells(owner);
-+        std::vector<int32_t> expected;
-+        for (uint32_t physical = 0; physical < cells.size(); ++physical) {
-+            // Independent scalar scan of actual membership and the known 2-row window.
-+            if (cells.seq_has(physical, owner) && (!swa || cells.pos_get(physical) >= batch.pos[stream*2] - 1)) {
-+                expected.push_back(static_cast<int32_t>(physical));
-+            }
-+        }
-+        iswa_row_require(!expected.empty() && expected.size() < width, "ISWA nonempty bounded expected rows");
-+        for (uint32_t column = 0; column < width; ++column) {
-+            const int32_t physical = column < expected.size() ? expected[column] : -1;
-+            iswa_row_require(actual_rows[stream*width + column] == physical, "ISWA current ascending owner rows");
-+            for (uint32_t q = 0; q < 2; ++q) {
-+                const llama_pos query = batch.pos[stream*2 + q];
-+                const bool visible = physical >= 0 && cells.pos_get(physical) <= query &&
-+                        (!swa || cells.pos_get(physical) > query - 2);
-+                const float value = ggml_fp16_to_fp32(actual_mask[(stream*2 + q)*width + column]);
-+                iswa_row_require(visible ? value == 0.0f : (std::isinf(value) && value < 0),
-+                        "ISWA exact causal/SWA compact mask");
-+            }
-+        }
-+    }
-+}
-+
-+static void iswa_row_check_bindings(const llm_graph_result & result, const llm_graph_input_attn_kv_iswa & input) {
-+    const std::pair<const ggml_tensor *, const char *> expected[] = {
-+        {input.self_kv_rows, "attention.base.read_rows.0"},
-+        {input.self_read_mask, "attention.base.read_mask.0"},
-+        {input.self_kv_rows_swa, "attention.swa.read_rows.0"},
-+        {input.self_read_mask_swa, "attention.swa.read_mask.0"},
-+    };
-+    for (const auto & item : expected) {
-+        iswa_row_require(item.first != nullptr, "ISWA missing declared input");
-+        const auto & bindings = result.get_request_input_bindings();
-+        const auto count = std::count_if(bindings.begin(), bindings.end(), [&](const skippy_request_input_binding & binding) {
-+            return binding.tensor == item.first && binding.identity == item.second;
-+        });
-+        iswa_row_require(count == 1, "ISWA semantic input binding");
-+    }
-+}
-+
-+static int check_iswa_row_inputs() {
-+    try {
-+        iswa_row_fixture_model model;
-+        llama_kv_cache_iswa cache(model, GGML_TYPE_F16, GGML_TYPE_F16, false, false,
-+                false, true, 512, 3, 16, 256, nullptr, nullptr, nullptr, nullptr);
-+        auto prefix = iswa_row_batch(8, 0, false);
-+        auto prefix_context = iswa_row_apply(cache, prefix);
-+        cache.seq_cp(0, 1, -1, -1);
-+        cache.seq_cp(0, 2, -1, -1); // parked owner keeps the shared prefix live
-+        auto first = iswa_row_batch(2, 8, true);
-+        auto first_context = iswa_row_apply(cache, first);
-+        ggml_backend_ptr cpu(ggml_backend_cpu_init());
-+        iswa_row_require(cpu != nullptr, "ISWA CPU backend");
-+        ggml_backend_t backends[] = {cpu.get()};
-+        ggml_backend_sched_ptr scheduler(ggml_backend_sched_new(backends, nullptr, 1, 512, false, true));
-+        iswa_row_require(scheduler != nullptr, "ISWA CPU scheduler");
-+        llm_graph_result result(512);
-+        llm_graph_params params = {};
-+        params.arch = model.arch;
-+        params.hparams = model.hparams;
-+        params.cparams.flash_attn = params.cparams.fused_kv_rows = true;
-+        params.cparams.kv_unified = params.cparams.causal_attn = params.cparams.offload_kqv = true;
-+        params.cparams.n_ctx = 512;
-+        params.cparams.n_seq_max = 3;
-+        params.ubatch = first;
-+        params.mctx = first_context.get();
-+        params.sched = scheduler.get();
-+        params.backend_cpu = cpu.get();
-+        params.res = &result;
-+        llm_graph_context graph(params);
-+        auto * input = graph.build_attn_inp_kv_iswa();
-+        iswa_row_check_bindings(result, *input);
-+        auto * q = ggml_new_tensor_3d(result.get_ctx(), GGML_TYPE_F32, 64, 1, 4);
-+        ggml_set_input(q);
-+        std::vector<ggml_tensor *> outputs;
-+        for (int layer = 0; layer < 2; ++layer) {
-+            outputs.push_back(graph.build_attn(input, nullptr, nullptr, nullptr, q, nullptr, nullptr,
-+                    nullptr, nullptr, nullptr, 0.125f, layer));
-+        }
-+        const auto & fused = result.get_fused_nodes();
-+        iswa_row_require(fused.size() == 2, "ISWA both attention layers");
-+        for (const auto & node : fused) {
-+            const bool swa = model.hparams.is_swa(node.il);
-+            iswa_row_require(node.op == LLM_FUSED_OP_FLASH_ATTN_KV_ROWS && node.tensor->src[6] == nullptr &&
-+                    node.tensor->src[5] == (swa ? input->self_kv_rows_swa : input->self_kv_rows) &&
-+                    node.tensor->src[3] == (swa ? input->self_read_mask_swa : input->self_read_mask) &&
-+                    ggml_backend_supports_op(cpu.get(), node.tensor), "ISWA per-layer pool/route admission");
-+        }
-+        iswa_row_require(ggml_backend_sched_alloc_graph(scheduler.get(), result.get_gf()), "ISWA graph allocation");
-+        std::vector<float> zeros(64*4, 0.0f);
-+        ggml_backend_tensor_set(q, zeros.data(), 0, zeros.size()*sizeof(float));
-+        const auto execute = [&](const llama_ubatch & batch) {
-+            result.set_inputs(&batch);
-+            iswa_row_check_pool(*cache.get_base(), batch, input->self_kv_rows, input->self_read_mask, false);
-+            iswa_row_check_pool(*cache.get_swa(), batch, input->self_kv_rows_swa, input->self_read_mask_swa, true);
-+            iswa_row_require(ggml_backend_sched_graph_compute(scheduler.get(), result.get_gf()) == GGML_STATUS_SUCCESS,
-+                    "ISWA finite graph compute");
-+            for (auto * output : outputs) {
-+                std::vector<float> values(ggml_nelements(output));
-+                ggml_backend_tensor_get(output, values.data(), 0, values.size()*sizeof(float));
-+                for (float value : values) iswa_row_require(std::isfinite(value) && value == 0.0f, "ISWA zero-KV finite output");
-+            }
-+        };
-+        execute(first);
-+        auto next = iswa_row_batch(2, 10, true);
-+        auto next_context = iswa_row_apply(cache, next);
-+        params.ubatch = next;
-+        params.mctx = next_context.get();
-+        iswa_row_require(input->can_reuse(params) && input->mctx == next_context.get(), "ISWA refresh actual current mctx");
-+        execute(next);
-+        for (const auto * pool : {cache.get_base(), cache.get_swa()}) {
-+            const auto & cells = pool->get_cells(2);
-+            for (uint32_t i = 0; i < 8; ++i) {
-+                iswa_row_require(cells.seq_has(i, 0) && cells.seq_has(i, 1) && cells.seq_has(i, 2) &&
-+                        cells.pos_get(i) == static_cast<llama_pos>(i), "ISWA shared parked prefix retained");
-+            }
-+        }
-+        // Exercise the hybrid caller with real typed contexts too. The fixture
-+        // has no recurrent layers: this checks attention delegation, not RS math.
-+        llama_memory_hybrid_iswa hybrid(model, GGML_TYPE_F16, GGML_TYPE_F16, false, false,
-+                512, 16, 256, GGML_TYPE_F32, GGML_TYPE_F32, 3, 3, 0, false, true,
-+                nullptr, [](int32_t) { return false; });
-+        auto * hybrid_cache = hybrid.get_mem_attn();
-+        auto hybrid_prefix = iswa_row_apply(*hybrid_cache, prefix);
-+        hybrid_cache->seq_cp(0, 1, -1, -1);
-+        hybrid_cache->seq_cp(0, 2, -1, -1);
-+        auto hybrid_first = iswa_row_apply(*hybrid_cache, first);
-+        auto hybrid_context = hybrid.init_full();
-+        auto * old_hybrid_context = static_cast<const llama_memory_hybrid_iswa_context *>(hybrid_context.get());
-+        ggml_backend_sched_ptr hybrid_scheduler(ggml_backend_sched_new(backends, nullptr, 1, 512, false, true));
-+        iswa_row_require(hybrid_scheduler != nullptr, "hybrid ISWA CPU scheduler");
-+        llm_graph_result hybrid_result(512);
-+        auto hybrid_params = params;
-+        hybrid_params.ubatch = first;
-+        hybrid_params.mctx = hybrid_context.get();
-+        hybrid_params.res = &hybrid_result;
-+        hybrid_params.sched = hybrid_scheduler.get();
-+        llm_graph_context hybrid_graph(hybrid_params);
-+        auto * hybrid_input = hybrid_graph.build_inp_mem_hybrid_iswa();
-+        iswa_row_check_bindings(hybrid_result, *hybrid_input->get_attn());
-+        auto * hybrid_q = ggml_new_tensor_3d(hybrid_result.get_ctx(), GGML_TYPE_F32, 64, 1, 4);
-+        ggml_set_input(hybrid_q);
-+        std::vector<ggml_tensor *> hybrid_outputs;
-+        for (int layer = 0; layer < 2; ++layer) {
-+            hybrid_outputs.push_back(hybrid_graph.build_attn(hybrid_input->get_attn(), nullptr, nullptr, nullptr,
-+                    hybrid_q, nullptr, nullptr, nullptr, nullptr, nullptr, 0.125f, layer));
-+        }
-+        iswa_row_require(ggml_backend_sched_alloc_graph(hybrid_scheduler.get(), hybrid_result.get_gf()),
-+                "hybrid ISWA graph allocation");
-+        ggml_backend_tensor_set(hybrid_q, zeros.data(), 0, zeros.size()*sizeof(float));
-+        const auto execute_hybrid = [&](const llama_ubatch & batch) {
-+            hybrid_result.set_inputs(&batch);
-+            const auto * attention = hybrid_input->get_attn();
-+            iswa_row_check_pool(*hybrid_cache->get_base(), batch, attention->self_kv_rows, attention->self_read_mask, false);
-+            iswa_row_check_pool(*hybrid_cache->get_swa(), batch, attention->self_kv_rows_swa, attention->self_read_mask_swa, true);
-+            iswa_row_require(ggml_backend_sched_graph_compute(hybrid_scheduler.get(), hybrid_result.get_gf()) == GGML_STATUS_SUCCESS,
-+                    "hybrid ISWA finite compute");
-+            for (auto * output : hybrid_outputs) {
-+                std::vector<float> values(ggml_nelements(output));
-+                ggml_backend_tensor_get(output, values.data(), 0, values.size()*sizeof(float));
-+                for (float value : values) iswa_row_require(std::isfinite(value) && value == 0.0f, "hybrid ISWA finite output");
-+            }
-+        };
-+        execute_hybrid(first);
-+        auto hybrid_next = iswa_row_apply(*hybrid_cache, next);
-+        auto next_hybrid_context = hybrid.init_full();
-+        hybrid_params.ubatch = next;
-+        hybrid_params.mctx = next_hybrid_context.get();
-+        const auto * actual_hybrid_context = static_cast<const llama_memory_hybrid_iswa_context *>(next_hybrid_context.get());
-+        iswa_row_require(actual_hybrid_context != old_hybrid_context && hybrid_input->can_reuse(hybrid_params) &&
-+                hybrid_input->mctx == actual_hybrid_context && hybrid_input->get_attn()->mctx == actual_hybrid_context->get_attn(),
-+                "hybrid ISWA refresh both current context pointers");
-+        execute_hybrid(next);
-+
-+        auto ragged = next;
-+        ragged.b_equal_seqs = 0;
-+        ragged.n_tokens = 3;
-+        iswa_row_require(!input->can_reuse_row_inputs(ragged, params.cparams), "ISWA ragged topology rejects row reuse");
-+        auto ordinary = params.cparams;
-+        ordinary.fused_kv_rows = false;
-+        iswa_row_require(!input->can_reuse_row_inputs(next, ordinary), "ISWA row-enabled topology cannot reuse ordinary");
-+        ordinary = params.cparams;
-+        ordinary.training = true;
-+        iswa_row_require(!input->can_reuse_row_inputs(next, ordinary), "ISWA training cannot reuse row topology");
-+        // Test both ordinary pool builders without changing the product setting.
-+        llm_graph_result ordinary_result(512);
-+        params.cparams.fused_kv_rows = false;
-+        params.res = &ordinary_result;
-+        llm_graph_context ordinary_graph(params);
-+        auto * ordinary_input = ordinary_graph.build_attn_inp_kv_iswa();
-+        iswa_row_require(!ordinary_input->self_kv_rows && !ordinary_input->self_kv_rows_swa,
-+                "ISWA ordinary row inputs absent");
-+        auto * ordinary_q = ggml_new_tensor_3d(ordinary_result.get_ctx(), GGML_TYPE_F32, 64, 1, 4);
-+        for (int layer = 0; layer < 2; ++layer) {
-+            ordinary_graph.build_attn(ordinary_input, nullptr, nullptr, nullptr, ordinary_q, nullptr, nullptr,
-+                    nullptr, nullptr, nullptr, 0.125f, layer);
-+        }
-+        iswa_row_require(ordinary_result.get_fused_nodes().size() == 2, "ISWA both ordinary layers");
-+        for (const auto & node : ordinary_result.get_fused_nodes()) {
-+            iswa_row_require(node.op == LLM_FUSED_OP_FLASH_ATTN && !node.tensor->src[5] && !node.tensor->src[6] &&
-+                    node.tensor->src[3] == (model.hparams.is_swa(node.il) ? ordinary_input->self_kq_mask_swa : ordinary_input->self_kq_mask),
-+                    "ISWA ordinary per-layer mask");
-+        }
-+        return 0;
-+    } catch (const std::exception & error) {
-+        std::fprintf(stderr, "ISWA row-input regression: %s\n", error.what());
-+        return 120;
-+    }
 +}
 diff --git a/src/skippy/tests/live_graph_reference.h b/src/skippy/tests/live_graph_reference.h
 new file mode 100644
@@ -5480,299 +5153,6 @@ index 000000000..0832b018e
 +    llama_backend_free();
 +    return result;
 +}
-diff --git a/src/skippy/tests/resident_checkpoint_gpu.cpp b/src/skippy/tests/resident_checkpoint_gpu.cpp
-new file mode 100644
-index 000000000..691e92c37
---- /dev/null
-+++ b/src/skippy/tests/resident_checkpoint_gpu.cpp
-@@ -0,0 +1,287 @@
-+// Opt-in real-model GPU proof: separate checkpoint ownership from HTTP scheduling.
-+#include "skippy.h"
-+#include "../runtime_types.h"
-+#include "llama-model.h"
-+#include "ggml-backend.h"
-+
-+#include <algorithm>
-+#include <array>
-+#include <cmath>
-+#include <cstdio>
-+#include <cstdlib>
-+#include <cstring>
-+#include <limits>
-+#include <vector>
-+
-+int skippy_test_resident_checkpoint_gpu(const char * model_path, skippy_runtime_config config);
-+
-+namespace {
-+constexpr size_t lanes = 4;
-+constexpr size_t suffix_steps = 32;
-+constexpr size_t pressure_tokens = 4096;
-+using Sessions = std::array<skippy_session *, lanes>;
-+using Prefixes = std::array<std::vector<llama_token>, lanes>;
-+
-+#define REQUIRE(condition) do { if (!(condition)) { \
-+    std::fprintf(stderr, "long GPU checkpoint failed: %s at %s:%d\n", #condition, __FILE__, __LINE__); \
-+    std::exit(1); } } while (0)
-+
-+void ok(skippy_status status, skippy_error * error) {
-+    if (status != SKIPPY_STATUS_OK) {
-+        std::fprintf(stderr, "long GPU native error: %s\n", error ? error->message : "no detail");
-+        std::exit(1);
-+    }
-+    skippy_error_free(error);
-+}
-+
-+size_t prefix_tokens() {
-+    const char * value = std::getenv("SKIPPY_NATIVE_TEST_PREFIX_TOKENS");
-+    if (!value) { return 23497; }
-+    REQUIRE(*value && std::strspn(value, "0123456789") == std::strlen(value));
-+    const unsigned long count = std::strtoul(value, nullptr, 10);
-+    REQUIRE(count >= 128 && count <= 65536);
-+    return static_cast<size_t>(count);
-+}
-+
-+Sessions create(skippy_model * model) {
-+    Sessions sessions{};
-+    for (auto & session : sessions) {
-+        skippy_error * error = nullptr;
-+        const auto status = skippy_session_create(model, &session, &error);
-+        ok(status, error);
-+    }
-+    return sessions;
-+}
-+
-+void release(Sessions & sessions) {
-+    for (auto & session : sessions) {
-+        skippy_error * error = nullptr;
-+        const auto status = skippy_session_free(session, &error);
-+        ok(status, error);
-+        session = nullptr;
-+    }
-+}
-+
-+void prefill(Sessions & sessions, const Prefixes & prefixes) {
-+    // Identical explicit chunk and lane order in every cold reference arm.
-+    for (size_t offset = 0; offset < prefixes[0].size(); offset += 512) {
-+        for (size_t lane = 0; lane < lanes; ++lane) {
-+            const size_t count = std::min<size_t>(512, prefixes[lane].size() - offset);
-+            skippy_error * error = nullptr;
-+            size_t bytes = 0;
-+            const auto status = skippy_prefill_chunk(sessions[lane], prefixes[lane].data() + offset,
-+                    count, nullptr, 0, nullptr, 0, &bytes, &error);
-+            ok(status, error);
-+        }
-+    }
-+}
-+
-+Prefixes tokens(size_t count, int32_t vocab_size, int32_t salt) {
-+    REQUIRE(vocab_size > 64);
-+    const int32_t span = std::min<int32_t>(vocab_size - 32, 4096);
-+    Prefixes prefixes;
-+    for (size_t lane = 0; lane < lanes; ++lane) {
-+        prefixes[lane].reserve(count);
-+        for (size_t i = 0; i < count; ++i) {
-+            prefixes[lane].push_back(32 + static_cast<int32_t>((i * 17 + lane * 101 + salt) % span));
-+        }
-+    }
-+    return prefixes;
-+}
-+
-+struct Components {
-+    std::vector<uint8_t> kv;
-+    std::vector<uint8_t> recurrent;
-+};
-+
-+Components components(skippy_session * session) {
-+    const int32_t layers = static_cast<int32_t>(session->stage_model->model->hparams.n_layer());
-+    skippy_kv_page_desc desc{};
-+    size_t bytes = 0;
-+    skippy_error * error = nullptr;
-+    auto status = skippy_export_kv_page(session, 0, layers, 0, session->n_past,
-+            &desc, nullptr, 0, &bytes, &error);
-+    REQUIRE(status == SKIPPY_STATUS_BUFFER_TOO_SMALL && bytes > 0);
-+    skippy_error_free(error);
-+    Components result;
-+    result.kv.resize(bytes);
-+    error = nullptr;
-+    status = skippy_export_kv_page(session, 0, layers, 0, session->n_past,
-+            &desc, result.kv.data(), result.kv.size(), &bytes, &error);
-+    ok(status, error);
-+    result.kv.resize(bytes);
-+    error = nullptr;
-+    status = skippy_export_recurrent_state(session, nullptr, 0, &bytes, &error);
-+    REQUIRE(status == SKIPPY_STATUS_BUFFER_TOO_SMALL && bytes > 0);
-+    skippy_error_free(error);
-+    result.recurrent.resize(bytes);
-+    error = nullptr;
-+    status = skippy_export_recurrent_state(session, result.recurrent.data(),
-+            result.recurrent.size(), &bytes, &error);
-+    ok(status, error);
-+    result.recurrent.resize(bytes);
-+    return result;
-+}
-+
-+struct DecodeRows {
-+    std::array<llama_token, lanes> greedy;
-+    std::array<std::vector<float>, lanes> logits;
-+};
-+
-+using DecodeTrace = std::vector<DecodeRows>;
-+
-+DecodeTrace decode_fixed_suffix(Sessions & sessions, int32_t vocab_size) {
-+    skippy_sampling_config sampling{};
-+    sampling.version = 1;
-+    sampling.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
-+    sampling.repeat_penalty = 1.0f;
-+    sampling.temperature = 0;
-+    sampling.top_k = 1;
-+    sampling.reasoning_budget_tokens = -1;
-+    DecodeTrace trace;
-+    trace.reserve(suffix_steps);
-+    for (size_t step = 0; step < suffix_steps; ++step) {
-+        std::array<llama_token, lanes> input{};
-+        for (size_t lane = 0; lane < lanes; ++lane) {
-+            input[lane] = 32 + static_cast<llama_token>((step * 11 + lane * 37) % (vocab_size - 32));
-+        }
-+        DecodeRows rows;
-+        skippy_error * error = nullptr;
-+        std::array<skippy_iteration_request, lanes> requests{};
-+        std::array<size_t, lanes> sampled_indexes{};
-+        size_t sampled_count = 0;
-+        for (size_t lane = 0; lane < lanes; ++lane) {
-+            requests[lane].session = sessions[lane];
-+            requests[lane].token_ids = &input[lane];
-+            requests[lane].token_count = 1;
-+            requests[lane].sampling = &sampling;
-+            requests[lane].sample_last = true;
-+        }
-+        const auto status = skippy_iteration_batch_sampled(requests.data(), requests.size(),
-+                nullptr, nullptr, nullptr, nullptr, sampled_indexes.data(), rows.greedy.data(),
-+                rows.greedy.size(), &sampled_count, &error);
-+        ok(status, error);
-+        REQUIRE(sampled_count == lanes);
-+        for (size_t lane = 0; lane < lanes; ++lane) {
-+            REQUIRE(sampled_indexes[lane] == lane);
-+            const float * logits = llama_get_logits_ith(sessions[lane]->ctx, static_cast<int32_t>(lane));
-+            REQUIRE(logits != nullptr);
-+            rows.logits[lane].assign(logits, logits + vocab_size);
-+            REQUIRE(std::all_of(rows.logits[lane].begin(), rows.logits[lane].end(),
-+                    [](float value) { return std::isfinite(value); }));
-+        }
-+        trace.push_back(std::move(rows));
-+    }
-+    return trace;
-+}
-+
-+bool compare(const char * arm, const DecodeTrace & reference, const DecodeTrace & actual) {
-+    REQUIRE(reference.size() == actual.size());
-+    float max_delta = 0;
-+    size_t mismatched_greedy = 0;
-+    for (size_t step = 0; step < reference.size(); ++step) {
-+        for (size_t lane = 0; lane < lanes; ++lane) {
-+            mismatched_greedy += reference[step].greedy[lane] != actual[step].greedy[lane];
-+            REQUIRE(reference[step].logits[lane].size() == actual[step].logits[lane].size());
-+            for (size_t token = 0; token < reference[step].logits[lane].size(); ++token) {
-+                max_delta = std::max(max_delta,
-+                        std::fabs(reference[step].logits[lane][token] - actual[step].logits[lane][token]));
-+            }
-+        }
-+    }
-+    std::fprintf(stderr, "%s: batch=4 steps=%zu max_logit_delta=%.9g greedy_mismatches=%zu\n",
-+            arm, reference.size(), max_delta, mismatched_greedy);
-+    return max_delta <= 1e-6f && mismatched_greedy == 0;
-+}
-+
-+void save(Sessions & sessions, size_t count) {
-+    for (size_t lane = 0; lane < lanes; ++lane) {
-+        skippy_error * error = nullptr;
-+        const auto status = skippy_session_save_prefix(sessions[lane], static_cast<int32_t>(8 + lane), count, &error);
-+        ok(status, error);
-+    }
-+}
-+
-+Sessions restore(skippy_model * model, const Prefixes & prefixes) {
-+    Sessions sessions{};
-+    for (size_t lane = 0; lane < lanes; ++lane) {
-+        skippy_error * error = nullptr;
-+        const auto status = skippy_session_create_from_resident_prefix(model, static_cast<int32_t>(8 + lane),
-+                prefixes[lane].data(), prefixes[lane].size(), &sessions[lane], &error);
-+        ok(status, error);
-+    }
-+    return sessions;
-+}
-+
-+void require_gpu_weights(skippy_model * model) {
-+    REQUIRE(std::any_of(model->model->tensors_by_name.begin(), model->model->tensors_by_name.end(),
-+            [](const auto & item) {
-+                if (!item.second->buffer || ggml_backend_buffer_is_host(item.second->buffer)) { return false; }
-+                const auto type = ggml_backend_dev_type(ggml_backend_buft_get_device(
-+                        ggml_backend_buffer_get_type(item.second->buffer)));
-+                return type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU;
-+            }));
-+}
-+
-+} // namespace
-+
-+int skippy_test_resident_checkpoint_gpu(const char * model_path, skippy_runtime_config config) {
-+    REQUIRE(model_path && *model_path && config.n_gpu_layers > 0);
-+    const size_t count = prefix_tokens();
-+    config.ctx_size = static_cast<int32_t>(count + pressure_tokens + suffix_steps + 64);
-+    config.lane_count = lanes;
-+    config.kv_unified = 1;
-+    config.n_batch = 512;
-+    config.n_ubatch = 512;
-+    skippy_model * model = nullptr;
-+    skippy_error * error = nullptr;
-+    auto status = skippy_model_open(model_path, &config, &model, &error);
-+    ok(status, error);
-+    require_gpu_weights(model);
-+    REQUIRE(config.ctx_size <= llama_model_n_ctx_train(model->model));
-+    const auto capabilities = skippy_model_memory_cache_capabilities(model);
-+    REQUIRE(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION);
-+    REQUIRE(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT);
-+    const int32_t vocab_size = llama_vocab_n_tokens(llama_model_get_vocab(model->model));
-+    const auto prefixes = tokens(count, vocab_size, 0);
-+    auto source = create(model);
-+    prefill(source, prefixes);
-+    save(source, count);
-+    std::array<Components, lanes> expected;
-+    for (size_t lane = 0; lane < lanes; ++lane) { expected[lane] = components(source[lane]); }
-+    const auto reference = decode_fixed_suffix(source, vocab_size);
-+    release(source);
-+
-+    auto pressure = create(model);
-+    prefill(pressure, tokens(pressure_tokens, vocab_size, 503));
-+    release(pressure);
-+    auto warm = restore(model, prefixes);
-+    for (size_t lane = 0; lane < lanes; ++lane) {
-+        const auto restored = components(warm[lane]);
-+        std::fprintf(stderr, "checkpoint lane=%zu tokens=%zu kv_bytes=%zu recurrent_bytes=%zu kv_exact=%d recurrent_exact=%d\n",
-+                lane, count, restored.kv.size(), restored.recurrent.size(),
-+                restored.kv == expected[lane].kv, restored.recurrent == expected[lane].recurrent);
-+        REQUIRE(restored.kv == expected[lane].kv);
-+        REQUIRE(restored.recurrent == expected[lane].recurrent);
-+    }
-+    const auto restored_trace = decode_fixed_suffix(warm, vocab_size);
-+    const bool passed = compare("resident restore vs reference", reference, restored_trace);
-+    for (size_t lane = 0; lane < lanes; ++lane) {
-+        error = nullptr;
-+        status = skippy_session_drop_sequence(warm[0], static_cast<int32_t>(8 + lane), &error);
-+        ok(status, error);
-+    }
-+    release(warm);
-+    if (!passed) {
-+        // Preserve the strict failure. A same-shape second cold reference
-+        // distinguishes backend drift before any tolerance change is proposed.
-+        auto repeated = create(model);
-+        prefill(repeated, prefixes);
-+        compare("cold reference vs repeated cold reference", reference, decode_fixed_suffix(repeated, vocab_size));
-+        release(repeated);
-+    }
-+    error = nullptr;
-+    status = skippy_model_free(model, &error);
-+    ok(status, error);
-+    return passed ? 0 : 1;
-+}
 diff --git a/src/skippy/tests/residual_checkpoint_regression.h b/src/skippy/tests/residual_checkpoint_regression.h
 new file mode 100644
 index 000000000..31734bf56
@@ -6534,101 +5914,30 @@ index 000000000..00a6ff0ec
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..ec345c761
+index 000000000..9e134586f
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,967 @@
+@@ -0,0 +1,517 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
-+#include "../sampling_internal.h"
-+#include "../sampling_argmax.h"
 +#include "../runtime_support.h"
 +#include "llama-model.h"
-+#include "llama-graph.h"
-+#include "ggml-backend.h"
 +#include "../../../common/sampling.h"
 +
 +#include <cstdio>
-+#include <algorithm>
 +#include <cstdlib>
 +#include <cmath>
 +#include <cstring>
 +#include <vector>
 +#include <limits>
-+#include <iterator>
 +
 +#define CHECK(condition) do { if (!(condition)) { \
 +    std::fprintf(stderr, "CHECK failed: %s at %s:%d\n", #condition, __FILE__, __LINE__); \
 +    std::exit(1); } } while (0)
 +
-+int skippy_test_resident_checkpoint_gpu(const char * model_path, skippy_runtime_config config);
-+
 +namespace {
 +
 +bool require_recurrent = false;
-+
-+int32_t cache_type(const char * name) {
-+    for (const auto type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16,
-+            GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0}) {
-+        if (std::strcmp(name, ggml_type_name(type)) == 0) { return type; }
-+    }
-+    CHECK(false && "unsupported test KV type");
-+    return -1;
-+}
-+
-+ggml_type verify_attention_read(skippy_model * model, ggml_tensor * input, int32_t stored_type) {
-+    if (stored_type != GGML_TYPE_F32) {
-+        CHECK(input->type == stored_type);
-+        return input->type;
-+    }
-+    // Ordinary FA reads explicitly convert an F32 cache on its selected backend.
-+    CHECK(input->type == GGML_TYPE_F16 && input->op == GGML_OP_CPY);
-+    CHECK(input->src[0] && input->src[0]->type == GGML_TYPE_F32);
-+    auto * backend = ggml_backend_sched_get_tensor_backend(model->ctx->get_sched(), input);
-+    CHECK(backend && std::strcmp(ggml_backend_name(backend), model->config.selected_backend_device) == 0);
-+    return input->type;
-+}
-+
-+void verify_typed_attention(skippy_model * model, const skippy_kv_page_desc & page) {
-+    const auto & config = model->config;
-+    const auto check_types = [&](uint32_t k, uint32_t v) {
-+        CHECK(k == static_cast<uint32_t>(config.cache_type_k));
-+        CHECK(v == static_cast<uint32_t>(config.cache_type_v));
-+    };
-+    if (page.component_count) {
-+        CHECK(page.component_count <= std::size(page.components));
-+        for (uint32_t i = 0; i < page.component_count; ++i) {
-+            check_types(page.components[i].k_type, page.components[i].v_type);
-+        }
-+    } else {
-+        check_types(page.k_type, page.v_type);
-+    }
-+    auto * result = model->ctx->get_gf_res_prev_active();
-+    CHECK(result && result->get_gf());
-+    auto * graph = result->get_gf();
-+    int attention = 0;
-+    ggml_type actual_k = GGML_TYPE_COUNT;
-+    ggml_type actual_v = GGML_TYPE_COUNT;
-+    for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
-+        auto * node = ggml_graph_node(graph, i);
-+        if (node->op != GGML_OP_FLASH_ATTN_EXT) { continue; }
-+        auto * backend = ggml_backend_sched_get_tensor_backend(model->ctx->get_sched(), node);
-+        CHECK(backend && std::strcmp(ggml_backend_name(backend), config.selected_backend_device) == 0);
-+        CHECK(node->src[5] == nullptr && node->src[6] == nullptr);
-+        actual_k = verify_attention_read(model, node->src[1], config.cache_type_k);
-+        actual_v = verify_attention_read(model, node->src[2], config.cache_type_v);
-+        ++attention;
-+    }
-+    int expected_attention = 0;
-+    for (uint32_t layer = 0; layer < model->model->hparams.n_layer(); ++layer) {
-+        expected_attention += !model->model->hparams.is_recr(layer);
-+    }
-+    CHECK(attention > 0 && attention == expected_attention);
-+    std::fprintf(stderr, "typed resident: backend=%s stored_K=%s stored_V=%s FA_K=%s FA_V=%s attention=%d expected=%d components=%u read_layout=ordinary\n",
-+            config.selected_backend_device, ggml_type_name(static_cast<ggml_type>(config.cache_type_k)),
-+            ggml_type_name(static_cast<ggml_type>(config.cache_type_v)), ggml_type_name(actual_k), ggml_type_name(actual_v),
-+            attention, expected_attention, page.component_count);
-+}
 +
 +void ok(skippy_status status, skippy_error * error) {
 +    if (status != SKIPPY_STATUS_OK) {
@@ -6636,31 +5945,6 @@ index 000000000..ec345c761
 +        std::exit(1);
 +    }
 +    skippy_error_free(error);
-+}
-+
-+void configure_test_gpu(skippy_runtime_config & config) {
-+    config.n_gpu_layers = 0;
-+    const char * value = std::getenv("SKIPPY_NATIVE_TEST_GPU_LAYERS");
-+    if (!value) { return; }
-+    CHECK(*value && std::strspn(value, "0123456789") == std::strlen(value));
-+    const unsigned long layers = std::strtoul(value, nullptr, 10);
-+    CHECK(layers <= static_cast<unsigned long>(std::numeric_limits<int32_t>::max()));
-+    if (!layers) { return; }
-+    size_t count = 0;
-+    skippy_error * error = nullptr;
-+    auto status = skippy_backend_device_count(&count, &error);
-+    ok(status, error);
-+    for (size_t i = 0; i < count; ++i) {
-+        skippy_backend_device device{};
-+        error = nullptr;
-+        status = skippy_backend_device_at(i, &device, &error);
-+        ok(status, error);
-+        if (device.type != SKIPPY_BACKEND_DEVICE_TYPE_GPU && device.type != SKIPPY_BACKEND_DEVICE_TYPE_IGPU) { continue; }
-+        config.selected_backend_device = device.name;
-+        config.n_gpu_layers = static_cast<int32_t>(layers);
-+        return;
-+    }
-+    CHECK(false && "GPU layers requested but no GPU backend is available");
 +}
 +
 +void prefill(skippy_session * session, const std::vector<llama_token> & tokens) {
@@ -6894,10 +6178,6 @@ index 000000000..ec345c761
 +    ok(status, error);
 +    CHECK(session->token_history.size() == prefix.size());
 +    CHECK(session->sampling_accepted_token_count <= session->token_history.size());
-+    CHECK(session->sampler == nullptr);
-+    configure(session, sampling, false, prefix.size() + 1);
-+    CHECK(decode(session, sampling, 2) == 42);
-+    CHECK(decode(session, sampling, 42) == 43);
 +    release(session);
 +}
 +
@@ -6927,108 +6207,6 @@ index 000000000..ec345c761
 +    release(restored);
 +}
 +
-+// Temperature 0 with the defaults and sampler order the serving layer sends.
-+skippy_sampling_config temperature_zero_config() {
-+    skippy_sampling_config config{};
-+    config.version = 1;
-+    config.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
-+    config.temperature = 0.0f;
-+    config.top_k = 40;
-+    config.top_p = 0.95f;
-+    config.min_p = 0.05f;
-+    config.typical_p = 1.0f;
-+    config.top_nsigma = -1.0f;
-+    config.dynatemp_exponent = 1.0f;
-+    config.repeat_penalty = 1.0f;
-+    config.penalty_last_n = 64;
-+    config.dry_base = 1.75f;
-+    config.dry_allowed_length = 2;
-+    config.dry_penalty_last_n = 64;
-+    config.xtc_threshold = 0.1f;
-+    config.mirostat_entropy = 5.0f;
-+    config.mirostat_learning_rate = 0.1f;
-+    config.reasoning_budget_tokens = -1;
-+    config.sampler_count = 9;
-+    for (uint32_t i = 0; i < config.sampler_count; ++i) {
-+        config.samplers[i] = i + 1;
-+    }
-+    return config;
-+}
-+
-+// The token a freshly built chain selects from the row the last decode sampled.
-+llama_token full_chain_token(skippy_session * session) {
-+    auto * reference = common_sampler_clone(session->sampler);
-+    CHECK(reference != nullptr);
-+    common_sampler_reset(reference);
-+    for (const llama_token token : session->token_history) {
-+        common_sampler_accept(reference, token, true);
-+    }
-+    const auto token = common_sampler_sample(reference, session->ctx, -1);
-+    CHECK(common_sampler_last(session->sampler) == session->token_history.back());
-+    CHECK(session->sampling_accepted_token_count == session->token_history.size());
-+    common_sampler_free(reference);
-+    return token;
-+}
-+
-+// Count the decodes that took the argmax path and check each against the full chain.
-+uint64_t argmax_decodes(skippy_model * model, const skippy_sampling_config & sampling,
-+        std::vector<llama_token> * predicted) {
-+    auto * session = create(model);
-+    prefill(session, {1, 2, 3, 4, 5, 6, 7, 8});
-+    const uint64_t before = session->sampling_argmax_count;
-+    llama_token previous = 9;
-+    for (int step = 0; step < 6; ++step) {
-+        previous = decode(session, sampling, previous);
-+        CHECK(previous == full_chain_token(session));
-+        predicted->push_back(previous);
-+    }
-+    const uint64_t taken = session->sampling_argmax_count - before;
-+    release(session);
-+    return taken;
-+}
-+
-+void argmax_path(skippy_model * model) {
-+    // Repeated biases apply in order to the original logit, without pre-summing.
-+    skippy_argmax_plan plan;
-+    skippy_prepare_argmax_plan(&plan, {{0, -1e20f}, {1, 0.0f}, {0, 1.0f}, {-1, 4.0f}}, 2);
-+    const float logits[] = {1e20f, 0.5f};
-+    CHECK(skippy_select_unique_argmax(logits, 2, plan) == 0);
-+    skippy_prepare_argmax_plan(&plan, {}, 2);
-+    CHECK(skippy_select_unique_argmax(logits, 2, plan) == 0);
-+
-+    // Each request can only select the top biased logit, so it must not run the full chain.
-+    auto ignore_eos = temperature_zero_config();
-+    ignore_eos.flags |= SKIPPY_SAMPLING_FLAG_IGNORE_EOS;
-+    ignore_eos.ignore_eos = 1;
-+    auto logit_bias = temperature_zero_config();
-+    logit_bias.logit_bias_count = 2;
-+    logit_bias.logit_bias[0] = {7, -3.0f};
-+    logit_bias.logit_bias[1] = {9, 2.5f};
-+    auto inert_penalties = temperature_zero_config();
-+    inert_penalties.presence_penalty = 0.5f;
-+    inert_penalties.frequency_penalty = 0.5f;
-+    inert_penalties.penalty_last_n = 0;
-+    for (const auto & sampling : {ignore_eos, logit_bias, inert_penalties}) {
-+        std::vector<llama_token> predicted;
-+        const uint64_t taken = argmax_decodes(model, sampling, &predicted);
-+        if (taken != predicted.size()) {
-+            std::fprintf(stderr, "argmax path taken for %llu of %zu temperature-0 decodes\n",
-+                    static_cast<unsigned long long>(taken), predicted.size());
-+        }
-+        CHECK(taken == predicted.size());
-+    }
-+
-+    // Equal biased maxima keep the full chain's tie order.
-+    auto tie = temperature_zero_config();
-+    tie.logit_bias_count = 2;
-+    tie.logit_bias[0] = {3, 1e30f};
-+    tie.logit_bias[1] = {5, 1e30f};
-+    std::vector<llama_token> predicted;
-+    CHECK(argmax_decodes(model, tie, &predicted) == 0);
-+    for (const llama_token token : predicted) {
-+        CHECK(token == 3 || token == 5);
-+    }
-+}
 +
 +int32_t stage_layers(skippy_session * session) {
 +    return session->stage_model->model->hparams.n_layer();
@@ -7050,6 +6228,33 @@ index 000000000..ec345c761
 +    ok(status, error);
 +    payload.resize(bytes);
 +    return payload;
++}
++
++std::vector<uint8_t> export_recurrent(skippy_session * session) {
++    skippy_error * error = nullptr;
++    size_t bytes = 0;
++    auto status = skippy_export_recurrent_state(session, nullptr, 0, &bytes, &error);
++    CHECK(status == SKIPPY_STATUS_BUFFER_TOO_SMALL || status == SKIPPY_STATUS_OK);
++    skippy_error_free(error);
++    error = nullptr;
++    std::vector<uint8_t> payload(bytes);
++    status = skippy_export_recurrent_state(session, payload.data(), payload.size(), &bytes, &error);
++    ok(status, error);
++    payload.resize(bytes);
++    return payload;
++}
++
++void restore_recurrent(skippy_session * session, const std::vector<uint8_t> & payload,
++        const std::vector<llama_token> & prefix) {
++    skippy_error * error = nullptr;
++    auto status = skippy_import_recurrent_state(session, payload.data(), payload.size(), &error);
++    ok(status, error);
++    error = nullptr;
++    status = skippy_session_set_position(session, prefix.size(), &error);
++    ok(status, error);
++    error = nullptr;
++    status = skippy_session_restore_token_history(session, prefix.data(), prefix.size(), &error);
++    ok(status, error);
 +}
 +
 +skippy_sampling_config greedy_config() {
@@ -7078,20 +6283,27 @@ index 000000000..ec345c761
 +    return std::vector<float>(logits, logits + n_vocab);
 +}
 +
-+// Exact hybrid restoration combines attention pages with a separate recurrent
-+// checkpoint. The recurrent component must never duplicate full-attention KV.
++// A declared-exact stage checkpoint must be reconstructible from its export
++// alone. LLAMA_STATE_SEQ_FLAGS_PARTIAL_ONLY is an alias of
++// LLAMA_STATE_SEQ_FLAGS_SWA_ONLY: it writes the recurrent and sliding-window
++// half of a hybrid memory and nothing from a full-attention KV cache, so a
++// session restored from that half carries no full-attention cells and decodes a
++// different continuation from an uninterrupted prefill. Compare the attention
++// page the restored session exposes with the source's page, and the next-token
++// logits of a restored prefix with those of the same prefix prefilled from
++// scratch.
 +void state_round_trip(skippy_model * model) {
 +    const std::vector<llama_token> prefix(128, 1);
 +    auto * source = create(model);
 +    prefill(source, prefix);
 +    const auto source_page = export_page(source, prefix.size());
 +    CHECK(!source_page.empty());
-+    const snapshot checkpoint(source, false);
-+    CHECK(!checkpoint.recurrent.empty());
++    const auto recurrent = export_recurrent(source);
++    CHECK(!recurrent.empty());
 +    release(source);
 +
 +    auto * restored = create(model);
-+    checkpoint.restore(restored, prefix);
++    restore_recurrent(restored, recurrent, prefix);
 +    const auto restored_page = export_page(restored, prefix.size());
 +    CHECK(restored_page.size() == source_page.size());
 +    CHECK(std::memcmp(restored_page.data(), source_page.data(), source_page.size()) == 0);
@@ -7104,7 +6316,7 @@ index 000000000..ec345c761
 +    const auto cold_logits = decode_logits(cold, suffix.back());
 +    release(cold);
 +    auto * warm = create(model);
-+    checkpoint.restore(warm, prefix);
++    restore_recurrent(warm, recurrent, prefix);
 +    prefill(warm, suffix);
 +    const auto warm_logits = decode_logits(warm, suffix.back());
 +    release(warm);
@@ -7122,174 +6334,6 @@ index 000000000..ec345c761
 +            max_delta, differing, cold_logits.size());
 +    CHECK(max_delta == 0.0f);
 +}
-+
-+void resident_prefix_ownership(skippy_model * model, bool typed = false) {
-+    const auto capabilities = skippy_model_memory_cache_capabilities(model);
-+    CHECK(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT);
-+    CHECK(bool(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT) == require_recurrent);
-+    const std::vector<llama_token> prefix(128, 1);
-+    const std::vector<llama_token> suffix_a{2, 3, 4};
-+    const std::vector<llama_token> suffix_b{5, 6, 7};
-+    constexpr int32_t cache_id = 8;
-+    auto * source = create(model);
-+    prefill(source, prefix);
-+    skippy_error * error = nullptr;
-+    uint64_t before_cells = 0;
-+    ok(skippy_session_memory_used_cells(source, &before_cells, &error), error);
-+    error = nullptr;
-+    ok(skippy_session_save_prefix(source, cache_id, prefix.size(), &error), error);
-+    uint64_t after_cells = 0;
-+    error = nullptr;
-+    ok(skippy_session_memory_used_cells(source, &after_cells, &error), error);
-+    CHECK(before_cells == after_cells); // Sharing must not allocate attention cells.
-+    uint64_t checkpoint_bytes = 0;
-+    error = nullptr;
-+    ok(skippy_session_resident_prefix_bytes(source, cache_id, &checkpoint_bytes, &error), error);
-+    CHECK(checkpoint_bytes >= prefix.size() * sizeof(llama_token));
-+    const auto source_page = export_page(source, prefix.size());
-+    snapshot persistent(source, false);
-+    if (typed) { verify_typed_attention(model, persistent.page); }
-+    if (require_recurrent) {
-+        CHECK(checkpoint_bytes > prefix.size() * sizeof(llama_token));
-+        error = nullptr;
-+        CHECK(skippy_session_save_prefix(source, cache_id, prefix.size() - 1, &error)
-+                == SKIPPY_STATUS_INVALID_ARGUMENT);
-+        skippy_error_free(error);
-+        uint64_t unchanged_bytes = 0;
-+        error = nullptr;
-+        ok(skippy_session_resident_prefix_bytes(source, cache_id, &unchanged_bytes, &error), error);
-+        CHECK(unchanged_bytes == checkpoint_bytes);
-+    }
-+    for (const auto token : suffix_a) { prefill(source, {token}); }
-+    const auto expected_a = decode_logits(source, suffix_a.back());
-+    const auto expected_page_a = export_page(source, source->n_past);
-+    release(source); // Originating lane and mutable recurrent row are gone.
-+
-+    auto * recycled = create(model);
-+    prefill(recycled, std::vector<llama_token>(32, 9));
-+    decode_logits(recycled, 10);
-+    release(recycled);
-+    auto * cold_b = create(model);
-+    prefill(cold_b, prefix);
-+    for (const auto token : suffix_b) { prefill(cold_b, {token}); }
-+    const auto expected_b = decode_logits(cold_b, suffix_b.back());
-+    const auto expected_page_b = export_page(cold_b, cold_b->n_past);
-+    release(cold_b);
-+
-+    // Invalid identity and boundary must neither claim a lane nor damage the
-+    // cached checkpoint; repeatedly exercising create catches leaked claims.
-+    auto wrong_tokens = prefix;
-+    wrong_tokens.back() = 12;
-+    for (int attempt = 0; attempt < 4; ++attempt) {
-+        skippy_session * invalid = nullptr;
-+        error = nullptr;
-+        CHECK(skippy_session_create_from_resident_prefix(model, cache_id,
-+                wrong_tokens.data(), wrong_tokens.size(), &invalid, &error)
-+                == SKIPPY_STATUS_INVALID_ARGUMENT);
-+        skippy_error_free(error);
-+        CHECK(invalid == nullptr);
-+    }
-+    if (require_recurrent) {
-+        skippy_session * invalid = nullptr;
-+        error = nullptr;
-+        CHECK(skippy_session_create_from_resident_prefix(model, cache_id,
-+                prefix.data(), prefix.size() - 1, &invalid, &error)
-+                == SKIPPY_STATUS_INVALID_ARGUMENT);
-+        skippy_error_free(error);
-+        CHECK(invalid == nullptr);
-+    }
-+    auto restore = [&]() {
-+        skippy_session * restored = nullptr;
-+        error = nullptr;
-+        ok(skippy_session_create_from_resident_prefix(model, cache_id,
-+                prefix.data(), prefix.size(), &restored, &error), error);
-+        CHECK(restored->token_history == prefix);
-+        CHECK(export_page(restored, prefix.size()) == source_page);
-+        return restored;
-+    };
-+    auto * a = restore();
-+    auto * b = restore();
-+    // All execution lanes are occupied. Cold offload exports the cache-owned
-+    // state directly, without restoring over either live borrower.
-+    const auto history_a = a->token_history;
-+    const auto history_b = b->token_history;
-+    size_t kv_bytes = 0;
-+    error = nullptr;
-+    CHECK(skippy_session_export_resident_kv_page(a, cache_id, 0, persistent.layers,
-+            0, prefix.size(), &persistent.page, nullptr, 0, &kv_bytes, &error)
-+            == SKIPPY_STATUS_BUFFER_TOO_SMALL);
-+    skippy_error_free(error);
-+    CHECK(kv_bytes == persistent.payload.size());
-+    error = nullptr;
-+    ok(skippy_session_export_resident_kv_page(a, cache_id, 0, persistent.layers,
-+            0, prefix.size(), &persistent.page, persistent.payload.data(), kv_bytes,
-+            &kv_bytes, &error), error);
-+    CHECK(persistent.payload == source_page);
-+    size_t recurrent_bytes = 0;
-+    error = nullptr;
-+    const auto recurrent_status = skippy_session_export_resident_recurrent_state(a,
-+            cache_id, nullptr, 0, &recurrent_bytes, &error);
-+    CHECK(recurrent_status == (require_recurrent ? SKIPPY_STATUS_BUFFER_TOO_SMALL : SKIPPY_STATUS_OK));
-+    skippy_error_free(error);
-+    CHECK(recurrent_bytes == persistent.recurrent.size());
-+    if (recurrent_bytes) {
-+        std::vector<uint8_t> retained_recurrent(recurrent_bytes);
-+        error = nullptr;
-+        ok(skippy_session_export_resident_recurrent_state(a, cache_id,
-+                retained_recurrent.data(), recurrent_bytes, &recurrent_bytes, &error), error);
-+        CHECK(retained_recurrent == persistent.recurrent);
-+    }
-+    CHECK(a->token_history == history_a && b->token_history == history_b);
-+    CHECK(a->n_past == static_cast<int32_t>(prefix.size()) && b->n_past == a->n_past);
-+    for (size_t i = 0; i < suffix_a.size(); ++i) {
-+        prefill(a, {suffix_a[i]});
-+        prefill(b, {suffix_b[i]});
-+    }
-+    // Evicting radix ownership must leave both active borrowers valid.
-+    error = nullptr;
-+    ok(skippy_session_drop_sequence(a, cache_id, &error), error);
-+    uint64_t dropped_bytes = 1;
-+    error = nullptr;
-+    ok(skippy_session_resident_prefix_bytes(a, cache_id, &dropped_bytes, &error), error);
-+    CHECK(dropped_bytes == 0);
-+    const auto actual_a = decode_logits(a, suffix_a.back());
-+    const auto actual_b = decode_logits(b, suffix_b.back());
-+    float delta_a = 0, delta_b = 0;
-+    for (size_t i = 0; i < actual_a.size(); ++i) {
-+        delta_a = std::max(delta_a, std::fabs(actual_a[i] - expected_a[i]));
-+        delta_b = std::max(delta_b, std::fabs(actual_b[i] - expected_b[i]));
-+    }
-+    std::fprintf(stderr, "resident fork: max delta a=%.9g b=%.9g page a=%d b=%d\n", delta_a, delta_b,
-+            export_page(a, a->n_past) == expected_page_a, export_page(b, b->n_past) == expected_page_b);
-+    // Different shared-pool occupancy changes the CPU attention reduction
-+    // shape. Measured drift is below 2e-7; reject nonfinite or larger errors
-+    // and require the selected greedy token to remain identical.
-+    for (const auto value : actual_a) { CHECK(std::isfinite(value)); }
-+    for (const auto value : actual_b) { CHECK(std::isfinite(value)); }
-+    CHECK(delta_a <= 1e-6f && delta_b <= 1e-6f);
-+    CHECK(std::max_element(actual_a.begin(), actual_a.end()) - actual_a.begin()
-+            == std::max_element(expected_a.begin(), expected_a.end()) - expected_a.begin());
-+    CHECK(std::max_element(actual_b.begin(), actual_b.end()) - actual_b.begin()
-+            == std::max_element(expected_b.begin(), expected_b.end()) - expected_b.begin());
-+    if (require_recurrent) {
-+        CHECK(export_page(a, a->n_past) == expected_page_a);
-+        CHECK(export_page(b, b->n_past) == expected_page_b);
-+    }
-+    release(a);
-+    release(b);
-+    // The resident owner has been evicted. The independently exported payload
-+    // still reconstructs both attention and recurrent state in a new lane.
-+    auto * persisted = create(model);
-+    persistent.restore(persisted, prefix);
-+    CHECK(export_page(persisted, prefix.size()) == source_page);
-+    for (const auto token : suffix_a) { prefill(persisted, {token}); }
-+    const auto persisted_logits = decode_logits(persisted, suffix_a.back());
-+    for (size_t i = 0; i < persisted_logits.size(); ++i) {
-+        CHECK(std::isfinite(persisted_logits[i]));
-+        CHECK(std::fabs(persisted_logits[i] - expected_a[i]) <= 1e-6f);
-+    }
-+    release(persisted);
-+    }
 +
 +void adapter_contracts(skippy_model * model) {
 +    auto * session = create(model);
@@ -7317,7 +6361,6 @@ index 000000000..ec345c761
 +    error = nullptr;
 +
 +    config = sampling_config();
-+    config.temperature = 0.8f;
 +    config.ignore_eos = 1;
 +    config.logit_bias_count = 3;
 +    const auto * vocab = llama_model_get_vocab(model->model);
@@ -7347,117 +6390,27 @@ index 000000000..ec345c761
 +    release(session);
 +}
 +
-+void dense_resident_configuration(const char * path, skippy_runtime_config config) {
-+    config.lane_count = 1;
-+    config.kv_unified = SKIPPY_TRISTATE_AUTO;
-+    skippy_model * model = nullptr;
-+    skippy_error * error = nullptr;
-+    ok(skippy_model_open(path, &config, &model, &error), error);
-+    CHECK(model->ctx->get_cparams().kv_unified);
-+    CHECK(skippy_model_memory_cache_capabilities(model) & SKIPPY_MEMORY_CACHE_RESIDENT);
-+    constexpr int32_t cache_id = 8;
-+    const std::vector<llama_token> tokens(16, 1);
-+    auto * source = create(model);
-+    prefill(source, tokens);
-+    const auto page = export_page(source, tokens.size());
-+    error = nullptr;
-+    ok(skippy_session_save_prefix(source, cache_id, tokens.size(), &error), error);
-+    const auto expected = decode_logits(source, 2);
-+    release(source);
-+    skippy_session * restored = nullptr;
-+    error = nullptr;
-+    ok(skippy_session_create_from_resident_prefix(model, cache_id,
-+            tokens.data(), tokens.size(), &restored, &error), error);
-+    CHECK(export_page(restored, tokens.size()) == page);
-+    CHECK(decode_logits(restored, 2) == expected);
-+    release(restored);
-+    error = nullptr;
-+    ok(skippy_model_free(model, &error), error);
-+
-+    // Explicit overrides remain supported, but must not claim resident APIs
-+    // that reject this context. Cover both one stream and real multi-stream.
-+    for (const uint32_t lanes : {1u, 2u}) {
-+        config.lane_count = lanes;
-+        config.kv_unified = SKIPPY_TRISTATE_FALSE;
-+        model = nullptr;
-+        error = nullptr;
-+        ok(skippy_model_open(path, &config, &model, &error), error);
-+        CHECK(!model->ctx->get_cparams().kv_unified);
-+        const auto capabilities = skippy_model_memory_cache_capabilities(model);
-+        CHECK(!(capabilities & (SKIPPY_MEMORY_CACHE_RESIDENT
-+                | SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION
-+                | SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT)));
-+        CHECK(capabilities & SKIPPY_MEMORY_CACHE_KV_RECURRENT);
-+        source = create(model);
-+        prefill(source, tokens);
-+        error = nullptr;
-+        CHECK(skippy_session_save_prefix(source, cache_id, tokens.size(), &error)
-+                == SKIPPY_STATUS_UNSUPPORTED);
-+        skippy_error_free(error);
-+        release(source);
-+        error = nullptr;
-+        ok(skippy_model_free(model, &error), error);
-+    }
-+}
-+
 +} // namespace
 +
 +int main(int argc, char ** argv) {
-+    if (argc == 2 && std::strcmp(argv[1], "resident-gpu-long") == 0) {
-+        const char * model_path = std::getenv("SKIPPY_NATIVE_TEST_REAL_MODEL");
-+        if (!model_path) { std::fprintf(stderr, "SKIPPY_NATIVE_TEST_REAL_MODEL is unset; skipping real GPU checkpoint proof\n"); return 77; }
-+        auto config = skippy_runtime_config_default();
-+        config.selected_backend_device = "CPU";
-+        configure_test_gpu(config);
-+        return skippy_test_resident_checkpoint_gpu(model_path, config);
-+    }
-+    CHECK(argc == 4 || argc == 6);
++    CHECK(argc == 4);
 +    const bool grammar = std::strcmp(argv[2], "grammar") == 0;
 +    const bool state = std::strcmp(argv[2], "state") == 0;
-+    const bool resident = std::strcmp(argv[2], "resident") == 0;
-+    CHECK(grammar || state || resident || std::strcmp(argv[2], "penalty") == 0);
-+    const bool automatic = resident && std::strcmp(argv[3], "auto") == 0;
-+    CHECK(automatic || std::strcmp(argv[3], "dense") == 0 || std::strcmp(argv[3], "recurrent") == 0);
-+    CHECK(argc == 4 || resident);
++    CHECK(grammar || state || std::strcmp(argv[2], "penalty") == 0);
++    CHECK(std::strcmp(argv[3], "dense") == 0 || std::strcmp(argv[3], "recurrent") == 0);
 +    require_recurrent = std::strcmp(argv[3], "recurrent") == 0;
 +    auto config = skippy_runtime_config_default();
 +    config.selected_backend_device = "CPU";
-+    configure_test_gpu(config);
-+    if (argc == 6) {
-+        config.cache_type_k = cache_type(argv[4]);
-+        config.cache_type_v = cache_type(argv[5]);
-+        config.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
-+    }
 +    config.ctx_size = 512;
-+    if (resident) { config.lane_count = 2; config.kv_unified = 1; }
 +    skippy_model * model = nullptr;
 +    skippy_error * error = nullptr;
 +    const auto status = skippy_model_open(argv[1], &config, &model, &error);
 +    ok(status, error);
-+    if (automatic) {
-+        const auto capabilities = skippy_model_memory_cache_capabilities(model);
-+        CHECK(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION);
-+        require_recurrent = capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT;
-+    }
-+    if (config.n_gpu_layers > 0) {
-+        CHECK(std::any_of(model->model->tensors_by_name.begin(), model->model->tensors_by_name.end(),
-+                [](const auto & item) {
-+                    if (!item.second->buffer || ggml_backend_buffer_is_host(item.second->buffer)) { return false; }
-+                    const auto type = ggml_backend_dev_type(ggml_backend_buft_get_device(
-+                            ggml_backend_buffer_get_type(item.second->buffer)));
-+                    return type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU;
-+                }));
-+        std::fprintf(stderr, "GPU ownership test: device=%s requested_layers=%d\n", config.selected_backend_device, config.n_gpu_layers);
-+    }
-+    if (resident) {
-+        resident_prefix_ownership(model, argc == 6);
-+    } else if (state) {
++    if (state) {
 +        // A dense stage's page already carries its whole checkpoint, so the
 +        // partial side payload is intentionally empty there.
 +        CHECK(require_recurrent);
 +        state_round_trip(model);
-+    } else if (argmax) {
-+        argmax_path(model);
 +    } else {
 +        for (const bool full : {false, true}) {
 +            if (grammar) {
@@ -7480,9 +6433,6 @@ index 000000000..ec345c761
 +    error = nullptr;
 +    const auto freed = skippy_model_free(model, &error);
 +    ok(freed, error);
-+    if (resident && !require_recurrent) {
-+        dense_resident_configuration(argv[1], config);
-+    }
 +    return 0;
 +}
 diff --git a/src/skippy/tests/stage_plan_header.c b/src/skippy/tests/stage_plan_header.c
@@ -9227,548 +8177,6 @@ index 000000000..87a499031
 +    }
 +    return 0;
 +}
-diff --git a/tests/test-flash-attn-rows.cpp b/tests/test-flash-attn-rows.cpp
-new file mode 100644
-index 000000000..22e1bc3d9
---- /dev/null
-+++ b/tests/test-flash-attn-rows.cpp
-@@ -0,0 +1,536 @@
-+#include "ggml.h"
-+#include "ggml-alloc.h"
-+#include "ggml-backend.h"
-+
-+#include <algorithm>
-+#include <array>
-+#include <cmath>
-+#include <cstdio>
-+#include <cstring>
-+#include <limits>
-+#include <memory>
-+#include <random>
-+#include <stdexcept>
-+#include <string>
-+#include <vector>
-+
-+namespace {
-+constexpr int64_t kv_heads = 2;
-+constexpr int64_t requests = 4;
-+// Match test_flash_attn_ext::max_nmse_err in test-backend-ops.cpp.
-+constexpr double max_nmse = 5e-4;
-+
-+struct attention_case {
-+    int64_t queries;
-+    int64_t logical_rows;
-+    bool mask;
-+    bool sinks;
-+    bool query_local = false;
-+    bool strided_query = false;
-+    ggml_type type_k = GGML_TYPE_F16;
-+    ggml_type type_v = GGML_TYPE_F16;
-+    int64_t dk = 256;
-+    int64_t dv = 256;
-+    float max_bias = 1.5f;
-+    int64_t heads = 8;
-+    float logit_softcap = 0.0f;
-+};
-+
-+void require(bool condition, const char * message) {
-+    if (!condition) {
-+        throw std::runtime_error(message);
-+    }
-+}
-+
-+struct inputs {
-+    const attention_case spec;
-+    const int64_t physical_rows;
-+    const int64_t mask_queries;
-+    std::vector<float> q;
-+    const size_t row_k;
-+    const size_t row_v;
-+    std::vector<uint8_t> k, v, logical_k, logical_v;
-+    std::vector<ggml_fp16_t> mask;
-+    std::vector<int32_t> rows;
-+    std::array<int32_t, requests> visible_rows{};
-+    std::vector<float> sinks;
-+
-+    explicit inputs(attention_case value) : spec(value), physical_rows(2*value.logical_rows + 257),
-+            mask_queries((value.queries + 63)/64*64),
-+            q(value.dk*value.queries*value.heads*requests),
-+            row_k(ggml_row_size(value.type_k, value.dk)), row_v(ggml_row_size(value.type_v, value.dv)),
-+            k(row_k*physical_rows*kv_heads), v(row_v*physical_rows*kv_heads),
-+            logical_k(row_k*value.logical_rows*kv_heads*requests),
-+            logical_v(row_v*value.logical_rows*kv_heads*requests),
-+            mask(value.logical_rows*mask_queries*requests),
-+            rows(value.logical_rows*requests), sinks(value.heads) {
-+        std::mt19937 random(34791);
-+        std::uniform_real_distribution<float> sample(-0.75f, 0.75f);
-+        for (float & item : q) {
-+            item = sample(random);
-+        }
-+        std::vector<float> values(std::max(value.dk, value.dv)*physical_rows*kv_heads);
-+        for (float & item : values) {
-+            item = sample(random);
-+        }
-+        ggml_quantize_chunk(value.type_k, values.data(), k.data(), 0, physical_rows*kv_heads, value.dk, nullptr);
-+        for (float & item : values) {
-+            item = sample(random);
-+        }
-+        ggml_quantize_chunk(value.type_v, values.data(), v.data(), 0, physical_rows*kv_heads, value.dv, nullptr);
-+        for (float & item : sinks) {
-+            item = sample(random);
-+        }
-+    }
-+
-+    void refresh(int phase) {
-+        const int64_t width = spec.logical_rows;
-+        std::fill(rows.begin(), rows.end(), -1);
-+        std::fill(logical_k.begin(), logical_k.end(), 0);
-+        std::fill(logical_v.begin(), logical_v.end(), 0);
-+        const int epoch = phase % 2;
-+        const std::array<int32_t, requests> counts = epoch == 0 ?
-+                std::array<int32_t, requests>{0, 31, 65, int32_t(width - 7)} :
-+                std::array<int32_t, requests>{65, int32_t(width - 9), 0, 31};
-+        for (int64_t request = 0; request < requests; ++request) {
-+            visible_rows[request] = spec.mask ? counts[request] : int32_t(width);
-+            for (int32_t slot = 0; slot < visible_rows[request]; ++slot) {
-+                // Shared first rows plus interleaved, nonmonotonic physical rows.
-+                const int32_t physical = int32_t((slot*37 + (slot < 5 ? 0 : request*53) + epoch*101) % physical_rows);
-+                rows[request*width + slot] = physical;
-+            }
-+            for (int64_t slot = 0; slot < width; ++slot) {
-+                const int32_t physical = std::max(0, rows[request*width + slot]);
-+                for (int64_t head = 0; head < kv_heads; ++head) {
-+                    const size_t src = head*physical_rows + physical;
-+                    const size_t dst = (request*kv_heads + head)*width + slot;
-+                    // Preserve the exact encoded block bytes, not re-quantized floats.
-+                    std::copy_n(k.data() + src*row_k, row_k, logical_k.data() + dst*row_k);
-+                    std::copy_n(v.data() + src*row_v, row_v, logical_v.data() + dst*row_v);
-+                }
-+            }
-+            for (int64_t query = 0; query < mask_queries; ++query) {
-+                const int32_t count = std::max(0, visible_rows[request] - (spec.query_local ? int32_t(query % 3) : 0));
-+                for (int64_t slot = 0; slot < width; ++slot) {
-+                    float bias = -std::numeric_limits<float>::infinity();
-+                    if (query < spec.queries && slot < count) {
-+                        bias = spec.mask ? -0.025f*float(slot % 7) : 0.0f;
-+                        if (spec.mask && slot % 11 == 3) {
-+                            bias = -std::numeric_limits<float>::infinity();
-+                        }
-+                    }
-+                    mask[(request*mask_queries + query)*width + slot] = ggml_fp32_to_fp16(bias);
-+                }
-+            }
-+        }
-+    }
-+};
-+
-+struct graph_fixture {
-+    ggml_context * ctx = nullptr;
-+    ggml_backend_buffer_t buffer = nullptr;
-+    ggml_tensor * q = nullptr;
-+    ggml_tensor * k = nullptr;
-+    ggml_tensor * v = nullptr;
-+    ggml_tensor * mask = nullptr;
-+    ggml_tensor * rows = nullptr;
-+    ggml_tensor * sinks = nullptr;
-+    ggml_tensor * output = nullptr;
-+    ggml_cgraph * graph = nullptr;
-+    const bool row_based;
-+
-+    graph_fixture(ggml_backend_t backend, const inputs & data, bool use_rows) : row_based(use_rows) {
-+        ggml_init_params params{32*ggml_tensor_overhead() + ggml_graph_overhead_custom(32, false), nullptr, true};
-+        ctx = ggml_init(params);
-+        require(ctx != nullptr, "allocate graph context");
-+        if (data.spec.strided_query) {
-+            auto storage = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, data.spec.dk, 2*data.spec.queries, data.spec.heads, requests);
-+            q = ggml_view_4d(ctx, storage, data.spec.dk, data.spec.queries, data.spec.heads, requests,
-+                    2*storage->nb[1], storage->nb[2], storage->nb[3], 0);
-+        } else {
-+            q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, data.spec.dk, data.spec.queries, data.spec.heads, requests);
-+        }
-+        const int64_t storage_rows = row_based ? data.physical_rows : data.spec.logical_rows;
-+        const int64_t streams = row_based ? 1 : requests;
-+        k = ggml_new_tensor_4d(ctx, data.spec.type_k, data.spec.dk, storage_rows, kv_heads, streams);
-+        v = ggml_new_tensor_4d(ctx, data.spec.type_v, data.spec.dv, storage_rows, kv_heads, streams);
-+        // The ordinary reference materializes exactly the same row0 padding.
-+        if (row_based || data.spec.mask) {
-+            mask = ggml_new_tensor_4d(ctx, GGML_TYPE_F16, data.spec.logical_rows, data.mask_queries, 1, requests);
-+        }
-+        if (row_based) {
-+            rows = ggml_new_tensor_2d(ctx, GGML_TYPE_I32, data.spec.logical_rows, requests);
-+            output = ggml_flash_attn_ext_rows(ctx, q, k, v, mask, rows,
-+                    1.0f/std::sqrt(float(data.spec.dk)), data.spec.mask ? data.spec.max_bias : 0.0f,
-+                    data.spec.logit_softcap);
-+        } else {
-+            output = ggml_flash_attn_ext(ctx, q, k, v, mask,
-+                    1.0f/std::sqrt(float(data.spec.dk)), data.spec.mask ? data.spec.max_bias : 0.0f,
-+                    data.spec.logit_softcap);
-+        }
-+        if (data.spec.sinks) {
-+            sinks = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, data.spec.heads);
-+            ggml_flash_attn_ext_add_sinks(output, sinks);
-+        }
-+        ggml_prec_set_acc(output, GGML_PREC_F32);
-+        require(output->src[5] == rows && output->src[6] == nullptr,
-+                "row constructor must preserve the src5-only contract");
-+        if (rows) {
-+            require(rows->type == GGML_TYPE_I32 && rows->ne[0] == data.spec.logical_rows &&
-+                    rows->ne[1] == requests && rows->ne[2] == 1 && rows->ne[3] == 1,
-+                    "row constructor must use one physical table per query stream");
-+        }
-+        require(ggml_backend_supports_op(backend, output), "selected backend does not support rows test shape");
-+        graph = ggml_new_graph_custom(ctx, 32, false);
-+        ggml_build_forward_expand(graph, output);
-+        buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
-+        require(buffer != nullptr, "allocate backend graph tensors");
-+    }
-+
-+    ~graph_fixture() {
-+        ggml_backend_buffer_free(buffer);
-+        ggml_free(ctx);
-+    }
-+    graph_fixture(const graph_fixture &) = delete;
-+    graph_fixture & operator=(const graph_fixture &) = delete;
-+
-+    std::vector<float> run(ggml_backend_t backend, const inputs & data) {
-+        for (int64_t request = 0; request < requests; ++request) {
-+            for (int64_t head = 0; head < data.spec.heads; ++head) {
-+                for (int64_t query = 0; query < data.spec.queries; ++query) {
-+                    const size_t offset = request*q->nb[3] + head*q->nb[2] + query*q->nb[1];
-+                    const size_t source = ((request*data.spec.heads + head)*data.spec.queries + query)*data.spec.dk;
-+                    ggml_backend_tensor_set(q, data.q.data() + source, offset, data.spec.dk*sizeof(float));
-+                }
-+            }
-+        }
-+        ggml_backend_tensor_set(k, row_based ? data.k.data() : data.logical_k.data(), 0, ggml_nbytes(k));
-+        ggml_backend_tensor_set(v, row_based ? data.v.data() : data.logical_v.data(), 0, ggml_nbytes(v));
-+        if (mask) {
-+            ggml_backend_tensor_set(mask, data.mask.data(), 0, ggml_nbytes(mask));
-+        }
-+        if (rows) {
-+            ggml_backend_tensor_set(rows, data.rows.data(), 0, ggml_nbytes(rows));
-+        }
-+        if (sinks) {
-+            ggml_backend_tensor_set(sinks, data.sinks.data(), 0, ggml_nbytes(sinks));
-+        }
-+        require(ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS, "compute attention graph");
-+        std::vector<float> result(ggml_nelements(output));
-+        ggml_backend_tensor_get(output, result.data(), 0, ggml_nbytes(output));
-+        return result;
-+    }
-+};
-+
-+bool exceptional_query(const inputs & data, int64_t request, int64_t query) {
-+    if (data.spec.sinks) { return false; }
-+    const auto begin = data.mask.begin() + (request*data.mask_queries + query)*data.spec.logical_rows;
-+    return std::all_of(begin, begin + data.spec.logical_rows,
-+            [](ggml_fp16_t value) { return ggml_fp16_to_fp32(value) == -INFINITY; });
-+}
-+
-+int result_class(float value) {
-+    if (std::isfinite(value)) { return 0; }
-+    if (std::isnan(value)) { return 1; }
-+    return std::signbit(value) ? 3 : 2;
-+}
-+
-+void exceptional_result_control(const std::vector<float> & ordinary, const std::vector<float> & rows,
-+        const inputs & data, const char * backend, int phase) {
-+    std::array<size_t, 4> ordinary_classes{}, rows_classes{};
-+    size_t mismatches = 0, elements = 0;
-+    for (int64_t request = 0; request < requests; ++request) {
-+        for (int64_t query = 0; query < data.spec.queries; ++query) {
-+            if (!exceptional_query(data, request, query)) { continue; }
-+            const size_t begin = (request*data.spec.queries + query)*data.spec.heads*data.spec.dv;
-+            for (size_t i = begin; i < begin + data.spec.heads*data.spec.dv; ++i) {
-+                const int left = result_class(ordinary[i]), right = result_class(rows[i]);
-+                ++ordinary_classes[left]; ++rows_classes[right];
-+                mismatches += left != right; ++elements;
-+            }
-+        }
-+    }
-+    if (!elements) { return; }
-+    std::printf("EXCEPTIONAL_RESULT backend=%s phase=%d elements=%zu ordinary_finite_nan_posinf_neginf=%zu,%zu,%zu,%zu rows_finite_nan_posinf_neginf=%zu,%zu,%zu,%zu class_mismatches=%zu no_finite_qualification=1\n",
-+            backend, phase, elements, ordinary_classes[0], ordinary_classes[1], ordinary_classes[2], ordinary_classes[3],
-+            rows_classes[0], rows_classes[1], rows_classes[2], rows_classes[3], mismatches);
-+    require(mismatches == 0, "same-backend all-masked ordinary/rows result classes differ");
-+}
-+
-+void compare(const std::vector<float> & expected, const std::vector<float> & actual,
-+        const inputs & data, const char * backend, int phase) {
-+    double maximum_nmse = 0.0;
-+    float max_absolute = 0.0f;
-+    const size_t request_elements = data.spec.dv*data.spec.heads*data.spec.queries;
-+    std::vector<bool> exceptional(requests*data.spec.queries);
-+    for (int64_t request = 0; request < requests; ++request) {
-+        for (int64_t query = 0; query < data.spec.queries; ++query) {
-+            exceptional[request*data.spec.queries + query] = exceptional_query(data, request, query);
-+        }
-+    }
-+    for (int64_t request = 0; request < requests; ++request) {
-+        double error = 0.0, energy = 0.0;
-+        for (size_t i = request*request_elements; i < (request + 1)*request_elements; ++i) {
-+            const int64_t query = (i - request*request_elements) / (data.spec.heads*data.spec.dv);
-+            if (exceptional[request*data.spec.queries + query]) { continue; }
-+            require(std::isfinite(expected[i]) && std::isfinite(actual[i]), "non-finite attention output");
-+            const double delta = double(expected[i]) - actual[i];
-+            error += delta*delta;
-+            energy += double(expected[i])*expected[i];
-+            max_absolute = std::max(max_absolute, float(std::abs(delta)));
-+        }
-+        if (energy == 0.0) {
-+            require(error == 0.0, "zero-energy finite-domain output must remain exact");
-+        } else {
-+            maximum_nmse = std::max(maximum_nmse, error/energy);
-+            require(error/energy <= max_nmse, "rows attention exceeds existing FA NMSE tolerance");
-+        }
-+    }
-+    std::printf("PASS finite-domain backend=%s K=%s V=%s dk=%lld dv=%lld heads=%lld bias=%.2f q=%lld logical=%lld mask=%d sinks=%d query_local=%d strided_q=%d softcap=%.2f phase=%d max_request_nmse=%.9g max_abs=%.9g\n",
-+            backend, ggml_type_name(data.spec.type_k), ggml_type_name(data.spec.type_v),
-+            (long long) data.spec.dk, (long long) data.spec.dv, (long long) data.spec.heads,
-+            data.spec.mask ? data.spec.max_bias : 0.0f, (long long) data.spec.queries, (long long) data.spec.logical_rows,
-+            data.spec.mask, data.spec.sinks, data.spec.query_local, data.spec.strided_query,
-+            data.spec.logit_softcap, phase, maximum_nmse, max_absolute);
-+}
-+
-+void set_threads(ggml_backend_t backend) {
-+    const auto reg = ggml_backend_dev_backend_reg(ggml_backend_get_device(backend));
-+    const auto setter = reinterpret_cast<void (*)(ggml_backend_t, int)>(
-+            ggml_backend_reg_get_proc_address(reg, "ggml_backend_set_n_threads"));
-+    if (setter) {
-+        setter(backend, 4);
-+    }
-+}
-+
-+// Accept an exact device (e.g. MTL0/CUDA0) or its registry (Metal/CUDA).
-+ggml_backend_t open_backend(const char * name) {
-+    if (auto exact = ggml_backend_init_by_name(name, nullptr)) {
-+        return exact;
-+    }
-+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-+        auto device = ggml_backend_dev_get(i);
-+        const auto registry = ggml_backend_dev_backend_reg(device);
-+        if (std::strcmp(ggml_backend_reg_name(registry), name) == 0) {
-+            return ggml_backend_dev_init(device, nullptr);
-+        }
-+    }
-+    return nullptr;
-+}
-+
-+void run_case(ggml_backend_t cpu, ggml_backend_t target, attention_case spec) {
-+    inputs data(spec);
-+    graph_fixture reference(cpu, data, false);
-+    graph_fixture row_based(cpu, data, true);
-+    require(reference.output->src[5] == nullptr && reference.output->src[6] == nullptr,
-+            "ordinary FA must remain free of row metadata");
-+    if (!spec.mask) {
-+        require(reference.mask == nullptr && row_based.mask != nullptr,
-+                "ordinary unmasked input and required rows zero-mask metadata are distinct representations");
-+        std::printf("REPRESENTATION ordinary_mask=null rows_mask=explicit_zero logical_values=unmasked\n");
-+    }
-+    require(std::memcmp(reference.output->op_params, row_based.output->op_params,
-+            sizeof(reference.output->op_params)) == 0, "rows must retain ordinary arithmetic parameters");
-+    std::unique_ptr<graph_fixture> device;
-+    std::unique_ptr<graph_fixture> device_ordinary;
-+    if (target != cpu) {
-+        if (ggml_backend_supports_op(target, row_based.output)) {
-+            require(ggml_backend_supports_op(target, reference.output), "rows require an ordinary same-backend control");
-+            device = std::make_unique<graph_fixture>(target, data, true);
-+            device_ordinary = std::make_unique<graph_fixture>(target, data, false);
-+            std::printf("ADMISSION rows backend=%s K=%s V=%s dk=%lld dv=%lld q=%lld mask=%d\n",
-+                    ggml_backend_name(target), ggml_type_name(spec.type_k), ggml_type_name(spec.type_v),
-+                    (long long) spec.dk, (long long) spec.dv, (long long) spec.queries, spec.mask);
-+        } else {
-+            const bool dense_supported = ggml_backend_supports_op(target, reference.output);
-+            if (dense_supported) {
-+                device = std::make_unique<graph_fixture>(target, data, false);
-+            }
-+            std::printf("%s backend=%s K=%s V=%s q=%lld mask=%d query_local=%d softcap=%.2f rows_admission=0 ordinary_admission=%d; CPU reference is separate\n",
-+                    dense_supported ? "FALLBACK ordinary-selected-backend" : "SKIP unsupported-selected-backend",
-+                    ggml_backend_name(target), ggml_type_name(spec.type_k), ggml_type_name(spec.type_v),
-+                    (long long) spec.queries, spec.mask, spec.query_local, spec.logit_softcap, dense_supported);
-+        }
-+    }
-+    // Changed row tables and masks must remain visible after graph reuse.
-+    for (int phase = 0; phase < 4; ++phase) {
-+        data.refresh(phase);
-+        const auto expected = reference.run(cpu, data);
-+        if (phase == 0) {
-+            const auto repeated = reference.run(cpu, data);
-+            require(expected.size() == repeated.size(), "ordinary repeat output size");
-+            for (int64_t request = 0; request < requests; ++request) {
-+                for (int64_t query = 0; query < spec.queries; ++query) {
-+                    const size_t begin = (request*spec.queries + query)*spec.heads*spec.dv;
-+                    const size_t count = spec.heads*spec.dv;
-+                    if (exceptional_query(data, request, query)) {
-+                        for (size_t i = begin; i < begin + count; ++i) {
-+                            require(result_class(expected[i]) == result_class(repeated[i]), "ordinary exceptional repeat class");
-+                        }
-+                    } else {
-+                        require(std::memcmp(expected.data() + begin, repeated.data() + begin,
-+                                count*sizeof(float)) == 0, "ordinary finite-domain output must self-repeat exactly");
-+                    }
-+                }
-+            }
-+        }
-+        const auto cpu_rows = row_based.run(cpu, data);
-+        exceptional_result_control(expected, cpu_rows, data, ggml_backend_name(cpu), phase);
-+        compare(expected, cpu_rows, data, ggml_backend_name(cpu), phase);
-+        if (device) {
-+            const auto actual = device->run(target, data);
-+            if (device_ordinary && spec.mask && !spec.sinks) {
-+                const auto ordinary = device_ordinary->run(target, data);
-+                exceptional_result_control(ordinary, actual, data, ggml_backend_name(target), phase);
-+            }
-+            compare(expected, actual, data, ggml_backend_name(target), phase);
-+        }
-+    }
-+}
-+
-+void run_unquantized_vector_cases(ggml_backend_t cpu, ggml_backend_t target) {
-+    const std::array<ggml_type, 2> types = {GGML_TYPE_F16, GGML_TYPE_BF16};
-+    // Wide GQA must retain the shared hardware policy rather than force vec.
-+    for (auto type_k : types) {
-+        for (auto type_v : types) {
-+            for (int64_t queries : {1, 2}) {
-+                run_case(cpu, target, {queries, 256, true, false, false, false,
-+                        type_k, type_v, 256, 256, 0.0f, 16});
-+            }
-+        }
-+    }
-+    for (int64_t dimension : {64, 128, 256}) {
-+        for (auto type_k : types) {
-+            for (auto type_v : types) {
-+                for (int64_t queries : {1, 2}) {
-+                    if (dimension != 256) {
-+                        run_case(cpu, target, {queries, 256, true, true, false, false,
-+                                type_k, type_v, dimension, dimension});
-+                    }
-+                    run_case(cpu, target, {queries, 256, false, false, false, false,
-+                            type_k, type_v, dimension, dimension});
-+                    if (dimension != 64) {
-+                        run_case(cpu, target, {queries, 256, true, true, false, false,
-+                                type_k, type_v, dimension, dimension, 0.0f, 8, 4.0f});
-+                    }
-+                }
-+            }
-+        }
-+    }
-+    run_case(cpu, target, {2, 256, true, true, false, true,
-+            GGML_TYPE_F16, GGML_TYPE_BF16, 128, 128});
-+}
-+
-+void run_softcap_capability_cases(ggml_backend_t cpu, ggml_backend_t target) {
-+    const auto registry = ggml_backend_dev_backend_reg(ggml_backend_get_device(target));
-+    const bool cuda = std::strcmp(ggml_backend_reg_name(registry), "CUDA") == 0;
-+    for (auto type_k : {GGML_TYPE_F16, GGML_TYPE_BF16}) {
-+        for (auto type_v : {GGML_TYPE_F16, GGML_TYPE_BF16}) {
-+            for (int64_t queries : {1, 2}) {
-+                attention_case spec{queries, 256, true, true, false, false,
-+                        type_k, type_v, 64, 64, 0.0f, 8, 4.0f};
-+                if (cuda) {
-+                    inputs data(spec);
-+                    graph_fixture dense(cpu, data, false);
-+                    graph_fixture row_based(cpu, data, true);
-+                    require(!ggml_backend_supports_op(target, dense.output) &&
-+                            !ggml_backend_supports_op(target, row_based.output),
-+                            "CUDA must refuse head64 softcap without a compiled kernel");
-+                    std::printf("PASS CUDA admission refuses unsupported softcap K=%s V=%s dk=64 q=%lld\n",
-+                            ggml_type_name(type_k), ggml_type_name(type_v), (long long) queries);
-+                }
-+                // CPU reference coverage is separate; a CUDA skip is not a GPU pass.
-+                run_case(cpu, target, spec);
-+            }
-+        }
-+    }
-+    const std::array<std::array<int64_t, 3>, 5> shapes = {{{192, 128, 16},
-+            {320, 256, 64}, {512, 512, 8}, {576, 512, 8}, {576, 512, 4}}};
-+    for (const auto & shape : shapes) {
-+        for (auto type : {GGML_TYPE_F16, GGML_TYPE_BF16}) {
-+            for (int64_t queries : {1, 2}) {
-+                run_case(cpu, target, {queries, 256, true, true, false, false,
-+                        type, type, shape[0], shape[1], 0.0f, shape[2], 4.0f});
-+            }
-+        }
-+    }
-+}
-+} // namespace
-+
-+int main(int argc, char ** argv) {
-+    try {
-+        require(argc == 1 || (argc == 3 && std::strcmp(argv[1], "--backend") == 0),
-+                "usage: test-flash-attn-rows [--backend DEVICE_NAME]");
-+        ggml_backend_load_all();
-+        using backend_ptr = std::unique_ptr<ggml_backend, decltype(&ggml_backend_free)>;
-+        backend_ptr cpu(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_CPU, nullptr), ggml_backend_free);
-+        require(cpu != nullptr, "CPU reference backend unavailable");
-+        set_threads(cpu.get());
-+        backend_ptr selected(nullptr, ggml_backend_free);
-+        if (argc == 3) {
-+            selected.reset(open_backend(argv[2]));
-+            require(selected != nullptr, "requested backend unavailable");
-+        } else {
-+            selected.reset(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_GPU, nullptr));
-+            if (!selected) {
-+                selected.reset(ggml_backend_init_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU, nullptr));
-+            }
-+        }
-+        const bool selected_cpu = selected &&
-+                ggml_backend_dev_type(ggml_backend_get_device(selected.get())) == GGML_BACKEND_DEVICE_TYPE_CPU;
-+        auto target = selected && !selected_cpu ? selected.get() : cpu.get();
-+        std::printf("rows FA: CPU reference and target=%s; per-request NMSE limit=%.9g\n", ggml_backend_name(target), max_nmse);
-+        for (int64_t queries : {1, 2, 4, 31, 32, 64}) {
-+            run_case(cpu.get(), target, {queries, 256, true, true});
-+        }
-+        run_case(cpu.get(), target, {1, 4352, true, true});
-+        run_case(cpu.get(), target, {4, 256, false, false});
-+        run_case(cpu.get(), target, {31, 256, true, false, true});
-+        run_case(cpu.get(), target, {32, 256, true, true, false, true});
-+        const std::array<ggml_type, 8> types = {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16,
-+                GGML_TYPE_Q4_0, GGML_TYPE_Q4_1, GGML_TYPE_Q5_0, GGML_TYPE_Q5_1, GGML_TYPE_Q8_0};
-+        for (auto type_k : types) {
-+            for (auto type_v : types) {
-+                for (int64_t queries : {1, 2, 32}) {
-+                    run_case(cpu.get(), target, {queries, 256, true, true, false, false, type_k, type_v});
-+                }
-+            }
-+        }
-+        run_unquantized_vector_cases(cpu.get(), target);
-+        run_softcap_capability_cases(cpu.get(), target);
-+        const std::array<std::array<int64_t, 2>, 13> head_shapes = {{{32, 32}, {64, 64}, {96, 96},
-+                {96, 64}, {128, 128}, {128, 96}, {192, 192}, {192, 128}, {256, 256},
-+                {320, 256}, {512, 512}, {576, 512}, {128, 64}}};
-+        for (const auto & dimensions : head_shapes) {
-+            for (auto type : types) {
-+                for (int64_t queries : {1, 32}) {
-+                    run_case(cpu.get(), target, {queries, 256, true, true, false, false,
-+                            type, type, dimensions[0], dimensions[1]});
-+                }
-+            }
-+        }
-+        // CUDA's larger-head kernels require zero ALiBi and admitted GQA tile ratios.
-+        const std::array<std::array<int64_t, 3>, 5> wide_shapes = {{{192, 128, 16},
-+                {320, 256, 64}, {512, 512, 8}, {576, 512, 8}, {576, 512, 4}}};
-+        for (const auto & dimensions : wide_shapes) {
-+            for (auto type : types) {
-+                for (int64_t queries : {1, 32}) {
-+                    run_case(cpu.get(), target, {queries, 256, true, true, false, false,
-+                            type, type, dimensions[0], dimensions[1], 0.0f, dimensions[2]});
-+                }
-+            }
-+        }
-+        for (int64_t dimension : {40, 48, 72, 80, 112}) {
-+            for (auto type : {GGML_TYPE_F32, GGML_TYPE_F16, GGML_TYPE_BF16}) {
-+                for (int64_t queries : {1, 32}) {
-+                    run_case(cpu.get(), target, {queries, 256, true, true, false, false,
-+                            type, type, dimension, dimension});
-+                }
-+            }
-+        }
-+        return 0;
-+    } catch (const std::exception & error) {
-+        std::fprintf(stderr, "rows FA test failed: %s\n", error.what());
-+        return 1;
-+    }
-+}
 diff --git a/tests/test-graph-contract-fixture.h b/tests/test-graph-contract-fixture.h
 new file mode 100644
 index 000000000..c45915888
@@ -11285,127 +9693,29 @@ index 000000000..b15b5e53a
 +}
 diff --git a/tests/test-skippy-kv-cells-contiguous.cpp b/tests/test-skippy-kv-cells-contiguous.cpp
 new file mode 100644
-index 000000000..d922e73c0
+index 000000000..0e95c35b2
 --- /dev/null
 +++ b/tests/test-skippy-kv-cells-contiguous.cpp
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,20 @@
 +#include "../src/llama-kv-cells.h"
 +
-+#include <algorithm>
-+#include <cstdio>
-+#include <stdexcept>
-+#include <utility>
-+
-+namespace {
-+void check(bool pass, const char * reason) {
-+    if (!pass) { throw std::runtime_error(reason); }
-+}
-+
-+void check_rows(const llama_kv_cells & cells) {
-+    const std::vector<llama_seq_id> owners = {0, 1, 2, 3, 4};
-+    const std::vector<llama_pos> minima = {0, 2, 4, 1, 0};
-+    for (int cutoff : {0, 1, 2}) {
-+        const auto minimum = cutoff == 0 ? std::vector<llama_pos>{} :
-+                cutoff == 1 ? minima : std::vector<llama_pos>(owners.size(), -100);
-+        std::vector<int32_t> actual(cells.size() * owners.size(), -2);
-+        cells.get_seq_cells(owners, minimum, actual.data(), cells.size());
-+        for (size_t s = 0; s < owners.size(); ++s) {
-+            std::vector<int32_t> expected;
-+            std::set<std::pair<llama_pos, uint32_t>> positions;
-+            for (uint32_t i = 0; i < cells.size(); ++i) {
-+                if (cells.is_empty(i) || !cells.seq_has(i, owners[s])) { continue; }
-+                positions.emplace(cells.pos_get(i), i);
-+                if (minimum.empty() || cells.pos_get(i) >= minimum[s]) { expected.push_back(i); }
-+            }
-+            check(positions == cells.seq_pos_get(owners[s]), "logical position index differs from physical owners");
-+            expected.resize(cells.size(), -1);
-+            check(std::equal(expected.begin(), expected.end(), actual.begin() + s*cells.size()),
-+                    "row bitmap differs from physical-order owner scan or padding");
-+        }
-+    }
-+}
-+
-+void contiguous_positions() {
++int main() {
 +    llama_kv_cells cells;
 +    cells.resize(8);
 +    for (uint32_t i = 0; i < 4; ++i) {
 +        cells.pos_set(i, static_cast<llama_pos>(i));
 +        cells.seq_add(i, 0);
 +    }
-+    check(cells.seq_pos_is_cell_contiguous(0), "dense prefix must remain resident-admissible");
-+    check_rows(cells);
++    if (!cells.seq_pos_is_cell_contiguous(0)) return 1;
++
 +    cells.mv(1, 4);
-+    check(!cells.seq_pos_is_cell_contiguous(0), "moved prefix must not appear physically contiguous");
-+    check_rows(cells);
++    if (cells.seq_pos_is_cell_contiguous(0)) return 2;
 +    cells.mv(4, 1);
-+    check(cells.seq_pos_is_cell_contiguous(0), "restored physical prefix must regain admission");
-+    check(cells.seq_rm(2, 0) && cells.is_empty(2), "removed sole owner must clear cell");
-+    check(!cells.seq_pos_is_cell_contiguous(0), "prefix hole must reject complete-prefix admission");
-+    check_rows(cells);
-+}
++    if (!cells.seq_pos_is_cell_contiguous(0)) return 3;
 +
-+void shared_ownership_and_restore() {
-+    llama_kv_cells cells;
-+    cells.resize(192);
-+    for (uint32_t i = 0; i < 8; ++i) {
-+        cells.pos_set(i, i);
-+        for (llama_seq_id owner = 0; owner < 5; ++owner) { cells.seq_add(i, owner); }
-+    }
-+    for (const auto & item : {std::pair<uint32_t, llama_pos>{130, 8}, {63, 10}, {64, 9}}) {
-+        cells.pos_set(item.first, item.second);
-+        cells.seq_add(item.first, 1);
-+    }
-+    check(!cells.seq_pos_is_cell_contiguous(1), "scattered tail must reject contiguous resident admission");
-+    check(cells.seq_pos_is_cell_contiguous(4), "parked alias must retain complete prefix admission");
-+    check_rows(cells);
-+    for (uint32_t i = 0; i < 8; ++i) {
-+        check(!cells.seq_rm(i, 0), "removing one alias must preserve shared cell");
-+    }
-+    check_rows(cells);
-+    cells.pos_set(191, 40); cells.seq_add(191, 0);
-+    cells.rm(191);
-+    cells.pos_set(191, 0); cells.seq_add(191, 0);
-+    check_rows(cells);
-+    cells.mv(64, 65);
-+    cells.pos_add(63, 7);
-+    cells.pos_div(130, 2);
-+    check_rows(cells);
-+    check(cells.seq_pos_is_cell_contiguous(4), "other owners' shifts must not invalidate parked prefix");
-+    cells.reset_shift();
-+    const auto sparse = cells.cp(std::vector<uint32_t>{130, 65, 0, 191});
-+    const auto contiguous = cells.cp(0, 8);
-+    llama_kv_cells restored;
-+    restored.resize(192);
-+    restored.set(std::vector<uint32_t>{64, 127, 129, 190}, sparse);
-+    check_rows(restored);
-+    restored.set(0, contiguous);
-+    check_rows(restored);
-+    llama_kv_cells empty; empty.resize(1);
-+    restored.set(64, empty);
-+    check_rows(restored);
-+    check(!cells.seq_keep(0, 4), "keeping parked alias must retain its shared payload");
-+    check(cells.seq_keep(65, 4), "keeping absent alias must clear its cell");
-+    check(cells.seq_pos_is_cell_contiguous(4) && !cells.seq_pos_is_cell_contiguous(1),
-+            "keeping a shared owner must update each resident prefix index");
-+    check_rows(cells);
-+    check(cells.pos_add(191, -1), "negative logical shift must remove recycled row");
-+    check_rows(cells);
-+    cells.reset(); check_rows(cells);
-+    cells.resize(65); check_rows(cells);
-+    cells.pos_set(64, 0); cells.seq_add(64, 4); check_rows(cells);
-+    cells.resize(8); check_rows(cells);
-+}
-+} // namespace
-+
-+int main() {
-+    try {
-+        contiguous_positions();
-+        shared_ownership_and_restore();
-+        return 0;
-+    } catch (const std::exception & error) {
-+        std::fprintf(stderr, "KV cell ownership test failed: %s\n", error.what());
-+        return 1;
-+    }
++    if (!cells.seq_rm(2, 0)) return 4;
++    if (cells.seq_pos_is_cell_contiguous(0)) return 5;
++    return 0;
 +}
 diff --git a/tests/test-skippy-kv-page-export.cpp b/tests/test-skippy-kv-page-export.cpp
 new file mode 100644
@@ -11453,12 +9763,12 @@ index 000000000..30c88b490
 +        });
 +        return skippy_graph_cache_capabilities(result);
 +    };
-+    const uint32_t dense = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION | SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT | SKIPPY_MEMORY_CACHE_KV_RECURRENT |
++    const uint32_t dense = SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT |
 +            SKIPPY_MEMORY_CACHE_FULL_STATE;
 +    if (capabilities(skippy_state_kind::kv_key) != dense ||
 +            capabilities(skippy_state_kind::kv_value) != dense ||
-+            capabilities(skippy_state_kind::recurrent_conv) != dense ||
-+            capabilities(skippy_state_kind::recurrent_ssm) != dense ||
++            capabilities(skippy_state_kind::recurrent_conv) != (SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
++            capabilities(skippy_state_kind::recurrent_ssm) != (SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
 +            capabilities(skippy_state_kind::derived_persistent) != SKIPPY_MEMORY_CACHE_FULL_STATE) {
 +        return false;
 +    }
@@ -11533,7 +9843,7 @@ index 000000000..30c88b490
 +            {});
 +
 +    if (skippy_memory_cache_capabilities(&kv) !=
-+            (SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION | SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
++            (SKIPPY_MEMORY_CACHE_RESIDENT | SKIPPY_MEMORY_CACHE_KV_RECURRENT | SKIPPY_MEMORY_CACHE_FULL_STATE) ||
 +            skippy_model_memory_cache_capabilities(nullptr) != 0) {
 +        return 1;
 +    }
@@ -12116,8 +10426,6 @@ index 000000000..0fae7bbd4
 +#include "../src/llama-io.h"
 +#include "../src/llama-memory-recurrent.h"
 +#include "../src/llama-model.h"
-+#include "../src/skippy/state_memory.h"
-+#include "skippy/state.h"
 +
 +#include "ggml-backend.h"
 +
@@ -12204,13 +10512,6 @@ index 000000000..0fae7bbd4
 +    model->hparams.ssm_d_inner = 2;
 +
 +    auto source = make_memory(*model);
-+    const auto capabilities = skippy_memory_cache_capabilities(&source);
-+    if (!(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_CHECKPOINT)
-+            || !(capabilities & SKIPPY_MEMORY_CACHE_RESIDENT)
-+            || (capabilities & SKIPPY_MEMORY_CACHE_RESIDENT_ATTENTION)) {
-+        std::fprintf(stderr, "pure recurrent memory has an incorrect resident attention contract\n");
-+        return 13;
-+    }
 +    llama_pos source_pos = 7;
 +    llama_seq_id source_seq_id = 0;
 +    llama_seq_id * source_seq_ids = &source_seq_id;
@@ -12277,37 +10578,6 @@ index 000000000..0fae7bbd4
 +    if (restored_r != source_r || restored_s != source_s) {
 +        std::fprintf(stderr, "recurrent tensor data changed during cross-sequence restore\n");
 +        return 7;
-+    }
-+
-+    // Immutable cache-owned bytes survive source lane removal and reuse.
-+    if (!source.seq_rm(source_seq_id, -1, -1)) { return 8; }
-+    const std::vector<float> changed_r = { 91.0f, 92.0f, 93.0f, 94.0f };
-+    ggml_backend_tensor_set(source.r_l[0], changed_r.data(), 0, changed_r.size() * sizeof(float));
-+    buffer_reader second_reader(writer.data);
-+    destination.state_read(second_reader, 0, LLAMA_STATE_SEQ_FLAGS_NONE);
-+    const auto a_row = destination.cells[0].tail;
-+    const auto b_row = destination.cells[1].tail;
-+    if (a_row < 0 || b_row < 0 || a_row == b_row) {
-+        std::fprintf(stderr, "restored recurrent borrowers did not receive private mutable rows\n");
-+        return 9;
-+    }
-+    ggml_backend_tensor_set(destination.r_l[0], changed_r.data(),
-+            destination.r_l[0]->nb[1] * a_row, changed_r.size() * sizeof(float));
-+    buffer_writer preserved_b;
-+    destination.state_write(preserved_b, 1, LLAMA_STATE_SEQ_FLAGS_NONE);
-+    if (preserved_b.data != writer.data) {
-+        std::fprintf(stderr, "diverging borrower changed another recurrent checkpoint\n");
-+        return 10;
-+    }
-+    // The original checkpoint can restore again after either borrower is freed.
-+    if (!destination.seq_rm(0, -1, -1)) { return 11; }
-+    buffer_reader third_reader(writer.data);
-+    destination.state_read(third_reader, 0, LLAMA_STATE_SEQ_FLAGS_NONE);
-+    buffer_writer restored_a;
-+    destination.state_write(restored_a, 0, LLAMA_STATE_SEQ_FLAGS_NONE);
-+    if (restored_a.data != writer.data) {
-+        std::fprintf(stderr, "recurrent checkpoint changed after repeated lane recycling\n");
-+        return 12;
 +    }
 +
 +    return 0;

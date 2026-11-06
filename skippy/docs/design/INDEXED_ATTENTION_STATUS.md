@@ -1,6 +1,213 @@
 # Indexed KV attention: review candidate
 
-Status on 2026-10-31: implementation available for review. All eight real-model
+## Current candidate: upstream per-owner row lists
+
+The working candidate replaces the custom indexed operator with the per-owner
+row-list and ownership-bitmap implementation from upstream PR29510, based on
+`006fc936d1dcb8077c0bccfad31c72ee453960e8`. It stays on the existing upstream pin.
+CPU, CUDA and Metal use `ggml_flash_attn_ext_rows` with one I32 row list per
+query stream and the existing attention mask. Runtime admission probes the
+actual assigned backend and stored KV representation; unsupported row layouts
+retain ordinary attention on that backend. Model names do not select a path.
+Radix ownership, recurrent checkpoints and persistent L3 remain separate.
+
+The [layout-matched full-model control](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/9562cd5443cd4bd78573dcf0eb61ca38)
+passes all 23 mandatory comparisons byte-for-byte at the unchanged `1e-6`
+bound for the fixed Qwen3.5-35B/F16 fixture. Vanilla kernels independently
+reproduce the full PR's logits, saved states and restored continuations when
+given the matching attention layout. This is a diagnostic intervention, not
+untouched vanilla or universal model qualification. The original cross-layout
+failure and two optional ordinary-restore failures remain recorded.
+
+CPU validation passes 2,452 finite operator comparisons, 36 exceptional controls
+and 294 native tests; one GPU-only test is explicitly skipped. Initial M1
+validation passed bitmap/codec checks and 1,318 finite comparisons before the
+unchanged operator bound failed at F16 head width 40. The inherited row-gather
+copy loop omitted entries at head boundaries for widths 40 and 72. The generic
+repair assigns copy chunks within each head, preserving the original mapping
+for aligned heads. The repaired M1 diagnostic passes the complete unchanged
+operator program and F16/Q8/F32 resident-model gates. Actual loaded-library
+hashes match the sealed provider. F16 and Q8 use row nodes; stored F32 retains
+ordinary attention with F16 attention inputs on Metal. The diagnostic reuses
+unchanged host objects and replaces the Metal auxiliary shader; it is not the
+shipping runtime. The subsequent production builds are attributed separately
+below.
+
+The final candidate also wires row inputs through both the full-attention and
+sliding-window cache pools. Both ordinary and hybrid graph reuse refresh the
+current pool inputs; each layer uses its existing window metadata. The new CPU
+fixture exercises the actual two-pool graph, shared owners, reordered query
+streams and graph reuse. It passes alongside the existing graph-input tests.
+No model-family rule, new setting, kernel arithmetic change or CPU fallback was
+added. Clean replay of all 104 patches produces native `aec61426350541d9f6c4762ef4ca1850e4f34f49`,
+tree `22cbb3144e2926b15ab850016d6fce5eb40d2ceb`, queue digest
+`11701d0ac354c8d240d4813e5ff60b83d07d4f9a2daecde45ebe8ccd6ef3f18f`.
+
+The preceding `cc855ab2` candidate completed the early serving pairs below.
+Every arm completed 69 requests and 18,713 output tokens with clean client and
+server exits. These are single ordered diagnostics, not ABBAAB qualification,
+generated-content parity or results for the final two-pool candidate.
+
+| Backend / model at c4 | Skippy output tok/s | Standard llama output tok/s | Difference |
+|---|---:|---:|---:|
+| [CUDA / hybrid dense 4B](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/da26189089e5493f9dbb5a59e8ce3c57) | 26.476 | 26.654 | -0.67% |
+| [CUDA / hybrid MoE 35B](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/30aa91d8233f4a599d8436f4673fa446) | 24.971 | 25.056 | -0.34% |
+| [CUDA / attention MoE 30B](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/7ae025fc9ac741758d0b0c9e604e2796) | 15.782 | 13.705 | +15.16% |
+| [M3 Metal / hybrid dense 4B](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/33bc478fecf44f3bbe8e5861610b4f99) | 26.613 | 26.228 | +1.47% |
+
+Metal TTFT p95 remains worse in that pair (74.58 versus 29.81 seconds). The
+dense CUDA pair failed in the benchmark client after its exact HTTP cache
+gate passed; no partial throughput is qualified. Its failed attempt remains
+retained. The original Gemma ordinary-attention resident failure reproduces
+with the old `00983cf4` runtime at the same observed deltas; neither failure is
+waived. The final candidate's actual two-pool GPU tests are separate evidence.
+
+The [owning Metal runtime's targeted M1 gates](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/fe742c2cf8944ef69e0fdce624475938)
+pass all five native/admission tests with clean postchecks. Gemma F16 and Q8
+each execute 13 full-attention and 13 sliding-window row nodes on MTL0;
+resident fork logits have zero differences and both page comparisons are exact.
+Dense F16/Q8 execute 36 row nodes, while stored F32 preserves the selected Metal
+ordinary-attention conversion. These tests retain the original `1e-6` limit.
+
+The [final CUDA runtime gates](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/accb9ce48b87441888fc1f4fb100a99f)
+pass the operator catalog, six resident storage pairs, exact four-lane/32-step
+checkpoint continuation and fresh-process L3 restore. The producer reused
+unchanged CUDA kernel objects and rebuilt the changed graph consumers; all 19
+numeric exits and 59 artifact hashes pass audit.
+
+The [final CUDA Gemma F16/Q8 gates](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/a459675abb7240088b65f2892d0c663c)
+execute all 26 attention layers through row nodes, with zero fork-logit
+differences and exact restored pages. The [final dense CUDA gates](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/602d580a52b443c79acd38c920766a80)
+also pass F16, Q8 and mixed Q8/F16 with all 36 row nodes and the same unchanged
+resident bound. These actual-model checks are distinct from the CPU two-pool
+graph fixture and do not relabel the older ordinary-attention failures.
+
+Remaining qualification uses one frozen final runtime per backend, all four
+models and c1/c2/c4 in ABBAAB order. Audit complete work, source/model/runtime/
+client identities, lifecycle, latency, cache reads and sampled memory before
+publishing performance through the typed owner into existing MLflow experiment
+6. Historical campaigns and failed attempts keep their original attribution.
+
+The preceding candidate's cold replay produced native
+`cc855ab2f443f77626ebf0f4901610dea737fd14`, tree
+`7ff0e7d6b92bf3145b08dd8492b174d2c1bf7ee0`, queue
+`a3628a88bae20819756d22e1fc2a68781de2cedae711ed9b08590e7cd9a3a116`.
+The Skippy ABI remains 0.1.76; this GGML constructor change adds no Rust ABI
+symbol. All performance evidence below remains attributed to its original
+source and does not qualify this candidate.
+
+## Preceding repair: retain ordinary attention execution
+
+The automatic indexed graph is being withheld because it fails the unchanged
+full-model baseline arithmetic contract. This also happens without saved cache
+owners or checkpoint imports: fresh base/head controls have exact same-source
+repeats, but cross-source maximum logit deltas are `0.223699808` at c1 and
+`0.857750654` at c4, with zero and three greedy differences respectively.
+These failures remain recorded; operator accuracy tests do not waive them.
+
+The conservative native repair candidate is `00983cf474939f13c2d8a151efe7355518642906`,
+tree `e709f20cf29ae4df087e4d20719fec5e267b554d`, queue
+`72b73c5eaf35a818d8b38043f41955565e4786eca998e4209456951bf00b38db`.
+It declines automatic indexed read plans at the common graph-admission point,
+consistently during construction and reuse. Ordinary attention retains its
+existing query layout, physical key extent and backend selection. This is not
+a CPU fallback, model exception, new configuration switch or tolerance change.
+The public indexed GGML operator remains independently available and tested.
+Default-model fixtures explicitly require absent index inputs and the selected
+backend; stored KV types and attention-input types are reported separately.
+
+The preceding ordinary-graph candidate `4c133af3` matched the retained CUDA c4
+canonical and fresh-context baseline exactly, but still differed at c1.
+Graph-disabled controls reproduced the same c1 difference. Nsight found 234
+registers and six VEC partial reductions in the baseline versus 150 registers
+and nine partials in the modified kernel. The occupancy-based launcher changed
+the partitioning without a selector change. This repair therefore preserves
+the original ordinary VEC body separately from indexed row loading. Selection
+depends only on the presence of index inputs; register and grid counts are not
+hardcoded. Source-matched CUDA builds now pass the unchanged fresh c1/c4
+baseline comparisons: all six repeat/cross comparisons have maximum logit
+delta zero and no greedy differences (`job_mkz3w1kj6zqmpy5`). The retained
+canonical c4 replay also passes all four comparisons exactly
+(`job_wjm2d0ge3h65req`). Actual Nsight launches restore 234 registers/thread,
+grid 1x6x16, block 32x4 and 16,640 shared bytes across all 256 observed VEC
+decode launches (`job_vs97wb6qvq6z4fz`). All 51 downloaded artifacts across
+these three controls passed independent size and SHA-256 verification.
+
+Strict cross-placement resident continuation remains a separate open contract.
+The actual Qwen3.5-4B CUDA fixture fails identically on retained ordinary `f71`
+and candidate `4c133af3`; saved prefix and cold-export bytes pass, but computed
+continuation logits and KV pages differ. Extra Llama-1B Metal tests also fail
+the unchanged strict continuation comparison. A separate public-API control
+against true unpatched llama.cpp reproduces the same F16 continuation deltas
+on Metal; full trace comparison remains separate from equal delta summaries.
+These failures remain recorded, rather
+than being hidden by passing operator tests or output-count hashes.
+
+Resident radix ownership, recurrent checkpoints, persistent L3, cooperative
+hybrid scheduling and longest RAM/L3 prefix selection remain independent.
+Restoring the ordinary graph also restores its physical-pool scaling cost.
+The historical idle-prefix scaling improvements below therefore do not describe
+this repair candidate. Exact numerical, mixed-KV, additional-model and AgentX
+qualification of the repaired default path remains incomplete. The local Just
+CLI/native package build passes at this exact native identity. A separate
+true-vanilla Gemma2 Metal control crosses its 4,096-token sliding window with
+a 6,144-token prefix and softcap 50: all six c1/c4 repeat/cross full-vocabulary
+comparisons are exact, with all 26 attention layers on the selected GPU.
+This is additional-model correctness evidence, not performance qualification.
+ABI remains 0.1.76.
+
+## One-lane resident-cache correction
+
+Default native and MTP contexts now select unified KV even at one lane.
+Previously, dense one-lane contexts selected non-unified KV while advertising
+resident caching; native prefix saves then returned unsupported and repeated
+HTTP requests reused zero tokens. Explicit non-unified attention contexts now
+omit the resident capability flags that their save API cannot honor.
+
+Native `11aa69c53e118958f3dc0ab0870f89f3d24d7897`, tree
+`b085f1e7672c73be8ec821c84bdad7401600fe91`, queue digest
+`0378e014f6c267fd03b078a285dff03fb25f42502e3fbed8907926010296299f`
+replays cleanly. The expanded dense resident fixture passes on CPU and Metal:
+default one-lane save, source release, byte-exact restore and next logits;
+explicit non-unified one- and two-lane contexts report no resident support and
+reject saves. CUDA and actual dense-model HTTP reuse are pending on this fix.
+ABI 0.1.76 and the attention kernels are unchanged.
+
+## Historical combined candidate with indexed vector decode
+
+The earlier combined candidate integrated Jared Wyles's `18f0fa7a49142344c9297cfcbaf9a16352352189`.
+For eligible indexed CUDA queries of at most two tokens, F16/BF16 KV can now
+use the existing vector kernel; larger prefill and verification windows retain
+their existing selection. The owning patch was regenerated to correct stale
+mail-patch hunk counts after the guard removal. The combined candidate also
+checks compiled CUDA softcap capabilities: unsupported V widths are refused;
+supported wide shapes without an MMA softcap variant use the existing tile
+kernel. D64 softcapping remains explicitly unsupported on CUDA and cannot count
+as GPU qualification through CPU fallback.
+
+Clean queue replay produces native `9e5ce4cd088fd30193702e7cb176857ef3f47dee`,
+tree `bc57c588724ca8cfedb714ea357a5f3370b6068a`, queue digest
+`ef74e663109626492be260e879ac0492b71a3963dab035d54d3e8b430eec0297`.
+Expanded operator cases cover Q2, mixed F16/BF16, no-mask/no-sink execution,
+softcap eligibility and four alternating metadata phases spanning graph replay.
+
+CUDA correctness and performance qualification for this combined source are
+recorded separately from the one-lane fix above. Source `382c6c62a` passes the
+CUDA operator, real-model cache/L3, fresh-process and all-eight-layer FP64
+gates; actual F16 attention uses the vector kernel. Its complete same-host c4
+pair measures 26.805 Skippy versus 26.577 standard llama output tokens/s,
+69 requests and 18,713 outputs per arm with zero errors. This single pair is
+interim evidence, not a complete ABBAAB group. Its verified metrics and artifacts
+are in [the existing MLflow experiment](https://mlflow.internal.generalinference.xyz/mlflow/#/experiments/6/runs/90be7573cb6c49fcb3cdc7032861f656).
+The older measurements below remain attributed to their original source;
+they do not qualify the new dispatch. The full four-model c1/c2/c4 ABBAAB sweep
+will record a new campaign within the existing MLflow experiment
+`agentx-skippy-vs-llama` (ID 6), preserving historical runs.
+
+## Prior-source qualification (`1b3f2e6fc36d`)
+
+The following results qualify the preceding source, before Jared's vector
+selection change. All eight real-model
 attention layers match existing dense CUDA attention exactly at the same logical
 layout. Strict cache tests pass on CUDA and Metal. Comparison against the old
 physical layout still fails; that diagnostic is retained below. The final CUDA

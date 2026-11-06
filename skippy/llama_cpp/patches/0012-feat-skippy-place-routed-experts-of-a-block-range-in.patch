@@ -37,7 +37,7 @@ index b9b5259af..df831c43e 100644
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
-index b47c55f82..c930d9c3b 100644
+index 799bdca2d..bc4da9a07 100644
 --- a/include/skippy/runtime.h
 +++ b/include/skippy/runtime.h
 @@ -117,6 +117,12 @@ struct skippy_runtime_config {
@@ -132,7 +132,7 @@ index 554d2bdd3..e3649e713 100644
          const skippy_runtime_config * config,
          llama_context_params & params);
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
-index d6e24cd2a..4082fa198 100644
+index 60a27669f..7305cc529 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
 @@ -962,10 +962,12 @@ enum skippy_status skippy_model_open_impl(

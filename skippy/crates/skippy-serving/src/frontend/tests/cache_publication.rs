@@ -1,7 +1,6 @@
 //! Exact-state cache requests must distinguish queued capture from publication.
 use super::*;
 use crate::kv_integration::StagePrefixCachePayload;
-use crate::runtime_state::{loaded_memory_cache_capabilities, loaded_model_state_kind};
 use skippy_inference_api::chat::ChatCompletionRequest;
 
 fn cache_stats(kv: &KvStageIntegration) -> Value {

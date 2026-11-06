@@ -23,10 +23,10 @@ resets, instead of attaching rebuilt chains to the backend.
  5 files changed, 20 insertions(+), 1 deletion(-)
 
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
-index ba072fe82..db3392ddf 100644
+index 38ebae8d7..f44e874d9 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
-@@ -165,6 +165,11 @@ struct skippy_session {
+@@ -158,6 +158,11 @@ struct skippy_session {
      // detached -- e.g. so a sampled verify window can output every row --
      // it must never be re-attached; only building a fresh chain clears this.
      bool sampling_backend_retired = false;
@@ -61,10 +61,10 @@ index 6fd1240e3..de5fa6ba5 100644
          // scheduler may reset and reuse the same chain on every iteration;
          // attaching it again violates llama_sampler_chain's one-shot init
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index be612007f..0653347a7 100644
+index f1de95cc5..36c972d92 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
-@@ -389,6 +389,7 @@ enum skippy_status skippy_session_reset(
+@@ -392,6 +392,7 @@ enum skippy_status skippy_session_reset(
          skippy_clear_chat_sampling(session);
      }
      skippy_mtp_clear_session_state(session);

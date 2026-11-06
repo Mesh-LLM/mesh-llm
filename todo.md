@@ -64,6 +64,75 @@ The model-backed refusal case also passes on both backends: a one-byte L3 budget
 cannot retain a checkpoint, but eviction frees native attention cells and cold
 recomputation produces identical fixed-input predictions.
 
+The combined Jared vector-decode candidate additionally passes the bounded
+native **process** restart on local Metal: separate supervised seed/restore
+children, a committed L3 hit, complete attention/recurrent SHA-256 equality and
+four identical fixed-input predictions. Long-prefix, HTTP-server restart and
+concurrent c4 cases remain separately scoped below.
+
+## Combined-source AgentX sweep
+
+- [x] Integrate Jared's indexed F16/BF16 vector-decode route and regenerate its
+  owning mail patch; retain compiled-kernel softcap eligibility and expand Q2,
+  mixed-type and post-capture graph-replay operator tests.
+- [x] Package the combined Metal runtime and pass the local model-backed
+  foundation, including the native process-restart gate.
+- [ ] Qualify the changed CUDA route with actual kernel evidence, the expanded
+  operator cases, independent FP64 and strict cache/L3 model gates.
+- [ ] Prepare one CUDA producer per isolated lab and one Metal producer, reusing
+  verified artifacts across models and compatible workers.
+- [ ] Finish the reusable full AgentX runner: four pinned models, c1/c2/c4,
+  complete recorded work, ABBAAB, standard vanilla and observed product-auto
+  Skippy capacity. Do not substitute the correctness foundation for this runner.
+- [ ] Run and audit all eight model/backend sweeps (144 engine cells), preserving
+  raw work, resolved settings, source/runtime/tool identities and failures.
+- [ ] Record the new campaign and linked runs in existing MLflow experiment
+  **6 `agentx-skippy-vs-llama`**, preserving historical campaigns.
+- [ ] Rewrite the AgentX PR descriptions around the final implementation,
+  benchmark contract and source-pinned results. Reconcile #2657's remaining
+  correctness requirements before declaring it fully superseded.
+
+## PR #2746 regression repair gates
+
+These gates supplement the fixed four-model campaign. Product selection must
+depend on loaded capabilities, tensor geometry and backend support; model names
+and family allowlists must not choose a serving or kernel path.
+
+The repair withholds automatic indexed graph selection until the unchanged
+full-model arithmetic contract passes. Direct indexed-operator support is
+separate. Ordinary attention retains its physical-pool cost; do not carry the
+historical idle-pool scaling claim into the fallback candidate's results.
+
+- [ ] Preserve the common upstream CUDA hardware/GQA dispatch policy for indexed
+  attention. Verify actual MMA selection for eligible wide-GQA decode and an
+  eligible vector control, plus unchanged operator numerical and graph-replay
+  gates. Kernel availability alone is not a performance qualification.
+- [ ] Prove that resident recurrent checkpoints retain cooperative suffix-prefill
+  and cache-wave scheduling with disk disabled. Decode must make progress before
+  a competing long prefill completes. Exercise cancellation and resource cleanup
+  without changing exact checkpoint boundaries.
+- [ ] Compare the longest valid resident and committed L3 prefixes using
+  metadata. Cover a short resident prefix with a longer L3 checkpoint, resident
+  ties, refused or failed L3 fill, and preservation of the resident fallback.
+- [ ] Exercise large native-owner cold offload during active decode with L3
+  admission pressure. Byte-budget safety alone does not establish bounded
+  request latency while snapshots are materialized.
+- [ ] Run genuine uncached base/head model controls and retain the original
+  strict physical-layout full-model numerical failure until the same contract
+  passes. Operator FP64 references and output-count hashes do not close it.
+- [ ] Extend cache save/restore/fork and cold-export correctness coverage to
+  supported quantized and mixed K/V pairs, retaining byte/state, fixed-input
+  logit and selected-token assertions. Finite-logit dispatch tests are separate.
+- [ ] Add pinned small-model probes for independent capability coverage: a
+  different head width/GQA and sliding-window/softcap attention. Verify actual
+  metadata and intended baseline fallback when indexing is unsupported; do not
+  count such a fallback as indexed-attention coverage. These models supplement
+  the existing four; they do not replace or alter their pinned qualification.
+- [ ] Restart affected M3 and allowed-Spark AgentX groups after the relevant
+  corrected-source gates pass. Keep original source943 results/failures and
+  source188 admission recovery separate, publish audited complete groups into
+  existing MLflow experiment6, and update public PR2746 with exact attribution.
+
 ## Retain PR #2657's correctness requirements
 
 Cache-owned immutable checkpoints replace the old execution-lane pinning and

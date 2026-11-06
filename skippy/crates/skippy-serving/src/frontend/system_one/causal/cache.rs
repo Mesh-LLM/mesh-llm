@@ -19,6 +19,7 @@ impl DecisionSequence<'_> {
         }
         let base = self.backend.local_kv_message_base(&self.session, self.ids);
         let identities = kv.lookup_identities(&self.backend.config, &base, 0, tokens);
+        let prepared = kv.prepare_exact_state_restore(&identities, true);
         let cache = kv.clone();
         let session = self.session.clone();
         let token_ids = tokens.to_vec();
@@ -26,17 +27,13 @@ impl DecisionSequence<'_> {
             "decision-prefix-restore",
             move |runtime| {
                 if let Some(hit) = cache
-                    .restore_exact_state_with_shared_durable_fallback(
-                        runtime,
-                        &session,
-                        &identities,
-                    )
+                    .restore_prepared_exact_state(runtime, &session, &prepared, None)
                     .map_err(openai_backend_error)?
                 {
                     return Ok(hit.token_count);
                 }
                 cache
-                    .restore_resident_prefix(runtime, &session, &identities, &token_ids)
+                    .restore_resident_prefix(runtime, &session, prepared.identities(), &token_ids)
                     .map(|hit| hit.map_or(0, |hit| hit.token_count))
                     .map_err(openai_backend_error)
             },

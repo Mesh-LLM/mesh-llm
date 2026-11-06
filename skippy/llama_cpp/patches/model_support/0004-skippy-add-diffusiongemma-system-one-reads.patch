@@ -121,7 +121,7 @@ diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index 4f4fc1cd1..d3c86694f 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -98,6 +98,7 @@ add_library(llama
+@@ -94,6 +94,7 @@ add_library(llama
              skippy/speculative_decoding.cpp
              skippy/tokenization.cpp
              skippy/events.cpp
@@ -391,5 +391,5 @@ index 000000000..d0c51d87a
 +    }
 +}
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

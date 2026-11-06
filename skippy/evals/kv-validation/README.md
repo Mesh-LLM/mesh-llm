@@ -26,12 +26,16 @@ This foundation runs:
   releasing its source lane, followed by model/runtime/cache reload against the
   same L3 directory. Require an actual L3 hit, identical attention and recurrent
   payload bytes, and four matching fixed-input continuation predictions. This
-  runs in one test process and does not qualify fresh-process server restart.
+  first runs within one test process. The validator additionally invokes two
+  separate supervised test processes: seed commits and exits before restore
+  starts. Distinct PIDs, an L3 hit, complete attention/recurrent SHA-256 equality
+  and four matching predictions are required. This qualifies the bounded native
+  process boundary, not an HTTP-server restart or long-prefix workload.
   A second model test refuses L3 writes with a one-byte disk budget, requires
   native attention cells to be released, and verifies exact cold-recompute
   predictions before checking that no durable entry was published.
 
-Long c4 state comparisons, L3 restart, pressure, default-budget qualification and
+Long c4 state comparisons, HTTP-server L3 restart, pressure, default-budget qualification and
 standard-vanilla performance comparisons remain separate work in
 [todo.md](../../../todo.md). A green foundation is not throughput parity or full
 KV certification. There is no automatic GPU CI trigger or new serving option.
