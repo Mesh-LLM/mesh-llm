@@ -93,6 +93,283 @@ fn exact_external_project_and_pins_are_admitted() {
     check_fixture(&root).unwrap();
 }
 
+fn agentx_fixture() -> (TempDir, PathBuf) {
+    let (temporary, root) = fixture();
+    let mut policy: serde_json::Value = serde_json::from_str(POLICY).unwrap();
+    let reviewed: serde_json::Value =
+        serde_json::from_str(include_str!("../../../../../ci/python-tooling-policy.json")).unwrap();
+    let agentx = reviewed["dependency_inputs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|input| input["manifest_path"] == "skippy/evals/agentx/pyproject.toml")
+        .unwrap();
+    policy["dependency_inputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(agentx.clone());
+    policy["allowed_invocations"] = serde_json::Value::Array(
+        reviewed["allowed_invocations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|invocation| invocation["path"] == "just/skippy.just")
+            .cloned()
+            .collect(),
+    );
+    write(&root, POLICY_PATH, &serde_json::to_string(&policy).unwrap());
+    write(
+        &root,
+        "skippy/evals/agentx/pyproject.toml",
+        include_str!("../../../../../skippy/evals/agentx/pyproject.toml"),
+    );
+    write(
+        &root,
+        "skippy/evals/agentx/uv.lock",
+        include_str!("../../../../../skippy/evals/agentx/uv.lock"),
+    );
+    write(
+        &root,
+        "just/skippy.just",
+        include_str!("../../../../../just/skippy.just"),
+    );
+    (temporary, root)
+}
+
+#[test]
+fn reviewed_agentx_wheel_lock_and_preinstalled_interpreter_setup_are_admitted() {
+    let (_temporary, root) = agentx_fixture();
+    check_fixture(&root).unwrap();
+}
+
+#[test]
+fn agentx_manifest_source_override_must_match_its_reviewed_wheel() {
+    for missing in [false, true] {
+        let (_temporary, root) = agentx_fixture();
+        let path = "skippy/evals/agentx/pyproject.toml";
+        let mut manifest: toml::Value =
+            toml::from_str(&fs::read_to_string(root.join(path)).unwrap()).unwrap();
+        if missing {
+            manifest["tool"]["uv"]
+                .as_table_mut()
+                .unwrap()
+                .remove("sources");
+        } else {
+            manifest["tool"]["uv"]["sources"]["agentx-harness"]["url"] =
+                toml::Value::String("https://example.org/other.whl".into());
+        }
+        write(&root, path, &toml::to_string(&manifest).unwrap());
+        assert!(
+            check_fixture(&root)
+                .unwrap_err()
+                .to_string()
+                .contains("reviewed")
+        );
+    }
+}
+
+#[test]
+fn agentx_source_url_wheel_url_and_valid_but_different_hash_are_rejected() {
+    for field in [
+        "source-url",
+        "wheel-url",
+        "wheel-hash",
+        "extra-wheel",
+        "sdist",
+    ] {
+        let (_temporary, root) = agentx_fixture();
+        let path = "skippy/evals/agentx/uv.lock";
+        let mut lock: toml::Value =
+            toml::from_str(&fs::read_to_string(root.join(path)).unwrap()).unwrap();
+        let agentx = lock["package"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|package| package["name"].as_str() == Some("agentx-harness"))
+            .unwrap();
+        match field {
+            "source-url" => {
+                agentx["source"]["url"] =
+                    toml::Value::String("https://example.org/other.whl".into())
+            }
+            "wheel-url" => {
+                agentx["wheels"][0]["url"] =
+                    toml::Value::String("https://example.org/other.whl".into())
+            }
+            "wheel-hash" => {
+                agentx["wheels"][0]["hash"] =
+                    toml::Value::String(format!("sha256:{}", "e".repeat(64)))
+            }
+            "extra-wheel" => {
+                let extra = agentx["wheels"][0].clone();
+                agentx["wheels"].as_array_mut().unwrap().push(extra);
+            }
+            "sdist" => {
+                let sdist = agentx["wheels"][0].clone();
+                agentx.as_table_mut().unwrap().insert("sdist".into(), sdist);
+            }
+            _ => unreachable!(),
+        }
+        write(&root, path, &toml::to_string(&lock).unwrap());
+        assert!(
+            check_fixture(&root)
+                .unwrap_err()
+                .to_string()
+                .contains("reviewed exact wheel URL/SHA-256"),
+            "{field}"
+        );
+    }
+}
+
+#[test]
+fn registry_admission_cannot_hide_a_second_package_source() {
+    let (_temporary, root) = fixture();
+    let path = "ci/llama-canary/jinja/uv.lock";
+    let source = fs::read_to_string(root.join(path)).unwrap().replacen(
+        "source = { registry = \"https://pypi.org/simple\" }",
+        "source = { registry = \"https://pypi.org/simple\", url = \"https://example.org/other.whl\" }", 1);
+    write(&root, path, &source);
+    assert!(
+        check_fixture(&root)
+            .unwrap_err()
+            .to_string()
+            .contains("pinned PyPI registry")
+    );
+}
+
+#[test]
+fn agentx_lock_rejects_missing_extra_and_duplicate_transitive_packages() {
+    for change in ["missing", "extra", "duplicate"] {
+        let (_temporary, root) = agentx_fixture();
+        let path = "skippy/evals/agentx/uv.lock";
+        let mut lock: toml::Value =
+            toml::from_str(&fs::read_to_string(root.join(path)).unwrap()).unwrap();
+        let packages = lock["package"].as_array_mut().unwrap();
+        let index = packages
+            .iter()
+            .position(|package| package["name"].as_str() == Some("aiofiles"))
+            .unwrap();
+        match change {
+            "missing" => {
+                packages.remove(index);
+            }
+            "extra" => {
+                let mut extra = packages[index].clone();
+                extra["name"] = toml::Value::String("unreviewed-package".into());
+                packages.push(extra);
+            }
+            "duplicate" => {
+                packages.push(packages[index].clone());
+            }
+            _ => unreachable!(),
+        }
+        write(&root, path, &toml::to_string(&lock).unwrap());
+        let error = check_fixture(&root).unwrap_err().to_string();
+        assert!(
+            error.contains("locked package set differs")
+                || error.contains("repeats locked package"),
+            "{change}: {error}"
+        );
+    }
+}
+
+#[test]
+fn agentx_url_admission_does_not_allow_other_transitive_sources_or_versions() {
+    for source_override in [false, true] {
+        let (_temporary, root) = agentx_fixture();
+        let path = "skippy/evals/agentx/uv.lock";
+        let mut lock: toml::Value =
+            toml::from_str(&fs::read_to_string(root.join(path)).unwrap()).unwrap();
+        let package = lock["package"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|package| package["name"].as_str() == Some("aiofiles"))
+            .unwrap();
+        if source_override {
+            package["source"] = toml::Value::Table(toml::map::Map::from_iter([(
+                "url".into(),
+                toml::Value::String("https://example.org/aiofiles.whl".into()),
+            )]));
+        } else {
+            package["version"] = toml::Value::String("99.0.0".into());
+        }
+        write(&root, path, &toml::to_string(&lock).unwrap());
+        let error = check_fixture(&root).unwrap_err().to_string();
+        assert!(
+            if source_override {
+                error.contains("pinned PyPI registry")
+            } else {
+                error.contains("locked package set differs")
+            },
+            "{error}"
+        );
+    }
+}
+
+#[test]
+fn agentx_admission_keeps_python_source_and_command_occurrences_closed() {
+    let (_temporary, root) = agentx_fixture();
+    write(&root, "skippy/evals/agentx/local-harness.py", "pass\n");
+    assert!(
+        check_fixture(&root)
+            .unwrap_err()
+            .to_string()
+            .contains("repository Python source is forbidden")
+    );
+    fs::remove_file(root.join("skippy/evals/agentx/local-harness.py")).unwrap();
+    let setup = fs::read_to_string(root.join("just/skippy.just")).unwrap();
+    write(
+        &root,
+        "just/skippy.just",
+        &setup.replace("--no-python-downloads ", ""),
+    );
+    assert!(
+        check_fixture(&root)
+            .unwrap_err()
+            .to_string()
+            .contains("unreviewed Python tooling invocation")
+    );
+    let (_temporary, root) = agentx_fixture();
+    let setup = fs::read_to_string(root.join("just/skippy.just")).unwrap();
+    write(
+        &root,
+        "just/skippy.just",
+        &format!(
+            "{setup}\nextra-client-install:\n    uv sync --locked --no-managed-python --no-python-downloads --python 3.12 --project \"$AGENTX_PROJECT\"\n"
+        ),
+    );
+    assert!(
+        check_fixture(&root)
+            .unwrap_err()
+            .to_string()
+            .contains("exceeds its reviewed occurrence count")
+    );
+}
+
+#[test]
+fn url_wheel_admission_must_pin_a_direct_dependency_and_a_valid_digest() {
+    for field in ["name", "sha256", "url"] {
+        let (_temporary, root) = agentx_fixture();
+        let mut policy: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(root.join(POLICY_PATH)).unwrap()).unwrap();
+        policy["dependency_inputs"][1]["url_packages"][0][field] = serde_json::json!(match field {
+            "name" => "aiofiles",
+            "sha256" => "not-a-sha256",
+            "url" => "http://example.org/unpinned.whl",
+            _ => unreachable!(),
+        });
+        write(&root, POLICY_PATH, &serde_json::to_string(&policy).unwrap());
+        assert!(
+            check_fixture(&root)
+                .unwrap_err()
+                .to_string()
+                .contains("exact direct wheel"),
+            "{field}"
+        );
+    }
+}
+
 #[test]
 fn locked_project_must_match_its_consumed_assignment() {
     let (_temporary, root) = fixture();

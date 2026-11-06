@@ -10,7 +10,11 @@ skippy-kv-jy-plan input output:
 
 # Install only the locked upstream client environment; final workers stay offline.
 agentx-setup:
-    uv sync --locked --managed-python --python 3.12 --project skippy/evals/agentx
+    #!/usr/bin/env bash
+    set -euo pipefail
+    TRUSTED_ROOT="{{justfile_directory()}}"
+    AGENTX_PROJECT="$TRUSTED_ROOT/skippy/evals/agentx"
+    uv sync --locked --no-managed-python --no-python-downloads --python 3.12 --project "$AGENTX_PROJECT"
 
 agentx-comparison input output:
     @just automation-run automation agentx comparison --input "{{ input }}" --output "{{ output }}"
