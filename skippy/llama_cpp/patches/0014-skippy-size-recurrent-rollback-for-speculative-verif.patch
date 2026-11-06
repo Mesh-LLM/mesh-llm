@@ -23,7 +23,7 @@ backend-sampling output limit is restored.
  5 files changed, 19 insertions(+), 5 deletions(-)
 
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
-index c930d9c3b..856c98f97 100644
+index bc4da9a07..b570682ef 100644
 --- a/include/skippy/runtime.h
 +++ b/include/skippy/runtime.h
 @@ -123,6 +123,10 @@ struct skippy_runtime_config {
@@ -56,10 +56,10 @@ index c9a0a226b..3257d7f2c 100644
                  }
              }
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
-index 4082fa198..5bfd47c93 100644
+index 7305cc529..db5a69e38 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
-@@ -734,7 +734,13 @@ enum skippy_status skippy_finish_model_open(
+@@ -733,7 +733,13 @@ enum skippy_status skippy_finish_model_open(
      }
      if (llm_arch_is_recurrent(model->arch) || llm_arch_is_hybrid(model->arch)) {
          params.n_seq_max = std::max<uint32_t>(params.n_seq_max, std::max<uint32_t>(2, stage_model->lane_count * 2));
@@ -90,10 +90,10 @@ index 6a1352271..b688fce73 100644
      session->sampling_config_valid = false;
      session->chat_sampling_metadata.clear();
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index 0653347a7..40110a816 100644
+index 36c972d92..4741f55cb 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
-@@ -387,6 +387,7 @@ enum skippy_status skippy_session_reset(
+@@ -390,6 +390,7 @@ enum skippy_status skippy_session_reset(
              skippy_env_enabled("SKIPPY_DETACH_SAMPLER_ON_RESET");
      if (detach_sampler_on_reset || !skippy_reset_reusable_sampling(session)) {
          skippy_clear_chat_sampling(session);

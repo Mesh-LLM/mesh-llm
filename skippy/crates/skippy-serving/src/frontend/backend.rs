@@ -36,7 +36,6 @@ use crate::frontend::generation::completion_response_from_generated_text;
 use crate::frontend::generation::ensure_requested_model;
 use crate::frontend::generation::generation_event_to_completion_chunk;
 use crate::frontend::generation::generation_event_to_inference_event;
-use crate::frontend::generation::generation_predicted_wait_error;
 use crate::frontend::generation::generation_queue_timeout_error;
 use crate::frontend::generation::generation_response_from_generated_text;
 use crate::frontend::generation::template_exposes_reasoning;

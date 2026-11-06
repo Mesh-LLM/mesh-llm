@@ -30,6 +30,7 @@ mod exact_state;
 pub(crate) mod scheduling;
 mod snapshot_validation;
 pub(crate) use exact_state::CaptureAdmission;
+pub(crate) use exact_state::PreparedExactStateRestore;
 mod identity;
 mod l2_serving;
 pub mod lifecycle;

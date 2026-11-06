@@ -42,5 +42,5 @@ index 98dfc4b65..f19c533b9 100644
          // generation prompt, so the output starts at " to=".
          tst.test(" to=special_function<|message|>" + call_markup)
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

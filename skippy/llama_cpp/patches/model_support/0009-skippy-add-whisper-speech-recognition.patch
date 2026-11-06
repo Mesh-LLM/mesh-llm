@@ -1,4 +1,4 @@
-From d96bec3062e9d6b566576d2e0a11ccc00b24abf6 Mon Sep 17 00:00:00 2001
+From 43dc48235a7b30a1dba4d59ad3cb90928df2aa00 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 22 Oct 2026 17:15:05 +1100
 Subject: [PATCH] skippy: add Whisper speech recognition
@@ -220,7 +220,7 @@ index 000000000..99d4a1094
 +
 +#endif // SKIPPY_ASR_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 54c87b6f2..80710eb3b 100644
+index 54c87b6f2..4214d0b89 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
@@ -228,7 +228,7 @@ index 54c87b6f2..80710eb3b 100644
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
 -#define SKIPPY_ABI_VERSION_PATCH 73
-+#define SKIPPY_ABI_VERSION_PATCH 75
++#define SKIPPY_ABI_VERSION_PATCH 74
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -242,7 +242,7 @@ index 54c87b6f2..80710eb3b 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index eab1c3a46..ea0cdd178 100644
+index f43b87266..deb634e8a 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -101,6 +101,7 @@ add_library(llama
@@ -264,7 +264,7 @@ index eab1c3a46..ea0cdd178 100644
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  
  target_include_directories(llama PRIVATE . ../common ../tools/laya ${CMAKE_CURRENT_BINARY_DIR})
-@@ -170,6 +175,38 @@ if (LLAMA_LLGUIDANCE)
+@@ -173,6 +178,38 @@ if (LLAMA_LLGUIDANCE)
  endif()
  
  

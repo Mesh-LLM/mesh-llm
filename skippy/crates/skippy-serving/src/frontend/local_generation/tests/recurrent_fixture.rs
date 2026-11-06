@@ -162,7 +162,7 @@ pub(super) fn recurrent_test_backend_with_lanes(
         telemetry,
         model_id: backend_model_id.to_string(),
         default_max_tokens,
-        request_defaults: EmbeddedOpenAiRequestDefaults::default(),
+        request_defaults: EmbeddedOpenAiRequestDefaults::default().into(),
         thinking: None,
         ctx_size,
         mode: InferenceBackendMode::LocalRuntime,

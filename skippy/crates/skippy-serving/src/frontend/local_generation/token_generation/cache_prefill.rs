@@ -86,7 +86,6 @@ impl StageOpenAiBackend {
         let scheduler_backend = self.clone();
         let scheduler_session_id = session_id.to_string();
         let scheduler_ids = request.ids.clone();
-        let scheduler_lookup_identities = Arc::clone(&lookup_identities);
         let scheduler_prefill_tokens = Arc::clone(&prefill_tokens);
         let record_prefill_tokens = Arc::clone(&prefill_tokens);
         let mut scheduler_cache_stats = std::mem::take(cache_stats);
@@ -94,6 +93,18 @@ impl StageOpenAiBackend {
             self.generation_admission_timeout,
             request.prompt_token_ids.len(),
         );
+        // Disk metadata probes must not occupy the iteration worker or runtime.
+        // Keep the original deadline: time spent here still consumes its budget.
+        if request
+            .cancellation
+            .is_some_and(skippy_inference_api::CancellationToken::is_cancelled)
+        {
+            return Err(InferenceError::backend("request cancelled"));
+        }
+        let prepared_restore = self
+            .kv
+            .as_ref()
+            .map(|kv| kv.prepare_exact_state_restore(lookup_identities.as_ref(), false));
         let outcome = self.iteration_scheduler.execute_cache_aware_runtime_timed(
             "feature-kv-restore-prefill-record",
             crate::frontend::iteration_scheduler::cache_runtime::CacheAwareRuntimeRequest {
@@ -112,7 +123,7 @@ impl StageOpenAiBackend {
                     &scheduler_ids,
                     &scheduler_session_id,
                     scheduler_prefill_tokens.as_ref(),
-                    scheduler_lookup_identities.as_ref(),
+                    prepared_restore.as_ref(),
                     kv_identity_ms,
                     recurrent_cache_prefix_token_ids.as_deref(),
                     max_tokens,
@@ -428,7 +439,7 @@ impl StageOpenAiBackend {
         ids: &InferenceGenerationIds,
         session_id: &str,
         prefill_tokens: &[i32],
-        lookup_identities: &[PrefillKvIdentity],
+        prepared_restore: Option<&crate::kv_integration::PreparedExactStateRestore>,
         kv_identity_ms: f64,
         recurrent_cache_prefix_token_ids: Option<&[i32]>,
         max_tokens: u32,
@@ -446,7 +457,9 @@ impl StageOpenAiBackend {
                     session_id,
                     ids,
                     prefill_tokens,
-                    lookup_identities,
+                    prepared_restore.ok_or_else(|| {
+                        InferenceError::backend("missing prepared exact-state lookup")
+                    })?,
                     kv_identity_ms,
                     cache_stats,
                 )

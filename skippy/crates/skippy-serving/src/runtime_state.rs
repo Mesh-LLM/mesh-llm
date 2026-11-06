@@ -17,9 +17,11 @@ use skippy_runtime::{
     WorkloadInfo, parse_cache_type,
 };
 
+mod context_capacity;
 mod expert_placement;
 mod frame_operations;
 pub(crate) use frame_operations::slice_activation_frame;
+pub(crate) mod lane_admission;
 mod lane_lifecycle;
 pub mod lifecycle;
 pub(crate) mod model_content;

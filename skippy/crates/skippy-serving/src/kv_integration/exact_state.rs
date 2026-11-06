@@ -16,6 +16,7 @@ const MAX_PREFIX_PROBES: usize = 64;
 
 mod resident_preference;
 use resident_preference::DurableRestoreLookup;
+pub(crate) use resident_preference::PreparedExactStateRestore;
 mod restore;
 mod snapshot_headroom;
 
@@ -182,14 +183,13 @@ impl KvStageIntegration {
         &self,
         runtime: &mut RuntimeState,
         session_id: &str,
-        identities: &[PrefillKvIdentity],
+        prepared: &PreparedExactStateRestore,
         cold_prefill_cost: Option<f64>,
-        shared_durable_fallback: bool,
     ) -> Result<Option<ExactStateRestore>> {
         if !self.should_lookup() || self.exact_state_payload().is_none() {
             return Ok(None);
         }
-        for candidate in self.ordered_restore_candidates(identities, shared_durable_fallback) {
+        for candidate in self.ordered_restore_candidates(prepared) {
             let identity = candidate.identity;
             let lookup_started = Instant::now();
             let (lookup, entries) = {
@@ -209,6 +209,9 @@ impl KvStageIntegration {
                 lookup.as_ref().map(|matched| matched.stored_tokens.len()),
             );
             let Some(lookup) = lookup else {
+                let Some(location) = candidate.location else {
+                    continue;
+                };
                 // The durable tiers may still hold this prefix.
                 // Runs inside the restore transaction, so a failed import
                 // rolls the lane back exactly as a radix restore would.
@@ -218,8 +221,7 @@ impl KvStageIntegration {
                     identity,
                     DurableRestoreLookup {
                         started: lookup_started,
-                        location: candidate.location.as_ref(),
-                        shared_fallback: shared_durable_fallback,
+                        location,
                     },
                     cold_prefill_cost,
                 )? {
@@ -698,26 +700,11 @@ impl KvStageIntegration {
         // load on the located entry's manifest key: same-length queries for
         // different prefixes never suppress each other, and different-length
         // queries resolving to one entry never load it twice.
-        let durable_token_ids = if lookup.shared_fallback {
-            self.durable_exact_lookup_token_ids(&identity.token_ids)
-        } else {
-            &identity.token_ids
-        };
-        let location = if let Some(location) = lookup.location {
-            location.clone()
-        } else {
-            match l3.locate_longest(&identity.namespace, durable_token_ids, MAX_PREFIX_PROBES) {
-                Ok(Some(location)) => location,
-                // Nothing stored, or a corrupt / identity-mismatched entry.
-                // Either way the miss path is the safe one; the tier has
-                // recorded the reason for the status surface.
-                Ok(None) | Err(_) => return Ok(None),
-            }
-        };
+        let location = lookup.location;
         // L3 remains the authority for L2: locate and validate the current
         // manifest identity before a host-RAM mirror may serve the request.
         if let Some(restored) =
-            self.restore_from_l2(runtime, session_id, identity, &location, lookup.started)?
+            self.restore_from_l2(runtime, session_id, identity, location, lookup.started)?
         {
             return Ok(Some(restored));
         }
@@ -725,7 +712,7 @@ impl KvStageIntegration {
         // numerical states. A fill claim must not: one state's fill cannot
         // warm another state's radix namespace, even when their payload bytes
         // happen to be identical.
-        let fill_claim = l3_fill_claim_key(l3, &location);
+        let fill_claim = l3_fill_claim_key(l3, location);
         {
             let mut inflight = self
                 .inflight_fills
@@ -741,7 +728,7 @@ impl KvStageIntegration {
             identity,
             lookup.started,
             l3,
-            &location,
+            location,
             cold_prefill_cost,
         );
         // On success the claim travels with the re-warm record and the worker

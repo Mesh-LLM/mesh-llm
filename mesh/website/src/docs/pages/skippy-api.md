@@ -9,7 +9,7 @@ description: Generated reference for the capability-oriented Skippy C ABI.
 
 This reference is generated from the patched llama.cpp public headers. It documents the native C ABI used by Skippy's Rust FFI layer and staged runtime. The ABI is experimental and versioned for lockstep native/Rust builds.
 
-Current generated surface: **21 headers** and **131 exported functions**.
+Current generated surface: **21 headers** and **134 exported functions**.
 
 ## Quick navigation
 
@@ -199,7 +199,7 @@ Current generated surface: **21 headers** and **131 exported functions**.
       </div>
     </section>
     <section class="skippy-api-index__group">
-      <a class="skippy-api-index__group-title" href="#skippy-header-state-h"><code>state.h</code><span>17 functions</span></a>
+      <a class="skippy-api-index__group-title" href="#skippy-header-state-h"><code>state.h</code><span>20 functions</span></a>
       <div class="skippy-api-index__functions">
         <a href="#skippy-fn-skippy-model-memory-cache-capabilities"><code>skippy_model_memory_cache_capabilities</code></a>
         <a href="#skippy-fn-skippy-export-state"><code>skippy_export_state</code></a>

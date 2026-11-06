@@ -29,6 +29,7 @@ use crate::binary_transport::binary_kv::add_binary_record_stats;
 use crate::binary_transport::binary_kv::emit_binary_proactive_eviction;
 use crate::binary_transport::binary_kv::maybe_lookup_binary_prefill;
 use crate::binary_transport::binary_kv::maybe_record_binary_full_prefill;
+use crate::binary_transport::binary_kv::prepare_binary_prefill;
 use crate::binary_transport::direct_return;
 use crate::binary_transport::direct_return::PredictionReturnSinks;
 use crate::binary_transport::forwarded_stage_message_timed;
@@ -452,7 +453,14 @@ fn handle_binary_connection_messages(
             && !token_ids.is_empty();
         let lookup_result = if lookup_needed {
             let lookup_config = config.clone();
-            let lookup_kv = kv.cloned();
+            let prepared = prepare_binary_prefill(
+                config,
+                kv,
+                &session_key,
+                &message,
+                &token_ids,
+                output_activation_width,
+            );
             let lookup_telemetry = telemetry.clone();
             let lookup_session_key = session_key.clone();
             let lookup_token_ids = token_ids.clone();
@@ -470,12 +478,11 @@ fn handle_binary_connection_messages(
                     let lookup_result = maybe_lookup_binary_prefill(
                         &lookup_config,
                         runtime,
-                        lookup_kv.as_ref(),
+                        prepared,
                         &lookup_telemetry,
                         &lookup_session_key,
                         &message,
                         &lookup_token_ids,
-                        output_activation_width,
                     );
                     Ok((message, auto_align, lookup_result))
                 })
