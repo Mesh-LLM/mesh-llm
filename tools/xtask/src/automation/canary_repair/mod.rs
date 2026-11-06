@@ -95,12 +95,8 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         return Err("invalid repair deadline or overlapping output directories".into());
     }
     for output in [&input.state, &input.build] {
-        if input.root.starts_with(output)
-            || input.controller.starts_with(output)
-            || output.starts_with(&input.root)
-            || output.starts_with(&input.controller)
-        {
-            return Err("repair outputs must be outside both checkouts".into());
+        if input.root.starts_with(output) || input.controller.starts_with(output) {
+            return Err("repair outputs cannot contain a checkout".into());
         }
     }
     let steps = plan::steps(&input);
