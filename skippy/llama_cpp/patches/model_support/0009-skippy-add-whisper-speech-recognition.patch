@@ -241,7 +241,7 @@ diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index eab1c3a46..ea0cdd178 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -97,6 +97,7 @@ add_library(llama
+@@ -101,6 +101,7 @@ add_library(llama
              skippy/system_one.cpp
              skippy/laya.cpp
              ../tools/laya/laya.cpp
@@ -249,7 +249,7 @@ index eab1c3a46..ea0cdd178 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -123,6 +124,10 @@ set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h .
+@@ -127,6 +128,10 @@ set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h .
  set_source_files_properties(${LLAMA_MODELS_SOURCES}
      PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
  

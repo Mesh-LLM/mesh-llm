@@ -305,6 +305,21 @@ fn server(
         super::prepared_launch::arguments(&mut args, engine, tools);
     }
     let mut spec = command::spec(&input.root, binary.to_str().ok_or("server path")?, &args)?;
+    if engine == "llama"
+        && let Some(tools) = input.tools.as_ref()
+    {
+        // ggml's dynamic backend discovery searches the executable directory
+        // and cwd. Both must belong to the tree whose bytes were pinned.
+        spec.executable = super::standard_runtime::admitted_executable(
+            &spec.executable,
+            &tools.standard_runtime.path,
+        )?;
+        spec.cwd = spec
+            .executable
+            .parent()
+            .ok_or("baseline executable parent missing")?
+            .into();
+    }
     if engine == "skippy" {
         spec.arguments.extend([
             process::Value::Public("--runtime-bundle".into()),
@@ -456,7 +471,14 @@ pub(super) fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynRe
         &input.output.join("memory-summary.json"),
         &serde_json::to_value(memory.finish()?)?,
     )?;
-    let clean = report.recovery_success()
+    let clean = report.members.iter().any(|member| {
+        member.member == MemberId::Seed
+            && member
+                .process
+                .status
+                .as_ref()
+                .is_some_and(expected_server_shutdown)
+    }) && report.recovery_success()
         && report.members.len() == 2
         && report.members.iter().all(|member| {
             member.process.cleanup.complete
@@ -495,6 +517,21 @@ pub(super) fn execute(input: &Prepared, engine: &str, concurrency: u32) -> DynRe
         return Err(format!("{engine} c{concurrency} failed; partial artifacts retained").into());
     }
     Ok(())
+}
+// The servers receive SIGTERM after the worker finishes. Skippy can handle it
+// and exit zero; an external llama can retain SIGTERM as its wait status.
+// Explicit nonzero exits and other signals are shutdown failures.
+fn expected_server_shutdown(status: &std::process::ExitStatus) -> bool {
+    if status.success() {
+        return true;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal() == Some(libc::SIGTERM)
+    }
+    #[cfg(not(unix))]
+    false
 }
 fn launch_identity(
     input: &Prepared,
@@ -661,6 +698,62 @@ impl Coordinator for Owner {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pinned_llama_launch_cannot_discover_plugins_in_the_workspace() {
+        let root = tempfile::tempdir().unwrap();
+        let workspace = root.path().join("workspace");
+        let runtime = root.path().join("standard");
+        std::fs::create_dir(&workspace).unwrap();
+        std::fs::create_dir(&runtime).unwrap();
+        std::fs::write(
+            workspace.join("libggml-cpu.so"),
+            b"untrusted workspace plugin",
+        )
+        .unwrap();
+        let binary = runtime.join("llama-server");
+        std::fs::write(&binary, b"pinned executable fixture").unwrap();
+        let mut tools: super::super::prepared_tools::Tools = serde_json::from_str(include_str!(
+            "../../../../../skippy/evals/agentx/tools.example.json"
+        ))
+        .unwrap();
+        tools.llama.path = binary.clone();
+        tools.standard_runtime.path = runtime.clone();
+        let models: Vec<super::super::Model> = serde_json::from_str(include_str!(
+            "../../../../../skippy/evals/kv-validation/models.json"
+        ))
+        .unwrap();
+        let input = Prepared {
+            tools: Some(tools),
+            root: workspace,
+            output: root.path().join("output"),
+            model: models[0].clone(),
+            weights: root.path().join("weights.gguf"),
+            dataset: root.path().join("traces"),
+            profile: Profile::Comparison,
+        };
+        let launch = server(&input, "llama", 8080, 1).unwrap();
+        assert_eq!(launch.executable, binary.canonicalize().unwrap());
+        assert_eq!(launch.cwd, runtime.canonicalize().unwrap());
+        for key in ["GGML_BACKEND_PATH", "LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"] {
+            assert!(!launch.environment.contains_key(std::ffi::OsStr::new(key)));
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn shutdown_accepts_zero_or_expected_sigterm_and_rejects_failures() {
+        use std::os::unix::process::ExitStatusExt;
+        for (raw, expected) in [
+            (0, true),
+            (libc::SIGTERM, true),
+            (256, false),
+            (libc::SIGKILL, false),
+        ] {
+            assert_eq!(
+                expected_server_shutdown(&std::process::ExitStatus::from_raw(raw)),
+                expected
+            );
+        }
+    }
     #[test]
     fn skippy_diagnostic_overrides_are_explicit_and_positive() {
         assert!(skippy_diagnostic_arguments(None).is_empty());

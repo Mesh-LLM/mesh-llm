@@ -39,6 +39,9 @@
       "release-runtime-build"
     ],
     "just/skippy.just": [
+      "agentx-comparison",
+      "agentx-mlflow-export",
+      "agentx-setup",
       "bench-corpus",
       "competitive-benchmark-build",
       "competitive-inputs-helper-build",
@@ -72,6 +75,9 @@
       "skippy-cli-release-build",
       "skippy-ffi-bindgen-check",
       "skippy-ffi-bindgen-regen",
+      "skippy-kv-jy-plan",
+      "skippy-kv-prepare",
+      "skippy-kv-validate",
       "skippy-layer-package-cache",
       "skippy-layer-package-fetch",
       "skippy-layer-package-inspect",

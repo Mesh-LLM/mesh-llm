@@ -98,6 +98,13 @@ impl Tree {
                 {
                     return Err("prepared trees require regular files or regular-file links".into());
                 }
+                if entry
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "pth")
+                {
+                    verify_python_path_file(&entry.path(), &root)?;
+                }
             }
         }
         if count == 0 {
@@ -120,6 +127,29 @@ impl Tree {
         }
         Ok(hex::encode(hash.finalize()))
     }
+}
+
+fn verify_python_path_file(path: &Path, root: &Path) -> DynResult<()> {
+    let bytes = crate::automation::receipt_files::bounded(&path.canonicalize()?, 1024 * 1024)?;
+    for line in std::str::from_utf8(&bytes)?.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // .pth import statements execute arbitrary code before AgentX starts;
+        // a tree hash cannot establish that they preserve module ownership.
+        if line.starts_with("import ") || line.starts_with("import\t") {
+            return Err("prepared environment cannot contain executable .pth imports".into());
+        }
+        let target = path
+            .parent()
+            .ok_or(".pth parent missing")?
+            .join(line)
+            .canonicalize()?;
+        if !target.starts_with(root) {
+            return Err("prepared .pth path escapes its environment".into());
+        }
+    }
+    Ok(())
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -194,6 +224,7 @@ impl Tools {
         ] {
             tree.verify()?;
         }
+        super::standard_runtime::verify(&self.llama.path, &self.standard_runtime.path)?;
         let lock = std::fs::read(root.join("skippy/evals/agentx/uv.lock"))?;
         if super::inputs::digest(&lock) != self.client_lock.sha256 {
             return Err("client lock differs from the owned external AgentX lock".into());
@@ -205,16 +236,22 @@ impl Tools {
         }
         let manifest: serde_json::Value =
             serde_json::from_slice(&std::fs::read(self.runtime.path.join("manifest.json"))?)?;
-        self.validate_manifest(&manifest)
+        let ffi = std::fs::read(root.join("skippy/crates/skippy-ffi/src/lib.rs"))?;
+        let abi = crate::native_policy::package_version::abi_version(&ffi)?.to_string();
+        self.validate_manifest(&manifest, &abi)
     }
-    pub(super) fn validate_manifest(&self, manifest: &serde_json::Value) -> DynResult<()> {
+    pub(super) fn validate_manifest(
+        &self,
+        manifest: &serde_json::Value,
+        abi: &str,
+    ) -> DynResult<()> {
         if manifest["runtime"]["backend"]["kind"] != self.backend.name()
             || manifest["build"]["llama_patched_sha"] != self.native_source_commit
             || manifest["build"]["llama_patch_digest"] != self.native_patch_digest
             || manifest["build"]["llama_upstream_sha"] != self.standard_upstream
-            || manifest["runtime"]["skippy_abi"] != "0.1.76"
+            || manifest["runtime"]["skippy_abi"] != abi
         {
-            return Err("runtime must be exact matching ABI76 backend/native leaf".into());
+            return Err("runtime must match the owning FFI ABI, backend and native leaf".into());
         }
         Ok(())
     }

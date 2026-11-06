@@ -231,9 +231,25 @@ impl StageOpenAiBackend {
         let base = self.local_kv_message_base(session_id, ids);
         let identity = kv.prefill_identity(&self.config, &base, 0, checkpoint_tokens);
         if kv.records_resident_prefixes() {
-            let recorded = kv
-                .record_resident_prefix(runtime, session_id, &identity, checkpoint_tokens)
-                .is_ok_and(|record| record.is_some());
+            let recorded = match kv.record_resident_prefix(
+                runtime,
+                session_id,
+                &identity,
+                checkpoint_tokens,
+            ) {
+                Ok(record) => record.is_some(),
+                Err(error) => {
+                    let mut attrs = self.openai_attrs(ids);
+                    attrs.insert(
+                        "skippy.kv.decision".to_string(),
+                        json!(format!("{decision_prefix}_error")),
+                    );
+                    attrs.insert("skippy.kv.error".to_string(), json!(format!("{error:#}")));
+                    self.telemetry
+                        .emit("stage.openai_kv_record_decision", attrs);
+                    false
+                }
+            };
             #[cfg(test)]
             {
                 if recorded && decision_prefix == "post_decode_checkpoint" {

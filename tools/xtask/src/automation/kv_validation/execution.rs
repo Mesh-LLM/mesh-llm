@@ -12,11 +12,11 @@ use serde_json::json;
 use std::{
     collections::BTreeMap,
     ffi::OsString,
-    path::Path,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 #[path = "server.rs"]
-mod server;
+pub(super) mod server;
 
 pub(super) fn environment(extra: &[(&str, OsString)]) -> BTreeMap<OsString, Arg> {
     let mut env: BTreeMap<_, _> = [
@@ -105,22 +105,36 @@ pub(super) fn run(input: Cell, output: &Path) -> DynResult<()> {
     let interrupt = crate::automation::command_interrupt::Interrupt::install()?;
     let deadline = Instant::now() + Duration::from_secs(input.execution_seconds);
     let result = execute(&input, output, deadline, &interrupt.cancellation());
-    let finish = interrupt.finish();
-    let passed = result.is_ok() && finish.is_ok() && Instant::now() < deadline;
+    let finish = interrupt.finish().map_err(Into::into);
+    finalize(&input, output, deadline, result, finish, archive)
+}
+
+pub(super) fn finalize(
+    input: &Cell,
+    output: &Path,
+    deadline: Instant,
+    result: DynResult<()>,
+    finish: DynResult<()>,
+    archive_evidence: impl FnOnce(&Path) -> DynResult<()>,
+) -> DynResult<()> {
+    // The final result is deliberately outside the archive: only after archive
+    // traversal, compression and hashing finish can the deadline be evaluated.
+    let archived = archive_evidence(output);
+    let passed = result.is_ok() && finish.is_ok() && archived.is_ok() && Instant::now() < deadline;
     publish(
         &output.join("result.json"),
         &json!({"schema_version":1,"status":if passed {"passed"} else {"failed"},"model_key":input.model_key,"request":input,"failure":result.as_ref().err().map(ToString::to_string),"interrupt_failure":finish.as_ref().err().map(ToString::to_string),"scope":"KVdtype_dispatch_generic_c1_cache_plus_recurrent_runtime_L3_restart_not_long_c4_process_restart_or_performance"}),
     )?;
-    archive(output)?;
     finish?;
     result?;
+    archived?;
     if !passed {
         return Err("KV validation deadline exceeded".into());
     }
     Ok(())
 }
 pub(super) fn archive(output: &Path) -> DynResult<()> {
-    let path = output.with_extension("tar.gz");
+    let path = sibling(output, ".tar.gz")?;
     let archive_name = path
         .file_name()
         .and_then(|name| name.to_str())
@@ -151,9 +165,17 @@ pub(super) fn archive(output: &Path) -> DynResult<()> {
     tar.into_inner()?.finish()?;
     let sha256 = crate::product::digest::file_sha256(&path).map_err(|e| e.error)?;
     publish(
-        &output.with_extension("archive.json"),
-        &json!({"archive":archive_name,"sha256":sha256,"symlinks":"excluded; selected runtime identity retained in JSON"}),
+        &sibling(output, ".archive.json")?,
+        &json!({"archive":archive_name,"sha256":sha256,"final_result":"result.json is published after archiving as a separate sidecar","symlinks":"excluded; selected runtime identity retained in JSON"}),
     )
+}
+fn sibling(output: &Path, suffix: &str) -> DynResult<PathBuf> {
+    let mut name = output
+        .file_name()
+        .ok_or("KV output requires a directory name")?
+        .to_os_string();
+    name.push(suffix);
+    Ok(output.with_file_name(name))
 }
 fn remaining(deadline: Instant) -> DynResult<Duration> {
     deadline

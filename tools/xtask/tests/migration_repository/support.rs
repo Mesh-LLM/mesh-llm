@@ -80,9 +80,18 @@ impl Invocation<'_> {
         }
         let mut child = command.spawn()?;
         let mut stdin = child.stdin.take().ok_or("missing stdin pipe")?;
-        stdin.write_all(self.stdin.unwrap_or_default().as_bytes())?;
+        let written = stdin.write_all(self.stdin.unwrap_or_default().as_bytes());
         drop(stdin);
-        Ok(child.wait_with_output()?)
+        let output = child.wait_with_output()?;
+        if let Err(error) = written {
+            // Invalid source paths can be rejected before metadata is read.
+            // Reap the child and let callers check its actual failure status
+            // and diagnostic instead of replacing that evidence with EPIPE.
+            if error.kind() != std::io::ErrorKind::BrokenPipe || output.status.success() {
+                return Err(error.into());
+            }
+        }
+        Ok(output)
     }
 }
 

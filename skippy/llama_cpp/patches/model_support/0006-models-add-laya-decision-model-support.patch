@@ -267,7 +267,7 @@ diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index d3c86694f..db01bc2f5 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -95,6 +95,8 @@ add_library(llama
+@@ -99,6 +99,8 @@ add_library(llama
              skippy/tokenization.cpp
              skippy/events.cpp
              skippy/system_one.cpp
@@ -276,7 +276,7 @@ index d3c86694f..db01bc2f5 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -123,7 +125,7 @@ set_source_files_properties(${LLAMA_MODELS_SOURCES}
+@@ -127,7 +129,7 @@ set_source_files_properties(${LLAMA_MODELS_SOURCES}
  
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  

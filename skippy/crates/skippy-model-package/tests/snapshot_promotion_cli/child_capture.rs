@@ -94,7 +94,29 @@ fn fixture(mode: &str) -> Child {
 
 #[test]
 fn fixture_child() {
-    match std::env::var(FIXTURE_MODE).as_deref() {
+    let mode = std::env::var(FIXTURE_MODE);
+    if let Ok(mode) = &mode {
+        if mode == "prefix" {
+            // Exit before libtest appends its test result or summary. The parent
+            // measures the already-written harness prefix rather than assuming
+            // a particular compiler's libtest output format.
+            std::io::stdout().flush().unwrap();
+            std::process::exit(0);
+        }
+        if let Some(boundary) = mode.strip_prefix("boundary:") {
+            let (total, prefix) = boundary.split_once(':').unwrap();
+            let total = total.parse::<usize>().unwrap();
+            let prefix = prefix.parse::<usize>().unwrap();
+            std::io::stdout()
+                .write_all(&vec![b'o'; total - prefix])
+                .unwrap();
+            std::io::stderr().write_all(&vec![b'e'; total]).unwrap();
+            std::io::stdout().flush().unwrap();
+            std::io::stderr().flush().unwrap();
+            std::process::exit(0);
+        }
+    }
+    match mode.as_deref() {
         Ok("large") => {
             std::io::stdout()
                 .write_all(&vec![b'o'; 1024 * 1024])
@@ -119,6 +141,31 @@ fn drains_both_streams_before_waiting_for_exit() {
             .any(|bytes| bytes.iter().all(|byte| *byte == b'o'))
     );
     assert_eq!(output.stderr, vec![b'e'; 1024 * 1024]);
+}
+
+#[test]
+fn exact_stream_limit_is_accepted_and_one_extra_byte_is_rejected_after_draining() {
+    let prefix = finish(fixture("prefix"), Duration::from_secs(10), "harness prefix");
+    assert!(prefix.status.success());
+    assert!(prefix.stderr.is_empty());
+    assert!(prefix.stdout.len() < STREAM_LIMIT);
+    for total in [STREAM_LIMIT, STREAM_LIMIT + 1] {
+        let mode = format!("boundary:{total}:{}", prefix.stdout.len());
+        let captured = capture(fixture(&mode), Duration::from_secs(10));
+        // Both pipes must drain fully for the child to complete both writes and
+        // exit; stopping at the retained limit would leave stderr blocked.
+        assert!(!captured.timed_out);
+        assert!(captured.output.status.success());
+        assert_eq!(captured.output_exceeded, total > STREAM_LIMIT);
+        assert_eq!(captured.output.stdout.len(), STREAM_LIMIT);
+        assert!(captured.output.stdout.starts_with(&prefix.stdout));
+        assert!(
+            captured.output.stdout[prefix.stdout.len()..]
+                .iter()
+                .all(|byte| *byte == b'o')
+        );
+        assert_eq!(captured.output.stderr, vec![b'e'; STREAM_LIMIT]);
+    }
 }
 
 #[test]

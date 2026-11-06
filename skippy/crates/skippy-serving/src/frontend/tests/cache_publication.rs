@@ -49,14 +49,8 @@ async fn loaded_runtime_selects_cache_and_reuses_immediate_repeat() -> Result<()
     let model = config.model_id.clone();
     let mut backend = support::local_openai_backend(config.clone(), model.clone())?;
     let kv = Arc::new(
-        KvStageIntegration::from_loaded_model_with_l3_manager(
-            &config,
-            loaded_model_state_kind(Some(&backend.runtime)),
-            loaded_memory_cache_capabilities(Some(&backend.runtime)),
-            None,
-            None,
-        )?
-        .context("fixture must enable cache recording")?,
+        KvStageIntegration::from_runtime_with_l3_manager(&config, &backend.runtime, None, None)?
+            .context("fixture must enable cache recording")?,
     );
     assert_eq!(
         kv.payload,

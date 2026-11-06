@@ -105,7 +105,7 @@ fn complete(
         .context("chat completion has no prompt token count")?;
     let cached_tokens = body["usage"]["prompt_tokens_details"]["cached_tokens"]
         .as_u64()
-        .unwrap_or(0);
+        .context("chat completion has no unsigned cached token count")?;
     Ok(Completion {
         content,
         prompt_tokens,

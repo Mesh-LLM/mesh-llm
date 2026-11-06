@@ -2,6 +2,54 @@
 use super::*;
 use crate::frontend::generation::ADMISSION_STARVATION_BOUND_TURNS;
 
+#[tokio::test]
+async fn http_admission_waits_for_binary_work_on_the_same_runtime() {
+    let backend = super::hooks_test_backend(None);
+    let lanes = backend.runtime.lock().unwrap().lane_admission();
+    let binary = lanes.acquire_blocking(|| false).unwrap();
+    let ids = trusted_ids("http-waiting-for-binary");
+    let cancellation = skippy_inference_api::CancellationToken::new();
+    let mut waiting = Box::pin(backend.acquire_generation_admission(
+        &ids,
+        &cancellation,
+        GenerationAdmissionWork::default(),
+        GenerationAdmissionScheduling::default(),
+    ));
+    assert!(futures_util::poll!(&mut waiting).is_pending());
+    assert!(
+        backend.runtime.try_lock().is_ok(),
+        "capacity wait must not hold the runtime lock"
+    );
+    drop(binary);
+    let admitted = tokio::time::timeout(Duration::from_secs(5), waiting)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(backend.generation_limit.available_permits(), 0);
+    drop(admitted);
+    assert_eq!(backend.generation_limit.available_permits(), 1);
+}
+
+#[tokio::test]
+async fn cancelled_http_runtime_lane_wait_releases_frontend_reservations() {
+    let backend = super::hooks_test_backend(None);
+    let lanes = backend.runtime.lock().unwrap().lane_admission();
+    let _binary = lanes.acquire_blocking(|| false).unwrap();
+    let ids = trusted_ids("cancelled-http-runtime-wait");
+    let cancellation = skippy_inference_api::CancellationToken::new();
+    let mut waiting = Box::pin(backend.acquire_generation_admission(
+        &ids,
+        &cancellation,
+        GenerationAdmissionWork::default(),
+        GenerationAdmissionScheduling::default(),
+    ));
+    assert!(futures_util::poll!(&mut waiting).is_pending());
+    cancellation.cancel();
+    assert!(waiting.await.is_err());
+    assert_eq!(backend.generation_limit.available_permits(), 1);
+    assert!(backend.generation_session_locks.lock().unwrap().is_empty());
+}
+
 fn trusted_ids(session_id: &str) -> InferenceGenerationIds {
     InferenceGenerationIds::new_with_trust(
         InferenceCacheHints::default(),
@@ -895,6 +943,13 @@ async fn blocking_worker_holds_global_and_session_permits_until_work_finishes() 
     let worker_context = InferenceRequestContext::new();
     let worker_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let release_worker = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    struct ReleaseWorker(Arc<std::sync::atomic::AtomicBool>);
+    impl Drop for ReleaseWorker {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::Release);
+        }
+    }
+    let _release_on_unwind = ReleaseWorker(release_worker.clone());
     let started = worker_started.clone();
     let release = release_worker.clone();
 
@@ -945,8 +1000,8 @@ async fn blocking_worker_holds_global_and_session_permits_until_work_finishes() 
     );
 }
 
-#[test]
-fn untrusted_conversation_affinity_bypasses_session_registry() {
+#[tokio::test]
+async fn untrusted_conversation_affinity_bypasses_session_registry() {
     let registry = Arc::new(Mutex::new(BTreeMap::new()));
     let untrusted = InferenceGenerationIds::new_with_trust(
         InferenceCacheHints::default(),
@@ -956,6 +1011,21 @@ fn untrusted_conversation_affinity_bypasses_session_registry() {
     );
     assert!(trusted_generation_session_key(&untrusted).is_none());
     assert!(registry.lock().expect("session registry lock").is_empty());
+
+    let controller = admission_controller(1, 1);
+    let cancellation = skippy_inference_api::CancellationToken::new();
+    let (_generation_permit, session_permit) = controller
+        .acquire(&untrusted, &cancellation, Duration::from_secs(1))
+        .await
+        .expect("untrusted request still obtains global admission");
+    assert!(session_permit.is_none());
+    assert!(
+        controller
+            .generation_session_locks
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
 
     let trusted = trusted_ids("agent-7");
     let key = trusted_generation_session_key(&trusted).expect("trusted session key");

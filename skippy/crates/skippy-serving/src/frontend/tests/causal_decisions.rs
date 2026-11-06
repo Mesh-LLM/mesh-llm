@@ -1,7 +1,6 @@
 //! Explicit real-model HTTP proof; no synthetic fixture can certify readout scores.
 
 use super::*;
-use crate::runtime_state::{loaded_memory_cache_capabilities, loaded_model_state_kind};
 use axum::body::{Body, to_bytes};
 use axum::http::Request;
 use tower::ServiceExt;
@@ -89,14 +88,9 @@ fn backend_with_config(config: StageConfig) -> Result<StageOpenAiBackend> {
         None,
         backend.telemetry.clone(),
     )?;
-    backend.kv = KvStageIntegration::from_loaded_model_with_l3_manager(
-        &config,
-        loaded_model_state_kind(Some(&backend.runtime)),
-        loaded_memory_cache_capabilities(Some(&backend.runtime)),
-        None,
-        None,
-    )?
-    .map(Arc::new);
+    backend.kv =
+        KvStageIntegration::from_runtime_with_l3_manager(&config, &backend.runtime, None, None)?
+            .map(Arc::new);
     if config
         .kv_cache
         .as_ref()

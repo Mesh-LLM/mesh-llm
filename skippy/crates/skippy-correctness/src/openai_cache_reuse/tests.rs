@@ -48,6 +48,10 @@ impl Peer {
     }
 
     fn with_content(cached: [u64; 4], content: [&str; 4]) -> Self {
+        Self::with_telemetry(cached.map(|value| Some(json!(value))), content)
+    }
+
+    fn with_telemetry(cached: [Option<Value>; 4], content: [&str; 4]) -> Self {
         let content = content.map(str::to_owned);
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         listener.set_nonblocking(true).unwrap();
@@ -71,11 +75,16 @@ impl Peer {
                         let request = request_body(&mut stream);
                         let index = requests.len();
                         requests.push(request);
-                        let response = json!({
+                        let mut response = json!({
                             "choices": [{"message": {"content": content.get(index).cloned().unwrap_or_default()}}],
                             "usage": {"prompt_tokens": 100,
-                                "prompt_tokens_details": {"cached_tokens": cached.get(index).copied().unwrap_or(0)}}
-                        }).to_string();
+                                "prompt_tokens_details": {}}
+                        });
+                        if let Some(Some(value)) = cached.get(index) {
+                            response["usage"]["prompt_tokens_details"]["cached_tokens"] =
+                                value.clone();
+                        }
+                        let response = response.to_string();
                         write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}", response.len()).unwrap();
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -288,5 +297,35 @@ fn cold_seed_must_be_uncached_and_nonempty() {
                 .contains(expected)
         );
         assert_eq!(peer.finish().len(), 1);
+    }
+    let peer = Peer::with_content([0, 50, 50, 50], ["seed", "seed", "", ""]);
+    assert!(
+        run(args(&peer, &prompt))
+            .unwrap_err()
+            .to_string()
+            .contains("growing chat returned empty content")
+    );
+    assert_eq!(peer.finish().len(), 3);
+}
+
+#[test]
+fn unavailable_or_invalid_cache_telemetry_fails_at_each_request() {
+    let prompt = Prompt::new();
+    for index in 0..4 {
+        for invalid in [
+            None,
+            Some(json!(null)),
+            Some(json!("0")),
+            Some(json!(-1)),
+            Some(json!(1.5)),
+        ] {
+            let mut cached = [0, 50, 50, 50].map(|value| Some(json!(value)));
+            cached[index] = invalid;
+            let peer =
+                Peer::with_telemetry(cached, ["answer-0", "answer-0", "answer-2", "answer-2"]);
+            let error = run(args(&peer, &prompt)).unwrap_err().to_string();
+            assert!(error.contains("unsigned cached token count"), "{error}");
+            assert_eq!(peer.finish().len(), index + 1);
+        }
     }
 }
