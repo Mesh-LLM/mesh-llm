@@ -11,8 +11,10 @@ just llama-upgrade <40-hex-upstream-sha> cuda /absolute/model-cache
 
 This enters the same typed repair/build owner used by CI, freezes the Mesh and
 controller revisions, and writes its request, recovery source and diagnostics
-under a new temporary directory outside the checkout. It has no publication
-credentials. A successful local build exports an **uncertified** candidate bundle;
+under a new temporary directory outside the checkout. The child receives no
+GitHub publication token, uses a private home, and disables Git credential
+helpers. Provide Goose provider authentication through its environment.
+A successful local build exports an **uncertified** candidate bundle;
 the complete distributed family pass and fresh independent verification are
 still required for publication. It never downloads a missing model.
 
@@ -32,9 +34,12 @@ just llama-upgrade-check full metal
 an existing Python 3.12+ interpreter. The agent inherits that interpreter; system
 pip installs cannot repair this environment. `fast` replays the durable patch queue
 at the requested pin, builds the native link closure/probes and Python test driver,
-checks upstream Python tests, and builds self-contained Rust
-binaries, verifies their defined native model-open symbols and records source and
-binary identities, including matching Rust/native ABI versions. It then runs dense split/chain and recurrent state checks,
+checks upstream Python tests, builds self-contained Rust binaries, verifies
+their defined native model-open symbols, and records source and binary identities,
+including matching Rust/native ABI versions. The identity includes committed
+and uncommitted Mesh and llama.cpp source, so a later source edit requires
+recompilation before smoke checks. It then runs dense split/chain and recurrent
+state checks,
 with GPU layers and Flash Attention enabled on the native producer backend.
 The controller-owned focused smoke explicitly targets the selected checkout, so
 historical revisions do not need the new smoke switches. Focused and canonical
@@ -63,7 +68,11 @@ Each coding turn retains an explicitly unverified source checkpoint. After
 supervised termination, including cancellation, the outer owner also attempts a
 final checkpoint after child cleanup. Recovery includes the Mesh diff and native
 changes against their recorded upstream base, including native commits not yet
-exported to the durable patch queue. Recovery failure never changes the original
+exported to the durable patch queue. If the native marker is missing or its commit
+is unavailable, recovery records the whole tracked native tree as a patch from
+an empty tree and archives untracked files separately. The manifest marks this
+fallback with `full_tracked_tree: true`; it remains unverified diagnostic source.
+Recovery failure never changes the original
 exit status. Force termination or runner loss can still prevent final recovery;
 earlier checkpoints remain available.
 

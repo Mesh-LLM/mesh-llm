@@ -66,8 +66,11 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         .last("--backend")
         .filter(|s| matches!(*s, "metal" | "cuda"))
         .ok_or("local upgrade requires metal or cuda backend")?;
-    if !cfg!(any(target_os = "macos", target_os = "linux")) {
-        return Err("local upgrades require a native macOS or Linux producer".into());
+    if !matches!(
+        (std::env::consts::OS, backend),
+        ("macos", "metal") | ("linux", "cuda")
+    ) {
+        return Err("local upgrade backend must match its native macOS or Linux producer".into());
     }
     let selected = canary_package_closure::checkout_revision(&root)?;
     let authority = canary_package_closure::checkout_revision(&controller)?;
@@ -121,20 +124,64 @@ fn environment(
 ) -> BTreeMap<OsString, Value> {
     values
         .into_iter()
-        .filter(|(key, _)| {
-            ![
-                "GH_TOKEN",
-                "GITHUB_TOKEN",
-                "CANARY_REPAIR_TOKEN",
-                "GITHUB_OUTPUT",
-                "GITHUB_ENV",
-                "GITHUB_STEP_SUMMARY",
-            ]
-            .iter()
-            .any(|name| key == name)
-        })
+        .filter(|(key, _)| !publication_credential(key))
         .map(|(key, value)| (key, Value::Secret(value)))
         .collect()
+}
+
+fn publication_credential(key: &std::ffi::OsStr) -> bool {
+    let name = key.to_string_lossy();
+    if [
+        "ZAI_API_KEY",
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "GOOGLE_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOSE_API_KEY",
+    ]
+    .contains(&name.as_ref())
+    {
+        return false;
+    }
+    [
+        "GITHUB_OUTPUT",
+        "GITHUB_ENV",
+        "GITHUB_STEP_SUMMARY",
+        "GH_CONFIG_DIR",
+        "GIT_ASKPASS",
+        "SSH_ASKPASS",
+        "SSH_AUTH_SOCK",
+        "GIT_SSH",
+        "GIT_SSH_COMMAND",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
+        "GIT_HTTP_EXTRAHEADER",
+        "DOCKER_CONFIG",
+        "NETRC",
+        "GNUPGHOME",
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+    ]
+    .contains(&name.as_ref())
+        || name.starts_with("GIT_CONFIG_KEY_")
+        || name.starts_with("GIT_CONFIG_VALUE_")
+        || [
+            "_TOKEN",
+            "_SECRET",
+            "_PASSWORD",
+            "_CREDENTIAL",
+            "_ACCESS_KEY",
+            "_PRIVATE_KEY",
+            "_API_KEY",
+            "_JWT",
+        ]
+        .iter()
+        .any(|suffix| name.ends_with(suffix))
 }
 
 fn launch(
@@ -147,7 +194,25 @@ fn launch(
 ) -> DynResult<CheckReport> {
     let executable = std::env::current_exe()?;
     let mut environment = environment(std::env::vars_os());
+    let private_home = output.join("home");
+    fs::create_dir(&private_home)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&private_home, fs::Permissions::from_mode(0o700))?;
+    }
     for (key, value) in [
+        ("HOME", private_home.clone()),
+        ("XDG_CONFIG_HOME", private_home.join("config")),
+        ("XDG_DATA_HOME", private_home.join("data")),
+        ("XDG_STATE_HOME", private_home.join("state")),
+        ("XDG_CACHE_HOME", private_home.join("cache")),
+        ("GH_CONFIG_DIR", private_home.join("gh")),
+        ("GIT_CONFIG_GLOBAL", PathBuf::from("/dev/null")),
+        ("GIT_CONFIG_NOSYSTEM", PathBuf::from("1")),
+        ("GIT_CONFIG_COUNT", PathBuf::from("1")),
+        ("GIT_CONFIG_KEY_0", PathBuf::from("credential.helper")),
+        ("GIT_CONFIG_VALUE_0", PathBuf::new()),
         ("MESH_LLM_AUTOMATION_BIN", executable.clone()),
         ("RUNNER_TEMP", parent.into()),
         ("LLAMA_STAGE_BUILD_DIR", output.join("native")),
@@ -230,10 +295,19 @@ mod tests {
         let env = environment([
             ("GITHUB_TOKEN".into(), "private".into()),
             ("CANARY_REPAIR_TOKEN".into(), "private".into()),
+            ("GH_ENTERPRISE_TOKEN".into(), "private".into()),
+            ("AWS_SECRET_ACCESS_KEY".into(), "private".into()),
+            ("CLOUDFLARE_API_TOKEN".into(), "private".into()),
+            ("ZAI_API_KEY".into(), "provider".into()),
+            ("SSH_AUTH_SOCK".into(), "/publisher".into()),
+            ("GIT_ASKPASS".into(), "/publisher".into()),
+            ("GIT_CONFIG_KEY_0".into(), "credential.helper".into()),
+            ("HOME".into(), "/private-home".into()),
             ("GITHUB_OUTPUT".into(), "/publisher".into()),
             ("PATH".into(), "/tools".into()),
         ]);
-        assert_eq!(env.len(), 1);
+        assert_eq!(env.len(), 2);
         assert!(env.contains_key(std::ffi::OsStr::new("PATH")));
+        assert!(env.contains_key(std::ffi::OsStr::new("ZAI_API_KEY")));
     }
 }

@@ -447,8 +447,9 @@ fn failed_preparation_build_or_stamp_cannot_emit_successful_manifest() {
 fn shared_full_check_plan_keeps_cpu_producer_before_required_smokes() {
     let fixture = Fixture::new();
     let source = root();
-    let state = fixture.path().join("state");
-    let build = fixture.path().join("upgraded-metal");
+    let fixture_root = fixture.path().canonicalize().unwrap();
+    let state = fixture_root.join("state");
+    let build = fixture_root.join("upgraded-metal");
     let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
     command
         .args(["automation", "canary-receipts", "repair-check", "--root"])

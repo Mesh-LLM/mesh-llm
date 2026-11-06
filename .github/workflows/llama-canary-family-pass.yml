@@ -274,6 +274,7 @@ jobs:
             ${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/*.md
             ${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/agent-commands/
             ${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/checks/
+            ${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/verification-evidence/
             ${{ env.LLAMA_STAGE_BUILD_DIR }}/Testing/Temporary/
             ${{ runner.temp }}/canary-build-contract-${{ inputs.pass_id }}/
           if-no-files-found: warn

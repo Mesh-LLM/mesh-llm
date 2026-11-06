@@ -88,7 +88,6 @@ pub(super) fn steps(input: &Input) -> Vec<Step> {
                 "cargo",
                 "build",
                 "--locked",
-                "--no-default-features",
                 "-p",
                 "skippy-runtime",
                 "-p",

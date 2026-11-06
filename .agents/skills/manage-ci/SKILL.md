@@ -694,12 +694,17 @@ focused checks before generation/idempotence and the unfiltered native suite;
 complete family certification and fresh independent verification remain required.
 Only an isolated Metal fixture SIGBUS may receive one diagnostic retry, followed
 by an unfiltered native rerun; ordinary candidate failures never receive retries.
+Repair checks remove GitHub workflow-control paths from candidate processes and
+bind smoke tests to the compiled Mesh and llama.cpp source state. The local owner
+uses a private home and disables Git credential helpers.
 A downloaded job log alone does not establish that a process is stuck. Correlate
 runner/process state or an observed deadline; if unavailable, report liveness as
 unconfirmed.
 Bounded, explicitly unverified source checkpoints are retained after every coding
 turn and after supervised termination. Upload recovery before verbose evidence;
 never include the restored Python environment in the diagnostic upload.
+If the recorded native base is unavailable, capture its complete tracked tree
+against an empty tree so committed repairs remain in the unverified checkpoint.
 
 The System One contract fixture must exercise both single-token causal
 readouts and multi-token likelihoods as supported execution paths, retaining

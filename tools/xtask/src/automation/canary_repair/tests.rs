@@ -25,6 +25,31 @@ fn fixture(phase: Phase) -> (tempfile::TempDir, Input) {
     (temp, input)
 }
 
+#[cfg(unix)]
+#[test]
+fn output_paths_resolve_symlinked_existing_ancestors() {
+    let (temp, input) = fixture(Phase::Fast);
+    let alias = temp.path().join("alias");
+    std::os::unix::fs::symlink(&input.root, &alias).unwrap();
+    assert_eq!(
+        resolved_output(&alias.join("nested/checks")).unwrap(),
+        input.root.join("nested/checks")
+    );
+}
+
+#[test]
+fn candidate_checks_cannot_write_github_workflow_control_files() {
+    let environment = runner::inherited([
+        ("GITHUB_ENV".into(), "/runner/env".into()),
+        ("GITHUB_OUTPUT".into(), "/runner/output".into()),
+        ("GITHUB_STEP_SUMMARY".into(), "/runner/summary".into()),
+        ("GH_ENTERPRISE_TOKEN".into(), "credential".into()),
+        ("PATH".into(), "/usr/bin".into()),
+    ]);
+    assert_eq!(environment.len(), 1);
+    assert!(environment.contains_key(std::ffi::OsStr::new("PATH")));
+}
+
 #[test]
 fn focused_and_full_plans_share_exact_environment_compile_and_runtime_checks() {
     let (_temp, mut input) = fixture(Phase::Fast);
@@ -139,6 +164,33 @@ fn native_fixture(input: &Input) {
     for name in ["skippy", "skippy-correctness", "skippy-package-builder"] {
         fs::write(input.root.join("target/debug").join(name), name).unwrap();
     }
+    fs::write(input.root.join(".gitignore"), ".deps/\ntarget/\n").unwrap();
+    for repository in [&native, &input.root] {
+        for arguments in [
+            vec!["init", "-q"],
+            vec!["add", "."],
+            vec![
+                "-c",
+                "user.name=Fixture",
+                "-c",
+                "user.email=fixture@example.test",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "fixture",
+            ],
+        ] {
+            assert!(
+                std::process::Command::new("git")
+                    .args(arguments)
+                    .current_dir(repository)
+                    .status()
+                    .unwrap()
+                    .success()
+            );
+        }
+    }
 }
 
 #[test]
@@ -161,12 +213,51 @@ fn identity_rejects_changed_child_binary_native_recipe_and_requested_pin() {
     fs::write(&marker, "b".repeat(40)).unwrap();
     assert!(identity.verify(&input).is_err());
     fs::write(marker, "a".repeat(40)).unwrap();
+    let model = input.root.join(".deps/llama.cpp/src/model.cpp");
+    fs::create_dir_all(model.parent().unwrap()).unwrap();
+    fs::write(&model, "candidate changed after compile").unwrap();
+    assert!(identity.verify(&input).is_err());
+    let dirty_identity = identity::capture(&input).unwrap();
+    fs::write(&model, "candidate changed again").unwrap();
+    assert!(dirty_identity.verify(&input).is_err());
+    fs::remove_file(model).unwrap();
+    fs::write(input.root.join("skippy/llama_cpp/new.patch"), "new patch").unwrap();
+    assert!(identity.verify(&input).is_err());
+    fs::remove_file(input.root.join("skippy/llama_cpp/new.patch")).unwrap();
     fs::write(
         input.root.join("skippy/llama_cpp/upstream.txt"),
         "b".repeat(40),
     )
     .unwrap();
     assert!(identity.verify(&input).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn missing_executable_keeps_reproduction_details_and_returns_infrastructure_status() {
+    let (_temp, input) = fixture(Phase::Fast);
+    let step = plan::Step {
+        label: "missing-executable".into(),
+        arguments: vec!["/missing/repair-prerequisite".into(), "--check".into()],
+        environment: BTreeMap::new(),
+        identity: false,
+    };
+    let report = runner::execute(&input, &[step]).unwrap();
+    assert_eq!(report.code, 125);
+    let row: serde_json::Value =
+        serde_json::from_slice(&fs::read(input.state.join("last-check.json")).unwrap()).unwrap();
+    assert_eq!(row["command"][0], "/missing/repair-prerequisite");
+    assert_eq!(row["environment"]["LLAMA_STAGE_LINK_MODE"], "static");
+    assert_eq!(row["failure_class"], "infrastructure");
+    assert_eq!(row["rerun_repair_check"][0], "cargo");
+    assert!(
+        row["rerun_repair_check"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::Value::String(
+                input.state.to_string_lossy().into_owned()
+            ))
+    );
 }
 
 #[cfg(unix)]

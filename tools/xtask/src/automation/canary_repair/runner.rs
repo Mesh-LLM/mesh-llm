@@ -19,7 +19,11 @@ const LOG_BYTES: usize = 16 * 1024 * 1024;
 const REMOVED_ENVIRONMENT: &[&str] = &[
     "GH_TOKEN",
     "GITHUB_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
     "CANARY_REPAIR_TOKEN",
+    "GITHUB_ENV",
+    "GITHUB_OUTPUT",
+    "GITHUB_STEP_SUMMARY",
     "CARGO_BUILD_TARGET",
 ];
 
@@ -95,9 +99,17 @@ pub(super) fn execute(input: &Input, steps: &[Step]) -> DynResult<CheckReport> {
                 } else {
                     ("infrastructure", 125)
                 };
+                let reproduction = environment(input, step)
+                    .map(|value| value.reproduction)
+                    .unwrap_or_default();
                 atomic_json(
                     &input.state.join("last-check.json"),
-                    &serde_json::json!({"step":step.label,"status":"fail","failure_class":class,"error":error.to_string(),"exit_code":code}),
+                    &serde_json::json!({"step":step.label,"status":"fail","failure_class":class,"error":error.to_string(),"exit_code":code,
+                        "working_directory":input.root,"command":step.arguments,"environment":reproduction,
+                        "rerun_repair_check":rerun(input),
+                        "removed_environment":REMOVED_ENVIRONMENT,
+                        "log":directory.join(format!("{}.log",step.label)),
+                        "stderr_log":directory.join(format!("{}.stderr.log",step.label))}),
                 )?;
                 result = Ok(CheckReport {
                     stdout: String::new(),
@@ -117,6 +129,36 @@ pub(super) fn execute(input: &Input, steps: &[Step]) -> DynResult<CheckReport> {
         });
     }
     result
+}
+
+fn rerun(input: &Input) -> Vec<String> {
+    let phase = match input.phase {
+        super::Phase::Environment => "environment",
+        super::Phase::Fast => "fast",
+        super::Phase::Full => "full",
+    };
+    [
+        "cargo".into(),
+        "xtool".into(),
+        "automation".into(),
+        "canary-receipts".into(),
+        "repair-check".into(),
+        "--root".into(),
+        input.root.to_string_lossy().into_owned(),
+        "--controller-root".into(),
+        input.controller.to_string_lossy().into_owned(),
+        "--state-dir".into(),
+        input.state.to_string_lossy().into_owned(),
+        "--build-dir".into(),
+        input.build.to_string_lossy().into_owned(),
+        "--backend".into(),
+        input.backend.clone(),
+        "--phase".into(),
+        phase.into(),
+        "--seconds".into(),
+        input.seconds.to_string(),
+    ]
+    .into()
 }
 
 fn command_with_retry(
@@ -148,23 +190,7 @@ fn command_with_retry(
 }
 
 fn environment(input: &Input, step: &Step) -> DynResult<Environment> {
-    let mut environment: BTreeMap<_, _> = std::env::vars_os()
-        .filter(|(key, _)| !REMOVED_ENVIRONMENT.iter().any(|name| key == name))
-        .map(|(key, value)| {
-            let name = key.to_string_lossy();
-            let secret = ["_KEY", "_TOKEN", "_SECRET", "_PASSWORD"]
-                .iter()
-                .any(|suffix| name.ends_with(suffix));
-            (
-                key,
-                if secret {
-                    Value::Secret(value)
-                } else {
-                    Value::Public(value)
-                },
-            )
-        })
-        .collect();
+    let mut environment = inherited(std::env::vars_os());
     let mut reproduction = BTreeMap::new();
     if let Some(Value::Public(cache)) = environment.get(std::ffi::OsStr::new("HF_CACHE")) {
         reproduction.insert("HF_CACHE".into(), cache.to_string_lossy().into_owned());
@@ -211,6 +237,29 @@ fn environment(input: &Input, step: &Step) -> DynResult<Environment> {
         process: environment,
         reproduction,
     })
+}
+
+pub(super) fn inherited(
+    values: impl IntoIterator<Item = (OsString, OsString)>,
+) -> BTreeMap<OsString, Value> {
+    values
+        .into_iter()
+        .filter(|(key, _)| !REMOVED_ENVIRONMENT.iter().any(|name| key == name))
+        .map(|(key, value)| {
+            let name = key.to_string_lossy();
+            let secret = ["_KEY", "_TOKEN", "_SECRET", "_PASSWORD"]
+                .iter()
+                .any(|suffix| name.ends_with(suffix));
+            (
+                key,
+                if secret {
+                    Value::Secret(value)
+                } else {
+                    Value::Public(value)
+                },
+            )
+        })
+        .collect()
 }
 
 fn executable(name: &str) -> DynResult<PathBuf> {

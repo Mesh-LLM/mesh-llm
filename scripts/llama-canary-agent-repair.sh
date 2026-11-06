@@ -447,7 +447,8 @@ agent_session_step() {
   fi
   goose_args+=(--text "$prompt")
   run_for "agent developer task" "$seconds" env \
-    -u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN \
+    -u GH_TOKEN -u GITHUB_TOKEN -u GH_ENTERPRISE_TOKEN -u CANARY_REPAIR_TOKEN \
+    -u GITHUB_ENV -u GITHUB_OUTPUT -u GITHUB_STEP_SUMMARY \
     CANARY_REPAIR_LOG_DIR="$AGENT_COMMAND_LOG_DIR" \
     MESH_LLM_AUTOMATION_BIN="${repair_recovery_controller:?}" \
     CANARY_REPAIR_CONTROLLER_ROOT="$TRUSTED_ROOT" CANARY_REPAIR_STATE_DIR="$STATE_DIR" \

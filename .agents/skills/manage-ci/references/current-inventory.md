@@ -1657,7 +1657,7 @@ default branch therefore still gets a verdict instead of a red lane.
 `just llama-upgrade <upstream-sha> metal <cache-root>` enters the CI repair/build owner locally without publication credentials (see `ci/llama-canary/REPAIR.md`). `just llama-upgrade-check fast metal` and the trusted canary call the same typed
 `automation canary-receipts repair-check` command. The environment phase restores
 the controller-owned native-test lock before coding. Fast checks compile static
-binaries, verify their native ABI symbols and recipe/binary hashes, and exercise
+binaries, verify their native ABI symbols and compiled source/binary hashes, and exercise
 GPU Flash Attention split/chain and recurrent state execution. The full phase
 then checks generated equality/idempotence, runs the complete native suite and
 canonical Skippy, workload-oracle, System One and Laya gates. Focused results do
@@ -1668,6 +1668,9 @@ rerun, without starting an agent for the transient failure.
 
 Every coding turn saves an explicitly unverified source checkpoint; the native
 outer supervisor also attempts recovery after termination and cancellation.
+When the native base commit is unavailable, recovery captures the complete
+tracked tree against an empty tree. Candidate processes cannot inherit GitHub
+workflow-control paths, and local repair uses a private home without Git credentials.
 Recovery uploads precede verbose logs and omit the restored Python environment.
 The original failure remains authoritative if diagnostic recovery fails.
 

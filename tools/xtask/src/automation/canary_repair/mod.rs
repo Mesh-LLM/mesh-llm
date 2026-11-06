@@ -71,8 +71,8 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     let input = Input {
         root: path("--root")?.canonicalize()?,
         controller: path("--controller-root")?.canonicalize()?,
-        state: path("--state-dir")?,
-        build: path("--build-dir")?,
+        state: resolved_output(&path("--state-dir")?)?,
+        build: resolved_output(&path("--build-dir")?)?,
         backend: match parsed.last("--backend") {
             Some(value @ ("metal" | "cuda" | "cpu")) => value.into(),
             _ => return Err("unsupported repair backend".into()),
@@ -97,11 +97,10 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     for output in [&input.state, &input.build] {
         if input.root.starts_with(output)
             || input.controller.starts_with(output)
-            || output
-                .components()
-                .any(|c| matches!(c, std::path::Component::ParentDir))
+            || output.starts_with(&input.root)
+            || output.starts_with(&input.controller)
         {
-            return Err("repair outputs cannot contain a checkout".into());
+            return Err("repair outputs must be outside both checkouts".into());
         }
     }
     let steps = plan::steps(&input);
@@ -118,9 +117,38 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
                 .into(),
         );
     }
-    fs::create_dir_all(&input.state)?;
-    fs::create_dir_all(input.state.join("checks"))?;
-    runner::execute(&input, &steps)?.emit()
+    let report = fs::create_dir_all(&input.state)
+        .and_then(|()| fs::create_dir_all(input.state.join("checks")))
+        .map_err(Into::into)
+        .and_then(|()| runner::execute(&input, &steps));
+    match report {
+        Ok(report) => report.emit(),
+        Err(error) => CheckReport {
+            stdout: String::new(),
+            stderr: format!("repair infrastructure failure: {error}\n"),
+            code: 125,
+        }
+        .emit(),
+    }
+}
+
+fn resolved_output(path: &Path) -> DynResult<PathBuf> {
+    let mut ancestor = path;
+    let mut missing = Vec::new();
+    loop {
+        if ancestor.symlink_metadata().is_ok() {
+            let mut resolved = ancestor.canonicalize()?;
+            for name in missing.into_iter().rev() {
+                resolved.push(name);
+            }
+            return Ok(resolved);
+        }
+        let name = ancestor
+            .file_name()
+            .ok_or("output path has no existing ancestor")?;
+        missing.push(name.to_os_string());
+        ancestor = ancestor.parent().ok_or("output path has no parent")?;
+    }
 }
 
 fn atomic_json(path: &Path, value: &impl Serialize) -> DynResult<()> {
