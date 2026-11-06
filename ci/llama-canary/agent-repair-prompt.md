@@ -1,9 +1,10 @@
 # llama.cpp changed-pin canary developer task
 
 You are working on a trusted `main` checkout on the `family-certify`
-self-hosted runner. Complete the llama.cpp upstream update as one developer
-task. The harness has written the exact target SHA to
-`skippy/llama_cpp/upstream.txt` and `.deps/llama-canary-target-sha`.
+self-hosted runner. Repair the llama.cpp update to the exact SHA already written
+to `skippy/llama_cpp/upstream.txt` and `.deps/llama-canary-target-sha`. Your job
+is to produce a sound candidate and hand it back promptly. The trusted harness,
+not this coding session, performs complete verification and certification.
 
 Read `.agents/skills/llama-patch-changes/SKILL.md` before changing the queue.
 When the stage ABI changes, also read
@@ -14,40 +15,32 @@ Do not write new Python tooling during repair, including temporary or inline
 helpers. Follow `.agents/skills/manage-ci/SKILL.md` for new repository
 automation in typed `tools/xtask` commands; from the repository root,
 `cargo xtool repo-consistency ci-crate-lists` is an existing alias example.
-The existing patch generator below is transitional and stays in use until an
-equivalent Rust command has passed parity checks. This does not grant permission
-to edit the trusted scripts or CI boundary listed below.
+The existing patch generator remains transitional until an equivalent Rust
+command passes parity checks. This does not grant permission to edit the trusted
+scripts or CI boundary listed below.
 
-Keep console narration brief: before each meaningful action, state what you are
-checking or changing and why in one or two sentences. Report the result and next
-step afterward. Do not repeat complete commands, diffs, or tool output in prose;
-the harness retains them separately. Use descriptive command-log labels and
-keep long-running checks inside the logging wrapper so their progress can be
-observed before the tool returns. Do not infer progress percentages or success
-from activity alone.
+Work in this order. Stop as soon as the focused repair check passes:
 
-Own the repair end to end:
-
-1. Run `scripts/prepare-llama.sh pinned` and inspect the first real failure. If
-   patch application stops, use the failed patch and upstream source to
-   understand the refactor. Reconstruct the affected capability commits on the
-   target llama.cpp revision, prove the reconstructed tree has the intended
-   result, and regenerate the series with `git format-patch`. Repeating
-   `git am --3way` without resolving the semantic conflict is not a repair.
-2. Preserve every still-valid patch and make the smallest semantic changes to
-   the broken patches. Keep the queue ordered. Do not delete instrumentation or
-   weaken a gate to get a build through.
-3. Generate model-builder stage controls through the Clang rewriter and
-   `cargo xtool automation native-generator generate` with absolute `--git`
-   and `--rewriter` paths and `--max-diff-bytes 16777216`. Do not hand-edit per-family stage
-   filtering or `begin_block`/`end_block` patches. Extend general AST rules for
-   conventional upstream shapes. Preserve an exact `unsupported_shape` refusal
-   for irregular builders until a sound general rule exists.
-4. Fix Rust ABI mirrors, manifests, or runtime code when the upstream change
-   requires it. Bump the prepare schema and ABI version together where the
-   repository skills require that. A model row may change only when runtime
-   evidence shows that its immutable manifest data is stale.
-5. Use the shared focused repair command after updating the durable queue:
+1. Run `scripts/prepare-llama.sh pinned` on the first turn and inspect its
+   first real failure. Read the failed patch and the corresponding upstream
+   source before editing. On a resumed turn, start with the newest failure log
+   supplied by the harness. If preparation passes, use the first actual build
+   or focused-check failure; do not search for unrelated problems.
+2. Make the smallest semantic repair in the owning patch, generator, ABI mirror,
+   or Rust caller. Preserve still-valid patches, instrumentation, and queue
+   order. When a patch must be rebased, reconstruct its capability commit on the
+   target revision, compare the resulting tree with the intended result, and
+   regenerate the series with `git format-patch`. Repeating `git am --3way`
+   without resolving the semantic conflict is not a repair.
+3. Reproduce the changed behavior with the narrowest useful check. For generated
+   model-builder controls, use the Clang rewriter and
+   `cargo xtool automation native-generator generate` with absolute `--git` and
+   `--rewriter` paths and `--max-diff-bytes 16777216`. Do not hand-edit
+   per-family stage filtering or `begin_block`/`end_block` patches. Extend a
+   general AST rule only for a proven conventional upstream shape; retain
+   `unsupported_shape` for irregular builders. Fix Rust ABI mirrors and bump
+   the prepare schema and ABI version together only when the boundary changes.
+4. Run the shared focused repair check once the durable queue is ready:
 
    ```bash
    "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts repair-check \
@@ -56,34 +49,39 @@ Own the repair end to end:
      --backend "$LLAMA_STAGE_BACKEND" --phase fast
    ```
 
-   It owns the locked native-test Python environment, builds self-contained
-   static binaries, rejects dynamic-runtime substitutions, and exercises split
-   and recurrent state execution on the producer backend. Read its step result,
-   bounded failure excerpt and reproduction arguments. Use focused reproductions
-   for subsequent fixes. The harness owns the complete generated-family check,
-   native suite and canonical smokes; do not repeat those full gates here.
-   Python is already selected from the controller's locked environment. Do not
-   install packages with system pip or modify the system interpreter.
-   Run every build and test command through
-   `scripts/llama-canary-log-command.sh <short-label> <command> [args...]`.
-   For build or test commands containing pipelines, use `bash -o pipefail -c`
-   as the command argument so failures in earlier pipeline stages are reported.
-   For commands requiring shell syntax without pipelines, use `bash -c`.
-   The wrapper streams output, preserves the command's exit status, and saves a
-   separate full log for each invocation in the canary's 14-day build evidence
-   artifact. Use it on failed reproductions and retries too. Do not put secrets
-   in command output or labels.
-   Keep build and test commands in the foreground. If you start any background
-   command, record its PID, wait for it to exit, and check its exit status before
-   returning. Do not leave `nohup`, detached, or still-running build and test
-   processes behind: the harness must stop remaining process-group members
-   before it can safely verify your working tree.
-   Once those checks pass, return control to the trusted harness. Do not run
+   This command restores the locked native-test Python environment, builds
+   static binaries, rejects dynamic-runtime substitutions, checks binary
+   identity, and exercises focused split and recurrent execution. If it fails,
+   read its step result, bounded failure excerpt, and reproduction
+   arguments. Fix that failure, rerun its narrow reproduction, then rerun the
+   focused repair check. Do not install system Python packages.
+5. When the focused repair check passes, stop running commands and return
+   control. Report the files changed, exact passing checks, and any remaining
+   uncertainty. Do not preemptively investigate a smoke, model family, or
+   controller path that has not failed. A focused pass is not certification.
+
+Do not run the complete generated-family checker, an unfiltered native CTest
+suite, `just build`, canonical smokes, or family certification inside this coding
+session. The trusted harness runs those full gates after you return and feeds a
+real failure back to this same named session while the coding window remains
+open. Do not run
    an additional full family battery inside the coding session: the wrapper
    runs every canonical gate, including the complete roster, after you return.
-   If it finds a failure, use the supplied logs to reproduce and fix that
-   failure, then return for the next trusted pass. Report the exact checks you
-   ran and remaining uncertainties; a focused pass is not certification.
+If a trusted gate fails, read its supplied log, reproduce only that failure,
+repair it, and return for the next trusted pass. Do not weaken a gate or infer
+success from activity.
+
+Keep console narration brief: before each meaningful action, state what you are
+checking or changing and why in one or two sentences. Report the result and next
+step afterward. The harness retains complete commands and output separately.
+Use descriptive command-log labels. Run build and test reproductions you launch
+yourself through
+`scripts/llama-canary-log-command.sh <short-label> <command> [args...]`, including
+failed reproductions and retries. For a pipeline, pass `bash -o pipefail -c` as
+the command; otherwise use `bash -c` when shell syntax is needed. Keep commands
+in the foreground. If one must run in the background, record its PID, wait for
+its exit status, and leave no detached build or test process for the harness.
+Do not put secrets in commands or labels.
 
 The models are already available in the runner's `HF_CACHE`. Stay offline and
 do not add Actions caching or download logic. Full family certification must
