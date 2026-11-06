@@ -112,6 +112,11 @@ fn prepared_environment_rejects_executable_and_external_pth_entries() {
         path: dir.path().into(),
         sha256: String::new(),
     };
+    std::fs::write(
+        dir.path().join("pyvenv.cfg"),
+        "include-system-site-packages = false\n",
+    )
+    .unwrap();
     std::fs::create_dir(dir.path().join("modules")).unwrap();
     std::fs::write(&path, "# local modules\nmodules\n").unwrap();
     assert!(tree.observe().is_ok());
@@ -123,6 +128,182 @@ fn prepared_environment_rejects_executable_and_external_pth_entries() {
         std::fs::write(&path, content).unwrap();
         assert!(tree.observe().is_err());
     }
+}
+
+#[test]
+fn prepared_environment_rejects_system_site_packages_and_ambiguous_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("pyvenv.cfg");
+    let tree = Tree {
+        path: dir.path().into(),
+        sha256: String::new(),
+    };
+    for content in [
+        "home = /installed/python\nversion = 3.12.0\ninclude-system-site-packages = false\n",
+        "include-system-site-packages = false\n",
+        "# isolated environment\r\n  INCLUDE-SYSTEM-SITE-PACKAGES\t=\tFaLsE  \r\n",
+    ] {
+        std::fs::write(&path, content).unwrap();
+        assert!(tree.observe().is_ok(), "{content:?}");
+    }
+    for content in [
+        "home = /installed/python\nversion = 3.12.0\n",
+        "",
+        "include-system-site-packages = true\n",
+        "  InClUdE-SyStEm-SiTe-PaCkAgEs\t=\tTrUe  \r\n",
+        "include-system-site-packages = yes\n",
+        "include-system-site-packages = 1\n",
+        "include-system-site-packages =\n",
+        "include-system-site-packages = false # comment\n",
+        "include-system-site-packages = false\ninclude-system-site-packages = true\n",
+        "include-system-site-packages = true\ninclude-system-site-packages = false\n",
+        "include-system-site-packages = false\nINCLUDE-SYSTEM-SITE-PACKAGES = false\n",
+        "include-system-site-packages true\n",
+        "= false\n",
+    ] {
+        std::fs::write(&path, content).unwrap();
+        assert!(tree.observe().is_err(), "{content:?}");
+    }
+    std::fs::write(&path, [0xff]).unwrap();
+    assert!(tree.observe().is_err());
+}
+
+fn prepared_tools_fixture(root: &std::path::Path) -> Tools {
+    let mut tools = tools();
+    for (name, file) in [
+        ("skippy", &mut tools.skippy),
+        ("llama", &mut tools.llama),
+        ("client", &mut tools.client),
+        ("lock", &mut tools.client_lock),
+    ] {
+        file.path = root.join(name);
+        std::fs::write(&file.path, b"pinned fixture").unwrap();
+    }
+    for (name, tree) in [
+        ("runtime", &mut tools.runtime),
+        ("standard", &mut tools.standard_runtime),
+        ("environment", &mut tools.client_environment),
+        ("tokenizer", &mut tools.tokenizer),
+    ] {
+        tree.path = root.join(name);
+        std::fs::create_dir(&tree.path).unwrap();
+        std::fs::write(tree.path.join("module"), b"pinned fixture").unwrap();
+    }
+    tools
+}
+
+#[test]
+fn prepared_tools_require_isolated_root_config_for_pinning_and_verification() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut tools = prepared_tools_fixture(dir.path());
+    // Runtime and tokenizer trees remain generic; only the client requires a venv.
+    assert!(tools.runtime.observe().is_ok());
+    assert!(tools.tokenizer.observe().is_ok());
+    for error in [
+        tools.pin().unwrap_err(),
+        tools.verify(dir.path()).unwrap_err(),
+    ] {
+        assert!(error.to_string().contains("isolated root pyvenv.cfg"));
+    }
+    let config = tools.client_environment.path.join("pyvenv.cfg");
+    std::fs::write(&config, "include-system-site-packages = false\n").unwrap();
+    tools.pin().unwrap();
+    tools.client_environment.verify().unwrap();
+    std::fs::remove_file(&config).unwrap();
+    tools.client_environment.sha256 = tools.client_environment.observe().unwrap();
+    for error in [
+        tools.pin().unwrap_err(),
+        tools.verify(dir.path()).unwrap_err(),
+    ] {
+        assert!(error.to_string().contains("isolated root pyvenv.cfg"));
+    }
+}
+
+#[test]
+fn prepared_tools_reject_bin_config_overriding_an_isolated_root_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut tools = prepared_tools_fixture(dir.path());
+    let environment = tools.client_environment.path.clone();
+    std::fs::write(
+        environment.join("pyvenv.cfg"),
+        "include-system-site-packages = false\n",
+    )
+    .unwrap();
+    std::fs::create_dir(environment.join("bin")).unwrap();
+    let override_config = environment.join("bin/pyvenv.cfg");
+    std::fs::write(&override_config, "include-system-site-packages = false\n").unwrap();
+    tools.pin().unwrap();
+    for content in ["include-system-site-packages = true\n", "home = /python\n"] {
+        std::fs::write(&override_config, content).unwrap();
+        // Even an accurately pinned tree cannot admit the executable-directory override.
+        tools.client_environment.sha256 = crate::product::digest::tree_sha256(&environment)
+            .map_err(|error| error.error)
+            .unwrap();
+        assert!(
+            tools
+                .pin()
+                .unwrap_err()
+                .to_string()
+                .contains("site-packages")
+        );
+        assert!(
+            tools
+                .verify(dir.path())
+                .unwrap_err()
+                .to_string()
+                .contains("site-packages")
+        );
+    }
+}
+
+#[test]
+fn prepared_tools_check_executable_config_using_filesystem_case_resolution() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut tools = prepared_tools_fixture(dir.path());
+    let environment = tools.client_environment.path.clone();
+    std::fs::write(
+        environment.join("pyvenv.cfg"),
+        "include-system-site-packages = false\n",
+    )
+    .unwrap();
+    std::fs::create_dir(environment.join("bin")).unwrap();
+    std::fs::write(
+        environment.join("bin/PYVENV.CFG"),
+        "include-system-site-packages = true\n",
+    )
+    .unwrap();
+    match std::fs::metadata(environment.join("bin/pyvenv.cfg")) {
+        Ok(_) => {}
+        // A case-sensitive filesystem cannot resolve this spelling as Python would.
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return,
+        Err(error) => panic!("probe config case resolution: {error}"),
+    }
+    for error in [
+        tools.pin().unwrap_err(),
+        tools.verify(dir.path()).unwrap_err(),
+    ] {
+        assert!(error.to_string().contains("site-packages"));
+    }
+}
+
+#[test]
+fn prepared_tools_reject_nonregular_executable_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut tools = prepared_tools_fixture(dir.path());
+    let environment = tools.client_environment.path.clone();
+    std::fs::write(
+        environment.join("pyvenv.cfg"),
+        "include-system-site-packages = false\n",
+    )
+    .unwrap();
+    std::fs::create_dir(environment.join("Scripts")).unwrap();
+    let config = environment.join("Scripts/pyvenv.cfg");
+    std::fs::create_dir(&config).unwrap();
+    assert!(tools.pin().is_err());
+    assert!(tools.verify(dir.path()).is_err());
+    std::fs::remove_dir(&config).unwrap();
+    std::fs::write(&config, "include-system-site-packages = false\n").unwrap();
+    tools.pin().unwrap();
 }
 
 #[cfg(unix)]

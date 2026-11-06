@@ -16,6 +16,7 @@ impl StageOpenAiBackend {
         }
         let base = self.local_kv_message_base(session_key, request.ids);
         let identities = kv.lookup_identities(request.config, &base, 0, prefill_tokens);
+        let prepared = kv.prepare_exact_state_restore(&identities, true);
         let mut restore_stats = StageReplyStats::default();
         let scheduler_kv = Arc::clone(kv);
         let scheduler_session_key = session_key.to_string();
@@ -23,11 +24,7 @@ impl StageOpenAiBackend {
         let local_restore = self.iteration_scheduler.execute_runtime(
             "embedded-split-prefix-restore",
             move |runtime| match scheduler_kv
-                .restore_exact_state_with_shared_durable_fallback(
-                    runtime,
-                    &scheduler_session_key,
-                    &identities,
-                )
+                .restore_prepared_exact_state(runtime, &scheduler_session_key, &prepared, None)
                 .map_err(openai_backend_error)?
             {
                 Some(restored) => Ok(Some(restored.token_count)),
@@ -35,7 +32,7 @@ impl StageOpenAiBackend {
                     .restore_resident_prefix(
                         runtime,
                         &scheduler_session_key,
-                        &identities,
+                        prepared.identities(),
                         &scheduler_prefill_tokens,
                     )
                     .map_err(openai_backend_error)

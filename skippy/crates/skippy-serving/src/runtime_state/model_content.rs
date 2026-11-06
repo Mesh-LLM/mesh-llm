@@ -6,6 +6,7 @@ use std::{
     fs::{File, Metadata},
     io::{BufReader, Read},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
     time::{Instant, SystemTime},
 };
 
@@ -55,7 +56,9 @@ impl VerifiedModelContent {
     ) -> Result<(T, Option<Self>)> {
         #[cfg(unix)]
         let (model, content) = match Self::observe_files(config).ok().flatten() {
-            Some(files) => verify_alongside_load(load, || Self::from_observed(files))?,
+            Some(files) => {
+                verify_alongside_load(load, |cancelled| Self::from_observed(files, cancelled))?
+            }
             None => (load()?, None),
         };
         #[cfg(not(unix))]
@@ -69,7 +72,7 @@ impl VerifiedModelContent {
     #[cfg(any(not(unix), test))]
     pub(crate) fn observe(config: &StageConfig) -> Result<Option<Self>> {
         Self::observe_files(config)?
-            .map(Self::from_observed)
+            .map(|files| Self::from_observed(files, &AtomicBool::new(false)))
             .transpose()
     }
 
@@ -86,10 +89,10 @@ impl VerifiedModelContent {
 
     #[cfg(any(not(unix), test))]
     fn from_files(files: Vec<(String, PathBuf)>) -> Result<Self> {
-        Self::from_observed(capture_files(files)?)
+        Self::from_observed(capture_files(files)?, &AtomicBool::new(false))
     }
 
-    fn from_observed(files: ObservedFiles) -> Result<Self> {
+    fn from_observed(files: ObservedFiles, cancelled: &AtomicBool) -> Result<Self> {
         let started = Instant::now();
         let mut verified_bytes = 0_u64;
         let mut digest = Sha256::new();
@@ -97,6 +100,10 @@ impl VerifiedModelContent {
         let mut observed = Vec::with_capacity(files.len());
         let mut buffer = vec![0; 1024 * 1024];
         for (name, path, stamp) in files {
+            ensure!(
+                !cancelled.load(Ordering::Acquire),
+                "model content verification cancelled"
+            );
             let file = File::open(&path)
                 .with_context(|| format!("open model content {}", path.display()))?;
             let before = file.metadata()?;
@@ -112,14 +119,12 @@ impl VerifiedModelContent {
             digest.update(name.as_bytes());
             digest.update(stamp.bytes.to_le_bytes());
             let mut reader = BufReader::new(file);
-            loop {
-                let count = reader.read(&mut buffer)?;
-                if count == 0 {
-                    break;
-                }
-                digest.update(&buffer[..count]);
-                verified_bytes = verified_bytes.saturating_add(count as u64);
-            }
+            verified_bytes = verified_bytes.saturating_add(hash_content(
+                &mut reader,
+                &mut digest,
+                &mut buffer,
+                cancelled,
+            )?);
             ensure!(
                 FileStamp::read(&reader.get_ref().metadata()?) == stamp,
                 "model content changed during verification"
@@ -184,6 +189,28 @@ impl VerifiedModelContent {
     }
 }
 
+/// Hash bounded chunks, abandoning further input reads after a failed model open.
+fn hash_content(
+    reader: &mut impl Read,
+    digest: &mut Sha256,
+    buffer: &mut [u8],
+    cancelled: &AtomicBool,
+) -> Result<u64> {
+    let mut bytes = 0_u64;
+    loop {
+        ensure!(
+            !cancelled.load(Ordering::Acquire),
+            "model content verification cancelled"
+        );
+        let count = reader.read(buffer)?;
+        if count == 0 {
+            return Ok(bytes);
+        }
+        digest.update(&buffer[..count]);
+        bytes = bytes.saturating_add(count as u64);
+    }
+}
+
 fn capture_files(files: Vec<(String, PathBuf)>) -> Result<ObservedFiles> {
     files
         .into_iter()
@@ -201,14 +228,18 @@ fn capture_files(files: Vec<(String, PathBuf)>) -> Result<ObservedFiles> {
 #[cfg(unix)]
 fn verify_alongside_load<T>(
     load: impl FnOnce() -> Result<T>,
-    verify: impl FnOnce() -> Result<VerifiedModelContent> + Send,
+    verify: impl FnOnce(&AtomicBool) -> Result<VerifiedModelContent> + Send,
 ) -> Result<(T, Option<VerifiedModelContent>)> {
+    let cancelled = AtomicBool::new(false);
     std::thread::scope(|scope| {
         let verification = std::thread::Builder::new()
             .name("skippy-model-content".into())
-            .spawn_scoped(scope, verify)
+            .spawn_scoped(scope, || verify(&cancelled))
             .ok();
         let model = load();
+        if model.is_err() {
+            cancelled.store(true, Ordering::Release);
+        }
         let content = verification
             .and_then(|verification| verification.join().ok())
             .and_then(Result::ok);
@@ -295,6 +326,71 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn failed_model_open_cancels_verification_before_joining() {
+        use std::{sync::mpsc, time::Duration};
+        let (started, observed_start) = mpsc::channel();
+        let (cancellation, observed_cancellation) = mpsc::channel();
+        let error = verify_alongside_load(
+            || -> Result<()> {
+                observed_start.recv_timeout(Duration::from_secs(5))?;
+                anyhow::bail!("native model load failed")
+            },
+            move |cancelled| {
+                started.send(())?;
+                let deadline = Instant::now() + Duration::from_secs(5);
+                while !cancelled.load(Ordering::Acquire) && Instant::now() < deadline {
+                    std::thread::yield_now();
+                }
+                cancellation.send(cancelled.load(Ordering::Acquire))?;
+                anyhow::bail!("verification abandoned")
+            },
+        )
+        .err()
+        .expect("failed load must stay an error");
+        assert!(observed_cancellation.recv().unwrap());
+        assert_eq!(error.to_string(), "native model load failed");
+    }
+
+    #[test]
+    fn cancelled_verification_stops_before_the_next_chunk() {
+        struct CancelAfterRead<'a> {
+            cancelled: &'a AtomicBool,
+            reads: usize,
+        }
+        impl Read for CancelAfterRead<'_> {
+            fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+                self.reads += 1;
+                if self.reads > 1 {
+                    return Ok(0);
+                }
+                buffer.fill(7);
+                self.cancelled.store(true, Ordering::Release);
+                Ok(buffer.len())
+            }
+        }
+        let cancelled = AtomicBool::new(false);
+        let mut reader = CancelAfterRead {
+            cancelled: &cancelled,
+            reads: 0,
+        };
+        let error =
+            hash_content(&mut reader, &mut Sha256::new(), &mut [0; 16], &cancelled).unwrap_err();
+        assert_eq!(reader.reads, 1);
+        assert!(error.to_string().contains("verification cancelled"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verification_failure_does_not_fail_a_successful_model_open() {
+        let (model, proof) =
+            verify_alongside_load(|| Ok("loaded"), |_| anyhow::bail!("content unavailable"))
+                .unwrap();
+        assert_eq!(model, "loaded");
+        assert!(proof.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn model_open_and_content_verification_progress_concurrently() {
         use std::{sync::mpsc, time::Duration};
         let (started, observed_start) = mpsc::channel();
@@ -305,9 +401,10 @@ mod tests {
                 opened.send(())?;
                 Ok("loaded")
             },
-            move || {
+            move |cancelled| {
                 started.send(())?;
                 observed_open.recv_timeout(Duration::from_secs(5))?;
+                assert!(!cancelled.load(Ordering::Acquire));
                 Ok(VerifiedModelContent {
                     digest: "proof".into(),
                     files: Vec::new(),

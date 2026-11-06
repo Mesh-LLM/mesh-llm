@@ -9,7 +9,7 @@ use crate::{
     runtime_state::RuntimeState,
     telemetry::{Telemetry, lifecycle_attrs},
 };
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use skippy_metrics::attr;
 use skippy_protocol::{
@@ -19,8 +19,13 @@ use skippy_protocol::{
 use skippy_runtime::ActivationFrame;
 
 use super::kv_eviction::BinaryProactiveEviction;
+mod restore_preparation;
 use super::stage_execution::{
     binary_message_base, binary_message_request_id, elapsed_ms, stage_mask,
+};
+pub(in crate::binary_transport) use restore_preparation::{
+    PreparedBinaryPrefill, PreparedPrefixControl, prepare_binary_prefill,
+    prepare_prefix_cache_control,
 };
 
 #[derive(Default)]
@@ -135,16 +140,17 @@ pub(super) fn binary_message_kv_attrs(
 pub(in crate::binary_transport) fn maybe_prefix_cache_control(
     config: &StageConfig,
     runtime: &mut RuntimeState,
-    kv: Option<&Arc<KvStageIntegration>>,
+    prepared: Option<&PreparedPrefixControl>,
     telemetry: &Telemetry,
     session_id: &str,
     message: &StageWireMessage,
     token_ids: &[i32],
 ) -> BinaryPrefixCacheControlResult {
     let mut result = BinaryPrefixCacheControlResult::default();
-    let Some(kv) = kv else {
+    let Some(prepared) = prepared else {
         return result;
     };
+    let kv = &prepared.kv;
     if !kv.should_lookup() || token_ids.is_empty() {
         return result;
     }
@@ -208,13 +214,11 @@ pub(in crate::binary_transport) fn maybe_prefix_cache_control(
         WireMessageKind::RestorePrefill
         | WireMessageKind::TryRestorePrefill
         | WireMessageKind::TryRestorePrefillDecode => {
-            let restore = restore_binary_prefix(
-                kv,
-                runtime,
-                session_id,
-                std::slice::from_ref(&identity),
-                token_ids,
-            );
+            let restore = prepared
+                .exact
+                .as_ref()
+                .context("missing prepared binary exact-state lookup")
+                .and_then(|exact| restore_binary_prefix(kv, runtime, session_id, exact, token_ids));
             match restore {
                 Ok(Some(restored)) if restored.token_count >= token_ids.len() => {
                     result.hit = true;
@@ -285,17 +289,17 @@ fn restore_binary_prefix(
     kv: &KvStageIntegration,
     runtime: &mut RuntimeState,
     session_id: &str,
-    identities: &[PrefillKvIdentity],
+    prepared: &crate::kv_integration::PreparedExactStateRestore,
     token_ids: &[i32],
 ) -> Result<Option<BinaryRestoredPrefix>> {
-    match kv.restore_exact_state(runtime, session_id, identities)? {
+    match kv.restore_prepared_exact_state(runtime, session_id, prepared, None)? {
         Some(restored) => Ok(Some(BinaryRestoredPrefix::exact(
             restored.page_id,
             restored.token_count,
             restored.entries,
         ))),
         None => kv
-            .restore_resident_prefix(runtime, session_id, identities, token_ids)
+            .restore_resident_prefix(runtime, session_id, prepared.identities(), token_ids)
             .map(|restored| {
                 restored.map(|restored| {
                     BinaryRestoredPrefix::resident(
@@ -322,17 +326,17 @@ pub(in crate::binary_transport) fn emit_binary_proactive_eviction(
 pub(in crate::binary_transport) fn maybe_lookup_binary_prefill(
     config: &StageConfig,
     runtime: &mut RuntimeState,
-    kv: Option<&Arc<KvStageIntegration>>,
+    prepared: Option<PreparedBinaryPrefill>,
     telemetry: &Telemetry,
     session_id: &str,
     message: &StageWireMessage,
     token_ids: &[i32],
-    activation_width: i32,
 ) -> BinaryKvLookupResult {
     let mut result = BinaryKvLookupResult::default();
-    let Some(kv) = kv else {
+    let Some(prepared) = prepared else {
         return result;
     };
+    let kv = &prepared.kv;
     if !message.kind.is_prefill()
         || message.kind.requires_predicted_reply()
         || !kv.should_lookup()
@@ -341,8 +345,7 @@ pub(in crate::binary_transport) fn maybe_lookup_binary_prefill(
         return result;
     }
     let token_start = message.pos_start.max(0) as u64;
-    let base = binary_message_base(config, session_id, message);
-    let identities = kv.lookup_identities(config, &base, token_start, token_ids);
+    let identities = &prepared.identities;
     let mut attrs = binary_message_kv_attrs(config, kv, session_id, message, token_ids.len());
     attrs.insert(
         "skippy.kv.lookup_candidates".to_string(),
@@ -363,9 +366,7 @@ pub(in crate::binary_transport) fn maybe_lookup_binary_prefill(
         return result;
     }
     if config.downstream.is_some() {
-        let Some(activation) =
-            kv.restore_resident_activation(config, &base, token_start, token_ids, activation_width)
-        else {
+        let Some(activation) = prepared.activation else {
             result.stats.kv_lookup_misses += 1;
             attrs.insert(
                 "skippy.kv.lookup_ms".to_string(),
@@ -378,13 +379,8 @@ pub(in crate::binary_transport) fn maybe_lookup_binary_prefill(
             telemetry.emit("stage.binary_kv_lookup_decision", attrs);
             return result;
         };
-        let prefix_restore = restore_binary_prefix(
-            kv,
-            runtime,
-            session_id,
-            std::slice::from_ref(&activation.identity),
-            token_ids,
-        );
+        let prefix_restore =
+            restore_binary_prefix(kv, runtime, session_id, &prepared.exact, token_ids);
         match prefix_restore {
             Ok(Some(restored)) if restored.token_count >= token_ids.len() => {
                 result.restored_tokens = restored.token_count;
@@ -474,7 +470,7 @@ pub(in crate::binary_transport) fn maybe_lookup_binary_prefill(
             }
         }
     }
-    let prefix_restore = restore_binary_prefix(kv, runtime, session_id, &identities, token_ids);
+    let prefix_restore = restore_binary_prefix(kv, runtime, session_id, &prepared.exact, token_ids);
     match prefix_restore {
         Ok(Some(restored)) => {
             result.restored_tokens = restored.token_count;
