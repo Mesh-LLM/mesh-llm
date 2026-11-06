@@ -96,6 +96,8 @@ fn inherited(values: impl IntoIterator<Item = (OsString, OsString)>) -> BTreeMap
                 "CANARY_REPAIR_TOKEN",
                 "GITHUB_ENV",
                 "GITHUB_STEP_SUMMARY",
+                "GITHUB_PATH",
+                "GITHUB_STATE",
             ]
             .iter()
             .any(|name| key == name)
@@ -130,6 +132,8 @@ mod tests {
             ("GITHUB_TOKEN".into(), "github-secret".into()),
             ("GH_ENTERPRISE_TOKEN".into(), "github-secret".into()),
             ("GITHUB_ENV".into(), "/runner/env".into()),
+            ("GITHUB_PATH".into(), "/runner/path".into()),
+            ("GITHUB_STATE".into(), "/runner/state".into()),
             ("ZAI_API_KEY".into(), "agent-secret".into()),
             ("OPTIONAL_API_KEY".into(), "".into()),
             ("HF_CACHE".into(), "/read-only-cache".into()),
@@ -140,6 +144,8 @@ mod tests {
             "GH_ENTERPRISE_TOKEN",
             "CANARY_REPAIR_TOKEN",
             "GITHUB_ENV",
+            "GITHUB_PATH",
+            "GITHUB_STATE",
         ] {
             assert!(!environment.contains_key(std::ffi::OsStr::new(key)));
         }

@@ -43,6 +43,8 @@ fn candidate_checks_cannot_write_github_workflow_control_files() {
         ("GITHUB_ENV".into(), "/runner/env".into()),
         ("GITHUB_OUTPUT".into(), "/runner/output".into()),
         ("GITHUB_STEP_SUMMARY".into(), "/runner/summary".into()),
+        ("GITHUB_PATH".into(), "/runner/path".into()),
+        ("GITHUB_STATE".into(), "/runner/state".into()),
         ("GH_ENTERPRISE_TOKEN".into(), "credential".into()),
         ("PATH".into(), "/usr/bin".into()),
     ]);

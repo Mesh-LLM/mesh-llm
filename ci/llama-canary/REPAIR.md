@@ -12,8 +12,9 @@ just llama-upgrade <40-hex-upstream-sha> cuda /absolute/model-cache
 This enters the same typed repair/build owner used by CI, freezes the Mesh and
 controller revisions, and writes its request, recovery source and diagnostics
 under a new temporary directory outside the checkout. The child receives no
-GitHub publication token, uses a private home, and disables Git credential
-helpers. Provide Goose provider authentication through its environment.
+GitHub publication token, uses a private home and Cargo home, and disables Git
+credential helpers. It retains the installed rustup toolchain location. Provide
+Goose provider authentication through its environment.
 A successful local build exports an **uncertified** candidate bundle;
 the complete distributed family pass and fresh independent verification are
 still required for publication. It never downloads a missing model.

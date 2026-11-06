@@ -24,6 +24,8 @@ const REMOVED_ENVIRONMENT: &[&str] = &[
     "GITHUB_ENV",
     "GITHUB_OUTPUT",
     "GITHUB_STEP_SUMMARY",
+    "GITHUB_PATH",
+    "GITHUB_STATE",
     "CARGO_BUILD_TARGET",
 ];
 

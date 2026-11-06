@@ -122,11 +122,26 @@ fn request(
 fn environment(
     values: impl IntoIterator<Item = (OsString, OsString)>,
 ) -> BTreeMap<OsString, Value> {
-    values
-        .into_iter()
-        .filter(|(key, _)| !publication_credential(key))
-        .map(|(key, value)| (key, Value::Secret(value)))
-        .collect()
+    let mut environment = BTreeMap::new();
+    let mut default_rustup = None;
+    for (key, value) in values {
+        if key == "HOME" {
+            default_rustup = Some(
+                PathBuf::from(value.clone())
+                    .join(".rustup")
+                    .into_os_string(),
+            );
+        }
+        if !publication_credential(&key) {
+            environment.insert(key, Value::Secret(value));
+        }
+    }
+    if !environment.contains_key(std::ffi::OsStr::new("RUSTUP_HOME"))
+        && let Some(path) = default_rustup
+    {
+        environment.insert("RUSTUP_HOME".into(), Value::Secret(path));
+    }
+    environment
 }
 
 fn publication_credential(key: &std::ffi::OsStr) -> bool {
@@ -147,6 +162,8 @@ fn publication_credential(key: &std::ffi::OsStr) -> bool {
         "GITHUB_OUTPUT",
         "GITHUB_ENV",
         "GITHUB_STEP_SUMMARY",
+        "GITHUB_PATH",
+        "GITHUB_STATE",
         "GH_CONFIG_DIR",
         "GIT_ASKPASS",
         "SSH_ASKPASS",
@@ -162,6 +179,7 @@ fn publication_credential(key: &std::ffi::OsStr) -> bool {
         "NETRC",
         "GNUPGHOME",
         "HOME",
+        "CARGO_HOME",
         "XDG_CONFIG_HOME",
         "XDG_DATA_HOME",
         "XDG_STATE_HOME",
@@ -303,11 +321,24 @@ mod tests {
             ("GIT_ASKPASS".into(), "/publisher".into()),
             ("GIT_CONFIG_KEY_0".into(), "credential.helper".into()),
             ("HOME".into(), "/private-home".into()),
+            ("CARGO_HOME".into(), "/credential-cache".into()),
             ("GITHUB_OUTPUT".into(), "/publisher".into()),
+            ("GITHUB_PATH".into(), "/runner/path".into()),
+            ("GITHUB_STATE".into(), "/runner/state".into()),
             ("PATH".into(), "/tools".into()),
         ]);
-        assert_eq!(env.len(), 2);
+        assert_eq!(env.len(), 3);
         assert!(env.contains_key(std::ffi::OsStr::new("PATH")));
         assert!(env.contains_key(std::ffi::OsStr::new("ZAI_API_KEY")));
+        assert!(
+            matches!(env.get(std::ffi::OsStr::new("RUSTUP_HOME")), Some(Value::Secret(path)) if path.as_os_str() == std::ffi::OsStr::new("/private-home/.rustup"))
+        );
+        let explicit = environment([
+            ("HOME".into(), "/private-home".into()),
+            ("RUSTUP_HOME".into(), "/installed/toolchains".into()),
+        ]);
+        assert!(
+            matches!(explicit.get(std::ffi::OsStr::new("RUSTUP_HOME")), Some(Value::Secret(path)) if path.as_os_str() == std::ffi::OsStr::new("/installed/toolchains"))
+        );
     }
 }
