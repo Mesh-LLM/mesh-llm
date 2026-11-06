@@ -160,23 +160,32 @@ fn regular_publication_observer_preserves_known_commit_under_owned_cancel_or_dea
             }
             Ok(())
         };
-        let result = runtime().block_on(publisher(&server).publish_observed_until(
-            &plan,
-            vec![LocalFile {
-                path_in_repo: "runs/native-job.json".into(),
-                file: std::fs::File::open(&path).unwrap(),
-                identity: identity(bytes),
-            }],
-            // The deadline covers the preupload and commit exchanges as well as
-            // retrieval. Leave enough time to observe the commit on busy hosts.
-            Instant::now() + Duration::from_secs(20),
-            cancellation,
-            &mut observer,
-        ));
+        let publisher = publisher(&server);
+        let result = runtime().block_on(async {
+            tokio::time::timeout(
+                Duration::from_secs(45),
+                publisher.publish_observed_until(
+                    &plan,
+                    vec![LocalFile {
+                        path_in_repo: "runs/native-job.json".into(),
+                        file: std::fs::File::open(&path).unwrap(),
+                        identity: identity(bytes),
+                    }],
+                    // This bound also covers preupload and commit on busy hosts.
+                    Instant::now() + Duration::from_secs(20),
+                    cancellation,
+                    &mut observer,
+                ),
+            )
+            .await
+            .expect("publication exceeded independent fixture bound")
+        });
         assert!(known.load(Ordering::SeqCst));
         assert!(!result.completed && result.mutation_attempted);
         assert_eq!(result.commit_oid, Some("d".repeat(40)));
-        assert!(result.error.is_some());
+        let error = result.error.as_deref().expect("publication must fail");
+        let expected = if cancelled { "cancelled" } else { "deadline" };
+        assert!(error.contains(expected), "unexpected error: {error}");
         assert!(
             snapshots
                 .iter()

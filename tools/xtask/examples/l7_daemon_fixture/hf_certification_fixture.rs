@@ -11,7 +11,18 @@ pub(super) fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let bytes = std::fs::read(&projector)?;
     let mode = std::str::from_utf8(bytes.get(4..).ok_or("fixture magic")?)?.trim();
     if mode == "held" {
+        if Path::new("../handler-barrier").exists() {
+            std::fs::write("handler.pending", "waiting before handler installation")?;
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+            while !Path::new("handler.release").exists() {
+                if std::time::Instant::now() >= deadline {
+                    return Err("fixture handler barrier expired".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
         crate::signals::install()?;
+        std::fs::write("owned.pid", std::process::id().to_string())?;
     }
     // The marker is also the test's cancellation barrier: publish it only
     // after the held fixture can handle the shutdown signal.
@@ -20,7 +31,6 @@ pub(super) fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         while !crate::signals::stopped() {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        std::fs::write("stopped", "owned fixture stop")?;
         return Ok(());
     }
     if mode == "nonzero" {
