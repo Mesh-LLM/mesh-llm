@@ -160,7 +160,7 @@ impl StageOpenAiBackend {
                         });
                     }
                     Ok(None) => {
-                        let miss = kv.diagnose_resident_miss(identities);
+                        let miss = kv.diagnose_resident_miss(prepared.identities());
                         let mut attrs = self.openai_attrs(ids);
                         attrs.insert("skippy.kv.decision".to_string(), json!("miss"));
                         insert_resident_miss_attrs(&mut attrs, prefill_tokens.len(), miss);
