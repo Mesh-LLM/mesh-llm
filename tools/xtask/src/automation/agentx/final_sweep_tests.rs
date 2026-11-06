@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 pub(super) fn arms() -> Vec<Value> {
     ORDER.into_iter().enumerate().map(|(index,engine)|json!({"index":index+1,"engine":engine,"status":"passed",
-        "cells":([1,2,4].map(|c|json!({"offered_sessions":c,"output_tok_s":20.0,
+        "cells":([1,2,4].map(|c|json!({"offered_sessions":c,"output_tok_s":20.0,"ttft":{"p50":1.0,"p95":2.0},"itl":{"p50":0.5},
             "cohort":{"selected_cohort_sha256":COHORT_SHA},"phase_outcome":{"errors":0,"cancelled":0},
             "completed_work":{"requests":69,"output_tokens":18713,"source_turn_output_sha256":"a".repeat(64)}})))})).collect()
 }
@@ -81,9 +81,14 @@ fn prepared_tree_identity_detects_mutation_and_refuses_directory_links() {
 #[test]
 fn manifest_cannot_pair_wrong_source_backend_or_upstream_with_pinned_tools() {
     let tools = tools();
-    let manifest = json!({"runtime":{"backend":{"kind":"cuda"},"skippy_abi":"0.1.76"},
+    let abi = crate::native_policy::package_version::abi_version(include_bytes!(
+        "../../../../../skippy/crates/skippy-ffi/src/lib.rs"
+    ))
+    .unwrap()
+    .to_string();
+    let manifest = json!({"runtime":{"backend":{"kind":"cuda"},"skippy_abi":abi},
         "build":{"llama_patched_sha":tools.native_source_commit,"llama_patch_digest":tools.native_patch_digest,"llama_upstream_sha":tools.standard_upstream}});
-    tools.validate_manifest(&manifest).unwrap();
+    tools.validate_manifest(&manifest, &abi).unwrap();
     for pointer in [
         "/build/llama_patched_sha",
         "/build/llama_patch_digest",
@@ -93,7 +98,30 @@ fn manifest_cannot_pair_wrong_source_backend_or_upstream_with_pinned_tools() {
     ] {
         let mut wrong = manifest.clone();
         *wrong.pointer_mut(pointer).unwrap() = json!("different");
-        assert!(tools.validate_manifest(&wrong).is_err(), "{pointer}");
+        assert!(tools.validate_manifest(&wrong, &abi).is_err(), "{pointer}");
+    }
+    assert!(tools.validate_manifest(&manifest, "0.0.0").is_err());
+}
+
+#[test]
+fn prepared_environment_rejects_executable_and_external_pth_entries() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = tempfile::tempdir().unwrap();
+    let path = dir.path().join("module-path.pth");
+    let tree = Tree {
+        path: dir.path().into(),
+        sha256: String::new(),
+    };
+    std::fs::create_dir(dir.path().join("modules")).unwrap();
+    std::fs::write(&path, "# local modules\nmodules\n").unwrap();
+    assert!(tree.observe().is_ok());
+    for content in [
+        "import outside\n".into(),
+        "import\toutside\n".into(),
+        format!("{}\n", outside.path().display()),
+    ] {
+        std::fs::write(&path, content).unwrap();
+        assert!(tree.observe().is_err());
     }
 }
 

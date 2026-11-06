@@ -229,10 +229,55 @@ fn run_id(run: &Value) -> DynResult<&str> {
 fn now() -> DynResult<u128> {
     Ok(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())
 }
+
+fn publication_lock(
+    root: &Path,
+    tracking_uri: &str,
+    campaign_key: &str,
+) -> DynResult<std::fs::File> {
+    if !root.is_absolute() || !root.is_dir() {
+        return Err(
+            "AgentX publication lock directory must be an existing absolute shared directory"
+                .into(),
+        );
+    }
+    let tracking_root = url::Url::parse(tracking_uri)?.join("/")?;
+    let key = inputs::digest(&serde_json::to_vec(&(
+        tracking_root.as_str(),
+        campaign_key,
+    ))?);
+    let path = root.join(format!("agentx-{key}.lock"));
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW).mode(0o600);
+    }
+    let file = options.open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err("AgentX publication lock must be a regular file".into());
+    }
+    // No indefinite lock wait: concurrent publishers fail before any API write
+    // and can retry once the existing campaign publication releases the lock.
+    file.try_lock()
+        .map_err(|_| "AgentX campaign publication is busy or shared locking failed")?;
+    // Keep the file in place after unlock so other processes always lock the
+    // same inode; deleting it would allow concurrent independent lock owners.
+    Ok(file)
+}
+
 pub(super) fn run(plan: Plan, output: &Path) -> DynResult<()> {
     mlflow_export::validate_plan(&plan)?;
     std::fs::create_dir(output)?;
     let mut client = Client::new(output)?;
+    let lock_root = std::env::var_os("AGENTX_MLFLOW_LOCK_DIR")
+        .ok_or("AGENTX_MLFLOW_LOCK_DIR must identify the shared publication lock directory")?;
+    let _lock = publication_lock(
+        Path::new(&lock_root),
+        client.base.as_str(),
+        &plan.campaign_root.run_key,
+    )?;
     let existing = client.request(
         "/api/2.0/mlflow/experiments/get?experiment_id=6",
         "GET",
@@ -283,4 +328,89 @@ pub(super) fn run(plan: Plan, output: &Path) -> DynResult<()> {
         "publication":"finished; artifacts uploaded, execution/work accounting is distinct from numerical qualification",
         "plan_sha256":inputs::digest(&serde_json::to_vec(&plan)?)}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn campaign_publications_share_a_lock_across_output_directories() {
+        let root = tempfile::tempdir().unwrap();
+        let first =
+            publication_lock(root.path(), "https://tracking.example/", "campaign:root").unwrap();
+        assert!(
+            publication_lock(root.path(), "https://tracking.example/", "campaign:root").is_err()
+        );
+        assert!(
+            publication_lock(
+                root.path(),
+                "https://tracking.example/prefix/",
+                "campaign:root"
+            )
+            .is_err()
+        );
+        assert!(publication_lock(root.path(), "https://tracking.example/", "other:root").is_ok());
+        assert!(publication_lock(root.path(), "https://other.example/", "campaign:root").is_ok());
+        drop(first);
+        assert!(
+            publication_lock(root.path(), "https://tracking.example/", "campaign:root").is_ok()
+        );
+        assert!(
+            publication_lock(
+                Path::new("relative"),
+                "https://tracking.example/",
+                "campaign:root"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn publication_lock_child() {
+        let Some(root) = std::env::var_os("AGENTX_LOCK_TEST_ROOT") else {
+            return;
+        };
+        let busy = std::env::var_os("AGENTX_LOCK_TEST_BUSY").is_some();
+        assert_eq!(
+            publication_lock(
+                Path::new(&root),
+                "https://tracking.example/alias/",
+                "campaign:root"
+            )
+            .is_err(),
+            busy
+        );
+    }
+
+    #[test]
+    fn campaign_lock_excludes_an_independent_publication_process() {
+        let root = tempfile::tempdir().unwrap();
+        let lock =
+            publication_lock(root.path(), "https://tracking.example/", "campaign:root").unwrap();
+        let executable = std::env::current_exe().unwrap();
+        let mut spec = command::spec(
+            root.path(),
+            executable.to_str().unwrap(),
+            &[
+                "--exact".into(),
+                "automation::agentx::mlflow_publish::tests::publication_lock_child".into(),
+                "--test-threads=1".into(),
+            ],
+        )
+        .unwrap();
+        spec.environment.insert(
+            "AGENTX_LOCK_TEST_ROOT".into(),
+            crate::process::Value::Public(root.path().into()),
+        );
+        spec.environment.insert(
+            "AGENTX_LOCK_TEST_BUSY".into(),
+            crate::process::Value::Public("1".into()),
+        );
+        command::run(&spec, 30, &root.path().join("busy-child")).unwrap();
+        drop(lock);
+        spec.environment
+            .remove(std::ffi::OsStr::new("AGENTX_LOCK_TEST_BUSY"));
+        command::run(&spec, 30, &root.path().join("released-child")).unwrap();
+    }
 }

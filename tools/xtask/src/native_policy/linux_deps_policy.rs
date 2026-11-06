@@ -46,7 +46,7 @@ pub(super) struct Package<'a> {
     pub(super) arch: Option<String>,
 }
 
-fn host_owned(name: &str) -> bool {
+pub(crate) fn host_owned(name: &str) -> bool {
     let lower = casefold(name);
     HOST_LIBRARY_NAMES.contains(&lower.as_str())
         || lower.starts_with("linux-vdso")

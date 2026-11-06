@@ -27,7 +27,7 @@ use crate::frontend::speculative::{SpeculativeDecodeConfig, standalone_ngram_pro
 use crate::kv_integration::KvStageIntegration;
 use crate::listener::bind_serve_listener;
 use crate::runtime_state::RuntimeState;
-use crate::runtime_state::{loaded_memory_cache_capabilities, loaded_model_state_kind};
+use crate::runtime_state::loaded_model_state_kind;
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use crate::telemetry::now_unix_nanos;
@@ -400,10 +400,9 @@ fn embedded_openai_backend_with_state_kind(
         "stage.openai_runtime_prewarm",
     )
     .context("prewarm embedded OpenAI runtime sessions")?;
-    let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
+    let kv = KvStageIntegration::from_runtime_with_l3_manager(
         &args.config,
-        loaded_model_state_kind(Some(&args.runtime)),
-        loaded_memory_cache_capabilities(Some(&args.runtime)),
+        &args.runtime,
         args.l3_manager.clone(),
         args.kv_lifecycle_observer.clone(),
     )?
@@ -419,8 +418,8 @@ fn embedded_openai_backend_with_state_kind(
     }
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
     let generation_token_budget = {
-        let runtime = crate::runtime_state::panic_recovery::lock_runtime(&args.runtime);
-        Arc::new(GenerationTokenBudget::for_runtime(&runtime, ctx_size))
+        let mut runtime = crate::runtime_state::panic_recovery::lock_runtime(&args.runtime);
+        GenerationTokenBudget::shared_for_runtime(&mut runtime, ctx_size)
     };
     let iteration_scheduler = match iteration_scheduler {
         Some(iteration_scheduler) => iteration_scheduler,

@@ -28,6 +28,39 @@ impl KvStageIntegration {
             )));
         }
         let mut evicted = (0_usize, 0_u64);
+        // Attention cells are shared; recurrent state is copied. Evict against
+        // the measured checkpoint size and reserve host headroom before that
+        // copy, rather than relying on a post-allocation size check.
+        let checkpoint_bytes = if self.resident_requires_checkpoint() {
+            runtime.recurrent_state_size(session_id)?
+        } else {
+            0
+        };
+        if checkpoint_bytes > self.resident_checkpoint_max_bytes
+            || !make_record_room(
+                self.resident_config,
+                &mut radix,
+                &mut sequences,
+                checkpoint_bytes,
+                &mut evicted,
+                |victim| self.release_native_prefix(runtime, session_id, victim),
+            )?
+        {
+            return Ok(None);
+        }
+        let _host_reservation = if self.resident_requires_checkpoint() {
+            let Some(reservation) = self.reserve_snapshot_host_memory(
+                runtime,
+                session_id,
+                StagePrefixCachePayload::ResidentKv,
+                token_count as u64,
+            ) else {
+                return Ok(None);
+            };
+            reservation
+        } else {
+            None
+        };
         let seq_id = match sequences.allocate() {
             Ok(sequence) => sequence,
             Err(error) => {

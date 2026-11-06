@@ -1,7 +1,7 @@
-From 43d7915d757c943ce529adae7f406fea0b24689b Mon Sep 17 00:00:00 2001
+From 3a1e7caf283b9570f2718eef9fa7908d9ff51c29 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sun, 27 Sep 2026 21:12:21 +1000
-Subject: [PATCH 6/6] models: add Laya decision model support
+Subject: [PATCH] models: add Laya decision model support
 
 Port ggml-org/llama.cpp#29363 (head 6367bdd2da) onto the pinned revision:
 the LAYA architecture, GGUF keys and tensor names, the laya-multilingual
@@ -265,10 +265,10 @@ index 000000000..002fac598
 +
 +#endif // SKIPPY_LAYA_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 4276b95e3..91c7aad92 100644
+index f4889950f..59aad17bf 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -95,6 +95,8 @@ add_library(llama
+@@ -99,6 +99,8 @@ add_library(llama
              skippy/tokenization.cpp
              skippy/events.cpp
              skippy/system_one.cpp
@@ -277,7 +277,7 @@ index 4276b95e3..91c7aad92 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -123,7 +125,7 @@ set_source_files_properties(${LLAMA_MODELS_SOURCES}
+@@ -127,7 +129,7 @@ set_source_files_properties(${LLAMA_MODELS_SOURCES}
  
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  
@@ -2812,5 +2812,5 @@ index 000000000..8a713d563
 +// run one forward pass; returns 0 on success, non-zero on failure
 +LLAMA_API int laya_encode(laya_context * ctx, const laya_batch & batch, laya_result & result);
 -- 
-2.55.0
+2.54.0 (Apple Git-157)
 

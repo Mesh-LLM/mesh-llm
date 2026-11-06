@@ -182,6 +182,18 @@ pub(in crate::kv_integration) fn spill_exact_record_to_l3(
         l3_cost,
         native_raw,
     } = pending;
+    // Native eviction already owns the runtime and resident index. Resolve
+    // committed disk entries here on the durable worker, never under either
+    // scheduler lock. The in-flight claim remains held across this lookup.
+    if native_raw
+        && l3
+            .locate_longest(&namespace, &token_ids, 1)
+            .is_ok_and(|entry| {
+                entry.is_some_and(|entry| entry.token_count == token_ids.len() as u64)
+            })
+    {
+        return;
+    }
     let kv_desc_json = extra
         .kv_desc
         .as_ref()

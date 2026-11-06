@@ -76,10 +76,9 @@ fn backend(root: &Path) -> Result<StageOpenAiBackend> {
         2,
     )?;
     let manager = L3CacheManager::acquire(root, StoreLimits::new(4 << 30, 0))?;
-    backend.kv = KvStageIntegration::from_loaded_model_with_l3_manager(
+    backend.kv = KvStageIntegration::from_runtime_with_l3_manager(
         &backend.config,
-        crate::runtime_state::loaded_model_state_kind(Some(&backend.runtime)),
-        crate::runtime_state::loaded_memory_cache_capabilities(Some(&backend.runtime)),
+        &backend.runtime,
         Some(manager),
         None,
     )?

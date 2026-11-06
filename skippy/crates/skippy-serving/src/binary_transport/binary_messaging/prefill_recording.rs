@@ -254,8 +254,9 @@ mod tests {
             skippy_cache::StoreLimits::new(1 << 20, 0),
         )
         .unwrap();
-        let config = prefix_cache_test_config();
-        let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
+        let mut config = prefix_cache_test_config();
+        config.source_model_sha256 = Some("ab".repeat(32));
+        let kv = KvStageIntegration::from_test_model_with_l3_manager(
             &config,
             Some(ModelStateKind::Dense),
             Some(skippy_runtime::MemoryCacheCapabilities {

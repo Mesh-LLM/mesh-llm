@@ -1,7 +1,7 @@
-From 485910c3e86cb6fc0e60303504f0b936e88013a7 Mon Sep 17 00:00:00 2001
+From e6dcdbba87caf5c75eaf42a5490b834ef609a57e Mon Sep 17 00:00:00 2001
 From: Daniel Han <danielhanchen@gmail.com>
 Date: Sun, 20 Sep 2026 11:16:21 +1000
-Subject: [PATCH 3/6] llama: port DiffusionGemma support
+Subject: [PATCH] llama: port DiffusionGemma support
 
 Port the feature diff from ggml-org/llama.cpp PR #24423 at 12e0a9627d02c6395fd4bbf2aadff93d0d46a0e4 onto the mesh-llm llama.cpp pin. Express the phase-specific embedding selection as one assignment so the deterministic Skippy stage rewriter can prove the layer-carried activation.
 
@@ -166,7 +166,7 @@ index 8b302d5d7..6e8ec8651 100644
          { "-lr", "--learning-rate" }, "ALPHA",
          string_format("adamw or sgd optimizer alpha (default: %.2g); note: sgd alpha recommended ~10x (no momentum)", (double) params.lr.lr0),
 diff --git a/common/common.h b/common/common.h
-index 2cd6e2ec9..e927c8aae 100644
+index 54a928f04..9c1b1c2e1 100644
 --- a/common/common.h
 +++ b/common/common.h
 @@ -409,7 +409,10 @@ struct common_params_speculative {
@@ -641,7 +641,7 @@ index 000000000..8a430b504
 +}
 diff --git a/examples/diffusion-gemma-server/diffusion-gemma-visual-server.cpp b/examples/diffusion-gemma-server/diffusion-gemma-visual-server.cpp
 new file mode 100644
-index 000000000..193b326d9
+index 000000000..a4dea3783
 --- /dev/null
 +++ b/examples/diffusion-gemma-server/diffusion-gemma-visual-server.cpp
 @@ -0,0 +1,388 @@
@@ -1034,7 +1034,7 @@ index 000000000..193b326d9
 +    return 0;
 +}
 diff --git a/examples/diffusion/diffusion-cli.cpp b/examples/diffusion/diffusion-cli.cpp
-index c64611356..198515402 100644
+index c64611356..7f036913a 100644
 --- a/examples/diffusion/diffusion-cli.cpp
 +++ b/examples/diffusion/diffusion-cli.cpp
 @@ -2,13 +2,27 @@
@@ -1692,7 +1692,7 @@ index c64611356..198515402 100644
  
      llama_free(ctx);
 diff --git a/examples/diffusion/diffusion.cpp b/examples/diffusion/diffusion.cpp
-index 0ff57d953..f859d6893 100644
+index 0ff57d953..cf5c0e149 100644
 --- a/examples/diffusion/diffusion.cpp
 +++ b/examples/diffusion/diffusion.cpp
 @@ -8,7 +8,9 @@
@@ -2462,10 +2462,10 @@ index fe46aa888..94e1c5bbe 100644
      LLM_TENSOR_POST_MLP_NORM,
      LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 56390f221..6822f2e34 100644
+index 94d49115f..10c34a607 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -1729,8 +1729,14 @@ int llama_context::encode(
+@@ -1739,8 +1739,14 @@ int llama_context::encode(
      // eagle3/DFlash: features as encoder input, and non-draft paths fall back to model's input dim
      const int64_t n_vocab = model.vocab.n_tokens();
  
@@ -2481,7 +2481,7 @@ index 56390f221..6822f2e34 100644
          LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
          return -1;
      }
-@@ -1759,17 +1765,27 @@ int llama_context::encode(
+@@ -1769,17 +1775,27 @@ int llama_context::encode(
  
      n_queued_tokens += n_tokens;
  
@@ -2515,7 +2515,7 @@ index 56390f221..6822f2e34 100644
  
      const auto causal_attn_org = cparams.causal_attn;
  
-@@ -1802,7 +1818,7 @@ int llama_context::encode(
+@@ -1812,7 +1828,7 @@ int llama_context::encode(
          GGML_ASSERT(backend_res != nullptr);
          GGML_ASSERT(logits.data != nullptr);
  
@@ -3656,7 +3656,7 @@ index fc5e5b61d..1eaa9b576 100644
      llama_model_gemma4_assistant(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index e791fcaf9..edd61ff63 100644
+index 18257fb2e..69313f903 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -350,8 +350,11 @@ static gguf_context_ptr get_gguf_ctx(
@@ -3673,7 +3673,7 @@ index e791fcaf9..edd61ff63 100644
          std::vector<uint32_t> pattern;
          pattern.reserve(n_layer);
          for (uint32_t il = 0; il < n_layer; il++) {
-@@ -554,6 +557,16 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -555,6 +558,16 @@ static gguf_context_ptr get_gguf_ctx(
          ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,   std::vector<float>({0.0f, 4.0f}));
          ms.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, std::vector<float>({0.0f, 5.0f}));
      }
@@ -3690,7 +3690,7 @@ index e791fcaf9..edd61ff63 100644
      ms.add_kv(LLM_KV_WKV_HEAD_SIZE,               n_embd/n_head);
      ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,           uint32_t(3));
      ms.add_kv(LLM_KV_RESIDUAL_SCALE,              3.5565588200778455f);
-@@ -843,6 +856,7 @@ static bool moe_mandatory(const llm_arch arch) {
+@@ -844,6 +857,7 @@ static bool moe_mandatory(const llm_arch arch) {
          case LLM_ARCH_DEEPSEEK2:
          case LLM_ARCH_DEEPSEEK32:
          case LLM_ARCH_DOTS3NOTE:
@@ -3698,7 +3698,7 @@ index e791fcaf9..edd61ff63 100644
          case LLM_ARCH_DEEPSEEK4:
          case LLM_ARCH_GLM4_MOE:
          case LLM_ARCH_GLM_DSA:
-@@ -1163,7 +1177,10 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
+@@ -1166,7 +1180,10 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
              continue;
          }
  
@@ -3711,5 +3711,5 @@ index e791fcaf9..edd61ff63 100644
              if (moe && !moe_implemented(arch)) {
                  continue;
 -- 
-2.55.0
+2.54.0 (Apple Git-157)
 

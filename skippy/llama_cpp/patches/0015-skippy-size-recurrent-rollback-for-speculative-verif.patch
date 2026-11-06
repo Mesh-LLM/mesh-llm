@@ -1,4 +1,4 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From b9dc7c1eb49a963780de96de14a7864bff0b103e Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Wed, 28 Oct 2026 14:17:38 +1100
 Subject: [PATCH] skippy: size recurrent rollback for speculative verify
@@ -23,7 +23,7 @@ backend-sampling output limit is restored.
  5 files changed, 19 insertions(+), 5 deletions(-)
 
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
-index bc4da9a07..b570682ef 100644
+index c930d9c3b..856c98f97 100644
 --- a/include/skippy/runtime.h
 +++ b/include/skippy/runtime.h
 @@ -123,6 +123,10 @@ struct skippy_runtime_config {
@@ -38,10 +38,10 @@ index bc4da9a07..b570682ef 100644
  
  /** @brief Returns a C-safe runtime configuration with all derived-default controls set to auto. */
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 4d198295f..b5b6d0670 100644
+index 7f6338a91..ac42f935f 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -2019,9 +2019,10 @@ int llama_context::decode(
+@@ -2029,9 +2029,10 @@ int llama_context::decode(
                  // are limited to one output row; a sampler on some other
                  // sequence of this context must not reject a multi-output
                  // batch (e.g. speculative verification) for this one.
@@ -56,10 +56,10 @@ index 4d198295f..b5b6d0670 100644
                  }
              }
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
-index 7305cc529..db5a69e38 100644
+index 4082fa198..5bfd47c93 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
-@@ -733,7 +733,13 @@ enum skippy_status skippy_finish_model_open(
+@@ -734,7 +734,13 @@ enum skippy_status skippy_finish_model_open(
      }
      if (llm_arch_is_recurrent(model->arch) || llm_arch_is_hybrid(model->arch)) {
          params.n_seq_max = std::max<uint32_t>(params.n_seq_max, std::max<uint32_t>(2, stage_model->lane_count * 2));
@@ -90,10 +90,10 @@ index 6a1352271..b688fce73 100644
      session->sampling_config_valid = false;
      session->chat_sampling_metadata.clear();
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index 36c972d92..4741f55cb 100644
+index 0653347a7..40110a816 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
-@@ -390,6 +390,7 @@ enum skippy_status skippy_session_reset(
+@@ -387,6 +387,7 @@ enum skippy_status skippy_session_reset(
              skippy_env_enabled("SKIPPY_DETACH_SAMPLER_ON_RESET");
      if (detach_sampler_on_reset || !skippy_reset_reusable_sampling(session)) {
          skippy_clear_chat_sampling(session);

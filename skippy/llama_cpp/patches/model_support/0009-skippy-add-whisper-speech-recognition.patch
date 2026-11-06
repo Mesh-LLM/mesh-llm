@@ -1,4 +1,4 @@
-From 708ffe886e3d4d8dbd25abcaa8ae3162348aca56 Mon Sep 17 00:00:00 2001
+From 4c6d80d9ae29b00d14786b8c92b4299f70bf6395 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 22 Oct 2026 17:15:05 +1100
 Subject: [PATCH] skippy: add Whisper speech recognition
@@ -238,10 +238,10 @@ index 54c87b6f2..4214d0b89 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index c4712cad1..62694667f 100644
+index 0cd00bf9f..f34b481ee 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -97,6 +97,7 @@ add_library(llama
+@@ -101,6 +101,7 @@ add_library(llama
              skippy/system_one.cpp
              skippy/laya.cpp
              ../tools/laya/laya.cpp
@@ -249,7 +249,7 @@ index c4712cad1..62694667f 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -123,6 +124,10 @@ set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h .
+@@ -127,6 +128,10 @@ set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h .
  set_source_files_properties(${LLAMA_MODELS_SOURCES}
      PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
  
@@ -260,7 +260,7 @@ index c4712cad1..62694667f 100644
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  
  target_include_directories(llama PRIVATE . ../common ../tools/laya ${CMAKE_CURRENT_BINARY_DIR})
-@@ -169,6 +174,38 @@ if (LLAMA_LLGUIDANCE)
+@@ -173,6 +178,38 @@ if (LLAMA_LLGUIDANCE)
  endif()
  
  
@@ -788,5 +788,5 @@ index 000000000..680549066
 +    delete result;
 +}
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

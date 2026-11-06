@@ -6,7 +6,6 @@ mod capacity;
 mod command;
 mod comparison_cohort;
 mod completed_work;
-mod container;
 mod contention_cohort;
 mod context_support;
 mod final_sweep;
@@ -25,6 +24,7 @@ mod prepared_launch;
 mod prepared_tools;
 mod results;
 mod scheduler_profile;
+mod standard_runtime;
 mod trace_context;
 mod workload;
 use crate::{command::DynResult, repository::check_args::Grammar};
@@ -56,15 +56,6 @@ impl Profile {
             Self::Contention => "contention",
         }
     }
-    fn parse(value: &str) -> DynResult<Self> {
-        match value {
-            "smoke" => Ok(Self::Smoke),
-            "benchmark" => Ok(Self::Benchmark),
-            "comparison" => Ok(Self::Comparison),
-            "contention" => Ok(Self::Contention),
-            _ => Err("profile must be smoke, benchmark, comparison or contention".into()),
-        }
-    }
     fn concurrencies(self) -> &'static [u32] {
         // Offered load is independent of engine-planned serving capacity.
         match self {
@@ -79,13 +70,6 @@ pub(super) enum Engine {
     Skippy,
 }
 impl Engine {
-    fn parse(value: &str) -> DynResult<Self> {
-        match value {
-            "llama" => Ok(Self::Llama),
-            "skippy" => Ok(Self::Skippy),
-            _ => Err("engine must be llama or skippy".into()),
-        }
-    }
     fn label(self) -> &'static str {
         match self {
             Self::Llama => "llama",
@@ -141,17 +125,8 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         return Err("AgentX accepts comparison --input JSON --output DIR or mlflow-export; legacy unpinned launch modes are not admitted".into());
     }
     const GRAMMAR: Grammar = Grammar {
-        usage: "cargo xtool automation agentx {container|run} --engine {llama|skippy} --model KEY --profile {smoke|benchmark|comparison|contention} --output PATH [--only-concurrency N] | worker --input PATH --port PORT --concurrency N",
-        values: &[
-            "--model",
-            "--engine",
-            "--profile",
-            "--output",
-            "--input",
-            "--port",
-            "--concurrency",
-            "--only-concurrency",
-        ],
+        usage: "cargo xtool automation agentx worker --input PATH --port PORT --concurrency N",
+        values: &["--input", "--port", "--concurrency"],
         flags: &["--help"],
     };
     let parsed = GRAMMAR
@@ -161,45 +136,6 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
         return crate::repository::check_report::CheckReport::success(GRAMMAR.usage.into()).emit();
     }
     match parsed.positionals.as_slice() {
-        [verb] if *verb == "container" => {
-            if parsed.last("--only-concurrency").is_some() {
-                return Err(
-                    "only-concurrency applies to a native run, not a container launch".into(),
-                );
-            }
-            container::run(
-                Engine::parse(parsed.last("--engine").ok_or("missing engine")?)?,
-                parsed.last("--model").ok_or("missing model")?,
-                Profile::parse(parsed.last("--profile").ok_or("missing profile")?)?,
-                PathBuf::from(parsed.last("--output").ok_or("missing output")?),
-            )
-        }
-        [verb] if *verb == "run" => {
-            hardware::admit_execution()?;
-            let root = std::env::current_dir()?;
-            let profile = Profile::parse(parsed.last("--profile").ok_or("missing profile")?)?;
-            let output = PathBuf::from(parsed.last("--output").ok_or("missing output")?);
-            if !output.is_absolute() {
-                return Err("output must be absolute".into());
-            }
-            std::fs::create_dir(&output)?;
-            let engine = Engine::parse(parsed.last("--engine").ok_or("missing engine")?)?;
-            let only_concurrency = parsed
-                .last("--only-concurrency")
-                .map(str::parse::<u32>)
-                .transpose()?;
-            let prepared = inputs::prepare(
-                root,
-                output.clone(),
-                parsed.last("--model").ok_or("missing model")?,
-                profile,
-            );
-            let result =
-                prepared.and_then(|prepared| campaign::run(&prepared, engine, only_concurrency));
-            let archive = results::archive(&output);
-            result?;
-            archive
-        }
         [verb] if *verb == "worker" => {
             let prepared: Prepared = serde_json::from_slice(&std::fs::read(
                 parsed.last("--input").ok_or("missing input")?,

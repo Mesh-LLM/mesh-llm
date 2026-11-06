@@ -93,18 +93,42 @@ fn kib_field(text: &str, name: &str) -> Option<u64> {
 }
 
 fn cgroup_memory_path() -> Option<PathBuf> {
-    // Docker's cgroup namespace normally mounts this container at the root.
-    let root = PathBuf::from("/sys/fs/cgroup/memory.current");
-    if root.is_file() {
-        return Some(root);
-    }
     let groups = std::fs::read_to_string("/proc/self/cgroup").ok()?;
-    let relative = groups.lines().find_map(|line| line.strip_prefix("0::"))?;
-    Some(
-        Path::new("/sys/fs/cgroup")
-            .join(relative.trim_start_matches('/'))
-            .join("memory.current"),
-    )
+    let mounts = std::fs::read_to_string("/proc/self/mountinfo").ok()?;
+    resolve_cgroup_memory_path(&groups, &mounts)
+}
+
+fn resolve_cgroup_memory_path(groups: &str, mounts: &str) -> Option<PathBuf> {
+    let group = Path::new(groups.lines().find_map(|line| line.strip_prefix("0::"))?);
+    if !group.is_absolute()
+        || group
+            .components()
+            .any(|part| part == std::path::Component::ParentDir)
+    {
+        return None;
+    }
+    mounts.lines().find_map(|line| {
+        let (mount, filesystem) = line.split_once(" - ")?;
+        if filesystem.split_whitespace().next()? != "cgroup2" {
+            return None;
+        }
+        let fields: Vec<_> = mount.split_whitespace().collect();
+        let root = Path::new(*fields.get(3)?);
+        let mountpoint = Path::new(*fields.get(4)?);
+        // Ambiguous escaped mount paths remain unavailable rather than sampling
+        // an ancestor and attributing sibling memory to this campaign.
+        if !mountpoint.is_absolute()
+            || mountpoint.to_str()?.contains('\\')
+            || root.to_str()?.contains('\\')
+        {
+            return None;
+        }
+        Some(
+            mountpoint
+                .join(group.strip_prefix(root).ok()?)
+                .join("memory.current"),
+        )
+    })
 }
 
 fn read_sample(pid: u32, elapsed_ms: u128, cgroup: Option<&Path>) -> Sample {
@@ -237,6 +261,28 @@ fn sample_loop(file: File, pid: &AtomicU32, stop: &mpsc::Receiver<()>) -> DynRes
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cgroup_memory_resolves_the_exact_group_in_each_mount_namespace() {
+        let mount = "1 2 0:1 / /sys/fs/cgroup rw - cgroup2 cgroup rw";
+        assert_eq!(
+            resolve_cgroup_memory_path("0::/jobs/campaign", mount),
+            Some("/sys/fs/cgroup/jobs/campaign/memory.current".into())
+        );
+        assert_eq!(
+            resolve_cgroup_memory_path("0::/", mount),
+            Some("/sys/fs/cgroup/memory.current".into())
+        );
+        let subtree = "1 2 0:1 /jobs /sys/fs/cgroup rw - cgroup2 cgroup rw";
+        assert_eq!(
+            resolve_cgroup_memory_path("0::/jobs/campaign", subtree),
+            Some("/sys/fs/cgroup/campaign/memory.current".into())
+        );
+        assert_eq!(
+            resolve_cgroup_memory_path("0::/other/campaign", subtree),
+            None
+        );
+        assert_eq!(resolve_cgroup_memory_path("0::/jobs/../other", mount), None);
+    }
     #[test]
     fn proc_memory_requires_units_and_never_converts_missing_to_zero() {
         let status = "VmRSS:\t123 kB\nVmHWM:\t456 kB\nRssAnon:\t7 kB\n";

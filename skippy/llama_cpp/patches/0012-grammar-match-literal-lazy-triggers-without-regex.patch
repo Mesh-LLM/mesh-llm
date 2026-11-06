@@ -1,4 +1,4 @@
-From 96f8d0e83295e087a54a4fcb49ef93a0e9a84261 Mon Sep 17 00:00:00 2001
+From 9c2367aed4fc22f319e87e747a7a4a7b60e61e48 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 28 Oct 2026 20:57:15 +1300
 Subject: [PATCH] grammar: match literal lazy triggers without regex
@@ -32,10 +32,10 @@ index 0a8a61e7e..da0187e13 100644
          // get from the first matched capturing group to the end of the string
          size_t start = std::string::npos;
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 991bf5479..535cdf51e 100644
+index 659c7ec80..f21fa5099 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -184,6 +184,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+@@ -192,6 +192,7 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
      llama_build_and_test(test-sampling.cpp LINK llama)
      llama_build_and_test(test-reasoning-budget.cpp)
      llama_build_and_test(test-grammar-parser.cpp LINK llama)
@@ -122,5 +122,5 @@ index 000000000..6df57b5c6
 +    return 0;
 +}
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

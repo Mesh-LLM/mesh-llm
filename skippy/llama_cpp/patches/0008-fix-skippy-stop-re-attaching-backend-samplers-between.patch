@@ -1,4 +1,4 @@
-From 786e0119f47e1118a6cc8b7e5045e51f2d7cff02 Mon Sep 17 00:00:00 2001
+From 19f1d3621c12fc149f431512e191f90c99fdd2a6 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sat, 10 Oct 2026 18:34:14 +0100
 Subject: [PATCH] fix(skippy): stop re-attaching backend samplers between
@@ -23,10 +23,10 @@ resets, instead of attaching rebuilt chains to the backend.
  5 files changed, 20 insertions(+), 1 deletion(-)
 
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
-index 38ebae8d7..f44e874d9 100644
+index ba072fe82..db3392ddf 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
-@@ -158,6 +158,11 @@ struct skippy_session {
+@@ -165,6 +165,11 @@ struct skippy_session {
      // detached -- e.g. so a sampled verify window can output every row --
      // it must never be re-attached; only building a fresh chain clears this.
      bool sampling_backend_retired = false;
@@ -61,10 +61,10 @@ index 6fd1240e3..de5fa6ba5 100644
          // scheduler may reset and reuse the same chain on every iteration;
          // attaching it again violates llama_sampler_chain's one-shot init
 diff --git a/src/skippy/session.cpp b/src/skippy/session.cpp
-index f1de95cc5..36c972d92 100644
+index be612007f..0653347a7 100644
 --- a/src/skippy/session.cpp
 +++ b/src/skippy/session.cpp
-@@ -392,6 +392,7 @@ enum skippy_status skippy_session_reset(
+@@ -389,6 +389,7 @@ enum skippy_status skippy_session_reset(
          skippy_clear_chat_sampling(session);
      }
      skippy_mtp_clear_session_state(session);
@@ -73,10 +73,10 @@ index f1de95cc5..36c972d92 100644
      session->reset_required = false;
      session->verify_checkpoints.clear();
 diff --git a/src/skippy/tests/runtime_events.cpp b/src/skippy/tests/runtime_events.cpp
-index 21ac21c73..472f1d990 100644
+index 00a6ff0ec..471d598a2 100644
 --- a/src/skippy/tests/runtime_events.cpp
 +++ b/src/skippy/tests/runtime_events.cpp
-@@ -496,9 +496,19 @@ int test_native_model_load_production(const char * fixture_path) {
+@@ -498,9 +498,19 @@ int test_native_model_load_production(const char * fixture_path) {
      CHECK(!session->sampling_backend_enabled);
      CHECK(session->sampling_backend_retired);
  
@@ -109,5 +109,5 @@ index bb3c0e621..2e9b20c48 100644
      const bool activation_input = skippy_is_filtered(session) && session->stage_model->config.layer_start > 0;
      status = skippy_checkpoint_verify_window(
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

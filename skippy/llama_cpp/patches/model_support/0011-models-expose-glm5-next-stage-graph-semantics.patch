@@ -1,4 +1,4 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From de82323e5283bee104075fda59f048562370c416 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 29 Oct 2026 16:20:16 +1100
 Subject: [PATCH] models: expose glm5-next stage graph semantics
@@ -40,10 +40,10 @@ per-layer KV head counts over the NextN block.
  5 files changed, 220 insertions(+), 17 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 94f1fc871..e0f14f76f 100644
+index 0bdab7962..adb42794e 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -301,6 +301,17 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -305,6 +305,17 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_test(NAME skippy_qwen3moe_mtp COMMAND skippy-profile-residency
          "${QWEN3MOE_MTP_FIXTURE_DIR}/dense-mtp.gguf")
      set_tests_properties(skippy_qwen3moe_mtp PROPERTIES FIXTURES_REQUIRED qwen3moe-mtp-model)
@@ -61,12 +61,12 @@ index 94f1fc871..e0f14f76f 100644
      set(MULTIDEPTH_MTP_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/multidepth-mtp-models")
      file(MAKE_DIRECTORY "${MULTIDEPTH_MTP_FIXTURE_DIR}")
      add_test(NAME skippy_generate_multidepth_mtp COMMAND skippy-model-fixture-generator
-@@ -482,6 +493,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -487,6 +498,7 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_skippy_verify_rollback_test(qwen4exp qwen4exp-moe.gguf)
      # lfm2's fixture slides its attention window, so it checkpoints every window.
      add_skippy_verify_rollback_test(lfm2 lfm2-dense.gguf sliding-window)
 +    add_skippy_verify_rollback_test(glm5-next glm5-next-moe.gguf)
-     add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
+     add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp skippy/tests/resident_checkpoint_gpu.cpp)
      target_include_directories(skippy-sampling-history PRIVATE .)
      target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
 diff --git a/src/models/glm5-next.cpp b/src/models/glm5-next.cpp
@@ -222,7 +222,7 @@ index a1b722950..fd2e5d8dd 100644
      ggml_tensor * out = build_attn_mha(q_absorbed, k, v, nullptr, sel, nullptr, layer.wv_b, inp_kpool->n_sel, kq_scale, il);
      cb(out, "kqv_out", il);
 diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
-index f02490889..345041bfd 100644
+index 6527d2942..a8605bc20 100644
 --- a/src/skippy/tests/graph_build_inputs.cpp
 +++ b/src/skippy/tests/graph_build_inputs.cpp
 @@ -1,4 +1,5 @@
@@ -239,7 +239,7 @@ index f02490889..345041bfd 100644
  #include <cstdint>
  #include <cstdio>
  #include <cstring>
-@@ -897,6 +899,128 @@ static int check_execution_profile_residency() {
+@@ -900,6 +902,128 @@ static int check_execution_profile_residency() {
      return 0;
  }
  
@@ -368,7 +368,7 @@ index f02490889..345041bfd 100644
  int main(int argc, char ** argv) {
      if (const int rc = check_embedding_scale_predicate()) return rc;
      if (const int rc = check_prepared_export_token_axis()) return rc;
-@@ -907,6 +1031,18 @@ int main(int argc, char ** argv) {
+@@ -916,6 +1040,18 @@ int main(int argc, char ** argv) {
      if (argc == 2 && std::strcmp(argv[1], "--input-width") == 0) {
          return check_decode_input_width();
      }

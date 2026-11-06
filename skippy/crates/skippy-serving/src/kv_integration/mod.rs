@@ -158,6 +158,8 @@ pub(crate) struct ExactStateByteLimits {
 #[derive(Clone)]
 pub struct KvStageIntegration {
     pub(crate) mode: StageKvMode,
+    pub(crate) loaded_model_content:
+        Option<Arc<crate::runtime_state::model_content::VerifiedModelContent>>,
     /// The in-process cache representation. Dense models keep native resident
     /// KV here even when a durable tier is configured, so enabling disk does
     /// not replace the fast warm path with serialized state import.
@@ -612,6 +614,16 @@ fn verify_resident_ownership(
 }
 
 impl KvStageIntegration {
+    pub(crate) fn cache_enabled_for_stage(config: &skippy_protocol::StageConfig) -> bool {
+        config::effective_cache_config(config).is_some_and(|cache| {
+            matches!(
+                cache.mode,
+                skippy_protocol::StageKvCacheMode::Record
+                    | skippy_protocol::StageKvCacheMode::LookupRecord
+            )
+        })
+    }
+
     /// Attaches an optional resident-prefix cache lifecycle observer.
     /// Never required; a stage with no observer behaves identically.
     #[must_use]

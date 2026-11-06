@@ -19,8 +19,10 @@ use skippy_runtime::{
 
 mod context_capacity;
 mod frame_operations;
+pub(crate) mod lane_admission;
 mod lane_lifecycle;
 pub mod lifecycle;
+pub(crate) mod model_content;
 pub mod panic_recovery;
 mod resident_prefix;
 mod restore_transaction;
@@ -44,6 +46,10 @@ pub struct RuntimeLaunchOverrides {
 
 pub struct RuntimeState {
     pub model: StageModel,
+    runtime_lane_admission: Arc<lane_admission::RuntimeLaneAdmission>,
+    pub(crate) verified_model_content: Option<Arc<model_content::VerifiedModelContent>>,
+    pub(crate) generation_token_budget:
+        Option<Arc<crate::frontend::admission::GenerationTokenBudget>>,
     compute_meter: Arc<crate::compute_meter::StageComputeMeter>,
     layer_start: u32,
     layer_end: u32,
@@ -258,6 +264,9 @@ impl RuntimeState {
     pub(crate) fn new_modelless_with_capacity_for_test(lane_count: u32, ctx_size: u32) -> Self {
         Self {
             model: StageModel::new_dummy(),
+            runtime_lane_admission: lane_admission::RuntimeLaneAdmission::new(lane_count),
+            verified_model_content: None,
+            generation_token_budget: None,
             layer_start: 0,
             layer_end: 1,
             lane_count,
@@ -370,6 +379,9 @@ pub fn load_runtime_with_overrides(
 ) -> Result<Option<Arc<Mutex<RuntimeState>>>> {
     reject_legacy_serving_package(config)?;
     let runtime_config = runtime_config_from_stage_config(config, overrides)?;
+    let content = model_content::VerifiedModelContent::observe(config)
+        .ok()
+        .flatten();
 
     let admitted_model_parts = config
         .model_part_paths
@@ -387,11 +399,28 @@ pub fn load_runtime_with_overrides(
             open_stage_model(model_path, &runtime_config)?
         }
     };
-    Ok(Some(runtime_from_loaded_model(
+    Ok(Some(runtime_from_verified_model(
         config,
         model,
         session_lifecycle_observer,
+        content,
     )?))
+}
+
+fn runtime_from_verified_model(
+    config: &StageConfig,
+    model: StageModel,
+    observer: Option<Arc<dyn SessionLifecycleObserver>>,
+    content: Option<model_content::VerifiedModelContent>,
+) -> Result<Arc<Mutex<RuntimeState>>> {
+    // Re-stat after open before publishing proof. No filesystem work takes the
+    // runtime lock, and frontends reuse this proof without rehashing weights.
+    let content = content
+        .filter(|proof| proof.still_matches(config))
+        .map(Arc::new);
+    let runtime = runtime_from_loaded_model(config, model, observer)?;
+    panic_recovery::lock_runtime(&runtime).verified_model_content = content;
+    Ok(runtime)
 }
 
 /// Apply workload admission and retain the host's session-lifecycle observer.
@@ -406,6 +435,9 @@ fn runtime_from_loaded_model(
         ContextCapacity::for_loaded_model(config.ctx_size, lane_count, model.has_native_model())?;
     Ok(Arc::new(Mutex::new(RuntimeState {
         model,
+        runtime_lane_admission: lane_admission::RuntimeLaneAdmission::new(lane_count),
+        verified_model_content: None,
+        generation_token_budget: None,
         layer_start: config.layer_start,
         layer_end: config.layer_end,
         lane_count,
@@ -436,6 +468,9 @@ pub fn load_runtime_with_overrides_and_open_events(
 ) -> Result<Option<Arc<Mutex<RuntimeState>>>> {
     reject_legacy_serving_package(config)?;
     let runtime_config = runtime_config_from_stage_config(config, overrides)?;
+    let content = model_content::VerifiedModelContent::observe(config)
+        .ok()
+        .flatten();
 
     let admitted_model_parts = config
         .model_part_paths
@@ -455,10 +490,11 @@ pub fn load_runtime_with_overrides_and_open_events(
             open_stage_model_with_events(model_path, &runtime_config, model_open_events)?
         }
     };
-    Ok(Some(runtime_from_loaded_model(
+    Ok(Some(runtime_from_verified_model(
         config,
         model,
         session_lifecycle_observer,
+        content,
     )?))
 }
 

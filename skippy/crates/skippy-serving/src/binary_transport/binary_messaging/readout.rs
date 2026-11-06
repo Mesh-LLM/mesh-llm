@@ -229,22 +229,14 @@ mod tests {
     #[test]
     #[ignore = "requires SKIPPY_DECISION_MODEL: a real resident-cache-capable GGUF"]
     fn readout_reply_preserves_prefix_recording_evidence() -> Result<()> {
-        use crate::runtime_state::{
-            load_runtime, loaded_memory_cache_capabilities, loaded_model_state_kind,
-        };
+        use crate::runtime_state::load_runtime;
         use skippy_protocol::binary::{StageStateHeader, WireMessageKind};
 
         let config = cache_runtime_config()?;
         let runtime = load_runtime(&config)?.context("loaded runtime")?;
         let kv = Arc::new(
-            KvStageIntegration::from_loaded_model_with_l3_manager(
-                &config,
-                loaded_model_state_kind(Some(&runtime)),
-                loaded_memory_cache_capabilities(Some(&runtime)),
-                None,
-                None,
-            )?
-            .context("resident prefix cache")?,
+            KvStageIntegration::from_runtime_with_l3_manager(&config, &runtime, None, None)?
+                .context("resident prefix cache")?,
         );
         let telemetry = Telemetry::new(
             None,
