@@ -4,7 +4,8 @@ name: Publish DFlash pairing index
 # it changes on main. Each release pins the index by the SHA-256 of its bytes
 # (DFLASH_PAIRING_INDEX_SHA256) and fetches index/<sha256>.json from main, so
 # that file is uploaded once and never overwritten or deleted. index.json and
-# README.md at the repo root are copies for people to read.
+# README.md at the repo root are copies for people to read, refreshed only by
+# the run whose index is still the one on main.
 
 on:
   push:
@@ -13,8 +14,10 @@ on:
       - mesh/crates/mesh-llm-skippy-adapter/data/dflash-pairings/**
   workflow_dispatch:
 
+# One group per commit: a shared group would let GitHub replace a pending run,
+# and the index that commit pins would never be published.
 concurrency:
-  group: dflash-pairings-publish
+  group: dflash-pairings-publish-${{ github.sha }}
   cancel-in-progress: false
 
 permissions:
@@ -66,7 +69,16 @@ jobs:
           fi
           staging="$RUNNER_TEMP/dflash-pairings"
           mkdir -p "$staging/index"
-          cp "$PAIRINGS_DIR/index.json" "$PAIRINGS_DIR/README.md" "$staging/"
+          # Runs for different commits can overlap. Only the run whose pairings
+          # still match main refreshes the human-facing root copies, so an older
+          # run cannot overwrite a newer index.json or README.md.
+          git -c safe.directory="$GITHUB_WORKSPACE" fetch --quiet --depth=1 \
+            "https://github.com/$GITHUB_REPOSITORY.git" main
+          if git -c safe.directory="$GITHUB_WORKSPACE" diff --quiet HEAD FETCH_HEAD -- "$PAIRINGS_DIR"; then
+            cp "$PAIRINGS_DIR/index.json" "$PAIRINGS_DIR/README.md" "$staging/"
+          else
+            echo "main has newer pairings; leaving the root index.json and README.md to its run"
+          fi
           published="$RUNNER_TEMP/published-index.json"
           status="$(curl --silent --show-error --location --proto '=https' \
             --output "$published" --write-out '%{http_code}' \
@@ -98,6 +110,10 @@ jobs:
           STAGING: ${{ steps.stage.outputs.staging }}
         run: |
           set -euo pipefail
+          if [[ -z "$(find "$STAGING" -type f)" ]]; then
+            echo "index/$INDEX_SHA256.json is published and main has newer pairings; nothing to upload"
+            exit 0
+          fi
           # Without --delete, nothing already in the repo is removed.
           hf upload "$PAIRINGS_REPO" "$STAGING" . \
             --repo-type model \

@@ -23,17 +23,18 @@ pub(crate) fn refresh_dflash_pairing_index() {
         return;
     }
     let pin = DFlashPairingIndexPin::shipped();
-    refresh_cached_dflash_pairing_index(pin, pin.cached_path(), fetch_dflash_pairing_index(pin));
+    refresh_cached_dflash_pairing_index(pin, pin.cached_paths(), fetch_dflash_pairing_index(pin));
 }
 
-/// Installs the index cached at `cached` and returns `true`, or fetches it in
-/// the background and returns `false`.
+/// Installs the first usable index among the `cached` copies and returns
+/// `true`, or, when none is usable, fetches it in the background and returns
+/// `false`.
 fn refresh_cached_dflash_pairing_index(
     pin: DFlashPairingIndexPin,
-    cached: Option<PathBuf>,
+    cached: Vec<PathBuf>,
     fetch: impl Future<Output = Result<PathBuf>> + Send + 'static,
 ) -> bool {
-    if let Some(path) = cached {
+    for path in cached {
         let Err(error) = install_cached_dflash_pairing_index(pin, &path) else {
             return true;
         };
@@ -41,10 +42,11 @@ fn refresh_cached_dflash_pairing_index(
         // replaces it.
         tracing::warn!(
             index = %path.display(),
-            "DFlash pairing index unusable, choosing from the bootstrap table: {error:#}"
+            "DFlash pairing index unusable: {error:#}"
         );
         discard_cached_artifact(&path);
     }
+    tracing::info!("no usable DFlash pairing index cached; choosing from the bootstrap table");
     fetch_in_background(&pairing_index_fetch_key(pin), async move {
         let path = fetch.await?;
         if let Err(error) = install_cached_dflash_pairing_index(pin, &path) {
@@ -660,20 +662,25 @@ mod tests {
         // An unusable cached index is removed, so a later load fetches it again.
         assert!(!refresh_cached_dflash_pairing_index(
             pin,
-            Some(bad.clone()),
+            vec![bad.clone()],
             async { unreachable!("no runtime, so no fetch") }
         ));
         assert!(!bad.exists());
         let cached = cache.path().join(pin.file());
         std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
         std::fs::copy(checked_in_index(), &cached).unwrap();
+        // A corrupt copy in one snapshot does not hide a good one in another.
+        let corrupt = cache.path().join("corrupt.json");
+        std::fs::write(&corrupt, "corrupt").unwrap();
         // No runtime and a fetch that must not run: the cache alone serves.
         assert!(refresh_cached_dflash_pairing_index(
             pin,
-            Some(cached),
+            vec![corrupt.clone(), cached.clone()],
             async { unreachable!("a cached index is never fetched") }
         ));
         assert!(dflash_pairing_index_installed());
+        assert!(!corrupt.exists());
+        assert!(cached.exists());
     }
 
     #[test]
@@ -691,7 +698,7 @@ mod tests {
         // removed, so a later load fetches it again.
         assert!(!refresh_cached_dflash_pairing_index(
             OTHER_PIN,
-            Some(cached.clone()),
+            vec![cached.clone()],
             async { unreachable!("no runtime, so no fetch") }
         ));
         assert!(!cached.exists());
@@ -724,7 +731,7 @@ mod tests {
         let fetched = wrong.clone();
         assert!(!refresh_cached_dflash_pairing_index(
             OTHER_PIN,
-            None,
+            Vec::new(),
             async move { Ok(fetched) }
         ));
         let key = pairing_index_fetch_key(OTHER_PIN);
@@ -738,7 +745,7 @@ mod tests {
         let fetched = right.clone();
         assert!(!refresh_cached_dflash_pairing_index(
             pin,
-            None,
+            Vec::new(),
             async move { Ok(fetched) }
         ));
         let key = pairing_index_fetch_key(pin);

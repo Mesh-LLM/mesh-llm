@@ -65,26 +65,30 @@ impl DFlashPairingIndexPin {
         format!("index/{}.json", self.sha256)
     }
 
-    /// The index in the Hugging Face cache, in whichever snapshot holds it.
-    pub fn cached_path(&self) -> Option<PathBuf> {
-        self.cached_path_in(
+    /// Every copy of the index in the Hugging Face cache, one per snapshot
+    /// that holds it, in a stable order.
+    pub fn cached_paths(&self) -> Vec<PathBuf> {
+        self.cached_paths_in(
             &huggingface_hub_cache_dir()
                 .join(huggingface_repo_folder_name(self.repo, RepoTypeModel))
                 .join("snapshots"),
         )
     }
 
-    /// The index under `snapshots`, a repo's Hugging Face cache snapshot
-    /// directory. Its file name is its hash, so any snapshot's copy will do.
-    fn cached_path_in(&self, snapshots: &Path) -> Option<PathBuf> {
+    /// The copies of the index under `snapshots`, a repo's Hugging Face cache
+    /// snapshot directory. Its file name is its hash, so any copy that passes
+    /// [`Self::load`] will do.
+    fn cached_paths_in(&self, snapshots: &Path) -> Vec<PathBuf> {
         let file = self.file();
-        let mut found: Vec<PathBuf> = std::fs::read_dir(snapshots)
-            .ok()?
+        let Ok(entries) = std::fs::read_dir(snapshots) else {
+            return Vec::new();
+        };
+        let mut found: Vec<PathBuf> = entries
             .filter_map(|entry| Some(entry.ok()?.path().join(&file)))
             .filter(|path| path.is_file())
             .collect();
         found.sort();
-        found.into_iter().next()
+        found
     }
 
     /// Reads the index at `path`, refusing it unless its bytes hash to the pin.
@@ -727,16 +731,25 @@ mod tests {
     fn a_cached_index_is_found_by_its_hash_in_any_snapshot() {
         let pin = DFlashPairingIndexPin::shipped();
         let snapshots = tempfile::tempdir().unwrap();
-        assert_eq!(pin.cached_path_in(&snapshots.path().join("missing")), None);
-        // A snapshot without the file, and one (of a later commit) with it.
-        std::fs::create_dir_all(snapshots.path().join("a".repeat(40)).join("index")).unwrap();
-        let commit = snapshots.path().join("b".repeat(40));
-        std::fs::create_dir_all(commit.join("index")).unwrap();
-        assert_eq!(pin.cached_path_in(snapshots.path()), None);
-        let path = commit.join(pin.file());
+        assert!(
+            pin.cached_paths_in(&snapshots.path().join("missing"))
+                .is_empty()
+        );
+        // Snapshots without the file, then with it in two of them.
+        let older = snapshots.path().join("a".repeat(40));
+        let newer = snapshots.path().join("b".repeat(40));
+        std::fs::create_dir_all(older.join("index")).unwrap();
+        std::fs::create_dir_all(newer.join("index")).unwrap();
+        assert!(pin.cached_paths_in(snapshots.path()).is_empty());
+        let path = newer.join(pin.file());
         std::fs::copy(INDEX_PATH, &path).unwrap();
-        assert_eq!(pin.cached_path_in(snapshots.path()), Some(path.clone()));
+        assert_eq!(pin.cached_paths_in(snapshots.path()), vec![path.clone()]);
         assert!(pin.load(&path).is_ok());
+        std::fs::write(older.join(pin.file()), "corrupt").unwrap();
+        assert_eq!(
+            pin.cached_paths_in(snapshots.path()),
+            vec![older.join(pin.file()), path]
+        );
     }
 
     /// The pairings table in the Hugging Face README, rendered from the index.
