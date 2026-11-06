@@ -16,7 +16,7 @@
         <span class="hero-subtitle-copy"><span class="hero-subtitle-prefix"></span><span class="hero-subtitle-animated"><span class="hero-subtitle-dynamic"></span><span class="hero-subtitle-dot">.</span></span></span>
       </p>
     </div>
-    <p class="sr-only">Run any model across nodes in your homelab, in your business, or on the internet. Large models get split into smaller pieces, memory-bound GPUs run smaller layer slices, and layers land on right-sized nodes.</p>
+    <p class="sr-only">Run any model across nodes in your homelab, in your business, or on the internet. Share compute with friends, family, coworkers or the world to get AI for free. Large models get split into smaller pieces, memory-bound GPUs run smaller layer slices, and layers land on right-sized nodes.</p>
 
     <div class="hero-footer shell mx-auto flex w-[min(100%-1.5rem,75rem)] md:w-[min(100%-4rem,75rem)]" aria-label="Hero actions">
       <div class="hero-entry-points">
@@ -63,19 +63,14 @@
             <a href="/docs/pages/sdk-kotlin/">Kotlin / Java</a>
           </nav>
         </div>
-      </div>
-
-      <div class="hero-sponsor shrink-0 items-center gap-3 text-sm text-subtle" aria-label="Sponsor slot">
-        <span>Sponsored by</span>
-        <a class="sponsor-slot" href="{{ site.githubUrl }}" aria-label="Sponsor Mesh">
-          <svg aria-hidden="true" viewBox="0 0 50 50" fill="none">
-            <rect x="0.75" y="0.75" width="48.5" height="48.5" rx="7.25" stroke="currentColor" stroke-width="1.5"/>
-            <path d="M25 4.5V45.5M4.5 25H45.5M9 9H41V41H9V9Z" stroke="var(--sponsor-line-soft)" stroke-width="1"/>
-            <path d="M25 4.5L45.5 25L25 45.5L4.5 25L25 4.5Z" stroke="var(--sponsor-line)" stroke-width="1"/>
-            <circle cx="25" cy="25" r="18.5" stroke="var(--sponsor-line)" stroke-width="1"/>
-            <circle cx="25" cy="25" r="12" stroke="var(--sponsor-line-soft)" stroke-width="1"/>
-          </svg>
-        </a>
+        <div class="hero-sdk hero-plugins" aria-labelledby="hero-plugins-title">
+          <h2 id="hero-plugins-title">Extend Mesh</h2>
+          <p><strong>Many plugins.</strong> Add inference engines, agent tools, payments, and console pages.</p>
+          <a class="hero-sdk-link" href="/plugins/">Browse plugins <span aria-hidden="true">→</span></a>
+          <nav class="hero-sdk-languages" aria-label="Featured plugins">
+            {% for p in plugins.all %}{% if p.group == "inference" %}<a href="/plugins/#plugin-panel-{{ p.name }}">{{ p.name }}</a>{% endif %}{% endfor %}
+          </nav>
+        </div>
       </div>
     </div>
 
