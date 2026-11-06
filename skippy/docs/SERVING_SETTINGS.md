@@ -130,7 +130,7 @@ override its fields.
 given by `--draft-model-path` to the target model. The draft reads target
 hidden states, so it requires local serving of the complete target model, a
 DFlash GGUF trained for that target, and a runtime that exports the upstream
-draft-context API (not Windows builds). It drafts for greedy and sampled
+draft-context API, under Itanium or MSVC C++ names. It drafts for greedy and sampled
 requests; requests that ask for logprobs decode normally. Block length adapts
 to measured verify cost and acceptance, up to `--dflash-max-tokens`;
 `SKIPPY_DFLASH_ADAPTIVE=0` is an off switch that pins blocks at the cap. DSpark and
