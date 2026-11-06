@@ -139,6 +139,24 @@
       },
       "max_draft_tokens": 7,
       "backends": "not-metal"
+    },
+    {
+      "target": {
+        "architecture": "nemotron_h_moe",
+        "layer_count": 52,
+        "embedding_length": 2688,
+        "expert_count": 128,
+        "family": "Nemotron-3.5-Lightning"
+      },
+      "draft": {
+        "repo": "meshllm/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-DSpark-GGUF",
+        "revision": "5b7d4423fad884ef9a5a451c396b91bbd5f4d050",
+        "file": "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-DSpark-Q8_0.gguf",
+        "sha256": "0ca3174767e1ee35c193af9911de49fd2810a630fd7fa8b68fcab3137e72b5cf",
+        "bytes": 1036046944
+      },
+      "max_draft_tokens": 7,
+      "backends": "metal"
     }
   ]
 }

@@ -326,6 +326,29 @@ pub(super) fn bootstrap_pairings() -> Vec<DFlashPairing> {
             max_draft_tokens: 7,
             backends: DFlashBackends::NotMetal,
         },
+        // The same DSpark draft at Q8_0 on Metal, which has no fast NVFP4
+        // kernels. On an M3 Ultra greedy chat decodes 137.1 tok/s (119.1 MTP,
+        // 95.2 off), sampled 134.4 (83.5 MTP) and agentic coding 121.5
+        // (112.1 MTP).
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "nemotron_h_moe".to_string(),
+                layer_count: 52,
+                embedding_length: 2688,
+                expert_count: 128,
+                family: Some("Nemotron-3.5-Lightning".to_string()),
+            },
+            draft: DFlashDraft {
+                repo: "meshllm/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-DSpark-GGUF".to_string(),
+                revision: "5b7d4423fad884ef9a5a451c396b91bbd5f4d050".to_string(),
+                file: "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-DSpark-Q8_0.gguf".to_string(),
+                sha256: "0ca3174767e1ee35c193af9911de49fd2810a630fd7fa8b68fcab3137e72b5cf"
+                    .to_string(),
+                bytes: 1_036_046_944,
+            },
+            max_draft_tokens: 7,
+            backends: DFlashBackends::Metal,
+        },
     ]
 }
 
@@ -765,6 +788,10 @@ mod tests {
         assert_eq!(
             repo("Nemotron-3.5-Lightning-30B-A3B", false).as_deref(),
             Some("magnitudedev/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark-GGUF")
+        );
+        assert_eq!(
+            repo("Nemotron-3.5-Lightning-30B-A3B", true).as_deref(),
+            Some("meshllm/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-DSpark-GGUF")
         );
     }
 
