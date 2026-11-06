@@ -119,16 +119,19 @@ Run Cargo commands serially. Do not run multiple Cargo commands in parallel: thi
 - `cargo xtool repository affected-crates <paths from your diff against the PR base>` prints CI's list in its `affected` field (a bare invocation prints an empty list), and `just test-all` is the broad fallback, though it runs skippy-runtime and skippy-serving lib-only there.
 - `--lib` skips the integration-test binaries and the doc tests, and CI runs both for the crates it executes (`ci-rust-tests-slice.yml`), so a `--lib`-only run can be green while CI is red.
 - `cargo clippy --all-targets` type-checks test code but never executes it, so a green Clippy run
-  is not a test run either. Before pushing, run the full tests for every touched crate CI will
-  test (`just ci-automation-contracts` for `xtask`), and treat a failure caught locally as cheap,
-  a failure caught by pushed CI as expensive.
+  is not a test run either. Before pushing, run the full tests for every crate CI will test,
+  including workspace dependents (`just ci-automation-contracts` for `xtask`; on non-Windows hosts
+  that recipe skips the Windows-only tests CI runs, so run affected platform-specific tests on
+  Windows when available), and treat a failure caught locally as cheap, a failure caught by pushed
+  CI as expensive.
 - Exceptions: `xtask` runs its suites through `just ci-automation-contracts`; `skippy-ffi` is skipped by that slice and no CI job runs its own tests, so run `cargo test -p skippy-ffi --lib` yourself if you touched it; and CI additionally runs one feature-gated `claude-code-integration` real-client test for `mesh-llm-host-runtime` inline.
 - For broad refactors, fall back to `cargo check --workspace` (serially).
 - Follow the owning product's additional test and compatibility guidance.
 - When CI fails on a PR, first confirm the failing run belongs to the current head commit and
-  actually failed (not `cancelled` or superseded by a newer push) before diagnosing; then read the
-  failing job's log directly rather than polling the check rollup, which lags and keeps stale
-  results from superseded runs.
+  actually failed (not `cancelled` or superseded by a newer push) before diagnosing; a rerun keeps
+  the original commit SHA, so also check whether the job passed in a later attempt of the same run.
+  Then read the failing job's log directly rather than polling the check rollup, which lags and
+  keeps stale results from superseded runs.
 
 For new repository automation, follow the Rust ownership rule in
 `.agents/skills/manage-ci/SKILL.md` and spec section 7.5: do not write new
