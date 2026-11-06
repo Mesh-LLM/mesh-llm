@@ -21,8 +21,10 @@ use super::{
 
 use super::cache_payload::{durable_cache_payload, effective_cache_payload};
 
-mod durable_spill;
+pub(super) mod durable_spill;
 mod exact_state_limits;
+mod resident_policy;
+mod runtime_identity;
 use durable_spill::{
     DurableRecordTarget, PendingDurableSpill, spill_exact_record_to_l3, start_durable_spill_worker,
 };
@@ -71,6 +73,7 @@ impl KvStageIntegration {
             config,
             model_state_kind,
             memory_cache,
+            None,
             || l3_manager_from_env(config),
             observer,
         )
@@ -90,6 +93,7 @@ impl KvStageIntegration {
             config,
             model_state_kind,
             memory_cache,
+            None,
             || Ok(manager),
             observer,
         )
@@ -99,6 +103,9 @@ impl KvStageIntegration {
         config: &StageConfig,
         model_state_kind: Option<ModelStateKind>,
         memory_cache: Option<skippy_runtime::MemoryCacheCapabilities>,
+        loaded_model_content: Option<
+            Arc<crate::runtime_state::model_content::VerifiedModelContent>,
+        >,
         manager: impl FnOnce() -> Result<Option<L3CacheManager>>,
         observer: Option<Arc<dyn KvLifecycleObserver>>,
     ) -> Result<Option<Self>> {
@@ -131,9 +138,13 @@ impl KvStageIntegration {
             return Ok(None);
         };
         let payload_selection_reason = "loaded_graph_and_memory";
-        let dense_without_recurrent = admitted.resident;
-        let l3_manager = manager()?;
-        if cache_config.l2_max_bytes > 0 && l3_manager.is_none() {
+        let dense_without_recurrent = admitted.resident && !admitted.resident_checkpoint;
+        let l3_manager = if loaded_model_content.is_some() {
+            manager()?
+        } else {
+            None
+        };
+        if !admitted.resident && cache_config.l2_max_bytes > 0 && l3_manager.is_none() {
             let _ = skippy_events::diagnostics::emit(
                 skippy_events::diagnostics::ServingDiagnostic::Warning {
                     message: "Skippy L2 host-RAM cache disabled for this model stage".to_string(),
@@ -149,29 +160,41 @@ impl KvStageIntegration {
             .and_then(|_| durable_cache_payload(admitted));
         let l3 = l3_manager
             .zip(durable_payload)
-            .map(|(manager, payload)| l3_tier_for_manager(config, payload, manager))
+            .map(|(manager, payload)| {
+                l3_tier_for_manager(config, payload, manager, loaded_model_content.as_deref())
+            })
             .transpose()?;
         let l2 = l3
             .as_ref()
-            .filter(|_| cache_config.l2_max_bytes > 0)
+            .filter(|_| !admitted.resident && cache_config.l2_max_bytes > 0)
             .and(durable_payload)
             .map(|payload| {
                 super::l2_serving::StageL2::new(
                     cache_config.l2_max_bytes,
                     numerical_model_identity_for_stage(config),
-                    exact_state_identity_for_stage(config, l3_payload_kind(payload)),
+                    bind_model_content(
+                        loaded_model_content.as_deref(),
+                        exact_state_identity_for_stage(config, l3_payload_kind(payload)),
+                    ),
                 )
             });
         // Complete exporters are admitted by the native graph and memory; state
         // kind only limits retention for larger recurrent snapshots.
-        if matches!(
-            model_state_kind,
-            Some(ModelStateKind::Recurrent | ModelStateKind::Hybrid)
-        ) {
+        if !admitted.resident
+            && matches!(
+                model_state_kind,
+                Some(ModelStateKind::Recurrent | ModelStateKind::Hybrid)
+            )
+        {
             cache_config.max_entries = cache_config.max_entries.min(RECURRENT_CACHE_MAX_ENTRIES);
         }
         let mut checkpoint_policy = SparseCheckpointPolicy::from_cache(&cache_config);
-        let resident_config = ResidentCacheConfig::from_stage(config, &cache_config);
+        let resident_checkpoint_max_bytes = resident_policy::checkpoint_budget(&cache_config);
+        let activation_config = ResidentCacheConfig::from_stage(config, &cache_config);
+        let mut resident_config = activation_config;
+        if admitted.resident {
+            resident_config.max_bytes = resident_checkpoint_max_bytes;
+        }
         if resident_config.max_entries == 0 {
             return Ok(None);
         }
@@ -327,8 +350,10 @@ impl KvStageIntegration {
             exact_state_record_tx,
             exact_state_record_task,
             durable_spill_task,
+            durable_spill_tx,
         ));
         Ok(Some(Self {
+            loaded_model_content,
             mode,
             payload,
             payload_selection_reason,
@@ -344,7 +369,7 @@ impl KvStageIntegration {
             resident_sequences: Arc::new(Mutex::new(ResidentSequencePool::new(
                 resident_config.reserved_seq_count,
             ))),
-            activations: Arc::new(Mutex::new(ResidentActivationCache::new(resident_config))),
+            activations: Arc::new(Mutex::new(ResidentActivationCache::new(activation_config))),
             radix,
             exact_blobs,
             exact_max_entries,
@@ -380,6 +405,7 @@ impl KvStageIntegration {
             cachegen_serving_enabled: worker_cachegen,
             inflight_fills,
             dense_without_recurrent,
+            resident_checkpoint_max_bytes,
         }))
     }
 
@@ -392,6 +418,8 @@ impl KvStageIntegration {
             config,
             Some(model_state_kind),
             Some(skippy_runtime::MemoryCacheCapabilities {
+                resident_checkpoint: false,
+                resident_attention: model_state_kind == ModelStateKind::Dense,
                 resident: model_state_kind == ModelStateKind::Dense,
                 kv_recurrent: true,
                 full_state: true,
@@ -476,8 +504,12 @@ fn l3_tier_for_manager(
     config: &StageConfig,
     payload: StagePrefixCachePayload,
     manager: L3CacheManager,
+    content: Option<&crate::runtime_state::model_content::VerifiedModelContent>,
 ) -> Result<Arc<L3Tier>> {
-    let identity = exact_state_identity_for_stage(config, l3_payload_kind(payload));
+    let identity = bind_model_content(
+        content,
+        exact_state_identity_for_stage(config, l3_payload_kind(payload)),
+    );
     let model_identity = numerical_model_identity_for_stage(config);
     let root = manager.root().display().to_string();
     let tier = manager.tier_for_model(model_identity, identity, L3_SEGMENT_BYTES);
@@ -509,6 +541,16 @@ fn l3_tier_for_manager(
         }
     }
     Ok(Arc::new(tier))
+}
+
+fn bind_model_content(
+    content: Option<&crate::runtime_state::model_content::VerifiedModelContent>,
+    identity: String,
+) -> String {
+    match content {
+        Some(proof) => proof.bind(&identity),
+        None => identity,
+    }
 }
 
 fn l3_payload_kind(payload: StagePrefixCachePayload) -> &'static str {
@@ -784,6 +826,7 @@ fn store_exact_radix_record_with_codec(
     // a full disk from flooding the log.
     let durable_spill = write_through_l3.then_some(PendingDurableSpill {
         page_id,
+        native_raw: false,
         payload,
         extra,
         namespace,
@@ -899,7 +942,7 @@ fn cache_disabled_by_env(kv_cache: Option<&str>, prefix_cache: Option<&str>) -> 
         .any(|value| parse_cache_mode(value) == Some(StageKvCacheMode::Disabled))
 }
 
-fn effective_cache_config(config: &StageConfig) -> Option<StageKvCacheConfig> {
+pub(super) fn effective_cache_config(config: &StageConfig) -> Option<StageKvCacheConfig> {
     // An explicit environment kill-switch beats the planned stage config so
     // benches and incident response can turn the prefix cache off without
     // replanning the topology.
@@ -965,10 +1008,11 @@ fn parse_cache_mode(value: &str) -> Option<StageKvCacheMode> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use skippy_protocol::{FlashAttentionType, LoadMode, StageDevice};
+    use skippy_protocol::{FlashAttentionType, LoadMode};
 
     mod cache_admission;
     mod durable_spill;
+    mod runtime_admission;
 
     fn limits(soft_bytes: u64, hard_bytes: u64) -> ExactStateByteLimits {
         ExactStateByteLimits {
@@ -1169,44 +1213,6 @@ mod tests {
         assert!(location.native_kv_passthrough);
         assert_eq!(location.kv_bytes, location.kv_decoded_bytes);
         let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn cachegen_selector_enables_only_qualified_metal_layouts() {
-        let mut config = test_config("future/model");
-        config.selected_device = Some(StageDevice {
-            backend_device: "MTL0".to_string(),
-            stable_id: None,
-            index: Some(0),
-            vram_bytes: None,
-        });
-        config.cache_type_k = "f32".to_string();
-        config.cache_type_v = "f16".to_string();
-        assert!(cachegen_serving_enabled(
-            &config,
-            StageKvCacheCodec::CacheGen
-        ));
-
-        config.cache_type_k = "f16".to_string();
-        assert!(!cachegen_serving_enabled(
-            &config,
-            StageKvCacheCodec::CacheGen
-        ));
-        config.cache_type_k = "f32".to_string();
-        config.selected_device.as_mut().unwrap().backend_device = "CUDA0".to_string();
-        assert!(!cachegen_serving_enabled(
-            &config,
-            StageKvCacheCodec::CacheGen
-        ));
-        config.selected_device = None;
-        assert!(!cachegen_serving_enabled(
-            &config,
-            StageKvCacheCodec::CacheGen
-        ));
-        assert!(!cachegen_serving_enabled(
-            &config,
-            StageKvCacheCodec::Native
-        ));
     }
 
     #[test]
@@ -1584,194 +1590,6 @@ mod tests {
         assert!(radix.lookup_recurrent("model", &[1, 2]).is_some());
     }
 
-    #[test]
-    fn either_cache_kill_switch_disables_the_cache() {
-        assert!(!cache_disabled_by_env(None, None));
-        assert!(!cache_disabled_by_env(Some("on"), None));
-        assert!(cache_disabled_by_env(Some("off"), None));
-        assert!(cache_disabled_by_env(None, Some("off")));
-        assert!(cache_disabled_by_env(Some("on"), Some("off")));
-        assert!(cache_disabled_by_env(Some("off"), Some("on")));
-    }
-
-    #[test]
-    fn injected_manager_is_shared_across_placement_equivalent_stages() {
-        let root = std::env::temp_dir()
-            .join("skippy-server-l3-manager-tests")
-            .join(format!("shared-stages-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let manager = L3CacheManager::acquire(&root, StoreLimits::new(1_000_000, 0)).unwrap();
-        let first = enabled_auto_config("future/model");
-        let second = StageConfig {
-            stage_id: "replica-stage".to_string(),
-            stage_index: 7,
-            topology_id: "other-topology".to_string(),
-            run_id: "other-run".to_string(),
-            ..first.clone()
-        };
-
-        let first = KvStageIntegration::from_loaded_model_with_l3_manager(
-            &first,
-            Some(ModelStateKind::Dense),
-            Some(skippy_runtime::MemoryCacheCapabilities {
-                resident: true,
-                kv_recurrent: true,
-                full_state: true,
-            }),
-            Some(manager.clone()),
-            None,
-        )
-        .unwrap()
-        .unwrap();
-        let second = KvStageIntegration::from_loaded_model_with_l3_manager(
-            &second,
-            Some(ModelStateKind::Dense),
-            Some(skippy_runtime::MemoryCacheCapabilities {
-                resident: true,
-                kv_recurrent: true,
-                full_state: true,
-            }),
-            Some(manager),
-            None,
-        )
-        .unwrap()
-        .unwrap();
-        let first_l3 = first.l3.as_ref().unwrap();
-        let second_l3 = second.l3.as_ref().unwrap();
-
-        assert!(first_l3.manager().shares_root_with(second_l3.manager()));
-        assert_eq!(first_l3.state_identity(), second_l3.state_identity());
-        assert_eq!(first_l3.model_identity(), second_l3.model_identity());
-        assert!(Arc::ptr_eq(&first.inflight_fills, &second.inflight_fills));
-        assert!(Arc::ptr_eq(
-            &first.inflight_records,
-            &second.inflight_records
-        ));
-        assert!(first.try_begin_record("shared-page"));
-        assert!(
-            !second.try_begin_record("shared-page"),
-            "placement replicas performed duplicate record work"
-        );
-        first.finish_record("shared-page");
-        assert!(second.try_begin_record("shared-page"));
-        second.finish_record("shared-page");
-    }
-
-    #[test]
-    fn dense_disk_cache_preserves_resident_fast_path_and_exports_exact_state() {
-        let root = std::env::temp_dir()
-            .join("skippy-server-l3-manager-tests")
-            .join(format!("dense-export-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let manager = L3CacheManager::acquire(&root, StoreLimits::new(1_000_000, 0)).unwrap();
-        let config = enabled_auto_config("future/model");
-
-        let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
-            &config,
-            Some(ModelStateKind::Dense),
-            Some(skippy_runtime::MemoryCacheCapabilities {
-                resident: true,
-                kv_recurrent: true,
-                full_state: true,
-            }),
-            Some(manager),
-            None,
-        )
-        .unwrap()
-        .expect("dense disk cache should remain enabled");
-
-        assert_eq!(kv.payload, StagePrefixCachePayload::ResidentKv);
-        assert_eq!(
-            kv.durable_payload,
-            Some(StagePrefixCachePayload::KvRecurrent)
-        );
-        assert_eq!(
-            kv.exact_state_payload(),
-            Some(StagePrefixCachePayload::KvRecurrent)
-        );
-        assert!(kv.l3.is_some());
-
-        let mut invalid = kv;
-        invalid.payload = StagePrefixCachePayload::Disabled;
-        invalid.durable_payload = Some(StagePrefixCachePayload::ResidentKv);
-        assert_eq!(invalid.exact_state_payload(), None);
-    }
-
-    #[test]
-    fn cache_ram_budget_enables_stage_l2_with_disk_authority() {
-        let mut config = enabled_auto_config("future/model");
-        config
-            .kv_cache
-            .as_mut()
-            .expect("enabled cache config")
-            .l2_max_bytes = 64 * 1024 * 1024;
-        let root = tempfile::tempdir().unwrap();
-        let manager = L3CacheManager::acquire(root.path(), StoreLimits::new(1 << 30, 0)).unwrap();
-
-        let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
-            &config,
-            Some(ModelStateKind::Dense),
-            Some(skippy_runtime::MemoryCacheCapabilities {
-                resident: true,
-                kv_recurrent: true,
-                full_state: true,
-            }),
-            Some(manager),
-            None,
-        )
-        .unwrap()
-        .expect("prefix cache should remain enabled");
-
-        assert!(kv.l2.is_some());
-        assert!(kv.l3.is_some());
-        let attrs = kv.attrs().into_iter().collect::<BTreeMap<_, _>>();
-        assert_eq!(attrs["skippy.kv.l2.enabled"], serde_json::json!(true));
-        assert_eq!(
-            attrs["skippy.kv.l2.budget_bytes"],
-            serde_json::json!(64 * 1024 * 1024u64)
-        );
-    }
-
-    #[test]
-    fn cache_ram_budget_does_not_create_an_authority_free_l2() {
-        let mut config = enabled_auto_config("future/model");
-        config
-            .kv_cache
-            .as_mut()
-            .expect("enabled cache config")
-            .l2_max_bytes = 64 * 1024 * 1024;
-
-        let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
-            &config,
-            Some(ModelStateKind::Dense),
-            Some(skippy_runtime::MemoryCacheCapabilities {
-                resident: true,
-                kv_recurrent: true,
-                full_state: true,
-            }),
-            None,
-            None,
-        )
-        .unwrap()
-        .expect("L1 prefix cache should remain enabled");
-
-        assert!(kv.l2.is_none());
-        assert!(kv.l3.is_none());
-    }
-
-    #[test]
-    fn parses_cache_mode_aliases() {
-        assert_eq!(
-            parse_cache_mode("lookup_record"),
-            Some(StageKvCacheMode::LookupRecord)
-        );
-        assert_eq!(
-            parse_cache_mode("exact"),
-            Some(StageKvCacheMode::LookupRecord)
-        );
-        assert_eq!(parse_cache_mode("off"), Some(StageKvCacheMode::Disabled));
-    }
-
     fn test_config(model_id: &str) -> StageConfig {
         StageConfig {
             run_id: "test-run".to_string(),
@@ -1826,6 +1644,7 @@ mod tests {
 
     fn enabled_auto_config(model_id: &str) -> StageConfig {
         let mut config = test_config(model_id);
+        config.source_model_sha256 = Some("ab".repeat(32));
         config.kv_cache = Some(StageKvCacheConfig {
             exact_max_bytes: None,
             mode: StageKvCacheMode::LookupRecord,

@@ -1,4 +1,4 @@
-From 3f2412d2aee75610f4f74cc9b55f4817bab8b6eb Mon Sep 17 00:00:00 2001
+From 69524eae6d4a78050721190d13b801326013d28c Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Fri, 16 Oct 2026 19:21:00 +0300
 Subject: [PATCH] feat(skippy): place routed experts of a block range in host
@@ -37,7 +37,7 @@ index 3f6aab137..b9b5259af 100644
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
-index 799bdca2d..bc4da9a07 100644
+index b47c55f82..c930d9c3b 100644
 --- a/include/skippy/runtime.h
 +++ b/include/skippy/runtime.h
 @@ -117,6 +117,12 @@ struct skippy_runtime_config {
@@ -132,7 +132,7 @@ index 554d2bdd3..e3649e713 100644
          const skippy_runtime_config * config,
          llama_context_params & params);
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
-index 60a27669f..7305cc529 100644
+index d6e24cd2a..4082fa198 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
 @@ -962,10 +962,12 @@ enum skippy_status skippy_model_open_impl(
@@ -252,5 +252,5 @@ index 471968158..772d380e2 100644
      return passed ? 0 : 1;
  }
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

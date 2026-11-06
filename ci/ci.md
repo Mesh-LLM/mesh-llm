@@ -1,5 +1,19 @@
 # MeshLLM CI topology
 
+`automation kv-validation` is an explicit manual diagnostic surface, separate
+from the five required PR/main lanes. One backend producer prepares matching
+tools and the external indexed-attention model harness once; four model jobs
+reuse the immutable prepared image. The Linux JY adapter emits CPU/CUDA custom
+jobs without dispatching them. Native Metal uses the local worker command.
+No automatic GPU/model fan-out or required-check topology changes accompany
+this foundation. See `skippy/evals/kv-validation/README.md` for its bounded scope.
+
+The optional AgentX comparison uses a separately prepared, pinned upstream
+client environment. Its manifest, lock, wheel identity and setup invocation are
+admitted by `ci/python-tooling-policy.json` under the November 6 maintainer
+decision. Setup requires installed Python 3.12; workers remain offline. The
+allowance changes no required-check topology or generic Python tooling policy.
+
 All workflows disable Rust debug information with workflow- or job-level
 `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`,
 `CARGO_PROFILE_RELEASE_DEBUG=0` and `CARGO_PROFILE_BENCH_DEBUG=0`.
@@ -12,6 +26,7 @@ Cache epoch `v5` starts a fresh namespace. Batch jobs record filesystem space
 before each package and retained target/compiler-cache sizes even when tests fail.
 The upstream canary sets the environment in each executing job and its reusable
 family-pass workflow separately.
+
 
 ## Standalone C++ API qualification
 

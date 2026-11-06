@@ -27,13 +27,18 @@ mod cache_affinity;
 mod cache_payload;
 mod config;
 mod exact_state;
+pub(crate) mod scheduling;
 mod snapshot_validation;
 pub(crate) use exact_state::CaptureAdmission;
+pub(crate) use exact_state::PreparedExactStateRestore;
 mod identity;
 mod l2_serving;
 pub mod lifecycle;
 mod output_tokens;
+mod record_worker;
 mod records;
+mod resident_offload;
+use record_worker::ExactStateRecordWorker;
 mod resident_prefix;
 
 pub use lifecycle::{KvLifecycleEvent, KvLifecycleObserver};
@@ -154,6 +159,8 @@ pub(crate) struct ExactStateByteLimits {
 #[derive(Clone)]
 pub struct KvStageIntegration {
     pub(crate) mode: StageKvMode,
+    pub(crate) loaded_model_content:
+        Option<Arc<crate::runtime_state::model_content::VerifiedModelContent>>,
     /// The in-process cache representation. Dense models keep native resident
     /// KV here even when a durable tier is configured, so enabling disk does
     /// not replace the fast warm path with serialized state import.
@@ -243,6 +250,7 @@ pub struct KvStageIntegration {
     /// the position directly instead of importing one. Never true for a
     /// recurrent family, where an empty snapshot is corruption.
     pub(crate) dense_without_recurrent: bool,
+    pub(crate) resident_checkpoint_max_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -289,55 +297,6 @@ pub(crate) struct PendingExactStateRecord {
     /// the Drop impl of the credit performs the release.
     #[allow(dead_code)]
     pub(crate) admission_credit: crate::kv_integration::exact_state::ExactStateAdmissionCredit,
-}
-
-#[derive(Debug)]
-pub(crate) struct ExactStateRecordWorker {
-    sender: Mutex<Option<SyncSender<PendingExactStateRecord>>>,
-    tasks: Mutex<Vec<JoinHandle<()>>>,
-}
-
-impl ExactStateRecordWorker {
-    pub(crate) fn new(
-        sender: SyncSender<PendingExactStateRecord>,
-        record_task: JoinHandle<()>,
-        durable_task: Option<JoinHandle<()>>,
-    ) -> Self {
-        let mut tasks = vec![record_task];
-        tasks.extend(durable_task);
-        Self {
-            sender: Mutex::new(Some(sender)),
-            tasks: Mutex::new(tasks),
-        }
-    }
-
-    fn with_sender<T>(
-        &self,
-        use_sender: impl FnOnce(Option<&SyncSender<PendingExactStateRecord>>) -> T,
-    ) -> T {
-        let sender = self
-            .sender
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        use_sender(sender.as_ref())
-    }
-}
-
-impl Drop for ExactStateRecordWorker {
-    fn drop(&mut self) {
-        self.sender
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        for task in self
-            .tasks
-            .get_mut()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .drain(..)
-        {
-            let _ = task.join();
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -656,6 +615,16 @@ fn verify_resident_ownership(
 }
 
 impl KvStageIntegration {
+    pub(crate) fn cache_enabled_for_stage(config: &skippy_protocol::StageConfig) -> bool {
+        config::effective_cache_config(config).is_some_and(|cache| {
+            matches!(
+                cache.mode,
+                skippy_protocol::StageKvCacheMode::Record
+                    | skippy_protocol::StageKvCacheMode::LookupRecord
+            )
+        })
+    }
+
     /// Attaches an optional resident-prefix cache lifecycle observer.
     /// Never required; a stage with no observer behaves identically.
     #[must_use]
@@ -675,7 +644,7 @@ impl KvStageIntegration {
     }
 
     pub(crate) fn payload_is_exact_state(&self) -> bool {
-        self.exact_state_payload().is_some()
+        self.payload.is_exact_state()
     }
 
     /// Whether the serving tier retains native resident prefixes independently
@@ -869,6 +838,17 @@ impl KvStageIntegration {
     /// checks actual retention after the recorder drains.
     #[cfg(test)]
     pub(crate) fn retained_exact_identity(&self, namespace: &str, token_ids: &[i32]) -> bool {
+        if self.records_resident_prefixes() {
+            let radix = self
+                .radix
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            return self
+                .peek_native_prefix(&radix, namespace, token_ids)
+                .is_some_and(|matched| {
+                    matched.matched_tokens == token_ids.len() && matched.stored_tokens == token_ids
+                });
+        }
         match self
             .radix
             .lock()
@@ -891,6 +871,15 @@ impl KvStageIntegration {
         namespace: &str,
         query_tokens: &[i32],
     ) -> Option<usize> {
+        if self.records_resident_prefixes() {
+            let radix = self
+                .radix
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            return self
+                .peek_native_prefix(&radix, namespace, query_tokens)
+                .map(|matched| matched.matched_tokens);
+        }
         self.radix
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1477,7 +1466,7 @@ mod exact_state_record_queue_tests {
                 worker_completed.fetch_add(1, Ordering::Release);
             }
         });
-        let worker = Arc::new(ExactStateRecordWorker::new(sender, task, None));
+        let worker = Arc::new(ExactStateRecordWorker::new(sender, task, None, None));
         let (total, best_effort) = budget();
         worker.with_sender(|sender| {
             sender

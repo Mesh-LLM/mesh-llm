@@ -1,4 +1,4 @@
-From 864c7f48bb1fa38edcea73cb8b1330fcc2c909f0 Mon Sep 17 00:00:00 2001
+From 79c8dca719923d15216a3ffadb7fc93a62263da8 Mon Sep 17 00:00:00 2001
 From: Ethan Zhang <github@yzhang.io>
 Date: Wed, 21 Oct 2026 00:19:51 -0500
 Subject: [PATCH] models: include <algorithm> in clef.cpp

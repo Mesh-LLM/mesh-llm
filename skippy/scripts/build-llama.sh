@@ -513,6 +513,8 @@ if [[ "$LLAMA_STAGE_WORKLOAD_ORACLE" == "ON" ]]; then
 fi
 if [[ "$LLAMA_STAGE_BUILD_TESTS" == "ON" ]]; then
   BUILD_TARGETS+=(
+    skippy-asr-decode-boundary
+    skippy-diffusion-host-fallback
     skippy-graph-build-inputs
     skippy-hardware-application-probe
     skippy-model-fixture-generator

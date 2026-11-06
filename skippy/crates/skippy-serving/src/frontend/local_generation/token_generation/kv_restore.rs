@@ -9,7 +9,7 @@ impl StageOpenAiBackend {
         session_id: &str,
         ids: &InferenceGenerationIds,
         prefill_tokens: &[i32],
-        identities: &[PrefillKvIdentity],
+        prepared: &crate::kv_integration::PreparedExactStateRestore,
         kv_identity_ms: f64,
         cache_stats: &mut GenerationCacheStats,
     ) -> (bool, usize, Option<i32>) {
@@ -21,12 +21,26 @@ impl StageOpenAiBackend {
         let estimated_cold_prefill_ms = self
             .generation_service_estimator
             .estimated_prefill_ms(prefill_tokens.len());
-        match kv.restore_exact_state_with_cold_cost(
+        let exact = kv.restore_prepared_exact_state(
             runtime,
             session_id,
-            identities,
+            prepared,
             estimated_cold_prefill_ms,
-        ) {
+        );
+        let exact = match exact {
+            Err(error)
+                if kv.records_resident_prefixes()
+                    && matches!(runtime.canonical_session_position(session_id), Ok(0)) =>
+            {
+                self.emit_kv_restore_error(ids, "exact_error", &error);
+                // Retry only after verifying the native, Rust-session and tracked
+                // positions are all zero. A discarded or unverifiable lane
+                // stays on the existing error path.
+                Ok(None)
+            }
+            result => result,
+        };
+        match exact {
             Ok(Some(restored)) => {
                 restored_prefill = true;
                 cache_stats.status = "hit";
@@ -105,7 +119,12 @@ impl StageOpenAiBackend {
                     .emit("stage.openai_kv_lookup_decision", attrs);
             }
             Ok(None) => {
-                match kv.restore_resident_prefix(runtime, session_id, identities, prefill_tokens) {
+                match kv.restore_resident_prefix(
+                    runtime,
+                    session_id,
+                    prepared.identities(),
+                    prefill_tokens,
+                ) {
                     Ok(Some(restored)) => {
                         restored_prefill = true;
                         cache_stats.status = "hit";
@@ -153,16 +172,7 @@ impl StageOpenAiBackend {
                     }
                 }
             }
-            Err(error) => {
-                let mut attrs = self.openai_attrs(ids);
-                attrs.insert("skippy.kv.decision".to_string(), json!("exact_error"));
-                attrs.insert(
-                    "skippy.kv.error_class".to_string(),
-                    json!(crate::kv_integration::telemetry_error_class(&error)),
-                );
-                self.telemetry
-                    .emit("stage.openai_kv_lookup_decision", attrs);
-            }
+            Err(error) => self.emit_kv_restore_error(ids, "exact_error", &error),
         }
         if cache_stats.cached_prompt_tokens > 0 {
             cache_stats.restore_ms = kv_restore_started.elapsed().as_secs_f64() * 1_000.0;
@@ -176,7 +186,7 @@ impl StageOpenAiBackend {
             );
             attrs.insert(
                 "skippy.kv.identity_count".to_string(),
-                json!(identities.len()),
+                json!(prepared.identities().len()),
             );
             self.telemetry.emit_debug("stage.openai_kv_timing", attrs);
         }
@@ -343,5 +353,20 @@ impl StageOpenAiBackend {
             proactive_evicted_tokens,
             proactive_eviction_error,
         }
+    }
+    fn emit_kv_restore_error(
+        &self,
+        ids: &InferenceGenerationIds,
+        decision: &str,
+        error: &anyhow::Error,
+    ) {
+        let mut attrs = self.openai_attrs(ids);
+        attrs.insert("skippy.kv.decision".to_string(), json!(decision));
+        attrs.insert(
+            "skippy.kv.error_class".to_string(),
+            json!(crate::kv_integration::telemetry_error_class(error)),
+        );
+        self.telemetry
+            .emit("stage.openai_kv_lookup_decision", attrs);
     }
 }

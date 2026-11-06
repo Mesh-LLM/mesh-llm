@@ -6,7 +6,7 @@
 
 pub const SKIPPY_ABI_VERSION_MAJOR: u32 = 0;
 pub const SKIPPY_ABI_VERSION_MINOR: u32 = 1;
-pub const SKIPPY_ABI_VERSION_PATCH: u32 = 78;
+pub const SKIPPY_ABI_VERSION_PATCH: u32 = 79;
 pub const SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_MAX_LOGIT_BIAS: u32 = 256;
 pub const SKIPPY_MAX_SAMPLERS: u32 = 16;
@@ -471,7 +471,7 @@ pub struct skippy_runtime_config {
     pub glm_dsa_compact_flash_min_kv: i32,
     #[doc = " @brief Whether K/V tensors are offloaded to the compute backend (mirrors upstream `offload_kqv`)."]
     pub kv_offload: i32,
-    #[doc = " @brief Whether the KV cache is unified across sequences/lanes (mirrors upstream `kv_unified`). AUTO derives the setting from lane count; recurrent and hybrid models force it true."]
+    #[doc = " @brief Whether the KV cache is unified across sequences/lanes (mirrors upstream `kv_unified`). AUTO enables unified caching at every lane count. Explicit false selects non-unified caching, except recurrent and hybrid models force it true."]
     pub kv_unified: i32,
     #[doc = " @brief Whether sliding-window-attention layers use a full, unshifted cache window (mirrors upstream `swa_full`)."]
     pub swa_full: i32,
@@ -1325,6 +1325,10 @@ pub enum skippy_memory_cache_capability {
     Resident = 1,
     KvRecurrent = 2,
     FullState = 4,
+    #[doc = " Resident prefixes restore only their exact saved recurrent checkpoint boundary."]
+    ResidentCheckpoint = 8,
+    #[doc = " Complete resident prefixes contain attention cells in addition to any recurrent state."]
+    ResidentAttention = 16,
 }
 unsafe extern "C" {
     #[doc = " @brief Returns complete cache representations admitted by the built graph and loaded memory.\n Graph state effects restrict the loaded memory adapters' complete export capabilities.\n Full-state serialization is admitted explicitly too. Zero means no complete\n cache representation is available; callers cannot supply capability labels."]
@@ -1452,7 +1456,7 @@ unsafe extern "C" {
     ) -> skippy_status;
 }
 unsafe extern "C" {
-    #[doc = " @brief Exports recurrent state for models that maintain recurrent memory."]
+    #[doc = " @brief Exports only recurrent memory; attention pages are exported independently."]
     pub fn skippy_export_recurrent_state(
         session: *mut skippy_session,
         output: *mut ::std::os::raw::c_void,
@@ -1473,7 +1477,7 @@ unsafe extern "C" {
     ) -> skippy_status;
 }
 unsafe extern "C" {
-    #[doc = " @brief Imports recurrent state into a session."]
+    #[doc = " @brief Imports recurrent-only state into a session."]
     pub fn skippy_import_recurrent_state(
         session: *mut skippy_session,
         input: *const ::std::os::raw::c_void,
@@ -1543,7 +1547,7 @@ unsafe extern "C" {
     ) -> skippy_status;
 }
 unsafe extern "C" {
-    #[doc = " @brief Saves a session prefix into a resident cache sequence."]
+    #[doc = " @brief Retains shared attention cells and an immutable recurrent checkpoint owned by the cache.\n Recurrent memory requires token_count equal to the current session position."]
     pub fn skippy_session_save_prefix(
         session: *mut skippy_session,
         cache_seq_id: i32,
@@ -1552,12 +1556,48 @@ unsafe extern "C" {
     ) -> skippy_status;
 }
 unsafe extern "C" {
-    #[doc = " @brief Restores a session prefix from a resident cache sequence."]
+    #[doc = " @brief Shares retained attention cells and restores a private mutable recurrent row.\n Token identity must match; recurrent prefixes require the exact saved boundary."]
     pub fn skippy_session_restore_prefix(
         session: *mut skippy_session,
         cache_seq_id: i32,
         token_ids: *const llama_token,
         token_count: usize,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Exports a cache-owned attention page for cold offload without claiming or restoring an execution lane."]
+    pub fn skippy_session_export_resident_kv_page(
+        session: *mut skippy_session,
+        cache_seq_id: i32,
+        layer_start: i32,
+        layer_end: i32,
+        token_start: u64,
+        token_count: u64,
+        out_desc: *mut skippy_kv_page_desc,
+        output: *mut ::std::os::raw::c_void,
+        output_capacity: usize,
+        out_bytes: *mut usize,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Copies a cache-owned recurrent-only checkpoint for cold offload; a size query does not read tensors."]
+    pub fn skippy_session_export_resident_recurrent_state(
+        session: *mut skippy_session,
+        cache_seq_id: i32,
+        output: *mut ::std::os::raw::c_void,
+        output_capacity: usize,
+        out_bytes: *mut usize,
+        out_error: *mut *mut skippy_error,
+    ) -> skippy_status;
+}
+unsafe extern "C" {
+    #[doc = " @brief Reports cache-owned recurrent checkpoint and token identity bytes; shared attention cells remain in the native pool."]
+    pub fn skippy_session_resident_prefix_bytes(
+        session: *mut skippy_session,
+        cache_seq_id: i32,
+        out_bytes: *mut u64,
         out_error: *mut *mut skippy_error,
     ) -> skippy_status;
 }

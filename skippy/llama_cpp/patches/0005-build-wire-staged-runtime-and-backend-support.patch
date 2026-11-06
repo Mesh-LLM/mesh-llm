@@ -1,4 +1,4 @@
-From bc711264ee6c876c9a73ab7ebe02e8732eb76285 Mon Sep 17 00:00:00 2001
+From 8630645614e4ffead507d88147699b1403b75898 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] build(skippy): wire native runtime and backend support
@@ -31,11 +31,11 @@ Subject: [PATCH] build(skippy): wire native runtime and backend support
  ggml/src/ggml-metal/ggml-metal-impl.h      |  34 +-
  ggml/src/ggml-metal/ggml-metal.cpp         |   3 +
  ggml/src/ggml-metal/kernels/cachegen.metal | 195 ++++++
- src/CMakeLists.txt                         | 680 ++++++++++++++++++++-
+ src/CMakeLists.txt                         | 687 ++++++++++++++++++++-
  tools/mtmd/mtmd-audio.cpp                  |   2 +
  tools/mtmd/mtmd-helper.cpp                 |  35 +-
  tools/mtmd/mtmd-helper.h                   |  16 +
- 31 files changed, 3184 insertions(+), 164 deletions(-)
+ 31 files changed, 3191 insertions(+), 164 deletions(-)
  create mode 100644 common/stage-chat.cpp
  create mode 100644 ggml/src/ggml-cuda/cachegen.cu
  create mode 100644 ggml/src/ggml-cuda/cachegen.cuh
@@ -2574,7 +2574,7 @@ index 91691b223..a6d145e69 100644
      kernels/fa_f16.metal
      kernels/fa_f32.metal
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.h b/ggml/src/ggml-metal/ggml-metal-device.h
-index 4012b9d5f..e51558652 100644
+index 7569a598f..fd1ef26fd 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.h
 +++ b/ggml/src/ggml-metal/ggml-metal-device.h
 @@ -1,6 +1,7 @@
@@ -2585,7 +2585,7 @@ index 4012b9d5f..e51558652 100644
  
  #ifdef __cplusplus
  extern "C" {
-@@ -369,6 +370,12 @@ void   ggml_metal_buffer_clear        (ggml_metal_buffer_t buf, uint8_t value);
+@@ -374,6 +375,12 @@ void   ggml_metal_buffer_clear        (ggml_metal_buffer_t buf, uint8_t value);
  //
  struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, const struct ggml_tensor * t);
  
@@ -2599,7 +2599,7 @@ index 4012b9d5f..e51558652 100644
  }
  #endif
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index d1bce8bad..5b23ddf7f 100644
+index 15a3ccb06..645a3ef82 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
 @@ -11,6 +11,8 @@
@@ -2619,7 +2619,7 @@ index d1bce8bad..5b23ddf7f 100644
      X(FA_AUX,          fa_aux)         \
      X(FA_F16,          fa_f16)         \
      X(FA_F32,          fa_f32)         \
-@@ -180,6 +183,11 @@ struct ggml_metal_library {
+@@ -180,6 +183,11 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
      ggml_metal_device_t dev;
      ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
  
@@ -2883,7 +2883,7 @@ index d1bce8bad..5b23ddf7f 100644
  
          [mtl_function release];
  
-@@ -1754,6 +1916,29 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+@@ -1793,6 +1955,29 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
              if (op->src[1]->type != op->src[2]->type) {
                  return false;
              }
@@ -2913,7 +2913,7 @@ index d1bce8bad..5b23ddf7f 100644
              switch (op->src[1]->type) {
                  case GGML_TYPE_F32:
                  case GGML_TYPE_F16:
-@@ -2515,3 +2700,262 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
+@@ -2554,3 +2739,262 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
  
      return res;
  }
@@ -3177,10 +3177,10 @@ index d1bce8bad..5b23ddf7f 100644
 +    return true;
 +}
 diff --git a/ggml/src/ggml-metal/ggml-metal-impl.h b/ggml/src/ggml-metal/ggml-metal-impl.h
-index 4ffb5a77d..d151a600d 100644
+index 479c722d3..6aa68e8e6 100644
 --- a/ggml/src/ggml-metal/ggml-metal-impl.h
 +++ b/ggml/src/ggml-metal/ggml-metal-impl.h
-@@ -1036,6 +1036,23 @@ typedef struct {
+@@ -1049,6 +1049,23 @@ typedef struct {
      uint64_t nb3;
  } ggml_metal_kargs_solve_tri;
  
@@ -3204,7 +3204,7 @@ index 4ffb5a77d..d151a600d 100644
  typedef struct {
      int32_t  ne00t;
      int32_t  ne00;
-@@ -1278,23 +1295,6 @@ typedef struct {
+@@ -1291,23 +1308,6 @@ typedef struct {
      int64_t val;
  } ggml_metal_kargs_memset;
  
@@ -3229,10 +3229,10 @@ index 4ffb5a77d..d151a600d 100644
      int32_t  n_tokens;
      int32_t  n_iter;
 diff --git a/ggml/src/ggml-metal/ggml-metal.cpp b/ggml/src/ggml-metal/ggml-metal.cpp
-index 344882e04..f8732fbca 100644
+index cab2fbf99..6964c5b7e 100644
 --- a/ggml/src/ggml-metal/ggml-metal.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal.cpp
-@@ -946,6 +946,9 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const
+@@ -947,6 +947,9 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_metal_get_features;
      }
@@ -3444,7 +3444,7 @@ index 000000000..728899e4b
 +    }
 +}
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 97250c2e8..5e02baa49 100644
+index 97250c2e8..74edee136 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -1,4 +1,5 @@
@@ -3453,7 +3453,24 @@ index 97250c2e8..5e02baa49 100644
  
  #
  # libraries
-@@ -47,6 +48,50 @@ set(LLAMA_CORE_SOURCES
+@@ -15,13 +16,16 @@ set(LLAMA_CORE_SOURCES
+     llama-batch.cpp
+     llama-chat.cpp
+     llama-context.cpp
++    llama-context-kv-rows.cpp
+     llama-cparams.cpp
+     llama-grammar.cpp
+     llama-graph.cpp
++    llama-graph-kv-rows.cpp
+     llama-hparams.cpp
+     llama-impl.cpp
+     llama-io.cpp
+     llama-kv-cache.cpp
++    llama-kv-rows.cpp
+     llama-kv-cache-iswa.cpp
+     llama-kv-cache-dsa.cpp
+     llama-kv-cache-dsa-iswa.cpp
+@@ -47,6 +51,51 @@ set(LLAMA_CORE_SOURCES
  add_library(llama
              ../include/llama.h
              ${LLAMA_CORE_SOURCES}
@@ -3496,6 +3513,7 @@ index 97250c2e8..5e02baa49 100644
 +            skippy/stage_realization.cpp
 +            skippy/stage_execution_contract.cpp
 +            skippy/state.cpp
++            skippy/resident_prefix.cpp
 +            skippy/state_memory.cpp
 +            skippy/state_effects.cpp
 +            skippy/speculative_decoding.cpp
@@ -3504,7 +3522,7 @@ index 97250c2e8..5e02baa49 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -60,19 +105,648 @@ set_target_properties(llama PROPERTIES
+@@ -60,19 +109,651 @@ set_target_properties(llama PROPERTIES
  )
  
  # exclude non-model sources from unity build
@@ -3784,6 +3802,7 @@ index 97250c2e8..5e02baa49 100644
 +    target_link_libraries(skippy-graph-build-inputs PRIVATE llama)
 +    add_dependencies(skippy-stage-slice-plan skippy-graph-build-inputs skippy-profile-residency)
 +    add_test(NAME skippy_decode_input_width COMMAND skippy-graph-build-inputs --input-width)
++    add_test(NAME skippy_iswa_row_inputs COMMAND skippy-graph-build-inputs --iswa-rows)
 +
 +    add_test(
 +        NAME skippy_graph_build_inputs
@@ -3812,12 +3831,14 @@ index 97250c2e8..5e02baa49 100644
 +    set_tests_properties(skippy_generate_gemma_fixture PROPERTIES
 +        FIXTURES_SETUP skippy-model-loader-fixtures)
 +
-+    add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
++    add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp skippy/tests/resident_checkpoint_gpu.cpp)
 +    target_include_directories(skippy-sampling-history PRIVATE .)
 +    target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
 +    target_link_libraries(skippy-sampling-history PRIVATE llama)
++    add_test(NAME skippy_resident_checkpoint_gpu_long COMMAND skippy-sampling-history resident-gpu-long)
++    set_tests_properties(skippy_resident_checkpoint_gpu_long PROPERTIES SKIP_RETURN_CODE 77)
 +    function(add_skippy_sampling_history_tests family fixture state)
-+        foreach(mode grammar penalty)
++        foreach(mode grammar penalty resident)
 +            add_test(NAME skippy_sampling_history_${family}_${mode}
 +                COMMAND skippy-sampling-history
 +                    "${SKIPPY_MODEL_FIXTURE_DIR}/${family}-dense.gguf" ${mode} ${state})
@@ -4264,5 +4285,5 @@ index 7436230f0..f9fe048ff 100644
  struct mtmd_helper_embd_batch {
      int32_t n_tokens;
 -- 
-2.56.0
+2.54.0 (Apple Git-157)
 

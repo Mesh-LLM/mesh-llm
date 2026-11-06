@@ -1,4 +1,5 @@
-mod cache_runtime;
+pub(super) mod cache_runtime;
+mod cache_wave;
 mod detached_runtime;
 mod direct_batch;
 mod direct_execution;
@@ -20,7 +21,7 @@ use crate::frontend::admission::DECODE_BATCH_HEADROOM_TOKENS;
 use crate::frontend::generation::TokenControl;
 use crate::frontend::generation::generation_queue_full_error;
 use crate::frontend::util::openai_backend_error;
-use crate::kv_integration::StagePrefixCachePayload;
+use crate::kv_integration::scheduling::CacheSchedulingPolicy;
 use crate::runtime_state::panic_recovery::lock_runtime;
 use crate::runtime_state::{RuntimeIterationBatchRequest, RuntimeSessionAlignStats, RuntimeState};
 use crate::telemetry::Telemetry;
@@ -101,16 +102,6 @@ pub(crate) struct SchedulerRuntimeOutcome<T> {
 pub(crate) struct DirectIterationChannel {
     reply: std_mpsc::SyncSender<InferenceResult<SchedulerIterationOutcome>>,
     result: std_mpsc::Receiver<InferenceResult<SchedulerIterationOutcome>>,
-}
-
-pub(crate) struct CacheAwareRuntimeRequest<'a> {
-    pub(crate) operation_id: String,
-    pub(crate) deadline: Instant,
-    pub(crate) cancellation: Option<&'a skippy_inference_api::CancellationToken>,
-    pub(crate) prompt_tokens: Arc<[i32]>,
-    pub(crate) priority: u64,
-    pub(crate) payload: StagePrefixCachePayload,
-    pub(crate) refresh_affinity: CacheAffinityRefresh,
 }
 
 struct IterationSchedulerShared {
@@ -348,7 +339,7 @@ enum SchedulerCommand {
         RuntimeOperation,
         Arc<[i32]>,
         u64,
-        StagePrefixCachePayload,
+        CacheSchedulingPolicy,
         CacheAffinityRefresh,
     ),
     Cancel(String),
@@ -391,6 +382,7 @@ struct SchedulerWorker {
     max_commands_per_turn: usize,
     iteration_interval: Duration,
     active_runtime_sessions: usize,
+    cache_wave_sessions: usize,
     direct_wave_full: bool,
     telemetry: Option<Telemetry>,
     last_served_direct: bool,
@@ -505,6 +497,7 @@ impl IterationScheduler {
                     max_commands_per_turn: command_queue_capacity.min(MAX_COMMANDS_PER_TURN),
                     iteration_interval,
                     active_runtime_sessions: 0,
+                    cache_wave_sessions: 0,
                     direct_wave_full: false,
                     telemetry: Some(telemetry),
                     compute_meter,
@@ -799,36 +792,6 @@ impl IterationScheduler {
         })?
     }
 
-    /// Queue cache restore/prefill work by stage-local radix affinity while
-    /// retaining aging and decode-turn fairness.
-    pub(crate) fn execute_cache_aware_runtime_timed<T>(
-        &self,
-        label: &'static str,
-        request: CacheAwareRuntimeRequest<'_>,
-        operation: impl FnOnce(&mut RuntimeState, &CacheRuntimeContext) -> InferenceResult<T>
-        + Send
-        + 'static,
-    ) -> InferenceResult<SchedulerRuntimeOutcome<T>>
-    where
-        T: Send + 'static,
-    {
-        let (runtime_operation, result, control) = cache_runtime_operation(
-            label,
-            request.operation_id,
-            request.deadline,
-            request.cancellation,
-            operation,
-        );
-        self.enqueue_command(SchedulerCommand::ExecuteCacheAwareRuntime(
-            runtime_operation,
-            request.prompt_tokens,
-            request.priority,
-            request.payload,
-            request.refresh_affinity,
-        ))?;
-        wait_for_cache_runtime(result, &control)
-    }
-
     fn enqueue_command(&self, command: SchedulerCommand) -> InferenceResult<()> {
         self.shared
             .commands
@@ -938,6 +901,7 @@ impl SchedulerWorker {
             {
                 continue;
             }
+            self.refresh_cache_wave_sessions();
             if self.should_defer_cache_runtime() {
                 if !self.wait_for_scheduler_command(DIRECT_ITERATION_COALESCE_WINDOW) {
                     return;
@@ -947,7 +911,7 @@ impl SchedulerWorker {
             let cache_fill_wave_pending = should_fill_cache_runtime_wave(
                 !self.direct_iterations.is_empty(),
                 self.cache_runtime_queue.has_wave_aware_operations(),
-                self.active_runtime_sessions,
+                self.cache_wave_sessions,
                 self.max_direct_batch_size,
             );
             let coalesce_direct = should_coalesce_direct_iterations(
@@ -1001,15 +965,6 @@ impl SchedulerWorker {
         }
     }
 
-    fn should_defer_cache_runtime(&self) -> bool {
-        self.cache_runtime_queue.has_wave_aware_operations()
-            && self.direct_wave_full
-            && self.active_runtime_sessions >= self.max_direct_batch_size
-            && self.direct_iterations.is_empty()
-            && self.requests.is_empty()
-            && !self.cache_runtime_queue.is_empty()
-    }
-
     fn wait_for_scheduler_command(&mut self, timeout: Duration) -> bool {
         match self.commands.recv_timeout(timeout) {
             Ok(SchedulerCommand::Shutdown) => {
@@ -1022,47 +977,6 @@ impl SchedulerWorker {
             }
             Err(std_mpsc::RecvTimeoutError::Timeout) => true,
             Err(std_mpsc::RecvTimeoutError::Disconnected) => false,
-        }
-    }
-
-    fn run_work_turn(&mut self) {
-        let has_cache_runtime = !self.cache_runtime_queue.is_empty();
-        let has_wave_aware_cache_runtime = self.cache_runtime_queue.has_wave_aware_operations();
-        let has_direct = !self.direct_iterations.is_empty();
-        let has_planned = !self.requests.is_empty();
-        let has_iteration = has_planned || has_direct;
-        if has_wave_aware_cache_runtime
-            && has_direct
-            && self.active_runtime_sessions >= self.max_direct_batch_size
-        {
-            self.direct_wave_full = true;
-        }
-        let suppress_cache_runtime = should_suppress_cache_runtime(
-            has_wave_aware_cache_runtime,
-            self.direct_wave_full,
-            self.active_runtime_sessions,
-            self.max_direct_batch_size,
-        );
-        let fill_cache_wave = should_fill_cache_runtime_wave(
-            has_direct,
-            has_wave_aware_cache_runtime,
-            self.active_runtime_sessions,
-            self.max_direct_batch_size,
-        );
-        let serve_cache_runtime = !suppress_cache_runtime
-            && (fill_cache_wave
-                || should_serve_cache_runtime(
-                    has_cache_runtime,
-                    has_iteration,
-                    self.last_served_cache_runtime,
-                ));
-        self.cache_runtime_queue.advance_turn();
-        if serve_cache_runtime {
-            self.last_served_cache_runtime = true;
-            self.run_cache_runtime_operation();
-        } else {
-            self.last_served_cache_runtime = false;
-            self.run_iteration();
         }
     }
 
@@ -1085,8 +999,12 @@ impl SchedulerWorker {
         // waits, including lock contention, are excluded from the meter.
         let compute = (operation.run)(&self.runtime);
         self.record_compute(compute);
-        self.active_runtime_sessions = lock_runtime(&self.runtime).active_session_count();
-        if self.active_runtime_sessions < self.max_direct_batch_size {
+        {
+            let runtime = lock_runtime(&self.runtime);
+            self.active_runtime_sessions = runtime.active_session_count();
+            self.cache_wave_sessions = runtime.nonempty_active_session_count();
+        }
+        if self.cache_wave_sessions < self.max_direct_batch_size {
             self.direct_wave_full = false;
         } else if cache.as_ref().is_some_and(|cache| cache.wave_aware) {
             // A cache restore may complete before its caller can enqueue
@@ -1669,7 +1587,8 @@ impl SchedulerWorker {
             runtime.active_session_count()
         };
         self.active_runtime_sessions = active_runtime_sessions;
-        if active_runtime_sessions < self.max_direct_batch_size {
+        self.refresh_cache_wave_sessions();
+        if self.cache_wave_sessions < self.max_direct_batch_size {
             self.direct_wave_full = false;
         }
     }

@@ -17,12 +17,20 @@ use skippy_runtime::{
     WorkloadInfo, parse_cache_type,
 };
 
+mod context_capacity;
 mod frame_operations;
+pub(crate) mod lane_admission;
 mod lane_lifecycle;
 pub mod lifecycle;
+pub(crate) mod model_content;
 pub mod panic_recovery;
+mod resident_prefix;
 mod restore_transaction;
 mod state_transfer;
+
+#[cfg(test)]
+use context_capacity::lane_count_for_workload;
+use context_capacity::{ContextCapacity, effective_lane_count};
 
 pub use lifecycle::{SessionLifecycleEvent, SessionLifecycleObserver};
 
@@ -38,15 +46,15 @@ pub struct RuntimeLaunchOverrides {
 
 pub struct RuntimeState {
     pub model: StageModel,
+    runtime_lane_admission: Arc<lane_admission::RuntimeLaneAdmission>,
+    pub(crate) verified_model_content: Option<Arc<model_content::VerifiedModelContent>>,
+    pub(crate) generation_token_budget:
+        Option<Arc<crate::frontend::admission::GenerationTokenBudget>>,
     compute_meter: Arc<crate::compute_meter::StageComputeMeter>,
     layer_start: u32,
     layer_end: u32,
     lane_count: u32,
-    /// Size of the context's KV cell pool, in tokens (llama.cpp `n_ctx`). In
-    /// unified-KV mode every lane draws decode/prefill cells from this single
-    /// shared pool, so it is the real ceiling for scheduler admission — see
-    /// [`Self::kv_pool_tokens`].
-    ctx_size: u32,
+    context_capacity: ContextCapacity,
     /// High-water mark of lane indices ever handed out. Combined with
     /// [`Self::free_lane_indices`], the count of live lanes equals
     /// `next_lane_index - free_lane_indices.len()`.
@@ -256,10 +264,13 @@ impl RuntimeState {
     pub(crate) fn new_modelless_with_capacity_for_test(lane_count: u32, ctx_size: u32) -> Self {
         Self {
             model: StageModel::new_dummy(),
+            runtime_lane_admission: lane_admission::RuntimeLaneAdmission::new(lane_count),
+            verified_model_content: None,
+            generation_token_budget: None,
             layer_start: 0,
             layer_end: 1,
             lane_count,
-            ctx_size,
+            context_capacity: ContextCapacity::modelless(ctx_size),
             next_lane_index: 0,
             free_lane_indices: Vec::new(),
             sessions: BTreeMap::new(),
@@ -318,16 +329,6 @@ impl RuntimeState {
         self.sessions.len()
     }
 
-    /// Total KV cell pool available to this context, in tokens (`n_ctx`).
-    ///
-    /// In unified-KV mode all lanes share this single pool, so it is the real
-    /// token budget the iteration scheduler must admit against. Returns 0 for
-    /// the modelless test runtime, in which case callers should fall back to a
-    /// configured default.
-    pub fn kv_pool_tokens(&self) -> u32 {
-        self.ctx_size
-    }
-
     #[cfg(test)]
     pub(crate) fn is_modelless_for_test(&self) -> bool {
         self.modelless_for_test
@@ -378,28 +379,47 @@ pub fn load_runtime_with_overrides(
 ) -> Result<Option<Arc<Mutex<RuntimeState>>>> {
     reject_legacy_serving_package(config)?;
     let runtime_config = runtime_config_from_stage_config(config, overrides)?;
-
     let admitted_model_parts = config
         .model_part_paths
         .iter()
         .map(std::path::PathBuf::from)
         .collect::<Vec<_>>();
-    let model = match config.load_mode {
-        _ if !admitted_model_parts.is_empty() => {
-            open_stage_model_from_parts(&admitted_model_parts, &runtime_config)?
-        }
-        _ => {
-            let Some(model_path) = config.model_path.as_ref().map(std::path::Path::new) else {
-                return Ok(None);
-            };
-            open_stage_model(model_path, &runtime_config)?
-        }
+    let (model, content) = model_content::VerifiedModelContent::verify_during_load(config, || {
+        let model = match config.load_mode {
+            _ if !admitted_model_parts.is_empty() => {
+                open_stage_model_from_parts(&admitted_model_parts, &runtime_config)?
+            }
+            _ => {
+                let Some(model_path) = config.model_path.as_ref().map(std::path::Path::new) else {
+                    return Ok(None);
+                };
+                open_stage_model(model_path, &runtime_config)?
+            }
+        };
+        Ok(Some(model))
+    })?;
+    let Some(model) = model else {
+        return Ok(None);
     };
-    Ok(Some(runtime_from_loaded_model(
+    Ok(Some(runtime_from_verified_model(
         config,
         model,
         session_lifecycle_observer,
+        content,
     )?))
+}
+
+fn runtime_from_verified_model(
+    config: &StageConfig,
+    model: StageModel,
+    observer: Option<Arc<dyn SessionLifecycleObserver>>,
+    content: Option<model_content::VerifiedModelContent>,
+) -> Result<Arc<Mutex<RuntimeState>>> {
+    // Verification and its post-open file checks finished outside this lock.
+    let content = content.map(Arc::new);
+    let runtime = runtime_from_loaded_model(config, model, observer)?;
+    panic_recovery::lock_runtime(&runtime).verified_model_content = content;
+    Ok(runtime)
 }
 
 /// Apply workload admission and retain the host's session-lifecycle observer.
@@ -410,12 +430,17 @@ fn runtime_from_loaded_model(
 ) -> Result<Arc<Mutex<RuntimeState>>> {
     reject_unsupported_staged_workload(config, &model)?;
     let lane_count = effective_lane_count(config.lane_count, &model)?;
+    let context_capacity =
+        ContextCapacity::for_loaded_model(config.ctx_size, lane_count, model.has_native_model())?;
     Ok(Arc::new(Mutex::new(RuntimeState {
         model,
+        runtime_lane_admission: lane_admission::RuntimeLaneAdmission::new(lane_count),
+        verified_model_content: None,
+        generation_token_budget: None,
         layer_start: config.layer_start,
         layer_end: config.layer_end,
         lane_count,
-        ctx_size: config.ctx_size,
+        context_capacity,
         next_lane_index: 0,
         free_lane_indices: Vec::new(),
         sessions: BTreeMap::new(),
@@ -442,62 +467,36 @@ pub fn load_runtime_with_overrides_and_open_events(
 ) -> Result<Option<Arc<Mutex<RuntimeState>>>> {
     reject_legacy_serving_package(config)?;
     let runtime_config = runtime_config_from_stage_config(config, overrides)?;
-
     let admitted_model_parts = config
         .model_part_paths
         .iter()
         .map(std::path::PathBuf::from)
         .collect::<Vec<_>>();
-    let model = match config.load_mode {
-        _ if !admitted_model_parts.is_empty() => open_stage_model_from_parts_with_events(
-            &admitted_model_parts,
-            &runtime_config,
-            model_open_events,
-        )?,
-        _ => {
-            let Some(model_path) = config.model_path.as_ref().map(std::path::Path::new) else {
-                return Ok(None);
-            };
-            open_stage_model_with_events(model_path, &runtime_config, model_open_events)?
-        }
+    let (model, content) = model_content::VerifiedModelContent::verify_during_load(config, || {
+        let model = match config.load_mode {
+            _ if !admitted_model_parts.is_empty() => open_stage_model_from_parts_with_events(
+                &admitted_model_parts,
+                &runtime_config,
+                model_open_events,
+            )?,
+            _ => {
+                let Some(model_path) = config.model_path.as_ref().map(std::path::Path::new) else {
+                    return Ok(None);
+                };
+                open_stage_model_with_events(model_path, &runtime_config, model_open_events)?
+            }
+        };
+        Ok(Some(model))
+    })?;
+    let Some(model) = model else {
+        return Ok(None);
     };
-    Ok(Some(runtime_from_loaded_model(
+    Ok(Some(runtime_from_verified_model(
         config,
         model,
         session_lifecycle_observer,
+        content,
     )?))
-}
-
-/// Effective lane-admission bound for a loaded model.
-///
-/// Mirrors the native encoder-decoder serialization (skippy/llama_cpp/patches/
-/// 0002-skippy-implement-graph-planning-realization-and-runt.patch:
-/// `lane_count = encoder_decoder ? 1 : configured_lane_count`):
-/// encoder output is context-global in llama.cpp, so native only ever serves
-/// lane 0 for encoder-decoder models. Admission must not assign lane indices
-/// that native will never serve. The load-bypass dummy has no native model,
-/// so there is no native contract to mirror and the configured value stands.
-fn effective_lane_count(configured: u32, model: &StageModel) -> Result<u32> {
-    if !model.has_native_model() {
-        return Ok(configured);
-    }
-    Ok(lane_count_for_workload(
-        configured,
-        model.workload_info()?.kind,
-    ))
-}
-
-/// Pure lane-clamp decision: encoder-decoder work is serialized onto one
-/// lane (see [`effective_lane_count`]); every other workload keeps the
-/// configured bound.
-fn lane_count_for_workload(configured: u32, workload: ModelWorkload) -> u32 {
-    if configured <= 1 {
-        return configured;
-    }
-    if workload == ModelWorkload::EncoderDecoder {
-        return 1;
-    }
-    configured
 }
 
 /// Reject full-model-only workloads before filtered stages can begin serving.

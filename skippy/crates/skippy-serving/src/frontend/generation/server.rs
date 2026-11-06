@@ -27,7 +27,7 @@ use crate::frontend::speculative::{SpeculativeDecodeConfig, standalone_ngram_pro
 use crate::kv_integration::KvStageIntegration;
 use crate::listener::bind_serve_listener;
 use crate::runtime_state::RuntimeState;
-use crate::runtime_state::{loaded_memory_cache_capabilities, loaded_model_state_kind};
+use crate::runtime_state::loaded_model_state_kind;
 use crate::telemetry::Telemetry;
 use crate::telemetry::lifecycle_attrs;
 use crate::telemetry::now_unix_nanos;
@@ -400,10 +400,9 @@ fn embedded_openai_backend_with_state_kind(
         "stage.openai_runtime_prewarm",
     )
     .context("prewarm embedded OpenAI runtime sessions")?;
-    let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
+    let kv = KvStageIntegration::from_runtime_with_l3_manager(
         &args.config,
-        loaded_model_state_kind(Some(&args.runtime)),
-        loaded_memory_cache_capabilities(Some(&args.runtime)),
+        &args.runtime,
         args.l3_manager.clone(),
         args.kv_lifecycle_observer.clone(),
     )?
@@ -418,6 +417,13 @@ fn embedded_openai_backend_with_state_kind(
         args.telemetry.emit("stage.kv_payload_selected", attrs);
     }
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
+    let (generation_token_budget, runtime_lane_admission) = {
+        let mut runtime = crate::runtime_state::panic_recovery::lock_runtime(&args.runtime);
+        (
+            GenerationTokenBudget::shared_for_runtime(&mut runtime, ctx_size),
+            runtime.lane_admission(),
+        )
+    };
     let iteration_scheduler = match iteration_scheduler {
         Some(iteration_scheduler) => iteration_scheduler,
         None => IterationScheduler::new(
@@ -431,6 +437,7 @@ fn embedded_openai_backend_with_state_kind(
     };
     let stage_backend = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
+        runtime_lane_admission,
         workload: Default::default(),
         config: args.config.clone(),
         telemetry: args.telemetry.clone(),
@@ -485,7 +492,7 @@ fn embedded_openai_backend_with_state_kind(
             args.generation_concurrency,
         )),
         generation_session_locks: Arc::new(Mutex::new(BTreeMap::new())),
-        generation_token_budget: Arc::new(GenerationTokenBudget::new(ctx_size)),
+        generation_token_budget,
         hook_policy: args.hook_policy,
         generation_receipt: args.generation_receipt,
         generation_lifecycle: args.generation_lifecycle,

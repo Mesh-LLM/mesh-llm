@@ -7,8 +7,7 @@ use hub_fixture::Server;
 use std::{
     fs,
     process::{Command, Output, Stdio},
-    thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 fn cli(endpoint: &str, args: &[&str]) -> Output {
@@ -28,21 +27,12 @@ fn cli(endpoint: &str, args: &[&str]) -> Output {
     finish_fixture_child(child)
 }
 
-fn finish_fixture_child(mut child: std::process::Child) -> Output {
-    let deadline = Instant::now() + Duration::from_secs(30);
-    while child.try_wait().unwrap().is_none() {
-        if Instant::now() >= deadline {
-            child.kill().unwrap();
-            let output = child.wait_with_output().unwrap();
-            panic!(
-                "snapshot CLI timed out: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    child.wait_with_output().unwrap()
+fn finish_fixture_child(child: std::process::Child) -> Output {
+    child_capture::finish(child, Duration::from_secs(30), "snapshot CLI")
 }
+
+#[path = "snapshot_promotion_cli/child_capture.rs"]
+mod child_capture;
 
 fn info() -> Vec<u8> {
     serde_json::to_vec(&serde_json::json!({"id":"fixture/model","sha":"a".repeat(40)})).unwrap()
