@@ -103,6 +103,24 @@
       },
       "max_draft_tokens": 15,
       "backends": "metal"
+    },
+    {
+      "target": {
+        "architecture": "gemma4",
+        "layer_count": 42,
+        "embedding_length": 2560,
+        "expert_count": 0,
+        "family": "Nemotron-3.5-Bolt"
+      },
+      "draft": {
+        "repo": "unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF",
+        "revision": "b738967d6da3441a7d1c71fcec15e49e32e16ecd",
+        "file": "dflash-NVIDIA-Nemotron-3.5-Bolt-E4B-Q8_0.gguf",
+        "sha256": "9a63662ae8395b8bfc1a1b00d7a9ef354120f172704bd6ba88d3870cf22d4d03",
+        "bytes": 398892256
+      },
+      "max_draft_tokens": 7,
+      "backends": "all"
     }
   ]
 }
