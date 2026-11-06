@@ -1,4 +1,4 @@
-From 1899862061d03019d92702df737e091857ba79b2 Mon Sep 17 00:00:00 2001
+From 370e55af298b717c13f3919f95027aed6701ad85 Mon Sep 17 00:00:00 2001
 From: Codex <codex@openai.com>
 Date: Sun, 20 Sep 2026 11:19:07 +1000
 Subject: [PATCH] skippy: add DiffusionGemma system-one reads
@@ -118,7 +118,7 @@ index 000000000..4faf057ba
 +
 +#endif // SKIPPY_SYSTEM_ONE_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 27bc5a2cd..97e9b48cd 100644
+index 8fd5a4432..01577280b 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -100,6 +100,7 @@ add_library(llama

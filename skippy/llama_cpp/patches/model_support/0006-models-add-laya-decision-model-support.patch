@@ -1,4 +1,4 @@
-From 2edf6968e43da06a8cfb95fbf41b32c50a22181b Mon Sep 17 00:00:00 2001
+From ee38cdd155e9e99a3560d158df5f2985fd7e927b Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sun, 27 Sep 2026 21:12:21 +1000
 Subject: [PATCH] models: add Laya decision model support
@@ -265,7 +265,7 @@ index 000000000..002fac598
 +
 +#endif // SKIPPY_LAYA_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 97e9b48cd..8c41f1797 100644
+index 01577280b..38917c365 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -101,6 +101,8 @@ add_library(llama

@@ -1,4 +1,4 @@
-From 3765ef5e12d393936f7fd2c36ffd8a159d827de9 Mon Sep 17 00:00:00 2001
+From 667c3d7194ebee2275a11335b7933332fad46307 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 19 Sep 2026 18:30:01 +1000
 Subject: [PATCH] models: add inkling family support

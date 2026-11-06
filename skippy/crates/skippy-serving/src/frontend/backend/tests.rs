@@ -335,8 +335,10 @@ pub(super) fn hooks_test_backend(
     let iteration_scheduler =
         IterationScheduler::new(runtime.clone(), &config, 1, true, None, telemetry.clone())
             .expect("iteration scheduler for hook lifecycle tests");
+    let runtime_lane_admission = runtime.lock().unwrap().lane_admission();
     StageOpenAiBackend {
         runtime: runtime.clone(),
+        runtime_lane_admission,
         workload: Default::default(),
         config: config.clone(),
         telemetry,

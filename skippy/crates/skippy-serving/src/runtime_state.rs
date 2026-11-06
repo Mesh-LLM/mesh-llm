@@ -379,25 +379,27 @@ pub fn load_runtime_with_overrides(
 ) -> Result<Option<Arc<Mutex<RuntimeState>>>> {
     reject_legacy_serving_package(config)?;
     let runtime_config = runtime_config_from_stage_config(config, overrides)?;
-    let content = model_content::VerifiedModelContent::observe(config)
-        .ok()
-        .flatten();
-
     let admitted_model_parts = config
         .model_part_paths
         .iter()
         .map(std::path::PathBuf::from)
         .collect::<Vec<_>>();
-    let model = match config.load_mode {
-        _ if !admitted_model_parts.is_empty() => {
-            open_stage_model_from_parts(&admitted_model_parts, &runtime_config)?
-        }
-        _ => {
-            let Some(model_path) = config.model_path.as_ref().map(std::path::Path::new) else {
-                return Ok(None);
-            };
-            open_stage_model(model_path, &runtime_config)?
-        }
+    let (model, content) = model_content::VerifiedModelContent::verify_during_load(config, || {
+        let model = match config.load_mode {
+            _ if !admitted_model_parts.is_empty() => {
+                open_stage_model_from_parts(&admitted_model_parts, &runtime_config)?
+            }
+            _ => {
+                let Some(model_path) = config.model_path.as_ref().map(std::path::Path::new) else {
+                    return Ok(None);
+                };
+                open_stage_model(model_path, &runtime_config)?
+            }
+        };
+        Ok(Some(model))
+    })?;
+    let Some(model) = model else {
+        return Ok(None);
     };
     Ok(Some(runtime_from_verified_model(
         config,
@@ -413,11 +415,8 @@ fn runtime_from_verified_model(
     observer: Option<Arc<dyn SessionLifecycleObserver>>,
     content: Option<model_content::VerifiedModelContent>,
 ) -> Result<Arc<Mutex<RuntimeState>>> {
-    // Re-stat after open before publishing proof. No filesystem work takes the
-    // runtime lock, and frontends reuse this proof without rehashing weights.
-    let content = content
-        .filter(|proof| proof.still_matches(config))
-        .map(Arc::new);
+    // Verification and its post-open file checks finished outside this lock.
+    let content = content.map(Arc::new);
     let runtime = runtime_from_loaded_model(config, model, observer)?;
     panic_recovery::lock_runtime(&runtime).verified_model_content = content;
     Ok(runtime)
@@ -468,27 +467,29 @@ pub fn load_runtime_with_overrides_and_open_events(
 ) -> Result<Option<Arc<Mutex<RuntimeState>>>> {
     reject_legacy_serving_package(config)?;
     let runtime_config = runtime_config_from_stage_config(config, overrides)?;
-    let content = model_content::VerifiedModelContent::observe(config)
-        .ok()
-        .flatten();
-
     let admitted_model_parts = config
         .model_part_paths
         .iter()
         .map(std::path::PathBuf::from)
         .collect::<Vec<_>>();
-    let model = match config.load_mode {
-        _ if !admitted_model_parts.is_empty() => open_stage_model_from_parts_with_events(
-            &admitted_model_parts,
-            &runtime_config,
-            model_open_events,
-        )?,
-        _ => {
-            let Some(model_path) = config.model_path.as_ref().map(std::path::Path::new) else {
-                return Ok(None);
-            };
-            open_stage_model_with_events(model_path, &runtime_config, model_open_events)?
-        }
+    let (model, content) = model_content::VerifiedModelContent::verify_during_load(config, || {
+        let model = match config.load_mode {
+            _ if !admitted_model_parts.is_empty() => open_stage_model_from_parts_with_events(
+                &admitted_model_parts,
+                &runtime_config,
+                model_open_events,
+            )?,
+            _ => {
+                let Some(model_path) = config.model_path.as_ref().map(std::path::Path::new) else {
+                    return Ok(None);
+                };
+                open_stage_model_with_events(model_path, &runtime_config, model_open_events)?
+            }
+        };
+        Ok(Some(model))
+    })?;
+    let Some(model) = model else {
+        return Ok(None);
     };
     Ok(Some(runtime_from_verified_model(
         config,

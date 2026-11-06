@@ -1,4 +1,4 @@
-From ca9d085b37b18c39fa03f86c7b7c8f8c4973e90c Mon Sep 17 00:00:00 2001
+From 68f4428f009a2655cf7516dded2b7184cca0d069 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sat, 10 Oct 2026 16:37:38 +0100
 Subject: [PATCH] models: add Qwen3-MoE native MTP
@@ -180,10 +180,10 @@ index e8c8a8c99..4eeb4a98d 100644
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 8c41f1797..2ddd23441 100644
+index 38917c365..a37114d96 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -261,6 +261,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -275,6 +275,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_test(NAME skippy_glm_dsa_mtp COMMAND skippy-profile-residency
          "${GLM_DSA_MTP_FIXTURE_DIR}/dense-mtp.gguf")
      set_tests_properties(skippy_glm_dsa_mtp PROPERTIES FIXTURES_REQUIRED glm-dsa-mtp-model)
@@ -496,10 +496,10 @@ index 2198fcfb5..37ddca4f2 100644
 +    ggml_build_forward_expand(gf, cur);
 +}
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 69313f903..4f7ea31ac 100644
+index dc98baa72..73660e180 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -1486,7 +1486,7 @@ int main(int argc, char ** argv) {
+@@ -1503,7 +1503,7 @@ int main(int argc, char ** argv) {
              if (dense_mtp_depth == 0) throw std::runtime_error("--dense-mtp-depth must be positive");
              auto gguf = get_gguf_ctx(arch,
                      arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_HY_V3 ||

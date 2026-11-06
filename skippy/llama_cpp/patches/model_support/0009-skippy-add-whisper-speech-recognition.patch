@@ -1,4 +1,4 @@
-From 945008c9d7c2ccdc2644e84ce12e9d8d8f5f139d Mon Sep 17 00:00:00 2001
+From 602870192ff7d6416c8aac3a0a085fd448870195 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 22 Oct 2026 17:15:05 +1100
 Subject: [PATCH] skippy: add Whisper speech recognition
@@ -16,15 +16,19 @@ SKIPPY_FEATURE_SPEECH_RECOGNITION clear, and report UNSUPPORTED.
 
 Bumps the Skippy ABI to 0.1.72.
 ---
- include/skippy.h        |   1 +
- include/skippy/asr.h    | 172 +++++++++++++++
- include/skippy/common.h |   4 +-
- src/CMakeLists.txt      |  37 ++++
- src/skippy/abi.cpp      |   6 +-
- src/skippy/asr.cpp      | 465 ++++++++++++++++++++++++++++++++++++++++
- 6 files changed, 683 insertions(+), 2 deletions(-)
+ include/skippy.h                         |   1 +
+ include/skippy/asr.h                     | 172 +++++++++
+ include/skippy/common.h                  |   4 +-
+ src/CMakeLists.txt                       |  44 +++
+ src/skippy/abi.cpp                       |   6 +-
+ src/skippy/asr.cpp                       | 447 +++++++++++++++++++++++
+ src/skippy/asr_decode.h                  |  50 +++
+ src/skippy/tests/asr_decode_boundary.cpp |  81 ++++
+ 8 files changed, 803 insertions(+), 2 deletions(-)
  create mode 100644 include/skippy/asr.h
  create mode 100644 src/skippy/asr.cpp
+ create mode 100644 src/skippy/asr_decode.h
+ create mode 100644 src/skippy/tests/asr_decode_boundary.cpp
 
 diff --git a/include/skippy.h b/include/skippy.h
 index a1d73ac5a..fb2e80806 100644
@@ -238,7 +242,7 @@ index 4eeb4a98d..d521dd6b4 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 2ddd23441..acf0837fd 100644
+index a37114d96..557b8b7e7 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -103,6 +103,7 @@ add_library(llama
@@ -299,6 +303,20 @@ index 2ddd23441..acf0837fd 100644
  if (LLAMA_STAGE_BUILD_TESTS)
      target_compile_definitions(llama PRIVATE LLAMA_STAGE_BUILD_TESTS)
  
+@@ -242,6 +279,13 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     add_test(NAME skippy_diffusion_host_fallback COMMAND skippy-diffusion-host-fallback
+         "${DIFFUSION_FALLBACK_FIXTURE_DIR}/diffusion-gemma-moe.gguf")
+     set_tests_properties(skippy_diffusion_host_fallback PROPERTIES FIXTURES_REQUIRED diffusion-fallback-model)
++
++    add_executable(skippy-asr-decode-boundary skippy/tests/asr_decode_boundary.cpp)
++    target_include_directories(skippy-asr-decode-boundary PRIVATE .)
++    target_include_directories(skippy-asr-decode-boundary SYSTEM PRIVATE ../vendor)
++    target_compile_features(skippy-asr-decode-boundary PRIVATE cxx_std_17)
++    target_link_libraries(skippy-asr-decode-boundary PRIVATE llama)
++    add_test(NAME skippy_asr_decode_boundary COMMAND skippy-asr-decode-boundary)
+     set(MTP_WIDTH_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/mtp-width-models")
+     file(MAKE_DIRECTORY "${MTP_WIDTH_FIXTURE_DIR}")
+     add_test(NAME skippy_generate_mtp_width COMMAND skippy-model-fixture-generator
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
 index c15ec5c97..51d6f638d 100644
 --- a/src/skippy/abi.cpp
@@ -318,10 +336,10 @@ index c15ec5c97..51d6f638d 100644
  void skippy_error_free(struct skippy_error * error) {
 diff --git a/src/skippy/asr.cpp b/src/skippy/asr.cpp
 new file mode 100644
-index 000000000..680549066
+index 000000000..a0c619289
 --- /dev/null
 +++ b/src/skippy/asr.cpp
-@@ -0,0 +1,465 @@
+@@ -0,0 +1,447 @@
 +#include "skippy/asr.h"
 +#include "skippy/errors.h"
 +
@@ -358,7 +376,7 @@ index 000000000..680549066
 +#define MA_NO_ENGINE
 +#define MA_NO_GENERATION
 +#define MA_API static
-+#include "miniaudio/miniaudio.h"
++#include "asr_decode.h"
 +#endif
 +
 +struct skippy_asr_model {
@@ -470,7 +488,7 @@ index 000000000..680549066
 +    return stat(path, &info) == 0 ? static_cast<uint64_t>(info.st_size) : 0;
 +}
 +
-+enum class decode_outcome { ok, failed, too_long };
++using skippy_asr_detail::decode_outcome;
 +
 +decode_outcome decode_audio(const uint8_t * data, size_t len, std::vector<float> & samples) {
 +    ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 1, SKIPPY_ASR_SAMPLE_RATE);
@@ -482,26 +500,8 @@ index 000000000..680549066
 +        return decode_outcome::failed;
 +    }
 +    // Read in chunks: VBR MP3 cannot always report its length up front.
-+    constexpr ma_uint64 chunk = SKIPPY_ASR_SAMPLE_RATE;
-+    decode_outcome outcome = decode_outcome::ok;
-+    for (;;) {
-+        if (samples.size() >= static_cast<size_t>(SKIPPY_ASR_MAX_SAMPLES)) {
-+            outcome = decode_outcome::too_long;
-+            break;
-+        }
-+        const size_t offset = samples.size();
-+        samples.resize(offset + chunk);
-+        ma_uint64 read = 0;
-+        const ma_result result = ma_decoder_read_pcm_frames(&decoder, samples.data() + offset, chunk, &read);
-+        samples.resize(offset + read);
-+        if (result == MA_AT_END || (result == MA_SUCCESS && read < chunk)) {
-+            break;
-+        }
-+        if (result != MA_SUCCESS) {
-+            outcome = decode_outcome::failed;
-+            break;
-+        }
-+    }
++    const decode_outcome outcome = skippy_asr_detail::read_bounded_audio(
++        decoder, samples, static_cast<size_t>(SKIPPY_ASR_MAX_SAMPLES), SKIPPY_ASR_SAMPLE_RATE);
 +    ma_decoder_uninit(&decoder);
 +    return outcome;
 +}
@@ -786,6 +786,149 @@ index 000000000..680549066
 +
 +extern "C" void skippy_asr_result_free(struct skippy_asr_result * result) {
 +    delete result;
++}
+diff --git a/src/skippy/asr_decode.h b/src/skippy/asr_decode.h
+new file mode 100644
+index 000000000..c56a5ea9c
+--- /dev/null
++++ b/src/skippy/asr_decode.h
+@@ -0,0 +1,50 @@
++#pragma once
++
++#if defined(_WIN32) && !defined(NOMINMAX)
++#define NOMINMAX
++#endif
++#include "miniaudio/miniaudio.h"
++
++#include <algorithm>
++#include <vector>
++
++namespace skippy_asr_detail {
++
++enum class decode_outcome { ok, failed, too_long };
++
++// The production limit and read chunk are supplied by the ASR contract. Keeping the
++// decoder loop independent of Whisper also permits small, real audio boundary tests.
++inline decode_outcome read_bounded_audio(ma_decoder & decoder, std::vector<float> & samples,
++                                         size_t limit, ma_uint64 chunk) {
++    if (samples.size() > limit) {
++        return decode_outcome::too_long;
++    }
++    if (chunk == 0) {
++        return decode_outcome::failed;
++    }
++    while (samples.size() < limit) {
++        const size_t offset = samples.size();
++        const ma_uint64 request = (std::min<ma_uint64>)(chunk, limit - offset);
++        samples.resize(offset + static_cast<size_t>(request));
++        ma_uint64 read = 0;
++        const ma_result result = ma_decoder_read_pcm_frames(&decoder, samples.data() + offset, request, &read);
++        samples.resize(offset + static_cast<size_t>(read));
++        if (result == MA_AT_END || (result == MA_SUCCESS && read < request)) {
++            return decode_outcome::ok;
++        }
++        if (result != MA_SUCCESS) {
++            return decode_outcome::failed;
++        }
++    }
++    // A successful full read does not establish EOF. Probe one frame without growing
++    // the sample buffer: the inclusive maximum is valid only if no further frame exists.
++    float extra = 0.0f;
++    ma_uint64 read = 0;
++    const ma_result result = ma_decoder_read_pcm_frames(&decoder, &extra, 1, &read);
++    if (read != 0) {
++        return decode_outcome::too_long;
++    }
++    return result == MA_AT_END || result == MA_SUCCESS ? decode_outcome::ok : decode_outcome::failed;
++}
++
++} // namespace skippy_asr_detail
+diff --git a/src/skippy/tests/asr_decode_boundary.cpp b/src/skippy/tests/asr_decode_boundary.cpp
+new file mode 100644
+index 000000000..a5b1ff113
+--- /dev/null
++++ b/src/skippy/tests/asr_decode_boundary.cpp
+@@ -0,0 +1,81 @@
++// Use the same file-local decoder implementation as ASR, without a Whisper model.
++#define ma_atomic_global_lock skippy_asr_test_ma_atomic_global_lock
++#define MINIAUDIO_IMPLEMENTATION
++#define MA_NO_ENCODING
++#define MA_NO_DEVICE_IO
++#define MA_NO_RESOURCE_MANAGER
++#define MA_NO_NODE_GRAPH
++#define MA_NO_ENGINE
++#define MA_NO_GENERATION
++#define MA_API static
++#include "../asr_decode.h"
++
++#include <cmath>
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++
++namespace {
++void le16(std::vector<uint8_t> & wav, size_t offset, uint16_t value) {
++    wav[offset] = uint8_t(value);
++    wav[offset + 1] = uint8_t(value >> 8);
++}
++
++void le32(std::vector<uint8_t> & wav, size_t offset, uint32_t value) {
++    le16(wav, offset, uint16_t(value));
++    le16(wav, offset + 2, uint16_t(value >> 16));
++}
++
++bool check(size_t frames, size_t limit) {
++    // A real mono PCM WAV, just a few frames long. Samples remain recognizable
++    // after decoding so boundary checks also detect skipped/duplicated frames.
++    std::vector<uint8_t> wav(44 + frames * 2, 0);
++    std::memcpy(wav.data(), "RIFF", 4);
++    le32(wav, 4, uint32_t(wav.size() - 8));
++    std::memcpy(wav.data() + 8, "WAVEfmt ", 8);
++    le32(wav, 16, 16);
++    le16(wav, 20, 1);
++    le16(wav, 22, 1);
++    le32(wav, 24, 16000);
++    le32(wav, 28, 32000);
++    le16(wav, 32, 2);
++    le16(wav, 34, 16);
++    std::memcpy(wav.data() + 36, "data", 4);
++    le32(wav, 40, uint32_t(frames * 2));
++    for (size_t i = 0; i < frames; ++i) {
++        le16(wav, 44 + i * 2, uint16_t((i + 1) * 1024));
++    }
++    auto config = ma_decoder_config_init(ma_format_f32, 1, 16000);
++    ma_decoder decoder;
++    if (ma_decoder_init_memory(wav.data(), wav.size(), &config, &decoder) != MA_SUCCESS) {
++        return false;
++    }
++    std::vector<float> samples;
++    const auto outcome = skippy_asr_detail::read_bounded_audio(decoder, samples, limit, 4);
++    ma_decoder_uninit(&decoder);
++    const auto expected = frames > limit ? skippy_asr_detail::decode_outcome::too_long :
++                                          skippy_asr_detail::decode_outcome::ok;
++    bool valid = outcome == expected && samples.size() == (std::min)(frames, limit);
++    for (size_t i = 0; i < samples.size(); ++i) {
++        valid &= std::fabs(samples[i] - float(i + 1) / 32.0f) < 1e-6f;
++    }
++    if (!valid) {
++        std::fprintf(stderr, "audio frames=%zu limit=%zu: outcome=%d retained=%zu\n",
++                     frames, limit, int(outcome), samples.size());
++    }
++    return valid;
++}
++} // namespace
++
++int main() {
++    // Exercise a chunk-aligned limit (requires an EOF probe) and an unaligned
++    // limit (requires capping the last read). No large allocation or model needed.
++    for (size_t limit : { size_t(8), size_t(7) }) {
++        for (size_t frames : { limit - 1, limit, limit + 1 }) {
++            if (!check(frames, limit)) {
++                return 1;
++            }
++        }
++    }
++    return 0;
 +}
 -- 
 2.56.0
