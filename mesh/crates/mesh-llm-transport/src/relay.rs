@@ -188,15 +188,8 @@ async fn relay_tcp_to_quic(
     Ok(())
 }
 
-async fn relay_quic_to_tcp(
-    mut quic_recv: iroh::endpoint::RecvStream,
-    mut tcp_write: tokio::io::WriteHalf<TcpStream>,
-    first_byte_timeout: Duration,
-) -> Result<()> {
-    relay_response_and_close_writer(&mut quic_recv, &mut tcp_write, first_byte_timeout).await
-}
-
-/// Relay the response, then tell the TCP side that nothing more is coming.
+/// Relay the QUIC stream to the TCP side, then tell the TCP side that nothing
+/// more is coming.
 ///
 /// Dropping `tokio::io::split`'s write half sends nothing, because the read
 /// half in the other relay task keeps the socket open. Without this shutdown
@@ -204,9 +197,11 @@ async fn relay_quic_to_tcp(
 /// upstream dropped its lane keeps waiting for the next message, holding its
 /// session and execution lane, and an upstream whose stage closed the
 /// connection waits out its whole reply timeout.
-async fn relay_response_and_close_writer<R, W>(
-    reader: R,
-    writer: &mut W,
+///
+/// Generic over the streams so tests can drive it without a QUIC connection.
+async fn relay_quic_to_tcp<R, W>(
+    quic_recv: R,
+    mut tcp_write: W,
     first_byte_timeout: Duration,
 ) -> Result<()>
 where
@@ -214,10 +209,10 @@ where
     W: AsyncWrite + Unpin,
 {
     let result =
-        relay_response_with_first_byte_timeout(reader, &mut *writer, first_byte_timeout).await;
+        relay_response_with_first_byte_timeout(quic_recv, &mut tcp_write, first_byte_timeout).await;
     // Best effort: the peer may already be gone, and the relay's outcome is
     // decided by then.
-    let _ = writer.shutdown().await;
+    let _ = tcp_write.shutdown().await;
     result
 }
 
@@ -432,13 +427,13 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let relay_side = TcpStream::connect(addr).await.unwrap();
         let (mut stage, _) = listener.accept().await.unwrap();
-        let (_read_half, mut write_half) = tokio::io::split(relay_side);
+        let (_read_half, write_half) = tokio::io::split(relay_side);
 
         let (mut upstream_write, upstream_read) = tokio::io::duplex(1024);
         upstream_write.write_all(b"last frame").await.unwrap();
         drop(upstream_write);
 
-        relay_response_and_close_writer(upstream_read, &mut write_half, Duration::from_secs(5))
+        relay_quic_to_tcp(upstream_read, write_half, Duration::from_secs(5))
             .await
             .unwrap();
 
@@ -457,17 +452,13 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let relay_side = TcpStream::connect(addr).await.unwrap();
         let (mut stage, _) = listener.accept().await.unwrap();
-        let (_read_half, mut write_half) = tokio::io::split(relay_side);
+        let (_read_half, write_half) = tokio::io::split(relay_side);
 
         // Never written and never closed: the first-byte timeout fails the relay.
         let (_upstream_write, upstream_read) = tokio::io::duplex(1024);
-        let err = relay_response_and_close_writer(
-            upstream_read,
-            &mut write_half,
-            Duration::from_millis(20),
-        )
-        .await
-        .unwrap_err();
+        let err = relay_quic_to_tcp(upstream_read, write_half, Duration::from_millis(20))
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("no response within"));
 
         let mut received = Vec::new();
