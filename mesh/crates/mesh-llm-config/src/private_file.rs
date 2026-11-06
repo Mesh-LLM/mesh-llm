@@ -102,7 +102,7 @@ pub(crate) fn write_private_file(target: &Path, contents: &[u8]) -> io::Result<(
 
 /// Replaces `target` with `contents` through a temporary file renamed over
 /// it, which gets the access the old file had before anything is written: its
-/// mode on Unix, its DACL on Windows, read back through the temporary file's
+/// mode and ACL on Unix, its DACL on Windows, read back through the temporary file's
 /// handle to confirm it. A new file gets what a file created there gets. On
 /// any failure the old file stays as it was. Crates that forbid `unsafe`
 /// call this rather than reach the Windows security API themselves.
@@ -256,6 +256,11 @@ fn create_temp(
 }
 
 #[cfg(unix)]
+mod acl;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod acl_tests;
+
+#[cfg(unix)]
 mod platform {
     use std::fs;
     use std::io;
@@ -276,15 +281,21 @@ mod platform {
         Ok(())
     }
 
-    /// A file's mode.
-    pub(super) struct FileAccess(fs::Permissions);
+    /// A file's mode and ACL.
+    pub(super) struct FileAccess(fs::Permissions, super::acl::Acl);
 
     impl FileAccess {
+        // The mode last, as apply sets it last: a chmod between the two
+        // reads then stays in the captured mode.
         pub(super) fn of(path: &Path) -> io::Result<Self> {
-            Ok(Self(fs::metadata(path)?.permissions()))
+            let acl = super::acl::Acl::of(path)?;
+            Ok(Self(fs::metadata(path)?.permissions(), acl))
         }
 
+        // The ACL first: setting the mode afterwards leaves its entries but
+        // sets the mask from the mode, as on the old file.
         pub(super) fn apply(&self, file: &fs::File) -> io::Result<()> {
+            self.1.apply(file)?;
             file.set_permissions(self.0.clone())
         }
     }

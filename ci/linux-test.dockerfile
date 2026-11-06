@@ -4,6 +4,10 @@
 # NOTE: npm ci may fail behind SSL-intercepting proxies. If so, pre-build the
 # UI on the host (npm run build in mesh/crates/mesh-llm-ui/) — the dist/ is COPY'd in.
 FROM rust:latest
+ENV CARGO_PROFILE_DEV_DEBUG=0 \
+    CARGO_PROFILE_TEST_DEBUG=0 \
+    CARGO_PROFILE_RELEASE_DEBUG=0 \
+    CARGO_PROFILE_BENCH_DEBUG=0
 
 RUN apt-get update && apt-get install -y cmake pkg-config git && rm -rf /var/lib/apt/lists/*
 

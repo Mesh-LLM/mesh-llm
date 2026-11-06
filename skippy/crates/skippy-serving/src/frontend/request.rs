@@ -5,14 +5,14 @@ use crate::frontend::EmbeddedReasoningFormat;
 use crate::frontend::stop_sequences::validate_stop_sequences;
 use base64::Engine;
 use serde_json::Value;
-use skippy_inference_api::ChatCompletionRequest;
-use skippy_inference_api::ChatMessage;
 use skippy_inference_api::CompletionRequest;
 use skippy_inference_api::InferenceError;
 use skippy_inference_api::InferenceResult;
 use skippy_inference_api::MessageContent;
 use skippy_inference_api::MessageContentPart;
 use skippy_inference_api::chat_skippy_hooks_enabled;
+use skippy_inference_api::generation::GenerationMessage;
+use skippy_inference_api::generation::GenerationRequest;
 use skippy_package_format::{
     GenerationProfile, GenerationReasoningBudget, GenerationReasoningBudgetLevel,
     GenerationReasoningEnabled, GenerationReasoningFormat,
@@ -63,7 +63,7 @@ pub(super) struct RequestDefaultsDiagnostics {
 }
 
 pub(super) fn resolve_chat_request_defaults(
-    request: &ChatCompletionRequest,
+    request: &GenerationRequest,
     configured: &EmbeddedOpenAiRequestDefaults,
 ) -> InferenceResult<(EmbeddedOpenAiRequestDefaults, RequestDefaultsDiagnostics)> {
     let template_reasoning = skippy_inference_api::normalize_reasoning_template_options(
@@ -198,7 +198,7 @@ fn request_extra_is_set(extra: &BTreeMap<String, Value>, field: &str) -> bool {
 }
 
 fn chat_field_sources(
-    request: &ChatCompletionRequest,
+    request: &GenerationRequest,
     configured: &EmbeddedOpenAiRequestDefaults,
     package: Option<&GenerationProfile>,
     explicit_budget: Option<ReasoningBudget>,
@@ -680,7 +680,7 @@ struct SharedRequestFields<'a> {
 }
 
 pub(super) fn apply_chat_request_defaults(
-    request: &mut ChatCompletionRequest,
+    request: &mut GenerationRequest,
     defaults: &EmbeddedOpenAiRequestDefaults,
 ) -> InferenceResult<()> {
     if request.max_tokens.is_none() && request.max_completion_tokens.is_none() {
@@ -703,7 +703,7 @@ pub(super) fn apply_chat_request_defaults(
 }
 
 fn apply_chat_only_request_defaults(
-    request: &mut ChatCompletionRequest,
+    request: &mut GenerationRequest,
     defaults: &EmbeddedOpenAiRequestDefaults,
 ) -> InferenceResult<()> {
     for (name, value) in [
@@ -759,7 +759,7 @@ fn apply_chat_only_request_defaults(
     {
         request.messages.insert(
             0,
-            ChatMessage {
+            GenerationMessage {
                 role: "system".to_string(),
                 content: Some(skippy_inference_api::MessageContent::Text(system_prompt)),
                 extra: std::collections::BTreeMap::new(),
@@ -776,9 +776,9 @@ fn apply_chat_only_request_defaults(
     Ok(())
 }
 
-fn prefill_assistant_message(value: &Value) -> InferenceResult<ChatMessage> {
+fn prefill_assistant_message(value: &Value) -> InferenceResult<GenerationMessage> {
     if let Some(content) = value.as_str() {
-        return Ok(ChatMessage {
+        return Ok(GenerationMessage {
             role: "assistant".to_string(),
             content: Some(skippy_inference_api::MessageContent::Text(
                 content.to_string(),
@@ -786,7 +786,7 @@ fn prefill_assistant_message(value: &Value) -> InferenceResult<ChatMessage> {
             extra: std::collections::BTreeMap::new(),
         });
     }
-    let message = serde_json::from_value::<ChatMessage>(value.clone()).map_err(|_| {
+    let message = serde_json::from_value::<GenerationMessage>(value.clone()).map_err(|_| {
         InferenceError::invalid_request("prefill_assistant must be a string or chat message object")
     })?;
     if message.role != "assistant" {
@@ -1031,7 +1031,7 @@ fn extra_value_is_omitted(
 }
 
 pub(super) fn chat_sampling_config(
-    request: &ChatCompletionRequest,
+    request: &GenerationRequest,
     defaults: &EmbeddedOpenAiRequestDefaults,
 ) -> InferenceResult<SamplingConfig> {
     let mut sampling = sampling_config(
@@ -1083,7 +1083,7 @@ pub(super) fn completion_sampling_config(
 }
 
 pub(super) fn chat_template_options(
-    request: &ChatCompletionRequest,
+    request: &GenerationRequest,
     defaults: &EmbeddedOpenAiRequestDefaults,
 ) -> InferenceResult<ChatTemplateOptions> {
     let reasoning = skippy_inference_api::normalize_reasoning_template_options(
@@ -1210,7 +1210,7 @@ fn merged_chat_template_kwargs(
 }
 
 fn request_reasoning_format(
-    request: &ChatCompletionRequest,
+    request: &GenerationRequest,
     defaults: &EmbeddedOpenAiRequestDefaults,
 ) -> InferenceResult<ChatReasoningFormat> {
     let value = optional_string_extra(&request.extra, "reasoning_format")?;
@@ -1228,7 +1228,7 @@ fn request_reasoning_format(
 }
 
 fn request_reasoning_budget(
-    request: &ChatCompletionRequest,
+    request: &GenerationRequest,
 ) -> InferenceResult<Option<ReasoningBudget>> {
     let normalized = skippy_inference_api::normalize_reasoning_template_options(
         request.reasoning.as_ref(),
@@ -1315,7 +1315,7 @@ fn optional_string_extra(
 /// template engine has no recursion, loop, or memory limits, so a template
 /// is code the serving process runs.
 fn chat_template(
-    request: &ChatCompletionRequest,
+    request: &GenerationRequest,
     defaults: &EmbeddedOpenAiRequestDefaults,
 ) -> InferenceResult<Option<String>> {
     match bounded_optional_string_extra(&request.extra, "chat_template")? {
@@ -1375,7 +1375,7 @@ fn optional_bool_extra(
 }
 
 fn structured_output_string(
-    request: &ChatCompletionRequest,
+    request: &GenerationRequest,
     name: &str,
 ) -> InferenceResult<Option<String>> {
     let value = bounded_optional_string_extra(&request.extra, name)?;
@@ -1396,7 +1396,7 @@ fn structured_output_string(
 }
 
 fn structured_output_json(
-    request: &ChatCompletionRequest,
+    request: &GenerationRequest,
     name: &str,
 ) -> InferenceResult<Option<String>> {
     request
@@ -1460,7 +1460,7 @@ fn chat_reasoning_format(value: Option<EmbeddedReasoningFormat>) -> ChatReasonin
 }
 
 pub(super) fn ensure_chat_runtime_features_supported(
-    request: &ChatCompletionRequest,
+    request: &GenerationRequest,
 ) -> InferenceResult<()> {
     if !request.logprobs.unwrap_or(false) && request.top_logprobs.is_some() {
         return Err(InferenceError::invalid_request(

@@ -2,7 +2,11 @@
 use super::*;
 use crate::runtime::activity_policy::{AdmissionResult, IngressType};
 use crate::sdk::native::{ChatCompletionStream, Model, ModelTarget, NativeChatRequest};
-use skippy_inference_api::{ChatCompletionRequest, InferenceBackend, InferenceRequestContext};
+use skippy_inference_api::generation::GenerationRequest;
+use skippy_inference_api::{
+    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, InferenceBackend,
+    InferenceRequestContext,
+};
 use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
@@ -64,7 +68,7 @@ impl NativeInferenceState {
 /// Keeps unload/drain admission and backend cancellation tied to the call.
 struct PreparedNativeChat {
     backend: Arc<dyn InferenceBackend>,
-    request: ChatCompletionRequest,
+    request: GenerationRequest,
     context: InferenceRequestContext,
     _slot: tokio::sync::OwnedSemaphorePermit,
     _instance: crate::runtime::InstanceRequestGuard,
@@ -262,7 +266,7 @@ impl Node {
             let context = InferenceRequestContext::new();
             return Ok(PreparedNativeChat {
                 backend: candidate.backend.clone(),
-                request: call.request,
+                request: call.request.into(),
                 _cancel: CancelNativeOnDrop(context.cancellation_token()),
                 context,
                 _slot: slot,
@@ -286,7 +290,8 @@ impl Node {
             .backend
             .chat_completion_with_context(request, prepared.context.clone())
             .await?;
-        serde_json::to_value(response).context("encode native chat response")
+        serde_json::to_value(ChatCompletionResponse::from(response))
+            .context("encode native chat response")
     }
 
     pub(crate) fn spawn_native_chat_stream(

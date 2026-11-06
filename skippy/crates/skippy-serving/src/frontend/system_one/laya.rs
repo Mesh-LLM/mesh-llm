@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use skippy_inference_api::{
-    ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, InferenceBackend,
-    InferenceError, InferenceRequestContext, InferenceResult, ModelObject, SystemOneRequest,
-    SystemOneResponse,
+    InferenceBackend, InferenceError, InferenceRequestContext, InferenceResult, ModelObject,
+    SystemOneRequest, SystemOneResponse, generation::GenerationEventStream,
+    generation::GenerationRequest, generation::GenerationResponse,
 };
 use skippy_runtime::DecisionModel;
 use tokio::task;
@@ -49,16 +49,16 @@ impl InferenceBackend for LayaSystemOneBackend {
 
     async fn chat_completion(
         &self,
-        _request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        _request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         Err(decision_only())
     }
 
     async fn chat_completion_stream(
         &self,
-        _request: ChatCompletionRequest,
+        _request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         Err(decision_only())
     }
 }

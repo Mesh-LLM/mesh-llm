@@ -1,6 +1,9 @@
 use super::*;
 use crate::mesh::{Node, NodeRole};
 use async_trait::async_trait;
+use skippy_inference_api::generation::{
+    GenerationEventStream, GenerationRequest, GenerationResponse,
+};
 use skippy_inference_api::{
     CompletionRequest, CompletionResponse, InferenceExecutionScope, InferenceRequestContext,
     InferenceResult, ModelObject, Usage,
@@ -50,10 +53,7 @@ struct RecordingBackend {
 #[async_trait]
 impl InferenceBackend for RecordingBackend {
     /// Reject chat on the completion-only recording fixture.
-    async fn chat_completion(
-        &self,
-        _: skippy_inference_api::ChatCompletionRequest,
-    ) -> InferenceResult<skippy_inference_api::ChatCompletionResponse> {
+    async fn chat_completion(&self, _: GenerationRequest) -> InferenceResult<GenerationResponse> {
         Err(skippy_inference_api::InferenceError::unsupported(
             "completion-only test backend",
         ))
@@ -62,9 +62,9 @@ impl InferenceBackend for RecordingBackend {
     /// Reject chat streams on the completion-only recording fixture.
     async fn chat_completion_stream(
         &self,
-        _: skippy_inference_api::ChatCompletionRequest,
+        _: GenerationRequest,
         _: InferenceRequestContext,
-    ) -> InferenceResult<skippy_inference_api::ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         Err(skippy_inference_api::InferenceError::unsupported(
             "completion-only test backend",
         ))

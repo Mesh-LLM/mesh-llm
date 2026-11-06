@@ -32,16 +32,43 @@ fn input(directory: &std::path::Path) -> Input {
 }
 
 #[test]
-fn selected_source_only_admits_unchanged_pinned_build() {
+fn selected_source_binds_the_base_for_repair_and_pinned_builds() {
     let directory = tempfile::tempdir().unwrap();
     let mut request = input(directory.path());
     request.mesh_source = "c".repeat(40);
     request.selected_revision = request.mesh_source.clone();
-    assert!(request.validate().is_err());
+    assert!(request.validate().is_ok());
     request.mode = Mode::Pinned;
     assert!(request.validate().is_ok());
     request.selected_revision = "d".repeat(40);
     assert!(request.validate().is_err());
+}
+
+#[test]
+fn selected_upgrade_verification_requires_its_exact_changed_candidate_and_base() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut request = input(directory.path());
+    request.mesh_source = "d".repeat(40);
+    request.selected_revision = request.mesh_source.clone();
+    request.mode = Mode::Verify;
+    request.pass_id = "verify-1".into();
+    let package_path = directory.path().join("package");
+    previous(&mut request, &package_path);
+    let identity_path = package_path.join("identity.json");
+    let mut identity: serde_json::Value =
+        serde_json::from_slice(&fs::read(&identity_path).unwrap()).unwrap();
+    identity["mesh_source"] = json!(request.mesh_source);
+    fs::write(&identity_path, serde_json::to_vec(&identity).unwrap()).unwrap();
+    request.previous.as_mut().unwrap().identity =
+        Digest::of_file(&identity_path).unwrap().as_str().into();
+    assert!(request.validate().is_ok());
+    assert!(package::previous(&request).is_ok());
+    request.previous.as_mut().unwrap().candidate = "e".repeat(40);
+    assert!(package::previous(&request).is_err());
+    request.previous.as_mut().unwrap().candidate = "c".repeat(40);
+    request.mesh_source = "f".repeat(40);
+    request.selected_revision = request.mesh_source.clone();
+    assert!(package::previous(&request).is_err());
 }
 
 #[test]
@@ -79,6 +106,24 @@ fn continuation_requires_feedback_and_exact_pass_dependencies() {
     request.previous_feedback = None;
     assert!(request.validate().is_ok());
     request.mode = Mode::Pinned;
+    assert!(request.validate().is_err());
+}
+
+#[test]
+fn native_producer_requires_the_same_frozen_pass_and_candidate() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut request = input(directory.path());
+    previous(&mut request, &directory.path().join("package"));
+    request.mode = Mode::Native;
+    request.pass_id = "repair-1".into();
+    assert!(request.validate().is_ok());
+    assert!(package::previous(&request).is_ok());
+    request.pass_id = "verify-1".into();
+    assert!(package::previous(&request).is_err());
+    request.pass_id = "repair-1".into();
+    request.previous.as_mut().unwrap().candidate = "d".repeat(40);
+    assert!(package::previous(&request).is_err());
+    request.previous_feedback = Some(directory.path().join("feedback"));
     assert!(request.validate().is_err());
 }
 

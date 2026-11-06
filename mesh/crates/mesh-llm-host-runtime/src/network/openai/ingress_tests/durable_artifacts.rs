@@ -251,6 +251,56 @@ async fn node_with_hardware_and_descriptor(model_name: &str) -> mesh::Node {
     node
 }
 
+/// The raw-proxy terminal states why an exchange did not complete: a 402 the
+/// gate sent, and a stream cut after its 200 headers.
+#[tokio::test]
+async fn publish_raw_proxy_terminal_states_the_failure_class() {
+    use crate::plugin::openai_exchange::ExchangeFailureClass;
+    let node = node_with_hardware_and_descriptor("test-model").await;
+    let mut classes = Vec::new();
+    let mut asked = Vec::new();
+    for outcome in [
+        proxy::RouteDispatchOutcome::PolicyDenied { status_code: 402 },
+        proxy::RouteDispatchOutcome::FailedWithStatus {
+            status_code: 200,
+            reason: "upstream_stream_incomplete",
+        },
+        proxy::RouteDispatchOutcome::Responded(200),
+    ] {
+        let channel = RecordingChannel::default();
+        publish_raw_proxy_terminal(
+            &node,
+            &channel,
+            "exchange-1",
+            "test-model",
+            &outcome,
+            RawProxyTerminalFacts {
+                served_locally: false,
+                request_digest: None,
+                requested_by_node_id: Some("abcd"),
+                client_nonce: None,
+            },
+        )
+        .await;
+        let event = channel.events()[0].clone();
+        asked.push(event.requested_by_node_id);
+        classes.push(event.failure_class);
+    }
+    assert_eq!(
+        classes,
+        [
+            Some(ExchangeFailureClass::PaymentRequired),
+            Some(ExchangeFailureClass::UpstreamError),
+            None
+        ]
+    );
+    // The asker is named on a failed exchange, and only on one.
+    assert_eq!(
+        asked,
+        [Some("abcd".to_string()), Some("abcd".to_string()), None]
+    );
+}
+
 /// A served 2xx outcome on the host-served path attaches the full serving
 /// provenance block (hardware + model identity, both real), the real usage
 /// the backend reported, and the real request digest — everything a

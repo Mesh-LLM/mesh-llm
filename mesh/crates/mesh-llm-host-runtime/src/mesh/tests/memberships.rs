@@ -141,6 +141,7 @@ async fn a_membership_keeps_its_peers_apart_from_the_nodes_own() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[serial_test::serial]
 async fn a_membership_admits_only_its_own_allowlist() -> Result<()> {
     let me = test_owner_keypair(0x51, 0x52);
     let team = test_owner_keypair(0x61, 0x62);
@@ -161,21 +162,29 @@ async fn a_membership_admits_only_its_own_allowlist() -> Result<()> {
         .expect("membership binds an IPv4 socket");
     assert!(socket.ip().is_loopback());
     let address = EndpointAddr::new(membership.id()).with_ip_addr(socket);
+    // Wait for the rejection's audit record: the rejected peer closes the
+    // connection, and closing it clears `policy_rejected_peers` again.
+    let (mut audits, _capture) = crate::mesh::capture_mesh_operational_audits();
+    let rejected_id = hex::encode(my_other_node.id().as_bytes());
     let dial_result = my_other_node.connect_to_peer(address).await;
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        while !membership
-            .state
-            .lock()
-            .await
-            .policy_rejected_peers
-            .contains_key(&my_other_node.id())
-        {
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        loop {
+            let record = audits.recv().await.expect("audit capture remains open");
+            if record.code() == "gossip_policy_rejected"
+                && record.context().is_some_and(|context| {
+                    let fields = context.fields();
+                    let field = |name| fields.get(name).and_then(|value| value.as_str());
+                    field("subject_id") == Some(rejected_id.as_str())
+                        && field("reason_code") == Some("owner_untrusted")
+                })
+            {
+                return;
+            }
         }
     })
     .await
     .unwrap_or_else(|_| {
-        panic!("membership must record its owner-policy rejection: {dial_result:?}")
+        panic!("membership must reject the owner its allowlist lacks: {dial_result:?}")
     });
     assert!(peer_ids(&membership).await.is_empty());
     assert!(peer_ids(&node).await.is_empty());

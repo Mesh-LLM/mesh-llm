@@ -30,6 +30,12 @@ concurrency:
   group: depot-runner-canary
   cancel-in-progress: false
 
+env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_BENCH_DEBUG: "0"
+
 jobs:
   runner:
     name: ${{ matrix.runner }}
@@ -778,7 +784,7 @@ jobs:
         id: seed_key
         env:
           GH_TOKEN: ${{ github.token }}
-          CANARY_KEY: mesh-llm-sccache-seed-linux-x86_64-img-aaa36843-epoch-aaa36843-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
+          CANARY_KEY: mesh-llm-sccache-seed-linux-x86_64-img-aaa36843-epoch-aaa36843-v3-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'mesh/crates/*/Cargo.toml', 'skippy/crates/*/Cargo.toml', 'tools/*/Cargo.toml', '.github/workflows/cache-warm-sccache.yml', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
         run: '"$MESH_LLM_AUTOMATION_BIN" ci-ops runtime-seed preflight runtime-seed-evidence'
       - name: Start restore timer
         run: '"$MESH_LLM_AUTOMATION_BIN" ci-ops runtime-seed restore_start runtime-seed-evidence'

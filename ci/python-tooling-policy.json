@@ -117,7 +117,7 @@
       "purpose": "require the prepared external SDK interpreter path"
     },
     {
-      "path": "scripts/llama-canary-agent-repair.sh",
+      "path": "scripts/lib/llama-canary-native-build.sh",
       "line": "uv run --locked --no-python-downloads --python \"$jinja_python\" --project \"$JINJA_PROJECT\" -- \\",
       "occurrences": 2,
       "purpose": "run the upstream Jinja tests with locked dependencies and the installed interpreter"

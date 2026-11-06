@@ -1,4 +1,5 @@
 use super::*;
+use crate::chat::ChatCompletionRequest;
 use std::{collections::VecDeque, sync::Mutex};
 
 use futures_util::stream;
@@ -31,19 +32,19 @@ use super::{
 
 #[derive(Default)]
 struct RecordingBackend {
-    seen_chat: Mutex<Option<ChatCompletionRequest>>,
-    seen_chat_stream: Mutex<Option<ChatCompletionRequest>>,
+    seen_chat: Mutex<Option<GenerationRequest>>,
+    seen_chat_stream: Mutex<Option<GenerationRequest>>,
     seen_completion: Mutex<Option<CompletionRequest>>,
     seen_completion_stream: Mutex<Option<CompletionRequest>>,
 }
 
 struct SequencedBackend {
-    chat_requests: Mutex<Vec<ChatCompletionRequest>>,
-    chat_responses: Mutex<VecDeque<InferenceResult<ChatCompletionResponse>>>,
+    chat_requests: Mutex<Vec<GenerationRequest>>,
+    chat_responses: Mutex<VecDeque<InferenceResult<GenerationResponse>>>,
 }
 
 impl SequencedBackend {
-    fn new(chat_responses: Vec<InferenceResult<ChatCompletionResponse>>) -> Self {
+    fn new(chat_responses: Vec<InferenceResult<GenerationResponse>>) -> Self {
         Self {
             chat_requests: Mutex::new(Vec::new()),
             chat_responses: Mutex::new(VecDeque::from(chat_responses)),
@@ -113,17 +114,17 @@ impl InferenceBackend for RecordingBackend {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         *self.seen_chat.lock().unwrap() = Some(request.clone());
         Ok(recording_backend_chat_response(&request))
     }
 
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         *self.seen_chat_stream.lock().unwrap() = Some(request);
         Ok(Box::pin(stream::empty()))
     }
@@ -155,8 +156,8 @@ impl InferenceBackend for SequencedBackend {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         self.chat_requests.lock().unwrap().push(request.clone());
         self.chat_responses
             .lock()
@@ -167,9 +168,9 @@ impl InferenceBackend for SequencedBackend {
 
     async fn chat_completion_stream(
         &self,
-        _request: ChatCompletionRequest,
+        _request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         Ok(Box::pin(stream::empty()))
     }
 
@@ -194,13 +195,14 @@ impl InferenceBackend for SequencedBackend {
 async fn disabled_mode_delegates_chat_completion() {
     let backend = Arc::new(RecordingBackend::default());
     let guarded = GuardedInferenceBackend::new(backend.clone(), GuardrailPolicy::default());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "guarded-model",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "tool_choice": "auto"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let models = guarded.models().await.unwrap();
     let _ = guarded.chat_completion(request.clone()).await.unwrap();
@@ -248,13 +250,14 @@ async fn policy_handle_enables_same_guarded_backend_without_reconstruction() {
     let policy_handle = GuardrailPolicyHandle::default();
     let guarded =
         GuardedInferenceBackend::with_policy_handle(backend.clone(), policy_handle.clone());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "guarded-model",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "tool_choice": "auto"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     guarded.chat_completion(request.clone()).await.unwrap();
     assert_eq!(
@@ -283,7 +286,7 @@ async fn policy_handle_enables_same_guarded_backend_without_reconstruction() {
 async fn compacting_backend_applies_forced_mesh_compact_override() {
     let backend = Arc::new(RecordingBackend::default());
     let compacting = CompactingInferenceBackend::new(backend.clone(), CompactionConfig::default());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "tiny",
         "messages": [
             {"role": "tool", "content": "large stale result"},
@@ -291,7 +294,8 @@ async fn compacting_backend_applies_forced_mesh_compact_override() {
         ],
         "mesh_compact": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     compacting.chat_completion(request).await.unwrap();
 
@@ -304,7 +308,7 @@ async fn compacting_backend_applies_forced_mesh_compact_override() {
 async fn compacting_backend_applies_forced_mesh_compact_override_to_chat_stream() {
     let backend = Arc::new(RecordingBackend::default());
     let compacting = CompactingInferenceBackend::new(backend.clone(), CompactionConfig::default());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "tiny",
         "messages": [
             {"role": "tool", "content": "large stale result"},
@@ -312,7 +316,8 @@ async fn compacting_backend_applies_forced_mesh_compact_override_to_chat_stream(
         ],
         "mesh_compact": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let stream = compacting
         .chat_completion_stream(request, InferenceRequestContext::new())
@@ -396,7 +401,7 @@ fn public_policy_defaults_are_conservative() {
 #[test]
 fn engine_prepares_request_without_backend() {
     let engine = GuardrailEngine::new(GuardrailPolicy::default());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "guarded-model",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
@@ -405,7 +410,8 @@ fn engine_prepares_request_without_backend() {
         "response_format": supported_json_schema_response_format(),
         "mesh_guardrails": true
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let prepared = engine.prepare_request(&request);
     let state = prepared.state;
@@ -437,7 +443,7 @@ fn engine_prepares_request_without_backend() {
 
 #[test]
 fn request_contract_parses_raw_openai_fields() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "guarded-model",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}, {"type": "function"}],
@@ -446,7 +452,8 @@ fn request_contract_parses_raw_openai_fields() {
         "response_format": {"type": "text"},
         "mesh_guardrails": false
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let contract = request_contract::from_request(&request);
     assert!(matches!(
         contract.tools,
@@ -458,11 +465,12 @@ fn request_contract_parses_raw_openai_fields() {
     assert_eq!(contract.response_format, RawResponseFormat::Text);
     assert_eq!(contract.mesh_guardrails, MeshGuardrailsOverride::Disabled);
 
-    let absent: ChatCompletionRequest = serde_json::from_value(json!({
+    let absent: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "guarded-model",
         "messages": [{"role": "user", "content": "hello"}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let absent_contract = request_contract::from_request(&absent);
     assert_eq!(absent_contract.tools, RawToolSpec::Absent);
     assert_eq!(absent_contract.tool_choice, RawToolChoice::Absent);
@@ -476,13 +484,14 @@ fn request_contract_parses_raw_openai_fields() {
         MeshGuardrailsOverride::Unset
     );
 
-    let forced: ChatCompletionRequest = serde_json::from_value(json!({
+    let forced: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "guarded-model",
         "messages": [{"role": "user", "content": "hello"}],
         "tool_choice": {"type": "function", "function": {"name": "lookup"}},
         "response_format": {"type": "json_object"}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let forced_contract = request_contract::from_request(&forced);
     assert_eq!(
         forced_contract.tool_choice,
@@ -493,7 +502,7 @@ fn request_contract_parses_raw_openai_fields() {
         RawResponseFormat::Structured(_)
     ));
 
-    let malformed: ChatCompletionRequest = serde_json::from_value(json!({
+    let malformed: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "guarded-model",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": "bad",
@@ -501,7 +510,8 @@ fn request_contract_parses_raw_openai_fields() {
         "response_format": [],
         "mesh_guardrails": "yes"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let malformed_contract = request_contract::from_request(&malformed);
     assert_eq!(malformed_contract.tools, RawToolSpec::InvalidType);
     assert_eq!(malformed_contract.tool_choice, RawToolChoice::InvalidType);
@@ -531,13 +541,14 @@ async fn auto_tool_request_injects_mesh_respond() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "tool_choice": "auto"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let original = request.clone();
     let _ = guarded.chat_completion(request).await.unwrap();
@@ -559,13 +570,14 @@ async fn auto_tool_request_injects_mesh_respond() {
 async fn guarded_tool_request_suppresses_implicit_thinking() {
     let backend = Arc::new(RecordingBackend::default());
     let guarded = GuardedInferenceBackend::new(backend.clone(), enforce_policy());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "tool_choice": "auto"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let _ = guarded.chat_completion(request).await.unwrap();
 
@@ -583,12 +595,13 @@ async fn guarded_tool_request_suppresses_implicit_thinking() {
 async fn guarded_structured_request_suppresses_implicit_thinking() {
     let backend = Arc::new(RecordingBackend::default());
     let guarded = GuardedInferenceBackend::new(backend.clone(), enforce_policy());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "json"}],
         "response_format": supported_json_schema_response_format()
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let _ = guarded.chat_completion(request).await.unwrap();
 
@@ -606,13 +619,14 @@ async fn guarded_structured_request_suppresses_implicit_thinking() {
 async fn guarded_request_preserves_explicit_reasoning_effort() {
     let backend = Arc::new(RecordingBackend::default());
     let guarded = GuardedInferenceBackend::new(backend.clone(), enforce_policy());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "reasoning_effort": "low"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let _ = guarded.chat_completion(request).await.unwrap();
 
@@ -625,13 +639,14 @@ async fn guarded_request_preserves_explicit_reasoning_effort() {
 async fn guarded_request_preserves_explicit_provider_thinking_flag() {
     let backend = Arc::new(RecordingBackend::default());
     let guarded = GuardedInferenceBackend::new(backend.clone(), enforce_policy());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "chat_template_kwargs": {"enable_thinking": true}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let _ = guarded.chat_completion(request).await.unwrap();
 
@@ -658,12 +673,13 @@ async fn absent_tool_choice_injects_mesh_respond() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "llama-3-7b-instruct",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let _ = guarded.chat_completion(request).await.unwrap();
 
@@ -684,12 +700,13 @@ async fn structured_only_request_injects_mesh_emit_structured() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "json"}],
         "response_format": supported_json_schema_response_format()
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let _ = guarded.chat_completion(request).await.unwrap();
 
@@ -710,13 +727,14 @@ async fn forced_user_tool_request_does_not_inject_mesh_respond() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "tool_choice": {"type": "function", "function": {"name": "lookup"}}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let _ = guarded.chat_completion(request).await.unwrap();
 
@@ -737,13 +755,14 @@ async fn reserved_tool_name_is_rejected_in_enforce_mode() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "_mesh_respond"}}],
         "tool_choice": "auto"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let error = guarded.chat_completion(request).await.unwrap_err();
     let body = error.body();
@@ -765,13 +784,14 @@ async fn forced_reserved_tool_name_is_rejected_in_enforce_mode() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "tool_choice": {"type": "function", "function": {"name": "_mesh_emit_structured"}}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let error = guarded.chat_completion(request).await.unwrap_err();
     let body = error.body();
@@ -795,13 +815,14 @@ async fn metrics_only_records_reserved_tool_collision_and_passes_through() {
         },
     )
     .with_telemetry(telemetry.clone());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "_mesh_respond"}}],
         "tool_choice": "auto"
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let original = request.clone();
 
     let _ = guarded.chat_completion(request).await.unwrap();
@@ -825,13 +846,14 @@ async fn unsupported_structured_with_real_tools_is_rejected_in_enforce_mode() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "response_format": {"type": "json_schema"}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let error = guarded.chat_completion(request).await.unwrap_err();
     let body = error.body();
@@ -856,13 +878,14 @@ async fn real_tools_plus_structured_output_returns_unsupported() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "response_format": supported_json_schema_response_format()
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let error = guarded.chat_completion(request).await.unwrap_err();
 
@@ -887,13 +910,14 @@ async fn forced_tool_plus_structured_is_rejected_in_enforce_mode() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "tool_choice": {"type": "function", "function": {"name": "lookup"}},
         "response_format": {"type": "json_schema"}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let error = guarded.chat_completion(request).await.unwrap_err();
     let body = error.body();
@@ -918,13 +942,14 @@ async fn parallel_tool_calls_false_with_structured_is_rejected_in_enforce_mode()
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "parallel_tool_calls": false,
         "response_format": {"type": "json_schema"}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let error = guarded.chat_completion(request).await.unwrap_err();
     let body = error.body();
@@ -951,13 +976,14 @@ async fn metrics_only_records_unsupported_combination_and_passes_through() {
         },
     )
     .with_telemetry(telemetry.clone());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}],
         "response_format": {"type": "json_schema"}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let original = request.clone();
 
     let _ = guarded.chat_completion(request).await.unwrap();
@@ -983,13 +1009,14 @@ async fn streaming_requests_bypass_guardrails() {
         },
     )
     .with_telemetry(telemetry.clone());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "stream": true,
         "tools": [{"type": "function", "function": {"name": "lookup"}}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let original = request.clone();
 
     let _ = guarded.chat_completion(request).await.unwrap();
@@ -1014,12 +1041,13 @@ async fn no_tools_and_text_response_format_passes_through() {
         },
     )
     .with_telemetry(telemetry.clone());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "response_format": {"type": "text"}
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let original = request.clone();
 
     let _ = guarded.chat_completion(request).await.unwrap();
@@ -1043,12 +1071,14 @@ async fn small_model_threshold_controls_small_model_eligibility() {
             ..GuardrailPolicy::default()
         },
     );
-    let guarded_request: ChatCompletionRequest = serde_json::from_value(json!({
-        "model": "Qwen3-8B-Q4_K_M",
-        "messages": [{"role": "user", "content": "hello"}],
-        "tools": [{"type": "function", "function": {"name": "lookup"}}]
-    }))
-    .unwrap();
+    let guarded_request: GenerationRequest =
+        serde_json::from_value::<ChatCompletionRequest>(json!({
+            "model": "Qwen3-8B-Q4_K_M",
+            "messages": [{"role": "user", "content": "hello"}],
+            "tools": [{"type": "function", "function": {"name": "lookup"}}]
+        }))
+        .unwrap()
+        .into();
     let _ = guarded.chat_completion(guarded_request).await.unwrap();
     let guarded_seen = guarded_backend.seen_chat.lock().unwrap().clone().unwrap();
     assert_eq!(guarded_seen.tools.unwrap().as_array().unwrap().len(), 2);
@@ -1064,12 +1094,14 @@ async fn small_model_threshold_controls_small_model_eligibility() {
         },
     )
     .with_telemetry(bypass_telemetry.clone());
-    let bypass_request: ChatCompletionRequest = serde_json::from_value(json!({
-        "model": "Qwen3-8B-Q4_K_M",
-        "messages": [{"role": "user", "content": "hello"}],
-        "tools": [{"type": "function", "function": {"name": "lookup"}}]
-    }))
-    .unwrap();
+    let bypass_request: GenerationRequest =
+        serde_json::from_value::<ChatCompletionRequest>(json!({
+            "model": "Qwen3-8B-Q4_K_M",
+            "messages": [{"role": "user", "content": "hello"}],
+            "tools": [{"type": "function", "function": {"name": "lookup"}}]
+        }))
+        .unwrap()
+        .into();
     let bypass_original = bypass_request.clone();
     let _ = bypass.chat_completion(bypass_request).await.unwrap();
     assert_eq!(
@@ -1093,12 +1125,13 @@ async fn small_model_only_policy_bypasses_large_model() {
             ..GuardrailPolicy::default()
         },
     );
-    let small_request: ChatCompletionRequest = serde_json::from_value(json!({
+    let small_request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let _ = small_guarded.chat_completion(small_request).await.unwrap();
     let small_seen = small_backend.seen_chat.lock().unwrap().clone().unwrap();
     assert_eq!(small_seen.tools.unwrap().as_array().unwrap().len(), 2);
@@ -1113,12 +1146,13 @@ async fn small_model_only_policy_bypasses_large_model() {
         },
     )
     .with_telemetry(large_telemetry.clone());
-    let large_request: ChatCompletionRequest = serde_json::from_value(json!({
+    let large_request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-70B-Instruct",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     let large_original = large_request.clone();
     let _ = large_guarded.chat_completion(large_request).await.unwrap();
     assert_eq!(
@@ -1143,12 +1177,13 @@ async fn all_model_policy_guards_large_models_too() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-70B-Instruct",
         "messages": [{"role": "user", "content": "hello"}],
         "tools": [{"type": "function", "function": {"name": "lookup"}}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let _ = guarded.chat_completion(request).await.unwrap();
 
@@ -1169,13 +1204,14 @@ async fn mesh_guardrails_false_cannot_bypass_enforced_request() {
         },
     )
     .with_telemetry(telemetry.clone());
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-8B-Q4_K_M",
         "messages": [{"role": "user", "content": "hello"}],
         "mesh_guardrails": false,
         "tools": [{"type": "function", "function": {"name": "lookup"}}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let _ = guarded.chat_completion(request).await.unwrap();
 
@@ -1198,13 +1234,14 @@ async fn mesh_guardrails_true_opts_large_model_into_guardrails() {
             ..GuardrailPolicy::default()
         },
     );
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "Qwen3-70B-Instruct",
         "messages": [{"role": "user", "content": "hello"}],
         "mesh_guardrails": true,
         "tools": [{"type": "function", "function": {"name": "lookup"}}]
     }))
-    .unwrap();
+    .unwrap()
+    .into();
 
     let _ = guarded.chat_completion(request).await.unwrap();
 
@@ -1237,7 +1274,7 @@ fn enforce_policy() -> GuardrailPolicy {
     }
 }
 
-fn recording_backend_chat_response(request: &ChatCompletionRequest) -> ChatCompletionResponse {
+fn recording_backend_chat_response(request: &GenerationRequest) -> GenerationResponse {
     let tool_names = request
         .tools
         .as_ref()
@@ -1298,14 +1335,16 @@ fn recording_backend_chat_response(request: &ChatCompletionRequest) -> ChatCompl
         );
     }
 
-    ChatCompletionResponse::new(&request.model, "ok", Usage::new(0, 0))
+    GenerationResponse::new(&request.model, "ok", Usage::new(0, 0))
 }
 
 fn prepared_tool_request(
     engine: &GuardrailEngine,
     payload: serde_json::Value,
 ) -> super::state::PreparedGuardrailRequest {
-    let request: ChatCompletionRequest = serde_json::from_value(payload).unwrap();
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(payload)
+        .unwrap()
+        .into();
     engine.prepare_request(&request)
 }
 
@@ -1313,11 +1352,13 @@ fn prepared_text_request(
     engine: &GuardrailEngine,
     payload: serde_json::Value,
 ) -> super::state::PreparedGuardrailRequest {
-    let request: ChatCompletionRequest = serde_json::from_value(payload).unwrap();
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(payload)
+        .unwrap()
+        .into();
     engine.prepare_request(&request)
 }
 
-fn response_with_content(model: &str, content: &str) -> ChatCompletionResponse {
+fn response_with_content(model: &str, content: &str) -> GenerationResponse {
     response_with_content_with_usage(model, content, Usage::new(3, 2))
 }
 
@@ -1325,15 +1366,14 @@ fn response_with_content_with_usage(
     model: &str,
     content: &str,
     usage: Usage,
-) -> ChatCompletionResponse {
-    ChatCompletionResponse {
+) -> GenerationResponse {
+    GenerationResponse {
         id: "chatcmpl_test".to_string(),
-        object: "chat.completion",
         created: 123,
         model: model.to_string(),
-        choices: vec![crate::chat::ChatCompletionChoice {
+        choices: vec![crate::generation::GenerationChoice {
             index: 0,
-            message: crate::chat::AssistantMessage {
+            message: crate::generation::GeneratedMessage {
                 role: "assistant",
                 content: Some(content.to_string()),
                 reasoning_content: None,
@@ -1353,7 +1393,7 @@ fn response_with_tool_calls(
     model: &str,
     tool_calls: serde_json::Value,
     content: Option<&str>,
-) -> ChatCompletionResponse {
+) -> GenerationResponse {
     response_with_tool_calls_with_usage(model, tool_calls, content, Usage::new(3, 2))
 }
 
@@ -1362,15 +1402,14 @@ fn response_with_tool_calls_with_usage(
     tool_calls: serde_json::Value,
     content: Option<&str>,
     usage: Usage,
-) -> ChatCompletionResponse {
-    ChatCompletionResponse {
+) -> GenerationResponse {
+    GenerationResponse {
         id: "chatcmpl_test".to_string(),
-        object: "chat.completion",
         created: 123,
         model: model.to_string(),
-        choices: vec![crate::chat::ChatCompletionChoice {
+        choices: vec![crate::generation::GenerationChoice {
             index: 0,
-            message: crate::chat::AssistantMessage {
+            message: crate::generation::GeneratedMessage {
                 role: "assistant",
                 content: content.map(ToString::to_string),
                 reasoning_content: None,
@@ -1386,7 +1425,7 @@ fn response_with_tool_calls_with_usage(
     }
 }
 
-fn tool_call_name_from_response(response: &ChatCompletionResponse) -> Option<&str> {
+fn tool_call_name_from_response(response: &GenerationResponse) -> Option<&str> {
     response
         .choices
         .first()?

@@ -25,14 +25,23 @@ JINJA_PROJECT="$TRUSTED_ROOT/ci/llama-canary/jinja"
 source "$ROOT/scripts/lib/macos-deployment-target.sh"
 HARNESS_MODE="${CANARY_HARNESS_MODE:-repair}"
 if [[ -n "${CANARY_MESH_SOURCE:-}" ]]; then
-  if [[ "$HARNESS_MODE" != pinned-build ]]; then
-    echo "selected MeshLLM source requires certify-only pinned-build mode" >&2
+  if [[ ! "$HARNESS_MODE" =~ ^(pinned-build|repair-build|verify-build|native-build)$ ]]; then
+    echo "selected MeshLLM source requires a protected controller build mode" >&2
     exit 1
   fi
   ROOT="${CANARY_SOURCE_ROOT:?selected source checkout required}"
   if [[ "$(git -C "$ROOT" rev-parse HEAD)" != "$CANARY_MESH_SOURCE" ]]; then
     echo "selected MeshLLM checkout does not match frozen revision" >&2
     exit 1
+  fi
+  if [[ "$HARNESS_MODE" != pinned-build ]]; then
+    for identity_key in user.name user.email; do
+      identity_value="$(git -C "$TRUSTED_ROOT" config --local --get "$identity_key")" || {
+        echo "trusted controller Git identity is missing: $identity_key" >&2
+        exit 1
+      }
+      git -C "$ROOT" config --local "$identity_key" "$identity_value"
+    done
   fi
 fi
 UPSTREAM_SHA="${1:-${UPSTREAM_SHA_INPUT:-latest}}"
@@ -84,8 +93,8 @@ REPAIR_DEADLINE_AT=0
 AGENT_SESSION_NAME="llama-canary-repair-${RUN_KEY}-${PASS_ID}"
 AGENT_SESSION_STARTED=false
 
-if [[ ! "$HARNESS_MODE" =~ ^(repair|verify|repair-build|verify-build|pinned-build)$ ]]; then
-  echo "CANARY_HARNESS_MODE must be repair, verify, repair-build, verify-build, or pinned-build" >&2
+if [[ ! "$HARNESS_MODE" =~ ^(repair|verify|repair-build|verify-build|pinned-build|native-build)$ ]]; then
+  echo "CANARY_HARNESS_MODE must be repair, verify, repair-build, verify-build, pinned-build, or native-build" >&2
   exit 1
 fi
 
@@ -649,6 +658,9 @@ load_candidate_bundle() {
   fi
   git fetch "$input_bundle" "refs/heads/${candidate_branch}"
   CERTIFIED_SHA="$expected_head"
+  if [[ "$ROOT" != "$TRUSTED_ROOT" ]]; then
+    git -C "$TRUSTED_ROOT" fetch --no-tags "$ROOT" "$CERTIFIED_SHA"
+  fi
   CANDIDATE_BASE_HEAD="$(git rev-parse "${CERTIFIED_SHA}^")"
   VERIFICATION_TREE="$(git rev-parse "${CERTIFIED_SHA}^{tree}")"
 }
@@ -713,26 +725,11 @@ run_prepare() {
 }
 
 run_full_build() {
-  local archive arches jinja_environment jinja_python
   : > "$BUILD_LOG"
-  jinja_environment="$STATE_DIR/jinja-env"
-  jinja_python="${SKIPPY_WORKLOAD_SDK_PYTHON:-python3}"
   echo "trusted candidate gate: build" | tee -a "$BUILD_LOG"
-  run_verification_logged "complete patched llama.cpp build" "$BUILD_LOG" env \
-    LLAMA_STAGE_UPSTREAM_TESTS=ON UV_PROJECT_ENVIRONMENT="$jinja_environment" \
-    uv run --locked --no-python-downloads --python "$jinja_python" --project "$JINJA_PROJECT" -- \
-    arch -arm64 bash scripts/build-llama.sh --build-only -DCMAKE_OSX_ARCHITECTURES=arm64 -DGGML_METAL_EMBED_LIBRARY=ON \
-    || return 1
-  archive="$LLAMA_STAGE_BUILD_DIR/src/libllama.a"
-  arches="$(lipo -archs "$archive" 2>/dev/null || true)"
-  if [[ "$arches" != "arm64" ]]; then
-    echo "candidate native archive must be arm64, got: ${arches:-missing}" | tee -a "$BUILD_LOG" >&2
-    return 1
-  fi
-  run_verification_logged "generated model-family patch check" "$BUILD_LOG" \
-    env UV_PROJECT_ENVIRONMENT="$jinja_environment" \
-    uv run --locked --no-python-downloads --python "$jinja_python" --project "$JINJA_PROJECT" -- \
-    arch -arm64 bash scripts/check-skippy-generated-family-patch.sh --full-native-suite || return 1
+  # shellcheck source=scripts/lib/llama-canary-native-build.sh
+  source "$TRUSTED_ROOT/scripts/lib/llama-canary-native-build.sh"
+  run_canary_native_build || return 1
   run_verification_logged "stage runtime crate build" "$BUILD_LOG" \
     cargo build -p skippy-runtime -p skippy-cli -p skippy-package-builder -p skippy-correctness -p skippy-topology --bins \
     || return 1
@@ -749,16 +746,14 @@ run_full_build() {
       bash -c 'cargo test -p skippy-serving --lib --no-run --message-format=json > "$1"' \
       build-mm "$STATE_DIR/mm-build.jsonl" || return 1
   fi
-  # The family-certify runner is a Metal execution lane. Both real decision
-  # models are mandatory here: Jev exercises the complete DiffusionGemma read
-  # through the staged Metal server, and Laya exercises the static native CLI
-  # on its explicit CPU device against the upstream golden fixtures. Platform
-  # Laya smokes separately prove the packaged Metal runtime.
+  # The producer must qualify its own native backend before distributing
+  # executables to family workers on that platform.
+  local backend="${LLAMA_STAGE_BACKEND:?select canary backend before building}"
   run_verification_logged "System One smoke" "$BUILD_LOG" env \
     WORK_DIR="$SYSTEMONE_SMOKE_DIR" \
     SYSTEMONE_SMOKE_CADENCE=llama-bump \
-    SYSTEMONE_SMOKE_BUILD_BACKEND=metal \
-    SYSTEMONE_SMOKE_CERTIFIED_BACKENDS=metal \
+    SYSTEMONE_SMOKE_BUILD_BACKEND="$backend" \
+    SYSTEMONE_SMOKE_CERTIFIED_BACKENDS="$backend" \
     SYSTEMONE_SMOKE_REQUIRE_QUALIFIED=1 \
     scripts/skippy-system-one-smoke.sh || return 1
   run_verification_logged "Laya smoke" "$BUILD_LOG" env \
@@ -798,7 +793,7 @@ run_certification() {
     scripts/skippy-family-battery.sh --skip-build --plan "$PLAN_PATH"
 }
 
-run_early_metal_certification() {
+run_early_native_certification() {
   local setting workload_settings mm_test_bin
   local workload_env=()
   # A cached executable is usable only when its recorded source tree (and
@@ -819,10 +814,10 @@ run_early_metal_certification() {
   done <<< "$workload_settings"
   mm_test_bin="$(jq -rs '[.[] | select(.reason == "compiler-artifact" and .profile.test == true and .target.name == "skippy_serving" and .executable != null) | .executable] | unique | if length == 1 then .[0] else error("expected one exact multimodal test executable") end' "$STATE_DIR/mm-build.jsonl")" || return 1
   [[ -x "$mm_test_bin" ]] || return 1
-  # One exact candidate on Metal, with representatives for split parity,
+  # One exact candidate on the producer backend, with representatives for split parity,
   # recurrent and MoE replay, both encode-only startup classes, T5 ordering,
   # and an actual image response. The full roster remains the promotion gate.
-  run_verification_logged "early real-model Metal certification" "$CERTIFY_LOG" env \
+  run_verification_logged "early real-model native certification" "$CERTIFY_LOG" env \
     FAMILY_BATTERY_RUN_ID="${FAMILY_BATTERY_RUN_ID}-early" \
     FAMILY_BATTERY_MM_TEST_BIN="$mm_test_bin" \
     "${workload_env[@]}" \
@@ -861,7 +856,7 @@ run_candidate_gates() {
   fi
   run_full_build || return 1
   if [[ "$HARNESS_MODE" == *-build ]]; then
-    run_early_metal_certification || return 1
+    run_early_native_certification || return 1
     controller_parity_inventory
   else
     run_certification
@@ -1061,7 +1056,7 @@ export_family_inputs() {
     --arg admitted_identity_sha256 "$admission_sha" --arg producer_receipt "$CANARY_PRODUCER_RECEIPT" \
     --arg producer_receipt_sha256 "$CANARY_PRODUCER_RECEIPT_SHA" \
     '{context:$context,root:$root,output:$output,candidate:$candidate,base:$base,branch:$branch,pass_id:$pass_id,mode:$mode,
-      test_build:$test_build,bundle:(if $mode == "pinned-build" then null else $bundle end),summary:$summary,
+      test_build:$test_build,bundle:(if $candidate == $base then null else $bundle end),summary:$summary,
       workload_oracles:$workload_oracles,admitted_plan:$admitted_plan,admitted_identity_sha256:$admitted_identity_sha256,
       producer_receipt:$producer_receipt,producer_receipt_sha256:$producer_receipt_sha256}' > "$input" || return 1
   if "${MESH_LLM_AUTOMATION_BIN:?}" automation canary-receipts pack --input "$input"; then
@@ -1106,7 +1101,7 @@ if [[ "$HARNESS_MODE" == repair* ]]; then
   exit 0
 fi
 
-if [[ "$HARNESS_MODE" == "pinned-build" ]]; then
+if [[ "$HARNESS_MODE" == "pinned-build" || ( "$HARNESS_MODE" == "native-build" && -z "${CANARY_INPUT_BUNDLE:-}" ) ]]; then
   CERTIFIED_SHA="$BASE_HEAD"
   VERIFICATION_DEADLINE_AT="$(( $(date +%s) + VERIFICATION_TIMEOUT_SECONDS ))"
   run_candidate_gates
@@ -1132,7 +1127,7 @@ else
   exit "$status"
 fi
 check_split_certification_roster
-if [[ "$HARNESS_MODE" == "verify-build" ]]; then
+if [[ "$HARNESS_MODE" == "verify-build" || "$HARNESS_MODE" == "native-build" ]]; then
   cp "$CANARY_INPUT_BUNDLE" "$BUNDLE"
   export_family_inputs
 else

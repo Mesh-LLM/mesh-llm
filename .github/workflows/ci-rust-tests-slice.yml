@@ -70,12 +70,15 @@ permissions:
   packages: read
 
 env:
-  CACHE_NAMESPACE: mesh-llm
-  CARGO_INCREMENTAL: "0"
   # Retained dependency variants and integration-test executables must fit
   # alongside the runner image and compiler seed on the hosted disk.
   # This leaves debug assertions, overflow checks and all test targets enabled.
+  CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_BENCH_DEBUG: "0"
+  CACHE_NAMESPACE: mesh-llm
+  CARGO_INCREMENTAL: "0"
   SCCACHE_GHA_ENABLED: "false"
   # libtest gives every test thread the std default of 2 MiB. The Mesh daemon
   # reserves 8 MiB for its application and Tokio threads
@@ -175,7 +178,7 @@ jobs:
         uses: ./.github/actions/restore-sccache-seed
         with:
           allow_trusted_seed: ${{ needs.runner_policy.outputs.allow_trusted_sccache_seed }}
-          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-aaa36843-epoch-aaa36843-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
+          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-aaa36843-epoch-aaa36843-v3-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'mesh/crates/*/Cargo.toml', 'skippy/crates/*/Cargo.toml', 'tools/*/Cargo.toml', '.github/workflows/cache-warm-sccache.yml', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
@@ -419,7 +422,7 @@ jobs:
         uses: ./.github/actions/restore-sccache-seed
         with:
           allow_trusted_seed: ${{ needs.runner_policy.outputs.allow_trusted_sccache_seed }}
-          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-aaa36843-epoch-aaa36843-v3-${{ hashFiles('Cargo.lock', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
+          cache_key: mesh-llm-sccache-seed-linux-x86_64-img-aaa36843-epoch-aaa36843-v3-${{ hashFiles('Cargo.lock', 'Cargo.toml', 'mesh/crates/*/Cargo.toml', 'skippy/crates/*/Cargo.toml', 'tools/*/Cargo.toml', '.github/workflows/cache-warm-sccache.yml', '.github/cache-version.txt', '.cargo/config.toml', 'scripts/cargo-linker', 'scripts/cargo-linker-linux-*', 'scripts/lib/lld.sh', 'Justfile', 'just/**') }}
       - uses: ./.github/actions/configure-sccache-gha
         with:
           allow_depot_remote_cache: ${{ needs.runner_policy.outputs.allow_depot_remote_cache }}
