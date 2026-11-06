@@ -1,8 +1,7 @@
-From 9f2b7d8a3f35c49889da8f534efb30e0719e39bf Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 17 Oct 2026 03:37:10 +1100
-Subject: [PATCH 07/10] fix(muse-glimmer): parse implicit reasoning
- continuations
+Subject: [PATCH] fix(muse-glimmer): parse implicit reasoning continuations
 
 ---
  common/parsers/muse-glimmer.cpp | 5 ++++-
@@ -26,7 +25,7 @@ index 78ff50727..846264b60 100644
              p.rule("analysis", p.literal(" to=self<|message|>") + p.content(p.until("<|eom|>")) + p.literal("<|eom|>"));
          }
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index 74b466496..0cbd9da62 100644
+index 98dfc4b65..f19c533b9 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
 @@ -7046,6 +7046,12 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
@@ -43,5 +42,5 @@ index 74b466496..0cbd9da62 100644
          // generation prompt, so the output starts at " to=".
          tst.test(" to=special_function<|message|>" + call_markup)
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

@@ -240,6 +240,7 @@ pub enum mtmd_video_template {
     Default = 0,
     LFM3 = 1,
     LFM3Omni = 2,
+    QWEN3VL = 3,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -391,6 +392,9 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn mtmd_bitmap_is_audio(bitmap: *const mtmd_bitmap) -> bool;
+}
+unsafe extern "C" {
+    pub fn mtmd_bitmap_is_voice(bitmap: *const mtmd_bitmap) -> bool;
 }
 unsafe extern "C" {
     pub fn mtmd_bitmap_free(bitmap: *mut mtmd_bitmap);
@@ -637,6 +641,8 @@ pub enum mtmd_gen_audio_type {
     PocketTts = 2,
     Soprano = 3,
     LFM3A = 4,
+    Chatterbox = 5,
+    DRAMA3 = 6,
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -644,9 +650,30 @@ pub struct mtmd_gen_audio_info {
     pub type_: mtmd_gen_audio_type,
     pub sample_rate: i32,
     pub model_variant: *const ::std::os::raw::c_char,
+    pub n_voices: i32,
 }
 unsafe extern "C" {
     pub fn mtmd_gen_audio_get_info(ctx: *const mtmd_context) -> mtmd_gen_audio_info;
+}
+unsafe extern "C" {
+    pub fn mtmd_gen_audio_read_tensor(
+        ctx: *mut mtmd_context,
+        name: *const ::std::os::raw::c_char,
+        out: *mut f32,
+        n_max: usize,
+    ) -> usize;
+}
+unsafe extern "C" {
+    pub fn mtmd_gen_audio_voice_name(
+        ctx: *const mtmd_context,
+        idx: i32,
+    ) -> *const ::std::os::raw::c_char;
+}
+unsafe extern "C" {
+    pub fn mtmd_gen_audio_get_voice(
+        ctx: *const mtmd_context,
+        name: *const ::std::os::raw::c_char,
+    ) -> *mut mtmd_bitmap;
 }
 #[repr(u32)]
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
@@ -701,6 +728,9 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     pub fn mtmd_gen_state_reset(state: *mut mtmd_gen_state);
+}
+unsafe extern "C" {
+    pub fn mtmd_gen_state_set_ref(ctx: *mut mtmd_context, state: *mut mtmd_gen_state) -> i32;
 }
 unsafe extern "C" {
     pub fn mtmd_gen_inp_default(ctx: *const mtmd_context) -> mtmd_gen_inp;
@@ -947,7 +977,6 @@ pub struct mtmd_helper_gen_audio_inp {
     pub out_mode: mtmd_helper_gen_audio_out_mode,
     pub speaker_ref: *mut mtmd_bitmap,
     pub lang: *const ::std::os::raw::c_char,
-    pub voice: *const ::std::os::raw::c_char,
     pub top_k: i32,
     pub top_p: f32,
     pub seed: u32,

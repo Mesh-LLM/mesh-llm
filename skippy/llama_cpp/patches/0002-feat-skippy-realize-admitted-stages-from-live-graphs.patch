@@ -1,7 +1,7 @@
-From 60c4066bd4258e67836e04ad3eeaea19d6fd0848 Mon Sep 17 00:00:00 2001
+From bcd40d1a714c4c1c8644f60dc93209b3e7d59d4d Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 02/11] feat(skippy): realize admitted stages from live graphs
+Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
 
 ---
  common/common.cpp                       |  109 ---
@@ -32,7 +32,7 @@ Subject: [PATCH 02/11] feat(skippy): realize admitted stages from live graphs
  src/skippy/errors.h                     |   66 ++
  src/skippy/events.cpp                   |  243 +++++
  src/skippy/events_internal.h            |   35 +
- src/skippy/executable_graph.cpp         |  329 +++++++
+ src/skippy/executable_graph.cpp         |  335 +++++++
  src/skippy/executable_graph.h           |   37 +
  src/skippy/execution-batch.cpp          |  454 +++++++++
  src/skippy/execution-single.cpp         |  642 ++++++++++++
@@ -79,7 +79,7 @@ Subject: [PATCH 02/11] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  256 +++++
  src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 75 files changed, 16388 insertions(+), 395 deletions(-)
+ 75 files changed, 16394 insertions(+), 395 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -148,7 +148,7 @@ Subject: [PATCH 02/11] feat(skippy): realize admitted stages from live graphs
  create mode 100644 src/skippy/workloads_internal.h
 
 diff --git a/common/common.cpp b/common/common.cpp
-index 04e348805..8d0dfe864 100644
+index bc51de053..ae5995542 100644
 --- a/common/common.cpp
 +++ b/common/common.cpp
 @@ -67,14 +67,6 @@
@@ -178,7 +178,7 @@ index 04e348805..8d0dfe864 100644
  std::string string_join(const std::vector<std::string> & values, const std::string & separator) {
      std::ostringstream result;
      for (size_t i = 0; i < values.size(); ++i) {
-@@ -1060,48 +1047,6 @@ std::filesystem::path fs_get_cache_file(const std::string & filename) {
+@@ -1049,48 +1036,6 @@ std::filesystem::path fs_get_cache_file(const std::string & filename) {
  // TTY utils
  //
  
@@ -227,7 +227,7 @@ index 04e348805..8d0dfe864 100644
  //
  // Model utils
  //
-@@ -1864,60 +1809,6 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
+@@ -1853,60 +1798,6 @@ void common_threadpools::init(llama_context * ctx, const common_params & params)
  // Vocab utils
  //
  
@@ -289,7 +289,7 @@ index 04e348805..8d0dfe864 100644
      const llama_model * model = llama_get_model(ctx);
      const llama_vocab * vocab = llama_model_get_vocab(model);
 diff --git a/common/common.h b/common/common.h
-index d0e33fb75..b24b490a8 100644
+index 303e0c293..e05854ea2 100644
 --- a/common/common.h
 +++ b/common/common.h
 @@ -43,7 +43,7 @@
@@ -319,7 +319,7 @@ index d0e33fb75..b24b490a8 100644
  
  template<class T>
  static std::vector<T> string_split(const std::string & str, char delim) {
-@@ -949,11 +949,11 @@ void fs_write_atomic(const std::filesystem::path & path, const std::string & dat
+@@ -946,11 +946,11 @@ void fs_write_atomic(const std::filesystem::path & path, const std::string & dat
  //
  
  // Auto-detect if colors can be enabled based on terminal and environment
@@ -334,7 +334,7 @@ index d0e33fb75..b24b490a8 100644
  
  //
  // Model utils
-@@ -1170,13 +1170,13 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
+@@ -1172,13 +1172,13 @@ bool common_replay_last_token(struct llama_context * ctx, llama_token last_token
  
  // tokenizes a string into a vector of tokens
  // should work similar to Python's `tokenizer.encode`
@@ -350,7 +350,7 @@ index d0e33fb75..b24b490a8 100644
      const struct llama_vocab * vocab,
             const std::string & text,
                          bool   add_special,
-@@ -1184,12 +1184,12 @@ std::vector<llama_token> common_tokenize(
+@@ -1186,12 +1186,12 @@ std::vector<llama_token> common_tokenize(
  
  // tokenizes a token into a piece, optionally renders special/control tokens
  // should work similar to Python's `tokenizer.id_to_piece`
@@ -1426,10 +1426,10 @@ index 000000000..7f5064cb5
 +}
 +
 diff --git a/src/llama-memory-hybrid-idx.cpp b/src/llama-memory-hybrid-idx.cpp
-index 2c5a57680..2bf506b0e 100644
+index da1747649..426961b7e 100644
 --- a/src/llama-memory-hybrid-idx.cpp
 +++ b/src/llama-memory-hybrid-idx.cpp
-@@ -197,6 +197,16 @@ bool llama_memory_hybrid_idx::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_po
+@@ -194,6 +194,16 @@ bool llama_memory_hybrid_idx::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_po
      return get_mem_attn()->seq_rm(seq_id, p0, p1);
  }
  
@@ -1447,7 +1447,7 @@ index 2c5a57680..2bf506b0e 100644
      // only whole sequences are copied: the recurrent state ignores the range, and a shared cell holds a single pool grouping
      GGML_ASSERT(p0 <= 0 && p1 < 0 && "partial seq_cp is not supported");
 diff --git a/src/llama-memory-hybrid-idx.h b/src/llama-memory-hybrid-idx.h
-index 0ac4265df..e601ebc48 100644
+index 59940dbb8..1980f48e5 100644
 --- a/src/llama-memory-hybrid-idx.h
 +++ b/src/llama-memory-hybrid-idx.h
 @@ -65,6 +65,10 @@ public:
@@ -3558,10 +3558,10 @@ index 000000000..040f89e1e
 +#endif // SKIPPY_EVENTS_INTERNAL_H
 diff --git a/src/skippy/executable_graph.cpp b/src/skippy/executable_graph.cpp
 new file mode 100644
-index 000000000..bb590a6a0
+index 000000000..fb993cbd9
 --- /dev/null
 +++ b/src/skippy/executable_graph.cpp
-@@ -0,0 +1,329 @@
+@@ -0,0 +1,335 @@
 +#include "executable_graph.h"
 +
 +#include "graph_identity.h"
@@ -3742,7 +3742,13 @@ index 000000000..bb590a6a0
 +                if (!dependency(tensor->view_src)) {
 +                    return false;
 +                }
-+                for (const ggml_tensor * src : tensor->src) {
++                for (int i = 0; i < GGML_MAX_SRC; ++i) {
++                    const ggml_tensor * src = tensor->src[i];
++                    // ggml_cast represents its newly allocated destination as
++                    // CPY src[1] == result, not as a dependency on an old value.
++                    if (i == 1 && tensor->op == GGML_OP_CPY && src == tensor) {
++                        continue;
++                    }
 +                    if (!dependency(src)) {
 +                        return false;
 +                    }
@@ -17739,5 +17745,5 @@ index 000000000..cc9279e7e
 +// attached from an earlier chat request.
 +void skippy_prepare_non_chat_workload(skippy_session * session);
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

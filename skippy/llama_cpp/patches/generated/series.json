@@ -1,5 +1,5 @@
 {
-  "full_patch_sha256": "4f4f9662d25127f0f26d2681bec84a5ea2b03596cfb26d3dc5dffdae5fd7d14f",
+  "full_patch_sha256": "67597ac8b2b8483ea964f747986e986edfd00e40d0e28a568ef95a1db296414b",
   "generator_version": "0.5.0",
   "schema_version": 1,
   "shards": [
@@ -59,7 +59,7 @@
         "bailingmoe3"
       ],
       "file": "0006-family-bailingmoe3.patch",
-      "sha256": "e74a1423fd2e6cbf35c303af849dd8650fe19bab8aeb4ecce8d9c93c48008af8",
+      "sha256": "17cb91555fc6c46757cf62575d91d8e53065f3c417bfb50119f4950633c312a6",
       "sources": [
         "src/models/bailingmoe3.cpp"
       ]
@@ -111,7 +111,7 @@
         "deepseek32"
       ],
       "file": "0011-family-deepseek32.patch",
-      "sha256": "b5975770b63e6c900d668a970802f7358a16c3ccc310fc94504318d309014233",
+      "sha256": "dd72597f52837a43634712778baec36684a853e34270dbd0365419bfe21c118b",
       "sources": [
         "src/models/deepseek32.cpp"
       ]
@@ -121,7 +121,7 @@
         "deepseek4"
       ],
       "file": "0012-family-deepseek4.patch",
-      "sha256": "e062be14659753880d7f955d9285296e243285273023749bc2b41091ca36c9d2",
+      "sha256": "c054b47418b21a8aea04e263cc29d34787df0d0790e1f903b7efc2c5cce831e6",
       "sources": [
         "src/models/deepseek4.cpp"
       ]
@@ -221,7 +221,7 @@
         "gemma3n"
       ],
       "file": "0022-family-gemma3n.patch",
-      "sha256": "65af5209e79566c66636a851585a97905bad87e8087857ed3aa76413251dd010",
+      "sha256": "f7e37e5e3224389a9f23c7ee73a62026b72e88769e5b5eb463bf4b735d0d896d",
       "sources": [
         "src/models/gemma3n.cpp"
       ]
@@ -231,7 +231,7 @@
         "gemma4"
       ],
       "file": "0023-family-gemma4.patch",
-      "sha256": "d20f7af5e789bb735231558d3a01842bb9f3c9ccc749af91fe64dbb78f58897f",
+      "sha256": "b899f9ec80f0f21bd5edfecde27fc2a1389d98ec6d934c812cd6f2f7bd9de45e",
       "sources": [
         "src/models/gemma4.cpp"
       ]
@@ -241,7 +241,7 @@
         "glm-dsa"
       ],
       "file": "0024-family-glm-dsa.patch",
-      "sha256": "2e7cb10206ea6db482ac74332fb8245cbb7d5b86fbfe2a25eb9bc9966bc46cb0",
+      "sha256": "aba98382f4171acb7508799816773b5911c7ee9a3edaba23bab4babc400eede5",
       "sources": [
         "src/models/glm-dsa.cpp"
       ]
@@ -374,7 +374,7 @@
         "inkling"
       ],
       "file": "0037-family-inkling.patch",
-      "sha256": "16f131962174421ba666c2c15de6ac66aec7b1ab3c35508a13d7675615375d49",
+      "sha256": "5d8e80c678fe88fa6b1670146f057dc4ac700f530e4accfe510822e379e3e59b",
       "sources": [
         "src/models/inkling.cpp"
       ]
@@ -424,7 +424,7 @@
         "kimi-k3"
       ],
       "file": "0042-family-kimi-k3.patch",
-      "sha256": "d83d00a17867a7baffb57eb2f7604aab11be9849ad8515b29040416d00f88479",
+      "sha256": "5b642fd44f7842197ee7b3377437df90223ec076fc5fa9f16ff53598e41accc6",
       "sources": [
         "src/models/kimi-k3.cpp"
       ]
@@ -456,7 +456,7 @@
         "lfm2-vl"
       ],
       "file": "0045-family-lfm2--lfm2-moe--lfm2-vl.patch",
-      "sha256": "177e470334313b7fbd71bae18a788f619888b90d255653200939ac9aec4d89cb",
+      "sha256": "c96eccd1b2ab0c8bbb112df5a5d209cfac8219133082a62f69d09d7b46aa5d72",
       "sources": [
         "src/models/lfm2.cpp"
       ]
@@ -558,7 +558,7 @@
         "minimax-m3"
       ],
       "file": "0055-family-minimax-m3.patch",
-      "sha256": "baeeca97b1464b2df8fede3c23a5ab71016b549225b780c412e7feda6af60b33",
+      "sha256": "e6014f4a7644bb7a8785232b9c2a2d73b549b07c4b76ae0c17731fc6a76b9971",
       "sources": [
         "src/models/minimax-m3.cpp"
       ]
@@ -641,7 +641,7 @@
         "qwen2"
       ],
       "file": "0063-family-qwen2.patch",
-      "sha256": "adeaac3e3bb32cb2c0dce62bfceef0eb86259d83b595606c064ad7565a4b309c",
+      "sha256": "c6f714401e06ce7195be13f92bbc7e4763c96966748fd46d53da9d4bab2a56c9",
       "sources": [
         "src/models/qwen2.cpp"
       ]
@@ -741,7 +741,7 @@
         "qwen4exp"
       ],
       "file": "0073-family-qwen4exp.patch",
-      "sha256": "b438af024354cb6b01e0db7126fe79a565b9f5c38d9d91e00437c90aa430bdab",
+      "sha256": "2e20b132a7bb3d4fee3b5a8d6988e33af1c63945504e0aae8543837e8ea8b913",
       "sources": [
         "src/models/qwen4exp.cpp"
       ]
@@ -820,7 +820,7 @@
     {
       "families": [],
       "file": "0081-family-unmapped.patch",
-      "sha256": "1fc0de0cc815be4486d2167f2bbebbc05f080a520669565b70e77e5a821d0fff",
+      "sha256": "62161c8393b2e2ac7edaefe8ffeed770610152cb2b2ace046156c4fae7985ebf",
       "sources": [
         "src/models/arctic.cpp",
         "src/models/baichuan.cpp",
@@ -829,6 +829,7 @@
         "src/models/bert.cpp",
         "src/models/bitnet.cpp",
         "src/models/clef.cpp",
+        "src/models/clover-moe.cpp",
         "src/models/codeshell.cpp",
         "src/models/cogvlm.cpp",
         "src/models/cohere2moe.cpp",

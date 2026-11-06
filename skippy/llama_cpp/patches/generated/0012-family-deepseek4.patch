@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/deepseek4.cpp b/src/models/deepseek4.cpp
-index 236c04ead23902414d8c477613f6609f8e4989ac..3ab505e6ff6bc28599085e5caea041acca122d48 100644
+index 0dbc7d3cb345037f5eb1caf31eb7ee98391b5343..459af10cc78a94e1e83d9f2e4db86badeea13277 100644
 --- a/src/models/deepseek4.cpp
 +++ b/src/models/deepseek4.cpp
 @@ -1249,6 +1249,8 @@ llama_model_deepseek4::graph::graph(const llama_model & model, const llm_graph_p

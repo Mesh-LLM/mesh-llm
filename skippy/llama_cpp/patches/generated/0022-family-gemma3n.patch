@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/gemma3n.cpp b/src/models/gemma3n.cpp
-index 7848f9f59c887d0b62ead74f0185f0a17b876c66..c1acd26bba1d37b30b1984d9f0c880d8064888f2 100644
+index 7f12b17475473bce6eb38aeab331d7a3ba986fa4..3b51b08bdb57f169f28733e3bbd931abee9cef09 100644
 --- a/src/models/gemma3n.cpp
 +++ b/src/models/gemma3n.cpp
-@@ -127,6 +127,8 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
+@@ -132,6 +132,8 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
      // inpL now has shape: [n_embd, n_tokens, n_altup]
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index 7848f9f59c887d0b62ead74f0185f0a17b876c66..c1acd26bba1d37b30b1984d9f0c880d8
          // this block is made to be closely resemble Gemma3p5DecoderLayer on python code
          const float freq_base_l  = model.get_rope_freq_base(cparams, il);
          const float freq_scale_l = model.get_rope_freq_scale(cparams, il);
-@@ -262,6 +264,7 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
+@@ -267,6 +269,7 @@ llama_model_gemma3n::graph::graph(const llama_model & model, const llm_graph_par
  
          // input for next layer
          inpL = cur;

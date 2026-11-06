@@ -180,15 +180,15 @@ index 000000000..cf13822ed
 +
 +#endif // SKIPPY_CLEF_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 5f325683c..2a818d984 100644
+index 93232a2b8..d2ab5d538 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 77
-+#define SKIPPY_ABI_VERSION_PATCH 78
+-#define SKIPPY_ABI_VERSION_PATCH 78
++#define SKIPPY_ABI_VERSION_PATCH 79
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -202,10 +202,10 @@ index 5f325683c..2a818d984 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 4770024e3..1a5dbefb1 100644
+index e0f14f76f..e138d05d8 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -96,6 +96,8 @@ add_library(llama
+@@ -97,6 +97,8 @@ add_library(llama
              skippy/events.cpp
              skippy/system_one.cpp
              skippy/laya.cpp
@@ -214,7 +214,7 @@ index 4770024e3..1a5dbefb1 100644
              ../tools/laya/laya.cpp
              skippy/asr.cpp
              unicode.h
-@@ -130,6 +132,24 @@ set_source_files_properties(skippy/asr.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION
+@@ -131,6 +133,24 @@ set_source_files_properties(skippy/asr.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION
  
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  

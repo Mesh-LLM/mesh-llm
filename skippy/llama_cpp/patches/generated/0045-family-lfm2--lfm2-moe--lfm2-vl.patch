@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/lfm2.cpp b/src/models/lfm2.cpp
-index dd61f509a6a5703a30be53e95a4b8d1b37cb8812..dc6316ba0ff2b45a52be42714c5f54e35a67ab74 100644
+index f7d4f95b0aab83d5d42266e3cdad425187885ad0..1e7e55eb40c76cf553357e4a29ffe6ff8ce34f0e 100644
 --- a/src/models/lfm2.cpp
 +++ b/src/models/lfm2.cpp
 @@ -200,6 +200,8 @@ llama_model_lfm2::graph<iswa>::graph(const llama_model & model, const llm_graph_
@@ -29,7 +29,7 @@ index dd61f509a6a5703a30be53e95a4b8d1b37cb8812..dc6316ba0ff2b45a52be42714c5f54e3
      }
  
      cur = build_norm(cur, model.output_norm, NULL, LLM_NORM_RMS, -1);
-@@ -346,6 +349,8 @@ llama_model_lfm2::graph_decision::graph_decision(const llama_model & model, cons
+@@ -345,6 +348,8 @@ llama_model_lfm2::graph_decision::graph_decision(const llama_model & model, cons
      res->add_input(std::move(inp_conv));
  
      for (int il = 0; il < n_layer_enc; ++il) {
@@ -38,7 +38,7 @@ index dd61f509a6a5703a30be53e95a4b8d1b37cb8812..dc6316ba0ff2b45a52be42714c5f54e3
          const auto & layer = model.layers[il];
  
          ggml_tensor * inpL = cur;
-@@ -407,6 +412,7 @@ llama_model_lfm2::graph_decision::graph_decision(const llama_model & model, cons
+@@ -406,6 +411,7 @@ llama_model_lfm2::graph_decision::graph_decision(const llama_model & model, cons
  
          cur = ggml_add(ctx0, cur, ffn_out);
          cb(cur, "l_out", il);

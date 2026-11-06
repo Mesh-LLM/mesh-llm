@@ -1,7 +1,7 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From 31ae7425a8e8890566b588819262d4572c3aa220 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 29 Oct 2026 21:32:31 +1100
-Subject: [PATCH] skippy: roll back staged verify windows in place
+Subject: [PATCH 15/15] skippy: roll back staged verify windows in place
 
 A recurrent verify window of up to n_rs_seq rows rolls back through the
 rollback snapshots instead of a host checkpoint and replay, but staged
@@ -62,15 +62,15 @@ checkpoint, buffer reuse) and its rollback-count ABI.
  create mode 100644 src/skippy/verify_window.h
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index b9b5259af..df831c43e 100644
+index df831c43e..3448095a1 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 68
-+#define SKIPPY_ABI_VERSION_PATCH 69
+-#define SKIPPY_ABI_VERSION_PATCH 69
++#define SKIPPY_ABI_VERSION_PATCH 70
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -493,7 +493,7 @@ index 8ba595623..bbba808a3 100644
          skippy_session * session,
          uint64_t token_count,
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
-index 7d34b34bf..a959a7c81 100644
+index 46e907aa0..ec9fb94b1 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
 @@ -121,6 +121,11 @@ struct skippy_verify_checkpoint {
@@ -1274,5 +1274,5 @@ index d09acccb4..8d68604c3 100644
      return 0;
  }
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

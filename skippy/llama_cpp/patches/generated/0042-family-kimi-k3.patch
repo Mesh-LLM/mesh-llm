@@ -9,10 +9,10 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/kimi-k3.cpp b/src/models/kimi-k3.cpp
-index ac5173683b47d883988eea9d6c69d117732b6b93..3521fd151a0871bb265798df5d2d4cce49294410 100644
+index c6e6489a98e748635c560e3225182b6c87ce2f59..c4ede7960f655f4c02aafb0b8f584df8f8c06a64 100644
 --- a/src/models/kimi-k3.cpp
 +++ b/src/models/kimi-k3.cpp
-@@ -275,6 +275,8 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
+@@ -274,6 +274,8 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
      const int64_t  n_embd_latent = hparams.n_expert_latent > 0 ? hparams.n_expert_latent : n_embd;
  
      for (int il = 0; il < n_layer; ++il) {
@@ -21,7 +21,7 @@ index ac5173683b47d883988eea9d6c69d117732b6b93..3521fd151a0871bb265798df5d2d4cce
          const auto & layer = model.layers[il];
  
          // the residual stream, banked on checkpoint layers and then restarted
-@@ -328,6 +330,7 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
+@@ -327,6 +329,7 @@ llama_model_kimi_k3::graph::graph(const llama_model & model, const llm_graph_par
          cb(prefix_sum, "l_out", il);
  
          inpL = prefix_sum;

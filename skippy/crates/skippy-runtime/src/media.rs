@@ -326,7 +326,6 @@ impl StageModel {
         input.lang = language
             .as_ref()
             .map_or(ptr::null(), |value| value.as_ptr());
-        input.voice = ptr::null();
         input.top_k = config.top_k;
         input.top_p = config.top_p;
         input.seed = config.seed;

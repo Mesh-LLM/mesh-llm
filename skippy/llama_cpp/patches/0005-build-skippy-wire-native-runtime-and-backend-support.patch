@@ -1,7 +1,7 @@
-From 3a5bc8564dc2c70adda001f9e6e21a20803f8172 Mon Sep 17 00:00:00 2001
+From aafffedf760f80e8b2a2f0acb6bb0806a91a6c41 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
-Subject: [PATCH 05/11] build(skippy): wire native runtime and backend support
+Subject: [PATCH 05/15] build(skippy): wire native runtime and backend support
 
 ---
  CMakeLists.txt                             |  17 +
@@ -41,7 +41,7 @@ Subject: [PATCH 05/11] build(skippy): wire native runtime and backend support
  create mode 100644 ggml/src/ggml-metal/kernels/cachegen.metal
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index e37c8aa4c..c84be83bc 100644
+index b8b40e75f..f99407170 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -2,6 +2,18 @@ cmake_minimum_required(VERSION 3.14...3.28) # for add_link_options and implicit
@@ -62,7 +62,7 @@ index e37c8aa4c..c84be83bc 100644
 +
  ### llama.cpp version
  set(LLAMA_VERSION_MAJOR 0)
- set(LLAMA_VERSION_MINOR 8)
+ set(LLAMA_VERSION_MINOR 9)
 @@ -285,6 +297,7 @@ set(LLAMA_BIN_INSTALL_DIR     ${CMAKE_INSTALL_BINDIR}     CACHE PATH "Location o
  
  set(LLAMA_PUBLIC_HEADERS
@@ -1813,10 +1813,10 @@ index 42b65a580..956d453a7 100644
          foreach (TYPE_K IN LISTS FA_TYPES)
              if ("${TYPE_K}-${TYPE_V}" IN_LIST FA_COMBINATIONS)
 diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
-index 735ed2c2b..f6f8d7834 100644
+index afb86338a..0427fda49 100644
 --- a/ggml/include/ggml-backend.h
 +++ b/ggml/include/ggml-backend.h
-@@ -229,6 +229,33 @@ extern "C" {
+@@ -241,6 +241,33 @@ extern "C" {
      };
      typedef struct ggml_backend_feature * (*ggml_backend_get_features_t)(ggml_backend_reg_t reg);
  
@@ -2162,18 +2162,18 @@ index 000000000..7118c9aa9
 +
 +#endif // !defined(GGML_USE_MUSA)
 diff --git a/ggml/src/ggml-cuda/ggml-cuda.cu b/ggml/src/ggml-cuda/ggml-cuda.cu
-index 06956ce7a..5a92f977c 100644
+index 9c467ce95..4bc5c0482 100644
 --- a/ggml/src/ggml-cuda/ggml-cuda.cu
 +++ b/ggml/src/ggml-cuda/ggml-cuda.cu
-@@ -10,6 +10,7 @@
- #include "ggml-cuda/argmax.cuh"
+@@ -11,6 +11,7 @@
  #include "ggml-cuda/argsort.cuh"
+ #include "ggml-cuda/batch-get.cuh"
  #include "ggml-cuda/binbcast.cuh"
 +#include "ggml-cuda/cachegen.cuh"
  #include "ggml-cuda/clamp.cuh"
  #include "ggml-cuda/col2im-1d.cuh"
  #include "ggml-cuda/concat.cuh"
-@@ -87,6 +88,7 @@
+@@ -88,6 +89,7 @@
  #include <map>
  #include <memory>
  #include <mutex>
@@ -2181,7 +2181,7 @@ index 06956ce7a..5a92f977c 100644
  #include <cstdarg>
  #include <cstdio>
  #include <cstdlib>
-@@ -5988,7 +5990,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
+@@ -6146,7 +6148,12 @@ static bool ggml_backend_cuda_device_supports_op(ggml_backend_dev_t dev, const g
                  return false;
              }
          case GGML_OP_DUP:
@@ -2195,7 +2195,7 @@ index 06956ce7a..5a92f977c 100644
          case GGML_OP_ARGMAX:
          case GGML_OP_COUNT_EQUAL:
              return true;
-@@ -6347,7 +6354,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -6505,7 +6512,12 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      #endif
  
      #ifdef GGML_CUDA_FA_QUANTS
@@ -2209,7 +2209,7 @@ index 06956ce7a..5a92f977c 100644
      #endif
  
      {
-@@ -6373,6 +6385,329 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
+@@ -6531,6 +6543,329 @@ static ggml_backend_feature * ggml_backend_cuda_get_features(ggml_backend_reg_t
      GGML_UNUSED(reg);
  }
  
@@ -2539,7 +2539,7 @@ index 06956ce7a..5a92f977c 100644
  static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, const char * name) {
      GGML_UNUSED(reg);
      if (strcmp(name, "ggml_backend_comm_init") == 0) {
-@@ -6393,6 +6728,11 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
+@@ -6556,6 +6891,11 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_cuda_get_features;
      }
@@ -2576,7 +2576,7 @@ index 91691b223..a6d145e69 100644
      kernels/fa_f16.metal
      kernels/fa_f32.metal
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.h b/ggml/src/ggml-metal/ggml-metal-device.h
-index 1858e7fc5..d34545af8 100644
+index e096d611b..f04009fdb 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.h
 +++ b/ggml/src/ggml-metal/ggml-metal-device.h
 @@ -1,6 +1,7 @@
@@ -2587,7 +2587,7 @@ index 1858e7fc5..d34545af8 100644
  
  #ifdef __cplusplus
  extern "C" {
-@@ -374,6 +375,12 @@ void   ggml_metal_buffer_clear        (ggml_metal_buffer_t buf, uint8_t value);
+@@ -379,6 +380,12 @@ void   ggml_metal_buffer_clear        (ggml_metal_buffer_t buf, uint8_t value);
  //
  struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, const struct ggml_tensor * t);
  
@@ -2601,7 +2601,7 @@ index 1858e7fc5..d34545af8 100644
  }
  #endif
 diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
-index 3d4ebf86f..ababccd8e 100644
+index 63fbe2734..3743e7b50 100644
 --- a/ggml/src/ggml-metal/ggml-metal-device.m
 +++ b/ggml/src/ggml-metal/ggml-metal-device.m
 @@ -11,6 +11,8 @@
@@ -2621,7 +2621,7 @@ index 3d4ebf86f..ababccd8e 100644
      X(FA_AUX,          fa_aux)         \
      X(FA_F16,          fa_f16)         \
      X(FA_F32,          fa_f32)         \
-@@ -180,6 +183,11 @@ int ggml_metal_pipeline_max_theads_per_threadgroup(struct ggml_metal_pipeline_wi
+@@ -180,6 +183,11 @@ struct ggml_metal_library {
      ggml_metal_device_t dev;
      ggml_metal_pipelines_t pipelines; // cache of compiled pipelines
  
@@ -2885,7 +2885,7 @@ index 3d4ebf86f..ababccd8e 100644
  
          [mtl_function release];
  
-@@ -1756,6 +1918,29 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
+@@ -1789,6 +1951,29 @@ bool ggml_metal_device_supports_op(ggml_metal_device_t dev, const struct ggml_te
              if (op->src[1]->type != op->src[2]->type) {
                  return false;
              }
@@ -2915,7 +2915,7 @@ index 3d4ebf86f..ababccd8e 100644
              switch (op->src[1]->type) {
                  case GGML_TYPE_F32:
                  case GGML_TYPE_F16:
-@@ -2737,3 +2922,262 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
+@@ -2758,3 +2943,262 @@ struct ggml_metal_buffer_id ggml_metal_buffer_get_id(ggml_metal_buffer_t buf, co
  
      return res;
  }
@@ -3179,10 +3179,10 @@ index 3d4ebf86f..ababccd8e 100644
 +    return true;
 +}
 diff --git a/ggml/src/ggml-metal/ggml-metal.cpp b/ggml/src/ggml-metal/ggml-metal.cpp
-index 1699a7131..8e6853234 100644
+index 9bed6421b..528853974 100644
 --- a/ggml/src/ggml-metal/ggml-metal.cpp
 +++ b/ggml/src/ggml-metal/ggml-metal.cpp
-@@ -1015,6 +1015,9 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const
+@@ -1016,6 +1016,9 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const
      if (strcmp(name, "ggml_backend_get_features") == 0) {
          return (void *)ggml_backend_metal_get_features;
      }
@@ -4107,10 +4107,10 @@ index 97250c2e8..5e02baa49 100644
 +    target_link_libraries(llama PRIVATE ${SKIPPY_ACCELERATE_FRAMEWORK})
 +endif()
 diff --git a/tools/mtmd/mtmd-audio.cpp b/tools/mtmd/mtmd-audio.cpp
-index 14b5a7213..d2521f24b 100644
+index 74d265526..99e19490c 100644
 --- a/tools/mtmd/mtmd-audio.cpp
 +++ b/tools/mtmd/mtmd-audio.cpp
-@@ -285,6 +285,7 @@ struct filter_params {
+@@ -286,6 +286,7 @@ struct filter_params {
      float   mel_floor       = 5.960464477539063e-08f;
      bool    mel_floor_add   = false;  // log(x + floor) instead of log(max(x, floor))
      bool    std_eps_after_sqrt = false;  // std + eps instead of sqrt(var + eps)
@@ -4118,7 +4118,7 @@ index 14b5a7213..d2521f24b 100644
  };
  
  static void log_mel_spectrogram_worker_thread(int                        ith,
-@@ -329,6 +330,7 @@ static void log_mel_spectrogram_worker_thread(int                        ith,
+@@ -330,6 +331,7 @@ static void log_mel_spectrogram_worker_thread(int                        ith,
          // Calculate modulus^2 (power) or modulus (magnitude)
          for (int j = 0; j < n_fft_bins; j++) {
              float power = (fft_out[2 * j + 0] * fft_out[2 * j + 0] + fft_out[2 * j + 1] * fft_out[2 * j + 1]);
@@ -4127,7 +4127,7 @@ index 14b5a7213..d2521f24b 100644
          }
  
 diff --git a/tools/mtmd/mtmd-helper.cpp b/tools/mtmd/mtmd-helper.cpp
-index 29812219c..04382079d 100644
+index d86537e55..7594cee65 100644
 --- a/tools/mtmd/mtmd-helper.cpp
 +++ b/tools/mtmd/mtmd-helper.cpp
 @@ -209,6 +209,25 @@ int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
@@ -4187,7 +4187,7 @@ index 29812219c..04382079d 100644
              LOG_ERR("failed to decode %s\n", name);
              return ret;
 diff --git a/tools/mtmd/mtmd-helper.h b/tools/mtmd/mtmd-helper.h
-index 99ae1738d..9d6b0b25a 100644
+index a9ffdf71e..ab65ceb32 100644
 --- a/tools/mtmd/mtmd-helper.h
 +++ b/tools/mtmd/mtmd-helper.h
 @@ -115,6 +115,22 @@ MTMD_API int32_t mtmd_helper_eval_chunk_single(mtmd_context * ctx,
@@ -4214,5 +4214,5 @@ index 99ae1738d..9d6b0b25a 100644
  struct mtmd_helper_embd_batch {
      int32_t n_tokens;
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

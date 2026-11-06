@@ -456,6 +456,14 @@ fn shared_canary_full_build_runs_cpu_producer_before_required_smokes_and_stops_o
     for mode in ["repair-build", "verify-build", "pinned-build"] {
         for fail_cpu in [false, true] {
             let fixture = Fixture::new();
+            fs::create_dir_all(fixture.path().join("scripts/lib")).unwrap();
+            fs::copy(
+                root().join("scripts/lib/llama-canary-native-build.sh"),
+                fixture
+                    .path()
+                    .join("scripts/lib/llama-canary-native-build.sh"),
+            )
+            .unwrap();
             fixture.executable(
                 "bin/lipo",
                 "[[ $1 == -archs ]] || exit 97; printf 'arm64\\n'",

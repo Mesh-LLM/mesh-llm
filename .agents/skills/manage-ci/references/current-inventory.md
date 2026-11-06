@@ -1703,12 +1703,14 @@ Historical source workers consume that exact SDK interpreter. This is managed
 project dependency restoration, not an installation into system Python or the
 read-only model cache. The runner still requires preinstalled `uv`.
 
-The canary build and generated-patch checks share the locked external Jinja
+The canary build and generated-patch checks share the locked external native-test
 project in the trusted controller's `ci/llama-canary/jinja`, frozen before any
 selected-source switch so historical revisions need no new manifest. Its environment lives under the run-owned
 state directory and uses the prepared SDK interpreter when available, otherwise
 the installed `python3`. Interpreter downloads are disabled. Both upstream
-Jinja tests remain selected by the complete native suite. The optional developer
+Jinja tests and the upstream FP8 conversion test remain selected by the complete
+native suite. The locked environment requires Python 3.12 or newer and includes
+NumPy, PyTorch, Safetensors and Transformers for the conversion test. The optional developer
 llama-benchy wrapper defaults to a full upstream source commit; explicit caller
 overrides remain available. Neither dependency adds repository Python code.
 

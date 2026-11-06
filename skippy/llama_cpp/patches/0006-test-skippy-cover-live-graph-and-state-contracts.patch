@@ -1,9 +1,10 @@
-From 91f5eae940841ac57f49fbbe6d96dcdeb6c3b379 Mon Sep 17 00:00:00 2001
+From fc70c0d1683487654787650a3ffbe5243b4d09a5 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
-Subject: [PATCH 06/11] test(skippy): cover live graph and state contracts
+Subject: [PATCH] test(skippy): cover live graph and state contracts
 
 ---
+ .../tests/cast_destination_regression.h       |   27 +
  src/skippy/tests/embedding_input_regression.h |   91 +
  src/skippy/tests/graph_build_inputs.cpp       |  948 ++++++++++
  src/skippy/tests/graph_contract_cases.cmake   |  120 ++
@@ -13,16 +14,16 @@ Subject: [PATCH 06/11] test(skippy): cover live graph and state contracts
  src/skippy/tests/input_capabilities.cpp       |   78 +
  .../tests/input_leaf_state_regression.h       |   49 +
  src/skippy/tests/live_graph_reference.h       |  194 ++
- src/skippy/tests/noalloc_graph_planning.cpp   | 1109 +++++++++++
+ src/skippy/tests/noalloc_graph_planning.cpp   | 1137 +++++++++++
  src/skippy/tests/profile_residency.cpp        |  258 +++
- .../tests/renamed_multishard_planning.cpp     | 1659 +++++++++++++++++
+ .../tests/renamed_multishard_planning.cpp     | 1663 +++++++++++++++++
  .../tests/residual_checkpoint_regression.h    |   52 +
  src/skippy/tests/runtime_events.cpp           |  695 +++++++
  src/skippy/tests/sampling_history.cpp         |  517 +++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
- src/skippy/tests/stage_slice_plan.cpp         | 1196 ++++++++++++
- tests/CMakeLists.txt                          |   29 +
+ src/skippy/tests/stage_slice_plan.cpp         | 1198 ++++++++++++
+ tests/CMakeLists.txt                          |   28 +
  tests/test-chat-auto-parser.cpp               |   47 +
  tests/test-chat.cpp                           |  189 +-
  tests/test-deepseek4-mtp.h                    |   88 +
@@ -38,7 +39,8 @@ Subject: [PATCH 06/11] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 34 files changed, 10011 insertions(+), 32 deletions(-)
+ 35 files changed, 10075 insertions(+), 30 deletions(-)
+ create mode 100644 src/skippy/tests/cast_destination_regression.h
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -69,6 +71,39 @@ Subject: [PATCH 06/11] test(skippy): cover live graph and state contracts
  create mode 100644 tests/test-skippy-sampling-suppress.cpp
  create mode 100644 tests/test-skippy-verify-checkpoint-retirement.cpp
 
+diff --git a/src/skippy/tests/cast_destination_regression.h b/src/skippy/tests/cast_destination_regression.h
+new file mode 100644
+index 000000000..84da82c91
+--- /dev/null
++++ b/src/skippy/tests/cast_destination_regression.h
+@@ -0,0 +1,27 @@
++// ggml_cast's CPY destination is the new node itself, not an execution cycle.
++static int check_cast_destination_clone() {
++    const ggml_init_params params = {
++        ggml_tensor_overhead() * 8 + ggml_graph_overhead_custom(8, false), nullptr, true,
++    };
++    ggml_context_ptr context(ggml_init(params));
++    ggml_tensor * range = ggml_arange(context.get(), 0.0f, 4.0f, 1.0f);
++    ggml_tensor * cast = ggml_cast(context.get(), range, GGML_TYPE_I32);
++    ggml_cgraph * graph = ggml_new_graph_custom(context.get(), 8, false);
++    ggml_build_forward_expand(graph, cast);
++    std::vector<int32_t> nodes;
++    for (int32_t i = 0; i < ggml_graph_n_nodes(graph); ++i) { nodes.push_back(i); }
++    skippy_executable_graph clone;
++    std::string error;
++    if (!skippy_build_executable_graph(graph, nodes, {}, {cast}, clone, error) ||
++            clone.tensors.at(cast)->src[1] != clone.tensors.at(cast) ||
++            clone.tensors.at(cast)->src[0] != clone.tensors.at(range)) {
++        std::fprintf(stderr, "cast destination clone failed: %s\n", error.c_str());
++        return 92;
++    }
++    cast->src[0] = cast;
++    if (skippy_build_executable_graph(graph, nodes, {}, {cast}, clone, error) || error.empty()) {
++        std::fprintf(stderr, "cast source cycle was accepted\n");
++        return 93;
++    }
++    return 0;
++}
 diff --git a/src/skippy/tests/embedding_input_regression.h b/src/skippy/tests/embedding_input_regression.h
 new file mode 100644
 index 000000000..803489be0
@@ -2040,10 +2075,10 @@ index 000000000..73129bf07
 +};
 diff --git a/src/skippy/tests/noalloc_graph_planning.cpp b/src/skippy/tests/noalloc_graph_planning.cpp
 new file mode 100644
-index 000000000..f741784ef
+index 000000000..f6506940c
 --- /dev/null
 +++ b/src/skippy/tests/noalloc_graph_planning.cpp
-@@ -0,0 +1,1109 @@
+@@ -0,0 +1,1137 @@
 +#include "ggml-backend.h"
 +#include "ggml.h"
 +#include "gguf.h"
@@ -2666,7 +2701,8 @@ index 000000000..f741784ef
 +        const llama_model * model,
 +        const char * profile_name,
 +        const std::vector<layer_state_class> & layer_classes,
-+        size_t expected_conv_writes) {
++        size_t expected_conv_slots,
++        uint32_t rollback_depth) {
 +    std::vector<skippy_state_effect> effects;
 +    std::string effect_error;
 +    if (!skippy_infer_state_effects(graph_result->get_state_effects(), graph,
@@ -2713,13 +2749,32 @@ index 000000000..f741784ef
 +                break;
 +            case layer_state_class::recurrent:
 +                ok = conv_reads == 1 && ssm_reads == 1 && ssm_writes == 3 &&
-+                     conv_writes == expected_conv_writes + 2 &&
-+                     kv_total == 0;
-+                if (conv_writes != expected_conv_writes + 2) {
++                     conv_writes == 3 && kv_total == 0;
++                if (conv_writes != 3) {
 +                    std::fprintf(stderr,
 +                            "metadata-only %s layer %d registered %zu conv writes, expected %zu\n",
-+                            profile_name, il, conv_writes, expected_conv_writes + 2);
++                            profile_name, il, conv_writes, size_t{3});
 +                    return false;
++                }
++                // Rollback windows share one SET_ROWS write; verify every
++                // retained slot remains covered rather than counting old CPYs.
++                for (const auto & effect : effects) {
++                    if (effect.layer != il || effect.kind != skippy_state_kind::recurrent_conv ||
++                            effect.access != skippy_state_access::write || effect.write_ordinal != 2) {
++                        continue;
++                    }
++                    const ggml_tensor * write = effect.effect_node;
++                    const bool valid = write != nullptr && (rollback_depth == 0 ?
++                            write->op == GGML_OP_CPY :
++                            write->op == GGML_OP_SET_ROWS && write->src[0] && write->src[1] && write->src[2] &&
++                            write->src[0]->ne[1] == static_cast<int64_t>(expected_conv_slots) &&
++                            write->src[1]->ne[0] == static_cast<int64_t>(expected_conv_slots) &&
++                            write->src[2]->ne[1] == static_cast<int64_t>(rollback_depth) + 1);
++                    if (!valid) {
++                        std::fprintf(stderr, "metadata-only %s layer %d has incomplete convolution rollback slots\n",
++                                profile_name, il);
++                        return false;
++                    }
 +                }
 +                break;
 +            case layer_state_class::kda:
@@ -2753,7 +2808,15 @@ index 000000000..f741784ef
 +        for (const auto & effect : effects) {
 +            if (effect.storage != owner.storage || effect.access != skippy_state_access::write) { continue; }
 +            const ggml_tensor * node = effect.effect_node;
-+            if (node->op != (effect.write_ordinal == 0 ? GGML_OP_SCALE : GGML_OP_CPY)) { return false; }
++            const bool batched_conv = rollback_depth > 0 && owner.kind == skippy_state_kind::recurrent_conv &&
++                    layer_classes[owner.layer] == layer_state_class::recurrent && effect.write_ordinal == 2;
++            const ggml_op expected = effect.write_ordinal == 0 ? GGML_OP_SCALE :
++                    batched_conv ? GGML_OP_SET_ROWS : GGML_OP_CPY;
++            if (node->op != expected) {
++                std::fprintf(stderr, "metadata-only %s state write uses op %d, expected %d\n",
++                        profile_name, static_cast<int>(node->op), static_cast<int>(expected));
++                return false;
++            }
 +            for (int i = 0; i < ggml_graph_n_nodes(graph); ++i) {
 +                if (ggml_graph_node(graph, i) != node) { continue; }
 +                if (effect.write_ordinal == 0) { zero_position = i; }
@@ -2858,7 +2921,7 @@ index 000000000..f741784ef
 +    }
 +    result.boundary_pairs = boundaries.size() / 2;
 +
-+    // mirror the mamba2 slot loop: writes = min(n_seq_tokens, 1 + effective n_rs_seq)
++    // The batched write retains min(n_seq_tokens, 1 + effective n_rs_seq) rollback windows.
 +    const uint32_t effective_rs_seq = llama_n_rs_seq(context);
 +    if (n_rs_seq > 0 && effective_rs_seq != n_rs_seq) {
 +        std::fprintf(stderr, "metadata-only %s requested n_rs_seq=%u but context clamped it to %u\n",
@@ -2866,9 +2929,9 @@ index 000000000..f741784ef
 +        llama_free(context);
 +        return false;
 +    }
-+    const size_t expected_conv_writes = std::min<size_t>(n_tokens / n_seqs, 1 + effective_rs_seq);
++    const size_t expected_conv_slots = std::min<size_t>(n_tokens / n_seqs, 1 + effective_rs_seq);
 +
-+    if (!check_state_effects(graph_result, graph, model, profile_name, layer_classes, expected_conv_writes)) {
++    if (!check_state_effects(graph_result, graph, model, profile_name, layer_classes, expected_conv_slots, effective_rs_seq)) {
 +        llama_free(context);
 +        return false;
 +    }
@@ -3419,10 +3482,10 @@ index 000000000..17650efda
 +}
 diff --git a/src/skippy/tests/renamed_multishard_planning.cpp b/src/skippy/tests/renamed_multishard_planning.cpp
 new file mode 100644
-index 000000000..5335c1599
+index 000000000..1656f9ad3
 --- /dev/null
 +++ b/src/skippy/tests/renamed_multishard_planning.cpp
-@@ -0,0 +1,1659 @@
+@@ -0,0 +1,1663 @@
 +#include "embedding_input_regression.h"
 +#include "live_graph_reference.h"
 +#include "ggml-backend.h"
@@ -4146,8 +4209,8 @@ index 000000000..5335c1599
 +                    " ssm read=" + (ssm_read ? "1" : "0") + " writes=" + std::to_string(ssm_writes) + ")";
 +                return false;
 +            }
-+            // Every declared write must reference its real graph node: a CPY (or
-+            // zeroing SCALE for ordinal 0) whose destination is the registered
++            // Every declared write must reference its real graph node: CPY,
++            // batched rollback SET_ROWS, or ordinal-0 SCALE, targeting registered
 +            // storage. A discarded copy node or a non-write tensor registered as
 +            // the effect node fails here instead of mis-ordering stage plans.
 +            for (const auto & effect : effects) {
@@ -4159,13 +4222,17 @@ index 000000000..5335c1599
 +                    error = "delta-net state write at layer " + std::to_string(il) + " has no effect node";
 +                    return false;
 +                }
-+                const ggml_op expect = effect.write_ordinal == 0 ? GGML_OP_SCALE : GGML_OP_CPY;
++                const bool rollback_conv = llama_n_rs_seq(context.get()) > 0 &&
++                        effect.kind == skippy_state_kind::recurrent_conv && effect.write_ordinal == 2;
++                const ggml_op expect = effect.write_ordinal == 0 ? GGML_OP_SCALE :
++                        rollback_conv ? GGML_OP_SET_ROWS : GGML_OP_CPY;
 +                if (node->op != expect) {
 +                    error = "delta-net state write at layer " + std::to_string(il) +
 +                        " registers a non-write node (op=" + std::to_string(static_cast<int>(node->op)) + ")";
 +                    return false;
 +                }
-+                if (skippy_state_canonical_storage(node->src[node->op == GGML_OP_CPY ? 1 : 0]) != effect.storage) {
++                const int destination = node->op == GGML_OP_CPY ? 1 : node->op == GGML_OP_SET_ROWS ? 2 : 0;
++                if (skippy_state_canonical_storage(node->src[destination]) != effect.storage) {
 +                    error = "delta-net state write at layer " + std::to_string(il) +
 +                        " does not target its registered storage";
 +                    return false;
@@ -6401,10 +6468,10 @@ index 000000000..beb86aaae
 +}
 diff --git a/src/skippy/tests/stage_slice_plan.cpp b/src/skippy/tests/stage_slice_plan.cpp
 new file mode 100644
-index 000000000..b7ad7c85e
+index 000000000..8336599ac
 --- /dev/null
 +++ b/src/skippy/tests/stage_slice_plan.cpp
-@@ -0,0 +1,1196 @@
+@@ -0,0 +1,1198 @@
 +#include "ggml.h"
 +#include "ggml-backend.h"
 +#include "ggml-cpu.h"
@@ -7581,9 +7648,11 @@ index 000000000..b7ad7c85e
 +
 +#include "residual_checkpoint_regression.h"
 +#include "input_leaf_state_regression.h"
++#include "cast_destination_regression.h"
 +
 +int main() {
-+    int result = check_input_leaf_state_inference();
++    int result = check_cast_destination_clone();
++    if (!result) { result = check_input_leaf_state_inference(); }
 +    if (!result) { result = check_raw_embedding_checkpoint(); }
 +    if (!result) { result = check_semantic_identities(); }
 +    if (!result) { result = check_tied_parameter_identity(); }
@@ -7602,10 +7671,10 @@ index 000000000..b7ad7c85e
 +    return result;
 +}
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index 6a681afc6..b3bff9139 100644
+index 4224a15ae..65108c82a 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -179,7 +179,15 @@ set(LLAMA_CONTEXT_TEST_SRC
+@@ -181,7 +181,15 @@ set(LLAMA_CONTEXT_TEST_SRC
  )
  llama_build(${LLAMA_CONTEXT_TEST_SRC})
  
@@ -7621,7 +7690,7 @@ index 6a681afc6..b3bff9139 100644
      # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
      llama_build_and_test(test-unicode.cpp  LABEL behavior  LINK llama)
      llama_build_and_test(test-sampling.cpp  LABEL behavior  LINK llama)
-@@ -251,6 +259,22 @@ set_tests_properties(test-generate-models PROPERTIES
+@@ -253,6 +261,22 @@ set_tests_properties(test-generate-models PROPERTIES
      FIXTURES_SETUP generate-models
  )
  
@@ -7644,7 +7713,7 @@ index 6a681afc6..b3bff9139 100644
  # Target model for test-speculative-rejection-sampling
  set(SPEC_TARGET_DIR "${CMAKE_CURRENT_BINARY_DIR}/test-speculative-models/target")
  file(MAKE_DIRECTORY "${SPEC_TARGET_DIR}")
-@@ -297,6 +321,10 @@ llama_test_cmd(python3
+@@ -299,6 +323,10 @@ llama_test_cmd(python3
  llama_build_and_test(test-json-schema.cpp  LABEL behavior)
  llama_build_and_test(test-chat-auto-parser.cpp  LABEL behavior  WORKING_DIRECTORY ${PROJECT_SOURCE_DIR})
  llama_build_and_test(test-chat-template.cpp  LABEL behavior)
@@ -7737,7 +7806,7 @@ index b9a407182..7cc5c57f6 100644
  
  static void test_cohere_reasoning_detection(testing & t) {
 diff --git a/tests/test-chat.cpp b/tests/test-chat.cpp
-index fa4525389..d8b562dd2 100644
+index 4d10815e5..4cc533f10 100644
 --- a/tests/test-chat.cpp
 +++ b/tests/test-chat.cpp
 @@ -453,6 +453,21 @@ static common_chat_tool special_function_tool{
@@ -7937,7 +8006,7 @@ index fa4525389..d8b562dd2 100644
                  "</tool_call>\n";
  
              bool got_runtime_error = false;
-@@ -7835,6 +7958,41 @@ static void test_template_generation_prompt() {
+@@ -7839,6 +7962,41 @@ static void test_template_generation_prompt() {
          check(tmpls, continuation_content(),   "<|im_start|>assistant\n<think>\nI'm thinking\n</think>\n\nHello, ");
          check(tmpls, continuation_reasoning(), "<|im_start|>assistant\n<think>\nI'm");
      }
@@ -7979,7 +8048,7 @@ index fa4525389..d8b562dd2 100644
  }
  
  // Test the developer role to system workaround with a simple mock template
-@@ -8448,6 +8606,7 @@ static void test_msg_diffs_compute() {
+@@ -8452,6 +8610,7 @@ static void test_msg_diffs_compute() {
  int main(int argc, char ** argv) {
      bool detailed_debug    = false;
      bool only_run_filtered = false;
@@ -7987,7 +8056,7 @@ index fa4525389..d8b562dd2 100644
  
      // Check for --template and --detailed flags
      for (int i = 1; i < argc; i++) {
-@@ -8465,9 +8624,19 @@ int main(int argc, char ** argv) {
+@@ -8469,9 +8628,19 @@ int main(int argc, char ** argv) {
              g_force_reconstruction_test = true;
              only_run_filtered          = true;
          }
@@ -8263,7 +8332,7 @@ index 000000000..cb1e775bb
 +    return 0;
 +}
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index d82d6db79..60ea8c544 100644
+index fe949f2c2..cef3f814b 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
 @@ -7,12 +7,14 @@
@@ -8340,7 +8409,7 @@ index d82d6db79..60ea8c544 100644
  
      uint32_t n_vocab = 128;
      uint32_t n_embd  = 256;
-@@ -259,7 +293,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -258,7 +292,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
          n_embd  = 512;
          n_head  = 8;
          n_ff    = 1024;
@@ -8349,7 +8418,7 @@ index d82d6db79..60ea8c544 100644
      } else if (arch == LLM_ARCH_DEEPSEEK41) {
          // window-only, Engram, ratio-2 and ratio-1 sources, top-k reuse and a candidate-masked index layer
          n_embd  = 512;
-@@ -301,6 +335,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -306,6 +340,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
          n_layer = 6; // 1 layer per stack x 2 h-cycles x (2 l-cycles + 1) cache slots
      }
  
@@ -8366,7 +8435,7 @@ index d82d6db79..60ea8c544 100644
      uint32_t n_head_kv = n_head;
      if (arch == LLM_ARCH_QWEN3) {
          n_head_kv = 1; // MQA coverage
-@@ -321,7 +365,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -326,7 +370,10 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
      ms.add_kv(LLM_KV_EMBEDDING_LENGTH,          n_embd);
      ms.add_kv(LLM_KV_FEATURES_LENGTH,           n_embd);
      ms.add_kv(LLM_KV_BLOCK_COUNT,               n_layer);
@@ -8378,7 +8447,7 @@ index d82d6db79..60ea8c544 100644
  
      if (arch == LLM_ARCH_K2_HORIZON) {
          ms.add_kv(LLM_KV_ROPE_SCALING_YARN_BETA_FAST, 128.0f);
-@@ -371,7 +418,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -389,7 +436,7 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
      if (arch == LLM_ARCH_DEEPSEEK4 || arch == LLM_ARCH_DEEPSEEK41) {
          ms.add_kv(LLM_KV_ATTENTION_KEY_LENGTH,   n_embd_head);
          ms.add_kv(LLM_KV_ATTENTION_VALUE_LENGTH, n_embd_head);
@@ -8387,7 +8456,7 @@ index d82d6db79..60ea8c544 100644
      } else if (arch == LLM_ARCH_DEEPSEEK2
              || arch == LLM_ARCH_DEEPSEEK32
              || arch == LLM_ARCH_GLM_DSA
-@@ -515,12 +562,45 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -531,12 +578,45 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
      // note: using a realistic top-k here makes the results unstable and hard to match between CPU and GPU
      //       a large value makes things deterministic since all data is selected by the indexer
      //ms.add_kv(LLM_KV_ATTENTION_INDEXER_TOP_K,        uint32_t(8));
@@ -8434,7 +8503,7 @@ index d82d6db79..60ea8c544 100644
      // mrope sections count rope pairs; Ling 3.0 VL files carry [t, h, w] sections
      // summing to n_rot / 2 (n_rot is 64 in this fixture)
      if (arch == LLM_ARCH_BAILINGMOE3) {
-@@ -528,7 +608,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -544,7 +624,6 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
      } else {
          ms.add_kv(LLM_KV_ROPE_DIMENSION_SECTIONS, std::vector<uint32_t>({n_embd_head/4, n_embd_head/4, n_embd_head/4, n_embd_head/4}));
      }
@@ -8442,7 +8511,7 @@ index d82d6db79..60ea8c544 100644
      if (arch == LLM_ARCH_HY_V4) {
          ms.add_kv(LLM_KV_HYPER_CONNECTION_COUNT,     uint32_t(4));
          ms.add_kv(LLM_KV_HYPER_CONNECTION_EPSILON,   1.0e-6f);
-@@ -554,13 +633,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -570,13 +649,15 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
      }
  
      if (arch == LLM_ARCH_DEEPSEEK4) {
@@ -8465,7 +8534,7 @@ index d82d6db79..60ea8c544 100644
          ms.add_kv(LLM_KV_HASH_LAYER_COUNT,                      uint32_t(0));
          ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,                      10.0f);
          ms.add_kv(LLM_KV_EXPERT_WEIGHTS_SCALE,                  1.0f);
-@@ -725,6 +806,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
+@@ -752,6 +833,16 @@ static gguf_context_ptr get_gguf_ctx(const llm_arch arch, const bool moe) {
          ggml_format_name(&t, "convnext.%" PRIu32 ".dw.weight", il);
          gguf_add_tensor(ms.gguf_ctx, &t);
      }
@@ -8482,7 +8551,7 @@ index d82d6db79..60ea8c544 100644
      return ret;
  }
  
-@@ -732,6 +823,61 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
+@@ -759,6 +850,61 @@ static bool silent_model_load_progress(float /*progress*/, void * /*user_data*/)
      return true;
  }
  
@@ -8544,7 +8613,7 @@ index d82d6db79..60ea8c544 100644
  static std::string get_tmp_gguf_path() {
      static size_t id = 0;
      return (std::filesystem::temp_directory_path() / ("test-llama-archs-" + std::to_string(++id) + ".gguf")).string();
-@@ -765,7 +911,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -792,7 +938,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
          struct gguf_context * gguf_ctx, FILE * file, const size_t seed, const float stdev,
          const std::vector<ggml_backend_dev_t> & devs,
          const llama_split_mode split_mode = LLAMA_SPLIT_MODE_LAYER, bool encode = false,
@@ -8555,7 +8624,7 @@ index d82d6db79..60ea8c544 100644
      llama_model_ptr model = get_model(gguf_ctx, file, seed, stdev, devs, split_mode, tensor_buft_overrides);
  
      llama_context_params ctx_params = llama_context_default_params();
-@@ -780,6 +928,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -807,6 +955,9 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
          ctx_params.moe_cache_size = moe_cache_size;
          ctx_params.n_ubatch = 2;
      }
@@ -8565,7 +8634,7 @@ index d82d6db79..60ea8c544 100644
  
      llama_context_ptr lctx(llama_init_from_model(model.get(), ctx_params));
      if (!lctx) {
-@@ -788,6 +939,17 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
+@@ -815,6 +966,17 @@ static std::pair<llama_model_ptr, llama_context_ptr> get_model_and_ctx(
      return std::make_pair(std::move(model), std::move(lctx));
  }
  
@@ -8583,7 +8652,7 @@ index d82d6db79..60ea8c544 100644
  static std::vector<float> get_logits(
          llama_model * model, llama_context * lctx, const std::vector<llama_token> & tokens, bool encode = false) {
      const uint32_t n_vocab  = llama_vocab_n_tokens(llama_model_get_vocab(model));
-@@ -1045,7 +1207,21 @@ static bool arch_supported(const llm_arch arch) {
+@@ -1071,7 +1233,21 @@ static bool arch_supported(const llm_arch arch) {
      return true;
  }
  
@@ -8606,7 +8675,7 @@ index d82d6db79..60ea8c544 100644
      struct user_data_t {
          struct {
              ggml_log_callback callback;
-@@ -1092,11 +1268,20 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
+@@ -1115,11 +1291,20 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
                  LOG_INF("%s: %s model (%s) is unsupported, skipping\n", __func__, llama_arch_name(arch), moe ? "MoE" : "dense");
                  continue;
              }
@@ -8628,7 +8697,7 @@ index d82d6db79..60ea8c544 100644
              const std::uintmax_t size = std::filesystem::file_size(path);
              LOG_CNT(" (%.2f MB)\n", (double) size / (1024.0 * 1024.0));
          }
-@@ -1276,6 +1461,12 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
+@@ -1296,6 +1481,12 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
                  char mixed_str[12] = {0};
  
                  bool skip = !arch_supported(arch) || (dc.split_mode == LLAMA_SPLIT_MODE_TENSOR && dc.devs.empty());
@@ -8641,7 +8710,7 @@ index d82d6db79..60ea8c544 100644
                  bool test_executed = false;
                  bool test_ok = true;
                  if (!skip) {
-@@ -1395,6 +1586,9 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
+@@ -1415,6 +1606,9 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
      return all_ok ? 0 : 1;
  }
  
@@ -8651,7 +8720,7 @@ index d82d6db79..60ea8c544 100644
  int main(int argc, char ** argv) {
      // init the logger at max verbosity. filter with a custom callback respecting the user-configure verbosity
      common_log_set_verbosity_thold(LOG_LEVEL_DEBUG);
-@@ -1408,11 +1602,50 @@ int main(int argc, char ** argv) {
+@@ -1428,11 +1622,50 @@ int main(int argc, char ** argv) {
      float stdev = 0.1f;
      std::string out;
      const char * target_backend = nullptr;
@@ -8704,7 +8773,7 @@ index d82d6db79..60ea8c544 100644
              usage(argv);
              return 0;
          } else if (strcmp(argv[i], "-a") == 0 || strcmp(argv[i], "--arch") == 0) {
-@@ -1490,8 +1723,84 @@ int main(int argc, char ** argv) {
+@@ -1510,8 +1743,84 @@ int main(int argc, char ** argv) {
      init_normal_pool(seed, stdev);
  
      try {
@@ -10619,5 +10688,5 @@ index 000000000..d09acccb4
 +    return 0;
 +}
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

@@ -201,14 +201,18 @@ So on every re-pin, in addition to the checks above:
 
 - Read `git log <old-pin>..<new-pin> -- src/llama-model-loader.* src/llama-model.*`
   for changes to load order, not just to signatures the patches touch.
-- Prove the staged load path with a real artifact whose first block is not
-  block 0. `cargo test -p skippy-package-builder` covers this via
-  `mid_stage_artifact_opens_with_the_stage_filter_applied`.
-- Confirm that test actually ran rather than skipped. It is gated on
-  `SKIPPY_CORRECTNESS_MODEL`; without it the test prints
-  `skipping mid-stage: SKIPPY_CORRECTNESS_MODEL is not set` and passes. Grep the
-  CI log for `mid_stage_artifact_opens_with_the_stage_filter_applied ... ok`, or
-  set the variable locally. A skipped gate reads identically to a pass.
+- Prove the graph-admitted load path with a real model and a stage whose first
+  block is greater than zero. Run `RUN_DENSE_CHAIN_SMOKE=1 scripts/skippy-ci-smoke.sh`
+  through `just with-lld`; its dense single-step and three-stage chain checks
+  open nonzero stage ranges and compare their output with the monolithic model.
+- Inspect `dense-binary.json` and `dense-chain.json` under the smoke report
+  directory. Require `matches: true` and confirm their `stage_models` include a
+  nonzero `layer_start`; a filtered test invocation that runs zero tests is not
+  evidence of a staged model load.
+- On Metal, also run `skippy-correctness core-parity` with `--n-gpu-layers 999`
+  and `--flash-attn enabled`, explicit model/split ranges, and both report paths.
+  Require both reports to match. This exercises the native mask-row inputs that
+  differ from the CPU smoke's disabled Flash Attention path.
 
 Compile each new public header once as C11 and once as C++17 with warnings
 treated as errors. For implementation moves, run the tests owned by the moved

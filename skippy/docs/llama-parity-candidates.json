@@ -1561,6 +1561,18 @@
       "family": "sensenova-u1",
       "status": "candidate",
       "notes": "new upstream llama.cpp source registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "clover-moe",
+      "family": "clover-moe",
+      "status": "candidate",
+      "notes": "new upstream decoder receives generated stage boundaries; no artifact certification recorded yet"
+    },
+    {
+      "llama_model": "metis16",
+      "family": "metis16",
+      "status": "needs_boundary_registration",
+      "unsupported_reason": "multi-pass graph is supported only as a whole model; pass-local routing and memory dependencies have no partition boundary contract"
     }
   ]
 }

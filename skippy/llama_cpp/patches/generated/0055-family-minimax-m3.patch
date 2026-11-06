@@ -9,7 +9,7 @@ separately and remain outside the primary decoder stage interval.
 
 ---
 diff --git a/src/models/minimax-m3.cpp b/src/models/minimax-m3.cpp
-index da283de2295f4d72870e70ea092980f611b95d1d..35e5a7be415ce06cc8e8928ff6cf4cb62c883cd2 100644
+index b88e5597edafd870724225d44ef68d110615fd29..42b49b33acdefac24f552403ab89103b207a4ade 100644
 --- a/src/models/minimax-m3.cpp
 +++ b/src/models/minimax-m3.cpp
 @@ -322,6 +322,8 @@ llama_model_minimax_m3::graph::graph(const llama_model & model, const llm_graph_

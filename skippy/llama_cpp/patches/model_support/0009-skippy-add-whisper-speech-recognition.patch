@@ -1,7 +1,7 @@
-From 20e61091409b6ba5af547cb09808789f6c2b85d6 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 22 Oct 2026 17:15:05 +1100
-Subject: [PATCH 09/10] skippy: add Whisper speech recognition
+Subject: [PATCH] skippy: add Whisper speech recognition
 
 Build pinned whisper.cpp on this tree's ggml targets and fold it into
 libllama when SKIPPY_WHISPER_SOURCE_DIR names its source, so the runtime
@@ -216,15 +216,15 @@ index 000000000..99d4a1094
 +
 +#endif // SKIPPY_ASR_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 54c87b6f2..4214d0b89 100644
+index e5daa38a2..80710eb3b 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 73
-+#define SKIPPY_ABI_VERSION_PATCH 74
+-#define SKIPPY_ABI_VERSION_PATCH 74
++#define SKIPPY_ABI_VERSION_PATCH 75
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -238,7 +238,7 @@ index 54c87b6f2..4214d0b89 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 93803e031..e8657d188 100644
+index c4712cad1..62694667f 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -97,6 +97,7 @@ add_library(llama
@@ -788,5 +788,5 @@ index 000000000..680549066
 +    delete result;
 +}
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

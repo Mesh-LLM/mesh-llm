@@ -1,7 +1,7 @@
-From 72831ebb41fd5dd3d334f2b1b6750b030957f641 Mon Sep 17 00:00:00 2001
+From 7e2f9358e16d3032a382048fcad68fc314ac6db6 Mon Sep 17 00:00:00 2001
 From: Mesh-LLM CI <ci@mesh-llm.local>
 Date: Wed, 28 Oct 2026 20:57:15 +1300
-Subject: [PATCH 11/11] grammar: match literal lazy triggers without regex
+Subject: [PATCH 11/15] grammar: match literal lazy triggers without regex
 
 ---
  src/llama-grammar.cpp                   | 10 ++++
@@ -32,10 +32,10 @@ index 4e096a368..96772743d 100644
          // get from the first matched capturing group to the end of the string
          size_t start = std::string::npos;
 diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
-index b3bff9139..6280cc50c 100644
+index 65108c82a..bb1ab68d2 100644
 --- a/tests/CMakeLists.txt
 +++ b/tests/CMakeLists.txt
-@@ -189,10 +189,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
+@@ -191,10 +191,8 @@ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
      llama_build_and_test(test-skippy-kv-cells-contiguous.cpp)
      llama_build_and_test(test-skippy-recurrent-state-roundtrip.cpp)
      # these tests are disabled on Windows because they use internal functions not exported with LLAMA_API (when building with shared libraries)
@@ -126,5 +126,5 @@ index 000000000..6df57b5c6
 +    return 0;
 +}
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

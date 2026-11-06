@@ -1,7 +1,7 @@
-From fe10ef28575f8a90f1c533784727b8824d37e1eb Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sun, 27 Sep 2026 21:12:21 +1000
-Subject: [PATCH 06/10] models: add Laya decision model support
+Subject: [PATCH] models: add Laya decision model support
 
 Port ggml-org/llama.cpp#29363 (head 6367bdd2da) onto the pinned revision:
 the LAYA architecture, GGUF keys and tensor names, the laya-multilingual
@@ -69,15 +69,15 @@ index 571841a60..ac091dd24 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 2902b7279..4da8a4664 100644
+index d04825da4..54c87b6f2 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
 @@ -46,7 +46,7 @@ extern "C" {
  
  #define SKIPPY_ABI_VERSION_MAJOR 0
  #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 70
-+#define SKIPPY_ABI_VERSION_PATCH 72
+-#define SKIPPY_ABI_VERSION_PATCH 71
++#define SKIPPY_ABI_VERSION_PATCH 73
  
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -264,10 +264,10 @@ index 000000000..002fac598
 +
 +#endif // SKIPPY_LAYA_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index f57e574de..5b787f49c 100644
+index 4276b95e3..91c7aad92 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -93,6 +93,8 @@ add_library(llama
+@@ -95,6 +95,8 @@ add_library(llama
              skippy/tokenization.cpp
              skippy/events.cpp
              skippy/system_one.cpp
@@ -276,7 +276,7 @@ index f57e574de..5b787f49c 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -121,7 +123,7 @@ set_source_files_properties(${LLAMA_MODELS_SOURCES}
+@@ -123,7 +125,7 @@ set_source_files_properties(${LLAMA_MODELS_SOURCES}
  
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  
@@ -286,7 +286,7 @@ index f57e574de..5b787f49c 100644
  target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
  # Upstream added a models.h PCH for the llama target. The Skippy stage
 diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
-index ee3ae30b2..67c04c414 100644
+index 27c9404f0..a79bcc647 100644
 --- a/src/llama-arch.cpp
 +++ b/src/llama-arch.cpp
 @@ -22,6 +22,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
@@ -297,7 +297,7 @@ index ee3ae30b2..67c04c414 100644
      { LLM_ARCH_NOMIC_BERT,       "nomic-bert"       },
      { LLM_ARCH_NOMIC_BERT_MOE,   "nomic-bert-moe"   },
      { LLM_ARCH_NEO_BERT,         "neo-bert"         },
-@@ -246,6 +247,13 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
+@@ -248,6 +249,13 @@ static const std::map<llm_kv, const char *> LLM_KV_NAMES = {
      { LLM_KV_NUM_DEEPSTACK_LAYERS,              "%s.n_deepstack_layers"                },
      { LLM_KV_DEEPSTACK_MAPPING,                 "%s.deepstack_mapping"                 },
      { LLM_KV_HIDDEN_ACT,                        "%s.hidden_activation"                 },
@@ -311,7 +311,7 @@ index ee3ae30b2..67c04c414 100644
      { LLM_KV_POOLING_TYPE,                      "%s.pooling_type"                      },
      { LLM_KV_LOGIT_SCALE,                       "%s.logit_scale"                       },
      { LLM_KV_DECODER_START_TOKEN_ID,            "%s.decoder_start_token_id"            },
-@@ -606,6 +614,18 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
+@@ -644,6 +652,18 @@ static const std::map<llm_tensor, const char *> LLM_TENSOR_NAMES = {
      { LLM_TENSOR_DECISION_QUERY,                         "decision.query" },
      { LLM_TENSOR_DECISION_OPTION_MLP,                    "decision.option_mlp" },
      { LLM_TENSOR_DECISION_QUERY_MLP,                     "decision.query_mlp" },
@@ -330,7 +330,7 @@ index ee3ae30b2..67c04c414 100644
      { LLM_TENSOR_ENC_OUTPUT_NORM,                        "enc.output_norm" },
      { LLM_TENSOR_FFN_GATE_INP_SHEXP,                     "blk.%d.ffn_gate_inp_shexp" },
      { LLM_TENSOR_SSM_A_NOSCAN,                           "blk.%d.ssm_a" },
-@@ -916,6 +936,18 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
+@@ -954,6 +974,18 @@ static const std::map<llm_tensor, llm_tensor_info> LLM_TENSOR_INFOS = {
      {LLM_TENSOR_DECISION_QUERY,             {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
      {LLM_TENSOR_DECISION_OPTION_MLP,        {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
      {LLM_TENSOR_DECISION_QUERY_MLP,         {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}},
@@ -349,7 +349,7 @@ index ee3ae30b2..67c04c414 100644
      {LLM_TENSOR_DENSE_2_OUT,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}}, // Dense layer output
      {LLM_TENSOR_DENSE_3_OUT,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL_MAT}}, // Dense layer output
      {LLM_TENSOR_OUTPUT_NORM,                {LLM_TENSOR_LAYER_OUTPUT,    GGML_OP_MUL}},
-@@ -1459,6 +1491,7 @@ bool llama_arch_supports_save(llm_arch arch) {
+@@ -1529,6 +1561,7 @@ bool llama_arch_supports_save(llm_arch arch) {
          case LLM_ARCH_STEP35:
          case LLM_ARCH_CLEF: // the head tensors are not saved
          case LLM_ARCH_VLLM_DECISION2:
@@ -358,7 +358,7 @@ index ee3ae30b2..67c04c414 100644
              return false;
          default:
 diff --git a/src/llama-arch.h b/src/llama-arch.h
-index aeb85e33f..4b23ab8af 100644
+index 15c5de096..e34000631 100644
 --- a/src/llama-arch.h
 +++ b/src/llama-arch.h
 @@ -26,6 +26,7 @@ enum llm_arch {
@@ -369,7 +369,7 @@ index aeb85e33f..4b23ab8af 100644
      LLM_ARCH_NOMIC_BERT,
      LLM_ARCH_NOMIC_BERT_MOE,
      LLM_ARCH_NEO_BERT,
-@@ -249,6 +250,13 @@ enum llm_kv {
+@@ -251,6 +252,13 @@ enum llm_kv {
      LLM_KV_NUM_DEEPSTACK_LAYERS,
      LLM_KV_DEEPSTACK_MAPPING,
      LLM_KV_HIDDEN_ACT,
@@ -383,7 +383,7 @@ index aeb85e33f..4b23ab8af 100644
      LLM_KV_POOLING_TYPE,
      LLM_KV_LOGIT_SCALE,
      LLM_KV_DECODER_START_TOKEN_ID,
-@@ -787,6 +795,18 @@ enum llm_tensor {
+@@ -825,6 +833,18 @@ enum llm_tensor {
      LLM_TENSOR_DECISION_QUERY,
      LLM_TENSOR_DECISION_OPTION_MLP,
      LLM_TENSOR_DECISION_QUERY_MLP,
@@ -403,10 +403,10 @@ index aeb85e33f..4b23ab8af 100644
      LLM_TENSOR_CONVNEXT_DW,
      LLM_TENSOR_CONVNEXT_NORM,
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 9d72cc106..9d9f5c46a 100644
+index 259e18f09..c01d52571 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -377,6 +377,11 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+@@ -383,6 +383,11 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
              return new llama_model_kolibri1(params);
          case LLM_ARCH_INKLING:
              return new llama_model_inkling(params);
@@ -418,7 +418,7 @@ index 9d72cc106..9d9f5c46a 100644
          default:
              throw std::runtime_error(std::string("unsupported model architecture: '") + llm_arch_name(arch) + "'");
      }
-@@ -2947,6 +2952,7 @@ llama_memory_i * llama_model::create_memory(
+@@ -3020,6 +3025,7 @@ llama_memory_i * llama_model::create_memory(
          case LLM_ARCH_EUROBERT:
          case LLM_ARCH_WAVTOKENIZER_DEC:
          case LLM_ARCH_MODERN_BERT:
@@ -426,7 +426,7 @@ index 9d72cc106..9d9f5c46a 100644
          case LLM_ARCH_GEMMA_EMBEDDING:
          case LLM_ARCH_GEMMA_EMBEDDING2:
          case LLM_ARCH_DREAM:
-@@ -3773,6 +3779,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -3843,6 +3849,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_BERT:
          case LLM_ARCH_JINA_BERT_V3:
          case LLM_ARCH_MODERN_BERT:
@@ -2807,5 +2807,5 @@ index 000000000..8a713d563
 +// run one forward pass; returns 0 on success, non-zero on failure
 +LLAMA_API int laya_encode(laya_context * ctx, const laya_batch & batch, laya_result & result);
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 
