@@ -98,6 +98,9 @@ impl Tree {
                 {
                     return Err("prepared trees require regular files or regular-file links".into());
                 }
+                if entry.file_name() == "pyvenv.cfg" {
+                    verify_python_venv_config(&entry.path())?;
+                }
                 if entry
                     .path()
                     .extension()
@@ -127,6 +130,35 @@ impl Tree {
         }
         Ok(hex::encode(hash.finalize()))
     }
+}
+
+fn verify_python_venv_config(path: &Path) -> DynResult<()> {
+    let bytes = crate::automation::receipt_files::bounded(&path.canonicalize()?, 1024 * 1024)?;
+    let mut seen_site_packages = false;
+    for line in std::str::from_utf8(&bytes)?.lines().map(str::trim) {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (key, value) = line
+            .split_once('=')
+            .ok_or("prepared pyvenv.cfg requires key=value entries")?;
+        let key = key.trim();
+        if key.is_empty() {
+            return Err("prepared pyvenv.cfg requires nonempty keys".into());
+        }
+        if key.eq_ignore_ascii_case("include-system-site-packages") {
+            // System paths can execute unpinned .pth/sitecustomize hooks before
+            // the client imports. Reject ambiguous or non-boolean declarations.
+            if seen_site_packages || !value.trim().eq_ignore_ascii_case("false") {
+                return Err("prepared environment must disable system site-packages".into());
+            }
+            seen_site_packages = true;
+        }
+    }
+    if !seen_site_packages {
+        return Err("prepared pyvenv.cfg must explicitly disable system site-packages".into());
+    }
+    Ok(())
 }
 
 fn verify_python_path_file(path: &Path, root: &Path) -> DynResult<()> {
@@ -190,7 +222,34 @@ impl Tools {
             "fixed_complete_AgentX_comparison"
         }
     }
+
+    fn verify_client_environment(&self) -> DynResult<()> {
+        absolute(&self.client_environment.path)?;
+        verify_python_venv_config(&self.client_environment.path.join("pyvenv.cfg")).map_err(
+            |error| -> crate::command::DynError {
+                format!("prepared client environment requires an isolated root pyvenv.cfg: {error}")
+                    .into()
+            },
+        )?;
+        // Python checks the executable directory first. Probe the actual path,
+        // including case-insensitive filesystem resolution, rather than relying
+        // only on directory-entry spelling during the generic tree walk.
+        for directory in ["bin", "Scripts"] {
+            let config = self
+                .client_environment
+                .path
+                .join(directory)
+                .join("pyvenv.cfg");
+            match std::fs::symlink_metadata(&config) {
+                Ok(_) => verify_python_venv_config(&config)?,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Ok(())
+    }
     pub(super) fn pin(&mut self) -> DynResult<()> {
+        self.verify_client_environment()?;
         for file in [
             &mut self.skippy,
             &mut self.llama,
@@ -210,6 +269,7 @@ impl Tools {
         Ok(())
     }
     pub(super) fn verify(&self, root: &Path) -> DynResult<()> {
+        self.verify_client_environment()?;
         for source in [
             &self.product_source_commit,
             &self.native_source_commit,

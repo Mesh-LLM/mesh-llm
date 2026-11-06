@@ -8,7 +8,7 @@ use super::summary::BinaryRequestSummary;
 use crate::binary_transport::WireCondition;
 use crate::binary_transport::binary_kv::{
     accumulate_shared_prefill_tokens, maybe_prefix_cache_control, maybe_record_binary_full_prefill,
-    take_shared_prefill_tokens,
+    prepare_prefix_cache_control, take_shared_prefill_tokens,
 };
 use crate::binary_transport::direct_return::PredictionReturnSinks;
 use crate::binary_transport::peer_sampling::runtime_sampling_config;
@@ -381,7 +381,7 @@ pub(super) fn handle_prefix_cache_control(
     let token_ids =
         token_sideband_or_fill(&message).context("read prefix cache control token sideband")?;
     let scheduler_config = config.clone();
-    let scheduler_kv = kv.cloned();
+    let prepared = prepare_prefix_cache_control(config, kv, session_key, &message, &token_ids);
     let scheduler_telemetry = telemetry.clone();
     let scheduler_session_key = session_key.to_string();
     let scheduler_message = message.clone();
@@ -391,7 +391,7 @@ pub(super) fn handle_prefix_cache_control(
             Ok(maybe_prefix_cache_control(
                 &scheduler_config,
                 runtime,
-                scheduler_kv.as_ref(),
+                prepared.as_ref(),
                 &scheduler_telemetry,
                 &scheduler_session_key,
                 &scheduler_message,

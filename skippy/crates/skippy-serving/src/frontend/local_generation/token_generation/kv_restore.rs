@@ -10,7 +10,7 @@ impl StageOpenAiBackend {
         session_id: &str,
         ids: &InferenceGenerationIds,
         prefill_tokens: &[i32],
-        identities: &[PrefillKvIdentity],
+        prepared: &crate::kv_integration::PreparedExactStateRestore,
         kv_identity_ms: f64,
         cache_stats: &mut GenerationCacheStats,
     ) -> (bool, usize, Option<i32>) {
@@ -22,10 +22,10 @@ impl StageOpenAiBackend {
         let estimated_cold_prefill_ms = self
             .generation_service_estimator
             .estimated_prefill_ms(prefill_tokens.len());
-        let exact = kv.restore_exact_state_with_cold_cost(
+        let exact = kv.restore_prepared_exact_state(
             runtime,
             session_id,
-            identities,
+            prepared,
             estimated_cold_prefill_ms,
         );
         let exact = match exact {
@@ -120,7 +120,12 @@ impl StageOpenAiBackend {
                     .emit("stage.openai_kv_lookup_decision", attrs);
             }
             Ok(None) => {
-                match kv.restore_resident_prefix(runtime, session_id, identities, prefill_tokens) {
+                match kv.restore_resident_prefix(
+                    runtime,
+                    session_id,
+                    prepared.identities(),
+                    prefill_tokens,
+                ) {
                     Ok(Some(restored)) => {
                         restored_prefill = true;
                         cache_stats.status = "hit";
@@ -191,7 +196,7 @@ impl StageOpenAiBackend {
             );
             attrs.insert(
                 "skippy.kv.identity_count".to_string(),
-                json!(identities.len()),
+                json!(prepared.identities().len()),
             );
             self.telemetry.emit_debug("stage.openai_kv_timing", attrs);
         }
