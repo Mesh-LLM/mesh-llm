@@ -2807,5 +2807,5 @@ index 000000000..8a713d563
 +// run one forward pass; returns 0 on success, non-zero on failure
 +LLAMA_API int laya_encode(laya_context * ctx, const laya_batch & batch, laya_result & result);
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

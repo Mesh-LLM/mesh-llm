@@ -347,8 +347,10 @@ fn local_generation_signal_window_uses_configured_value() {
     let iteration_scheduler =
         IterationScheduler::new(runtime.clone(), &config, 1, true, None, telemetry.clone())
             .unwrap();
+    let runtime_lane_admission = runtime.lock().unwrap().lane_admission();
     let backend = StageOpenAiBackend {
         runtime,
+        runtime_lane_admission,
         workload: Default::default(),
         config,
         telemetry,
@@ -841,8 +843,10 @@ fn local_generation_eventually_delivers_receipts_and_cleanup_survives_sink_error
     let speculative = SpeculativeDecodeConfig::default();
     let iteration_scheduler =
         IterationScheduler::new(runtime.clone(), &config, 1, true, None, telemetry.clone())?;
+    let runtime_lane_admission = runtime.lock().unwrap().lane_admission();
     let backend = StageOpenAiBackend {
         runtime: runtime.clone(),
+        runtime_lane_admission,
         workload: Default::default(),
         config,
         telemetry,

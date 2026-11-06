@@ -420,8 +420,10 @@ mod tests {
             telemetry.clone(),
         )
         .unwrap();
+        let runtime_lane_admission = runtime.lock().unwrap().lane_admission();
         let backend = StageOpenAiBackend {
             runtime: runtime.clone(),
+            runtime_lane_admission,
             workload: Default::default(),
             config: stage_config.clone(),
             telemetry,

@@ -153,6 +153,23 @@ use a diagnostic scope and distinct MLflow run keys and capacity tags, so they
 cannot replace an automatic-capacity comparison. Prepared environments reject
 executable `.pth` hooks and path entries outside the pinned environment; remove
 unsupported hooks while preparing the offline environment before pinning it.
+In particular, the locked setuptools wheel installs `distutils-precedence.pth`,
+which imports `_distutils_hack` and is rejected by `pin`. For the Linux/macOS
+environment created by `just agentx-setup`, remove that specific hook before
+pinning (replace the absolute path with the prepared environment you own):
+
+```bash
+client_environment=/absolute/path/to/skippy/evals/agentx/.venv
+test -f "$client_environment/pyvenv.cfg"
+site_packages="$client_environment/lib/python3.12/site-packages"
+test -d "$site_packages"
+rm -f -- "$site_packages/distutils-precedence.pth"
+```
+
+This preparation is for the offline benchmark client, not a package-building
+environment. A later dependency sync may reinstall the hook, so prepare and pin
+again after syncing. Other executable hooks remain rejected; inspect them
+individually rather than removing every `.pth` file or weakening admission.
 The prepared llama executable and every non-system native dependency are inspected
 as ELF or Mach-O before a baseline is admitted. Loader search paths and resolved
 libraries must stay inside `standard_runtime`; ELF shared objects need their own
