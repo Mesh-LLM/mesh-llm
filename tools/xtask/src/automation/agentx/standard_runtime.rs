@@ -5,6 +5,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
+// CUDA vendor libraries can exceed 512 MiB; keep native-image inspection bounded
+// independently of the much smaller automation inputs and receipts.
+const MAX_NATIVE_IMAGE_BYTES: u64 = 1024 * 1024 * 1024;
+
 struct Imports {
     libraries: Vec<String>,
     search: Vec<String>,
@@ -96,7 +100,10 @@ fn is_library(path: &Path) -> bool {
 }
 
 fn inspect(path: &Path) -> DynResult<Imports> {
-    let bytes = crate::automation::receipt_files::bounded(path, 512 * 1024 * 1024)?;
+    if std::fs::symlink_metadata(path)?.len() > MAX_NATIVE_IMAGE_BYTES {
+        return Err("standard runtime native image exceeds inspection bound".into());
+    }
+    let bytes = crate::automation::receipt_files::bounded(path, MAX_NATIVE_IMAGE_BYTES)?;
     match goblin::Object::parse(&bytes)? {
         goblin::Object::Elf(image) => Ok(Imports {
             libraries: image
@@ -270,6 +277,30 @@ mod tests {
         }
         bytes[512..512 + strings.len()].copy_from_slice(&strings);
         std::fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn large_native_image_preserves_imports_and_rejects_oversized_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = dir.path().join("liblarge.so");
+        elf(&library, Some("libggml.so"), Some("$ORIGIN"));
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&library)
+            .unwrap();
+        file.set_len(512 * 1024 * 1024 + 4096).unwrap();
+
+        let imports = inspect(&library).unwrap();
+        assert_eq!(imports.libraries, ["libggml.so"]);
+        assert_eq!(imports.search, ["$ORIGIN"]);
+        assert!(!imports.macho);
+
+        file.set_len(MAX_NATIVE_IMAGE_BYTES + 1).unwrap();
+        let error = inspect(&library).err().unwrap();
+        assert_eq!(
+            error.to_string(),
+            "standard runtime native image exceeds inspection bound"
+        );
     }
 
     #[test]
