@@ -1,10 +1,14 @@
 //! Reject unusable terminal tool responses before returning non-streaming success.
 use super::{ParsedChatMessage, tool_calls_requested};
 use serde_json::Value;
-use skippy_inference_api::{ChatCompletionRequest, FinishReason, InferenceError, InferenceResult};
+#[cfg(test)]
+use skippy_inference_api::chat::ChatCompletionRequest;
+use skippy_inference_api::{
+    FinishReason, InferenceError, InferenceResult, generation::GenerationRequest,
+};
 
 pub(in crate::frontend) fn validate(
-    request: &ChatCompletionRequest,
+    request: &GenerationRequest,
     finish_reason: FinishReason,
     parsed: Option<&ParsedChatMessage>,
 ) -> InferenceResult<()> {
@@ -51,11 +55,14 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn request() -> ChatCompletionRequest {
-        serde_json::from_value(json!({"model":"test","messages":[],"tools":[{
-            "type":"function","function":{"name":"buzz__send","parameters":{"type":"object"}}
-        }]}))
+    fn request() -> GenerationRequest {
+        serde_json::from_value::<ChatCompletionRequest>(
+            json!({"model":"test","messages":[],"tools":[{
+                "type":"function","function":{"name":"buzz__send","parameters":{"type":"object"}}
+            }]}),
+        )
         .unwrap()
+        .into()
     }
 
     #[test]

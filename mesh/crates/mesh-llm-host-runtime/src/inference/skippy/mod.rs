@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
 #[cfg(test)]
+use skippy_inference_api::chat::ChatCompletionRequest;
+#[cfg(test)]
 use std::path::PathBuf;
 
 mod certification;
@@ -51,10 +53,11 @@ use async_trait::async_trait;
 use skippy_inference_api::thinking::ThinkingControls;
 use skippy_inference_api::{
     AudioResponse, AudioSpeechRequest, AudioTranscriptionRequest, AudioTranscriptionResponse,
-    ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, CompletionRequest,
-    CompletionResponse, CompletionStream, EmbeddingResponse, EmbeddingsRequest, GuardrailMode,
-    GuardrailPolicy, GuardrailPolicyHandle, InferenceBackend, InferenceHookPolicy,
+    CompletionRequest, CompletionResponse, CompletionStream, EmbeddingResponse, EmbeddingsRequest,
+    GuardrailMode, GuardrailPolicy, GuardrailPolicyHandle, InferenceBackend, InferenceHookPolicy,
     InferenceRequestContext, InferenceResult, ModelObject, RerankRequest, RerankResponse,
+    generation::GenerationEventStream, generation::GenerationRequest,
+    generation::GenerationResponse,
 };
 use skippy_protocol::{FlashAttentionType, LoadMode, StageConfig};
 use skippy_runtime::{ModelInfo, MtpSource};
@@ -472,7 +475,7 @@ fn wrap_host_guardrail_backend(
 
 #[async_trait]
 impl InferenceBackend for SkippyModelHandle {
-    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> InferenceResult<u32> {
+    async fn count_chat_tokens(&self, request: GenerationRequest) -> InferenceResult<u32> {
         self.backend.count_chat_tokens(request).await
     }
 
@@ -482,16 +485,16 @@ impl InferenceBackend for SkippyModelHandle {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         self.backend.chat_completion(request).await
     }
 
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         self.backend.chat_completion_stream(request, context).await
     }
 
@@ -786,7 +789,7 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingHostBackend {
-        seen_chat: Mutex<Option<ChatCompletionRequest>>,
+        seen_chat: Mutex<Option<GenerationRequest>>,
     }
 
     #[async_trait]
@@ -797,10 +800,10 @@ mod tests {
 
         async fn chat_completion(
             &self,
-            request: ChatCompletionRequest,
-        ) -> InferenceResult<ChatCompletionResponse> {
+            request: GenerationRequest,
+        ) -> InferenceResult<GenerationResponse> {
             *self.seen_chat.lock().expect("seen chat lock poisoned") = Some(request.clone());
-            Ok(ChatCompletionResponse::new(
+            Ok(GenerationResponse::new(
                 request.model,
                 "ok",
                 skippy_inference_api::Usage::new(0, 0),
@@ -809,9 +812,9 @@ mod tests {
 
         async fn chat_completion_stream(
             &self,
-            _request: ChatCompletionRequest,
+            _request: GenerationRequest,
             _context: InferenceRequestContext,
-        ) -> InferenceResult<ChatCompletionStream> {
+        ) -> InferenceResult<GenerationEventStream> {
             Err(InferenceError::unsupported(
                 "streaming is not needed by this host wrapper test",
             ))
@@ -1132,7 +1135,9 @@ mod tests {
             Some(8),
             None,
         );
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
+        let request: GenerationRequest = serde_json::from_value::<
+            skippy_inference_api::chat::ChatCompletionRequest,
+        >(json!({
             "model": "Qwen3-8B-Q4_K_M",
             "messages": [
                 {"role": "tool", "content": "large intermediate result", "tool_call_id": "call_1"},
@@ -1140,7 +1145,8 @@ mod tests {
             ],
             (MESH_COMPACT_FIELD): true
         }))
-        .expect("valid compacting request");
+        .expect("valid compacting request")
+        .into();
 
         wrapped
             .chat_completion(request)
@@ -1177,13 +1183,14 @@ mod tests {
             Some(8192),
             None,
         );
-        let request: ChatCompletionRequest = serde_json::from_value(json!({
+        let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
             "model": "Qwen3-8B-Q4_K_M",
             "messages": [{"role": "user", "content": "look this up"}],
             "tools": [{"type": "function", "function": {"name": "lookup"}}],
             "tool_choice": "auto"
         }))
-        .expect("valid tool request");
+        .expect("valid tool request")
+        .into();
 
         wrapped.chat_completion(request.clone()).await.unwrap();
         assert_eq!(
