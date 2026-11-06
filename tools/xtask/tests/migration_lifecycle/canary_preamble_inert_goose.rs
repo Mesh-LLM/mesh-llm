@@ -419,6 +419,11 @@ exec "$REAL_AUTOMATION" "$@"
         format!(
             r#"set -euo pipefail
 ROOT="$PWD"
+TRUSTED_ROOT="$ROOT"
+STATE_DIR="$ROOT"
+repair_recovery_controller="$MESH_LLM_AUTOMATION_BIN"
+LLAMA_STAGE_BUILD_DIR="$ROOT/native"
+LLAMA_STAGE_BACKEND=metal
 HARNESS_MODE=repair-build
 AGENT_PROVIDER=fixture_provider
 AGENT_MODEL=fixture_model
