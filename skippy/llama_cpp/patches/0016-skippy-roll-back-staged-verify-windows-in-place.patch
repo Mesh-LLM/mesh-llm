@@ -1,4 +1,4 @@
-From ebc80ca207b945a7f8c152f1da950cf3c2fd4192 Mon Sep 17 00:00:00 2001
+From 99841b3f7fe774e647c5f4bfbc4e97d0c16f5872 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 29 Oct 2026 21:32:31 +1100
 Subject: [PATCH] skippy: roll back staged verify windows in place
@@ -92,7 +92,7 @@ index 0fe373d78..6d9028a18 100644
  LLAMA_API enum skippy_status skippy_export_kv_page(
          struct skippy_session * session,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 20410597a..78adbf353 100644
+index baa891c56..7abccc924 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -62,6 +62,7 @@ add_library(llama
@@ -153,9 +153,9 @@ index 20410597a..78adbf353 100644
 +    set_tests_properties(skippy_recurrent_retention_qwen35 PROPERTIES
 +        FIXTURES_REQUIRED skippy-noalloc-qwen35-fixture ENVIRONMENT "SKIPPY_RS_SEQ=")
 +
-     add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp skippy/tests/resident_checkpoint_gpu.cpp)
-     target_include_directories(skippy-sampling-history PRIVATE .)
-     target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
+     add_executable(skippy-sampling-history
+         skippy/tests/sampling_history.cpp
+         skippy/tests/resident_checkpoint_gpu.cpp
 diff --git a/src/skippy-verify-checkpoint.h b/src/skippy-verify-checkpoint.h
 index 8793000c1..f6ce0295e 100644
 --- a/src/skippy-verify-checkpoint.h
@@ -492,10 +492,10 @@ index 84ead575c..965880071 100644
          batch.pos[i] = session->n_past;
          batch.n_seq_id[i] = 1;
 diff --git a/src/skippy/resident_prefix.cpp b/src/skippy/resident_prefix.cpp
-index 42769ba7c..418ebabaf 100644
+index 51a214152..317c96b46 100644
 --- a/src/skippy/resident_prefix.cpp
 +++ b/src/skippy/resident_prefix.cpp
-@@ -184,7 +184,7 @@ skippy_status restore_checkpoint(skippy_session * session, int32_t cache_seq_id,
+@@ -169,7 +169,7 @@ skippy_status restore_checkpoint(skippy_session * session, int32_t cache_seq_id,
      session->token_history = std::move(history);
      session->signal_history.clear();
      skippy_mtp_clear_session_state(session);
@@ -1960,6 +1960,3 @@ index d09acccb4..8d68604c3 100644
 +    if (skippy_retire_verify_checkpoint_exact(checkpoints, 30, 4, &retired)) return 10;
      return 0;
  }
--- 
-2.56.0
-

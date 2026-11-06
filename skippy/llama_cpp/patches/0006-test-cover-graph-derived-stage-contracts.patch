@@ -1,4 +1,4 @@
-From c5d75f3e73933b6f4faec5284ef6c41ba908d237 Mon Sep 17 00:00:00 2001
+From 0d42741aff4ab1eef021b64ae4d8f1c6d6c1fff1 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:43 +1100
 Subject: [PATCH] test(skippy): cover live graph and state contracts
@@ -18,9 +18,10 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  src/skippy/tests/profile_residency.cpp        |  258 +++
  .../tests/renamed_multishard_planning.cpp     | 1659 +++++++++++++++++
  src/skippy/tests/resident_checkpoint_gpu.cpp  |  287 +++
+ .../tests/resident_checkpoint_writer.cpp      |  126 ++
  .../tests/residual_checkpoint_regression.h    |   52 +
  src/skippy/tests/runtime_events.cpp           |  695 +++++++
- src/skippy/tests/sampling_history.cpp         |  967 ++++++++++
+ src/skippy/tests/sampling_history.cpp         |  974 ++++++++++
  src/skippy/tests/stage_plan_header.c          |   10 +
  src/skippy/tests/stage_plan_header.cpp        |   13 +
  src/skippy/tests/stage_slice_plan.cpp         | 1196 ++++++++++++
@@ -41,7 +42,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  tests/test-skippy-rerank-template.cpp         |   34 +
  tests/test-skippy-sampling-suppress.cpp       |   90 +
  ...st-skippy-verify-checkpoint-retirement.cpp |   26 +
- 37 files changed, 11740 insertions(+), 32 deletions(-)
+ 38 files changed, 11873 insertions(+), 32 deletions(-)
  create mode 100644 src/skippy/tests/embedding_input_regression.h
  create mode 100644 src/skippy/tests/graph_build_inputs.cpp
  create mode 100644 src/skippy/tests/graph_contract_cases.cmake
@@ -56,6 +57,7 @@ Subject: [PATCH] test(skippy): cover live graph and state contracts
  create mode 100644 src/skippy/tests/profile_residency.cpp
  create mode 100644 src/skippy/tests/renamed_multishard_planning.cpp
  create mode 100644 src/skippy/tests/resident_checkpoint_gpu.cpp
+ create mode 100644 src/skippy/tests/resident_checkpoint_writer.cpp
  create mode 100644 src/skippy/tests/residual_checkpoint_regression.h
  create mode 100644 src/skippy/tests/runtime_events.cpp
  create mode 100644 src/skippy/tests/sampling_history.cpp
@@ -5699,6 +5701,138 @@ index 000000000..691e92c37
 +    ok(status, error);
 +    return passed ? 0 : 1;
 +}
+diff --git a/src/skippy/tests/resident_checkpoint_writer.cpp b/src/skippy/tests/resident_checkpoint_writer.cpp
+new file mode 100644
+index 000000000..d08029062
+--- /dev/null
++++ b/src/skippy/tests/resident_checkpoint_writer.cpp
+@@ -0,0 +1,126 @@
++#include "llama-io.h"
++#include "ggml-alloc.h"
++#include "ggml-backend.h"
++#include "ggml-cpu.h"
++
++#include <array>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <stdexcept>
++#include <vector>
++
++int skippy_test_resident_checkpoint_writer();
++
++namespace {
++
++#define CHECK(condition) do { if (!(condition)) { \
++    std::fprintf(stderr, "resident writer check failed: %s at %s:%d\n", #condition, __FILE__, __LINE__); \
++    std::exit(1); } } while (0)
++
++// Preserve the previous resident writer as the byte-layout oracle. Both paths
++// consume the same metadata and actual backend tensor ranges in serialize().
++class previous_resident_writer final : public llama_io_write_i {
++public:
++    void write(const void * source, size_t bytes) override {
++        const auto * data = static_cast<const uint8_t *>(source);
++        if (bytes) { payload.insert(payload.end(), data, data + bytes); }
++    }
++    void write_tensor(ggml_tensor * tensor, size_t offset, size_t bytes) override {
++        const size_t start = payload.size();
++        payload.resize(start + bytes);
++        if (bytes) { ggml_backend_tensor_get(tensor, payload.data() + start, offset, bytes); }
++    }
++    size_t n_bytes() override { return payload.size(); }
++    std::vector<uint8_t> payload;
++};
++
++struct source_tensor {
++    ggml_context * context;
++    ggml_backend_buffer_t buffer;
++    ggml_tensor * tensor;
++
++    source_tensor() {
++        context = ggml_init({ggml_tensor_overhead() + 1024, nullptr, true});
++        CHECK(context != nullptr);
++        tensor = ggml_new_tensor_1d(context, GGML_TYPE_I8, 16);
++        buffer = ggml_backend_alloc_ctx_tensors_from_buft(context, ggml_backend_cpu_buffer_type());
++        CHECK(buffer != nullptr);
++        const std::array<uint8_t, 16> bytes = {1, 4, 9, 16, 25, 36, 49, 64, 81, 100, 121, 144, 169, 196, 225, 0};
++        ggml_backend_tensor_set(tensor, bytes.data(), 0, bytes.size());
++    }
++    ~source_tensor() {
++        ggml_backend_buffer_free(buffer);
++        ggml_free(context);
++    }
++};
++
++void serialize(llama_io_write_i & writer, ggml_tensor * tensor) {
++    const uint32_t header = 0x17294381;
++    const uint16_t separator = 0x5317;
++    writer.write(&header, sizeof(header));
++    writer.write_tensor(tensor, 4, 8);
++    writer.write(&separator, sizeof(separator));
++    writer.write_tensor(tensor, 0, 4);
++}
++
++void byte_layout_and_deferred_reads(ggml_tensor * tensor) {
++    previous_resident_writer previous;
++    serialize(previous, tensor);
++    std::vector<uint8_t> actual(previous.n_bytes(), 0xa5);
++    const auto * destination = actual.data();
++    auto writer = llama_io_write_host_create(actual.data(), actual.size());
++    serialize(*writer, tensor);
++    CHECK(writer->n_bytes() == previous.n_bytes());
++    CHECK(actual.data() == destination);
++    // Metadata is already written, while both queued tensor spans remain
++    // untouched until the explicit destruction that precedes publication.
++    CHECK(std::memcmp(actual.data(), previous.payload.data(), sizeof(uint32_t)) == 0);
++    CHECK(std::memcmp(actual.data() + 12, previous.payload.data() + 12, sizeof(uint16_t)) == 0);
++    for (size_t i : {4u, 5u, 6u, 7u, 8u, 9u, 10u, 11u, 14u, 15u, 16u, 17u}) {
++        CHECK(actual[i] == 0xa5);
++    }
++    writer.reset();
++    CHECK(actual == previous.payload);
++}
++
++void bounded_writes_and_error_flush(ggml_tensor * tensor) {
++    std::array<uint8_t, 16> guarded;
++    guarded.fill(0xa5);
++    auto writer = llama_io_write_host_create(guarded.data() + 2, 12);
++    const uint32_t header = 0x17294381;
++    writer->write(&header, sizeof(header));
++    writer->write_tensor(tensor, 4, 8);
++    bool metadata_rejected = false;
++    try { writer->write(&header, sizeof(header)); }
++    catch (const std::runtime_error &) { metadata_rejected = true; }
++    CHECK(metadata_rejected && writer->n_bytes() == 12);
++    bool tensor_rejected = false;
++    try { writer->write_tensor(tensor, 0, 1); }
++    catch (const std::runtime_error &) { tensor_rejected = true; }
++    CHECK(tensor_rejected && writer->n_bytes() == 12);
++    writer.reset();
++    previous_resident_writer previous;
++    previous.write(&header, sizeof(header));
++    previous.write_tensor(tensor, 4, 8);
++    CHECK(std::memcmp(guarded.data() + 2, previous.payload.data(), previous.n_bytes()) == 0);
++    CHECK(guarded[0] == 0xa5 && guarded[1] == 0xa5 && guarded[14] == 0xa5 && guarded[15] == 0xa5);
++
++    // n_bytes is the actual serialized count, not the supplied capacity: the
++    // resident caller can reject a changed measurement before publication.
++    writer = llama_io_write_host_create(guarded.data() + 2, 12);
++    writer->write(&header, sizeof(header));
++    CHECK(writer->n_bytes() == sizeof(header) && writer->n_bytes() != 12);
++    writer.reset();
++}
++
++} // namespace
++
++int skippy_test_resident_checkpoint_writer() {
++    source_tensor source;
++    byte_layout_and_deferred_reads(source.tensor);
++    bounded_writes_and_error_flush(source.tensor);
++    std::puts("resident checkpoint writer: byte layout, deferred reads and bounds passed");
++    return 0;
++}
 diff --git a/src/skippy/tests/residual_checkpoint_regression.h b/src/skippy/tests/residual_checkpoint_regression.h
 new file mode 100644
 index 000000000..31734bf56
@@ -6460,10 +6594,10 @@ index 000000000..00a6ff0ec
 +}
 diff --git a/src/skippy/tests/sampling_history.cpp b/src/skippy/tests/sampling_history.cpp
 new file mode 100644
-index 000000000..ec345c761
+index 000000000..5db14606e
 --- /dev/null
 +++ b/src/skippy/tests/sampling_history.cpp
-@@ -0,0 +1,967 @@
+@@ -0,0 +1,974 @@
 +#include "skippy.h"
 +#include "../runtime_types.h"
 +#include "../sampling_internal.h"
@@ -6488,6 +6622,7 @@ index 000000000..ec345c761
 +    std::exit(1); } } while (0)
 +
 +int skippy_test_resident_checkpoint_gpu(const char * model_path, skippy_runtime_config config);
++int skippy_test_resident_checkpoint_writer();
 +
 +namespace {
 +
@@ -7348,6 +7483,12 @@ index 000000000..ec345c761
 +} // namespace
 +
 +int main(int argc, char ** argv) {
++    // Keep this CPU-only serialization regression in the existing canonical
++    // sampling/resident fixture roster as well as its focused invocation.
++    skippy_test_resident_checkpoint_writer();
++    if (argc == 2 && std::strcmp(argv[1], "resident-writer") == 0) {
++        return 0;
++    }
 +    if (argc == 2 && std::strcmp(argv[1], "resident-gpu-long") == 0) {
 +        const char * model_path = std::getenv("SKIPPY_NATIVE_TEST_REAL_MODEL");
 +        if (!model_path) { std::fprintf(stderr, "SKIPPY_NATIVE_TEST_REAL_MODEL is unset; skipping real GPU checkpoint proof\n"); return 77; }
@@ -12371,6 +12512,3 @@ index 000000000..d09acccb4
 +    if (skippy_retire_verify_checkpoint_exact(checkpoints, 10, 3)) return 6;
 +    return 0;
 +}
--- 
-2.54.0 (Apple Git-157)
-
