@@ -153,8 +153,10 @@ pub(super) fn recurrent_test_backend_with_lanes(
     let speculative = SpeculativeDecodeConfig::default();
     let iteration_scheduler =
         IterationScheduler::new(runtime.clone(), &config, 1, true, None, telemetry.clone())?;
+    let runtime_lane_admission = runtime.lock().unwrap().lane_admission();
     let backend = StageOpenAiBackend {
         runtime: runtime.clone(),
+        runtime_lane_admission,
         workload: Default::default(),
         config,
         telemetry,

@@ -1,4 +1,4 @@
-From 688f4ec814c474f154317728f0d1c5ee0ee329f1 Mon Sep 17 00:00:00 2001
+From 29c8f07109674c0d59daee626cf5d889aa48ae45 Mon Sep 17 00:00:00 2001
 From: James Dumay <jameswdumay@gmail.com>
 Date: Sat, 17 Oct 2026 03:37:10 +1100
 Subject: [PATCH] fix(muse-glimmer): parse implicit reasoning continuations
@@ -42,5 +42,5 @@ index c6be5a10a..57887bc73 100644
          // generation prompt, so the output starts at " to=".
          tst.test(" to=special_function<|message|>" + call_markup)
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

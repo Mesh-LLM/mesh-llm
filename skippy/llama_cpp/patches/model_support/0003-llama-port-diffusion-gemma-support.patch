@@ -1,4 +1,4 @@
-From e6dcdbba87caf5c75eaf42a5490b834ef609a57e Mon Sep 17 00:00:00 2001
+From d397025ddc9684e91d05274b0f9ae89cfb4cfa63 Mon Sep 17 00:00:00 2001
 From: Daniel Han <danielhanchen@gmail.com>
 Date: Sun, 20 Sep 2026 11:16:21 +1000
 Subject: [PATCH] llama: port DiffusionGemma support
@@ -18,12 +18,13 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
  .../diffusion-gemma-server.cpp                | 189 ++++
  .../diffusion-gemma-visual-server.cpp         | 388 ++++++++
  examples/diffusion/diffusion-cli.cpp          | 548 +++++++++--
- examples/diffusion/diffusion.cpp              | 289 ++++++
+ examples/diffusion/diffusion.cpp              | 291 ++++++
  examples/diffusion/diffusion.h                |  38 +
  ggml/src/ggml-cuda/diffusion-sampling.cu      | 178 ++++
  ggml/src/ggml-cuda/diffusion-sampling.cuh     |  19 +
  ggml/src/ggml-cuda/ggml-cuda.cu               |   4 +
  include/llama.h                               |  49 +
+ src/CMakeLists.txt                            |  14 +
  src/llama-arch.cpp                            |  15 +
  src/llama-arch.h                              |   7 +
  src/llama-context.cpp                         |  32 +-
@@ -33,8 +34,9 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
  src/models/diffusion-gemma.cpp                | 854 ++++++++++++++++++
  src/models/gemma4-common.h                    | 126 +++
  src/models/models.h                           |  60 ++
- tests/test-llama-archs.cpp                    |  23 +-
- 25 files changed, 3057 insertions(+), 97 deletions(-)
+ src/skippy/tests/diffusion_host_fallback.cpp  | 111 +++
+ tests/test-llama-archs.cpp                    |  44 +-
+ 27 files changed, 3203 insertions(+), 99 deletions(-)
  create mode 100644 examples/diffusion-gemma-eval/CMakeLists.txt
  create mode 100644 examples/diffusion-gemma-eval/diffusion-gemma-eval.cpp
  create mode 100644 examples/diffusion-gemma-server/CMakeLists.txt
@@ -44,6 +46,7 @@ Signed-off-by: Michael Neale <14976+michaelneale@users.noreply.github.com>
  create mode 100644 ggml/src/ggml-cuda/diffusion-sampling.cuh
  create mode 100644 src/models/diffusion-gemma.cpp
  create mode 100644 src/models/gemma4-common.h
+ create mode 100644 src/skippy/tests/diffusion_host_fallback.cpp
 
 diff --git a/common/arg.cpp b/common/arg.cpp
 index 8b302d5d7..6e8ec8651 100644
@@ -1692,7 +1695,7 @@ index c64611356..7f036913a 100644
  
      llama_free(ctx);
 diff --git a/examples/diffusion/diffusion.cpp b/examples/diffusion/diffusion.cpp
-index 0ff57d953..cf5c0e149 100644
+index 0ff57d953..f752c18b6 100644
 --- a/examples/diffusion/diffusion.cpp
 +++ b/examples/diffusion/diffusion.cpp
 @@ -8,7 +8,9 @@
@@ -1766,7 +1769,7 @@ index 0ff57d953..cf5c0e149 100644
  
                      llama_token_data_array cur_p = {
                          candidates.data(),
-@@ -404,3 +432,264 @@ void diffusion_generate(llama_context *          ctx,
+@@ -404,3 +432,266 @@ void diffusion_generate(llama_context *          ctx,
  
      n_generated = params.max_length;
  }
@@ -1836,7 +1839,6 @@ index 0ff57d953..cf5c0e149 100644
 +    // canvas, reading the cached prefix - instead of re-decoding [prompt|canvas] every step.
 +    // The canvas logits row base is re-resolved from output_ids after each decode below: a capped
 +    // n_outputs_max compacts the flagged canvas rows to 0, while an uncapped pass keeps them at n_input.
-+    int32_t logit_off = params.kv_cache ? 0 : n_input;
 +    if (params.kv_cache) {
 +        llama_diffusion_set_sc(model, nullptr, 0.0f, 1.0f, false);
 +        // Chunked causal PREFILL: feed the prompt in ubatch-sized chunks, each writing its K/V to the store and
@@ -1912,18 +1914,8 @@ index 0ff57d953..cf5c0e149 100644
 +
 +        // Stage-1: when on, skip the 268 MB logits D2H + host reductions and sample on the GPU from sc_dev.
 +        const bool gpu_reduce  = dev_sc && device_sample_ok;
-+        const bool want_logits = !gpu_reduce;
-+        const float * logits = nullptr;                           // canvas rows packed: [C or max_length, n_vocab]
-+        if (want_logits) {
-+            logits = llama_get_logits(ctx);
-+            const float * first_canvas = llama_get_logits_ith(ctx, params.kv_cache ? 0 : n_input);
-+            if (first_canvas == nullptr) {
-+                LOG_ERR("%s: canvas logits row missing at step %d\n", __func__, step_idx);
-+                decode_failed = true;
-+                break;
-+            }
-+            logit_off = (int32_t) (first_canvas - logits) / n_vocab;
-+        } else {
++        const float * logits = nullptr;                           // first canvas row, resolved before host use
++        if (gpu_reduce) {
 +            llama_synchronize(ctx);                               // sc_dev write must complete before we read it
 +        }
 +
@@ -1936,7 +1928,7 @@ index 0ff57d953..cf5c0e149 100644
 +        // per position: argmax, entropy of softmax(raw/t), and a multinomial sample; stash raw row for SC
 +        auto worker = [&](int32_t p0, int32_t p1) {
 +            for (int32_t pos = p0; pos < p1; pos++) {
-+                const float * row = logits + (size_t) (logit_off + pos) * n_vocab;
++                const float * row = logits + (size_t) pos * n_vocab;
 +                float m = -INFINITY; int32_t amax = 0;
 +                for (int32_t v = 0; v < n_vocab; v++) {
 +                    const float z = row[v] * temp_inv;
@@ -1966,6 +1958,13 @@ index 0ff57d953..cf5c0e149 100644
 +            }
 +        };
 +        auto run_host_worker = [&]() {
++            // Resolve output_ids on every host entry, including the first device-sampling fallback.
++            // n_outputs_max can compact canvas rows to zero instead of their batch-token offset.
++            logits = llama_get_logits_ith(ctx, params.kv_cache ? 0 : n_input);
++            if (logits == nullptr) {
++                LOG_ERR("%s: canvas logits row missing at step %d\n", __func__, step_idx);
++                return false;
++            }
 +            std::vector<std::thread> pool;
 +            const int32_t chunk = (C + (int32_t) nth - 1) / (int32_t) nth;
 +            for (unsigned ti = 0; ti < nth; ti++) {
@@ -1974,6 +1973,7 @@ index 0ff57d953..cf5c0e149 100644
 +                if (p0 < p1) { pool.emplace_back(worker, p0, p1); }
 +            }
 +            for (auto & th : pool) { th.join(); }
++            return true;
 +        };
 +
 +        if (gpu_reduce) {
@@ -1987,11 +1987,16 @@ index 0ff57d953..cf5c0e149 100644
 +                    LOG_WRN("%s: on-device sampling unsupported on this backend; using host sampling\n", __func__);
 +                    device_sample_ok = false;
 +                }
-+                if (!logits) { logits = llama_get_logits(ctx); }
-+                run_host_worker();
++                if (!run_host_worker()) {
++                    decode_failed = true;
++                    break;
++                }
 +            }
 +        } else {
-+            run_host_worker();
++            if (!run_host_worker()) {
++                decode_failed = true;
++                break;
++            }
 +        }
 +
 +        // accept the lowest-entropy positions within the MI bound (sum of strictly-earlier entropies <= bound)
@@ -2375,6 +2380,31 @@ index f48e0e063..14a68a681 100644
      LLAMA_API int32_t llama_model_n_ctx_train  (const struct llama_model * model);
      LLAMA_API int32_t llama_model_n_embd       (const struct llama_model * model);
      LLAMA_API int32_t llama_model_n_embd_inp   (const struct llama_model * model);
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index a4fbfac19..eeb0553e6 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -223,6 +223,20 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     target_compile_features(skippy-model-fixture-generator PRIVATE cxx_std_17)
+     target_include_directories(skippy-model-fixture-generator PRIVATE .)
+     target_link_libraries(skippy-model-fixture-generator PRIVATE llama-common)
++
++    set(DIFFUSION_FALLBACK_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/diffusion-fallback-models")
++    file(MAKE_DIRECTORY "${DIFFUSION_FALLBACK_FIXTURE_DIR}")
++    add_test(NAME skippy_generate_diffusion_fallback COMMAND skippy-model-fixture-generator
++        --arch "^diffusion-gemma$" --seed 42 --out "${DIFFUSION_FALLBACK_FIXTURE_DIR}")
++    set_tests_properties(skippy_generate_diffusion_fallback PROPERTIES FIXTURES_SETUP diffusion-fallback-model)
++    add_executable(skippy-diffusion-host-fallback
++        skippy/tests/diffusion_host_fallback.cpp ../examples/diffusion/diffusion.cpp)
++    target_include_directories(skippy-diffusion-host-fallback PRIVATE . ../examples/diffusion)
++    target_compile_features(skippy-diffusion-host-fallback PRIVATE cxx_std_17)
++    target_link_libraries(skippy-diffusion-host-fallback PRIVATE llama-common)
++    add_test(NAME skippy_diffusion_host_fallback COMMAND skippy-diffusion-host-fallback
++        "${DIFFUSION_FALLBACK_FIXTURE_DIR}/diffusion-gemma-moe.gguf")
++    set_tests_properties(skippy_diffusion_host_fallback PROPERTIES FIXTURES_REQUIRED diffusion-fallback-model)
+     set(MTP_WIDTH_FIXTURE_DIR "${CMAKE_CURRENT_BINARY_DIR}/mtp-width-models")
+     file(MAKE_DIRECTORY "${MTP_WIDTH_FIXTURE_DIR}")
+     add_test(NAME skippy_generate_mtp_width COMMAND skippy-model-fixture-generator
 diff --git a/src/llama-arch.cpp b/src/llama-arch.cpp
 index 89e1fc386..512fadfd9 100644
 --- a/src/llama-arch.cpp
@@ -3655,11 +3685,136 @@ index fc5e5b61d..1eaa9b576 100644
  struct llama_model_gemma4_assistant : public llama_model_base {
      llama_model_gemma4_assistant(const struct llama_model_params & params) : llama_model_base(params) {}
      void load_arch_hparams(llama_model_loader & ml) override;
+diff --git a/src/skippy/tests/diffusion_host_fallback.cpp b/src/skippy/tests/diffusion_host_fallback.cpp
+new file mode 100644
+index 000000000..3d714fb1a
+--- /dev/null
++++ b/src/skippy/tests/diffusion_host_fallback.cpp
+@@ -0,0 +1,111 @@
++#include "diffusion.h"
++#include "ggml-backend.h"
++
++#include <algorithm>
++#include <cmath>
++#include <cstdio>
++#include <vector>
++
++namespace {
++constexpr int prompt_size = 4;
++constexpr int canvas_size = 16;
++
++struct observation {
++    llama_context * ctx;
++    bool device;
++    bool valid = true;
++    int steps = 0;
++};
++
++bool observe_step(int32_t step, int32_t total, const llama_token * tokens, int32_t count, void * user) {
++    auto & seen = *static_cast<observation *>(user);
++    const int vocab = llama_vocab_n_tokens(llama_model_get_vocab(llama_get_model(seen.ctx)));
++    const float * canvas = llama_get_logits_ith(seen.ctx, prompt_size);
++    // Enforce the regression's layout: only the canvas is output, packed from row zero.
++    seen.valid &= count == prompt_size + canvas_size && canvas == llama_get_logits(seen.ctx);
++    if (!canvas) {
++        seen.valid = false;
++        return false;
++    }
++    const float inv_temp = 1.0f / (0.4f + (0.8f - 0.4f) * float(total - step) / float(total));
++    for (int pos = 0; pos < canvas_size; ++pos) {
++        const float * row = llama_get_logits_ith(seen.ctx, prompt_size + pos);
++        seen.valid &= row == canvas + size_t(pos) * vocab;
++        if (!row) {
++            seen.valid = false;
++            return false;
++        }
++        float maximum = -INFINITY;
++        int argmax = 0;
++        for (int v = 0; v < vocab; ++v) {
++            const float value = row[v] * inv_temp;
++            if (value > maximum) {
++                maximum = value;
++                argmax = v;
++            }
++        }
++        seen.valid &= tokens[prompt_size + pos] == argmax;
++    }
++    if (seen.device) {
++        // A CPU-resident model must take the unsupported-device fallback, even in a CUDA build.
++        std::vector<float> draws(canvas_size, 0.5f), entropy(canvas_size);
++        std::vector<int> argmax(canvas_size), sampled(canvas_size);
++        seen.valid &= !llama_diffusion_device_sample(llama_get_model(seen.ctx), draws.data(), argmax.data(),
++                                                     entropy.data(), sampled.data(), canvas_size, inv_temp);
++    }
++    ++seen.steps;
++    return seen.valid;
++}
++
++bool run(llama_model * model, bool device) {
++    auto context_params = llama_context_default_params();
++    context_params.n_ctx = 128;
++    context_params.n_batch = 32;
++    context_params.n_ubatch = 32;
++    context_params.n_outputs_max = canvas_size;
++    context_params.n_threads = 2;
++    context_params.n_threads_batch = 2;
++    llama_context * ctx = llama_init_from_model(model, context_params);
++    if (!ctx) {
++        return false;
++    }
++    observation seen { ctx, device };
++    const std::vector<llama_token> prompt { 1, 2, 3, 4 };
++    std::vector<llama_token> output(prompt_size + canvas_size, -1);
++    diffusion_eb_params params;
++    params.max_length = int(output.size());
++    params.max_denoising_steps = 2;
++    params.confidence_threshold = -1.0f;
++    params.seed = 42;
++    params.gpu_sampling = device;
++    params.gpu_sample_reduce = device;
++    params.step_callback = observe_step;
++    params.step_callback_user_data = &seen;
++    int32_t generated = 0;
++    diffusion_generate_entropy_bound(ctx, prompt.data(), output.data(), prompt_size, params, generated);
++    const bool ok = seen.valid && seen.steps == 2 && generated == int(output.size()) &&
++                    std::equal(prompt.begin(), prompt.end(), output.begin());
++    llama_free(ctx);
++    return ok;
++}
++} // namespace
++
++int main(int argc, char ** argv) {
++    if (argc != 2) {
++        return 1;
++    }
++    llama_backend_init();
++    ggml_backend_load_all();
++    auto params = llama_model_default_params();
++    params.n_gpu_layers = 0;
++    llama_model * model = llama_model_load_from_file(argv[1], params);
++    const bool ok = model && run(model, false) && run(model, true);
++    if (model) {
++        llama_model_free(model);
++    }
++    llama_backend_free();
++    if (!ok) {
++        std::fprintf(stderr, "compacted diffusion host/device-fallback logits mismatch\n");
++    }
++    return ok ? 0 : 1;
++}
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
-index 18257fb2e..69313f903 100644
+index 18257fb2e..dc98baa72 100644
 --- a/tests/test-llama-archs.cpp
 +++ b/tests/test-llama-archs.cpp
-@@ -350,8 +350,11 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -10,6 +10,7 @@
+ // TODO: replace with #include "llama-ext.h" in the future
+ #include "../src/llama-arch.h"
+ #include "../src/llama-model-saver.h"
++#include "../src/llama-model.h"
+ 
+ #include <cinttypes>
+ #include <cmath>
+@@ -350,8 +351,11 @@ static gguf_context_ptr get_gguf_ctx(
          // SWA pattern: every 5th layer is full attention (matches E2B layer_types)
          ms.add_kv(LLM_KV_ATTENTION_SLIDING_WINDOW_PATTERN, uint32_t(5));
      } else if (arch == LLM_ARCH_COHERE2MOE || arch == LLM_ARCH_MIMO2 || arch == LLM_ARCH_STEP35 || arch == LLM_ARCH_SPARK2_5 ||
@@ -3673,7 +3828,7 @@ index 18257fb2e..69313f903 100644
          std::vector<uint32_t> pattern;
          pattern.reserve(n_layer);
          for (uint32_t il = 0; il < n_layer; il++) {
-@@ -555,6 +558,16 @@ static gguf_context_ptr get_gguf_ctx(
+@@ -555,6 +559,16 @@ static gguf_context_ptr get_gguf_ctx(
          ms.add_kv(LLM_KV_SWIGLU_CLAMP_EXP,   std::vector<float>({0.0f, 4.0f}));
          ms.add_kv(LLM_KV_SWIGLU_CLAMP_SHEXP, std::vector<float>({0.0f, 5.0f}));
      }
@@ -3690,7 +3845,7 @@ index 18257fb2e..69313f903 100644
      ms.add_kv(LLM_KV_WKV_HEAD_SIZE,               n_embd/n_head);
      ms.add_kv(LLM_KV_SHORTCONV_L_CACHE,           uint32_t(3));
      ms.add_kv(LLM_KV_RESIDUAL_SCALE,              3.5565588200778455f);
-@@ -844,6 +857,7 @@ static bool moe_mandatory(const llm_arch arch) {
+@@ -844,6 +858,7 @@ static bool moe_mandatory(const llm_arch arch) {
          case LLM_ARCH_DEEPSEEK2:
          case LLM_ARCH_DEEPSEEK32:
          case LLM_ARCH_DOTS3NOTE:
@@ -3698,7 +3853,41 @@ index 18257fb2e..69313f903 100644
          case LLM_ARCH_DEEPSEEK4:
          case LLM_ARCH_GLM4_MOE:
          case LLM_ARCH_GLM_DSA:
-@@ -1166,7 +1180,10 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
+@@ -1017,7 +1032,10 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
+             if (!moe && moe_mandatory(arch)) {
+                 continue;
+             }
+-            if (!llama_model_saver_supports_arch(arch) || !arch_supported(arch)) {
++            // This numeric fixture preserves the original per-layer SWA metadata;
++            // the production model saver cannot round-trip that metadata yet.
++            const bool diffusion_fixture = arch == LLM_ARCH_DIFFUSION_GEMMA && moe;
++            if ((!llama_model_saver_supports_arch(arch) && !diffusion_fixture) || !arch_supported(arch)) {
+                 LOG_INF("%s: %s model (%s) is unsupported, skipping\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense");
+                 continue;
+             }
+@@ -1033,7 +1051,20 @@ static int save_models(const std::string & arch_filter, const size_t seed, const
+             const std::string path = dir + "/" + llm_arch_name(arch) + (moe ? "-moe.gguf" : "-dense.gguf");
+             LOG_INF("%s: Saving %s model (%s) to %s...\n", __func__, llm_arch_name(arch), moe ? "MoE" : "dense", path.c_str());
+             begin_fixture_write(path);
+-            llama_model_save_to_file(model_and_ctx.first.get(), path.c_str());
++            if (diffusion_fixture) {
++                gguf_context_ptr fixture(gguf_init_empty());
++                gguf_set_kv(fixture.get(), gguf_ctx.get());
++                // The model owns real tensors initialized by set_tensor_data(seed, stdev).
++                // GGUF's writer reads their backend buffers, retaining every populated weight.
++                for (const auto & entry : model_and_ctx.first->tensors_by_name) {
++                    gguf_add_tensor(fixture.get(), entry.second);
++                }
++                if (!gguf_write_to_file(fixture.get(), path.c_str(), false)) {
++                    throw std::runtime_error("cannot write diffusion model fixture " + path);
++                }
++            } else {
++                llama_model_save_to_file(model_and_ctx.first.get(), path.c_str());
++            }
+             require_fixture_written(path);
+         }
+     }
+@@ -1166,7 +1197,10 @@ static int test_backends(const std::string & arch_filter, const size_t seed, con
              continue;
          }
  
@@ -3711,5 +3900,5 @@ index 18257fb2e..69313f903 100644
              if (moe && !moe_implemented(arch)) {
                  continue;
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

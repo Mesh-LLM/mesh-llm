@@ -1,4 +1,4 @@
-From a60cc7f36eb6bf628cf37af55eb2e6eefa337945 Mon Sep 17 00:00:00 2001
+From aeaae91b2e5449ebb1aba294fc623795d9a26a5b Mon Sep 17 00:00:00 2001
 From: Codex <codex@openai.com>
 Date: Sun, 20 Sep 2026 11:38:59 +1000
 Subject: [PATCH] skippy: query diffusion canvas length
@@ -68,5 +68,5 @@ index d0c51d87a..9cbe792ae 100644
          struct skippy_model * model,
          const llama_token * prompt_tokens,
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

@@ -1,4 +1,4 @@
-From 3a1e7caf283b9570f2718eef9fa7908d9ff51c29 Mon Sep 17 00:00:00 2001
+From a7d8ae9b5694cca8f8df2cedbee12a2ced064180 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sun, 27 Sep 2026 21:12:21 +1000
 Subject: [PATCH] models: add Laya decision model support
@@ -265,7 +265,7 @@ index 000000000..002fac598
 +
 +#endif // SKIPPY_LAYA_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index f4889950f..59aad17bf 100644
+index 38b8b5de6..8ad710459 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -99,6 +99,8 @@ add_library(llama
@@ -2812,5 +2812,5 @@ index 000000000..8a713d563
 +// run one forward pass; returns 0 on success, non-zero on failure
 +LLAMA_API int laya_encode(laya_context * ctx, const laya_batch & batch, laya_result & result);
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

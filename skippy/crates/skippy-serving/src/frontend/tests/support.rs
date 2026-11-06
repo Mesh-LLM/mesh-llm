@@ -135,8 +135,10 @@ pub(super) fn local_openai_backend(
     );
     let iteration_scheduler =
         IterationScheduler::new(runtime.clone(), &config, 1, true, None, telemetry.clone())?;
+    let runtime_lane_admission = runtime.lock().unwrap().lane_admission();
     Ok(StageOpenAiBackend {
         runtime,
+        runtime_lane_admission,
         workload: Default::default(),
         telemetry,
         config,
