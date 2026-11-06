@@ -8,6 +8,12 @@ schema; Metal runs natively through the same local owner. This foundation is
 not selected by ordinary CI and does not qualify deferred long-c4/L3/performance
 checks. See `skippy/evals/kv-validation/README.md`.
 
+The optional AgentX comparison owner consumes the pinned external client and
+locked environment in `skippy/evals/agentx/`. The November 6 maintainer decision
+admits this bounded dependency through `ci/python-tooling-policy.json`.
+`agentx-setup` uses installed Python 3.12 without interpreter downloads;
+campaign workers use prepared inputs offline. This adds no required CI lane.
+
 Every workflow disables Rust debug information for the dev, test, release and
 bench profiles through workflow- or job-level `CARGO_PROFILE_<PROFILE>_DEBUG=0`.
 Reusable workflows set their own environment, and the Linux test, client and

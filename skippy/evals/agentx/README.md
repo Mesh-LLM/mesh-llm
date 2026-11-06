@@ -27,6 +27,17 @@ runtime, tokenizer snapshot and corpus. External directory links/editable
 environments are refused; internal aliases such as `lib64 -> lib` are pinned
 without traversal, and regular-file interpreter links are hashed by content.
 
+Setup requires `uv` and an already installed CPython 3.12. `just agentx-setup`
+uses `--locked --no-managed-python --no-python-downloads --python 3.12` against
+the repository's exact AgentX project; it does not install an interpreter.
+The repository's Python-tooling policy admits only this setup invocation and
+the reviewed manifest/lock: 132 exact dependency pins plus the virtual project.
+The AgentX wheel URL is fixed in both the manifest and lock, with SHA-256
+`0f9a9e85ec7f9273bfc96de00a492daf9898acfb66cfeeb6aba85a07c89e8a2f`.
+Changing that wheel or any dependency pin requires an explicit policy update.
+This external-client allowance does not permit repository Python source or
+additional interpreter/install commands.
+
 Place the tokenizer snapshot in its pinned Hugging Face cache layout and set
 `HF_HUB_CACHE` (or `HF_HOME`) to that cache before pinning and running. The
 offline client receives the catalog's repository ID and exact revision; pinning

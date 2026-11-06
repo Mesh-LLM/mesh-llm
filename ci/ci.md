@@ -8,6 +8,12 @@ jobs without dispatching them. Native Metal uses the local worker command.
 No automatic GPU/model fan-out or required-check topology changes accompany
 this foundation. See `skippy/evals/kv-validation/README.md` for its bounded scope.
 
+The optional AgentX comparison uses a separately prepared, pinned upstream
+client environment. Its manifest, lock, wheel identity and setup invocation are
+admitted by `ci/python-tooling-policy.json` under the November 6 maintainer
+decision. Setup requires installed Python 3.12; workers remain offline. The
+allowance changes no required-check topology or generic Python tooling policy.
+
 All workflows disable Rust debug information with workflow- or job-level
 `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`,
 `CARGO_PROFILE_RELEASE_DEBUG=0` and `CARGO_PROFILE_BENCH_DEBUG=0`.
