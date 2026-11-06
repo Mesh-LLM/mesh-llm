@@ -1,4 +1,4 @@
-From 17c7592946694c523a778376eb4b41104d179373 Mon Sep 17 00:00:00 2001
+From 322efaf72e8506c12bcc5823033ba4bc1ccc0bf4 Mon Sep 17 00:00:00 2001
 From: Jared Wyles <jared.wyles@gmail.com>
 Date: Mon, 2 Nov 2026 09:00:00 +1100
 Subject: [PATCH] skippy: report native trace spans and GPU command timing
@@ -1460,7 +1460,7 @@ index 000000000..e9e57357c
 +
 +#endif // SKIPPY_TRACING_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index a4fbfac19..071532cab 100644
+index c7793b071..592550c42 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -98,6 +98,7 @@ add_library(llama
@@ -2058,7 +2058,7 @@ index 22269c506..b98adbd7f 100644
      for (size_t request_index = 0; request_index < request_count; ++request_index) {
          const auto & request = requests[request_index];
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
-index 5bfd47c93..d01e1a12d 100644
+index 727bdd6d3..6186123f5 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
 @@ -22,6 +22,7 @@
@@ -2069,7 +2069,7 @@ index 5bfd47c93..d01e1a12d 100644
  #include "../vendor/nlohmann/json.hpp"
  
  #include <algorithm>
-@@ -756,7 +757,10 @@ enum skippy_status skippy_finish_model_open(
+@@ -761,7 +762,10 @@ enum skippy_status skippy_finish_model_open(
      }
  
      const skippy_graph_build_inputs graph_build_inputs = skippy_graph_build_inputs_from_config(config);
@@ -2080,9 +2080,9 @@ index 5bfd47c93..d01e1a12d 100644
      if (stage_model->ctx == nullptr) {
          const char * message = "failed to create llama context";
          if (event_scope != nullptr) {
-@@ -863,7 +867,10 @@ enum skippy_status skippy_finish_model_open(
-         llama_context_params mtp_params = params;
-         mtp_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
+@@ -870,7 +874,10 @@ enum skippy_status skippy_finish_model_open(
+         // MTP consumes raw multirow outputs, without session backend samplers.
+         mtp_params.n_outputs_max_per_seq = 0;
          mtp_params.embeddings = false;
 +        skippy_trace::scope mtp_trace("llama.context_init");
 +        mtp_trace.set_detail("mtp");
@@ -2091,7 +2091,7 @@ index 5bfd47c93..d01e1a12d 100644
          if (stage_model->mtp_ctx != nullptr) {
              llama_set_embeddings_nextn(stage_model->ctx, true, false);
              llama_set_embeddings_nextn(stage_model->mtp_ctx, true, false);
-@@ -980,10 +987,12 @@ enum skippy_status skippy_model_open_impl(
+@@ -987,10 +994,12 @@ enum skippy_status skippy_model_open_impl(
          params.progress_callback_user_data = &event_scope;
      }
  
@@ -2104,7 +2104,7 @@ index 5bfd47c93..d01e1a12d 100644
      std::vector<ggml_backend_dev_t> selected_devices;
      enum skippy_status device_status = skippy_apply_selected_backend_device(config, params, selected_devices, out_error);
      if (device_status != SKIPPY_STATUS_OK) {
-@@ -995,8 +1004,10 @@ enum skippy_status skippy_model_open_impl(
+@@ -1002,8 +1011,10 @@ enum skippy_status skippy_model_open_impl(
          return device_status;
      }
      const auto selection = skippy_loader_selection(config);
@@ -2115,7 +2115,7 @@ index 5bfd47c93..d01e1a12d 100644
      if (model == nullptr) {
          const char * message = "failed to load llama model";
          event_scope.emit_failure(SKIPPY_STATUS_MODEL_ERROR, message);
-@@ -1072,10 +1083,12 @@ enum skippy_status skippy_model_open_from_parts_impl(
+@@ -1079,10 +1090,12 @@ enum skippy_status skippy_model_open_from_parts_impl(
          params.progress_callback_user_data = &event_scope;
      }
  
@@ -2128,7 +2128,7 @@ index 5bfd47c93..d01e1a12d 100644
      std::vector<ggml_backend_dev_t> selected_devices;
      enum skippy_status device_status = skippy_apply_selected_backend_device(config, params, selected_devices, out_error);
      if (device_status != SKIPPY_STATUS_OK) {
-@@ -1087,8 +1100,10 @@ enum skippy_status skippy_model_open_from_parts_impl(
+@@ -1094,8 +1107,10 @@ enum skippy_status skippy_model_open_from_parts_impl(
          return device_status;
      }
      const auto selection = skippy_loader_selection(config);
@@ -2139,7 +2139,7 @@ index 5bfd47c93..d01e1a12d 100644
      if (model == nullptr) {
          const char * message = "failed to load llama model from GGUF parts";
          event_scope.emit_failure(SKIPPY_STATUS_MODEL_ERROR, message);
-@@ -1146,10 +1161,12 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
+@@ -1153,10 +1168,12 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
          skippy_apply_host_expert_placement(config, model_params, tensor_placement);
      }
  

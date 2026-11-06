@@ -1,4 +1,4 @@
-From c5423d34b8e46060a3f507df95930b441606ab2b Mon Sep 17 00:00:00 2001
+From e03ed92a7c4bec5bfe536be9c32da368b3c959bd Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
@@ -35,7 +35,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/executable_graph.cpp         |  329 +++++++
  src/skippy/executable_graph.h           |   37 +
  src/skippy/execution-batch.cpp          |  454 +++++++++
- src/skippy/execution-single.cpp         |  642 ++++++++++++
+ src/skippy/execution-single.cpp         |  653 +++++++++++++
  src/skippy/execution_internal.h         |   20 +
  src/skippy/glm_dsa.cpp                  |  857 ++++++++++++++++
  src/skippy/glm_dsa.h                    |   14 +
@@ -80,7 +80,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  256 +++++
  src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 76 files changed, 16385 insertions(+), 395 deletions(-)
+ 76 files changed, 16396 insertions(+), 395 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -4398,10 +4398,10 @@ index 000000000..901095cab
 +} // extern "C"
 diff --git a/src/skippy/execution-single.cpp b/src/skippy/execution-single.cpp
 new file mode 100644
-index 000000000..4ce3d4ba9
+index 000000000..84ead575c
 --- /dev/null
 +++ b/src/skippy/execution-single.cpp
-@@ -0,0 +1,642 @@
+@@ -0,0 +1,653 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/graph_build_inputs.h"
@@ -4597,6 +4597,17 @@ index 000000000..4ce3d4ba9
 +    if (skippy_is_filtered(first) && first->stage_model->config.layer_start > 0) {
 +        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched token decode requires the first runtime slice or a full model");
 +        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++
++    // A legacy decode batch still samples only one row per session. Reject
++    // duplicate lanes before settling any pending verification window.
++    std::unordered_set<skippy_session *> unique_sessions;
++    for (size_t i = 0; i < request_count; ++i) {
++        if (!unique_sessions.insert(sessions[i]).second) {
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "batched token decode requires unique sessions");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
 +    }
 +
 +    const int32_t n_tokens = static_cast<int32_t>(request_count);
@@ -17744,5 +17755,5 @@ index 000000000..cc9279e7e
 +// attached from an earlier chat request.
 +void skippy_prepare_non_chat_workload(skippy_session * session);
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

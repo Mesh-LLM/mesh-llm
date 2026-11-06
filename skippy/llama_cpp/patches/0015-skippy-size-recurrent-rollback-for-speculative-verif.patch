@@ -1,4 +1,4 @@
-From b9dc7c1eb49a963780de96de14a7864bff0b103e Mon Sep 17 00:00:00 2001
+From dca47ec14e8d0ca63dac84548252198175fef059 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Wed, 28 Oct 2026 14:17:38 +1100
 Subject: [PATCH] skippy: size recurrent rollback for speculative verify
@@ -15,12 +15,12 @@ Sampled verify also gets cheaper: a sampling chain retired by sampled verify
 stays retired until the session resets, and upstream's per-sequence
 backend-sampling output limit is restored.
 ---
- include/skippy/runtime.h     | 4 ++++
- src/llama-context.cpp        | 7 ++++---
- src/skippy/model_loading.cpp | 8 +++++++-
- src/skippy/sampling.cpp      | 4 +++-
- src/skippy/session.cpp       | 1 +
- 5 files changed, 19 insertions(+), 5 deletions(-)
+ include/skippy/runtime.h     |  4 ++++
+ src/llama-context.cpp        |  7 ++++---
+ src/skippy/model_loading.cpp | 15 ++++++++++++++-
+ src/skippy/sampling.cpp      |  4 +++-
+ src/skippy/session.cpp       |  1 +
+ 5 files changed, 26 insertions(+), 5 deletions(-)
 
 diff --git a/include/skippy/runtime.h b/include/skippy/runtime.h
 index c930d9c3b..856c98f97 100644
@@ -56,10 +56,22 @@ index 7f6338a91..ac42f935f 100644
                  }
              }
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
-index 4082fa198..5bfd47c93 100644
+index 4082fa198..727bdd6d3 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
-@@ -734,7 +734,13 @@ enum skippy_status skippy_finish_model_open(
+@@ -692,6 +692,11 @@ enum skippy_status skippy_finish_model_open(
+     params.n_threads = config != nullptr && config->n_threads > 0 ? config->n_threads : skippy_default_thread_count();
+     params.n_threads_batch = config != nullptr && config->n_threads_batch > 0 ? config->n_threads_batch : params.n_threads;
+     params.n_seq_max = stage_model->lane_count;
++    // Ordinary session APIs sample only the final output row per sequence.
++    // Keep the separate global output capacity for raw verification/readouts.
++    constexpr uint32_t backend_sampled_rows_per_sequence = 1;
++    params.n_outputs_max_per_seq = backend_sampled_rows_per_sequence;
++
+     // Cache-owned sequence IDs share the attention pool even with one lane.
+     params.kv_unified = true;
+     if (config != nullptr) {
+@@ -734,7 +739,13 @@ enum skippy_status skippy_finish_model_open(
      }
      if (llm_arch_is_recurrent(model->arch) || llm_arch_is_hybrid(model->arch)) {
          params.n_seq_max = std::max<uint32_t>(params.n_seq_max, std::max<uint32_t>(2, stage_model->lane_count * 2));
@@ -74,6 +86,15 @@ index 4082fa198..5bfd47c93 100644
          params.kv_unified = true;
      }
      // Multi-lane activation exports rely on the shared KV pool's batch order.
+@@ -856,6 +867,8 @@ enum skippy_status skippy_finish_model_open(
+     if (skippy_should_create_native_mtp_sidecar(model, config)) {
+         llama_context_params mtp_params = params;
+         mtp_params.ctx_type = LLAMA_CONTEXT_TYPE_MTP;
++        // MTP consumes raw multirow outputs, without session backend samplers.
++        mtp_params.n_outputs_max_per_seq = 0;
+         mtp_params.embeddings = false;
+         stage_model->mtp_ctx = llama_init_from_model_with_graph_inputs(model, mtp_params, graph_build_inputs);
+         if (stage_model->mtp_ctx != nullptr) {
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
 index 6a1352271..b688fce73 100644
 --- a/src/skippy/sampling.cpp
@@ -102,5 +123,5 @@ index 0653347a7..40110a816 100644
      skippy_mtp_clear_session_state(session);
      session->sampling_backend_verifying = false;
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 
