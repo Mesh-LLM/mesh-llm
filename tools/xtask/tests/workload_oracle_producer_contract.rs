@@ -489,6 +489,36 @@ fn shared_full_check_plan_keeps_cpu_producer_before_required_smokes() {
     fixture.metal_untouched();
 }
 
+#[test]
+fn local_repair_recipe_plan_accepts_ignored_checkout_outputs() {
+    let fixture = Fixture::new();
+    let source = root();
+    let state = source.join(".deps/llama-upgrade-local");
+    let build = source.join(".deps/llama-upgrade-local-native");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+    command
+        .args(["automation", "canary-receipts", "repair-check", "--root"])
+        .arg(&source)
+        .arg("--controller-root")
+        .arg(&source)
+        .arg("--state-dir")
+        .arg(&state)
+        .arg("--build-dir")
+        .arg(&build)
+        .args(["--backend", "metal", "--phase", "fast", "--plan"]);
+    let receipt = fixture.run(command);
+    assert!(
+        receipt.status.success(),
+        "{}",
+        String::from_utf8_lossy(&receipt.stderr)
+    );
+    assert!(
+        !serde_json::from_slice::<Vec<Value>>(&receipt.stdout)
+            .unwrap()
+            .is_empty()
+    );
+}
+
 #[path = "workload_oracle_producer_contract/full_replay.rs"]
 mod full_replay;
 #[path = "workload_oracle_producer_contract/native_test_owner.rs"]
