@@ -247,18 +247,23 @@ impl DFlashDraft {
         // A final stage of a split target captures only the layers whose
         // input its graph produces; earlier stages send the rest with their
         // activations. The input of this stage's first layer is the
-        // activation it receives.
+        // activation it receives. Layer `n_layer`, the output head's input,
+        // is always this stage's: the draft runs where the head does.
         let complete = config.resident_tensor_names.is_empty() && config.layer_start == 0;
         let local_end = if complete || config.layer_end == 0 {
             u32::MAX
         } else {
             config.layer_end
         };
+        let head_input = u32::try_from(target_layers).unwrap_or(u32::MAX);
         self.local_layers = self
             .info
             .target_layer_ids
             .iter()
-            .map(|&lid| split::stage_captures_layer_input(lid, config.layer_start, local_end))
+            .map(|&lid| {
+                lid == head_input
+                    || split::stage_captures_layer_input(lid, config.layer_start, local_end)
+            })
             .collect();
         self.input_layer = if complete {
             None
@@ -665,8 +670,9 @@ fn target_layer_ids(
     let ids = unsafe { std::slice::from_raw_parts(ids, count) };
     ids.iter()
         .map(|&lid| {
-            // Skippy sizes layer-input capture to n_layer and aborts past it.
-            if lid < 0 || lid >= target_layers {
+            // Layer inputs are captured for 0..=n_layer; id n_layer is the
+            // last layer's output, the input of the output head.
+            if lid < 0 || lid > target_layers {
                 bail!("draft target layer {lid} is outside the target's {target_layers} layers");
             }
             u32::try_from(lid).context("target layer id exceeds u32")

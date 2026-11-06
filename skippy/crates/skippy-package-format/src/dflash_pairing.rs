@@ -218,7 +218,8 @@ pub(crate) fn validate_dflash_proposer(
             "target_layers must be strictly increasing".to_string(),
         );
     }
-    if let Some(layer) = target_layers.iter().find(|&&layer| layer >= layer_count) {
+    // Layer `layer_count` is the last layer's output, the output head's input.
+    if let Some(layer) = target_layers.iter().find(|&&layer| layer > layer_count) {
         invalid(
             "target_layers",
             format!("target layer {layer} is out of range for layer_count {layer_count}"),
