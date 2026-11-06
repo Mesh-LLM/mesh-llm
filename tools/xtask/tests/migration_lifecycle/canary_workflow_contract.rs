@@ -445,8 +445,19 @@ fn changed_pin_graph_requires_preflight_candidate_independent_verification_and_p
     assert!(field(env, "CANARY_AGENT_PROVIDER").contains("vars.LLAMA_CANARY_GOOSE_PROVIDER"));
     assert!(field(env, "CANARY_AGENT_MODEL").contains("glm-5.3-flash"));
     let (_, evidence) = named(build, "id", "upload_evidence");
+    let (recovery_index, recovery) = named(build, "name", "Upload unverified repair recovery");
+    let (evidence_index, _) = named(build, "id", "upload_evidence");
+    assert!(recovery_index < evidence_index);
+    assert!(field(recovery, "if").contains("success() || failure() || cancelled()"));
+    assert!(field(recovery.get("with").unwrap(), "path").ends_with("/recovery/"));
     assert_eq!(field(evidence.get("with").unwrap(), "retention-days"), "14");
     let evidence = evidence.get("with").unwrap();
+    assert!(
+        !field(evidence, "path")
+            .lines()
+            .any(|line| line.contains("llama-canary-state-")
+                && line.trim().ends_with("${{ inputs.pass_id }}/"))
+    );
     assert_eq!(field(evidence, "include-hidden-files"), "true");
     assert!(
         field(evidence, "path").contains("${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-")

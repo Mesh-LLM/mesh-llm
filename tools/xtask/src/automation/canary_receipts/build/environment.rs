@@ -31,6 +31,10 @@ pub(super) fn wrapper(
         environment.insert(key.into(), Value::Public(value.into()));
     }
     environment.insert(
+        "CANARY_RECOVERY_DIR".into(),
+        Value::Public(input.evidence.join("recovery").into()),
+    );
+    environment.insert(
         "CANARY_SOURCE_ROOT".into(),
         Value::Public(input.source_root.clone().into()),
     );

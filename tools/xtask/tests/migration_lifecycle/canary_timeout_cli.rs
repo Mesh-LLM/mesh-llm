@@ -95,9 +95,7 @@ fn actual_cli_input_preserves_nonzero_and_native_signal_status() {
 #[test]
 fn actual_wrapper_jq_to_cli_preserves_full_arguments_and_environment() {
     let root = tempfile::tempdir().unwrap();
-    let wrapper = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../scripts/llama-canary-agent-repair.sh");
-    let source = fs::read_to_string(wrapper).unwrap();
+    let source = crate::canary_full_gates::fixture::source();
     let start = source.find("run_for() {").unwrap();
     let end = source[start..].find("\n}\n").unwrap() + start + 3;
     assert!(

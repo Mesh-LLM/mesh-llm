@@ -187,6 +187,14 @@ jobs:
               evidence:$evidence, export:$export, agent_timeout_seconds:$agent_timeout_seconds,
               verification_timeout_seconds:$verification_timeout_seconds}' > "$input"
           "$MESH_LLM_AUTOMATION_BIN" automation canary-receipts build --input "$input"
+      - name: Upload unverified repair recovery
+        if: ${{ (success() || failure() || cancelled()) && inputs.mode == 'repair-build' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: llama-recovery-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ runner.os }}
+          path: ${{ runner.temp }}/canary-build-contract-${{ inputs.pass_id }}/recovery/
+          if-no-files-found: warn
+          retention-days: 14
       - name: Report System One smoke result
         if: ${{ !cancelled() }}
         env:
@@ -260,7 +268,12 @@ jobs:
           name: llama-build-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ runner.os }}
           include-hidden-files: true
           path: |
-            ${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/
+            ${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/*.log
+            ${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/*.json
+            ${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/*.jsonl
+            ${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/*.md
+            ${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/agent-commands/
+            ${{ env.CANARY_SOURCE_ROOT }}/.deps/llama-canary-state-${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.pass_id }}/checks/
             ${{ env.LLAMA_STAGE_BUILD_DIR }}/Testing/Temporary/
             ${{ runner.temp }}/canary-build-contract-${{ inputs.pass_id }}/
           if-no-files-found: warn

@@ -205,6 +205,31 @@ fn recovery_does_not_execute_candidate_git_fsmonitor_external_diff_or_textconv()
 }
 
 #[test]
+fn recovery_preserves_native_commits_that_were_not_exported_to_the_durable_queue() {
+    let fixture = Fixture::new();
+    let nested = fixture.root.join(".deps/llama.cpp");
+    fs::create_dir_all(&nested).unwrap();
+    git(&nested, &["init", "-q"]);
+    fs::write(nested.join("runtime.cpp"), b"upstream\n").unwrap();
+    git(&nested, &["add", "."]);
+    commit(&nested);
+    let base = git(&nested, &["rev-parse", "HEAD"]);
+    fs::write(nested.join("runtime.cpp"), b"committed repair\n").unwrap();
+    git(&nested, &["add", "."]);
+    commit(&nested);
+    fs::write(nested.join(".mesh-llm-upstream-sha"), &base).unwrap();
+    let output = fixture.root.join("recovery");
+    snapshot::save(&fixture.root, &output, &fixture.base).unwrap();
+    assert_eq!(manifest(&output)["prepared_llama_cpp"]["base"], base);
+    assert!(
+        fs::read_to_string(output.join("prepared-llama-cpp/tracked.patch"))
+            .unwrap()
+            .contains("committed repair")
+    );
+    assert_eq!(manifest(&output)["verified"], false);
+}
+
+#[test]
 fn recovery_refuses_bad_base_and_existing_destination_without_complete_output() {
     for mutation in ["bad-base", "existing"] {
         let fixture = Fixture::new();

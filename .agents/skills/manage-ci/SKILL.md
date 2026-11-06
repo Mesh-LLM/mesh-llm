@@ -128,7 +128,7 @@ tooling requires an explicit maintainer decision to change that policy. Do not c
 Python-free or remove legacy validation before its Rust replacement passes.
 
 Retained external Python dependencies have bounded owners: the admitted external
-Python SDK and its locked client environments, llama.cpp's upstream Jinja tests
+Python SDK and its locked client environments, llama.cpp's upstream Jinja and FP8 conversion tests
 using the trusted controller's `ci/llama-canary/jinja/uv.lock`, and the optional llama-benchy wrapper with
 an immutable default source commit. These interfaces do not authorize new
 repository Python implementations. The canary Jinja environment belongs to its
@@ -684,6 +684,22 @@ checked-in expiry are the maintainer-controlled approval boundary.
   required jobs reach a terminal successful conclusion; state expected skips.
 
 ## Llama canary family fan-out
+
+Repair iterations use `automation canary-receipts repair-check --phase fast`.
+The same typed command owns local and CI environments, static native/Rust builds,
+binary identity checks and focused GPU split/state smokes. Agents inherit the
+controller's locked native-test Python environment and must not install system
+packages or repeat the full native suite. The trusted `full` phase repeats the
+focused checks before generation/idempotence and the unfiltered native suite;
+complete family certification and fresh independent verification remain required.
+Only an isolated Metal fixture SIGBUS may receive one diagnostic retry, followed
+by an unfiltered native rerun; ordinary candidate failures never receive retries.
+A downloaded job log alone does not establish that a process is stuck. Correlate
+runner/process state or an observed deadline; if unavailable, report liveness as
+unconfirmed.
+Bounded, explicitly unverified source checkpoints are retained after every coding
+turn and after supervised termination. Upload recovery before verbose evidence;
+never include the restored Python environment in the diagnostic upload.
 
 The System One contract fixture must exercise both single-token causal
 readouts and multi-token likelihoods as supported execution paths, retaining

@@ -24,6 +24,10 @@ use std::{
 
 const WRAPPER_LOG_BYTES: usize = 16 * 1024 * 1024;
 
+pub(crate) fn validate_revision(value: &str) -> DynResult<()> {
+    contract::revision_valid(value)
+}
+
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     const GRAMMAR: Grammar = Grammar {
         usage: "cargo xtool automation canary-receipts build --input PATH",
@@ -114,6 +118,8 @@ fn execute(input: &Input) -> DynResult<()> {
         },
     );
     let interrupted = interrupt.finish();
+    #[cfg(unix)]
+    retain_recovery(input);
     match report {
         Ok(report) if report.success() && interrupted.is_ok() => {
             if let Err(error) = package::exported(input, previous_identity) {
@@ -130,6 +136,13 @@ fn execute(input: &Input) -> DynResult<()> {
                 || !matches!(report.outcome, crate::process::Outcome::Exited)
             {
                 failure("infrastructure", "process-supervision")?;
+            } else if report
+                .status
+                .as_ref()
+                .and_then(std::process::ExitStatus::code)
+                == Some(125)
+            {
+                failure("infrastructure", "repair-prerequisite")?;
             }
             Err(format!(
                 "canary build wrapper failed: {:?}, exit code {:?}, status {:?}",
@@ -145,6 +158,27 @@ fn execute(input: &Input) -> DynResult<()> {
         Err(error) => {
             failure("infrastructure", "process-supervision")?;
             Err(error.into())
+        }
+    }
+}
+
+#[cfg(unix)]
+fn retain_recovery(input: &Input) {
+    if matches!(input.mode, contract::Mode::Repair) {
+        let parent = input.evidence.join("recovery");
+        let result = fs::create_dir_all(&parent).and_then(|()| {
+            super::canary_package_closure::source_recovery::checkpoint(
+                &input.source_root,
+                &parent.join("final-source"),
+                &input.selected_revision,
+            )
+            .map_err(|error| std::io::Error::other(error.to_string()))
+        });
+        if let Err(error) = result {
+            let _ = writeln!(
+                crate::cli_output::stderr(),
+                "unverified recovery checkpoint failed: {error}"
+            );
         }
     }
 }

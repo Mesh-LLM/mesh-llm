@@ -81,6 +81,13 @@ unrelated functional boundaries.
 
 ## Validation
 
+Inside a controller-managed llama upgrade repair session, run the shared
+`automation canary-receipts repair-check --phase fast` command from the repair
+runbook after updating the durable queue, followed by focused reproductions.
+The trusted harness owns the complete build, generation/idempotence check and
+native suite. Do not repeat those full gates inside the coding session. Ordinary
+patch development outside that session retains the validation below.
+
 Validate that patches apply in a clean checkout:
 
 ```bash

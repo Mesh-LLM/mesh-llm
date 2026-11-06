@@ -444,78 +444,48 @@ fn failed_preparation_build_or_stamp_cannot_emit_successful_manifest() {
 }
 
 #[test]
-fn shared_canary_full_build_runs_cpu_producer_before_required_smokes_and_stops_on_failure() {
-    let source = fs::read_to_string(root().join("scripts/llama-canary-agent-repair.sh")).unwrap();
-    let body = source
-        .split("run_full_build() {\n")
-        .nth(1)
-        .unwrap()
-        .split("# Local CLI compatibility path.")
-        .next()
-        .unwrap();
-    for mode in ["repair-build", "verify-build", "pinned-build"] {
-        for fail_cpu in [false, true] {
-            let fixture = Fixture::new();
-            fixture.executable(
-                "bin/lipo",
-                "[[ $1 == -archs ]] || exit 97; printf 'arm64\\n'",
-            );
-            let harness = format!(
-                r#"
-set -euo pipefail
-JINJA_PROJECT="$TRUSTED_ROOT/ci/llama-canary/jinja"
-run_full_build() {{
-{body}
-BUILD_LOG="$FIXTURE_ROOT/build.log"
-LLAMA_STAGE_BUILD_DIR="$FIXTURE_ROOT/primary-metal/native"
-STATE_DIR="$FIXTURE_ROOT"
-SYSTEMONE_SMOKE_DIR="$FIXTURE_ROOT/system-one"
-HARNESS_MODE="$CASE_MODE"
-run_verification_logged() {{
-  local label="$1"
-  shift 2
-  printf '%s\n' "$label" >> "$FIXTURE_ROOT/gates"
-  if [[ "$label" == 'pinned CPU workload oracles and candidate' ]]; then
-    [[ $# == 3 && "$1" == just && "$2" == skippy-workload-oracles-build && "$3" == "$LLAMA_STAGE_BUILD_DIR-workloads" ]] || exit 97
-    [[ "$FAIL_CPU" == 0 ]] || return 41
-  fi
-}}
-run_full_build
-"#
-            );
-            let mut command = fixture.command();
-            command
-                .args(["-c", &harness])
-                .env("TRUSTED_ROOT", root())
-                .env("CASE_MODE", mode)
-                .env("FAIL_CPU", if fail_cpu { "1" } else { "0" });
-            let receipt = fixture.run(command);
-            let gates = fs::read_to_string(fixture.path().join("gates")).unwrap_or_else(|error| {
-                panic!(
-                    "missing canary gate log: {error}; stderr={}",
-                    String::from_utf8_lossy(&receipt.stderr)
-                )
-            });
-            let before_cpu = "complete patched llama.cpp build\ngenerated model-family patch check\nstage runtime crate build\nSkippy smoke tests\npinned CPU workload oracles and candidate\n";
-            if fail_cpu {
-                assert!(!receipt.status.success());
-                assert_eq!(gates, before_cpu);
-            } else {
-                assert!(
-                    receipt.status.success(),
-                    "{}",
-                    String::from_utf8_lossy(&receipt.stderr)
-                );
-                assert_eq!(
-                    gates,
-                    format!(
-                        "{before_cpu}build transferable multimodal test executable\nSystem One smoke\nLaya smoke\n"
-                    )
-                );
-            }
-            fixture.metal_untouched();
-        }
-    }
+fn shared_full_check_plan_keeps_cpu_producer_before_required_smokes() {
+    let fixture = Fixture::new();
+    let source = root();
+    let state = fixture.path().join("state");
+    let build = fixture.path().join("upgraded-metal");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_xtask"));
+    command
+        .args(["automation", "canary-receipts", "repair-check", "--root"])
+        .arg(&source)
+        .arg("--controller-root")
+        .arg(&source)
+        .arg("--state-dir")
+        .arg(&state)
+        .arg("--build-dir")
+        .arg(&build)
+        .args(["--backend", "metal", "--phase", "full", "--plan"]);
+    let receipt = fixture.run(command);
+    assert!(
+        receipt.status.success(),
+        "{}",
+        String::from_utf8_lossy(&receipt.stderr)
+    );
+    let steps: Vec<Value> = serde_json::from_slice(&receipt.stdout).unwrap();
+    let position = |label: &str| {
+        steps
+            .iter()
+            .position(|step| step["label"] == label)
+            .unwrap()
+    };
+    let cpu = position("workload-oracles");
+    assert!(cpu < position("system-one-smoke"));
+    assert!(position("system-one-smoke") < position("laya-smoke"));
+    assert_eq!(
+        steps[cpu]["arguments"],
+        serde_json::json!([
+            "just",
+            "skippy-workload-oracles-build",
+            format!("{}-workloads", build.display())
+        ])
+    );
+    assert!(!state.exists() && !build.exists());
+    fixture.metal_untouched();
 }
 
 #[path = "workload_oracle_producer_contract/full_replay.rs"]

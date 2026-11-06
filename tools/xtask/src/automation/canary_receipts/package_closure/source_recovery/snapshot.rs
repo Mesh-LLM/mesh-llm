@@ -64,7 +64,7 @@ pub(super) fn save(root: &Path, output: &Path, base: &str) -> DynResult<()> {
         let nested = root.join(".deps/llama.cpp");
         if nested.join(".git").symlink_metadata().is_ok() {
             nested_root.unchanged(&nested)?;
-            let nested_base = git.text(&nested, &["rev-parse", "HEAD"])?;
+            let nested_base = nested_base(&nested, &nested_root, &git)?;
             source::revision(&nested_base)?;
             let destination = stage.path().join("prepared-llama-cpp");
             fs::create_dir(&destination)?;
@@ -111,6 +111,26 @@ pub(super) fn save(root: &Path, output: &Path, base: &str) -> DynResult<()> {
     output_parent.unchanged(&parent)?;
     process::check()?;
     Ok(())
+}
+
+fn nested_base(root: &Path, admitted: &Root, git: &Git) -> DynResult<String> {
+    let marker = Path::new(".mesh-llm-upstream-sha");
+    match fs::symlink_metadata(root.join(marker)) {
+        Ok(_) => {
+            let mut value = String::new();
+            admitted
+                .file(marker)?
+                .take(128)
+                .read_to_string(&mut value)?;
+            let value = value.trim().to_owned();
+            source::revision(&value)?;
+            Ok(value)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            git.text(root, &["rev-parse", "HEAD"])
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 fn capture(

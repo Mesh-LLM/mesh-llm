@@ -16,10 +16,7 @@ fn function(source: &str, name: &str) -> String {
     format!("{marker}{body}\n}}\n")
 }
 fn run(root: &Path, mode: &str) -> process::ProcessReport {
-    let source = fs::read_to_string(
-        super::support::repository().join("scripts/llama-canary-agent-repair.sh"),
-    )
-    .unwrap();
+    let source = crate::canary_full_gates::fixture::source();
     let admission = source.split_once("if [[ ! \"$HARNESS_MODE\" =~ ^(repair|verify|repair-build|verify-build|pinned-build|native-build)$ ]]; then\n").unwrap().1.split_once("\nfi\n").unwrap().0;
     let admission = format!(
         "if [[ ! \"$HARNESS_MODE\" =~ ^(repair|verify|repair-build|verify-build|pinned-build|native-build)$ ]]; then\n{admission}\nfi\n"
