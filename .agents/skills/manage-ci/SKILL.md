@@ -98,7 +98,7 @@ not wait on a producer and only plan or validate (the entry planners through
 `prepare-ci-controller`, which builds only the `ci-controller` executable on
 GitHub-hosted Linux, restores it from its own exact-key cache, compiles only on
 a miss, and exports `MESH_CI_CONTROLLER_BIN`. Other jobs without a producer,
-such as authority audits, canary summaries, Docker precheck, and preview
+such as authority audits, canary summaries, and preview
 dispatch, use `prepare-automation` with the `hosted-bare` profile, which
 restores an exact-key cached full xtask executable and compiles only on a miss;
 the protected authority producers opt out of that cache so their bytes are
@@ -629,6 +629,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   device runner.
 
 ## Operational safety
+
+- Stability and KV ownership coverage are manual-only while their nightly
+  schedules are paused. Keep both manual entrypoints and their evidence gates;
+  restoring a schedule requires reviewed live qualification.
 
 - Self-hosted jobs must finish with bounded cleanup of their own generated
   files after artifact uploads and explicit cache saves. Preserve shared model,

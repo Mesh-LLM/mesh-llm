@@ -1,8 +1,7 @@
 name: Nightly Stability
 
 on:
-  schedule:
-    - cron: "37 9 * * *"
+  # Daily execution is paused until the stability setup is qualified.
   workflow_dispatch:
     inputs:
       base_url:
