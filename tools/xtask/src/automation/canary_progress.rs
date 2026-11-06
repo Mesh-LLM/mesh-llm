@@ -4,14 +4,19 @@ use crate::repository::{check_args::Grammar, check_report::CheckReport};
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
-    io::{self, BufRead, Read, Write},
+    io::{self, Read, Write},
     path::Path,
-    sync::mpsc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     time::{Duration, Instant},
 };
 
 #[path = "canary_progress/commands.rs"]
 mod commands;
+#[path = "canary_progress/events.rs"]
+mod events;
 #[cfg(test)]
 #[path = "canary_progress/tests.rs"]
 mod tests;
@@ -34,10 +39,11 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
     }
     let directory = Path::new(parsed.last("--commands").ok_or("missing --commands")?);
     let mut output = crate::cli_output::stdout();
-    project(io::BufReader::new(io::stdin()), directory, &mut output)
+    let input = events::NonblockingInput::stdin()?;
+    project(input, directory, &mut output)
 }
 
-fn project(input: impl BufRead + Send, directory: &Path, output: &mut impl Write) -> DynResult<()> {
+fn project(input: impl Read + Send, directory: &Path, output: &mut impl Write) -> DynResult<()> {
     let mut progress =
         Progress::new(std::env::var("GITHUB_ACTIONS").is_ok_and(|value| value == "true"));
     let mut commands = commands::Commands::default();
@@ -46,63 +52,38 @@ fn project(input: impl BufRead + Send, directory: &Path, output: &mut impl Write
         "canary: concise Goose progress; full events: agent.log; command output: {}/<label>/output.log",
         directory.display()
     )?;
+    let cancelled = AtomicBool::new(false);
     std::thread::scope(|scope| -> DynResult<()> {
         let (send, receive) = mpsc::sync_channel(4);
-        let reader = scope.spawn(move || read_events(input, &send));
-        let mut heartbeat = Instant::now();
-        loop {
-            match receive.recv_timeout(Duration::from_secs(1)) {
-                Ok(line) => progress.line(&line, output)?,
-                Err(mpsc::RecvTimeoutError::Timeout) => (),
-                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        let reader = scope.spawn(|| events::read_events(input, send, &cancelled));
+        let result = (|| -> DynResult<()> {
+            commands.report(directory, output)?;
+            let mut heartbeat = Instant::now();
+            loop {
+                match receive.recv_timeout(Duration::from_secs(1)) {
+                    Ok(line) => progress.line(&line, output)?,
+                    Err(mpsc::RecvTimeoutError::Timeout) => (),
+                    Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+                if heartbeat.elapsed() >= HEARTBEAT {
+                    progress.heartbeat(output)?;
+                    commands.report(directory, output)?;
+                    heartbeat = Instant::now();
+                }
+                output.flush()?;
             }
-            if heartbeat.elapsed() >= HEARTBEAT {
-                progress.heartbeat(output)?;
-                commands.report(directory, output)?;
-                heartbeat = Instant::now();
-            }
-            output.flush()?;
-        }
-        commands.report(directory, output)?;
-        reader.join().map_err(|_| "Goose event reader panicked")??;
+            commands.report(directory, output)?;
+            Ok(())
+        })();
+        cancelled.store(true, Ordering::Relaxed);
+        // Drop the receiver before joining: a queued reader must not block on send.
+        drop(receive);
+        let read_result = reader.join().map_err(|_| "Goose event reader panicked")?;
+        result?;
+        read_result?;
         output.flush()?;
         Ok(())
     })
-}
-
-fn read_events(mut input: impl BufRead, send: &mpsc::SyncSender<Vec<u8>>) -> io::Result<()> {
-    loop {
-        let mut line = Vec::new();
-        let count = input
-            .by_ref()
-            .take((MAX_EVENT + 1) as u64)
-            .read_until(b'\n', &mut line)?;
-        if count == 0 {
-            return Ok(());
-        }
-        if count > MAX_EVENT {
-            if !line.ends_with(b"\n") {
-                loop {
-                    let bytes = input.fill_buf()?;
-                    let consumed = bytes
-                        .iter()
-                        .position(|b| *b == b'\n')
-                        .map_or(bytes.len(), |i| i + 1);
-                    let done =
-                        bytes.is_empty() || bytes.get(consumed.saturating_sub(1)) == Some(&b'\n');
-                    input.consume(consumed);
-                    if done {
-                        break;
-                    }
-                }
-            }
-            line =
-                b"Goose event exceeds display limit; full event retained in agent.log\n".to_vec();
-        }
-        if send.send(line).is_err() {
-            return Ok(());
-        }
-    }
 }
 
 struct Progress {
@@ -172,6 +153,13 @@ impl Progress {
         Ok(())
     }
     fn request(&mut self, part: &Value, output: &mut impl Write) -> io::Result<()> {
+        if part["toolCall"]["status"] == "error" {
+            return writeln!(
+                output,
+                "goose tool parse error: {}",
+                compact(&part["toolCall"].to_string(), 600)
+            );
+        }
         let id = part["id"].as_str().unwrap_or("unknown");
         let call = &part["toolCall"]["value"];
         let name = call["name"].as_str().unwrap_or("tool");
@@ -268,7 +256,9 @@ fn compact(text: &str, limit: usize) -> String {
 fn escape_commands(text: &str) -> String {
     // GitHub recognizes commands even after a prefix. Never let model or tool
     // text close a group, set an output, or emit a workflow command.
-    text.replace("::", ": :").replace("::", ": :")
+    text.replace("::", ": :")
+        .replace("::", ": :")
+        .replace("##[", "# #[")
 }
 
 fn tool_details(result: &Value) -> String {

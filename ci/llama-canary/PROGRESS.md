@@ -22,8 +22,8 @@ canary output: checking shard 37/84
 A one-minute activity report shows time since the most recent Goose event.
 Command snapshots show the latest three lines of the full log even if Goose's
 shell command pipes its visible result through `tail`. An idle command remains
-running until an exit status is observed. Some tools emit nothing during long
-work; an unchanged log is not proof of a hang. Counts and stages appear only
+running until the wrapper publishes its separate completion record. Some tools
+emit nothing during long work; an unchanged log is not proof of a hang. Counts and stages appear only
 when the underlying command actually prints them.
 
 The console names the full per-command `output.log`. An operator with existing
@@ -41,8 +41,10 @@ GitHub does not expose the artifact until its upload step runs. This change adds
 no live log service or host access permissions.
 
 Events larger than the console projection's 1 MiB limit are omitted from display
-with a notice; the original event remains in `agent.log`. Unknown/malformed lines
+with a notice; tool lifecycle IDs and completion/error status are still processed.
+The original event remains in `agent.log`. Unknown/malformed lines
 produce a bounded diagnostic. Tool failures and provider errors remain visible.
 Console projection and log-write failure cannot turn an otherwise successful
-agent turn into an accepted candidate. Existing process deadlines and independent
+agent turn into an accepted candidate; failure cancels the supervised Goose/logging
+pipeline even while Goose is quiet. Existing process deadlines and independent
 verification still own admission.

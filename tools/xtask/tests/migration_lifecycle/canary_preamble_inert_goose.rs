@@ -373,16 +373,35 @@ fn repair_command_wrapper_preserves_complete_output_timing_and_nonzero_status() 
     assert!(log.contains("started_epoch: "));
     assert!(log.contains("first diagnostic\nlast diagnostic\n"));
     assert!(log.contains("exit_status: 73"));
+    assert_eq!(
+        fs::read_to_string(command.join("completion")).unwrap(),
+        "73\n"
+    );
     fixture.finish();
 }
 
 #[test]
-fn failed_progress_projection_cannot_accept_successful_goose_turn() {
+fn failed_progress_projection_stops_quiet_goose_without_waiting_for_deadline() {
     let fixture = Fixture::new();
     fixture.install_timeout_tools();
-    executable(&fixture.root.join("tools/goose"), GOOSE);
-    // A file cannot be scanned as the command-log directory. Goose still exits
-    // zero, so this exercises the projection leg rather than the agent leg.
+    executable(
+        &fixture.root.join("tools/goose"),
+        r#"#!/bin/bash
+printf started > "$HOME/goose.started"
+exec sleep 60
+"#,
+    );
+    executable(
+        &fixture.root.join("tools/automation"),
+        r#"#!/bin/bash
+if [[ "$2" == canary-progress ]]; then
+  while [[ ! -f "$HOME/goose.started" ]]; do sleep 0.05; done
+fi
+exec "$REAL_AUTOMATION" "$@"
+"#,
+    );
+    // Fail the projector only after the quiet agent starts. The pipeline must
+    // stop now rather than waiting for Goose's output or the repair deadline.
     fs::write(fixture.root.join("command-logs"), "not a directory").unwrap();
     let source = wrapper();
     let declarations = ["run_for", "remaining_repair_seconds", "agent_session_step"]
@@ -411,12 +430,17 @@ exit "$status"
         ),
     )
     .unwrap();
-    let report = fixture.run(&script, &[], fixture.environment());
-    assert_eq!(report.process.status.unwrap().code(), Some(125));
-    assert!(
-        fs::read_to_string(fixture.root.join("agent.log"))
-            .unwrap()
-            .contains("inert goose call 1")
+    let mut environment = fixture.environment();
+    environment.insert(
+        "REAL_AUTOMATION".into(),
+        Value::Public(env!("CARGO_BIN_EXE_xtask").into()),
     );
+    environment.insert(
+        "MESH_LLM_AUTOMATION_BIN".into(),
+        Value::Public(fixture.root.join("tools/automation").into()),
+    );
+    let report = fixture.run(&script, &[], environment);
+    assert!(fixture.root.join("goose.started").exists());
+    assert_eq!(report.process.status.unwrap().code(), Some(125));
     fixture.finish();
 }

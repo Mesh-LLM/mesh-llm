@@ -2,7 +2,7 @@
 use super::compact;
 use std::{
     collections::BTreeSet,
-    fs::{self, File},
+    fs::File,
     io::{self, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
@@ -16,12 +16,11 @@ impl Commands {
     pub(super) fn report(&mut self, root: &Path, output: &mut impl Write) -> io::Result<()> {
         let logs = recent_logs(root)?;
         self.finished
-            .retain(|path| logs.iter().any(|(_, log)| log == path));
-        for (_, log) in logs {
+            .retain(|path| logs.iter().any(|(_, _, log, _, _)| log == path));
+        for (_, _, log, mut file, completion) in logs {
             if self.finished.contains(&log) {
                 continue;
             }
-            let mut file = File::open(&log)?;
             let metadata = file.metadata()?;
             let mut header = Vec::new();
             Read::by_ref(&mut file).take(256).read_to_end(&mut header)?;
@@ -31,10 +30,7 @@ impl Commands {
             file.take(4096).read_to_end(&mut bytes)?;
             let tail = String::from_utf8_lossy(&bytes);
             let idle = metadata.modified()?.elapsed().unwrap_or_default().as_secs();
-            let status = tail
-                .lines()
-                .last()
-                .filter(|line| line.starts_with("exit_status: "));
+            let status = completion.map(|code| format!("exit_status: {code}"));
             let label = log
                 .parent()
                 .and_then(Path::file_name)
@@ -44,7 +40,7 @@ impl Commands {
                 output,
                 "canary command: {} — {}; {elapsed}; last output {idle}s ago; log: {}",
                 compact(&label, 100),
-                status.unwrap_or("running"),
+                status.as_deref().unwrap_or("running"),
                 compact(&log.display().to_string(), 600)
             )?;
             for line in tail
@@ -81,33 +77,107 @@ fn elapsed(header: &[u8]) -> String {
     }
 }
 
-fn recent_logs(root: &Path) -> io::Result<Vec<(SystemTime, PathBuf)>> {
-    if fs::symlink_metadata(root).is_ok_and(|meta| meta.file_type().is_symlink()) {
-        return Ok(Vec::new());
-    }
-    let entries = match fs::read_dir(root) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error),
+// Hold every opened directory and log by descriptor so replacements cannot
+// redirect a later read outside the run-owned tree.
+type Log = (bool, SystemTime, PathBuf, File, Option<i32>);
+
+#[cfg(unix)]
+fn recent_logs(root: &Path) -> io::Result<Vec<Log>> {
+    use rustix::fs::{Dir, Mode, OFlags, open, openat};
+    use std::os::unix::ffi::OsStrExt;
+    let directory_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let root_fd = match open(root, directory_flags, Mode::empty()) {
+        Ok(fd) => fd,
+        Err(rustix::io::Errno::NOENT | rustix::io::Errno::LOOP) => return Ok(Vec::new()),
+        Err(error) => return Err(error.into()),
     };
-    // Retain only the most recently written logs rather than pinning the first
-    // commands forever. A tool may run several foreground checks in one turn.
     let mut logs = Vec::new();
-    for entry in entries {
+    for entry in Dir::read_from(&root_fd)? {
         let entry = entry?;
-        if !entry.file_type()?.is_dir() {
+        let name = std::ffi::OsStr::from_bytes(entry.file_name().to_bytes());
+        if name == "." || name == ".." {
             continue;
         }
-        let path = entry.path().join("output.log");
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) if metadata.is_file() => metadata,
-            _ => continue,
+        let directory = match openat(&root_fd, name, directory_flags, Mode::empty()) {
+            Ok(fd) => fd,
+            Err(_) => continue,
         };
-        logs.push((metadata.modified()?, path));
-        logs.sort();
+        let Some(file) = open_log(&directory, "output.log")? else {
+            continue;
+        };
+        let metadata = file.metadata()?;
+        let completion = match open_log(&directory, "completion")? {
+            Some(file) => {
+                let mut text = String::new();
+                file.take(32).read_to_string(&mut text)?;
+                text.trim()
+                    .parse::<i32>()
+                    .ok()
+                    .filter(|code| (0..=255).contains(code))
+            }
+            None => None,
+        };
+        logs.push((
+            completion.is_none(),
+            metadata.modified()?,
+            root.join(name).join("output.log"),
+            file,
+            completion,
+        ));
+        // Quiet active commands outrank even the newest completed commands.
+        logs.sort_by(|a, b| (&a.0, &a.1, &a.2).cmp(&(&b.0, &b.1, &b.2)));
         if logs.len() > 16 {
             logs.remove(0);
         }
     }
     Ok(logs)
+}
+
+#[cfg(unix)]
+fn open_log(directory: &impl std::os::fd::AsFd, name: &str) -> io::Result<Option<File>> {
+    use rustix::fs::{Mode, OFlags, openat};
+    let fd = match openat(
+        directory,
+        name,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(fd) => fd,
+        Err(rustix::io::Errno::NOENT | rustix::io::Errno::LOOP | rustix::io::Errno::NOTDIR) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error.into()),
+    };
+    let file = File::from(fd);
+    Ok(file.metadata()?.is_file().then_some(file))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::fs;
+    #[test]
+    fn opened_logs_remain_bound_when_file_and_directory_are_replaced() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let command = root.path().join("command");
+        fs::create_dir(&command).unwrap();
+        fs::write(command.join("output.log"), "owned output").unwrap();
+        let mut logs = recent_logs(root.path()).unwrap();
+        let (_, _, _, mut file, _) = logs.pop().unwrap();
+        let foreign = tempfile::tempdir().unwrap();
+        fs::write(foreign.path().join("output.log"), "foreign secret").unwrap();
+        fs::rename(&command, root.path().join("old-command")).unwrap();
+        symlink(foreign.path(), &command).unwrap();
+        let mut text = String::new();
+        file.read_to_string(&mut text).unwrap();
+        assert_eq!(text, "owned output");
+        fs::remove_file(root.path().join("old-command/output.log")).unwrap();
+        symlink(
+            foreign.path().join("output.log"),
+            root.path().join("old-command/output.log"),
+        )
+        .unwrap();
+        assert!(recent_logs(root.path()).unwrap().is_empty());
+    }
 }

@@ -437,7 +437,7 @@ restore_previous_repair_candidate() {
 
 agent_session_step() {
   local prompt="$1" status seconds
-  local -a goose_args pipeline_status progress_automation
+  local -a goose_args progress_automation
   if ! seconds="$(remaining_repair_seconds)"; then
     echo "agent developer task cannot continue: repair budget exhausted" >&2
     return 124
@@ -462,18 +462,28 @@ agent_session_step() {
     goose_args+=(--resume)
   fi
   goose_args+=(--text "$prompt")
+  # The complete pipeline belongs to one supervised process group. If either
+  # logging leg fails, stop that group even when Goose produces no more output.
+  # The inner shell expands its own pipeline arguments.
+  # shellcheck disable=SC2016
   run_for "agent developer task" "$seconds" env \
     -u GH_TOKEN -u GITHUB_TOKEN -u CANARY_REPAIR_TOKEN \
     CANARY_REPAIR_LOG_DIR="$AGENT_COMMAND_LOG_DIR" \
     GOOSE_MODE=auto GOOSE_DISABLE_SESSION_NAMING=true \
-    goose "${goose_args[@]}" \
-    2>&1 | tee -a "$AGENT_LOG" | "${progress_automation[@]}" automation canary-progress --commands "$AGENT_COMMAND_LOG_DIR"
-  pipeline_status=("${PIPESTATUS[@]}")
-  status=${pipeline_status[0]}
-  # A failed logger must not turn successful coding into an admitted candidate.
-  if (( status == 0 && (pipeline_status[1] != 0 || pipeline_status[2] != 0) )); then
-    status=125
-  fi
+    bash -c '
+      set -o pipefail
+      trap "exit 125" TERM
+      log="$1"; commands="$2"; count="$3"; shift 3
+      progress=("${@:1:count}"); shift "$count"
+      goose "$@" 2>&1 \
+        | { tee -a "$log" || kill -TERM -- -$$; } \
+        | { "${progress[@]}" automation canary-progress --commands "$commands" || kill -TERM -- -$$; }
+      statuses=("${PIPESTATUS[@]}")
+      if (( statuses[1] != 0 || statuses[2] != 0 )); then exit 125; fi
+      exit "${statuses[0]}"
+    ' canary-agent-pipeline "$AGENT_LOG" "$AGENT_COMMAND_LOG_DIR" \
+      "${#progress_automation[@]}" "${progress_automation[@]}" "${goose_args[@]}"
+  status=$?
   set -e
   if (( status != 0 )); then
     printf 'agent developer task exited with status %s\n' "$status" \

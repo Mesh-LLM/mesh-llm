@@ -488,7 +488,10 @@ activity reports. Expandable GitHub log groups retain commands and returned tool
 results without cluttering the default view. The formatter samples the run-owned
 `agent-commands/*/output.log` files, exposing recent output even while a shell
 tool is blocked behind `tail`.
-It reports elapsed/idle time and observed exit status without guessing completion.
+It reports elapsed/idle time and the wrapper's separate completion record; active
+logs take priority over newer completed commands. The Unix projector opens logs
+through directory handles without following symlinks and cancels the supervised
+Goose/logging pipeline if projection fails while the agent is quiet.
 Full original events remain in `agent.log`; full command logs retain their
 existing 14-day build-artifact upload. The console prints local paths for live
 operator inspection; these are not remotely accessible HTTP links. Downloadable

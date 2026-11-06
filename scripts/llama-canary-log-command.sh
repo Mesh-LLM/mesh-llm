@@ -39,4 +39,8 @@ if [[ -n "${LLAMA_BUILD_DIR:-}" && -d "$LLAMA_BUILD_DIR/Testing/Temporary" ]]; t
   done
 fi
 printf 'finished: %s\nexit_status: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$status" | tee -a "$log"
+# Keep wrapper completion separate from arbitrary command output. Publish it
+# atomically only after tee and the final log footer have finished.
+printf '%s\n' "$status" > "$command_dir/completion.tmp"
+mv "$command_dir/completion.tmp" "$command_dir/completion"
 exit "$status"
