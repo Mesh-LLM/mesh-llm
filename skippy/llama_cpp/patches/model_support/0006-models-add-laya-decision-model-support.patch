@@ -36,7 +36,7 @@ Changes from the upstream draft:
 Co-authored-by: ZhangYu <zhangyub@uniontech.com>
 ---
  include/skippy.h          |    1 +
- include/skippy/common.h   |    4 +-
+ include/skippy/common.h   |    2 +
  include/skippy/laya.h     |  167 ++++++
  src/CMakeLists.txt        |    4 +-
  src/llama-arch.cpp        |   33 ++

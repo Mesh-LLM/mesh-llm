@@ -487,10 +487,7 @@ fn run_binary_stage(
         mtp_source,
         n_threads: tuning.n_threads,
         n_threads_batch: tuning.n_threads_batch,
-        recurrent_rollback_tokens: split_dflash.as_ref().map_or(
-            0,
-            crate::split_dflash::SplitDFlashStage::recurrent_rollback_tokens,
-        ),
+        recurrent_rollback_tokens,
     };
     let runtime = match load_runtime_with_overrides(&config, &overrides, None) {
         // A native runtime that predates borrowed tensors refuses them; the

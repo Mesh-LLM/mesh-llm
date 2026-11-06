@@ -9,11 +9,11 @@ in one micro-batch, as the upstream server does for clef.
 ---
  include/skippy.h        |   1 +
  include/skippy/clef.h   | 144 +++++++++++
- include/skippy/common.h |   4 +-
+ include/skippy/common.h |   2 +
  src/CMakeLists.txt      |  20 ++
  src/skippy/abi.cpp      |   1 +
  src/skippy/clef.cpp     | 517 ++++++++++++++++++++++++++++++++++++++++
- 6 files changed, 686 insertions(+), 1 deletion(-)
+ 6 files changed, 685 insertions(+)
  create mode 100644 include/skippy/clef.h
  create mode 100644 src/skippy/clef.cpp
 

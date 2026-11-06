@@ -41,8 +41,9 @@ pub struct RuntimeLaunchOverrides {
     pub n_threads: Option<usize>,
     pub n_threads_batch: Option<usize>,
     pub mtp_source: MtpSource,
-    /// Recurrent rollback depth the speculative plan needs; `0` keeps the
-    /// native default.
+    /// Recurrent rollback depth the speculative plan needs; `0` disables
+    /// snapshots for a known non-drafting runtime. An MTP source without an
+    /// explicit depth retains a two-input compatibility default.
     pub recurrent_rollback_tokens: u32,
 }
 
@@ -622,7 +623,13 @@ pub(crate) fn runtime_config_from_stage_config(
             skippy_protocol::GlmDsaPolicy::V1 => RuntimeGlmDsaPolicy::V1,
         },
         mtp_source: overrides.mtp_source,
-        recurrent_rollback_tokens: overrides.recurrent_rollback_tokens,
+        recurrent_rollback_tokens: if overrides.mtp_source != MtpSource::Disabled
+            && overrides.recurrent_rollback_tokens == 0
+        {
+            2
+        } else {
+            overrides.recurrent_rollback_tokens
+        },
         resident_tensor_names: config.resident_tensor_names.clone(),
         execution_contract: config.execution_contract.clone(),
         activation_import_identities: config.activation_import_identities.clone(),
@@ -960,6 +967,24 @@ mod tests {
         );
         assert_eq!(runtime_config.mtp_source, MtpSource::External);
         assert_eq!(runtime_config.recurrent_rollback_tokens, 16);
+    }
+
+    #[test]
+    fn runtime_config_rollback_distinguishes_nondraft_and_unknown_mtp() {
+        let config = StageConfig {
+            stage_id: "stage-0".into(),
+            layer_end: 1,
+            ..StageConfig::default()
+        };
+        let mut overrides = RuntimeLaunchOverrides::default();
+        let plain = runtime_config_from_stage_config(&config, &overrides).unwrap();
+        assert_eq!(plain.recurrent_rollback_tokens, 0);
+        overrides.mtp_source = MtpSource::Integrated;
+        let mtp = runtime_config_from_stage_config(&config, &overrides).unwrap();
+        assert_eq!(mtp.recurrent_rollback_tokens, 2);
+        overrides.recurrent_rollback_tokens = 1;
+        let explicit = runtime_config_from_stage_config(&config, &overrides).unwrap();
+        assert_eq!(explicit.recurrent_rollback_tokens, 1);
     }
 
     #[test]

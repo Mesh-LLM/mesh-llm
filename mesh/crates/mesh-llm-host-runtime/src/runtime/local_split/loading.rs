@@ -1105,10 +1105,13 @@ pub(super) async fn split_generation_load_settings_with<'a>(
         Some(_) => Some(split_dflash_fallback(&resolved, spec, &load_mode)?),
         None => None,
     };
-    runtime_options.recurrent_rollback_tokens = split_dflash.as_ref().map_or(
-        0,
-        skippy_serving::split_dflash::SplitDFlashStage::recurrent_rollback_tokens,
-    );
+    runtime_options.recurrent_rollback_tokens =
+        runtime_options
+            .recurrent_rollback_tokens
+            .max(split_dflash.as_ref().map_or(
+                0,
+                skippy_serving::split_dflash::SplitDFlashStage::recurrent_rollback_tokens,
+            ));
     tracing::info!(
         model = spec.model_ref,
         "KV cache: {} K + {} V",

@@ -41,11 +41,10 @@ rollback lifecycle (verify_window.cpp: when a window may roll back in
 place, settling a window that a pipelined decode lands on into a host
 checkpoint, buffer reuse) and its rollback-count ABI.
 ---
- include/skippy/common.h                       |   2 +-
  include/skippy/state.h                        |  15 +
- src/CMakeLists.txt                            |  34 ++
+ src/CMakeLists.txt                            |  47 +++
  src/skippy-verify-checkpoint.h                |   9 +-
- src/skippy/activation.cpp                     | 154 ++++----
+ src/skippy/activation.cpp                     | 154 ++++---
  src/skippy/execution-batch.cpp                |   7 +
  src/skippy/execution-single.cpp               |   5 +
  src/skippy/resident_prefix.cpp                |   2 +-
@@ -773,10 +772,10 @@ index 4100856f3..f092b75b0 100644
          }
 diff --git a/src/skippy/tests/verify_rollback.cpp b/src/skippy/tests/verify_rollback.cpp
 new file mode 100644
-index 000000000..9dcf7e051
+index 000000000..e1ec25bdc
 --- /dev/null
 +++ b/src/skippy/tests/verify_rollback.cpp
-@@ -0,0 +1,329 @@
+@@ -0,0 +1,377 @@
 +// Speculative verify windows with forced rejections must commit exactly the
 +// tokens a session decodes one at a time, whether each window rolls back in
 +// place through the recurrent rollback snapshots or through a host checkpoint,
@@ -784,6 +783,10 @@ index 000000000..9dcf7e051
 +// one is resolved, and a rejection then lands in the earlier window.
 +#include "skippy.h"
 +#include "../runtime_types.h"
++#include "../state_memory.h"
++#include "llama-context.h"
++#include "llama-memory-recurrent.h"
++#include "ggml-cpu.h"
 +
 +#include <cstdio>
 +#include <cstdlib>
@@ -800,6 +803,8 @@ index 000000000..9dcf7e051
 +constexpr size_t GENERATED = 48;
 +// Proposal index rejected in successive windows; -1 accepts every row.
 +constexpr int REJECTIONS[] = {-1, 0, 3, 1, -1, 2};
++const char * selected_backend = "CPU";
++bool use_gpu = false;
 +
 +void ok(skippy_status status, skippy_error * error) {
 +    if (status != SKIPPY_STATUS_OK) {
@@ -811,12 +816,28 @@ index 000000000..9dcf7e051
 +
 +skippy_model * open(const char * path, uint32_t rollback_tokens) {
 +    auto config = skippy_runtime_config_default();
-+    config.selected_backend_device = "CPU";
++    config.selected_backend_device = selected_backend;
++    config.n_gpu_layers = use_gpu ? 99 : 0;
 +    config.ctx_size = 256;
 +    config.recurrent_rollback_tokens = rollback_tokens;
 +    skippy_model * model = nullptr;
 +    skippy_error * error = nullptr;
 +    ok(skippy_model_open(path, &config, &model, &error), error);
++    if (use_gpu) {
++        auto * memory = skippy_memory_recurrent_adapter(model->ctx->get_memory());
++        CHECK(memory != nullptr);
++        size_t device_tensors = 0;
++        for (auto * tensor : memory->r_l) {
++            if (!tensor) { continue; }
++            CHECK(tensor->buffer != nullptr);
++            const auto type = ggml_backend_dev_type(ggml_backend_buft_get_device(
++                    ggml_backend_buffer_get_type(tensor->buffer)));
++            CHECK(type == GGML_BACKEND_DEVICE_TYPE_GPU || type == GGML_BACKEND_DEVICE_TYPE_IGPU);
++            ++device_tensors;
++        }
++        CHECK(device_tensors > 0);
++        std::fprintf(stderr, "GPU_STATE tensors=%zu device=%s\n", device_tensors, selected_backend);
++    }
 +    return model;
 +}
 +
@@ -1089,8 +1110,26 @@ index 000000000..9dcf7e051
 +int main(int argc, char ** argv) {
 +    // `sliding-window`: the fixture's attention slides, so no window may roll
 +    // back in place and every one takes a host checkpoint.
-+    CHECK(argc == 2 || (argc == 3 && std::strcmp(argv[2], "sliding-window") == 0));
-+    const bool sliding_window = argc == 3;
++    CHECK(argc >= 2 && argc <= 4);
++    bool sliding_window = false;
++    for (int i = 2; i < argc; ++i) {
++        if (std::strcmp(argv[i], "gpu") == 0) {
++            CHECK(!use_gpu);
++            use_gpu = true;
++        } else {
++            CHECK(!sliding_window && std::strcmp(argv[i], "sliding-window") == 0);
++            sliding_window = true;
++        }
++    }
++    if (!use_gpu) { ggml_backend_register(ggml_backend_cpu_reg()); }
++    llama_backend_init();
++    if (use_gpu) {
++        auto * device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
++        if (!device) { device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU); }
++        CHECK(device != nullptr);
++        selected_backend = ggml_backend_dev_name(device);
++    }
++    std::fprintf(stderr, "VERIFY_BACKEND name=%s gpu=%d\n", selected_backend, use_gpu);
 +    skippy_model * deep = open(argv[1], WINDOW + 2);
 +    const auto deep_reference = reference(deep);
 +    const auto & expected = deep_reference.tokens;
@@ -1104,6 +1143,14 @@ index 000000000..9dcf7e051
 +    speculate(shallow, expected, false);
 +    speculate_pipelined(shallow, shallow_reference);
 +    release(shallow);
++    // Explicit off still verifies through pre-decode host checkpoints.
++    skippy_model * off = open(argv[1], 0);
++    CHECK(off->ctx->get_cparams().n_rs_seq == 0);
++    auto off_reference = reference(off);
++    CHECK(off_reference.tokens == expected);
++    speculate(off, expected, false);
++    speculate_pipelined(off, off_reference);
++    release(off);
 +    return 0;
 +}
 diff --git a/src/skippy/verify_window.cpp b/src/skippy/verify_window.cpp

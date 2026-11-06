@@ -18,13 +18,13 @@ Bumps the Skippy ABI to 0.1.73.
 ---
  include/skippy.h                         |   1 +
  include/skippy/asr.h                     | 172 +++++++++
- include/skippy/common.h                  |   4 +-
+ include/skippy/common.h                  |   2 +
  src/CMakeLists.txt                       |  44 +++
  src/skippy/abi.cpp                       |   6 +-
  src/skippy/asr.cpp                       | 447 +++++++++++++++++++++++
  src/skippy/asr_decode.h                  |  50 +++
  src/skippy/tests/asr_decode_boundary.cpp |  81 ++++
- 8 files changed, 803 insertions(+), 2 deletions(-)
+ 8 files changed, 802 insertions(+), 1 deletion(-)
  create mode 100644 include/skippy/asr.h
  create mode 100644 src/skippy/asr.cpp
  create mode 100644 src/skippy/asr_decode.h

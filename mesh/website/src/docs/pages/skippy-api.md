@@ -1225,7 +1225,7 @@ LLAMA_API enum skippy_status skippy_model_open_from_source(
 <a id="skippy-fn-skippy-runtime-config-default"></a>
 #### `skippy_runtime_config_default`
 
-Returns a C-safe runtime configuration with all derived-default controls set to auto.
+Returns a C-safe runtime configuration with derived-default controls set to auto and recurrent rollback depth explicitly set to 2. Set recurrent_rollback_tokens to 0 when no speculative rollback snapshots are wanted.
 
 ```cpp
 LLAMA_API struct skippy_runtime_config skippy_runtime_config_default(

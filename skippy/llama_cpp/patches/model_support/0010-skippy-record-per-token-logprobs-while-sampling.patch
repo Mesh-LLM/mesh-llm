@@ -15,7 +15,6 @@ as unreadable instead of being read from a stale row. As the last patch
 to touch common.h it carries the queue's ABI version, 0.1.77.
 ---
  include/skippy.h               |  1 +
- include/skippy/common.h        |  2 +-
  include/skippy/logprobs.h      | 60 +++++++++++++++++++++
  include/skippy/sampling.h      |  4 ++
  src/CMakeLists.txt             |  1 +

@@ -72,6 +72,26 @@ pub struct EmbeddedOpenAiStageOptions {
 }
 
 impl BinaryStageOptions {
+    /// Size known plans before opening the stage. A transport-only stage has
+    /// no proposal-window contract, so retain the historical two-input floor;
+    /// larger incoming windows still use checkpoint/replay fallback.
+    pub(super) fn recurrent_rollback_tokens(&self) -> u32 {
+        let planned = self.openai.as_ref().map_or(2, |openai| {
+            openai.speculative.recurrent_rollback_tokens(
+                (self.resolved_mtp_source() != MtpSource::Disabled)
+                    .then_some(openai.native_mtp_max_tokens),
+                openai
+                    .draft_model_path
+                    .as_ref()
+                    .map(|_| openai.speculative_window),
+            )
+        });
+        planned.max(self.split_dflash.as_ref().map_or(
+            0,
+            crate::split_dflash::SplitDFlashStage::recurrent_rollback_tokens,
+        ))
+    }
+
     /// Resolve the MTP source from the admitted stage and optional OpenAI settings.
     pub fn resolved_mtp_source(&self) -> MtpSource {
         if !self.native_mtp_enabled || !self.config.native_mtp_enabled {
@@ -102,5 +122,45 @@ impl BinaryStageOptions {
                 || openai.speculative.ngram.is_some()
                 || openai.draft_model_path.is_some(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options() -> BinaryStageOptions {
+        BinaryStageOptions {
+            tuning: Default::default(),
+            config: StageConfig::default(),
+            topology: None,
+            bind_addr: "127.0.0.1:0".parse().unwrap(),
+            metrics_otlp_grpc: None,
+            telemetry_queue_capacity: 0,
+            telemetry_level: TelemetryLevel::Off,
+            max_inflight: 1,
+            reply_credit_limit: None,
+            async_prefill_forward: false,
+            downstream_wire_condition: WireCondition::new(0.0, None).unwrap(),
+            downstream_connect_timeout_secs: 1,
+            native_mtp_enabled: false,
+            last_stage_decode_batch: None,
+            continuous_batching: true,
+            openai: None,
+            compute_meter: None,
+            l3_manager: None,
+            split_dflash: None,
+        }
+    }
+
+    #[test]
+    fn unknown_binary_verifiers_keep_a_compatibility_floor() {
+        let mut options = options();
+        assert_eq!(options.recurrent_rollback_tokens(), 2);
+        options.split_dflash = Some(crate::split_dflash::SplitDFlashStage {
+            max_draft_tokens: Some(7),
+            ..Default::default()
+        });
+        assert_eq!(options.recurrent_rollback_tokens(), 8);
     }
 }

@@ -14,14 +14,13 @@ accelerator. Routing and precision are unchanged.
 The override list and its pattern are owned by a load-scoped storage
 object because llama.cpp borrows both until the load call returns.
 ---
- include/skippy/common.h                       |  2 +-
  include/skippy/runtime.h                      |  6 +++
  src/skippy/model_load_config.cpp              | 33 ++++++++++++++
  src/skippy/model_load_config_internal.h       | 16 +++++++
  src/skippy/model_loading.cpp                  |  6 +++
  src/skippy/model_source.cpp                   |  2 +
  .../tests/hardware_application_probe.cpp      | 45 +++++++++++++++++++
- 7 files changed, 109 insertions(+), 1 deletion(-)
+ 6 files changed, 108 insertions(+)
 
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 index b9b5259af..df831c43e 100644
@@ -252,5 +251,5 @@ index 471968158..772d380e2 100644
      return passed ? 0 : 1;
  }
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 
