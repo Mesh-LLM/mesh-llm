@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT="${SKIPPY_SMOKE_SOURCE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+if [[ "$ROOT" != /* || ! -d "$ROOT" ]]; then
+  echo "smoke source root must be an existing absolute checkout" >&2
+  exit 2
+fi
 # Frozen automation selection begins.
 automation=(just --justfile "$ROOT/Justfile" automation-run)
 if [[ "${MESH_LLM_AUTOMATION_BIN+set}" == set ]]; then
@@ -64,6 +68,8 @@ PROMPT_MAX_NEW_TOKENS="${PROMPT_MAX_NEW_TOKENS:-8}"
 SMOKE_COMMAND_TIMEOUT_SECS="${SMOKE_COMMAND_TIMEOUT_SECS:-900}"
 DENSE_CHAIN_STARTUP_TIMEOUT_SECS="${DENSE_CHAIN_STARTUP_TIMEOUT_SECS:-180}"
 SMOKE_FLASH_ATTN="${SMOKE_FLASH_ATTN:-disabled}"
+SMOKE_N_GPU_LAYERS="${SMOKE_N_GPU_LAYERS:-0}"
+SKIPPY_SMOKE_FOCUSED_ONLY="${SKIPPY_SMOKE_FOCUSED_ONLY:-0}"
 SMOKE_N_BATCH="${SMOKE_N_BATCH:-128}"
 SMOKE_N_UBATCH="${SMOKE_N_UBATCH:-$SMOKE_N_BATCH}"
 PROMPT_N_BATCH="${PROMPT_N_BATCH:-$PROMPT_PREFILL_CHUNK_SIZE}"
@@ -268,9 +274,16 @@ if [[ "$RECURRENT_MODEL_OVERRIDDEN" == "0" ]]; then
     --verify-root "$(dirname "$RECURRENT_MODEL_PATH")"
 fi
 
-echo "building skippy smoke binaries"
-LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
-  cargo build -p skippy-cli -p skippy-correctness -p skippy-package-builder
+if [[ "${SKIPPY_SMOKE_SKIP_BUILD:-0}" == "1" ]]; then
+  # The repair owner has already built and fingerprinted these exact executables.
+  for binary in "$STAGE_SERVER_BIN" target/debug/skippy-correctness target/debug/skippy-package-builder; do
+    [[ -f "$binary" && -x "$binary" ]] || { echo "missing smoke executable: $binary" >&2; exit 125; }
+  done
+else
+  echo "building skippy smoke binaries"
+  LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
+    cargo build --locked -p skippy-cli -p skippy-correctness -p skippy-package-builder
+fi
 
 DENSE_LAYER_END="$(model_layer_end "$DENSE_MODEL_PATH")"
 RECURRENT_LAYER_END="$(model_layer_end "$RECURRENT_MODEL_PATH")"
@@ -312,6 +325,7 @@ LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
     --n-batch "$DENSE_BINARY_N_BATCH" \
     --n-ubatch "$DENSE_BINARY_N_UBATCH" \
     --flash-attn "$SMOKE_FLASH_ATTN" \
+    --n-gpu-layers "$SMOKE_N_GPU_LAYERS" \
     --prompt "Say hi in three words." \
     --split-layer "$DENSE_BINARY_SPLIT" \
     --stage1-bind-addr "127.0.0.1:${BINARY_PORT}" \
@@ -360,6 +374,7 @@ if [[ "$RUN_DENSE_CHAIN_SMOKE" == "1" || "$RUN_DENSE_CHAIN_SMOKE" == "true" ]]; 
       --n-batch "$SMOKE_N_BATCH" \
       --n-ubatch "$SMOKE_N_UBATCH" \
       --flash-attn "$SMOKE_FLASH_ATTN" \
+      --n-gpu-layers "$SMOKE_N_GPU_LAYERS" \
       --prompt "Say hi in three words." \
       --splits "${DENSE_SPLIT_1},${DENSE_SPLIT_2}" \
       --stage1-bind-addr "127.0.0.1:${CHAIN_PORT_1}" \
@@ -386,6 +401,7 @@ if [[ "$SKIPPY_SMOKE_ENABLE_DENSE_STATE" == "1" ]]; then
       --n-batch "$SMOKE_N_BATCH" \
       --n-ubatch "$SMOKE_N_UBATCH" \
       --flash-attn "$SMOKE_FLASH_ATTN" \
+      --n-gpu-layers "$SMOKE_N_GPU_LAYERS" \
       --prompt "Dense full-state cache smoke." \
       --state-layer-start 0 \
       --state-layer-end "$DENSE_LAYER_END" \
@@ -411,6 +427,7 @@ LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
     --n-batch "$SMOKE_N_BATCH" \
     --n-ubatch "$SMOKE_N_UBATCH" \
     --flash-attn "$SMOKE_FLASH_ATTN" \
+    --n-gpu-layers "$SMOKE_N_GPU_LAYERS" \
     --prompt "Recurrent KV cache smoke." \
     --state-layer-start 0 \
     --state-layer-end "$RECURRENT_LAYER_END" \
@@ -423,6 +440,11 @@ LLAMA_STAGE_BUILD_DIR="$LLAMA_BUILD_DIR" \
     --report-out "$REPORT_DIR/recurrent-kv-recurrent.json"
 assert_json "$REPORT_DIR/recurrent-kv-recurrent.json" \
   '.matches == true and .cache_hit_matches == true and .suffix_prefill_matches == null and .state_payload_kind == "kv-recurrent" and .cache_hit_repeats == 2 and .state_bytes > 0 and .payload_digest.recurrent_bytes > 0 and .payload_digest.kv_bytes > 0'
+
+if [[ "$SKIPPY_SMOKE_FOCUSED_ONLY" == "1" ]]; then
+  echo "focused split/state smoke passed; full certification is still required"
+  exit 0
+fi
 
 PROMPT_LOG="$WORK_DIR/prompt-stage.log"
 PROMPT_IN="$WORK_DIR/prompt-input.txt"
@@ -565,6 +587,7 @@ if [[ "$openai_logprobs_status" != "200" ]]; then
   cat "$openai_logprobs_response" >&2 || true
   exit 1
 fi
+# shellcheck disable=SC2016
 assert_json "$openai_logprobs_response" \
   '.choices[0].logprobs.content as $c | ($c | length) > 0 and ($c | length) == .usage.completion_tokens and all($c[]; (.logprob | type) == "number" and .logprob <= 0 and (.top_logprobs | length) == 2)'
 
@@ -588,6 +611,7 @@ if [[ "$openai_completion_logprobs_status" != "200" ]]; then
   cat "$openai_completion_logprobs_response" >&2 || true
   exit 1
 fi
+# shellcheck disable=SC2016
 assert_json "$openai_completion_logprobs_response" \
   '.choices[0].logprobs as $l | ($l.tokens | length) > 0 and ($l.tokens | length) == .usage.completion_tokens and ($l.token_logprobs | length) == ($l.tokens | length) and all($l.token_logprobs[]; type == "number" and . <= 0) and all($l.top_logprobs[]; length <= 2)'
 

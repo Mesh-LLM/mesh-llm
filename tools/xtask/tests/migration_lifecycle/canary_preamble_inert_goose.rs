@@ -19,7 +19,7 @@ fn repository() -> PathBuf {
         .unwrap()
 }
 fn wrapper() -> String {
-    fs::read_to_string(repository().join("scripts/llama-canary-agent-repair.sh")).unwrap()
+    crate::canary_full_gates::fixture::source()
 }
 fn declaration(source: &str, name: &str) -> String {
     let marker = format!("\n{name}() {{\n");
@@ -291,6 +291,11 @@ exec /bin/sleep 600
         format!(
             r#"set -euo pipefail
 ROOT="$PWD"
+TRUSTED_ROOT="$ROOT"
+STATE_DIR="$ROOT"
+repair_recovery_controller="$MESH_LLM_AUTOMATION_BIN"
+LLAMA_STAGE_BUILD_DIR="$ROOT/native"
+LLAMA_STAGE_BACKEND=metal
 HARNESS_MODE=repair-build
 AGENT_PROVIDER=fixture_provider
 AGENT_MODEL=fixture_model

@@ -17,10 +17,14 @@ pub(super) fn repository() -> PathBuf {
         .canonicalize()
         .unwrap()
 }
-pub(super) fn source() -> String {
-    fs::read_to_string(repository().join("scripts/llama-canary-agent-repair.sh")).unwrap()
+pub(crate) fn source() -> String {
+    format!(
+        "{}\n{}",
+        fs::read_to_string(repository().join("scripts/llama-canary-agent-repair.sh")).unwrap(),
+        fs::read_to_string(repository().join("scripts/lib/llama-canary-build-gates.sh")).unwrap()
+    )
 }
-pub(super) fn declaration(source: &str, name: &str) -> String {
+pub(crate) fn declaration(source: &str, name: &str) -> String {
     let marker = format!("\n{name}() {{\n");
     assert_eq!(source.matches(&marker).count(), 1);
     let body = source
@@ -111,6 +115,14 @@ if [[ "$INERT_FAIL" == '{label}' ]]; then exit 17; fi
         );
     }
     pub(super) fn build_tools(&self) {
+        self.tool("tools/shared-check", "repair-check", "");
+        let actual = env!("CARGO_BIN_EXE_xtask").replace('\'', "'\\''");
+        executable(
+            &self.root.join("tools/controller"),
+            &format!(
+                "#!/bin/bash\nif [[ \"${{1:-}} ${{2:-}} ${{3:-}}\" == 'automation canary-receipts repair-check' ]]; then exec \"$INERT_ROOT/tools/shared-check\" \"$@\"; fi\nexec '{actual}' \"$@\"\n"
+            ),
+        );
         for (path, label) in [
             (
                 "scripts/check-skippy-generated-family-patch.sh",

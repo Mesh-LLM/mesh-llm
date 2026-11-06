@@ -404,3 +404,55 @@ fn static_build_still_requires_every_archive() {
         assert!(String::from_utf8_lossy(&output.stderr).contains("without the full link closure"));
     }
 }
+
+#[test]
+fn focused_target_keeps_link_closure_and_never_satisfies_a_complete_upstream_build() {
+    let fixture = Fixture::new(true);
+    commit_work(&fixture.work);
+    success(
+        fixture
+            .command("Linux")
+            .env("LLAMA_STAGE_UPSTREAM_TESTS", "ON")
+            .args(["--build-only", "--target", "test-jinja"])
+            .output()
+            .unwrap(),
+    );
+    let log = fixture.log();
+    let build = log
+        .lines()
+        .find(|line| line.starts_with("--build "))
+        .unwrap();
+    assert!(build.contains("--target llama llama-common mtmd "));
+    assert!(build.ends_with("test-jinja"));
+    fs::write(fixture.directory.path().join("calls"), "").unwrap();
+    success(
+        fixture
+            .command("Linux")
+            .env("LLAMA_STAGE_UPSTREAM_TESTS", "ON")
+            .arg("--build-only")
+            .output()
+            .unwrap(),
+    );
+    let log = fixture.log();
+    let build = log
+        .lines()
+        .find(|line| line.starts_with("--build "))
+        .unwrap();
+    assert!(
+        !build.contains("--target"),
+        "full upstream build must use CMake's complete target set"
+    );
+}
+
+#[test]
+fn focused_target_requires_caller_owned_checks_and_a_target_name() {
+    for arguments in [
+        vec!["--target", "test-jinja"],
+        vec!["--build-only", "--target"],
+    ] {
+        let fixture = Fixture::new(true);
+        let output = fixture.command("Linux").args(arguments).output().unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(!fixture.directory.path().join("calls").exists());
+    }
+}

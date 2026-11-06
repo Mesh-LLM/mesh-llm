@@ -27,6 +27,11 @@ const GRAMMAR: Grammar = Grammar {
     flags: &["--help"],
 };
 
+#[cfg(unix)]
+pub(crate) fn checkpoint(root: &Path, output: &Path, base: &str) -> DynResult<()> {
+    process::operation(|| snapshot::save(root, output, base))
+}
+
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     let parsed = match GRAMMAR.parse(args) {
         Ok(parsed) => parsed,
