@@ -76,10 +76,10 @@ index df831c43e..3448095a1 100644
  #if defined(_MSC_VER)
  #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 diff --git a/include/skippy/state.h b/include/skippy/state.h
-index 1cfaaa5c6..e8d0874a1 100644
+index 0fe373d78..6d9028a18 100644
 --- a/include/skippy/state.h
 +++ b/include/skippy/state.h
-@@ -173,6 +173,21 @@ LLAMA_API enum skippy_status skippy_retire_verify_checkpoint(
+@@ -177,6 +177,21 @@ LLAMA_API enum skippy_status skippy_retire_verify_checkpoint(
          uint64_t token_count,
          struct skippy_error ** out_error);
  
@@ -105,7 +105,7 @@ diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index cd2b536f6..4f4fc1cd1 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -59,6 +59,7 @@ add_library(llama
+@@ -62,6 +62,7 @@ add_library(llama
              skippy/model_source.cpp
              skippy/session.cpp
              skippy/verification.cpp
@@ -137,7 +137,7 @@ index cd2b536f6..4f4fc1cd1 100644
 +    add_skippy_verify_rollback_test(qwen4exp qwen4exp-moe.gguf)
 +    # lfm2's fixture slides its attention window, so it checkpoints every window.
 +    add_skippy_verify_rollback_test(lfm2 lfm2-dense.gguf sliding-window)
-     add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
+     add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp skippy/tests/resident_checkpoint_gpu.cpp)
      target_include_directories(skippy-sampling-history PRIVATE .)
      target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
 diff --git a/src/skippy-verify-checkpoint.h b/src/skippy-verify-checkpoint.h
@@ -497,7 +497,7 @@ diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
 index 46e907aa0..ec9fb94b1 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
-@@ -121,6 +121,11 @@ struct skippy_verify_checkpoint {
+@@ -130,6 +130,11 @@ struct skippy_verify_checkpoint {
      bool valid = false;
      int32_t token_start = 0;
      size_t token_count = 0;
@@ -509,7 +509,7 @@ index 46e907aa0..ec9fb94b1 100644
      std::vector<uint8_t> state;
      std::vector<llama_token> token_ids;
      bool has_activation_input = false;
-@@ -194,4 +199,16 @@ struct skippy_session {
+@@ -201,4 +206,16 @@ struct skippy_session {
      std::vector<skippy_pending_activation_part> pending_activation_exports;
      bool reset_required = false;
      std::vector<skippy_verify_checkpoint> verify_checkpoints;
@@ -572,76 +572,20 @@ index 4741f55cb..9d0ba6ee5 100644
              SKIPPY_RUNTIME_EVENT_KIND_KV_PRESSURE_CLEARED,
              static_cast<uint64_t>(session->seq_id),
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
-index 15c48419d..45a53c4ba 100644
+index b2f394444..57b9eea4e 100644
 --- a/src/skippy/state.cpp
 +++ b/src/skippy/state.cpp
-@@ -74,7 +74,7 @@ static void skippy_update_session_state_after_import(
-         session->signal_history.resize(static_cast<size_t>(session->n_past));
+@@ -726,8 +726,11 @@ enum skippy_status skippy_trim_session(
+         }
      }
-     skippy_mtp_clear_session_state(session);
--    session->verify_checkpoints.clear();
-+    skippy_clear_verify_windows(session);
- }
- 
- static enum skippy_status skippy_imported_session_position(
-@@ -646,7 +646,7 @@ enum skippy_status skippy_import_kv_page(
-     }
-     session->n_past = std::max<int32_t>(session->n_past, static_cast<int32_t>(std::min<uint64_t>(desc->token_start + desc->token_count, std::numeric_limits<int32_t>::max())));
-     skippy_mtp_clear_session_state(session);
--    session->verify_checkpoints.clear();
-+    skippy_clear_verify_windows(session);
-     session->ctx->synchronize();
-     return skippy_success(out_error);
- }
-@@ -742,7 +742,7 @@ enum skippy_status skippy_import_cachegen_kv_page_v1(struct skippy_session *
-                                         static_cast<int32_t>(std::min<uint64_t>(desc->token_start + desc->token_count,
-                                                                                 std::numeric_limits<int32_t>::max())));
-     skippy_mtp_clear_session_state(session);
--    session->verify_checkpoints.clear();
-+    skippy_clear_verify_windows(session);
-     session->ctx->synchronize();
-     return skippy_success(out_error);
- }
-@@ -759,17 +759,28 @@ enum skippy_status skippy_retire_verify_checkpoint(
-     if (!skippy_memory_needs_verify_checkpoint(session->ctx->get_memory())) {
-         return skippy_success(out_error);
-     }
--    // No checkpoint is taken when the span rolls back in place, so there is
--    // nothing to retire.
--    if (skippy_verify_window_can_roll_back_in_place(session, static_cast<size_t>(token_count))) {
-+    skippy_verify_checkpoint & inplace = session->inplace_verify_window;
-+    if (inplace.valid && static_cast<uint64_t>(inplace.token_start) == token_start &&
-+            inplace.token_count == token_count) {
-+        inplace.valid = false;
-+        ++session->verify_windows_in_place;
-         return skippy_success(out_error);
-     }
--    if (!skippy_retire_verify_checkpoint_exact(
--                session->verify_checkpoints, token_start, token_count)) {
--        skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "verify-window checkpoint was not found");
--        return SKIPPY_STATUS_INVALID_ARGUMENT;
-+    skippy_verify_checkpoint retired;
-+    if (skippy_retire_verify_checkpoint_exact(
-+                session->verify_checkpoints, token_start, token_count, &retired)) {
-+        if (session->verify_checkpoint_pool.size() < 2) {
-+            session->verify_checkpoint_pool.push_back(std::move(retired));
-+        }
-+        return skippy_success(out_error);
-     }
--    return skippy_success(out_error);
-+    // A window that could roll back in place may have taken no checkpoint
-+    // at all, so there is nothing to retire.
-+    if (skippy_verify_window_can_roll_back_in_place(session, static_cast<size_t>(token_count))) {
-+        return skippy_success(out_error);
+     session->n_past = static_cast<int32_t>(token_count);
+-    if (session->token_history.size() > token_count) {
++    const bool history_truncated = session->token_history.size() > token_count;
++    if (history_truncated) {
+         session->token_history.resize(static_cast<size_t>(token_count));
 +    }
-+    skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "verify-window checkpoint was not found");
-+    return SKIPPY_STATUS_INVALID_ARGUMENT;
- }
- 
- enum skippy_status skippy_trim_session(
-@@ -799,6 +810,25 @@ enum skippy_status skippy_trim_session(
-         skippy_set_error(out_error, SKIPPY_STATUS_RUNTIME_ERROR, "runtime memory is unavailable");
-         return SKIPPY_STATUS_RUNTIME_ERROR;
++    if (history_truncated || session->sampling_accepted_token_count > token_count) {
+         skippy_clear_chat_sampling(session);
      }
 +    // A window held in place rewinds through seq_rm below, to any row after
 +    // its first. Its first row is the committed token the window started

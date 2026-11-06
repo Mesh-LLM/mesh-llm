@@ -81,6 +81,7 @@ mod tests {
         let manager = L3CacheManager::acquire(root.path(), StoreLimits::new(1 << 20, 0)).unwrap();
         let config = StageConfig {
             layer_end: 1,
+            source_model_sha256: Some("ab".repeat(32)),
             kv_cache: Some(StageKvCacheConfig {
                 mode: StageKvCacheMode::LookupRecord,
                 min_tokens: 1,
@@ -94,7 +95,7 @@ mod tests {
             }),
             ..StageConfig::default()
         };
-        let kv = KvStageIntegration::from_loaded_model_with_l3_manager(
+        let kv = KvStageIntegration::from_test_model_with_l3_manager(
             &config,
             Some(ModelStateKind::Dense),
             Some(MemoryCacheCapabilities {

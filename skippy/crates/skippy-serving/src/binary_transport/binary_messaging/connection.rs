@@ -172,7 +172,7 @@ fn handle_binary_connection_messages(
         config.activation_codec_policy,
         max_inflight.max(1),
         discard_registry.clone(),
-        worker_control,
+        worker_control.clone(),
     )?;
     let mut async_forwarder = if async_prefill_forward || max_inflight > 1 {
         downstream
@@ -208,7 +208,9 @@ fn handle_binary_connection_messages(
         let message_started = Instant::now();
         let session_id = binary_message_session_id(connection_session_id, &message);
         let session_key = session_id.to_string();
-        session_tracker.touch(&session_key)?;
+        session_tracker.touch_interruptible(&session_key, || {
+            worker_control.is_shutting_down() || inbound_reader.is_finished()
+        })?;
         emit_binary_message_received(
             telemetry,
             config,

@@ -4,6 +4,7 @@ mod inference;
 mod prepared_exchange;
 #[cfg(test)]
 mod prepared_exchange_tests;
+mod runtime_admission;
 use crate::frontend::admission::GenerationTokenBudget;
 use crate::frontend::admission::GenerationTokenBudgetRequest;
 use crate::frontend::admission::GenerationTokenReservation;
@@ -563,6 +564,7 @@ impl GenerationAdmissionController {
         )?;
         match claim {
             GenerationAdmissionClaim::Acquired(resources) => Ok(GenerationAdmissionPermit {
+                _runtime_lane: None,
                 _lane: self.generation_limit.wrap_permit(resources.lane),
                 token_budget: resources.token_budget,
                 _active_work: self.generation_service_estimator.start_active(work),
@@ -588,6 +590,7 @@ impl GenerationAdmissionController {
                     )
                     .await?;
                 Ok(GenerationAdmissionPermit {
+                    _runtime_lane: None,
                     _lane: self.generation_limit.wrap_permit(resources.lane),
                     token_budget: resources.token_budget,
                     _active_work: queued_work.promote(),
@@ -604,6 +607,7 @@ impl GenerationAdmissionController {
 }
 
 pub(in crate::frontend) struct GenerationAdmissionPermit {
+    _runtime_lane: Option<crate::runtime_state::lane_admission::RuntimeLanePermit>,
     token_budget: GenerationTokenReservation,
     _lane: GenerationConcurrencyPermit,
     _active_work: GenerationActiveWorkReservation,
@@ -895,6 +899,7 @@ impl StageOpenAiBackend {
         work: GenerationAdmissionWork,
         scheduling: GenerationAdmissionScheduling,
     ) -> InferenceResult<(GenerationAdmissionPermit, Option<GenerationSessionPermit>)> {
+        let admission_started = Instant::now();
         let result = GenerationAdmissionController::for_backend(self)
             .acquire_scheduled_work(
                 ids,
@@ -904,6 +909,19 @@ impl StageOpenAiBackend {
                 scheduling,
             )
             .await;
+        let result = match result {
+            Ok((mut permit, session)) => match self
+                .acquire_runtime_lane(admission_started, cancellation)
+                .await
+            {
+                Ok(runtime_lane) => {
+                    permit._runtime_lane = Some(runtime_lane);
+                    Ok((permit, session))
+                }
+                Err(error) => Err(error),
+            },
+            Err(error) => Err(error),
+        };
         if let Err(error) = &result {
             let mut attrs = self.openai_attrs(ids);
             attrs.insert(

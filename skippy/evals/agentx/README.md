@@ -114,6 +114,14 @@ just automation-run automation agentx mlflow-publish --input /abs/new-plan.json 
 Export does not write MLflow. Explicit publication uses existing operator
 `MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_USERNAME`, `MLFLOW_TRACKING_PASSWORD`
 through a private temporary curl config, never job payloads or source. It first
+requires `AGENTX_MLFLOW_LOCK_DIR` to name an existing absolute directory on a
+filesystem shared by **every publishing host**, with working cross-host advisory
+file locks. All publishers must use the same mount. The lock is keyed by tracking
+URI and campaign root, held through the complete group publication, and retained
+on disk after release. A concurrent publication fails before API writes; retry
+after the current publisher finishes. A host-local directory cannot coordinate
+publications from different hosts and is not a supported configuration. MLflow
+tag values alone do not enforce run-key uniqueness. The publisher then
 GETs existing experiment6 and requires exact name `agentx-skippy-vs-llama` and
 active state. There is no experiment-create call. A new idempotent campaign
 root contains model/backend groups and their six arm children through
@@ -126,6 +134,32 @@ not a total. Then
 metrics are read back, artifacts uploaded/downloaded with matching SHA, then
 publication receipt is written. A publishing failure is nonzero and retains
 API evidence for retry. Publication is not a numerical-correctness certificate.
+
+Export and publication verify that the evidence archive contains exactly one
+`agentx/result.json` with the same bytes as the supplied report. TTFT p50/p95 and
+ITL p50 are required for every completed cell. Explicit generation-lane overrides
+use a diagnostic scope and distinct MLflow run keys and capacity tags, so they
+cannot replace an automatic-capacity comparison. Prepared environments reject
+executable `.pth` hooks and path entries outside the pinned environment; remove
+unsupported hooks while preparing the offline environment before pinning it.
+The prepared llama executable and every non-system native dependency are inspected
+as ELF or Mach-O before a baseline is admitted. Loader search paths and resolved
+libraries must stay inside `standard_runtime`; ELF shared objects need their own
+search paths. The existing Linux host/driver library exceptions and macOS system
+libraries remain host-owned. Package backend libraries in the same pinned tree;
+an unresolved or external dependency rejects preparation.
+The baseline executable itself must resolve inside that tree and launches from
+its canonical executable directory, so ggml's executable-directory and working-
+directory plugin searches cannot inspect the repository or an external binary
+directory. Ambient `GGML_BACKEND_PATH`, `LD_LIBRARY_PATH` and `DYLD_LIBRARY_PATH`
+are not inherited. Admitted baseline builds must retain the pinned unpatched
+source's empty `GGML_BACKEND_DIR` default, or set that compile-time directory
+inside the same pinned tree. Custom builds with an external compiled backend
+directory are unsupported.
+
+After the workload finishes, the supervisor deliberately sends the server
+SIGTERM. A zero exit or a Unix wait status recording that SIGTERM is accepted;
+an explicit nonzero exit, another signal, or forced cleanup fails the campaign.
 
 The ordinary CI/GPU suite and registered JY templates are unchanged. This
 benchmark owner does not mark the long-prefix/cancellation/L3 TODO complete.

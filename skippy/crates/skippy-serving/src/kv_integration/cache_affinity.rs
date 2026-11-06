@@ -177,7 +177,7 @@ mod checkpoint_matching_tests {
             ..StageConfig::default()
         };
         // An arbitrary state-kind label cannot override the loaded memory contract.
-        let integration = KvStageIntegration::from_loaded_model_with_l3_manager(
+        let integration = KvStageIntegration::from_test_model_with_l3_manager(
             &config,
             Some(skippy_runtime::ModelStateKind::Dense),
             Some(MemoryCacheCapabilities {

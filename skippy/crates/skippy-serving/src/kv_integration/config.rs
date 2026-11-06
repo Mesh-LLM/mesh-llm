@@ -24,6 +24,7 @@ use super::cache_payload::{durable_cache_payload, effective_cache_payload};
 pub(super) mod durable_spill;
 mod exact_state_limits;
 mod resident_policy;
+mod runtime_identity;
 use durable_spill::{
     DurableRecordTarget, PendingDurableSpill, spill_exact_record_to_l3, start_durable_spill_worker,
 };
@@ -72,6 +73,7 @@ impl KvStageIntegration {
             config,
             model_state_kind,
             memory_cache,
+            None,
             || l3_manager_from_env(config),
             observer,
         )
@@ -91,6 +93,7 @@ impl KvStageIntegration {
             config,
             model_state_kind,
             memory_cache,
+            None,
             || Ok(manager),
             observer,
         )
@@ -100,6 +103,9 @@ impl KvStageIntegration {
         config: &StageConfig,
         model_state_kind: Option<ModelStateKind>,
         memory_cache: Option<skippy_runtime::MemoryCacheCapabilities>,
+        loaded_model_content: Option<
+            Arc<crate::runtime_state::model_content::VerifiedModelContent>,
+        >,
         manager: impl FnOnce() -> Result<Option<L3CacheManager>>,
         observer: Option<Arc<dyn KvLifecycleObserver>>,
     ) -> Result<Option<Self>> {
@@ -133,7 +139,11 @@ impl KvStageIntegration {
         };
         let payload_selection_reason = "loaded_graph_and_memory";
         let dense_without_recurrent = admitted.resident && !admitted.resident_checkpoint;
-        let l3_manager = manager()?;
+        let l3_manager = if loaded_model_content.is_some() {
+            manager()?
+        } else {
+            None
+        };
         if !admitted.resident && cache_config.l2_max_bytes > 0 && l3_manager.is_none() {
             let _ = skippy_events::diagnostics::emit(
                 skippy_events::diagnostics::ServingDiagnostic::Warning {
@@ -150,7 +160,9 @@ impl KvStageIntegration {
             .and_then(|_| durable_cache_payload(admitted));
         let l3 = l3_manager
             .zip(durable_payload)
-            .map(|(manager, payload)| l3_tier_for_manager(config, payload, manager))
+            .map(|(manager, payload)| {
+                l3_tier_for_manager(config, payload, manager, loaded_model_content.as_deref())
+            })
             .transpose()?;
         let l2 = l3
             .as_ref()
@@ -160,7 +172,10 @@ impl KvStageIntegration {
                 super::l2_serving::StageL2::new(
                     cache_config.l2_max_bytes,
                     numerical_model_identity_for_stage(config),
-                    exact_state_identity_for_stage(config, l3_payload_kind(payload)),
+                    bind_model_content(
+                        loaded_model_content.as_deref(),
+                        exact_state_identity_for_stage(config, l3_payload_kind(payload)),
+                    ),
                 )
             });
         // Complete exporters are admitted by the native graph and memory; state
@@ -338,6 +353,7 @@ impl KvStageIntegration {
             durable_spill_tx,
         ));
         Ok(Some(Self {
+            loaded_model_content,
             mode,
             payload,
             payload_selection_reason,
@@ -488,8 +504,12 @@ fn l3_tier_for_manager(
     config: &StageConfig,
     payload: StagePrefixCachePayload,
     manager: L3CacheManager,
+    content: Option<&crate::runtime_state::model_content::VerifiedModelContent>,
 ) -> Result<Arc<L3Tier>> {
-    let identity = exact_state_identity_for_stage(config, l3_payload_kind(payload));
+    let identity = bind_model_content(
+        content,
+        exact_state_identity_for_stage(config, l3_payload_kind(payload)),
+    );
     let model_identity = numerical_model_identity_for_stage(config);
     let root = manager.root().display().to_string();
     let tier = manager.tier_for_model(model_identity, identity, L3_SEGMENT_BYTES);
@@ -521,6 +541,16 @@ fn l3_tier_for_manager(
         }
     }
     Ok(Arc::new(tier))
+}
+
+fn bind_model_content(
+    content: Option<&crate::runtime_state::model_content::VerifiedModelContent>,
+    identity: String,
+) -> String {
+    match content {
+        Some(proof) => proof.bind(&identity),
+        None => identity,
+    }
 }
 
 fn l3_payload_kind(payload: StagePrefixCachePayload) -> &'static str {
@@ -912,7 +942,7 @@ fn cache_disabled_by_env(kv_cache: Option<&str>, prefix_cache: Option<&str>) -> 
         .any(|value| parse_cache_mode(value) == Some(StageKvCacheMode::Disabled))
 }
 
-fn effective_cache_config(config: &StageConfig) -> Option<StageKvCacheConfig> {
+pub(super) fn effective_cache_config(config: &StageConfig) -> Option<StageKvCacheConfig> {
     // An explicit environment kill-switch beats the planned stage config so
     // benches and incident response can turn the prefix cache off without
     // replanning the topology.
@@ -1614,6 +1644,7 @@ mod tests {
 
     fn enabled_auto_config(model_id: &str) -> StageConfig {
         let mut config = test_config(model_id);
+        config.source_model_sha256 = Some("ab".repeat(32));
         config.kv_cache = Some(StageKvCacheConfig {
             exact_max_bytes: None,
             mode: StageKvCacheMode::LookupRecord,

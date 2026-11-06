@@ -107,7 +107,7 @@ fn run(request: Request, output: &Path) -> DynResult<()> {
     let status = if result.is_ok() { "passed" } else { "failed" };
     let mut report = json!({"schema_version":1,"campaign":request.campaign,"model_key":request.model_key,"request":request,
         "backend":request.tools.backend,"status":status,"arms":arms,"error":result.as_ref().err().map(ToString::to_string),
-        "repeat_order":ORDER,"concurrencies":[1,2,4],"scope":if request.tools.backend==Backend::Cpu{"cpu_diagnostic_not_gpu_performance"}else{"fixed_complete_AgentX_comparison"},
+        "repeat_order":ORDER,"concurrencies":[1,2,4],"scope":report_scope(request.tools.backend, request.tools.diagnostic_generation_lanes),
         "jy_job_id":std::env::var("JIANYANG_JOB_ID").ok(),"jy_run_id":std::env::var("JIANYANG_RUN_ID").ok(),
         "source_attribution":{"product":request.tools.product_source_commit,"native":request.tools.native_source_commit,
             "standard_upstream":request.tools.standard_upstream,"automation_binary_sha256":crate::product::digest::file_sha256(&std::env::current_exe()?).map_err(|e|e.error)?},
@@ -122,10 +122,16 @@ fn run(request: Request, output: &Path) -> DynResult<()> {
         write(&output.join("result.json"), &report)?;
         result = Err(error);
     }
-    if let Some(path) = std::env::var_os("JIANYANG_RESULT_PATH") {
-        write(Path::new(&path), &report)?;
-    }
     result
+}
+pub(super) fn report_scope(backend: Backend, lanes: Option<u32>) -> &'static str {
+    if backend == Backend::Cpu {
+        "cpu_diagnostic_not_gpu_performance"
+    } else if lanes.is_some() {
+        "diagnostic_generation_lanes_AgentX_comparison"
+    } else {
+        "fixed_complete_AgentX_comparison"
+    }
 }
 fn execute(request: &Request, output: &Path, arms: &mut Vec<Value>) -> DynResult<()> {
     admit_host(request.tools.backend, output)?;
