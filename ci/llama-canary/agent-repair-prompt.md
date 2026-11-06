@@ -18,6 +18,14 @@ The existing patch generator below is transitional and stays in use until an
 equivalent Rust command has passed parity checks. This does not grant permission
 to edit the trusted scripts or CI boundary listed below.
 
+Keep console narration brief: before each meaningful action, state what you are
+checking or changing and why in one or two sentences. Report the result and next
+step afterward. Do not repeat complete commands, diffs, or tool output in prose;
+the harness retains them separately. Use descriptive command-log labels and
+keep long-running checks inside the logging wrapper so their progress can be
+observed before the tool returns. Do not infer progress percentages or success
+from activity alone.
+
 Own the repair end to end:
 
 1. Run `scripts/prepare-llama.sh pinned` and inspect the first real failure. If
