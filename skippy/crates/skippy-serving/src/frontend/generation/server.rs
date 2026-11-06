@@ -427,9 +427,12 @@ fn embedded_openai_backend_with_state_kind(
         args.telemetry.emit("stage.kv_payload_selected", attrs);
     }
     let ctx_size = usize::try_from(args.config.ctx_size).unwrap_or(usize::MAX);
-    let generation_token_budget = {
+    let (generation_token_budget, runtime_lane_admission) = {
         let mut runtime = crate::runtime_state::panic_recovery::lock_runtime(&args.runtime);
-        GenerationTokenBudget::shared_for_runtime(&mut runtime, ctx_size)
+        (
+            GenerationTokenBudget::shared_for_runtime(&mut runtime, ctx_size),
+            runtime.lane_admission(),
+        )
     };
     let iteration_scheduler = match iteration_scheduler {
         Some(iteration_scheduler) => iteration_scheduler,
@@ -444,6 +447,7 @@ fn embedded_openai_backend_with_state_kind(
     };
     let stage_backend = Arc::new(StageOpenAiBackend {
         runtime: args.runtime,
+        runtime_lane_admission,
         workload: Default::default(),
         config: args.config.clone(),
         telemetry: args.telemetry.clone(),

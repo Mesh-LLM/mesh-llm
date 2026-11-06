@@ -43,12 +43,15 @@ Run and topology instance IDs do not fragment the namespace. Equivalent
 placements can reuse state when the numerical model and state layout match.
 
 Persistent reuse also binds its cache keys to verified bytes of the model inputs
-actually opened by the runtime. Serving hashes those files once around model
-loading, including every shard and any checkpoint, projector or importance
-matrix inputs. File fingerprints must remain unchanged through the load. Unix
+actually opened by the runtime, including every shard and any checkpoint,
+projector or importance matrix inputs. On Unix, serving captures strong file
+fingerprints before open and hashes on a scoped worker concurrently with model
+loading. Fingerprints must remain unchanged before hashing, after hashing, and
+after model open. Verification logs the byte count and elapsed time. Unix
 frontends reuse that strong fingerprint proof. Platforms without equivalent
 file identity and change-time evidence recheck bytes after load and at backend
-construction; requests do not rehash weights. Declared model or
+construction, retaining the pre-load hash instead of overlapping it with load;
+requests do not rehash weights. Declared model or
 manifest digests alone cannot authorize disk reuse. Integrations constructed
 from a raw stage configuration without loaded-content proof keep their native
 in-memory cache, but disable L3 and the L3-backed host tier.

@@ -6,13 +6,15 @@ use std::{
     fs::{File, Metadata},
     io::{BufReader, Read},
     path::{Path, PathBuf},
-    time::SystemTime,
+    time::{Instant, SystemTime},
 };
+
+type ObservedFiles = Vec<(String, PathBuf, FileStamp)>;
 
 #[derive(Clone)]
 pub(crate) struct VerifiedModelContent {
     digest: String,
-    files: Vec<(String, PathBuf, FileStamp)>,
+    files: ObservedFiles,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -44,7 +46,34 @@ impl FileStamp {
 }
 
 impl VerifiedModelContent {
+    /// Unix captures strong file stamps before native open, then hashes on a
+    /// scoped worker while the caller loads the model. Other platforms retain
+    /// the sequential read so weak timestamps cannot authorize a raced load.
+    pub(crate) fn verify_during_load<T>(
+        config: &StageConfig,
+        load: impl FnOnce() -> Result<T>,
+    ) -> Result<(T, Option<Self>)> {
+        #[cfg(unix)]
+        let (model, content) = match Self::observe_files(config).ok().flatten() {
+            Some(files) => verify_alongside_load(load, || Self::from_observed(files))?,
+            None => (load()?, None),
+        };
+        #[cfg(not(unix))]
+        let (model, content) = {
+            let content = Self::observe(config).ok().flatten();
+            (load()?, content)
+        };
+        Ok((model, content.filter(|proof| proof.still_matches(config))))
+    }
+
+    #[cfg(any(not(unix), test))]
     pub(crate) fn observe(config: &StageConfig) -> Result<Option<Self>> {
+        Self::observe_files(config)?
+            .map(Self::from_observed)
+            .transpose()
+    }
+
+    fn observe_files(config: &StageConfig) -> Result<Option<ObservedFiles>> {
         if !crate::kv_integration::KvStageIntegration::cache_enabled_for_stage(config) {
             return Ok(None);
         }
@@ -52,15 +81,22 @@ impl VerifiedModelContent {
         if files.is_empty() {
             return Ok(None);
         }
-        Self::from_files(files).map(Some)
+        capture_files(files).map(Some)
     }
 
+    #[cfg(any(not(unix), test))]
     fn from_files(files: Vec<(String, PathBuf)>) -> Result<Self> {
+        Self::from_observed(capture_files(files)?)
+    }
+
+    fn from_observed(files: ObservedFiles) -> Result<Self> {
+        let started = Instant::now();
+        let mut verified_bytes = 0_u64;
         let mut digest = Sha256::new();
         digest.update(b"skippy-loaded-model-content-v1\0");
         let mut observed = Vec::with_capacity(files.len());
         let mut buffer = vec![0; 1024 * 1024];
-        for (name, path) in files {
+        for (name, path, stamp) in files {
             let file = File::open(&path)
                 .with_context(|| format!("open model content {}", path.display()))?;
             let before = file.metadata()?;
@@ -68,7 +104,10 @@ impl VerifiedModelContent {
                 before.is_file(),
                 "model content proof requires regular files"
             );
-            let stamp = FileStamp::read(&before);
+            ensure!(
+                FileStamp::read(&before) == stamp,
+                "model content changed before verification"
+            );
             digest.update((name.len() as u64).to_le_bytes());
             digest.update(name.as_bytes());
             digest.update(stamp.bytes.to_le_bytes());
@@ -79,6 +118,7 @@ impl VerifiedModelContent {
                     break;
                 }
                 digest.update(&buffer[..count]);
+                verified_bytes = verified_bytes.saturating_add(count as u64);
             }
             ensure!(
                 FileStamp::read(&reader.get_ref().metadata()?) == stamp,
@@ -91,6 +131,13 @@ impl VerifiedModelContent {
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect();
+        tracing::info!(
+            target: "skippy::cache",
+            verified_bytes,
+            file_count = observed.len(),
+            elapsed_ms = started.elapsed().as_millis() as u64,
+            "hashed model content"
+        );
         Ok(Self {
             digest,
             files: observed,
@@ -135,6 +182,38 @@ impl VerifiedModelContent {
         digest.update(identity.as_bytes());
         format!("blake3:{}", digest.finalize().to_hex())
     }
+}
+
+fn capture_files(files: Vec<(String, PathBuf)>) -> Result<ObservedFiles> {
+    files
+        .into_iter()
+        .map(|(name, path)| {
+            let metadata = path.metadata()?;
+            ensure!(
+                metadata.is_file(),
+                "model content proof requires regular files"
+            );
+            Ok((name, path, FileStamp::read(&metadata)))
+        })
+        .collect()
+}
+
+#[cfg(unix)]
+fn verify_alongside_load<T>(
+    load: impl FnOnce() -> Result<T>,
+    verify: impl FnOnce() -> Result<VerifiedModelContent> + Send,
+) -> Result<(T, Option<VerifiedModelContent>)> {
+    std::thread::scope(|scope| {
+        let verification = std::thread::Builder::new()
+            .name("skippy-model-content".into())
+            .spawn_scoped(scope, verify)
+            .ok();
+        let model = load();
+        let content = verification
+            .and_then(|verification| verification.join().ok())
+            .and_then(Result::ok);
+        model.map(|model| (model, content))
+    })
 }
 
 fn source_files(config: &StageConfig) -> Result<Vec<(String, PathBuf)>> {
@@ -213,6 +292,55 @@ fn checkpoint_files(root: &Path) -> Result<Vec<(String, PathBuf)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn model_open_and_content_verification_progress_concurrently() {
+        use std::{sync::mpsc, time::Duration};
+        let (started, observed_start) = mpsc::channel();
+        let (opened, observed_open) = mpsc::channel();
+        let (model, content) = verify_alongside_load(
+            || {
+                observed_start.recv_timeout(Duration::from_secs(5))?;
+                opened.send(())?;
+                Ok("loaded")
+            },
+            move || {
+                started.send(())?;
+                observed_open.recv_timeout(Duration::from_secs(5))?;
+                Ok(VerifiedModelContent {
+                    digest: "proof".into(),
+                    files: Vec::new(),
+                })
+            },
+        )
+        .unwrap();
+        assert_eq!(model, "loaded");
+        assert_eq!(content.unwrap().digest, "proof");
+    }
+
+    #[test]
+    fn content_changes_during_model_open_disable_persistent_reuse() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("model.gguf");
+        std::fs::write(&path, b"old weights").unwrap();
+        let config = StageConfig {
+            model_path: Some(path.to_string_lossy().into_owned()),
+            kv_cache: Some(
+                serde_json::from_value(serde_json::json!({"mode":"lookup-record"})).unwrap(),
+            ),
+            ..StageConfig::default()
+        };
+        let (_, unchanged) = VerifiedModelContent::verify_during_load(&config, || Ok(())).unwrap();
+        assert!(unchanged.is_some());
+        let (model, proof) = VerifiedModelContent::verify_during_load(&config, || {
+            std::fs::write(&path, b"new weights")?;
+            Ok("loaded")
+        })
+        .unwrap();
+        assert_eq!(model, "loaded");
+        assert!(proof.is_none());
+    }
 
     #[test]
     fn unchanged_declared_digest_cannot_hide_changed_weight_bytes() {
