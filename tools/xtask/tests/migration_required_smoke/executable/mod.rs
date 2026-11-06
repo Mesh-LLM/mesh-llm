@@ -36,6 +36,10 @@ fn smoke_passes_when_fixture_serves_each_required_variant() {
         let directory = tempfile::tempdir().unwrap();
         let mut options = options(directory.path(), "success");
         options.variant = variant;
+        // This is a successful readiness test, not a deadline test; allow the
+        // local fixture to start on busy builders before requiring evidence.
+        options.readiness = std::time::Duration::from_secs(30);
+        options.shutdown = std::time::Duration::from_secs(10);
         let receipt =
             command::execute(directory.path(), &options, &Cancellation::default()).unwrap();
         let receipt = serde_json::to_value(receipt).unwrap();

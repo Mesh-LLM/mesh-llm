@@ -195,7 +195,9 @@ fn hf_acquire_actual_inflight_tool_cancel_and_shared_deadline_reap_without_parti
         assert!(seen);
         assert_eq!(token.is_cancelled(), explicit);
         assert_eq!(receipt(root.path())["status"], "FAILED");
-        assert!(root.path().join("evidence/certification/stopped").exists());
+        let pid =
+            std::fs::read_to_string(root.path().join("evidence/certification/owned.pid")).unwrap();
+        crate::support::assert_absent(pid.trim().parse().unwrap());
         if explicit {
             assert_eq!(result.process.outcome, process::Outcome::Cancelled);
         } else {
