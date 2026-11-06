@@ -541,7 +541,8 @@ checked-in expiry are the maintainer-controlled approval boundary.
   miss must remain a correctness-preserving miss, never a reason to rebuild a
   producer secretly in a consumer.
 - Every `release.yml` job that can reach cargo — directly, or through
-  `scripts/release-version.sh` or `scripts/publish-crates.sh` — initializes
+  `scripts/release-version.sh`, `scripts/publish-crates.sh`, or
+  `scripts/release-notes-generate.sh` — initializes
   sccache (`mozilla-actions/sccache-action` plus `configure-sccache-gha`)
   before its first compiler probe, because `.cargo/config.toml` makes sccache
   the repository-wide `rustc` wrapper. Only composition-only jobs skip it, and
@@ -680,6 +681,10 @@ checked-in expiry are the maintainer-controlled approval boundary.
   artifact, permission, secret/variable, external service, or workflow logic.
   Fix the owning source; do not weaken a gate or add retries to hide a
   deterministic failure.
+- When protected `main` requires pull requests and checks, prepare the complete
+  version update with `scripts/release-version.sh` in a reviewed PR before
+  dispatching a release. The workflow must reapply it idempotently. Do not
+  bypass branch rules to make its version-preparation push succeed.
 - Validate with the narrowest safe workflow. A run is not successful until all
   required jobs reach a terminal successful conclusion; state expected skips.
 
