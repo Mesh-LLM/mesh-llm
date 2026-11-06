@@ -3,13 +3,13 @@ use crate::{automation::canary_receipts::Digest, command::DynResult};
 use serde::Serialize;
 use std::{
     collections::BTreeMap,
-    ffi::OsStr,
     fs,
     io::Read,
-    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
 };
+#[cfg(unix)]
+use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
 
 const MARKERS: [&str; 4] = [
     ".mesh-llm-upstream-sha",
@@ -206,7 +206,10 @@ fn source_digest(root: &Path) -> DynResult<Digest> {
                 .next()
                 .ok_or("candidate source rename lacks its old path")?;
         }
+        #[cfg(unix)]
         let path = root.join(OsStr::from_bytes(&record[3..]));
+        #[cfg(windows)]
+        let path = root.join(std::str::from_utf8(&record[3..])?);
         let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
@@ -217,7 +220,7 @@ fn source_digest(root: &Path) -> DynResult<Digest> {
             return Err("candidate changed source exceeds 512 MiB".into());
         }
         let digest = if metadata.is_symlink() {
-            Digest::of_bytes(fs::read_link(&path)?.as_os_str().as_bytes())
+            Digest::of_bytes(fs::read_link(&path)?.as_os_str().as_encoded_bytes())
         } else if metadata.is_file() {
             Digest::of_file(&path)?
         } else {
