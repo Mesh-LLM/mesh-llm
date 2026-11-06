@@ -110,7 +110,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if !headless && scenario == "overlap-early" && root.join("primary.exit").exists() {
             return Ok(());
         }
-        if started.elapsed() > Duration::from_secs(120) {
+        // The longest test uses 30s readiness. The coordinator allows
+        // readiness * 2 + 300s, then 10s graceful and 5s forced cleanup.
+        if started.elapsed() > Duration::from_secs(390) {
             return Err("fixture expired".into());
         }
         for listener in &listeners {

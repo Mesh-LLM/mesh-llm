@@ -61,7 +61,7 @@ fn command(root: &Path, cancel: &Cancellation) -> process::RawProcessReport {
             .collect(),
     };
     let limits = Limits {
-        execution: Duration::from_secs(22),
+        execution: Duration::from_secs(75),
         graceful_shutdown: Duration::from_secs(4),
         forced_shutdown: Duration::from_secs(2),
         retained_bytes_per_stream: 1048576,
@@ -212,13 +212,28 @@ fn hf_certification_cli_cancel_and_deadline_stop_owned_inflight_product_and_publ
         let mut input = fixture(root.path(), "held", true);
         if !explicit {
             input["timeout_secs"] = json!(5);
+        } else {
+            input["timeout_secs"] = json!(60);
+            std::fs::write(root.path().join("handler-barrier"), b"hold").unwrap();
         }
         write(root.path(), &input);
         let token = Cancellation::default();
         let (result, seen) = std::thread::scope(|scope| {
             let worker = scope.spawn(|| command(root.path(), &token));
-            let deadline = Instant::now() + Duration::from_secs(10);
+            let deadline = Instant::now() + Duration::from_secs(30);
             let marker = root.path().join("evidence/invoked.json");
+            if explicit {
+                let pending = root.path().join("evidence/handler.pending");
+                while !pending.exists() && Instant::now() < deadline && !worker.is_finished() {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                let before_install = pending.exists() && !marker.exists();
+                if pending.exists() {
+                    std::fs::write(root.path().join("evidence/handler.release"), b"release")
+                        .unwrap();
+                }
+                assert!(before_install, "readiness marker preceded signal handler");
+            }
             while !marker.exists() && Instant::now() < deadline && !worker.is_finished() {
                 std::thread::sleep(Duration::from_millis(5));
             }
@@ -238,7 +253,8 @@ fn hf_certification_cli_cancel_and_deadline_stop_owned_inflight_product_and_publ
             assert_eq!(result.process.status.unwrap().code(), Some(1));
         }
         assert_eq!(receipt(root.path())["status"], "FAILED");
-        assert!(root.path().join("evidence/stopped").exists());
+        let pid = std::fs::read_to_string(root.path().join("evidence/owned.pid")).unwrap();
+        crate::support::assert_absent(pid.trim().parse().unwrap());
         root.close().unwrap();
     }
 }
