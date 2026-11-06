@@ -450,7 +450,13 @@ exit "$status"
         Value::Public(fixture.root.join("tools/automation").into()),
     );
     let report = fixture.run(&script, &[], environment);
-    assert!(fixture.root.join("goose.started").exists());
+    assert!(
+        fixture.root.join("goose.started").exists(),
+        "status={:?}; stdout={}; stderr={}",
+        report.process.status,
+        String::from_utf8_lossy(report.stdout.as_ref().unwrap().as_bytes()),
+        String::from_utf8_lossy(report.stderr.as_ref().unwrap().as_bytes())
+    );
     assert_eq!(report.process.status.unwrap().code(), Some(125));
     fixture.finish();
 }
