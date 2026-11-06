@@ -1,4 +1,4 @@
-From 296ca3f6b106a47cae7a43d187acc6099baa42a0 Mon Sep 17 00:00:00 2001
+From f2f1039d4f3c58180bd15b1a55a7d7436bb0e284 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sat, 10 Oct 2026 16:37:38 +0100
 Subject: [PATCH] models: add Qwen3-MoE native MTP
@@ -23,12 +23,11 @@ synthetic fixture certifies the integrated stage program and its drafts.
 ---
  conversion/qwen.py         |  98 ++++++++++++++++
  gguf-py/gguf/constants.py  |  10 ++
- include/skippy/common.h    |   2 +-
  src/CMakeLists.txt         |   8 ++
  src/models/models.h        |   5 +
  src/models/qwen3moe.cpp    | 227 ++++++++++++++++++++++++++++++++++---
  tests/test-llama-archs.cpp |   2 +-
- 7 files changed, 332 insertions(+), 20 deletions(-)
+ 6 files changed, 331 insertions(+), 19 deletions(-)
 
 diff --git a/conversion/qwen.py b/conversion/qwen.py
 index 43d2fb466..b935e6630 100644
@@ -166,24 +165,11 @@ index a39d046fe..5a7beb09b 100644
      ],
      MODEL_ARCH.QWEN3NEXT: [
          MODEL_TENSOR.TOKEN_EMBD,
-diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 4da8a4664..54c87b6f2 100644
---- a/include/skippy/common.h
-+++ b/include/skippy/common.h
-@@ -46,7 +46,7 @@ extern "C" {
- 
- #define SKIPPY_ABI_VERSION_MAJOR 0
- #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 72
-+#define SKIPPY_ABI_VERSION_PATCH 73
- 
- #if defined(_MSC_VER)
- #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 8ad710459..f43b87266 100644
+index 8d755d4e3..fc288f1a0 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -273,6 +273,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -275,6 +275,14 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_test(NAME skippy_glm_dsa_mtp COMMAND skippy-profile-residency
          "${GLM_DSA_MTP_FIXTURE_DIR}/dense-mtp.gguf")
      set_tests_properties(skippy_glm_dsa_mtp PROPERTIES FIXTURES_REQUIRED glm-dsa-mtp-model)

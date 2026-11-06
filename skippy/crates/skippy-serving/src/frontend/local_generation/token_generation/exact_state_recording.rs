@@ -1,4 +1,5 @@
 use super::*;
+use crate::kv_integration::{ResidentPrefixRecord, ResidentRecordOutcome, ResidentRecordSkip};
 
 /// Owns one unit of the test-only outstanding-capture counter for a single
 /// detached capture task. Construction increments the counter, so the unit is
@@ -231,25 +232,14 @@ impl StageOpenAiBackend {
         let base = self.local_kv_message_base(session_id, ids);
         let identity = kv.prefill_identity(&self.config, &base, 0, checkpoint_tokens);
         if kv.records_resident_prefixes() {
-            let recorded = match kv.record_resident_prefix(
+            let recorded = self.record_resident_checkpoint(
                 runtime,
                 session_id,
+                ids,
                 &identity,
                 checkpoint_tokens,
-            ) {
-                Ok(record) => record.is_some(),
-                Err(error) => {
-                    let mut attrs = self.openai_attrs(ids);
-                    attrs.insert(
-                        "skippy.kv.decision".to_string(),
-                        json!(format!("{decision_prefix}_error")),
-                    );
-                    attrs.insert("skippy.kv.error".to_string(), json!(format!("{error:#}")));
-                    self.telemetry
-                        .emit("stage.openai_kv_record_decision", attrs);
-                    false
-                }
-            };
+                decision_prefix,
+            );
             #[cfg(test)]
             {
                 if recorded && decision_prefix == "post_decode_checkpoint" {
@@ -368,6 +358,110 @@ impl StageOpenAiBackend {
                     .emit("stage.openai_kv_record_decision", attrs);
                 false
             }
+        }
+    }
+
+    /// Keep a resident checkpoint and report whether it was kept, and why not.
+    fn record_resident_checkpoint(
+        &self,
+        runtime: &mut RuntimeState,
+        session_id: &str,
+        ids: &InferenceGenerationIds,
+        identity: &PrefillKvIdentity,
+        checkpoint_tokens: &[i32],
+        decision_prefix: &str,
+    ) -> bool {
+        let Some(kv) = self.kv.as_ref() else {
+            return false;
+        };
+        let outcome =
+            kv.record_resident_prefix_outcome(runtime, session_id, identity, checkpoint_tokens);
+        let mut attrs = self.openai_attrs(ids);
+        attrs.insert(
+            "skippy.kv.checkpoint_token_count".to_string(),
+            json!(checkpoint_tokens.len()),
+        );
+        let decision = match &outcome {
+            Ok(ResidentRecordOutcome::Recorded(record)) => {
+                insert_resident_record_attrs(&mut attrs, record);
+                if record.stored {
+                    "recorded"
+                } else {
+                    "already_cached"
+                }
+            }
+            Ok(ResidentRecordOutcome::Skipped(skip)) => {
+                insert_resident_skip_attrs(&mut attrs, *skip);
+                "skipped"
+            }
+            Err(error) => {
+                attrs.insert(
+                    "skippy.kv.error_class".to_string(),
+                    json!(crate::kv_integration::telemetry_error_class(error)),
+                );
+                "error"
+            }
+        };
+        attrs.insert(
+            "skippy.kv.decision".to_string(),
+            json!(format!("{decision_prefix}_{decision}")),
+        );
+        self.telemetry
+            .emit("stage.openai_kv_record_decision", attrs);
+        matches!(outcome, Ok(ResidentRecordOutcome::Recorded(_)))
+    }
+}
+
+fn insert_resident_record_attrs(
+    attrs: &mut BTreeMap<String, serde_json::Value>,
+    record: &ResidentPrefixRecord,
+) {
+    attrs.insert(
+        "skippy.kv.resident_entries".to_string(),
+        json!(record.entries),
+    );
+    attrs.insert(
+        "skippy.kv.resident_tokens".to_string(),
+        json!(record.resident_tokens),
+    );
+    attrs.insert(
+        "skippy.kv.evicted_entries".to_string(),
+        json!(record.evicted_entries),
+    );
+    attrs.insert(
+        "skippy.kv.evicted_tokens".to_string(),
+        json!(record.evicted_tokens),
+    );
+}
+
+fn insert_resident_skip_attrs(
+    attrs: &mut BTreeMap<String, serde_json::Value>,
+    skip: ResidentRecordSkip,
+) {
+    attrs.insert("skippy.kv.skip_reason".to_string(), json!(skip.reason()));
+    match skip {
+        ResidentRecordSkip::RecordingOff => {}
+        ResidentRecordSkip::PositionMismatch { session_tokens } => {
+            attrs.insert(
+                "skippy.kv.runtime_token_count".to_string(),
+                json!(session_tokens),
+            );
+        }
+        ResidentRecordSkip::BelowMinTokens { min_tokens } => {
+            attrs.insert("skippy.kv.min_tokens".to_string(), json!(min_tokens));
+        }
+        ResidentRecordSkip::OverCheckpointBudget {
+            bytes,
+            budget_bytes,
+        } => {
+            attrs.insert("skippy.kv.checkpoint_bytes".to_string(), json!(bytes));
+            attrs.insert(
+                "skippy.kv.checkpoint_budget_bytes".to_string(),
+                json!(budget_bytes),
+            );
+        }
+        ResidentRecordSkip::NoRoom { bytes } => {
+            attrs.insert("skippy.kv.checkpoint_bytes".to_string(), json!(bytes));
         }
     }
 }

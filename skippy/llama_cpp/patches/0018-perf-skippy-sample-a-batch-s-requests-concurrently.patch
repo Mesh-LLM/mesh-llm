@@ -1,0 +1,619 @@
+From dbcd86805035ef9c1a9ed00f8407005fa53ce27e Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Thu, 5 Nov 2026 01:00:00 +1100
+Subject: [PATCH] skippy: sample a batch's requests concurrently
+
+An iteration's sampled requests waited for one another: after the batch's
+outputs were recorded, each request ran its sampler chain in turn on the
+scheduler thread while the GPU sat idle. With four requests decoding
+together on Qwen3.5-4B, sampling took about 0.5 ms of every ~21 ms step,
+most of it the top-k pass over the full 248,320-token vocabulary.
+
+skippy_iteration_batch_sampled now records every request's outputs first and
+then samples the requests together. Its sessions are already distinct and
+share one context. A sampler that would attach or retire a backend sampler
+on that context, or that samples through one, is readied and sampled first
+on the calling thread. The rest sample at the same time, one thread each,
+under a skippy.sample_concurrent span that their skippy.sample spans join.
+
+Sampling reads the context's outputs, and every read synchronizes the
+context and applies pending output reorders, which write to it. A
+llama_synchronized_outputs, made only by llama_context::synchronize_outputs
+after doing both, lets a thread hold a llama_output_reader; while it does,
+that thread's reads of the context skip both steps, so concurrent readers
+write nothing shared.
+
+skippy-concurrent-sampling decodes four lanes together for twelve steps on
+dense and hybrid recurrent fixtures, and checks every sampled token against
+four more sessions with the same seeded samplers sampling the same rows one
+after another, and that all four sampled under the concurrent span.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ src/CMakeLists.txt                       |  12 ++
+ src/llama-context.cpp                    |  23 ++-
+ src/llama-context.h                      |  33 +++++
+ src/llama-graph.h                        |   2 +-
+ src/skippy/batch_sampling.cpp            |  91 ++++++++++++
+ src/skippy/batch_sampling.h              |  20 +++
+ src/skippy/execution-batch.cpp           |  25 ++--
+ src/skippy/sampling.cpp                  |  43 +++++-
+ src/skippy/sampling_internal.h           |   6 +
+ src/skippy/tests/concurrent_sampling.cpp | 175 +++++++++++++++++++++++
+ 10 files changed, 413 insertions(+), 17 deletions(-)
+ create mode 100644 src/skippy/batch_sampling.cpp
+ create mode 100644 src/skippy/batch_sampling.h
+ create mode 100644 src/skippy/tests/concurrent_sampling.cpp
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 071532cab..27bc5a2cd 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -84,6 +84,7 @@ add_library(llama
+             ../common/json.cpp
+             ../common/llguidance.cpp
+             skippy/sampling.cpp
++            skippy/batch_sampling.cpp
+             skippy/sampling_config.cpp
+             skippy/chat_sampling.cpp
+             skippy/sampling_vocab.cpp
+@@ -467,6 +468,17 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     endfunction()
+     add_skippy_sampling_history_state_tests(granitehybrid skippy-noalloc-granite-hybrid-fixture recurrent)
+ 
++    add_executable(skippy-concurrent-sampling skippy/tests/concurrent_sampling.cpp)
++    target_include_directories(skippy-concurrent-sampling PRIVATE .)
++    target_compile_features(skippy-concurrent-sampling PRIVATE cxx_std_17)
++    target_link_libraries(skippy-concurrent-sampling PRIVATE llama)
++    add_test(NAME skippy_concurrent_sampling_gemma
++        COMMAND skippy-concurrent-sampling "${SKIPPY_MODEL_FIXTURE_DIR}/gemma-dense.gguf")
++    set_tests_properties(skippy_concurrent_sampling_gemma PROPERTIES FIXTURES_REQUIRED skippy-model-loader-fixtures)
++    add_test(NAME skippy_concurrent_sampling_qwen35
++        COMMAND skippy-concurrent-sampling "${SKIPPY_MODEL_FIXTURE_DIR}/qwen35-dense.gguf")
++    set_tests_properties(skippy_concurrent_sampling_qwen35 PROPERTIES FIXTURES_REQUIRED skippy-noalloc-qwen35-fixture)
++
+     add_test(
+         NAME skippy_generate_qwen3_fixture
+         COMMAND skippy-model-fixture-generator
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 381bece6e..34fb9c9de 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -942,8 +942,26 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
+             __func__, (t_end_us - t_start_us)/1000.0, ggml_backend_sched_get_n_copies(sched.get()));
+ }
+ 
++// the context whose synchronized outputs this thread reads, if any
++static thread_local const llama_context * t_output_reader_ctx = nullptr;
++
++llama_output_reader::llama_output_reader(const llama_synchronized_outputs & outputs)
++    : previous(t_output_reader_ctx) {
++    t_output_reader_ctx = &outputs.context();
++}
++
++llama_output_reader::~llama_output_reader() {
++    t_output_reader_ctx = previous;
++}
++
++llama_synchronized_outputs llama_context::synchronize_outputs() {
++    synchronize();
++    output_reorder();
++    return llama_synchronized_outputs(*this);
++}
++
+ void llama_context::synchronize() {
+-    if (!sched) {
++    if (!sched || t_output_reader_ctx == this) {
+         return;
+     }
+ 
+@@ -2645,6 +2663,9 @@ bool llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
+ }
+ 
+ void llama_context::output_reorder() {
++    if (t_output_reader_ctx == this) {
++        return;
++    }
+     const uint64_t n_vocab    = model.vocab.n_tokens();
+     const uint64_t n_embd     = model.hparams.n_embd;
+     const uint64_t n_embd_out = model.hparams.n_embd_out();
+diff --git a/src/llama-context.h b/src/llama-context.h
+index e977846ab..6e2a89979 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -65,6 +65,36 @@ struct llama_memory_buffer {
+ 
+ using llama_memory_buffers = std::map<ggml_backend_buffer_type_t, llama_memory_buffer>;
+ 
++struct llama_context;
++
++// Proof that a context's outputs were synchronized and reordered; made only
++// by llama_context::synchronize_outputs.
++class llama_synchronized_outputs {
++  public:
++    const llama_context & context() const { return ctx; }
++
++  private:
++    friend struct llama_context;
++    explicit llama_synchronized_outputs(const llama_context & ctx) : ctx(ctx) {}
++
++    const llama_context & ctx;
++};
++
++// While one lives, its thread reads the context's outputs without
++// synchronizing or reordering them, so several threads may read at once. The
++// thread that synchronized queues no work on the context meanwhile.
++class llama_output_reader {
++  public:
++    explicit llama_output_reader(const llama_synchronized_outputs & outputs);
++    ~llama_output_reader();
++
++    llama_output_reader(const llama_output_reader &)             = delete;
++    llama_output_reader & operator=(const llama_output_reader &) = delete;
++
++  private:
++    const llama_context * previous;
++};
++
+ struct llama_context {
+     // init scheduler and compute buffers, reserve worst-case graphs
+     llama_context(
+@@ -85,6 +115,9 @@ struct llama_context {
+ 
+     void synchronize();
+ 
++    // synchronizes and reorders the outputs, for llama_output_reader
++    llama_synchronized_outputs synchronize_outputs();
++
+     const llama_model   & get_model()   const;
+     const llama_cparams & get_cparams() const;
+     const skippy_graph_build_inputs & get_graph_build_inputs() const;
+diff --git a/src/llama-graph.h b/src/llama-graph.h
+index bb272612a..d5b6bfb1d 100644
+--- a/src/llama-graph.h
++++ b/src/llama-graph.h
+@@ -1639,7 +1639,7 @@ struct llm_graph_context {
+                 int32_t   state_size,
+                 int32_t   n_seqs,
+             skippy_state_kind kind, int il,
+-            const llm_graph_get_rows_fn & get_state_rows = ggml_get_rows) const;
++            const llm_graph_get_rows_fn & get_state_rows = nullptr) const;
+ 
+     ggml_tensor * build_rwkv_token_shift_load(
+         llm_graph_input_rs * inp,
+diff --git a/src/skippy/batch_sampling.cpp b/src/skippy/batch_sampling.cpp
+new file mode 100644
+index 000000000..e59c89857
+--- /dev/null
++++ b/src/skippy/batch_sampling.cpp
+@@ -0,0 +1,91 @@
++#include "skippy/batch_sampling.h"
++
++#include "llama-context.h"
++#include "skippy/runtime_types.h"
++#include "skippy/sampling_internal.h"
++#include "skippy/trace_scope.h"
++
++#include <algorithm>
++#include <iterator>
++#include <numeric>
++#include <system_error>
++#include <thread>
++
++namespace {
++
++bool distinct_sessions(const std::vector<skippy_sample_request> & requests) {
++    std::vector<const skippy_session *> sessions(requests.size());
++    std::transform(requests.begin(), requests.end(), sessions.begin(),
++            [](const skippy_sample_request & request) { return request.session; });
++    std::sort(sessions.begin(), sessions.end());
++    return std::adjacent_find(sessions.begin(), sessions.end()) == sessions.end();
++}
++
++llama_token sample(const skippy_sample_request & request) {
++    return skippy_sample_token_ith(request.session, request.sampling, request.logits_index);
++}
++
++// One helper thread per index after the first, which this thread samples.
++// Each thread writes only its own slot of `tokens`.
++void sample_concurrently(
++        const std::vector<skippy_sample_request> & requests,
++        std::vector<size_t>::const_iterator first,
++        std::vector<size_t>::const_iterator last,
++        const llama_synchronized_outputs & outputs,
++        std::vector<llama_token> & tokens) {
++    skippy_trace::scope trace("skippy.sample_concurrent", "requests", std::distance(first, last));
++    const uint64_t parent = skippy_trace::current_parent();
++    const auto sample_reading = [&requests, &tokens, &outputs](size_t index) {
++        const llama_output_reader reader(outputs);
++        tokens[index] = sample(requests[index]);
++    };
++    std::vector<std::thread> helpers;
++    helpers.reserve(static_cast<size_t>(std::distance(first, last)));
++    std::for_each(std::next(first), last, [&](size_t index) {
++        try {
++            helpers.emplace_back([&sample_reading, index, parent] {
++                const skippy_trace::adopt joined(parent);
++                sample_reading(index);
++            });
++        } catch (const std::system_error &) {
++            sample_reading(index);
++        }
++    });
++    sample_reading(*first);
++    std::for_each(helpers.begin(), helpers.end(), [](std::thread & helper) { helper.join(); });
++}
++
++bool share_context(
++        const std::vector<skippy_sample_request> & requests,
++        std::vector<size_t>::const_iterator first,
++        std::vector<size_t>::const_iterator last) {
++    const llama_context * ctx = requests[*first].session->ctx;
++    return std::all_of(first, last, [&](size_t index) { return requests[index].session->ctx == ctx; });
++}
++
++} // namespace
++
++std::vector<llama_token> skippy_sample_requests(const std::vector<skippy_sample_request> & requests) {
++    std::vector<llama_token> tokens(requests.size(), LLAMA_TOKEN_NULL);
++    if (requests.size() < 2 || !distinct_sessions(requests)) {
++        std::transform(requests.begin(), requests.end(), tokens.begin(), sample);
++        return tokens;
++    }
++
++    // Readying a sampler may attach or retire a backend sampler on the shared
++    // context, and those that remain on it sample through it: both stay here.
++    std::vector<size_t> order(requests.size());
++    std::iota(order.begin(), order.end(), size_t { 0 });
++    const auto concurrent = std::stable_partition(order.begin(), order.end(), [&](size_t index) {
++        return !skippy_prepare_concurrent_sample(requests[index].session, requests[index].sampling);
++    });
++    std::for_each(order.begin(), concurrent, [&](size_t index) { tokens[index] = sample(requests[index]); });
++
++    if (std::distance(concurrent, order.end()) < 2 || !share_context(requests, concurrent, order.end())) {
++        std::for_each(concurrent, order.end(), [&](size_t index) { tokens[index] = sample(requests[index]); });
++        return tokens;
++    }
++    const llama_synchronized_outputs outputs = requests[*concurrent].session->ctx->synchronize_outputs();
++    sample_concurrently(requests, concurrent, order.end(), outputs, tokens);
++    return tokens;
++}
+diff --git a/src/skippy/batch_sampling.h b/src/skippy/batch_sampling.h
+new file mode 100644
+index 000000000..0c253ca71
+--- /dev/null
++++ b/src/skippy/batch_sampling.h
+@@ -0,0 +1,20 @@
++#pragma once
++
++#include "llama.h"
++
++#include <cstdint>
++#include <vector>
++
++struct skippy_sampling_config;
++struct skippy_session;
++
++struct skippy_sample_request {
++    skippy_session *               session;
++    const skippy_sampling_config * sampling;
++    int32_t                        logits_index;
++};
++
++// Every request's next token, in request order. When the sessions are
++// distinct, those whose samplers only read the shared context sample at the
++// same time, one thread each; the rest sample first, on this thread.
++std::vector<llama_token> skippy_sample_requests(const std::vector<skippy_sample_request> & requests);
+diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
+index b98adbd7f..1600ace25 100644
+--- a/src/skippy/execution-batch.cpp
++++ b/src/skippy/execution-batch.cpp
+@@ -1,5 +1,6 @@
+ #include "skippy.h"
+ #include "skippy/activation_internal.h"
++#include "skippy/batch_sampling.h"
+ #include "skippy/errors.h"
+ #include "skippy/graph_build_inputs.h"
+ #include "skippy/runtime_support.h"
+@@ -422,7 +423,10 @@ enum skippy_status skippy_iteration_batch_sampled(
+ 
+     // exports, readouts and sampling, request by request
+     skippy_trace::scope outputs_trace("skippy.batch_outputs", "requests", static_cast<int64_t>(request_count));
+-    size_t sampled_index = 0;
++    // the sessions are distinct and share one context: they sample together
++    // once every request's outputs are recorded
++    std::vector<skippy_sample_request> samples;
++    std::vector<size_t> sample_request_indexes;
+     for (size_t request_index = 0; request_index < request_count; ++request_index) {
+         const auto & request = requests[request_index];
+         status = skippy_copy_batched_exports(
+@@ -450,16 +454,19 @@ enum skippy_status skippy_iteration_batch_sampled(
+         if (request.sample_last && request_logits) {
+             // Logits are indexed by the original batch row; llama.cpp handles
+             // sparse output-row translation internally.
+-            const skippy_status sample_status = skippy_store_sampled_token(
+-                    skippy_sample_token_ith(
+-                            request.session, request.sampling,
+-                            static_cast<int32_t>(offsets[request_index + 1] - 1)),
+-                    &out_predicted_tokens[sampled_index], out_error);
+-            if (sample_status != SKIPPY_STATUS_OK) return sample_status;
+-            out_sampled_request_indexes[sampled_index++] = request_index;
++            samples.push_back({ request.session, request.sampling,
++                    static_cast<int32_t>(offsets[request_index + 1] - 1) });
++            sample_request_indexes.push_back(request_index);
+         }
+     }
+-    *out_sampled_output_count = sampled_index;
++    const std::vector<llama_token> sampled = skippy_sample_requests(samples);
++    const auto exhausted = std::find_if(sampled.begin(), sampled.end(), [](llama_token token) { return token < 0; });
++    if (exhausted != sampled.end()) {
++        return skippy_store_sampled_token(*exhausted, out_predicted_tokens, out_error);
++    }
++    std::copy(sampled.begin(), sampled.end(), out_predicted_tokens);
++    std::copy(sample_request_indexes.begin(), sample_request_indexes.end(), out_sampled_request_indexes);
++    *out_sampled_output_count = sampled.size();
+     return skippy_success(out_error);
+ }
+ 
+diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
+index 671ccbb3c..d045994de 100644
+--- a/src/skippy/sampling.cpp
++++ b/src/skippy/sampling.cpp
+@@ -572,20 +572,51 @@ void skippy_refresh_backend_sampling(
+     }
+ }
+ 
++static bool skippy_sampling_session_ready(const skippy_session * session) {
++    return session != nullptr && !session->reset_required && session->ctx != nullptr &&
++            session->stage_model != nullptr && session->stage_model->model != nullptr;
++}
++
++// the session's configured sampler already serves this request
++static bool skippy_uses_session_sampler(
++        const skippy_session * session,
++        const skippy_sampling_config * sampling) {
++    return session->sampler != nullptr &&
++            (!session->chat_sampling_metadata.empty() ||
++             (skippy_sampling_enabled(sampling) && session->sampling_config_valid &&
++              skippy_sampling_configs_equal(session->sampling_config, *sampling)));
++}
++
++bool skippy_prepare_concurrent_sample(
++        skippy_session * session,
++        const skippy_sampling_config * sampling) {
++    if (!skippy_sampling_session_ready(session)) {
++        return false;
++    }
++    try {
++        if (!skippy_uses_session_sampler(session, sampling) &&
++                !skippy_ensure_plain_sampling_chain(session, sampling)) {
++            return false;
++        }
++    } catch (...) {
++        // sampling on the calling thread reports the failure
++        return false;
++    }
++    // a backend sampler reads and retires through the shared context
++    return session->sampler != nullptr && !session->sampling_backend_enabled;
++}
++
++
+ llama_token skippy_sample_token_ith(
+         skippy_session * session,
+         const skippy_sampling_config * sampling,
+         int32_t logits_index) {
+     skippy_trace::scope trace("skippy.sample");
+-    if (session == nullptr || session->reset_required || session->ctx == nullptr ||
+-            session->stage_model == nullptr || session->stage_model->model == nullptr) {
++    if (!skippy_sampling_session_ready(session)) {
+         return LLAMA_TOKEN_NULL;
+     }
+     try {
+-        if (session->sampler != nullptr &&
+-                (!session->chat_sampling_metadata.empty() ||
+-                 (skippy_sampling_enabled(sampling) && session->sampling_config_valid &&
+-                  skippy_sampling_configs_equal(session->sampling_config, *sampling)))) {
++        if (skippy_uses_session_sampler(session, sampling)) {
+             return skippy_chat_sample_token(session, logits_index);
+         }
+         if (skippy_ensure_plain_sampling_chain(session, sampling)) {
+diff --git a/src/skippy/sampling_internal.h b/src/skippy/sampling_internal.h
+index 7bbf16016..38621b6e9 100644
+--- a/src/skippy/sampling_internal.h
++++ b/src/skippy/sampling_internal.h
+@@ -64,4 +64,10 @@ llama_token skippy_sample_token_ith(
+         skippy_session * session,
+         const skippy_sampling_config * sampling,
+         int32_t logits_index);
++// Readies the session's sampler on the calling thread; true when sampling it
++// afterwards only reads the shared context, so other threads may sample other
++// sessions at the same time.
++bool skippy_prepare_concurrent_sample(
++        skippy_session * session,
++        const skippy_sampling_config * sampling);
+ llama_token skippy_sample_token(skippy_session * session, const skippy_sampling_config * sampling);
+diff --git a/src/skippy/tests/concurrent_sampling.cpp b/src/skippy/tests/concurrent_sampling.cpp
+new file mode 100644
+index 000000000..0e19dbce5
+--- /dev/null
++++ b/src/skippy/tests/concurrent_sampling.cpp
+@@ -0,0 +1,175 @@
++#include "skippy.h"
++#include "../runtime_types.h"
++#include "../sampling_internal.h"
++
++#include <algorithm>
++#include <array>
++#include <atomic>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <iterator>
++#include <numeric>
++#include <string>
++#include <vector>
++
++#define CHECK(condition) do { if (!(condition)) { \
++    std::fprintf(stderr, "CHECK failed: %s at %s:%d\n", #condition, __FILE__, __LINE__); \
++    std::exit(1); } } while (0)
++
++namespace {
++
++constexpr size_t LANES = 4;
++constexpr int STEPS = 12;
++
++void ok(skippy_status status, skippy_error * error) {
++    if (status != SKIPPY_STATUS_OK) {
++        std::fprintf(stderr, "native failure: %s\n", error ? error->message : "no detail");
++        std::exit(1);
++    }
++    skippy_error_free(error);
++}
++
++struct span {
++    uint64_t    id;
++    uint64_t    parent;
++    std::string name;
++};
++
++// spans arrive from every sampling thread
++std::vector<span> g_spans;
++std::atomic<bool>  g_receiving { false };
++
++void receive(const skippy_native_span_v1 * received, void *) {
++    while (g_receiving.exchange(true, std::memory_order_acquire)) {}
++    g_spans.push_back({ received->id, received->parent, received->name });
++    g_receiving.store(false, std::memory_order_release);
++}
++
++skippy_session * create(skippy_model * model) {
++    skippy_session * session = nullptr;
++    skippy_error * error = nullptr;
++    ok(skippy_session_create(model, &session, &error), error);
++    return session;
++}
++
++// a seeded random sampler: not greedy, so it samples on the CPU
++skippy_sampling_config random_sampling(uint32_t seed) {
++    skippy_sampling_config config{};
++    config.version = 1;
++    config.flags = SKIPPY_SAMPLING_FLAG_ENABLED;
++    config.seed = seed;
++    config.top_k = 40;
++    config.temperature = 1.3f;
++    config.top_p = 0.95f;
++    config.repeat_penalty = 1.0f;
++    config.reasoning_budget_tokens = -1;
++    return config;
++}
++
++std::array<llama_token, LANES> decode_together(
++        const std::array<skippy_session *, LANES> & sessions,
++        const std::array<llama_token, LANES> & tokens,
++        const std::array<skippy_sampling_config, LANES> & sampling) {
++    std::array<skippy_iteration_request, LANES> requests{};
++    std::array<size_t, LANES> order{};
++    std::iota(order.begin(), order.end(), size_t { 0 });
++    std::transform(order.begin(), order.end(), requests.begin(), [&](size_t lane) {
++        skippy_iteration_request request{};
++        request.session = sessions[lane];
++        request.token_ids = &tokens[lane];
++        request.token_count = 1;
++        request.sampling = &sampling[lane];
++        request.sample_last = true;
++        return request;
++    });
++    std::array<size_t, LANES> indexes{};
++    std::array<llama_token, LANES> predicted{};
++    size_t count = 0;
++    skippy_error * error = nullptr;
++    ok(skippy_iteration_batch_sampled(requests.data(), LANES, nullptr, nullptr, nullptr, nullptr,
++            indexes.data(), predicted.data(), LANES, &count, &error), error);
++    CHECK(count == LANES);
++    CHECK(indexes == order);
++    return predicted;
++}
++
++} // namespace
++
++int main(int argc, char ** argv) {
++    CHECK(argc == 2);
++    auto config = skippy_runtime_config_default();
++    config.selected_backend_device = "CPU";
++    config.n_gpu_layers = 0;
++    config.ctx_size = 512;
++    config.lane_count = 2 * LANES;
++    config.kv_unified = 1;
++    skippy_model * model = nullptr;
++    skippy_error * error = nullptr;
++    ok(skippy_model_open(argv[1], &config, &model, &error), error);
++    const auto n_vocab = static_cast<llama_token>(model->model->vocab.n_tokens());
++    CHECK(n_vocab > 64);
++
++    std::array<skippy_session *, LANES> together{};
++    std::array<skippy_session *, LANES> alone{};
++    std::array<skippy_sampling_config, LANES> sampling{};
++    std::array<llama_token, LANES> next{};
++    std::array<size_t, LANES> lanes{};
++    std::iota(lanes.begin(), lanes.end(), size_t { 0 });
++    std::for_each(lanes.begin(), lanes.end(), [&](size_t lane) {
++        together[lane] = create(model);
++        alone[lane] = create(model);
++        sampling[lane] = random_sampling(17 + static_cast<uint32_t>(lane));
++        const std::vector<llama_token> prompt = { static_cast<llama_token>(3 + lane), 7, 5 };
++        size_t bytes = 0;
++        skippy_error * prefill_error = nullptr;
++        ok(skippy_prefill_chunk(together[lane], prompt.data(), prompt.size(),
++                nullptr, 0, nullptr, 0, &bytes, &prefill_error), prefill_error);
++        next[lane] = static_cast<llama_token>(9 + lane);
++    });
++
++    CHECK(skippy_set_native_span_callback(receive, nullptr) == SKIPPY_STATUS_OK);
++    std::vector<llama_token> generated;
++    for (int step = 0; step < STEPS; ++step) {
++        g_spans.clear();
++        const auto predicted = decode_together(together, next, sampling);
++        // Samplers with the same seeds read the same rows, one after another.
++        std::array<llama_token, LANES> expected{};
++        std::transform(lanes.begin(), lanes.end(), expected.begin(), [&](size_t lane) {
++            return skippy_sample_token_ith(alone[lane], &sampling[lane], static_cast<int32_t>(lane));
++        });
++        CHECK(predicted == expected);
++        CHECK(std::all_of(predicted.begin(), predicted.end(),
++                [&](llama_token token) { return token >= 0 && token < n_vocab; }));
++
++        // all four sampled under one concurrent span, which nests in the batch outputs
++        const auto named = [](const char * name) {
++            return [name](const span & candidate) { return candidate.name == name; };
++        };
++        const auto concurrent = std::find_if(g_spans.begin(), g_spans.end(), named("skippy.sample_concurrent"));
++        const auto outputs = std::find_if(g_spans.begin(), g_spans.end(), named("skippy.batch_outputs"));
++        CHECK(concurrent != g_spans.end() && outputs != g_spans.end());
++        CHECK(concurrent->parent == outputs->id);
++        const auto under_concurrent = std::count_if(g_spans.begin(), g_spans.end(), [&](const span & candidate) {
++            return candidate.name == "skippy.sample" && candidate.parent == concurrent->id;
++        });
++        CHECK(under_concurrent == static_cast<long>(LANES));
++
++        generated.insert(generated.end(), predicted.begin(), predicted.end());
++        next = predicted;
++    }
++    CHECK(skippy_set_native_span_callback(nullptr, nullptr) == SKIPPY_STATUS_OK);
++    // seeded random sampling over a random model varies its choices
++    std::sort(generated.begin(), generated.end());
++    CHECK(std::distance(generated.begin(), std::unique(generated.begin(), generated.end())) > 4);
++
++    std::for_each(lanes.begin(), lanes.end(), [&](size_t lane) {
++        skippy_error * free_error = nullptr;
++        ok(skippy_session_free(together[lane], &free_error), free_error);
++        ok(skippy_session_free(alone[lane], &free_error), free_error);
++    });
++    ok(skippy_model_free(model, &error), error);
++    std::printf("ok\n");
++    return 0;
++}
+-- 
+2.56.0
+

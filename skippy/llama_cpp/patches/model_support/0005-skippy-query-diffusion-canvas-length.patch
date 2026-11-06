@@ -1,4 +1,4 @@
-From aeaae91b2e5449ebb1aba294fc623795d9a26a5b Mon Sep 17 00:00:00 2001
+From 19e4d27c05d9b78f754846dba1aba3efc558246a Mon Sep 17 00:00:00 2001
 From: Codex <codex@openai.com>
 Date: Sun, 20 Sep 2026 11:38:59 +1000
 Subject: [PATCH] skippy: query diffusion canvas length

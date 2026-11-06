@@ -203,9 +203,26 @@ pub(super) struct Tools {
     /// None preserves the product's automatic lane plan independently of offered C.
     pub diagnostic_generation_lanes: Option<u32>,
     pub diagnostic_cpu: bool,
+    /// Debug Skippy telemetry to a per-cell OTLP JSON file. It perturbs
+    /// timing, so the campaign is scoped as a diagnostic and never published.
+    #[serde(default)]
+    pub diagnostic_telemetry: bool,
     pub cell_seconds: u64,
 }
 impl Tools {
+    /// Only an undiagnosed GPU campaign is a publishable comparison.
+    pub(super) fn campaign_scope(&self) -> &'static str {
+        if self.backend == Backend::Cpu {
+            "cpu_diagnostic_not_gpu_performance"
+        } else if self.diagnostic_telemetry {
+            "telemetry_diagnostic_not_performance"
+        } else if self.diagnostic_generation_lanes.is_some() {
+            "diagnostic_generation_lanes_AgentX_comparison"
+        } else {
+            "fixed_complete_AgentX_comparison"
+        }
+    }
+
     fn verify_client_environment(&self) -> DynResult<()> {
         absolute(&self.client_environment.path)?;
         verify_python_venv_config(&self.client_environment.path.join("pyvenv.cfg")).map_err(

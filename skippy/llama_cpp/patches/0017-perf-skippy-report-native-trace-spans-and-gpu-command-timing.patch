@@ -1,0 +1,3037 @@
+From 322efaf72e8506c12bcc5823033ba4bc1ccc0bf4 Mon Sep 17 00:00:00 2001
+From: Jared Wyles <jared.wyles@gmail.com>
+Date: Mon, 2 Nov 2026 09:00:00 +1100
+Subject: [PATCH] skippy: report native trace spans and GPU command timing
+
+skippy/tracing.h reports where time goes inside a native call, for a
+caller that already times the call itself. skippy_set_native_span_callback
+delivers one span per finished phase of host work, on the thread that did
+it: Skippy batch preparation, output handling and sampling; llama decode,
+batch init, memory slot search, output reserve, per-ubatch graph build,
+allocation, input upload and submission, output extraction, the recurrent
+state sync and synchronize (the host waiting for the device); sampler
+chains, each sampler and grammar; tokenization; KV and recurrent memory
+operations, KV page export and import, and sequence state save and
+restore; graph reserve, backend and memory creation, and model load
+(GGUF open, hyperparameters, vocabulary, tensors and their data) at
+startup. Spans nest under the open
+span on their thread, else under the tag the caller set with
+skippy_set_trace_tag, and work a thread does on another's behalf can adopt
+that thread's open span as its parent; span ids carry
+SKIPPY_NATIVE_SPAN_ID_BIT so they never collide with caller tags.
+skippy_set_gpu_command_timing_callback reports, for each unit of device
+work, when it was encoded and when the GPU ran it, carrying the submitting
+thread's tag. SKIPPY_FEATURE_NATIVE_TRACING advertises the symbols; with no
+callback installed a span costs one atomic load.
+
+Backends expose the capability through three registry procs,
+ggml_backend_set_command_timing_callback, ggml_backend_set_command_timing_tag
+and ggml_backend_set_trace_span_callback, so Skippy never links a backend
+directly. Metal times each command buffer with a completed handler
+(GPUStartTime/GPUEndTime) and its encode window, numbering graph computes
+like GGML_METAL_CAPTURE_COMPUTE so a slow graph seen in a trace can be
+captured for Xcode by number. It reports compiling each kernel library,
+opening the pipeline archive, initialising the device library and compiling
+each pipeline on first use, allocating and mapping buffers and their
+residency sets, blocking uploads and downloads, output copies, graph
+optimisation and waiting on the last command buffer. Device initialisation runs before anyone can
+listen, so spans that end before the first span callback are kept, a
+bounded number, and delivered when it arrives. A dispatch worker encoding a
+command buffer carries that buffer's tag, so a pipeline compiled there
+lands under the call that submitted the graph.
+
+Each command timing record also says what its graph nodes did. Backends
+classify nodes as attention (flash attention, or the masked soft max and
+K/Q, K/Q/V products of unfused attention), mat-muls with weights,
+recurrent and linear-attention state (SSM, RWKV, gated linear attention,
+delta-net updates and their cache copies), KV cache writes, and other
+work; views and reshapes have no class. The record counts nodes and the
+bytes they read per class (a gather or row write counts only its rows, not
+the cache it indexes), the model layer of its first named node, the most
+recurrent states one gather reads and how many of them are copied back
+unchanged because no sequence of the batch owns them, and for attention
+the most KV cells one query addresses (its row list for per-sequence row
+lists, else the K/V span, or the K/Q product's K span for unfused
+attention), the query rows, and how many attention nodes read row lists or
+are flash attention.
+With GGML_METAL_OP_PROFILE=1 and command timing installed, Metal splits
+each graph into one command buffer per run of same-class nodes, encoded in
+order on the calling thread, so the GPU times every class by itself;
+splitting serialises the graph and stops fusion across class boundaries,
+so totals grow while shares stay meaningful.
+The first compute of a graph with a new node count reports an
+mtl.graph_ops span whose detail counts the graph's nodes by op, so the
+graphs two runtimes build for the same model can be compared op by op.
+
+Bumps the Skippy ABI to 0.1.68.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
+---
+ ggml/include/ggml-backend.h               | 105 +++++
+ ggml/src/ggml-metal/CMakeLists.txt        |   1 +
+ ggml/src/ggml-metal/ggml-metal-context.m  | 132 ++++++
+ ggml/src/ggml-metal/ggml-metal-device.m   |  24 +
+ ggml/src/ggml-metal/ggml-metal-timing.cpp | 529 ++++++++++++++++++++++
+ ggml/src/ggml-metal/ggml-metal-timing.h   | 102 +++++
+ ggml/src/ggml-metal/ggml-metal.cpp        |  10 +
+ include/skippy.h                          |   1 +
+ include/skippy/common.h                   |   2 +
+ include/skippy/tracing.h                  | 197 ++++++++
+ src/CMakeLists.txt                        |   1 +
+ src/llama-context.cpp                     |  52 ++-
+ src/llama-kv-cache.cpp                    |  10 +
+ src/llama-memory-recurrent.cpp            |   8 +
+ src/llama-model.cpp                       |   3 +
+ src/llama-sampler.cpp                     |   7 +
+ src/llama-vocab.cpp                       |   2 +
+ src/llama.cpp                             |   8 +
+ src/skippy/abi.cpp                        |   3 +-
+ src/skippy/activation.cpp                 |   3 +
+ src/skippy/execution-batch.cpp            |   6 +
+ src/skippy/model_loading.cpp              |  17 +
+ src/skippy/sampling.cpp                   |   2 +
+ src/skippy/speculative_decoding.cpp       |   2 +
+ src/skippy/trace_scope.h                  |  61 +++
+ src/skippy/tracing.cpp                    | 272 +++++++++++
+ tests/CMakeLists.txt                      |   4 +
+ tests/test-skippy-tracing-metal.cpp       | 155 +++++++
+ tests/test-skippy-tracing.cpp             | 306 +++++++++++++
+ 29 files changed, 2022 insertions(+), 3 deletions(-)
+ create mode 100644 ggml/src/ggml-metal/ggml-metal-timing.cpp
+ create mode 100644 ggml/src/ggml-metal/ggml-metal-timing.h
+ create mode 100644 include/skippy/tracing.h
+ create mode 100644 src/skippy/trace_scope.h
+ create mode 100644 src/skippy/tracing.cpp
+ create mode 100644 tests/test-skippy-tracing-metal.cpp
+ create mode 100644 tests/test-skippy-tracing.cpp
+
+diff --git a/ggml/include/ggml-backend.h b/ggml/include/ggml-backend.h
+index fbc940129..65b031822 100644
+--- a/ggml/include/ggml-backend.h
++++ b/ggml/include/ggml-backend.h
+@@ -253,6 +253,111 @@ extern "C" {
+             char * error,
+             size_t error_capacity);
+ 
++    // Command timing, exposed by a backend registry as the procs
++    // "ggml_backend_set_command_timing_callback" and
++    // "ggml_backend_set_command_timing_tag". A backend reports one record per
++    // unit of submitted device work (a Metal command buffer) once the device
++    // has finished it. Times are Unix nanoseconds; 0 when unknown.
++    // What a command's graph nodes do. Views and reshapes do no work and
++    // belong to no class.
++    enum ggml_backend_op_class {
++        GGML_BACKEND_OP_CLASS_OTHER,
++        // attention over the KV cache: flash attention, or the masked soft
++        // max and the K/Q and K/Q/V products the graph names "kq" and "kqv"
++        GGML_BACKEND_OP_CLASS_ATTENTION,
++        // matrix products with weights
++        GGML_BACKEND_OP_CLASS_MATMUL,
++        // recurrent and linear-attention state: SSM, RWKV, gated linear
++        // attention and delta-net updates, and copies to or from their cache
++        GGML_BACKEND_OP_CLASS_RECURRENT,
++        // writes into the attention KV cache
++        GGML_BACKEND_OP_CLASS_KV_WRITE,
++        GGML_BACKEND_OP_CLASS_COUNT,
++    };
++
++    struct ggml_backend_command_timing {
++        // the submitting thread's tag when the graph was submitted
++        uint64_t tag;
++        // backend instance, and its 1-based graph compute count
++        uint32_t context_id;
++        uint32_t compute_index;
++        // execution order of this command within the graph compute
++        uint32_t command_index;
++        uint32_t command_count;
++        uint32_t node_count;
++        // 0 when the device completed the command
++        int32_t  status;
++        int64_t  encode_start_unix_ns;
++        int64_t  encode_end_unix_ns;
++        int64_t  execute_start_unix_ns;
++        int64_t  execute_end_unix_ns;
++        // The class every classified node of the command belongs to, or
++        // GGML_BACKEND_OP_CLASS_COUNT when it mixes classes. A backend that
++        // splits a graph at class boundaries (op profiling) sets one class
++        // per command and `split_by_class`.
++        int32_t  op_class;
++        // the model layer of the command's first layer-named node, -1 if none
++        int32_t  layer;
++        uint32_t split_by_class;
++        // attention nodes: the most KV cells one query addresses (the row
++        // list length when attention reads per-sequence row lists, else the
++        // K/V span; for unfused attention the K/Q product's K span), the
++        // most query rows one node processes, how many nodes read row lists,
++        // and how many are flash attention (the rest are unfused)
++        uint32_t attention_kv_cells;
++        uint32_t attention_queries;
++        uint32_t attention_row_list_nodes;
++        uint32_t attention_flash_nodes;
++        // per class: nodes, and the bytes they read; a gather counts the rows
++        // it reads and a row write the rows it writes, not the tensor they
++        // index, and attention counts only the K/V rows a node addresses
++        uint32_t class_nodes[GGML_BACKEND_OP_CLASS_COUNT];
++        uint64_t class_bytes[GGML_BACKEND_OP_CLASS_COUNT];
++        // recurrent state caches: the most states one gather reads (the
++        // states of the batch's sequences and every state between them), and
++        // the most of those a copy writes back unchanged
++        uint32_t recurrent_states;
++        uint32_t recurrent_states_carried;
++    };
++
++    // Called on a backend-owned thread; keep it short.
++    typedef void (*ggml_backend_command_timing_callback_t)(
++            const struct ggml_backend_command_timing * timing,
++            void * user_data);
++    // A null callback stops reporting.
++    typedef void (*ggml_backend_set_command_timing_callback_t)(
++            ggml_backend_command_timing_callback_t callback,
++            void * user_data);
++    // Thread-local: graphs this thread submits afterwards carry `tag`, and so
++    // do the backend's trace spans on this thread.
++    typedef void (*ggml_backend_set_command_timing_tag_t)(uint64_t tag);
++
++    // Trace spans, exposed by a backend registry as the proc
++    // "ggml_backend_set_trace_span_callback": host-side backend work worth a
++    // timeline entry, such as compiling a kernel library or pipeline. A
++    // backend reports each span when it ends, on the thread that did the
++    // work. Spans that end before any callback was ever installed (device
++    // initialisation can run first) are kept, a bounded number of them, and
++    // delivered on the installing thread when the first callback arrives.
++    struct ggml_backend_trace_span {
++        // the reporting thread's tag (see the command timing tag); 0 when none
++        uint64_t     tag;
++        // static storage, such as "mtl.pipeline_compile"
++        const char * name;
++        // NULL, or what the span worked on; valid only during the callback
++        const char * detail;
++        int64_t      start_unix_ns;
++        int64_t      end_unix_ns;
++    };
++
++    typedef void (*ggml_backend_trace_span_callback_t)(
++            const struct ggml_backend_trace_span * span,
++            void * user_data);
++    // A null callback stops reporting.
++    typedef void (*ggml_backend_set_trace_span_callback_t)(
++            ggml_backend_trace_span_callback_t callback,
++            void * user_data);
++
+     //
+     // Backend registry
+     //
+diff --git a/ggml/src/ggml-metal/CMakeLists.txt b/ggml/src/ggml-metal/CMakeLists.txt
+index a6d145e69..b36e3b56b 100644
+--- a/ggml/src/ggml-metal/CMakeLists.txt
++++ b/ggml/src/ggml-metal/CMakeLists.txt
+@@ -12,6 +12,7 @@ ggml_add_backend_library(ggml-metal
+                          ggml-metal-context.m
+                          ggml-metal-fusion.cpp
+                          ggml-metal-ops.cpp
++                         ggml-metal-timing.cpp
+                          ggml-metal-tuning.cpp
+                         )
+ 
+diff --git a/ggml/src/ggml-metal/ggml-metal-context.m b/ggml/src/ggml-metal/ggml-metal-context.m
+index e9064666f..38941c954 100644
+--- a/ggml/src/ggml-metal/ggml-metal-context.m
++++ b/ggml/src/ggml-metal/ggml-metal-context.m
+@@ -7,6 +7,7 @@
+ #import "ggml-metal-common.h"
+ #import "ggml-metal-ops.h"
+ #import "ggml-metal-fusion.h"
++#import "ggml-metal-timing.h"
+ 
+ #import <Foundation/Foundation.h>
+ 
+@@ -79,6 +80,11 @@ struct ggml_metal {
+     ggml_abort_callback abort_callback;
+     void *              abort_callback_data;
+ 
++    // command timing (ggml_backend_set_command_timing_callback)
++    uint32_t timing_context_id;
++    uint32_t timing_compute_index; // counts like GGML_METAL_CAPTURE_COMPUTE
++    ggml_metal_timing_record_t timing[GGML_METAL_MAX_COMMAND_BUFFERS + 1];
++
+     // error state - set when a command buffer fails during synchronize
+     // once set, graph_compute will return GGML_STATUS_FAILED until the backend is recreated
+     bool has_error;
+@@ -181,6 +187,12 @@ ggml_metal_t ggml_metal_init(ggml_metal_device_t dev) {
+             res->cmd_bufs[i].obj = nil;
+         }
+ 
++        res->timing_context_id    = ggml_metal_timing_next_context_id();
++        res->timing_compute_index = 0;
++        for (int i = 0; i <= GGML_METAL_MAX_COMMAND_BUFFERS; ++i) {
++            res->timing[i] = NULL;
++        }
++
+         res->cmd_bufs_ext = [[NSMutableArray alloc] init];
+         res->buf_refs     = [[NSMutableArray alloc] init];
+ 
+@@ -254,6 +266,7 @@ const char * ggml_metal_get_name(ggml_metal_t ctx) {
+ void ggml_metal_synchronize(ggml_metal_t ctx) {
+     // wait for any backend operations to finish
+     if (ctx->cmd_buf_last) {
++        GGML_METAL_TIMING_SPAN(span, "mtl.wait", NULL);
+         [ctx->cmd_buf_last waitUntilCompleted];
+         ctx->cmd_buf_last = nil;
+     }
+@@ -370,6 +383,8 @@ void ggml_metal_set_tensor_async(ggml_metal_t ctx, struct ggml_tensor * tensor,
+ }
+ 
+ void ggml_metal_get_tensor_async(ggml_metal_t ctx, const struct ggml_tensor * tensor, void * data, size_t offset, size_t size) {
++    // wraps the host destination and queues a blit; does not wait
++    GGML_METAL_TIMING_SPAN(span, "mtl.copy_out", tensor->name);
+     @autoreleasepool {
+         id<MTLDevice> device = ggml_metal_device_get_obj(ctx->dev);
+         id<MTLBuffer> buf_dst = [device newBufferWithBytesNoCopy:data
+@@ -471,6 +486,99 @@ bool ggml_metal_cpy_tensor_async(ggml_metal_t ctx_src, ggml_metal_t ctx_dst, con
+     }
+ }
+ 
++// time a command buffer that encodes the graph nodes [idx_start, idx_end)
++// when command timing is on; call before it is committed
++static ggml_metal_timing_record_t ggml_metal_time_nodes(
++        ggml_metal_t ctx, id<MTLCommandBuffer> cmd_buf, int command_index, int command_count,
++        int idx_start, int idx_end, bool split_by_class) {
++    ggml_metal_timing_record_t record = ggml_metal_timing_begin(
++            ctx->timing_context_id, ctx->timing_compute_index, command_index, command_count, MAX(idx_end - idx_start, 0));
++    if (record == NULL) {
++        return NULL;
++    }
++
++    ggml_metal_timing_account(record, ctx->gf, idx_start, idx_end, split_by_class);
++
++    [cmd_buf addCompletedHandler:^(id<MTLCommandBuffer> cb) {
++        const MTLCommandBufferStatus status = [cb status];
++        ggml_metal_timing_finish(record, [cb GPUStartTime], [cb GPUEndTime],
++                status == MTLCommandBufferStatusCompleted ? 0 : (int32_t) status);
++    }];
++
++    return record;
++}
++
++static void ggml_metal_time_command_buffer(
++        ggml_metal_t ctx, id<MTLCommandBuffer> cmd_buf, int cb_idx, int command_index, int idx_start, int idx_end) {
++    ctx->timing[cb_idx] = ggml_metal_time_nodes(ctx, cmd_buf, command_index, ctx->n_cb + 1, idx_start, idx_end, false);
++}
++
++// op profiling: one command buffer per run of nodes of one class, encoded
++// and committed in order on the calling thread, so the GPU times each class
++// by itself. Splitting serialises the graph and stops fusion across class
++// boundaries, so totals grow; the shares are what this measures.
++static enum ggml_status ggml_metal_graph_compute_by_class(ggml_metal_t ctx, struct ggml_cgraph * gf, id<MTLCommandQueue> queue) {
++    const int n_nodes = gf->n_nodes;
++
++    int * run_ends = malloc(sizeof(int) * (size_t) n_nodes);
++    if (run_ends == NULL) {
++        return GGML_STATUS_ALLOC_FAILED;
++    }
++
++    int n_runs = 0;
++    for (int idx_start = 0; idx_start < n_nodes; idx_start = run_ends[n_runs - 1]) {
++        run_ends[n_runs++] = ggml_metal_timing_class_run_end(gf, idx_start);
++    }
++
++    int idx_start = 0;
++    for (int run = 0; run < n_runs; ++run) {
++        const int idx_end = run_ends[run];
++
++        id<MTLCommandBuffer> cmd_buf = [queue commandBufferWithUnretainedReferences];
++        ggml_metal_timing_record_t record = ggml_metal_time_nodes(ctx, cmd_buf, run, n_runs, idx_start, idx_end, true);
++
++        ggml_metal_timing_encode_start(record);
++
++        ggml_metal_op_t ctx_op = ggml_metal_op_init(
++            ctx->dev,
++            cmd_buf,
++            gf,
++            ctx->finfo,
++            idx_start,
++            idx_end,
++            ctx->use_concurrency,
++            false,
++            ctx->debug_graph);
++
++        for (int idx = 0; idx < ggml_metal_op_n_nodes(ctx_op); ++idx) {
++            const int res = ggml_metal_op_encode(ctx_op, idx);
++            if (res == 0) {
++                break;
++            }
++
++            idx += res - 1;
++        }
++
++        ggml_metal_op_free(ctx_op);
++
++        ggml_metal_timing_encode_end(record);
++
++        [cmd_buf commit];
++
++        // synchronize() waits for, checks and releases these
++        [ctx->cmd_bufs_ext addObject:cmd_buf];
++        ctx->cmd_buf_last = cmd_buf;
++
++        [cmd_buf retain];
++
++        idx_start = idx_end;
++    }
++
++    free(run_ends);
++
++    return GGML_STATUS_SUCCESS;
++}
++
+ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph * gf) {
+     if (ctx->has_error) {
+         GGML_LOG_ERROR("%s: backend is in error state from a previous command buffer failure - recreate the backend to recover\n", __func__);
+@@ -516,6 +624,9 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
+             ctx->capture_compute--;
+         }
+ 
++        ctx->timing_compute_index++;
++        ggml_metal_timing_graph_ops(gf);
++
+         const bool use_capture = ctx->capture_compute == 0;
+         if (use_capture) {
+             // make sure all previous computations have finished before starting the capture
+@@ -551,6 +662,10 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
+         // short-hand
+         id<MTLCommandQueue> queue = ggml_metal_device_get_queue(ctx->dev);
+ 
++        if (!use_capture && ggml_metal_timing_op_profile()) {
++            return ggml_metal_graph_compute_by_class(ctx, gf, queue);
++        }
++
+         // the main thread commits the first few commands immediately
+         // cmd_buf[n_cb]
+         {
+@@ -562,6 +677,9 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
+             }
+             ctx->cmd_bufs[n_cb].obj = cmd_buf;
+ 
++            // runs first on the GPU
++            ggml_metal_time_command_buffer(ctx, cmd_buf, n_cb, 0, 0, ctx->n_nodes_0);
++
+             [cmd_buf enqueue];
+ 
+             ctx->encode_async(n_cb);
+@@ -581,6 +699,15 @@ enum ggml_status ggml_metal_graph_compute(ggml_metal_t ctx, struct ggml_cgraph *
+             }
+             ctx->cmd_bufs[cb_idx].obj = cmd_buf;
+ 
++            // time only the buffers that encode_async commits; the rest may never complete
++            ctx->timing[cb_idx] = NULL;
++            if (cb_idx < 2 || ctx->abort_callback == NULL) {
++                const int idx_start = ctx->n_nodes_0 + cb_idx*ctx->n_nodes_per_cb;
++                const int idx_end   = ctx->n_nodes_0 + MIN(cb_idx == n_cb - 1 ? ctx->n_nodes_1 : (cb_idx + 1)*ctx->n_nodes_per_cb, ctx->n_nodes_1);
++
++                ggml_metal_time_command_buffer(ctx, cmd_buf, cb_idx, cb_idx + 1, idx_start, idx_end);
++            }
++
+             // always enqueue the first two command buffers
+             // enqueue all of the command buffers if we don't need to abort
+             if (cb_idx < 2 || ctx->abort_callback == NULL) {
+@@ -663,6 +790,7 @@ void ggml_metal_graph_optimize(ggml_metal_t ctx, struct ggml_cgraph * gf) {
+     //const int64_t t_start = ggml_time_us();
+ 
+     if (ctx->use_graph_optimize) {
++        GGML_METAL_TIMING_SPAN(span, "mtl.graph_optimize", NULL);
+         ggml_graph_optimize(gf);
+     }
+ 
+@@ -743,6 +871,8 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
+ 
+         id<MTLCommandBuffer> cmd_buf = ctx->cmd_bufs[cb_idx].obj;
+ 
++        ggml_metal_timing_encode_start(ctx->timing[cb_idx]);
++
+         ggml_metal_op_t ctx_op = ggml_metal_op_init(
+             ctx->dev,
+             cmd_buf,
+@@ -765,6 +895,8 @@ void ggml_metal_set_n_cb(ggml_metal_t ctx, int n_cb) {
+ 
+         ggml_metal_op_free(ctx_op);
+ 
++        ggml_metal_timing_encode_end(ctx->timing[cb_idx]);
++
+         if (cb_idx < 2 || ctx->abort_callback == NULL) {
+             [cmd_buf commit];
+         }
+diff --git a/ggml/src/ggml-metal/ggml-metal-device.m b/ggml/src/ggml-metal/ggml-metal-device.m
+index 645a3ef82..6434704ad 100644
+--- a/ggml/src/ggml-metal/ggml-metal-device.m
++++ b/ggml/src/ggml-metal/ggml-metal-device.m
+@@ -5,6 +5,7 @@
+ #import "ggml-backend-impl.h"
+ #import "ggml-metal-impl.h"
+ #import "ggml-metal-common.h"
++#import "ggml-metal-timing.h"
+ 
+ #include <Foundation/Foundation.h>
+ 
+@@ -257,6 +258,8 @@ static void ggml_metal_pso_cache_setup(ggml_metal_library_t lib, id<MTLDevice> d
+         char path[PATH_MAX];
+         snprintf(path, sizeof(path), "%s/pipelines-%016llx.metallibar", dir, (unsigned long long) h);
+ 
++        GGML_METAL_TIMING_SPAN(span, "mtl.pipeline_cache_open", path);
++
+         NSString * path_ns = [NSString stringWithUTF8String:path];
+         NSURL * url = [NSURL fileURLWithPath:path_ns];
+ 
+@@ -433,6 +436,7 @@ static bool ggml_metal_library_compile_all(
+ 
+     for (int kind = 0; kind < GGML_METAL_LIB_COUNT; ++kind) {
+         dispatch_group_async(group, queue, ^{
++            GGML_METAL_TIMING_SPAN(span, "mtl.library_compile", k_lib_names[kind]);
+ 
+             const int64_t t0 = ggml_time_us();
+ 
+@@ -877,6 +881,9 @@ struct ggml_metal_pipeline_with_params ggml_metal_library_compile_pipeline(ggml_
+         return res;
+     }
+ 
++    // first use of this pipeline: compiled now, or loaded from the archive
++    GGML_METAL_TIMING_SPAN(span, "mtl.pipeline_compile", name);
++
+     @autoreleasepool {
+         NSError * error = nil;
+ 
+@@ -1470,7 +1477,9 @@ ggml_metal_device_t ggml_metal_device_init(int device, int n_devices) {
+                     snprintf(dev->props.desc, sizeof(dev->props.desc), "%s", gpu_name);
+                 }
+ 
++                const int64_t t_library = ggml_metal_timing_span_start();
+                 dev->library = ggml_metal_library_init(dev);
++                ggml_metal_timing_span_end("mtl.library_init", dev->props.desc, t_library);
+                 if (!dev->library) {
+                     GGML_LOG_ERROR("%s: error: failed to create library\n", __func__);
+                 }
+@@ -2265,6 +2274,8 @@ static bool ggml_metal_buffer_rset_init(ggml_metal_buffer_t buf) {
+         return true;
+     }
+ 
++    GGML_METAL_TIMING_SPAN(span, "mtl.residency_set", NULL);
++
+ #if defined(GGML_METAL_HAS_RESIDENCY_SETS)
+     if (@available(macOS 15.0, iOS 18.0, tvOS 18.0, visionOS 2.0, *)) {
+         MTLResidencySetDescriptor * desc = [[MTLResidencySetDescriptor alloc] init];
+@@ -2332,6 +2343,10 @@ static void * ggml_metal_host_malloc(size_t n) {
+ }
+ 
+ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size, bool shared) {
++    char span_detail[32];
++    snprintf(span_detail, sizeof(span_detail), "%zu bytes", size);
++    GGML_METAL_TIMING_SPAN(span, "mtl.buffer_alloc", span_detail);
++
+     ggml_metal_buffer_t res = calloc(1, sizeof(struct ggml_metal_buffer));
+ 
+     res->dev = dev;
+@@ -2402,6 +2417,10 @@ ggml_metal_buffer_t ggml_metal_buffer_init(ggml_metal_device_t dev, size_t size,
+ }
+ 
+ ggml_metal_buffer_t ggml_metal_buffer_map(ggml_metal_device_t dev, void * ptr, size_t size, size_t max_tensor_size) {
++    char span_detail[32];
++    snprintf(span_detail, sizeof(span_detail), "%zu bytes", size);
++    GGML_METAL_TIMING_SPAN(span, "mtl.buffer_map", span_detail);
++
+     ggml_metal_buffer_t res = calloc(1, sizeof(struct ggml_metal_buffer));
+ 
+     res->dev = dev;
+@@ -2560,6 +2579,9 @@ void ggml_metal_buffer_set_tensor(ggml_metal_buffer_t buf, struct ggml_tensor *
+         return;
+     }
+ 
++    // a private buffer: a blit the host waits for
++    GGML_METAL_TIMING_SPAN(span, "mtl.upload", tensor->name);
++
+     @autoreleasepool {
+         // src
+         void * data_ptr = (void *)(uintptr_t) data; // "const cast" the src data
+@@ -2616,6 +2638,8 @@ void ggml_metal_buffer_get_tensor(ggml_metal_buffer_t buf, const struct ggml_ten
+         return;
+     }
+ 
++    GGML_METAL_TIMING_SPAN(span, "mtl.download", tensor->name);
++
+     @autoreleasepool {
+         // src
+         struct ggml_metal_buffer_id bid_src = ggml_metal_buffer_get_id(buf, tensor);
+diff --git a/ggml/src/ggml-metal/ggml-metal-timing.cpp b/ggml/src/ggml-metal/ggml-metal-timing.cpp
+new file mode 100644
+index 000000000..8bf274932
+--- /dev/null
++++ b/ggml/src/ggml-metal/ggml-metal-timing.cpp
+@@ -0,0 +1,529 @@
++#include "ggml-metal-timing.h"
++
++#include "ggml-impl.h"
++
++#include <algorithm>
++#include <atomic>
++#include <cstdlib>
++#include <ctime>
++#include <iterator>
++#include <map>
++#include <memory>
++#include <mutex>
++#include <new>
++#include <numeric>
++#include <set>
++#include <string>
++#include <string_view>
++#include <vector>
++
++#if defined(__APPLE__)
++#include <mach/mach_time.h>
++#endif
++
++namespace {
++
++// install once: a replacement racing a completion may pair the new callback with the old data
++std::atomic<ggml_backend_command_timing_callback_t> g_callback { nullptr };
++std::atomic<void *>                                 g_user_data { nullptr };
++
++std::atomic<ggml_backend_trace_span_callback_t> g_span_callback { nullptr };
++std::atomic<void *>                             g_span_user_data { nullptr };
++
++std::atomic<uint32_t> g_next_context_id { 0 };
++
++std::mutex    g_graph_ops_mutex;
++std::set<int> g_graph_ops_reported; // node counts, guarded by g_graph_ops_mutex
++
++thread_local uint64_t g_tag = 0;
++
++// spans that ended before the first span callback arrived: device
++// initialisation compiles the kernel libraries before anyone can listen
++struct pending_span {
++    uint64_t     tag;
++    const char * name;
++    bool         has_detail;
++    std::string  detail;
++    int64_t      start_unix_ns;
++    int64_t      end_unix_ns;
++};
++
++constexpr size_t MAX_PENDING_SPANS = 256;
++
++std::mutex                g_pending_mutex;
++std::vector<pending_span> g_pending;          // guarded by g_pending_mutex
++std::atomic<bool>         g_span_installed { false };
++
++// seconds on the host clock that Metal stamps command buffers with
++double host_now_s() {
++#if defined(__APPLE__)
++    static const double ns_per_tick = [] {
++        mach_timebase_info_data_t info {};
++        mach_timebase_info(&info);
++        return (double) info.numer / (double) info.denom;
++    }();
++    return (double) mach_absolute_time() * ns_per_tick * 1e-9;
++#else
++    timespec ts {};
++    clock_gettime(CLOCK_MONOTONIC, &ts);
++    return (double) ts.tv_sec + (double) ts.tv_nsec * 1e-9;
++#endif
++}
++
++int64_t unix_now_ns() {
++    timespec ts {};
++    clock_gettime(CLOCK_REALTIME, &ts);
++    return (int64_t) ts.tv_sec * 1000000000 + (int64_t) ts.tv_nsec;
++}
++
++void deliver_span(ggml_backend_trace_span_callback_t callback, void * user_data, const ggml_backend_trace_span & span) {
++    if (callback != nullptr) {
++        callback(&span, user_data);
++    }
++}
++
++// views and reshapes: no work, so they join the run around them
++constexpr int OP_CLASS_NONE = -1;
++
++bool has_prefix(const char * name, std::string_view prefix) {
++    return std::string_view(name).compare(0, prefix.size(), prefix) == 0;
++}
++
++// the cache a node writes, or reads with a view: its root tensor's name
++const char * cache_name(const ggml_tensor * t) {
++    const ggml_tensor * root = t->view_src != nullptr ? t->view_src : t;
++    return has_prefix(root->name, "cache_") ? root->name : nullptr;
++}
++
++// llama-memory-recurrent names its state cache_r_l<i> and cache_s_l<i>
++bool is_recurrent_cache(const char * name) {
++    return has_prefix(name, "cache_r_l") || has_prefix(name, "cache_s_l");
++}
++
++// the cache class of a node that copies into or gathers from a cache
++int cache_class(const ggml_tensor * node) {
++    const char * name = cache_name(node);
++    if (name == nullptr && node->op == GGML_OP_GET_ROWS && node->src[0] != nullptr) {
++        name = cache_name(node->src[0]);
++        return name != nullptr && is_recurrent_cache(name) ? GGML_BACKEND_OP_CLASS_RECURRENT : GGML_BACKEND_OP_CLASS_OTHER;
++    }
++    if (name == nullptr) {
++        return GGML_BACKEND_OP_CLASS_OTHER;
++    }
++    return is_recurrent_cache(name) ? GGML_BACKEND_OP_CLASS_RECURRENT : GGML_BACKEND_OP_CLASS_KV_WRITE;
++}
++
++// the K/Q and K/Q/V products of llama-graph's unfused attention ("kq-<il>",
++// "kqv-<il>") and its output ("kqv_out-<il>")
++bool is_named_attention(const ggml_tensor * node) {
++    return has_prefix(node->name, "kq-") || has_prefix(node->name, "kqv-") ||
++        has_prefix(node->name, "kq_") || has_prefix(node->name, "kqv_");
++}
++
++int op_class(const ggml_tensor * node) {
++    switch (node->op) {
++        case GGML_OP_NONE:
++        case GGML_OP_RESHAPE:
++        case GGML_OP_VIEW:
++        case GGML_OP_PERMUTE:
++        case GGML_OP_TRANSPOSE:
++            return OP_CLASS_NONE;
++        case GGML_OP_FLASH_ATTN_EXT:
++            return GGML_BACKEND_OP_CLASS_ATTENTION;
++        case GGML_OP_SSM_CONV:
++        case GGML_OP_SSM_SCAN:
++        case GGML_OP_RWKV_WKV6:
++        case GGML_OP_RWKV_WKV7:
++        case GGML_OP_GATED_LINEAR_ATTN:
++        case GGML_OP_GATED_DELTA_NET:
++            return GGML_BACKEND_OP_CLASS_RECURRENT;
++        case GGML_OP_SOFT_MAX:
++            // a masked soft max is unfused attention; MoE routing has no mask
++            return node->src[1] != nullptr || is_named_attention(node) ?
++                GGML_BACKEND_OP_CLASS_ATTENTION : GGML_BACKEND_OP_CLASS_OTHER;
++        case GGML_OP_MUL_MAT:
++        case GGML_OP_MUL_MAT_ID:
++            return is_named_attention(node) ? GGML_BACKEND_OP_CLASS_ATTENTION : GGML_BACKEND_OP_CLASS_MATMUL;
++        case GGML_OP_SET_ROWS:
++        case GGML_OP_CPY:
++        case GGML_OP_GET_ROWS:
++            return cache_class(node);
++        default:
++            return is_named_attention(node) ? GGML_BACKEND_OP_CLASS_ATTENTION : GGML_BACKEND_OP_CLASS_OTHER;
++    }
++}
++
++uint64_t input_bytes(const ggml_tensor * node) {
++    return std::accumulate(std::begin(node->src), std::end(node->src), uint64_t { 0 },
++            [](uint64_t sum, const ggml_tensor * src) { return src != nullptr ? sum + ggml_nbytes(src) : sum; });
++}
++
++uint64_t bytes_of(const ggml_tensor * t) {
++    return t != nullptr ? ggml_nbytes(t) : 0;
++}
++
++// a gather reads only its rows, and a row write writes only its rows, of the
++// tensor they index: get_rows(a, ids) has a as src[0], set_rows(a, b, ids) as src[2]
++uint64_t bytes_read(const ggml_tensor * node) {
++    switch (node->op) {
++        case GGML_OP_GET_ROWS:
++            return ggml_nbytes(node) + bytes_of(node->src[1]);
++        case GGML_OP_SET_ROWS:
++            return input_bytes(node) - bytes_of(node->src[2]);
++        default:
++            return input_bytes(node);
++    }
++}
++
++bool in_recurrent_cache(const ggml_tensor * t) {
++    const char * name = t != nullptr ? cache_name(t) : nullptr;
++    return name != nullptr && is_recurrent_cache(name);
++}
++
++struct state_rows {
++    uint32_t gathered;
++    uint32_t carried;
++};
++
++// llama-graph's build_rs gathers the states from the batch's first state cell
++// to its last, then copies the gathered states no sequence of the batch owns
++// back unchanged
++state_rows state_rows_of(const ggml_tensor * node) {
++    if (node->op == GGML_OP_GET_ROWS && in_recurrent_cache(node->src[0]) && node->src[1] != nullptr) {
++        return { (uint32_t) ggml_nelements(node->src[1]), 0 };
++    }
++    if (node->op != GGML_OP_CPY || node->src[0] == nullptr || !in_recurrent_cache(node->src[1])) {
++        return { 0, 0 };
++    }
++    const ggml_tensor * gathered = node->src[0]->view_src;
++    const bool unchanged = gathered != nullptr && gathered->op == GGML_OP_GET_ROWS && in_recurrent_cache(gathered->src[0]);
++    return { 0, unchanged ? (uint32_t) ggml_nrows(node->src[0]) : 0 };
++}
++
++// ggml_flash_attn_ext_rows passes its I32 row lists [padded_rows, slices] as src[5]
++const ggml_tensor * attention_rows(const ggml_tensor * node) {
++    return node->op == GGML_OP_FLASH_ATTN_EXT ? node->src[5] : nullptr;
++}
++
++struct attention_shape {
++    uint32_t kv_cells;
++    uint32_t queries;
++    bool     row_lists;
++    bool     flash;
++    uint64_t bytes;
++};
++
++// unfused attention's K/Q product, kq = mul_mat(k, q): k is
++// [head_dim, n_kv, n_head_kv, ...], q is [head_dim, n_tokens, n_head, ...]
++attention_shape unfused_shape_of(const ggml_tensor * node) {
++    const ggml_tensor * k = node->src[0];
++    const ggml_tensor * q = node->src[1];
++    if (k == nullptr || q == nullptr) {
++        return { 0, 0, false, false, input_bytes(node) };
++    }
++    return { (uint32_t) k->ne[1], (uint32_t) (q->ne[1] * q->ne[3]), false, false, input_bytes(node) };
++}
++
++// what one attention node addresses: with row lists only the listed K/V
++// rows of the shared pool, otherwise the whole K/V span it was given
++attention_shape attention_shape_of(const ggml_tensor * node) {
++    if (node->op == GGML_OP_MUL_MAT && has_prefix(node->name, "kq-")) {
++        return unfused_shape_of(node);
++    }
++    const ggml_tensor * q    = node->src[0];
++    const ggml_tensor * k    = node->src[1];
++    const ggml_tensor * v    = node->src[2];
++    const ggml_tensor * rows = attention_rows(node);
++    if (node->op != GGML_OP_FLASH_ATTN_EXT || q == nullptr || k == nullptr || v == nullptr) {
++        return { 0, 0, false, false, input_bytes(node) };
++    }
++    const uint32_t queries = (uint32_t) (q->ne[1] * q->ne[3]);
++    if (rows == nullptr) {
++        return { (uint32_t) k->ne[1], queries, false, true, input_bytes(node) };
++    }
++    const uint64_t row_bytes =
++        ggml_row_size(k->type, k->ne[0]) * (uint64_t) k->ne[2] +
++        ggml_row_size(v->type, v->ne[0]) * (uint64_t) v->ne[2];
++    const uint64_t listed = (uint64_t) rows->ne[0] * (uint64_t) rows->ne[1];
++    const uint64_t other  = input_bytes(node) - ggml_nbytes(k) - ggml_nbytes(v);
++    return { (uint32_t) rows->ne[0], queries, true, true, other + listed * row_bytes };
++}
++
++// llama-graph names a layer's tensors "<name>-<il>"
++int32_t layer_of(const ggml_tensor * node) {
++    const std::string_view name(node->name);
++    const size_t dash = name.rfind('-');
++    if (dash == std::string_view::npos || dash + 1 == name.size()) {
++        return -1;
++    }
++    const std::string_view digits = name.substr(dash + 1);
++    if (!std::all_of(digits.begin(), digits.end(), [](char c) { return c >= '0' && c <= '9'; })) {
++        return -1;
++    }
++    return (int32_t) std::strtol(std::string(digits).c_str(), nullptr, 10);
++}
++
++} // namespace
++
++struct ggml_metal_timing_record {
++    ggml_backend_command_timing timing {};
++
++    // the encoding thread's own tag, restored once it has encoded this buffer
++    uint64_t saved_tag = 0;
++
++    // written by the encoding thread, read on Metal's completion thread
++    std::atomic<double> encode_start_host_s { 0.0 };
++    std::atomic<double> encode_end_host_s   { 0.0 };
++};
++
++uint32_t ggml_metal_timing_next_context_id(void) {
++    return g_next_context_id.fetch_add(1, std::memory_order_relaxed) + 1;
++}
++
++ggml_metal_timing_record_t ggml_metal_timing_begin(
++        uint32_t context_id,
++        uint32_t compute_index,
++        uint32_t command_index,
++        uint32_t command_count,
++        uint32_t node_count) {
++    if (g_callback.load(std::memory_order_acquire) == nullptr &&
++            g_span_callback.load(std::memory_order_acquire) == nullptr) {
++        return nullptr;
++    }
++
++    auto * record = new (std::nothrow) ggml_metal_timing_record {};
++    if (record == nullptr) {
++        return nullptr;
++    }
++
++    record->timing.tag           = g_tag;
++    record->timing.context_id    = context_id;
++    record->timing.compute_index = compute_index;
++    record->timing.command_index = command_index;
++    record->timing.command_count = command_count;
++    record->timing.node_count    = node_count;
++    record->timing.op_class      = GGML_BACKEND_OP_CLASS_COUNT;
++    record->timing.layer         = -1;
++
++    return record;
++}
++
++void ggml_metal_timing_account(
++        ggml_metal_timing_record_t record,
++        struct ggml_cgraph * gf,
++        int start,
++        int end,
++        bool split_by_class) {
++    if (record == nullptr || gf == nullptr || start >= end) {
++        return;
++    }
++    ggml_backend_command_timing & timing = record->timing;
++    timing.split_by_class = split_by_class ? 1 : 0;
++
++    ggml_tensor ** first = gf->nodes + start;
++    ggml_tensor ** last  = gf->nodes + std::min(end, gf->n_nodes);
++
++    std::for_each(first, last, [&timing](const ggml_tensor * node) {
++        const int cls = op_class(node);
++        if (cls == OP_CLASS_NONE) {
++            return;
++        }
++        if (timing.layer < 0) {
++            timing.layer = layer_of(node);
++        }
++        timing.class_nodes[cls] += 1;
++        const state_rows states = state_rows_of(node);
++        timing.recurrent_states         = std::max(timing.recurrent_states, states.gathered);
++        timing.recurrent_states_carried = std::max(timing.recurrent_states_carried, states.carried);
++        if (cls != GGML_BACKEND_OP_CLASS_ATTENTION) {
++            timing.class_bytes[cls] += bytes_read(node);
++            return;
++        }
++        const attention_shape shape = attention_shape_of(node);
++        timing.class_bytes[cls] += shape.bytes;
++        timing.attention_kv_cells = std::max(timing.attention_kv_cells, shape.kv_cells);
++        timing.attention_queries  = std::max(timing.attention_queries, shape.queries);
++        timing.attention_row_list_nodes += shape.row_lists ? 1 : 0;
++        timing.attention_flash_nodes    += shape.flash ? 1 : 0;
++    });
++
++    const uint32_t * counts_begin = std::cbegin(timing.class_nodes);
++    const uint32_t * counts_end   = std::cend(timing.class_nodes);
++    const auto       nonzero      = [](uint32_t n) { return n > 0; };
++    const auto classes_used = std::count_if(counts_begin, counts_end, nonzero);
++    if (classes_used == 0) {
++        timing.op_class = GGML_BACKEND_OP_CLASS_OTHER;
++    } else if (classes_used == 1) {
++        timing.op_class = (int32_t) std::distance(counts_begin, std::find_if(counts_begin, counts_end, nonzero));
++    }
++}
++
++int ggml_metal_timing_class_run_end(struct ggml_cgraph * gf, int start) {
++    ggml_tensor ** first = gf->nodes + start;
++    ggml_tensor ** last  = gf->nodes + gf->n_nodes;
++
++    const auto classified = [](const ggml_tensor * node) { return op_class(node) != OP_CLASS_NONE; };
++    ggml_tensor ** lead = std::find_if(first, last, classified);
++    if (lead == last) {
++        return gf->n_nodes;
++    }
++    const int cls = op_class(*lead);
++    ggml_tensor ** next = std::find_if(lead + 1, last, [cls](const ggml_tensor * node) {
++        const int other = op_class(node);
++        return other != OP_CLASS_NONE && other != cls;
++    });
++    return (int) std::distance(gf->nodes, next);
++}
++
++bool ggml_metal_timing_op_profile(void) {
++    static const bool requested = [] {
++        const char * value = std::getenv("GGML_METAL_OP_PROFILE");
++        return value != nullptr && value[0] != '\0' && std::string_view(value) != "0";
++    }();
++    return requested && g_callback.load(std::memory_order_acquire) != nullptr;
++}
++
++void ggml_metal_timing_encode_start(ggml_metal_timing_record_t record) {
++    if (record != nullptr) {
++        record->saved_tag = g_tag;
++        g_tag = record->timing.tag;
++        record->encode_start_host_s.store(host_now_s(), std::memory_order_release);
++    }
++}
++
++void ggml_metal_timing_encode_end(ggml_metal_timing_record_t record) {
++    if (record != nullptr) {
++        record->encode_end_host_s.store(host_now_s(), std::memory_order_release);
++        g_tag = record->saved_tag;
++    }
++}
++
++void ggml_metal_timing_finish(
++        ggml_metal_timing_record_t record,
++        double execute_start_host_s,
++        double execute_end_host_s,
++        int32_t status) {
++    const std::unique_ptr<ggml_metal_timing_record> owned(record);
++    if (!owned) {
++        return;
++    }
++
++    const auto callback = g_callback.load(std::memory_order_acquire);
++    if (callback == nullptr) {
++        return;
++    }
++    void * user_data = g_user_data.load(std::memory_order_acquire);
++
++    // one paired reading converts every host time on this record
++    const double  host_now = host_now_s();
++    const int64_t unix_now = unix_now_ns();
++    const auto to_unix_ns = [&](double host_s) -> int64_t {
++        return host_s > 0.0 ? unix_now - (int64_t) ((host_now - host_s) * 1e9) : 0;
++    };
++
++    ggml_backend_command_timing timing = owned->timing;
++    timing.status                = status;
++    timing.encode_start_unix_ns  = to_unix_ns(owned->encode_start_host_s.load(std::memory_order_acquire));
++    timing.encode_end_unix_ns    = to_unix_ns(owned->encode_end_host_s.load(std::memory_order_acquire));
++    timing.execute_start_unix_ns = to_unix_ns(execute_start_host_s);
++    timing.execute_end_unix_ns   = to_unix_ns(execute_end_host_s);
++
++    callback(&timing, user_data);
++}
++
++int64_t ggml_metal_timing_span_start(void) {
++    if (g_span_callback.load(std::memory_order_acquire) == nullptr &&
++            g_span_installed.load(std::memory_order_acquire)) {
++        return 0;
++    }
++    return unix_now_ns();
++}
++
++void ggml_metal_timing_span_end(const char * name, const char * detail, int64_t start_unix_ns) {
++    if (start_unix_ns == 0 || name == nullptr) {
++        return;
++    }
++    const ggml_backend_trace_span span = { g_tag, name, detail, start_unix_ns, unix_now_ns() };
++
++    if (g_span_installed.load(std::memory_order_acquire)) {
++        deliver_span(g_span_callback.load(std::memory_order_acquire),
++                g_span_user_data.load(std::memory_order_acquire), span);
++        return;
++    }
++
++    {
++        std::lock_guard<std::mutex> lock(g_pending_mutex);
++        if (!g_span_installed.load(std::memory_order_acquire)) {
++            if (g_pending.size() < MAX_PENDING_SPANS) {
++                g_pending.push_back({ span.tag, name, detail != nullptr, detail != nullptr ? detail : "",
++                        span.start_unix_ns, span.end_unix_ns });
++            }
++            return;
++        }
++    }
++    // the first callback arrived while this span was ending
++    deliver_span(g_span_callback.load(std::memory_order_acquire),
++            g_span_user_data.load(std::memory_order_acquire), span);
++}
++
++void ggml_metal_timing_set_callback(ggml_backend_command_timing_callback_t callback, void * user_data) {
++    if (callback == nullptr) {
++        g_callback.store(nullptr, std::memory_order_release);
++        return;
++    }
++    g_user_data.store(user_data, std::memory_order_relaxed);
++    g_callback.store(callback, std::memory_order_release);
++}
++
++void ggml_metal_timing_graph_ops(struct ggml_cgraph * gf) {
++    if (gf == nullptr || g_callback.load(std::memory_order_acquire) == nullptr) {
++        return;
++    }
++    {
++        std::lock_guard<std::mutex> lock(g_graph_ops_mutex);
++        if (!g_graph_ops_reported.insert(gf->n_nodes).second) {
++            return;
++        }
++    }
++    const int64_t start = ggml_metal_timing_span_start();
++
++    std::map<std::string_view, int> counts;
++    std::for_each(gf->nodes, gf->nodes + gf->n_nodes, [&counts](const ggml_tensor * node) {
++        ++counts[ggml_op_desc(node)];
++    });
++    const std::string detail = std::accumulate(counts.begin(), counts.end(), "nodes=" + std::to_string(gf->n_nodes),
++        [](std::string text, const auto & op) {
++            return std::move(text) + ' ' + std::string(op.first) + ':' + std::to_string(op.second);
++        });
++
++    ggml_metal_timing_span_end("mtl.graph_ops", detail.c_str(), start);
++}
++
++void ggml_metal_timing_set_tag(uint64_t tag) {
++    g_tag = tag;
++}
++
++void ggml_metal_timing_set_span_callback(ggml_backend_trace_span_callback_t callback, void * user_data) {
++    if (callback == nullptr) {
++        g_span_callback.store(nullptr, std::memory_order_release);
++        return;
++    }
++
++    std::vector<pending_span> pending;
++    {
++        std::lock_guard<std::mutex> lock(g_pending_mutex);
++        g_span_user_data.store(user_data, std::memory_order_relaxed);
++        g_span_callback.store(callback, std::memory_order_release);
++        g_span_installed.store(true, std::memory_order_release);
++        pending.swap(g_pending);
++    }
++
++    // kept spans reach the first callback in the order they ended
++    for (const auto & kept : pending) {
++        const ggml_backend_trace_span span = {
++            kept.tag, kept.name, kept.has_detail ? kept.detail.c_str() : nullptr,
++            kept.start_unix_ns, kept.end_unix_ns,
++        };
++        deliver_span(callback, user_data, span);
++    }
++}
+diff --git a/ggml/src/ggml-metal/ggml-metal-timing.h b/ggml/src/ggml-metal/ggml-metal-timing.h
+new file mode 100644
+index 000000000..3cbe29099
+--- /dev/null
++++ b/ggml/src/ggml-metal/ggml-metal-timing.h
+@@ -0,0 +1,102 @@
++// tracing for ggml-metal:
++//  - command timing: one record per command buffer, reported through
++//    ggml_backend_set_command_timing_callback once the GPU has finished it
++//  - trace spans: host-side work such as library and pipeline compilation,
++//    reported through ggml_backend_set_trace_span_callback
++
++#pragma once
++
++#include "ggml-backend.h"
++
++#include <stdbool.h>
++#include <stdint.h>
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++typedef struct ggml_metal_timing_record * ggml_metal_timing_record_t;
++
++// a process-unique id for a new Metal context
++uint32_t ggml_metal_timing_next_context_id(void);
++
++// NULL unless a command timing or trace span callback is installed;
++// captures the calling thread's tag
++ggml_metal_timing_record_t ggml_metal_timing_begin(
++        uint32_t context_id,
++        uint32_t compute_index,
++        uint32_t command_index,
++        uint32_t command_count,
++        uint32_t node_count);
++
++// accept NULL records; between the two, the encoding thread carries the
++// record's tag, so spans it reports (a pipeline compiled on first use) land
++// under the call that submitted the graph even on a dispatch worker
++void ggml_metal_timing_encode_start(ggml_metal_timing_record_t record);
++void ggml_metal_timing_encode_end  (ggml_metal_timing_record_t record);
++
++// classifies the graph nodes [start, end) the record's command encodes (see
++// ggml_backend_op_class); `split_by_class` marks a command of a graph split
++// at class boundaries; accepts a NULL record
++void ggml_metal_timing_account(
++        ggml_metal_timing_record_t record,
++        struct ggml_cgraph * gf,
++        int start,
++        int end,
++        bool split_by_class);
++
++// the end of the run of nodes from `start` that share one class; views and
++// reshapes join the run they sit in
++int ggml_metal_timing_class_run_end(struct ggml_cgraph * gf, int start);
++
++// the first compute of a graph with this many nodes reports an "mtl.graph_ops"
++// span whose detail counts its nodes by op ("nodes=N ADD:12 CPY:4 ..."), while
++// a command timing callback is installed
++void ggml_metal_timing_graph_ops(struct ggml_cgraph * gf);
++
++// whether to split each graph at class boundaries, one command buffer per
++// run, so the GPU times every class by itself: GGML_METAL_OP_PROFILE=1 with
++// a command timing callback installed
++bool ggml_metal_timing_op_profile(void);
++
++// reports and frees the record; times are MTLCommandBuffer GPUStartTime/GPUEndTime
++void ggml_metal_timing_finish(
++        ggml_metal_timing_record_t record,
++        double execute_start_host_s,
++        double execute_end_host_s,
++        int32_t status);
++
++// the start of a trace span, in Unix nanoseconds; 0 when nothing would
++// record it (a callback was installed once and has since been cleared)
++int64_t ggml_metal_timing_span_start(void);
++
++// report a span begun by ggml_metal_timing_span_start; `name` must have
++// static storage, `detail` may be NULL and is copied when the span is kept
++// for later delivery; ignores a zero start
++void ggml_metal_timing_span_end(const char * name, const char * detail, int64_t start_unix_ns);
++
++// a trace span from here to the end of the enclosing scope, for C and
++// Objective-C callers with several exits; `detail` must outlive the scope
++struct ggml_metal_timing_span_scope {
++    const char * name;
++    const char * detail;
++    int64_t      start_unix_ns;
++};
++
++static inline void ggml_metal_timing_span_scope_end(struct ggml_metal_timing_span_scope * scope) {
++    ggml_metal_timing_span_end(scope->name, scope->detail, scope->start_unix_ns);
++}
++
++#define GGML_METAL_TIMING_SPAN(var, name, detail) \
++    __attribute__((cleanup(ggml_metal_timing_span_scope_end), unused)) \
++    struct ggml_metal_timing_span_scope var = { (name), (detail), ggml_metal_timing_span_start() }
++
++// the ggml_backend_set_command_timing_callback, _tag and
++// ggml_backend_set_trace_span_callback procs
++void ggml_metal_timing_set_callback(ggml_backend_command_timing_callback_t callback, void * user_data);
++void ggml_metal_timing_set_tag(uint64_t tag);
++void ggml_metal_timing_set_span_callback(ggml_backend_trace_span_callback_t callback, void * user_data);
++
++#ifdef __cplusplus
++}
++#endif
+diff --git a/ggml/src/ggml-metal/ggml-metal.cpp b/ggml/src/ggml-metal/ggml-metal.cpp
+index 6964c5b7e..9aaa830c9 100644
+--- a/ggml/src/ggml-metal/ggml-metal.cpp
++++ b/ggml/src/ggml-metal/ggml-metal.cpp
+@@ -7,6 +7,7 @@
+ #include "ggml-metal-fusion.h"
+ #include "ggml-metal-context.h"
+ #include "ggml-metal-ops.h"
++#include "ggml-metal-timing.h"
+ #include "ggml-metal-tuning.h"
+ 
+ #include <mutex>
+@@ -950,6 +951,15 @@ static void * ggml_backend_metal_get_proc_address(ggml_backend_reg_t reg, const
+     if (strcmp(name, "ggml_backend_cachegen_decode") == 0) {
+         return (void *)ggml_metal_cachegen_decode;
+     }
++    if (strcmp(name, "ggml_backend_set_command_timing_callback") == 0) {
++        return (void *)(ggml_backend_set_command_timing_callback_t) ggml_metal_timing_set_callback;
++    }
++    if (strcmp(name, "ggml_backend_set_command_timing_tag") == 0) {
++        return (void *)(ggml_backend_set_command_timing_tag_t) ggml_metal_timing_set_tag;
++    }
++    if (strcmp(name, "ggml_backend_set_trace_span_callback") == 0) {
++        return (void *)(ggml_backend_set_trace_span_callback_t) ggml_metal_timing_set_span_callback;
++    }
+     if (strcmp(name, "ggml_backend_metal_tuning_set_fa_vec_override") == 0) {
+         return (void *)ggml_backend_metal_tuning_set_fa_vec_override;
+     }
+diff --git a/include/skippy.h b/include/skippy.h
+index dc8cbb431..8d710ed64 100644
+--- a/include/skippy.h
++++ b/include/skippy.h
+@@ -12,6 +12,7 @@
+ // Public umbrella for the capability-oriented Skippy C API.
+ #include "skippy/common.h"
+ #include "skippy/events.h"
++#include "skippy/tracing.h"
+ #include "skippy/devices.h"
+ #include "skippy/runtime.h"
+ #include "skippy/model_source.h"
+diff --git a/include/skippy/common.h b/include/skippy/common.h
+index df831c43e..31e5d1136 100644
+--- a/include/skippy/common.h
++++ b/include/skippy/common.h
+@@ -107,6 +107,8 @@ enum skippy_feature {
+ #define SKIPPY_FEATURE_NON_CHAT_WORKLOADS     ((uint64_t)1 << 37)
+ 
+ #define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
++/** @brief Native span and GPU command timing callbacks (`skippy/tracing.h`). */
++#define SKIPPY_FEATURE_NATIVE_TRACING         (UINT64_C(1) << 43)
+ 
+ enum skippy_status {
+     SKIPPY_STATUS_OK                      = 0,
+diff --git a/include/skippy/tracing.h b/include/skippy/tracing.h
+new file mode 100644
+index 000000000..e9e57357c
+--- /dev/null
++++ b/include/skippy/tracing.h
+@@ -0,0 +1,197 @@
++#ifndef SKIPPY_TRACING_H
++#define SKIPPY_TRACING_H
++
++/**
++ * @file skippy/tracing.h
++ * @brief Where time goes inside native calls: native spans and GPU command timing.
++ *
++ * Requires SKIPPY_FEATURE_NATIVE_TRACING. Two callbacks report what a native
++ * call did, for a caller that already times the call itself. Native spans
++ * name the phases of host work (preparing a batch, building and allocating
++ * the llama graph, encoding it, waiting for the device, extracting outputs,
++ * sampling, and in a backend that reports them, compiling kernel libraries
++ * and pipelines); each arrives when it ends, on the thread that did the work.
++ * GPU command timing reports each unit of device work (Metal: a command
++ * buffer) once the device has finished it, on a backend completion thread.
++ * Both carry the tag the calling thread set with skippy_set_trace_tag, so a
++ * caller that sets a fresh tag before each native call can place everything
++ * the call caused under it, though spans and device records arrive later.
++ */
++
++#include "common.h"
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++#define SKIPPY_NATIVE_SPAN_V1_ABI_VERSION 1
++
++/**
++ * @brief Set in every native span id, so ids never collide with caller tags
++ * that leave the top bit clear.
++ */
++#define SKIPPY_NATIVE_SPAN_ID_BIT (UINT64_C(1) << 63)
++
++/** @brief One finished phase of native work. */
++struct skippy_native_span_v1 {
++    uint32_t abi_version;
++    uint32_t struct_size;
++    /** Process-unique and nonzero; SKIPPY_NATIVE_SPAN_ID_BIT is set. */
++    uint64_t id;
++    /**
++     * The enclosing native span's id when there is one, else the reporting
++     * thread's trace tag, else 0. Children end, and so arrive, before their
++     * parent.
++     */
++    uint64_t parent;
++    /** Dotted span name such as "llama.graph_compute"; static storage. */
++    const char * name;
++    /** Null, or what the span worked on; valid only during the callback. */
++    const char * detail;
++    /** Unix nanoseconds. */
++    int64_t start_unix_ns;
++    int64_t end_unix_ns;
++    /** Null, or the name of one measured quantity; static storage. */
++    const char * value_name;
++    int64_t value;
++};
++
++/**
++ * @brief Receives one native span, on the thread that did the work.
++ *
++ * That is usually the thread inside the native call, so a slow callback
++ * slows the call it measures. The span is valid only for the call.
++ */
++typedef void (*skippy_native_span_callback)(
++        const struct skippy_native_span_v1 * span,
++        void * user_data);
++
++/**
++ * @brief Installs the process-global native span callback.
++ *
++ * Install once, before the calls to observe; a null callback stops
++ * reporting. A callback already running may finish after it is cleared.
++ * Installing reaches every loaded backend, which may initialise the backend
++ * registry on the calling thread. Backend spans that ended before a backend
++ * received its first callback (device initialisation compiles kernel
++ * libraries) are delivered from within this call: those that began during
++ * it under the calling thread's tag, earlier ones with no parent.
++ */
++LLAMA_API enum skippy_status skippy_set_native_span_callback(
++        skippy_native_span_callback callback,
++        void * user_data);
++
++#define SKIPPY_GPU_COMMAND_TIMING_V1_ABI_VERSION 1
++
++/** @brief Timing of one unit of device work, such as a Metal command buffer. */
++struct skippy_gpu_command_timing_v1 {
++    uint32_t abi_version;
++    uint32_t struct_size;
++    /** The submitting thread's trace tag; 0 when none was set. */
++    uint64_t tag;
++    /** The ggml backend registry name, such as "MTL"; static storage. */
++    const char * backend_name;
++    /** Backend instance, and its 1-based graph compute count. */
++    uint32_t context_id;
++    uint32_t compute_index;
++    /** Execution order of this command within its graph compute. */
++    uint32_t command_index;
++    uint32_t command_count;
++    /** Graph nodes encoded into this command. */
++    uint32_t node_count;
++    /** 0 when the device completed the command, else a backend status. */
++    int32_t status;
++    /** Unix nanoseconds; 0 when the backend did not observe the instant. */
++    int64_t encode_start_unix_ns;
++    int64_t encode_end_unix_ns;
++    int64_t execute_start_unix_ns;
++    int64_t execute_end_unix_ns;
++    /**
++     * What the command's graph nodes do: "attention", "matmul", "recurrent",
++     * "kv_write" or "other" when every classified node shares that class,
++     * else "mixed"; static storage. Views and reshapes have no class.
++     * Attention is flash attention, or the masked soft max and K/Q, K/Q/V
++     * products of unfused attention; recurrent is SSM, RWKV, gated linear
++     * attention and delta-net state, and copies to or from its cache.
++     */
++    const char * op_class;
++    /** The model layer of the command's first layer-named node; -1 when unknown. */
++    int32_t layer;
++    /**
++     * 1 when the backend split this graph at op class boundaries so each
++     * command holds one class (Metal: GGML_METAL_OP_PROFILE=1), else 0.
++     */
++    uint32_t split_by_class;
++    /**
++     * Attention nodes: the most KV cells one query addresses (the row list
++     * length for attention that reads per-sequence row lists, else the K/V
++     * span; for unfused attention, the K/Q product's K span), the most query
++     * rows one node processes, how many nodes read row lists, and how many
++     * are flash attention (unfused attention has none).
++     */
++    uint32_t attention_kv_cells;
++    uint32_t attention_queries;
++    uint32_t attention_row_list_nodes;
++    uint32_t attention_flash_nodes;
++    /** Graph nodes by class. */
++    uint32_t attention_nodes;
++    uint32_t matmul_nodes;
++    uint32_t recurrent_nodes;
++    uint32_t kv_write_nodes;
++    uint32_t other_nodes;
++    /**
++     * Bytes the nodes read, by class: weights and activations for mat-muls;
++     * for gathers from and row writes into a cache, only the rows read or
++     * written; for attention only the K/V rows its nodes address.
++     */
++    uint64_t attention_bytes;
++    uint64_t matmul_bytes;
++    uint64_t recurrent_bytes;
++    uint64_t kv_write_bytes;
++    uint64_t other_bytes;
++    /**
++     * Recurrent state caches: the most states one gather reads (the states
++     * of the batch's sequences and every state between them), and the most
++     * of those a copy writes back unchanged because no sequence in the batch
++     * owns them.
++     */
++    uint32_t recurrent_states;
++    uint32_t recurrent_states_carried;
++};
++
++/**
++ * @brief Receives one timing record, on a backend-owned completion thread.
++ *
++ * The record is valid only for the duration of the call. Return quickly:
++ * the thread may be serving completion for every command on the device.
++ */
++typedef void (*skippy_gpu_command_timing_callback)(
++        const struct skippy_gpu_command_timing_v1 * timing,
++        void * user_data);
++
++/**
++ * @brief Installs the process-global GPU command timing callback.
++ *
++ * Install once, before submitting work; a null callback stops reporting. A
++ * callback already running may finish after it is cleared. Returns
++ * SKIPPY_STATUS_UNSUPPORTED when no loaded backend reports command timing.
++ */
++LLAMA_API enum skippy_status skippy_set_gpu_command_timing_callback(
++        skippy_gpu_command_timing_callback callback,
++        void * user_data);
++
++/**
++ * @brief Sets the calling thread's trace tag for the work it does afterwards.
++ *
++ * Native spans without an enclosing native span, and GPU work the thread
++ * submits, carry the tag. Thread-local and cheap; pass 0 to stop tagging.
++ * Tags should leave SKIPPY_NATIVE_SPAN_ID_BIT clear. Backends see the tag
++ * once either callback has been installed.
++ */
++LLAMA_API void skippy_set_trace_tag(uint64_t tag);
++
++#ifdef __cplusplus
++}
++#endif
++
++#endif // SKIPPY_TRACING_H
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index c7793b071..592550c42 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -98,6 +98,7 @@ add_library(llama
+             skippy/speculative_decoding.cpp
+             skippy/tokenization.cpp
+             skippy/events.cpp
++            skippy/tracing.cpp
+             unicode.h
+             ${LLAMA_MODELS_SOURCES}
+             )
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index ac42f935f..381bece6e 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -17,6 +17,7 @@
+ #include "skippy/activation.h"
+ #include "skippy/environment.h"
+ #include "skippy/state_memory.h"
++#include "skippy/trace_scope.h"
+ 
+ #include <atomic>
+ #include <cinttypes>
+@@ -455,6 +456,7 @@ llama_context::llama_context(
+     }
+ 
+     if (!hparams.vocab_only) {
++        skippy_trace::scope backend_trace("llama.backend_init");
+         // GPU backends
+         for (const auto & dev : model.devices) {
+             ggml_backend_t backend = ggml_backend_dev_init(dev.dev, nullptr);
+@@ -519,6 +521,8 @@ llama_context::llama_context(
+             /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
+         };
+ 
++        // allocates the KV cache and recurrent state
++        skippy_trace::scope memory_trace("llama.memory_create");
+         memory.reset(model.create_memory(params_mem, cparams, graph_build_inputs.selection));
+     }
+ 
+@@ -783,6 +787,8 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
+         return;
+     }
+ 
++    skippy_trace::scope trace("llama.sched_reserve");
++
+     sched_need_reserve = false;
+     ++sched_reserve_count;
+ 
+@@ -941,7 +947,11 @@ void llama_context::synchronize() {
+         return;
+     }
+ 
+-    ggml_backend_sched_synchronize(sched.get());
++    {
++        // the host waits here for the device to finish queued work
++        skippy_trace::scope trace("llama.synchronize", "queued_tokens", n_queued_tokens);
++        ggml_backend_sched_synchronize(sched.get());
++    }
+ 
+     // FIXME: if multiple single tokens are evaluated without a synchronization,
+     // the stats will be added to the prompt evaluation stats
+@@ -1069,6 +1079,8 @@ bool llama_context::memory_update(
+                 }
+         }
+ 
++        skippy_trace::scope trace("llama.memory_update");
++
+         // reset the previous graph results to make sure that they won't be reused
+         // TODO: make mctx->apply() report if a graph reserve is needed, then reset graph results only if the memory module reset the scheduler
+         for (auto & res : gf_res_prev) {
+@@ -1626,7 +1638,13 @@ llm_graph_result * llama_context::process_ubatch(
+         llama_memory_context_i * mctx,
+         ggml_status & ret,
+         const skippy_graph_build_inputs & graph_build_inputs) {
+-    if (mctx && !mctx->apply()) {
++    skippy_trace::scope trace("llama.process_ubatch", "tokens", ubatch.n_tokens);
++    trace.set_detail("build");
++
++    skippy_trace::scope apply_trace("llama.memory_apply");
++    const bool applied = mctx == nullptr || mctx->apply();
++    apply_trace.end();
++    if (!applied) {
+         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
+         ret = GGML_STATUS_FAILED;
+         return nullptr;
+@@ -1641,6 +1659,7 @@ llm_graph_result * llama_context::process_ubatch(
+ 
+     if (!graph_reuse_disable && gf_res_prev_active == res && res->can_reuse(gparams)) {
+         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
++        trace.set_detail("reuse");
+ 
+         // with pipeline parallelism, the previous graph_compute_async may still be running
+         // on the GPU. we must synchronize before set_inputs to avoid overwriting input tensors
+@@ -1659,7 +1678,10 @@ llm_graph_result * llama_context::process_ubatch(
+ 
+         //const auto t_start_us = ggml_time_us();
+ 
++        skippy_trace::scope build_trace("llama.graph_build");
+         gf = model.build_graph(gparams);
++        build_trace.set_value("nodes", gf != nullptr ? ggml_graph_n_nodes(gf) : 0);
++        build_trace.end();
+ 
+         //LLAMA_LOG_INFO("graph build time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
+ 
+@@ -1679,11 +1701,13 @@ llm_graph_result * llama_context::process_ubatch(
+             return nullptr;
+         }
+ 
++        skippy_trace::scope alloc_trace("llama.graph_alloc");
+         if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
+             LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
+             ret = GGML_STATUS_ALLOC_FAILED;
+             return nullptr;
+         }
++        alloc_trace.end();
+ 
+         gf_res_prev_active = res;
+     }
+@@ -1693,12 +1717,16 @@ llm_graph_result * llama_context::process_ubatch(
+         //const auto t_start_us = ggml_time_us();
+ 
+         // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
++        skippy_trace::scope inputs_trace("llama.set_inputs");
+         res->set_inputs(&ubatch, graph_build_inputs);
+ 
+         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
+     }
+ 
++    // submits the graph; the device may still be running it on return
++    skippy_trace::scope compute_trace("llama.graph_compute", "nodes", ggml_graph_n_nodes(res->get_gf()));
+     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
++    compute_trace.end();
+     if (status != GGML_STATUS_SUCCESS) {
+         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
+         ret = status;
+@@ -1985,6 +2013,8 @@ int llama_context::decode(
+         return encode(batch_inp, graph_build_inputs);
+     }
+ 
++    skippy_trace::scope trace("llama.decode", "tokens", (int64_t) batch_inp.tokens.size());
++
+     if (batch_inp.tokens.empty()) {
+         LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
+         return -1;
+@@ -2039,10 +2069,12 @@ int llama_context::decode(
+         }
+     }
+ 
++    skippy_trace::scope batch_trace("llama.batch_init");
+     if (!balloc->init(batch_inp, vocab, output_all)) {
+         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
+         return -1;
+     }
++    batch_trace.end();
+ 
+     const uint32_t n_tokens_all  = balloc->get_n_tokens();
+     const uint32_t n_outputs_all = balloc->get_n_outputs();
+@@ -2083,6 +2115,8 @@ int llama_context::decode(
+ 
+     llama_memory_context_ptr mctx;
+ 
++    // finds cells for the batch and splits it into ubatches
++    skippy_trace::scope slot_trace("llama.memory_init_batch");
+     while (true) {
+         mctx = memory->init_batch(*balloc, cparams.n_ubatch, embd_all);
+         if (!mctx) {
+@@ -2126,11 +2160,15 @@ int llama_context::decode(
+         break;
+     }
+ 
++    slot_trace.end();
++
+     // reserve output buffer
++    skippy_trace::scope output_trace("llama.output_reserve", "outputs", n_outputs_all);
+     if (output_reserve(n_outputs_all) < n_outputs_all) {
+         LLAMA_LOG_ERROR("%s: could not reserve space for batch with %d outputs\n", __func__, n_outputs_all);
+         return -2;
+     };
++    output_trace.end();
+ 
+     int64_t n_outputs_prev = 0;
+     int64_t n_tokens_prev  = 0;
+@@ -2199,6 +2237,9 @@ int llama_context::decode(
+         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
+         //}
+ 
++        // queues copies of this ubatch's outputs to the host
++        skippy_trace::scope extract_trace("llama.output_extract", "outputs", n_outputs);
++
+         auto * t_logits  = res->get_logits();
+         auto * t_embd    = cparams.embeddings       ? res->get_embd()     : nullptr;
+         auto * t_h_nextn = cparams.embeddings_nextn ? res->get_h_nextn()  : nullptr;
+@@ -2337,10 +2378,13 @@ int llama_context::decode(
+             copy_tensor_async_rows(res->t_candidates,     sampling.candidates, stride, n_outputs_prev, sched.get(), &sampling.candidates_count);
+         }
+ 
++        extract_trace.end();
++
+         n_outputs_prev += n_outputs;
+         n_tokens_prev  += ubatch.n_tokens;
+         if (llm_arch_is_recurrent(model.arch) || llm_arch_is_hybrid(model.arch)) {
+             // Recurrent state written by this graph must be ready before the next ubatch or output read.
++            skippy_trace::scope sync_trace("llama.recurrent_sync");
+             ggml_backend_sched_synchronize(sched.get());
+         }
+     } while (mctx->next());
+@@ -2831,6 +2875,8 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
+     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
+     GGML_ASSERT(n_outputs >= 1);
+ 
++    skippy_trace::scope trace("llama.graph_reserve", "tokens", n_tokens);
++
+     if (n_tokens % n_seqs != 0) {
+         n_tokens = ((n_tokens + (n_seqs - 1)) / n_seqs) * n_seqs; // round to next multiple of n_seqs
+         LLAMA_LOG_DEBUG("%s: making n_tokens a multiple of n_seqs - n_tokens = %u, n_seqs = %u, n_outputs = %u\n", __func__, n_tokens, n_seqs, n_outputs);
+@@ -3783,6 +3829,7 @@ size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_fl
+ }
+ 
+ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, size_t size, llama_state_seq_flags flags) {
++    skippy_trace::scope trace("llama.state_seq_save", "bytes", (int64_t) size);
+     std::unique_ptr<llama_io_write_i> io;
+     if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
+         io = std::make_unique<llama_io_write_device>(dst, size, mem_storage[seq_id]);
+@@ -3802,6 +3849,7 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
+ }
+ 
+ size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags) {
++    skippy_trace::scope trace("llama.state_seq_restore", "bytes", (int64_t) size);
+     std::unique_ptr<llama_io_read_i> io;
+     if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
+         // create a temporary io to read the magic and the src seq_id
+diff --git a/src/llama-kv-cache.cpp b/src/llama-kv-cache.cpp
+index d66a11c7d..d8f281331 100644
+--- a/src/llama-kv-cache.cpp
++++ b/src/llama-kv-cache.cpp
+@@ -1,4 +1,5 @@
+ #include "llama-kv-cache.h"
++#include "skippy/trace_scope.h"
+ 
+ #include "llama-impl.h"
+ #include "llama-io.h"
+@@ -416,6 +417,7 @@ llama_kv_cache::llama_kv_cache(
+ }
+ 
+ void llama_kv_cache::clear(bool data) {
++    skippy_trace::scope trace("llama.kv_clear");
+     for (uint32_t s = 0; s < n_stream; ++s) {
+         v_cells[s].reset();
+         v_heads[s] = 0;
+@@ -429,6 +431,7 @@ void llama_kv_cache::clear(bool data) {
+ }
+ 
+ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
++    skippy_trace::scope trace("llama.kv_seq_rm", "seq", seq_id);
+     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+     if (other) {
+         return true;
+@@ -531,6 +534,7 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
+ }
+ 
+ void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
++    skippy_trace::scope trace("llama.kv_seq_cp", "seq", seq_id_dst);
+     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+     if (other) {
+         return;
+@@ -623,6 +627,7 @@ void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, ll
+ }
+ 
+ void llama_kv_cache::seq_keep(llama_seq_id seq_id) {
++    skippy_trace::scope trace("llama.kv_seq_keep", "seq", seq_id);
+     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+     if (other) {
+         return;
+@@ -650,6 +655,7 @@ void llama_kv_cache::seq_keep(llama_seq_id seq_id) {
+ }
+ 
+ void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
++    skippy_trace::scope trace("llama.kv_seq_add", "seq", seq_id);
+     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+     if (other) {
+         return;
+@@ -1606,6 +1612,7 @@ bool llama_kv_cache::stage_export_kv_page(
+         size_t output_capacity,
+         size_t * out_bytes,
+         std::string & error) const {
++    skippy_trace::scope trace("llama.kv_page_export", "seq", seq_id);
+     if (out_desc == nullptr || out_bytes == nullptr) {
+         error = "out_desc and out_bytes are required";
+         return false;
+@@ -1848,6 +1855,7 @@ bool llama_kv_cache::stage_import_kv_page(
+         size_t input_bytes,
+         std::string & error,
+         bool validate_only) {
++    skippy_trace::scope trace("llama.kv_page_import", "bytes", (int64_t) input_bytes);
+     if (input == nullptr) {
+         error = "input payload is required";
+         return false;
+@@ -3402,6 +3410,7 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
+ }
+ 
+ void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
++    skippy_trace::scope trace("llama.kv_state_write", "seq", seq_id);
+     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
+     if (other) {
+         return;
+@@ -3474,6 +3483,7 @@ void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, lla
+ }
+ 
+ void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
++    skippy_trace::scope trace("llama.kv_state_read", "seq", seq_id);
+     state_read_sinfo(io, seq_id, flags, nullptr, nullptr);
+ }
+ 
+diff --git a/src/llama-memory-recurrent.cpp b/src/llama-memory-recurrent.cpp
+index 8b765e3ed..82b5a038d 100644
+--- a/src/llama-memory-recurrent.cpp
++++ b/src/llama-memory-recurrent.cpp
+@@ -1,4 +1,5 @@
+ #include "llama-memory-recurrent.h"
++#include "skippy/trace_scope.h"
+ 
+ #include "ggml-backend.h"
+ #include "llama-impl.h"
+@@ -187,6 +188,7 @@ llama_memory_recurrent::llama_memory_recurrent(
+ }
+ 
+ void llama_memory_recurrent::clear(bool data) {
++    skippy_trace::scope trace("llama.recurrent_clear");
+     for (int32_t i = 0; i < (int32_t) size; ++i) {
+         cells[i].pos = -1;
+         cells[i].seq_id.clear();
+@@ -207,6 +209,7 @@ void llama_memory_recurrent::clear(bool data) {
+ }
+ 
+ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
++    skippy_trace::scope trace("llama.recurrent_seq_rm", "seq", seq_id);
+     uint32_t new_head = size;
+ 
+     if (p0 < 0) {
+@@ -304,6 +307,7 @@ bool llama_memory_recurrent::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos
+ }
+ 
+ void llama_memory_recurrent::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
++    skippy_trace::scope trace("llama.recurrent_seq_cp", "seq", seq_id_dst);
+     if (seq_id_src == seq_id_dst) {
+         return;
+     }
+@@ -341,6 +345,7 @@ void llama_memory_recurrent::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id
+ }
+ 
+ void llama_memory_recurrent::seq_keep(llama_seq_id seq_id) {
++    skippy_trace::scope trace("llama.recurrent_seq_keep", "seq", seq_id);
+     uint32_t new_head = size;
+ 
+     for (uint32_t i = 0; i < size; ++i) {
+@@ -373,6 +378,7 @@ void llama_memory_recurrent::seq_keep(llama_seq_id seq_id) {
+ }
+ 
+ void llama_memory_recurrent::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
++    skippy_trace::scope trace("llama.recurrent_seq_add", "seq", seq_id);
+     if (shift == 0) {
+         return;
+     }
+@@ -833,6 +839,7 @@ size_t llama_memory_recurrent::size_p_bytes() const {
+ }
+ 
+ void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
++    skippy_trace::scope trace("llama.recurrent_state_write", "seq", seq_id);
+     GGML_UNUSED(flags);
+ 
+     std::vector<std::pair<uint32_t, uint32_t>> cell_ranges; // ranges, from inclusive, to exclusive
+@@ -914,6 +921,7 @@ void llama_memory_recurrent::state_write(llama_io_write_i & io, llama_seq_id seq
+ }
+ 
+ void llama_memory_recurrent::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
++    skippy_trace::scope trace("llama.recurrent_state_read", "seq", seq_id);
+     GGML_UNUSED(flags);
+ 
+     uint32_t cell_count;
+diff --git a/src/llama-model.cpp b/src/llama-model.cpp
+index 9901eca36..0c1eb83c4 100644
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -1,4 +1,5 @@
+ #include "llama-model.h"
++#include "skippy/trace_scope.h"
+ 
+ #include "llama-arch.h"
+ #include "llama-ext.h"
+@@ -2067,11 +2068,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+     }
+ 
+     // load tensor data
++    skippy_trace::scope data_trace("llama.load_tensor_data", "buffers", (int64_t) ctx_bufs.size());
+     for (auto & [ctx, bufs] : ctx_bufs) {
+         if (!ml.load_all_data(ctx, bufs, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)) {
+             return false;
+         }
+     }
++    data_trace.end();
+ 
+     if (use_mmap_buffer) {
+         for (auto & mapping : ml.mappings) {
+diff --git a/src/llama-sampler.cpp b/src/llama-sampler.cpp
+index 521c5718e..4d37d74ff 100644
+--- a/src/llama-sampler.cpp
++++ b/src/llama-sampler.cpp
+@@ -1,4 +1,5 @@
+ #include "llama-sampler.h"
++#include "skippy/trace_scope.h"
+ 
+ #include "llama-impl.h"
+ #include "llama-vocab.h"
+@@ -385,6 +386,9 @@ void llama_sampler_apply(struct llama_sampler * smpl, struct llama_token_data_ar
+     }
+ 
+     GGML_ASSERT(smpl->iface->apply);
++    skippy_trace::scope trace("llama.sampler_apply", "candidates", (int64_t) cur_p->size);
++    // a sampler owns its name for its lifetime
++    trace.set_detail(smpl->iface->name != nullptr ? smpl->iface->name(smpl) : nullptr);
+     smpl->iface->apply(smpl, cur_p);
+ }
+ 
+@@ -893,6 +897,7 @@ uint32_t llama_sampler_backend_n_nodes(const llama_sampler * sampler) {
+ }
+ 
+ llama_token llama_sampler_sample(struct llama_sampler * smpl, struct llama_context * ctx, int32_t idx) {
++    skippy_trace::scope trace("llama.sampler_sample");
+     const llama_token   sampled_token  = llama_get_sampled_token_ith     (ctx, idx);
+     const float *       sampled_probs  = llama_get_sampled_probs_ith     (ctx, idx);
+     const float *       sampled_logits = llama_get_sampled_logits_ith    (ctx, idx);
+@@ -2679,6 +2684,7 @@ static const char * llama_sampler_grammar_name(const struct llama_sampler * /*sm
+ static void llama_sampler_grammar_accept_impl(struct llama_sampler * smpl, llama_token token) {
+     auto * ctx = (llama_sampler_grammar *) smpl->ctx;
+     if (ctx->grammar) {
++        skippy_trace::scope trace("llama.grammar_accept");
+         llama_grammar_accept_impl(*ctx->grammar, token);
+     }
+ }
+@@ -2686,6 +2692,7 @@ static void llama_sampler_grammar_accept_impl(struct llama_sampler * smpl, llama
+ static void llama_sampler_grammar_apply(struct llama_sampler * smpl, llama_token_data_array * cur_p) {
+     auto * ctx = (llama_sampler_grammar *) smpl->ctx;
+     if (ctx->grammar) {
++        skippy_trace::scope trace("llama.grammar_apply", "candidates", (int64_t) cur_p->size);
+         llama_grammar_apply_impl(*ctx->grammar, cur_p);
+     }
+ }
+diff --git a/src/llama-vocab.cpp b/src/llama-vocab.cpp
+index 9b5cc2e1c..44bb6f81e 100644
+--- a/src/llama-vocab.cpp
++++ b/src/llama-vocab.cpp
+@@ -1,4 +1,5 @@
+ #include "llama-vocab.h"
++#include "skippy/trace_scope.h"
+ 
+ #include "ggml.h"
+ #include "gguf.h"
+@@ -4669,6 +4670,7 @@ int32_t llama_tokenize(
+                      int32_t   n_tokens_max,
+                         bool   add_special,
+                         bool   parse_special) {
++    skippy_trace::scope trace("llama.tokenize", "bytes", text_len);
+     return vocab->tokenize(text, text_len, tokens, n_tokens_max, add_special, parse_special);
+ }
+ 
+diff --git a/src/llama.cpp b/src/llama.cpp
+index 16ad7eca5..c5254df6a 100644
+--- a/src/llama.cpp
++++ b/src/llama.cpp
+@@ -1,4 +1,5 @@
+ #include "llama.h"
++#include "skippy/trace_scope.h"
+ 
+ #include "llama-impl.h"
+ #include "llama-version.h"
+@@ -317,9 +318,12 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
+         const std::string & fname, std::vector<std::string> & splits, bool ordered_parts, FILE * file, llama_model_params & params,
+         const llama_model_loader_stage_selection * stage_selection) {
+     try {
++        // reads the GGUF header and tensor index
++        skippy_trace::scope open_trace("llama.gguf_open");
+         llama_model_loader ml(metadata, set_tensor_data, set_tensor_data_ud, fname, splits, ordered_parts, file, params.load_mode,
+             params.check_tensors, params.no_alloc, params.load_mtp, params.kv_overrides, params.tensor_buft_overrides,
+             stage_selection);
++        open_trace.end();
+ 
+         ml.lazy.mode = params.lazy_mode;
+ 
+@@ -347,6 +351,7 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
+         model->hparams.no_alloc   = params.no_alloc;
+ 
+         try {
++            skippy_trace::scope trace("llama.load_hparams");
+             model->load_hparams(ml);
+         } catch(const std::exception & e) {
+             throw std::runtime_error("error loading model hyperparameters: " + std::string(e.what()));
+@@ -355,6 +360,7 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
+             throw std::runtime_error("CLIP cannot be used as main model, use it with --mmproj instead");
+         }
+         try {
++            skippy_trace::scope trace("llama.load_vocab");
+             model->load_vocab(ml);
+         } catch(const std::exception & e) {
+             throw std::runtime_error("error loading model vocabulary: " + std::string(e.what()));
+@@ -368,9 +374,11 @@ static std::pair<int, llama_model *> llama_model_load(struct gguf_context * meta
+             return {0, model_ptr.release()};
+         }
+ 
++        skippy_trace::scope tensors_trace("llama.load_tensors");
+         if (!model->load_tensors(ml)) {
+             return {-2, nullptr};
+         }
++        tensors_trace.end();
+ 
+         return {0, model_ptr.release()};
+     } catch (const std::exception & err) {
+diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
+index ceed6e5d3..6693d8d44 100644
+--- a/src/skippy/abi.cpp
++++ b/src/skippy/abi.cpp
+@@ -46,7 +46,8 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_DIAGNOSTIC_EVENTS |
+            SKIPPY_FEATURE_UNLOAD_EVENTS |
+            SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
+-           SKIPPY_FEATURE_CACHEGEN_KV_PAGE;
++           SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
++           SKIPPY_FEATURE_NATIVE_TRACING;
+ }
+ 
+ void skippy_error_free(struct skippy_error * error) {
+diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
+index 7167e5f7a..885b602e9 100644
+--- a/src/skippy/activation.cpp
++++ b/src/skippy/activation.cpp
+@@ -7,6 +7,7 @@
+ #include "skippy-verify-checkpoint.h"
+ #include "skippy/devices.h"
+ #include "skippy/verify_window.h"
++#include "skippy/trace_scope.h"
+ 
+ #include <mutex>
+ #include "gguf.h"
+@@ -468,6 +469,7 @@ enum skippy_status skippy_decode_batch(
+         int32_t glm_dsa_phase_hint,
+         struct skippy_error ** out_error,
+         const skippy_graph_build_inputs * graph_build_inputs) {
++    skippy_trace::scope prepare_trace("skippy.decode_prepare", "tokens", static_cast<int64_t>(token_count));
+     if (session == nullptr || session->ctx == nullptr || token_count == 0) {
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "session and at least one token are required");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+@@ -498,6 +500,7 @@ enum skippy_status skippy_decode_batch(
+                 inputs.selection.glm_dsa_phase_hint,
+                 token_count);
+     }
++    prepare_trace.end();
+     skippy_glm_dsa_op_timing_begin(session, token_count);
+     int32_t rc = 0;
+     const bool decoded = skippy_contain_native_failure(
+diff --git a/src/skippy/execution-batch.cpp b/src/skippy/execution-batch.cpp
+index 22269c506..b98adbd7f 100644
+--- a/src/skippy/execution-batch.cpp
++++ b/src/skippy/execution-batch.cpp
+@@ -6,6 +6,7 @@
+ #include "skippy/runtime_types.h"
+ #include "skippy/sampling_internal.h"
+ #include "skippy/selected_logits.h"
++#include "skippy/trace_scope.h"
+ 
+ #include "llama-arch.h"
+ #include "llama-context.h"
+@@ -209,6 +210,8 @@ enum skippy_status skippy_iteration_batch_sampled(
+         size_t sampled_output_capacity,
+         size_t * out_sampled_output_count,
+         struct skippy_error ** out_error) {
++    // validation, output frames, the batched frontier and the llama batch
++    skippy_trace::scope prepare_trace("skippy.batch_prepare", "requests", static_cast<int64_t>(request_count));
+     if (requests == nullptr || request_count == 0 || out_sampled_output_count == nullptr) {
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
+                 "requests, request_count, and out_sampled_output_count are required");
+@@ -403,6 +406,7 @@ enum skippy_status skippy_iteration_batch_sampled(
+         seq_ids.data(),
+         logits.data(),
+     };
++    prepare_trace.end();
+     int32_t decode_rc = 0;
+     if (!skippy_contain_native_failure(
+                 out_error, [&] { decode_rc = first->ctx->decode(batch, graph_inputs); })) {
+@@ -416,6 +420,8 @@ enum skippy_status skippy_iteration_batch_sampled(
+     skippy_mark_context_work_pending(first->stage_model);
+     skippy_synchronize_context_if_pending(first->stage_model);
+ 
++    // exports, readouts and sampling, request by request
++    skippy_trace::scope outputs_trace("skippy.batch_outputs", "requests", static_cast<int64_t>(request_count));
+     size_t sampled_index = 0;
+     for (size_t request_index = 0; request_index < request_count; ++request_index) {
+         const auto & request = requests[request_index];
+diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
+index 727bdd6d3..6186123f5 100644
+--- a/src/skippy/model_loading.cpp
++++ b/src/skippy/model_loading.cpp
+@@ -22,6 +22,7 @@
+ #include "llama-model-loader.h"
+ #include "model_load_config_internal.h"
+ #include "skippy/graph_identity.h"
++#include "skippy/trace_scope.h"
+ #include "../vendor/nlohmann/json.hpp"
+ 
+ #include <algorithm>
+@@ -761,7 +762,10 @@ enum skippy_status skippy_finish_model_open(
+     }
+ 
+     const skippy_graph_build_inputs graph_build_inputs = skippy_graph_build_inputs_from_config(config);
++    skippy_trace::scope context_trace("llama.context_init");
++    context_trace.set_detail("target");
+     stage_model->ctx = llama_init_from_model_with_graph_inputs(model, params, graph_build_inputs);
++    context_trace.end();
+     if (stage_model->ctx == nullptr) {
+         const char * message = "failed to create llama context";
+         if (event_scope != nullptr) {
+@@ -870,7 +874,10 @@ enum skippy_status skippy_finish_model_open(
+         // MTP consumes raw multirow outputs, without session backend samplers.
+         mtp_params.n_outputs_max_per_seq = 0;
+         mtp_params.embeddings = false;
++        skippy_trace::scope mtp_trace("llama.context_init");
++        mtp_trace.set_detail("mtp");
+         stage_model->mtp_ctx = llama_init_from_model_with_graph_inputs(model, mtp_params, graph_build_inputs);
++        mtp_trace.end();
+         if (stage_model->mtp_ctx != nullptr) {
+             llama_set_embeddings_nextn(stage_model->ctx, true, false);
+             llama_set_embeddings_nextn(stage_model->mtp_ctx, true, false);
+@@ -987,10 +994,12 @@ enum skippy_status skippy_model_open_impl(
+         params.progress_callback_user_data = &event_scope;
+     }
+ 
++    skippy_trace::scope backend_trace("skippy.backend_init");
+     llama_backend_init();
+     if (!ggml_backend_reg_count()) {
+         ggml_backend_load_all();
+     }
++    backend_trace.end();
+     std::vector<ggml_backend_dev_t> selected_devices;
+     enum skippy_status device_status = skippy_apply_selected_backend_device(config, params, selected_devices, out_error);
+     if (device_status != SKIPPY_STATUS_OK) {
+@@ -1002,8 +1011,10 @@ enum skippy_status skippy_model_open_impl(
+         return device_status;
+     }
+     const auto selection = skippy_loader_selection(config);
++    skippy_trace::scope load_trace("llama.model_load");
+     llama_model * model = llama_model_load_from_file_with_selection(
+             path, params, skippy_loader_selection_ptr(config, selection));
++    load_trace.end();
+     if (model == nullptr) {
+         const char * message = "failed to load llama model";
+         event_scope.emit_failure(SKIPPY_STATUS_MODEL_ERROR, message);
+@@ -1079,10 +1090,12 @@ enum skippy_status skippy_model_open_from_parts_impl(
+         params.progress_callback_user_data = &event_scope;
+     }
+ 
++    skippy_trace::scope backend_trace("skippy.backend_init");
+     llama_backend_init();
+     if (!ggml_backend_reg_count()) {
+         ggml_backend_load_all();
+     }
++    backend_trace.end();
+     std::vector<ggml_backend_dev_t> selected_devices;
+     enum skippy_status device_status = skippy_apply_selected_backend_device(config, params, selected_devices, out_error);
+     if (device_status != SKIPPY_STATUS_OK) {
+@@ -1094,8 +1107,10 @@ enum skippy_status skippy_model_open_from_parts_impl(
+         return device_status;
+     }
+     const auto selection = skippy_loader_selection(config);
++    skippy_trace::scope load_trace("llama.model_load", "parts", static_cast<int64_t>(path_count));
+     llama_model * model = llama_model_load_from_parts_with_selection(
+             paths, path_count, params, skippy_loader_selection_ptr(config, selection));
++    load_trace.end();
+     if (model == nullptr) {
+         const char * message = "failed to load llama model from GGUF parts";
+         event_scope.emit_failure(SKIPPY_STATUS_MODEL_ERROR, message);
+@@ -1153,10 +1168,12 @@ enum skippy_status skippy_model_attach_mtp_draft_model(
+         skippy_apply_host_expert_placement(config, model_params, tensor_placement);
+     }
+ 
++    skippy_trace::scope backend_trace("skippy.backend_init");
+     llama_backend_init();
+     if (!ggml_backend_reg_count()) {
+         ggml_backend_load_all();
+     }
++    backend_trace.end();
+     std::vector<ggml_backend_dev_t> selected_devices;
+     enum skippy_status device_status = skippy_apply_selected_backend_device(config, model_params, selected_devices, out_error);
+     if (device_status != SKIPPY_STATUS_OK) {
+diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
+index b688fce73..671ccbb3c 100644
+--- a/src/skippy/sampling.cpp
++++ b/src/skippy/sampling.cpp
+@@ -7,6 +7,7 @@
+ #include "../../common/sampling.h"
+ #include "skippy/sampling_internal.h"
+ #include "skippy/speculative_internal.h"
++#include "skippy/trace_scope.h"
+ 
+ #include "llama-impl.h"
+ #include "../vendor/nlohmann/json.hpp"
+@@ -575,6 +576,7 @@ llama_token skippy_sample_token_ith(
+         skippy_session * session,
+         const skippy_sampling_config * sampling,
+         int32_t logits_index) {
++    skippy_trace::scope trace("skippy.sample");
+     if (session == nullptr || session->reset_required || session->ctx == nullptr ||
+             session->stage_model == nullptr || session->stage_model->model == nullptr) {
+         return LLAMA_TOKEN_NULL;
+diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
+index 7f55c0d88..3fb86667d 100644
+--- a/src/skippy/speculative_decoding.cpp
++++ b/src/skippy/speculative_decoding.cpp
+@@ -6,6 +6,7 @@
+ #include "skippy/runtime_types.h"
+ #include "skippy/sampling_internal.h"
+ #include "skippy/speculative_internal.h"
++#include "skippy/trace_scope.h"
+ 
+ #include "llama-context.h"
+ #include "llama-graph.h"
+@@ -191,6 +192,7 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+             token_count == 0) {
+         return skippy_success(out_error);
+     }
++    skippy_trace::scope trace("skippy.mtp_sync", "tokens", static_cast<int64_t>(token_count));
+     if (token_count > static_cast<size_t>(std::numeric_limits<int32_t>::max())) {
+         skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT, "MTP token_count exceeds int32_t range");
+         return SKIPPY_STATUS_INVALID_ARGUMENT;
+diff --git a/src/skippy/trace_scope.h b/src/skippy/trace_scope.h
+new file mode 100644
+index 000000000..b64d9da37
+--- /dev/null
++++ b/src/skippy/trace_scope.h
+@@ -0,0 +1,61 @@
++#pragma once
++
++// Native trace spans (skippy/tracing.h) for Skippy and llama internals. With
++// no span callback installed a scope costs one atomic load.
++
++#include <cstdint>
++
++namespace skippy_trace {
++
++// A span from construction until end() or destruction, nested under the
++// scope already open on this thread, else under the thread's trace tag.
++// Scopes on one thread must end in reverse order of construction.
++class scope {
++  public:
++    explicit scope(const char * name) noexcept;
++    scope(const char * name, const char * value_name, int64_t value) noexcept;
++    ~scope() { end(); }
++
++    scope(const scope &)             = delete;
++    scope & operator=(const scope &) = delete;
++
++    // `detail` must outlive the scope
++    void set_detail(const char * detail) noexcept { detail_ = detail; }
++    void set_value(const char * value_name, int64_t value) noexcept {
++        value_name_ = value_name;
++        value_      = value;
++    }
++
++    // ends the span now; later calls and the destructor do nothing
++    void end() noexcept;
++
++  private:
++    const char * name_;
++    const char * detail_     = nullptr;
++    const char * value_name_ = nullptr;
++    int64_t      value_      = 0;
++    uint64_t     id_         = 0;
++    uint64_t     parent_     = 0;
++    uint64_t     previous_   = 0;
++    int64_t      start_unix_ns_ = 0;
++};
++
++// What a span begun now on this thread nests under: its open scope, else its
++// trace tag; 0 when there is neither.
++uint64_t current_parent() noexcept;
++
++// While it lives, spans this thread begins nest under `parent`, so work done
++// on another thread's behalf joins that thread's trace.
++class adopt {
++  public:
++    explicit adopt(uint64_t parent) noexcept;
++    ~adopt();
++
++    adopt(const adopt &)             = delete;
++    adopt & operator=(const adopt &) = delete;
++
++  private:
++    uint64_t previous_;
++};
++
++} // namespace skippy_trace
+diff --git a/src/skippy/tracing.cpp b/src/skippy/tracing.cpp
+new file mode 100644
+index 000000000..9aa48e08c
+--- /dev/null
++++ b/src/skippy/tracing.cpp
+@@ -0,0 +1,272 @@
++#include "skippy/tracing.h"
++#include "skippy/trace_scope.h"
++
++#include "ggml-backend.h"
++
++#include <array>
++#include <atomic>
++#include <chrono>
++
++namespace {
++
++// Each supporting backend registry gets its own forwarder, so a record can
++// name the backend it came from.
++constexpr size_t MAX_TRACING_BACKENDS = 4;
++
++std::atomic<skippy_native_span_callback> g_span_callback { nullptr };
++std::atomic<void *>                      g_span_user_data { nullptr };
++
++std::atomic<skippy_gpu_command_timing_callback> g_gpu_callback { nullptr };
++std::atomic<void *>                             g_gpu_user_data { nullptr };
++
++// Read on every tagged native call, so lock-free.
++std::array<std::atomic<ggml_backend_set_command_timing_tag_t>, MAX_TRACING_BACKENDS> g_tag_setters {};
++
++std::atomic<uint64_t> g_next_span_id { 0 };
++
++// when the span callback was last installed; backend spans kept from before
++// then have no known parent
++std::atomic<int64_t> g_span_install_unix_ns { 0 };
++
++// the innermost open scope on this thread, and the tag its caller set
++thread_local uint64_t t_current = 0;
++thread_local uint64_t t_tag     = 0;
++
++int64_t unix_now_ns() {
++    return std::chrono::duration_cast<std::chrono::nanoseconds>(
++            std::chrono::system_clock::now().time_since_epoch()).count();
++}
++
++uint64_t next_span_id() {
++    return (g_next_span_id.fetch_add(1, std::memory_order_relaxed) + 1) | SKIPPY_NATIVE_SPAN_ID_BIT;
++}
++
++void deliver_span(
++        uint64_t id, uint64_t parent, const char * name, const char * detail,
++        int64_t start_unix_ns, int64_t end_unix_ns, const char * value_name, int64_t value) {
++    const auto callback = g_span_callback.load(std::memory_order_acquire);
++    if (callback == nullptr) {
++        return;
++    }
++    skippy_native_span_v1 span = {};
++    span.abi_version   = SKIPPY_NATIVE_SPAN_V1_ABI_VERSION;
++    span.struct_size   = sizeof(span);
++    span.id            = id;
++    span.parent        = parent;
++    span.name          = name;
++    span.detail        = detail;
++    span.start_unix_ns = start_unix_ns;
++    span.end_unix_ns   = end_unix_ns;
++    span.value_name    = value_name;
++    span.value         = value;
++    callback(&span, g_span_user_data.load(std::memory_order_acquire));
++}
++
++// A backend span joins the open scope on its thread when there is one (a
++// pipeline compiled inside llama.graph_compute), else the tag the backend
++// carried (a dispatch worker encoding for a tagged call), else the thread's
++// own tag: device initialisation that the install itself triggered. Spans
++// kept from before the install began have no parent.
++uint64_t backend_span_parent(const ggml_backend_trace_span & span) {
++    if (t_current != 0) {
++        return t_current;
++    }
++    if (span.tag != 0) {
++        return span.tag;
++    }
++    return span.start_unix_ns < g_span_install_unix_ns.load(std::memory_order_acquire) ? 0 : t_tag;
++}
++
++void forward_backend_span(const ggml_backend_trace_span * span, void *) {
++    if (span == nullptr || span->name == nullptr) {
++        return;
++    }
++    const uint64_t parent = backend_span_parent(*span);
++    deliver_span(next_span_id(), parent, span->name, span->detail,
++            span->start_unix_ns, span->end_unix_ns, nullptr, 0);
++}
++
++// the names skippy/tracing.h documents for ggml_backend_op_class
++const char * op_class_name(int32_t op_class) {
++    switch (op_class) {
++        case GGML_BACKEND_OP_CLASS_OTHER:     return "other";
++        case GGML_BACKEND_OP_CLASS_ATTENTION: return "attention";
++        case GGML_BACKEND_OP_CLASS_MATMUL:    return "matmul";
++        case GGML_BACKEND_OP_CLASS_RECURRENT: return "recurrent";
++        case GGML_BACKEND_OP_CLASS_KV_WRITE:  return "kv_write";
++        default:                              return "mixed";
++    }
++}
++
++void fill_op_classes(skippy_gpu_command_timing_v1 & record, const ggml_backend_command_timing & timing) {
++    record.op_class                 = op_class_name(timing.op_class);
++    record.layer                    = timing.layer;
++    record.split_by_class           = timing.split_by_class;
++    record.attention_kv_cells       = timing.attention_kv_cells;
++    record.attention_queries        = timing.attention_queries;
++    record.attention_row_list_nodes = timing.attention_row_list_nodes;
++    record.attention_flash_nodes    = timing.attention_flash_nodes;
++    record.attention_nodes          = timing.class_nodes[GGML_BACKEND_OP_CLASS_ATTENTION];
++    record.matmul_nodes             = timing.class_nodes[GGML_BACKEND_OP_CLASS_MATMUL];
++    record.recurrent_nodes          = timing.class_nodes[GGML_BACKEND_OP_CLASS_RECURRENT];
++    record.kv_write_nodes           = timing.class_nodes[GGML_BACKEND_OP_CLASS_KV_WRITE];
++    record.other_nodes              = timing.class_nodes[GGML_BACKEND_OP_CLASS_OTHER];
++    record.attention_bytes          = timing.class_bytes[GGML_BACKEND_OP_CLASS_ATTENTION];
++    record.matmul_bytes             = timing.class_bytes[GGML_BACKEND_OP_CLASS_MATMUL];
++    record.recurrent_bytes          = timing.class_bytes[GGML_BACKEND_OP_CLASS_RECURRENT];
++    record.kv_write_bytes           = timing.class_bytes[GGML_BACKEND_OP_CLASS_KV_WRITE];
++    record.other_bytes              = timing.class_bytes[GGML_BACKEND_OP_CLASS_OTHER];
++    record.recurrent_states         = timing.recurrent_states;
++    record.recurrent_states_carried = timing.recurrent_states_carried;
++}
++
++void forward_command_timing(const ggml_backend_command_timing * timing, void * user_data) {
++    const auto callback = g_gpu_callback.load(std::memory_order_acquire);
++    if (callback == nullptr || timing == nullptr) {
++        return;
++    }
++    auto * reg = static_cast<ggml_backend_reg_t>(user_data);
++
++    skippy_gpu_command_timing_v1 record = {};
++    record.abi_version           = SKIPPY_GPU_COMMAND_TIMING_V1_ABI_VERSION;
++    record.struct_size           = sizeof(record);
++    record.tag                   = timing->tag;
++    record.backend_name          = reg != nullptr ? ggml_backend_reg_name(reg) : "";
++    record.context_id            = timing->context_id;
++    record.compute_index         = timing->compute_index;
++    record.command_index         = timing->command_index;
++    record.command_count         = timing->command_count;
++    record.node_count            = timing->node_count;
++    record.status                = timing->status;
++    record.encode_start_unix_ns  = timing->encode_start_unix_ns;
++    record.encode_end_unix_ns    = timing->encode_end_unix_ns;
++    record.execute_start_unix_ns = timing->execute_start_unix_ns;
++    record.execute_end_unix_ns   = timing->execute_end_unix_ns;
++    fill_op_classes(record, *timing);
++
++    callback(&record, g_gpu_user_data.load(std::memory_order_acquire));
++}
++
++template <typename T>
++T backend_proc(ggml_backend_reg_t reg, const char * name) {
++    return reinterpret_cast<T>(ggml_backend_reg_get_proc_address(reg, name));
++}
++
++// Remember every backend that takes a tag, so skippy_set_trace_tag reaches
++// it whichever callback was installed. Returns how many there are.
++size_t register_tag_setters() {
++    size_t count = 0;
++    for (size_t i = 0; i < ggml_backend_reg_count() && count < MAX_TRACING_BACKENDS; ++i) {
++        const auto set_tag = backend_proc<ggml_backend_set_command_timing_tag_t>(
++                ggml_backend_reg_get(i), "ggml_backend_set_command_timing_tag");
++        if (set_tag != nullptr) {
++            g_tag_setters[count++].store(set_tag, std::memory_order_release);
++        }
++    }
++    return count;
++}
++
++} // namespace
++
++namespace skippy_trace {
++
++scope::scope(const char * name) noexcept : name_(name) {
++    if (g_span_callback.load(std::memory_order_relaxed) == nullptr) {
++        return;
++    }
++    id_            = next_span_id();
++    previous_      = t_current;
++    parent_        = t_current != 0 ? t_current : t_tag;
++    t_current      = id_;
++    start_unix_ns_ = unix_now_ns();
++}
++
++scope::scope(const char * name, const char * value_name, int64_t value) noexcept : scope(name) {
++    set_value(value_name, value);
++}
++
++void scope::end() noexcept {
++    if (id_ == 0) {
++        return;
++    }
++    const int64_t end_unix_ns = unix_now_ns();
++    t_current = previous_;
++    deliver_span(id_, parent_, name_, detail_, start_unix_ns_, end_unix_ns, value_name_, value_);
++    id_ = 0;
++}
++
++uint64_t current_parent() noexcept {
++    return t_current != 0 ? t_current : t_tag;
++}
++
++adopt::adopt(uint64_t parent) noexcept : previous_(t_current) {
++    if (parent != 0) {
++        t_current = parent;
++    }
++}
++
++adopt::~adopt() {
++    t_current = previous_;
++}
++
++} // namespace skippy_trace
++
++enum skippy_status skippy_set_native_span_callback(
++        skippy_native_span_callback callback,
++        void * user_data) {
++    if (callback == nullptr) {
++        g_span_callback.store(nullptr, std::memory_order_release);
++    } else {
++        g_span_install_unix_ns.store(unix_now_ns(), std::memory_order_release);
++        g_span_user_data.store(user_data, std::memory_order_relaxed);
++        g_span_callback.store(callback, std::memory_order_release);
++    }
++
++    register_tag_setters();
++    for (size_t i = 0; i < ggml_backend_reg_count(); ++i) {
++        const auto set_callback = backend_proc<ggml_backend_set_trace_span_callback_t>(
++                ggml_backend_reg_get(i), "ggml_backend_set_trace_span_callback");
++        if (set_callback != nullptr) {
++            set_callback(callback != nullptr ? forward_backend_span : nullptr, nullptr);
++        }
++    }
++
++    // Skippy and llama report their own spans with or without a backend.
++    return SKIPPY_STATUS_OK;
++}
++
++enum skippy_status skippy_set_gpu_command_timing_callback(
++        skippy_gpu_command_timing_callback callback,
++        void * user_data) {
++    if (callback == nullptr) {
++        g_gpu_callback.store(nullptr, std::memory_order_release);
++    } else {
++        g_gpu_user_data.store(user_data, std::memory_order_relaxed);
++        g_gpu_callback.store(callback, std::memory_order_release);
++    }
++
++    register_tag_setters();
++    size_t supported = 0;
++    for (size_t i = 0; i < ggml_backend_reg_count(); ++i) {
++        ggml_backend_reg_t reg = ggml_backend_reg_get(i);
++        const auto set_callback = backend_proc<ggml_backend_set_command_timing_callback_t>(
++                reg, "ggml_backend_set_command_timing_callback");
++        if (set_callback != nullptr) {
++            set_callback(callback != nullptr ? forward_command_timing : nullptr, reg);
++            ++supported;
++        }
++    }
++
++    return supported > 0 ? SKIPPY_STATUS_OK : SKIPPY_STATUS_UNSUPPORTED;
++}
++
++void skippy_set_trace_tag(uint64_t tag) {
++    t_tag = tag;
++    for (const auto & setter : g_tag_setters) {
++        const auto set_tag = setter.load(std::memory_order_acquire);
++        if (set_tag == nullptr) {
++            return;
++        }
++        set_tag(tag);
++    }
++}
+diff --git a/tests/CMakeLists.txt b/tests/CMakeLists.txt
+index f21fa5099..e1fa5f472 100644
+--- a/tests/CMakeLists.txt
++++ b/tests/CMakeLists.txt
+@@ -181,6 +181,9 @@ llama_build(${LLAMA_CONTEXT_TEST_SRC})
+ llama_build_and_test(test-skippy-rerank-template.cpp)
+ 
+ if (NOT WIN32 OR NOT BUILD_SHARED_LIBS)
++    # scopes are internal to libllama
++    llama_build_and_test(test-skippy-tracing.cpp)
++    target_include_directories(test-skippy-tracing PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src ${PROJECT_SOURCE_DIR}/src)
+     llama_build_and_test(test-skippy-cachegen-import.cpp)
+     llama_build_and_test(test-skippy-sampling-suppress.cpp)
+     llama_build_and_test(test-skippy-kv-page-export.cpp)
+@@ -282,6 +285,7 @@ endif()
+ 
+ if (GGML_METAL)
+     llama_build_and_test(test-skippy-cachegen-metal.cpp)
++    llama_build_and_test(test-skippy-tracing-metal.cpp)
+ endif()
+ 
+ llama_build_and_test(test-chat-peg-parser.cpp peg-parser/simple-tokenize.cpp)
+diff --git a/tests/test-skippy-tracing-metal.cpp b/tests/test-skippy-tracing-metal.cpp
+new file mode 100644
+index 000000000..365052e0e
+--- /dev/null
++++ b/tests/test-skippy-tracing-metal.cpp
+@@ -0,0 +1,155 @@
++// skippy native tracing on the real Metal backend: library initialisation
++// that ran before the install is still reported, and a tagged graph compute
++// reports the pipelines it compiled and the command buffers that ran, in
++// order, on the GPU
++
++#include "ggml-alloc.h"
++#include "ggml-backend.h"
++#include "ggml-metal.h"
++#include "ggml.h"
++#include "skippy/common.h"
++#include "skippy/tracing.h"
++
++#include <chrono>
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++#include <mutex>
++#include <string>
++#include <thread>
++#include <vector>
++
++#define CHECK(cond)                                                     \
++    do {                                                                \
++        if (!(cond)) {                                                  \
++            std::fprintf(stderr, "%s:%d: CHECK(%s)\n", __FILE__, __LINE__, #cond); \
++            return 1;                                                   \
++        }                                                               \
++    } while (0)
++
++namespace {
++
++constexpr uint64_t TAG = 0x5eed;
++
++struct received_span {
++    std::string name;
++    std::string detail;
++    uint64_t    parent;
++    int64_t     start_unix_ns;
++    int64_t     end_unix_ns;
++};
++
++// timings arrive on Metal's completion thread, spans on encoding threads
++std::mutex                                g_mutex;
++std::vector<skippy_gpu_command_timing_v1> g_received;
++std::vector<received_span>                g_spans;
++
++void receive(const skippy_gpu_command_timing_v1 * timing, void *) {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    g_received.push_back(*timing);
++}
++
++void receive_span(const skippy_native_span_v1 * span, void *) {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    g_spans.push_back({ span->name, span->detail != nullptr ? span->detail : "", span->parent,
++            span->start_unix_ns, span->end_unix_ns });
++}
++
++size_t received_count() {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    return g_received.size();
++}
++
++bool has_span(const char * name, uint64_t parent) {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    for (const auto & span : g_spans) {
++        if (span.name == name && span.parent == parent && span.start_unix_ns <= span.end_unix_ns) {
++            return true;
++        }
++    }
++    return false;
++}
++
++} // namespace
++
++int main() {
++    ggml_backend_t backend = ggml_backend_metal_init();
++    if (backend == nullptr) {
++        std::fprintf(stderr, "no Metal device; skipping\n");
++        return 0;
++    }
++
++    // the device compiled its libraries before anyone listened
++    CHECK(skippy_set_native_span_callback(receive_span, nullptr) == SKIPPY_STATUS_OK);
++    CHECK(has_span("mtl.library_init", 0));
++    CHECK(skippy_set_gpu_command_timing_callback(receive, nullptr) == SKIPPY_STATUS_OK);
++
++    ggml_init_params params = { ggml_tensor_overhead() * 8 + ggml_graph_overhead(), nullptr, true };
++    ggml_context * ctx = ggml_init(params);
++    CHECK(ctx != nullptr);
++    ggml_tensor * a = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4096);
++    ggml_tensor * b = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4096);
++    ggml_tensor * c = ggml_add(ctx, ggml_mul(ctx, a, b), b);
++    ggml_cgraph * gf = ggml_new_graph(ctx);
++    ggml_build_forward_expand(gf, c);
++
++    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, backend);
++    CHECK(buffer != nullptr);
++    const std::vector<float> ones(4096, 1.0f);
++    ggml_backend_tensor_set(a, ones.data(), 0, ggml_nbytes(a));
++    ggml_backend_tensor_set(b, ones.data(), 0, ggml_nbytes(b));
++
++    const auto submitted = std::chrono::system_clock::now();
++    skippy_set_trace_tag(TAG);
++    CHECK(ggml_backend_graph_compute(backend, gf) == GGML_STATUS_SUCCESS);
++    skippy_set_trace_tag(0);
++
++    // the graph's kernels were first used here, by this call
++    CHECK(has_span("mtl.pipeline_compile", TAG));
++
++    // completion handlers run after the GPU finishes, possibly after synchronize returns
++    for (int i = 0; i < 200 && received_count() == 0; ++i) {
++        std::this_thread::sleep_for(std::chrono::milliseconds(10));
++    }
++
++    std::vector<skippy_gpu_command_timing_v1> received;
++    {
++        std::lock_guard<std::mutex> lock(g_mutex);
++        received = g_received;
++    }
++    CHECK(!received.empty());
++
++    const char * backend_name = ggml_backend_reg_name(ggml_backend_metal_reg());
++    const int64_t submitted_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
++            submitted.time_since_epoch()).count();
++    // mul and add are neither attention, mat-muls, recurrent state nor KV writes
++    uint32_t other_nodes = 0;
++    for (const auto & t : received) {
++        other_nodes += t.other_nodes;
++        CHECK(std::strcmp(t.op_class, "other") == 0);
++        CHECK(t.attention_nodes == 0 && t.matmul_nodes == 0 && t.recurrent_nodes == 0 && t.kv_write_nodes == 0);
++        CHECK(t.layer == -1);
++    }
++    CHECK(other_nodes == 2);
++    for (const auto & t : received) {
++        CHECK(t.tag == TAG);
++        CHECK(std::strcmp(t.backend_name, backend_name) == 0);
++        CHECK(t.status == 0);
++        CHECK(t.compute_index >= 1);
++        CHECK(t.command_index < t.command_count);
++        CHECK(t.encode_start_unix_ns <= t.encode_end_unix_ns);
++        CHECK(t.execute_start_unix_ns > 0 && t.execute_start_unix_ns <= t.execute_end_unix_ns);
++        // a clock-conversion error would land far from the submission time
++        CHECK(t.execute_start_unix_ns > submitted_ns - 1000000000LL);
++        CHECK(t.execute_end_unix_ns < submitted_ns + 10000000000LL);
++    }
++
++    CHECK(skippy_set_gpu_command_timing_callback(nullptr, nullptr) == SKIPPY_STATUS_OK);
++    CHECK(skippy_set_native_span_callback(nullptr, nullptr) == SKIPPY_STATUS_OK);
++    ggml_backend_buffer_free(buffer);
++    ggml_free(ctx);
++    ggml_backend_free(backend);
++
++    std::printf("ok: %zu command buffer(s)\n", received.size());
++    return 0;
++}
+diff --git a/tests/test-skippy-tracing.cpp b/tests/test-skippy-tracing.cpp
+new file mode 100644
+index 000000000..804c2f7e0
+--- /dev/null
++++ b/tests/test-skippy-tracing.cpp
+@@ -0,0 +1,306 @@
++// skippy native tracing on any platform: scope nesting and tags, and a fake
++// backend registry for span and GPU command timing forwarding
++
++#include "ggml-backend-impl.h"
++#include "ggml-backend.h"
++#include "skippy/common.h"
++#include "skippy/trace_scope.h"
++#include "skippy/tracing.h"
++
++#include <chrono>
++#include <cstdint>
++#include <cstdio>
++#include <cstring>
++#include <string>
++#include <thread>
++#include <vector>
++
++#define CHECK(cond)                                                     \
++    do {                                                                \
++        if (!(cond)) {                                                  \
++            std::fprintf(stderr, "%s:%d: CHECK(%s)\n", __FILE__, __LINE__, #cond); \
++            return 1;                                                   \
++        }                                                               \
++    } while (0)
++
++namespace {
++
++// what the fake backend was handed
++ggml_backend_command_timing_callback_t g_backend_callback       = nullptr;
++void *                                 g_backend_user_data      = nullptr;
++ggml_backend_trace_span_callback_t     g_backend_span_callback  = nullptr;
++void *                                 g_backend_span_user_data = nullptr;
++uint64_t                               g_backend_tag            = 0;
++
++void fake_set_callback(ggml_backend_command_timing_callback_t callback, void * user_data) {
++    g_backend_callback  = callback;
++    g_backend_user_data = user_data;
++}
++
++void fake_set_span_callback(ggml_backend_trace_span_callback_t callback, void * user_data) {
++    g_backend_span_callback  = callback;
++    g_backend_span_user_data = user_data;
++}
++
++void fake_set_tag(uint64_t tag) {
++    g_backend_tag = tag;
++}
++
++const char * fake_name(ggml_backend_reg_t) {
++    return "FakeGPU";
++}
++
++size_t fake_device_count(ggml_backend_reg_t) {
++    return 0;
++}
++
++ggml_backend_dev_t fake_device(ggml_backend_reg_t, size_t) {
++    return nullptr;
++}
++
++void * fake_proc(ggml_backend_reg_t, const char * name) {
++    if (std::strcmp(name, "ggml_backend_set_command_timing_callback") == 0) {
++        return (void *) (ggml_backend_set_command_timing_callback_t) fake_set_callback;
++    }
++    if (std::strcmp(name, "ggml_backend_set_command_timing_tag") == 0) {
++        return (void *) (ggml_backend_set_command_timing_tag_t) fake_set_tag;
++    }
++    if (std::strcmp(name, "ggml_backend_set_trace_span_callback") == 0) {
++        return (void *) (ggml_backend_set_trace_span_callback_t) fake_set_span_callback;
++    }
++    return nullptr;
++}
++
++ggml_backend_reg g_fake_reg = {
++    /* .api_version = */ GGML_BACKEND_API_VERSION,
++    /* .iface       = */ { fake_name, fake_device_count, fake_device, fake_proc },
++    /* .context     = */ nullptr,
++};
++
++struct received_span {
++    skippy_native_span_v1 span;
++    std::string           name;
++    std::string           detail;
++};
++
++int g_user_marker = 0;
++
++std::vector<received_span>                g_spans;
++std::vector<skippy_gpu_command_timing_v1> g_timings;
++
++// built-in backends may report their own spans; keep the test's
++void receive_span(const skippy_native_span_v1 * span, void * user_data) {
++    if (span == nullptr || user_data != &g_user_marker || std::strncmp(span->name, "test.", 5) != 0) {
++        return;
++    }
++    g_spans.push_back({ *span, span->name, span->detail != nullptr ? span->detail : "" });
++}
++
++void receive_timing(const skippy_gpu_command_timing_v1 * timing, void * user_data) {
++    if (timing != nullptr && user_data == &g_user_marker) {
++        g_timings.push_back(*timing);
++    }
++}
++
++const received_span * find_span(const char * name) {
++    for (const auto & span : g_spans) {
++        if (span.name == name) {
++            return &span;
++        }
++    }
++    return nullptr;
++}
++
++int64_t unix_now_ns() {
++    return std::chrono::duration_cast<std::chrono::nanoseconds>(
++            std::chrono::system_clock::now().time_since_epoch()).count();
++}
++
++int check_scopes() {
++    // nothing is reported before a callback is installed
++    {
++        skippy_trace::scope early("test.early");
++    }
++    CHECK(skippy_set_native_span_callback(receive_span, &g_user_marker) == SKIPPY_STATUS_OK);
++    CHECK(find_span("test.early") == nullptr);
++
++    skippy_set_trace_tag(42);
++    {
++        skippy_trace::scope outer("test.outer", "tokens", 7);
++        {
++            skippy_trace::scope inner("test.inner");
++            inner.set_detail("reuse");
++        }
++        skippy_trace::scope sibling("test.sibling");
++        sibling.end();
++        sibling.end();
++    }
++    skippy_set_trace_tag(0);
++    {
++        skippy_trace::scope untagged("test.untagged");
++    }
++
++    CHECK(g_spans.size() == 4);
++    const auto * outer    = find_span("test.outer");
++    const auto * inner    = find_span("test.inner");
++    const auto * sibling  = find_span("test.sibling");
++    const auto * untagged = find_span("test.untagged");
++    CHECK(outer && inner && sibling && untagged);
++    // children end, and arrive, first
++    CHECK(g_spans[0].name == "test.inner" && g_spans[2].name == "test.outer");
++
++    for (const auto & got : g_spans) {
++        CHECK(got.span.abi_version == SKIPPY_NATIVE_SPAN_V1_ABI_VERSION);
++        CHECK(got.span.struct_size == sizeof(skippy_native_span_v1));
++        CHECK((got.span.id & SKIPPY_NATIVE_SPAN_ID_BIT) != 0);
++        CHECK(got.span.start_unix_ns > 0 && got.span.start_unix_ns <= got.span.end_unix_ns);
++    }
++    CHECK(outer->span.parent == 42);
++    CHECK(inner->span.parent == outer->span.id);
++    CHECK(sibling->span.parent == outer->span.id);
++    CHECK(untagged->span.parent == 0);
++    CHECK(inner->span.id != outer->span.id && sibling->span.id != inner->span.id);
++    CHECK(inner->span.start_unix_ns >= outer->span.start_unix_ns);
++    CHECK(inner->span.end_unix_ns <= outer->span.end_unix_ns);
++    CHECK(std::strcmp(outer->span.value_name, "tokens") == 0 && outer->span.value == 7);
++    CHECK(inner->span.value_name == nullptr && inner->detail == "reuse");
++
++    // work another thread does on this one's behalf joins the scope that handed it over
++    g_spans.clear();
++    {
++        skippy_trace::scope handing("test.handing");
++        const uint64_t parent = skippy_trace::current_parent();
++        CHECK(parent != 0);
++        std::thread([parent] {
++            skippy_trace::adopt joined(parent);
++            skippy_trace::scope adopted("test.adopted");
++        }).join();
++    }
++    std::thread([] {
++        skippy_trace::adopt none(skippy_trace::current_parent());
++        skippy_trace::scope lone("test.lone");
++    }).join();
++    const auto * handing = find_span("test.handing");
++    const auto * adopted = find_span("test.adopted");
++    const auto * lone    = find_span("test.lone");
++    CHECK(handing && adopted && lone);
++    CHECK(adopted->span.parent == handing->span.id);
++    CHECK(lone->span.parent == 0);
++    return 0;
++}
++
++int check_backend() {
++    ggml_backend_register(&g_fake_reg);
++
++    CHECK(skippy_set_native_span_callback(receive_span, &g_user_marker) == SKIPPY_STATUS_OK);
++    CHECK(g_backend_span_callback != nullptr);
++    CHECK(skippy_set_gpu_command_timing_callback(receive_timing, &g_user_marker) == SKIPPY_STATUS_OK);
++    CHECK(g_backend_callback != nullptr);
++    CHECK(g_backend_user_data == &g_fake_reg);
++
++    skippy_set_trace_tag(77);
++    CHECK(g_backend_tag == 77);
++
++    // a span the backend kept from before the install has no parent
++    g_spans.clear();
++    ggml_backend_trace_span span = { 0, "test.kept", "kept detail", 1000, 2000 };
++    g_backend_span_callback(&span, g_backend_span_user_data);
++    // one from this thread joins its tag, or its open scope
++    const int64_t now = unix_now_ns();
++    span = { 0, "test.backend", "pipeline", now, now + 10 };
++    g_backend_span_callback(&span, g_backend_span_user_data);
++    {
++        skippy_trace::scope open("test.open");
++        span = { 5, "test.nested", nullptr, now, now + 10 };
++        g_backend_span_callback(&span, g_backend_span_user_data);
++    }
++    // a backend tag wins outside a scope (a dispatch worker encoding)
++    span = { 9, "test.worker", nullptr, now, now + 10 };
++    g_backend_span_callback(&span, g_backend_span_user_data);
++
++    const auto * kept   = find_span("test.kept");
++    const auto * owned  = find_span("test.backend");
++    const auto * open   = find_span("test.open");
++    const auto * nested = find_span("test.nested");
++    const auto * worker = find_span("test.worker");
++    CHECK(kept && owned && open && nested && worker);
++    CHECK(kept->span.parent == 0 && kept->detail == "kept detail");
++    CHECK(owned->span.parent == 77 && owned->detail == "pipeline");
++    CHECK(nested->span.parent == open->span.id);
++    CHECK(worker->span.parent == 9);
++    CHECK((owned->span.id & SKIPPY_NATIVE_SPAN_ID_BIT) != 0);
++    CHECK(owned->span.start_unix_ns == now && owned->span.end_unix_ns == now + 10);
++
++    ggml_backend_command_timing timing = {};
++    timing.tag                   = 77;
++    timing.context_id            = 3;
++    timing.compute_index         = 7;
++    timing.command_index         = 1;
++    timing.command_count         = 2;
++    timing.node_count            = 64;
++    timing.encode_start_unix_ns  = 1000;
++    timing.encode_end_unix_ns    = 2000;
++    timing.execute_start_unix_ns = 2500;
++    timing.execute_end_unix_ns   = 9000;
++    timing.op_class                 = GGML_BACKEND_OP_CLASS_ATTENTION;
++    timing.layer                    = 11;
++    timing.split_by_class           = 1;
++    timing.attention_kv_cells       = 4096;
++    timing.attention_queries        = 4;
++    timing.attention_row_list_nodes = 2;
++    timing.attention_flash_nodes    = 2;
++    timing.class_nodes[GGML_BACKEND_OP_CLASS_ATTENTION] = 2;
++    timing.class_nodes[GGML_BACKEND_OP_CLASS_OTHER]     = 3;
++    timing.class_bytes[GGML_BACKEND_OP_CLASS_ATTENTION] = 1 << 20;
++    timing.class_bytes[GGML_BACKEND_OP_CLASS_MATMUL]    = 1 << 10;
++    timing.recurrent_states         = 9;
++    timing.recurrent_states_carried = 5;
++    g_backend_callback(&timing, g_backend_user_data);
++
++    CHECK(g_timings.size() == 1);
++    const skippy_gpu_command_timing_v1 & got = g_timings[0];
++    CHECK(got.abi_version == SKIPPY_GPU_COMMAND_TIMING_V1_ABI_VERSION);
++    CHECK(got.struct_size == sizeof(skippy_gpu_command_timing_v1));
++    CHECK(got.tag == 77);
++    CHECK(std::strcmp(got.backend_name, "FakeGPU") == 0);
++    CHECK(got.context_id == 3 && got.compute_index == 7);
++    CHECK(got.command_index == 1 && got.command_count == 2 && got.node_count == 64);
++    CHECK(got.status == 0);
++    CHECK(got.encode_start_unix_ns == 1000 && got.encode_end_unix_ns == 2000);
++    CHECK(got.execute_start_unix_ns == 2500 && got.execute_end_unix_ns == 9000);
++    CHECK(std::strcmp(got.op_class, "attention") == 0);
++    CHECK(got.layer == 11 && got.split_by_class == 1);
++    CHECK(got.attention_kv_cells == 4096 && got.attention_queries == 4 && got.attention_row_list_nodes == 2);
++    CHECK(got.attention_flash_nodes == 2);
++    CHECK(got.attention_nodes == 2 && got.other_nodes == 3 && got.matmul_nodes == 0);
++    CHECK(got.attention_bytes == (1 << 20) && got.matmul_bytes == (1 << 10) && got.other_bytes == 0);
++    CHECK(got.recurrent_states == 9 && got.recurrent_states_carried == 5);
++
++    // a command that mixes classes says so
++    timing.op_class = GGML_BACKEND_OP_CLASS_COUNT;
++    g_backend_callback(&timing, g_backend_user_data);
++    CHECK(g_timings.size() == 2 && std::strcmp(g_timings[1].op_class, "mixed") == 0);
++
++    // clearing stops both reports
++    CHECK(skippy_set_gpu_command_timing_callback(nullptr, nullptr) == SKIPPY_STATUS_OK);
++    CHECK(g_backend_callback == nullptr);
++    CHECK(skippy_set_native_span_callback(nullptr, nullptr) == SKIPPY_STATUS_OK);
++    CHECK(g_backend_span_callback == nullptr);
++    g_spans.clear();
++    {
++        skippy_trace::scope cleared("test.cleared");
++    }
++    CHECK(g_spans.empty());
++    skippy_set_trace_tag(0);
++    return 0;
++}
++
++} // namespace
++
++int main() {
++    if (check_scopes() != 0 || check_backend() != 0) {
++        return 1;
++    }
++    std::printf("ok\n");
++    return 0;
++}
+-- 
+2.56.0
+

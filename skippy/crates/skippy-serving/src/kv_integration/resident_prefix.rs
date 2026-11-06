@@ -15,7 +15,8 @@ use crate::runtime_state::RuntimeState;
 
 use super::{
     KvLifecycleEvent, KvStageIntegration, PrefillKvIdentity, RadixResidentEntry,
-    ResidentPrefixRecord, ResidentPrefixRestore, ResidentSequencePool, StagePrefixCachePayload,
+    ResidentMissDiagnosis, ResidentMissReason, ResidentPrefixRecord, ResidentPrefixRestore,
+    ResidentRecordOutcome, ResidentRecordSkip, ResidentSequencePool, StagePrefixCachePayload,
     lock_resident_sequences,
 };
 

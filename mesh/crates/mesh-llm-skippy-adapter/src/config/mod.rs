@@ -23,6 +23,9 @@ mod tests;
 mod speculative_tests;
 
 #[cfg(test)]
+mod recurrent_rollback_tests;
+
+#[cfg(test)]
 mod exact_head_tests;
 
 #[cfg(test)]

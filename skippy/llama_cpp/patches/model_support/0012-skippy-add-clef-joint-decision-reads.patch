@@ -1,4 +1,4 @@
-From 8234aeb6b21b80f2b694d2fd5462008d56348e1c Mon Sep 17 00:00:00 2001
+From d6836923a6a3f1c2fe9a664f5ee30f561be104db Mon Sep 17 00:00:00 2001
 From: Michael Neale <14976+michaelneale@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 17:27:44 +1100
 Subject: [PATCH] skippy: add clef joint decision reads
@@ -9,19 +9,19 @@ in one micro-batch, as the upstream server does for clef.
 ---
  include/skippy.h        |   1 +
  include/skippy/clef.h   | 144 +++++++++++
- include/skippy/common.h |   4 +-
+ include/skippy/common.h |   2 +
  src/CMakeLists.txt      |  20 ++
  src/skippy/abi.cpp      |   1 +
  src/skippy/clef.cpp     | 517 ++++++++++++++++++++++++++++++++++++++++
- 6 files changed, 686 insertions(+), 1 deletion(-)
+ 6 files changed, 685 insertions(+)
  create mode 100644 include/skippy/clef.h
  create mode 100644 src/skippy/clef.cpp
 
 diff --git a/include/skippy.h b/include/skippy.h
-index 9497734b7..48e0be2cf 100644
+index 37a15eea3..15d9af032 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
-@@ -28,6 +28,7 @@
+@@ -29,6 +29,7 @@
  #include "skippy/workloads.h"
  #include "skippy/system_one.h"
  #include "skippy/laya.h"
@@ -180,19 +180,10 @@ index 000000000..cf13822ed
 +
 +#endif // SKIPPY_CLEF_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index dae7be31c..d2ab5d538 100644
+index 83b930dbe..6b4bcf440 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
-@@ -46,7 +46,7 @@ extern "C" {
- 
- #define SKIPPY_ABI_VERSION_MAJOR 0
- #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 77
-+#define SKIPPY_ABI_VERSION_PATCH 79
- 
- #if defined(_MSC_VER)
- #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
-@@ -112,6 +112,8 @@ enum skippy_feature {
+@@ -114,6 +114,8 @@ enum skippy_feature {
  #define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)
  /** @brief Full-model speech recognition (`skippy/asr.h`). */
  #define SKIPPY_FEATURE_SPEECH_RECOGNITION     (UINT64_C(1) << 41)
@@ -202,11 +193,11 @@ index dae7be31c..d2ab5d538 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 831fd1fc1..1d944cd90 100644
+index 6e3482988..08b12fa1e 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -101,6 +101,8 @@ add_library(llama
-             skippy/events.cpp
+@@ -103,6 +103,8 @@ add_library(llama
+             skippy/tracing.cpp
              skippy/system_one.cpp
              skippy/laya.cpp
 +            skippy/clef.cpp
@@ -214,7 +205,7 @@ index 831fd1fc1..1d944cd90 100644
              ../tools/laya/laya.cpp
              skippy/asr.cpp
              unicode.h
-@@ -135,6 +137,24 @@ set_source_files_properties(skippy/asr.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION
+@@ -137,6 +139,24 @@ set_source_files_properties(skippy/asr.cpp PROPERTIES SKIP_UNITY_BUILD_INCLUSION
  
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  
@@ -240,17 +231,17 @@ index 831fd1fc1..1d944cd90 100644
  target_include_directories(llama PUBLIC ../include)
  target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index ed9825df3..7ad903ff5 100644
+index 51d6f638d..f6a6bd507 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
-@@ -49,6 +49,7 @@ uint64_t skippy_abi_features(void) {
+@@ -48,6 +48,7 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
             SKIPPY_FEATURE_SYSTEM_ONE |
-            SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
             SKIPPY_FEATURE_LAYA_DECISIONS |
 +           SKIPPY_FEATURE_CLEF_DECISIONS |
+            SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
+            SKIPPY_FEATURE_NATIVE_TRACING |
  #if defined(SKIPPY_HAS_WHISPER)
-            SKIPPY_FEATURE_SPEECH_RECOGNITION |
- #endif
 diff --git a/src/skippy/clef.cpp b/src/skippy/clef.cpp
 new file mode 100644
 index 000000000..6ccd39221

@@ -20,7 +20,7 @@ fn gpu_tune_recommends_stable_defaults() {
     assert_applied_kv(&plan, TuneField::CacheTypeV, TuneKvCacheType::Q8_0);
     assert_applied_flash_attention(&plan, TuneFlashAttentionValue::Enabled);
     assert_applied_context(&plan, 131_072);
-    assert_applied_batch(&plan, 512);
+    assert_applied_batch(&plan, 2048);
     assert_applied_ubatch(&plan, 512);
     assert_applied_gpu_layers(&plan, TuneGpuLayersValue::All);
     assert_applied_fit_target(&plan, 22 * 1024);
@@ -51,7 +51,7 @@ fn gpu_tune_does_not_shadow_throughput_profile_ubatch() {
         survey: &survey_with_gpu(24 * gib(), 64 * gib()),
     });
 
-    assert_applied_batch(&plan, 512);
+    assert_applied_batch(&plan, 2048);
     assert_preserved(&plan, TuneField::Ubatch, "throughput tuning profile");
 }
 

@@ -47,7 +47,7 @@ pub(super) const CONSOLE_OUTPUT_OWNERS: &[&str] = &[
     "mesh/crates/mesh-llm-tui/src/output/formatting.rs",
     "mesh/crates/mesh-llm-tui/src/output/terminal_out.rs",
     "mesh/crates/mesh-llm-host-runtime/src/runtime/tracing_writer.rs",
-    "skippy/crates/skippy-serving/src/telemetry.rs",
+    "skippy/crates/skippy-serving/src/telemetry/stderr_sink.rs",
     "skippy/crates/skippy-commands/src/console.rs",
     "mesh/crates/mesh-llm-cli/src/pager.rs",
     "mesh/crates/mesh-llm-commands/src/gpus/tune_runner.rs",

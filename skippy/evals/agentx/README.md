@@ -98,6 +98,12 @@ Standard vanilla explicitly uses separate KV slots, parallel=C,
 context=C×131072, F16 FA, batch2048/ubatch512 and cache RAM8192MiB. Each baseline
 must report the expected slots/context. Unified-llama is not substituted.
 
+`diagnostic_telemetry: true` runs Skippy at `--telemetry-level debug` and
+writes each cell's spans to `skippy-telemetry.otlp.jsonl` (OTLP/JSON, one
+request per line) beside the cell's other evidence. Debug telemetry perturbs
+timing, so the report scope becomes `telemetry_diagnostic_not_performance` and
+MLflow export refuses it. Standard llama is unchanged.
+
 Use `backend` cuda/metal with matching prepared bundles/hosts. CPU requires
 `diagnostic_cpu:true`; its report is explicitly ineligible for GPU performance
 publication. Independent model campaigns can occupy equivalent idle machines;

@@ -1,7 +1,11 @@
 //! Execute admitted direct iterations under one native runtime lease.
 
+use super::step_telemetry::{insert_kv_used_cells, sample_kv_used_cells};
 use super::*;
 use skippy_runtime::IterationBatchOutput;
+
+#[cfg(test)]
+mod ordered_reply_tests;
 
 type Runnable = (DirectIteration, Option<RuntimeSessionAlignStats>);
 
@@ -9,6 +13,7 @@ struct BatchTiming {
     wait: Vec<f64>,
     lock_wait_ms: f64,
     lock_hold_ms: f64,
+    kv_used_cells: Option<u64>,
 }
 
 impl SchedulerWorker {
@@ -24,12 +29,29 @@ impl SchedulerWorker {
         if active.is_empty() {
             return;
         }
+        // The lease span covers lock request through release; native calls
+        // made under it nest beneath it.
+        let span = ActiveSpan::start(
+            self.telemetry.as_ref(),
+            "stage.scheduler_feature_iteration",
+            SpanLevel::Debug,
+        );
+        let entered = span.enter();
         let lock_started = Instant::now();
-        let mut runtime = lock_runtime(&self.runtime);
+        let mut runtime = self.lock_runtime_traced();
         let lock_wait_ms = lock_started.elapsed().as_secs_f64() * 1_000.0;
         let hold_started = Instant::now();
+        let align_span = ActiveSpan::start(
+            self.telemetry.as_ref(),
+            "stage.scheduler_align",
+            SpanLevel::Debug,
+        );
         let runnable = align_requests(&mut runtime, active);
+        align_span.end();
         if runnable.is_empty() {
+            drop(entered);
+            // Its lock wait and alignment were exported beneath it.
+            span.end();
             return;
         }
         let requests = runnable
@@ -63,59 +85,86 @@ impl SchedulerWorker {
             .iteration_batch_scored(&requests, &selections)
             .map_err(openai_backend_error);
         let hold = hold_started.elapsed();
+        let kv_used_cells = runnable.first().and_then(|(request, _)| {
+            sample_kv_used_cells(self.telemetry.as_ref(), &mut runtime, &request.session_id)
+        });
         drop(runtime);
+        drop(entered);
         self.record_compute(hold);
         let timing = BatchTiming {
             wait,
             lock_wait_ms,
             lock_hold_ms: hold.as_secs_f64() * 1_000.0,
+            kv_used_cells,
         };
-        self.record_direct_batch(&runnable, &timing);
+        self.record_direct_batch(&runnable, &timing, span);
+        let reply_span = ActiveSpan::start(
+            self.telemetry.as_ref(),
+            "stage.scheduler_reply",
+            SpanLevel::Debug,
+        );
         match result {
             Ok((output, scores)) => send_outputs(runnable, output, scores, timing),
             Err(error) => fail_requests(runnable, error),
         }
+        reply_span.end();
     }
 
-    /// Record execution and timing evidence for one native direct batch.
-    fn record_direct_batch(&self, requests: &[Runnable], timing: &BatchTiming) {
+    /// Record execution and timing evidence for one native direct batch, and
+    /// end its lease span linked to every request it served.
+    fn record_direct_batch(
+        &self,
+        requests: &[Runnable],
+        timing: &BatchTiming,
+        mut span: ActiveSpan,
+    ) {
         let decode_steps = requests
             .iter()
             .filter(|(request, _)| request.phase == IterationBatchPhase::Decode)
             .count();
         self.compute_meter.record_decode_tokens(decode_steps as u64);
-        if let Some(telemetry) = self.telemetry.as_ref() {
-            telemetry.emit_debug(
-                "stage.scheduler_feature_iteration",
-                BTreeMap::from([
-                    (
-                        "skippy.scheduler.batch_size".to_string(),
-                        json!(requests.len()),
+        resource_metrics::record_decode_tokens(decode_steps as u64);
+        resource_metrics::record_scheduler(
+            self.active_runtime_sessions,
+            self.direct_iterations.len(),
+            requests.len(),
+        );
+        if self.telemetry.is_some() {
+            let mut attrs = BTreeMap::from([
+                (
+                    "skippy.scheduler.batch_size".to_string(),
+                    json!(requests.len()),
+                ),
+                (
+                    "skippy.scheduler.token_count".to_string(),
+                    json!(
+                        requests
+                            .iter()
+                            .map(|(r, _)| r.token_ids.len())
+                            .sum::<usize>()
                     ),
-                    (
-                        "skippy.scheduler.token_count".to_string(),
-                        json!(
-                            requests
-                                .iter()
-                                .map(|(r, _)| r.token_ids.len())
-                                .sum::<usize>()
-                        ),
-                    ),
-                    (
-                        "skippy.scheduler.batch_wait_max_ms".to_string(),
-                        json!(timing.wait.iter().copied().fold(0.0_f64, f64::max)),
-                    ),
-                    (
-                        "skippy.scheduler.runtime_lock_wait_ms".to_string(),
-                        json!(timing.lock_wait_ms),
-                    ),
-                    (
-                        "skippy.scheduler.runtime_lock_hold_ms".to_string(),
-                        json!(timing.lock_hold_ms),
-                    ),
-                ]),
-            );
+                ),
+                (
+                    "skippy.scheduler.batch_wait_max_ms".to_string(),
+                    json!(timing.wait.iter().copied().fold(0.0_f64, f64::max)),
+                ),
+                (
+                    "skippy.scheduler.runtime_lock_wait_ms".to_string(),
+                    json!(timing.lock_wait_ms),
+                ),
+                (
+                    "skippy.scheduler.runtime_lock_hold_ms".to_string(),
+                    json!(timing.lock_hold_ms),
+                ),
+            ]);
+            insert_kv_used_cells(&mut attrs, timing.kv_used_cells);
+            requests
+                .iter()
+                .filter_map(|(request, _)| trace_context::sequence_context(&request.session_id))
+                .for_each(|context| span.link(context));
+            span.extend_attributes(attrs);
         }
+        span.end();
     }
 }
 

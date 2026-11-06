@@ -1,4 +1,4 @@
-From 43dc48235a7b30a1dba4d59ad3cb90928df2aa00 Mon Sep 17 00:00:00 2001
+From 6bbf393c0ed3af8dd1bbfe04eb1892eb8756fe28 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 22 Oct 2026 17:15:05 +1100
 Subject: [PATCH] skippy: add Whisper speech recognition
@@ -18,23 +18,23 @@ Bumps the Skippy ABI to 0.1.72.
 ---
  include/skippy.h                         |   1 +
  include/skippy/asr.h                     | 172 +++++++++
- include/skippy/common.h                  |   4 +-
+ include/skippy/common.h                  |   2 +
  src/CMakeLists.txt                       |  44 +++
  src/skippy/abi.cpp                       |   6 +-
  src/skippy/asr.cpp                       | 447 +++++++++++++++++++++++
  src/skippy/asr_decode.h                  |  50 +++
  src/skippy/tests/asr_decode_boundary.cpp |  81 ++++
- 8 files changed, 803 insertions(+), 2 deletions(-)
+ 8 files changed, 802 insertions(+), 1 deletion(-)
  create mode 100644 include/skippy/asr.h
  create mode 100644 src/skippy/asr.cpp
  create mode 100644 src/skippy/asr_decode.h
  create mode 100644 src/skippy/tests/asr_decode_boundary.cpp
 
 diff --git a/include/skippy.h b/include/skippy.h
-index ac091dd24..4e33847d9 100644
+index a1d73ac5a..fb2e80806 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
-@@ -27,5 +27,6 @@
+@@ -28,5 +28,6 @@
  #include "skippy/workloads.h"
  #include "skippy/system_one.h"
  #include "skippy/laya.h"
@@ -220,21 +220,12 @@ index 000000000..99d4a1094
 +
 +#endif // SKIPPY_ASR_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 54c87b6f2..4214d0b89 100644
+index a3955499d..83b930dbe 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
-@@ -46,7 +46,7 @@ extern "C" {
- 
- #define SKIPPY_ABI_VERSION_MAJOR 0
- #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 73
-+#define SKIPPY_ABI_VERSION_PATCH 74
- 
- #if defined(_MSC_VER)
- #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
-@@ -110,6 +110,8 @@ enum skippy_feature {
- #define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
- /** @brief Full-model Laya decision reads (`skippy/laya.h`). */
+@@ -112,6 +112,8 @@ enum skippy_feature {
+ #define SKIPPY_FEATURE_NATIVE_TRACING         (UINT64_C(1) << 43)
+ /** @brief Joint Laya decision reads (`skippy/laya.h`). */
  #define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)
 +/** @brief Full-model speech recognition (`skippy/asr.h`). */
 +#define SKIPPY_FEATURE_SPEECH_RECOGNITION     (UINT64_C(1) << 41)
@@ -242,10 +233,10 @@ index 54c87b6f2..4214d0b89 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index f43b87266..deb634e8a 100644
+index fc288f1a0..f32203873 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -101,6 +101,7 @@ add_library(llama
+@@ -103,6 +103,7 @@ add_library(llama
              skippy/system_one.cpp
              skippy/laya.cpp
              ../tools/laya/laya.cpp
@@ -253,7 +244,7 @@ index f43b87266..deb634e8a 100644
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
-@@ -127,6 +128,10 @@ set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h .
+@@ -129,6 +130,10 @@ set_source_files_properties(${LLAMA_CORE_SOURCES} ../include/llama.h unicode.h .
  set_source_files_properties(${LLAMA_MODELS_SOURCES}
      PROPERTIES SKIP_UNITY_BUILD_INCLUSION ON)
  
@@ -264,7 +255,7 @@ index f43b87266..deb634e8a 100644
  configure_file(llama-version.h.in ${CMAKE_CURRENT_BINARY_DIR}/llama-version.h @ONLY)
  
  target_include_directories(llama PRIVATE . ../common ../tools/laya ${CMAKE_CURRENT_BINARY_DIR})
-@@ -173,6 +178,38 @@ if (LLAMA_LLGUIDANCE)
+@@ -175,6 +180,38 @@ if (LLAMA_LLGUIDANCE)
  endif()
  
  
@@ -303,7 +294,7 @@ index f43b87266..deb634e8a 100644
  if (LLAMA_STAGE_BUILD_TESTS)
      target_compile_definitions(llama PRIVATE LLAMA_STAGE_BUILD_TESTS)
  
-@@ -240,6 +277,13 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -242,6 +279,13 @@ if (LLAMA_STAGE_BUILD_TESTS)
      add_test(NAME skippy_diffusion_host_fallback COMMAND skippy-diffusion-host-fallback
          "${DIFFUSION_FALLBACK_FIXTURE_DIR}/diffusion-gemma-moe.gguf")
      set_tests_properties(skippy_diffusion_host_fallback PROPERTIES FIXTURES_REQUIRED diffusion-fallback-model)
@@ -318,15 +309,15 @@ index f43b87266..deb634e8a 100644
      file(MAKE_DIRECTORY "${MTP_WIDTH_FIXTURE_DIR}")
      add_test(NAME skippy_generate_mtp_width COMMAND skippy-model-fixture-generator
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index f806cdbdc..ed9825df3 100644
+index c15ec5c97..51d6f638d 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
-@@ -48,7 +48,11 @@ uint64_t skippy_abi_features(void) {
-            SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
+@@ -49,7 +49,11 @@ uint64_t skippy_abi_features(void) {
             SKIPPY_FEATURE_SYSTEM_ONE |
+            SKIPPY_FEATURE_LAYA_DECISIONS |
             SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
--           SKIPPY_FEATURE_LAYA_DECISIONS;
-+           SKIPPY_FEATURE_LAYA_DECISIONS |
+-           SKIPPY_FEATURE_NATIVE_TRACING;
++           SKIPPY_FEATURE_NATIVE_TRACING |
 +#if defined(SKIPPY_HAS_WHISPER)
 +           SKIPPY_FEATURE_SPEECH_RECOGNITION |
 +#endif

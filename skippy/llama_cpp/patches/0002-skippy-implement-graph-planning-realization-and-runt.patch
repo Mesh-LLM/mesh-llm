@@ -1,4 +1,4 @@
-From c5423d34b8e46060a3f507df95930b441606ab2b Mon Sep 17 00:00:00 2001
+From c7e05ded2dc3a6caafc2afedf69b55f3dcdeee51 Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
@@ -17,6 +17,8 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  common/sampling.cpp                     |  254 +----
  common/sampling.h                       |   50 +-
  common/tokenization.cpp                 |   58 ++
+ src/llama-context.cpp                   |    4 +
+ src/llama-io.h                          |    6 +
  src/llama-memory-hybrid-idx.cpp         |   10 +
  src/llama-memory-hybrid-idx.h           |    4 +
  src/skippy/abi.cpp                      |   59 ++
@@ -35,7 +37,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/executable_graph.cpp         |  329 +++++++
  src/skippy/executable_graph.h           |   37 +
  src/skippy/execution-batch.cpp          |  454 +++++++++
- src/skippy/execution-single.cpp         |  642 ++++++++++++
+ src/skippy/execution-single.cpp         |  653 +++++++++++++
  src/skippy/execution_internal.h         |   20 +
  src/skippy/glm_dsa.cpp                  |  857 ++++++++++++++++
  src/skippy/glm_dsa.h                    |   14 +
@@ -54,7 +56,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/package_tensor_binding.cpp   |  120 +++
  src/skippy/package_tensor_binding.h     |   27 +
  src/skippy/rerank_template.h            |   36 +
- src/skippy/resident_prefix.cpp          |  447 +++++++++
+ src/skippy/resident_prefix.cpp          |  438 +++++++++
  src/skippy/runtime_support.h            |   47 +
  src/skippy/runtime_types.h              |  190 ++++
  src/skippy/sampling.cpp                 |  602 ++++++++++++
@@ -80,7 +82,7 @@ Subject: [PATCH] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  256 +++++
  src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 76 files changed, 16385 insertions(+), 395 deletions(-)
+ 78 files changed, 16397 insertions(+), 395 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -1427,6 +1429,42 @@ index 000000000..7f5064cb5
 +    return piece;
 +}
 +
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index 9ee64b566..1a6cb95b4 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -2953,6 +2953,10 @@ private:
+     std::vector<write_info> winfos;
+ };
+ 
++std::unique_ptr<llama_io_write_i> llama_io_write_host_create(uint8_t * dst, size_t size) {
++    return std::make_unique<llama_io_write_host>(dst, size);
++}
++
+ class llama_io_read_host : public llama_io_read_i {
+ public:
+     llama_io_read_host(const uint8_t * p, size_t len) : ptr(p), buf_size(len) {}
+diff --git a/src/llama-io.h b/src/llama-io.h
+index 0aca73310..72aa58718 100644
+--- a/src/llama-io.h
++++ b/src/llama-io.h
+@@ -2,6 +2,7 @@
+ 
+ #include <cstddef>
+ #include <cstdint>
++#include <memory>
+ #include <string>
+ 
+ struct ggml_tensor;
+@@ -36,3 +37,8 @@ public:
+ 
+     void read_string(std::string & str);
+ };
++
++// Uses the same host serializer as llama_state_seq_get_data_ext. The caller
++// owns the fixed-size destination and source tensors until writer destruction,
++// which completes the deferred tensor reads before returning.
++std::unique_ptr<llama_io_write_i> llama_io_write_host_create(uint8_t * dst, size_t size);
 diff --git a/src/llama-memory-hybrid-idx.cpp b/src/llama-memory-hybrid-idx.cpp
 index 2c5a57680..2bf506b0e 100644
 --- a/src/llama-memory-hybrid-idx.cpp
@@ -4398,10 +4436,10 @@ index 000000000..901095cab
 +} // extern "C"
 diff --git a/src/skippy/execution-single.cpp b/src/skippy/execution-single.cpp
 new file mode 100644
-index 000000000..4ce3d4ba9
+index 000000000..84ead575c
 --- /dev/null
 +++ b/src/skippy/execution-single.cpp
-@@ -0,0 +1,642 @@
+@@ -0,0 +1,653 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/graph_build_inputs.h"
@@ -4597,6 +4635,17 @@ index 000000000..4ce3d4ba9
 +    if (skippy_is_filtered(first) && first->stage_model->config.layer_start > 0) {
 +        skippy_set_error(out_error, SKIPPY_STATUS_UNSUPPORTED, "batched token decode requires the first runtime slice or a full model");
 +        return SKIPPY_STATUS_UNSUPPORTED;
++    }
++
++    // A legacy decode batch still samples only one row per session. Reject
++    // duplicate lanes before settling any pending verification window.
++    std::unordered_set<skippy_session *> unique_sessions;
++    for (size_t i = 0; i < request_count; ++i) {
++        if (!unique_sessions.insert(sessions[i]).second) {
++            skippy_set_error(out_error, SKIPPY_STATUS_INVALID_ARGUMENT,
++                    "batched token decode requires unique sessions");
++            return SKIPPY_STATUS_INVALID_ARGUMENT;
++        }
 +    }
 +
 +    const int32_t n_tokens = static_cast<int32_t>(request_count);
@@ -10443,10 +10492,10 @@ index 000000000..f0c3b2ea7
 +}
 diff --git a/src/skippy/resident_prefix.cpp b/src/skippy/resident_prefix.cpp
 new file mode 100644
-index 000000000..42769ba7c
+index 000000000..51a214152
 --- /dev/null
 +++ b/src/skippy/resident_prefix.cpp
-@@ -0,0 +1,447 @@
+@@ -0,0 +1,438 @@
 +#include "skippy/state.h"
 +#include "skippy/state_memory.h"
 +#include "skippy/errors.h"
@@ -10527,21 +10576,6 @@ index 000000000..42769ba7c
 +    uint8_t * data;
 +    size_t capacity;
 +    size_t position = 0;
-+};
-+
-+class checkpoint_writer final : public llama_io_write_i {
-+public:
-+    void write(const void * source, size_t bytes) override {
-+        const auto * data = static_cast<const uint8_t *>(source);
-+        if (bytes) { payload.insert(payload.end(), data, data + bytes); }
-+    }
-+    void write_tensor(ggml_tensor * tensor, size_t offset, size_t bytes) override {
-+        const size_t start = payload.size();
-+        payload.resize(start + bytes);
-+        if (bytes) { ggml_backend_tensor_get(tensor, payload.data() + start, offset, bytes); }
-+    }
-+    size_t n_bytes() override { return payload.size(); }
-+    std::vector<uint8_t> payload;
 +};
 +
 +class checkpoint_reader final : public llama_io_read_i {
@@ -10689,10 +10723,16 @@ index 000000000..42769ba7c
 +        if (auto * recurrent = skippy_memory_recurrent_adapter(memory)) {
 +            recurrent_buffer_writer measure;
 +            recurrent->state_write(measure, session->seq_id, LLAMA_STATE_SEQ_FLAGS_NONE);
-+            checkpoint_writer writer;
-+            writer.payload.reserve(measure.n_bytes());
-+            recurrent->state_write(writer, session->seq_id, LLAMA_STATE_SEQ_FLAGS_NONE);
-+            checkpoint.recurrent = std::move(writer.payload);
++            checkpoint.recurrent.resize(measure.n_bytes());
++            auto writer = llama_io_write_host_create(checkpoint.recurrent.data(), checkpoint.recurrent.size());
++            recurrent->state_write(*writer, session->seq_id, LLAMA_STATE_SEQ_FLAGS_NONE);
++            if (writer->n_bytes() != checkpoint.recurrent.size()) {
++                throw std::runtime_error("resident recurrent checkpoint size changed during capture");
++            }
++            // Upstream's host writer defers tensor reads until destruction.
++            // Finish them while the destination and resident owner are stable,
++            // before publishing either the checkpoint or its attention alias.
++            writer.reset();
 +        }
 +        // Allocate metadata first. On allocation failure during seq_cp, remove
 +        // every partially attached attention reference and unpublished map node.
@@ -17743,6 +17783,3 @@ index 000000000..cc9279e7e
 +// batches request output for every input row, so no backend sampler may remain
 +// attached from an earlier chat request.
 +void skippy_prepare_non_chat_workload(skippy_session * session);
--- 
-2.54.0 (Apple Git-157)
-

@@ -153,7 +153,8 @@ pub struct RuntimeConfig {
     pub host_expert_layers: Option<HostExpertLayers>,
     /// Recurrent-state rollback depth for recurrent and hybrid models. A
     /// speculative plan sets it to its largest verify window so verify rolls
-    /// back in place; `0` keeps the native default.
+    /// back in place; `0` disables snapshots. Windows outside native retention
+    /// use the existing checkpoint/replay fallback.
     pub recurrent_rollback_tokens: u32,
 }
 
@@ -572,6 +573,18 @@ pub fn parse_cache_type(value: &str) -> Result<u32> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn recurrent_rollback_zero_and_positive_values_reach_native_unchanged() -> anyhow::Result<()> {
+        for depth in [0, 1, 2, 16, 100] {
+            let config = super::RuntimeConfig {
+                recurrent_rollback_tokens: depth,
+                ..super::RuntimeConfig::default()
+            };
+            assert_eq!(config.as_raw()?.raw.recurrent_rollback_tokens, depth);
+        }
+        Ok(())
+    }
+
     use std::ffi::CStr;
 
     use super::*;

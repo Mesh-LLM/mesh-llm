@@ -1,3 +1,4 @@
+use crate::native_timing::native_call;
 use std::ffi::{CStr, CString};
 use std::ptr;
 
@@ -59,8 +60,12 @@ impl SpeechEmbeddingsGuard {
         // context; speech generation holds exclusive access to the session.
         unsafe { skippy_ffi::llama_set_embeddings(self.context, false) };
         let mut error = ptr::null_mut();
-        let status =
-            unsafe { skippy_ffi::skippy_session_begin_external_decode(self.session, &mut error) };
+        let status = unsafe {
+            native_call!(skippy_session_begin_external_decode(
+                self.session,
+                &mut error
+            ))
+        };
         ensure_ok(status, error).context("refresh stage program after speech synthesis")?;
         // The begin has been issued, so this guard's restore is complete. The
         // external-decode scope is now owned by the caller's ExternalDecodeGuard,
@@ -71,7 +76,7 @@ impl SpeechEmbeddingsGuard {
         self.active = false;
         let mut error = ptr::null_mut();
         let status =
-            unsafe { skippy_ffi::skippy_session_end_external_decode(self.session, &mut error) };
+            unsafe { native_call!(skippy_session_end_external_decode(self.session, &mut error)) };
         ensure_ok(status, error).context("end stage-program refresh after speech synthesis")?;
         Ok(())
     }
@@ -88,10 +93,12 @@ impl Drop for SpeechEmbeddingsGuard {
         let mut error = ptr::null_mut();
         unsafe {
             skippy_ffi::llama_set_embeddings(self.context, false);
-            if skippy_ffi::skippy_session_begin_external_decode(self.session, &mut error)
-                == skippy_ffi::Status::Ok
+            if native_call!(skippy_session_begin_external_decode(
+                self.session,
+                &mut error
+            )) == skippy_ffi::Status::Ok
             {
-                let _ = skippy_ffi::skippy_session_end_external_decode(self.session, &mut error);
+                let _ = native_call!(skippy_session_end_external_decode(self.session, &mut error));
             }
         }
         free_error(error);
@@ -163,7 +170,7 @@ impl MediaProjector {
             params.batch_max_tokens =
                 i32::try_from(value).context("batch_max_tokens exceeds i32")?;
         }
-        let raw = unsafe { skippy_ffi::mtmd_init_from_file(path.as_ptr(), raw_model, params) };
+        let raw = unsafe { native_call!(mtmd_init_from_file(path.as_ptr(), raw_model, params)) };
         if raw.is_null() {
             return Err(anyhow!("failed to load multimodal projector {path:?}"));
         }
@@ -189,7 +196,7 @@ impl Drop for MediaProjector {
     fn drop(&mut self) {
         if !self.raw.is_null() {
             unsafe {
-                skippy_ffi::mtmd_free(self.raw);
+                native_call!(mtmd_free(self.raw));
             }
         }
     }
@@ -272,7 +279,7 @@ impl StageModel {
                 }
                 let mut error = ptr::null_mut();
                 let status = unsafe {
-                    skippy_ffi::skippy_session_end_external_decode(self.session, &mut error)
+                    native_call!(skippy_session_end_external_decode(self.session, &mut error))
                 };
                 ensure_ok(status, error).context("end speech external-decode scope")?;
                 self.active = false;
@@ -288,7 +295,7 @@ impl StageModel {
                 let mut error = ptr::null_mut();
                 unsafe {
                     let _ =
-                        skippy_ffi::skippy_session_end_external_decode(self.session, &mut error);
+                        native_call!(skippy_session_end_external_decode(self.session, &mut error));
                 }
                 free_error(error);
             }
@@ -302,15 +309,19 @@ impl StageModel {
         };
         let mut guard_error = ptr::null_mut();
         let status = unsafe {
-            skippy_ffi::skippy_session_begin_external_decode(session.raw, &mut guard_error)
+            native_call!(skippy_session_begin_external_decode(
+                session.raw,
+                &mut guard_error
+            ))
         };
         ensure_ok(status, guard_error)?;
         let mut external_decode = ExternalDecodeGuard {
             session: session.raw,
             active: true,
         };
-        let generator =
-            AudioGenerator(unsafe { skippy_ffi::mtmd_helper_gen_audio_init(lctx, projector.raw) });
+        let generator = AudioGenerator(unsafe {
+            native_call!(mtmd_helper_gen_audio_init(lctx, projector.raw))
+        });
         if generator.0.is_null() {
             return Err(anyhow!("failed to initialize speech synthesis pipeline"));
         }
@@ -331,7 +342,7 @@ impl StageModel {
             seed: config.seed,
             out_type: output_type,
         };
-        if unsafe { skippy_ffi::mtmd_helper_gen_audio_set_input(generator.0, &input) } != 0 {
+        if unsafe { native_call!(mtmd_helper_gen_audio_set_input(generator.0, &input)) } != 0 {
             return Err(anyhow!("speech synthesis rejected the input"));
         }
         let batch_size =
@@ -341,7 +352,7 @@ impl StageModel {
                 return Err(anyhow!("speech synthesis cancelled"));
             }
             let remaining =
-                unsafe { skippy_ffi::mtmd_helper_gen_audio_step_prompt(generator.0, batch_size) };
+                unsafe { native_call!(mtmd_helper_gen_audio_step_prompt(generator.0, batch_size)) };
             if remaining < 0 {
                 return Err(anyhow!("speech prompt evaluation failed"));
             }
@@ -372,13 +383,13 @@ impl StageModel {
             let mut next_hidden_state = ptr::null();
             let mut stop = false;
             let step = unsafe {
-                skippy_ffi::mtmd_helper_gen_audio_step_gen(
+                native_call!(mtmd_helper_gen_audio_step_gen(
                     generator.0,
                     sampled,
                     hidden_state,
                     &mut next_hidden_state,
                     &mut stop,
-                )
+                ))
             };
             if step != 0 {
                 return Err(anyhow!(
@@ -409,13 +420,13 @@ impl StageModel {
         let mut data_len = 0usize;
         let mut sample_count = 0_i64;
         let output_status = unsafe {
-            skippy_ffi::mtmd_helper_gen_audio_get_output(
+            native_call!(mtmd_helper_gen_audio_get_output(
                 generator.0,
                 &mut sample_rate,
                 &mut data,
                 &mut data_len,
                 &mut sample_count,
-            )
+            ))
         };
         if output_status != 0 || data.is_null() || data_len == 0 {
             return Err(anyhow!("speech synthesis produced no audio"));
@@ -494,13 +505,13 @@ impl StageModel {
             }
             check_declared_media_size(&item.bytes)?;
             let wrapper = unsafe {
-                skippy_ffi::mtmd_helper_bitmap_init_from_buf(
+                native_call!(mtmd_helper_bitmap_init_from_buf(
                     projector.raw,
                     item.bytes.as_ptr(),
                     item.bytes.len(),
                     false,
                     skippy_ffi::mtmd_helper_init_opt_default(),
-                )
+                ))
             };
             // Take ownership before the null check: on a partial failure the
             // wrapper can still carry a video context that has to be freed.
@@ -534,13 +545,13 @@ impl StageModel {
             .map(|bitmap| bitmap.raw.cast_const())
             .collect::<Vec<_>>();
         let tokenize_status = unsafe {
-            skippy_ffi::mtmd_tokenize(
+            native_call!(mtmd_tokenize(
                 projector.raw,
                 chunks.raw,
                 &input_text,
                 bitmap_ptrs.as_ptr(),
                 bitmap_ptrs.len(),
-            )
+            ))
         };
         if tokenize_status != 0 {
             return Err(anyhow!(
@@ -570,7 +581,10 @@ impl StageModel {
         }
         let mut guard_error = ptr::null_mut();
         let guard_status = unsafe {
-            skippy_ffi::skippy_session_begin_external_decode(session.raw, &mut guard_error)
+            native_call!(skippy_session_begin_external_decode(
+                session.raw,
+                &mut guard_error
+            ))
         };
         ensure_ok(guard_status, guard_error)?;
 
@@ -580,7 +594,7 @@ impl StageModel {
             fn drop(&mut self) {
                 let mut error = ptr::null_mut();
                 unsafe {
-                    let _ = skippy_ffi::skippy_session_end_external_decode(self.0, &mut error);
+                    let _ = native_call!(skippy_session_end_external_decode(self.0, &mut error));
                 }
                 free_error(error);
             }
@@ -590,7 +604,7 @@ impl StageModel {
 
         let mut new_n_past = 0_i32;
         let eval_status = unsafe {
-            skippy_ffi::mtmd_helper_eval_chunks(
+            native_call!(mtmd_helper_eval_chunks(
                 projector.raw,
                 lctx,
                 chunks.raw,
@@ -599,7 +613,7 @@ impl StageModel {
                 n_batch,
                 true,
                 &mut new_n_past,
-            )
+            ))
         };
         if eval_status != 0 {
             return Err(anyhow!(
@@ -608,8 +622,13 @@ impl StageModel {
         }
 
         let mut error = ptr::null_mut();
-        let status =
-            unsafe { skippy_ffi::skippy_session_set_position(session.raw, new_n_past, &mut error) };
+        let status = unsafe {
+            native_call!(skippy_session_set_position(
+                session.raw,
+                new_n_past,
+                &mut error
+            ))
+        };
         ensure_ok(status, error)?;
         session.token_count =
             u64::try_from(new_n_past).context("multimodal position is negative")?;
@@ -669,7 +688,7 @@ impl StageModel {
             fn drop(&mut self) {
                 let mut error = ptr::null_mut();
                 unsafe {
-                    let _ = skippy_ffi::skippy_session_end_external_decode(self.0, &mut error);
+                    let _ = native_call!(skippy_session_end_external_decode(self.0, &mut error));
                 }
                 free_error(error);
             }
@@ -683,13 +702,13 @@ impl StageModel {
             }
             check_declared_media_size(&item.bytes)?;
             let wrapper = unsafe {
-                skippy_ffi::mtmd_helper_bitmap_init_from_buf(
+                native_call!(mtmd_helper_bitmap_init_from_buf(
                     projector.raw,
                     item.bytes.as_ptr(),
                     item.bytes.len(),
                     false,
                     skippy_ffi::mtmd_helper_init_opt_default(),
-                )
+                ))
             };
             // Take ownership before the null check: on a partial failure the
             // wrapper can still carry a video context that has to be freed.
@@ -723,13 +742,13 @@ impl StageModel {
             .map(|bitmap| bitmap.raw.cast_const())
             .collect::<Vec<_>>();
         let tokenize_status = unsafe {
-            skippy_ffi::mtmd_tokenize(
+            native_call!(mtmd_tokenize(
                 projector.raw,
                 chunks.raw,
                 &input_text,
                 bitmap_ptrs.as_ptr(),
                 bitmap_ptrs.len(),
-            )
+            ))
         };
         if tokenize_status != 0 {
             return Err(anyhow!(
@@ -760,7 +779,10 @@ impl StageModel {
 
         let mut guard_error = ptr::null_mut();
         let guard_status = unsafe {
-            skippy_ffi::skippy_session_begin_external_decode(session.raw, &mut guard_error)
+            native_call!(skippy_session_begin_external_decode(
+                session.raw,
+                &mut guard_error
+            ))
         };
         ensure_ok(guard_status, guard_error)?;
         let _external_decode_guard = ExternalDecodeGuard(session.raw);
@@ -851,7 +873,7 @@ impl StageModel {
             let mut new_n_past = n_past;
             let mut capture = ChunkCapture::new(session);
             let eval_status = unsafe {
-                skippy_ffi::mtmd_helper_eval_chunk_single_with_callback(
+                native_call!(mtmd_helper_eval_chunk_single_with_callback(
                     projector.raw,
                     lctx,
                     chunk,
@@ -862,7 +884,7 @@ impl StageModel {
                     &mut new_n_past,
                     Some(capture_microbatch),
                     (&mut capture as *mut ChunkCapture<'_>).cast(),
-                )
+                ))
             };
             let frames = capture
                 .finish(eval_status)
@@ -881,7 +903,7 @@ impl StageModel {
 
         let mut error = ptr::null_mut();
         let status =
-            unsafe { skippy_ffi::skippy_session_set_position(session.raw, n_past, &mut error) };
+            unsafe { native_call!(skippy_session_set_position(session.raw, n_past, &mut error)) };
         ensure_ok(status, error)?;
         session.token_count = u64::try_from(n_past).context("multimodal position is negative")?;
 

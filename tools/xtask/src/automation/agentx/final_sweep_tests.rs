@@ -1,7 +1,7 @@
 use super::{
     final_sweep::{self, COHORT_SHA, ORDER},
     prepared_launch,
-    prepared_tools::{Tools, Tree},
+    prepared_tools::{Backend, Tools, Tree},
 };
 use serde_json::{Value, json};
 
@@ -38,6 +38,39 @@ fn tools() -> Tools {
         "../../../../../skippy/evals/agentx/tools.example.json"
     ))
     .unwrap()
+}
+#[test]
+fn telemetry_diagnostics_are_scoped_out_of_publication() {
+    let mut tools = tools();
+    assert_eq!(tools.campaign_scope(), "fixed_complete_AgentX_comparison");
+    tools.diagnostic_telemetry = true;
+    assert_eq!(
+        tools.campaign_scope(),
+        "telemetry_diagnostic_not_performance"
+    );
+    tools.backend = Backend::Cpu;
+    assert_eq!(tools.campaign_scope(), "cpu_diagnostic_not_gpu_performance");
+    tools.backend = Backend::Metal;
+    tools.diagnostic_telemetry = false;
+    tools.diagnostic_generation_lanes = Some(1);
+    assert_eq!(
+        tools.campaign_scope(),
+        "diagnostic_generation_lanes_AgentX_comparison"
+    );
+
+    let mut earlier: Value = serde_json::from_str(include_str!(
+        "../../../../../skippy/evals/agentx/tools.example.json"
+    ))
+    .unwrap();
+    earlier
+        .as_object_mut()
+        .unwrap()
+        .remove("diagnostic_telemetry");
+    let earlier: Tools = serde_json::from_value(earlier).unwrap();
+    assert!(
+        !earlier.diagnostic_telemetry,
+        "earlier pins stay qualifying"
+    );
 }
 #[test]
 fn product_auto_capacity_is_preserved_and_diagnostic_override_is_verified() {

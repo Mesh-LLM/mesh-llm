@@ -7,6 +7,7 @@ use crate::frontend::util::{generation_stop_values, openai_backend_error};
 use serde_json::json;
 use skippy_inference_api::{ChatCompletionRequest, InferenceError, InferenceResult};
 use skippy_runtime::{ModelWorkload, SamplingConfig};
+use std::time::Instant;
 
 pub(super) fn resident_capacity_target_tokens(prompt_token_count: usize) -> u64 {
     u64::try_from(prompt_token_count).unwrap_or(u64::MAX)
@@ -20,7 +21,9 @@ impl StageOpenAiBackend {
         ids: &InferenceGenerationIds,
     ) -> InferenceResult<PreparedTextPrompt> {
         let tokenize_timer = PhaseTimer::start();
+        let tokenizing = self.enter_openai_phase(&tokenize_timer);
         let token_ids = self.tokenize(&prompt.text)?;
+        drop(tokenizing);
         let mut tokenize_attrs = self.openai_attrs(ids);
         tokenize_attrs.insert(
             "llama_stage.prompt_chars".to_string(),
@@ -149,6 +152,20 @@ impl StageOpenAiBackend {
                     && prefix.len() <= prompt_token_ids.len()
                     && prompt_token_ids.starts_with(prefix)
             });
+        // Also optional: the rendered system prefix ends in an empty user turn,
+        // so only the tokens it shares with this prompt are the boundary.
+        let shared_system_prefix_tokens = prompt
+            .recurrent_system_prefix_text
+            .as_deref()
+            .and_then(|prefix| self.tokenize(prefix).ok())
+            .map(|prefix| {
+                prefix
+                    .iter()
+                    .zip(&prompt_token_ids)
+                    .take_while(|(system_token, prompt_token)| system_token == prompt_token)
+                    .count()
+            })
+            .filter(|&tokens| tokens > 0 && tokens < prompt_token_ids.len());
         if cancellation.is_some_and(skippy_inference_api::CancellationToken::is_cancelled) {
             return Err(InferenceError::backend("request cancelled"));
         }
@@ -232,11 +249,20 @@ impl StageOpenAiBackend {
             ));
         }
 
+        // Work on this thread from here on belongs to the generation span,
+        // which `stage.openai_generation_summary` closes below.
+        let _generation = self.enter_openai_summary(&generation_timer);
+        let mut first_token_at = None;
+        let mut push_token = |token: i32| {
+            first_token_at.get_or_insert_with(Instant::now);
+            collector.push_token(token)
+        };
         let cache_stats = match self.mode.clone() {
             InferenceBackendMode::LocalRuntime => self.generate_local_tokens(
                 LocalGeneration {
                     prompt_token_ids: &prompt_token_ids,
                     recurrent_cache_prefix_token_ids: recurrent_cache_prefix_token_ids.as_deref(),
+                    shared_system_prefix_tokens,
                     max_tokens,
                     sampling: &sampling,
                     chat_sampling_metadata,
@@ -248,7 +274,7 @@ impl StageOpenAiBackend {
                     cancellation,
                     ids: &ids,
                 },
-                |token| collector.push_token(token),
+                &mut push_token,
             )?,
             InferenceBackendMode::EmbeddedStageZero {
                 config,
@@ -353,6 +379,18 @@ impl StageOpenAiBackend {
             "llama_stage.eog_check_ms".to_string(),
             json!(output.eog_check_ms),
         );
+        // Offset from this span's start, so a reader can place it absolutely.
+        if let Some(first_token_at) = first_token_at {
+            summary_attrs.insert(
+                "llama_stage.first_token_ms".to_string(),
+                json!(
+                    first_token_at
+                        .duration_since(generation_timer.start_instant)
+                        .as_secs_f64()
+                        * 1000.0
+                ),
+            );
+        }
         self.emit_openai_summary(
             "stage.openai_generation_summary",
             generation_timer,

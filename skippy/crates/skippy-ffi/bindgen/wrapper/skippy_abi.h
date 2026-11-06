@@ -41,6 +41,7 @@ static const uint64_t skippy_ffi_bridge_feature_laya_decisions = SKIPPY_FEATURE_
 static const uint64_t skippy_ffi_bridge_feature_speech_recognition =
     SKIPPY_FEATURE_SPEECH_RECOGNITION;
 static const uint64_t skippy_ffi_bridge_feature_clef_decisions = SKIPPY_FEATURE_CLEF_DECISIONS;
+static const uint64_t skippy_ffi_bridge_feature_native_tracing = SKIPPY_FEATURE_NATIVE_TRACING;
 
 /* Same cast-form macro bridge as the feature bits above. */
 static const uint32_t skippy_ffi_bridge_activation_part_optional = SKIPPY_ACTIVATION_PART_OPTIONAL;

@@ -1,4 +1,4 @@
-From d397025ddc9684e91d05274b0f9ae89cfb4cfa63 Mon Sep 17 00:00:00 2001
+From 914033e4aba1b0f16c5c71de385330cbe6094e05 Mon Sep 17 00:00:00 2001
 From: Daniel Han <danielhanchen@gmail.com>
 Date: Sun, 20 Sep 2026 11:16:21 +1000
 Subject: [PATCH] llama: port DiffusionGemma support
@@ -2381,10 +2381,10 @@ index f48e0e063..14a68a681 100644
      LLAMA_API int32_t llama_model_n_embd       (const struct llama_model * model);
      LLAMA_API int32_t llama_model_n_embd_inp   (const struct llama_model * model);
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index a4fbfac19..eeb0553e6 100644
+index 27bc5a2cd..8fd5a4432 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -223,6 +223,20 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -225,6 +225,20 @@ if (LLAMA_STAGE_BUILD_TESTS)
      target_compile_features(skippy-model-fixture-generator PRIVATE cxx_std_17)
      target_include_directories(skippy-model-fixture-generator PRIVATE .)
      target_link_libraries(skippy-model-fixture-generator PRIVATE llama-common)
@@ -2492,10 +2492,10 @@ index fe46aa888..94e1c5bbe 100644
      LLM_TENSOR_POST_MLP_NORM,
      LLM_TENSOR_PER_LAYER_TOKEN_EMBD, // gemma3n
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 94d49115f..10c34a607 100644
+index e20b670b5..4b0713399 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -1739,8 +1739,14 @@ int llama_context::encode(
+@@ -1785,8 +1785,14 @@ int llama_context::encode(
      // eagle3/DFlash: features as encoder input, and non-draft paths fall back to model's input dim
      const int64_t n_vocab = model.vocab.n_tokens();
  
@@ -2511,7 +2511,7 @@ index 94d49115f..10c34a607 100644
          LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
          return -1;
      }
-@@ -1769,17 +1775,27 @@ int llama_context::encode(
+@@ -1815,17 +1821,27 @@ int llama_context::encode(
  
      n_queued_tokens += n_tokens;
  
@@ -2545,7 +2545,7 @@ index 94d49115f..10c34a607 100644
  
      const auto causal_attn_org = cparams.causal_attn;
  
-@@ -1812,7 +1828,7 @@ int llama_context::encode(
+@@ -1858,7 +1874,7 @@ int llama_context::encode(
          GGML_ASSERT(backend_res != nullptr);
          GGML_ASSERT(logits.data != nullptr);
  
@@ -2567,10 +2567,10 @@ index 7ddb0a54b..3dcfc7484 100644
          default:
              return true;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index e39a0dcfb..dd701fcee 100644
+index 463fa3604..393b47522 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
-@@ -155,6 +155,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
+@@ -156,6 +156,8 @@ static llama_model * llama_model_mapping(llm_arch arch, const llama_model_params
              return new llama_model_gemma4(params);
          case LLM_ARCH_GEMMA4_ASSISTANT:
              return new llama_model_gemma4_assistant(params);
@@ -2579,7 +2579,7 @@ index e39a0dcfb..dd701fcee 100644
          case LLM_ARCH_GEMMA_EMBEDDING:
              return new llama_model_gemma_embedding(params);
          case LLM_ARCH_GEMMA_EMBEDDING2:
-@@ -2898,6 +2900,7 @@ llama_memory_i * llama_model::create_memory(
+@@ -2901,6 +2903,7 @@ llama_memory_i * llama_model::create_memory(
          case LLM_ARCH_LLADA_MOE:
          case LLM_ARCH_RND1:
          case LLM_ARCH_CLEF:
@@ -2587,7 +2587,7 @@ index e39a0dcfb..dd701fcee 100644
              {
                  res = nullptr;
              } break;
-@@ -3705,6 +3708,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
+@@ -3708,6 +3711,7 @@ llama_rope_type llama_model_rope_type(const llama_model * model) {
          case LLM_ARCH_GEMMA4:
          case LLM_ARCH_MAION_CODER:
          case LLM_ARCH_GEMMA4_ASSISTANT:
