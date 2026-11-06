@@ -87,6 +87,7 @@ async fn a_model_rejected_before_routing_is_counted_in_request_telemetry() {
         affinity: &affinity,
         plugin_manager: None,
         requested_by_node_id: None,
+        automatic_retry: None,
         exchange_channel: None,
     };
     let lifecycle = OpenAiLifecycleAttachment::unowned();

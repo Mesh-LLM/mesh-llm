@@ -1074,6 +1074,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial_test::serial]
     async fn embedded_startup_fails_when_api_port_is_occupied() {
+        let keystore_dir = tempfile::tempdir().expect("isolated owner keystore");
         let api_stub = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind api port occupier");
@@ -1082,6 +1083,10 @@ mod tests {
 
         let startup = start_embedded_serve(EmbeddedServeConfig {
             mode: EmbeddedMeshNodeMode::Client,
+            admission: EmbeddedMeshAdmissionConfig {
+                owner_key: Some(keystore_dir.path().join("owner-keystore.json")),
+                ..EmbeddedMeshAdmissionConfig::default()
+            },
             api_port,
             console_port,
             startup_timeout: Duration::from_secs(30),
@@ -1201,10 +1206,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     #[serial_test::serial]
     async fn embedded_startup_times_out_and_cleans_up_worker() {
+        let keystore_dir = tempfile::tempdir().expect("isolated owner keystore");
         let api_port = free_local_port();
         let console_port = free_local_port();
         let startup = start_embedded_serve(EmbeddedServeConfig {
             mode: EmbeddedMeshNodeMode::Client,
+            admission: EmbeddedMeshAdmissionConfig {
+                owner_key: Some(keystore_dir.path().join("owner-keystore.json")),
+                ..EmbeddedMeshAdmissionConfig::default()
+            },
             api_port,
             console_port,
             // This exercises worker cleanup, not public relay or STUN readiness.

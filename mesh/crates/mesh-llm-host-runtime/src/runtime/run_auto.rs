@@ -915,33 +915,10 @@ pub(super) async fn start_run_auto_node_and_plugins(
         .await;
 
     let (plugin_mesh_tx, plugin_mesh_rx) = tokio::sync::mpsc::channel(256);
-    let mut resolved_plugins = resolved_plugins.clone();
-    if resolved_plugins
-        .externals
-        .iter()
-        .any(|spec| spec.name == plugin::MOA_PLUGIN_ID)
-    {
-        return Err(cleanup_failed_node_start(
-            &node,
-            anyhow::anyhow!(
-                "Plugin name '{}' is reserved for the built-in MoA virtual model",
-                plugin::MOA_PLUGIN_ID
-            ),
-        )
-        .await);
-    }
-    let mut moa_spec = plugin::in_process_builtin_spec(plugin::MOA_PLUGIN_ID);
-    moa_spec.startup.optional = false;
-    resolved_plugins.externals.push(moa_spec);
-    let in_process = plugin::InProcessPlugins::default();
-    let moa_runner: plugin::InProcessPluginRunner =
-        std::sync::Arc::new(|stream| Box::pin(mesh_llm_moa_plugin::run(stream)));
-    let in_process = in_process.with(plugin::MOA_PLUGIN_ID, moa_runner);
-    let plugin_manager = match plugin::PluginManager::start_with_in_process(
-        &resolved_plugins,
+    let plugin_manager = match plugin::PluginManager::start(
+        resolved_plugins,
         plugin_host_mode(options),
         plugin_mesh_tx,
-        in_process,
     )
     .await
     {

@@ -2,7 +2,7 @@
 //!
 //! These cover the decision `resolve_auto_routed_model` makes *before* any
 //! model is contacted: whether a request that asked for automatic routing
-//! convenes a committee or is served by one capability-selected model.
+//! uses an installed plugin override or one capability-selected model.
 
 use crate::inference::election;
 use crate::mesh;
@@ -483,7 +483,7 @@ async fn explicitly_named_model_must_advertise_the_endpoint_workload() {
 }
 
 #[tokio::test]
-async fn plain_text_directive_stays_on_the_committee() {
+async fn plain_text_directive_stays_on_the_plugin_override() {
     let (node, targets) = node_serving(&["vision-model", "text-model"]).await;
     let descriptors = vec![
         descriptor("vision-model", true, false),
@@ -499,7 +499,7 @@ async fn plain_text_directive_stays_on_the_committee() {
     )
     .await;
 
-    // The directive must survive resolution so the MoA gateway picks it up.
+    // The directive must survive resolution so the installed virtual-model plugin receives it.
     match resolution {
         AutoRouteResolution::Continue {
             effective_model, ..
@@ -591,7 +591,7 @@ async fn deprecated_alias_behaves_exactly_like_the_directive() {
     )
     .await;
 
-    // `auto` is the same directive, so it must also reach the committee rather
+    // `auto` is the same directive, so it must also reach the plugin_override rather
     // than resolving to a single model as it did historically.
     match via_alias {
         AutoRouteResolution::Continue {
@@ -607,8 +607,7 @@ async fn deprecated_alias_behaves_exactly_like_the_directive() {
 
 #[tokio::test]
 async fn streaming_directive_resolves_to_a_single_model() {
-    // A committee cannot stream: workers are called non-streaming and the SSE
-    // is synthesised afterwards. A client asking to stream gets one model.
+    // The override seam accepts only buffered chat bodies. Streaming stays in core.
     let (node, targets) = node_serving(&["text-model", "other-text-model"]).await;
     let descriptors = vec![
         descriptor("text-model", false, false),
@@ -634,7 +633,7 @@ async fn streaming_directive_resolves_to_a_single_model() {
             assert_ne!(
                 model,
                 automatic::DIRECTIVE,
-                "a streaming request must not stay on the committee"
+                "a streaming request must not stay on the plugin_override"
             );
             assert!(
                 model == "text-model" || model == "other-text-model",
@@ -651,7 +650,7 @@ async fn streaming_directive_resolves_to_a_single_model() {
 
 #[tokio::test]
 async fn model_less_request_resolves_to_a_single_model() {
-    // A client that named nothing never opted into committee cost.
+    // A client that named nothing never opted into a plugin override.
     let (node, targets) = node_serving(&["text-model", "other-text-model"]).await;
     let descriptors = vec![
         descriptor("text-model", false, false),
@@ -668,7 +667,7 @@ async fn model_less_request_resolves_to_a_single_model() {
             assert_ne!(
                 model,
                 automatic::DIRECTIVE,
-                "a model-less request must not silently convene a committee"
+                "a model-less request must not silently invoke a plugin override"
             );
         }
         AutoRouteResolution::WorkloadUnsupported(workload) => {
@@ -814,9 +813,9 @@ async fn image_request_selects_a_vision_model_served_only_by_a_peer() {
 }
 
 #[tokio::test]
-async fn text_request_still_convenes_a_committee_across_two_nodes() {
-    // Two models, one local and one remote: enough for a committee, and the
-    // directive must survive resolution so the MoA gateway forms one.
+async fn text_request_still_is_eligible_for_plugin_override_across_two_nodes() {
+    // Model placement does not change override eligibility. Preserve the
+    // directive for the installed virtual-model plugin.
     let (node, targets) = two_node_mesh("local-text-model", "remote-text-model", false).await;
     let descriptors = vec![
         descriptor("local-text-model", false, false),
@@ -917,6 +916,51 @@ async fn forwarded_model_field(
 }
 
 #[tokio::test]
+async fn without_plugin_both_directives_resolve_streaming_and_non_streaming_to_one_model() {
+    let (node, targets) = node_serving(&["text-model"]).await;
+    let descriptors = vec![descriptor("text-model", false, false)];
+    for model in [automatic::DIRECTIVE, automatic::DEPRECATED_ALIAS] {
+        for stream in [false, true] {
+            let mut body = text_body(Some(model));
+            body["stream"] = stream.into();
+            let mut request = request_with_body(Some(model), &body);
+            let resolution = resolve_auto_routed_model(
+                &node,
+                &mut request,
+                &targets,
+                None,
+                false,
+                &descriptors,
+                None,
+                &affinity::AffinityRouter::new(),
+            )
+            .await;
+            let AutoRouteResolution::Continue {
+                effective_model, ..
+            } = resolution
+            else {
+                panic!("a ready concrete model must be selected");
+            };
+            assert_eq!(effective_model.as_deref(), Some("text-model"));
+            super::super::ingress::maybe_enable_auto_route_hooks(
+                &mut request,
+                effective_model.as_deref(),
+            );
+            let start = request
+                .raw
+                .windows(4)
+                .position(|w| w == b"\r\n\r\n")
+                .unwrap()
+                + 4;
+            let forwarded: serde_json::Value =
+                serde_json::from_slice(&request.raw[start..]).unwrap();
+            assert_eq!(forwarded["model"], "text-model");
+            assert_eq!(forwarded["stream"], stream);
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_single_model_decision_is_written_into_the_forwarded_body() {
     // The backend reads `model` from the forwarded bytes and 404s anything that
     // is not its own advertised identity, so selecting `vision-model` while
@@ -945,9 +989,8 @@ async fn a_single_model_decision_is_written_into_the_forwarded_body() {
 }
 
 #[tokio::test]
-async fn committee_mode_keeps_the_directive_in_the_forwarded_body() {
-    // The MoA gateway self-gates on the body's model, so committee mode must
-    // not have the directive rewritten away.
+async fn plugin_override_mode_keeps_the_directive_in_the_forwarded_body() {
+    // Preserve the directive so the installed virtual-model plugin can claim it.
     let (node, targets) = node_serving(&["text-model", "other-text-model"]).await;
     let descriptors = vec![
         descriptor("text-model", false, false),
@@ -970,7 +1013,7 @@ async fn committee_mode_keeps_the_directive_in_the_forwarded_body() {
 #[tokio::test]
 async fn a_non_chat_endpoint_resolves_to_a_single_model() {
     // `model=auto` on `/v1/completions` selected one concrete model before this
-    // change. Entering committee mode would reject it for having no `messages`
+    // change. Entering plugin_override mode would reject it for having no `messages`
     // array, breaking a request shape that already worked.
     let (node, targets) = node_serving(&["text-model", "other-text-model"]).await;
     let descriptors = vec![
@@ -998,7 +1041,7 @@ async fn a_non_chat_endpoint_resolves_to_a_single_model() {
     )
     .await;
 
-    // Pin the reason, not just "left the committee": asserting only
+    // Pin the reason, not just "left the plugin_override": asserting only
     // `!= DIRECTIVE` would keep passing if the endpoint gate were deleted and
     // some unrelated condition happened to divert the request anyway.
     assert_eq!(
@@ -1018,7 +1061,7 @@ async fn a_non_chat_endpoint_resolves_to_a_single_model() {
             assert_ne!(
                 model,
                 automatic::DIRECTIVE,
-                "a non-chat request must not convene a committee it cannot fan out"
+                "a non-chat request must not invoke the buffered chat override"
             );
         }
         AutoRouteResolution::WorkloadUnsupported(workload) => {

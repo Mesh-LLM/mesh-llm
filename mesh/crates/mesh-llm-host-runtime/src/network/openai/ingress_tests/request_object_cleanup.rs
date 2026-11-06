@@ -132,6 +132,7 @@ async fn rejected_request_releases_objects(model: &str, media: bool, required_ho
                     affinity: &affinity,
                     plugin_manager: Some(&manager),
                     requested_by_node_id: None,
+                    automatic_retry: None,
                     exchange_channel: None,
                 },
             },
