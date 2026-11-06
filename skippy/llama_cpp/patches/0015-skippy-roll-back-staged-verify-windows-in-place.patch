@@ -45,9 +45,10 @@ checkpoint, buffer reuse) and its rollback-count ABI.
  include/skippy/state.h                        |  15 +
  src/CMakeLists.txt                            |  21 ++
  src/skippy-verify-checkpoint.h                |   9 +-
- src/skippy/activation.cpp                     | 154 +++++----
+ src/skippy/activation.cpp                     | 154 ++++----
  src/skippy/execution-batch.cpp                |   7 +
  src/skippy/execution-single.cpp               |   5 +
+ src/skippy/resident_prefix.cpp                |   2 +-
  src/skippy/runtime_support.h                  |   7 +
  src/skippy/runtime_types.h                    |  17 +
  src/skippy/session.cpp                        |  13 +-
@@ -475,6 +476,19 @@ index 4ce3d4ba9..8a1b320ff 100644
          batch.token[i] = token_ids[i];
          batch.pos[i] = session->n_past;
          batch.n_seq_id[i] = 1;
+diff --git a/src/skippy/resident_prefix.cpp b/src/skippy/resident_prefix.cpp
+index 42769ba7c..418ebabaf 100644
+--- a/src/skippy/resident_prefix.cpp
++++ b/src/skippy/resident_prefix.cpp
+@@ -184,7 +184,7 @@ skippy_status restore_checkpoint(skippy_session * session, int32_t cache_seq_id,
+     session->token_history = std::move(history);
+     session->signal_history.clear();
+     skippy_mtp_clear_session_state(session);
+-    session->verify_checkpoints.clear();
++    skippy_clear_verify_windows(session);
+     return skippy_success(error);
+ }
+ 
 diff --git a/src/skippy/runtime_support.h b/src/skippy/runtime_support.h
 index 8ba595623..bbba808a3 100644
 --- a/src/skippy/runtime_support.h
@@ -759,10 +773,10 @@ index 4100856f3..f092b75b0 100644
          }
 diff --git a/src/skippy/tests/verify_rollback.cpp b/src/skippy/tests/verify_rollback.cpp
 new file mode 100644
-index 000000000..d61e314a6
+index 000000000..9dcf7e051
 --- /dev/null
 +++ b/src/skippy/tests/verify_rollback.cpp
-@@ -0,0 +1,320 @@
+@@ -0,0 +1,329 @@
 +// Speculative verify windows with forced rejections must commit exactly the
 +// tokens a session decodes one at a time, whether each window rolls back in
 +// place through the recurrent rollback snapshots or through a host checkpoint,
@@ -910,6 +924,15 @@ index 000000000..d61e314a6
 +            ok(skippy_retire_verify_checkpoint(session, base, WINDOW, &error), error);
 +        } else {
 +            ok(skippy_trim_session(session, base + 1 + accepted, &error), error);
++        }
++        // Resolving a serial window must leave the next window quiescent.
++        // Stale in-place bookkeeping otherwise settles an already accepted
++        // window from snapshots overwritten by a later decode.
++        CHECK(!session->inplace_verify_window.valid);
++        CHECK(session->verify_checkpoints.empty());
++        if (want_in_place) {
++            CHECK(session->verify_windows_in_place == step + 1);
++            CHECK(session->verify_windows_checkpointed == 0);
 +        }
 +        current = predicted[accepted];
 +    }
