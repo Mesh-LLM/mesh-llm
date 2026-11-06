@@ -45,17 +45,22 @@ gpu_layers = "auto"
 
 ## Managed inference providers
 
-A model entry can select an installed inference plugin. Provider models use
-provider-owned option and request schemas and do not inherit built-in LLM
-hardware, sampling or context defaults.
+A model entry can select an installed inference plugin that implements managed
+models. Provider models use provider-owned option and request schemas and do not
+inherit built-in LLM hardware, sampling or context defaults.
+
+This schema example is for provider implementers. `example-ocr` represents a
+provider that defines the model, variant and options shown below; it is not an
+ONNX installation recipe. Use the values documented by your provider.
 
 ```toml
 [[plugin]]
-name = "onnx"
+name = "example-ocr"
+command = "/absolute/path/to/example-ocr"
 
 [[models]]
-model = "datalab-to/indra-ocr@v1.1.0"
-provider = "onnx"
+model = "example-org/document-ocr@v1"
+provider = "example-ocr"
 variant = "fp32"
 
 [models.options]
@@ -70,12 +75,17 @@ idle_timeout_secs = 300
 prefetch = true
 ```
 
-The host passes only this provider's selected models to its process. It prepares
-explicit asset plans through the shared Hugging Face cache; credentials stay in
-Mesh. The plugin validates options and creates inference sessions on demand.
-Idle eviction releases sessions without deleting cached assets. Set prefetch to
-false to defer downloading too. A local source directory bypasses downloading;
-relative directories resolve against the configuration file's directory.
+The host passes only this provider's selected models to its process. At the
+provider's request, it prepares explicit asset plans through the shared Hugging
+Face cache; credentials stay in Mesh. The provider must implement option
+validation, session loading, prefetch and idle eviction to honor this policy.
+A local source directory bypasses downloading; relative directories resolve
+against the configuration file's directory.
+
+The ONNX OCR provider currently takes an explicit local model directory through
+`--model-dir` and loads its sessions at startup. It does not implement this
+managed-model configuration. See [managed provider contracts and manual ONNX
+configuration](https://github.com/Mesh-LLM/mesh-llm/blob/main/mesh/docs/plugins/managed-models.md).
 
 ## Plugins
 
