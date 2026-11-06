@@ -1,4 +1,4 @@
-From 602870192ff7d6416c8aac3a0a085fd448870195 Mon Sep 17 00:00:00 2001
+From 6bbf393c0ed3af8dd1bbfe04eb1892eb8756fe28 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Thu, 22 Oct 2026 17:15:05 +1100
 Subject: [PATCH] skippy: add Whisper speech recognition
@@ -18,13 +18,13 @@ Bumps the Skippy ABI to 0.1.72.
 ---
  include/skippy.h                         |   1 +
  include/skippy/asr.h                     | 172 +++++++++
- include/skippy/common.h                  |   4 +-
+ include/skippy/common.h                  |   2 +
  src/CMakeLists.txt                       |  44 +++
  src/skippy/abi.cpp                       |   6 +-
  src/skippy/asr.cpp                       | 447 +++++++++++++++++++++++
  src/skippy/asr_decode.h                  |  50 +++
  src/skippy/tests/asr_decode_boundary.cpp |  81 ++++
- 8 files changed, 803 insertions(+), 2 deletions(-)
+ 8 files changed, 802 insertions(+), 1 deletion(-)
  create mode 100644 include/skippy/asr.h
  create mode 100644 src/skippy/asr.cpp
  create mode 100644 src/skippy/asr_decode.h
@@ -220,18 +220,9 @@ index 000000000..99d4a1094
 +
 +#endif // SKIPPY_ASR_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 4eeb4a98d..d521dd6b4 100644
+index a3955499d..83b930dbe 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
-@@ -46,7 +46,7 @@ extern "C" {
- 
- #define SKIPPY_ABI_VERSION_MAJOR 0
- #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 73
-+#define SKIPPY_ABI_VERSION_PATCH 74
- 
- #if defined(_MSC_VER)
- #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 @@ -112,6 +112,8 @@ enum skippy_feature {
  #define SKIPPY_FEATURE_NATIVE_TRACING         (UINT64_C(1) << 43)
  /** @brief Joint Laya decision reads (`skippy/laya.h`). */
@@ -242,7 +233,7 @@ index 4eeb4a98d..d521dd6b4 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index a37114d96..557b8b7e7 100644
+index fc288f1a0..f32203873 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -103,6 +103,7 @@ add_library(llama

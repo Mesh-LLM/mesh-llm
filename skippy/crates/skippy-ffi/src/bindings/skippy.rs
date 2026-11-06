@@ -6,7 +6,7 @@
 
 pub const SKIPPY_ABI_VERSION_MAJOR: u32 = 0;
 pub const SKIPPY_ABI_VERSION_MINOR: u32 = 1;
-pub const SKIPPY_ABI_VERSION_PATCH: u32 = 80;
+pub const SKIPPY_ABI_VERSION_PATCH: u32 = 81;
 pub const SKIPPY_RUNTIME_EVENT_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_NATIVE_SPAN_V1_ABI_VERSION: u32 = 1;
 pub const SKIPPY_GPU_COMMAND_TIMING_V1_ABI_VERSION: u32 = 1;
@@ -600,11 +600,11 @@ pub struct skippy_runtime_config {
     pub host_expert_layer_start: i32,
     #[doc = " @brief One past the last such block index. `host_expert_layer_end <= host_expert_layer_start` keeps every routed expert on the accelerator, and a range wider than 4096 blocks is ignored the same way: no supported model approaches that block count, and the bound keeps override construction proportional to the model. Routing and precision are unchanged; only weight placement differs."]
     pub host_expert_layer_end: i32,
-    #[doc = " @brief Recurrent-state rollback depth (mirrors upstream `n_rs_seq`) for recurrent and hybrid models. Verifying an N-token speculative window in place needs at least N. 0 keeps the default of 2; `SKIPPY_RS_SEQ` overrides either."]
+    #[doc = " @brief Recurrent-state rollback depth (mirrors upstream `n_rs_seq`) for recurrent and hybrid models. 0 disables rollback snapshots; positive values request that depth, bounded to 64. Verifying an N-token speculative input window, including its committed anchor, in place needs at least N; otherwise verification uses a host checkpoint and replay while model computation remains on its selected backend. `SKIPPY_RS_SEQ` overrides the depth, including explicit 0. The native default configuration and a NULL configuration request 2 for legacy C callers."]
     pub recurrent_rollback_tokens: u32,
 }
 unsafe extern "C" {
-    #[doc = " @brief Returns a C-safe runtime configuration with all derived-default controls set to auto."]
+    #[doc = " @brief Returns a C-safe runtime configuration with derived-default controls set to auto and recurrent rollback depth explicitly set to 2. Set recurrent_rollback_tokens to 0 when no speculative rollback snapshots are wanted."]
     pub fn skippy_runtime_config_default() -> skippy_runtime_config;
 }
 unsafe extern "C" {

@@ -1,4 +1,4 @@
-From ee38cdd155e9e99a3560d158df5f2985fd7e927b Mon Sep 17 00:00:00 2001
+From ac45821d455a1e1f2f2e95f9debabf23933ac8bc Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sun, 27 Sep 2026 21:12:21 +1000
 Subject: [PATCH] models: add Laya decision model support
@@ -36,7 +36,7 @@ Changes from the upstream draft:
 Co-authored-by: ZhangYu <zhangyub@uniontech.com>
 ---
  include/skippy.h          |    1 +
- include/skippy/common.h   |    4 +-
+ include/skippy/common.h   |    2 +
  include/skippy/laya.h     |  167 ++++++
  src/CMakeLists.txt        |    4 +-
  src/llama-arch.cpp        |   32 ++
@@ -50,7 +50,7 @@ Co-authored-by: ZhangYu <zhangyub@uniontech.com>
  tools/laya/laya-cli.cpp   |  670 ++++++++++++++++++++++
  tools/laya/laya.cpp       | 1132 +++++++++++++++++++++++++++++++++++++
  tools/laya/laya.h         |  119 ++++
- 15 files changed, 2552 insertions(+), 2 deletions(-)
+ 15 files changed, 2551 insertions(+), 1 deletion(-)
  create mode 100644 include/skippy/laya.h
  create mode 100644 src/skippy/laya.cpp
  create mode 100644 tools/laya/CMakeLists.txt
@@ -70,18 +70,9 @@ index cd65095a5..a1d73ac5a 100644
  
  #endif // SKIPPY_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 6eb33bbae..e8c8a8c99 100644
+index 43ac106b5..a3955499d 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
-@@ -46,7 +46,7 @@ extern "C" {
- 
- #define SKIPPY_ABI_VERSION_MAJOR 0
- #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 70
-+#define SKIPPY_ABI_VERSION_PATCH 72
- 
- #if defined(_MSC_VER)
- #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 @@ -110,6 +110,8 @@ enum skippy_feature {
  #define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
  /** @brief Native span and GPU command timing callbacks (`skippy/tracing.h`). */
@@ -265,7 +256,7 @@ index 000000000..002fac598
 +
 +#endif // SKIPPY_LAYA_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 01577280b..38917c365 100644
+index 06d8c79fb..8d755d4e3 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -101,6 +101,8 @@ add_library(llama

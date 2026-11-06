@@ -1,4 +1,4 @@
-From 0171d4ab4c7681b9faca7791d4e9f39e58211b5f Mon Sep 17 00:00:00 2001
+From d6836923a6a3f1c2fe9a664f5ee30f561be104db Mon Sep 17 00:00:00 2001
 From: Michael Neale <14976+michaelneale@users.noreply.github.com>
 Date: Thu, 29 Oct 2026 17:27:44 +1100
 Subject: [PATCH] skippy: add clef joint decision reads
@@ -9,11 +9,11 @@ in one micro-batch, as the upstream server does for clef.
 ---
  include/skippy.h        |   1 +
  include/skippy/clef.h   | 144 +++++++++++
- include/skippy/common.h |   4 +-
+ include/skippy/common.h |   2 +
  src/CMakeLists.txt      |  20 ++
  src/skippy/abi.cpp      |   1 +
  src/skippy/clef.cpp     | 517 ++++++++++++++++++++++++++++++++++++++++
- 6 files changed, 686 insertions(+), 1 deletion(-)
+ 6 files changed, 685 insertions(+)
  create mode 100644 include/skippy/clef.h
  create mode 100644 src/skippy/clef.cpp
 
@@ -180,18 +180,9 @@ index 000000000..cf13822ed
 +
 +#endif // SKIPPY_CLEF_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 1fc153e55..40d945508 100644
+index 83b930dbe..6b4bcf440 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
-@@ -46,7 +46,7 @@ extern "C" {
- 
- #define SKIPPY_ABI_VERSION_MAJOR 0
- #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 77
-+#define SKIPPY_ABI_VERSION_PATCH 80
- 
- #if defined(_MSC_VER)
- #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 @@ -114,6 +114,8 @@ enum skippy_feature {
  #define SKIPPY_FEATURE_LAYA_DECISIONS         (UINT64_C(1) << 40)
  /** @brief Full-model speech recognition (`skippy/asr.h`). */
@@ -202,7 +193,7 @@ index 1fc153e55..40d945508 100644
  enum skippy_status {
      SKIPPY_STATUS_OK                      = 0,
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index f4224b0db..527a9458d 100644
+index 6e3482988..08b12fa1e 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -103,6 +103,8 @@ add_library(llama

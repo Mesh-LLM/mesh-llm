@@ -5,7 +5,7 @@ mod dynamic_library;
 // without compiling the crate to determine native-runtime compatibility.
 pub const ABI_VERSION_MAJOR: u32 = 0;
 pub const ABI_VERSION_MINOR: u32 = 1;
-pub const ABI_VERSION_PATCH: u32 = 80;
+pub const ABI_VERSION_PATCH: u32 = 81;
 
 // The facade constants are parsed without compiling; tie them to the generated
 // bindings' view of the native ABI version at compile time so a common.h bump

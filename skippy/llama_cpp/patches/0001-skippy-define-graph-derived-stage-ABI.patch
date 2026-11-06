@@ -1,4 +1,4 @@
-From d746621ccf1d4ad30ff75df356da5d35f0a058e3 Mon Sep 17 00:00:00 2001
+From 92125f5edfaf0adb41e01a2269f6aed147405f9e Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH] feat(skippy): define graph-derived native ABI
@@ -147,7 +147,7 @@ index 000000000..673c1d81c
 +#endif // SKIPPY_ACTIVATION_H
 diff --git a/include/skippy/common.h b/include/skippy/common.h
 new file mode 100644
-index 000000000..3f6aab137
+index 000000000..74f1c49e7
 --- /dev/null
 +++ b/include/skippy/common.h
 @@ -0,0 +1,146 @@
@@ -199,7 +199,7 @@ index 000000000..3f6aab137
 +
 +#define SKIPPY_ABI_VERSION_MAJOR 0
 +#define SKIPPY_ABI_VERSION_MINOR 1
-+#define SKIPPY_ABI_VERSION_PATCH 67
++#define SKIPPY_ABI_VERSION_PATCH 81
 +
 +#if defined(_MSC_VER)
 +#define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
@@ -2283,5 +2283,5 @@ index 000000000..6aff32414
 +
 +#endif  // SKIPPY_WORKLOADS_H
 -- 
-2.54.0 (Apple Git-157)
+2.56.0
 

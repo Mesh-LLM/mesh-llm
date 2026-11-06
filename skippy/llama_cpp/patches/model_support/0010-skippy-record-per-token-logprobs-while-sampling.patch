@@ -1,4 +1,4 @@
-From 2abf48addb91071876f869d876a49bfd97765689 Mon Sep 17 00:00:00 2001
+From 41b865431c6db422c6d3baf8c97be35bdb1ede6b Mon Sep 17 00:00:00 2001
 From: Virgile-pct <pourchetvirgile@gmail.com>
 Date: Wed, 21 Oct 2026 23:42:33 +0200
 Subject: [PATCH] skippy: record per-token logprobs while sampling
@@ -15,7 +15,6 @@ as unreadable instead of being read from a stale row. As the last patch
 to touch common.h it carries the queue's ABI version, 0.1.77.
 ---
  include/skippy.h               |  1 +
- include/skippy/common.h        |  2 +-
  include/skippy/logprobs.h      | 60 +++++++++++++++++++++
  include/skippy/sampling.h      |  4 ++
  src/CMakeLists.txt             |  1 +
@@ -26,7 +25,7 @@ to touch common.h it carries the queue's ABI version, 0.1.77.
  src/skippy/sampling_internal.h |  7 +++
  src/skippy/session.cpp         |  1 +
  src/skippy/workloads.cpp       |  1 +
- 12 files changed, 195 insertions(+), 2 deletions(-)
+ 11 files changed, 194 insertions(+), 1 deletion(-)
  create mode 100644 include/skippy/logprobs.h
  create mode 100644 src/skippy/logprobs.cpp
 
@@ -42,19 +41,6 @@ index fb2e80806..37a15eea3 100644
  #include "skippy/workloads.h"
  #include "skippy/system_one.h"
  #include "skippy/laya.h"
-diff --git a/include/skippy/common.h b/include/skippy/common.h
-index d521dd6b4..1fc153e55 100644
---- a/include/skippy/common.h
-+++ b/include/skippy/common.h
-@@ -46,7 +46,7 @@ extern "C" {
- 
- #define SKIPPY_ABI_VERSION_MAJOR 0
- #define SKIPPY_ABI_VERSION_MINOR 1
--#define SKIPPY_ABI_VERSION_PATCH 74
-+#define SKIPPY_ABI_VERSION_PATCH 77
- 
- #if defined(_MSC_VER)
- #define SKIPPY_DEPRECATED(message) __declspec(deprecated(message))
 diff --git a/include/skippy/logprobs.h b/include/skippy/logprobs.h
 new file mode 100644
 index 000000000..c7f4ab5cd
@@ -144,7 +130,7 @@ index 1b42f32c0..c1a755c4c 100644
  
  #ifdef __cplusplus
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 557b8b7e7..1cb985a73 100644
+index f32203873..373b86364 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -88,6 +88,7 @@ add_library(llama
