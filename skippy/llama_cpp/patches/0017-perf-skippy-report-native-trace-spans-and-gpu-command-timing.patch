@@ -1,7 +1,7 @@
-From ccd636e535915234d2a6f026649053247f472c65 Mon Sep 17 00:00:00 2001
+From 17c7592946694c523a778376eb4b41104d179373 Mon Sep 17 00:00:00 2001
 From: Jared Wyles <jared.wyles@gmail.com>
 Date: Mon, 2 Nov 2026 09:00:00 +1100
-Subject: [PATCH 1/2] skippy: report native trace spans and GPU command timing
+Subject: [PATCH] skippy: report native trace spans and GPU command timing
 
 skippy/tracing.h reports where time goes inside a native call, for a
 caller that already times the call itself. skippy_set_native_span_callback
@@ -78,7 +78,7 @@ Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
  include/skippy.h                          |   1 +
  include/skippy/common.h                   |   2 +
  include/skippy/tracing.h                  | 197 ++++++++
- src/CMakeLists.txt                        |   6 +-
+ src/CMakeLists.txt                        |   1 +
  src/llama-context.cpp                     |  52 ++-
  src/llama-kv-cache.cpp                    |  10 +
  src/llama-memory-recurrent.cpp            |   8 +
@@ -86,7 +86,7 @@ Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
  src/llama-sampler.cpp                     |   7 +
  src/llama-vocab.cpp                       |   2 +
  src/llama.cpp                             |   8 +
- src/skippy/abi.cpp                        |   1 +
+ src/skippy/abi.cpp                        |   3 +-
  src/skippy/activation.cpp                 |   3 +
  src/skippy/execution-batch.cpp            |   6 +
  src/skippy/model_loading.cpp              |  17 +
@@ -97,7 +97,7 @@ Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
  tests/CMakeLists.txt                      |   4 +
  tests/test-skippy-tracing-metal.cpp       | 155 +++++++
  tests/test-skippy-tracing.cpp             | 306 +++++++++++++
- 29 files changed, 2021 insertions(+), 7 deletions(-)
+ 29 files changed, 2022 insertions(+), 3 deletions(-)
  create mode 100644 ggml/src/ggml-metal/ggml-metal-timing.cpp
  create mode 100644 ggml/src/ggml-metal/ggml-metal-timing.h
  create mode 100644 include/skippy/tracing.h
@@ -1232,7 +1232,7 @@ index 6964c5b7e..9aaa830c9 100644
          return (void *)ggml_backend_metal_tuning_set_fa_vec_override;
      }
 diff --git a/include/skippy.h b/include/skippy.h
-index 48e0be2cf..15d9af032 100644
+index dc8cbb431..8d710ed64 100644
 --- a/include/skippy.h
 +++ b/include/skippy.h
 @@ -12,6 +12,7 @@
@@ -1244,13 +1244,13 @@ index 48e0be2cf..15d9af032 100644
  #include "skippy/runtime.h"
  #include "skippy/model_source.h"
 diff --git a/include/skippy/common.h b/include/skippy/common.h
-index 63d91ca3f..afb090a21 100644
+index df831c43e..31e5d1136 100644
 --- a/include/skippy/common.h
 +++ b/include/skippy/common.h
-@@ -114,6 +114,8 @@ enum skippy_feature {
- #define SKIPPY_FEATURE_SPEECH_RECOGNITION     (UINT64_C(1) << 41)
- /** @brief Joint Clef decision reads (`skippy/clef.h`). */
- #define SKIPPY_FEATURE_CLEF_DECISIONS         (UINT64_C(1) << 42)
+@@ -107,6 +107,8 @@ enum skippy_feature {
+ #define SKIPPY_FEATURE_NON_CHAT_WORKLOADS     ((uint64_t)1 << 37)
+ 
+ #define SKIPPY_FEATURE_CACHEGEN_KV_PAGE       (UINT64_C(1) << 39)
 +/** @brief Native span and GPU command timing callbacks (`skippy/tracing.h`). */
 +#define SKIPPY_FEATURE_NATIVE_TRACING         (UINT64_C(1) << 43)
  
@@ -1460,25 +1460,19 @@ index 000000000..e9e57357c
 +
 +#endif // SKIPPY_TRACING_H
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index d5a10bacb..ffe5d72f8 100644
+index a4fbfac19..071532cab 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -99,12 +99,8 @@ add_library(llama
+@@ -98,6 +98,7 @@ add_library(llama
              skippy/speculative_decoding.cpp
              skippy/tokenization.cpp
              skippy/events.cpp
--            skippy/system_one.cpp
--            skippy/laya.cpp
--            skippy/clef.cpp
--            $<TARGET_OBJECTS:llama-clef-template>
--            ../tools/laya/laya.cpp
-             skippy/asr.cpp
 +            skippy/tracing.cpp
              unicode.h
              ${LLAMA_MODELS_SOURCES}
              )
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 10c34a607..bce8ef4ae 100644
+index ac42f935f..381bece6e 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -17,6 +17,7 @@
@@ -1489,7 +1483,7 @@ index 10c34a607..bce8ef4ae 100644
  
  #include <atomic>
  #include <cinttypes>
-@@ -461,6 +462,7 @@ llama_context::llama_context(
+@@ -455,6 +456,7 @@ llama_context::llama_context(
      }
  
      if (!hparams.vocab_only) {
@@ -1497,7 +1491,7 @@ index 10c34a607..bce8ef4ae 100644
          // GPU backends
          for (const auto & dev : model.devices) {
              ggml_backend_t backend = ggml_backend_dev_init(dev.dev, nullptr);
-@@ -525,6 +527,8 @@ llama_context::llama_context(
+@@ -519,6 +521,8 @@ llama_context::llama_context(
              /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
          };
  
@@ -1506,7 +1500,7 @@ index 10c34a607..bce8ef4ae 100644
          memory.reset(model.create_memory(params_mem, cparams, graph_build_inputs.selection));
      }
  
-@@ -789,6 +793,8 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
+@@ -783,6 +787,8 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
          return;
      }
  
@@ -1515,7 +1509,7 @@ index 10c34a607..bce8ef4ae 100644
      sched_need_reserve = false;
      ++sched_reserve_count;
  
-@@ -947,7 +953,11 @@ void llama_context::synchronize() {
+@@ -941,7 +947,11 @@ void llama_context::synchronize() {
          return;
      }
  
@@ -1528,7 +1522,7 @@ index 10c34a607..bce8ef4ae 100644
  
      // FIXME: if multiple single tokens are evaluated without a synchronization,
      // the stats will be added to the prompt evaluation stats
-@@ -1075,6 +1085,8 @@ bool llama_context::memory_update(
+@@ -1069,6 +1079,8 @@ bool llama_context::memory_update(
                  }
          }
  
@@ -1537,7 +1531,7 @@ index 10c34a607..bce8ef4ae 100644
          // reset the previous graph results to make sure that they won't be reused
          // TODO: make mctx->apply() report if a graph reserve is needed, then reset graph results only if the memory module reset the scheduler
          for (auto & res : gf_res_prev) {
-@@ -1632,7 +1644,13 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -1626,7 +1638,13 @@ llm_graph_result * llama_context::process_ubatch(
          llama_memory_context_i * mctx,
          ggml_status & ret,
          const skippy_graph_build_inputs & graph_build_inputs) {
@@ -1552,7 +1546,7 @@ index 10c34a607..bce8ef4ae 100644
          LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
          ret = GGML_STATUS_FAILED;
          return nullptr;
-@@ -1647,6 +1665,7 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -1641,6 +1659,7 @@ llm_graph_result * llama_context::process_ubatch(
  
      if (!graph_reuse_disable && gf_res_prev_active == res && res->can_reuse(gparams)) {
          //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
@@ -1560,7 +1554,7 @@ index 10c34a607..bce8ef4ae 100644
  
          // with pipeline parallelism, the previous graph_compute_async may still be running
          // on the GPU. we must synchronize before set_inputs to avoid overwriting input tensors
-@@ -1665,7 +1684,10 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -1659,7 +1678,10 @@ llm_graph_result * llama_context::process_ubatch(
  
          //const auto t_start_us = ggml_time_us();
  
@@ -1571,7 +1565,7 @@ index 10c34a607..bce8ef4ae 100644
  
          //LLAMA_LOG_INFO("graph build time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
  
-@@ -1685,11 +1707,13 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -1679,11 +1701,13 @@ llm_graph_result * llama_context::process_ubatch(
              return nullptr;
          }
  
@@ -1585,7 +1579,7 @@ index 10c34a607..bce8ef4ae 100644
  
          gf_res_prev_active = res;
      }
-@@ -1699,12 +1723,16 @@ llm_graph_result * llama_context::process_ubatch(
+@@ -1693,12 +1717,16 @@ llm_graph_result * llama_context::process_ubatch(
          //const auto t_start_us = ggml_time_us();
  
          // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
@@ -1602,7 +1596,7 @@ index 10c34a607..bce8ef4ae 100644
      if (status != GGML_STATUS_SUCCESS) {
          LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
          ret = status;
-@@ -2007,6 +2035,8 @@ int llama_context::decode(
+@@ -1985,6 +2013,8 @@ int llama_context::decode(
          return encode(batch_inp, graph_build_inputs);
      }
  
@@ -1611,7 +1605,7 @@ index 10c34a607..bce8ef4ae 100644
      if (batch_inp.tokens.empty()) {
          LLAMA_LOG_ERROR("%s: n_tokens == 0\n", __func__);
          return -1;
-@@ -2061,10 +2091,12 @@ int llama_context::decode(
+@@ -2039,10 +2069,12 @@ int llama_context::decode(
          }
      }
  
@@ -1624,7 +1618,7 @@ index 10c34a607..bce8ef4ae 100644
  
      const uint32_t n_tokens_all  = balloc->get_n_tokens();
      const uint32_t n_outputs_all = balloc->get_n_outputs();
-@@ -2105,6 +2137,8 @@ int llama_context::decode(
+@@ -2083,6 +2115,8 @@ int llama_context::decode(
  
      llama_memory_context_ptr mctx;
  
@@ -1633,7 +1627,7 @@ index 10c34a607..bce8ef4ae 100644
      while (true) {
          mctx = memory->init_batch(*balloc, cparams.n_ubatch, embd_all);
          if (!mctx) {
-@@ -2148,11 +2182,15 @@ int llama_context::decode(
+@@ -2126,11 +2160,15 @@ int llama_context::decode(
          break;
      }
  
@@ -1649,7 +1643,7 @@ index 10c34a607..bce8ef4ae 100644
  
      int64_t n_outputs_prev = 0;
      int64_t n_tokens_prev  = 0;
-@@ -2221,6 +2259,9 @@ int llama_context::decode(
+@@ -2199,6 +2237,9 @@ int llama_context::decode(
          //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
          //}
  
@@ -1659,7 +1653,7 @@ index 10c34a607..bce8ef4ae 100644
          auto * t_logits  = res->get_logits();
          auto * t_embd    = cparams.embeddings       ? res->get_embd()     : nullptr;
          auto * t_h_nextn = cparams.embeddings_nextn ? res->get_h_nextn()  : nullptr;
-@@ -2359,10 +2400,13 @@ int llama_context::decode(
+@@ -2337,10 +2378,13 @@ int llama_context::decode(
              copy_tensor_async_rows(res->t_candidates,     sampling.candidates, stride, n_outputs_prev, sched.get(), &sampling.candidates_count);
          }
  
@@ -1673,7 +1667,7 @@ index 10c34a607..bce8ef4ae 100644
              ggml_backend_sched_synchronize(sched.get());
          }
      } while (mctx->next());
-@@ -2853,6 +2897,8 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
+@@ -2831,6 +2875,8 @@ ggml_cgraph * llama_context::graph_reserve(uint32_t                          n_t
      LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
      GGML_ASSERT(n_outputs >= 1);
  
@@ -1682,7 +1676,7 @@ index 10c34a607..bce8ef4ae 100644
      if (n_tokens % n_seqs != 0) {
          n_tokens = ((n_tokens + (n_seqs - 1)) / n_seqs) * n_seqs; // round to next multiple of n_seqs
          LLAMA_LOG_DEBUG("%s: making n_tokens a multiple of n_seqs - n_tokens = %u, n_seqs = %u, n_outputs = %u\n", __func__, n_tokens, n_seqs, n_outputs);
-@@ -3805,6 +3851,7 @@ size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_fl
+@@ -3783,6 +3829,7 @@ size_t llama_context::state_seq_get_size(llama_seq_id seq_id, llama_state_seq_fl
  }
  
  size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, size_t size, llama_state_seq_flags flags) {
@@ -1690,7 +1684,7 @@ index 10c34a607..bce8ef4ae 100644
      std::unique_ptr<llama_io_write_i> io;
      if (flags & LLAMA_STATE_SEQ_FLAGS_ON_DEVICE) {
          io = std::make_unique<llama_io_write_device>(dst, size, mem_storage[seq_id]);
-@@ -3824,6 +3871,7 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
+@@ -3802,6 +3849,7 @@ size_t llama_context::state_seq_get_data(llama_seq_id seq_id, uint8_t * dst, siz
  }
  
  size_t llama_context::state_seq_set_data(llama_seq_id seq_id, const uint8_t * src, size_t size, llama_state_seq_flags flags) {
@@ -1847,7 +1841,7 @@ index 8b765e3ed..82b5a038d 100644
  
      uint32_t cell_count;
 diff --git a/src/llama-model.cpp b/src/llama-model.cpp
-index 5992b1989..02c6f11ce 100644
+index 9901eca36..0c1eb83c4 100644
 --- a/src/llama-model.cpp
 +++ b/src/llama-model.cpp
 @@ -1,4 +1,5 @@
@@ -1856,7 +1850,7 @@ index 5992b1989..02c6f11ce 100644
  
  #include "llama-arch.h"
  #include "llama-ext.h"
-@@ -2076,11 +2077,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
+@@ -2067,11 +2068,13 @@ bool llama_model_base::load_tensors(llama_model_loader & ml) {
      }
  
      // load tensor data
@@ -1915,7 +1909,7 @@ index 521c5718e..4d37d74ff 100644
      }
  }
 diff --git a/src/llama-vocab.cpp b/src/llama-vocab.cpp
-index a800d3ff3..32ca3fb8c 100644
+index 9b5cc2e1c..44bb6f81e 100644
 --- a/src/llama-vocab.cpp
 +++ b/src/llama-vocab.cpp
 @@ -1,4 +1,5 @@
@@ -1924,7 +1918,7 @@ index a800d3ff3..32ca3fb8c 100644
  
  #include "ggml.h"
  #include "gguf.h"
-@@ -4679,6 +4680,7 @@ int32_t llama_tokenize(
+@@ -4669,6 +4670,7 @@ int32_t llama_tokenize(
                       int32_t   n_tokens_max,
                          bool   add_special,
                          bool   parse_special) {
@@ -1984,17 +1978,19 @@ index 16ad7eca5..c5254df6a 100644
          return {0, model_ptr.release()};
      } catch (const std::exception & err) {
 diff --git a/src/skippy/abi.cpp b/src/skippy/abi.cpp
-index 7ad903ff5..3bd8ac46f 100644
+index ceed6e5d3..6693d8d44 100644
 --- a/src/skippy/abi.cpp
 +++ b/src/skippy/abi.cpp
-@@ -50,6 +50,7 @@ uint64_t skippy_abi_features(void) {
-            SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
-            SKIPPY_FEATURE_LAYA_DECISIONS |
-            SKIPPY_FEATURE_CLEF_DECISIONS |
-+           SKIPPY_FEATURE_NATIVE_TRACING |
- #if defined(SKIPPY_HAS_WHISPER)
-            SKIPPY_FEATURE_SPEECH_RECOGNITION |
- #endif
+@@ -46,7 +46,8 @@ uint64_t skippy_abi_features(void) {
+            SKIPPY_FEATURE_DIAGNOSTIC_EVENTS |
+            SKIPPY_FEATURE_UNLOAD_EVENTS |
+            SKIPPY_FEATURE_NON_CHAT_WORKLOADS |
+-           SKIPPY_FEATURE_CACHEGEN_KV_PAGE;
++           SKIPPY_FEATURE_CACHEGEN_KV_PAGE |
++           SKIPPY_FEATURE_NATIVE_TRACING;
+ }
+ 
+ void skippy_error_free(struct skippy_error * error) {
 diff --git a/src/skippy/activation.cpp b/src/skippy/activation.cpp
 index 7167e5f7a..885b602e9 100644
 --- a/src/skippy/activation.cpp
@@ -2157,7 +2153,7 @@ index 5bfd47c93..d01e1a12d 100644
      enum skippy_status device_status = skippy_apply_selected_backend_device(config, model_params, selected_devices, out_error);
      if (device_status != SKIPPY_STATUS_OK) {
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index f26e2194f..438df155c 100644
+index b688fce73..671ccbb3c 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
 @@ -7,6 +7,7 @@
@@ -2168,7 +2164,7 @@ index f26e2194f..438df155c 100644
  
  #include "llama-impl.h"
  #include "../vendor/nlohmann/json.hpp"
-@@ -579,6 +580,7 @@ static llama_token skippy_sample_token_ith_impl(
+@@ -575,6 +576,7 @@ llama_token skippy_sample_token_ith(
          skippy_session * session,
          const skippy_sampling_config * sampling,
          int32_t logits_index) {
@@ -2177,7 +2173,7 @@ index f26e2194f..438df155c 100644
              session->stage_model == nullptr || session->stage_model->model == nullptr) {
          return LLAMA_TOKEN_NULL;
 diff --git a/src/skippy/speculative_decoding.cpp b/src/skippy/speculative_decoding.cpp
-index 5ab739c9d..8a53ceb51 100644
+index 7f55c0d88..3fb86667d 100644
 --- a/src/skippy/speculative_decoding.cpp
 +++ b/src/skippy/speculative_decoding.cpp
 @@ -6,6 +6,7 @@
@@ -2186,9 +2182,9 @@ index 5ab739c9d..8a53ceb51 100644
  #include "skippy/speculative_internal.h"
 +#include "skippy/trace_scope.h"
  
- #include "llama-arch.h"
  #include "llama-context.h"
-@@ -218,6 +219,7 @@ enum skippy_status skippy_mtp_sync_target_inputs(
+ #include "llama-graph.h"
+@@ -191,6 +192,7 @@ enum skippy_status skippy_mtp_sync_target_inputs(
              token_count == 0) {
          return skippy_success(out_error);
      }
@@ -3036,3 +3032,6 @@ index 000000000..804c2f7e0
 +    std::printf("ok\n");
 +    return 0;
 +}
+-- 
+2.56.0
+

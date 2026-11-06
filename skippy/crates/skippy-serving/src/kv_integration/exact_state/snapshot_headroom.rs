@@ -22,7 +22,7 @@ pub(crate) const HOST_RESERVE_DIVISOR: u64 = 16;
 static RESERVED_BYTES: Mutex<u64> = Mutex::new(0);
 
 #[derive(Debug)]
-pub(super) struct SnapshotReservation {
+pub(in crate::kv_integration) struct SnapshotReservation {
     bytes: u64,
     counter: &'static Mutex<u64>,
 }
@@ -118,9 +118,9 @@ fn warn(message: &str, context: String) {
 impl KvStageIntegration {
     /// Sizes the snapshot through the native size-only queries, then checks it
     /// against host memory read now, before any state is copied. A size probe
-    /// that fails admits the record (the export reports its own error), and
-    /// says so once per stage so a host without admission is noticeable.
-    pub(super) fn reserve_snapshot_host_memory(
+    /// that fails declines resident checkpoint copies. Legacy exported-state
+    /// records retain their warning-and-export behavior on a failed size probe.
+    pub(in crate::kv_integration) fn reserve_snapshot_host_memory(
         &self,
         runtime: &mut RuntimeState,
         session_id: &str,
@@ -129,6 +129,11 @@ impl KvStageIntegration {
     ) -> Option<Option<SnapshotReservation>> {
         let snapshot_bytes = match self.snapshot_size(runtime, session_id, payload, token_count) {
             Ok(snapshot_bytes) => snapshot_bytes,
+            Err(_) if payload == StagePrefixCachePayload::ResidentKv => {
+                self.exact_state_records_dropped
+                    .fetch_add(1, Ordering::Relaxed);
+                return None;
+            }
             Err(_) => {
                 if self
                     .snapshot_size_probe_failures
@@ -198,6 +203,9 @@ impl KvStageIntegration {
                     Err(error) => return Err(error),
                 };
                 Ok(kv.saturating_add(recurrent))
+            }
+            StagePrefixCachePayload::ResidentKv if self.resident_requires_checkpoint() => {
+                runtime.recurrent_state_size(session_id)
             }
             StagePrefixCachePayload::Disabled | StagePrefixCachePayload::ResidentKv => Ok(0),
         }

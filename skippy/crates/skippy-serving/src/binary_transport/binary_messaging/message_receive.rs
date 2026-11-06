@@ -134,6 +134,7 @@ pub(super) struct InboundMessageReader {
     stopped: Arc<AtomicBool>,
     worker_control: Arc<ConnectionWorkerControl>,
     holding_message: AtomicBool,
+    finished: Arc<AtomicBool>,
 }
 
 impl Drop for InboundMessageReader {
@@ -177,7 +178,16 @@ pub(super) fn spawn_message_reader(
     let reader_queued_bytes = queued_bytes.clone();
     let stopped = Arc::new(AtomicBool::new(false));
     let reader_stopped = stopped.clone();
+    let finished = Arc::new(AtomicBool::new(false));
+    let reader_finished = finished.clone();
     let thread = thread::spawn(move || {
+        struct FinishOnExit(Arc<AtomicBool>);
+        impl Drop for FinishOnExit {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+        let _finished = FinishOnExit(reader_finished);
         loop {
             // Back off while the parsed backlog is over the byte ceiling; the
             // executor decrements as it takes messages off the queue.
@@ -253,10 +263,15 @@ pub(super) fn spawn_message_reader(
         stopped,
         worker_control: handle_control,
         holding_message: AtomicBool::new(false),
+        finished,
     })
 }
 
 impl InboundMessageReader {
+    pub(super) fn is_finished(&self) -> bool {
+        self.finished.load(Ordering::Acquire)
+    }
+
     /// EOF classification: a clean EOF before any traffic is a normal
     /// connection close, anything else is an error.
     pub(super) fn next(

@@ -109,6 +109,24 @@ fn continuation_requires_feedback_and_exact_pass_dependencies() {
     assert!(request.validate().is_err());
 }
 
+#[test]
+fn native_producer_requires_the_same_frozen_pass_and_candidate() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut request = input(directory.path());
+    previous(&mut request, &directory.path().join("package"));
+    request.mode = Mode::Native;
+    request.pass_id = "repair-1".into();
+    assert!(request.validate().is_ok());
+    assert!(package::previous(&request).is_ok());
+    request.pass_id = "verify-1".into();
+    assert!(package::previous(&request).is_err());
+    request.pass_id = "repair-1".into();
+    request.previous.as_mut().unwrap().candidate = "d".repeat(40);
+    assert!(package::previous(&request).is_err());
+    request.previous_feedback = Some(directory.path().join("feedback"));
+    assert!(request.validate().is_err());
+}
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 #[test]
 fn repair_continuation_admits_only_bound_candidate_feedback_and_keeps_snapshot() {

@@ -138,7 +138,7 @@ int main(int argc, char ** argv) {
         const bool cpu = std::strcmp(backend, "CPU") == 0;
         const bool metal = std::strcmp(backend, "MTL0") == 0;
         require(cpu || metal || std::strcmp(backend, "CUDA0") == 0, "select CPU, MTL0 or CUDA0 explicitly");
-        ggml_backend_load_all();
+        ggml_backend_load_all_from_path(KV_NATIVE_LIB_DIR);
         const auto device = ggml_backend_dev_by_name(backend);
         require(device != nullptr, "selected backend unavailable");
         ggml_backend_dev_t devices[] = {device, nullptr};

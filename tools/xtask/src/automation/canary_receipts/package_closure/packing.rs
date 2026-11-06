@@ -72,7 +72,7 @@ pub(super) fn pack(input: &Input) -> DynResult<serde_json::Value> {
     export_native(&root, &stage.path, &native)?;
     binaries(&root, &stage.path, &input.test_build)?;
     workloads(&input.workload_oracles, &stage.path, &sealed)?;
-    archive::binaries(&stage.path.join("binaries.tar"))?;
+    archive::binaries_for(&stage.path.join("binaries.tar"), cfg!(target_os = "linux"))?;
     workload::archive(
         &stage.path.join("workload-oracles.tar"),
         &input.candidate,
@@ -92,7 +92,12 @@ pub(super) fn pack(input: &Input) -> DynResult<serde_json::Value> {
     } else {
         None
     };
-    let identity = serde_json::json!({"schema":3,"platform":"macos-arm64-metal","candidate":input.candidate,"base":input.base,"branch":input.branch,"pass_id":input.pass_id,
+    let platform = match std::env::consts::OS {
+        "macos" => "macos-arm64-metal",
+        "linux" => "linux-arm64-cuda",
+        _ => return Err("unsupported certification producer platform".into()),
+    };
+    let identity = serde_json::json!({"schema":3,"platform":platform,"candidate":input.candidate,"base":input.base,"branch":input.branch,"pass_id":input.pass_id,
         "run_id":input.context.run_id,"run_attempt":input.context.run_attempt,"controller":input.context.controller_revision,"mesh_source":input.context.selected_source,
         "manifest_sha256":manifest,"plan_sha256":Digest::of_bytes(&plan),"source_plan_identity_sha256":input.admitted_identity_sha256,
         "binaries_sha256":Digest::of_file(&stage.path.join("binaries.tar"))?,"workload_oracles_sha256":Digest::of_file(&stage.path.join("workload-oracles.tar"))?,
@@ -148,6 +153,7 @@ fn validate_mode(input: &Input) -> DynResult<()> {
                 || (!input.context.selected_source.is_empty() && input.pass_id == "verify-1"))
                 && input.candidate == input.base
                 && input.bundle.is_none() => {}
+        "native-build" if (input.candidate == input.base) == input.bundle.is_none() => {}
         _ => return Err("package mode/pass/candidate/bundle contract mismatch".into()),
     }
     if input.context.selected_source.is_empty() {

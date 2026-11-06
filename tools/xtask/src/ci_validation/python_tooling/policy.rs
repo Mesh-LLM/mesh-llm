@@ -28,6 +28,8 @@ pub(super) struct DependencyInput {
     project_version: String,
     direct_dependencies: Vec<PackagePin>,
     locked_packages: Vec<PackagePin>,
+    #[serde(default)]
+    url_packages: Vec<UrlPackagePin>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -35,6 +37,16 @@ pub(super) struct DependencyInput {
 struct PackagePin {
     name: String,
     version: String,
+}
+
+/// One reviewed direct wheel; this never grants a registry, host or path pattern.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UrlPackagePin {
+    name: String,
+    version: String,
+    url: String,
+    sha256: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,6 +124,7 @@ pub(super) fn validate_policy_shape(policy: &Policy) -> DynResult<()> {
         }
         unique_package_pins(&input.direct_dependencies, &input.manifest_path)?;
         unique_package_pins(&input.locked_packages, &input.lock_path)?;
+        validate_url_package_pins(input)?;
     }
 
     for source in &policy.external_source_descriptors {
@@ -153,6 +166,37 @@ pub(super) fn validate_policy_shape(policy: &Policy) -> DynResult<()> {
             return Err(format!(
                 "invalid, duplicate, or unreviewed command exception in `{}`",
                 allowed.path
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn validate_url_package_pins(input: &DependencyInput) -> DynResult<()> {
+    let mut names = BTreeSet::new();
+    for pin in &input.url_packages {
+        let url = url::Url::parse(&pin.url)?;
+        let is_pinned = |packages: &[PackagePin]| {
+            packages
+                .iter()
+                .any(|package| package.name == pin.name && package.version == pin.version)
+        };
+        if !names.insert(pin.name.to_ascii_lowercase())
+            || !is_pinned(&input.direct_dependencies)
+            || !is_pinned(&input.locked_packages)
+            || !is_hex_revision(&pin.sha256, 64)
+            || url.scheme() != "https"
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || !url.path().ends_with(".whl")
+        {
+            return Err(format!(
+                "`{}` URL package admission requires one exact direct wheel, HTTPS URL and SHA-256",
+                input.manifest_path
             )
             .into());
         }
@@ -219,6 +263,7 @@ pub(super) fn validate_dependency_input(
         )
         .into());
     }
+    validate_manifest_sources(&manifest, input)?;
 
     let lock: toml::Value = toml::from_str(&fs::read_to_string(&lock_path)?)?;
     let packages = lock
@@ -242,7 +287,12 @@ pub(super) fn validate_dependency_input(
             .and_then(toml::Value::as_str)
             == Some(".")
         {
-            if name != input.project_name || version != input.project_version {
+            if name != input.project_name
+                || version != input.project_version
+                || package_source
+                    .and_then(toml::Value::as_table)
+                    .is_none_or(|source| source.len() != 1)
+            {
                 return Err(format!(
                     "`{}` has an unexpected virtual project record `{name}=={version}`",
                     input.lock_path
@@ -252,18 +302,15 @@ pub(super) fn validate_dependency_input(
             virtual_project_count += 1;
             continue;
         }
-        let source = package_source
-            .and_then(|source| source.get("registry"))
-            .and_then(toml::Value::as_str);
-        if source != Some("https://pypi.org/simple") {
+        validate_package_source(package, input, name, version)?;
+        validate_package_hashes(package, &input.lock_path, name)?;
+        if !actual.insert((name.to_owned(), version.to_owned())) {
             return Err(format!(
-                "`{}` package `{name}` must come from the pinned PyPI registry",
+                "`{}` repeats locked package `{name}=={version}`",
                 input.lock_path
             )
             .into());
         }
-        validate_package_hashes(package, &input.lock_path, name)?;
-        actual.insert((name.to_owned(), version.to_owned()));
     }
     let expected: BTreeSet<_> = input
         .locked_packages
@@ -290,6 +337,99 @@ pub(super) fn validate_dependency_input(
         return Err(format!(
             "`{}` must bind {} to the reviewed project directory",
             input.consumer_path, input.consumer_assignment
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn validate_manifest_sources(manifest: &toml::Value, input: &DependencyInput) -> DynResult<()> {
+    let sources = manifest
+        .get("tool")
+        .and_then(|tool| tool.get("uv"))
+        .and_then(|uv| uv.get("sources"));
+    let Some(sources) = sources else {
+        if input.url_packages.is_empty() {
+            return Ok(());
+        }
+        return Err(format!(
+            "`{}` is missing its reviewed direct wheel source",
+            input.manifest_path
+        )
+        .into());
+    };
+    let sources = sources
+        .as_table()
+        .ok_or("Python package source overrides must be a table")?;
+    if sources.len() != input.url_packages.len()
+        || input.url_packages.iter().any(|pin| {
+            sources
+                .get(&pin.name)
+                .and_then(toml::Value::as_table)
+                .is_none_or(|source| {
+                    source.len() != 1
+                        || source.get("url").and_then(toml::Value::as_str) != Some(pin.url.as_str())
+                })
+        })
+    {
+        return Err(format!(
+            "`{}` package sources differ from the reviewed exact wheel URLs",
+            input.manifest_path
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn validate_package_source(
+    package: &toml::Value,
+    input: &DependencyInput,
+    name: &str,
+    version: &str,
+) -> DynResult<()> {
+    if let Some(pin) = input
+        .url_packages
+        .iter()
+        .find(|pin| pin.name == name && pin.version == version)
+    {
+        let source_matches = package
+            .get("source")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|source| {
+                source.len() == 1
+                    && source.get("url").and_then(toml::Value::as_str) == Some(pin.url.as_str())
+            });
+        let expected_hash = format!("sha256:{}", pin.sha256);
+        let wheel_matches = package
+            .get("wheels")
+            .and_then(toml::Value::as_array)
+            .is_some_and(|wheels| {
+                wheels.len() == 1
+                    && wheels[0].get("url").and_then(toml::Value::as_str) == Some(pin.url.as_str())
+                    && wheels[0].get("hash").and_then(toml::Value::as_str)
+                        == Some(expected_hash.as_str())
+            });
+        if !source_matches || !wheel_matches || package.get("sdist").is_some() {
+            return Err(format!(
+                "`{}` package `{name}` differs from its reviewed exact wheel URL/SHA-256",
+                input.lock_path
+            )
+            .into());
+        }
+        return Ok(());
+    }
+    if !package
+        .get("source")
+        .and_then(toml::Value::as_table)
+        .is_some_and(|source| {
+            source.len() == 1
+                && source.get("registry").and_then(toml::Value::as_str)
+                    == Some("https://pypi.org/simple")
+        })
+    {
+        return Err(format!(
+            "`{}` package `{name}` must come from the pinned PyPI registry",
+            input.lock_path
         )
         .into());
     }

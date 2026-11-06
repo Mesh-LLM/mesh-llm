@@ -8,6 +8,60 @@ const COMMON: &[&str] = &[
 ];
 
 #[test]
+fn actual_linux_full_build_uses_native_shell_and_retains_all_gates() {
+    let fixture = Fixture::new();
+    fixture.build_tools();
+    let mut names = COMMON.to_vec();
+    names.push("run_full_build");
+    let report = fixture.run(
+        "native-build",
+        &names,
+        "LLAMA_STAGE_BACKEND=cuda",
+        "run_full_build",
+        &[("INERT_OS", "Linux".into())],
+    );
+    assert_eq!(
+        report.process.status.unwrap().code(),
+        Some(0),
+        "{}",
+        fixture.diagnostic(&report)
+    );
+    assert_eq!(
+        fixture.order(),
+        [
+            "uv",
+            "uv",
+            "generated",
+            "cargo",
+            "smoke",
+            "oracles",
+            "cargo",
+            "systemone",
+            "laya"
+        ]
+    );
+    assert_eq!(
+        &fixture.args("uv-1")[8..],
+        ["bash", "scripts/build-llama.sh", "--build-only"]
+    );
+    assert_eq!(
+        &fixture.args("uv-2")[8..],
+        [
+            "bash",
+            "scripts/check-skippy-generated-family-patch.sh",
+            "--full-native-suite"
+        ]
+    );
+    assert_eq!(
+        fs::read(fixture.root.join("upstream-tests")).unwrap(),
+        b"ON"
+    );
+    let smoke = fixture.values("systemone.environment");
+    assert_eq!(&smoke[1..], ["llama-bump", "cuda", "cuda", "1"]);
+    fixture.finish();
+}
+
+#[test]
 fn actual_prepare_admits_relative_script_in_all_five_modes_and_refuses_wrong_stamp() {
     for mode in [
         "repair",

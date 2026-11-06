@@ -23,6 +23,8 @@ pub(super) struct Input {
 }
 #[derive(Deserialize)]
 struct Identity {
+    schema: u8,
+    platform: String,
     candidate: String,
     base: String,
     branch: String,
@@ -48,6 +50,7 @@ pub(super) fn restore(input: &Input) -> DynResult<serde_json::Value> {
     }
     verify(input, &package)?;
     let identity: Identity = serde_json::from_slice(&fs::read(package.join("identity.json"))?)?;
+    let (binaries, workloads) = native_archives(&package, &identity)?;
     source::revision(&identity.base)?;
     source::revision(&identity.candidate)?;
     source::branch(&identity.branch)?;
@@ -100,18 +103,11 @@ pub(super) fn restore(input: &Input) -> DynResult<serde_json::Value> {
         &provenance,
         &staged.join(".deps/llama.cpp"),
     )?;
-    archive::binaries(&package.join("binaries.tar"))?;
-    workload::archive(
-        &package.join("workload-oracles.tar"),
-        &identity.candidate,
-        &provenance.head,
-    )?;
+    archive::binaries_for(&binaries, cfg!(target_os = "linux"))?;
+    workload::archive(&workloads, &identity.candidate, &provenance.head)?;
     fs::create_dir(staged.join("target"))?;
-    archive_extract::extract(&package.join("binaries.tar"), &staged.join("target/debug"))?;
-    archive_extract::extract(
-        &package.join("workload-oracles.tar"),
-        &staged.join(".deps/canary-workload-oracles"),
-    )?;
+    archive_extract::extract(&binaries, &staged.join("target/debug"))?;
+    archive_extract::extract(&workloads, &staged.join(".deps/canary-workload-oracles"))?;
     archive_extract::normalize_workload(&staged.join(".deps/canary-workload-oracles"))?;
     closure(
         &staged,
@@ -121,7 +117,7 @@ pub(super) fn restore(input: &Input) -> DynResult<serde_json::Value> {
     )?;
     admission::compare_binaries(
         &staged,
-        &package,
+        &binaries,
         &staged.join("target/debug/skippy-mm-test"),
     )?;
     verify(input, &package)?;
@@ -137,7 +133,7 @@ pub(super) fn restore(input: &Input) -> DynResult<serde_json::Value> {
             &provenance,
             &identity,
         )?;
-        admission::compare_binaries(&root, &package, &root.join("target/debug/skippy-mm-test"))?;
+        admission::compare_binaries(&root, &binaries, &root.join("target/debug/skippy-mm-test"))?;
         verify(input, &package)?;
         admitted(&package, &root, input, &identity)?;
         input.context.validate()?;
@@ -167,6 +163,30 @@ fn verify(input: &Input, package: &Path) -> DynResult<()> {
         },
     )?;
     Ok(())
+}
+
+fn native_archives(package: &Path, identity: &Identity) -> DynResult<(PathBuf, PathBuf)> {
+    let host = match std::env::consts::OS {
+        "macos" => "macos-arm64-metal",
+        "linux" => "linux-arm64-cuda",
+        _ => return Err("unsupported certification consumer platform".into()),
+    };
+    let prefix =
+        if identity.schema == 4 && identity.platform == "macos-arm64-metal+linux-arm64-cuda" {
+            if host == "linux-arm64-cuda" {
+                "linux-"
+            } else {
+                ""
+            }
+        } else if identity.schema == 3 && identity.platform == host {
+            ""
+        } else {
+            return Err("native package platform differs from certification consumer".into());
+        };
+    Ok((
+        package.join(format!("{prefix}binaries.tar")),
+        package.join(format!("{prefix}workload-oracles.tar")),
+    ))
 }
 fn fresh(root: &Path, base: &str) -> DynResult<()> {
     if fs::symlink_metadata(root)?.file_type().is_symlink()
@@ -241,17 +261,14 @@ pub(super) fn verify_consumer(input: &Input, capture: &Path) -> DynResult<()> {
     }
     verify(input, &package)?;
     let identity: Identity = serde_json::from_slice(&fs::read(package.join("identity.json"))?)?;
+    let (binaries, workloads) = native_archives(&package, &identity)?;
     let provenance: source::Provenance =
         serde_json::from_slice(&fs::read(package.join("llama-source.json"))?)?;
     admitted(&package, &root, input, &identity)?;
     closure(&root, capture, &provenance, &identity)?;
-    archive::binaries(&package.join("binaries.tar"))?;
-    workload::archive(
-        &package.join("workload-oracles.tar"),
-        &identity.candidate,
-        &provenance.head,
-    )?;
-    admission::compare_binaries(&root, &package, &root.join("target/debug/skippy-mm-test"))?;
+    archive::binaries_for(&binaries, cfg!(target_os = "linux"))?;
+    workload::archive(&workloads, &identity.candidate, &provenance.head)?;
+    admission::compare_binaries(&root, &binaries, &root.join("target/debug/skippy-mm-test"))?;
     verify(input, &package)?;
     input.context.validate()?;
     process::check()

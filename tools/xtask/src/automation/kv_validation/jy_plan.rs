@@ -1,6 +1,6 @@
 //! Manual JY specs using the observed lab/custom schema, not a new CI provider.
 use super::{
-    contract::{self, Backend, Cell, Tool},
+    contract::{self, Backend, Cell, Prepared, Tool},
     publish,
 };
 use crate::command::DynResult;
@@ -51,6 +51,10 @@ impl Fleet {
         contract::absolute(&self.prepared.path)?;
         if !contract::sha(&self.prepared.sha256, 64) {
             return Err("JY prepared receipt SHA required".into());
+        }
+        let prepared = Prepared::read_for_plan(&self.prepared)?;
+        if prepared.producer.backend != self.backend {
+            return Err("JY fleet backend differs from prepared producer backend".into());
         }
         let mut ids = BTreeSet::new();
         let mut hosts = BTreeSet::new();

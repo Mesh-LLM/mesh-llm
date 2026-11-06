@@ -938,7 +938,7 @@ impl StageOpenAiBackend {
         let recurrent_checkpoint_required = self
             .kv
             .as_ref()
-            .is_some_and(|kv| kv.payload == StagePrefixCachePayload::KvRecurrent);
+            .is_some_and(|kv| kv.retains_recurrent_checkpoints());
         let resume_scheduler_decode = prompt_prefill_sample.is_some()
             && !state.stopped
             && state.decoded_tokens < request.max_tokens as usize

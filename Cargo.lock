@@ -11754,6 +11754,7 @@ dependencies = [
  "flate2",
  "getrandom 0.3.4",
  "glob",
+ "goblin",
  "hex",
  "http-body-util",
  "hyper",

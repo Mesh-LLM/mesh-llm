@@ -16,10 +16,9 @@ fn backend_with_disk(root: &Path, disk_bytes: u64) -> Result<StageOpenAiBackend>
         512,
     )?;
     let manager = L3CacheManager::acquire(root, StoreLimits::new(disk_bytes, 0))?;
-    backend.kv = KvStageIntegration::from_loaded_model_with_l3_manager(
+    backend.kv = KvStageIntegration::from_runtime_with_l3_manager(
         &backend.config,
-        crate::runtime_state::loaded_model_state_kind(Some(&backend.runtime)),
-        crate::runtime_state::loaded_memory_cache_capabilities(Some(&backend.runtime)),
+        &backend.runtime,
         Some(manager),
         None,
     )?
@@ -281,6 +280,15 @@ fn capture_and_commit(root: &Path) -> Result<PrefixReference> {
                 .record_resident_prefix(&mut runtime, "source", &stored, &tokens)?
                 .expect("native checkpoint captured");
             assert!(record.stored);
+            assert!(kv.probe_resident_prefix(&stored).is_some());
+            assert!(
+                kv.l3
+                    .as_ref()
+                    .unwrap()
+                    .locate_longest(&stored.namespace, &tokens, 1)?
+                    .is_none(),
+                "recording a resident prefix must not eagerly export it to L3"
+            );
             let output = inputs
                 .iter()
                 .map(|&token| runtime.decode("source", token))

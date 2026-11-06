@@ -1,7 +1,7 @@
-From 7f0f1e22bf3cdd0beda61abfd03d4d7a68ad4519 Mon Sep 17 00:00:00 2001
+From dbcd86805035ef9c1a9ed00f8407005fa53ce27e Mon Sep 17 00:00:00 2001
 From: Jared Wyles <jared.wyles@gmail.com>
 Date: Thu, 5 Nov 2026 01:00:00 +1100
-Subject: [PATCH 2/2] skippy: sample a batch's requests concurrently
+Subject: [PATCH] skippy: sample a batch's requests concurrently
 
 An iteration's sampled requests waited for one another: after the batch's
 outputs were recorded, each request ran its sampler chain in turn on the
@@ -31,24 +31,23 @@ after another, and that all four sampled under the concurrent span.
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01QA3dWey3RBtBgDz1Tery9Y
 ---
- src/CMakeLists.txt                       |  19 ++-
+ src/CMakeLists.txt                       |  12 ++
  src/llama-context.cpp                    |  23 ++-
  src/llama-context.h                      |  33 +++++
  src/llama-graph.h                        |   2 +-
  src/skippy/batch_sampling.cpp            |  91 ++++++++++++
  src/skippy/batch_sampling.h              |  20 +++
  src/skippy/execution-batch.cpp           |  25 ++--
- src/skippy/logprobs.cpp                  |   2 +
- src/skippy/sampling.cpp                  |  44 +++++-
+ src/skippy/sampling.cpp                  |  43 +++++-
  src/skippy/sampling_internal.h           |   6 +
  src/skippy/tests/concurrent_sampling.cpp | 175 +++++++++++++++++++++++
- 11 files changed, 421 insertions(+), 19 deletions(-)
+ 10 files changed, 413 insertions(+), 17 deletions(-)
  create mode 100644 src/skippy/batch_sampling.cpp
  create mode 100644 src/skippy/batch_sampling.h
  create mode 100644 src/skippy/tests/concurrent_sampling.cpp
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index ffe5d72f8..88294d87c 100644
+index 071532cab..27bc5a2cd 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -84,6 +84,7 @@ add_library(llama
@@ -59,22 +58,7 @@ index ffe5d72f8..88294d87c 100644
              skippy/sampling_config.cpp
              skippy/chat_sampling.cpp
              skippy/sampling_vocab.cpp
-@@ -99,8 +100,13 @@ add_library(llama
-             skippy/speculative_decoding.cpp
-             skippy/tokenization.cpp
-             skippy/events.cpp
--            skippy/asr.cpp
-             skippy/tracing.cpp
-+            skippy/system_one.cpp
-+            skippy/laya.cpp
-+            skippy/clef.cpp
-+            $<TARGET_OBJECTS:llama-clef-template>
-+            ../tools/laya/laya.cpp
-+            skippy/asr.cpp
-             unicode.h
-             ${LLAMA_MODELS_SOURCES}
-             )
-@@ -543,6 +549,17 @@ if (LLAMA_STAGE_BUILD_TESTS)
+@@ -467,6 +468,17 @@ if (LLAMA_STAGE_BUILD_TESTS)
      endfunction()
      add_skippy_sampling_history_state_tests(granitehybrid skippy-noalloc-granite-hybrid-fixture recurrent)
  
@@ -93,10 +77,10 @@ index ffe5d72f8..88294d87c 100644
          NAME skippy_generate_qwen3_fixture
          COMMAND skippy-model-fixture-generator
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index bce8ef4ae..4b0713399 100644
+index 381bece6e..34fb9c9de 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
-@@ -948,8 +948,26 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
+@@ -942,8 +942,26 @@ void llama_context::sched_reserve(const skippy_graph_build_inputs & graph_build_
              __func__, (t_end_us - t_start_us)/1000.0, ggml_backend_sched_get_n_copies(sched.get()));
  }
  
@@ -124,7 +108,7 @@ index bce8ef4ae..4b0713399 100644
          return;
      }
  
-@@ -2667,6 +2685,9 @@ bool llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
+@@ -2645,6 +2663,9 @@ bool llama_context::extract_layer_inputs(const llm_graph_result * res, size_t to
  }
  
  void llama_context::output_reorder() {
@@ -372,31 +356,11 @@ index b98adbd7f..1600ace25 100644
      return skippy_success(out_error);
  }
  
-diff --git a/src/skippy/logprobs.cpp b/src/skippy/logprobs.cpp
-index 43260dfc2..75064451b 100644
---- a/src/skippy/logprobs.cpp
-+++ b/src/skippy/logprobs.cpp
-@@ -1,6 +1,7 @@
- #include "errors.h"
- #include "runtime_types.h"
- #include "sampling_internal.h"
-+#include "trace_scope.h"
- 
- #include <algorithm>
- #include <cmath>
-@@ -21,6 +22,7 @@ void skippy_record_token_logprobs(
-             !skippy_sampling_wants_logprobs(sampling)) {
-         return;
-     }
-+    skippy_trace::scope trace("skippy.token_logprobs");
-     skippy_token_logprobs entry = {};
-     entry.token = token;
-     entry.logprob = std::numeric_limits<float>::quiet_NaN();
 diff --git a/src/skippy/sampling.cpp b/src/skippy/sampling.cpp
-index 438df155c..d61992bd3 100644
+index 671ccbb3c..d045994de 100644
 --- a/src/skippy/sampling.cpp
 +++ b/src/skippy/sampling.cpp
-@@ -576,20 +576,49 @@ void skippy_refresh_backend_sampling(
+@@ -572,20 +572,51 @@ void skippy_refresh_backend_sampling(
      }
  }
  
@@ -434,11 +398,12 @@ index 438df155c..d61992bd3 100644
 +    return session->sampler != nullptr && !session->sampling_backend_enabled;
 +}
 +
- static llama_token skippy_sample_token_ith_impl(
++
+ llama_token skippy_sample_token_ith(
          skippy_session * session,
          const skippy_sampling_config * sampling,
          int32_t logits_index) {
--    skippy_trace::scope trace("skippy.sample");
+     skippy_trace::scope trace("skippy.sample");
 -    if (session == nullptr || session->reset_required || session->ctx == nullptr ||
 -            session->stage_model == nullptr || session->stage_model->model == nullptr) {
 +    if (!skippy_sampling_session_ready(session)) {
@@ -453,19 +418,11 @@ index 438df155c..d61992bd3 100644
              return skippy_chat_sample_token(session, logits_index);
          }
          if (skippy_ensure_plain_sampling_chain(session, sampling)) {
-@@ -611,6 +640,7 @@ llama_token skippy_sample_token_ith(
-         skippy_session * session,
-         const skippy_sampling_config * sampling,
-         int32_t logits_index) {
-+    skippy_trace::scope trace("skippy.sample");
-     try {
-         const bool raw_logits_valid = session == nullptr || !session->sampling_backend_enabled;
-         const llama_token token = skippy_sample_token_ith_impl(session, sampling, logits_index);
 diff --git a/src/skippy/sampling_internal.h b/src/skippy/sampling_internal.h
-index 81bc26ff5..9847f95f0 100644
+index 7bbf16016..38621b6e9 100644
 --- a/src/skippy/sampling_internal.h
 +++ b/src/skippy/sampling_internal.h
-@@ -71,4 +71,10 @@ llama_token skippy_sample_token_ith(
+@@ -64,4 +64,10 @@ llama_token skippy_sample_token_ith(
          skippy_session * session,
          const skippy_sampling_config * sampling,
          int32_t logits_index);
@@ -657,3 +614,6 @@ index 000000000..0e19dbce5
 +    std::printf("ok\n");
 +    return 0;
 +}
+-- 
+2.56.0
+

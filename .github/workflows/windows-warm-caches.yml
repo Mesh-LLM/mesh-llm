@@ -62,6 +62,10 @@ permissions:
   actions: write
 
 env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_BENCH_DEBUG: "0"
   CACHE_NAMESPACE: mesh-llm
   LLAMA_WINDOWS_CACHE_RETENTION: ${{ github.event.inputs.retention || vars.LLAMA_WINDOWS_CACHE_RETENTION || '2' }}
   WINDOWS_CUDA_VERSION: ${{ vars.CUDA_VERSION || '12.6.3' }}

@@ -30,7 +30,7 @@ use std::time::Instant;
 pub const DECODE_BATCH_HEADROOM_TOKENS: usize = 512;
 
 #[derive(Debug)]
-pub(super) struct GenerationTokenBudget {
+pub(crate) struct GenerationTokenBudget {
     capacity_tokens: usize,
     state: Mutex<GenerationTokenBudgetState>,
     #[cfg(test)]
@@ -57,6 +57,19 @@ pub(super) struct GenerationTokenReservation {
 }
 
 impl GenerationTokenBudget {
+    /// All frontends sharing a runtime reserve against one aggregate pool.
+    pub(crate) fn shared_for_runtime(
+        runtime: &mut crate::runtime_state::RuntimeState,
+        configured_tokens: usize,
+    ) -> Arc<Self> {
+        if let Some(budget) = runtime.generation_token_budget.as_ref() {
+            return Arc::clone(budget);
+        }
+        let budget = Arc::new(Self::for_runtime(runtime, configured_tokens));
+        runtime.generation_token_budget = Some(Arc::clone(&budget));
+        budget
+    }
+
     /// Admission shares the loaded context's aggregate pool across its lanes.
     /// Modelless runtimes may leave capacity unknown; retain the caller's
     /// configured budget in that case without inferring a native allocation.
@@ -337,6 +350,32 @@ mod tests {
             explicit
                 .try_reserve(GenerationTokenBudgetRequest::new(257, 0))
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn multiple_frontends_share_one_runtime_token_reservation_pool() {
+        let mut runtime =
+            crate::runtime_state::RuntimeState::new_modelless_with_capacity_for_test(2, 1024);
+        let first = GenerationTokenBudget::shared_for_runtime(&mut runtime, 512);
+        let second = GenerationTokenBudget::shared_for_runtime(&mut runtime, 512);
+        assert!(Arc::ptr_eq(&first, &second));
+        let reservation = first
+            .try_reserve(GenerationTokenBudgetRequest::new(768, 0))
+            .unwrap()
+            .unwrap();
+        assert!(
+            second
+                .try_reserve(GenerationTokenBudgetRequest::new(512, 0))
+                .unwrap()
+                .is_none()
+        );
+        drop(reservation);
+        assert!(
+            second
+                .try_reserve(GenerationTokenBudgetRequest::new(512, 0))
+                .unwrap()
+                .is_some()
         );
     }
 

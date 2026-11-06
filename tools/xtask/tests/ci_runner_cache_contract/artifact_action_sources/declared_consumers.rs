@@ -63,7 +63,13 @@ fn action_calls(action: &str) -> BTreeMap<String, Vec<Node>> {
         .collect::<Vec<_>>();
     paths.sort();
     for path in paths {
-        let document = workflow_yaml::parse(&fs::read_to_string(&path).unwrap()).unwrap();
+        let source = fs::read_to_string(&path).unwrap();
+        let document = if path.file_name().unwrap() == "llama-canary-family-pass.yml" {
+            workflow_yaml::parse_resolved_aliases(&source)
+        } else {
+            workflow_yaml::parse(&source)
+        }
+        .unwrap();
         let calls = workflow_steps(&document)
             .into_iter()
             .filter(|step| text(step, "uses") == Some(marker.as_str()))

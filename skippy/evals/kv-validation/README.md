@@ -48,6 +48,9 @@ runtime dependency feature. The producer image must contain those exact tools,
 the prepared native source, the workspace and this automation executable.
 Prepare once **inside that immutable image**, preserving paths across workers.
 No worker rebuilds native code, Rust or the model matrix executable.
+This harness supports Linux and macOS only. Preparation rejects Windows because
+packaged Windows runtimes do not export the private graph inspection helpers;
+the harness does not replace the packaged runtime with a different static build.
 
 Copy [producer.example.json](producer.example.json), replace its absolute paths
 and source commit, and observe byte pins. Empty SHA fields are allowed only as
@@ -65,6 +68,10 @@ test harness, and emits `/absolute/kv-prepared/prepared.json`. It uses shared
 libraries and matching private graph headers, without modifying the native
 patch queue. Source declarations are provenance; artifact hashes and the trusted
 producer image bind the executable bytes actually consumed.
+Verification also launches an exact serving-test identity probe in a fresh
+process, with only the verified runtime leaf available for discovery. The probe
+rejects static test builds and requires successful dynamic runtime loading.
+The native matrix loads packaged backends from that runtime's `lib` directory.
 
 Copy [cell.example.json](cell.example.json), supply the prepared receipt SHA
 (`shasum -a 256 /absolute/kv-prepared/prepared.json`) and the actual model path.
@@ -90,6 +97,11 @@ fails the command. Preserve both the failed receipt and evidence archive.
 The cache receipt is a closed typed projection observed before log sanitization;
 it preserves only the declared content, counters and status, never arbitrary
 child payloads, protocol headers or environment data.
+The archive contains the raw evidence available before the final status decision.
+`result.json` is a separate post-archive sidecar: traversal, compression and
+hashing count against the execution deadline before it can report success.
+Directory suffixes are preserved (`trial.1` produces `trial.1.tar.gz` and
+`trial.1.archive.json`).
 
 ## Explicit JY jobs
 
@@ -99,6 +111,10 @@ eligible Sparks. The planner rejects both excluded node IDs (`spark-000280`,
 `spark-000499`) and hostnames (`spark-db08`, `spark-9f06`). Each worker also checks
 its actual hostname. Jobs are independent per model and reuse the prepared
 image; JY's node lease queues jobs rather than stacking GPU measurements.
+Run the planner where the pinned prepared JSON is available. It verifies that
+receipt's digest, schema and declared backend before writing any jobs; each
+worker subsequently re-verifies the prepared tool and runtime artifacts inside
+the immutable image.
 
 ```sh
 just skippy-kv-jy-plan /absolute/fleet.json /absolute/new-jobs

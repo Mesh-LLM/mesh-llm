@@ -51,6 +51,17 @@ without a key share the default namespace.
 Run and topology instance IDs do not fragment the namespace. Equivalent
 placements can reuse state when the numerical model and state layout match.
 
+Persistent reuse also binds its cache keys to verified bytes of the model inputs
+actually opened by the runtime. Serving hashes those files once around model
+loading, including every shard and any checkpoint, projector or importance
+matrix inputs. File fingerprints must remain unchanged through the load. Unix
+frontends reuse that strong fingerprint proof. Platforms without equivalent
+file identity and change-time evidence recheck bytes after load and at backend
+construction; requests do not rehash weights. Declared model or
+manifest digests alone cannot authorize disk reuse. Integrations constructed
+from a raw stage configuration without loaded-content proof keep their native
+in-memory cache, but disable L3 and the L3-backed host tier.
+
 A saved native prefix remains usable after the originating session is freed.
 Eviction drops the cache's native attention references and recurrent checkpoint.
 The attention pool releases cells once no cache entry or request references

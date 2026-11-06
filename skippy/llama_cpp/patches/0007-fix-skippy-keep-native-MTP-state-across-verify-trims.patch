@@ -1,4 +1,4 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From c02e7f39b2ad1dcda383645a60dd19dad54c2508 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sat, 10 Oct 2026 17:10:06 +0100
 Subject: [PATCH] fix(skippy): keep native MTP state across verify trims
@@ -29,10 +29,10 @@ resumes. Callers that discard drafts from rejected windows are unaffected.
  6 files changed, 144 insertions(+), 8 deletions(-)
 
 diff --git a/src/skippy/runtime_support.h b/src/skippy/runtime_support.h
-index 55499ea20..1c1cdb8fa 100644
+index d7e991307..8ba595623 100644
 --- a/src/skippy/runtime_support.h
 +++ b/src/skippy/runtime_support.h
-@@ -39,6 +39,7 @@ void skippy_mark_context_synchronized(skippy_model * model);
+@@ -36,6 +36,7 @@ void skippy_mark_context_synchronized(skippy_model * model);
  void skippy_synchronize_context_if_pending(skippy_model * model);
  bool skippy_memory_needs_verify_checkpoint(llama_memory_t memory);
  void skippy_mtp_clear_session_state(skippy_session * session);
@@ -41,10 +41,10 @@ index 55499ea20..1c1cdb8fa 100644
  bool skippy_verify_window_can_roll_back_in_place(
          const skippy_session * session,
 diff --git a/src/skippy/runtime_types.h b/src/skippy/runtime_types.h
-index fa97e12a5..8c7b99651 100644
+index 38cd35c47..ba072fe82 100644
 --- a/src/skippy/runtime_types.h
 +++ b/src/skippy/runtime_types.h
-@@ -172,6 +172,11 @@ struct skippy_session {
+@@ -184,6 +184,11 @@ struct skippy_session {
      // is the boundary the next sync prunes back to once the accepted prefix is
      // known.
      llama_pos mtp_pending_draft_end = 0;
@@ -220,10 +220,10 @@ index d8276944d..3a147d14d 100644
 +        skippy_native_mtp_draft * out_mtp_draft,
 +        skippy_error ** out_error);
 diff --git a/src/skippy/state.cpp b/src/skippy/state.cpp
-index f035ea13f..15c48419d 100644
+index cf0838051..b2f394444 100644
 --- a/src/skippy/state.cpp
 +++ b/src/skippy/state.cpp
-@@ -852,7 +852,7 @@ enum skippy_status skippy_trim_session(
+@@ -733,7 +733,7 @@ enum skippy_status skippy_trim_session(
      if (session->signal_history.size() > token_count) {
          session->signal_history.resize(static_cast<size_t>(token_count));
      }
@@ -233,10 +233,10 @@ index f035ea13f..15c48419d 100644
      session->ctx->synchronize();
  
 diff --git a/src/skippy/verification.cpp b/src/skippy/verification.cpp
-index e078d867c..c8b6e163f 100644
+index 0812485d7..bb3c0e621 100644
 --- a/src/skippy/verification.cpp
 +++ b/src/skippy/verification.cpp
-@@ -244,13 +244,24 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
+@@ -230,13 +230,24 @@ enum skippy_status skippy_verify_tokens_frame_sampled(
                  break;
              }
          }

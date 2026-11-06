@@ -1,6 +1,6 @@
 use skippy_protocol::binary::StageSamplingConfig as WireSamplingConfig;
 
-mod admission;
+pub(crate) mod admission;
 mod backend;
 mod decode_scheduler;
 mod embedded_execution;

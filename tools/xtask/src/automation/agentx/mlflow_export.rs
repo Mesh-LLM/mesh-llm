@@ -3,7 +3,7 @@ use super::{final_sweep, prepared_tools::File};
 use crate::command::DynResult;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, io::Read, path::Path};
 
 pub(super) const EXPERIMENT: &str = "6";
 pub(super) const EXPERIMENT_NAME: &str = "agentx-skippy-vs-llama";
@@ -45,6 +45,7 @@ pub(super) struct Child {
 pub(super) fn run(input: Input, output: &Path) -> DynResult<()> {
     input.report.verify()?;
     input.archive.verify()?;
+    validate_archive(&input.archive, &input.report.sha256)?;
     let report: Value = serde_json::from_slice(&crate::automation::receipt_files::bounded(
         &input.report.path,
         4 * 1024 * 1024,
@@ -53,7 +54,22 @@ pub(super) fn run(input: Input, output: &Path) -> DynResult<()> {
     crate::automation::receipt_files::fresh(output, &serde_json::to_vec_pretty(&plan)?)
 }
 fn build(report: &Value, input: Input) -> DynResult<Plan> {
-    if report["status"] != "passed" || report["scope"] != "fixed_complete_AgentX_comparison" {
+    let lanes = match &report["request"]["tools"]["diagnostic_generation_lanes"] {
+        Value::Null => None,
+        value => Some(
+            value
+                .as_u64()
+                .filter(|lanes| (1..=256).contains(lanes))
+                .ok_or("invalid diagnostic generation lane count")? as u32,
+        ),
+    };
+    let backend_kind: super::prepared_tools::Backend =
+        serde_json::from_value(report["backend"].clone())?;
+    let expected_scope = final_sweep::report_scope(backend_kind, lanes);
+    if backend_kind == super::prepared_tools::Backend::Cpu
+        || report["status"] != "passed"
+        || report["scope"] != expected_scope
+    {
         return Err("MLflow performance publication requires a complete non-CPU campaign".into());
     }
     let arms = report["arms"].as_array().ok_or("arms missing")?;
@@ -84,6 +100,13 @@ fn build(report: &Value, input: Input) -> DynResult<Plan> {
     tags.insert("ax.model_sha256".into(), selected.files[0].sha256.clone());
     tags.insert("ax.category".into(), selected.family.clone());
     tags.insert("ax.stage".into(), "final-comparison".into());
+    if let Some(lanes) = lanes {
+        tags.insert(
+            "ax.capacity_policy".into(),
+            "diagnostic_generation_lanes".into(),
+        );
+        tags.insert("ax.diagnostic_generation_lanes".into(), lanes.to_string());
+    }
     for (key, pointer) in [
         (
             "ax.native_source_commit",
@@ -133,44 +156,14 @@ fn build(report: &Value, input: Input) -> DynResult<Plan> {
             tags.insert(key.into(), value.into());
         }
     }
-    let key = format!("{campaign}:{source}:{backend}:{model}");
+    let diagnostic = lanes.map_or_else(String::new, |lanes| format!(":diagnostic-lanes{lanes}"));
+    let key = format!("{campaign}:{source}:{backend}:{model}{diagnostic}");
     let mut children = Vec::new();
     for (index, arm) in arms.iter().enumerate() {
         let engine = arm["engine"].as_str().ok_or("engine missing")?;
         let mut metrics = BTreeMap::new();
         for cell in arm["cells"].as_array().ok_or("cells missing")? {
-            let concurrency = cell["offered_sessions"]
-                .as_u64()
-                .ok_or("concurrency missing")?;
-            let prefix = format!("c{concurrency}");
-            for (name, pointer) in [
-                ("output_tok_s", "/output_tok_s"),
-                ("ttft_p50_ms", "/ttft/p50"),
-                ("ttft_p95_ms", "/ttft/p95"),
-                ("itl_p50_ms", "/itl/p50"),
-                ("cache_read_tokens_avg", "/cache_read_tokens/avg"),
-                (
-                    "peak_process_rss_bytes",
-                    "/memory/sampled_peak_process_rss_bytes",
-                ),
-                (
-                    "peak_process_footprint_bytes",
-                    "/memory/sampled_peak_process_physical_footprint_bytes",
-                ),
-                (
-                    "peak_cuda_process_accounted_bytes",
-                    "/memory/sampled_peak_cuda_process_accounted_memory_bytes",
-                ),
-            ] {
-                if let Some(value) = cell.pointer(pointer).and_then(Value::as_f64) {
-                    if !value.is_finite() || value < 0.0 {
-                        return Err("nonfinite/negative publication metric".into());
-                    }
-                    metrics.insert(format!("{prefix}.{name}"), value);
-                }
-            }
-            metrics.insert(format!("{prefix}.requests"), 69.0);
-            metrics.insert(format!("{prefix}.output_tokens"), 18713.0);
+            metrics.extend(cell_metrics(cell)?);
         }
         let mut child_tags = tags.clone();
         child_tags.insert("ax.engine".into(), engine.into());
@@ -187,7 +180,7 @@ fn build(report: &Value, input: Input) -> DynResult<Plan> {
         experiment_id: EXPERIMENT.into(),
         expected_experiment_name: EXPERIMENT_NAME.into(),
         campaign_root: CampaignRoot {
-            run_key: format!("{campaign}:{source}:root"),
+            run_key: format!("{campaign}:{source}{diagnostic}:root"),
             name: campaign.into(),
             tags: BTreeMap::from([
                 ("ax.campaign".into(), campaign.into()),
@@ -207,6 +200,54 @@ fn build(report: &Value, input: Input) -> DynResult<Plan> {
         archive: input.archive,
     })
 }
+fn cell_metrics(cell: &Value) -> DynResult<BTreeMap<String, f64>> {
+    let mut metrics = BTreeMap::new();
+    let concurrency = cell["offered_sessions"]
+        .as_u64()
+        .ok_or("concurrency missing")?;
+    let prefix = format!("c{concurrency}");
+    for pointer in ["/ttft/p50", "/ttft/p95", "/itl/p50"] {
+        if cell
+            .pointer(pointer)
+            .and_then(Value::as_f64)
+            .is_none_or(|value| !value.is_finite() || value < 0.0)
+        {
+            return Err(
+                format!("missing finite nonnegative publication latency: {pointer}").into(),
+            );
+        }
+    }
+    for (name, pointer) in [
+        ("output_tok_s", "/output_tok_s"),
+        ("ttft_p50_ms", "/ttft/p50"),
+        ("ttft_p95_ms", "/ttft/p95"),
+        ("itl_p50_ms", "/itl/p50"),
+        ("cache_read_tokens_avg", "/cache_read_tokens/avg"),
+        (
+            "peak_process_rss_bytes",
+            "/memory/sampled_peak_process_rss_bytes",
+        ),
+        (
+            "peak_process_footprint_bytes",
+            "/memory/sampled_peak_process_physical_footprint_bytes",
+        ),
+        (
+            "peak_cuda_process_accounted_bytes",
+            "/memory/sampled_peak_cuda_process_accounted_memory_bytes",
+        ),
+    ] {
+        if let Some(value) = cell.pointer(pointer).and_then(Value::as_f64) {
+            if !value.is_finite() || value < 0.0 {
+                return Err("nonfinite/negative publication metric".into());
+            }
+            metrics.insert(format!("{prefix}.{name}"), value);
+        }
+    }
+    metrics.insert(format!("{prefix}.requests"), 69.0);
+    metrics.insert(format!("{prefix}.output_tokens"), 18713.0);
+    Ok(metrics)
+}
+
 pub(super) fn validate_experiment(value: &Value) -> DynResult<()> {
     let experiment = &value["experiment"];
     if experiment["experiment_id"] != EXPERIMENT
@@ -228,6 +269,7 @@ pub(super) fn validate_plan(plan: &Plan) -> DynResult<()> {
     }
     plan.report.verify()?;
     plan.archive.verify()?;
+    validate_archive(&plan.archive, &plan.report.sha256)?;
     let report: Value = serde_json::from_slice(&crate::automation::receipt_files::bounded(
         &plan.report.path,
         4 * 1024 * 1024,
@@ -241,6 +283,34 @@ pub(super) fn validate_plan(plan: &Plan) -> DynResult<()> {
     )?;
     if serde_json::to_value(expected)? != serde_json::to_value(plan)? {
         return Err("MLflow plan differs from verified report".into());
+    }
+    Ok(())
+}
+
+fn validate_archive(archive: &File, report_sha256: &str) -> DynResult<()> {
+    let decoder = flate2::read::GzDecoder::new(std::fs::File::open(&archive.path)?);
+    let mut archive = tar::Archive::new(decoder);
+    let mut found = false;
+    for (index, entry) in archive.entries()?.enumerate() {
+        if index >= 250_000 {
+            return Err("AgentX archive exceeds entry bound".into());
+        }
+        let mut entry = entry?;
+        if entry.path()?.as_ref() != Path::new("agentx/result.json") {
+            continue;
+        }
+        if found || !entry.header().entry_type().is_file() || entry.size() > 4 * 1024 * 1024 {
+            return Err("AgentX archive requires one bounded regular campaign report".into());
+        }
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes)?;
+        if super::inputs::digest(&bytes) != report_sha256 {
+            return Err("AgentX archive report differs from publication report".into());
+        }
+        found = true;
+    }
+    if !found {
+        return Err("AgentX archive campaign report missing".into());
     }
     Ok(())
 }
@@ -300,9 +370,60 @@ mod tests {
         ] {
             assert!(plan.tags.contains_key(tag), "{tag}");
         }
+        assert!(!plan.tags.contains_key("ax.diagnostic_generation_lanes"));
+        for pointer in ["/ttft/p50", "/ttft/p95", "/itl/p50"] {
+            let mut missing = report.clone();
+            *missing["arms"][0]["cells"][0].pointer_mut(pointer).unwrap() = Value::Null;
+            assert!(build(&missing, input()).is_err(), "{pointer}");
+        }
+        let mut diagnostic = report.clone();
+        diagnostic["request"]["tools"]["diagnostic_generation_lanes"] = json!(2);
+        assert!(build(&diagnostic, input()).is_err());
+        diagnostic["scope"] = json!("diagnostic_generation_lanes_AgentX_comparison");
+        let diagnostic = build(&diagnostic, input()).unwrap();
+        assert_eq!(diagnostic.tags["ax.diagnostic_generation_lanes"], "2");
+        assert_ne!(diagnostic.run_key, plan.run_key);
+        assert_ne!(diagnostic.campaign_root.run_key, plan.campaign_root.run_key);
         report["request"]["tools"]["runtime"]["sha256"] = Value::Null;
         assert!(build(&report, input()).is_err());
         report["scope"] = json!("cpu_diagnostic_not_gpu_performance");
         assert!(build(&report, input()).is_err());
+    }
+
+    #[test]
+    fn archive_must_contain_exactly_the_published_campaign_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("campaign.tar.gz");
+        let report = br#"{"campaign":"one","status":"passed"}"#;
+        let write_archive = |reports: &[&[u8]]| {
+            let encoder = flate2::write::GzEncoder::new(
+                std::fs::File::create(&path).unwrap(),
+                flate2::Compression::fast(),
+            );
+            let mut tar = tar::Builder::new(encoder);
+            for report in reports {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(report.len() as u64);
+                header.set_mode(0o600);
+                header.set_cksum();
+                tar.append_data(&mut header, "agentx/result.json", *report)
+                    .unwrap();
+            }
+            tar.into_inner().unwrap().finish().unwrap();
+        };
+        let archive = File {
+            path: path.clone(),
+            sha256: String::new(),
+        };
+        let sha = super::super::inputs::digest(report);
+        write_archive(&[report]);
+        validate_archive(&archive, &sha).unwrap();
+        assert!(
+            validate_archive(&archive, &super::super::inputs::digest(b"another campaign")).is_err()
+        );
+        write_archive(&[report, report]);
+        assert!(validate_archive(&archive, &sha).is_err());
+        write_archive(&[]);
+        assert!(validate_archive(&archive, &sha).is_err());
     }
 }

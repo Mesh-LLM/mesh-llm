@@ -115,13 +115,7 @@ impl KvStageIntegration {
         let Some(capabilities) = self.loaded_memory_cache else {
             return Ok(false);
         };
-        let Some(l3) = self.l3.as_ref() else {
-            return Ok(false);
-        };
-        if l3
-            .locate_longest(&victim.namespace, &victim.tokens, 1)?
-            .is_some_and(|entry| entry.token_count == victim.tokens.len() as u64)
-        {
+        if self.l3.is_none() {
             return Ok(false);
         }
         let Some(claim) =

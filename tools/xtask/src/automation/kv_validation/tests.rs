@@ -1,8 +1,11 @@
 use super::{
-    contract::{self, Backend, Cell, Tool},
+    contract::{self, Backend, Cell, Prepared, Producer, Tool},
     evidence, execution, jy_plan,
 };
 use std::path::PathBuf;
+
+#[path = "tests/cache_client.rs"]
+mod cache_client;
 
 #[test]
 fn l3_restart_requires_distinct_processes_exact_state_and_typed_predictions() {
@@ -309,10 +312,7 @@ fn accepted_jy_envelope_keeps_all_four_pins_and_never_submits() {
         source_commit: "1".repeat(40),
         prepared_image: format!("sha256:{}", "2".repeat(64)),
         automation: "/opt/xtask".into(),
-        prepared: Tool {
-            path: "/opt/prepared.json".into(),
-            sha256: "3".repeat(64),
-        },
+        prepared: prepared_receipt(dir.path(), Backend::Cuda),
         nodes: vec![jy_plan::Node {
             id: "spark-000137".into(),
             hostname: "spark-james".into(),
@@ -344,6 +344,151 @@ fn accepted_jy_envelope_keeps_all_four_pins_and_never_submits() {
         );
     }
     assert_eq!(std::fs::read_dir(output).unwrap().count(), 5);
+}
+
+fn prepared_receipt(root: &std::path::Path, backend: Backend) -> Tool {
+    let tool = Tool {
+        path: root.join("tool"),
+        sha256: "3".repeat(64),
+    };
+    let prepared = Prepared {
+        schema_version: 1,
+        catalog_sha256: contract::CATALOG_SHA.into(),
+        producer: Producer {
+            schema_version: 1,
+            backend,
+            workspace: root.into(),
+            native_source: root.join("native"),
+            native_source_commit: "4".repeat(40),
+            runtime_bundle: root.join("runtime"),
+            runtime_sha256: "5".repeat(64),
+            cli: tool.clone(),
+            correctness: tool.clone(),
+            serving_tests: tool.clone(),
+            just: root.join("just"),
+            cmake: root.join("cmake"),
+        },
+        matrix: tool,
+    };
+    let path = root.join("prepared.json");
+    let bytes = serde_json::to_vec(&prepared).unwrap();
+    std::fs::write(&path, &bytes).unwrap();
+    Tool {
+        path,
+        sha256: super::hash(&bytes),
+    }
+}
+
+#[test]
+fn jy_plan_refuses_mismatched_backend_or_changed_prepared_receipt_before_writing_jobs() {
+    let dir = tempfile::tempdir().unwrap();
+    let prepared = prepared_receipt(dir.path(), Backend::Cpu);
+    let mut input = jy_plan::Fleet {
+        schema_version: 1,
+        backend: Backend::Cuda,
+        source_commit: "1".repeat(40),
+        prepared_image: format!("sha256:{}", "2".repeat(64)),
+        automation: "/opt/xtask".into(),
+        prepared,
+        nodes: vec![jy_plan::Node {
+            id: "spark-000137".into(),
+            hostname: "spark-james".into(),
+        }],
+        execution_seconds: 1800,
+    };
+    let output = dir.path().join("jobs");
+    let error = jy_plan::run(
+        serde_json::from_value(serde_json::to_value(&input).unwrap()).unwrap(),
+        &output,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("backend differs"));
+    assert!(!output.exists());
+    input.backend = Backend::Cpu;
+    std::fs::write(&input.prepared.path, "{}").unwrap();
+    assert!(
+        jy_plan::run(input, &output)
+            .unwrap_err()
+            .to_string()
+            .contains("SHA-256 mismatch")
+    );
+    assert!(!output.exists());
+}
+
+#[test]
+fn dotted_output_directories_keep_distinct_archive_names() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["trial.1", "trial.2"] {
+        let output = dir.path().join(name);
+        std::fs::create_dir(&output).unwrap();
+        std::fs::write(output.join("evidence.txt"), name).unwrap();
+        execution::archive(&output).unwrap();
+        let archive = dir.path().join(format!("{name}.tar.gz"));
+        let receipt: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(dir.path().join(format!("{name}.archive.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(receipt["archive"], format!("{name}.tar.gz"));
+        assert_eq!(
+            receipt["sha256"],
+            super::hash(&std::fs::read(archive).unwrap())
+        );
+    }
+}
+
+#[test]
+fn final_result_is_published_after_archive_and_rejects_expired_deadline() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = Cell {
+        schema_version: 1,
+        prepared: Tool {
+            path: dir.path().join("prepared.json"),
+            sha256: "0".repeat(64),
+        },
+        model_key: "qwen3.5-4b-q4-k-m".into(),
+        model: dir.path().join("model.gguf"),
+        port: 19337,
+        execution_seconds: 30,
+    };
+    for (name, elapsed, archive_ok) in [
+        ("elapsed", true, true),
+        ("good", false, true),
+        ("archive-failure", false, false),
+    ] {
+        let output = dir.path().join(name);
+        std::fs::create_dir(&output).unwrap();
+        let deadline = if elapsed {
+            std::time::Instant::now()
+        } else {
+            std::time::Instant::now() + std::time::Duration::from_secs(60)
+        };
+        let result = execution::finalize(&input, &output, deadline, Ok(()), Ok(()), |path| {
+            assert!(
+                !path.join("result.json").exists(),
+                "final status cannot precede archive completion"
+            );
+            if archive_ok {
+                execution::archive(path)
+            } else {
+                Err("fixture archive failure".into())
+            }
+        });
+        assert_eq!(result.is_ok(), !elapsed && archive_ok);
+        let receipt: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(output.join("result.json")).unwrap()).unwrap();
+        assert_eq!(
+            receipt["status"],
+            if elapsed || !archive_ok {
+                "failed"
+            } else {
+                "passed"
+            }
+        );
+        assert_eq!(
+            receipt["result_location"],
+            "post_archive_sidecar_not_in_evidence_archive"
+        );
+    }
 }
 
 #[cfg(unix)]

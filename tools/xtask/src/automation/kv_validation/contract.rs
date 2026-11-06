@@ -69,6 +69,9 @@ pub(super) struct Producer {
 }
 impl Producer {
     pub(super) fn verify(&self) -> DynResult<()> {
+        if cfg!(windows) {
+            return Err("KV validation supports Linux and macOS only; Windows private graph helpers are not exported".into());
+        }
         if self.schema_version != 1 || !sha(&self.native_source_commit, 40) {
             return Err("invalid KV producer schema/source".into());
         }
@@ -95,7 +98,38 @@ impl Producer {
             self.backend,
             &self.native_source_commit,
         )?;
+        self.verify_serving_runtime()?;
         Ok(())
+    }
+
+    fn verify_serving_runtime(&self) -> DynResult<()> {
+        let temporary = tempfile::tempdir()?;
+        let runtimes = temporary.path().join("runtime-parent");
+        std::fs::create_dir(&runtimes)?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&self.runtime_bundle, runtimes.join("selected-runtime"))?;
+        #[cfg(windows)]
+        std::os::windows::fs::symlink_dir(&self.runtime_bundle, runtimes.join("selected-runtime"))?;
+        let test = "frontend::local_generation::tests::recurrent_fixture::kv_validation_dynamic_runtime_identity";
+        let text = super::execution::child(
+            &self.serving_tests.path,
+            vec![
+                "--exact".into(),
+                test.into(),
+                "--ignored".into(),
+                "--nocapture".into(),
+                "--test-threads=1".into(),
+            ],
+            (temporary.path(), temporary.path()),
+            "serving-runtime-identity",
+            std::time::Duration::from_secs(30),
+            &crate::process::Cancellation::default(),
+            &[(
+                "MESH_LLM_NATIVE_RUNTIME_BUNDLE_DIR",
+                runtimes.into_os_string(),
+            )],
+        )?;
+        super::evidence::rust_test(&text, test)
     }
 }
 
@@ -108,10 +142,29 @@ pub(super) struct Prepared {
     pub matrix: Tool,
 }
 impl Prepared {
-    pub(super) fn verify(&self) -> DynResult<()> {
-        if self.schema_version != 1 || self.catalog_sha256 != CATALOG_SHA {
+    pub(super) fn read_for_plan(tool: &Tool) -> DynResult<Self> {
+        tool.verify()?;
+        let prepared: Self = serde_json::from_slice(&crate::automation::receipt_files::bounded(
+            &tool.path,
+            1024 * 1024,
+        )?)?;
+        prepared.validate()?;
+        Ok(prepared)
+    }
+
+    fn validate(&self) -> DynResult<()> {
+        if self.schema_version != 1
+            || self.catalog_sha256 != CATALOG_SHA
+            || self.producer.schema_version != 1
+            || !sha(&self.producer.native_source_commit, 40)
+        {
             return Err("KV prepared receipt catalog/schema mismatch".into());
         }
+        Ok(())
+    }
+
+    pub(super) fn verify(&self) -> DynResult<()> {
+        self.validate()?;
         self.producer.verify()?;
         self.matrix.verify()
     }

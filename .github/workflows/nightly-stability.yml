@@ -47,6 +47,12 @@ concurrency:
   group: nightly-stability
   cancel-in-progress: false
 
+env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_BENCH_DEBUG: "0"
+
 jobs:
   stability:
     if: ${{ github.event_name == 'workflow_dispatch' || vars.MESH_NIGHTLY_STABILITY_ENABLED == '1' }}

@@ -26,6 +26,70 @@ impl Drop for PendingPrefill {
 
 #[test]
 #[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS; run explicitly with --ignored"]
+fn prefill_only_resident_recurrent_request_retains_shared_grid_checkpoint() -> Result<()> {
+    let (backend, speculative) = recurrent_test_backend_with_lanes(
+        "prefill-only-checkpoint",
+        "prefill-only-checkpoint",
+        1024,
+        64,
+        0,
+        1024,
+        1,
+    )?;
+    let kv = backend.kv.as_ref().unwrap();
+    let tokens = [1, 2, 3, 4, 5, 6, 7, 8].repeat(16);
+    let boundary = kv
+        .exact_shared_checkpoint_token_count((tokens.len() - 1) as u64)
+        .unwrap() as usize;
+    let ids = InferenceGenerationIds::new_with_trust(
+        InferenceCacheHints::default(),
+        Some("prefill-only-checkpoint"),
+        true,
+        None,
+    );
+    let sampling = SamplingConfig {
+        enabled: false,
+        ..Default::default()
+    };
+    let mut emitted = 0;
+    backend.generate_local_tokens(
+        LocalGeneration {
+            prompt_token_ids: &tokens,
+            recurrent_cache_prefix_token_ids: None,
+            shared_system_prefix_tokens: None,
+            max_tokens: 0,
+            sampling: &sampling,
+            chat_sampling_metadata: None,
+            speculative: &speculative,
+            native_mtp_enabled: false,
+            hook_request: None,
+            hook_runtime: None,
+            cancellation: None,
+            ids: &ids,
+        },
+        |_| {
+            emitted += 1;
+            Ok(TokenControl::Continue)
+        },
+    )?;
+    assert_eq!(emitted, 0);
+    kv.wait_for_exact_state_captures_idle(Duration::from_secs(30))
+        .map_err(anyhow::Error::msg)?;
+    let base = backend.local_kv_message_base(&ids.session_label, &ids);
+    let checkpoint = kv.prefill_identity(&backend.config, &base, 0, &tokens[..boundary]);
+    let mut divergent = tokens[..boundary].to_vec();
+    divergent.extend([11, 12]);
+    let probe = kv.prefill_identity(&backend.config, &base, 0, &divergent);
+    assert_eq!(
+        kv.probe_resident_prefix(&probe).unwrap().token_count,
+        boundary
+    );
+    assert!(kv.retained_exact_identity(&checkpoint.namespace, &tokens[..boundary]));
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires SKIPPY_RECURRENT_CACHE_TEST_MODEL and _LAYERS; run explicitly with --ignored"]
 fn resident_checkpoint_prefill_yields_to_decode_and_cancels_without_losing_checkpoint() -> Result<()>
 {
     let (backend, speculative) = recurrent_test_backend_with_lanes(

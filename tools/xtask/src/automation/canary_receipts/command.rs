@@ -68,6 +68,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
                 "producer-receipt"
                     | "candidate-plan"
                     | "pack"
+                    | "combine"
                     | "restore"
                     | "certify"
                     | "split-roster"

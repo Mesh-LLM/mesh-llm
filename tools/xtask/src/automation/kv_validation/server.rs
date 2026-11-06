@@ -26,6 +26,38 @@ struct Owner {
     cache_evidence: Option<CacheEvidence>,
     duplicate_evidence: bool,
 }
+
+#[cfg(test)]
+pub(in crate::automation::kv_validation) fn verify_captured_client_stdout(
+    text: &str,
+) -> DynResult<()> {
+    let mut owner = Owner {
+        server: None,
+        client: None,
+        ready: false,
+        stopping: false,
+        port: 19337,
+        cache_evidence: None,
+        duplicate_evidence: false,
+    };
+    for line in text.lines() {
+        owner.captured_line(
+            MemberId::WorkerOne,
+            ObservedLine {
+                stream: Stream::Stdout,
+                bytes: line.as_bytes(),
+                ending: process::LineEnding::Lf,
+            },
+        );
+    }
+    if owner.duplicate_evidence {
+        return Err("generic cache client emitted duplicate evidence".into());
+    }
+    owner
+        .cache_evidence
+        .ok_or("generic cache client evidence missing")?
+        .verify()
+}
 impl Coordinator for Owner {
     type Rejection = String;
     fn captured_line(&mut self, member: MemberId, line: ObservedLine<'_>) {

@@ -122,10 +122,16 @@ fn run(request: Request, output: &Path) -> DynResult<()> {
         write(&output.join("result.json"), &report)?;
         result = Err(error);
     }
-    if let Some(path) = std::env::var_os("JIANYANG_RESULT_PATH") {
-        write(Path::new(&path), &report)?;
-    }
     result
+}
+pub(super) fn report_scope(backend: Backend, lanes: Option<u32>) -> &'static str {
+    if backend == Backend::Cpu {
+        "cpu_diagnostic_not_gpu_performance"
+    } else if lanes.is_some() {
+        "diagnostic_generation_lanes_AgentX_comparison"
+    } else {
+        "fixed_complete_AgentX_comparison"
+    }
 }
 fn execute(request: &Request, output: &Path, arms: &mut Vec<Value>) -> DynResult<()> {
     admit_host(request.tools.backend, output)?;

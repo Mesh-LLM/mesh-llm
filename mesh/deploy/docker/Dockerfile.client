@@ -31,6 +31,10 @@ RUN pnpm run build
 # Output: /app/dist
 
 FROM debian:bookworm-slim AS rust-deps
+ENV CARGO_PROFILE_DEV_DEBUG=0 \
+    CARGO_PROFILE_TEST_DEBUG=0 \
+    CARGO_PROFILE_RELEASE_DEBUG=0 \
+    CARGO_PROFILE_BENCH_DEBUG=0
 ARG TARGETARCH
 ARG SCCACHE_VERSION=0.16.0
 RUN --mount=type=cache,id=mesh-llm-apt-lists-debian-bookworm-${TARGETARCH},target=/var/lib/apt/lists,sharing=locked \

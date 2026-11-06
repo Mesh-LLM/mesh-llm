@@ -3,9 +3,9 @@ use super::*;
 
 pub(super) fn deferred_suffix_prefill_enabled(
     scheduling: Option<CacheSchedulingPolicy>,
-    max_tokens: u32,
+    _max_tokens: u32,
 ) -> bool {
-    max_tokens > 0 && scheduling.is_some_and(CacheSchedulingPolicy::cooperative)
+    scheduling.is_some_and(CacheSchedulingPolicy::cooperative)
 }
 
 fn deferred_suffix_split(
@@ -248,13 +248,17 @@ impl StageOpenAiBackend {
                 session_id,
                 &request.prompt_token_ids[suffix_start..],
                 request.sampling.enabled.then_some(request.sampling),
-                true,
+                max_tokens > 0,
                 cache_operation_deadline,
                 request.cancellation,
             )?;
-            prompt_prefill_sample = Some(suffix_outcome.predicted.ok_or_else(|| {
-                InferenceError::backend("deferred suffix prefill was not sampled")
-            })?);
+            prompt_prefill_sample = if max_tokens > 0 {
+                Some(suffix_outcome.predicted.ok_or_else(|| {
+                    InferenceError::backend("deferred suffix prefill was not sampled")
+                })?)
+            } else {
+                None
+            };
             prefill_chunk_count = checkpoint_chunks.saturating_add(suffix_outcome.chunk_count);
             scheduler_batch_size_max = scheduler_batch_size_max.max(suffix_outcome.max_batch_size);
             runtime_lock_wait_ms += suffix_outcome.runtime_lock_wait_ms;
@@ -748,16 +752,12 @@ fn resident_kv_suffix_prefill_stays_inside_the_cache_operation() {
 
 #[cfg(test)]
 #[test]
-fn recurrent_suffix_prefill_requires_a_nonzero_generation_budget() {
+fn recurrent_suffix_prefill_includes_prefill_only_requests() {
     assert!(deferred_suffix_prefill_enabled(
         Some(CacheSchedulingPolicy::Cooperative),
         1,
     ));
     assert!(deferred_suffix_prefill_enabled(
-        Some(CacheSchedulingPolicy::Cooperative),
-        1,
-    ));
-    assert!(!deferred_suffix_prefill_enabled(
         Some(CacheSchedulingPolicy::Cooperative),
         0,
     ));
