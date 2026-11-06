@@ -31,6 +31,15 @@ fn stop_during_join_releases_runtime_and_restarts() {
 
 #[test]
 #[serial_test::serial]
+fn stop_releases_quic_before_caller_blocking_pool_runs() {
+    isolated(
+        "stop_releases_quic_before_caller_blocking_pool_runs",
+        busy_caller_pool_scenario,
+    );
+}
+
+#[test]
+#[serial_test::serial]
 fn cancelling_startup_releases_runtime_and_restarts() {
     isolated(
         "cancelling_startup_releases_runtime_and_restarts",
@@ -118,6 +127,7 @@ fn isolated<F: std::future::Future<Output = ()>>(name: &str, scenario: fn() -> F
     if std::env::var_os(CHILD).is_some() {
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
+            .max_blocking_threads(1)
             .enable_all()
             .build()
             .unwrap()
@@ -306,6 +316,38 @@ async fn join_scenario() {
         .await
         .expect("shutdown preempts in-flight join")
         .unwrap();
+    restart_and_stop(config).await;
+}
+
+async fn busy_caller_pool_scenario() {
+    let config = isolated_config();
+    let handle = start_embedded_node(config.clone()).await.unwrap();
+    let stop = handle.stop();
+    tokio::pin!(stop);
+    // Poll once to enqueue the runtime-thread join on the caller's sole
+    // blocking worker, then queue a blocker behind it. Any socket close
+    // deferred to the caller after that join must wait for our release.
+    assert!(futures_util::poll!(&mut stop).is_pending());
+    let (release, wait) = std::sync::mpsc::channel::<()>();
+    let (started, running) = tokio::sync::oneshot::channel();
+    let blocker = tokio::task::spawn_blocking(move || {
+        let _ = started.send(());
+        let _ = wait.recv();
+    });
+    tokio::time::timeout(Duration::from_secs(10), stop)
+        .await
+        .expect("stop joins its worker without waiting for the caller's pool")
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(10), running)
+        .await
+        .expect("caller blocking worker reaches the fixture gate")
+        .unwrap();
+    let rebound =
+        std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, config.network.bind_port.unwrap()));
+    // Release even on failure, so the fixture cannot hang runtime teardown.
+    drop(release);
+    blocker.await.unwrap();
+    drop(rebound.expect("stop released QUIC before caller-side deferred cleanup"));
     restart_and_stop(config).await;
 }
 
