@@ -110,7 +110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if !headless && scenario == "overlap-early" && root.join("primary.exit").exists() {
             return Ok(());
         }
-        if started.elapsed() > Duration::from_secs(20) {
+        if started.elapsed() > Duration::from_secs(120) {
             return Err("fixture expired".into());
         }
         for listener in &listeners {

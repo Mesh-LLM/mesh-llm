@@ -10,9 +10,13 @@ pub(super) fn run(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let projector = value("--projector")?;
     let bytes = std::fs::read(&projector)?;
     let mode = std::str::from_utf8(bytes.get(4..).ok_or("fixture magic")?)?.trim();
-    std::fs::write("invoked.json", serde_json::to_vec(args)?)?;
     if mode == "held" {
         crate::signals::install()?;
+    }
+    // The marker is also the test's cancellation barrier: publish it only
+    // after the held fixture can handle the shutdown signal.
+    std::fs::write("invoked.json", serde_json::to_vec(args)?)?;
+    if mode == "held" {
         while !crate::signals::stopped() {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
