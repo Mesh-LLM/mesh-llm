@@ -73,7 +73,7 @@ fn developer_contract(runbook: &str, wrapper: &str) -> Result<(), String> {
 fn repair_developer_runbook_preserves_inner_session_and_one_distributed_pass() {
     let root = repository();
     let runbook = fs::read_to_string(root.join("ci/llama-canary/agent-repair-prompt.md")).unwrap();
-    let wrapper = fs::read_to_string(root.join("scripts/llama-canary-agent-repair.sh")).unwrap();
+    let wrapper = crate::canary_full_gates::fixture::source();
     developer_contract(&runbook, &wrapper).unwrap();
     for (before, after) in [
         (
@@ -136,8 +136,7 @@ fn scratch_contract(wrapper: &str) -> Result<(), &'static str> {
 
 #[test]
 fn repair_scratch_contract_preserves_run_pass_names_and_refuses_widened_prune() {
-    let wrapper =
-        fs::read_to_string(repository().join("scripts/llama-canary-agent-repair.sh")).unwrap();
+    let wrapper = crate::canary_full_gates::fixture::source();
     scratch_contract(&wrapper).unwrap();
     for (before, after) in [
         (

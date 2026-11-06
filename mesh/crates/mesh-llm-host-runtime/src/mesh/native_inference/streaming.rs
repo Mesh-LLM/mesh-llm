@@ -73,7 +73,7 @@ impl Node {
             let Some(chunk) = chunk else {
                 break;
             };
-            tx.send(Ok(serde_json::to_value(chunk?)?))
+            tx.send(Ok(serde_json::to_value(ChatCompletionChunk::from(chunk?))?))
                 .await
                 .context("native chunk consumer closed")?;
         }
@@ -136,7 +136,7 @@ impl Node {
                 let Some(chunk) = chunk else {
                     break;
                 };
-                send_value(send, &chunk?).await?;
+                send_value(send, &ChatCompletionChunk::from(chunk?)).await?;
             }
             write_native_frame(
                 send,
@@ -152,7 +152,7 @@ impl Node {
                 _ = send.stopped() => return Ok(()),
                 response = prepared.backend.chat_completion_with_context(request, prepared.context.clone()) => response?,
             };
-            send_value(send, &response).await
+            send_value(send, &ChatCompletionResponse::from(response)).await
         }
     }
 }

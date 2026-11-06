@@ -4,10 +4,10 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use skippy_inference_api::{
-    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream,
     CompletionRequest, CompletionResponse, CompletionStream, HookedInferenceBackend,
     InferenceBackend, InferenceHookPolicy, InferenceRequestContext, InferenceResult, ModelObject,
-    Usage,
+    Usage, generation::GenerationEvent, generation::GenerationEventStream,
+    generation::GenerationRequest, generation::GenerationResponse,
 };
 use std::sync::{
     Arc,
@@ -26,10 +26,10 @@ impl InferenceBackend for TypedBackend {
     }
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         self.calls.fetch_add(1, Ordering::SeqCst);
-        Ok(ChatCompletionResponse::new(
+        Ok(GenerationResponse::new(
             request.model,
             "typed",
             Usage::new(2, 1),
@@ -37,13 +37,13 @@ impl InferenceBackend for TypedBackend {
     }
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         Ok(Box::pin(futures_util::stream::iter(vec![
-            Ok(ChatCompletionChunk::delta(request.model.clone(), "typed")),
-            Ok(ChatCompletionChunk::done(request.model)),
+            Ok(GenerationEvent::delta(request.model.clone(), "typed")),
+            Ok(GenerationEvent::done(request.model)),
         ])))
     }
     async fn completion(&self, request: CompletionRequest) -> InferenceResult<CompletionResponse> {

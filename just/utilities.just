@@ -31,6 +31,15 @@ cache-prune max_size="80GiB" max_age="14":
 llama-update-pin:
     scripts/update-llama-pin.sh
 
+# Run the same focused/full native upgrade checks as the canary controller.
+[unix]
+llama-upgrade upstream backend="metal" cache=env("HF_CACHE", ""):
+    just automation-run automation canary-receipts local-upgrade --root "{{justfile_directory()}}" --upstream "{{upstream}}" --backend "{{backend}}" --cache-root "{{cache}}"
+
+[unix]
+llama-upgrade-check phase="fast" backend="metal":
+    just automation-run automation canary-receipts repair-check --root "{{justfile_directory()}}" --controller-root "{{justfile_directory()}}" --state-dir "{{justfile_directory()}}/.deps/llama-upgrade-local" --build-dir "{{justfile_directory()}}/.deps/llama-upgrade-local-native" --backend "{{backend}}" --phase "{{phase}}"
+
 # Render a Markdown summary for a llama.cpp upstream pin change.
 llama-summary old new:
     scripts/summarize-llama-upstream.sh "{{ old }}" "{{ new }}"

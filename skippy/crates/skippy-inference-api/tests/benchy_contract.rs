@@ -1,3 +1,6 @@
+use skippy_inference_api::generation::{
+    GenerationEvent, GenerationEventStream, GenerationRequest, GenerationResponse,
+};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -9,7 +12,6 @@ use futures_util::stream;
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use skippy_inference_api::{
-    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream,
     CompletionChunk, CompletionRequest, CompletionResponse, CompletionStream, FinishReason,
     GuardedInferenceBackend, GuardrailMode, GuardrailPolicy, InferenceBackend, InferenceError,
     InferenceFrontendConfig, InferenceRequestContext, InferenceResult, ModelObject, Usage,
@@ -21,8 +23,8 @@ struct BenchyBackend;
 
 #[derive(Default)]
 struct GuardedBenchyBackend {
-    seen_chat_requests: Arc<Mutex<Vec<ChatCompletionRequest>>>,
-    seen_stream_requests: Arc<Mutex<Vec<ChatCompletionRequest>>>,
+    seen_chat_requests: Arc<Mutex<Vec<GenerationRequest>>>,
+    seen_stream_requests: Arc<Mutex<Vec<GenerationRequest>>>,
 }
 
 const BENCHY_MODEL_ID: &str = "org/repo:Q4_K_M";
@@ -35,11 +37,11 @@ impl InferenceBackend for BenchyBackend {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         ensure_model(&request.model)?;
         let completion_tokens = request.effective_max_tokens().unwrap_or(2);
-        Ok(ChatCompletionResponse::new(
+        Ok(GenerationResponse::new(
             request.model,
             format!(
                 "benchy echo: {}",
@@ -51,20 +53,20 @@ impl InferenceBackend for BenchyBackend {
 
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         ensure_model(&request.model)?;
         let completion_tokens = request.effective_max_tokens().unwrap_or(2);
         let model = request.model;
         Ok(Box::pin(stream::iter(vec![
-            Ok(ChatCompletionChunk::delta(model.clone(), "tok")),
-            Ok(ChatCompletionChunk::delta(model.clone(), "en")),
-            Ok(ChatCompletionChunk::usage(
+            Ok(GenerationEvent::delta(model.clone(), "tok")),
+            Ok(GenerationEvent::delta(model.clone(), "en")),
+            Ok(GenerationEvent::usage(
                 model.clone(),
                 Usage::new(9, completion_tokens),
             )),
-            Ok(ChatCompletionChunk::done_with_reason(
+            Ok(GenerationEvent::done_with_reason(
                 model,
                 FinishReason::Length,
             )),
@@ -111,14 +113,14 @@ impl InferenceBackend for GuardedBenchyBackend {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         ensure_model(&request.model)?;
         self.seen_chat_requests
             .lock()
             .unwrap()
             .push(request.clone());
-        Ok(ChatCompletionResponse::new(
+        Ok(GenerationResponse::new(
             request.model,
             r#"lookup[ARGS]{"city":"Sydney"}"#,
             Usage::new(9, 2),
@@ -127,9 +129,9 @@ impl InferenceBackend for GuardedBenchyBackend {
 
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         ensure_model(&request.model)?;
         self.seen_stream_requests
             .lock()
@@ -137,17 +139,14 @@ impl InferenceBackend for GuardedBenchyBackend {
             .push(request.clone());
         let model = request.model;
         Ok(Box::pin(stream::iter(vec![
-            Ok(ChatCompletionChunk::delta(model.clone(), "lookup")),
-            Ok(ChatCompletionChunk::delta(model.clone(), "[ARGS]")),
-            Ok(ChatCompletionChunk::delta(
+            Ok(GenerationEvent::delta(model.clone(), "lookup")),
+            Ok(GenerationEvent::delta(model.clone(), "[ARGS]")),
+            Ok(GenerationEvent::delta(
                 model.clone(),
                 r#"{"city":"Sydney"}"#,
             )),
-            Ok(ChatCompletionChunk::usage(model.clone(), Usage::new(9, 2))),
-            Ok(ChatCompletionChunk::done_with_reason(
-                model,
-                FinishReason::Stop,
-            )),
+            Ok(GenerationEvent::usage(model.clone(), Usage::new(9, 2))),
+            Ok(GenerationEvent::done_with_reason(model, FinishReason::Stop)),
         ])))
     }
 

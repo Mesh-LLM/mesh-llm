@@ -45,7 +45,7 @@ impl Fixture {
         fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
         fs::write(root.join("tools/xtask/Cargo.toml"), "[package]\n").unwrap();
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let source = fs::read_to_string(repo.join("scripts/llama-canary-agent-repair.sh")).unwrap();
+        let source = crate::canary_full_gates::fixture::source();
         let selection = source
             .split("# Legacy workload automation selection begins.\n")
             .nth(1)
@@ -214,10 +214,7 @@ fn actual_verify_preimport_cache_uses_frozen_typed_owner_and_refuses_corrupt_cac
     // check_family_cache precedes candidate bundle import in the real main;
     // CERTIFIED_SHA is still empty. Post-import verification is qualified by
     // verification_source_cli/wrapper_qualification over actual local Git trees.
-    let source = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/llama-canary-agent-repair.sh"),
-    )
-    .unwrap();
+    let source = crate::canary_full_gates::fixture::source();
     assert!(
         source.find("\nif ! check_family_cache;").unwrap()
             < source.find("\nload_candidate_bundle\n").unwrap()

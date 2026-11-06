@@ -3,10 +3,10 @@ use crate::runtime::{InstanceLifecycleRecord, InstanceLifecycleState};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use skippy_inference_api::common::ReasoningEffort;
-use skippy_inference_api::{
-    ChatCompletionRequest, ChatCompletionResponse, ChatCompletionStream, InferenceResult,
-    ModelObject, Usage,
+use skippy_inference_api::generation::{
+    GenerationEvent, GenerationEventStream, GenerationRequest, GenerationResponse,
 };
+use skippy_inference_api::{ChatCompletionRequest, InferenceResult, ModelObject, Usage};
 use std::sync::{
     Mutex,
     atomic::{AtomicUsize, Ordering},
@@ -27,7 +27,7 @@ fn native_chat_requires_peer_admission_under_every_trust_policy() {
 
 #[derive(Default)]
 struct RecordingBackend {
-    requests: Mutex<Vec<ChatCompletionRequest>>,
+    requests: Mutex<Vec<GenerationRequest>>,
     stream_tokens: Mutex<Vec<skippy_inference_api::CancellationToken>>,
     generated_chunks: Arc<AtomicUsize>,
     stream_forever: bool,
@@ -50,19 +50,19 @@ impl InferenceBackend for RecordingBackend {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         let answer = format!("effort={:?}", request.reasoning_effort);
         let model = request.model.clone();
         self.requests.lock().unwrap().push(request);
-        Ok(ChatCompletionResponse::new(model, answer, Usage::new(2, 1)))
+        Ok(GenerationResponse::new(model, answer, Usage::new(2, 1)))
     }
 
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         self.stream_tokens
             .lock()
             .unwrap()
@@ -73,10 +73,7 @@ impl InferenceBackend for RecordingBackend {
             let generated = self.generated_chunks.clone();
             return Ok(Box::pin(futures_util::stream::repeat_with(move || {
                 generated.fetch_add(1, Ordering::Relaxed);
-                Ok(skippy_inference_api::ChatCompletionChunk::delta(
-                    model.clone(),
-                    "x".repeat(64 * 1024),
-                ))
+                Ok(GenerationEvent::delta(model.clone(), "x".repeat(64 * 1024)))
             })));
         }
         if let Some(pacing) = self.pacing {
@@ -89,33 +86,20 @@ impl InferenceBackend for RecordingBackend {
                                 return None;
                             }
                             tokio::time::sleep(every).await;
-                            Some((
-                                Ok(skippy_inference_api::ChatCompletionChunk::delta(
-                                    model, "tok",
-                                )),
-                                index + 1,
-                            ))
+                            Some((Ok(GenerationEvent::delta(model, "tok")), index + 1))
                         }
                     }))
                 }
                 Pacing::Stalled => Box::pin(
-                    futures_util::stream::iter(vec![Ok(
-                        skippy_inference_api::ChatCompletionChunk::delta(model, "tok"),
-                    )])
-                    .chain(futures_util::stream::pending()),
+                    futures_util::stream::iter(vec![Ok(GenerationEvent::delta(model, "tok"))])
+                        .chain(futures_util::stream::pending()),
                 ),
             });
         }
         Ok(Box::pin(futures_util::stream::iter(vec![
-            Ok(skippy_inference_api::ChatCompletionChunk::delta(
-                model.clone(),
-                "first",
-            )),
-            Ok(skippy_inference_api::ChatCompletionChunk::delta(
-                model.clone(),
-                "second",
-            )),
-            Ok(skippy_inference_api::ChatCompletionChunk::done(model)),
+            Ok(GenerationEvent::delta(model.clone(), "first")),
+            Ok(GenerationEvent::delta(model.clone(), "second")),
+            Ok(GenerationEvent::done(model)),
         ])))
     }
 }
@@ -199,6 +183,8 @@ async fn local_native_inference_preserves_effort_and_rejects_stale_or_draining_t
         .native_chat_completion(call(&node, Some(ReasoningEffort::High)))
         .await
         .unwrap();
+    assert_eq!(response["object"], "chat.completion");
+    assert_eq!(response["usage"]["total_tokens"], 3);
     assert_eq!(
         response["choices"][0]["message"]["content"],
         "effort=Some(High)"
@@ -319,6 +305,8 @@ async fn real_mesh_discovery_keeps_provider_controls_and_executes_selected_remot
         .native_chat_completion(call(&provider, Some(ReasoningEffort::High)))
         .await
         .unwrap();
+    assert_eq!(response["object"], "chat.completion");
+    assert_eq!(response["usage"]["total_tokens"], 3);
     assert_eq!(
         response["choices"][0]["message"]["content"],
         "effort=Some(High)"
@@ -471,30 +459,48 @@ async fn remote_native_stream_times_out_when_provider_withholds_stream_credit() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn real_mesh_stream_delivers_deltas_and_preserves_effort() {
+async fn native_stream_preserves_wire_chunks_and_effort_locally_and_over_real_mesh() {
     let (provider, backend, _) = serving_node(Some(vec!["high".into()])).await;
     let client = Node::new_for_tests(NodeRole::Client).await.unwrap();
     connect(&client, &provider).await;
-    let mut stream = client
-        .native_chat_completion_stream(call(&provider, Some(ReasoningEffort::High)))
-        .await
-        .unwrap();
-    let mut text = String::new();
-    while let Some(chunk) = tokio::time::timeout(Duration::from_secs(5), stream.next_chunk())
-        .await
-        .unwrap()
-    {
-        let chunk = chunk.unwrap();
-        if let Some(delta) = chunk["choices"][0]["delta"]["content"].as_str() {
-            text.push_str(delta);
+    for caller in [&provider, &client] {
+        let mut request = call(&provider, Some(ReasoningEffort::High));
+        request.request.extra.insert(
+            "native_extension".into(),
+            serde_json::json!({"nested": ["preserved", 42]}),
+        );
+        let mut stream = caller.native_chat_completion_stream(request).await.unwrap();
+        let mut text = String::new();
+        let mut finished = false;
+        while let Some(chunk) = tokio::time::timeout(Duration::from_secs(5), stream.next_chunk())
+            .await
+            .unwrap()
+        {
+            let chunk = chunk.unwrap();
+            assert_eq!(chunk["object"], "chat.completion.chunk");
+            assert_eq!(chunk["model"], "native-test");
+            if let Some(delta) = chunk["choices"][0]["delta"]["content"].as_str() {
+                text.push_str(delta);
+            }
+            finished |= chunk["choices"][0]["finish_reason"] == "stop";
         }
+        assert_eq!(text, "firstsecond");
+        assert!(
+            finished,
+            "the native stream must retain its terminal reason"
+        );
     }
-    assert_eq!(text, "firstsecond");
     {
         let requests = backend.requests.lock().unwrap();
-        assert_eq!(requests.len(), 1);
-        assert!(requests[0].stream);
-        assert_eq!(requests[0].reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(requests.len(), 2);
+        for request in requests.iter() {
+            assert!(request.stream);
+            assert_eq!(request.reasoning_effort, Some(ReasoningEffort::High));
+            assert_eq!(
+                request.extra["native_extension"],
+                serde_json::json!({"nested": ["preserved", 42]}),
+            );
+        }
     }
     client.endpoint.close().await;
     provider.endpoint.close().await;

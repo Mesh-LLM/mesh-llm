@@ -73,6 +73,10 @@ pub(crate) fn prepared_native_head(root: &std::path::Path) -> DynResult<String> 
     process::operation(|| Ok(source::prepared(root)?.head))
 }
 
+pub(crate) fn checkout_revision(root: &std::path::Path) -> DynResult<String> {
+    process::operation(|| process::text(root, &["rev-parse", "HEAD"]))
+}
+
 pub(crate) fn verified_workload_test(
     root: &std::path::Path,
     binary: &std::path::Path,

@@ -6,6 +6,10 @@
 //! (request translation, response envelope, SSE event sequence, tool
 //! round-trips, and error bodies).
 
+use skippy_inference_api::generation::{
+    GenerationDelta, GenerationEvent, GenerationEventChoice, GenerationEventStream,
+    GenerationRequest, GenerationResponse,
+};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -17,10 +21,8 @@ use futures_util::stream;
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use skippy_inference_api::{
-    ChatCompletionChunk, ChatCompletionChunkChoice, ChatCompletionDelta, ChatCompletionRequest,
-    ChatCompletionResponse, ChatCompletionStream, FinishReason, InferenceBackend,
-    InferenceFrontendConfig, InferenceRequestContext, InferenceResult, ModelObject, Usage,
-    router_for_with_config,
+    FinishReason, InferenceBackend, InferenceFrontendConfig, InferenceRequestContext,
+    InferenceResult, ModelObject, Usage, router_for_with_config,
 };
 use tower::ServiceExt;
 
@@ -28,21 +30,21 @@ const MODEL_ID: &str = "org/repo:Q4_K_M";
 
 #[derive(Default)]
 struct RecordingBackend {
-    seen_requests: Mutex<Vec<ChatCompletionRequest>>,
-    stream_responses: Mutex<Vec<Vec<InferenceResult<ChatCompletionChunk>>>>,
+    seen_requests: Mutex<Vec<GenerationRequest>>,
+    stream_responses: Mutex<Vec<Vec<InferenceResult<GenerationEvent>>>>,
 }
 
 impl RecordingBackend {
     /// Queue a chunk script for the next streaming call (LIFO, mirroring the
     /// mock style used in `benchy_contract.rs`).
-    fn queue_stream(&self, chunks: Vec<InferenceResult<ChatCompletionChunk>>) {
+    fn queue_stream(&self, chunks: Vec<InferenceResult<GenerationEvent>>) {
         self.stream_responses.lock().expect("lock").push(chunks);
     }
 }
 
 #[async_trait]
 impl InferenceBackend for RecordingBackend {
-    async fn count_chat_tokens(&self, request: ChatCompletionRequest) -> InferenceResult<u32> {
+    async fn count_chat_tokens(&self, request: GenerationRequest) -> InferenceResult<u32> {
         self.seen_requests.lock().expect("lock").push(request);
         Ok(42)
     }
@@ -53,10 +55,10 @@ impl InferenceBackend for RecordingBackend {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         self.seen_requests.lock().expect("lock").push(request);
-        let mut response = ChatCompletionResponse::new(
+        let mut response = GenerationResponse::new(
             MODEL_ID,
             "The secret word is OBSIDIAN-4.",
             Usage::new(15_033, 9),
@@ -67,9 +69,9 @@ impl InferenceBackend for RecordingBackend {
 
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         self.seen_requests.lock().expect("lock").push(request);
         let scripted = self
             .stream_responses
@@ -78,8 +80,8 @@ impl InferenceBackend for RecordingBackend {
             .pop()
             .unwrap_or_else(|| {
                 vec![
-                    Ok(ChatCompletionChunk::delta(MODEL_ID, "Hel")),
-                    Ok(ChatCompletionChunk::delta(MODEL_ID, "lo")),
+                    Ok(GenerationEvent::delta(MODEL_ID, "Hel")),
+                    Ok(GenerationEvent::delta(MODEL_ID, "lo")),
                 ]
             });
         Ok(Box::pin(stream::iter(scripted)))
@@ -334,7 +336,7 @@ fn tool_call_chunk(
     id: Option<&str>,
     name: Option<&str>,
     arguments: &str,
-) -> ChatCompletionChunk {
+) -> GenerationEvent {
     let mut function = serde_json::Map::new();
     if let Some(name) = name {
         function.insert("name".to_string(), json!(name));
@@ -347,14 +349,13 @@ fn tool_call_chunk(
     }
     fragment.insert("type".to_string(), json!("function"));
     fragment.insert("function".to_string(), Value::Object(function));
-    ChatCompletionChunk {
+    GenerationEvent {
         id: "chatcmpl-agent".to_string(),
-        object: "chat.completion.chunk",
         created: 0,
         model: model.to_string(),
-        choices: vec![ChatCompletionChunkChoice {
+        choices: vec![GenerationEventChoice {
             index: 0,
-            delta: ChatCompletionDelta {
+            delta: GenerationDelta {
                 role: None,
                 content: None,
                 reasoning_content: None,
@@ -383,17 +384,17 @@ async fn simulated_agent_tool_use_loop_round_trips_over_streaming_messages() {
     let backend = RecordingBackend::default();
     // LIFO queue: the turn-2 script goes in first so turn 1 pops first.
     backend.queue_stream(vec![
-        Ok(ChatCompletionChunk::delta(MODEL_ID, "It is sunny in Oslo.")),
-        Ok(ChatCompletionChunk::usage(MODEL_ID, Usage::new(34, 6))),
-        Ok(ChatCompletionChunk::done_with_reason(
+        Ok(GenerationEvent::delta(MODEL_ID, "It is sunny in Oslo.")),
+        Ok(GenerationEvent::usage(MODEL_ID, Usage::new(34, 6))),
+        Ok(GenerationEvent::done_with_reason(
             MODEL_ID,
             FinishReason::Stop,
         )),
     ]);
     backend.queue_stream(vec![
         // Turn 1: the model reasons briefly, then requests the tool.
-        Ok(ChatCompletionChunk::delta(MODEL_ID, "Checking ")),
-        Ok(ChatCompletionChunk::delta(MODEL_ID, "the weather.")),
+        Ok(GenerationEvent::delta(MODEL_ID, "Checking ")),
+        Ok(GenerationEvent::delta(MODEL_ID, "the weather.")),
         Ok(tool_call_chunk(
             MODEL_ID,
             Some("toolu_01"),
@@ -401,8 +402,8 @@ async fn simulated_agent_tool_use_loop_round_trips_over_streaming_messages() {
             "{\"ci",
         )),
         Ok(tool_call_chunk(MODEL_ID, None, None, "ty\":\"oslo\"}")),
-        Ok(ChatCompletionChunk::usage(MODEL_ID, Usage::new(21, 14))),
-        Ok(ChatCompletionChunk::done_with_reason(
+        Ok(GenerationEvent::usage(MODEL_ID, Usage::new(21, 14))),
+        Ok(GenerationEvent::done_with_reason(
             MODEL_ID,
             FinishReason::ToolCalls,
         )),
@@ -541,7 +542,7 @@ async fn simulated_agent_tool_use_loop_round_trips_over_streaming_messages() {
 fn review_preserves_mesh_hooks() {
     let mut body = messages_body();
     body["mesh_hooks"] = json!(true);
-    let req = skippy_inference_api::anthropic::messages_request_to_chat_request(
+    let req = skippy_inference_api::anthropic::messages_request_to_generation(
         serde_json::from_value(body).unwrap(),
     )
     .unwrap();
@@ -555,7 +556,7 @@ fn review_preserves_mesh_hooks() {
 fn review_preserves_skippy_hooks() {
     let mut body = messages_body();
     body["skippy_hooks"] = json!(true);
-    let req = skippy_inference_api::anthropic::messages_request_to_chat_request(
+    let req = skippy_inference_api::anthropic::messages_request_to_generation(
         serde_json::from_value(body).unwrap(),
     )
     .unwrap();
@@ -566,7 +567,7 @@ fn review_preserves_skippy_hooks() {
 fn review_preserves_image_content() {
     let mut body = messages_body();
     body["messages"][0]["content"] = json!([{"type":"text","text":"describe"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]);
-    let req = skippy_inference_api::anthropic::messages_request_to_chat_request(
+    let req = skippy_inference_api::anthropic::messages_request_to_generation(
         serde_json::from_value(body).unwrap(),
     )
     .unwrap();
@@ -589,7 +590,7 @@ async fn review_two_streamed_tools_remain_distinct() {
     backend.queue_stream(vec![
         Ok(first),
         Ok(second),
-        Ok(ChatCompletionChunk::done_with_reason(
+        Ok(GenerationEvent::done_with_reason(
             MODEL_ID,
             FinishReason::ToolCalls,
         )),
@@ -607,14 +608,14 @@ async fn review_two_streamed_tools_remain_distinct() {
 async fn review_error_does_not_emit_success_end_turn() {
     let backend = RecordingBackend::default();
     backend.queue_stream(vec![
-        Ok(ChatCompletionChunk::delta(MODEL_ID, "partial")),
+        Ok(GenerationEvent::delta(MODEL_ID, "partial")),
         Err(skippy_inference_api::InferenceError::internal(
             "backend failed",
         )),
         Err(skippy_inference_api::InferenceError::internal(
             "second failure",
         )),
-        Ok(ChatCompletionChunk::delta(MODEL_ID, "after failure")),
+        Ok(GenerationEvent::delta(MODEL_ID, "after failure")),
     ]);
     let mut body = messages_body();
     body["stream"] = json!(true);
@@ -627,12 +628,12 @@ async fn review_error_does_not_emit_success_end_turn() {
 async fn review_usage_after_finish_is_reported() {
     let backend = RecordingBackend::default();
     backend.queue_stream(vec![
-        Ok(ChatCompletionChunk::delta(MODEL_ID, "ok")),
-        Ok(ChatCompletionChunk::done_with_reason(
+        Ok(GenerationEvent::delta(MODEL_ID, "ok")),
+        Ok(GenerationEvent::done_with_reason(
             MODEL_ID,
             FinishReason::Stop,
         )),
-        Ok(ChatCompletionChunk::usage(MODEL_ID, Usage::new(21, 14))),
+        Ok(GenerationEvent::usage(MODEL_ID, Usage::new(21, 14))),
     ]);
     let mut body = messages_body();
     body["stream"] = json!(true);
@@ -652,7 +653,7 @@ struct InjectingHook;
 impl skippy_inference_api::InferenceHookPolicy for InjectingHook {
     async fn before_chat_completion(
         &self,
-        request: &mut ChatCompletionRequest,
+        request: &mut GenerationRequest,
     ) -> InferenceResult<skippy_inference_api::ChatHookOutcome> {
         assert_eq!(request.extra.get("mesh_hooks"), Some(&json!(true)));
         Ok(skippy_inference_api::ChatHookOutcome::injected(
@@ -762,13 +763,13 @@ async fn claude_code_thinking_cache_and_context_defaults_are_accepted() {
 
 #[test]
 fn translated_cached_usage_preserves_prompt_token_accounting() {
-    let response = ChatCompletionResponse::new(
+    let response = GenerationResponse::new(
         MODEL_ID,
         "cached answer",
         Usage::new(20, 5).with_cached_tokens(12),
     );
     let translated =
-        skippy_inference_api::anthropic::messages_response_from_chat_response(&response).unwrap();
+        skippy_inference_api::anthropic::messages_response_from_generation(&response).unwrap();
     let usage = serde_json::to_value(translated.usage).unwrap();
     assert_eq!(
         usage,

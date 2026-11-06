@@ -175,6 +175,12 @@ duplicate patch numbers in the durable directory.
 
 ## Validation
 
+Controller-managed upgrade repairs use the shared `repair-check --phase fast`
+command in `ci/llama-canary/agent-repair-prompt.md`, plus focused reproductions.
+The trusted full phase owns the complete native suite and generation/idempotence
+checks after the agent returns. The validation below remains the standalone
+development workflow; do not duplicate the trusted full gates in a coding turn.
+
 Validate patch application in a clean checkout:
 
 ```bash

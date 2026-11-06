@@ -13,8 +13,7 @@ impl Fixture {
     fn new() -> Self {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path().canonicalize().unwrap();
-        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let source = fs::read_to_string(repo.join("scripts/llama-canary-agent-repair.sh")).unwrap();
+        let source = crate::canary_full_gates::fixture::source();
         let helper = source
             .split("repair_source_inspection() {")
             .nth(1)
