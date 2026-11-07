@@ -1,7 +1,11 @@
 //! Read-only HF source admission and published package-root projection.
 //! Artifact uploads may have removed local shards; this is not byte/tensor certification.
+// Their callers outside tests (the CLI and the front doors) are Unix-only;
+// they still build and test everywhere.
+#[cfg_attr(not(unix), allow(dead_code))]
 mod card;
 mod license;
+#[cfg_attr(not(unix), allow(dead_code))]
 mod workspace;
 pub use license::License;
 #[cfg(unix)]

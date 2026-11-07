@@ -365,6 +365,8 @@ fn embedded_native_helper_survives_build_workspace_cleanup() {
 #[path = "snapshot_promotion_cli/publisher_helper.rs"]
 mod publisher_helper;
 
+// Only the Unix-only fixtures run bash scripts or prepend to `PATH`.
+#[cfg_attr(not(unix), allow(dead_code))]
 #[path = "snapshot_promotion_cli/child_env.rs"]
 mod child_env;
 
