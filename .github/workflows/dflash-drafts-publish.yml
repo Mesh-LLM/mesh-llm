@@ -15,10 +15,12 @@ on:
       - mesh/crates/mesh-llm-skippy-adapter/data/dflash-drafts/**
   workflow_dispatch:
 
-# One group per commit: a shared group would let GitHub replace a pending run,
-# and the drafts that commit adds would never be published.
+# One run at a time, so two runs never write the same file at once. GitHub
+# keeps only the newest pending run; that loses nothing, because every run
+# publishes all of its manifest's unpublished drafts, and the newest manifest
+# is the one that counts.
 concurrency:
-  group: dflash-drafts-publish-${{ github.sha }}
+  group: dflash-drafts-publish
   cancel-in-progress: false
 
 permissions:

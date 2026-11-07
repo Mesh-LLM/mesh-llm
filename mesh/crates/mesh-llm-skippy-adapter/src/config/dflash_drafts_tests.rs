@@ -12,7 +12,7 @@ use std::path::Path;
 use serde_json::{Map, Value, json};
 
 use super::dflash_catalog::bootstrap_pairings;
-use super::{DFlashPairing, load_dflash_pairing_index};
+use super::{DFlashDraft, DFlashPairing, load_dflash_pairing_index};
 
 const MANIFEST_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -288,6 +288,17 @@ fn a_hosted_draft_must_match_its_manifest_entry_byte_for_byte() {
         "015e033295b5b4fa6bf04230092cafecd7f84e05d01c190785723c436c3a8b3d".to_string();
     pairing.draft.bytes = 494_735_328;
     check_hosted_drafts(std::slice::from_ref(&pairing), &outputs).unwrap();
+
+    // Each pinned field must match on its own.
+    for edit in [
+        |draft: &mut DFlashDraft| draft.repo = "meshllm/other-draft".to_string(),
+        |draft: &mut DFlashDraft| draft.file = "other.gguf".to_string(),
+        |draft: &mut DFlashDraft| draft.bytes += 1,
+    ] {
+        let mut changed = pairing.clone();
+        edit(&mut changed.draft);
+        assert!(check_hosted_drafts(std::slice::from_ref(&changed), &outputs).is_err());
+    }
 
     // A hand-published file in the same repo is refused.
     pairing.draft.sha256 =
