@@ -1,4 +1,4 @@
-From 6dbffff666e80bf61a4d3f922f53cf88823b9375 Mon Sep 17 00:00:00 2001
+From b2dddb7fe45d8c3cca7436cac0c3ffed2696e81f Mon Sep 17 00:00:00 2001
 From: James Dumay <james@generalinference.xyz>
 Date: Tue, 13 Oct 2026 22:06:42 +1100
 Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
@@ -22,7 +22,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  src/skippy/abi.cpp                      |   59 ++
  src/skippy/activation.cpp               | 1028 ++++++++++++++++++++
  src/skippy/activation_internal.h        |   88 ++
- src/skippy/activation_layout.cpp        |  156 +++
+ src/skippy/activation_layout.cpp        |  160 +++
  src/skippy/block_boundaries.cpp         |   64 ++
  src/skippy/block_boundaries.h           |   42 +
  src/skippy/chat_sampling.cpp            |   75 ++
@@ -79,7 +79,7 @@ Subject: [PATCH 02/15] feat(skippy): realize admitted stages from live graphs
  src/skippy/verification.cpp             |  256 +++++
  src/skippy/workloads.cpp                |  373 +++++++
  src/skippy/workloads_internal.h         |    8 +
- 75 files changed, 16394 insertions(+), 395 deletions(-)
+ 75 files changed, 16398 insertions(+), 395 deletions(-)
  create mode 100644 common/log-terminal.cpp
  create mode 100644 common/regex-escape.cpp
  create mode 100644 common/sampling-config.cpp
@@ -2656,10 +2656,10 @@ index 000000000..29674ebda
 +        skippy_error ** out_error);
 diff --git a/src/skippy/activation_layout.cpp b/src/skippy/activation_layout.cpp
 new file mode 100644
-index 000000000..59233f3e7
+index 000000000..27bf26f5b
 --- /dev/null
 +++ b/src/skippy/activation_layout.cpp
-@@ -0,0 +1,156 @@
+@@ -0,0 +1,160 @@
 +#include "skippy.h"
 +#include "skippy/activation_internal.h"
 +#include "skippy/errors.h"
@@ -2811,6 +2811,10 @@ index 000000000..59233f3e7
 +    if (status != SKIPPY_STATUS_OK) {
 +        return status;
 +    }
++    // External media decodes can use llama_process, which bypasses the
++    // pending-work marker. Wait for CUDA before reading each live batch.
++    session->ctx->synchronize();
++    skippy_mark_context_synchronized(session->stage_model);
 +    return skippy_copy_output_activation_frame(
 +            session, token_count, output_payload, nullptr, nullptr, out_output_payload_bytes, output_desc, out_error);
 +}
