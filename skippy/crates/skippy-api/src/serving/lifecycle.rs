@@ -260,6 +260,7 @@ mod tests {
                 max_draft_tokens: Some(cap),
                 target_layers: Vec::new(),
                 context_window: None,
+                feature_encoding: None,
             });
             request.size_recurrent_rollback();
             assert_eq!(

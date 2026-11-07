@@ -294,4 +294,7 @@ pub(crate) struct StageStatusSnapshot {
     /// no feature rows for prompt tokens before it. `None` when any layer
     /// attends the whole context.
     pub(crate) dflash_context_window: Option<u32>,
+    /// With those layers: the feature-row encodings the stage reads, by name.
+    /// Empty from a stage that drafts nothing.
+    pub(crate) dflash_feature_encodings: Vec<String>,
 }

@@ -10,13 +10,13 @@ pub const STAGE_SUBPROTOCOL_NAME: &str = "skippy-stage";
 pub const STAGE_SUBPROTOCOL_MAJOR: u32 = 2;
 pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_CONTROL: &str = "stage-control";
 pub const STAGE_SUBPROTOCOL_FEATURE_PERSISTENT_LANE_MARKER: &str = "persistent-lane-marker";
-pub const STAGE_PROTOCOL_GENERATION: u32 = 14;
+pub const STAGE_PROTOCOL_GENERATION: u32 = 15;
 /// Generation-scoped stage capability. A peer can advertise `stage-control`
 /// while still rejecting current-generation frames, so split planning gates on
 /// this exact token before sending current-generation control requests.
-pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V14: &str = "stage-generation-14";
+pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V15: &str = "stage-generation-15";
 pub const STAGE_SUBPROTOCOL_FEATURE_STAGE_GENERATION: &str =
-    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V14;
+    STAGE_SUBPROTOCOL_FEATURE_STAGE_PROTOCOL_GENERATION_V15;
 pub const STAGE_SUBPROTOCOL_FEATURE_ARTIFACT_TRANSFER: &str = "artifact-transfer";
 pub const STAGE_SUBPROTOCOL_FEATURE_STATUS_LIST: &str = "status-list";
 pub const STAGE_SUBPROTOCOL_FEATURE_LOCAL_GGUF_CONTENT_ID_V1: &str = "local-gguf-content-id-v1";

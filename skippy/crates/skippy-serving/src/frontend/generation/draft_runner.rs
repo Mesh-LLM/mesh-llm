@@ -276,6 +276,7 @@ fn attach_planned_dflash_draft(
             &plan.target_layers,
             config.layer_start,
             config.layer_end,
+            skippy_runtime::DFlashFeatureEncoding::for_plan(plan.feature_encoding),
         )?;
         tracing::info!(layers = ?layers, "split DFlash target-layer capture attached on stage 0");
         return Ok(None);

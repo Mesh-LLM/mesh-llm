@@ -610,6 +610,7 @@ mod tests {
             max_draft_tokens: None,
             target_layers: Vec::new(),
             context_window: None,
+            feature_encoding: None,
         });
         assert!(speculation_plan_is_active(&plan));
     }
