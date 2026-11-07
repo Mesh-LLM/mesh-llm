@@ -65,13 +65,16 @@ fn package_bypass(job: &Node, step: &Node) -> bool {
     })
 }
 
-fn cargo_step(job: &Node, step: &Node) -> bool {
-    let run = field(step, "run").unwrap_or("");
-    let executable = run
+fn executable_run(step: &Node) -> String {
+    field(step, "run")
+        .unwrap_or("")
         .lines()
         .filter(|line| !line.trim_start().starts_with('#'))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n")
+}
+fn cargo_step(job: &Node, step: &Node) -> bool {
+    let executable = executable_run(step);
     [
         "cargo ",
         "scripts/release-version.sh",
@@ -133,18 +136,25 @@ fn check_setup(document: &Node, job: &Node, callers: &[(usize, &Node)]) -> DynRe
 }
 
 fn check_notes_toolchain(job: &Node) -> DynResult<()> {
-    let Some(helper) = steps(job).iter().position(|step| {
-        field(step, "run").is_some_and(|run| run.contains("scripts/release-notes-generate.sh"))
-    }) else {
+    let Some(helper) = steps(job)
+        .iter()
+        .position(|step| executable_run(step).contains("scripts/release-notes-generate.sh"))
+    else {
         return Ok(());
     };
-    if steps(job)[..helper].iter().any(|step| {
+    let caller = &steps(job)[helper];
+    let Some(toolchain) = steps(job)[..helper].iter().find(|step| {
         field(step, "uses").is_some_and(|uses| uses.starts_with("dtolnay/rust-toolchain@"))
-    }) {
-        Ok(())
-    } else {
-        Err("release notes helper runs before the pinned Rust toolchain".into())
+    }) else {
+        return Err("release notes helper runs before the pinned Rust toolchain".into());
+    };
+    if suppressed(toolchain) || !covers(toolchain, caller) {
+        return Err(
+            "pinned Rust toolchain condition or failure suppression does not cover the release notes helper"
+                .into(),
+        );
     }
+    Ok(())
 }
 
 fn check_composer(root: &Path, job: &Node) -> DynResult<()> {
