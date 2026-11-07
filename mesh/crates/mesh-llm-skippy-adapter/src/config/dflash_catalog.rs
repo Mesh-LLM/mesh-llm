@@ -291,6 +291,34 @@ pub(super) fn bootstrap_pairings() -> Vec<DFlashPairing> {
             max_draft_tokens: 7,
             backends: DFlashBackends::NotMetal,
         },
+        // Laguna-S-2.1 (Poolside, 118B MoE with 8B active). Poolside's own BF16
+        // GGUF of the draft reads target layers 2, 11, 20, 30, 39 and 48 (the
+        // last layer's output) with a 512-token sliding window. A DGX Spark
+        // decodes chat 1.45x and agent turns 1.6x faster. Community Q8_0 GGUFs
+        // without the window metadata lose all acceptance past 16K of history.
+        // Off on Metal: Laguna's target returns NaN logits there for short
+        // prompts (f16 overflow in the MoE down projection). Laguna-XS-2.1
+        // has no default until a Q8_0 of its draft that keeps the window is
+        // published; the community GGUFs drop it or use another layout.
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "laguna".to_string(),
+                layer_count: 48,
+                embedding_length: 3072,
+                expert_count: 256,
+                family: None,
+            },
+            draft: DFlashDraft {
+                repo: "poolside/Laguna-S-2.1-GGUF".to_string(),
+                revision: "19036076775e9ba6758595f78af99cb976ef8ff0".to_string(),
+                file: "laguna-s-2.1-DFlash-BF16.gguf".to_string(),
+                sha256: "2ee8aa30338d6599bc7a8ce008cc57c56f2c2b2fdc21f6db9ecda203c751bfd4"
+                    .to_string(),
+                bytes: 2_233_764_224,
+            },
+            max_draft_tokens: 15,
+            backends: DFlashBackends::NotMetal,
+        },
     ]
 }
 
@@ -585,8 +613,9 @@ mod tests {
 
     /// Every target the bootstrap table pairs by default, named as its GGUF
     /// names it: Qwen3.5-9B, Qwen3.6-27B, Qwen3.8-27B (with its NextN block),
-    /// Qwen3.6-35B-A3B, Qwen3-Coder-Next, Nemotron-3.5-Bolt-E4B and
-    /// Nemotron-3.5-Lightning-30B-A3B (with its NextN block).
+    /// Qwen3.6-35B-A3B, Qwen3-Coder-Next, Nemotron-3.5-Bolt-E4B,
+    /// Nemotron-3.5-Lightning-30B-A3B (with its NextN block) and Laguna-S-2.1,
+    /// plus Laguna-XS-2.1, which has no default draft yet.
     fn default_targets() -> Vec<(&'static str, GgufCompactMeta)> {
         let mut qwen38 = named(target_meta("qwen35", 65, 5120, 0), "Qwen3.8-27B");
         qwen38.nextn_predict_layers = 1;
@@ -621,6 +650,14 @@ mod tests {
                 ),
             ),
             ("Nemotron-3.5-Lightning-30B-A3B", lightning),
+            (
+                "Laguna-XS-2.1",
+                named(target_meta("laguna", 40, 2048, 256), "Laguna XS 2.1"),
+            ),
+            (
+                "Laguna-S-2.1",
+                named(target_meta("laguna", 48, 3072, 256), "Laguna S 2.1"),
+            ),
         ]
     }
 
@@ -703,6 +740,26 @@ mod tests {
         );
         // Native MTP stays Lightning's default on Metal.
         assert_eq!(repo("Nemotron-3.5-Lightning-30B-A3B", true), None);
+    }
+
+    #[test]
+    fn the_published_index_pairs_laguna_s_off_metal_and_not_laguna_xs() {
+        let index = published_index();
+        let repo = |model: &str, metal| {
+            let (_, meta) = default_targets()
+                .into_iter()
+                .find(|(name, _)| *name == model)
+                .unwrap();
+            pairing_in(&index.pairings, &meta, metal).map(|pairing| pairing.draft.repo.clone())
+        };
+        assert_eq!(
+            repo("Laguna-S-2.1", false).as_deref(),
+            Some("poolside/Laguna-S-2.1-GGUF")
+        );
+        assert_eq!(repo("Laguna-S-2.1", true), None);
+        // Laguna-XS-2.1 waits for a published draft with its sliding window.
+        assert_eq!(repo("Laguna-XS-2.1", false), None);
+        assert_eq!(repo("Laguna-XS-2.1", true), None);
     }
 
     #[test]
