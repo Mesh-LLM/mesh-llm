@@ -10,6 +10,8 @@ mod archive_write;
 mod candidate_plan;
 #[path = "package_closure/candidate_view.rs"]
 mod candidate_view;
+#[path = "package_closure/combine.rs"]
+mod combine;
 #[path = "package_closure/executable.rs"]
 mod executable;
 #[path = "package_closure/frozen_verifier.rs"]
@@ -69,6 +71,10 @@ struct WorkloadInput {
 
 pub(crate) fn prepared_native_head(root: &std::path::Path) -> DynResult<String> {
     process::operation(|| Ok(source::prepared(root)?.head))
+}
+
+pub(crate) fn checkout_revision(root: &std::path::Path) -> DynResult<String> {
+    process::operation(|| process::text(root, &["rev-parse", "HEAD"]))
 }
 
 pub(crate) fn verified_workload_test(
@@ -138,7 +144,7 @@ fn workload_document(bytes: &[u8]) -> DynResult<Vec<u8>> {
 /// Production package transaction verbs share one signal/cancellation scope.
 pub(crate) fn transaction(args: &[String], verb: &str) -> DynResult<()> {
     let grammar = Grammar {
-        usage: "cargo xtool automation canary-receipts <producer-receipt|candidate-plan|pack|restore> --input PATH",
+        usage: "cargo xtool automation canary-receipts <producer-receipt|candidate-plan|pack|combine|restore> --input PATH",
         values: &["--input"],
         flags: &["--help"],
     };
@@ -163,6 +169,7 @@ pub(crate) fn transaction(args: &[String], verb: &str) -> DynResult<()> {
                 serde_json::json!({"admitted_identity_sha256":candidate_plan::admit(&serde_json::from_slice(&bytes)?)?}),
             ),
             "pack" => packing::pack(&serde_json::from_slice(&bytes)?),
+            "combine" => combine::run(&serde_json::from_slice(&bytes)?),
             "restore" => restoring::restore(&serde_json::from_slice(&bytes)?),
             "local-manifest-policy" | "local-parity-inventory" | "local-split-roster" => {
                 local_inspection::execute(&bytes, verb)
@@ -176,7 +183,7 @@ pub(crate) fn transaction(args: &[String], verb: &str) -> DynResult<()> {
     });
     match result {
         Ok(output) => {
-            if verb == "pack" {
+            if verb == "pack" || verb == "combine" {
                 workflow_outputs(&output)?;
             }
             CheckReport::success(format!("{}\n", serde_json::to_string(&output)?)).emit()

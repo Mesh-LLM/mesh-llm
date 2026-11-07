@@ -63,20 +63,24 @@ preparation may use step-local Cargo home and target directories outside the
 measured paths before preflight, without populating the measured compiler cache.
 Neither exception permits product compilation in composition-only consumers.
 
-Persistent macOS canary jobs use the `preinstalled-macos` automation profile.
-Preflight and build require `[self-hosted, macOS, ARM64, jy-managed,
-family-certify, accelerator-memory-128plus]`; family and infrastructure-retry
-jobs replace the final label with the controller's `matrix.memory_tier`.
-JY owns machine eligibility through attribute selectors: macOS Apple M1 Ultra
-with exactly 128 GiB or Apple M3 Ultra with exactly 256 GiB, with mounted model
-storage. Never select a node name. The JY runner groups must allow only these
+Persistent canary jobs use the runner OS's `preinstalled-macos` or
+`preinstalled-linux` automation profile. The native producers request their OS
+and at least 128 GiB; preflight, family and infrastructure-retry jobs request
+the controller's memory tier without an OS or machine type. The worker restores
+the matching native payload from one candidate-bound combined package. Backend
+selection uses Metal on macOS and CUDA on Linux; the Linux image must carry a
+working driver and toolkit. Native Linux builds use the ordinary shell and
+backend configuration; arm64 arch/lipo checks and OSX CMake options are macOS-only.
+JY owns machine eligibility through attribute selectors and mounted model storage.
+Never select a node name or machine type
+in the workflow. The JY runner groups must allow only these
 two canary workflows at their protected `main` references. Provision through
 MDM and register the labeled runners before merging the workflow switch;
 unavailable managed capacity queues rather than falling back to another pool.
 They check runner prerequisites before compiling automation or preparing SDK
 dependencies and fail if any are absent. Tool installation and upgrades belong
 to runner provisioning: never invoke Rust, Just, or Homebrew installers from
-this profile. Keep job-owned compiler-cache startup and linker verification.
+these profiles. Keep job-owned compiler-cache startup and linker verification.
 
 Automation is compiled at most once per run and platform for product-source
 work, never once per job. Each platform lane has one `product_automation_*`
@@ -124,7 +128,7 @@ tooling requires an explicit maintainer decision to change that policy. Do not c
 Python-free or remove legacy validation before its Rust replacement passes.
 
 Retained external Python dependencies have bounded owners: the admitted external
-Python SDK and its locked client environments, llama.cpp's upstream Jinja tests
+Python SDK and its locked client environments, llama.cpp's upstream Jinja and FP8 conversion tests
 using the trusted controller's `ci/llama-canary/jinja/uv.lock`, and the optional llama-benchy wrapper with
 an immutable default source commit. These interfaces do not authorize new
 repository Python implementations. The canary Jinja environment belongs to its
@@ -490,16 +494,19 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Cache contract
 
-- Linux Rust-test jobs and the trusted compiler seed's test build disable
-  Cargo test-profile debug information (`CARGO_PROFILE_TEST_DEBUG=0`). Keep
-  debug assertions, overflow checks and complete package test coverage. The
-  per-package feature-isolated builds otherwise retain large DWARF-bearing
-  dependency variants and test executables on the same hosted disk. Keep the
-  warmer and consumers aligned, and change the cache epoch with this policy.
+- Disable Rust debug information in every CI workflow with workflow- or job-level
+  `CARGO_PROFILE_DEV_DEBUG=0`, `CARGO_PROFILE_TEST_DEBUG=0`,
+  `CARGO_PROFILE_RELEASE_DEBUG=0`, and `CARGO_PROFILE_BENCH_DEBUG=0`.
+  Reusable workflows declare these themselves because caller workflow
+  environments do not propagate through `workflow_call`. Docker build stages
+  declare the same environment before invoking Cargo. Keep local development
+  defaults, debug assertions, overflow checks and complete test coverage.
+  Keep compiler-seed publishers and consumers aligned, and change the cache
+  epoch with this policy.
 - The trusted seed also builds the isolated default-feature `xtask` Clippy
-  graph with `--all-targets`, independently of the product graph. Scope the
-  seed's test-debug override to its test-build command so Clippy retains the
-  consumer's profile. Seed compatibility keys include the root and workspace
+  graph with `--all-targets`, independently of the product graph. All seed
+  builds use the same debug-information settings as their consumers.
+  Seed compatibility keys include the root and workspace
   package Cargo manifests and the warmer workflow's build configuration as well
   as the image, lockfile and recipe inputs. Keep the publisher, consumers and
   runner-image catalog aligned.
@@ -678,6 +685,27 @@ checked-in expiry are the maintainer-controlled approval boundary.
 
 ## Llama canary family fan-out
 
+Repair iterations use `automation canary-receipts repair-check --phase fast`.
+The same typed command owns local and CI environments, static native/Rust builds,
+binary identity checks and focused GPU split/state smokes. Agents inherit the
+controller's locked native-test Python environment and must not install system
+packages or repeat the full native suite. The trusted `full` phase repeats the
+focused checks before generation/idempotence and the unfiltered native suite;
+complete family certification and fresh independent verification remain required.
+Only an isolated Metal fixture SIGBUS may receive one diagnostic retry, followed
+by an unfiltered native rerun; ordinary candidate failures never receive retries.
+Repair checks remove GitHub workflow-control paths from candidate processes and
+bind smoke tests to the compiled Mesh and llama.cpp source state. The local owner
+uses a private home and disables Git credential helpers.
+A downloaded job log alone does not establish that a process is stuck. Correlate
+runner/process state or an observed deadline; if unavailable, report liveness as
+unconfirmed.
+Bounded, explicitly unverified source checkpoints are retained after every coding
+turn and after supervised termination. Upload recovery before verbose evidence;
+never include the restored Python environment in the diagnostic upload.
+If the recorded native base is unavailable, capture its complete tracked tree
+against an empty tree so committed repairs remain in the unverified checkpoint.
+
 The System One contract fixture must exercise both single-token causal
 readouts and multi-token likelihoods as supported execution paths, retaining
 all malformed/unsupported request refusals. Verify ordered finite scores,
@@ -706,8 +734,10 @@ override; `mesh_ref` defaults to certify-only; explicit `mesh_action=certify-and
 adds independent verification and publication of the unchanged selected commit. Upstream release
 qualification never replaces the complete candidate and independent family
 passes required before publishing an upgrade PR. Only the hosted upstream
-selection step may receive the read-only GitHub token for public upstream API
-reads; workers and repair agents remain credential-free.
+selection steps may receive the read-only GitHub token; workers and repair
+agents remain credential-free. Runner placement uses managed labels and queues
+when matching capacity is unavailable; it never queries the repository runner
+API or adds an administrator credential to repair workers.
 
 Each candidate build owns one complete native CTest pass. The initial native
 build may compile tests without executing them; after fresh annotation
@@ -721,6 +751,13 @@ rewriter pass and 60 seconds per Git command by default; an explicit `--timeout`
 overrides both. Keep both generation and idempotence passes mandatory, and
 report deadline failures with readable retained diagnostics and cleanup status.
 
+Changed-pin repair invokes Goose in its normal text mode and streams its output
+unchanged to the job console while saving it in `agent.log`. Keep the complete
+per-command logs in the existing build evidence. Do not add a JSON projection,
+activity snapshots, prefixes or duplicate tool output. Disable GitHub workflow
+command interpretation while Goose runs, and fail the turn if logging fails.
+Keep the existing worker credential boundary.
+
 Build evidence uploads must explicitly include the run-owned hidden `.deps`
 state and native CTest results before cleanup. A truncated live log is not a
 substitute for the retained failure output.
@@ -729,9 +766,10 @@ Git payloads consumed as manifests, source inventories or source identity diffs
 must use bounded raw capture, never redacted diagnostic output. Keep diagnostic
 redaction enabled separately; incomplete or oversized payloads fail admission.
 
-The trusted-main canary releases its build runner before scheduling one job
-per certified family. Every worker consumes the exact source, plan, manifest,
-and executable handoff from its producer; family workers never rebuild.
+The trusted-main canary releases both native build runners before scheduling
+one job per certified family. The combined handoff binds one source, plan and
+manifest to separate macOS and Linux executable sets; each worker chooses its
+set after memory-only placement and never rebuilds.
 The immutable model cache remains offline and read-only. One workflow-level
 non-cancelling concurrency group prevents overlapping canary runs, while
 family jobs have no shared concurrency group and use at most eight runners.
@@ -744,7 +782,13 @@ existing pin and patches without repair. Default `mesh_action=certify` does not
 publish. Explicit `mesh_action=certify-and-publish` requires a complete candidate
 pass and a fresh independent build and complete family pass on the same frozen
 selected commit before publishing that exact commit as a PR to main. It never
-changes the selected pin or invokes coding repair. Selected build scripts
+changes the selected pin or invokes coding repair. Explicit `mesh_action=upgrade`
+instead requires a full lowercase `upstream_sha` and admits a changed-pin repair
+from the frozen selected branch. Keep the controller on protected main and bind
+the selected revision as the candidate's base through build, bundle, worker,
+retry and verification handoffs. An upgrade must target a different pin; it uses
+the normal bounded repair loop, two complete green passes, and hosted PR
+publication. Certify modes continue to reject upstream overrides. Selected build scripts
 and battery code execute on persistent lab runners, so operators must choose
 trusted revisions; a main controller does not sandbox that source.
 
@@ -822,8 +866,10 @@ small models first in the canary's one-family-per-job matrix; parallel runner
 availability can still change actual start and completion order.
 
 Partial GitHub reruns may reuse an earlier producer attempt from the same run
-only through the exact dependency-provided identity digest. Producer provenance
-and all source/plan/executable checks remain immutable. Family artifacts are
+only through the exact dependency-provided identity digest, even when the two
+native producers ran on different attempts. The combined identity retains the
+macOS producer's attempt; neither may exceed the current attempt. Producer
+provenance and all source/plan/executable checks remain immutable. Family artifacts are
 namespaced by that identity and worker attempt. Aggregation chooses the newest
 receipt per family, rejects duplicate same-attempt receipts and invalid attempt
 bounds, and never falls back from a newer failure to an older success. The
@@ -848,6 +894,9 @@ just ci-validate
 
 Also run what applies:
 
+- `just test-all` when a change alters which tests or build options CI invokes
+  or changes the `test-all` recipe itself. Other CI-only edits do not require
+  the full workspace gate.
 - `just ci-shellcheck <changed-script>...` for changed shell scripts or
   substantial embedded Bash.
 - `just ci-crate-lists` for routing,

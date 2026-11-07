@@ -1,3 +1,8 @@
+use crate::chat::ChatCompletionRequest;
+use crate::generation::{
+    GeneratedMessage, GenerationChoice, GenerationEvent, GenerationEventStream, GenerationMessage,
+    GenerationRequest, GenerationResponse,
+};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -271,14 +276,8 @@ fn default_backend_timeout_exceeds_a_cold_large_prompt_prefill() {
 }
 use crate::{
     FinishReason,
-    backend::{
-        CancellationToken, ChatCompletionStream, CompletionStream, InferenceRequestContext,
-        InferenceResult,
-    },
-    chat::{
-        AssistantMessage, ChatCompletionChoice, ChatCompletionResponse, ChatMessage,
-        MessageContent, MessageContentPart, messages_to_plain_prompt,
-    },
+    backend::{CancellationToken, CompletionStream, InferenceRequestContext, InferenceResult},
+    chat::{MessageContent, MessageContentPart, messages_to_plain_prompt},
     common::Usage,
     completions::{CompletionPrompt, CompletionResponse},
     errors::{InferenceErrorKind, already_openai_error, map_upstream_error_body},
@@ -291,7 +290,7 @@ struct FakeBackend;
 
 #[derive(Default)]
 struct GuardrailRescueBackend {
-    seen_chat_requests: Mutex<Vec<ChatCompletionRequest>>,
+    seen_chat_requests: Mutex<Vec<GenerationRequest>>,
 }
 
 #[async_trait]
@@ -302,20 +301,19 @@ impl InferenceBackend for GuardrailRescueBackend {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         self.seen_chat_requests
             .lock()
             .unwrap()
             .push(request.clone());
-        Ok(ChatCompletionResponse {
+        Ok(GenerationResponse {
             id: "chatcmpl_guarded_tool".to_string(),
-            object: "chat.completion",
             created: 123,
             model: request.model,
-            choices: vec![ChatCompletionChoice {
+            choices: vec![GenerationChoice {
                 index: 0,
-                message: AssistantMessage {
+                message: GeneratedMessage {
                     role: "assistant",
                     content: None,
                     reasoning_content: None,
@@ -340,9 +338,9 @@ impl InferenceBackend for GuardrailRescueBackend {
 
     async fn chat_completion_stream(
         &self,
-        _request: ChatCompletionRequest,
+        _request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         unreachable!("guardrail rescue test uses non-streaming requests")
     }
 
@@ -558,8 +556,8 @@ impl InferenceBackend for FakeBackend {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         if request.model == "missing" {
             return Err(InferenceError::model_not_found(request.model));
         }
@@ -569,14 +567,13 @@ impl InferenceBackend for FakeBackend {
             ));
         }
         if request.model == "tool-call" {
-            return Ok(ChatCompletionResponse {
+            return Ok(GenerationResponse {
                 id: "chatcmpl_tool".to_string(),
-                object: "chat.completion",
                 created: 123,
                 model: request.model,
-                choices: vec![ChatCompletionChoice {
+                choices: vec![GenerationChoice {
                     index: 0,
-                    message: AssistantMessage {
+                    message: GeneratedMessage {
                         role: "assistant",
                         content: Some("calling lookup".to_string()),
                         reasoning_content: None,
@@ -604,7 +601,7 @@ impl InferenceBackend for FakeBackend {
             });
         }
         if request.model == "exchange-id" {
-            let mut response = ChatCompletionResponse::new(
+            let mut response = GenerationResponse::new(
                 request.model,
                 format!("echo: {}", messages_to_plain_prompt(&request.messages)),
                 Usage::new(3, 2),
@@ -612,7 +609,7 @@ impl InferenceBackend for FakeBackend {
             response.exchange_id = Some("exch-fixture-01".to_string());
             return Ok(response);
         }
-        Ok(ChatCompletionResponse::new(
+        Ok(GenerationResponse::new(
             request.model,
             format!("echo: {}", messages_to_plain_prompt(&request.messages)),
             Usage::new(3, 2),
@@ -621,9 +618,9 @@ impl InferenceBackend for FakeBackend {
 
     async fn chat_completion_stream(
         &self,
-        request: ChatCompletionRequest,
+        request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         if request.model == "missing" {
             return Err(InferenceError::model_not_found(request.model));
         }
@@ -640,14 +637,13 @@ impl InferenceBackend for FakeBackend {
         if request.model == "stream-logprobs" {
             let model = request.model;
             return Ok(Box::pin(stream::iter(vec![
-                Ok(ChatCompletionChunk {
+                Ok(GenerationEvent {
                     id: "chatcmpl_stream_logprobs".to_string(),
-                    object: "chat.completion.chunk",
                     created: 123,
                     model: model.clone(),
-                    choices: vec![crate::chat::ChatCompletionChunkChoice {
+                    choices: vec![crate::generation::GenerationEventChoice {
                         index: 0,
-                        delta: crate::chat::ChatCompletionDelta {
+                        delta: crate::generation::GenerationDelta {
                             role: None,
                             content: Some("tok".to_string()),
                             reasoning_content: None,
@@ -664,15 +660,15 @@ impl InferenceBackend for FakeBackend {
                     usage: None,
                     timings: None,
                 }),
-                Ok(ChatCompletionChunk::done(model)),
+                Ok(GenerationEvent::done(model)),
             ])));
         }
         let model = request.model;
         Ok(Box::pin(stream::iter(vec![
-            Ok(ChatCompletionChunk::delta(model.clone(), "hel")),
-            Ok(ChatCompletionChunk::delta(model.clone(), "lo")),
-            Ok(ChatCompletionChunk::usage(model.clone(), Usage::new(3, 2))),
-            Ok(ChatCompletionChunk::done_with_reason(
+            Ok(GenerationEvent::delta(model.clone(), "hel")),
+            Ok(GenerationEvent::delta(model.clone(), "lo")),
+            Ok(GenerationEvent::usage(model.clone(), Usage::new(3, 2))),
+            Ok(GenerationEvent::done_with_reason(
                 model,
                 FinishReason::Length,
             )),
@@ -809,16 +805,16 @@ impl InferenceBackend for SlowBackend {
 
     async fn chat_completion(
         &self,
-        _request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        _request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         unreachable!("slow backend test only calls readiness")
     }
 
     async fn chat_completion_stream(
         &self,
-        _request: ChatCompletionRequest,
+        _request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         unreachable!("slow backend test only calls readiness")
     }
 
@@ -841,7 +837,7 @@ struct CancellationBackend {
 
 #[derive(Default)]
 struct SessionCaptureBackend {
-    requests: Arc<Mutex<Vec<ChatCompletionRequest>>>,
+    requests: Arc<Mutex<Vec<GenerationRequest>>>,
 }
 
 #[async_trait]
@@ -852,10 +848,10 @@ impl InferenceBackend for SessionCaptureBackend {
 
     async fn chat_completion(
         &self,
-        request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         self.requests.lock().unwrap().push(request.clone());
-        Ok(ChatCompletionResponse::new(
+        Ok(GenerationResponse::new(
             request.model,
             "ok",
             Usage::new(1, 1),
@@ -864,9 +860,9 @@ impl InferenceBackend for SessionCaptureBackend {
 
     async fn chat_completion_stream(
         &self,
-        _request: ChatCompletionRequest,
+        _request: GenerationRequest,
         _context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         unreachable!("agent-session tests use non-streaming requests")
     }
 }
@@ -878,16 +874,16 @@ impl InferenceBackend for CancellationBackend {
 
     async fn chat_completion(
         &self,
-        _request: ChatCompletionRequest,
-    ) -> InferenceResult<ChatCompletionResponse> {
+        _request: GenerationRequest,
+    ) -> InferenceResult<GenerationResponse> {
         unreachable!("cancellation backend test only calls streaming")
     }
 
     async fn chat_completion_stream(
         &self,
-        _request: ChatCompletionRequest,
+        _request: GenerationRequest,
         context: InferenceRequestContext,
-    ) -> InferenceResult<ChatCompletionStream> {
+    ) -> InferenceResult<GenerationEventStream> {
         *self.token.lock().expect("token lock poisoned") = Some(context.cancellation_token());
         Ok(Box::pin(stream::pending()))
     }
@@ -896,12 +892,12 @@ impl InferenceBackend for CancellationBackend {
 #[test]
 fn messages_to_plain_prompt_extracts_text_parts() {
     let messages = vec![
-        ChatMessage {
+        GenerationMessage {
             role: "system".to_string(),
             content: Some(MessageContent::Text("system text".to_string())),
             extra: Default::default(),
         },
-        ChatMessage {
+        GenerationMessage {
             role: "user".to_string(),
             content: Some(MessageContent::Parts(vec![MessageContentPart {
                 content_type: "text".to_string(),
@@ -919,13 +915,14 @@ fn messages_to_plain_prompt_extracts_text_parts() {
 
 #[test]
 fn max_completion_tokens_takes_precedence() {
-    let request: ChatCompletionRequest = serde_json::from_value(json!({
+    let request: GenerationRequest = serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": "test",
         "messages": [{"role": "user", "content": "hello"}],
         "max_tokens": 10,
         "max_completion_tokens": 3
     }))
-    .unwrap();
+    .unwrap()
+    .into();
     assert_eq!(request.effective_max_tokens(), Some(3));
 }
 
@@ -1340,8 +1337,8 @@ struct CapsuleMintingHook;
 impl crate::hooks::InferenceHookPolicy for CapsuleMintingHook {
     async fn capsule_marker_for_response(
         &self,
-        _request: &ChatCompletionRequest,
-        response: &ChatCompletionResponse,
+        _request: &GenerationRequest,
+        response: &GenerationResponse,
     ) -> Option<crate::chat::CapsuleMarker> {
         Some(crate::chat::CapsuleMarker {
             capsule_id: format!("capsule-{}", response.id),
@@ -1353,7 +1350,7 @@ impl crate::hooks::InferenceHookPolicy for CapsuleMintingHook {
 /// End-to-end rung-ladder response-leg reference: a hook mints a capsule
 /// marker, and it rides all the way out through the real axum router as an
 /// `X-Capsule-Id` header — not just as an in-process Rust value. This is the
-/// mechanism M1's design note found missing (`ChatCompletionResponse` had no
+/// mechanism M1's design note found missing (`GenerationResponse` had no
 /// write path, `frontend_lifecycle_middleware` runs after every hook call).
 #[tokio::test]
 async fn hook_minted_capsule_marker_is_exposed_as_x_capsule_id_response_header() {
@@ -1463,7 +1460,7 @@ async fn no_capsule_marker_means_no_x_capsule_id_header() {
 /// the same header-plumbing hop as `X-Capsule-Id`
 /// above, for `response.exchange_id` -> `X-Exchange-Id`. Proves the value
 /// really rides out through the real axum router as a response header, not
-/// just as an in-process `ChatCompletionResponse` field.
+/// just as an in-process `GenerationResponse` field.
 #[tokio::test]
 async fn backend_exchange_id_is_exposed_as_x_exchange_id_response_header() {
     let app = router_for(Arc::new(FakeBackend));

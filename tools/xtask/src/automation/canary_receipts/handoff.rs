@@ -86,7 +86,7 @@ fn execute(input: &Input, publication: bool) -> DynResult<()> {
             return Err("publication does not accept worker receipt fields".into());
         }
         let (identity, count, bundle) = package.publication_context();
-        let selected = !input.selected_source.is_empty();
+        let selected = !input.selected_source.is_empty() && !bundle;
         if selected {
             if identity.pass_id != "verify-1" || bundle {
                 return Err(

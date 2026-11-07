@@ -19,7 +19,7 @@ impl InferenceHookPolicy for PreparedPolicy {
     }
     async fn admit_effective_chat_completion(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         route: &ChatExchangeRoute,
     ) -> InferenceResult<()> {
         self.seen.lock().unwrap().push(route.exchange_id.clone());
@@ -30,7 +30,7 @@ impl InferenceHookPolicy for PreparedPolicy {
     }
     async fn on_chat_completion_terminal(
         &self,
-        request: &ChatCompletionRequest,
+        request: &GenerationRequest,
         _exchange_id: &str,
         outcome: &ChatCompletionOutcome<'_>,
     ) {
@@ -47,7 +47,7 @@ async fn prepared_admission_denies_after_preparation_before_generation() {
     let marker = generated.clone();
     let result = backend
         .chat_completion_with_prepared_hooks_for_exchange(
-            ChatCompletionRequest::default(),
+            GenerationRequest::default(),
             Some("exchange".into()),
             move |mut request, admission| async move {
                 // This models defaults/template preparation inside the dispatch closure.

@@ -72,15 +72,12 @@ exit {child_status}
 #[test]
 fn copied_real_certification_refuses_failed_or_empty_producer_and_preserves_admitted_environment_and_status()
  {
-    let source = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/llama-canary-agent-repair.sh"),
-    )
-    .unwrap();
+    let source = crate::canary_full_gates::fixture::source();
     let function = source
         .split("run_certification() {\n")
         .nth(1)
         .unwrap()
-        .split("\nrun_candidate_gates() {\n")
+        .split("\nrun_early_native_certification() {\n")
         .next()
         .unwrap();
     for (output, producer_status, child_status, accepted) in [
@@ -195,13 +192,10 @@ esac
 }
 
 #[test]
-fn early_metal_caller_binds_native_producer_and_refuses_before_downstream_consumption() {
-    let source = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/llama-canary-agent-repair.sh"),
-    )
-    .unwrap();
+fn early_native_caller_binds_native_producer_and_refuses_before_downstream_consumption() {
+    let source = crate::canary_full_gates::fixture::source();
     let early = source
-        .split("run_early_metal_certification() {\n")
+        .split("run_early_native_certification() {\n")
         .nth(1)
         .unwrap()
         .split("\nrun_candidate_gates() {\n")
@@ -242,10 +236,10 @@ repair_workload_automation=("$repair_workload_controller")
 repair_workload_controller_unchanged() {{{guard}
 verification_candidate_unchanged() {{ printf 'custody\n' >> custody; }}
 run_verification_logged() {{ local label="$1" log="$2"; shift 2; printf '%s\n' "$label" >> "$log"; "$@"; }}
-run_early_metal_certification() {{
+run_early_native_certification() {{
 {early}
 {before}
-run_early_metal_certification
+run_early_native_certification
 "#)).unwrap();
         let report = invoke(root);
         if mode == "native-refusal" {

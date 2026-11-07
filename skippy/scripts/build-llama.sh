@@ -38,6 +38,7 @@ fi
 PRINT_BUILD_DIR=0
 REQUIRE_EXISTING=0
 BUILD_ONLY=0
+REQUESTED_TARGETS=()
 
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
@@ -49,6 +50,14 @@ while [[ "$#" -gt 0 ]]; do
       REQUIRE_EXISTING=1
       shift
       ;;
+    --target)
+      if [[ $# -lt 2 || ! "$2" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_.+-]*$ ]]; then
+        echo "--target requires a CMake target name" >&2
+        exit 2
+      fi
+      REQUESTED_TARGETS+=("$2")
+      shift 2
+      ;;
     --build-only)
       BUILD_ONLY=1
       shift
@@ -58,6 +67,11 @@ while [[ "$#" -gt 0 ]]; do
       ;;
   esac
 done
+
+if (( ${#REQUESTED_TARGETS[@]} > 0 )) && [[ "$BUILD_ONLY" != "1" ]]; then
+  echo "--target requires --build-only; the caller owns selective checks" >&2
+  exit 2
+fi
 
 case "$LLAMA_BACKEND" in
   cpu|cuda|rocm|hip|vulkan|metal) ;;
@@ -464,6 +478,7 @@ CURRENT_BUILD_STAMP="$(
 
 if [[ "$LLAMA_STAGE_FULL_REPLAY" != "ON" &&
       "$LLAMA_STAGE_UPSTREAM_TESTS" != "ON" &&
+      "${#REQUESTED_TARGETS[@]}" == 0 &&
       "${LLAMA_STAGE_FORCE_BUILD:-${SKIPPY_FORCE_LLAMA_BUILD:-0}}" != "1" &&
       -f "$BUILD_STAMP" &&
       "$(cat "$BUILD_STAMP")" == "$CURRENT_BUILD_STAMP" ]] &&
@@ -544,12 +559,17 @@ if [[ "$LLAMA_STAGE_FULL_REPLAY" == "ON" ]]; then
   fi
 fi
 
-if [[ "$LLAMA_STAGE_UPSTREAM_TESTS" == "ON" ]]; then
+if (( ${#REQUESTED_TARGETS[@]} > 0 )); then
+  BUILD_TARGETS+=("${REQUESTED_TARGETS[@]}")
+fi
+
+if [[ "$LLAMA_STAGE_UPSTREAM_TESTS" == "ON" && ${#REQUESTED_TARGETS[@]} == 0 ]]; then
   # Build CMake's complete default target set so every upstream llama.cpp
   # CTest executable is present. The ordinary ABI path intentionally builds
   # only the native link closure and Skippy probes listed above.
   cmake --build "$LLAMA_BUILD_DIR" --config "${CMAKE_BUILD_TYPE:-Release}" --parallel "$(detect_jobs)"
 else
+  # Explicit targets add to the required ABI closure/probes without building every upstream executable.
   cmake --build "$LLAMA_BUILD_DIR" --config "${CMAKE_BUILD_TYPE:-Release}" --parallel "$(detect_jobs)" --target "${BUILD_TARGETS[@]}"
 fi
 

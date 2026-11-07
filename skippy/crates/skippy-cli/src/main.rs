@@ -14,6 +14,11 @@ use cli::{Cli, Command, OutputFormat};
 use std::io::IsTerminal;
 use std::sync::Arc;
 
+/// Stack for the thread that drives the application future. The process main
+/// thread gets 1 MiB on Windows (8 MiB on Linux), which an unoptimized build
+/// overflows; `mesh-llm` runs its application on a thread of the same size.
+const APPLICATION_STACK_SIZE: usize = 8 * 1024 * 1024;
+
 fn main() -> std::process::ExitCode {
     let startup_warnings = prepare_model_download_directories();
     let cli = match parse_cli() {
@@ -24,6 +29,24 @@ fn main() -> std::process::ExitCode {
             return std::process::ExitCode::FAILURE;
         }
     };
+    // Spawned only after the environment above is prepared: no other thread
+    // may exist while it is mutated.
+    let application = std::thread::Builder::new()
+        .name("skippy-main".to_string())
+        .stack_size(APPLICATION_STACK_SIZE)
+        .spawn(move || run_application(cli, startup_warnings));
+    match application {
+        Ok(handle) => handle
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic)),
+        Err(error) => {
+            let _ = skippy_commands::console::failure(&error.into());
+            std::process::ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_application(cli: Cli, startup_warnings: Vec<String>) -> std::process::ExitCode {
     let native_logs = Arc::new(native_logging::NativeDiagnostics::new(cli.debug));
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()

@@ -91,11 +91,7 @@ impl Fixture {
         }
         fixture.git(&["add", "-A"]);
         fixture.git(&["commit", "-m", "baseline"]);
-        let source = fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../scripts/llama-canary-agent-repair.sh"),
-        )
-        .unwrap();
+        let source = crate::canary_full_gates::fixture::source();
         let start = source
             .find("\nassert_agent_control_unchanged() {\n")
             .unwrap()

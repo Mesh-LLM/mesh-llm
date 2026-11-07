@@ -23,6 +23,7 @@ pub(crate) mod canary_package_closure;
     reason = "Direct component tests also consume receipt parsing and error accessors"
 )]
 pub(crate) mod canary_receipts;
+pub(crate) mod canary_repair;
 #[path = "canary_receipts/source_plan.rs"]
 pub(crate) mod canary_source_plan;
 pub(crate) mod canary_timeout;

@@ -19,6 +19,9 @@ use skippy_protocol::binary::{
 
 const CLIENT_READY_HELLO_ENV: &str = "SKIPPY_STAGE_CLIENT_READY_HELLO";
 const CLIENT_READY_HELLO_PEEK_TIMEOUT: Duration = Duration::from_millis(500);
+/// How often an idle return stream checks for shutdown, as skippy-serving's
+/// prediction return hub does.
+const RETURN_WAIT_POLL: Duration = Duration::from_millis(250);
 
 pub(super) struct PredictionReturnListener {
     bind_addr: SocketAddr,
@@ -128,12 +131,18 @@ fn accept_prediction_return(
     consume_optional_client_ready_hello(&mut stream)?;
     send_ready(&mut stream).context("send direct prediction return ready")?;
     stream.flush().ok();
+    if !wait_for_frame(&stream, shutdown)? {
+        return Ok(());
+    }
     let open =
         read_stage_message(&mut stream, 0).context("read direct prediction return open message")?;
     if open.kind != WireMessageKind::PredictionReturnOpen {
         bail!("expected direct prediction return open message");
     }
     loop {
+        if !wait_for_frame(&stream, shutdown)? {
+            return Ok(());
+        }
         match recv_reply(&mut stream) {
             Ok(reply) => {
                 if sender.send(Ok(reply)).is_err() {
@@ -149,6 +158,43 @@ fn accept_prediction_return(
             Err(error) => return Err(error).context("read direct prediction return reply"),
         }
     }
+}
+
+/// Waits for the next frame to start; false once the listener shuts down. Only
+/// this wait is polled, since a Windows shutdown does not wake a blocked read;
+/// a started frame is read without a timeout.
+fn wait_for_frame(stream: &TcpStream, shutdown: &AtomicBool) -> Result<bool> {
+    // Darwin refuses socket options once both directions are shut down, which
+    // drop does at any point; with the shutdown flag set, that is its end.
+    let set_timeout = |timeout| match stream.set_read_timeout(timeout) {
+        Err(_) if shutdown.load(Ordering::SeqCst) => Ok(false),
+        Err(error) => Err(error).context("set direct prediction return wait timeout"),
+        Ok(()) => Ok(true),
+    };
+    if !set_timeout(Some(RETURN_WAIT_POLL))? {
+        return Ok(false);
+    }
+    let mut first = [0_u8; 1];
+    loop {
+        match stream.peek(&mut first) {
+            // Leave the timeout set: the read sees the end at once.
+            Ok(0) => return Ok(true),
+            Ok(_) => break,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) =>
+            {
+                if shutdown.load(Ordering::SeqCst) {
+                    return Ok(false);
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            Err(error) => return Err(error).context("wait for direct prediction return"),
+        }
+    }
+    set_timeout(None)
 }
 
 fn consume_optional_client_ready_hello(stream: &mut TcpStream) -> Result<()> {
@@ -233,6 +279,84 @@ mod tests {
 
         assert_eq!(reply.predicted, 674);
         client.join().unwrap();
+    }
+
+    fn open_message(request_id: u64) -> Vec<u8> {
+        let kind = WireMessageKind::PredictionReturnOpen;
+        let open = StageWireMessage {
+            kind,
+            pos_start: 0,
+            token_count: 0,
+            state: StageStateHeader::new(kind),
+            request_id,
+            session_id: 13,
+            sampling: None,
+            chat_sampling_metadata: None,
+            readout_tokens: Vec::new(),
+            tokens: Vec::new(),
+            positions: Vec::new(),
+            activation: Vec::new(),
+            raw_bytes: Vec::new(),
+        };
+        let mut bytes = Vec::new();
+        write_stage_message(&mut bytes, &open).unwrap();
+        bytes
+    }
+
+    /// Frames that start after a wait poll, and arrive in pieces, are read whole.
+    #[test]
+    fn late_and_split_frames_are_read_whole() {
+        let listener = PredictionReturnListener::start().unwrap();
+        let address = listener
+            .endpoint()
+            .strip_prefix("tcp://")
+            .unwrap()
+            .to_string();
+        let client = thread::spawn(move || {
+            let mut stream = TcpStream::connect(address).unwrap();
+            if client_ready_hello_enabled() {
+                send_ready(&mut stream).unwrap();
+            }
+            recv_ready(&mut stream).unwrap();
+            let mut reply = Vec::new();
+            send_reply_predicted(&mut reply, 674).unwrap();
+            for frame in [open_message(11), reply] {
+                thread::sleep(RETURN_WAIT_POLL + Duration::from_millis(150));
+                let (first, rest) = frame.split_at(frame.len() / 2);
+                stream.write_all(first).unwrap();
+                stream.flush().unwrap();
+                thread::sleep(RETURN_WAIT_POLL + Duration::from_millis(150));
+                stream.write_all(rest).unwrap();
+            }
+            stream
+        });
+
+        let reply = listener.receive(Duration::from_secs(5)).unwrap();
+
+        assert_eq!(reply.predicted, 674);
+        drop(client.join().unwrap());
+    }
+
+    #[test]
+    fn drop_stops_when_peer_stalls_after_the_open_message() {
+        let listener = PredictionReturnListener::start().unwrap();
+        let address = listener
+            .endpoint()
+            .strip_prefix("tcp://")
+            .unwrap()
+            .to_string();
+        let mut stream = TcpStream::connect(address).unwrap();
+        if client_ready_hello_enabled() {
+            send_ready(&mut stream).unwrap();
+        }
+        recv_ready(&mut stream).unwrap();
+        stream.write_all(&open_message(11)).unwrap();
+        thread::sleep(RETURN_WAIT_POLL);
+
+        let started = std::time::Instant::now();
+        drop(listener);
+
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

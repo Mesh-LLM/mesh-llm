@@ -14,10 +14,28 @@ use std::{
 };
 
 const MAX_PATCH: u64 = 256 * 1024 * 1024;
+#[derive(Clone, Copy)]
+enum CaptureBase<'a> {
+    Commit(&'a str),
+    EmptyTree(&'a str),
+}
+
+impl<'a> CaptureBase<'a> {
+    fn revision(self) -> &'a str {
+        match self {
+            Self::Commit(revision) | Self::EmptyTree(revision) => revision,
+        }
+    }
+
+    fn is_empty_tree(self) -> bool {
+        matches!(self, Self::EmptyTree(_))
+    }
+}
 #[derive(Serialize)]
 struct Snapshot {
     base: String,
     head: String,
+    full_tracked_tree: bool,
     tracked_patch_bytes: u64,
     untracked_files: usize,
 }
@@ -57,14 +75,19 @@ pub(super) fn save(root: &Path, output: &Path, base: &str) -> DynResult<()> {
         stage.path(),
         &output,
         stage.path(),
-        base,
+        CaptureBase::Commit(base),
         &git,
     )?;
     let nested = if let Some(nested_root) = source_root.nested(Path::new(".deps/llama.cpp"))? {
         let nested = root.join(".deps/llama.cpp");
         if nested.join(".git").symlink_metadata().is_ok() {
             nested_root.unchanged(&nested)?;
-            let nested_base = git.text(&nested, &["rev-parse", "HEAD"])?;
+            let recorded_base = nested_base(&nested, &nested_root, &git)?;
+            let full_tracked_tree = recorded_base.is_none();
+            let nested_base = match recorded_base {
+                Some(base) => base,
+                None => git.text(&nested, &["mktree"])?,
+            };
             source::revision(&nested_base)?;
             let destination = stage.path().join("prepared-llama-cpp");
             fs::create_dir(&destination)?;
@@ -74,7 +97,11 @@ pub(super) fn save(root: &Path, output: &Path, base: &str) -> DynResult<()> {
                 &destination,
                 &output,
                 stage.path(),
-                &nested_base,
+                if full_tracked_tree {
+                    CaptureBase::EmptyTree(&nested_base)
+                } else {
+                    CaptureBase::Commit(&nested_base)
+                },
                 &git,
             )?)
         } else {
@@ -113,17 +140,53 @@ pub(super) fn save(root: &Path, output: &Path, base: &str) -> DynResult<()> {
     Ok(())
 }
 
+fn nested_base(root: &Path, admitted: &Root, git: &Git) -> DynResult<Option<String>> {
+    let marker = Path::new(".mesh-llm-upstream-sha");
+    match fs::symlink_metadata(root.join(marker)) {
+        Ok(_) => {
+            let mut value = String::new();
+            admitted
+                .file(marker)?
+                .take(128)
+                .read_to_string(&mut value)?;
+            let value = value.trim().to_owned();
+            if source::revision(&value).is_err()
+                || git
+                    .text(root, &["cat-file", "-e", &format!("{value}^{{commit}}")])
+                    .is_err()
+            {
+                return Ok(None);
+            }
+            Ok(Some(value))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 fn capture(
     root: &Path,
     admitted: &Root,
     output: &Path,
     destination: &Path,
     stage: &Path,
-    base: &str,
+    base: CaptureBase<'_>,
     git: &Git,
 ) -> DynResult<Snapshot> {
     admitted.unchanged(root)?;
-    git.text(root, &["cat-file", "-e", &format!("{base}^{{commit}}")])?;
+    let object_type = if base.is_empty_tree() {
+        "tree"
+    } else {
+        "commit"
+    };
+    git.text(
+        root,
+        &[
+            "cat-file",
+            "-e",
+            &format!("{}^{{{object_type}}}", base.revision()),
+        ],
+    )?;
     let head = git.text(root, &["rev-parse", "HEAD"])?;
     source::revision(&head)?;
     let listing = git.run(
@@ -154,7 +217,7 @@ fn capture(
             "--no-ext-diff".into(),
             "--no-textconv".into(),
             output_arg,
-            base.into(),
+            base.revision().into(),
             "--".into(),
         ],
     )?;
@@ -192,8 +255,9 @@ fn capture(
         return Err("recovery source HEAD changed during capture".into());
     }
     Ok(Snapshot {
-        base: base.into(),
+        base: base.revision().into(),
         head,
+        full_tracked_tree: base.is_empty_tree(),
         tracked_patch_bytes: bytes,
         untracked_files,
     })

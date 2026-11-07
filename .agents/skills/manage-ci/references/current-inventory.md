@@ -1,11 +1,16 @@
 # MeshLLM CI inventory
 
-Linux Rust-test batches and the SafeTensors smoke set
-`CARGO_PROFILE_TEST_DEBUG=0` at reusable-workflow scope; the trusted sccache
-warmer uses the same setting for its test graph. Complete package tests,
-assertions and overflow checks remain enabled. Cache epoch `v4` invalidates
-the previous namespace. Batch jobs report filesystem space before each package
-and target/compiler-cache sizes after the test step, including failures.
+Every workflow disables Rust debug information for the dev, test, release and
+bench profiles through workflow- or job-level `CARGO_PROFILE_<PROFILE>_DEBUG=0`.
+Reusable workflows set their own environment, and the Linux test, client and
+Fly Docker builders set the same values inside their Rust build stages.
+The trusted compiler-seed warmer uses the same settings as consumers.
+The upstream canary sets them in each executing job; its reusable family-pass
+workflow declares its own workflow environment.
+Local development defaults, complete package tests, assertions and overflow
+checks are preserved. Cache epoch `v5` invalidates the previous namespace.
+Batch jobs report filesystem space before each package and target/compiler-cache
+sizes after the test step, including failures.
 
 The standalone C++ facade paths `skippy/skippy_api/**` and
 `skippy/skippy-api-rs/**` have additive tooling ownership. Their catalog-only
@@ -190,9 +195,12 @@ read before selecting: the feed is ordered by creation time, so a draft created
 long ago but published recently is on a late page, and the 180-second budget and
 1000-page ceiling bound the walk. It records the release kind, publication time,
 tag and commit in the Actions summary and rejects lookup failures or tag movement
-without falling back to `master`. The hosted selection step alone receives
-the workflow's read-only GitHub token; fixed read-only GraphQL queries fetch
-metadata without release assets, and REST resolves the selected tag. The lookup
+without falling back to `master`. The hosted upstream selection step receives
+the workflow's read-only GitHub token through `GH_TOKEN`.
+Runner placement uses managed memory labels without a runner API query. Workers
+receive no GitHub token.
+Fixed read-only GraphQL queries fetch metadata without release assets, and
+REST resolves the selected tag. The lookup
 has a 180-second total budget, 1 MiB per response and a 1000-page ceiling;
 incomplete pagination fails instead of selecting from a partial feed.
 An explicit full `upstream_sha` bypasses release lookup; empty or `latest` selects
@@ -273,7 +281,15 @@ gh workflow run llama-upstream-canary.yml --ref main \
 The run summary records the resolved MeshLLM SHA and existing llama.cpp pin;
 a branch moving later cannot change the selected source for that run.
 
-`llama-canary-family-pass.yml` owns the reusable build → family matrix → hosted
+Manual `mesh_action=upgrade` uses that frozen selected revision as a repair base
+and requires an exact, different `upstream_sha`. It keeps the controller on main
+and uses the ordinary candidate, retry, independent verification and publication
+pipeline. Packages bind both the controller and selected base; changed candidates
+must be direct children of that base with an admitted bundle. Certify modes still
+reject upstream overrides and preserve the selected commit unchanged.
+
+`llama-canary-family-pass.yml` owns the reusable macOS build → Linux native
+build → hosted package combination → memory-tier family matrix → hosted
 aggregate. The protected controller prepares automation and invokes `canary-receipts build`
 with frozen controller/selected revisions, pass identity, budgets and previous-package admission.
 Package Git probes capture exact raw stdout with a 4 MiB ceiling before parsing
@@ -289,23 +305,26 @@ job results, then export verified classified feedback. Retry rows overlay only
 controller placement fields over admitted source rows. Each attempt selector
 and the final selector prepare the frozen controller with both cache authorities
 disabled before invoking native selection.
-Its bounded process owner retains redacted logs and owns the repair heartbeat tree.
+Its bounded process owner retains redacted logs and owns the Goose process.
 The retained repair wrapper performs prepare, manifest-policy, full native and Rust
 builds, generated-family validation, smoke, and split-roster checks. It validates
 the immutable HF cache before compilation and exports a candidate Git bundle,
 one-family-per-shard plan, five arm64 certification binaries, a prebuilt
 multimodal library-test executable, and the run-scoped CPU workload oracle
-closure built by `just skippy-workload-oracles-build`. Static Metal resources
-are embedded; an unpackaged non-system dylib makes the handoff fail. SHA-256
-digests bind all handoff bytes to the candidate, main base, run/attempt, and
+closure built by `just skippy-workload-oracles-build` on each OS. Static Metal
+resources are embedded; an unpackaged non-system dylib or unsafe Linux ELF
+loader path makes the handoff fail. SHA-256 digests bind both native payloads
+to the candidate, main base, run/attempt, and
 pass identity.
 The native generator defaults to 600 seconds per whole-source rewriter pass,
 independently of its 60-second Git command budget. `--timeout` overrides both.
 Both generation and idempotence remain required; deadline diagnostics retain
 readable child output and process cleanup status.
 
-The build job sets `CTEST_PARALLEL_LEVEL=16` for complete upstream CTest runs
-in the repair session and trusted build; the per-case timeout remains 900 seconds.
+The macOS build job sets `CTEST_PARALLEL_LEVEL=16` for complete upstream CTest
+runs in the repair session and trusted build. The Linux build job uses 4 to
+limit concurrent CUDA test memory pressure. The per-case timeout remains 900
+seconds.
 The build job prepares the locked canary Python SDK before its early Metal
 battery, so Nomic embedding uses the same interpreter as family workers.
 Non-chat certification starts the candidate through `skippy serve --model-path`
@@ -313,7 +332,7 @@ and verifies oracle evidence against that same `skippy` executable. Its native
 fixture distinguishes API workload classes from causal decoder execution;
 OCR and speech frontends may legitimately warm a decoder.
 Goose's build and test commands use `scripts/llama-canary-log-command.sh` to
-stream output and retain separate invocation logs, exit statuses, and available
+retain complete invocation logs, exit statuses, and available
 CTest result files under the build job's 14-day repair evidence artifact.
 That upload explicitly includes hidden run-owned `.deps` state and the native
 build's `Testing/Temporary` results before cleanup. The controller forwards up
@@ -337,9 +356,13 @@ name breaking ties. Balanced shard membership remains unchanged. This puts
 small models first in the canary's one-family-per-job matrix; parallel runner
 availability can still change actual start and completion order.
 
+The native build adapter keeps arch/lipo and OSX CMake options on macOS only;
+Linux uses its selected CUDA backend with the ordinary shell.
+
 Partial reruns reuse the successful producer's exact identity digest from the
-same workflow run, retaining its original attempt. Family artifacts include
-that digest and their worker attempt; aggregation downloads all attempts for
+same run even when native producer attempts differ. Combination retains the
+macOS producer's attempt and rejects either producer from a future attempt.
+Family artifacts include that digest and their worker attempt; aggregation downloads all attempts for
 that identity and pass, then selects the latest receipt per family. Newer
 failures supersede older successes; duplicate same-attempt receipts, missing
 families, foreign identities, and out-of-range attempts fail closed. The matrix
@@ -459,6 +482,17 @@ a repeated infrastructure failure or invalid aggregate evidence stops. Only
 complete independent success permits publication.
 Full worker/build logs remain for 14 days; executable handoffs remain for seven
 days so a single-machine queue can complete later passes.
+
+Llama repair invokes Goose in normal text mode. Its stdout and stderr stream
+once to the job console and are saved as `agent.log`; there is no progress
+projector, activity ticker or tool-output duplication. GitHub workflow commands
+are disabled around the Goose stream so model/tool text cannot alter the job.
+Complete per-command logs remain in the existing 14-day build artifact and can
+be inspected on the runner while a command is active. The artifact becomes
+downloadable after upload. Logging failure stops the supervised turn; credential
+and certification boundaries are unchanged.
+
+See [Following a Llama Upgrade repair](../../../../ci/llama-canary/PROGRESS.md).
 
 Within each candidate build job, Goose resumes the same session for
 prepare/build failures under the existing 11.5-hour coding-admission and
@@ -877,23 +911,21 @@ builds and long test phases. Remote cache configuration is preserved. It never
 stops the default host server. Canary toolchain
 verification only sets cache identity; accelerator setup owns server startup.
 
-Persistent macOS canary preflight, build, family and infrastructure-retry jobs
-require `self-hosted`, `macOS`, `ARM64`, `jy-managed` and `family-certify`.
-Preflight/build require `accelerator-memory-128plus`; workers retain the
-controller's `matrix.memory_tier`. JY attribute policies select macOS Apple M1
-Ultra 128 GiB and Apple M3 Ultra 256 GiB with mounted model storage; both carry
-128-plus, and only the M3 carries 256-plus. Runner groups allow only the two
-canary workflows at protected `main` references. The
-[companion JY/Fleet change](https://github.com/general-inference/monorepo/pull/244)
-must deploy, provision and register matching runners before this switch merges.
-Jobs queue if managed capacity is absent.
-These jobs
-run `setup-canary-runner` before `prepare-automation` with
-`runner-profile: preinstalled-macos`. Missing tools fail with their names and a
-runner-provisioning instruction. This profile skips Rust and Just installers,
-disables Rustup automatic toolchain installation, and selects the accelerator
-action's `tool-source: preinstalled` path, which checks Homebrew lld and sccache
-without installing either. Hosted profiles retain their existing installers.
+Persistent canary jobs use the profile matching their runner OS. Managed labels
+retain `self-hosted`, `ARM64`, `jy-managed` and `family-certify`. Preflight and
+family jobs request only their memory tier; the two native producers also
+request their OS. The JY policies select eligible hardware with mounted model
+storage, and only eligible 256 GiB hosts carry the 256-plus label. Runner groups
+allow only the two canary workflows at
+protected `main` references. Jobs queue if managed capacity is absent.
+These jobs run `setup-canary-runner` before `prepare-automation` with the
+resolver-selected `preinstalled-macos` or `preinstalled-linux` profile.
+Missing tools fail with their names and a runner-provisioning instruction.
+Both profiles skip Rust and Just installers, disable Rustup automatic toolchain
+installation, and select the accelerator action's `tool-source: preinstalled`
+path. The macOS path checks Homebrew lld and sccache without installing either;
+the Linux path checks its provisioned CUDA/toolchain dependencies. Hosted
+profiles retain their existing installers.
 The build prepares controller automation before the locked Python SDK
 environment, so SDK source admission uses the initialized automation binary.
 
@@ -1153,8 +1185,8 @@ Rust-test and host jobs restore one bounded trusted sccache seed
 instead of per-row Cargo target archives. The protected warmer's
 `just ci-sccache-seed-build` recipe covers the dominant `mesh-llm` Clippy graph,
 the isolated `mesh-llm-cli` test graph, and the isolated default-feature `xtask`
-Clippy graph with all targets. Only the test-build command disables test debug
-information; Clippy keeps the same profile as its consumer. The shared key also
+Clippy graph with all targets. Every profile disables debug information in the
+warmer and its consumers. The shared key also
 hashes the root and workspace package Cargo manifests and the warmer workflow
 so feature and profile changes invalidate the seed. Depot selections cannot
 restore that seed through their cross-trust cache proxy. Its exact key fingerprints the
@@ -1633,6 +1665,28 @@ unmapped planned package is passed through to the executor's workspace filter,
 which drops and annotates it. A branch that predates a member added on the
 default branch therefore still gets a verdict instead of a red lane.
 
+### Focused upgrade repair checks
+
+`just llama-upgrade <upstream-sha> metal <cache-root>` enters the CI repair/build owner locally without publication credentials (see `ci/llama-canary/REPAIR.md`). `just llama-upgrade-check fast metal` and the trusted canary call the same typed
+`automation canary-receipts repair-check` command. The environment phase restores
+the controller-owned native-test lock before coding. Fast checks compile static
+binaries, verify their native ABI symbols and compiled source/binary hashes, and exercise
+GPU Flash Attention split/chain and recurrent state execution. The full phase
+then checks generated equality/idempotence, runs the complete native suite and
+canonical Skippy, workload-oracle, System One and Laya gates. Focused results do
+not replace the complete candidate and independent family passes. Step logs stay
+on disk; live output contains progress and bounded failure excerpts. One isolated
+Metal fixture SIGBUS gets a diagnostic fixture retry and an unfiltered native
+rerun, without starting an agent for the transient failure.
+
+Every coding turn saves an explicitly unverified source checkpoint; the native
+outer supervisor also attempts recovery after termination and cancellation.
+When the native base commit is unavailable, recovery captures the complete
+tracked tree against an empty tree. Candidate processes cannot inherit GitHub
+workflow-control paths, and local repair uses a private home without Git credentials.
+Recovery uploads precede verbose logs and omit the restored Python environment.
+The original failure remains authoritative if diagnostic recovery fails.
+
 ### Canary memory admission and Python SDK
 
 The controller projects each immutable source plan onto `family-certify` plus
@@ -1684,12 +1738,12 @@ Historical source workers consume that exact SDK interpreter. This is managed
 project dependency restoration, not an installation into system Python or the
 read-only model cache. The runner still requires preinstalled `uv`.
 
-The canary build and generated-patch checks share the locked external Jinja
+The canary build and generated-patch checks share the locked external native-test
 project in the trusted controller's `ci/llama-canary/jinja`, frozen before any
 selected-source switch so historical revisions need no new manifest. Its environment lives under the run-owned
 state directory and uses the prepared SDK interpreter when available, otherwise
 the installed `python3`. Interpreter downloads are disabled. Both upstream
-Jinja tests remain selected by the complete native suite. The optional developer
+Jinja and FP8 conversion tests remain selected by the complete native suite. The lock requires Python 3.12 or newer and includes NumPy, PyTorch, Safetensors and Transformers. The optional developer
 llama-benchy wrapper defaults to a full upstream source commit; explicit caller
 overrides remain available. Neither dependency adds repository Python code.
 

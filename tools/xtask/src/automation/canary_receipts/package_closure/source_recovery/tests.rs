@@ -158,7 +158,7 @@ fn recovery_preserves_literal_external_dangling_links_and_platform_filenames_wit
 }
 
 #[test]
-fn recovery_captures_dirty_prepared_checkout_against_its_own_head() {
+fn recovery_captures_dirty_prepared_checkout_without_a_marker() {
     let fixture = Fixture::new();
     let nested = fixture.root.join(".deps/llama.cpp");
     fs::create_dir_all(&nested).unwrap();
@@ -172,7 +172,8 @@ fn recovery_captures_dirty_prepared_checkout_against_its_own_head() {
     let output = fixture.root.join("recovery");
     snapshot::save(&fixture.root, &output, &fixture.base).unwrap();
     let report = manifest(&output);
-    assert_eq!(report["prepared_llama_cpp"]["base"], base);
+    assert_eq!(report["prepared_llama_cpp"]["head"], base);
+    assert_eq!(report["prepared_llama_cpp"]["full_tracked_tree"], true);
     assert_eq!(report["prepared_llama_cpp"]["untracked_files"], 1);
     let patch = fs::read(output.join("prepared-llama-cpp/tracked.patch")).unwrap();
     assert!(String::from_utf8_lossy(&patch).contains("dirty repair"));
@@ -202,6 +203,64 @@ fn recovery_does_not_execute_candidate_git_fsmonitor_external_diff_or_textconv()
     fs::write(fixture.root.join("tracked.txt"), b"repair").unwrap();
     snapshot::save(&fixture.root, &fixture.root.join("recovery"), &fixture.base).unwrap();
     assert!(!marker.exists());
+}
+
+#[test]
+fn recovery_preserves_native_commits_that_were_not_exported_to_the_durable_queue() {
+    let fixture = Fixture::new();
+    let nested = fixture.root.join(".deps/llama.cpp");
+    fs::create_dir_all(&nested).unwrap();
+    git(&nested, &["init", "-q"]);
+    fs::write(nested.join("runtime.cpp"), b"upstream\n").unwrap();
+    git(&nested, &["add", "."]);
+    commit(&nested);
+    let base = git(&nested, &["rev-parse", "HEAD"]);
+    fs::write(nested.join("runtime.cpp"), b"committed repair\n").unwrap();
+    git(&nested, &["add", "."]);
+    commit(&nested);
+    fs::write(nested.join(".mesh-llm-upstream-sha"), &base).unwrap();
+    let output = fixture.root.join("recovery");
+    snapshot::save(&fixture.root, &output, &fixture.base).unwrap();
+    assert_eq!(manifest(&output)["prepared_llama_cpp"]["base"], base);
+    assert!(
+        fs::read_to_string(output.join("prepared-llama-cpp/tracked.patch"))
+            .unwrap()
+            .contains("committed repair")
+    );
+    assert_eq!(manifest(&output)["verified"], false);
+}
+
+#[test]
+fn recovery_preserves_committed_native_repairs_without_a_reachable_upstream_marker() {
+    for marker in [None, Some("0000000000000000000000000000000000000000")] {
+        let fixture = Fixture::new();
+        let nested = fixture.root.join(".deps/llama.cpp");
+        fs::create_dir_all(&nested).unwrap();
+        git(&nested, &["init", "-q"]);
+        fs::write(nested.join("runtime.cpp"), b"upstream\n").unwrap();
+        git(&nested, &["add", "."]);
+        commit(&nested);
+        fs::write(nested.join("runtime.cpp"), b"committed repair\n").unwrap();
+        git(&nested, &["add", "."]);
+        commit(&nested);
+        fs::write(nested.join("runtime.cpp"), b"dirty repair\n").unwrap();
+        if let Some(marker) = marker {
+            fs::write(nested.join(".mesh-llm-upstream-sha"), marker).unwrap();
+        }
+        let output = fixture.root.join("recovery");
+        snapshot::save(&fixture.root, &output, &fixture.base).unwrap();
+        let report = manifest(&output);
+        assert_eq!(report["prepared_llama_cpp"]["full_tracked_tree"], true);
+        let patch = output.join("prepared-llama-cpp/tracked.patch");
+        let restored = fixture.root.parent().unwrap().join("restored");
+        fs::create_dir(&restored).unwrap();
+        git(&restored, &["init", "-q"]);
+        git(&restored, &["apply", "--binary", patch.to_str().unwrap()]);
+        assert_eq!(
+            fs::read(restored.join("runtime.cpp")).unwrap(),
+            b"dirty repair\n"
+        );
+    }
 }
 
 #[test]

@@ -78,13 +78,22 @@ cleanup() {
 trap cleanup EXIT
 
 git -C "$SOURCE_ROOT" checkout --force --detach "$PRE_GENERATED_SOURCE_HEAD" >/dev/null
-if marker_matches="$(rg -n '\bbegin_block[[:space:]]*\(|\bend_block[[:space:]]*\(' "$SOURCE_ROOT/src/models" || true)" &&
+# The managed Linux canary runner has grep but does not provision ripgrep.
+# Search tracked model sources so untracked backups and symlinks cannot alter the gate.
+# Keep word boundaries Unicode-aware even if the caller uses the C locale.
+model_grep() {
+  LC_ALL=C.UTF-8 git -C "$SOURCE_ROOT" grep "$@" -- src/models
+}
+begin_block_pattern='(^|[^[:alnum:]_])begin_block[[:space:]]*\('
+end_block_pattern='(^|[^[:alnum:]_])end_block[[:space:]]*\('
+stage_filter_pattern='(^|[^[:alnum:]_])stage_filter([^[:alnum:]_]|$)'
+if marker_matches="$(model_grep -n -E "$begin_block_pattern|$end_block_pattern" || true)" &&
    [[ -n "$marker_matches" ]]; then
   echo "pre-generated queue already contains model-stage transformations:" >&2
   printf '%s\n' "$marker_matches" >&2
   exit 1
 fi
-if legacy_filter_matches="$(rg -n '\bstage_filter\b' "$SOURCE_ROOT/src/models" || true)" &&
+if legacy_filter_matches="$(model_grep -n -E "$stage_filter_pattern" || true)" &&
    [[ -n "$legacy_filter_matches" ]]; then
   echo "model-local stage filtering is forbidden under Graph Filter V2:" >&2
   printf '%s\n' "$legacy_filter_matches" >&2
@@ -150,16 +159,19 @@ cargo xtool automation native-generator contracts coverage \
   --family-map "$FAMILY_SOURCE_MAP" \
   --report "$FIRST_REPORT"
 
-if legacy_generated_matches="$(rg -n '\bstage_filter\b|build_inputs\.filter|g_skippy_graph_filter' \
-    "$SOURCE_ROOT/src/models" "$GENERATED_PATCH" "$GENERATED_PATCH_DIR" || true)" &&
+if legacy_generated_matches="$(
+    model_grep -n -E "$stage_filter_pattern|build_inputs\.filter|g_skippy_graph_filter" || true
+    LC_ALL=C.UTF-8 grep -R -n -E "$stage_filter_pattern|build_inputs\.filter|g_skippy_graph_filter" \
+      "$GENERATED_PATCH" "$GENERATED_PATCH_DIR" || true
+  )" &&
    [[ -n "$legacy_generated_matches" ]]; then
   echo "generated Graph Filter V2 builders contain legacy stage-selection control flow:" >&2
   printf '%s\n' "$legacy_generated_matches" >&2
   exit 1
 fi
 
-if ! rg -q '\bbegin_block[[:space:]]*\(' "$SOURCE_ROOT/src/models" ||
-   ! rg -q '\bend_block[[:space:]]*\(' "$SOURCE_ROOT/src/models"; then
+if ! model_grep -q -E "$begin_block_pattern" ||
+   ! model_grep -q -E "$end_block_pattern"; then
   echo "generated Graph Filter V2 tree is missing block-boundary annotations" >&2
   exit 1
 fi

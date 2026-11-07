@@ -87,7 +87,7 @@ pub enum ModelWorkloadClass {
     Rerank,
     EncoderDecoder,
     SpeechSynthesis,
-    /// Typed System One decisions (`POST /systemone`) with no text generation,
+    /// Typed System One decisions (`POST /v1/systemone`) with no text generation,
     /// such as a Laya encoder + decision head.
     Decision,
     /// Speech-to-text (`/v1/audio/transcriptions` and `/translations`) with no

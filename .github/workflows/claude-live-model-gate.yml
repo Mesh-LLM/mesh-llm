@@ -16,6 +16,12 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_BENCH_DEBUG: "0"
+
 jobs:
   live_claude:
     name: Claude Code → Mesh → live Claude

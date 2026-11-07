@@ -33,6 +33,8 @@ pub(crate) fn print_usage() {
         "  cargo xtool automation agent-fixture-evidence {{soak RESPONSE LABEL | result JSONL LABEL REQUIRE_TOOLS | probe RESPONSE LABEL | opencode-session JSONL | opencode-result JSONL}}"
     );
     println!("  cargo xtool automation family-model-identity MODEL_ID MODEL_PATH");
+    println!("  cargo xtool automation canary-receipts local-upgrade --help");
+    println!("  cargo xtool automation canary-receipts repair-check --help");
     println!("  cargo xtool automation family-model-identity --snapshot-revision PATH");
     println!(
         "  cargo xtool automation family-battery-policy ROOT MANIFEST PLAN SHARD_INDEX_OR_EMPTY"

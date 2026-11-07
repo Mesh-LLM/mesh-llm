@@ -20,7 +20,7 @@ log="$command_dir/output.log"
 printf 'repair command log: %s\n' "$log" >&2
 set +e
 {
-  printf 'started: %s\nlabel: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$label"
+  printf 'started: %s\nstarted_epoch: %s\nlabel: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(date +%s)" "$label"
   "$@"
 } 2>&1 | tee "$log"
 pipeline_status=("${PIPESTATUS[@]}")
@@ -39,4 +39,8 @@ if [[ -n "${LLAMA_BUILD_DIR:-}" && -d "$LLAMA_BUILD_DIR/Testing/Temporary" ]]; t
   done
 fi
 printf 'finished: %s\nexit_status: %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$status" | tee -a "$log"
+# Keep wrapper completion separate from arbitrary command output. Publish it
+# atomically only after tee and the final log footer have finished.
+printf '%s\n' "$status" > "$command_dir/completion.tmp"
+mv "$command_dir/completion.tmp" "$command_dir/completion"
 exit "$status"

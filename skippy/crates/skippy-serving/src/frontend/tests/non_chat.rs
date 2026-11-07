@@ -1,4 +1,5 @@
 use super::*;
+use skippy_inference_api::chat::ChatCompletionRequest;
 
 use skippy_inference_api::{
     AudioFormat, AudioSpeechRequest, AudioTranscriptionRequest, EmbeddingInput, EmbeddingOutput,
@@ -356,13 +357,13 @@ async fn certify_encoder_decoder(backend: &StageOpenAiBackend, max_tokens: u32) 
 }
 
 /// Build an in-process media request from the exact fixture bytes.
-fn media_chat_request(fixture: &WorkloadFixture) -> Result<ChatCompletionRequest> {
+fn media_chat_request(fixture: &WorkloadFixture) -> Result<GenerationRequest> {
     let path = fixture
         .media_path
         .as_ref()
         .context("media path is required")?;
     let encoded = base64::engine::general_purpose::STANDARD.encode(fs::read(path)?);
-    serde_json::from_value(json!({
+    serde_json::from_value::<ChatCompletionRequest>(json!({
         "model": fixture.model_id,
         "messages": [{
             "role": "user",
@@ -374,7 +375,8 @@ fn media_chat_request(fixture: &WorkloadFixture) -> Result<ChatCompletionRequest
         "max_tokens": fixture.max_tokens,
         "temperature": 0.0
     }))
-    .context("build OCR request")
+    .map(Into::into)
+        .context("build OCR request")
 }
 
 /// Exercise the OCR projector and assert a usable textual result.

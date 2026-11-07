@@ -35,6 +35,10 @@ const GRAMMAR: Grammar = Grammar {
 
 pub(crate) fn run(args: &[String]) -> DynResult<()> {
     match args {
+        [verb, rest @ ..] if verb == "local-upgrade" => {
+            return super::canary_repair::local::run(rest);
+        }
+        [verb, rest @ ..] if verb == "repair-check" => return super::canary_repair::run(rest),
         [verb, rest @ ..] if verb == "reconcile" => return reconcile_command::run(rest),
         [verb, rest @ ..] if verb == "select-attempt" => {
             return attempt_selection::run_attempt(rest);
@@ -68,6 +72,7 @@ pub(crate) fn run(args: &[String]) -> DynResult<()> {
                 "producer-receipt"
                     | "candidate-plan"
                     | "pack"
+                    | "combine"
                     | "restore"
                     | "certify"
                     | "split-roster"

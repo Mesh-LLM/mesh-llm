@@ -50,6 +50,7 @@ fn bootstrap_fixture_build_and_required_environment_cannot_be_omitted_or_reorder
             "target_directory=\"$(printf",
             "guessed_directory=\"$(printf",
         ),
+        source.replace("$1 == \"binary_path\"", "$1 == \"target_directory\""),
         source.replace(
             "export CARGO_TARGET_DIR=\"$target_directory\"",
             "export CARGO_TARGET_DIR=target",
@@ -74,6 +75,17 @@ fn bootstrap_fixture_build_and_required_environment_cannot_be_omitted_or_reorder
     );
     assert!(recipe(&late, &targets).is_err());
 }
+#[test]
+fn fixture_path_in_shell_comment_cannot_mask_an_incorrect_assignment() {
+    let (source, targets) = inputs();
+    let changed = source.replace(
+        r#"export SPV_ADAPTER_FIXTURE="${binary%[/\\]*}/examples/swift_privacy_lint_fixture$fixture_suffix""#,
+        r#"export SPV_ADAPTER_FIXTURE="$target_directory/debug/examples/swift_privacy_lint_fixture$fixture_suffix" # ${binary%[/\\]*}/examples/swift_privacy_lint_fixture$fixture_suffix"#,
+    );
+    assert_ne!(changed, source);
+    assert!(recipe(&changed, &targets).is_err());
+}
+
 #[test]
 fn quality_calls_are_required_direct_and_ordered_before_retained_legacy() {
     for run in [

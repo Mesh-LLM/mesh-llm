@@ -66,12 +66,13 @@ pub(super) fn check(root: &Path) -> DynResult<()> {
             .to_owned();
         let source = std::fs::read_to_string(&path)?;
         shell::check_expressions(&source).map_err(|error| format!("{name}: {error}"))?;
-        let document = if name == "llama-upstream-canary.yml" {
-            workflow_yaml::parse_resolved_aliases(&source)
-        } else {
-            workflow_yaml::parse(&source)
-        }
-        .map_err(|error| format!("{name}: {error}"))?;
+        let document =
+            if name == "llama-upstream-canary.yml" || name == "llama-canary-family-pass.yml" {
+                workflow_yaml::parse_resolved_aliases(&source)
+            } else {
+                workflow_yaml::parse(&source)
+            }
+            .map_err(|error| format!("{name}: {error}"))?;
         shell::check_containers(&document).map_err(|error| format!("{name}: {error}"))?;
         workflows.insert(name, document);
     }

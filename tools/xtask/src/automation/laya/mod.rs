@@ -115,7 +115,7 @@ impl Source {
             Self::Http { base_url, model } => {
                 let body = request::body(model, golden)?;
                 let bytes = http::request(
-                    &format!("{}/systemone", base_url.trim_end_matches('/')),
+                    &format!("{}/v1/systemone", base_url.trim_end_matches('/')),
                     Some(body),
                     timeout,
                 )?;

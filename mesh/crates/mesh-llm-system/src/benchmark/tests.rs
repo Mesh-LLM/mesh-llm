@@ -619,8 +619,12 @@ fn test_run_benchmark_times_out_child_process() {
     // Replace the shell with the sleeping process so killing the benchmark
     // child also closes its piped stdout/stderr immediately.
     let child = write_test_child(&root, "mesh-llm-child", "exec sleep 5");
+    // cmd has no `exec`, and any program it starts (`timeout`, `ping`) would
+    // outlive the killed script and hold its pipes open. Spin inside cmd
+    // itself instead. Not `timeout /t` anyway: from a Git Bash shell GNU
+    // coreutils' `timeout` comes first on PATH and rejects `/t`.
     #[cfg(windows)]
-    let child = write_test_child(&root, "mesh-llm-child.cmd", "timeout /t 5 >NUL");
+    let child = write_test_child(&root, "mesh-llm-child.cmd", ":spin\r\ngoto spin");
     // Timed from the attempt that ran: a start retried on "Text file busy"
     // isn't part of the timeout.
     let mut started = Instant::now();

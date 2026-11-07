@@ -137,11 +137,7 @@ impl Fixture {
         }
     }
     fn logged_script(&self, action: &str) -> String {
-        let source = fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../scripts/llama-canary-agent-repair.sh"),
-        )
-        .unwrap();
+        let source = crate::canary_full_gates::fixture::source();
         let selection = source
             .split_once("# Legacy workload automation selection begins.\n")
             .unwrap()
@@ -446,10 +442,7 @@ fn copied_real_final_bundle_uses_candidate_base_when_controller_contains_candida
     )
     .unwrap();
     fixture.document["authority"]["controller"]["revision"] = json!(commit(&controller));
-    let source = fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/llama-canary-agent-repair.sh"),
-    )
-    .unwrap();
+    let source = crate::canary_full_gates::fixture::source();
     let finalization = caller_function(&source, "finalize_certified_tree");
     let pin = caller_function(&source, "verify_repair_pin");
     let action = format!(

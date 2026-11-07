@@ -10,12 +10,16 @@ use mesh_llm_node::serving::{
 use mesh_llm_system::hardware::{self, Metric};
 #[cfg(test)]
 use mesh_llm_types::models::capabilities::ModelCapabilities;
-use skippy_inference_api::{ChatCompletionRequest, ChatMessage, InferenceBackend, MessageContent};
+use skippy_inference_api::{
+    InferenceBackend, MessageContent, generation::GenerationMessage, generation::GenerationRequest,
+};
 use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(test)]
+use std::time::Instant;
 use tempfile::NamedTempFile;
 use tokio::sync::Mutex;
 
@@ -55,7 +59,6 @@ pub mod config {
 pub mod native_runtime;
 
 const DEFAULT_EMBEDDED_WORKER_STACK_SIZE: usize = 8 * 1024 * 1024;
-const EMBEDDED_STARTUP_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Debug)]
 pub struct EmbeddedServeStatus {
@@ -118,31 +121,6 @@ impl EmbeddedServeHandle {
             .map_err(|_| anyhow::anyhow!("embedded mesh runtime control channel is closed"))?;
         rx.await
             .context("embedded mesh runtime join response dropped")?
-    }
-
-    /// Request cancellation and wait until the runtime thread finishes cleanup.
-    /// Dropping the handle also requests cancellation, but does not wait for it.
-    pub async fn stop(mut self) -> Result<()> {
-        self.request_shutdown("sdk");
-        let task = self
-            .task
-            .take()
-            .context("embedded mesh runtime thread handle is unavailable")?;
-        join_embedded_runtime_thread(task).await?;
-        Ok(())
-    }
-
-    fn request_shutdown(&mut self, source: &'static str) {
-        self.shutdown.send_replace(true);
-        if let Some(tx) = self.control_tx.take() {
-            let _ = tx.send(crate::api::RuntimeControlRequest::Shutdown { source });
-        }
-    }
-}
-
-impl Drop for EmbeddedServeHandle {
-    fn drop(&mut self) {
-        self.request_shutdown("sdk-drop");
     }
 }
 
@@ -294,40 +272,6 @@ fn embedded_runtime_options(
     }
 }
 
-async fn join_embedded_runtime_thread(task: std::thread::JoinHandle<Result<()>>) -> Result<()> {
-    tokio::task::spawn_blocking(move || join_embedded_runtime_thread_blocking(task))
-        .await
-        .context("join embedded mesh runtime thread")?
-}
-
-async fn join_embedded_runtime_thread_with_timeout(
-    task: std::thread::JoinHandle<Result<()>>,
-    timeout: Duration,
-) -> Result<()> {
-    tokio::task::spawn_blocking(move || {
-        let deadline = Instant::now() + timeout;
-        loop {
-            if task.is_finished() {
-                return join_embedded_runtime_thread_blocking(task);
-            }
-            if Instant::now() >= deadline {
-                anyhow::bail!(
-                    "timed out after {:?} waiting for embedded mesh runtime thread to exit",
-                    timeout
-                );
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    })
-    .await
-    .context("join embedded mesh runtime thread after startup failure")?
-}
-
-fn join_embedded_runtime_thread_blocking(task: std::thread::JoinHandle<Result<()>>) -> Result<()> {
-    task.join()
-        .map_err(|_| anyhow::anyhow!("embedded mesh runtime thread panicked"))?
-}
-
 /// Wait for the embedded worker's own bind evidence, then acquire the native
 /// node over the control channel. The readiness wait gives fast failure
 /// reporting and the worker-only bind proof (#2147) before the node wait
@@ -342,32 +286,12 @@ async fn wait_for_embedded_startup(
     timeout: Duration,
 ) -> Result<crate::mesh::Node> {
     if let Err(error) = wait_for_embedded_readiness(readiness_rx, timeout).await {
-        return Err(shutdown_after_startup_error(handle, error).await);
+        return Err(embedded_shutdown::shutdown_after_startup_error(handle, error).await);
     }
     match native::wait_for_embedded_node(handle, timeout).await {
         Ok(node) => Ok(node),
-        Err(error) => Err(shutdown_after_startup_error(handle, error).await),
+        Err(error) => Err(embedded_shutdown::shutdown_after_startup_error(handle, error).await),
     }
-}
-
-/// Shut the embedded runtime down after a failed startup, joining it with a
-/// bounded timeout, and return `error` annotated when the join itself failed.
-async fn shutdown_after_startup_error(
-    handle: &mut EmbeddedServeHandle,
-    error: anyhow::Error,
-) -> anyhow::Error {
-    handle.request_shutdown("sdk-startup-error");
-    if let Err(shutdown_error) = join_embedded_runtime_thread_with_timeout(
-        handle.task.take().expect("runtime task"),
-        EMBEDDED_STARTUP_SHUTDOWN_TIMEOUT,
-    )
-    .await
-    {
-        return error.context(format!(
-            "failed to shut down embedded mesh runtime after startup error: {shutdown_error}"
-        ));
-    }
-    error
 }
 
 async fn wait_for_embedded_readiness(
@@ -469,11 +393,11 @@ impl EmbeddedServingController {
         messages: Vec<EmbeddedChatMessage>,
     ) -> Result<String> {
         let loaded = self.loaded_model(model).await?;
-        let request = ChatCompletionRequest {
+        let request = GenerationRequest {
             model: loaded.served.model_id.clone(),
             messages: messages
                 .into_iter()
-                .map(|message| ChatMessage {
+                .map(|message| GenerationMessage {
                     role: message.role,
                     content: Some(MessageContent::Text(message.content)),
                     extra: BTreeMap::new(),
@@ -1138,6 +1062,62 @@ mod tests {
         assert!(status.payload.is_object());
 
         handle.stop().await.expect("stop embedded mesh client");
+    }
+
+    /// Starts a client node that times out at once and returns the startup
+    /// error with the time until the worker was stopped and joined.
+    async fn stop_during_startup(relay: Option<String>) -> (String, Duration) {
+        let started = Instant::now();
+        let startup = start_embedded_serve(EmbeddedServeConfig {
+            mode: EmbeddedMeshNodeMode::Client,
+            api_port: free_local_port(),
+            console_port: free_local_port(),
+            startup_timeout: Duration::from_millis(1),
+            disable_iroh_relays: relay.is_none(),
+            relay: relay.into_iter().collect(),
+            bind_ip: Some(std::net::Ipv4Addr::LOCALHOST.into()),
+            ..EmbeddedServeConfig::default()
+        })
+        .await;
+        let elapsed = started.elapsed();
+        match startup {
+            Ok(handle) => {
+                let _ = handle.stop().await;
+                panic!(
+                    "embedded startup must not report ready before its worker signals readiness"
+                );
+            }
+            Err(error) => (format!("{error:#}"), elapsed),
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[serial_test::serial]
+    async fn embedded_startup_timeout_does_not_wait_out_the_relay_connection() {
+        // Without relays the node skips its relay and net report waits; the
+        // stop time there is this machine's baseline.
+        let (_, baseline) = stop_during_startup(None).await;
+
+        // A relay that accepts connections but never answers holds startup in
+        // those waits (5 s and the net report's 3 s) on any machine.
+        let relay = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let relay_url = format!("http://{}", relay.local_addr().unwrap());
+        let (message, elapsed) = stop_during_startup(Some(relay_url)).await;
+        drop(relay);
+
+        assert!(
+            message.contains("timed out waiting for the embedded mesh runtime to become ready"),
+            "startup must end in its own timeout, not an earlier failure: {message}"
+        );
+        assert!(
+            !message.contains("waiting for embedded mesh runtime thread to exit"),
+            "a stop during the relay wait must end the worker in time: {message}"
+        );
+        // Either wait left running adds at least two seconds.
+        assert!(
+            elapsed < baseline + Duration::from_secs(2),
+            "stopping took {elapsed:?}, {baseline:?} without relays"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

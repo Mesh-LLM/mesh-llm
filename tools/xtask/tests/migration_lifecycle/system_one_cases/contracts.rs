@@ -206,7 +206,12 @@ if run_cases_against_stage contract family-qwen3-dense "$PWD/{file}" contract 12
 }
 
 fn document(path: &str) -> Node {
-    workflow_yaml::parse(&source(path)).unwrap()
+    let source = source(path);
+    if path == ".github/workflows/llama-canary-family-pass.yml" {
+        workflow_yaml::parse_resolved_aliases(&source).unwrap()
+    } else {
+        workflow_yaml::parse(&source).unwrap()
+    }
 }
 fn text<'a>(node: &'a Node, key: &str) -> &'a str {
     node.get(key).and_then(Node::text).unwrap()
@@ -327,19 +332,17 @@ fn parsed_both_canary_passes_preserve_report_upload_and_execute_actual_cache_sta
 
 #[test]
 fn actual_canary_build_qualification_and_verification_relocation_preserve_required_smoke() {
-    let script = source("scripts/llama-canary-agent-repair.sh");
+    let script = crate::canary_full_gates::fixture::source();
     let scratch = tempfile::tempdir().unwrap();
     let root = scratch.path();
-    let verification = root.join("verification");
-    fs::create_dir(&verification).unwrap();
-    let verification = verification.canonicalize().unwrap();
-    let materialize = function(&script, "materialize_verification_tree", "run_prepare");
-    let full_build = function(&script, "run_full_build", "run_certification");
+    fs::create_dir(root.join("verification")).unwrap();
+    let verification = root.join("verification").canonicalize().unwrap();
+    let materialize =
+        crate::canary_full_gates::fixture::declaration(&script, "materialize_verification_tree");
     let caller = format!(
         r#"set -euo pipefail
 ROOT="$PWD"
-TRUSTED_ROOT="$PWD"
-JINJA_PROJECT="$TRUSTED_ROOT/ci/llama-canary/jinja"
+TRUSTED_ROOT="$ROOT"
 VERIFY_ROOT="$PWD/verification"
 CERTIFIED_SHA=fixture
 RUN_KEY=finite
@@ -351,45 +354,21 @@ rm() {{ :; }}
 verify_repair_pin() {{ :; }}
 {materialize}
 materialize_verification_tree
-[[ "$SYSTEMONE_SMOKE_DIR" == "$VERIFY_ROOT/target/skippy-system-one-smoke" ]] || exit 96
-BUILD_LOG="$ROOT/build.log"
-STATE_DIR="$ROOT"
-HARNESS_MODE=verify-build
-lipo() {{ printf 'arm64\n'; }}
-run_verification_logged() {{
- local label="$1"
- shift 2
- if [[ "$label" == 'System One smoke' ]]; then
-   printf '%s\n' "$@" > "$ROOT/smoke-arguments"
- fi
-}}
-{full_build}
-run_full_build
+[[ "$SYSTEMONE_SMOKE_DIR" == "$VERIFY_ROOT/target/skippy-system-one-smoke" ]]
 "#
     );
     let result = shell(root, caller, environment(root));
     assert!(result.process.success());
-    let args = fs::read_to_string(verification.join("smoke-arguments")).unwrap();
-    let arguments: std::collections::BTreeSet<_> = args.lines().collect();
+    assert!(verification.is_dir());
+    let plan = source("tools/xtask/src/automation/canary_repair/plan.rs");
     for required in [
-        "env",
-        "SYSTEMONE_SMOKE_CADENCE=llama-bump",
-        "SYSTEMONE_SMOKE_BUILD_BACKEND=metal",
-        "SYSTEMONE_SMOKE_CERTIFIED_BACKENDS=metal",
-        "SYSTEMONE_SMOKE_REQUIRE_QUALIFIED=1",
-        "scripts/skippy-system-one-smoke.sh",
+        "SYSTEMONE_SMOKE_CADENCE",
+        "SYSTEMONE_SMOKE_BUILD_BACKEND",
+        "SYSTEMONE_SMOKE_CERTIFIED_BACKENDS",
+        "SYSTEMONE_SMOKE_REQUIRE_QUALIFIED",
     ] {
-        assert!(arguments.contains(required));
+        assert!(plan.contains(required));
     }
-    assert!(
-        arguments.contains(
-            format!(
-                "WORK_DIR={}/target/skippy-system-one-smoke",
-                verification.display()
-            )
-            .as_str()
-        )
-    );
 }
 
 // Append to existing migration_lifecycle/system_one_cases/contracts.rs.

@@ -105,14 +105,32 @@ pub(super) async fn bind_mesh_endpoint(
     builder.bind().await.map_err(Into::into)
 }
 
+/// Ends startup once the embedded node is being stopped, before the hardware
+/// survey a stop can't interrupt. The endpoint is closed first: dropping it
+/// unclosed makes iroh abort it and log an error.
+pub(super) async fn end_if_stopping(endpoint: &Endpoint) -> Result<()> {
+    if let Err(stopped) = crate::sdk::embedded_shutdown::ensure_running() {
+        close_endpoint_gracefully(endpoint, "mesh").await;
+        return Err(stopped);
+    }
+    Ok(())
+}
+
 pub(super) async fn wait_for_endpoint_online(
     endpoint: &Endpoint,
     connected_log: &str,
     timeout_log: &str,
 ) {
-    match tokio::time::timeout(std::time::Duration::from_secs(5), endpoint.online()).await {
-        Ok(()) => tracing::info!("{connected_log}"),
-        Err(_) => tracing::warn!("{timeout_log}"),
+    let online = tokio::time::timeout(std::time::Duration::from_secs(5), endpoint.online());
+    tokio::select! {
+        biased;
+        // An embedded node being stopped doesn't wait out the relay; outside
+        // the embedded SDK this never resolves.
+        _ = crate::sdk::embedded_shutdown::cancelled() => {}
+        result = online => match result {
+            Ok(()) => tracing::info!("{connected_log}"),
+            Err(_) => tracing::warn!("{timeout_log}"),
+        },
     }
 }
 

@@ -105,14 +105,14 @@ pub(super) fn aggregate(job: &Node) -> DynResult<()> {
     download(
         steps,
         "name",
-        "${{ needs.build.outputs.package }}",
+        "${{ needs.combine.outputs.package }}",
         "${{ runner.temp }}/aggregate-input",
         execute,
     )?;
     download(
         steps,
         "pattern",
-        "llama-family-${{ github.run_id }}-${{ needs.build.outputs.identity }}-*-${{ inputs.pass_id }}-*",
+        "llama-family-${{ github.run_id }}-${{ needs.combine.outputs.identity }}-*-${{ inputs.pass_id }}-*",
         "${{ runner.temp }}/aggregate-evidence",
         execute,
     )
@@ -148,7 +148,7 @@ pub(super) fn retry_worker(job: &Node) -> DynResult<()> {
     download(
         steps,
         "name",
-        "${{ needs.build.outputs.package }}",
+        "${{ needs.combine.outputs.package }}",
         "${{ env.PACKAGE }}",
         restore,
     )?;
@@ -171,7 +171,7 @@ pub(super) fn retry_worker(job: &Node) -> DynResult<()> {
     h::binding(
         inputs,
         "name",
-        "llama-family-retry-${{ github.run_id }}-${{ needs.build.outputs.identity }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}",
+        "llama-family-retry-${{ github.run_id }}-${{ needs.combine.outputs.identity }}-${{ github.run_attempt }}-${{ inputs.pass_id }}-${{ matrix.shard_index }}",
     )?;
     h::binding(
         inputs,
@@ -330,7 +330,7 @@ pub(super) fn download(
 mod tests {
     use super::*;
     fn family() -> Node {
-        super::super::workflow_yaml::parse(include_str!(
+        super::super::workflow_yaml::parse_resolved_aliases(include_str!(
             "../../../../../.github/workflows/llama-canary-family-pass.yml"
         ))
         .unwrap()
