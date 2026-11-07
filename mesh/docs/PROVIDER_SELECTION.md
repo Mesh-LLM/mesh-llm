@@ -11,13 +11,15 @@ Start your local client with `mesh-llm client --auto`, then query its API:
 
 ```bash
 BASE_URL=http://127.0.0.1:9337/v1
-curl -fsS "$BASE_URL/models" | jq '
-  .data[] | {id, requires}'
+curl -fsS http://127.0.0.1:9337/mesh/v1/models | jq '
+  .data[] | {id, providers: [.providers[] | {provider_id, available, requires}]}'
 ```
 
-For the desired model, choose an offer's `provider_id`. The offer also reports
-`paid`, `pricing`, and `rate_unit`. Discovery is not a binding price quote and
-does not prove that a provider is currently healthy. Do not use a shortened node
+For the desired model, choose a provider's `provider_id`. A gated provider
+lists under `requires` the plugin channels it needs, with the terms its plugin
+attached (a price, for a payment plugin), republished verbatim; see
+[Mesh model discovery](MODEL_DISCOVERY.md). Discovery is not a binding price
+quote and does not prove that a provider is currently healthy. Do not use a shortened node
 ID displayed by a status table, an owner ID, or a wallet ID.
 
 ```bash
