@@ -5,7 +5,9 @@ mod compact_meta;
 mod kv_cache;
 mod split_bundle;
 
-pub use compact_meta::{scan_gguf_compact_meta, scan_gguf_dflash_target_layers};
+pub use compact_meta::{
+    scan_gguf_compact_meta, scan_gguf_dflash_context_window, scan_gguf_dflash_target_layers,
+};
 pub use kv_cache::{GgufKvCacheQuant, GgufKvCacheType};
 pub use split_bundle::scan_gguf_bundle_total_parameters;
 

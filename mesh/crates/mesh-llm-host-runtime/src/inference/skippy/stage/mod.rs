@@ -892,6 +892,7 @@ fn status_from_running(stage: &RunningStage) -> StageStatusSnapshot {
         compute_busy_nanos: compute.busy_nanos,
         compute_operations: compute.operations,
         dflash_target_layers: server.split_dflash_target_layers.clone(),
+        dflash_context_window: server.split_dflash_context_window,
     }
 }
 
@@ -935,6 +936,7 @@ fn stopped_status(stop: &StageStopRequest) -> StageStatusSnapshot {
         compute_busy_nanos: 0,
         compute_operations: 0,
         dflash_target_layers: None,
+        dflash_context_window: None,
     }
 }
 
@@ -984,5 +986,6 @@ fn failed_status_from_load(load: &StageLoadRequest, error: String) -> StageStatu
         compute_busy_nanos: 0,
         compute_operations: 0,
         dflash_target_layers: None,
+        dflash_context_window: None,
     }
 }

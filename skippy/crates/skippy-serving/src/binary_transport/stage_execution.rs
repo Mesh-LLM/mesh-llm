@@ -600,6 +600,7 @@ pub(crate) fn run_binary_stage_message(
     input: Option<&ActivationFrame>,
     options: BinaryStageExecutionOptions,
 ) -> Result<(i32, Vec<i32>, ActivationFrame, Option<StageNativeMtpDraft>)> {
+    runtime.dflash_split_mark_unattended(session_id, message.state.split_dflash_unattended_rows());
     runtime.dflash_split_input(session_id, input);
     // A draft owed for an earlier window is moot once the next message lands.
     runtime.dflash_take_deferred_draft(session_id);

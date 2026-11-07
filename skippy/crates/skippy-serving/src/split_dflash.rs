@@ -96,6 +96,19 @@ impl SplitDFlashStage {
     }
 }
 
+/// What a split's final stage reports once it has attached its DFlash draft.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SplitDFlashAttached {
+    /// The target layers the draft reads.
+    pub target_layers: Vec<u32>,
+    /// How many positions back the draft attends, when every one of its
+    /// attention layers slides over a window. A block drafted after position
+    /// `p` never reads a target row at or before `p - window`, so stage 0
+    /// leaves the feature rows of older prompt tokens off the wire. `None`
+    /// when any layer attends the whole context.
+    pub context_window: Option<u32>,
+}
+
 /// The target layers a DFlash draft reads, from its GGUF header.
 pub fn draft_target_layers(path: &Path) -> Result<Vec<u32>> {
     let layers = skippy_model_artifact::gguf::scan_gguf_dflash_target_layers(path)
@@ -189,14 +202,14 @@ pub fn borrowed_resident_tensor_ids(
 /// others. A final stage without a usable draft serves without one; stage 0
 /// then receives no drafts and decodes serially.
 ///
-/// Returns the draft's target layers once a final stage has attached it, so
-/// the planner can tell stage 0 the draft is there; `None` otherwise.
+/// Returns what the final stage attached, so the planner can tell stage 0
+/// the draft is there; `None` otherwise.
 pub(crate) fn attach_split_dflash(
     runtime: &mut RuntimeState,
     config: &StageConfig,
     overrides: &RuntimeLaunchOverrides,
     plan: &SplitDFlashStage,
-) -> Result<Option<Vec<u32>>> {
+) -> Result<Option<SplitDFlashAttached>> {
     if config.downstream.is_none() {
         let Some(path) = plan.draft_model_path.as_deref() else {
             return Ok(None);
@@ -226,7 +239,16 @@ pub(crate) fn attach_split_dflash(
             target_layers = ?info.target_layer_ids,
             "split DFlash draft attached on the final stage"
         );
-        return Ok(Some(info.target_layer_ids.clone()));
+        let context_window = skippy_model_artifact::gguf::scan_gguf_dflash_context_window(path);
+        tracing::info!(
+            stage = config.stage_id,
+            context_window = ?context_window,
+            "split DFlash draft attention reach: earlier stages send feature rows only within it"
+        );
+        return Ok(Some(SplitDFlashAttached {
+            target_layers: info.target_layer_ids.clone(),
+            context_window,
+        }));
     }
     let layers = runtime.model.attach_dflash_capture(
         &plan.target_layers,
@@ -303,6 +325,7 @@ mod tests {
                 draft_model_path: PathBuf::from("/models/draft-dflash.gguf"),
                 max_draft_tokens: cap,
                 target_layers: Vec::new(),
+                context_window: None,
             }),
             ..SpeculativeDecodeConfig::default()
         }
@@ -491,6 +514,7 @@ mod tests {
             draft_model_path: PathBuf::from("/not/on/this/node.gguf"),
             max_draft_tokens: Some(4),
             target_layers: vec![2, 17, 32],
+            context_window: None,
         };
         let plan = SplitDFlashStage::from_draft(&dflash, false, None).unwrap();
         assert_eq!(plan.target_layers, vec![2, 17, 32]);
