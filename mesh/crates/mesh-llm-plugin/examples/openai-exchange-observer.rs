@@ -175,9 +175,10 @@ async fn main() -> anyhow::Result<()> {
                         mesh_llm_plugin::PluginError::invalid_request(e.to_string())
                     })?;
                     // The event acknowledgement must follow the completed log write.
-                    file.flush().await.map_err(|e| {
-                        mesh_llm_plugin::PluginError::invalid_request(e.to_string())
-                    })?;
+                    // A flush failure is reported without discarding the decision.
+                    if let Err(error) = file.flush().await {
+                        eprintln!("event log flush failed: {error}");
+                    }
                 }
                 Ok(OpenAiExchangeDecision {
                     decision: if denied {
