@@ -1,4 +1,4 @@
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import type { ExtraProps } from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { KaTeXBlock } from '@/features/chat/components/messages/KaTeXBlock'
 import { MermaidBlock } from '@/features/chat/components/messages/MermaidBlock'
 import { normalizeMathDelimiters, preserveMathDelimiters } from '@/features/chat/components/messages/math-delimiters'
+import { hideUnfinishedGeneratedImages, isGeneratedImageUrl } from '@/features/chat/lib/generated-images'
 
 export type MarkdownMessageProps = {
   content: string
@@ -33,7 +34,8 @@ export function MarkdownMessage({
   variant = 'default',
   className
 }: MarkdownMessageProps) {
-  const markdown = streaming ? preserveMathDelimiters(content) : normalizeMathDelimiters(content)
+  const displayContent = hideUnfinishedGeneratedImages(content)
+  const markdown = streaming ? preserveMathDelimiters(displayContent) : normalizeMathDelimiters(displayContent)
   const remarkPlugins = streaming ? [remarkGfm] : [remarkGfm, remarkMath]
 
   return (
@@ -63,6 +65,13 @@ export function MarkdownMessage({
       <ReactMarkdown
         remarkPlugins={remarkPlugins}
         rehypePlugins={[rehypeHighlight]}
+        urlTransform={(url, key, node) => {
+          // Generated raster images travel with the response over the mesh.
+          if (key === 'src' && node.tagName === 'img' && isGeneratedImageUrl(url)) {
+            return url
+          }
+          return defaultUrlTransform(url)
+        }}
         components={{
           a(props) {
             const { node, ...anchorProps } = props

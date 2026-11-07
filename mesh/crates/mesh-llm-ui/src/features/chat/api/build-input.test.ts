@@ -1,4 +1,4 @@
-import type { UIMessage } from '@tanstack/ai'
+import type { ModelMessage, UIMessage } from '@tanstack/ai'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const uploadAttachmentMock = vi.hoisted(() => vi.fn())
@@ -86,6 +86,69 @@ describe('buildResponsesInput', () => {
 
     expect(uploadAttachmentMock).not.toHaveBeenCalled()
     expect(request.input).toEqual([{ role: 'user', content: 'Hello mesh' }])
+  })
+
+  it.each(['png', 'jpeg', 'webp'])('summarizes generated %s pixels only in assistant history', async (format) => {
+    const image = `![Generated cat](data:image/${format};base64,${'YWJj'.repeat(32_768)})`
+    const assistant = {
+      ...createMessage([{ type: 'text', content: `Here is your cat.\n\n${image}` }]),
+      role: 'assistant' as const
+    }
+    const user = createMessage([{ type: 'text', content: `Keep this user text: ${image}` }])
+    const request = await buildResponsesInput([assistant, user], 'model-a', 'client-123', 'request-456')
+
+    expect(request.input).toEqual([
+      { role: 'assistant', content: 'Here is your cat.\n\n[Generated cat]' },
+      { role: 'user', content: `Keep this user text: ${image}` }
+    ])
+    expect(assistant.parts[0]).toEqual({ type: 'text', content: `Here is your cat.\n\n${image}` })
+  })
+
+  it('summarizes both string and multipart assistant model messages without changing other media', async () => {
+    const image = '![Generated image](data:image/png;base64,YWJj)'
+    const messages: ModelMessage[] = [
+      { role: 'assistant', content: `First: ${image}` },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'text', content: `Second: ${image}` },
+          { type: 'image', source: { type: 'url', value: 'https://example.com/reference.png' } }
+        ]
+      }
+    ]
+    const request = await buildResponsesInput(messages, 'model-a', 'client-123', 'request-456')
+
+    expect(request.input).toEqual([
+      { role: 'assistant', content: 'First: [Generated image]' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'input_text', text: 'Second: [Generated image]' },
+          { type: 'input_image', image_url: 'https://example.com/reference.png' }
+        ]
+      }
+    ])
+    expect(JSON.stringify(request)).not.toContain('base64')
+  })
+
+  it('does not echo image bytes from reference, titled, angle-delimited or incomplete assistant Markdown', async () => {
+    const url = 'data:image/png;base64,YWJj'
+    const messages: ModelMessage[] = [
+      {
+        role: 'assistant',
+        content: [
+          `![Reference][image]\n\n[image]: ${url}`,
+          `![Title](${url} "Image title")`,
+          `![Angle](<${url}>)`,
+          `![Unfinished](${url}`
+        ].join('\n\n')
+      }
+    ]
+    const request = await buildResponsesInput(messages, 'model-a', 'client-123', 'request-456')
+
+    expect(JSON.stringify(request)).not.toContain('base64')
+    expect(request.input[0]?.content).toContain('Reference')
+    expect(request.input[0]?.content).toContain('[Generated image]')
   })
 
   it('prepends the saved system prompt as a responses system message', async () => {

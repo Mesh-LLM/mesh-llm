@@ -12,7 +12,7 @@ test('discovery preserves OCR providers and translates filters without invoking 
       availability: 'available', operations: ['document_ocr'],
       providers: [{ provider_id: 'peer-a', local: false, available: true,
         workload_class: 'document_ocr', operations: ['document_ocr'],
-        metadata: { architecture: 'ocr' }, runtime: { model_name: 'shared', ready: true } }]
+        metadata: { architecture: 'ocr', output_modalities: ['text', 'image', 'future'] }, runtime: { model_name: 'shared', ready: true } }]
     }], next_cursor: 'opaque-next-page'
   }
   const models = new Models({

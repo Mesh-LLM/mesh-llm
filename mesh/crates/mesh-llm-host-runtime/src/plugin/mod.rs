@@ -2,6 +2,7 @@ mod capability_registration;
 mod channel_broadcast;
 pub(crate) use self::channel_broadcast::ChannelRoute;
 mod config;
+mod endpoint_models;
 mod exchange_grants;
 mod exchange_lifecycle;
 mod exchange_permissions;

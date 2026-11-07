@@ -231,6 +231,7 @@ export type MeshModelQuery = {
 
 export type MeshModelMetadata = {
   workload_class?: ModelWorkloadClass
+  output_modalities?: string[]
   architecture?: string
   parameter_size?: string
   parameter_count_b?: number
