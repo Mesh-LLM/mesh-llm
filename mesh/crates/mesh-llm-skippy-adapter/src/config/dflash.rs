@@ -189,6 +189,7 @@ pub(super) fn dflash_decode_config(
         max_draft_tokens: (draft_max_tokens > 0).then_some(draft_max_tokens as usize),
         target_layers: Vec::new(),
         context_window: None,
+        feature_encoding: None,
     });
     base
 }

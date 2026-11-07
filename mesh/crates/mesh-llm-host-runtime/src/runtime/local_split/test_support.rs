@@ -780,7 +780,7 @@ async fn split_load_of_a_paired_native_mtp_target_keeps_native_mtp() {
     assert!(settings.final_stage_native_mtp());
 
     // The final stage reports no draft: stage 0 keeps native MTP.
-    settings.settle_split_dflash(None, None);
+    settings.settle_split_dflash(None, None, &[]);
     assert!(settings.split_dflash.is_none());
     assert!(settings.runtime_options.config.native_mtp_enabled);
     assert!(settings.embedded_openai.native_mtp_enabled);
@@ -873,7 +873,11 @@ async fn a_final_stage_with_its_own_draft_copy_settles_split_dflash() {
         .expect("split settings should resolve");
 
     // The worker had the draft cached even though this node does not.
-    settings.settle_split_dflash(Some(&[6, 20, 34, 48, 62]), Some(2048));
+    settings.settle_split_dflash(
+        Some(&[6, 20, 34, 48, 62]),
+        Some(2048),
+        &["bf16".to_string(), "q8".to_string(), "q4".to_string()],
+    );
 
     let plan = settings
         .split_dflash
@@ -892,6 +896,11 @@ async fn a_final_stage_with_its_own_draft_copy_settles_split_dflash() {
             .as_ref()
             .map(|dflash| dflash.target_layers.clone()),
         Some(vec![6, 20, 34, 48, 62])
+    );
+    // Stages before the final one send the encoding it reads.
+    assert_eq!(
+        plan.feature_encoding,
+        Some(skippy_runtime::DFlashFeatureEncoding::Q4)
     );
     // Stage 0 learns how far back the final stage's draft attends.
     assert_eq!(
@@ -1290,6 +1299,7 @@ pub(super) fn test_stage_status_from_load(
         compute_operations: 0,
         dflash_target_layers: None,
         dflash_context_window: None,
+        dflash_feature_encodings: Vec::new(),
     }
 }
 
@@ -1346,6 +1356,7 @@ pub(super) fn test_stage_status_from_stop(
         compute_operations: 0,
         dflash_target_layers: None,
         dflash_context_window: None,
+        dflash_feature_encodings: Vec::new(),
     }
 }
 

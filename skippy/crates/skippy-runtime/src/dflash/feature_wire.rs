@@ -57,24 +57,57 @@ pub enum DFlashFeatureEncoding {
 }
 
 impl DFlashFeatureEncoding {
-    /// The encoding this process sends: `SKIPPY_DFLASH_FEATURE_ENCODING`, or
-    /// Q8.
-    pub fn configured() -> Self {
-        static CONFIGURED: OnceLock<DFlashFeatureEncoding> = OnceLock::new();
-        *CONFIGURED.get_or_init(|| {
+    /// Every encoding this build reads.
+    pub const READABLE: [Self; 3] = [Self::Bf16, Self::Q8, Self::Q4];
+
+    /// The name a stage plan or status carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Bf16 => "bf16",
+            Self::Q8 => "q8",
+            Self::Q4 => "q4",
+        }
+    }
+
+    /// The encoding `name` names, ignoring case and surrounding space.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "bf16" => Some(Self::Bf16),
+            "q8" => Some(Self::Q8),
+            "q4" => Some(Self::Q4),
+            _ => None,
+        }
+    }
+
+    /// The encoding `SKIPPY_DFLASH_FEATURE_ENCODING` forces on this process,
+    /// if it names one.
+    pub fn env_override() -> Option<Self> {
+        static OVERRIDE: OnceLock<Option<DFlashFeatureEncoding>> = OnceLock::new();
+        *OVERRIDE.get_or_init(|| {
             let value = std::env::var(FEATURE_ENCODING_ENV).unwrap_or_default();
-            match value.trim().to_ascii_lowercase().as_str() {
-                "" | "q8" => Self::Q8,
-                "q4" => Self::Q4,
-                "bf16" => Self::Bf16,
-                other => {
-                    crate::write_native_log_note(format!(
-                        "{FEATURE_ENCODING_ENV}={other} is not bf16, q8 or q4; sending q8"
-                    ));
-                    Self::Q8
-                }
+            if value.trim().is_empty() {
+                return None;
             }
+            let parsed = Self::parse(&value);
+            if parsed.is_none() {
+                crate::write_native_log_note(format!(
+                    "{FEATURE_ENCODING_ENV}={value} is not bf16, q8 or q4; ignored"
+                ));
+            }
+            parsed
         })
+    }
+
+    /// The encoding this process sends when its plan names none:
+    /// `SKIPPY_DFLASH_FEATURE_ENCODING`, or Q8, which every receiver reads.
+    pub fn configured() -> Self {
+        Self::env_override().unwrap_or(Self::Q8)
+    }
+
+    /// What a capturing stage sends: `SKIPPY_DFLASH_FEATURE_ENCODING` if set,
+    /// else what its plan names, else Q8.
+    pub fn for_plan(planned: Option<Self>) -> Self {
+        Self::env_override().or(planned).unwrap_or(Self::Q8)
     }
 
     /// Bytes one row of `n_embd` values takes.

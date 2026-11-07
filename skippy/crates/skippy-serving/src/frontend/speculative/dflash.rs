@@ -53,6 +53,11 @@ pub struct DFlashProposalConfig {
     /// never attend. `None` sends them all.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u32>,
+    /// On stage 0 of a split: how it encodes the feature rows it forwards
+    /// (`bf16`, `q8` or `q4`), as settled against what the final stage
+    /// reads. `None` sends Q8, which every final stage reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub feature_encoding: Option<String>,
 }
 
 impl DFlashProposalConfig {
@@ -111,6 +116,7 @@ mod tests {
                 max_draft_tokens: Some(8),
                 target_layers: Vec::new(),
                 context_window: None,
+                feature_encoding: None,
             }),
             ..SpeculativeDecodeConfig::default()
         }

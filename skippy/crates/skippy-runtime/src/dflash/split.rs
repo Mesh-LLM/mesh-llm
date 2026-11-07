@@ -400,6 +400,8 @@ pub(crate) struct DFlashCapture {
     input_layer: Option<u32>,
     n_embd: usize,
     n_batch: usize,
+    /// How this stage encodes the rows it forwards.
+    encoding: DFlashFeatureEncoding,
 }
 
 // Only touched behind the owning Mutex, and Skippy serializes target-context
@@ -461,21 +463,25 @@ pub(crate) struct DFlashSplitSession {
     /// The next message's rows lie before the draft's attention window: no
     /// stage forwards their features and the draft does not ingest them.
     pub(crate) unattended: bool,
+    /// How this stage encodes the rows it forwards.
+    encoding: DFlashFeatureEncoding,
 }
 
 impl DFlashSplitSession {
     pub(crate) fn capturing(capture: &SharedDFlashCapture) -> Self {
-        let (input_layer, captures_layers) = {
+        let (input_layer, captures_layers, encoding) = {
             let capture = lock_recovering(capture, |_| {});
             (
                 capture.input_layer.map(|layer| (layer, capture.n_embd)),
                 !capture.layers.is_empty(),
+                capture.encoding,
             )
         };
         Self {
             capture: Some(Arc::downgrade(capture)),
             input_layer,
             captures_layers,
+            encoding,
             ..Self::default()
         }
     }
@@ -673,7 +679,7 @@ impl StageSession {
             }
         }
         if let Some(rows) = rows {
-            rows.append_to_frame(frame)?;
+            rows.append_to_frame_as(frame, split.encoding)?;
         }
         input_error.map_or(Ok(()), Err)
     }
@@ -703,13 +709,15 @@ impl StageModel {
 
     /// Captures the inputs of the DFlash target layers this stage owns so its
     /// sessions can forward them to the final stage's draft, plus its input
-    /// activation when this stage starts on a target layer. Returns the
+    /// activation when this stage starts on a target layer, encoded as
+    /// `encoding` (see [`DFlashFeatureEncoding::for_plan`]). Returns the
     /// forwarded layers. Attach before creating serving sessions.
     pub fn attach_dflash_capture(
         &mut self,
         target_layers: &[u32],
         layer_start: u32,
         layer_end: u32,
+        encoding: DFlashFeatureEncoding,
     ) -> Result<Vec<u32>> {
         if self.dflash_draft().is_some() || self.dflash_capture().is_some() {
             bail!("a DFlash draft or capture is already attached");
@@ -751,6 +759,7 @@ impl StageModel {
             input_layer,
             n_embd,
             n_batch,
+            encoding,
         };
         if !layers.is_empty() {
             super::refresh_target_program(&probe)?;
@@ -758,8 +767,8 @@ impl StageModel {
         drop(probe);
         self.install_dflash_capture(Arc::new(Mutex::new(capture)))?;
         crate::write_native_log_note(format!(
-            "dflash split capture attached layers={layers:?} input_layer={input_layer:?} encoding={:?}",
-            DFlashFeatureEncoding::configured()
+            "dflash split capture attached layers={layers:?} input_layer={input_layer:?} encoding={}",
+            encoding.as_str()
         ));
         Ok(layers.into_iter().chain(input_layer).collect())
     }
