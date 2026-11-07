@@ -294,7 +294,7 @@ message StageDFlashDraftStatus {
   // How many positions back the draft attends, when every one of its
   // attention layers slides over a window. Stage 0 then sends no feature rows
   // for prompt tokens before it. Unset when any layer attends the whole
-  // context, or from a stage that predates the field.
+  // context.
   optional uint32 context_window = 2;
 }
 

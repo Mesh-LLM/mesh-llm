@@ -292,6 +292,6 @@ pub(crate) struct StageStatusSnapshot {
     /// With those layers: how many positions back the draft attends, when
     /// every draft attention layer slides over a window. Stage 0 then sends
     /// no feature rows for prompt tokens before it. `None` when any layer
-    /// attends the whole context, or from a stage that predates the report.
+    /// attends the whole context.
     pub(crate) dflash_context_window: Option<u32>,
 }
