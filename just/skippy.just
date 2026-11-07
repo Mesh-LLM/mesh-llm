@@ -305,6 +305,18 @@ skippy-llama-api-test:
     cmake --build "$build_dir" --parallel
     ctest --test-dir "$build_dir" --output-on-failure --no-tests=error
 
+# The certified split roster must pin the digest of the patch queue this tree
+# ships. Every queue edit (patch bytes, member names, series files) changes the
+# v2 patch_queue_sha256 that skippy/crates/skippy-api/build.rs computes; update
+# the pinned digest in skippy/crates/skippy-api/src/split-certified.json in the
+# same commit. PR #2907 shipped a queue edit with main's digest and no local
+# gate caught it.
+[unix]
+skippy-queue-cert-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo test -p skippy-api --lib split_certification
+
 skippy-llama-api-bench:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -379,6 +391,8 @@ skippy-api-verify embed_model="" reranker_model="" causal_model="" *ARGS="":
     just skippy-api-all-targets-build
     printf '%s\n' '== C++ tests' >&2
     just skippy-llama-api-test
+    printf '%s\n' '== certified queue roster' >&2
+    just skippy-queue-cert-check
     printf '%s\n' '== Rust tests' >&2
     just skippy-api-rs-e2e "$embed" "$reranker" "$causal"
     printf '%s\n' '== downstream static link closure' >&2

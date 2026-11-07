@@ -36,8 +36,9 @@ Both patch queues were diffed before this plan was written:
   3. replay cold: `scripts/prepare-llama.sh pinned`
   4. regenerate the certified-queue roster: recompute `patch_queue_sha256` over the folded
      queue and update `skippy/crates/skippy-api/src/split-certified.json` in the same commit
-     (#2907 review: a queue edit without a roster regen fails `split_certification`, and the
-     local 7-gate checkpoint does not build `skippy-api`, so nothing local catches it)
+     (#2907 review: a queue edit without a roster regen fails `split_certification`; the
+     checkpoint gate now runs `just skippy-queue-cert-check`, which was the missing local
+     catch)
 - done-when: the cold replay applies clean, `just skippy-api-all-targets-build` plus
   `just skippy-llama-api-test` are green on the folded tree, and `cargo test -p skippy-api --lib`
   passes — the roster certifies the queue the tree ships

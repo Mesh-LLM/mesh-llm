@@ -81,6 +81,13 @@ unrelated functional boundaries.
 
 ## Validation
 
+Every queue edit (patch bytes, member names, series files) changes the v2
+`patch_queue_sha256` that `skippy/crates/skippy-api/build.rs` computes over the
+queue. Update the pinned digest in `skippy/crates/skippy-api/src/split-certified.json`
+in the same commit and run `just skippy-queue-cert-check`. CI's Quality/Linux
+lanes fail a stale roster, and merging one leaves the roster certifying a queue
+main no longer ships; no other local gate sees the queue.
+
 Validate that patches apply in a clean checkout:
 
 ```bash
