@@ -129,22 +129,14 @@ pub(super) struct SplitDFlashFallback {
 }
 
 /// How earlier stages encode feature rows for a final stage that reported
-/// reading `reported`; `None` when it reads nothing they send. A final stage
-/// that predates the report reads bf16 and q8.
+/// reading `reported`; `None` when it reads nothing they send.
 fn final_stage_feature_encoding(
     reported: &[String],
 ) -> Option<skippy_runtime::DFlashFeatureEncoding> {
-    let readable: Vec<_> = if reported.is_empty() {
-        vec![
-            skippy_runtime::DFlashFeatureEncoding::Bf16,
-            skippy_runtime::DFlashFeatureEncoding::Q8,
-        ]
-    } else {
-        reported
-            .iter()
-            .filter_map(|name| skippy_runtime::DFlashFeatureEncoding::parse(name))
-            .collect()
-    };
+    let readable: Vec<_> = reported
+        .iter()
+        .filter_map(|name| skippy_runtime::DFlashFeatureEncoding::parse(name))
+        .collect();
     let encoding = skippy_serving::split_dflash::settled_feature_encoding(&readable);
     if encoding.is_none() {
         tracing::warn!(

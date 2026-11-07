@@ -295,6 +295,6 @@ pub(crate) struct StageStatusSnapshot {
     /// attends the whole context.
     pub(crate) dflash_context_window: Option<u32>,
     /// With those layers: the feature-row encodings the stage reads, by name.
-    /// Empty from a stage that predates the report.
+    /// Empty from a stage that drafts nothing.
     pub(crate) dflash_feature_encodings: Vec<String>,
 }
