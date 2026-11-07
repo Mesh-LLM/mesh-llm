@@ -28,3 +28,12 @@ public:
         return guarded<RichResult>([&] { return RichResult{path}; });
     }
 };
+
+// The sanctioned escape for a body that cannot throw: the bare primitive
+// with a reasoned NOLINT at the site - never a third wrapper, a Barriers
+// override, or an Exempt entry taught to the check (closed vocabulary).
+class GetterBridge {
+public:
+    // NOLINTNEXTLINE(skippy-bridge-barrier): nothrow C-ABI getter; nothing can throw across it
+    int width() const noexcept { return 512; }
+};

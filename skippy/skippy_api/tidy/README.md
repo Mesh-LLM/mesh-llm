@@ -88,7 +88,7 @@ skippy-llama-api-tidy:
 | `skippy-no-raw-loops` | ranges over loops; index loops only at an index-based ABI, with a NOLINT reason | the P2-3 table |
 | `skippy-preceded-by` | `llama_memory_clear` immediately after `llama_synchronize` (configurable pair) | P1-1 |
 | `skippy-no-alloc-in-oom-handler` | nothing allocates inside a `bad_alloc`/catch-all handler of a noexcept function | P2-11, the `run_pass` trap |
-| `skippy-bridge-barrier` | every noexcept bridge member is `return <barrier>(...)` | the eight methods of P0-2 |
+| `skippy-bridge-barrier` | every noexcept bridge member is `return <barrier>(...)`; the vocabulary is closed — a nothrow body takes the primitive form with a reasoned NOLINT, never a third wrapper or an option override | the eight methods of P0-2 |
 | `skippy-single-call-site` | a native getter with a default/padded value is read in one named place | P0-1/P0-B (`n_cls_out`), P0-A (`n_ctx`) |
 | `skippy-no-lock-across-native-call` | no mutex held across a call into llama/ggml/skippy | AGENTS "State" (no instance yet) |
 | `skippy-no-void-silencing` | `(void)x` on a local with no other use is a dead computation | the `(void)imports…` blocks in materialize/clone |

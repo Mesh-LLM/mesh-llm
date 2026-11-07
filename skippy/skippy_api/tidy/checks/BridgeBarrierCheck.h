@@ -15,6 +15,13 @@ namespace clang::tidy::skippy {
 ///
 /// Would have flagged: the eight methods of P0-2 before 64766af1.
 ///
+/// The barrier vocabulary is closed: `guarded` and `guarded_message`, as
+/// pinned in getModuleOptions(). A body that cannot throw (a nothrow C-ABI
+/// getter) takes the bare primitive form with a reasoned NOLINT at the site.
+/// Never silence a finding by teaching this check a new word - a third
+/// wrapper, a Barriers override, or an Exempt entry: each widens the gate
+/// until it says nothing. (guarded_scalar, tried and reverted, is the case.)
+///
 /// Options:
 ///   FileRegex (default "bridge\\.cpp$")  which files are the bridge
 ///   Barriers  (default "guarded;guarded_message")
