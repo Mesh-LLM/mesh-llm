@@ -31,16 +31,27 @@ fixture runs live MTP sync and drafting against an independently
 loaded reference, and the same fixture checks that every trunk layer
 publishes a finite, distinct input row per token; the fixture generator now writes glm5-next's
 per-layer KV head counts over the NextN block.
+
+The layer-input checks also cover drafts that read the output head's
+input, layer n_layer, as Nemotron-3.5-Lightning's DFlash draft does:
+`--layer-inputs <model> --head-input` captures it on the Nemotron-H
+fixture, and `--stage-layer-inputs <model> <targets>` takes a draft's
+target layers, run on the Lightning-shaped nemotron contract with layer
+52 kept by the final stage.
+
+`--head-input-published <model> <0|1>` checks llama_layer_inp_published
+for the head input: the Nemotron-H fixture publishes it, and the Qwen3
+dense contract, which records only trunk layer inputs, does not.
 ---
- src/CMakeLists.txt                          |  12 ++
- src/models/glm5-next.cpp                    |  63 ++++++---
- src/skippy/tests/graph_build_inputs.cpp     | 136 ++++++++++++++++++++
- src/skippy/tests/graph_contract_cases.cmake |  17 +++
+ src/CMakeLists.txt                          |  27 +++
+ src/models/glm5-next.cpp                    |  63 +++++--
+ src/skippy/tests/graph_build_inputs.cpp     | 193 ++++++++++++++++++++
+ src/skippy/tests/graph_contract_cases.cmake |  32 ++++
  tests/test-llama-archs.cpp                  |   9 +-
- 5 files changed, 220 insertions(+), 17 deletions(-)
+ 5 files changed, 307 insertions(+), 17 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 94f1fc871..e0f14f76f 100644
+index 94f1fc871..09412c534 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
 @@ -301,6 +301,17 @@ if (LLAMA_STAGE_BUILD_TESTS)
@@ -69,6 +80,28 @@ index 94f1fc871..e0f14f76f 100644
      add_executable(skippy-sampling-history skippy/tests/sampling_history.cpp)
      target_include_directories(skippy-sampling-history PRIVATE .)
      target_compile_features(skippy-sampling-history PRIVATE cxx_std_17)
+@@ -760,6 +772,21 @@ if (LLAMA_STAGE_BUILD_TESTS)
+     set_tests_properties(skippy_noalloc_graph_planning_recurrent_rollback PROPERTIES
+         FIXTURES_REQUIRED skippy-noalloc-nemotron-h-fixture)
+ 
++    # Nemotron-H (and nemotron_h_moe, which shares its trunk graph) publishes
++    # the last layer's output as layer n_layer's input for DFlash drafts.
++    add_test(
++        NAME skippy_nemotron_h_head_layer_input
++        COMMAND skippy-graph-build-inputs --layer-inputs
++            "${SKIPPY_MODEL_FIXTURE_DIR}/nemotron_h-dense.gguf" --head-input)
++    set_tests_properties(skippy_nemotron_h_head_layer_input PROPERTIES
++        FIXTURES_REQUIRED skippy-noalloc-nemotron-h-fixture)
++    add_test(
++        NAME skippy_nemotron_h_head_input_published
++        COMMAND skippy-graph-build-inputs --head-input-published
++            "${SKIPPY_MODEL_FIXTURE_DIR}/nemotron_h-dense.gguf" 1)
++    set_tests_properties(skippy_nemotron_h_head_input_published PROPERTIES
++        FIXTURES_REQUIRED skippy-noalloc-nemotron-h-fixture)
++
+     add_test(
+         NAME skippy_generate_mamba2_fixture
+         COMMAND skippy-model-fixture-generator
 diff --git a/src/models/glm5-next.cpp b/src/models/glm5-next.cpp
 index a1b722950..fd2e5d8dd 100644
 --- a/src/models/glm5-next.cpp
@@ -222,7 +255,7 @@ index a1b722950..fd2e5d8dd 100644
      ggml_tensor * out = build_attn_mha(q_absorbed, k, v, nullptr, sel, nullptr, layer.wv_b, inp_kpool->n_sel, kq_scale, il);
      cb(out, "kqv_out", il);
 diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
-index f02490889..345041bfd 100644
+index f02490889..02d879783 100644
 --- a/src/skippy/tests/graph_build_inputs.cpp
 +++ b/src/skippy/tests/graph_build_inputs.cpp
 @@ -1,4 +1,5 @@
@@ -231,22 +264,32 @@ index f02490889..345041bfd 100644
  #include "llama-graph.h"
  #include "llama-kv-cache-msa.h"
  #include "ggml-cpu.h"
-@@ -11,6 +12,7 @@
+@@ -10,13 +11,16 @@
+ #include "skippy/stage_slice_plan.h"
  #include "skippy/stage_realization.h"
  
++#include <algorithm>
  #include <atomic>
 +#include <cmath>
  #include <cstdint>
  #include <cstdio>
  #include <cstring>
-@@ -897,6 +899,128 @@ static int check_execution_profile_residency() {
+ #include <functional>
+ #include <map>
+ #include <memory>
++#include <string>
+ #include <set>
+ #include <stdexcept>
+ #include <thread>
+@@ -897,6 +901,176 @@ static int check_execution_profile_residency() {
      return 0;
  }
  
 +// Speculative drafters capture the residual entering each trunk layer. Every
 +// layer must publish a finite input row per token, and distinct layers must
-+// not alias one tensor.
-+static int check_layer_inputs(const char * model_path) {
++// not alias one tensor. With `head_input`, layer n_layer, the last layer's
++// output entering the output head, is captured too (Nemotron-3.5 drafts read it).
++static int check_layer_inputs(const char * model_path, bool head_input) {
 +    llama_model_params model_params = llama_model_default_params();
 +    model_params.n_gpu_layers = 0;
 +    model_params.load_mtp = true; // the fixture carries a NextN block beside the trunk
@@ -259,14 +302,15 @@ index f02490889..345041bfd 100644
 +    }
 +    const int32_t n_layer = llama_model_n_layer(model);
 +    const int32_t n_embd = llama_model_n_embd(model);
-+    for (int32_t il = 0; il < n_layer; ++il) {
++    const int32_t n_captured = head_input ? n_layer + 1 : n_layer;
++    for (int32_t il = 0; il < n_captured; ++il) {
 +        llama_set_embeddings_layer_inp(ctx, il, true);
 +    }
 +    llama_token tokens[] = {1, 2, 3, 4};
 +    const int32_t n_tokens = 4;
 +    int rc = llama_decode(ctx, llama_batch_get_one(tokens, n_tokens)) == 0 ? 0 : 122;
 +    std::vector<std::vector<float>> rows;
-+    for (int32_t il = 0; rc == 0 && il < n_layer; ++il) {
++    for (int32_t il = 0; rc == 0 && il < n_captured; ++il) {
 +        const float * data = llama_get_embeddings_layer_inp(ctx, il);
 +        if (data == nullptr) {
 +            std::fprintf(stderr, "layer %d input was not captured\n", il);
@@ -298,24 +342,69 @@ index f02490889..345041bfd 100644
 +    return rc;
 +}
 +
++// Whether a graph publishes the head input (layer n_layer) must match what a
++// decode capturing it finds: a target that does not publish it would abort the
++// decode, so a drafter reading it is refused at attach instead.
++static int check_head_input_published(const char * model_path, bool expected) {
++    llama_model_params model_params = llama_model_default_params();
++    model_params.n_gpu_layers = 0;
++    model_params.load_mtp = true;
++    llama_model * model = llama_model_load_from_file(model_path, model_params);
++    if (model == nullptr) return 140;
++    llama_context * ctx = llama_init_from_model(model, make_context_params(1));
++    if (ctx == nullptr) {
++        llama_model_free(model);
++        return 141;
++    }
++    const uint32_t n_layer = (uint32_t) llama_model_n_layer(model);
++    int rc = 0;
++    // Every trunk layer's input is published by graphs that record layer inputs.
++    if (!llama_layer_inp_published(ctx, 0)) {
++        std::fprintf(stderr, "layer 0 input is not published\n");
++        rc = 142;
++    }
++    if (rc == 0 && llama_layer_inp_published(ctx, n_layer) != expected) {
++        std::fprintf(stderr, "head input published = %d, expected %d\n", !expected, expected);
++        rc = 143;
++    }
++    llama_free(ctx);
++    llama_model_free(model);
++    return rc;
++}
++
 +// A split stage captures the input of each drafter target layer it runs,
 +// except its first layer when that input arrives from the previous stage.
-+// The realized stage graph must keep every such capture.
-+static int check_stage_layer_inputs(const char * model_path) {
++// Target n_layer, the output head's input, belongs to the final stage. The
++// realized stage graph must keep every such capture. `targets_csv` names the
++// draft's target layers; without it, GLM-5.3-Flash's draft on its two- and
++// four-stage cuts.
++static int check_stage_layer_inputs(const char * model_path, const char * targets_csv) {
 +    llama_model_params model_params = llama_model_default_params();
 +    model_params.n_gpu_layers = 0;
 +    model_params.load_mtp = true;
 +    llama_model * model = llama_model_load_from_file(model_path, model_params);
 +    const int32_t n_layer = model == nullptr ? 0 : llama_model_n_layer(model);
-+    if (n_layer < 44) {
++    std::vector<int32_t> targets = {6, 15, 25, 34, 43};
++    std::vector<std::vector<int32_t>> splits = {
++        {0, 23, n_layer}, {0, 11, 23, 34, n_layer},
++    };
++    if (targets_csv != nullptr) {
++        targets.clear();
++        const std::string list = targets_csv;
++        for (size_t pos = 0;;) {
++            const size_t comma = list.find(',', pos);
++            targets.push_back(std::stoi(list.substr(pos, comma - pos)));
++            if (comma == std::string::npos) break;
++            pos = comma + 1;
++        }
++        splits = {{0, n_layer / 2, n_layer}, {0, n_layer / 4, n_layer / 2, 3 * n_layer / 4, n_layer}};
++    }
++    const bool targets_in_range = std::all_of(targets.begin(), targets.end(),
++            [n_layer](int32_t layer) { return layer >= 0 && layer <= n_layer; });
++    if (n_layer < 4 || targets.empty() || !targets_in_range) {
 +        llama_model_free(model);
 +        return 130;
 +    }
-+    // GLM-5.3-Flash's DFlash draft targets, on its two- and four-stage cuts.
-+    const int32_t targets[] = {6, 15, 25, 34, 43};
-+    const std::vector<std::vector<int32_t>> splits = {
-+        {0, 23, n_layer}, {0, 11, 23, 34, n_layer},
-+    };
 +    int rc = 0;
 +    for (const auto & cuts : splits) {
 +        for (size_t stage = 0; rc == 0 && stage + 1 < cuts.size(); ++stage) {
@@ -334,7 +423,8 @@ index f02490889..345041bfd 100644
 +            }
 +            std::vector<int32_t> captured;
 +            for (int32_t layer : targets) {
-+                if (layer >= start && layer < end && (layer != start || start == 0)) {
++                const bool computed = (layer >= start && layer < end) || (layer == n_layer && end == n_layer);
++                if (computed && (layer != start || start == 0)) {
 +                    captured.push_back(layer);
 +                    context->set_embeddings_layer_inp(layer, true);
 +                }
@@ -368,19 +458,26 @@ index f02490889..345041bfd 100644
  int main(int argc, char ** argv) {
      if (const int rc = check_embedding_scale_predicate()) return rc;
      if (const int rc = check_prepared_export_token_axis()) return rc;
-@@ -907,6 +1031,18 @@ int main(int argc, char ** argv) {
+@@ -907,6 +1081,25 @@ int main(int argc, char ** argv) {
      if (argc == 2 && std::strcmp(argv[1], "--input-width") == 0) {
          return check_decode_input_width();
      }
-+    if (argc == 3 && std::strcmp(argv[1], "--stage-layer-inputs") == 0) {
++    if ((argc == 3 || argc == 4) && std::strcmp(argv[1], "--stage-layer-inputs") == 0) {
 +        llama_backend_init();
-+        const int rc = check_stage_layer_inputs(argv[2]);
++        const int rc = check_stage_layer_inputs(argv[2], argc == 4 ? argv[3] : nullptr);
 +        llama_backend_free();
 +        return rc;
 +    }
-+    if (argc == 3 && std::strcmp(argv[1], "--layer-inputs") == 0) {
++    if (argc == 4 && std::strcmp(argv[1], "--head-input-published") == 0) {
 +        llama_backend_init();
-+        const int rc = check_layer_inputs(argv[2]);
++        const int rc = check_head_input_published(argv[2], std::strcmp(argv[3], "1") == 0);
++        llama_backend_free();
++        return rc;
++    }
++    if ((argc == 3 || (argc == 4 && std::strcmp(argv[3], "--head-input") == 0)) &&
++            std::strcmp(argv[1], "--layer-inputs") == 0) {
++        llama_backend_init();
++        const int rc = check_layer_inputs(argv[2], argc == 4);
 +        llama_backend_free();
 +        return rc;
 +    }
@@ -388,10 +485,10 @@ index f02490889..345041bfd 100644
          llama_backend_init();
          const int rc = check_stage_fused_ops_auto(argv[2]);
 diff --git a/src/skippy/tests/graph_contract_cases.cmake b/src/skippy/tests/graph_contract_cases.cmake
-index 4ee862411..0d1bbf6e7 100644
+index 4ee862411..9f2e50f49 100644
 --- a/src/skippy/tests/graph_contract_cases.cmake
 +++ b/src/skippy/tests/graph_contract_cases.cmake
-@@ -118,3 +118,20 @@ add_test(NAME skippy_graph_contract_glm53_synthetic COMMAND skippy-graph-contrac
+@@ -118,3 +118,35 @@ add_test(NAME skippy_graph_contract_glm53_synthetic COMMAND skippy-graph-contrac
      "${glm53_contract_dir}/graph-contract.gguf" causal)
  set_tests_properties(skippy_graph_contract_glm53_synthetic PROPERTIES
      FIXTURES_REQUIRED contract-glm53-synthetic TIMEOUT 900)
@@ -412,6 +509,21 @@ index 4ee862411..0d1bbf6e7 100644
 +    "${glm5_next_contract_dir}/graph-contract.gguf")
 +set_tests_properties(skippy_glm5_next_stage_layer_inputs PROPERTIES
 +    FIXTURES_REQUIRED contract-glm5-next-synthetic TIMEOUT 900)
++
++# Nemotron-3.5-Lightning's DFlash draft reads target layers 2, 6, 20, 30, 42
++# and 52: layer 52 of the 52-layer trunk is its output, the output head's
++# input, which only the final stage computes.
++add_test(NAME skippy_nemotron_stage_layer_inputs COMMAND skippy-graph-build-inputs --stage-layer-inputs
++    "${SKIPPY_MODEL_FIXTURE_DIR}/contract-nemotron/graph-contract.gguf" 2,6,20,30,42,52)
++set_tests_properties(skippy_nemotron_stage_layer_inputs PROPERTIES
++    FIXTURES_REQUIRED contract-nemotron TIMEOUT 900)
++
++# Qwen3 records each trunk layer's input but not the head input (layer
++# n_layer), so a drafter reading it must be refused rather than abort a decode.
++add_test(NAME skippy_qwen3_head_input_not_published COMMAND skippy-graph-build-inputs --head-input-published
++    "${SKIPPY_MODEL_FIXTURE_DIR}/contract-qwen3-dense/graph-contract.gguf" 0)
++set_tests_properties(skippy_qwen3_head_input_not_published PROPERTIES
++    FIXTURES_REQUIRED contract-qwen3-dense TIMEOUT 900)
 diff --git a/tests/test-llama-archs.cpp b/tests/test-llama-archs.cpp
 index 4f7ea31ac..939cd2241 100644
 --- a/tests/test-llama-archs.cpp
@@ -440,5 +552,5 @@ index 4f7ea31ac..939cd2241 100644
              saver.save(path);
              require_fixture_written(path);
 -- 
-2.54.0 (Apple Git-157)
+2.50.1 (Apple Git-157)
 

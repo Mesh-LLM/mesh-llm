@@ -37,7 +37,7 @@ use crate::{RuntimeConfig, StageModel, StageSession, ensure_ok, write_native_log
 
 use context::{DraftContext, IngestPlan};
 use draft_batch::{DraftBatch, target_feature_row};
-use readout::{argmax_token, block_draft_capacity, walk_dflash2_lattice};
+use readout::{BlockLayout, argmax_token, walk_dflash2_lattice};
 
 pub use context::DFlashHealth;
 pub use feature_wire::{DFlashFeatureEncoding, dflash_feature_identity, dflash_feature_layer};
@@ -49,8 +49,12 @@ const DEFAULT_BLOCK_SIZE: usize = 16;
 /// Draft cache and batch room reserved per lane for one scratch noise block.
 /// Trained DFlash blocks are 8-16 tokens.
 const MAX_BLOCK_SIZE: usize = 64;
-/// DSpark drafts share the `dflash` architecture and add a Markov head.
+/// DSpark drafts share the `dflash` architecture and add a Markov head,
+/// which the draft graph applies to its logits.
 const DSPARK_MARKOV_TENSOR: &str = "markov_w1.weight";
+/// Whether a DSpark draft predicts from the anchor position. Upstream reads a
+/// missing key as true.
+const DSPARK_SAMPLE_FROM_ANCHOR_KEY: &str = "dflash.sample_from_anchor";
 /// LiliCorr drafts share the `dflash` architecture and carry state
 /// embeddings between blocks, which this drafter does not implement.
 const LILICORR_CANDIDATE_TOPK_KEY: &str = "lilicorr.candidate_topk";
@@ -62,6 +66,9 @@ pub enum DFlashVariant {
     DFlash,
     /// Local convolution plus a candidate selector lattice.
     DFlash2,
+    /// A Markov head biasing each position's logits by the token before it,
+    /// read greedily like DFlash.
+    DSpark,
 }
 
 impl DFlashVariant {
@@ -69,6 +76,7 @@ impl DFlashVariant {
         match self {
             Self::DFlash => "dflash",
             Self::DFlash2 => "dflash2",
+            Self::DSpark => "dspark",
         }
     }
 }
@@ -157,6 +165,7 @@ pub(crate) struct DFlashDraft {
     target_n_batch: usize,
     mask_token: i32,
     mrope: bool,
+    layout: BlockLayout,
     batch: DraftBatch,
 }
 
@@ -180,8 +189,8 @@ impl DFlashDraft {
     ) -> Result<Self> {
         let api = skippy_ffi::llama_draft::llama_draft_api()
             .ok_or_else(|| anyhow!("native runtime does not export the draft-context API"))?;
-        let draft_embeds = reject_dspark(path)?;
-        if !draft_embeds
+        let tensors = inspect_draft_tensors(path)?;
+        if !tensors.embeds
             && let Some(tensor) = missing_borrowed_tensor(&config.resident_tensor_names)
         {
             bail!(
@@ -217,10 +226,11 @@ impl DFlashDraft {
             target_n_batch: 0,
             mask_token: -1,
             mrope: false,
+            layout: BlockLayout::BonusAnchor,
             batch: DraftBatch::default(),
         };
         // From here the Drop impl owns the native handles.
-        draft.configure(target_model, options, config)?;
+        draft.configure(target_model, options, config, tensors.markov)?;
         Ok(draft)
     }
 
@@ -229,6 +239,7 @@ impl DFlashDraft {
         target_model: *const Opaque,
         options: &DFlashDraftOptions,
         config: &RuntimeConfig,
+        markov: bool,
     ) -> Result<()> {
         let api = self.api;
         let architecture =
@@ -239,26 +250,34 @@ impl DFlashDraft {
                 architecture.as_deref().unwrap_or("unknown")
             );
         }
-        if meta_usize(self.model, LILICORR_CANDIDATE_TOPK_KEY)?.is_some_and(|top_k| top_k > 0) {
-            bail!("LiliCorr drafts are not supported");
-        }
+        check_lilicorr_draft(self.model)?;
         let target_layers = unsafe { (api.model_n_layer)(target_model) };
-        self.info.target_layer_ids = target_layer_ids(api, self.model, target_layers)?;
+        let target_ctx = self.target_ctx;
+        self.info.target_layer_ids = target_layer_ids(api, self.model, target_layers, |lid| {
+            // Asks the target's graph; capturing a layer it does not
+            // publish would abort its next decode.
+            unsafe { (api.layer_inp_published)(target_ctx, lid) }
+        })?;
         // A final stage of a split target captures only the layers whose
         // input its graph produces; earlier stages send the rest with their
         // activations. The input of this stage's first layer is the
-        // activation it receives.
+        // activation it receives. Layer `n_layer`, the output head's input,
+        // is always this stage's: the draft runs where the head does.
         let complete = config.resident_tensor_names.is_empty() && config.layer_start == 0;
         let local_end = if complete || config.layer_end == 0 {
             u32::MAX
         } else {
             config.layer_end
         };
+        let head_input = u32::try_from(target_layers).unwrap_or(u32::MAX);
         self.local_layers = self
             .info
             .target_layer_ids
             .iter()
-            .map(|&lid| split::stage_captures_layer_input(lid, config.layer_start, local_end))
+            .map(|&lid| {
+                lid == head_input
+                    || split::stage_captures_layer_input(lid, config.layer_start, local_end)
+            })
             .collect();
         self.input_layer = if complete {
             None
@@ -304,16 +323,8 @@ impl DFlashDraft {
                 self.info.block_size
             );
         }
-        let selector_top_k = unsafe { (api.model_dflash_selector_top_k)(self.model) };
-        if selector_top_k > 0 {
-            self.info.variant = DFlashVariant::DFlash2;
-            self.info.selector_top_k = positive_usize(selector_top_k, "selector top-k")?;
-            let row_used = self.info.selector_top_k * (self.info.selector_top_k + 1);
-            if row_used > self.n_embd_draft {
-                bail!("draft hidden size is too small for the DFlash2 selector lattice");
-            }
-        }
-        self.info.max_draft_tokens = block_draft_capacity(
+        self.select_variant(markov)?;
+        self.info.max_draft_tokens = self.layout.capacity(
             self.info.block_size,
             options.max_draft_tokens.unwrap_or(usize::MAX),
         );
@@ -342,6 +353,35 @@ impl DFlashDraft {
             self.mask_token,
             self.mrope,
         ));
+        Ok(())
+    }
+
+    /// Picks the draft family and its block layout: DSpark when the draft has
+    /// a Markov head, DFlash2 when it has a selector lattice, else DFlash.
+    fn select_variant(&mut self, markov: bool) -> Result<()> {
+        let selector_top_k = unsafe { (self.api.model_dflash_selector_top_k)(self.model) };
+        if markov {
+            if selector_top_k > 0 {
+                bail!(
+                    "a draft with both a DSpark Markov head and a DFlash2 selector is not supported"
+                );
+            }
+            self.info.variant = DFlashVariant::DSpark;
+            let anchor_first = unsafe {
+                skippy_ffi::llama_model_meta_val_str(self.model, DSPARK_SAMPLE_FROM_ANCHOR_KEY)
+            }
+            .is_none_or(|value| value == "true");
+            if anchor_first {
+                self.layout = BlockLayout::AnchorFirst;
+            }
+        } else if selector_top_k > 0 {
+            self.info.variant = DFlashVariant::DFlash2;
+            self.info.selector_top_k = positive_usize(selector_top_k, "selector top-k")?;
+            let row_used = self.info.selector_top_k * (self.info.selector_top_k + 1);
+            if row_used > self.n_embd_draft {
+                bail!("draft hidden size is too small for the DFlash2 selector lattice");
+            }
+        }
         Ok(())
     }
 
@@ -518,9 +558,11 @@ impl DFlashDraft {
         self.truncate(seq_id, anchor_position);
         // Every block row is an output, as upstream requests: marking only the
         // mask rows returns logits shifted by one row. DFlash2 reads its
-        // lattice from the nextn output instead and needs no logits.
+        // lattice from the nextn output instead and needs no logits. A DSpark
+        // block is never longer than its trained block, past which the draft
+        // graph leaves out the Markov head.
         self.batch.clear();
-        for index in 0..=draft_tokens {
+        for index in 0..self.layout.block_tokens(draft_tokens) {
             let token = if index == 0 { anchor } else { self.mask_token };
             let position = anchor_position
                 .checked_add(i32::try_from(index).context("draft index exceeds i32")?)
@@ -556,7 +598,8 @@ impl DFlashDraft {
             ));
         }
         let mut tokens = Vec::with_capacity(draft_tokens);
-        for row in 1..=draft_tokens {
+        let first = self.layout.first_draft_row();
+        for row in first..first + draft_tokens {
             let row = i32::try_from(row).context("draft row exceeds i32")?;
             let logits = unsafe { (self.api.get_logits_ith)(self.ctx, row) };
             if logits.is_null() {
@@ -603,25 +646,51 @@ fn missing_borrowed_tensor(resident: &[String]) -> Option<&'static str> {
     .then_some(DFLASH_BORROWED_TARGET_TENSOR)
 }
 
-/// Refuses a DSpark draft, and returns whether the draft carries its own
-/// token embeddings.
-fn reject_dspark(path: &Path) -> Result<bool> {
-    let catalog = skippy_model::gguf_catalog::read_gguf_tensor_catalog(path)
-        .with_context(|| format!("read draft GGUF {}", path.display()))?;
-    if catalog
-        .tensors
-        .iter()
-        .any(|tensor| tensor.name == DSPARK_MARKOV_TENSOR)
-    {
+/// Opt-in to run a LiliCorr draft as plain DFlash, without the correlation
+/// head that rescores its top candidates. Verification stays exact; only
+/// acceptance can differ.
+const LILICORR_HEADLESS_ENV: &str = "SKIPPY_DFLASH_LILICORR_HEADLESS";
+
+/// Refuses a LiliCorr draft unless [`LILICORR_HEADLESS_ENV`] asks to run it as
+/// plain DFlash.
+fn check_lilicorr_draft(model: *const Opaque) -> Result<()> {
+    if !meta_usize(model, LILICORR_CANDIDATE_TOPK_KEY)?.is_some_and(|top_k| top_k > 0) {
+        return Ok(());
+    }
+    if !lilicorr_headless_enabled_by(std::env::var(LILICORR_HEADLESS_ENV).ok().as_deref()) {
         bail!(
-            "DSpark drafts are not supported; {} has a Markov head",
-            path.display()
+            "LiliCorr drafts are not supported; {LILICORR_HEADLESS_ENV}=1 runs one as plain DFlash without its correlation head"
         );
     }
-    Ok(catalog
-        .tensors
-        .iter()
-        .any(|tensor| tensor.name == DFLASH_BORROWED_TARGET_TENSOR))
+    // Without state embeddings in the block batch the draft graph leaves out
+    // the correlation head, and its logits are plain DFlash logits.
+    write_native_log_note(
+        "dflash draft is LiliCorr; running it as plain DFlash without its correlation head",
+    );
+    Ok(())
+}
+
+fn lilicorr_headless_enabled_by(value: Option<&str>) -> bool {
+    matches!(value.map(str::trim), Some("1" | "true"))
+}
+
+/// What a draft's tensors say about how it runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DraftTensors {
+    /// The draft carries its own token embeddings.
+    embeds: bool,
+    /// The draft is a DSpark draft with a Markov head.
+    markov: bool,
+}
+
+fn inspect_draft_tensors(path: &Path) -> Result<DraftTensors> {
+    let catalog = skippy_model::gguf_catalog::read_gguf_tensor_catalog(path)
+        .with_context(|| format!("read draft GGUF {}", path.display()))?;
+    let has = |name: &str| catalog.tensors.iter().any(|tensor| tensor.name == name);
+    Ok(DraftTensors {
+        embeds: has(DFLASH_BORROWED_TARGET_TENSOR),
+        markov: has(DSPARK_MARKOV_TENSOR),
+    })
 }
 
 /// Refuses a runtime whose upstream parameter defaults do not match the
@@ -655,6 +724,7 @@ fn target_layer_ids(
     api: &LlamaDraftApi,
     model: *const Opaque,
     target_layers: i32,
+    head_input_published: impl FnOnce(u32) -> bool,
 ) -> Result<Vec<u32>> {
     let count = unsafe { (api.model_target_layer_ids_n)(model) };
     let ids = unsafe { (api.model_target_layer_ids)(model) };
@@ -663,15 +733,37 @@ fn target_layer_ids(
     }
     let count = usize::try_from(count).context("target layer count exceeds usize")?;
     let ids = unsafe { std::slice::from_raw_parts(ids, count) };
-    ids.iter()
+    let ids = ids
+        .iter()
         .map(|&lid| {
-            // Skippy sizes layer-input capture to n_layer and aborts past it.
-            if lid < 0 || lid >= target_layers {
+            // Layer inputs are captured for 0..=n_layer; id n_layer is the
+            // last layer's output, the input of the output head.
+            if lid < 0 || lid > target_layers {
                 bail!("draft target layer {lid} is outside the target's {target_layers} layers");
             }
             u32::try_from(lid).context("target layer id exceeds u32")
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    check_head_input(&ids, target_layers, head_input_published)?;
+    Ok(ids)
+}
+
+/// Refuses a draft that reads layer `n_layer`, the output head's input, from
+/// a target whose graph does not publish it.
+fn check_head_input(
+    ids: &[u32],
+    target_layers: i32,
+    published: impl FnOnce(u32) -> bool,
+) -> Result<()> {
+    let Ok(head) = u32::try_from(target_layers) else {
+        return Ok(());
+    };
+    if ids.contains(&head) && !published(head) {
+        bail!(
+            "draft reads target layer {head}, the output head's input, which this target's graph does not publish"
+        );
+    }
+    Ok(())
 }
 
 fn load_draft(
@@ -1399,6 +1491,19 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_draft_reading_the_head_input_needs_a_target_that_publishes_it() {
+        let ids = [2, 14, 26, 34, 40];
+        assert!(check_head_input(&ids, 40, |_| true).is_ok());
+        let refused = check_head_input(&ids, 40, |lid| lid != 40).unwrap_err();
+        assert!(
+            refused.to_string().contains("does not publish"),
+            "{refused}"
+        );
+        // Drafts below the head never ask.
+        assert!(check_head_input(&[2, 14, 26], 40, |_| panic!("asked")).is_ok());
+    }
+
+    #[test]
     fn a_poisoned_lock_is_reset_and_reusable() {
         let mutex = Mutex::new(vec![1, 2, 3]);
         let _ = std::panic::catch_unwind(|| {
@@ -1525,6 +1630,68 @@ mod tests {
         let mut with_embeddings = final_stage.to_vec();
         with_embeddings.push("token_embd.weight".to_string());
         assert_eq!(missing_borrowed_tensor(&with_embeddings), None);
+    }
+
+    /// A GGUF holding one-float tensors named `names`.
+    fn gguf_with_tensors(names: &[&str]) -> tempfile::NamedTempFile {
+        use std::io::Write;
+        let mut bytes = b"GGUF".to_vec();
+        bytes.extend_from_slice(&3u32.to_le_bytes());
+        bytes.extend_from_slice(&(names.len() as u64).to_le_bytes());
+        bytes.extend_from_slice(&0u64.to_le_bytes());
+        for (index, name) in names.iter().enumerate() {
+            bytes.extend_from_slice(&(name.len() as u64).to_le_bytes());
+            bytes.extend_from_slice(name.as_bytes());
+            bytes.extend_from_slice(&1u32.to_le_bytes());
+            bytes.extend_from_slice(&1u64.to_le_bytes());
+            bytes.extend_from_slice(&0u32.to_le_bytes()); // f32
+            bytes.extend_from_slice(&(32 * index as u64).to_le_bytes());
+        }
+        bytes.resize(bytes.len().next_multiple_of(32), 0);
+        bytes.resize(bytes.len() + 32 * names.len(), 0);
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(&bytes).unwrap();
+        file
+    }
+
+    #[test]
+    fn a_markov_head_marks_a_dspark_draft() {
+        let dflash = gguf_with_tensors(&["blk.0.attn_q.weight", "fc.weight"]);
+        assert_eq!(
+            inspect_draft_tensors(dflash.path()).unwrap(),
+            DraftTensors {
+                embeds: false,
+                markov: false
+            }
+        );
+        let dspark = gguf_with_tensors(&[
+            "blk.0.attn_q.weight",
+            "token_embd.weight",
+            "markov_w1.weight",
+            "markov_w2.weight",
+        ]);
+        assert_eq!(
+            inspect_draft_tensors(dspark.path()).unwrap(),
+            DraftTensors {
+                embeds: true,
+                markov: true
+            }
+        );
+    }
+
+    #[test]
+    fn a_lilicorr_draft_runs_headless_only_when_asked() {
+        for (value, enabled) in [
+            (None, false),
+            (Some(""), false),
+            (Some("0"), false),
+            (Some("yes"), false),
+            (Some("1"), true),
+            (Some("true"), true),
+            (Some(" 1 "), true),
+        ] {
+            assert_eq!(lilicorr_headless_enabled_by(value), enabled, "{value:?}");
+        }
     }
 
     #[test]

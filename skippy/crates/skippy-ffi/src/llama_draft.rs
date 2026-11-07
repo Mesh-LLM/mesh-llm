@@ -133,6 +133,8 @@ pub struct LlamaDraftApi {
     pub get_embeddings_nextn: unsafe extern "C" fn(ctx: *mut Opaque) -> *mut f32,
     pub set_embeddings_layer_inp: unsafe extern "C" fn(ctx: *mut Opaque, lid: u32, value: bool),
     pub get_embeddings_layer_inp: unsafe extern "C" fn(ctx: *mut Opaque, lid: u32) -> *mut f32,
+    /// Whether the target graph publishes layer `lid`'s input when captured.
+    pub layer_inp_published: unsafe extern "C" fn(ctx: *mut Opaque, lid: u32) -> bool,
     pub model_target_layer_ids: unsafe extern "C" fn(model: *const Opaque) -> *const i32,
     pub model_target_layer_ids_n: unsafe extern "C" fn(model: *const Opaque) -> u32,
     pub model_dflash_selector_top_k: unsafe extern "C" fn(model: *const Opaque) -> i32,
@@ -183,6 +185,7 @@ pub fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
         get_embeddings_nextn: raw::llama_get_embeddings_nextn,
         set_embeddings_layer_inp: raw::llama_set_embeddings_layer_inp,
         get_embeddings_layer_inp: raw::llama_get_embeddings_layer_inp,
+        layer_inp_published: raw::llama_layer_inp_published,
         model_target_layer_ids: raw::llama_model_target_layer_ids,
         model_target_layer_ids_n: raw::llama_model_target_layer_ids_n,
         model_dflash_selector_top_k: raw::llama_model_dflash_selector_top_k,

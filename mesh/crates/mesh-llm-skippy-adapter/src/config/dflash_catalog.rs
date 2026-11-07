@@ -276,6 +276,79 @@ pub(super) fn bootstrap_pairings() -> Vec<DFlashPairing> {
             max_draft_tokens: 15,
             backends: DFlashBackends::Metal,
         },
+        // Nemotron-3.5-Bolt-E4B, a Gemma-4-E4B fine-tune with Gemma-4-E4B-It's
+        // shape, so the name breaks the tie. NVIDIA's DFlash draft reads target
+        // layers 6..=36 at width 2560 with an 8-token block, in sliding-window
+        // attention. Greedy chat decodes 142.1 tok/s on a DGX Spark (58.4 off)
+        // and 62.3 on an M4 (28.5 off).
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "gemma4".to_string(),
+                layer_count: 42,
+                embedding_length: 2560,
+                expert_count: 0,
+                family: Some("Nemotron-3.5-Bolt".to_string()),
+            },
+            draft: DFlashDraft {
+                repo: "unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF".to_string(),
+                revision: "b738967d6da3441a7d1c71fcec15e49e32e16ecd".to_string(),
+                file: "dflash-NVIDIA-Nemotron-3.5-Bolt-E4B-Q8_0.gguf".to_string(),
+                sha256: "9a63662ae8395b8bfc1a1b00d7a9ef354120f172704bd6ba88d3870cf22d4d03"
+                    .to_string(),
+                bytes: 398_892_256,
+            },
+            max_draft_tokens: 7,
+            backends: DFlashBackends::All,
+        },
+        // Nemotron-3.5-Lightning-30B-A3B has Nemotron-3-Nano-30B-A3B's shape,
+        // so the name breaks the tie. NVIDIA's DSpark draft (DFlash with a
+        // Markov head) reads target layers 2..=52, layer 52 being the head's
+        // input, with an 8-token block. It replaces the default native MTP:
+        // on a DGX Spark greedy chat decodes 88.0 tok/s (76.7 MTP, 66.0 off),
+        // sampled at T=0.7 87.6 (54.8 MTP) and agentic coding 78.4 (72.8 MTP).
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "nemotron_h_moe".to_string(),
+                layer_count: 52,
+                embedding_length: 2688,
+                expert_count: 128,
+                family: Some("Nemotron-3.5-Lightning".to_string()),
+            },
+            draft: DFlashDraft {
+                repo: "magnitudedev/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark-GGUF"
+                    .to_string(),
+                revision: "ed35fc990759330e325ab9e41bcf80737ab4dafc".to_string(),
+                file: "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark.gguf".to_string(),
+                sha256: "14fcc5296ca9be2fa2156275fd1811de966835e2894729907a03cf7f80634856"
+                    .to_string(),
+                bytes: 1_357_001_312,
+            },
+            max_draft_tokens: 7,
+            backends: DFlashBackends::NotMetal,
+        },
+        // The same DSpark draft at Q8_0 on Metal, which has no fast NVFP4
+        // kernels. On an M3 Ultra greedy chat decodes 137.1 tok/s (119.1 MTP,
+        // 95.2 off), sampled 134.4 (83.5 MTP) and agentic coding 121.5
+        // (112.1 MTP).
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "nemotron_h_moe".to_string(),
+                layer_count: 52,
+                embedding_length: 2688,
+                expert_count: 128,
+                family: Some("Nemotron-3.5-Lightning".to_string()),
+            },
+            draft: DFlashDraft {
+                repo: "meshllm/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-DSpark-GGUF".to_string(),
+                revision: "5b7d4423fad884ef9a5a451c396b91bbd5f4d050".to_string(),
+                file: "NVIDIA-Nemotron-3.5-Lightning-30B-A3B-DSpark-Q8_0.gguf".to_string(),
+                sha256: "0ca3174767e1ee35c193af9911de49fd2810a630fd7fa8b68fcab3137e72b5cf"
+                    .to_string(),
+                bytes: 1_036_046_944,
+            },
+            max_draft_tokens: 7,
+            backends: DFlashBackends::Metal,
+        },
     ]
 }
 
@@ -374,13 +447,25 @@ pub(super) fn package_selects_dflash(
 
 /// Whether `name` carries `family` as a whole token, ignoring case, so
 /// "Huihui-Qwen3.6-27B" names Qwen3.6 but "Qwen3.6x" and "Qwen3.65" do not.
+/// Spaces, underscores and hyphens are one separator, so "NVIDIA Nemotron 3.5
+/// Bolt E4B" names Nemotron-3.5-Bolt.
 fn names_family(name: &str, family: &str) -> bool {
-    let name = name.to_ascii_lowercase();
-    let family = family.to_ascii_lowercase();
+    let name = separators_as_hyphens(name);
+    let family = separators_as_hyphens(family);
     let continues = |c: char| c.is_ascii_alphanumeric() || c == '.';
     name.match_indices(&family).any(|(start, _)| {
         !name[..start].ends_with(continues) && !name[start + family.len()..].starts_with(continues)
     })
+}
+
+/// `text` lowercased, with spaces and underscores written as hyphens.
+fn separators_as_hyphens(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            ' ' | '_' => '-',
+            c => c.to_ascii_lowercase(),
+        })
+        .collect()
 }
 
 /// The default cap on DFlash draft tokens per block. Adaptive block sizing
@@ -405,8 +490,9 @@ pub fn dflash_draft_cache_path(draft: &DFlashDraft) -> PathBuf {
 
 impl DefaultDFlash {
     /// Refuses a draft that cannot read this target: it must be a DFlash GGUF
-    /// as wide as the target that reads only layers the target has, and
-    /// exactly the layers a package proposer declares.
+    /// as wide as the target that reads only layers the target has (layer
+    /// `layer_count` is the last layer's output, the output head's input),
+    /// and exactly the layers a package proposer declares.
     pub fn check_draft(&self, path: &Path) -> Result<()> {
         let target = &self.pairing.target;
         let Some(meta) = scan_gguf_compact_meta(path) else {
@@ -425,7 +511,7 @@ impl DefaultDFlash {
         );
         let layers = scan_gguf_dflash_target_layers(path).unwrap_or_default();
         ensure!(!layers.is_empty(), "draft names no target layers");
-        if let Some(layer) = layers.iter().find(|&&layer| layer >= target.layer_count) {
+        if let Some(layer) = layers.iter().find(|&&layer| layer > target.layer_count) {
             bail!(
                 "draft reads target layer {layer}, but the target has {} layers",
                 target.layer_count
@@ -588,10 +674,16 @@ mod tests {
 
     /// Every target the bootstrap table pairs by default, named as its GGUF
     /// names it: Qwen3.5-9B, Qwen3.6-27B, Qwen3.8-27B (with its NextN block),
-    /// Qwen3.6-35B-A3B and Qwen3-Coder-Next.
+    /// Qwen3.6-35B-A3B, Qwen3-Coder-Next, Nemotron-3.5-Bolt-E4B and
+    /// Nemotron-3.5-Lightning-30B-A3B (with its NextN block).
     fn default_targets() -> Vec<(&'static str, GgufCompactMeta)> {
         let mut qwen38 = named(target_meta("qwen35", 65, 5120, 0), "Qwen3.8-27B");
         qwen38.nextn_predict_layers = 1;
+        let mut lightning = named(
+            target_meta("nemotron_h_moe", 53, 2688, 128),
+            "Nvidia-Nemotron-3.5-Lightning-30B-A3B",
+        );
+        lightning.nextn_predict_layers = 1;
         vec![
             (
                 "Qwen3.5-9B",
@@ -610,6 +702,14 @@ mod tests {
                 "Qwen3-Coder-Next",
                 named(target_meta("qwen3next", 48, 2048, 512), "Qwen3-Coder-Next"),
             ),
+            (
+                "Nemotron-3.5-Bolt-E4B",
+                named(
+                    target_meta("gemma4", 42, 2560, 0),
+                    "NVIDIA Nemotron 3.5 Bolt E4B",
+                ),
+            ),
+            ("Nemotron-3.5-Lightning-30B-A3B", lightning),
         ]
     }
 
@@ -679,6 +779,70 @@ mod tests {
             Some("AtomicChat/Qwen3-Coder-Next-DFlash-GGUF")
         );
         assert_eq!(repo("Qwen3-Coder-Next", false), None);
+        for metal in [true, false] {
+            assert_eq!(
+                repo("Nemotron-3.5-Bolt-E4B", metal).as_deref(),
+                Some("unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF")
+            );
+        }
+        assert_eq!(
+            repo("Nemotron-3.5-Lightning-30B-A3B", false).as_deref(),
+            Some("magnitudedev/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark-GGUF")
+        );
+        assert_eq!(
+            repo("Nemotron-3.5-Lightning-30B-A3B", true).as_deref(),
+            Some("meshllm/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-DSpark-GGUF")
+        );
+    }
+
+    #[test]
+    fn nemotron_lightning_is_told_from_nemotron_3_nano_by_name() {
+        const DSPARK: &str = "magnitudedev/NVIDIA-Nemotron-3.5-Lightning-30B-A3B-NVFP4-DSpark-GGUF";
+        let with_mtp = |name: &str| {
+            let mut meta = named(target_meta("nemotron_h_moe", 53, 2688, 128), name);
+            meta.nextn_predict_layers = 1;
+            meta
+        };
+        for name in [
+            "Nvidia-Nemotron-3.5-Lightning-30B-A3B",
+            "NVIDIA Nemotron 3.5 Lightning 30B A3B",
+        ] {
+            assert_eq!(
+                repo(&with_mtp(name), false).as_deref(),
+                Some(DSPARK),
+                "{name}"
+            );
+        }
+        // Nemotron-3-Nano-30B-A3B has the same executable shape.
+        let nano = named(
+            target_meta("nemotron_h_moe", 52, 2688, 128),
+            "Nemotron-3-Nano-30B-A3B",
+        );
+        assert_eq!(repo(&nano, false), None);
+        assert_eq!(repo(&nano, true), None);
+    }
+
+    #[test]
+    fn nemotron_bolt_is_told_from_gemma_4_by_name() {
+        const BOLT: &str = "unsloth/NVIDIA-Nemotron-3.5-Bolt-E4B-GGUF";
+        let gemma4 = target_meta("gemma4", 42, 2560, 0);
+        // As unsloth, bartowski, LM Studio and NVIDIA name their quants.
+        for name in [
+            "NVIDIA Nemotron 3.5 Bolt E4B",
+            "NVIDIA-Nemotron-3.5-Bolt-E4B",
+            "Nemotron 3.5 Bolt E4B",
+        ] {
+            for metal in [true, false] {
+                assert_eq!(
+                    repo(&named(gemma4.clone(), name), metal).as_deref(),
+                    Some(BOLT),
+                    "{name}"
+                );
+            }
+        }
+        // Gemma-4-E4B-It has the same shape; the Bolt draft is not its default.
+        assert_eq!(repo(&named(gemma4.clone(), "Gemma-4-E4B-It"), false), None);
+        assert_eq!(repo(&gemma4, false), None);
     }
 
     #[test]
@@ -757,6 +921,16 @@ mod tests {
             ("MyQwen3.8-27B", "Qwen3.8", false),
             ("Qwen3.6-27B", "Qwen3.8", false),
             ("", "Qwen3.8", false),
+            ("NVIDIA Nemotron 3.5 Bolt E4B", "Nemotron-3.5-Bolt", true),
+            ("Nemotron 3.5 Bolt E4B", "Nemotron-3.5-Bolt", true),
+            (
+                "Nvidia-Nemotron-3.5-Lightning-30B-A3B",
+                "Nemotron-3.5-Lightning",
+                true,
+            ),
+            ("nemotron_3.5_lightning", "Nemotron-3.5-Lightning", true),
+            ("Nemotron-3-Nano-30B-A3B", "Nemotron-3.5-Lightning", false),
+            ("Gemma-4-E4B-It", "Nemotron-3.5-Bolt", false),
         ] {
             assert_eq!(names_family(name, family), expected, "{name}");
         }
@@ -852,12 +1026,17 @@ mod tests {
         for (draft, reason) in [
             (draft_file("qwen35", 4096, &[2, 30]), "architecture"),
             (draft_file("dflash", 2048, &[2, 30]), "hidden size"),
-            (draft_file("dflash", 4096, &[2, 38]), "target layer 38"),
+            (draft_file("dflash", 4096, &[2, 33]), "target layer 33"),
             (draft_file("dflash", 4096, &[]), "no target layers"),
         ] {
             let error = pairing.check_draft(draft.path()).unwrap_err().to_string();
             assert!(error.contains(reason), "{error}");
         }
+
+        // Layer 32 of a 32-layer target is its last layer's output, the
+        // output head's input, which Nemotron-3.5 drafts read.
+        let head_input = draft_file("dflash", 4096, &[2, 32]);
+        pairing.check_draft(head_input.path()).unwrap();
 
         // A package proposer's declared target layers must be the draft's.
         pairing.target_layers = Some(vec![2, 30]);
