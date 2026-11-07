@@ -1,12 +1,14 @@
 //! How DFlash feature rows are encoded on the wire between split stages.
 //!
-//! Rows travel as Q8 blocks by default: 32 values share an F16 scale, as in
-//! ggml's Q8_0, which is about half the bytes of BF16. A block keeps an
-//! outlier channel from flattening the rest of its row. Q4 blocks halve that
-//! again. The draft only proposes tokens the target then verifies, so feature
-//! precision can change acceptance but never output.
-//! `SKIPPY_DFLASH_FEATURE_ENCODING=bf16|q8|q4` picks what this process sends;
-//! receivers read all three.
+//! Rows travel in blocks of 32 values that share an F16 scale, as in ggml's
+//! Q8_0 and Q4_0; a block keeps an outlier channel from flattening the rest
+//! of its row. Q8 is about half the bytes of BF16 and Q4 half again. The
+//! draft only proposes tokens the target then verifies, so feature precision
+//! can change acceptance but never which tokens the target emits. A split
+//! sends Q4 when its final stage reports that it reads Q4, and Q8 otherwise
+//! (see `skippy_serving::split_dflash::settled_feature_encoding`).
+//! `SKIPPY_DFLASH_FEATURE_ENCODING=bf16|q8|q4` overrides what this process
+//! sends; receivers read all three.
 //!
 //! A Q8 or Q4 part is an I32 part of packed rows, so activation codecs and
 //! the native runtime carry it through untouched like any other opaque part.
