@@ -1597,6 +1597,12 @@ impl StageOpenAiBackend {
             cache_stats.predicted_ms = stats.predicted_ms;
             let model_generation_elapsed =
                 self.emit_decode_summary(request, &mut state, cache_stats, decode_timer)?;
+            // Tokens the worker decoded past a Stop were never delivered, but
+            // the session consumed them, so the checkpoint must name them to
+            // match the session position.
+            state
+                .generated_token_ids
+                .extend_from_slice(&stats.undelivered_tokens);
             if state.generated_token_ids.len() > 1 {
                 let _ = self.record_post_decode_exact_state(request, session_id, &state);
             }
