@@ -419,8 +419,10 @@ deadline, separate from the 60-second Git command default. An explicit
 `--timeout` overrides both. Generation and idempotence each remain required;
 deadline failures report readable retained output and process cleanup status.
 
-The build job sets `CTEST_PARALLEL_LEVEL=16` for complete upstream CTest runs
-in the repair session and trusted build; the per-case timeout remains 900 seconds.
+The macOS build job sets `CTEST_PARALLEL_LEVEL=16` for complete upstream CTest
+runs in the repair session and trusted build. The Linux build job uses 4 to
+limit concurrent CUDA test memory pressure. The per-case timeout remains 900
+seconds.
 Non-chat certification uses ordinary `skippy serve --model-path` startup and
 binds oracle evidence to the same candidate `skippy` executable. It does not
 generate a stage configuration or supply cache-admission labels.
@@ -527,26 +529,18 @@ Build evidence explicitly includes hidden run-owned `.deps` state and native
 CTest results before cleanup. Live controller output retains up to 16 MiB per
 stream; the artifact contains the complete gate logs when that bound is exceeded.
 Agent-run build and test commands save complete individual logs and exit statuses
-under `agent-commands/` in the build evidence artifact; the console projects their
-activity without dumping successful tool results.
+under `agent-commands/` in the build evidence artifact. The console shows
+Goose’s normal text output.
 The command wrapper also snapshots available CTest result files after each run.
 
-Llama repair now invokes Goose with `stream-json` and projects it through
-`automation canary-progress` before the bounded outer wrapper capture. The
-console keeps concise assistant narration, tool start/return/error and one-minute
-activity reports. Expandable GitHub log groups retain commands and returned tool
-results without cluttering the default view. The formatter samples the run-owned
-`agent-commands/*/output.log` files, exposing recent output even while a shell
-tool is blocked behind `tail`.
-It reports elapsed/idle time and the wrapper's separate completion record; active
-logs take priority over newer completed commands. The Unix projector opens logs
-through directory handles without following symlinks and cancels the supervised
-Goose/logging pipeline if projection fails while the agent is quiet.
-Full original events remain in `agent.log`; full command logs retain their
-existing 14-day build-artifact upload. The console prints local paths for live
-operator inspection; these are not remotely accessible HTTP links. Downloadable
-full logs become available after the evidence upload, not while a job is active.
-There is no new service, permission, secret, runner selection or certification gate.
+Llama repair invokes Goose in normal text mode and streams its stdout and stderr
+once to the job console while saving the same output in `agent.log`. It does not
+project JSON events, add activity messages or repeat tool output. GitHub workflow
+commands are disabled around this stream so model/tool text cannot alter the job.
+Full per-command logs remain in the existing 14-day build artifact. They can be
+inspected on the runner during a job and downloaded after artifact upload.
+Logging failure stops the supervised turn. The worker credential boundary and
+certification gates are unchanged.
 
 See [Following a Llama Upgrade repair](llama-canary/PROGRESS.md) for console and detailed-log examples.
 
