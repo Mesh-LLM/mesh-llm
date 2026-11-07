@@ -301,6 +301,7 @@ impl ServeSettings {
                             max_draft_tokens: None,
                             target_layers: Vec::new(),
                             context_window: None,
+                            feature_encoding: None,
                         });
                     }
                 }

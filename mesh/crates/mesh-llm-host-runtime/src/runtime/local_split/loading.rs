@@ -139,19 +139,36 @@ impl SplitGenerationLoadSettings<'_> {
         &mut self,
         final_stage_target_layers: Option<&[u32]>,
         final_stage_context_window: Option<u32>,
+        final_stage_feature_encodings: &[String],
     ) {
         let Some(plan) = self.split_dflash.as_mut() else {
             return;
         };
         if let Some(layers) = final_stage_target_layers.filter(|layers| !layers.is_empty()) {
+            // A final stage that predates the report reads bf16 and q8.
+            let readable: Vec<_> = if final_stage_feature_encodings.is_empty() {
+                vec![
+                    skippy_runtime::DFlashFeatureEncoding::Bf16,
+                    skippy_runtime::DFlashFeatureEncoding::Q8,
+                ]
+            } else {
+                final_stage_feature_encodings
+                    .iter()
+                    .filter_map(|name| skippy_runtime::DFlashFeatureEncoding::parse(name))
+                    .collect()
+            };
+            let encoding = skippy_serving::split_dflash::settled_feature_encoding(&readable);
             plan.target_layers = layers.to_vec();
+            plan.feature_encoding = encoding;
             if let Some(dflash) = self.embedded_openai.speculative.dflash.as_mut() {
                 dflash.target_layers = layers.to_vec();
                 dflash.context_window = final_stage_context_window;
+                dflash.feature_encoding = encoding.map(|encoding| encoding.as_str().to_string());
             }
             tracing::info!(
                 target_layers = ?layers,
                 context_window = ?final_stage_context_window,
+                feature_encoding = encoding.map(|encoding| encoding.as_str()),
                 "split DFlash: the final stage attached its draft"
             );
             return;
@@ -772,6 +789,7 @@ pub(super) async fn load_downstream_split_runtime_stages(
             settings.settle_split_dflash(
                 ready.status.dflash_target_layers.as_deref(),
                 ready.status.dflash_context_window,
+                &ready.status.dflash_feature_encodings,
             );
         }
         ready_by_stage.insert(stage.stage_id.clone(), ready.status);
