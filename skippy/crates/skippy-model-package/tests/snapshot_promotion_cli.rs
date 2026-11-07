@@ -15,6 +15,7 @@ fn cli(endpoint: &str, args: &[&str]) -> Output {
     let home = tempfile::tempdir().unwrap();
     let child = Command::new(env!("CARGO_BIN_EXE_promote-layer-package-snapshot"))
         .env_clear()
+        .envs(child_env::windows_system())
         .envs(child_env::ca_certificates())
         .env("HF_ENDPOINT", endpoint)
         .env("HF_HOME", home.path())
