@@ -604,24 +604,7 @@ fn read_native_profile(
             state_identities.insert(identity.clone()),
             "native state effect identity {identity:?} is duplicated"
         );
-        let kind = match state.kind {
-            value if value == skippy_ffi::StagePlanStateKind::KvKey as i32 => {
-                skippy_ffi::StagePlanStateKind::KvKey
-            }
-            value if value == skippy_ffi::StagePlanStateKind::KvValue as i32 => {
-                skippy_ffi::StagePlanStateKind::KvValue
-            }
-            value if value == skippy_ffi::StagePlanStateKind::RecurrentConv as i32 => {
-                skippy_ffi::StagePlanStateKind::RecurrentConv
-            }
-            value if value == skippy_ffi::StagePlanStateKind::RecurrentSsm as i32 => {
-                skippy_ffi::StagePlanStateKind::RecurrentSsm
-            }
-            value if value == skippy_ffi::StagePlanStateKind::DerivedPersistent as i32 => {
-                skippy_ffi::StagePlanStateKind::DerivedPersistent
-            }
-            unknown => anyhow::bail!("native state effect kind {unknown} is unsupported"),
-        };
+        let kind = state_effect_kind(state.kind)?;
         let access = match state.access {
             value if value == skippy_ffi::StagePlanStateAccess::Read as i32 => {
                 skippy_ffi::StagePlanStateAccess::Read
@@ -883,4 +866,17 @@ fn path_cstring(path: &Path, label: &str) -> anyhow::Result<CString> {
         .to_str()
         .with_context(|| format!("{label} is not valid UTF-8: {}", path.display()))?;
     cstring(value, label)
+}
+
+/// The state kind a native stage plan reports for one state effect.
+pub(super) fn state_effect_kind(value: i32) -> anyhow::Result<skippy_ffi::StagePlanStateKind> {
+    use skippy_ffi::StagePlanStateKind as Kind;
+    Ok(match value {
+        value if value == Kind::KvKey as i32 => Kind::KvKey,
+        value if value == Kind::KvValue as i32 => Kind::KvValue,
+        value if value == Kind::RecurrentConv as i32 => Kind::RecurrentConv,
+        value if value == Kind::RecurrentSsm as i32 => Kind::RecurrentSsm,
+        value if value == Kind::DerivedPersistent as i32 => Kind::DerivedPersistent,
+        unknown => anyhow::bail!("native state effect kind {unknown} is unsupported"),
+    })
 }
