@@ -6,8 +6,16 @@ Checks: >
   skippy-bridge-barrier,
   skippy-no-alloc-in-oom-handler,
   skippy-rust-string-lossy,
-  skippy-explicit-narrowing
+  skippy-explicit-narrowing,
+  skippy-single-call-site,
+  skippy-span-buffer-extent
 HeaderFilterRegex: 'skippy-sys/cpp/.*'
 
 CheckOptions:
   skippy-bridge-barrier.FileRegex: 'bridge\.cpp$'
+  # The bridge reaches the batch entry points only through the facade, which
+  # bounds the fed count by the session's own batch width and the selection
+  # by the output buffer's honest extent (PR #2907 findings #18/#8): a direct
+  # native call here bypasses both and is a finding.
+  skippy-single-call-site.Functions: 'skippy_iteration_batch_sampled;skippy_session_embed'
+  skippy-single-call-site.AllowedCallers: ''

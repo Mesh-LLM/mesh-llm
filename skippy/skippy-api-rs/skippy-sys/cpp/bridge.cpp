@@ -569,6 +569,7 @@ ReadoutResult Bridge::staged_readout(StagedSession& session, rust::Slice<const s
     });
 }
 
+// NOLINTNEXTLINE(skippy-bridge-barrier): nothrow C-ABI getter; nothing can throw across it
 std::int32_t Bridge::staged_batch_width(const StagedSession& session) const noexcept {
     return skippy_session_batch_size(session.get().native());
 }

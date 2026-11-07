@@ -1,6 +1,6 @@
 # skippy clang-tidy checks
 
-Eighteen out-of-tree clang-tidy checks for the `skippy_api` rules that a type
+Nineteen out-of-tree clang-tidy checks for the `skippy_api` rules that a type
 cannot carry (see `../TYPE-RULES.md` §1 for when a rule is a type and when it is a
 check). Built and tested against LLVM 18; every API used is unchanged through
 LLVM 20.
@@ -101,6 +101,7 @@ skippy-llama-api-tidy:
 | `skippy-no-raw-pointer` | tree-wide | views over raw pointers; raw pointers only in owning cells and the ABI struct (TYPE-RULES.md §4) |
 | `skippy-explicit-narrowing` | an integer cast that can lose value is `narrow<>()`, a fitting constant, or carries `// bounded by …` | `arena_put` ×2, the three layer casts |
 | `skippy-const-native-mutation` | a const method never hands a member to a native function through a non-const pointer | AGENTS "const means what it says" |
+| `skippy-span-buffer-extent` | a `std::span` over a fixed buffer takes its extent from the buffer, not a runtime count | PR #2907 finding #8 (the bridge's 256-float score buffer spanned by the selection size) |
 
 Every check's `.h` carries the rule, the option list and the finding it maps to.
 

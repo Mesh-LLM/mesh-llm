@@ -29,6 +29,7 @@ add_library(SkippyTidyChecks MODULE
     checks/RustStringLossyCheck.cpp
     checks/ExplicitNarrowingCheck.cpp
     checks/ConstNativeMutationCheck.cpp
+    checks/SpanBufferExtentCheck.cpp
 )
 
 target_include_directories(SkippyTidyChecks SYSTEM PRIVATE ${CLANG_INCLUDE_DIRS} ${LLVM_INCLUDE_DIRS})

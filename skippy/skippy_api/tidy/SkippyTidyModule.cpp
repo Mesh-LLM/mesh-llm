@@ -22,6 +22,7 @@
 #include "checks/PrecededByCheck.h"
 #include "checks/RustStringLossyCheck.h"
 #include "checks/SingleCallSiteCheck.h"
+#include "checks/SpanBufferExtentCheck.h"
 
 namespace clang::tidy::skippy {
 
@@ -46,6 +47,7 @@ public:
         Factories.registerCheck<RustStringLossyCheck>("skippy-rust-string-lossy");
         Factories.registerCheck<ExplicitNarrowingCheck>("skippy-explicit-narrowing");
         Factories.registerCheck<ConstNativeMutationCheck>("skippy-const-native-mutation");
+        Factories.registerCheck<SpanBufferExtentCheck>("skippy-span-buffer-extent");
     }
 
     // Defaults for this tree; .clang-tidy overrides any of them.

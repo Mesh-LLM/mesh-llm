@@ -9,10 +9,15 @@ Checks: >
   skippy-no-lock-across-native-call,
   skippy-const-native-mutation,
   skippy-explicit-narrowing,
-  skippy-no-alloc-in-oom-handler
+  skippy-no-alloc-in-oom-handler,
+  skippy-span-buffer-extent
 HeaderFilterRegex: '.*/skippy_api/(include|src|tools)/.*'
 
 CheckOptions:
-  skippy-single-call-site.Functions: 'llama_model_n_cls_out;llama_n_ctx;llama_n_batch;llama_n_ubatch;llama_n_seq_max'
-  skippy-single-call-site.AllowedCallers: 'skippy::llama::ClassifierHead::detect;skippy::llama::ContextCapacity::ContextCapacity;skippy::llama::BatchLimit::BatchLimit'
+  # The batch entry points that abort on an over-capacity feed are pinned to
+  # their facade owners, which bound the fed count by the session's own batch
+  # width first (PR #2907 finding #18): a new direct call bypasses that bound
+  # and is a finding, not a silent GGML_ASSERT.
+  skippy-single-call-site.Functions: 'llama_model_n_cls_out;llama_n_ctx;llama_n_batch;llama_n_ubatch;llama_n_seq_max;skippy_iteration_batch_sampled;skippy_session_embed'
+  skippy-single-call-site.AllowedCallers: 'skippy::llama::ClassifierHead::detect;skippy::llama::ContextCapacity::ContextCapacity;skippy::llama::BatchLimit::BatchLimit;skippy::llama::read_selected_log_probs;skippy::llama::StagedSession::embed'
   skippy-explicit-narrowing.AllowedFiles: 'narrow\.h$'
