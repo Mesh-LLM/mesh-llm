@@ -74,7 +74,8 @@ pub fn scan_gguf_dflash_target_layers(path: &Path) -> Option<Vec<u32>> {
 
 /// How far back a DFlash draft's attention reaches: the sliding window
 /// (`dflash.attention.sliding_window`) when its pattern
-/// (`dflash.attention.sliding_window_pattern`) slides every draft layer. A
+/// (`dflash.attention.sliding_window_pattern`) slides every one of its
+/// `dflash.block_count` layers. A
 /// block drafted after position `p` then never attends a target row at or
 /// before `p - window`. `None` when any layer attends the whole context, when
 /// the draft does not say, or when the header cannot be read.
@@ -85,6 +86,7 @@ pub fn scan_gguf_dflash_context_window(path: &Path) -> Option<u32> {
         ..
     } = open_gguf_header(path)?;
     let mut window = None;
+    let mut layers = None;
     let mut pattern: Option<Vec<bool>> = None;
     for _ in 0..n_kv {
         let key = read_gguf_string(&mut reader).ok()?;
@@ -93,6 +95,9 @@ pub fn scan_gguf_dflash_context_window(path: &Path) -> Option<u32> {
             "dflash.attention.sliding_window" => {
                 window = read_gguf_value_as_u32(&mut reader, value_type).ok()?;
             }
+            "dflash.block_count" => {
+                layers = read_gguf_value_as_u32(&mut reader, value_type).ok()?;
+            }
             "dflash.attention.sliding_window_pattern" => {
                 pattern = read_gguf_value_as_bool_list(&mut reader, value_type).ok()?;
             }
@@ -100,7 +105,9 @@ pub fn scan_gguf_dflash_context_window(path: &Path) -> Option<u32> {
         }
     }
     let pattern = pattern?;
-    (!pattern.is_empty() && pattern.iter().all(|&sliding| sliding))
+    // A layer the pattern does not name attends the whole context.
+    let layers = usize::try_from(layers?).ok()?;
+    (layers > 0 && pattern.len() >= layers && pattern[..layers].iter().all(|&sliding| sliding))
         .then_some(window?)
         .filter(|window| *window > 0)
 }
@@ -269,13 +276,20 @@ mod tests {
         assert_eq!(layers, Some(vec![2, 6, 30]));
     }
 
-    fn dflash_window_header(window: Option<u32>, pattern: Option<&[bool]>) -> Option<u32> {
+    fn dflash_window_header(
+        layers: u32,
+        window: Option<u32>,
+        pattern: Option<&[bool]>,
+    ) -> Option<u32> {
         let mut bytes = b"GGUF".to_vec();
         bytes.extend_from_slice(&3u32.to_le_bytes());
         bytes.extend_from_slice(&0u64.to_le_bytes());
-        let count = 1 + usize::from(window.is_some()) + usize::from(pattern.is_some());
+        let count = 2 + usize::from(window.is_some()) + usize::from(pattern.is_some());
         bytes.extend_from_slice(&(count as u64).to_le_bytes());
         architecture(&mut bytes);
+        string(&mut bytes, "dflash.block_count");
+        bytes.extend_from_slice(&(GgufType::Uint32 as u32).to_le_bytes());
+        bytes.extend_from_slice(&layers.to_le_bytes());
         if let Some(pattern) = pattern {
             string(&mut bytes, "dflash.attention.sliding_window_pattern");
             bytes.extend_from_slice(&(GgufType::Array as u32).to_le_bytes());
@@ -299,7 +313,7 @@ mod tests {
     #[test]
     fn a_draft_that_slides_every_layer_reports_its_window() {
         assert_eq!(
-            dflash_window_header(Some(1024), Some(&[true, true, true])),
+            dflash_window_header(3, Some(1024), Some(&[true, true, true])),
             Some(1024)
         );
     }
@@ -307,13 +321,15 @@ mod tests {
     #[test]
     fn a_draft_with_any_full_attention_layer_reports_no_window() {
         assert_eq!(
-            dflash_window_header(Some(2048), Some(&[true, true, false])),
+            dflash_window_header(3, Some(2048), Some(&[true, true, false])),
             None
         );
-        assert_eq!(dflash_window_header(None, None), None);
-        assert_eq!(dflash_window_header(Some(2048), None), None);
-        assert_eq!(dflash_window_header(Some(0), Some(&[true])), None);
-        assert_eq!(dflash_window_header(Some(512), Some(&[])), None);
+        assert_eq!(dflash_window_header(3, None, None), None);
+        assert_eq!(dflash_window_header(3, Some(2048), None), None);
+        assert_eq!(dflash_window_header(1, Some(0), Some(&[true])), None);
+        assert_eq!(dflash_window_header(1, Some(512), Some(&[])), None);
+        // A pattern shorter than the draft leaves its last layers dense.
+        assert_eq!(dflash_window_header(2, Some(1024), Some(&[true])), None);
     }
 
     #[test]

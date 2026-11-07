@@ -957,6 +957,14 @@ mod tests {
     }
 
     #[test]
+    fn a_new_request_on_the_lane_starts_unmarked() {
+        let mut session = session_with_captured(DFlashFeatureRows::new(1, 0));
+        session.dflash_mark_unattended(true);
+        session.dflash_reset_health();
+        assert!(!session.dflash_unattended());
+    }
+
+    #[test]
     fn a_session_outside_split_dflash_ignores_the_mark() {
         let mut session = StageSession {
             raw: std::ptr::null_mut(),
