@@ -1,0 +1,265 @@
+name: Publish DFlash draft conversions
+
+# Converts the DFlash drafts listed in the checked-in manifest to GGUF and
+# publishes them to Hugging Face when the manifest changes on main. Each entry
+# pins its sources by revision and SHA-256, names the llama.cpp pin it was
+# converted at, and states the SHA-256 the conversion must produce. A draft is
+# uploaded only when the output hashes to that value and its target file does
+# not exist yet; a published file is never overwritten or deleted, and one that
+# hashes differently fails the run.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - mesh/crates/mesh-llm-skippy-adapter/data/dflash-drafts/**
+  workflow_dispatch:
+
+# One group per commit: a shared group would let GitHub replace a pending run,
+# and the drafts that commit adds would never be published.
+concurrency:
+  group: dflash-drafts-publish-${{ github.sha }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: read
+
+env:
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+  CARGO_PROFILE_BENCH_DEBUG: "0"
+  DRAFTS_MANIFEST: mesh/crates/mesh-llm-skippy-adapter/data/dflash-drafts/manifest.json
+  LLAMA_PIN_FILE: skippy/llama_cpp/upstream.txt
+
+jobs:
+  publish:
+    name: Publish DFlash draft conversions
+    if: ${{ github.repository == 'Mesh-LLM/mesh-llm' && github.ref == 'refs/heads/main' }}
+    # The HF token stays on a GitHub-hosted runner and reaches only the upload
+    # step; the container supplies git, jq and the pinned hf CLI.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    container:
+      image: ghcr.io/mesh-llm/mesh-llm-cuda-runner@sha256:f499b79bc52dc7492d57397fdbec9f890c6f6bb1d8c1fcde9c1c97d45c0541a7
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Verify prebuilt runner environment
+        run: verify-runner-image public cpu
+      - name: Find drafts to publish
+        id: plan
+        run: |
+          set -euo pipefail
+          hex() { [[ "$1" =~ ^[0-9a-f]{$2}$ ]]; }
+          safe_name() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
+          safe_repo() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; }
+          jq -e '.schema_version == 1 and (.drafts | type == "array")' "$DRAFTS_MANIFEST" >/dev/null || {
+            echo "::error::$DRAFTS_MANIFEST is not a schema 1 draft manifest" >&2
+            exit 1
+          }
+          # The unit tests check the manifest's shape; check what this job
+          # interpolates into paths and URLs again before using it.
+          pending='[]'
+          count="$(jq '.drafts | length' "$DRAFTS_MANIFEST")"
+          for ((i = 0; i < count; i++)); do
+            entry="$(jq -c ".drafts[$i]" "$DRAFTS_MANIFEST")"
+            name="$(jq -r '.name' <<<"$entry")"
+            repo="$(jq -r '.output.repo' <<<"$entry")"
+            file="$(jq -r '.output.file' <<<"$entry")"
+            sha256="$(jq -r '.output.sha256' <<<"$entry")"
+            bytes="$(jq -r '.output.bytes' <<<"$entry")"
+            if ! safe_name "$name" || ! safe_repo "$repo" || [[ "$repo" != meshllm/* ]] \
+              || ! safe_name "$file" || [[ "$file" != *.gguf ]] || ! hex "$sha256" 64 \
+              || ! [[ "$bytes" =~ ^[1-9][0-9]*$ ]]; then
+              echo "::error::draft $i ($name) has an invalid output" >&2
+              exit 1
+            fi
+            headers="$RUNNER_TEMP/probe-$i.txt"
+            status="$(curl --silent --show-error --proto '=https' --head \
+              --dump-header "$headers" --output /dev/null --write-out '%{http_code}' \
+              "https://huggingface.co/$repo/resolve/main/$file")"
+            error_code="$(sed -n 's/^x-error-code: *//Ip' "$headers" | tr -d '\r')"
+            case "$status" in
+              302|200)
+                # Published files are immutable: never overwrite, only verify.
+                published_sha256="$(sed -n 's/^x-linked-etag: *"\{0,1\}\([0-9a-f]*\)"\{0,1\}.*/\1/Ip' "$headers" | tr -d '\r')"
+                published_bytes="$(sed -n 's/^x-linked-size: *//Ip' "$headers" | tr -d '\r')"
+                if [[ "$published_sha256" != "$sha256" || "$published_bytes" != "$bytes" ]]; then
+                  echo "::error::$repo/$file is published as $published_sha256 ($published_bytes bytes), not $sha256 ($bytes bytes)" >&2
+                  exit 1
+                fi
+                echo "$name: $repo/$file is already published"
+                ;;
+              404)
+                if [[ "$error_code" != "EntryNotFound" && "$error_code" != "RepoNotFound" ]]; then
+                  echo "::error::probing $repo/$file returned HTTP 404 ($error_code)" >&2
+                  exit 1
+                fi
+                pending="$(jq -c --argjson i "$i" '. + [$i]' <<<"$pending")"
+                ;;
+              401)
+                # Anonymous requests for a repo that does not exist get 401. The
+                # upload step checks again with the token before it writes.
+                pending="$(jq -c --argjson i "$i" '. + [$i]' <<<"$pending")"
+                ;;
+              *)
+                echo "::error::probing $repo/$file returned HTTP $status" >&2
+                exit 1
+                ;;
+            esac
+          done
+          echo "pending=$pending" >> "$GITHUB_OUTPUT"
+          echo "count=$(jq 'length' <<<"$pending")" >> "$GITHUB_OUTPUT"
+      - name: Prepare pinned llama.cpp
+        if: ${{ steps.plan.outputs.count != '0' }}
+        run: |
+          set -euo pipefail
+          scripts/prepare-llama.sh pinned
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        if: ${{ steps.plan.outputs.count != '0' }}
+        with:
+          version: "0.12.19"
+          enable-cache: false
+      - name: Convert drafts
+        id: convert
+        if: ${{ steps.plan.outputs.count != '0' }}
+        env:
+          PENDING: ${{ steps.plan.outputs.pending }}
+        run: |
+          set -euo pipefail
+          TRUSTED_ROOT="$GITHUB_WORKSPACE"
+          DRAFT_CONVERT_PROJECT="$TRUSTED_ROOT/ci/dflash-drafts/convert"
+          export UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/draft-convert-venv"
+          export UV_CACHE_DIR="$RUNNER_TEMP/uv-cache"
+          uv sync --locked --no-python-downloads --python python3 --project "$DRAFT_CONVERT_PROJECT"
+          llama="$TRUSTED_ROOT/.deps/llama.cpp"
+          pin="$(tr -d '[:space:]' < "$LLAMA_PIN_FILE")"
+          staging="$RUNNER_TEMP/dflash-drafts"
+          mkdir -p "$staging"
+
+          # Downloads the files a source lists at its revision into dir, and
+          # refuses any whose bytes do not hash to the manifest.
+          fetch() {
+            local source="$1" dir="$2" repo revision path sha256
+            repo="$(jq -r '.repo' <<<"$source")"
+            revision="$(jq -r '.revision' <<<"$source")"
+            [[ "$repo" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$ && "$revision" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "::error::invalid source $repo@$revision" >&2
+              return 1
+            }
+            mkdir -p "$dir"
+            while IFS=$'\t' read -r path sha256; do
+              [[ "$path" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ && "$sha256" =~ ^[0-9a-f]{64}$ ]] || {
+                echo "::error::invalid source file $repo/$path" >&2
+                return 1
+              }
+              curl --silent --show-error --fail --location --proto '=https' --retry 3 \
+                --output "$dir/$path" "https://huggingface.co/$repo/resolve/$revision/$path"
+              echo "$sha256  $dir/$path" | sha256sum --check --strict --quiet || {
+                echo "::error::$repo@$revision/$path does not hash to $sha256" >&2
+                return 1
+              }
+            done < <(jq -r '.files[] | [.path, .sha256] | @tsv' <<<"$source")
+          }
+
+          for i in $(jq -r '.[]' <<<"$PENDING"); do
+            entry="$(jq -c ".drafts[$i]" "$DRAFTS_MANIFEST")"
+            name="$(jq -r '.name' <<<"$entry")"
+            file="$(jq -r '.output.file' <<<"$entry")"
+            sha256="$(jq -r '.output.sha256' <<<"$entry")"
+            bytes="$(jq -r '.output.bytes' <<<"$entry")"
+            outtype="$(jq -r '.convert.outtype' <<<"$entry")"
+            if [[ "$(jq -r '.convert.llama_cpp_upstream' <<<"$entry")" != "$pin" ]]; then
+              echo "::error::$name was converted at another llama.cpp pin than $pin; reconvert it and update its output" >&2
+              exit 1
+            fi
+            case "$outtype" in
+              q8_0|bf16|f16|f32) ;;
+              *) echo "::error::$name: unsupported outtype $outtype" >&2; exit 1 ;;
+            esac
+
+            # The converter names the model after the source directory, so the
+            # layout is fixed: <work>/source/<repo name>, <work>/target/<repo name>.
+            work="$RUNNER_TEMP/convert-$i"
+            source_dir="$work/source/$(jq -r '.source.repo | split("/")[1]' <<<"$entry")"
+            fetch "$(jq -c '.source' <<<"$entry")" "$source_dir"
+            args=("$source_dir" --outtype "$outtype" --outfile "$work/$file")
+            if jq -e '.target_model' <<<"$entry" >/dev/null; then
+              target_dir="$work/target/$(jq -r '.target_model.repo | split("/")[1]' <<<"$entry")"
+              fetch "$(jq -c '.target_model' <<<"$entry")" "$target_dir"
+              args+=(--target-model-dir "$target_dir")
+            fi
+            uv run --locked --no-sync --no-python-downloads --project "$DRAFT_CONVERT_PROJECT" python "$llama/convert_hf_to_gguf.py" "${args[@]}"
+
+            produced_sha256="$(sha256sum "$work/$file" | cut -d' ' -f1)"
+            produced_bytes="$(stat -c %s "$work/$file")"
+            echo "$name: $file is $produced_sha256 ($produced_bytes bytes)" | tee -a "$GITHUB_STEP_SUMMARY"
+            if [[ "$produced_sha256" != "$sha256" || "$produced_bytes" != "$bytes" ]]; then
+              echo "::error::$name converted to $produced_sha256 ($produced_bytes bytes), the manifest expects $sha256 ($bytes bytes)" >&2
+              exit 1
+            fi
+            mkdir -p "$staging/$i"
+            mv "$work/$file" "$staging/$i/$file"
+            rm -rf "$work"
+          done
+          echo "staging=$staging" >> "$GITHUB_OUTPUT"
+      - name: Upload to Hugging Face
+        if: ${{ steps.plan.outputs.count != '0' }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          PENDING: ${{ steps.plan.outputs.pending }}
+          STAGING: ${{ steps.convert.outputs.staging }}
+        run: |
+          set -euo pipefail
+          for i in $(jq -r '.[]' <<<"$PENDING"); do
+            entry="$(jq -c ".drafts[$i]" "$DRAFTS_MANIFEST")"
+            name="$(jq -r '.name' <<<"$entry")"
+            repo="$(jq -r '.output.repo' <<<"$entry")"
+            file="$(jq -r '.output.file' <<<"$entry")"
+            # Check again with the token, which also sees a private repo: a
+            # file already there is never replaced.
+            headers="$RUNNER_TEMP/recheck-$i.txt"
+            status="$(curl --silent --show-error --proto '=https' --head \
+              --header @<(printf 'Authorization: Bearer %s\n' "$HF_TOKEN") \
+              --dump-header "$headers" --output /dev/null --write-out '%{http_code}' \
+              "https://huggingface.co/$repo/resolve/main/$file")"
+            error_code="$(sed -n 's/^x-error-code: *//Ip' "$headers" | tr -d '\r')"
+            if [[ "$status" != 404 || ( "$error_code" != "EntryNotFound" && "$error_code" != "RepoNotFound" ) ]]; then
+              echo "::error::$repo/$file appeared before upload (HTTP $status $error_code); not overwriting it" >&2
+              exit 1
+            fi
+            # Uploads one file and deletes nothing.
+            hf upload "$repo" "$STAGING/$i/$file" "$file" \
+              --repo-type model \
+              --commit-message "Publish $name from mesh-llm $GITHUB_SHA"
+          done
+      - name: Verify the published drafts
+        if: ${{ steps.plan.outputs.count != '0' }}
+        env:
+          PENDING: ${{ steps.plan.outputs.pending }}
+        run: |
+          set -euo pipefail
+          for i in $(jq -r '.[]' <<<"$PENDING"); do
+            entry="$(jq -c ".drafts[$i]" "$DRAFTS_MANIFEST")"
+            repo="$(jq -r '.output.repo' <<<"$entry")"
+            file="$(jq -r '.output.file' <<<"$entry")"
+            sha256="$(jq -r '.output.sha256' <<<"$entry")"
+            bytes="$(jq -r '.output.bytes' <<<"$entry")"
+            headers="$RUNNER_TEMP/verify-$i.txt"
+            curl --silent --show-error --proto '=https' --head --dump-header "$headers" \
+              --output /dev/null "https://huggingface.co/$repo/resolve/main/$file"
+            published_sha256="$(sed -n 's/^x-linked-etag: *"\{0,1\}\([0-9a-f]*\)"\{0,1\}.*/\1/Ip' "$headers" | tr -d '\r')"
+            published_bytes="$(sed -n 's/^x-linked-size: *//Ip' "$headers" | tr -d '\r')"
+            revision="$(sed -n 's/^x-repo-commit: *//Ip' "$headers" | tr -d '\r')"
+            if [[ "$published_sha256" != "$sha256" || "$published_bytes" != "$bytes" ]]; then
+              echo "::error::published $repo/$file is $published_sha256 ($published_bytes bytes), not $sha256 ($bytes bytes)" >&2
+              exit 1
+            fi
+            echo "Published $repo/$file at revision $revision (sha256 $sha256)" >> "$GITHUB_STEP_SUMMARY"
+          done

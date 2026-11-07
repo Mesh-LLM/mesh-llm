@@ -24,6 +24,9 @@ mod tests;
 mod speculative_tests;
 
 #[cfg(test)]
+mod dflash_drafts_tests;
+
+#[cfg(test)]
 mod exact_head_tests;
 
 #[cfg(test)]
