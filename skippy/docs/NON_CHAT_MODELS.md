@@ -16,7 +16,7 @@ its runtime-probed workload class for safe routing.
 | Speech synthesis | `POST /v1/audio/speech` | Unsplit local full model and projector |
 | Speech recognition / translation (audio-input chat models) | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations` | Causal trunk and audio projector colocated on one node |
 | Speech recognition (Whisper) | `POST /v1/audio/transcriptions`, `POST /v1/audio/translations`, `GET /v1/realtime` (live) | Unsplit local whisper.cpp model |
-| Laya decision (encoder + decision head) | `POST /systemone` | Unsplit local full model; see [the OpenJEV runbook](design/OPENJEV_SKIPPY_POC.md#laya-backend) |
+| Laya decision (encoder + decision head) | `POST /v1/systemone` | Unsplit local full model; see [the OpenJEV runbook](design/OPENJEV_SKIPPY_POC.md#laya-backend) |
 
 Embedding, rerank, encoder-decoder, and speech-synthesis workloads do not
 silently enter the stage-split generation path. A filtered stage model returns

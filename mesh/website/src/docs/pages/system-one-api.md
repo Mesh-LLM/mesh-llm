@@ -4,7 +4,7 @@ title: System One API
 
 # System One API
 
-`POST /systemone` is a separate API on the same HTTP server, outside the
+`POST /v1/systemone` (also mounted as the legacy alias `POST /systemone`) is a separate API on the same HTTP server, outside the
 OpenAI-compatible `/v1` surface. It is **not a standard OpenAI endpoint**. It accepts shared `state` and named
 `questions`, returning typed answers and label probabilities rather than chat
 messages or generated text. Selecting its model in an ordinary chat client
@@ -42,7 +42,7 @@ mesh-llm serve --model meshllm/laya-multilingual-F16-GGUF
 Mesh downloads the [compatible F16 GGUF](https://huggingface.co/meshllm/laya-multilingual-F16-GGUF)
 when it is not cached and reuses it on subsequent runs. No source checkout,
 Python installation, or manual conversion is required. Wait for the model to
-be ready, then use its discovered ID with `/systemone` as shown below.
+be ready, then use its discovered ID with `/v1/systemone` as shown below.
 
 Without an explicit device, Laya runs on CPU. Use the node's normal `--device`
 or pinned-GPU configuration to place it on a GPU, or set
@@ -67,7 +67,7 @@ Explicit `--model` or `--gguf` arguments replace the configured startup model li
 
 Add `--join <invite>` to serve them on an existing mesh, or `--publish` to
 advertise your mesh for discovery; see [mesh setup](https://github.com/Mesh-LLM/mesh-llm/blob/main/docs/MESHES.md).
-Only call `/systemone` through a client after its own `/v1/models` response
+Only call `/v1/systemone` through a client after its own `/v1/models` response
 advertises `system_one` for the selected model; seeing a model name alone is
 not sufficient. The chat model uses `/v1/chat/completions`. Loading both does
 not automatically route chat through Laya.
@@ -139,7 +139,7 @@ curl -s http://127.0.0.1:9337/v1/models \
       | {id, display_name, system_one_status, metadata}'
 ```
 
-Print only model IDs that are safe to send to `/systemone`:
+Print only model IDs that are safe to send to `/v1/systemone`:
 
 ```sh
 curl -s http://127.0.0.1:9337/v1/models \
@@ -160,7 +160,7 @@ Use the exact `id` returned by `/v1/models`. For the DiffusionGemma setup
 above, that is the configured `openjev-latest` alias:
 
 ```sh
-curl http://localhost:9337/systemone \
+curl http://localhost:9337/v1/systemone \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "openjev-latest",
@@ -200,7 +200,7 @@ can be a canonical Hugging Face ID or a content-hash ID. Object-valued `state`
 is also accepted:
 
 ```sh
-curl http://127.0.0.1:9337/systemone \
+curl http://127.0.0.1:9337/v1/systemone \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "YOUR_DISCOVERED_LAYA_ID",
@@ -239,7 +239,7 @@ These execution paths share the request and typed-answer contract:
 - **Laya** (`general.architecture = "laya"`, for example a converted
   `convaiinnovations/laya-multilingual`) is a small encoder with a typed
   decision head that scores every option in one forward pass. It serves only
-  `/systemone`, keeps the request order of choice options and `state` keys, and
+  `/v1/systemone`, keeps the request order of choice options and `state` keys, and
   follows the node's configured device (`--device` or a pinned GPU); with none
   it runs on the CPU unless `MESH_LLM_LAYA_ACCELERATOR=1` puts it on the GPU.
   It can use the same configured aliases, but aliases must remain unique on a
