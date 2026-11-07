@@ -6,20 +6,23 @@
 //! cache on first load and serves without speculation if it cannot.
 //!
 //! The default draft comes from, in order: the layer package's own `dflash`
-//! proposer, the pairing index published on Hugging Face at the revision this
-//! release pins, and, until that index is published and cached, the bootstrap
-//! table compiled in here.
+//! proposer, the pairing index this release pins by content hash, and, until
+//! that index is cached (or if it cannot be read or fails its hash), the
+//! bootstrap table compiled in here.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, RwLock};
 
 use anyhow::{Context, Result, bail, ensure};
 use hf_hub::RepoTypeModel;
+use sha2::{Digest, Sha256};
 use skippy_model_artifact::gguf::{
     GgufCompactMeta, scan_gguf_compact_meta, scan_gguf_dflash_target_layers,
     scan_gguf_vocab_token_count,
 };
-use skippy_model_hf::store::local::huggingface_snapshot_path;
+use skippy_model_hf::store::local::{
+    huggingface_hub_cache_dir, huggingface_repo_folder_name, huggingface_snapshot_path,
+};
 pub use skippy_package_format::{
     DFlashBackends, DFlashDraft, DFlashPairing, DFlashPairingIndex, DFlashTarget,
 };
@@ -27,37 +30,93 @@ use skippy_runtime::package::PackageGenerationInfo;
 
 /// The Hugging Face repo that publishes the DFlash pairing index.
 pub const DFLASH_PAIRING_INDEX_REPO: &str = "meshllm/dflash-pairings";
-/// The index file in [`DFLASH_PAIRING_INDEX_REPO`].
-pub const DFLASH_PAIRING_INDEX_FILE: &str = "index.json";
-/// The one index commit this release trusts.
-pub const DFLASH_PAIRING_INDEX_REVISION: Option<&str> =
-    Some("91c1cb2cc50f4087ac73a7a74b01670a18015059");
+/// The SHA-256 of the pairing index this release trusts: the bytes of
+/// `data/dflash-pairings/index.json` in this crate. CI publishes that file as
+/// `index/<sha256>.json` in [`DFLASH_PAIRING_INDEX_REPO`] when it changes on
+/// `main`, so editing the pairings means updating this constant too.
+pub const DFLASH_PAIRING_INDEX_SHA256: &str =
+    "daec3de5ce231a13e6b3f2f81e6c54993ae055a6501e08215ff37292805b5766";
 
-/// A pairing index file pinned to one commit of a Hugging Face repo.
+/// A pairing index named by the SHA-256 of its bytes.
+///
+/// Published index files are never changed or deleted, so `main` of the repo
+/// holds every index any release pins, and a file whose bytes hash to the pin
+/// is that index wherever it came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DFlashPairingIndexPin {
     pub repo: &'static str,
-    pub revision: &'static str,
-    pub file: &'static str,
+    pub sha256: &'static str,
 }
 
 impl DFlashPairingIndexPin {
-    /// The index this release trusts, once it is published.
-    pub fn shipped() -> Option<Self> {
-        DFLASH_PAIRING_INDEX_REVISION.map(|revision| Self {
+    /// The revision the index is fetched at.
+    pub const REVISION: &'static str = "main";
+
+    /// The index this release trusts.
+    pub fn shipped() -> Self {
+        Self {
             repo: DFLASH_PAIRING_INDEX_REPO,
-            revision,
-            file: DFLASH_PAIRING_INDEX_FILE,
-        })
+            sha256: DFLASH_PAIRING_INDEX_SHA256,
+        }
     }
 
-    /// Where the Hugging Face cache keeps the index once fetched.
-    pub fn cache_path(&self) -> PathBuf {
-        huggingface_snapshot_path(self.repo, RepoTypeModel, self.revision).join(self.file)
+    /// The index's path in the repo: `index/<sha256>.json`.
+    pub fn file(&self) -> String {
+        format!("index/{}.json", self.sha256)
+    }
+
+    /// Every copy of the index in the Hugging Face cache, one per snapshot
+    /// that holds it, in a stable order.
+    pub fn cached_paths(&self) -> Vec<PathBuf> {
+        self.cached_paths_in(
+            &huggingface_hub_cache_dir()
+                .join(huggingface_repo_folder_name(self.repo, RepoTypeModel))
+                .join("snapshots"),
+        )
+    }
+
+    /// The copies of the index under `snapshots`, a repo's Hugging Face cache
+    /// snapshot directory. Its file name is its hash, so any copy that passes
+    /// [`Self::load`] will do.
+    fn cached_paths_in(&self, snapshots: &Path) -> Vec<PathBuf> {
+        let file = self.file();
+        let Ok(entries) = std::fs::read_dir(snapshots) else {
+            return Vec::new();
+        };
+        let mut found: Vec<PathBuf> = entries
+            .filter_map(|entry| Some(entry.ok()?.path().join(&file)))
+            .filter(|path| path.is_file())
+            .collect();
+        found.sort();
+        found
+    }
+
+    /// Reads the index at `path`, refusing it unless its bytes hash to the pin.
+    pub fn load(&self, path: &Path) -> Result<DFlashPairingIndex> {
+        let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
+        let sha256 = sha256_hex(&bytes);
+        ensure!(
+            sha256 == self.sha256,
+            "{} has sha256 {sha256}, expected {}",
+            path.display(),
+            self.sha256
+        );
+        let json = std::str::from_utf8(&bytes)
+            .with_context(|| format!("{} is not UTF-8", path.display()))?;
+        DFlashPairingIndex::from_json(json)
+            .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))
     }
 }
 
-/// Reads and validates a pairing index file.
+/// The lowercase hex SHA-256 of `bytes`.
+fn sha256_hex(bytes: &[u8]) -> String {
+    Sha256::digest(bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// Reads and validates a pairing index file, without checking its hash.
 pub fn load_dflash_pairing_index(path: &Path) -> Result<DFlashPairingIndex> {
     let json = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
     DFlashPairingIndex::from_json(&json)
@@ -136,13 +195,12 @@ pub struct DefaultDFlash {
     pub source: DFlashPairingSource,
 }
 
-/// The pairings this release ships, used only until the published index is
-/// cached.
+/// The pairings this release falls back to until the pinned index is cached,
+/// or when it cannot be read or fails its hash.
 ///
-/// TODO: delete once `meshllm/dflash-pairings` is published and
-/// [`DFLASH_PAIRING_INDEX_REVISION`] pins it; the index then carries these
-/// pairings (`skippy/evals/dflash-pairings/index.json` is generated from this
-/// table).
+/// TODO: delete once packages declare their drafts; the index
+/// (`data/dflash-pairings/index.json`) is the source of truth, and a test
+/// checks that it pairs every target here the same way.
 pub(super) fn bootstrap_pairings() -> Vec<DFlashPairing> {
     vec![
         // Qwen3.5-9B; the draft reads target layers 2..=30 at width 4096.
@@ -557,33 +615,130 @@ mod tests {
 
     const INDEX_PATH: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../../skippy/evals/dflash-pairings/index.json"
+        "/data/dflash-pairings/index.json"
+    );
+    const README_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/data/dflash-pairings/README.md"
     );
 
-    /// The bootstrap table as the index `meshllm/dflash-pairings` publishes.
-    fn generated_index_json() -> String {
-        let index = DFlashPairingIndex {
-            schema_version: skippy_package_format::DFLASH_PAIRING_INDEX_SCHEMA_VERSION,
-            pairings: bootstrap_pairings(),
-        };
-        serde_json::to_string_pretty(&index).unwrap() + "\n"
+    /// The pin is the hash of the checked-in index, so a change to the
+    /// pairings has to update [`DFLASH_PAIRING_INDEX_SHA256`] in the same
+    /// change, and CI publishes exactly the bytes this release trusts.
+    #[test]
+    fn the_pin_is_the_hash_of_the_checked_in_index() {
+        let bytes = std::fs::read(INDEX_PATH).unwrap();
+        assert_eq!(
+            DFLASH_PAIRING_INDEX_SHA256,
+            sha256_hex(&bytes),
+            "set DFLASH_PAIRING_INDEX_SHA256 to the sha256 of {INDEX_PATH}"
+        );
+        let pin = DFlashPairingIndexPin::shipped();
+        assert_eq!(pin.repo, "meshllm/dflash-pairings");
+        assert_eq!(
+            pin.file(),
+            format!("index/{DFLASH_PAIRING_INDEX_SHA256}.json")
+        );
+        assert_eq!(
+            pin.load(Path::new(INDEX_PATH)).unwrap(),
+            load_dflash_pairing_index(Path::new(INDEX_PATH)).unwrap()
+        );
     }
 
-    /// `UPDATE_DFLASH_PAIRINGS_INDEX=1` rewrites the checked-in index from
-    /// the bootstrap table.
     #[test]
-    fn the_checked_in_index_is_the_bootstrap_table() {
-        let generated = generated_index_json();
-        if std::env::var_os("UPDATE_DFLASH_PAIRINGS_INDEX").is_some() {
-            std::fs::write(INDEX_PATH, &generated).unwrap();
-        }
-        let checked_in = std::fs::read_to_string(INDEX_PATH).unwrap();
-        assert_eq!(
-            checked_in, generated,
-            "regenerate with UPDATE_DFLASH_PAIRINGS_INDEX=1 cargo test -p mesh-llm-skippy-adapter the_checked_in_index"
+    fn an_index_whose_bytes_do_not_hash_to_the_pin_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("index.json");
+        let mut json = std::fs::read_to_string(INDEX_PATH).unwrap();
+        // Still a valid index, but not the one the pin names.
+        json.push('\n');
+        std::fs::write(&path, &json).unwrap();
+        assert!(load_dflash_pairing_index(&path).is_ok());
+        let error = DFlashPairingIndexPin::shipped()
+            .load(&path)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("expected"), "{error}");
+        assert!(error.contains(DFLASH_PAIRING_INDEX_SHA256), "{error}");
+    }
+
+    #[test]
+    fn a_cached_index_is_found_by_its_hash_in_any_snapshot() {
+        let pin = DFlashPairingIndexPin::shipped();
+        let snapshots = tempfile::tempdir().unwrap();
+        assert!(
+            pin.cached_paths_in(&snapshots.path().join("missing"))
+                .is_empty()
         );
+        // Snapshots without the file, then with it in two of them.
+        let older = snapshots.path().join("a".repeat(40));
+        let newer = snapshots.path().join("b".repeat(40));
+        std::fs::create_dir_all(older.join("index")).unwrap();
+        std::fs::create_dir_all(newer.join("index")).unwrap();
+        assert!(pin.cached_paths_in(snapshots.path()).is_empty());
+        let path = newer.join(pin.file());
+        std::fs::copy(INDEX_PATH, &path).unwrap();
+        assert_eq!(pin.cached_paths_in(snapshots.path()), vec![path.clone()]);
+        assert!(pin.load(&path).is_ok());
+        std::fs::write(older.join(pin.file()), "corrupt").unwrap();
+        assert_eq!(
+            pin.cached_paths_in(snapshots.path()),
+            vec![older.join(pin.file()), path]
+        );
+    }
+
+    /// The pairings table in the Hugging Face README, rendered from the index.
+    fn readme_table(index: &DFlashPairingIndex) -> String {
+        let mut table =
+            String::from("| Match | Draft | Cap | Backends |\n| --- | --- | --- | --- |\n");
+        for pairing in &index.pairings {
+            let target = &pairing.target;
+            let mut shape = format!(
+                "`{}`, {} layers, {} wide",
+                target.architecture, target.layer_count, target.embedding_length
+            );
+            if target.expert_count > 0 {
+                shape.push_str(&format!(", {} experts", target.expert_count));
+            }
+            if let Some(family) = &target.family {
+                shape.push_str(&format!(", name carries `{family}`"));
+            }
+            let draft = &pairing.draft;
+            let backends = match pairing.backends {
+                DFlashBackends::All => "all",
+                DFlashBackends::Metal => "Metal",
+                DFlashBackends::NotMetal => "not Metal",
+            };
+            table.push_str(&format!(
+                "| {shape} | [{repo}](https://huggingface.co/{repo}/blob/{revision}/{file}) `{file}` | {cap} | {backends} |\n",
+                repo = draft.repo,
+                revision = draft.revision,
+                file = draft.file,
+                cap = pairing.max_draft_tokens,
+            ));
+        }
+        table
+    }
+
+    /// The README CI publishes next to the index lists its pairings.
+    /// `UPDATE_DFLASH_PAIRINGS_README=1` rewrites the table from the index.
+    #[test]
+    fn the_readme_lists_the_checked_in_pairings() {
+        const START: &str = "<!-- pairings:start -->\n";
+        const END: &str = "<!-- pairings:end -->";
         let index = load_dflash_pairing_index(Path::new(INDEX_PATH)).unwrap();
-        assert_eq!(index.pairings, bootstrap_pairings());
+        let readme = std::fs::read_to_string(README_PATH).unwrap();
+        let (head, rest) = readme.split_once(START).expect("README start marker");
+        let (_, tail) = rest.split_once(END).expect("README end marker");
+        let expected = format!("{head}{START}{}{END}{tail}", readme_table(&index));
+        if std::env::var_os("UPDATE_DFLASH_PAIRINGS_README").is_some() {
+            std::fs::write(README_PATH, &expected).unwrap();
+        }
+        assert_eq!(
+            std::fs::read_to_string(README_PATH).unwrap(),
+            expected,
+            "regenerate with UPDATE_DFLASH_PAIRINGS_README=1 cargo test -p mesh-llm-skippy-adapter the_readme_lists"
+        );
     }
 
     /// Every target the bootstrap table pairs by default, named as its GGUF
@@ -613,8 +768,7 @@ mod tests {
         ]
     }
 
-    /// The published index: the checked-in copy of `index.json` at
-    /// [`DFLASH_PAIRING_INDEX_REVISION`], or the file
+    /// The pinned index: the checked-in `index.json`, or the file
     /// `DFLASH_PAIRING_INDEX_FIXTURE` names (a fresh download, say).
     fn published_index() -> DFlashPairingIndex {
         let path = std::env::var_os("DFLASH_PAIRING_INDEX_FIXTURE")
@@ -948,20 +1102,13 @@ mod tests {
     }
 
     #[test]
-    fn the_index_is_pinned_to_one_revision_of_its_repo() {
-        assert_eq!(DFLASH_PAIRING_INDEX_REPO, "meshllm/dflash-pairings");
-        assert_eq!(DFLASH_PAIRING_INDEX_FILE, "index.json");
-        if let Some(revision) = DFLASH_PAIRING_INDEX_REVISION {
-            assert_eq!(revision.len(), 40);
-            assert!(revision.bytes().all(|byte| byte.is_ascii_hexdigit()));
-        }
-        let pin = DFlashPairingIndexPin {
-            repo: DFLASH_PAIRING_INDEX_REPO,
-            revision: "0123456789abcdef0123456789abcdef01234567",
-            file: DFLASH_PAIRING_INDEX_FILE,
-        };
-        assert!(pin.cache_path().ends_with(
-            "models--meshllm--dflash-pairings/snapshots/0123456789abcdef0123456789abcdef01234567/index.json"
-        ));
+    fn the_index_is_pinned_by_a_lowercase_sha256() {
+        assert_eq!(DFLASH_PAIRING_INDEX_SHA256.len(), 64);
+        assert!(
+            DFLASH_PAIRING_INDEX_SHA256
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        );
+        assert_eq!(DFlashPairingIndexPin::REVISION, "main");
     }
 }
