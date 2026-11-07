@@ -34,21 +34,29 @@ Both patch queues were diffed before this plan was written:
      and owning patch `0015` with the rework (identical file sets, so the owning-patch
      rule holds: update in place, never append, never renumber)
   3. replay cold: `scripts/prepare-llama.sh pinned`
-- done-when: the cold replay applies clean and `just skippy-api-all-targets-build` plus
-  `just skippy-llama-api-test` are green on the folded tree
+  4. regenerate the certified-queue roster: recompute `patch_queue_sha256` over the folded
+     queue and update `skippy/crates/skippy-api/src/split-certified.json` in the same commit
+     (#2907 review: a queue edit without a roster regen fails `split_certification`, and the
+     local 7-gate checkpoint does not build `skippy-api`, so nothing local catches it)
+- done-when: the cold replay applies clean, `just skippy-api-all-targets-build` plus
+  `just skippy-llama-api-test` are green on the folded tree, and `cargo test -p skippy-api --lib`
+  passes — the roster certifies the queue the tree ships
 - commit: `chore(skippy): fold the port queue onto the landed decode line`
 
 ## Card 2 — regenerate bindings and verify the ABI
 
 - files: generated bindings under `skippy/skippy-api-rs`
-- why: the facade rename (`rollback_depth` → `verify_rollback`) is layout-neutral, so no
-  ABI bump is expected — but verify, don't assume.
+- why: the facade rename (`rollback_depth` → `verify_rollback`) is layout-neutral, but the
+  fold still carries the decode line's own ABI bumps — it moved `0.1.78 → 0.1.81` before
+  `70ffac666`, so the folded `skippy/common.h` will disagree with this line's constants.
 - steps:
   1. `just skippy-ffi-bindgen-regen`
-  2. confirm the `SKIPPY_ABI_VERSION_*` constants in the generated bindings match
-     `skippy/common.h` on the folded tree
-- done-when: skippy-ffi and skippy-runtime lib tests green; commit through
-  `just skippy-api-checkpoint`
+  2. update the `skippy-ffi` `ABI_VERSION_*` constants and the roster's `skippy_abi` in
+     `skippy/crates/skippy-api/src/split-certified.json` to the folded `skippy/common.h`
+     value, together
+  3. confirm the constants match the generated bindings (they are const-asserted)
+- done-when: skippy-ffi and skippy-runtime lib tests green and
+  `cargo test -p skippy-api --lib` green; commit through `just skippy-api-checkpoint`
 - commit: `chore(skippy-api-rs): regen ffi bindings on the folded queue`
 
 ## Card 3 — re-measure the whole manifest
