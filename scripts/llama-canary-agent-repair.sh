@@ -401,15 +401,10 @@ restore_previous_repair_candidate() {
 
 agent_session_step() {
   local prompt="$1" status seconds
-  local -a goose_args progress_automation
+  local -a goose_args
   if ! seconds="$(remaining_repair_seconds)"; then
     echo "agent developer task cannot continue: repair budget exhausted" >&2
     return 124
-  fi
-  if [[ "$HARNESS_MODE" == repair ]]; then
-    progress_automation=("${repair_workload_automation[@]}")
-  else
-    progress_automation=("${MESH_LLM_AUTOMATION_BIN:?}")
   fi
   set +e
   goose_args=(
@@ -419,15 +414,14 @@ agent_session_step() {
     --with-builtin developer
     --no-profile
     --max-turns 1000
-    --output-format stream-json
+    --output-format text
     --name "$AGENT_SESSION_NAME"
   )
   if [[ "$AGENT_SESSION_STARTED" == "true" ]]; then
     goose_args+=(--resume)
   fi
   goose_args+=(--text "$prompt")
-  # The complete pipeline belongs to one supervised process group. If either
-  # logging leg fails, stop that group even when Goose produces no more output.
+  # If logging fails, stop the supervised group rather than admitting the turn.
   # The inner shell expands its own pipeline arguments.
   # shellcheck disable=SC2016
   run_for "agent developer task" "$seconds" env \
@@ -441,16 +435,22 @@ agent_session_step() {
     bash -c '
       set -o pipefail
       trap "exit 125" TERM
-      log="$1"; commands="$2"; count="$3"; shift 3
-      progress=("${@:1:count}"); shift "$count"
-      goose "$@" 2>&1 \
-        | { tee -a "$log" || kill -TERM -- -$$; } \
-        | { "${progress[@]}" automation canary-progress --commands "$commands" || kill -TERM -- -$$; }
+      if [[ -n ${GITHUB_ACTIONS:-} ]]; then
+        # GitHub must not interpret workflow commands printed by Goose or its tools.
+        if ! command_token="$(od -An -N16 -tx1 /dev/urandom | tr -d "[:space:]")" ||
+          [[ ! "$command_token" =~ ^[0-9a-f]{32}$ ]]; then
+          exit 125
+        fi
+        printf "::stop-commands::%s\n" "$command_token"
+        trap '\''printf "::%s::\n" "$command_token"'\'' EXIT
+      fi
+      log="$1"; shift
+      if ! : >> "$log"; then exit 125; fi
+      goose "$@" 2>&1 | { tee -a "$log" || kill -TERM -- -$$; }
       statuses=("${PIPESTATUS[@]}")
-      if (( statuses[1] != 0 || statuses[2] != 0 )); then exit 125; fi
+      if (( statuses[1] != 0 )); then exit 125; fi
       exit "${statuses[0]}"
-    ' canary-agent-pipeline "$AGENT_LOG" "$AGENT_COMMAND_LOG_DIR" \
-      "${#progress_automation[@]}" "${progress_automation[@]}" "${goose_args[@]}"
+    ' canary-agent-pipeline "$AGENT_LOG" "${goose_args[@]}"
   status=$?
   set -e
   if (( status != 0 )); then
