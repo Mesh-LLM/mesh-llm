@@ -135,7 +135,11 @@ impl SplitGenerationLoadSettings<'_> {
     /// attach). Without a draft the remaining stages capture nothing and
     /// stage 0 serves the fallback plan, so native MTP stays on where the
     /// draft replaced it.
-    pub(super) fn settle_split_dflash(&mut self, final_stage_target_layers: Option<&[u32]>) {
+    pub(super) fn settle_split_dflash(
+        &mut self,
+        final_stage_target_layers: Option<&[u32]>,
+        final_stage_context_window: Option<u32>,
+    ) {
         let Some(plan) = self.split_dflash.as_mut() else {
             return;
         };
@@ -143,9 +147,11 @@ impl SplitGenerationLoadSettings<'_> {
             plan.target_layers = layers.to_vec();
             if let Some(dflash) = self.embedded_openai.speculative.dflash.as_mut() {
                 dflash.target_layers = layers.to_vec();
+                dflash.context_window = final_stage_context_window;
             }
             tracing::info!(
                 target_layers = ?layers,
+                context_window = ?final_stage_context_window,
                 "split DFlash: the final stage attached its draft"
             );
             return;
@@ -763,7 +769,10 @@ pub(super) async fn load_downstream_split_runtime_stages(
         // The final stage loads first; whether it attached its DFlash draft
         // decides what every other stage, and stage 0, serve.
         if load.downstream.is_none() {
-            settings.settle_split_dflash(ready.status.dflash_target_layers.as_deref());
+            settings.settle_split_dflash(
+                ready.status.dflash_target_layers.as_deref(),
+                ready.status.dflash_context_window,
+            );
         }
         ready_by_stage.insert(stage.stage_id.clone(), ready.status);
     }

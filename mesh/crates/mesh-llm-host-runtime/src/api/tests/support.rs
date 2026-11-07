@@ -1102,6 +1102,7 @@ async fn seed_runtime_data_api_state(state: &MeshApi) {
             compute_busy_nanos: 0,
             compute_operations: 0,
             dflash_target_layers: None,
+            dflash_context_window: None,
         },
     )
     .await;
