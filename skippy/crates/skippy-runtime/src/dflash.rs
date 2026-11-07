@@ -243,22 +243,32 @@ impl DFlashDraft {
             bail!("LiliCorr drafts are not supported");
         }
         let target_layers = unsafe { (api.model_n_layer)(target_model) };
-        self.info.target_layer_ids = target_layer_ids(api, self.model, target_layers)?;
+        let target_ctx = self.target_ctx;
+        self.info.target_layer_ids = target_layer_ids(api, self.model, target_layers, |lid| {
+            // Asks the target's graph; capturing a layer it does not
+            // publish would abort its next decode.
+            unsafe { (api.layer_inp_published)(target_ctx, lid) }
+        })?;
         // A final stage of a split target captures only the layers whose
         // input its graph produces; earlier stages send the rest with their
         // activations. The input of this stage's first layer is the
-        // activation it receives.
+        // activation it receives. Layer `n_layer`, the output head's input,
+        // is always this stage's: the draft runs where the head does.
         let complete = config.resident_tensor_names.is_empty() && config.layer_start == 0;
         let local_end = if complete || config.layer_end == 0 {
             u32::MAX
         } else {
             config.layer_end
         };
+        let head_input = u32::try_from(target_layers).unwrap_or(u32::MAX);
         self.local_layers = self
             .info
             .target_layer_ids
             .iter()
-            .map(|&lid| split::stage_captures_layer_input(lid, config.layer_start, local_end))
+            .map(|&lid| {
+                lid == head_input
+                    || split::stage_captures_layer_input(lid, config.layer_start, local_end)
+            })
             .collect();
         self.input_layer = if complete {
             None
@@ -317,9 +327,15 @@ impl DFlashDraft {
             self.info.block_size,
             options.max_draft_tokens.unwrap_or(usize::MAX),
         );
+        // Laguna drafts attend causally within the block; Poolside's own GGUFs
+        // say so only through their decoder architecture.
         let causal =
             unsafe { skippy_ffi::llama_model_meta_val_str(self.model, "dflash.attention.causal") }
-                .is_some_and(|value| value == "true");
+                .is_some_and(|value| value == "true")
+                || unsafe {
+                    skippy_ffi::llama_model_meta_val_str(self.model, "dflash.decoder_arch")
+                }
+                .is_some_and(|value| value == "laguna");
         let dflash2 = self.info.variant == DFlashVariant::DFlash2;
         unsafe {
             // DFlash2 reads its lattice from every row of the nextn output.
@@ -655,6 +671,7 @@ fn target_layer_ids(
     api: &LlamaDraftApi,
     model: *const Opaque,
     target_layers: i32,
+    head_input_published: impl FnOnce(u32) -> bool,
 ) -> Result<Vec<u32>> {
     let count = unsafe { (api.model_target_layer_ids_n)(model) };
     let ids = unsafe { (api.model_target_layer_ids)(model) };
@@ -663,15 +680,37 @@ fn target_layer_ids(
     }
     let count = usize::try_from(count).context("target layer count exceeds usize")?;
     let ids = unsafe { std::slice::from_raw_parts(ids, count) };
-    ids.iter()
+    let ids = ids
+        .iter()
         .map(|&lid| {
-            // Skippy sizes layer-input capture to n_layer and aborts past it.
-            if lid < 0 || lid >= target_layers {
+            // Layer inputs are captured for 0..=n_layer; id n_layer is the
+            // last layer's output, the input of the output head.
+            if lid < 0 || lid > target_layers {
                 bail!("draft target layer {lid} is outside the target's {target_layers} layers");
             }
             u32::try_from(lid).context("target layer id exceeds u32")
         })
-        .collect()
+        .collect::<Result<Vec<_>>>()?;
+    check_head_input(&ids, target_layers, head_input_published)?;
+    Ok(ids)
+}
+
+/// Refuses a draft that reads layer `n_layer`, the output head's input, from
+/// a target whose graph does not publish it.
+fn check_head_input(
+    ids: &[u32],
+    target_layers: i32,
+    published: impl FnOnce(u32) -> bool,
+) -> Result<()> {
+    let Ok(head) = u32::try_from(target_layers) else {
+        return Ok(());
+    };
+    if ids.contains(&head) && !published(head) {
+        bail!(
+            "draft reads target layer {head}, the output head's input, which this target's graph does not publish"
+        );
+    }
+    Ok(())
 }
 
 fn load_draft(
@@ -1397,6 +1436,19 @@ fn refresh_target_program(session: &StageSession) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_draft_reading_the_head_input_needs_a_target_that_publishes_it() {
+        let ids = [2, 14, 26, 34, 40];
+        assert!(check_head_input(&ids, 40, |_| true).is_ok());
+        let refused = check_head_input(&ids, 40, |lid| lid != 40).unwrap_err();
+        assert!(
+            refused.to_string().contains("does not publish"),
+            "{refused}"
+        );
+        // Drafts below the head never ask.
+        assert!(check_head_input(&[2, 14, 26], 40, |_| panic!("asked")).is_ok());
+    }
 
     #[test]
     fn a_poisoned_lock_is_reset_and_reusable() {
