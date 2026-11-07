@@ -41,14 +41,15 @@ target layers, run on the Lightning-shaped nemotron contract with layer
 
 `--head-input-published <model> <0|1>` checks llama_layer_inp_published
 for the head input: the Nemotron-H fixture publishes it, and the Qwen3
-dense contract, which records only trunk layer inputs, does not.
+dense contract, which records only trunk layer inputs, does not. The query runs on a
+one-sequence and a two-sequence context.
 ---
  src/CMakeLists.txt                          |  27 +++
  src/models/glm5-next.cpp                    |  63 +++++--
- src/skippy/tests/graph_build_inputs.cpp     | 193 ++++++++++++++++++++
+ src/skippy/tests/graph_build_inputs.cpp     | 199 ++++++++++++++++++++
  src/skippy/tests/graph_contract_cases.cmake |  32 ++++
  tests/test-llama-archs.cpp                  |   9 +-
- 5 files changed, 307 insertions(+), 17 deletions(-)
+ 5 files changed, 313 insertions(+), 17 deletions(-)
 
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index 94f1fc871..09412c534 100644
@@ -255,7 +256,7 @@ index a1b722950..fd2e5d8dd 100644
      ggml_tensor * out = build_attn_mha(q_absorbed, k, v, nullptr, sel, nullptr, layer.wv_b, inp_kpool->n_sel, kq_scale, il);
      cb(out, "kqv_out", il);
 diff --git a/src/skippy/tests/graph_build_inputs.cpp b/src/skippy/tests/graph_build_inputs.cpp
-index f02490889..02d879783 100644
+index f02490889..1f117c599 100644
 --- a/src/skippy/tests/graph_build_inputs.cpp
 +++ b/src/skippy/tests/graph_build_inputs.cpp
 @@ -1,4 +1,5 @@
@@ -281,7 +282,7 @@ index f02490889..02d879783 100644
  #include <set>
  #include <stdexcept>
  #include <thread>
-@@ -897,6 +901,176 @@ static int check_execution_profile_residency() {
+@@ -897,6 +901,182 @@ static int check_execution_profile_residency() {
      return 0;
  }
  
@@ -351,23 +352,29 @@ index f02490889..02d879783 100644
 +    model_params.load_mtp = true;
 +    llama_model * model = llama_model_load_from_file(model_path, model_params);
 +    if (model == nullptr) return 140;
-+    llama_context * ctx = llama_init_from_model(model, make_context_params(1));
-+    if (ctx == nullptr) {
-+        llama_model_free(model);
-+        return 141;
-+    }
 +    const uint32_t n_layer = (uint32_t) llama_model_n_layer(model);
 +    int rc = 0;
-+    // Every trunk layer's input is published by graphs that record layer inputs.
-+    if (!llama_layer_inp_published(ctx, 0)) {
-+        std::fprintf(stderr, "layer 0 input is not published\n");
-+        rc = 142;
++    // The query builds a graph for the context's own sequence count; a
++    // multi-sequence context lays out a cache stream per sequence.
++    for (uint32_t n_seq_max : {1u, 2u}) {
++        llama_context * ctx = llama_init_from_model(model, make_context_params(n_seq_max));
++        if (ctx == nullptr) {
++            rc = 141;
++            break;
++        }
++        // Every trunk layer's input is published by graphs that record layer inputs.
++        if (!llama_layer_inp_published(ctx, 0)) {
++            std::fprintf(stderr, "layer 0 input is not published (n_seq_max %u)\n", n_seq_max);
++            rc = 142;
++        }
++        if (rc == 0 && llama_layer_inp_published(ctx, n_layer) != expected) {
++            std::fprintf(stderr, "head input published = %d, expected %d (n_seq_max %u)\n",
++                    !expected, expected, n_seq_max);
++            rc = 143;
++        }
++        llama_free(ctx);
++        if (rc != 0) break;
 +    }
-+    if (rc == 0 && llama_layer_inp_published(ctx, n_layer) != expected) {
-+        std::fprintf(stderr, "head input published = %d, expected %d\n", !expected, expected);
-+        rc = 143;
-+    }
-+    llama_free(ctx);
 +    llama_model_free(model);
 +    return rc;
 +}
@@ -458,7 +465,7 @@ index f02490889..02d879783 100644
  int main(int argc, char ** argv) {
      if (const int rc = check_embedding_scale_predicate()) return rc;
      if (const int rc = check_prepared_export_token_axis()) return rc;
-@@ -907,6 +1081,25 @@ int main(int argc, char ** argv) {
+@@ -907,6 +1087,25 @@ int main(int argc, char ** argv) {
      if (argc == 2 && std::strcmp(argv[1], "--input-width") == 0) {
          return check_decode_input_width();
      }
