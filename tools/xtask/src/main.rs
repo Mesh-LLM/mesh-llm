@@ -217,7 +217,6 @@ fn run() -> DynResult<()> {
             let root = repository::RepositoryRoot::resolve(parsed.root.as_deref())?;
             automation::laya::run(root.as_path(), rest)
         }
-        cli::CliCommand::CanaryProgress(rest) => automation::canary_progress::run(rest),
         cli::CliCommand::CanaryTimeout(rest) => automation::canary_timeout::run(rest),
         cli::CliCommand::CanaryReceipts(rest) => automation::canary_aggregate_command::run(rest),
         cli::CliCommand::WorkloadOracleEvidence(rest) => {

@@ -1583,3 +1583,68 @@ fn test_ram_offload_bytes_never_underflows_when_the_budget_trails_device_vram() 
     };
     assert_eq!(ram_offload_bytes(&survey), 0);
 }
+
+/// Measured on a Windows desktop with the Vulkan runtime: a Ryzen iGPU that
+/// reports 17 GB of shared system RAM, then an RTX 4070 Ti. llama loads only
+/// on the discrete GPU there, so only its memory is the node's, while both
+/// devices stay listed with their own index and backend name for pinning.
+#[test]
+fn test_igpu_beside_discrete_gpu_keeps_its_fact_but_not_its_memory() {
+    let gpus = vec![
+        GpuFacts {
+            index: 0,
+            backend_device: Some("Vulkan0".to_string()),
+            vram_bytes: 17_012_097_024,
+            unified_memory: true,
+            ..GpuFacts::default()
+        },
+        GpuFacts {
+            index: 1,
+            backend_device: Some("Vulkan1".to_string()),
+            vram_bytes: 12_576_620_544,
+            ..GpuFacts::default()
+        },
+    ];
+    let mut survey = HardwareSurvey::default();
+    apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes, Metric::IsSoc, Metric::GpuFacts],
+        Ok::<Vec<GpuFacts>, ()>(gpus),
+        || 34_000_000_000,
+    );
+
+    assert!(!survey.is_soc);
+    assert_eq!(survey.gpus.len(), 2);
+    assert_eq!(survey.gpus[1].backend_device.as_deref(), Some("Vulkan1"));
+    assert_eq!(survey.gpu_vram, vec![17_012_097_024, 12_576_620_544]);
+    let ram_offload: u64 = 34_000_000_000 - 12_576_620_544;
+    assert_eq!(
+        survey.vram_bytes,
+        12_576_620_544 + (ram_offload as f64 * 0.90) as u64
+    );
+    assert_eq!(
+        crate::capacity::mesh_capacity_bytes(&survey),
+        crate::vram::allocatable_bytes(12_576_620_544, None)
+    );
+}
+
+#[test]
+fn test_igpu_alone_still_counts_as_unified_memory() {
+    let gpus = vec![GpuFacts {
+        index: 0,
+        backend_device: Some("Vulkan0".to_string()),
+        vram_bytes: 17_012_097_024,
+        unified_memory: true,
+        ..GpuFacts::default()
+    }];
+    let mut survey = HardwareSurvey::default();
+    apply_gpu_probe_outcome_to_survey(
+        &mut survey,
+        &[Metric::VramBytes, Metric::IsSoc, Metric::GpuFacts],
+        Ok::<Vec<GpuFacts>, ()>(gpus),
+        || 34_000_000_000,
+    );
+
+    assert!(survey.is_soc);
+    assert_eq!(survey.vram_bytes, 17_012_097_024);
+}

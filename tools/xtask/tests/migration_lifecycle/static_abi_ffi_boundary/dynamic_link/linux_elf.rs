@@ -87,7 +87,7 @@ fn prepare_libraries(root: &Path, fixture: &DynamicFixture, staged: &Path) {
             "-Wl,-soname,libllama.so".into(),
         ],
     );
-    for name in ["mtmd", "llama-common"] {
+    for name in ["mtmd", "llama-common", "ggml", "ggml-base"] {
         shared_library(
             root,
             "empty.c",

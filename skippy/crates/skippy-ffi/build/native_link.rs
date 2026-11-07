@@ -81,6 +81,10 @@ fn link_main() {
         println!("cargo:rustc-link-lib=dylib=mtmd");
         println!("cargo:rustc-link-lib=dylib=llama-common");
         println!("cargo:rustc-link-lib=dylib=llama");
+        // skippy-ffi calls ggml directly (ggml_log_set, ggml_backend_dev_by_name);
+        // the static mode links these as archives.
+        println!("cargo:rustc-link-lib=dylib=ggml");
+        println!("cargo:rustc-link-lib=dylib=ggml-base");
         emit_native_link_fingerprint("dynamic");
         if target.contains("linux") && backend == "cuda" {
             // Driverless builders use the toolkit's link-time driver stub.

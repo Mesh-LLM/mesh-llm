@@ -251,7 +251,9 @@ for key in GH_TOKEN GITHUB_TOKEN CANARY_REPAIR_TOKEN; do
 done
 [[ "$GOOSE_MODE" == auto && "$GOOSE_DISABLE_SESSION_NAMING" == true ]] || exit 96
 [[ "$CANARY_REPAIR_LOG_DIR" == "$root/command-logs" ]] || exit 96
-printf '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"inert goose call %s"}]}}\n' "$count"
+printf 'inert goose call %s\n' "$count"
+printf '▸ shell\n  command: printf hello\nhello\n'
+printf '::warning::tool output is data\n'
 if (( count == 2 )); then exit 23; fi
 "#;
 
@@ -299,6 +301,7 @@ exit "$status"
     for key in ["GH_TOKEN", "GITHUB_TOKEN", "CANARY_REPAIR_TOKEN"] {
         environment.insert(key.into(), Value::Secret("inert credential".into()));
     }
+    environment.insert("GITHUB_ACTIONS".into(), Value::Public("true".into()));
     let report = fixture.run(&script, &[], environment);
     assert_eq!(
         report.process.status.unwrap().code(),
@@ -320,7 +323,7 @@ exit "$status"
         "--max-turns",
         "1000",
         "--output-format",
-        "stream-json",
+        "text",
         "--name",
         "llama-canary-repair-fixture-1-local",
     ];
@@ -338,10 +341,30 @@ exit "$status"
     }
     let log = fs::read_to_string(fixture.root.join("agent.log")).unwrap();
     assert!(log.contains("inert goose call 1") && log.contains("inert goose call 2"));
-    assert!(log.contains(r#""type":"message""#));
     let console = String::from_utf8_lossy(report.stdout.as_ref().unwrap().as_bytes());
-    assert!(console.contains("goose: inert goose call 1"));
-    assert!(!console.contains(r#""type":"message""#));
+    assert!(console.contains("inert goose call 1\n"));
+    assert!(console.contains("inert goose call 2\n"));
+    assert_eq!(
+        console
+            .matches("▸ shell\n  command: printf hello\nhello\n")
+            .count(),
+        2
+    );
+    assert!(log.contains("::warning::tool output is data\n"));
+    assert_eq!(console.matches("::stop-commands::").count(), 2);
+    assert_eq!(
+        console.matches("::warning::tool output is data\n").count(),
+        2
+    );
+    for line in console
+        .lines()
+        .filter(|line| line.starts_with("::stop-commands::"))
+    {
+        let token = line.trim_start_matches("::stop-commands::");
+        assert!(console.contains(&format!("::{token}::\n")));
+    }
+    assert!(!log.contains("::stop-commands::"));
+    assert!(!console.contains("goose:"));
     assert!(log.contains("agent developer task exited with status 23"));
     assert!(!log.contains("inert credential"));
     assert_eq!(fs::read_dir(fixture.root.join("tmp")).unwrap().count(), 0);
@@ -386,7 +409,7 @@ fn repair_command_wrapper_preserves_complete_output_timing_and_nonzero_status() 
 }
 
 #[test]
-fn failed_progress_projection_stops_quiet_goose_without_waiting_for_deadline() {
+fn failed_log_open_stops_before_waiting_for_goose_or_deadline() {
     let fixture = Fixture::new();
     fixture.install_timeout_tools();
     executable(
@@ -396,18 +419,8 @@ printf started > "$HOME/goose.started"
 exec sleep 60
 "#,
     );
-    executable(
-        &fixture.root.join("tools/automation"),
-        r#"#!/bin/bash
-if [[ "$2" == canary-progress ]]; then
-  while [[ ! -f "$HOME/goose.started" ]]; do sleep 0.05; done
-fi
-exec "$REAL_AUTOMATION" "$@"
-"#,
-    );
-    // Fail the projector only after the quiet agent starts. The pipeline must
-    // stop now rather than waiting for Goose's output or the repair deadline.
-    fs::write(fixture.root.join("command-logs"), "not a directory").unwrap();
+    // A failed log must stop the turn before starting a quiet agent.
+    fs::create_dir(fixture.root.join("agent.log")).unwrap();
     let source = wrapper();
     let declarations = ["run_for", "remaining_repair_seconds", "agent_session_step"]
         .iter()
@@ -429,7 +442,7 @@ AGENT_PROVIDER=fixture_provider
 AGENT_MODEL=fixture_model
 AGENT_LOG="$ROOT/agent.log"
 AGENT_COMMAND_LOG_DIR="$ROOT/command-logs"
-AGENT_SESSION_NAME=projection-failure
+AGENT_SESSION_NAME=logging-failure
 AGENT_SESSION_STARTED=false
 REPAIR_DEADLINE_AT="$(( $(date +%s) + 20 ))"
 {declarations}
@@ -440,17 +453,8 @@ exit "$status"
         ),
     )
     .unwrap();
-    let mut environment = fixture.environment();
-    environment.insert(
-        "REAL_AUTOMATION".into(),
-        Value::Public(env!("CARGO_BIN_EXE_xtask").into()),
-    );
-    environment.insert(
-        "MESH_LLM_AUTOMATION_BIN".into(),
-        Value::Public(fixture.root.join("tools/automation").into()),
-    );
+    let environment = fixture.environment();
     let report = fixture.run(&script, &[], environment);
-    assert!(fixture.root.join("goose.started").exists());
     assert_eq!(report.process.status.unwrap().code(), Some(125));
     fixture.finish();
 }
