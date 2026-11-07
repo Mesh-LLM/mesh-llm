@@ -545,6 +545,8 @@ pub(crate) fn llama_draft_api() -> Option<&'static LlamaDraftApi> {
                     .lookup_optional(b"_Z30llama_set_embeddings_layer_inpP13llama_contextjb\0")?,
                 get_embeddings_layer_inp: symbols
                     .lookup_optional(b"_Z30llama_get_embeddings_layer_inpP13llama_contextj\0")?,
+                layer_inp_published: symbols
+                    .lookup_optional(b"_Z25llama_layer_inp_publishedP13llama_contextj\0")?,
                 model_target_layer_ids: symbols
                     .lookup_optional(b"_Z28llama_model_target_layer_idsPK11llama_model\0")?,
                 model_target_layer_ids_n: symbols
