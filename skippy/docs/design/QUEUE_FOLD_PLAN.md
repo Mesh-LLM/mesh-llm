@@ -4,13 +4,19 @@ Status: planned, not started. Execute only after `perf/skippy-metal-decode-and-p
 lands on main. Last diffed 2026-11-07 against port `9813d278a` and decode `70ffac666`
 (merge-base `2c54e65b9`); both hashes will have moved by the time Card 1 starts.
 
+Every tree assertion below carries the command that proved it. Re-run each at
+Card 1 start: a claim that was true at planning time is not true at fold time
+until re-proven. (The original "0016 identical" claim was written without its
+command and was wrong — delta 4 is the correction.)
+
 ## Why only four cards
 
-Both patch queues were diffed before this plan was written:
+Both patch queues were diffed before this plan was written (`diff` of each
+same-named pair under `skippy/llama_cpp/patches/`):
 
-- core `0013` / `0014` / `0016` are identical on both lines
+- core `0013` / `0014` are identical on both lines
 - the whole `model_support` lane (`0001`–`0012`) is identical
-- the remaining native deltas are exactly three:
+- the remaining native deltas are exactly four:
   1. **0015 semantics** — his `0015-skippy-size-recurrent-rollback-for-speculative-verif.patch`
      is the old clamp version; the port carries the reworked
      `0015-skippy-reserve-recurrent-rollback-snapshots-only-for-verifying-sessions.patch`
@@ -22,17 +28,31 @@ Both patch queues were diffed before this plan was written:
   3. **0017 + 0018 are new on his line only** — trace spans and concurrent sampling.
      Neither has a hit for `recurrent_rollback` / `n_rs_seq` / `verify_rollback`, so
      both replay clean over the reworked `0015`.
+  4. **0016 content** — not identical. Evidence:
+     `grep -c recurrent_rollback_tokens <queue>/0016-*.patch` → his 3, port 0;
+     `diff <his 0016> <port 0016>` → his is 17 files, +1464/−76, carrying
+     `src/skippy/tests/backend_sample_capacity.cpp` (251 lines),
+     `src/skippy/tests/recurrent_retention.cpp` (326 lines) and a
+     `resident_prefix.cpp` hunk; the port's is 15 files, +800/−76, renamed to
+     `verify_rollback_tokens` (following its reworked `0015`) with an
+     `include/skippy/common.h` hunk, and drops those tests. Fold: his `0016`
+     is the base (it owns the extra coverage); apply the rename, port the
+     `common.h` hunk, reconcile `state.cpp` and `src/CMakeLists.txt` — an
+     in-place update of the owning patch.
 
 ## Card 1 — rebranch and replay the queue
 
-- files: `skippy/llama_cpp/patches/0004-*`, `skippy/llama_cpp/patches/0015-*`
+- files: `skippy/llama_cpp/patches/0004-*`, `skippy/llama_cpp/patches/0015-*`,
+  `skippy/llama_cpp/patches/0016-*`
 - why: the port queue must sit on his landed main as a series of owning patches, not a
   merge; the queue is the source of truth for what the native tree is.
 - steps:
   1. rebranch the port successor onto the landed main
   2. take his queue as the base; overwrite owning patch `0004` with the nullptr flip
      and owning patch `0015` with the rework (identical file sets, so the owning-patch
-     rule holds: update in place, never append, never renumber)
+     rule holds: update in place, never append, never renumber); merge owning patch
+     `0016` per delta 4 (his base + rename + `common.h` hunk, reconciling `state.cpp`
+     and `src/CMakeLists.txt`)
   3. replay cold: `scripts/prepare-llama.sh pinned`
   4. regenerate the certified-queue roster: recompute `patch_queue_sha256` over the folded
      queue and update `skippy/crates/skippy-api/src/split-certified.json` in the same commit
