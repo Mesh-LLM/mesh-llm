@@ -156,6 +156,24 @@
       },
       "max_draft_tokens": 15,
       "backends": "not-metal"
+    },
+    {
+      "target": {
+        "architecture": "deepseek4",
+        "layer_count": 43,
+        "embedding_length": 4096,
+        "expert_count": 256,
+        "family": "DeepSeek-V4-Flash-0731"
+      },
+      "draft": {
+        "repo": "unsloth/DeepSeek-V4-Flash-0731-GGUF",
+        "revision": "fbbb5b93fb787c21338159b0af3318bb3f4d9768",
+        "file": "dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf",
+        "sha256": "2c7ac54b0b64a99df1f139a9f1371a00198265e1d6a614b77597d20a655a4249",
+        "bytes": 10896057440
+      },
+      "max_draft_tokens": 5,
+      "backends": "not-metal"
     }
   ]
 }

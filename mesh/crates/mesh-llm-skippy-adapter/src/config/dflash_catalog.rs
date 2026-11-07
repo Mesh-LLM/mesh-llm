@@ -319,6 +319,36 @@ pub(super) fn bootstrap_pairings() -> Vec<DFlashPairing> {
             max_draft_tokens: 15,
             backends: DFlashBackends::NotMetal,
         },
+        // DeepSeek-V4-Flash-0731 ships its DSpark draft in the checkpoint: three
+        // uncompressed DSV4 blocks with hyper-connections and a Markov head,
+        // reading target layers 41..=43 (43 being the output head's input),
+        // drafting a 5-token block from the anchor on. DeepSeek-V4-Flash and
+        // its Vision-Exp fine-tune have the same shape but other weights, so
+        // the name breaks the tie. The GGUFs carry no MTP head, so the draft
+        // replaces plain decoding. On one DGX Spark (UD-Q2_K_XL) greedy chat
+        // decodes 34.0 tok/s (18.2 off), sampled at T=0.7 33.3 (18.2) and
+        // agentic coding 28.1 (14.0). Split across two Sparks (UD-Q4_K_XL)
+        // greedy chat decodes 22.7 tok/s (14.5 off) on the LAN and 19.6
+        // (11.3) with 20 ms per hop. Metal is untested.
+        DFlashPairing {
+            target: DFlashTarget {
+                architecture: "deepseek4".to_string(),
+                layer_count: 43,
+                embedding_length: 4096,
+                expert_count: 256,
+                family: Some("DeepSeek-V4-Flash-0731".to_string()),
+            },
+            draft: DFlashDraft {
+                repo: "unsloth/DeepSeek-V4-Flash-0731-GGUF".to_string(),
+                revision: "fbbb5b93fb787c21338159b0af3318bb3f4d9768".to_string(),
+                file: "dspark-DeepSeek-V4-Flash-0731-Q8_0.gguf".to_string(),
+                sha256: "2c7ac54b0b64a99df1f139a9f1371a00198265e1d6a614b77597d20a655a4249"
+                    .to_string(),
+                bytes: 10_896_057_440,
+            },
+            max_draft_tokens: 5,
+            backends: DFlashBackends::NotMetal,
+        },
     ]
 }
 
@@ -614,8 +644,9 @@ mod tests {
     /// Every target the bootstrap table pairs by default, named as its GGUF
     /// names it: Qwen3.5-9B, Qwen3.6-27B, Qwen3.8-27B (with its NextN block),
     /// Qwen3.6-35B-A3B, Qwen3-Coder-Next, Nemotron-3.5-Bolt-E4B,
-    /// Nemotron-3.5-Lightning-30B-A3B (with its NextN block) and Laguna-S-2.1,
-    /// plus Laguna-XS-2.1, which has no default draft yet.
+    /// Nemotron-3.5-Lightning-30B-A3B (with its NextN block), Laguna-S-2.1 and
+    /// DeepSeek-V4-Flash-0731, plus Laguna-XS-2.1, which has no default draft
+    /// yet.
     fn default_targets() -> Vec<(&'static str, GgufCompactMeta)> {
         let mut qwen38 = named(target_meta("qwen35", 65, 5120, 0), "Qwen3.8-27B");
         qwen38.nextn_predict_layers = 1;
@@ -657,6 +688,13 @@ mod tests {
             (
                 "Laguna-S-2.1",
                 named(target_meta("laguna", 48, 3072, 256), "Laguna S 2.1"),
+            ),
+            (
+                "DeepSeek-V4-Flash-0731",
+                named(
+                    target_meta("deepseek4", 43, 4096, 256),
+                    "Deepseek-V4-Flash-0731",
+                ),
             ),
         ]
     }
@@ -740,6 +778,34 @@ mod tests {
         );
         // Native MTP stays Lightning's default on Metal.
         assert_eq!(repo("Nemotron-3.5-Lightning-30B-A3B", true), None);
+        assert_eq!(
+            repo("DeepSeek-V4-Flash-0731", false).as_deref(),
+            Some("unsloth/DeepSeek-V4-Flash-0731-GGUF")
+        );
+        assert_eq!(repo("DeepSeek-V4-Flash-0731", true), None);
+    }
+
+    #[test]
+    fn deepseek_v4_flash_0731_is_told_from_deepseek_v4_flash_by_name() {
+        const DSPARK: &str = "unsloth/DeepSeek-V4-Flash-0731-GGUF";
+        let dsv4 = target_meta("deepseek4", 43, 4096, 256);
+        for name in [
+            "Deepseek-V4-Flash-0731",
+            "DeepSeek V4 Flash 0731",
+            "deepseek-v4-flash-0731",
+        ] {
+            assert_eq!(
+                repo(&named(dsv4.clone(), name), false).as_deref(),
+                Some(DSPARK),
+                "{name}"
+            );
+        }
+        // The original release and its vision fine-tune share the shape but
+        // not the draft's training.
+        for name in ["DeepSeek-V4-Flash", "DeepSeek-V4-Flash-Vision-Exp"] {
+            assert_eq!(repo(&named(dsv4.clone(), name), false), None, "{name}");
+        }
+        assert_eq!(repo(&dsv4, false), None);
     }
 
     #[test]
@@ -899,6 +965,9 @@ mod tests {
             ("nemotron_3.5_lightning", "Nemotron-3.5-Lightning", true),
             ("Nemotron-3-Nano-30B-A3B", "Nemotron-3.5-Lightning", false),
             ("Gemma-4-E4B-It", "Nemotron-3.5-Bolt", false),
+            ("Deepseek-V4-Flash-0731", "DeepSeek-V4-Flash-0731", true),
+            ("DeepSeek-V4-Flash", "DeepSeek-V4-Flash-0731", false),
+            ("DeepSeek-V4-Flash-07310", "DeepSeek-V4-Flash-0731", false),
         ] {
             assert_eq!(names_family(name, family), expected, "{name}");
         }
