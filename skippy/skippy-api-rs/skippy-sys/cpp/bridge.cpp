@@ -402,12 +402,12 @@ StagedModelResult Bridge::load_staged_model(rust::Str path, std::uint32_t stages
             result.error = rust::String::lossy(lease.error().message);
             return result;
         }
-        auto spec = skippy::llama::own(lease->configs[index]);
         // A plain lane is a configless native load: it states the native
         // default rather than letting the facade pick. A caller whose
         // session never verifies drafts passes VerifyRollback::None through
         // the named lane instead.
-        spec.verify_rollback = skippy::VerifyRollback::native_default();
+        auto spec =
+            skippy::llama::own(lease->configs[index], skippy::VerifyRollback::native_default());
         auto model = skippy::llama::StagedModel::open(model_path, spec);
         if (!model) {
             result.error = rust::String::lossy(model.error().message);
@@ -451,8 +451,8 @@ StagedModelResult Bridge::load_staged_model_host_experts(rust::Str path, std::ui
                 result.error = rust::String::lossy(lease.error().message);
                 return result;
             }
-            auto spec = skippy::llama::own(lease->configs[index]);
-            spec.verify_rollback = skippy::VerifyRollback::native_default();
+            auto spec =
+                skippy::llama::own(lease->configs[index], skippy::VerifyRollback::native_default());
             spec.host_experts = skippy::LayerRange{host_start, host_end};
             auto model = skippy::llama::StagedModel::open(model_path, spec);
             if (!model) {
@@ -496,7 +496,6 @@ StagedModelResult Bridge::load_staged_model_verify_rollback(rust::Str path, std:
                 result.error = rust::String::lossy(lease.error().message);
                 return result;
             }
-            auto spec = skippy::llama::own(lease->configs[index]);
             // 0 is the safe enum's None, not a depth: map it to none() so a
             // non-drafting session opens with n_rs_seq == 0 and verify falls
             // back to checkpoint restore.
@@ -506,7 +505,7 @@ StagedModelResult Bridge::load_staged_model_verify_rollback(rust::Str path, std:
                 result.error = rust::String::lossy(verify_rollback.error());
                 return result;
             }
-            spec.verify_rollback = *verify_rollback;
+            auto spec = skippy::llama::own(lease->configs[index], *verify_rollback);
             auto model = skippy::llama::StagedModel::open(model_path, spec);
             if (!model) {
                 result.error = rust::String::lossy(model.error().message);

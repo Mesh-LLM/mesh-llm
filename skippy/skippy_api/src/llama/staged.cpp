@@ -20,9 +20,10 @@ StagedFailure failure(skippy_status status, skippy_error* error) {
 
 } // namespace
 
-StageSpec own(const StageLoadConfig& config) {
+StageSpec own(const StageLoadConfig& config, VerifyRollback verify_rollback) {
     StageSpec spec;
     spec.stage_index = config.stage_index;
+    spec.verify_rollback = verify_rollback;
     spec.layers = config.layers;
     spec.execution_contract.assign(config.execution_contract);
     spec.resident_identities.reserve(config.resident_identities.size());

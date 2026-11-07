@@ -1319,10 +1319,10 @@ public:
             return false;
         }
         lease_ = std::move(*lease);
-        skippy::llama::StageSpec spec = skippy::llama::own(lease_.configs.front());
         // A plain open states the native default, matching the FFI side's
         // skippy_runtime_config_default().
-        spec.verify_rollback = skippy::VerifyRollback::native_default();
+        skippy::llama::StageSpec spec =
+            skippy::llama::own(lease_.configs.front(), skippy::VerifyRollback::native_default());
 
         // Same planned open on both sides: the load path is not the boundary
         // under test, and sharing it removes it from the ratio.
@@ -1643,18 +1643,17 @@ public:
             return false;
         }
         lease_ = std::move(*lease);
-        spec_ = skippy::llama::own(lease_.configs.front());
-        spec_.verify_rollback = skippy::VerifyRollback::native_default();
+        // One snapshot per speculative window token, at the window cap; the
+        // host-experts knob keeps the native default.
+        const auto verify = knob_ == Knob::kHostExperts ? skippy::VerifyRollback::native_default()
+                                                        : skippy::VerifyRollback::in_place(64);
+        if (!verify) {
+            error = verify.error();
+            return false;
+        }
+        spec_ = skippy::llama::own(lease_.configs.front(), *verify);
         if (knob_ == Knob::kHostExperts) {
             spec_.host_experts = skippy::LayerRange{0, layers_};
-        } else {
-            // One snapshot per speculative window token, at the window cap.
-            const auto verify = skippy::VerifyRollback::in_place(64);
-            if (!verify) {
-                error = verify.error();
-                return false;
-            }
-            spec_.verify_rollback = *verify;
         }
 
         auto source = skippy::llama::StagedModel::open(path, spec_);

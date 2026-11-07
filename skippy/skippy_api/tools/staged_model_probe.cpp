@@ -60,7 +60,8 @@ int main(
         return 2;
     }
 
-    const auto spec = skippy::llama::own(lease->configs[stage_index]);
+    const auto spec =
+        skippy::llama::own(lease->configs[stage_index], skippy::VerifyRollback::native_default());
     auto model = skippy::llama::StagedModel::open(path, spec);
     if (!model) {
         std::cerr << "open: " << model.error().message << " (status " << model.error().status

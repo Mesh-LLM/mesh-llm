@@ -201,7 +201,7 @@ int main(
         } else {
             // The plan borrows its strings from an arena; the loader wants
             // NUL-terminated C strings, so own() them before converting.
-            const auto spec = skippy::llama::own(*load);
+            const auto spec = skippy::llama::own(*load, skippy::VerifyRollback::native_default());
             auto config = skippy_runtime_config_default();
             config.stage_index = spec.stage_index;
             config.layer_start = spec.layers.start;

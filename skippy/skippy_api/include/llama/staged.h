@@ -90,8 +90,11 @@ private:
     skippy_session* session_ = nullptr;
 };
 
-/// Converts a planned loader config into an owning spec.
-[[nodiscard]] StageSpec own(const StageLoadConfig& config);
+/// Converts a planned loader config into an owning spec. The verify-rollback
+/// policy is a required caller input: it is a parameter so that omitting it
+/// at a spec birth site (tools, benchmarks, bridge lanes) is a compile error,
+/// not an open-time refusal.
+[[nodiscard]] StageSpec own(const StageLoadConfig& config, VerifyRollback verify_rollback);
 
 } // namespace skippy::llama
 
