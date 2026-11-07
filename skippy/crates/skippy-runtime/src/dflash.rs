@@ -250,19 +250,7 @@ impl DFlashDraft {
                 architecture.as_deref().unwrap_or("unknown")
             );
         }
-        if meta_usize(self.model, LILICORR_CANDIDATE_TOPK_KEY)?.is_some_and(|top_k| top_k > 0) {
-            if !lilicorr_headless_enabled_by(std::env::var(LILICORR_HEADLESS_ENV).ok().as_deref()) {
-                bail!(
-                    "LiliCorr drafts are not supported; {LILICORR_HEADLESS_ENV}=1 runs one as plain DFlash without its correlation head"
-                );
-            }
-            // Without state embeddings in the block batch the draft graph
-            // leaves out the correlation head, and its logits are plain
-            // DFlash logits.
-            write_native_log_note(
-                "dflash draft is LiliCorr; running it as plain DFlash without its correlation head",
-            );
-        }
+        check_lilicorr_draft(self.model)?;
         let target_layers = unsafe { (api.model_n_layer)(target_model) };
         let target_ctx = self.target_ctx;
         self.info.target_layer_ids = target_layer_ids(api, self.model, target_layers, |lid| {
@@ -335,29 +323,7 @@ impl DFlashDraft {
                 self.info.block_size
             );
         }
-        let selector_top_k = unsafe { (api.model_dflash_selector_top_k)(self.model) };
-        if markov {
-            if selector_top_k > 0 {
-                bail!(
-                    "a draft with both a DSpark Markov head and a DFlash2 selector is not supported"
-                );
-            }
-            self.info.variant = DFlashVariant::DSpark;
-            let anchor_first = unsafe {
-                skippy_ffi::llama_model_meta_val_str(self.model, DSPARK_SAMPLE_FROM_ANCHOR_KEY)
-            }
-            .is_none_or(|value| value == "true");
-            if anchor_first {
-                self.layout = BlockLayout::AnchorFirst;
-            }
-        } else if selector_top_k > 0 {
-            self.info.variant = DFlashVariant::DFlash2;
-            self.info.selector_top_k = positive_usize(selector_top_k, "selector top-k")?;
-            let row_used = self.info.selector_top_k * (self.info.selector_top_k + 1);
-            if row_used > self.n_embd_draft {
-                bail!("draft hidden size is too small for the DFlash2 selector lattice");
-            }
-        }
+        self.select_variant(markov)?;
         self.info.max_draft_tokens = self.layout.capacity(
             self.info.block_size,
             options.max_draft_tokens.unwrap_or(usize::MAX),
@@ -387,6 +353,35 @@ impl DFlashDraft {
             self.mask_token,
             self.mrope,
         ));
+        Ok(())
+    }
+
+    /// Picks the draft family and its block layout: DSpark when the draft has
+    /// a Markov head, DFlash2 when it has a selector lattice, else DFlash.
+    fn select_variant(&mut self, markov: bool) -> Result<()> {
+        let selector_top_k = unsafe { (self.api.model_dflash_selector_top_k)(self.model) };
+        if markov {
+            if selector_top_k > 0 {
+                bail!(
+                    "a draft with both a DSpark Markov head and a DFlash2 selector is not supported"
+                );
+            }
+            self.info.variant = DFlashVariant::DSpark;
+            let anchor_first = unsafe {
+                skippy_ffi::llama_model_meta_val_str(self.model, DSPARK_SAMPLE_FROM_ANCHOR_KEY)
+            }
+            .is_none_or(|value| value == "true");
+            if anchor_first {
+                self.layout = BlockLayout::AnchorFirst;
+            }
+        } else if selector_top_k > 0 {
+            self.info.variant = DFlashVariant::DFlash2;
+            self.info.selector_top_k = positive_usize(selector_top_k, "selector top-k")?;
+            let row_used = self.info.selector_top_k * (self.info.selector_top_k + 1);
+            if row_used > self.n_embd_draft {
+                bail!("draft hidden size is too small for the DFlash2 selector lattice");
+            }
+        }
         Ok(())
     }
 
@@ -655,6 +650,25 @@ fn missing_borrowed_tensor(resident: &[String]) -> Option<&'static str> {
 /// head that rescores its top candidates. Verification stays exact; only
 /// acceptance can differ.
 const LILICORR_HEADLESS_ENV: &str = "SKIPPY_DFLASH_LILICORR_HEADLESS";
+
+/// Refuses a LiliCorr draft unless [`LILICORR_HEADLESS_ENV`] asks to run it as
+/// plain DFlash.
+fn check_lilicorr_draft(model: *const Opaque) -> Result<()> {
+    if !meta_usize(model, LILICORR_CANDIDATE_TOPK_KEY)?.is_some_and(|top_k| top_k > 0) {
+        return Ok(());
+    }
+    if !lilicorr_headless_enabled_by(std::env::var(LILICORR_HEADLESS_ENV).ok().as_deref()) {
+        bail!(
+            "LiliCorr drafts are not supported; {LILICORR_HEADLESS_ENV}=1 runs one as plain DFlash without its correlation head"
+        );
+    }
+    // Without state embeddings in the block batch the draft graph leaves out
+    // the correlation head, and its logits are plain DFlash logits.
+    write_native_log_note(
+        "dflash draft is LiliCorr; running it as plain DFlash without its correlation head",
+    );
+    Ok(())
+}
 
 fn lilicorr_headless_enabled_by(value: Option<&str>) -> bool {
     matches!(value.map(str::trim), Some("1" | "true"))
