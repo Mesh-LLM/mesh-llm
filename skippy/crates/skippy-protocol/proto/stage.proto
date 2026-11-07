@@ -131,7 +131,8 @@ message StageDFlashPlan {
   optional string draft_device = 6;
   // How the stages before the final one encode the feature rows they
   // forward (bf16, q8 or q4), settled against what the final stage reports
-  // it reads. Unset, or from an older planner, sends q8.
+  // it reads. Unset, or from an older planner, sends q8. A stage's
+  // SKIPPY_DFLASH_FEATURE_ENCODING overrides it.
   optional string feature_encoding = 7;
 }
 

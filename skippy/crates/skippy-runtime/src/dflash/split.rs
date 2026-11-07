@@ -463,7 +463,8 @@ pub(crate) struct DFlashSplitSession {
     /// The next message's rows lie before the draft's attention window: no
     /// stage forwards their features and the draft does not ingest them.
     pub(crate) unattended: bool,
-    /// How this stage encodes the rows it forwards.
+    /// How this stage encodes the rows it forwards: the plan's encoding,
+    /// unless `SKIPPY_DFLASH_FEATURE_ENCODING` names another, which wins.
     encoding: DFlashFeatureEncoding,
 }
 

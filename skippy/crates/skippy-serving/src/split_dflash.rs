@@ -49,7 +49,8 @@ pub struct SplitDFlashStage {
     pub draft_source: Option<SplitDFlashDraftSource>,
     /// How the stages before the final one encode the feature rows they
     /// forward, settled against what the final stage reads. `None` sends Q8,
-    /// which every final stage reads.
+    /// which every final stage reads. On any stage,
+    /// `SKIPPY_DFLASH_FEATURE_ENCODING` overrides it.
     pub feature_encoding: Option<skippy_runtime::DFlashFeatureEncoding>,
 }
 

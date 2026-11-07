@@ -780,8 +780,15 @@ async fn split_load_of_a_paired_native_mtp_target_keeps_native_mtp() {
     assert!(settings.final_stage_native_mtp());
 
     // The final stage reports no draft: stage 0 keeps native MTP.
+    let mut unreadable = split_generation_load_settings_with(&spec, SplitDefaultDraft::Uncached)
+        .await
+        .expect("split settings should resolve");
     settings.settle_split_dflash(None, None, &[]);
     assert!(settings.split_dflash.is_none());
+    // A draft whose stage reads no encoding this stage sends is no draft.
+    unreadable.settle_split_dflash(Some(&[6, 20, 34]), None, &["zstd-q2".to_string()]);
+    assert!(unreadable.split_dflash.is_none());
+    assert!(unreadable.embedded_openai.native_mtp_enabled);
     assert!(settings.runtime_options.config.native_mtp_enabled);
     assert!(settings.embedded_openai.native_mtp_enabled);
     assert!(settings.embedded_openai.speculative.dflash.is_none());
