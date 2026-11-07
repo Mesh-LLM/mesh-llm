@@ -31,9 +31,9 @@ use crate::{
 };
 
 use super::feature_wire::{
-    DFlashFeatureEncoding, GGML_TYPE_BF16, decode_bf16, decode_q8_rows, dflash_feature_identity,
-    dflash_feature_layer, dflash_feature_part, encode_bf16, encode_q8_rows, f16_to_f32,
-    q8_feature_identity,
+    DFlashFeatureEncoding, GGML_TYPE_BF16, block_feature_identity, decode_bf16, decode_q4_rows,
+    decode_q8_rows, dflash_feature_identity, dflash_feature_layer, dflash_feature_part,
+    encode_bf16, encode_q4_rows, encode_q8_rows, f16_to_f32,
 };
 use super::lock_recovering;
 
@@ -257,12 +257,13 @@ impl DFlashFeatureRows {
                     GGML_TYPE_BF16,
                     usize::try_from(part.dimensions[0]).context("feature width")?,
                 ),
-                DFlashFeatureEncoding::Q8 => {
-                    let n_embd = width.context("Q8 feature part names no width")?;
+                DFlashFeatureEncoding::Q8 | DFlashFeatureEncoding::Q4 => {
+                    let n_embd = width
+                        .with_context(|| format!("{encoding:?} feature part names no width"))?;
                     let words = usize::try_from(part.dimensions[0]).context("feature words")?;
                     ensure!(
                         words * 4 == encoding.row_bytes(n_embd),
-                        "Q8 feature part for layer {layer} has {words} words a row, \
+                        "{encoding:?} feature part for layer {layer} has {words} words a row, \
                          not the {} bytes of {n_embd} values",
                         encoding.row_bytes(n_embd)
                     );
@@ -288,6 +289,7 @@ impl DFlashFeatureRows {
             let values = match encoding {
                 DFlashFeatureEncoding::Bf16 => decode_bf16(payload),
                 DFlashFeatureEncoding::Q8 => decode_q8_rows(payload, n_embd),
+                DFlashFeatureEncoding::Q4 => decode_q4_rows(payload, n_embd),
             };
             rows.insert(layer, values)?;
         }
@@ -348,10 +350,14 @@ impl DFlashFeatureRows {
                         self.n_embd,
                     )
                 }
-                DFlashFeatureEncoding::Q8 => {
-                    encode_q8_rows(values, self.n_embd, &mut frame.payload);
+                DFlashFeatureEncoding::Q8 | DFlashFeatureEncoding::Q4 => {
+                    if encoding == DFlashFeatureEncoding::Q8 {
+                        encode_q8_rows(values, self.n_embd, &mut frame.payload);
+                    } else {
+                        encode_q4_rows(values, self.n_embd, &mut frame.payload);
+                    }
                     (
-                        q8_feature_identity(*layer, self.n_embd)?,
+                        block_feature_identity(encoding, *layer, self.n_embd)?,
                         crate::GGML_TYPE_I32,
                         4,
                         row_bytes / 4,
@@ -1112,7 +1118,8 @@ mod tests {
 
         // A width that disagrees with the packed rows is refused.
         let mut wrong = frame.clone();
-        wrong.desc.parts[1].identity = q8_feature_identity(6, 64).unwrap();
+        wrong.desc.parts[1].identity =
+            block_feature_identity(DFlashFeatureEncoding::Q8, 6, 64).unwrap();
         assert!(DFlashFeatureRows::from_frame(&wrong).is_err());
     }
 
