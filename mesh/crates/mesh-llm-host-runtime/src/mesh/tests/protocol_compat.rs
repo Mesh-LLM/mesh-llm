@@ -402,6 +402,35 @@ fn stage_status_proto_carries_the_final_stage_draft_layers() {
 }
 
 #[test]
+fn stage_status_proto_carries_the_compute_meter() {
+    let mut status = crate::mesh::stage_status_from_load(
+        &stage_load_request(),
+        crate::inference::skippy::StageRuntimeState::Ready,
+    );
+    status.compute_busy_nanos = 7_000_000;
+    status.compute_operations = 41;
+    status.compute_decode_tokens = 32;
+    let mut proto = stage_status_to_proto(status);
+    let decoded = stage_status_from_proto(proto.clone()).unwrap();
+    assert_eq!(
+        (
+            decoded.compute_busy_nanos,
+            decoded.compute_operations,
+            decoded.compute_decode_tokens
+        ),
+        (7_000_000, 41, 32)
+    );
+
+    // A stage that predates the decode count reports none, and its busy time still arrives.
+    proto.compute_decode_tokens = 0;
+    let decoded = stage_status_from_proto(proto).unwrap();
+    assert_eq!(
+        (decoded.compute_busy_nanos, decoded.compute_decode_tokens),
+        (7_000_000, 0)
+    );
+}
+
+#[test]
 fn a_stage_load_from_a_peer_without_split_dflash_has_no_plan() {
     let mut proto = stage_load_to_proto(stage_load_request());
     proto.dflash = None;

@@ -659,6 +659,11 @@ impl MeshApi {
         let stage_statuses = statuses
             .iter()
             .map(|status| {
+                // stage 0 runs in the node's own runtime, whose meter its status does not carry
+                let stage0 = (status.stage_index == 0)
+                    .then(|| crate::inference::skippy::stage0_compute_meter(&status.run_id))
+                    .flatten()
+                    .map(|meter| meter.snapshot());
                 serde_json::json!({
                     "topology_id": status.topology_id.clone(),
                     "run_id": status.run_id.clone(),
@@ -701,6 +706,9 @@ impl MeshApi {
                     "lane_count": status.lane_count,
                     "error": status.error.clone(),
                     "shutdown_generation": status.shutdown_generation,
+                    "compute_busy_nanos": stage0.map_or(status.compute_busy_nanos, |c| c.busy_nanos),
+                    "compute_operations": stage0.map_or(status.compute_operations, |c| c.operations),
+                    "compute_decode_tokens": stage0.map_or(status.compute_decode_tokens, |c| c.decode_tokens),
                 })
             })
             .collect::<Vec<_>>();

@@ -371,6 +371,7 @@ pub(super) fn runtime_status_for_stage(
         shutdown_generation: generation.generation,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        compute_decode_tokens: 0,
     }
 }
 
@@ -1278,6 +1279,7 @@ pub(super) fn test_stage_status_from_load(
         lease_until_unix_ms: load.lease_until_unix_ms,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        compute_decode_tokens: 0,
         dflash_target_layers: None,
     }
 }
@@ -1333,6 +1335,7 @@ pub(super) fn test_stage_status_from_stop(
         lease_until_unix_ms: 0,
         compute_busy_nanos: 0,
         compute_operations: 0,
+        compute_decode_tokens: 0,
         dflash_target_layers: None,
     }
 }

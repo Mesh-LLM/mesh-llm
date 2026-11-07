@@ -283,6 +283,9 @@ message StageStatus {
   // covers, for auto-balance split placement. Zero when not reported.
   uint64 compute_busy_nanos = 37;
   uint64 compute_operations = 38;
+  // Serial decode steps run on this stage, as its compute meter counts them.
+  // Zero from older stages.
+  uint64 compute_decode_tokens = 40;
   // Set by a split final stage that attached its DFlash draft. Unset when the
   // stage drafts nothing, and from older stages.
   optional StageDFlashDraftStatus dflash_draft = 39;
