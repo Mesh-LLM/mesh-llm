@@ -373,7 +373,9 @@ fn model_download_has_no_skippy_only_pin_flags() {
 fn model_delete_uses_mesh_preview_first_policy() {
     let root = tempfile::tempdir().unwrap();
     let repo = root.path().join("models--org--model");
-    let snapshot = repo.join("snapshots/abcdef1234567890");
+    // One component per join: the CLI reports native separators, so a "/"
+    // inside a component would never compare equal on Windows.
+    let snapshot = repo.join("snapshots").join("abcdef1234567890");
     std::fs::create_dir_all(&snapshot).unwrap();
     std::fs::create_dir_all(repo.join("refs")).unwrap();
     std::fs::write(repo.join("refs/main"), b"abcdef1234567890").unwrap();
