@@ -1,4 +1,4 @@
-From e0c8abb6bc14b6193aa39e1b04b7a0caa6ed5c38 Mon Sep 17 00:00:00 2001
+From ddd20b7a7a847b1aa774260667516aeeb10524c8 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Wed, 28 Oct 2026 14:17:38 +1100
 Subject: [PATCH 14/15] skippy: size recurrent rollback for speculative verify
@@ -56,10 +56,10 @@ index 2658379ba..de3bc61c5 100644
                  }
              }
 diff --git a/src/skippy/model_loading.cpp b/src/skippy/model_loading.cpp
-index 7305cc529..db5a69e38 100644
+index 22b713b58..95324f866 100644
 --- a/src/skippy/model_loading.cpp
 +++ b/src/skippy/model_loading.cpp
-@@ -733,7 +733,13 @@ enum skippy_status skippy_finish_model_open(
+@@ -742,7 +742,13 @@ enum skippy_status skippy_finish_model_open(
      }
      if (llm_arch_is_recurrent(model->arch) || llm_arch_is_hybrid(model->arch)) {
          params.n_seq_max = std::max<uint32_t>(params.n_seq_max, std::max<uint32_t>(2, stage_model->lane_count * 2));

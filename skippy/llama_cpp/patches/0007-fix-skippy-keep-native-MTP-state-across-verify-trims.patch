@@ -1,4 +1,4 @@
-From c5679ce9db072ed6a23a42f797be56f6db1bda67 Mon Sep 17 00:00:00 2001
+From b7a8dfc2d832d4d871a05298bcd15b6a629655a7 Mon Sep 17 00:00:00 2001
 From: Daniel Winter <danielwinterw@gmail.com>
 Date: Sat, 10 Oct 2026 17:10:06 +0100
 Subject: [PATCH 07/15] fix(skippy): keep native MTP state across verify trims
