@@ -460,6 +460,19 @@ jobs:
             cargo test --locked -p $crate --lib --features mesh-llm-system/dynamic-native-runtime
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+      - name: Run Windows skippy-cli tests
+        if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
+        shell: pwsh
+        run: |
+          # `skippy-cli` has no library target: its tests drive the debug
+          # `skippy` binary, so they also cover its main-thread stack and the
+          # paths it prints. It stays off the `platform-windows-cfg` catalog
+          # while the rename map lists it as a `skippy-server` successor, so
+          # this row runs it on main and manual-full and on pull requests that
+          # select the row for another reason. The dynamic link mode needs no
+          # native ABI build, and the tests use offline fixtures only.
+          cargo test --locked -p skippy-cli --features dynamic-native-runtime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Prepare Windows automation contract tools
         if: ${{ matrix.check.kind == 'unit' && matrix.check.platform == 'windows' }}
