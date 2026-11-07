@@ -1585,6 +1585,12 @@
       "family": "xing4-0",
       "status": "candidate",
       "notes": "new upstream llama.cpp hyper-connection decoder registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
+    },
+    {
+      "llama_model": "kimi-k31",
+      "family": "kimi-k31",
+      "status": "candidate",
+      "notes": "new upstream Kimi K3.1 decoder registers begin_block/end_block stage boundaries via the generated family patch; no local artifact certification run yet"
     }
   ]
 }
