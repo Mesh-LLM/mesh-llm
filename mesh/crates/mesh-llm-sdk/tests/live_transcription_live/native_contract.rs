@@ -411,6 +411,15 @@ fn ready(model: &MeshModel) -> bool {
 }
 
 async fn discover(node: &MeshNode, inputs: &Inputs) -> Result<String> {
+    // Subscribe to runtime status changes before the first list, so a model
+    // becoming ready between a list and the wait still wakes the next list.
+    let mut changes = reqwest::Client::builder()
+        .no_proxy()
+        .build()?
+        .get(format!("{}/api/events", node.console_url()))
+        .send()
+        .await?
+        .error_for_status()?;
     loop {
         let page = bounded(
             10,
@@ -441,7 +450,11 @@ async fn discover(node: &MeshNode, inputs: &Inputs) -> Result<String> {
             )?;
             return Ok(exact.id);
         }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        // Each status update or server keepalive triggers another list.
+        changes
+            .chunk()
+            .await?
+            .context("Runtime event stream ended before speech became ready")?;
     }
 }
 
@@ -607,8 +620,9 @@ async fn stream_clip(
     started: Instant,
 ) -> Result<()> {
     for chunk in inputs.pcm.as_chunks::<1600>().0 {
+        // Each send waits for the session to accept the chunk. Cadence runs on
+        // the audio clock, so unpaced sends must give the same transcript.
         bounded(10, "audio send", session.send_audio(chunk.to_vec())).await??;
-        tokio::time::sleep(Duration::from_millis(100)).await;
     }
     let tail = bounded(20, "speech stop", session.stop()).await??;
     let mut events = join_reader(reader).await?;
@@ -734,13 +748,14 @@ async fn cancel_blocked_read(node: &MeshNode, inputs: &Inputs, model: &str) -> R
     });
     let outcome = async {
         bounded(2, "reader entered", started).await??;
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        // No audio was sent, so the reader has nothing to return until close.
+        // EOF from the close below, not any earlier event, is the proof.
         ensure!(!reader.is_finished(), "Empty reader must be pending before cancellation");
         // Rust cancels this session by close, not by aborting a recv future.
         bounded(3, "cancel pending read", session.close()).await?;
         let event = bounded(3, "cancelled reader EOF", &mut reader).await??;
         ensure!(event.is_none(), "Close must unblock the pending reader at EOF");
-        inputs.write("cancellation.json", &json!({"collector_started": true, "pending_after_ms": 200,
+        inputs.write("cancellation.json", &json!({"collector_started": true, "pending_at_close": true,
             "cancellation_api": "LiveTranscriptionSession::close", "pending_reader_returned_eof": true}))?;
         Ok::<(), anyhow::Error>(())
     }.await;
