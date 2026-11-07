@@ -944,8 +944,7 @@ pub(in crate::binary_transport) fn is_decode_frame_batch_candidate(
         return false;
     }
 
-    is_decode_step_frame(message.kind) && message.token_count == 1
-        && token_ids.len() == 1
+    is_decode_step_frame(message.kind) && message.token_count == 1 && token_ids.len() == 1
 }
 
 pub(in crate::binary_transport) fn input_activation_frame(
@@ -1202,9 +1201,8 @@ mod tests {
         decode_record_tokens_sideband, dflash_early_verdict,
         first_decode_message_with_full_prompt_sideband, is_decode_frame_batch_candidate,
         is_decode_step_frame, prefix_cache_test_config, run_binary_stage_message,
-        run_deferred_dflash_draft,
-        stage_output_activation_capacity, take_ready_downstream, take_warm_or_connect_downstream,
-        token_sideband_or_fill, warm_downstream_is_healthy,
+        run_deferred_dflash_draft, stage_output_activation_capacity, take_ready_downstream,
+        take_warm_or_connect_downstream, token_sideband_or_fill, warm_downstream_is_healthy,
         warm_downstream_preconnect_enabled_from,
     };
     use skippy_protocol::binary::{StageStateHeader, StageWireMessage, WireMessageKind};
