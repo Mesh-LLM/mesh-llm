@@ -871,7 +871,7 @@ fn plan_qwen35_9b(vram_bytes: u64, draft: Option<PlannedSpeculativeDraft>) -> Ru
 fn dflash_draft(cap: u32) -> PlannedSpeculativeDraft {
     PlannedSpeculativeDraft {
         weight_bytes: 1_383_768_224,
-        recurrent_rollback_tokens: cap + 1,
+        verify_rollback_tokens: cap + 1,
         kv_bytes_per_token: 0,
         compute_bytes: 0,
     }

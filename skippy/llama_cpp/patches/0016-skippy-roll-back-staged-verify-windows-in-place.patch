@@ -703,7 +703,7 @@ index 000000000..d61e314a6
 +    auto config = skippy_runtime_config_default();
 +    config.selected_backend_device = "CPU";
 +    config.ctx_size = 256;
-+    config.recurrent_rollback_tokens = rollback_tokens;
++    config.verify_rollback_tokens = rollback_tokens;
 +    skippy_model * model = nullptr;
 +    skippy_error * error = nullptr;
 +    ok(skippy_model_open(path, &config, &model, &error), error);

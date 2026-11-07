@@ -98,7 +98,7 @@ std::expected<StagedModel, StagedFailure> StagedModel::open(const std::string& p
         config.host_expert_layer_start = (*placement)->start;
         config.host_expert_layer_end = (*placement)->end;
     }
-    config.recurrent_rollback_tokens = spec.recurrent_rollback.value();
+    config.verify_rollback_tokens = spec.recurrent_rollback.value();
     config.ctx_size = 512;
     config.n_batch = 512;
     config.n_ubatch = 512;

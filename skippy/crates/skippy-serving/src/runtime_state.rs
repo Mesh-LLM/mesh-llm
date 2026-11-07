@@ -33,7 +33,7 @@ pub struct RuntimeLaunchOverrides {
     pub mtp_source: MtpSource,
     /// Recurrent rollback depth the speculative plan needs; `0` keeps the
     /// native default.
-    pub recurrent_rollback_tokens: u32,
+    pub verify_rollback_tokens: u32,
 }
 
 pub struct RuntimeState {
@@ -623,7 +623,7 @@ pub(crate) fn runtime_config_from_stage_config(
             skippy_protocol::GlmDsaPolicy::V1 => RuntimeGlmDsaPolicy::V1,
         },
         mtp_source: overrides.mtp_source,
-        recurrent_rollback_tokens: overrides.recurrent_rollback_tokens,
+        verify_rollback_tokens: overrides.verify_rollback_tokens,
         resident_tensor_names: config.resident_tensor_names.clone(),
         execution_contract: config.execution_contract.clone(),
         activation_import_identities: config.activation_import_identities.clone(),
@@ -939,7 +939,7 @@ mod tests {
             n_threads: Some(8),
             n_threads_batch: Some(4),
             mtp_source: MtpSource::External,
-            recurrent_rollback_tokens: 16,
+            verify_rollback_tokens: 16,
         };
 
         let runtime_config = runtime_config_from_stage_config(&config, &overrides).unwrap();
@@ -960,7 +960,7 @@ mod tests {
             RuntimeFlashAttentionType::Enabled
         );
         assert_eq!(runtime_config.mtp_source, MtpSource::External);
-        assert_eq!(runtime_config.recurrent_rollback_tokens, 16);
+        assert_eq!(runtime_config.verify_rollback_tokens, 16);
     }
 
     #[test]

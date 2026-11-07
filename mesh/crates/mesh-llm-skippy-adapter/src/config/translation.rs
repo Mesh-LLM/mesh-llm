@@ -323,7 +323,7 @@ impl ResolvedSkippyConfig {
             } else {
                 MtpSource::Disabled
             },
-            recurrent_rollback_tokens: 0,
+            verify_rollback_tokens: 0,
             metrics_otlp_grpc: telemetry.metrics_otlp_grpc.clone(),
             telemetry_queue_capacity: telemetry.queue_capacity,
             telemetry_level: telemetry.level,

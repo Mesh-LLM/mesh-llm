@@ -131,7 +131,7 @@ mod tests {
             main_gpu: None,
             split_mode: SplitMode::Auto,
             host_expert_layers: None,
-            recurrent_rollback_tokens: 0,
+            verify_rollback_tokens: 0,
             checkpoint_quantization: CheckpointQuantization::Preserve,
             checkpoint_imatrix: None,
             checkpoint_imatrix_sha256: None,

@@ -163,7 +163,7 @@ impl SplitGenerationLoadSettings<'_> {
             None => {
                 self.embedded_openai.speculative.dflash = None;
                 self.embedded_openai.speculative.effective_strategy = "disabled".to_string();
-                self.runtime_options.recurrent_rollback_tokens = 0;
+                self.runtime_options.verify_rollback_tokens = 0;
             }
         }
     }
@@ -1064,9 +1064,9 @@ pub(super) async fn split_generation_load_settings_with<'a>(
         Some(_) => Some(split_dflash_fallback(&resolved, spec, &load_mode)?),
         None => None,
     };
-    runtime_options.recurrent_rollback_tokens = split_dflash.as_ref().map_or(
+    runtime_options.verify_rollback_tokens = split_dflash.as_ref().map_or(
         0,
-        skippy_serving::split_dflash::SplitDFlashStage::recurrent_rollback_tokens,
+        skippy_serving::split_dflash::SplitDFlashStage::verify_rollback_tokens,
     );
     tracing::info!(
         model = spec.model_ref,

@@ -83,8 +83,8 @@ pub struct EmbeddedRuntimeOptions {
     pub n_threads_batch: Option<usize>,
     pub mtp_source: MtpSource,
     /// Recurrent rollback depth for the target context; see
-    /// [`RuntimeLaunchOverrides::recurrent_rollback_tokens`].
-    pub recurrent_rollback_tokens: u32,
+    /// [`RuntimeLaunchOverrides::verify_rollback_tokens`].
+    pub verify_rollback_tokens: u32,
     pub metrics_otlp_grpc: Option<String>,
     pub telemetry_queue_capacity: usize,
     pub telemetry_level: TelemetryLevel,
@@ -203,7 +203,7 @@ impl SkippyRuntimeHandle {
                 n_threads: options.n_threads,
                 n_threads_batch: options.n_threads_batch,
                 mtp_source: options.mtp_source,
-                recurrent_rollback_tokens: options.recurrent_rollback_tokens,
+                verify_rollback_tokens: options.verify_rollback_tokens,
             },
             options.session_lifecycle_observer.clone(),
         )?
@@ -244,7 +244,7 @@ impl SkippyRuntimeHandle {
                 n_threads: options.n_threads,
                 n_threads_batch: options.n_threads_batch,
                 mtp_source: options.mtp_source,
-                recurrent_rollback_tokens: options.recurrent_rollback_tokens,
+                verify_rollback_tokens: options.verify_rollback_tokens,
             },
             model_open_events.as_ref(),
             options.session_lifecycle_observer.clone(),

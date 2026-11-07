@@ -1702,7 +1702,7 @@ public:
             config.host_expert_layer_end = layers_;
         } else {
             // Matches the API arm's RollbackTokens::from_planned(64).
-            config.recurrent_rollback_tokens = 64;
+            config.verify_rollback_tokens = 64;
         }
         config.ctx_size = 512;
         config.n_batch = 512;
