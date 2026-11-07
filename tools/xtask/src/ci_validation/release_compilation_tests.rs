@@ -9,13 +9,22 @@ fn accepts_hosted_setup_before_cargo() {
 
 #[test]
 fn release_notes_helper_requires_prior_cache_setup() {
-    let source = VALID.replace("metadata:", "release_notes:").replace(
-        "cargo fmt --all --check",
-        "scripts/release-notes-generate.sh",
-    );
+    let toolchain = "      - uses: dtolnay/rust-toolchain@pin\n";
+    let source = VALID
+        .replace("metadata:", "release_notes:")
+        .replace(
+            "cargo fmt --all --check",
+            "scripts/release-notes-generate.sh",
+        )
+        .replace("    steps:\n", &format!("    steps:\n{toolchain}"));
     check(Path::new("."), &source).unwrap();
 
     for invalid in [
+        source.replace(toolchain, ""),
+        source.replace(toolchain, "").replace(
+            "      - run: scripts/release-notes-generate.sh\n",
+            &format!("      - run: scripts/release-notes-generate.sh\n{toolchain}"),
+        ),
         source.replace("      - uses: mozilla-actions/sccache-action@pin\n", ""),
         source.replace(
             "      - uses: ./.github/actions/configure-sccache-gha\n",
@@ -35,6 +44,22 @@ fn release_notes_helper_requires_prior_cache_setup() {
                 .contains("release_notes"),
             "{invalid}"
         );
+    }
+}
+
+#[test]
+fn real_release_notes_job_keeps_remote_caches_disabled() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source = std::fs::read_to_string(root.join(".github/workflows/release.yml")).unwrap();
+    let document = workflow_yaml::parse(&source).unwrap();
+    let job = document.get("jobs").unwrap().get("release_notes").unwrap();
+    let configure = steps(job)
+        .iter()
+        .find(|step| field(step, "uses") == Some("./.github/actions/configure-sccache-gha"))
+        .expect("release_notes configures sccache");
+    let inputs = configure.get("with").expect("configure-sccache-gha inputs");
+    for key in ["allow_depot_remote_cache", "allow_native_github_cache"] {
+        assert_eq!(field(inputs, key), Some("false"), "{key}");
     }
 }
 

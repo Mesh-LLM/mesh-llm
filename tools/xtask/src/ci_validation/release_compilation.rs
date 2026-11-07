@@ -132,6 +132,21 @@ fn check_setup(document: &Node, job: &Node, callers: &[(usize, &Node)]) -> DynRe
     Ok(())
 }
 
+fn check_notes_toolchain(job: &Node) -> DynResult<()> {
+    let Some(helper) = steps(job).iter().position(|step| {
+        field(step, "run").is_some_and(|run| run.contains("scripts/release-notes-generate.sh"))
+    }) else {
+        return Ok(());
+    };
+    if steps(job)[..helper].iter().any(|step| {
+        field(step, "uses").is_some_and(|uses| uses.starts_with("dtolnay/rust-toolchain@"))
+    }) {
+        Ok(())
+    } else {
+        Err("release notes helper runs before the pinned Rust toolchain".into())
+    }
+}
+
 fn check_composer(root: &Path, job: &Node) -> DynResult<()> {
     if !steps(job)
         .iter()
@@ -226,7 +241,7 @@ pub(super) fn check(root: &Path, source: &str) -> DynResult<()> {
             if callers.is_empty() {
                 Ok(())
             } else {
-                check_setup(&document, job, &callers)
+                check_setup(&document, job, &callers).and_then(|()| check_notes_toolchain(job))
             }
         };
         result.map_err(|error| format!("release workflow `{name}`: {error}"))?;

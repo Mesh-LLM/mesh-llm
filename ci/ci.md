@@ -768,10 +768,14 @@ process does not bypass those rules.
 
 `scripts/release-version.sh` is the single owner of the tracked release-version
 surface. It runs cargo, and `.cargo/config.toml` wraps `rustc` with sccache, so
-every release job that can reach cargo — including the canary-skipped
-`metadata`, `publish`, and `release_notes` jobs — initializes sccache before its
-first cargo call. The artifact-only composition jobs never call cargo, and
-`tools/xtask` enforces both halves. On a non-canary `release.yml` dispatch,
+every release job that can reach cargo — including `metadata`, which runs on
+canary dispatches too, and the canary-skipped `publish` and `release_notes`
+jobs — initializes sccache before its first cargo call. The artifact-only
+composition jobs never call cargo, and `tools/xtask` enforces both halves. The
+Cargo-reach check recognizes direct `cargo` invocations and the named helpers
+`release-version.sh`, `publish-crates.sh`, `release-notes-generate.sh` and
+`package-release.sh`; other scripts that invoke Cargo are not covered unless the
+validator is extended to detect them. On a non-canary `release.yml` dispatch,
 metadata reapplies the prepared version. If a diff remains, it attempts a new
 release-source commit and main push; protected `main` rejects that unreviewed
 update before the build graph begins. `just release` only
