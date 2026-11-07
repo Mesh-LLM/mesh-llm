@@ -128,6 +128,33 @@ pub(super) struct SplitDFlashFallback {
     pub(super) embedded_openai: skippy::ResolvedEmbeddedOpenAiArgs,
 }
 
+/// How earlier stages encode feature rows for a final stage that reported
+/// reading `reported`; `None` when it reads nothing they send. A final stage
+/// that predates the report reads bf16 and q8.
+fn final_stage_feature_encoding(
+    reported: &[String],
+) -> Option<skippy_runtime::DFlashFeatureEncoding> {
+    let readable: Vec<_> = if reported.is_empty() {
+        vec![
+            skippy_runtime::DFlashFeatureEncoding::Bf16,
+            skippy_runtime::DFlashFeatureEncoding::Q8,
+        ]
+    } else {
+        reported
+            .iter()
+            .filter_map(|name| skippy_runtime::DFlashFeatureEncoding::parse(name))
+            .collect()
+    };
+    let encoding = skippy_serving::split_dflash::settled_feature_encoding(&readable);
+    if encoding.is_none() {
+        tracing::warn!(
+            ?reported,
+            "split DFlash: the final stage reads no feature encoding this stage sends"
+        );
+    }
+    encoding
+}
+
 impl SplitGenerationLoadSettings<'_> {
     /// Settles the split DFlash plan with what the final stage, which loads
     /// first, reported: the target layers of the draft it attached, or `None`
@@ -141,23 +168,17 @@ impl SplitGenerationLoadSettings<'_> {
         final_stage_context_window: Option<u32>,
         final_stage_feature_encodings: &[String],
     ) {
+        if self.split_dflash.is_none() {
+            return;
+        }
+        let encoding = final_stage_feature_encoding(final_stage_feature_encodings);
         let Some(plan) = self.split_dflash.as_mut() else {
             return;
         };
-        if let Some(layers) = final_stage_target_layers.filter(|layers| !layers.is_empty()) {
-            // A final stage that predates the report reads bf16 and q8.
-            let readable: Vec<_> = if final_stage_feature_encodings.is_empty() {
-                vec![
-                    skippy_runtime::DFlashFeatureEncoding::Bf16,
-                    skippy_runtime::DFlashFeatureEncoding::Q8,
-                ]
-            } else {
-                final_stage_feature_encodings
-                    .iter()
-                    .filter_map(|name| skippy_runtime::DFlashFeatureEncoding::parse(name))
-                    .collect()
-            };
-            let encoding = skippy_serving::split_dflash::settled_feature_encoding(&readable);
+        if let Some(layers) = final_stage_target_layers
+            .filter(|layers| !layers.is_empty())
+            .filter(|_| encoding.is_some())
+        {
             plan.target_layers = layers.to_vec();
             plan.feature_encoding = encoding;
             if let Some(dflash) = self.embedded_openai.speculative.dflash.as_mut() {

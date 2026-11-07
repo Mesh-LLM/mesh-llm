@@ -328,7 +328,14 @@ pub(super) fn encode_q4_rows(values: &[f32], n_embd: usize, out: &mut Vec<u8>) {
                 .iter()
                 .filter(|value| value.is_finite())
                 .fold(0.0_f32, |amax, value| amax.max(value.abs()));
-            let scale_bits = f16_from_nonnegative(amax / Q4_LEVELS);
+            // Round the scale up, so the block maximum never clamps: with
+            // seven levels a scale rounded down (a subnormal one especially)
+            // would cut the largest values short.
+            let wanted = amax / Q4_LEVELS;
+            let mut scale_bits = f16_from_nonnegative(wanted);
+            if f16_to_f32(scale_bits) < wanted && scale_bits < 0x7bff {
+                scale_bits += 1;
+            }
             let scale = f16_to_f32(scale_bits);
             let inverse = if scale > 0.0 { scale.recip() } else { 0.0 };
             out.extend_from_slice(&scale_bits.to_le_bytes());
@@ -506,6 +513,18 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn q4_rows_keep_tiny_blocks_within_a_step() {
+        let tiny = f32::powi(2.0, -24);
+        let values = [10.0 * tiny, -3.0 * tiny, tiny, 0.0];
+        let mut bytes = Vec::new();
+        encode_q4_rows(&values, values.len(), &mut bytes);
+        for (got, want) in decode_q4_rows(&bytes, values.len()).iter().zip(values) {
+            // A step here is the smallest F16 scale that reaches the maximum.
+            assert!((got - want).abs() <= tiny, "{got} vs {want}");
         }
     }
 
